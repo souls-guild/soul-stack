@@ -83,7 +83,7 @@ func (f *fakePushProviderPool) QueryRow(_ context.Context, sql string, args ...a
 			label = &s
 		}
 		f.entries[name] = &pushprovider.PushProvider{
-			Name:         name,
+			ID:           name,
 			Label:        label,
 			Params:       params,
 			CreatedAt:    now,
@@ -92,7 +92,7 @@ func (f *fakePushProviderPool) QueryRow(_ context.Context, sql string, args ...a
 		}
 		return scanRowPP{values: []any{now, now}}
 	}
-	if strings.Contains(sql, "SELECT") && strings.Contains(sql, "FROM push_providers") && strings.Contains(sql, "WHERE name = $1") {
+	if strings.Contains(sql, "SELECT") && strings.Contains(sql, "FROM push_providers") && strings.Contains(sql, "WHERE id = $1") {
 		if f.selectByErr != nil {
 			return errRowPP{err: f.selectByErr}
 		}
@@ -103,7 +103,7 @@ func (f *fakePushProviderPool) QueryRow(_ context.Context, sql string, args ...a
 		}
 		paramsBytes, _ := json.Marshal(p.Params)
 		return scanRowPP{values: []any{
-			p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label,
+			p.ID, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label,
 		}}
 	}
 	if strings.Contains(sql, "SELECT COUNT(*)") {
@@ -116,7 +116,7 @@ func (f *fakePushProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx
 	rows := make([][]any, 0, len(f.entries))
 	for _, p := range f.entries {
 		paramsBytes, _ := json.Marshal(p.Params)
-		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
+		rows = append(rows, []any{p.ID, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
 	}
 	return &fakeRowsPP{rows: rows}, nil
 }
@@ -237,12 +237,12 @@ func pmap(m map[string]any) *map[string]any { return &m }
 func TestPushProviderHandler_CreateTyped_Success(t *testing.T) {
 	h, _ := newPushProviderHandler(t)
 	reply, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
-		PushProviderCreateInput{Name: "vault-bastion", Params: pmap(map[string]any{"vault_addr": "https://vault.example.com"})})
+		PushProviderCreateInput{ID: "vault-bastion", Params: pmap(map[string]any{"vault_addr": "https://vault.example.com"})})
 	if err != nil {
 		t.Fatalf("CreateTyped: %v", err)
 	}
-	if reply.Body.Name != "vault-bastion" {
-		t.Errorf("name = %v", reply.Body.Name)
+	if reply.Body.ID != "vault-bastion" {
+		t.Errorf("name = %v", reply.Body.ID)
 	}
 	if reply.Body.CreatedByAID != "archon-alice" {
 		t.Errorf("created_by_aid = %v", reply.Body.CreatedByAID)
@@ -252,7 +252,7 @@ func TestPushProviderHandler_CreateTyped_Success(t *testing.T) {
 func TestPushProviderHandler_CreateTyped_RejectsPlainSensitive_422(t *testing.T) {
 	h, _ := newPushProviderHandler(t)
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
-		PushProviderCreateInput{Name: "vault", Params: pmap(map[string]any{"secret_id": "plain-leaked"})})
+		PushProviderCreateInput{ID: "vault", Params: pmap(map[string]any{"secret_id": "plain-leaked"})})
 	if got := ppProblemType(t, err); got != problem.TypeValidationFailed {
 		t.Fatalf("problem.Type = %q, want %q (sensitive plain → 422)", got, problem.TypeValidationFailed)
 	}
@@ -261,7 +261,7 @@ func TestPushProviderHandler_CreateTyped_RejectsPlainSensitive_422(t *testing.T)
 func TestPushProviderHandler_CreateTyped_InvalidName_422(t *testing.T) {
 	h, _ := newPushProviderHandler(t)
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
-		PushProviderCreateInput{Name: "1bad-name"})
+		PushProviderCreateInput{ID: "1bad-name"})
 	if got := ppProblemType(t, err); got != problem.TypeValidationFailed {
 		t.Errorf("problem.Type = %q, want %q", got, problem.TypeValidationFailed)
 	}
@@ -269,10 +269,10 @@ func TestPushProviderHandler_CreateTyped_InvalidName_422(t *testing.T) {
 
 func TestPushProviderHandler_CreateTyped_DuplicateName_409(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
-	pool.entries["vault"] = &pushprovider.PushProvider{Name: "vault", CreatedByAID: "archon-alice"}
+	pool.entries["vault"] = &pushprovider.PushProvider{ID: "vault", CreatedByAID: "archon-alice"}
 
 	_, err := h.CreateTyped(context.Background(), claimsFor("archon-alice"),
-		PushProviderCreateInput{Name: "vault"})
+		PushProviderCreateInput{ID: "vault"})
 	if got := ppProblemType(t, err); got != problem.TypePushProviderExists {
 		t.Errorf("problem.Type = %q, want %q (409 duplicate)", got, problem.TypePushProviderExists)
 	}
@@ -282,7 +282,7 @@ func TestPushProviderHandler_GetTyped_Success(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
 	now := time.Now()
 	pool.entries["vault"] = &pushprovider.PushProvider{
-		Name:         "vault",
+		ID:           "vault",
 		Params:       map[string]any{"role": "keeper"},
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -293,8 +293,8 @@ func TestPushProviderHandler_GetTyped_Success(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTyped: %v", err)
 	}
-	if view.Name != "vault" {
-		t.Errorf("name = %v", view.Name)
+	if view.ID != "vault" {
+		t.Errorf("name = %v", view.ID)
 	}
 	if view.Params["role"] != "keeper" {
 		t.Errorf("params: %v", view.Params)
@@ -313,7 +313,7 @@ func TestPushProviderHandler_UpdateTyped_Success(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
 	now := time.Now()
 	pool.entries["vault"] = &pushprovider.PushProvider{
-		Name:         "vault",
+		ID:           "vault",
 		Params:       map[string]any{"role": "old"},
 		CreatedAt:    now,
 		UpdatedAt:    now,
@@ -345,7 +345,7 @@ func TestPushProviderHandler_UpdateTyped_NotFound_404(t *testing.T) {
 
 func TestPushProviderHandler_UpdateTyped_RejectsPlainSensitive_422(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
-	pool.entries["vault"] = &pushprovider.PushProvider{Name: "vault", CreatedByAID: "archon-alice"}
+	pool.entries["vault"] = &pushprovider.PushProvider{ID: "vault", CreatedByAID: "archon-alice"}
 
 	_, err := h.UpdateTyped(context.Background(), claimsFor("archon-bob"), "vault",
 		PushProviderUpdateInput{Params: map[string]any{"token": "plain"}})
@@ -356,14 +356,14 @@ func TestPushProviderHandler_UpdateTyped_RejectsPlainSensitive_422(t *testing.T)
 
 func TestPushProviderHandler_DeleteTyped_Success(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
-	pool.entries["vault"] = &pushprovider.PushProvider{Name: "vault", CreatedByAID: "archon-alice"}
+	pool.entries["vault"] = &pushprovider.PushProvider{ID: "vault", CreatedByAID: "archon-alice"}
 
 	reply, err := h.DeleteTyped(context.Background(), "vault")
 	if err != nil {
 		t.Fatalf("DeleteTyped: %v", err)
 	}
-	if reply.Name != "vault" {
-		t.Errorf("reply.Name = %q, want vault", reply.Name)
+	if reply.ID != "vault" {
+		t.Errorf("reply.ID = %q, want vault", reply.ID)
 	}
 	if _, exists := pool.entries["vault"]; exists {
 		t.Error("entry not deleted")
@@ -381,8 +381,8 @@ func TestPushProviderHandler_DeleteTyped_NotFound_404(t *testing.T) {
 func TestPushProviderHandler_ListTyped_Success(t *testing.T) {
 	h, pool := newPushProviderHandler(t)
 	now := time.Now()
-	pool.entries["vault"] = &pushprovider.PushProvider{Name: "vault", CreatedAt: now, UpdatedAt: now, CreatedByAID: "archon-alice"}
-	pool.entries["static"] = &pushprovider.PushProvider{Name: "static", CreatedAt: now, UpdatedAt: now, CreatedByAID: "archon-alice"}
+	pool.entries["vault"] = &pushprovider.PushProvider{ID: "vault", CreatedAt: now, UpdatedAt: now, CreatedByAID: "archon-alice"}
+	pool.entries["static"] = &pushprovider.PushProvider{ID: "static", CreatedAt: now, UpdatedAt: now, CreatedByAID: "archon-alice"}
 
 	page, err := h.ListTyped(context.Background(), "", 0, 10)
 	if err != nil {

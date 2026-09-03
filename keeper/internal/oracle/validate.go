@@ -21,26 +21,31 @@ var ErrValidation = errors.New("oracle: validation failed")
 // Form patterns duplicating migration 041's CHECKs (reject a bad value
 // before the round-trip — better diagnostics, no wasted call on bad input).
 //
-//   - NamePattern        — vigils_name_format / decrees_name_format (kebab 1..63).
+//   - IDPattern          — vigils_id_format / decrees_id_format (kebab 1..63).
 //   - IncarnationPattern — decrees_incarnation_name_format (= incarnation.name).
 //   - ScenarioPattern    — decrees_scenario_format (snake_case named scenario).
 //
 // The SUBJECT's own forms are not restated here — they belong to
 // [subject.Validate], the one validator all three registries share.
 const (
-	NamePattern        = `^[a-z0-9-]{1,63}$`
+	// IDPattern — the Vigil / Decree id. UNCHANGED in form by the `name` -> `id`
+	// rename ([ADR-0085], NIM-729): the identifier moved spelling, not grammar.
+	IDPattern = `^[a-z0-9-]{1,63}$`
+	// IncarnationPattern belongs to the INCARNATION registry, whose own rename
+	// is a later batch of NIM-729 — it keeps its spelling here, and keeps
+	// checking `decrees.incarnation_name`, the FK column that renames with it.
 	IncarnationPattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 	ScenarioPattern    = `^[a-z][a-z0-9_]*$`
 )
 
 var (
-	nameRe        = regexp.MustCompile(NamePattern)
+	idRe          = regexp.MustCompile(IDPattern)
 	incarnationRe = regexp.MustCompile(IncarnationPattern)
 	scenarioRe    = regexp.MustCompile(ScenarioPattern)
 )
 
-// ValidName checks a Vigil / Decree name against the canonical form (kebab 1..63).
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks a Vigil / Decree id against the canonical form (kebab 1..63).
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // ValidCoven checks a single Coven label. Kept as the package's spelling of
 // [subject.ValidCoven] for callers that check one label outside a selector.

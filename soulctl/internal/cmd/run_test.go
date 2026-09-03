@@ -417,14 +417,14 @@ func TestAutoDetectIncarnation(t *testing.T) {
 		wantOK  string
 	}{
 		{items: []map[string]any{{
-			"name": "redis-prod", "service": "redis", "service_version": "v",
+			"id": "redis-prod", "service": "redis", "service_version": "v",
 			"state_schema_version": 1, "covens": []string{}, "status": "ready",
 			"created_by_aid": "x", "created_at": "t", "updated_at": "t",
 		}}, wantOK: "redis-prod"},
 		{items: []map[string]any{}, wantErr: true},
 		{items: []map[string]any{
-			{"name": "a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
-			{"name": "b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+			{"id": "a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+			{"id": "b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
 		}, wantErr: true},
 	}
 	for _, tc := range cases {
@@ -460,8 +460,8 @@ func TestRunScenario_AutoDetect_Many(t *testing.T) {
 			atomic.AddInt32(&called, 1)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
-					{"name": "redis-a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
-					{"name": "redis-b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+					{"id": "redis-a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+					{"id": "redis-b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
 				},
 				"offset": 0, "limit": 50, "total": 2,
 			})

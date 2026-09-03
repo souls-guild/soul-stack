@@ -101,10 +101,10 @@ func (s *Service) invalidate(ctx context.Context) {
 // (nil → created_by_aid IS NULL for seed/system creation; transport fills it
 // from claims).
 type CreateServiceInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetServiceLabel].
-	// nil/blank stores NULL and the consumer shows Name.
+	// nil/blank stores NULL and the consumer shows ID.
 	Label     *string
 	Git       string
 	Ref       string
@@ -116,15 +116,15 @@ type CreateServiceInput struct {
 // DB round trip (better error, no wasted call on bad input).
 //
 // Returns:
-//   - [ErrInvalidName] / [ErrInvalidGit] / [ErrInvalidRef] / [ErrInvalidRefresh] — 422;
-//   - [ErrAlreadyExists] — name is taken (409);
+//   - [ErrInvalidID] / [ErrInvalidGit] / [ErrInvalidRef] / [ErrInvalidRefresh] — 422;
+//   - [ErrAlreadyExists] — id is taken (409);
 //   - [ErrOperatorNotFound] — CallerAID doesn't exist in operators (FK).
 func (s *Service) CreateService(ctx context.Context, in CreateServiceInput) (*ServiceEntry, error) {
-	if err := validateFields(in.Name, in.Git, in.Ref, in.Refresh); err != nil {
+	if err := validateFields(in.ID, in.Git, in.Ref, in.Refresh); err != nil {
 		return nil, err
 	}
 	e := &ServiceEntry{
-		Name:         in.Name,
+		ID:           in.ID,
 		Label:        in.Label,
 		Git:          in.Git,
 		Ref:          in.Ref,
@@ -142,20 +142,20 @@ func (s *Service) CreateService(ctx context.Context, in CreateServiceInput) (*Se
 	return e, nil
 }
 
-// GetService reads a Service record by name. [ErrNotFound] if none.
-func (s *Service) GetService(ctx context.Context, name string) (*ServiceEntry, error) {
-	return GetService(ctx, s.pool, name)
+// GetService reads a Service record by id. [ErrNotFound] if none.
+func (s *Service) GetService(ctx context.Context, id string) (*ServiceEntry, error) {
+	return GetService(ctx, s.pool, id)
 }
 
-// ListServices returns all Service records (sort name ASC).
+// ListServices returns all Service records (sort id ASC).
 func (s *Service) ListServices(ctx context.Context) ([]*ServiceEntry, error) {
 	return ListServices(ctx, s.pool)
 }
 
 // UpdateServiceInput — parameters for UpdateService. Replaces the record's
-// mutable fields (git/ref/refresh); name is the key, it doesn't change.
+// mutable fields (git/ref/refresh); id is the key, it doesn't change.
 type UpdateServiceInput struct {
-	Name      string
+	ID        string
 	Git       string
 	Ref       string
 	Refresh   *string
@@ -170,14 +170,14 @@ type UpdateServiceInput struct {
 //
 // Returns:
 //   - validation sentinels (422);
-//   - [ErrNotFound] — no record with that name (404);
+//   - [ErrNotFound] — no record with that id (404);
 //   - [ErrOperatorNotFound] — CallerAID doesn't exist (FK).
 func (s *Service) UpdateService(ctx context.Context, in UpdateServiceInput) (*ServiceEntry, error) {
-	if err := validateFields(in.Name, in.Git, in.Ref, in.Refresh); err != nil {
+	if err := validateFields(in.ID, in.Git, in.Ref, in.Refresh); err != nil {
 		return nil, err
 	}
 	e := &ServiceEntry{
-		Name:         in.Name,
+		ID:           in.ID,
 		Git:          in.Git,
 		Ref:          in.Ref,
 		Refresh:      in.Refresh,
@@ -198,19 +198,19 @@ func (s *Service) UpdateService(ctx context.Context, in UpdateServiceInput) (*Se
 // `service:invalidate` channel refreshes carries git/ref/refresh and the caches
 // derived from an artifact, and a caption is none of them.
 //
-// [ErrNotFound] if no record with that name.
-func (s *Service) SetServiceLabel(ctx context.Context, name string, label *string) (*ServiceEntry, *string, error) {
-	previous, err := UpdateServiceLabel(ctx, s.pool, name, label)
+// [ErrNotFound] if no record with that id.
+func (s *Service) SetServiceLabel(ctx context.Context, id string, label *string) (*ServiceEntry, *string, error) {
+	previous, err := UpdateServiceLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	e, err := GetService(ctx, s.pool, name)
+	e, err := GetService(ctx, s.pool, id)
 	return e, previous, err
 }
 
-// DeleteService deletes a Service record by name. [ErrNotFound] if none.
-func (s *Service) DeleteService(ctx context.Context, name string) error {
-	if err := DeleteService(ctx, s.pool, name); err != nil {
+// DeleteService deletes a Service record by id. [ErrNotFound] if none.
+func (s *Service) DeleteService(ctx context.Context, id string) error {
+	if err := DeleteService(ctx, s.pool, id); err != nil {
 		return err
 	}
 	s.invalidate(ctx)
@@ -269,26 +269,26 @@ func (s *Service) DeleteSetting(ctx context.Context, key string) error {
 }
 
 // validateFields — shared application-level validation of Service record
-// fields (create/update): name format, non-empty git/ref, refresh format via
+// fields (create/update): id format, non-empty git/ref, refresh format via
 // config.ParseDuration (if set). Duplicates DB CHECKs for a better error
 // before the round trip; refresh isn't caught by a DB CHECK (like augur
 // token_ttl) — only here.
-func validateFields(name, git, ref string, refresh *string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("%w: %q must match %s", ErrInvalidName, name, NamePattern)
+func validateFields(id, git, ref string, refresh *string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("%w: %q must match %s", ErrInvalidID, id, IDPattern)
 	}
-	// NIM-706. The service name becomes the first path segment after the KV mount of
+	// NIM-706. The service id becomes the first path segment after the KV mount of
 	// every secret the platform derives for it ([ADR-0083] §1), and a handful of words
 	// already name a path family keeper writes under itself — `secret/keeper/*`
 	// ([ADR-014]), `secret/herald/*` and `secret/provider/*` (keeper/internal/secretwrite).
 	// A service admitted under one of them derives on top of that family, and the
 	// secretwrite writer REPLACES a KV entry rather than merging into it, so the second
 	// write of the two destroys the first one's fields with no error anywhere. This is
-	// the choke point: create and update are the only two writers of the name, and the
-	// name is the primary key, immutable afterwards.
-	if config.IsReservedVaultNamespace(name) {
+	// the choke point: create and update are the only two writers of the id, and the
+	// id is the primary key, immutable afterwards.
+	if config.IsReservedVaultNamespace(id) {
 		return fmt.Errorf("%w: %q is reserved (%s) — the platform derives its own secrets under `<mount>/%s/`",
-			ErrReservedName, name, strings.Join(config.ReservedVaultNamespaceNames(), ", "), name)
+			ErrReservedID, id, strings.Join(config.ReservedVaultNamespaceNames(), ", "), id)
 	}
 	if git == "" {
 		return ErrInvalidGit

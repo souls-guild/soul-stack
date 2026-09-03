@@ -24,9 +24,9 @@ type profileCreateInput struct {
 // — the name of an existing Provider (FK, 422 on missing); params — opaque VM-spec
 // (optional, nil → {}); cloud_init — optional userdata.
 type ProfileCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name (kebab)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile id (kebab, immutable)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/profiles/{name}/label. No pattern — capitals and spaces are the
+	// by PUT /v1/profiles/{id}/label. No pattern — capitals and spaces are the
 	// point.
 	Label     *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Provider  string         `json:"provider" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"name of an existing Cloud Provider"`
@@ -77,10 +77,10 @@ func profileListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/profiles/{name} (get) — READ with path (no audit) ===
+// === GET /v1/profiles/{id} (get) — READ with path (no audit) ===
 
 type profileGetInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
+	ID string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile id"`
 }
 
 type profileGetOutput struct {
@@ -91,7 +91,7 @@ func profileGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getProfile",
 		Method:        http.MethodGet,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Cloud Profile card",
 		Description:   "Metadata of a single Cloud Profile by name (ADR-017). Permission profile.read. Read-only, no audit.",
 		Tags:          []string{"profile"},
@@ -100,10 +100,10 @@ func profileGetOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/profiles/{name} (delete) — WRITE+AUDIT profile.deleted ===
+// === DELETE /v1/profiles/{id} (delete) — WRITE+AUDIT profile.deleted ===
 
 type profileDeleteInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
+	ID string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile id"`
 }
 
 // profileNoContentOutput — 204 No Content (no Body).
@@ -111,10 +111,10 @@ type profileNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// === PUT /v1/profiles/{name}/label (label-set) — WRITE+AUDIT profile.label_changed ===
+// === PUT /v1/profiles/{id}/label (label-set) — WRITE+AUDIT profile.label_changed ===
 
 type profileSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile name"`
+	ID   string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Profile id"`
 	Body LabelSetRequest
 }
 
@@ -126,7 +126,7 @@ func profileSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setProfileLabel",
 		Method:        http.MethodPut,
-		Path:          "/{name}/label",
+		Path:          "/{id}/label",
 		Summary:       "Set the Cloud-Profile display caption",
 		Description:   "Replaces the display caption of one Cloud-Profile (ADR-0085). Permission profile.label-set, audit profile.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing.",
 		Tags:          []string{"profile"},
@@ -139,7 +139,7 @@ func profileDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteProfile",
 		Method:        http.MethodDelete,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Delete a Cloud Profile",
 		Description:   "Deletes a Cloud Profile record (ADR-017). Permission profile.delete. 404 - record absent.",
 		Tags:          []string{"profile"},

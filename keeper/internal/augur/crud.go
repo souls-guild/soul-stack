@@ -19,8 +19,8 @@ import (
 //   - ErrOmenNotFound      → 404.
 //   - ErrRiteNotFound      → 404.
 var (
-	ErrOmenAlreadyExists = errors.New("augur: omen name already exists")
-	ErrOmenNotFound      = errors.New("augur: omen name not found")
+	ErrOmenAlreadyExists = errors.New("augur: omen id already exists")
+	ErrOmenNotFound      = errors.New("augur: omen id not found")
 	ErrRiteNotFound      = errors.New("augur: rite id not found")
 )
 
@@ -49,12 +49,12 @@ var (
 // --- Omen -------------------------------------------------------------
 
 const omenInsertSQL = `
-INSERT INTO omens (name, source_type, endpoint, auth_ref, created_by_aid, label)
+INSERT INTO omens (id, source_type, endpoint, auth_ref, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING created_at
 `
 
-const omenColumns = `name, source_type, endpoint, auth_ref, created_by_aid, created_at, label`
+const omenColumns = `id, source_type, endpoint, auth_ref, created_by_aid, created_at, label`
 
 // omenUpdateLabelSQL replaces the display caption of one Omen ([ADR-0085]). It
 // sets `label` and nothing else — the PK is not in the SET list, because the
@@ -63,20 +63,20 @@ const omenUpdateLabelSQL = `
 UPDATE omens AS x
 SET label = $2
 FROM omens AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const omenSelectByNameSQL = `
+const omenSelectByIDSQL = `
 SELECT ` + omenColumns + `
 FROM omens
-WHERE name = $1
+WHERE id = $1
 `
 
 // InsertOmen inserts a new Omen.
 //
 // Pre-conditions (service validation):
-//   - o.Name matches [NamePattern];
+//   - o.Name matches [IDPattern];
 //   - o.SourceType ∈ closed enum;
 //   - o.Endpoint is non-empty;
 //   - o.AuthRef is a valid vault-ref ([ValidAuthRef]).
@@ -87,8 +87,8 @@ func InsertOmen(ctx context.Context, db ExecQueryRower, o *Omen) error {
 	if o == nil {
 		return fmt.Errorf("augur: nil omen")
 	}
-	if !ValidName(o.Name) {
-		return fmt.Errorf("augur: invalid omen name %q (must match %s)", o.Name, NamePattern)
+	if !ValidID(o.ID) {
+		return fmt.Errorf("augur: invalid omen id %q (must match %s)", o.ID, IDPattern)
 	}
 	if !ValidSourceType(o.SourceType) {
 		return fmt.Errorf("augur: invalid source_type %q (must be vault/prometheus/elk)", o.SourceType)
@@ -114,7 +114,7 @@ func InsertOmen(ctx context.Context, db ExecQueryRower, o *Omen) error {
 	}
 
 	row := db.QueryRow(ctx, omenInsertSQL,
-		o.Name, string(o.SourceType), o.Endpoint, o.AuthRef, createdByAID, label,
+		o.ID, string(o.SourceType), o.Endpoint, o.AuthRef, createdByAID, label,
 	)
 	if err := row.Scan(&o.CreatedAt); err != nil {
 		return mapOmenInsertError(err)
@@ -138,9 +138,9 @@ func mapOmenInsertError(err error) error {
 	return fmt.Errorf("augur: insert omen: %w", err)
 }
 
-// SelectOmenByName reads an Omen by PK. [ErrOmenNotFound] on pgx.ErrNoRows.
-func SelectOmenByName(ctx context.Context, db ExecQueryRower, name string) (*Omen, error) {
-	return scanOmen(db.QueryRow(ctx, omenSelectByNameSQL, name))
+// SelectOmenByID reads an Omen by PK. [ErrOmenNotFound] on pgx.ErrNoRows.
+func SelectOmenByID(ctx context.Context, db ExecQueryRower, id string) (*Omen, error) {
+	return scanOmen(db.QueryRow(ctx, omenSelectByIDSQL, id))
 }
 
 func scanOmen(row pgx.Row) (*Omen, error) {
@@ -150,7 +150,7 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 		createdByAID *string
 		label        *string
 	)
-	err := row.Scan(&o.Name, &srcType, &o.Endpoint, &o.AuthRef, &createdByAID, &o.CreatedAt, &label)
+	err := row.Scan(&o.ID, &srcType, &o.Endpoint, &o.AuthRef, &createdByAID, &o.CreatedAt, &label)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrOmenNotFound
@@ -180,16 +180,16 @@ func scanOmen(row pgx.Row) (*Omen, error) {
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateOmenLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("augur: invalid name %q (must match %s)", name, NamePattern)
+func UpdateOmenLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("augur: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, omenUpdateLabelSQL, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, omenUpdateLabelSQL, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrOmenNotFound
 		}
@@ -218,7 +218,7 @@ func SelectAllOmens(ctx context.Context, db ExecQueryRower, offset, limit int) (
 
 	const listSQL = `SELECT ` + omenColumns + `
 FROM omens
-ORDER BY created_at DESC, name ASC
+ORDER BY created_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {
@@ -242,8 +242,8 @@ OFFSET $1 LIMIT $2`
 
 // DeleteOmen deletes an Omen by PK. All its Rites cascade away (ON DELETE
 // CASCADE, augur.md §9). [ErrOmenNotFound] if the row didn't exist.
-func DeleteOmen(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, "DELETE FROM omens WHERE name = $1", name)
+func DeleteOmen(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, "DELETE FROM omens WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("augur: delete omen: %w", err)
 	}
@@ -288,7 +288,7 @@ func InsertRite(ctx context.Context, db ExecQueryRower, r *Rite) error {
 		return err
 	}
 
-	omen, err := SelectOmenByName(ctx, db, r.Omen)
+	omen, err := SelectOmenByID(ctx, db, r.Omen)
 	if err != nil {
 		return err // ErrOmenNotFound or a wrapped scan error
 	}

@@ -58,7 +58,7 @@ func (p *augurFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Ro
 			return augurErrRow{p.riteInsertErr}
 		}
 		return augurTRow{[]any{int64(7), time.Now()}}
-	case strings.Contains(sql, "FROM omens") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM omens") && strings.Contains(sql, "WHERE id"):
 		if p.omenGetErr != nil {
 			return augurErrRow{p.omenGetErr}
 		}
@@ -265,9 +265,9 @@ func TestAugurTools_NilGuard(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`},
+		{"keeper.augur.omen.create", `{"id":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`},
 		{"keeper.augur.omen.list", `{}`},
-		{"keeper.augur.omen.delete", `{"name":"x"}`},
+		{"keeper.augur.omen.delete", `{"id":"x"}`},
 		{"keeper.augur.rite.create", `{"omen":"x","allow":{"paths":["x"]}}`},
 		{"keeper.augur.rite.list", `{"omen":"x"}`},
 		{"keeper.augur.rite.delete", `{"id":1}`},
@@ -294,7 +294,7 @@ func TestAugurTools_RBACForbidden(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`},
+		{"keeper.augur.omen.create", `{"id":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`},
 		{"keeper.augur.rite.create", `{"omen":"x","allow":{"paths":["x"]}}`},
 		{"keeper.augur.rite.delete", `{"id":1}`},
 	}
@@ -324,9 +324,9 @@ func TestAugurTools_Validation(t *testing.T) {
 		want string
 	}{
 		{"omen-no-name", "keeper.augur.omen.create", `{"source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`, mcpCodeValidationFailed},
-		{"omen-bad-source", "keeper.augur.omen.create", `{"name":"x","source_type":"redis","endpoint":"e","auth_ref":"vault:s/p"}`, mcpCodeValidationFailed},
-		{"omen-bad-authref", "keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"plain"}`, mcpCodeValidationFailed},
-		{"omen-unknown-field", "keeper.augur.omen.create", `{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p","z":1}`, mcpCodeMalformedRequest},
+		{"omen-bad-source", "keeper.augur.omen.create", `{"id":"x","source_type":"redis","endpoint":"e","auth_ref":"vault:s/p"}`, mcpCodeValidationFailed},
+		{"omen-bad-authref", "keeper.augur.omen.create", `{"id":"x","source_type":"vault","endpoint":"e","auth_ref":"plain"}`, mcpCodeValidationFailed},
+		{"omen-unknown-field", "keeper.augur.omen.create", `{"id":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p","z":1}`, mcpCodeMalformedRequest},
 		{"rite-no-omen", "keeper.augur.rite.create", `{"allow":{"paths":["x"]}}`, mcpCodeValidationFailed},
 		{"rite-bad-allow-shape", "keeper.augur.rite.create", `{"omen":"vault-prod","subject":{"coven":["web"]},"allow":{"queries":["up"]}}`, mcpCodeValidationFailed},
 		// Exactly-one-of, both ways round: two dimensions at once and none at all.
@@ -356,7 +356,7 @@ func TestAugurTools_Validation(t *testing.T) {
 func TestAugurOmenCreate_Success(t *testing.T) {
 	h, rec := newAugurToolHandler(t, augurAdminCfg(), &augurFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.create",
-		`{"name":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`)
+		`{"id":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -369,7 +369,7 @@ func TestAugurOmenCreate_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if out.Name != "vault-prod" || out.SourceType != "vault" {
+	if out.ID != "vault-prod" || out.SourceType != "vault" {
 		t.Errorf("output = %+v", out)
 	}
 
@@ -383,7 +383,7 @@ func TestAugurOmenCreate_Success(t *testing.T) {
 	if ev.Source != audit.SourceMCP {
 		t.Errorf("source = %q, want mcp", ev.Source)
 	}
-	assertPayload(t, ev.Payload, "name", "vault-prod")
+	assertPayload(t, ev.Payload, "id", "vault-prod")
 	assertPayload(t, ev.Payload, "source_type", "vault")
 	assertPayload(t, ev.Payload, "auth_ref", "vault:secret/keeper/ar")
 	assertPayload(t, ev.Payload, "created_by_aid", "archon-alice")
@@ -394,7 +394,7 @@ func TestAugurOmenCreate_Duplicate409(t *testing.T) {
 		omenInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "omens_pkey"},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.create",
-		`{"name":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`)
+		`{"id":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -432,19 +432,19 @@ func TestAugurOmenList_Success(t *testing.T) {
 
 func TestAugurOmenDelete_Success(t *testing.T) {
 	h, rec := newAugurToolHandler(t, augurAdminCfg(), &augurFakePool{omenDeleteRows: 1})
-	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.delete", `{"name":"vault-prod"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.delete", `{"id":"vault-prod"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventOmenRevoked {
 		t.Fatalf("expected omen.revoked audit, got %+v", rec.events)
 	}
-	assertPayload(t, rec.events[0].Payload, "name", "vault-prod")
+	assertPayload(t, rec.events[0].Payload, "id", "vault-prod")
 }
 
 func TestAugurOmenDelete_NotFound404(t *testing.T) {
 	h, _ := newAugurToolHandler(t, augurAdminCfg(), &augurFakePool{omenDeleteRows: 0})
-	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.delete", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.augur.omen.delete", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

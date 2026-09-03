@@ -65,7 +65,7 @@ func resetOracleCrossSide(t *testing.T) {
 
 // liveOracleEnqueuer — a [ScenarioEnqueuer] implementation over live PG, an
 // exact copy of cmd/keeper/oracle_enqueuer.go (it can't be imported —
-// package main): SelectByName(incarnation) → Resolve(service) with a ref
+// package main): SelectByID(incarnation) → Resolve(service) with a ref
 // override = ServiceVersion → InsertPlanned(Recipe). Asserts the REAL
 // consumer seam all the way to apply_runs(planned) (unlike fakeEnqueuer,
 // which cuts the seam short).
@@ -74,7 +74,7 @@ type liveOracleEnqueuer struct {
 }
 
 func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueScenarioRequest) (string, error) {
-	inc, err := incarnation.SelectByName(ctx, integrationPool, req.IncarnationName)
+	inc, err := incarnation.SelectByID(ctx, integrationPool, req.IncarnationName)
 	if err != nil {
 		return "", err
 	}
@@ -88,7 +88,7 @@ func (e *liveOracleEnqueuer) EnqueueScenario(ctx context.Context, req EnqueueSce
 	if err := applyrun.InsertPlanned(ctx, integrationPool, &applyrun.ApplyRun{
 		ApplyID:         applyID,
 		SID:             req.SubjectSID,
-		IncarnationName: inc.Name,
+		IncarnationName: inc.ID,
 		Scenario:        req.ScenarioName,
 		StartedByAID:    nil, // Soul-initiated reaction, no Archon identity
 		Recipe: &applyrun.Recipe{
@@ -177,7 +177,7 @@ func soulSchedulerPortent(t *testing.T, beacon, sid string, data map[string]any)
 //	  consumer's handlePortentEvent on live PG:
 //	    SelectDecreesByBeacon (a real decree) → covens from the
 //	    souls registry → SubjectMatches → membership → where-CEL →
-//	    cooldown → EnqueueScenario (live: SelectByName(incarnation) →
+//	    cooldown → EnqueueScenario (live: SelectByID(incarnation) →
 //	    Resolve → InsertPlanned) → RecordFire → audit oracle.fired
 //	→ ASSERT: an apply_runs row(planned) with
 //	  Recipe.ServiceRef.Ref == inc.ServiceVersion + Recipe.Input carried
@@ -208,7 +208,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Fatalf("soul.Insert: %v", err)
 	}
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: incName, Service: svcName, ServiceVersion: svcVer,
+		ID: incName, Service: svcName, ServiceVersion: svcVer,
 		StateSchemaVersion: 1, State: map[string]any{"replicas": float64(3)},
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
@@ -222,13 +222,13 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 		t.Fatalf("incarnation.AddMembers: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
-		Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s",
+		ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s",
 		CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertVigil: %v", err)
 	}
 	if err := oracle.InsertDecree(ctx, integrationPool, &oracle.Decree{
-		Name: "restart-web", OnBeacon: "svc-down",
+		ID: "restart-web", OnBeacon: "svc-down",
 		SubjectCoven: []string{"web"}, IncarnationName: incName,
 		ActionScenario: "restart_service", ActionInput: []byte(`{"unit":"nginx","graceful":true}`),
 		Cooldown: "5m", Enabled: true, CreatedByAID: &creator,
@@ -345,7 +345,7 @@ func TestIntegration_OracleCrossSide_PortentToPlannedApplyRun(t *testing.T) {
 // DELETE CASCADE (migration 099) — a host cannot be a member of an
 // incarnation that is not in the registry, so the gate refuses long
 // before the enqueuer runs. An unresolvable service is the same failure
-// (SelectByName → Resolve, one step later) staged where it can still
+// (SelectByID → Resolve, one step later) staged where it can still
 // happen.
 func TestIntegration_OracleCrossSide_EnqueueFailureNoFireNoAudit(t *testing.T) {
 	resetOracleCrossSide(t)
@@ -368,7 +368,7 @@ func TestIntegration_OracleCrossSide_EnqueueFailureNoFireNoAudit(t *testing.T) {
 		t.Fatalf("soul.Insert: %v", err)
 	}
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: incName, Service: "unknown-svc", ServiceVersion: "v1",
+		ID: incName, Service: "unknown-svc", ServiceVersion: "v1",
 		StateSchemaVersion: 1, State: map[string]any{},
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
@@ -378,13 +378,13 @@ func TestIntegration_OracleCrossSide_EnqueueFailureNoFireNoAudit(t *testing.T) {
 		t.Fatalf("incarnation.AddMembers: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
-		Name: "svc-down", Coven: []string{"ghost"}, IntervalSpec: "30s",
+		ID: "svc-down", Coven: []string{"ghost"}, IntervalSpec: "30s",
 		CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertVigil: %v", err)
 	}
 	if err := oracle.InsertDecree(ctx, integrationPool, &oracle.Decree{
-		Name: "restart-ghost", OnBeacon: "svc-down",
+		ID: "restart-ghost", OnBeacon: "svc-down",
 		SubjectCoven: []string{"ghost"}, IncarnationName: incName,
 		ActionScenario: "restart_service", Cooldown: "5m", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
@@ -448,7 +448,7 @@ func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL
 		t.Fatalf("soul.Insert: %v", err)
 	}
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: incName, Service: svcName, ServiceVersion: svcVer,
+		ID: incName, Service: svcName, ServiceVersion: svcVer,
 		StateSchemaVersion: 1, State: map[string]any{},
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
@@ -458,14 +458,14 @@ func seedV5TypedFixture(t *testing.T, ctx context.Context, beaconCheck, whereCEL
 		t.Fatalf("incarnation.AddMembers: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
-		Name: "watch-v5", Coven: []string{"web"}, IntervalSpec: "30s",
+		ID: "watch-v5", Coven: []string{"web"}, IntervalSpec: "30s",
 		CheckAddr: beaconCheck, Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertVigil: %v", err)
 	}
 	whereRef := whereCEL
 	if err := oracle.InsertDecree(ctx, integrationPool, &oracle.Decree{
-		Name: "react-v5", OnBeacon: "watch-v5", WhereCEL: &whereRef,
+		ID: "react-v5", OnBeacon: "watch-v5", WhereCEL: &whereRef,
 		SubjectCoven: []string{"web"}, IncarnationName: incName,
 		ActionScenario: "restart_service",
 		Cooldown:       "5m", Enabled: true, CreatedByAID: &creator,

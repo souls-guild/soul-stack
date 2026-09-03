@@ -159,7 +159,7 @@ func TestCreate_HappyPath(t *testing.T) {
 	}
 	parent := "archon-alice"
 	inc := &Incarnation{
-		Name:               "redis-prod",
+		ID:                 "redis-prod",
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
@@ -206,28 +206,28 @@ func TestCreate_HappyPath(t *testing.T) {
 	}
 }
 
-func TestCreate_RejectsInvalidName(t *testing.T) {
+func TestCreate_RejectsInvalidID(t *testing.T) {
 	f := &fakeDB{}
 	inc := &Incarnation{
-		Name: "Bad_Name", Service: "redis", ServiceVersion: "v1",
+		ID: "Bad_Name", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 	}
 	err := Create(context.Background(), f, inc)
 	if err == nil {
-		t.Fatal("Create with invalid name returned nil")
+		t.Fatal("Create with invalid id returned nil")
 	}
-	if !strings.Contains(err.Error(), "invalid name") {
+	if !strings.Contains(err.Error(), "invalid id") {
 		t.Errorf("err = %v", err)
 	}
 	if f.queryRowCalls != 0 {
-		t.Errorf("queryRowCalls = %d on invalid name; want 0", f.queryRowCalls)
+		t.Errorf("queryRowCalls = %d on invalid id; want 0", f.queryRowCalls)
 	}
 }
 
 func TestCreate_RejectsEmptyService(t *testing.T) {
 	f := &fakeDB{}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "", ServiceVersion: "v1",
+		ID: "redis-x", Service: "", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 	}
 	if err := Create(context.Background(), f, inc); err == nil {
@@ -238,7 +238,7 @@ func TestCreate_RejectsEmptyService(t *testing.T) {
 func TestCreate_RejectsInvalidStatus(t *testing.T) {
 	f := &fakeDB{}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: Status("hax"),
 	}
 	if err := Create(context.Background(), f, inc); err == nil {
@@ -249,7 +249,7 @@ func TestCreate_RejectsInvalidStatus(t *testing.T) {
 func TestCreate_RejectsZeroSchemaVersion(t *testing.T) {
 	f := &fakeDB{}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 0, Status: StatusReady,
 	}
 	if err := Create(context.Background(), f, inc); err == nil {
@@ -274,7 +274,7 @@ func TestCreate_MapsUniqueViolation(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 	}
 	err := Create(context.Background(), f, inc)
@@ -297,7 +297,7 @@ func TestCreate_MapsFKViolation(t *testing.T) {
 	}
 	parent := "archon-ghost"
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &parent,
 	}
 	err := Create(context.Background(), f, inc)
@@ -322,7 +322,7 @@ func TestCreate_NilCovensBecomesEmptySlice(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		// Covens nil
 	}
@@ -349,7 +349,7 @@ func TestCreate_CovensPassedThrough(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		Covens: []string{"prod", "dc1"},
 	}
@@ -362,7 +362,7 @@ func TestCreate_CovensPassedThrough(t *testing.T) {
 	}
 }
 
-// --- SelectByName -----------------------------------------------------
+// --- SelectByID -----------------------------------------------------
 
 func TestSelectByName_HappyPath(t *testing.T) {
 	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
@@ -382,12 +382,12 @@ func TestSelectByName_HappyPath(t *testing.T) {
 			}}
 		},
 	}
-	inc, err := SelectByName(context.Background(), f, "redis-prod")
+	inc, err := SelectByID(context.Background(), f, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if inc.Name != "redis-prod" {
-		t.Errorf("Name = %q", inc.Name)
+	if inc.ID != "redis-prod" {
+		t.Errorf("Name = %q", inc.ID)
 	}
 	if inc.Status != StatusReady {
 		t.Errorf("Status = %q", inc.Status)
@@ -409,7 +409,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 
 func TestSelectByName_NotFound(t *testing.T) {
 	f := &fakeDB{} // default → ErrNoRows
-	_, err := SelectByName(context.Background(), f, "missing")
+	_, err := SelectByID(context.Background(), f, "missing")
 	if !errors.Is(err, ErrIncarnationNotFound) {
 		t.Fatalf("err = %v, want ErrIncarnationNotFound", err)
 	}
@@ -456,8 +456,8 @@ func TestSelectAll_NoFilter(t *testing.T) {
 	if len(out) != 2 {
 		t.Fatalf("len(out) = %d, want 2", len(out))
 	}
-	if out[0].Name != "a" || out[1].Name != "b" {
-		t.Errorf("names = %s, %s", out[0].Name, out[1].Name)
+	if out[0].ID != "a" || out[1].ID != "b" {
+		t.Errorf("names = %s, %s", out[0].ID, out[1].ID)
 	}
 	if !strings.Contains(f.querySQL, "ORDER BY created_at DESC") {
 		t.Errorf("ORDER missing in: %q", f.querySQL)
@@ -592,7 +592,7 @@ func TestSelectAll_ScopeCovens_TagsOnly(t *testing.T) {
 	if !strings.Contains(f.querySQL, "covens && $1") {
 		t.Errorf("coven intersection covens && $1 is missing: %q", f.querySQL)
 	}
-	if strings.Contains(f.querySQL, "name = ANY($1)") {
+	if strings.Contains(f.querySQL, "id = ANY($1)") {
 		t.Errorf("a coven scope still matches by name — the name is not a coven tag: %q", f.querySQL)
 	}
 	if covs, ok := f.queryArgs[0].([]string); !ok || len(covs) != 1 || covs[0] != "redis-prod" {
@@ -600,18 +600,18 @@ func TestSelectAll_ScopeCovens_TagsOnly(t *testing.T) {
 	}
 }
 
-// TestSelectAll_ScopeStateNames_PushdownByName — the state dimension arrives
+// TestSelectAll_ScopeStateNames_PushdownByID — the state dimension arrives
 // as a pre-resolved set of names → `name = ANY($n)` pushdown (CEL isn't
 // duplicated in CRUD; names match via plain SQL, total/offset stay coherent).
-func TestSelectAll_ScopeStateNames_PushdownByName(t *testing.T) {
+func TestSelectAll_ScopeStateNames_PushdownByID(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{},
 		ListScope{StateNames: []string{"redis-a", "redis-c"}}, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	if !strings.Contains(f.querySQL, "name = ANY($1)") {
-		t.Errorf("state-names pushdown name = ANY($1) is missing: %q", f.querySQL)
+	if !strings.Contains(f.querySQL, "id = ANY($1)") {
+		t.Errorf("state-names pushdown id = ANY($1) is missing: %q", f.querySQL)
 	}
 	if names, ok := f.queryArgs[0].([]string); !ok || len(names) != 2 {
 		t.Errorf("state-names bind = %v, want [redis-a redis-c]", f.queryArgs[0])
@@ -634,7 +634,7 @@ func TestSelectAll_ScopeOR_CovenAndState(t *testing.T) {
 		t.Errorf("service filter is missing: %q", f.querySQL)
 	}
 	// scope block is parenthesized and contains OR between dimensions.
-	if !strings.Contains(f.querySQL, "(covens && $2 OR name = ANY($3))") {
+	if !strings.Contains(f.querySQL, "(covens && $2 OR id = ANY($3))") {
 		t.Errorf("dimension OR-block is wrong: %q", f.querySQL)
 	}
 }
@@ -723,7 +723,7 @@ func TestAppendScopeClause_Table(t *testing.T) {
 		{
 			name:       "coven ∪ state-names -> dimension OR inside common parens",
 			scope:      ListScope{Covens: []string{"prod"}, StateNames: []string{"redis-a"}},
-			wantSubstr: []string{"(covens && $1 OR name = ANY($2))"},
+			wantSubstr: []string{"(covens && $1 OR id = ANY($2))"},
 			denySubstr: []string{"@>", "traits->>", "FALSE"},
 		},
 		{
@@ -956,16 +956,16 @@ func TestSelectAll_StatePredicate_CombinesWithBaseFilter(t *testing.T) {
 
 // --- SelectAll: SortBy / SortDir --------------------------------------
 
-func TestSelectAll_SortByName_Asc(t *testing.T) {
+func TestSelectAll_SortByID_Asc(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{
-		SortBy: "name", SortDir: SortAsc,
+		SortBy: "id", SortDir: SortAsc,
 	}, ListScope{Unrestricted: true}, 0, 50)
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	if !strings.Contains(f.querySQL, "ORDER BY name ASC, name ASC") {
-		t.Errorf("ORDER BY name asc missing in: %q", f.querySQL)
+	if !strings.Contains(f.querySQL, "ORDER BY id ASC, id ASC") {
+		t.Errorf("ORDER BY id asc missing in: %q", f.querySQL)
 	}
 }
 
@@ -978,7 +978,7 @@ func TestSelectAll_SortByStatus_Desc(t *testing.T) {
 		t.Fatalf("SelectAll: %v", err)
 	}
 	// tie-break on name ASC is kept for stable pagination.
-	if !strings.Contains(f.querySQL, "ORDER BY status DESC, name ASC") {
+	if !strings.Contains(f.querySQL, "ORDER BY status DESC, id ASC") {
 		t.Errorf("ORDER BY status desc missing in: %q", f.querySQL)
 	}
 }
@@ -993,7 +993,7 @@ func TestSelectAll_SortByStateField(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	if !strings.Contains(f.querySQL, "ORDER BY state->>'redis_version' ASC, name ASC") {
+	if !strings.Contains(f.querySQL, "ORDER BY state->>'redis_version' ASC, id ASC") {
 		t.Errorf("ORDER BY state-field missing in: %q", f.querySQL)
 	}
 }
@@ -1022,7 +1022,7 @@ func TestSelectAll_SortBy_RejectsInjectionStatePath(t *testing.T) {
 func TestSelectAll_SortDir_RejectsUnknown(t *testing.T) {
 	f := newCountQueryFakeDB()
 	_, _, err := SelectAll(context.Background(), f, ListFilter{
-		SortBy: "name", SortDir: "sideways",
+		SortBy: "id", SortDir: "sideways",
 	}, ListScope{Unrestricted: true}, 0, 50)
 	if !errors.Is(err, ErrInvalidSortDir) {
 		t.Errorf("err = %v, want ErrInvalidSortDir", err)
@@ -1037,7 +1037,7 @@ func TestSelectAll_DefaultSortUnchanged(t *testing.T) {
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	if !strings.Contains(f.querySQL, "ORDER BY created_at DESC, name ASC") {
+	if !strings.Contains(f.querySQL, "ORDER BY created_at DESC, id ASC") {
 		t.Errorf("default ORDER BY changed: %q", f.querySQL)
 	}
 }
@@ -1248,7 +1248,7 @@ func TestHistorySelectByName_RejectsBadOffsetLimit(t *testing.T) {
 	}
 }
 
-// --- ValidName --------------------------------------------------------
+// --- ValidID --------------------------------------------------------
 
 // --- UpdateStateFromRun ---
 
@@ -1403,7 +1403,7 @@ func TestUpdateStateFromRun_RejectsBadName(t *testing.T) {
 	err := UpdateStateFromRun(context.Background(), f,
 		"BAD_NAME", "s", "a", nil, nil, StatusReady, nil, nil, "h", nil, nil)
 	if err == nil {
-		t.Fatal("invalid name returned nil err")
+		t.Fatal("invalid id returned nil err")
 	}
 	if f.calls != 0 {
 		t.Errorf("calls = %d, want 0 (validation before round-trip)", f.calls)
@@ -1454,13 +1454,13 @@ func TestValidName(t *testing.T) {
 	bad := []string{"", "-leading", "Upper", "with_underscore", "x:colon",
 		strings.Repeat("a", 64)}
 	for _, n := range good {
-		if !ValidName(n) {
-			t.Errorf("ValidName(%q) = false, want true", n)
+		if !ValidID(n) {
+			t.Errorf("ValidID(%q) = false, want true", n)
 		}
 	}
 	for _, n := range bad {
-		if ValidName(n) {
-			t.Errorf("ValidName(%q) = true, want false", n)
+		if ValidID(n) {
+			t.Errorf("ValidID(%q) = true, want false", n)
 		}
 	}
 }
@@ -1494,7 +1494,7 @@ func TestCreate_CreatedScenarioPassedThrough(t *testing.T) {
 	}
 	cs := "create_cluster"
 	inc := &Incarnation{
-		Name: "redis-cluster", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-cluster", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		CreatedScenario: &cs,
 	}
@@ -1516,7 +1516,7 @@ func TestCreate_BareCreatedScenarioNull(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-bare", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-bare", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		CreatedScenario: nil,
 	}
@@ -1548,25 +1548,25 @@ func TestSelectByName_ReadsCreatedScenario(t *testing.T) {
 		}
 	}
 
-	inc, err := SelectByName(context.Background(), makeF("create_cluster"), "redis-cluster")
+	inc, err := SelectByID(context.Background(), makeF("create_cluster"), "redis-cluster")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if inc.CreatedScenario == nil || *inc.CreatedScenario != "create_cluster" {
 		t.Errorf("CreatedScenario = %v, want create_cluster", inc.CreatedScenario)
 	}
 
 	// NULL → nil (bare incarnation).
-	bare, err := SelectByName(context.Background(), makeF(nil), "redis-cluster")
+	bare, err := SelectByID(context.Background(), makeF(nil), "redis-cluster")
 	if err != nil {
-		t.Fatalf("SelectByName(bare): %v", err)
+		t.Fatalf("SelectByID(bare): %v", err)
 	}
 	if bare.CreatedScenario != nil {
 		t.Errorf("bare CreatedScenario = %v, want nil (NULL)", bare.CreatedScenario)
 	}
 }
 
-// TestSelectByName_ReadsApplyingApplyID — guard ADR-068 §A1: SelectByName reads
+// TestSelectByName_ReadsApplyingApplyID — guard ADR-068 §A1: SelectByID reads
 // the applying_apply_id column into Incarnation.ApplyingApplyID — non-null while
 // a run is in progress (applying), nil at terminal (NULL). Read-source for the
 // incarnation→live-run link.
@@ -1589,18 +1589,18 @@ func TestSelectByName_ReadsApplyingApplyID(t *testing.T) {
 	}
 
 	// Run in progress → non-null apply_id.
-	applying, err := SelectByName(context.Background(), makeF("01HAPPLYINGRUN000000000000"), "redis-cluster")
+	applying, err := SelectByID(context.Background(), makeF("01HAPPLYINGRUN000000000000"), "redis-cluster")
 	if err != nil {
-		t.Fatalf("SelectByName(applying): %v", err)
+		t.Fatalf("SelectByID(applying): %v", err)
 	}
 	if applying.ApplyingApplyID == nil || *applying.ApplyingApplyID != "01HAPPLYINGRUN000000000000" {
 		t.Errorf("ApplyingApplyID = %v, want 01HAPPLYINGRUN000000000000 (non-null while applying)", applying.ApplyingApplyID)
 	}
 
 	// Terminal → NULL → nil.
-	terminal, err := SelectByName(context.Background(), makeF(nil), "redis-cluster")
+	terminal, err := SelectByID(context.Background(), makeF(nil), "redis-cluster")
 	if err != nil {
-		t.Fatalf("SelectByName(terminal): %v", err)
+		t.Fatalf("SelectByID(terminal): %v", err)
 	}
 	if terminal.ApplyingApplyID != nil {
 		t.Errorf("terminal ApplyingApplyID = %v, want nil (NULL at terminal)", terminal.ApplyingApplyID)

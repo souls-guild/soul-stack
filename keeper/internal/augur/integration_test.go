@@ -98,7 +98,7 @@ func seedOperator(t *testing.T, aid string) {
 
 func newVaultOmen(name, aid string) *Omen {
 	return &Omen{
-		Name:         name,
+		ID:           name,
 		SourceType:   SourceVault,
 		Endpoint:     "https://vault.internal:8200",
 		AuthRef:      "vault:secret/keeper/augur/" + name,
@@ -119,9 +119,9 @@ func TestIntegration_Omen_InsertSelectDelete(t *testing.T) {
 		t.Error("CreatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectOmenByName(ctx, integrationPool, "vault-prod")
+	got, err := SelectOmenByID(ctx, integrationPool, "vault-prod")
 	if err != nil {
-		t.Fatalf("SelectOmenByName: %v", err)
+		t.Fatalf("SelectOmenByID: %v", err)
 	}
 	if got.SourceType != SourceVault || got.Endpoint != o.Endpoint {
 		t.Errorf("got = %+v", got)
@@ -130,7 +130,7 @@ func TestIntegration_Omen_InsertSelectDelete(t *testing.T) {
 	if err := DeleteOmen(ctx, integrationPool, "vault-prod"); err != nil {
 		t.Fatalf("DeleteOmen: %v", err)
 	}
-	if _, err := SelectOmenByName(ctx, integrationPool, "vault-prod"); !errors.Is(err, ErrOmenNotFound) {
+	if _, err := SelectOmenByID(ctx, integrationPool, "vault-prod"); !errors.Is(err, ErrOmenNotFound) {
 		t.Fatalf("after delete err = %v, want ErrOmenNotFound", err)
 	}
 }
@@ -154,7 +154,7 @@ func TestIntegration_Omen_SourceTypeCHECK(t *testing.T) {
 	ctx := context.Background()
 	// Direct INSERT bypassing Go validation: SQL CHECK should reject bad enum.
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO omens (name, source_type, endpoint, auth_ref, created_by_aid)
+		`INSERT INTO omens (id, source_type, endpoint, auth_ref, created_by_aid)
 		 VALUES ($1, 'mysql', 'e', 'vault:secret/x', $2)`,
 		"bad-omen", "archon-alice")
 	if err == nil {
@@ -172,9 +172,9 @@ func TestIntegration_Omen_NullCreatedByOnOperatorDelete(t *testing.T) {
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM operators WHERE aid = 'archon-alice'`); err != nil {
 		t.Fatalf("DELETE operator: %v", err)
 	}
-	got, err := SelectOmenByName(ctx, integrationPool, "vault-prod")
+	got, err := SelectOmenByID(ctx, integrationPool, "vault-prod")
 	if err != nil {
-		t.Fatalf("SelectOmenByName: %v", err)
+		t.Fatalf("SelectOmenByID: %v", err)
 	}
 	if got.CreatedByAID != nil {
 		t.Errorf("CreatedByAID = %v after operator delete, want nil", got.CreatedByAID)

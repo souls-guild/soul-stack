@@ -13,7 +13,7 @@ import (
 )
 
 // callOracleDecreeSetLabel — keeper.oracle.decree.label-set, the MCP mirror of
-// PUT /v1/decrees/{name}/label (ADR-0085). Cooldown state and the circuit
+// PUT /v1/decrees/{id}/label (ADR-0085). Cooldown state and the circuit
 // breaker are keyed on the name and do not move.
 func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[decreeView]{
@@ -21,17 +21,17 @@ func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Clai
 		resource:      "decree",
 		configured:    h.deps.OracleSvc != nil,
 		notConfigured: oracleNotConfigured,
-		validName:     oracle.ValidName,
-		namePattern:   oracle.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (decreeView, *string, error) {
-			d, previous, err := h.deps.OracleSvc.SetDecreeLabel(ctx, name, label)
+		validID:       oracle.ValidID,
+		idPattern:     oracle.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (decreeView, *string, error) {
+			d, previous, err := h.deps.OracleSvc.SetDecreeLabel(ctx, id, label)
 			if err != nil {
 				return decreeView{}, nil, err
 			}
 			return toDecreeView(d), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrDecreeNotFound) },
-		notFoundf:  func(name string) string { return "decree " + name + " not found" },
+		notFoundf:  func(id string) string { return "decree " + id + " not found" },
 		failMsg:    "set decree label failed",
 		event:      audit.EventDecreeLabelChanged,
 	})
@@ -40,7 +40,7 @@ func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Clai
 // decreeView — output projection of a Decree for oracle-tools (schemaDecreeView).
 // 1:1 with REST decreeResponse / [oracle.Decree].
 type decreeView struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
 	Label           *string         `json:"label,omitempty"`
 	OnBeacon        string          `json:"on_beacon"`
@@ -62,7 +62,7 @@ func toDecreeView(d *oracle.Decree) decreeView {
 		input = json.RawMessage("{}")
 	}
 	return decreeView{
-		Name:            d.Name,
+		ID:              d.ID,
 		Label:           d.Label,
 		OnBeacon:        d.OnBeacon,
 		WhereCEL:        d.WhereCEL,
@@ -82,7 +82,7 @@ func toDecreeView(d *oracle.Decree) decreeView {
 // exactly one of the four dimensions ([subjectPayload]); where is an optional CEL
 // predicate (compile-checked in Service); enabled is optional (omitted → true).
 type decreeCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.oracle.decree.label-set.
 	Label           *string         `json:"label"`
@@ -124,8 +124,8 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	enabled := true
@@ -135,7 +135,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 
 	callerAID := claims.Subject
 	d, err := h.deps.OracleSvc.CreateDecree(ctx, oracle.CreateDecreeInput{
-		Name:            a.Name,
+		ID:              a.ID,
 		Label:           a.Label,
 		OnBeacon:        a.OnBeacon,
 		WhereCEL:        a.WhereCEL,
@@ -151,7 +151,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 		code, detail := mapOracleErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: oracle.decree.create failed",
-				slog.String("name", a.Name), slog.String("by_aid", callerAID), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", callerAID), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
@@ -160,7 +160,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 	// action_scenario, subject, created_by_aid}. where-CEL and action_input
 	// are NOT put in the payload (action_input may carry a vault-ref in transit).
 	h.writeAudit(audit.EventDecreeCreated, callerAID, map[string]any{
-		"name":            d.Name,
+		"id":              d.ID,
 		"label":           d.Label,
 		"on_beacon":       d.OnBeacon,
 		"incarnation":     d.IncarnationName,
@@ -236,7 +236,7 @@ func (h *Handler) callOracleDecreeList(ctx context.Context, claims *jwt.Claims, 
 
 // decreeDeleteArgs — arguments for keeper.oracle.decree.delete.
 type decreeDeleteArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // callOracleDecreeDelete — mutating-tool keeper.oracle.decree.delete.
@@ -260,21 +260,21 @@ func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
-	if err := h.deps.OracleSvc.DeleteDecree(ctx, a.Name); err != nil {
+	if err := h.deps.OracleSvc.DeleteDecree(ctx, a.ID); err != nil {
 		code, detail := mapOracleErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: oracle.decree.delete failed",
-				slog.String("name", a.Name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
 	h.writeAudit(audit.EventDecreeDeleted, claims.Subject, map[string]any{
-		"name": a.Name,
+		"id": a.ID,
 	})
 
 	// REST returns 204 No Content; MCP equivalent is an empty output object.

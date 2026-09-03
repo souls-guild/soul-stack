@@ -15,7 +15,7 @@ import (
 // incarnationRunArgs — arguments for keeper.incarnation.run
 // (schemaIncarnationRunInput): name + scenario are required, input is optional.
 type incarnationRunArgs struct {
-	Name     string         `json:"name"`
+	ID       string         `json:"id"`
 	Scenario string         `json:"scenario"`
 	Input    map[string]any `json:"input,omitempty"`
 }
@@ -45,12 +45,12 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.Scenario == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'scenario' is required")
@@ -66,20 +66,20 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"scenario runner is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		// Fail-closed RBAC when the incarnation is missing/failed to load
 		// (parity with REST: IncarnationScopeSelector would return a nil set →
 		// scoped deny, bare/`*` passes → handler returns 404/500). Forbidden
 		// takes priority over 404.
-		if scopeErr := h.checkIncarnationScope(claims, "run", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "run", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.run")
 		}
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.run select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -90,7 +90,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
 	// {name}) — mirrors REST middleware. Checked AFTER select: the scope is
 	// built from inc.Service / inc.Covens.
-	if err := h.checkIncarnationScope(claims, "run", inc.Name, inc.Service, inc.Covens); err != nil {
+	if err := h.checkIncarnationScope(claims, "run", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.run")
 	}
@@ -99,7 +99,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// run (authority is lockRun under FOR UPDATE; parity with REST).
 	if inc.Status == incarnation.StatusErrorLocked {
 		return h.toolError(req.ID, toolName, mcpCodeIncarnationLocked,
-			"incarnation "+a.Name+" is error_locked — unlock required before next run")
+			"incarnation "+a.ID+" is error_locked — unlock required before next run")
 	}
 
 	serviceRef, ok := h.deps.ServiceRegistry.Resolve(inc.Service)
@@ -118,7 +118,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 					"input_invalid: "+err.Error())
 			}
 			h.deps.Logger.Error("mcp: incarnation.run input validation failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("scenario", a.Scenario),
 				slog.Any("error", err),
 			)
@@ -135,7 +135,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// type assertion, as on the create path.
 	if pf, ok := h.deps.ScenarioRunner.(assertPreflighter); ok {
 		if err := pf.PreflightAssert(ctx, scenario.RunSpec{
-			IncarnationName: a.Name,
+			IncarnationName: a.ID,
 			ServiceRef:      serviceRef,
 			ScenarioName:    a.Scenario,
 			Input:           a.Input,
@@ -145,7 +145,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
 			}
 			h.deps.Logger.Error("mcp: incarnation.run pre-flight assert failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("scenario", a.Scenario),
 				slog.Any("error", err),
 			)
@@ -157,14 +157,14 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	applyID := audit.NewULID()
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
-		IncarnationName: a.Name,
+		IncarnationName: a.ID,
 		ServiceRef:      serviceRef,
 		ScenarioName:    a.Scenario,
 		Input:           a.Input,
 		StartedByAID:    claims.Subject,
 	}); err != nil {
 		h.deps.Logger.Error("mcp: incarnation.run scenario start failed",
-			slog.String("name", a.Name),
+			slog.String("name", a.ID),
 			slog.String("scenario", a.Scenario),
 			slog.String("apply_id", applyID),
 			slog.Any("error", err),
@@ -174,14 +174,14 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	}
 
 	h.writeAudit(audit.EventIncarnationScenarioStarted, claims.Subject, map[string]any{
-		"name":     a.Name,
+		"id":       a.ID,
 		"scenario": a.Scenario,
 		"apply_id": applyID,
 	})
 
 	return h.toolResult(req.ID, incarnationRunOutput{
 		ApplyID:     applyID,
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		Scenario:    a.Scenario,
 	})
 }

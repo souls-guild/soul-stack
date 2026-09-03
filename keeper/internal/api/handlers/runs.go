@@ -84,9 +84,9 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		filter.Status = st
 	}
 	if in.Incarnation != "" {
-		if !incarnation.ValidName(in.Incarnation) {
+		if !incarnation.ValidID(in.Incarnation) {
 			return zero, incProblem(problem.TypeValidationFailed,
-				"query 'incarnation' must match "+incarnation.NamePattern)
+				"query 'incarnation' must match "+incarnation.IDPattern)
 		}
 		filter.Incarnation = in.Incarnation
 	}

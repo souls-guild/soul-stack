@@ -623,9 +623,9 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 			"kind=scenario target requires one of incarnations[]/service/coven")}
 	}
 	for _, name := range req.Target.Incarnations {
-		if !incarnation.ValidName(name) {
+		if !incarnation.ValidID(name) {
 			return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
-				"target.incarnations: name "+name+" must match "+incarnation.NamePattern)}
+				"target.incarnations: name "+name+" must match "+incarnation.IDPattern)}
 		}
 	}
 	// scenario uses a single filter env tag (coven[0]); the list is a UI convenience,
@@ -672,14 +672,14 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 	// the bare-check above already guaranteed the base right (cluster-admin / bare role).
 	if h.incReader != nil {
 		for _, name := range resolved {
-			inc, sErr := incarnation.SelectByName(ctx, h.incReader, name)
+			inc, sErr := incarnation.SelectByID(ctx, h.incReader, name)
 			if sErr != nil {
 				h.logger.Error("voyage: scope-check select failed",
 					slog.String("incarnation", name), slog.Any("error", sErr))
 				return nil, &problemError{problem.New(problem.TypeInternalError, "",
 					"voyage scope check failed")}
 			}
-			contexts := incarnationCovenContexts(inc.Name, inc.Service, inc.Covens)
+			contexts := incarnationCovenContexts(inc.ID, inc.Service, inc.Covens)
 			if !h.allowedAnyContext(claims.Subject, "incarnation", "run", contexts) {
 				return nil, &problemError{problem.New(problem.TypeForbidden, "",
 					"operator lacks incarnation.run on resolved incarnation "+name)}

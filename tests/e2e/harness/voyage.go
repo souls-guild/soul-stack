@@ -234,7 +234,7 @@ func (s *Stack) IncarnationsInStatus(t *testing.T, incNames []string, status str
 	var out []string
 	for _, name := range incNames {
 		var st string
-		if err := s.db.QueryRow(ctx, "SELECT status FROM incarnation WHERE name = $1", name).Scan(&st); err != nil {
+		if err := s.db.QueryRow(ctx, "SELECT status FROM incarnation WHERE id = $1", name).Scan(&st); err != nil {
 			t.Fatalf("IncarnationsInStatus(%s): %v", name, err)
 		}
 		if st == status {
@@ -254,7 +254,7 @@ func (s *Stack) IncarnationStatusDetails(t *testing.T, name string) (string, str
 	var status string
 	var details *string
 	if err := s.db.QueryRow(ctx,
-		"SELECT status, status_details::text FROM incarnation WHERE name = $1", name).Scan(&status, &details); err != nil {
+		"SELECT status, status_details::text FROM incarnation WHERE id = $1", name).Scan(&status, &details); err != nil {
 		t.Fatalf("IncarnationStatusDetails(%s): %v", name, err)
 	}
 	d := ""
@@ -288,7 +288,7 @@ func (s *Stack) DumpRecoveryState(t *testing.T, voyageID string) {
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 
-	incRows, err := s.db.Query(ctx, `SELECT name, status FROM incarnation ORDER BY name`)
+	incRows, err := s.db.Query(ctx, `SELECT id, status FROM incarnation ORDER BY id`)
 	if err == nil {
 		var dump []string
 		for incRows.Next() {

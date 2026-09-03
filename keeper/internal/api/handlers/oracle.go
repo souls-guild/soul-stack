@@ -39,7 +39,7 @@ import (
 )
 
 // reOracleName is the format of the {name} path segment for Vigil / Decree (kebab 1..63,
-// oracle.NamePattern). A path segment with no slashes/`..` is traversal-safe.
+// oracle.IDPattern). A path segment with no slashes/`..` is traversal-safe.
 var reOracleName = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
 
 // OracleHandler holds the REST endpoints for the Oracle registries (vigils + decrees).
@@ -80,7 +80,7 @@ func OracleSpecStub() *OracleHandler {
 // reorder keys). created_at/updated_at — UTC + Truncate(Second) (pinned here, as in the
 // oracle (w,r) reference).
 type VigilView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -100,7 +100,7 @@ func toVigilView(v *oracle.Vigil) VigilView {
 		params = json.RawMessage("{}")
 	}
 	return VigilView{
-		Name:         v.Name,
+		ID:           v.ID,
 		Label:        v.Label,
 		Subject:      v.Subject(),
 		Interval:     v.IntervalSpec,
@@ -119,9 +119,9 @@ func toVigilView(v *oracle.Vigil) VigilView {
 // category D); enabled — pointer-optional (omitted → true). The subject and the form of
 // interval/check/params are validated by the service.
 type VigilCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/vigils/{name}/label.
+	// by PUT /v1/vigils/{id}/label.
 	Label    *string
 	Subject  subject.Selector
 	Interval string
@@ -145,7 +145,7 @@ type VigilCreateReply struct {
 // name/check/interval/subject/created_by_aid; params is NOT included).
 func (r VigilCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":           r.View.Name,
+		"id":             r.View.ID,
 		"label":          r.View.Label,
 		"check":          r.Check,
 		"interval":       r.Interval,
@@ -162,7 +162,7 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 	var zero VigilCreateReply
 	callerAID := claims.Subject
 	v, err := h.svc.CreateVigil(ctx, oracle.CreateVigilInput{
-		Name:      req.Name,
+		ID:        req.ID,
 		Label:     req.Label,
 		Subject:   req.Subject,
 		Interval:  req.Interval,
@@ -172,7 +172,7 @@ func (h *OracleHandler) CreateVigilTyped(ctx context.Context, claims *keeperjwt.
 		CallerAID: &callerAID,
 	})
 	if err != nil {
-		return zero, h.vigilError("oracle.vigil.create", req.Name, callerAID, err)
+		return zero, h.vigilError("oracle.vigil.create", req.ID, callerAID, err)
 	}
 	return VigilCreateReply{
 		View:      toVigilView(v),
@@ -214,24 +214,24 @@ func (h *OracleHandler) ListVigilsTyped(ctx context.Context, offset, limit int) 
 	return VigilListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetVigilTyped is the domain function for GET /v1/vigils/{name} (handler-native, read with
+// GetVigilTyped is the domain function for GET /v1/vigils/{id} (handler-native, read with
 // path, no audit): path-name validation + svc.GetVigil + sentinel→problem (404/422/500).
 // Errors are *problemError; success is [VigilView].
-func (h *OracleHandler) GetVigilTyped(ctx context.Context, name string) (VigilView, error) {
+func (h *OracleHandler) GetVigilTyped(ctx context.Context, id string) (VigilView, error) {
 	var zero VigilView
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	v, err := h.svc.GetVigil(ctx, name)
+	v, err := h.svc.GetVigil(ctx, id)
 	switch {
 	case err == nil:
 		return toVigilView(v), nil
 	case errors.Is(err, oracle.ErrVigilNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+id+" not found")}
 	default:
 		h.logger.Error("oracle.vigil.get: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get vigil failed")}
 	}
 }
@@ -239,81 +239,81 @@ func (h *OracleHandler) GetVigilTyped(ctx context.Context, name string) (VigilVi
 // VigilDeleteReply is the extracted result of [OracleHandler.DeleteVigilTyped]
 // (handler-native). Carries the audit fields (the HTTP response is an empty 204 body).
 type VigilDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload builds the audit payload for the vigil.delete route (legacy parity: name).
 func (r VigilDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteVigilTyped is the domain function for DELETE /v1/vigils/{name} (handler-native):
+// DeleteVigilTyped is the domain function for DELETE /v1/vigils/{id} (handler-native):
 // path-name validation + svc.DeleteVigil + sentinel→problem. Errors are *problemError;
 // success is [VigilDeleteReply].
-func (h *OracleHandler) DeleteVigilTyped(ctx context.Context, name string) (VigilDeleteReply, error) {
+func (h *OracleHandler) DeleteVigilTyped(ctx context.Context, id string) (VigilDeleteReply, error) {
 	var zero VigilDeleteReply
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	err := h.svc.DeleteVigil(ctx, name)
+	err := h.svc.DeleteVigil(ctx, id)
 	switch {
 	case err == nil:
-		return VigilDeleteReply{Name: name}, nil
+		return VigilDeleteReply{ID: id}, nil
 	case errors.Is(err, oracle.ErrVigilNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+id+" not found")}
 	default:
 		h.logger.Error("oracle.vigil.delete: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete vigil failed")}
 	}
 }
 
-// SetVigilLabelTyped — domain function for PUT /v1/vigils/{name}/label
+// SetVigilLabelTyped — domain function for PUT /v1/vigils/{id}/label
 // (WRITE+AUDIT vigil.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only 422 this route
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row and is what a Decree's on_beacon points at.
-func (h *OracleHandler) SetVigilLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[VigilView], error) {
+func (h *OracleHandler) SetVigilLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[VigilView], error) {
 	var zero LabelWriteReply[VigilView]
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	v, previous, err := h.svc.SetVigilLabel(ctx, name, req.Label)
+	v, previous, err := h.svc.SetVigilLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[VigilView]{Body: toVigilView(v), Name: name, Label: v.Label, Previous: previous}, nil
+		return LabelWriteReply[VigilView]{Body: toVigilView(v), ID: id, Label: v.Label, Previous: previous}, nil
 	case errors.Is(err, oracle.ErrVigilNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "vigil "+id+" not found")}
 	default:
 		h.logger.Error("oracle.vigil.label-set: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set vigil label failed")}
 	}
 }
 
-// SetDecreeLabelTyped — domain function for PUT /v1/decrees/{name}/label
+// SetDecreeLabelTyped — domain function for PUT /v1/decrees/{id}/label
 // (WRITE+AUDIT decree.label_changed). 404 if absent. Same contract as
 // [OracleHandler.SetVigilLabelTyped]; the reactor's cooldown and circuit state
 // are keyed on the name and do not move.
-func (h *OracleHandler) SetDecreeLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[DecreeView], error) {
+func (h *OracleHandler) SetDecreeLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[DecreeView], error) {
 	var zero LabelWriteReply[DecreeView]
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	d, previous, err := h.svc.SetDecreeLabel(ctx, name, req.Label)
+	d, previous, err := h.svc.SetDecreeLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[DecreeView]{Body: toDecreeView(d), Name: name, Label: d.Label, Previous: previous}, nil
+		return LabelWriteReply[DecreeView]{Body: toDecreeView(d), ID: id, Label: d.Label, Previous: previous}, nil
 	case errors.Is(err, oracle.ErrDecreeNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+id+" not found")}
 	default:
 		h.logger.Error("oracle.decree.label-set: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set decree label failed")}
 	}
 }
@@ -321,15 +321,15 @@ func (h *OracleHandler) SetDecreeLabelTyped(ctx context.Context, name string, re
 // vigilError maps [oracle.Service] sentinels (Vigil create) to *problemError:
 //   - ErrValidation         → validation-failed (422).
 //   - ErrVigilAlreadyExists  → vigil-already-exists (409).
-func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error {
+func (h *OracleHandler) vigilError(op, id, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, oracle.ErrValidation):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	case errors.Is(err, oracle.ErrVigilAlreadyExists):
-		return &problemError{problem.New(problem.TypeVigilExists, "", "vigil "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeVigilExists, "", "vigil "+id+" already exists")}
 	default:
 		h.logger.Error(op+": service failed",
-			slog.String("name", name), slog.String("by_aid", callerAID), slog.Any("error", err))
+			slog.String("id", id), slog.String("by_aid", callerAID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" failed")}
 	}
 }
@@ -343,7 +343,7 @@ func (h *OracleHandler) vigilError(op, name, callerAID string, err error) error 
 // JSONB ([json.RawMessage], ADR-051 category D): raw bytes are returned as-is.
 // created_at/updated_at — UTC + Truncate(Second).
 type DecreeView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label           *string
@@ -366,7 +366,7 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 		input = json.RawMessage("{}")
 	}
 	return DecreeView{
-		Name:            d.Name,
+		ID:              d.ID,
 		Label:           d.Label,
 		OnBeacon:        d.OnBeacon,
 		Where:           d.WhereCEL,
@@ -389,9 +389,9 @@ func toDecreeView(d *oracle.Decree) DecreeView {
 // cooldown/enabled — pointer-optional (enabled omitted → true). The subject / where-CEL /
 // cooldown are validated by the service.
 type DecreeCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/decrees/{name}/label.
+	// by PUT /v1/decrees/{id}/label.
 	Label           *string
 	OnBeacon        string
 	Subject         subject.Selector
@@ -418,7 +418,7 @@ type DecreeCreateReply struct {
 // action_input are NOT included).
 func (r DecreeCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":            r.View.Name,
+		"id":              r.View.ID,
 		"label":           r.View.Label,
 		"on_beacon":       r.View.OnBeacon,
 		"incarnation":     r.View.IncarnationName,
@@ -436,7 +436,7 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 	var zero DecreeCreateReply
 	callerAID := claims.Subject
 	d, err := h.svc.CreateDecree(ctx, oracle.CreateDecreeInput{
-		Name:            req.Name,
+		ID:              req.ID,
 		Label:           req.Label,
 		OnBeacon:        req.OnBeacon,
 		WhereCEL:        req.Where,
@@ -449,7 +449,7 @@ func (h *OracleHandler) CreateDecreeTyped(ctx context.Context, claims *keeperjwt
 		CallerAID:       &callerAID,
 	})
 	if err != nil {
-		return zero, h.decreeError("oracle.decree.create", req.Name, callerAID, err)
+		return zero, h.decreeError("oracle.decree.create", req.ID, callerAID, err)
 	}
 	return DecreeCreateReply{View: toDecreeView(d), Subject: d.Subject().String(), CallerAID: callerAID}, nil
 }
@@ -484,24 +484,24 @@ func (h *OracleHandler) ListDecreesTyped(ctx context.Context, offset, limit int)
 	return DecreeListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetDecreeTyped is the domain function for GET /v1/decrees/{name} (handler-native, read
+// GetDecreeTyped is the domain function for GET /v1/decrees/{id} (handler-native, read
 // with path, no audit): path-name validation + svc.GetDecree + sentinel→problem
 // (404/422/500). Errors are *problemError; success is [DecreeView].
-func (h *OracleHandler) GetDecreeTyped(ctx context.Context, name string) (DecreeView, error) {
+func (h *OracleHandler) GetDecreeTyped(ctx context.Context, id string) (DecreeView, error) {
 	var zero DecreeView
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	d, err := h.svc.GetDecree(ctx, name)
+	d, err := h.svc.GetDecree(ctx, id)
 	switch {
 	case err == nil:
 		return toDecreeView(d), nil
 	case errors.Is(err, oracle.ErrDecreeNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+id+" not found")}
 	default:
 		h.logger.Error("oracle.decree.get: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get decree failed")}
 	}
 }
@@ -509,32 +509,32 @@ func (h *OracleHandler) GetDecreeTyped(ctx context.Context, name string) (Decree
 // DecreeDeleteReply is the extracted result of [OracleHandler.DeleteDecreeTyped]
 // (handler-native). Carries the audit fields (the HTTP response is an empty 204 body).
 type DecreeDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload builds the audit payload for the decree.delete route (legacy parity: name).
 func (r DecreeDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteDecreeTyped is the domain function for DELETE /v1/decrees/{name} (handler-native):
+// DeleteDecreeTyped is the domain function for DELETE /v1/decrees/{id} (handler-native):
 // path-name validation + svc.DeleteDecree + sentinel→problem (the cascade clears
 // cooldown-state). Errors are *problemError; success is [DecreeDeleteReply].
-func (h *OracleHandler) DeleteDecreeTyped(ctx context.Context, name string) (DecreeDeleteReply, error) {
+func (h *OracleHandler) DeleteDecreeTyped(ctx context.Context, id string) (DecreeDeleteReply, error) {
 	var zero DecreeDeleteReply
-	if !reOracleName.MatchString(name) {
+	if !reOracleName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOracleName.String())}
+			"path param 'id' must match "+reOracleName.String())}
 	}
-	err := h.svc.DeleteDecree(ctx, name)
+	err := h.svc.DeleteDecree(ctx, id)
 	switch {
 	case err == nil:
-		return DecreeDeleteReply{Name: name}, nil
+		return DecreeDeleteReply{ID: id}, nil
 	case errors.Is(err, oracle.ErrDecreeNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "decree "+id+" not found")}
 	default:
 		h.logger.Error("oracle.decree.delete: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete decree failed")}
 	}
 }
@@ -542,15 +542,15 @@ func (h *OracleHandler) DeleteDecreeTyped(ctx context.Context, name string) (Dec
 // decreeError maps [oracle.Service] sentinels (Decree create) to *problemError:
 //   - ErrValidation          → validation-failed (422).
 //   - ErrDecreeAlreadyExists   → decree-already-exists (409).
-func (h *OracleHandler) decreeError(op, name, callerAID string, err error) error {
+func (h *OracleHandler) decreeError(op, id, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, oracle.ErrValidation):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	case errors.Is(err, oracle.ErrDecreeAlreadyExists):
-		return &problemError{problem.New(problem.TypeDecreeExists, "", "decree "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeDecreeExists, "", "decree "+id+" already exists")}
 	default:
 		h.logger.Error(op+": service failed",
-			slog.String("name", name), slog.String("by_aid", callerAID), slog.Any("error", err))
+			slog.String("id", id), slog.String("by_aid", callerAID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" failed")}
 	}
 }

@@ -31,7 +31,7 @@ type CompatCatalog struct {
 // snapshot at `(name, ref)`. Declared as an interface so the handler can be
 // tested without git; the production implementation is a function over
 // [artifact.ServiceLoader] + the destiny loader (see daemon.setupScenarioDeps).
-// nil → `GET /v1/services/{name}/compat` answers 500 "not configured".
+// nil → `GET /v1/services/{id}/compat` answers 500 "not configured".
 type CompatLister interface {
 	ListServiceCompat(ctx context.Context, name, gitURL, ref string) (*CompatCatalog, error)
 }

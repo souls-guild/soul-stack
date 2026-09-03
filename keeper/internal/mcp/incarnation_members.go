@@ -1,7 +1,7 @@
 package mcp
 
 // keeper.incarnation.bind-member / .unbind-member / .members — parity with REST
-// POST/DELETE/GET /v1/incarnations/{name}/members (ADR-008 amendment 2026-07-28,
+// POST/DELETE/GET /v1/incarnations/{id}/members (ADR-008 amendment 2026-07-28,
 // NIM-209). The OPERATOR path for incarnation membership: before it the only bind
 // act was `core.soul.registered` INSIDE a scenario run, so a scenario deploying
 // onto a ready roster was unreachable from any operator surface.
@@ -73,7 +73,7 @@ func nonNilSIDs(xs []string) []string {
 }
 
 type incarnationBindMemberArgs struct {
-	Name string   `json:"name"`
+	ID   string   `json:"id"`
 	SIDs []string `json:"sids"`
 }
 
@@ -94,11 +94,11 @@ func (h *Handler) callIncarnationBindMember(ctx context.Context, claims *jwt.Cla
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+incarnation.IDPattern)
 	}
 	if len(a.SIDs) == 0 {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'sids' must contain at least one SID")
@@ -115,20 +115,20 @@ func (h *Handler) callIncarnationBindMember(ctx context.Context, claims *jwt.Cla
 
 	// Gate (a). A failed probe → fail-closed on the scoped check (unlock/destroy
 	// pattern); a bare/`*` holder passes through and meets the 404 below.
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "bind-member", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "bind-member", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.bind-member")
 		}
 		if errors.Is(probeErr, incarnation.ErrIncarnationNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: incarnation.bind-member probe failed",
-			slog.String("name", a.Name), slog.Any("error", probeErr))
+			slog.String("name", a.ID), slog.Any("error", probeErr))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "select incarnation failed")
 	}
-	if scopeErr := h.checkIncarnationScope(claims, "bind-member", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	if scopeErr := h.checkIncarnationScope(claims, "bind-member", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.bind-member")
 	}
@@ -142,7 +142,7 @@ func (h *Handler) callIncarnationBindMember(ctx context.Context, claims *jwt.Cla
 	rej, err := incarnation.ScreenBindCandidates(ctx, h.deps.IncarnationDB, sids, scope)
 	if err != nil {
 		h.deps.Logger.Error("mcp: incarnation.bind-member screen failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("name", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "select souls failed")
 	}
 	if !rej.Empty() {
@@ -162,31 +162,31 @@ func (h *Handler) callIncarnationBindMember(ctx context.Context, claims *jwt.Cla
 	}
 
 	boundBy := claims.Subject
-	bound, err := incarnation.AddMembersReporting(ctx, h.deps.IncarnationDB, a.Name, sids, &boundBy)
+	bound, err := incarnation.AddMembersReporting(ctx, h.deps.IncarnationDB, a.ID, sids, &boundBy)
 	if err != nil {
 		h.deps.Logger.Error("mcp: incarnation.bind-member failed",
-			slog.String("name", a.Name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+			slog.String("name", a.ID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "bind members failed")
 	}
 	already := diffSortedSIDs(sids, bound)
 
 	h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
-		"name":           a.Name,
+		"id":             a.ID,
 		"sids":           sids,
 		"bound":          bound,
 		"already_member": already,
 	})
 
 	return h.toolResult(req.ID, incarnationBindMemberOutput{
-		Incarnation:   a.Name,
+		Incarnation:   a.ID,
 		Bound:         nonNilSIDs(bound),
 		AlreadyMember: nonNilSIDs(already),
 	})
 }
 
 type incarnationUnbindMemberArgs struct {
-	Name string `json:"name"`
-	SID  string `json:"sid"`
+	ID  string `json:"id"`
+	SID string `json:"sid"`
 }
 
 // incarnationUnbindMemberOutput — `removed` is false when the SID was not a
@@ -206,30 +206,30 @@ func (h *Handler) callIncarnationUnbindMember(ctx context.Context, claims *jwt.C
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+incarnation.IDPattern)
 	}
 	if !soul.ValidSID(a.SID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'sid' must match "+soul.SIDPattern)
 	}
 
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "unbind-member", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "unbind-member", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.unbind-member")
 		}
 		if errors.Is(probeErr, incarnation.ErrIncarnationNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: incarnation.unbind-member probe failed",
-			slog.String("name", a.Name), slog.Any("error", probeErr))
+			slog.String("name", a.ID), slog.Any("error", probeErr))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "select incarnation failed")
 	}
-	if scopeErr := h.checkIncarnationScope(claims, "unbind-member", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	if scopeErr := h.checkIncarnationScope(claims, "unbind-member", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.unbind-member")
 	}
@@ -242,7 +242,7 @@ func (h *Handler) callIncarnationUnbindMember(ctx context.Context, claims *jwt.C
 	inScope, known, err := incarnation.HostInScope(ctx, h.deps.IncarnationDB, a.SID, scope)
 	if err != nil {
 		h.deps.Logger.Error("mcp: incarnation.unbind-member scope probe failed",
-			slog.String("name", a.Name), slog.String("sid", a.SID), slog.Any("error", err))
+			slog.String("name", a.ID), slog.String("sid", a.SID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "select soul failed")
 	}
 	if known && !inScope {
@@ -250,28 +250,28 @@ func (h *Handler) callIncarnationUnbindMember(ctx context.Context, claims *jwt.C
 			"SID "+a.SID+" is outside the operator's soul scope")
 	}
 
-	removed, err := incarnation.RemoveMember(ctx, h.deps.IncarnationDB, a.Name, a.SID)
+	removed, err := incarnation.RemoveMember(ctx, h.deps.IncarnationDB, a.ID, a.SID)
 	if err != nil {
 		h.deps.Logger.Error("mcp: incarnation.unbind-member failed",
-			slog.String("name", a.Name), slog.String("sid", a.SID), slog.Any("error", err))
+			slog.String("name", a.ID), slog.String("sid", a.SID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "unbind member failed")
 	}
 
 	h.writeAudit(audit.EventIncarnationMemberUnbound, claims.Subject, map[string]any{
-		"name":    a.Name,
+		"id":      a.ID,
 		"sid":     a.SID,
 		"removed": removed,
 	})
 
 	return h.toolResult(req.ID, incarnationUnbindMemberOutput{
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		SID:         a.SID,
 		Removed:     removed,
 	})
 }
 
 type incarnationMembersArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // incarnationMemberEntry / incarnationMembersOutput mirror the REST roster read.
@@ -297,35 +297,35 @@ func (h *Handler) callIncarnationMembers(ctx context.Context, claims *jwt.Claims
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+incarnation.IDPattern)
 	}
 
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "get", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "get", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.get")
 		}
 		if errors.Is(probeErr, incarnation.ErrIncarnationNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "incarnation "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: incarnation.members probe failed",
-			slog.String("name", a.Name), slog.Any("error", probeErr))
+			slog.String("name", a.ID), slog.Any("error", probeErr))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "select incarnation failed")
 	}
-	if scopeErr := h.checkIncarnationScope(claims, "get", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	if scopeErr := h.checkIncarnationScope(claims, "get", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.get")
 	}
 
-	members, err := incarnation.ListMembers(ctx, h.deps.IncarnationDB, a.Name)
+	members, err := incarnation.ListMembers(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		h.deps.Logger.Error("mcp: incarnation.members failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("name", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "list members failed")
 	}
 
@@ -348,7 +348,7 @@ func (h *Handler) callIncarnationMembers(ctx context.Context, claims *jwt.Claims
 	}
 
 	return h.toolResult(req.ID, incarnationMembersOutput{
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		Items:       items,
 		Total:       len(items),
 	})

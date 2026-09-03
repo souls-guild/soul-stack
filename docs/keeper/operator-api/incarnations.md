@@ -19,7 +19,7 @@ Runs the selected bootstrap scenario for the specified service; creates an entry
 | `name` | `string` (kebab-case) | yes | The name of the new instance. It is an **identity, not a label**: it is what an `incarnation=` scope and an `on:`-less scenario target are written against, and it is **not** a Coven ([ADR-008 amendment 2026-07-17](../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). |
 | `service` | `string` | yes | Service name from `keeper.yml → services[].name` ([config.md → services](../config.md#services--default_destiny_source--default_module_source)). |
 | `covens` | `list<string>` | optional | Declared environment tags incarnation ([ADR-008](../../adr/0008-coven-stable-tags.md) amendment a). The format of each tag is `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` (same as Soul tags). Default is `[]`. Carry RBAC coven-scope incarnation operations (see below). |
-| `traits` | `object` | optional | Operator-set key-value incarnation trait marks ([ADR-060](../../adr/0060-traits.md) R1 slice a): key → value `scalar` OR `list of scalars` (`{"owner": "alice", "owners": ["alice", "bob"]}`). Placed in `incarnation.traits`, where they label the **incarnation** and nothing else: a member host carries only the traits an operator set on it, now and after it joins ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Nothing is written to any host row. Nested object/array-within-array → `422`. Default is `{}` (no labels). Day-2 replacement - `PUT /v1/incarnations/{name}/traits`. |
+| `traits` | `object` | optional | Operator-set key-value incarnation trait marks ([ADR-060](../../adr/0060-traits.md) R1 slice a): key → value `scalar` OR `list of scalars` (`{"owner": "alice", "owners": ["alice", "bob"]}`). Placed in `incarnation.traits`, where they label the **incarnation** and nothing else: a member host carries only the traits an operator set on it, now and after it joins ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Nothing is written to any host row. Nested object/array-within-array → `422`. Default is `{}` (no labels). Day-2 replacement - `PUT /v1/incarnations/{id}/traits`. |
 | `create_scenario` | `string` | conditional | The name of the starting (bootstrap) scenario - a scenario with top-level `create: true` in `scenario/<name>/main.yml` (a mechanism for several create scenarios; the name `create` is NOT privileged, only the key `create: true` gives validity). Format `^[a-z][a-z0-9_]*$`. **Required, if the service offers ≥1 create scenario**: empty field → `422 validation-failed` with text listing valid scenarios. Value outside the create set (operational scenario, e.g. `add_user`, or non-existent name) → `422 validation-failed`. **For a service without create scenarios, the field is ignored** - a bare incarnation is created (see below). Saved in `incarnation.created_scenario`; `rerun-last` uses it on the create path (when the last one to fall was the start scenario). |
 | `input` | `object` | optional | Input for the selected startup scenario, is validated against the `scenario/<create_scenario>/input:` service schema (NOT necessarily `create`). For bare-incarnation it is not validated (there is no run). Default is `{}`. |
 
@@ -61,17 +61,17 @@ Starting set of service = **exactly** scenarios with top-level `create: true` in
 
 - **The service offers ≥1 create-scenario + `create_scenario` non-empty and in the set** → the selected scenario is launched, `input` is validated against ITS `input:`-schema, `created_scenario` = selected name. Async run (`202` + `apply_id`).
 - **Service offers ≥1 create-scenario + `create_scenario` empty** → `422 validation-failed` (`create_scenario_required`): selection is required because `input` is validated against the schema of a SPECIFIC scenario, and Keeper does not guess which one. `detail` lists valid scenarios.
-- **Service without a single create scenario + `create_scenario` empty** → **bare incarnation**: record is created in `ready` **synchronously, without running**, `apply_id` is not in the response, `created_scenario` = `null`. Ready for day-2 operations via `POST /v1/incarnations/{name}/scenarios/{scenario}`. Non-empty `create_scenario` for such a service → `422 validation-failed` (name not in the set).
+- **Service without a single create scenario + `create_scenario` empty** → **bare incarnation**: record is created in `ready` **synchronously, without running**, `apply_id` is not in the response, `created_scenario` = `null`. Ready for day-2 operations via `POST /v1/incarnations/{id}/scenarios/{scenario}`. Non-empty `create_scenario` for such a service → `422 validation-failed` (name not in the set).
 
 A `create_scenario` value that is not included in the starter set (an operational scenario like `add_user` or a non-existent name) is always → `422 validation-failed`, the incarnation is not created (failure at the model stage). A name that is invalid in format (`^[a-z][a-z0-9_]*$`, path-traversal guard) is repelled with the same `422` until the set is resolved.
 
 Example (redis carries three create scenarios - `create` / `create_from_souls` / `migrate_cluster`): to raise a cluster from scratch, the operator passes `"create_scenario": "create"`; to upload data from an external cluster when creating - `"create_scenario": "migrate_cluster"`.
 
-#### `POST /v1/incarnations/{name}/rerun-last` - restart the last crashed scenario from `error_locked`
+#### `POST /v1/incarnations/{id}/rerun-last` - restart the last crashed scenario from `error_locked`
 
 Permission: `incarnation.rerun-last`. MCP-tool: `keeper.incarnation.rerun-last`. Path-param: `name`. OperationID: `rerunLastIncarnation`.
 
-Atomically removes the `error_locked` block and **with the same action** restarts **the last fallen scenario** incarnation ([architecture.md → Atomicity and `error_locked`](../../architecture.md)) - this can be like a bootstrap scenario (`create`/..., if the creation failed), as well as any day-2 operation (`add_user`, `restart`, ...). The name of the failed scenario reads under `FOR UPDATE` (create-path is `incarnation.created_scenario`, day-2-path is the scenario of the last failed run). Under one `FOR UPDATE`: `error_locked → applying` bypassing `ready` (race-free), `state` is NOT touched (last known-good is saved, the snapshot of the transition is written to `state_history` with the general `apply_id`). Difference from `unlock`: `unlock` only clears the block (the operator decides what to do next), and `rerun-last` clears the block and restarts the fallen scenario with one confirmed action. Asynchronous operation - `202` + `apply_id`, status polling via `GET /v1/incarnations/{name}`.
+Atomically removes the `error_locked` block and **with the same action** restarts **the last fallen scenario** incarnation ([architecture.md → Atomicity and `error_locked`](../../architecture.md)) - this can be like a bootstrap scenario (`create`/..., if the creation failed), as well as any day-2 operation (`add_user`, `restart`, ...). The name of the failed scenario reads under `FOR UPDATE` (create-path is `incarnation.created_scenario`, day-2-path is the scenario of the last failed run). Under one `FOR UPDATE`: `error_locked → applying` bypassing `ready` (race-free), `state` is NOT touched (last known-good is saved, the snapshot of the transition is written to `state_history` with the general `apply_id`). Difference from `unlock`: `unlock` only clears the block (the operator decides what to do next), and `rerun-last` clears the block and restarts the fallen scenario with one confirmed action. Asynchronous operation - `202` + `apply_id`, status polling via `GET /v1/incarnations/{id}`.
 
 **Recovering the input of a crashed run.** The scenario is restarted with the SAME input values ​​that the crashed run had (and not with defaults) - otherwise rerun with required fields (for example, redis cluster: `version`/`shards`) would have failed on input validations or applied defaults. Source input:
 
@@ -97,19 +97,19 @@ The same `apply_id` goes both in the `state_history`-snapshot of the unlock tran
 
 **Response `202 Accepted`:** `{"apply_id": "<ULID>", "incarnation": "redis-prod", "scenario": "add_user"}` - `scenario` echoes the name of the restarted (crashed) scenario.
 
-**Errors:** `403 forbidden` (no `incarnation.rerun-last`), `404 not-found` (incarnation does not exist), `409 incarnation-locked` (status not `error_locked`), `409 rerun-input-unavailable` (input of the failed day-2 run is not available - the run fell to dispatch and the recipe was not written / the recipe was cleared retention / legacy run without a prescription; see above), `422 validation-failed` (empty `reason` / `reason` longer than 500 characters / invalid path-`name` / incarnation service is not registered in the Service registry), `500 internal-error` (runner not configured / transaction / run launch).
+**Errors:** `403 forbidden` (no `incarnation.rerun-last`), `404 not-found` (incarnation does not exist), `409 incarnation-locked` (status not `error_locked`), `409 rerun-input-unavailable` (input of the failed day-2 run is not available - the run fell to dispatch and the recipe was not written / the recipe was cleared retention / legacy run without a prescription; see above), `422 validation-failed` (empty `reason` / `reason` longer than 500 characters / invalid path-`id` / incarnation service is not registered in the Service registry), `500 internal-error` (runner not configured / transaction / run launch).
 
-**RBAC:** scope is the same as `incarnation.run` / `incarnation.unlock` - `coven=`/`service=`/`incarnation=` (landing on path-`name`: declared `covens ∪ {name}` + `service` from the incarnation line).
+**RBAC:** scope is the same as `incarnation.run` / `incarnation.unlock` - `coven=`/`service=`/`incarnation=` (landing on path-`id`: declared `covens ∪ {name}` + `service` from the incarnation line).
 
 **Audit:** `incarnation.rerun_last` (`source: api` / `mcp`, `correlation_id=apply_id`, payload `{name, reason, scenario, previous_status, apply_id}`) - written by the handler after a successful unlock transition (`previous_status` is known only after it), does NOT reuse `incarnation.unlocked`.
 
-#### `POST /v1/incarnations/{name}/scenarios/{scenario}` — run a custom scenario
+#### `POST /v1/incarnations/{id}/scenarios/{scenario}` — run a custom scenario
 
 Permission: `incarnation.run`. MCP-tool: `keeper.incarnation.run`. Path-params: `name`, `scenario`.
 
 Runs scenario `<scenario>` against an existing incarnation. Asynchronous operation, response `202` + `apply_id`. The long path was chosen deliberately - RESTful (scenario as a sub-resource incarnation).
 
-**The existence of a scenario is an async contract.** Keeper synchronously checks only the grammar of the name (`scenario.ScenarioNamePattern`), not its existence: scenarios live in the service git repo (`scenario/<name>/main.yml`) and are resolved only after git-load inside the run, not in the registry. So the **unknown-but-grammatically-valid** scenario name gives `202 Accepted`, and the run then goes to `error_locked` from `scenario_load_failed` to `status_details`. This is a conscious async contract, consistent with `POST /v1/incarnations` (Create): the operator learns the result through `GET /v1/incarnations/{name}` (`status: applying` → `ready` or `error_locked`), and not from the synchronous `404`/`422`. Synchronous `422 validation-failed` returns only on a name that fails `ScenarioNamePattern` (path-traversal guard).
+**The existence of a scenario is an async contract.** Keeper synchronously checks only the grammar of the name (`scenario.ScenarioNamePattern`), not its existence: scenarios live in the service git repo (`scenario/<name>/main.yml`) and are resolved only after git-load inside the run, not in the registry. So the **unknown-but-grammatically-valid** scenario name gives `202 Accepted`, and the run then goes to `error_locked` from `scenario_load_failed` to `status_details`. This is a conscious async contract, consistent with `POST /v1/incarnations` (Create): the operator learns the result through `GET /v1/incarnations/{id}` (`status: applying` → `ready` or `error_locked`), and not from the synchronous `404`/`422`. Synchronous `422 validation-failed` returns only on a name that fails `ScenarioNamePattern` (path-traversal guard).
 
 **Request:**
 
@@ -132,7 +132,7 @@ Runs scenario `<scenario>` against an existing incarnation. Asynchronous operati
 
 **Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (scenario name did not pass `ScenarioNamePattern`). A non-existent-but-valid scenario is a **not** error for this endpoint: `202` → `error_locked` (see async contract above).
 
-#### `GET /v1/incarnations/{name}` - read spec + state + status
+#### `GET /v1/incarnations/{id}` - read spec + state + status
 
 Permission: `incarnation.get`. MCP-tool: `keeper.incarnation.get`. Path-param: `name`.
 
@@ -164,9 +164,9 @@ Permission: `incarnation.list`. MCP-tool: `keeper.incarnation.list`.
 | `service` | `string` | Filter by service name. |
 | `status` | `enum` (see above) | Filter by status. |
 
-**Response `200`:** `{items: [IncarnationGetReply], offset, limit, total}` (elements are the same form as in `GET /v1/incarnations/{name}`).
+**Response `200`:** `{items: [IncarnationGetReply], offset, limit, total}` (elements are the same form as in `GET /v1/incarnations/{id}`).
 
-#### `GET /v1/incarnations/{name}/history` — state changelog
+#### `GET /v1/incarnations/{id}/history` — state changelog
 
 Permission: `incarnation.history`. MCP-tool: `keeper.incarnation.history`. Path-param: `name`. Query:
 
@@ -188,7 +188,7 @@ Permission: `incarnation.history`. MCP-tool: `keeper.incarnation.history`. Path-
 | `apply_id` | `string` (ULID) | Launch ULID. |
 | `created_at` | `string` (RFC 3339) | When. |
 
-#### `GET /v1/incarnations/{name}/runs` - list of incarnation runs
+#### `GET /v1/incarnations/{id}/runs` - list of incarnation runs
 
 Permission: `incarnation.history` (reuse read-tier: whoever sees the history of the incarnation also sees its runs; separate permission is not entered). **REST-only - MCP-tool - but not.** Path-param: `name`. OperationID: `listIncarnationRuns`.
 
@@ -211,11 +211,11 @@ Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "exe
 
 **RBAC:** gate — existence-`RequireAction(incarnation, history)`; per-`{name}` scope - in-handler inScope-predicate (same as History): incarnation outside Purview-scope or non-existent → single `404 not-found`.
 
-**Errors:** `400 malformed-request` (out-of-range `offset`/`limit`), `404 not-found`, `422 validation-failed` (invalid path-`name`).
+**Errors:** `400 malformed-request` (out-of-range `offset`/`limit`), `404 not-found`, `422 validation-failed` (invalid path-`id`).
 
-#### `GET /v1/incarnations/{name}/runs/{apply_id}` - run details (per-host)
+#### `GET /v1/incarnations/{id}/runs/{apply_id}` - run details (per-host)
 
-Permission: `incarnation.history`. **REST-only - there is no MCP-tool.** Path-params: `name`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRun`.
+Permission: `incarnation.history`. **REST-only - there is no MCP-tool.** Path-params: `id`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRun`.
 
 Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` - list form above) + `hosts[]`. There are N lines per host (according to Passage staged-render) - the UI sees the address of the failed per-passage task.
 
@@ -233,11 +233,11 @@ Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`
 | `cancel_requested` | `bool` | Whether cancellation has been requested. |
 | `notices` | `array` (optional) | Advisory findings this host reported during the run ([ADR-0076(u)](../../adr/0076-engine-compat-window.md)). Unlike `error_summary`, **independent of `status`**: the task ran and succeeded, and something about how it was asked is on its way out. Key omitted when the run had nothing to say. Elements are `{code, module, param, message}` — today `code` is only `deprecated_param`, and `message` carries the deadline and the replacement. Deduplicated by `(code, module, param)`: one deprecated param used by twenty tasks is one thing to migrate, not twenty lines. **Per host, deliberately** — the contract a param is checked against is the manifest compiled into *that* agent, so a park mid-upgrade legitimately answers differently host to host, and flattening it into one run-level verdict would report a fleet-wide truth nobody established. |
 
-**Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found` (incarnation outside scope/does not exist; `apply_id` does not exist **or belongs to another incarnation** - store layer filters `WHERE apply_id AND incarnation_name`, cross-incarnation reading of runs is excluded), `422 validation-failed` (invalid path-`name`).
+**Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found` (incarnation outside scope/does not exist; `apply_id` does not exist **or belongs to another incarnation** - store layer filters `WHERE apply_id AND incarnation_name`, cross-incarnation reading of runs is excluded), `422 validation-failed` (invalid path-`id`).
 
-#### `GET /v1/incarnations/{name}/runs/{apply_id}/tasks` - run tasks (plan + per-host)
+#### `GET /v1/incarnations/{id}/runs/{apply_id}/tasks` - run tasks (plan + per-host)
 
-Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.read`). **REST-only - MCP-tool, but not.** Path-params: `name`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRunTasks`.
+Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.read`). **REST-only - MCP-tool, but not.** Path-params: `id`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRunTasks`.
 
 **Per-task** run slice (unlike the detail endpoint above - it gives the host lines `apply_runs`): task plan (`apply_run_plan`) + the result of each task on each host from the audit log (`task.executed`), join by `plan_index`. Under the UI tab is the "run progress": which scenario was used, from which tasks, what changed. `hosts[]` carries only hosts with a result in audit (pending is not included - the front will finish it off).
 
@@ -258,7 +258,7 @@ the flag, so the operator gets the whole step and the platform masks the declare
 
 **RBAC:** existence-`RequireAction(incarnation, history)` + in-handler inScope predicate (parity RunDetail); incarnation is out of scope/does not exist **or** `apply_id` belongs to another incarnation → single `404 not-found`.
 
-**Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found`, `422 validation-failed` (invalid path-`name`).
+**Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found`, `422 validation-failed` (invalid path-`id`).
 
 > **★ Secret hygiene `params`.** `/tasks` shows **rendered** `params` tasks to operators with `incarnation.history`. The values are masked by the seal-aware mechanism on the write-path (before writing to `apply_run_plan`, `audit.MaskSecretsSealed`; the same layer as `state`/`spec` - [§ Masking state/spec in GET responses](../operator-api.md)) - OR three layers ([templating.md §7.4](../../templating.md)): sealed-provenance (cell whose raw `${…}` read the secret-input of the active scheme / `vault(...)`), vault-ref-marker and regex-last-resort by sensitive-key name (`token`/`secret`/`password`/…). A declared secret ([ADR-0083](../../adr/0083-declared-secret-state-fields.md) §1) never renders as plaintext in the first place - the cell holds a `vault:` ref.
 >
@@ -302,7 +302,7 @@ Cart form: `{total, applying, success, failed, cancelled}` (`int`; `total` = amo
 
 **Errors:** `403 forbidden`, `500 internal-error`.
 
-#### ~~`GET /v1/incarnations/{name}/tides` - list of Tide runs~~ - superseded-by `GET /v1/voyages` ([ADR-043](../../adr/0043-voyage.md), endpoint `/v1/tides` and table `tides` removed in Wave 5; section below is historical entry)
+#### ~~`GET /v1/incarnations/{id}/tides` - list of Tide runs~~ - superseded-by `GET /v1/voyages` ([ADR-043](../../adr/0043-voyage.md), endpoint `/v1/tides` and table `tides` removed in Wave 5; section below is historical entry)
 
 Permission: `incarnation.history` (parity GET `/history` - read about the runtime state of incarnation runs; a separate `tide.read` perm is not entered until the operator requests it, [ADR-040 § RBAC reuse](../../adr/0040-tide.md#adr-040-tide--invocation-time-scope-chunking--target-override)). MCP-tool: `keeper.tide.list` (ADR-040 W-4). Path-param: `name`.
 
@@ -347,7 +347,7 @@ UI does client-side polling for progress (every 2–5 s) until the native SSE en
 
 **Errors:** `400 malformed-request` (invalid ULID in path), `403`, `404` (`tide_id` does not exist), `500`.
 
-#### `POST /v1/incarnations/{name}/unlock` — remove `error_locked`
+#### `POST /v1/incarnations/{id}/unlock` — remove `error_locked`
 
 Permission: `incarnation.unlock`. MCP-tool: `keeper.incarnation.unlock`. Path-param: `name`.
 
@@ -375,13 +375,13 @@ Clears the `error_locked` status after manually analyzing the consequences of a 
 
 **Errors:** `404 not-found`, `409` if the status is not `error_locked` (`detail` indicates the current status), `422 validation-failed` if `reason` is empty.
 
-#### `POST /v1/incarnations/{name}/upgrade` - translation to new state_schema_version
+#### `POST /v1/incarnations/{id}/upgrade` - translation to new state_schema_version
 
 Permission: `incarnation.upgrade`. MCP-tool: `keeper.incarnation.upgrade`. Path-param: `name`.
 
 Starts state migration by [ADR-019](../../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl) + switches `service_version`. One PG transaction ([migrations.md](../../migrations.md)).
 
-With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if the target version has an upgrade scenario (`upgrade/<slug>/` with `from:` ⊇ current pin, mode `found`) - after the migration, host orchestration of the transition is automatically started (`status: applying` → `ready`); otherwise (`legacy`) - the same behavior (pin change + state migration + `drift`, the operator finishes with the usual apply). The paired READ endpoint `GET /v1/incarnations/{name}/upgrade-paths` ("where and how can I update": cheap - registry tags + `is_current`; `?to=` - `direction`/`mode`/`reachable`) is described in a separate section below.
+With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if the target version has an upgrade scenario (`upgrade/<slug>/` with `from:` ⊇ current pin, mode `found`) - after the migration, host orchestration of the transition is automatically started (`status: applying` → `ready`); otherwise (`legacy`) - the same behavior (pin change + state migration + `drift`, the operator finishes with the usual apply). The paired READ endpoint `GET /v1/incarnations/{id}/upgrade-paths` ("where and how can I update": cheap - registry tags + `is_current`; `?to=` - `direction`/`mode`/`reachable`) is described in a separate section below.
 
 **Request:**
 
@@ -394,11 +394,11 @@ With [ADR-0068](../../adr/0068-service-upgrade-v2.md) upgrade - two-phase: if th
 - `apply_id` (M) — state migration ULID, always present.
 - `run_apply_id` (R) — ULID of the Runner for the upgrade scenario; **only in the found branch** (there is an upgrade scenario for the transition → autorun). In the legacy branch (no scenario → `drift`), the field is omitted (`omitempty`). Poll run - `GET .../runs/{run_apply_id}`.
 
-Incarnation status poll - `GET /v1/incarnations/{name}` (`status: applying` → `ready` or `migration_failed`).
+Incarnation status poll - `GET /v1/incarnations/{id}` (`status: applying` → `ready` or `migration_failed`).
 
 **Errors:** `404 not-found`, `409 incarnation-locked`, `409 migration-failed`, `422 validation-failed` (target version not registered).
 
-#### `GET /v1/incarnations/{name}/upgrade-paths` - upgrade paths
+#### `GET /v1/incarnations/{id}/upgrade-paths` - upgrade paths
 
 Permission: `incarnation.upgrade` (read-edge). Path-param: `name`. Query-param: `to` (optional, git-ref targets). **READ, without audit.** Design - [ADR-0068 §6](../../adr/0068-service-upgrade-v2.md); enum dictionary - [naming-rules.md → Upgrade v2](../../naming-rules.md).
 
@@ -422,7 +422,7 @@ Two mutually exclusive blocks (`paths` without `?to=` / `target` with `?to=`) + 
 
 **Errors:** `404 not-found` (no incarnation / out of scope). **Broken migration chain is NOT an error**: `200` with `reachable: false` + `unreachable_reason` (preview gives the unreachable target as data). `502` — ls-remote tags / load snapshot target; `500` - other migration chain failure.
 
-#### `DELETE /v1/incarnations/{name}` — delete instance
+#### `DELETE /v1/incarnations/{id}` — delete instance
 
 Permission: `incarnation.destroy`. MCP-tool: `keeper.incarnation.destroy`. Path-param: `name`.
 
@@ -460,7 +460,7 @@ services — a service that does not write them reports no VMs, and a missing or
 malformed value never fails the destroy). Being state, they are masked before they
 are read, so a vault reference stored under those keys comes back as `***MASKED***`
 rather than in four places at once. **The masking here is weaker than the one
-`GET /v1/incarnations/{name}` applies: it covers the vault-ref and key-name layers,
+`GET /v1/incarnations/{id}` applies: it covers the vault-ref and key-name layers,
 not the service `state_schema` layer** — a key a service
 declares `secret: true` whose value is not a vault reference and whose name is not
 secret-shaped is masked in the incarnation view and not here (NIM-531). `sids` are
@@ -494,7 +494,7 @@ than not deleting.
 
 ⚠️ The row is then left in `destroying`, and **that status has no operator exit**:
 a repeat `DELETE` is refused (`409`, `destroying` is not a destroyable status),
-`POST /v1/incarnations/{name}/unlock` is refused too (it accepts only
+`POST /v1/incarnations/{id}/unlock` is refused too (it accepts only
 `error_locked` / `migration_failed` / `destroy_failed`), and nothing reclaims a
 stale `destroying` in the background. Recovery today means a direct database
 update. This is a pre-existing gap — the archive INSERT and the DELETE could
@@ -510,7 +510,7 @@ by `status_details.force`.) These two values exist only in the archive and are n
 
 **Manifest `lifecycle.auto_destroy` ([architecture.md → Service](../../architecture.md)).** If `manifest.lifecycle.auto_destroy: false`, deletion is **always** direct (DELETE without teardown), priority over `allow_destroy` - even `allow_destroy=false` does not run a teardown scenario and does not run into `422` "no scenario `destroy`." By default (`true`, backcompat), deletion follows the usual `allow_destroy` logic. Resolved from a snapshot of the deployed service-ref.
 
-#### `PATCH /v1/incarnations/{name}/hosts` — REMOVED (NIM-330)
+#### `PATCH /v1/incarnations/{id}/hosts` — REMOVED (NIM-330)
 
 This endpoint edited `incarnation.spec.hosts[]`, and both are gone
 ([ADR-044 amendment 2026-07-30](../../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)).
@@ -544,7 +544,7 @@ was the **declared role** — and that has been an attribute of a Choir Voice si
       role: master
   ```
 
-- **Day-2, through the API** — `POST /v1/incarnations/{name}/choirs/{choir}/voices`
+- **Day-2, through the API** — `POST /v1/incarnations/{id}/choirs/{choir}/voices`
   (permission `choir.add-voice`, audit `choir.voice_added`), with `role` in the body.
   See [choirs.md](choirs.md).
 
@@ -553,7 +553,7 @@ not a default group ([ADR-044 amendment 2026-06-30(b)](../../adr/0044-choir.md#a
 The **actual** role is unaffected and still comes only from a live probe +
 `register:` + `where:` ([ADR-008](../../adr/0008-coven-stable-tags.md)).
 
-#### `PUT /v1/incarnations/{name}/label` — set the display caption
+#### `PUT /v1/incarnations/{id}/label` — set the display caption
 
 Permission: `incarnation.label-set`. MCP-tool: `keeper.incarnation.label-set`. Path-param: `name`. OperationID: `setIncarnationLabel`. **Sync operation**: editing a caption is not a run, and the response is the updated incarnation without `apply_id`.
 
@@ -573,15 +573,15 @@ Consequently there is **no status gate**: the caption may be fixed while the inc
 { "label": "Redis — Billing (production)" }
 ```
 
-**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{name}`), with the caption applied.
+**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{id}`), with the caption applied.
 
-**Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`name` — the caption itself has no form to fail), `500 internal-error`.
+**Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`id` — the caption itself has no form to fail), `500 internal-error`.
 
-**RBAC:** the same scope selector as every other incarnation mutation (`coven=`/`service=`/`incarnation=` by path-`name`). **Only that gate** — unlike `PUT .../traits` below there is no second, pair-level check, because a trait pair is a live scope dimension and grants visibility while a caption is in no dimension of anything and grants nothing.
+**RBAC:** the same scope selector as every other incarnation mutation (`coven=`/`service=`/`incarnation=` by path-`id`). **Only that gate** — unlike `PUT .../traits` below there is no second, pair-level check, because a trait pair is a live scope dimension and grants visibility while a caption is in no dimension of anything and grants nothing.
 
-**Audit:** `incarnation.label_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_label, new_label}`) — written by the handler after the write. `label` is explicitly `null` when the caption was cleared; `name` is the identifier that was addressed and is not what changed.
+**Audit:** `incarnation.label_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{id, old_label, new_label}`) — written by the handler after the write. `label` is explicitly `null` when the caption was cleared; `name` is the identifier that was addressed and is not what changed.
 
-#### `PUT /v1/incarnations/{name}/traits` — replace incarnation trait marks
+#### `PUT /v1/incarnations/{id}/traits` — replace incarnation trait marks
 
 Permission: `incarnation.traits-set`. MCP-tool: `keeper.incarnation.traits-set`. Path-param: `name`. **Sync operation** (not async): editing operator-set labels is not a run, the response returns an updated incarnation, without `apply_id`.
 
@@ -605,15 +605,15 @@ The per-host counterpart is `POST /v1/souls/traits` (first-class, see [Soul → 
 }
 ```
 
-**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{name}`) with replacement `traits` already applied. `state`/`spec` are masked according to the general rule ([§ Masking state/spec in GET responses](../operator-api.md)).
+**Response `200 OK`:** full `IncarnationGetReply` (same form as `GET /v1/incarnations/{id}`) with replacement `traits` already applied. `state`/`spec` are masked according to the general rule ([§ Masking state/spec in GET responses](../operator-api.md)).
 
-**Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name` / invalid key / nested trait value), `500 internal-error`.
+**Errors:** `400 malformed-request` (broken JSON / unknown body field), `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`id` / invalid key / nested trait value), `500 internal-error`.
 
-**RBAC:** scope selector is the same as the other incarnation mutations (env-RBAC, `coven=`/`service=`/`incarnation=` by path-`name`: declared `covens ∪ {name}` + `service`). trait-**key** NOT a scope-dimension - there is no gate for keys.
+**RBAC:** scope selector is the same as the other incarnation mutations (env-RBAC, `coven=`/`service=`/`incarnation=` by path-`id`: declared `covens ∪ {name}` + `service`). trait-**key** NOT a scope-dimension - there is no gate for keys.
 
 **Audit:** `incarnation.traits_changed` (`source: api` / `mcp`, `archon = JWT.sub`, payload `{name, old_keys, new_keys}`) - written by the handler **after** the commit. Payload carries only sorted lists of trait-**KEYS** before and after; the trait-**VALUES** themselves are NOT included in audit (secret-hygiene: trait-value can carry host infrastructure data - symmetrically `soul.traits-changed`).
 
-#### `POST /v1/incarnations/{name}/members` — bind hosts to the roster
+#### `POST /v1/incarnations/{id}/members` — bind hosts to the roster
 
 Permission: `incarnation.bind-member`. MCP-tool: `keeper.incarnation.bind-member`. Path-param: `name`. OperationID: `bindIncarnationMembers`.
 
@@ -622,8 +622,8 @@ Binds already-onboarded, **connected** Souls to the incarnation's roster (`incar
 **The operator flow it enables:**
 
 1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring `name_template` ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
-2. `POST /v1/incarnations/{name}/members` — the roster is bound.
-3. `POST /v1/incarnations/{name}/scenarios/{scenario}` — the create scenario runs against a roster that now exists.
+2. `POST /v1/incarnations/{id}/members` — the roster is bound.
+3. `POST /v1/incarnations/{id}/scenarios/{scenario}` — the create scenario runs against a roster that now exists.
 
 | Field | Type | Required | Description |
 |---|---|---|---|
@@ -645,15 +645,15 @@ Binds already-onboarded, **connected** Souls to the incarnation's roster (`incar
 
 **Idempotency.** Re-binding a member is a no-op that still succeeds; the split between `bound` and `already_member` is what keeps a repeat distinguishable from a first bind, in the reply and in the audit payload alike. Duplicate SIDs within one request are collapsed, not rejected.
 
-**RBAC — two gates, both required.** (a) the incarnation, by the usual `coven=`/`service=`/`incarnation=` selector on path-`name`; (b) **every** target SID must be inside the caller's soul visibility (`soul.list` purview). Gate (a) alone would be insufficient — an `incarnation=`-scoped predicate is satisfied without examining the host, so its holder could otherwise pull any host into their incarnation and reach it with `incarnation.run`. Gate (b) is **all-or-nothing**: one out-of-scope SID rejects the whole call and nothing is written. Details — [rbac.md → § Incarnation membership](../rbac.md).
+**RBAC — two gates, both required.** (a) the incarnation, by the usual `coven=`/`service=`/`incarnation=` selector on path-`id`; (b) **every** target SID must be inside the caller's soul visibility (`soul.list` purview). Gate (a) alone would be insufficient — an `incarnation=`-scoped predicate is satisfied without examining the host, so its holder could otherwise pull any host into their incarnation and reach it with `incarnation.run`. Gate (b) is **all-or-nothing**: one out-of-scope SID rejects the whole call and nothing is written. Details — [rbac.md → § Incarnation membership](../rbac.md).
 
 **Status rule.** Only a `connected` host may be bound by an operator: a `pending` host has never reported, and `disconnected`/`revoked`/`expired`/`destroyed` will not answer the run. The keeper-internal bind act is deliberately exempt — it binds hosts it has just created, in `pending`, on the provision-from-zero path.
 
-**Errors:** `400 malformed-request`, `403 forbidden` (no permission, **or** a SID outside the caller's soul scope — the message names them), `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name` / malformed SID / empty or oversized `sids` / unknown SID / host not connected), `500 internal-error`.
+**Errors:** `400 malformed-request`, `403 forbidden` (no permission, **or** a SID outside the caller's soul scope — the message names them), `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`id` / malformed SID / empty or oversized `sids` / unknown SID / host not connected), `500 internal-error`.
 
 **Audit:** `incarnation.member_bound` (`source: api` / `mcp`, payload `{name, sids, bound, already_member}`) — written by the handler itself.
 
-#### `GET /v1/incarnations/{name}/members` — read the roster
+#### `GET /v1/incarnations/{id}/members` — read the roster
 
 Permission: `incarnation.get` (the roster needs no right of its own). MCP-tool: `keeper.incarnation.members`. OperationID: `listIncarnationMembers`.
 
@@ -671,9 +671,9 @@ Member hosts of the incarnation with the membership audit columns. `status` is t
 
 `bound_by_aid` is absent for a keeper-internal bind (`core.soul.registered` carries no operator). The list is **narrowed to the hosts inside the caller's soul scope**, so `total` is what this operator may see, not the size of the whole roster (the two-layer read pattern, [ADR-047 §g](../../adr/0047-purview.md)).
 
-**Errors:** `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`name`), `500 internal-error`. Read-only — no audit.
+**Errors:** `403 forbidden`, `404 not-found`, `422 validation-failed` (invalid path-`id`), `500 internal-error`. Read-only — no audit.
 
-#### `DELETE /v1/incarnations/{name}/members/{sid}` — unbind a host
+#### `DELETE /v1/incarnations/{id}/members/{sid}` — unbind a host
 
 Permission: `incarnation.unbind-member`. MCP-tool: `keeper.incarnation.unbind-member`. Path-params: `name`, `sid`. OperationID: `unbindIncarnationMember`.
 
@@ -685,6 +685,6 @@ Removes the host from the roster — it stops being a target of **every future r
 
 **RBAC:** the same two gates as `bind-member`; the SID must be inside the caller's soul scope when the host still exists.
 
-**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`name`/`sid`), `500 internal-error`.
+**Errors:** `403 forbidden`, `404 not-found` (incarnation does not exist), `422 validation-failed` (invalid path-`id`/`sid`), `500 internal-error`.
 
 **Audit:** `incarnation.member_unbound` (payload `{name, sid, removed}`).

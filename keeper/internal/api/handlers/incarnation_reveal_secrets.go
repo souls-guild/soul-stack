@@ -73,7 +73,7 @@ type RevealableSecretsView struct {
 	Items []RevealableSecretItem
 }
 
-// RevealSecretTyped — domain function POST /v1/incarnations/{name}/secrets/reveal
+// RevealSecretTyped — domain function POST /v1/incarnations/{id}/secrets/reveal
 // (SELF-AUDIT incarnation.secret_revealed). Resolves the plaintext of secret secretID for
 // element key from Vault. Errors are *problemError (422 form / key arity, 404 out of scope |
 // no secretID | key not in state | floor | no value in Vault / 500 failure).
@@ -86,8 +86,8 @@ type RevealableSecretsView struct {
 func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.Claims, name, secretID, key string) (RevealSecretView, error) {
 	var zero RevealSecretView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if !reRevealSecretID.MatchString(secretID) {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'secret_id' must match "+reRevealSecretID.String())
@@ -99,7 +99,7 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 		return zero, incProblem(problem.TypeValidationFailed, "field 'key' must be a Vault path segment (letters, digits, `_` and `-`)")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			// Resource absent — not audited (not a denied-reveal, nothing to attribute).
@@ -167,7 +167,7 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 
 	// The derivation ([ADR-0083] §1) checks every segment itself and fails closed;
 	// a refusal here means state or the manifest carries something unsafe.
-	logical, derr := field.VaultPath(h.vaultMount, inc.Service, inc.Name, key)
+	logical, derr := field.VaultPath(h.vaultMount, inc.Service, inc.ID, key)
 	if derr != nil {
 		h.logger.Error("incarnation.reveal-secret: vault path derivation refused",
 			slog.String("name", name), slog.String("secret_id", secretID), slog.Any("error", derr))
@@ -181,7 +181,7 @@ func (h *IncarnationHandler) RevealSecretTyped(ctx context.Context, claims *jwt.
 	// A derived path satisfies it by construction — the check stays because it is
 	// assembled here INDEPENDENTLY of the derivation, and so still bites if the
 	// derivation ever changes what it emits.
-	allowedPrefix := config.EffectiveVaultMount(h.vaultMount) + "/" + inc.Service + "/" + inc.Name + "/"
+	allowedPrefix := config.EffectiveVaultMount(h.vaultMount) + "/" + inc.Service + "/" + inc.ID + "/"
 	if !strings.HasPrefix(logical, allowedPrefix) {
 		h.logger.Warn("incarnation.reveal-secret: path outside service/incarnation namespace",
 			slog.String("name", name), slog.String("secret_id", secretID), slog.String("path", logical))
@@ -235,7 +235,7 @@ func (h *IncarnationHandler) auditReveal(ctx context.Context, aid, name, secretI
 		return
 	}
 	payload := map[string]any{
-		"name":      name,
+		"id":        name,
 		"secret_id": secretID,
 		"key":       key,
 		"result":    result,
@@ -258,17 +258,17 @@ func (h *IncarnationHandler) auditReveal(ctx context.Context, aid, name, secretI
 	}
 }
 
-// RevealableSecretsTyped — domain function GET /v1/incarnations/{name}/secrets/
+// RevealableSecretsTyped — domain function GET /v1/incarnations/{id}/secrets/
 // revealable (READ, no audit). For each declared secret it collects the keys present
 // in the current state (none for a scalar field). Out of scope → 404 (parity Get). An
 // empty list is valid.
 func (h *IncarnationHandler) RevealableSecretsTyped(ctx context.Context, claims *jwt.Claims, name string) (RevealableSecretsView, error) {
 	zero := RevealableSecretsView{Items: []RevealableSecretItem{}}
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")

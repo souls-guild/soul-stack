@@ -4,7 +4,7 @@ Scenario - **orchestration layer** Soul Stack: one operation on the whole cluste
 
 Folder `scenario/<name>/` in the service git repo, entry point `main.yml`. Version - git ref service-repo ([ADR-007](../adr/0007-versioning-git-ref.md)).
 
-> **The second auto-discovery channel is `upgrade/`.** Version-to-version upgrade scripts live in a separate directory `upgrade/<slug>/` next to `scenario/` (self-describing key `from:` - source versions), are launched by the upgrade (`POST /v1/incarnations/{name}/upgrade`) and in regular day-2 script lists are not shown. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md).
+> **The second auto-discovery channel is `upgrade/`.** Version-to-version upgrade scripts live in a separate directory `upgrade/<slug>/` next to `scenario/` (self-describing key `from:` - source versions), are launched by the upgrade (`POST /v1/incarnations/{id}/upgrade`) and in regular day-2 script lists are not shown. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md).
 
 ## What is scenario in the new model
 

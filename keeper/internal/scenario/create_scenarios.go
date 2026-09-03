@@ -432,7 +432,7 @@ func ComposeName(template string, merged map[string]any) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	if incarnation.ValidName(composed) {
+	if incarnation.ValidID(composed) {
 		return composed, nil
 	}
 	if len(composed) > config.IncarnationNameMaxLen {
@@ -440,7 +440,7 @@ func ComposeName(template string, merged map[string]any) (string, error) {
 			ErrComposedNameInvalid, composed, len(composed), config.IncarnationNameMaxLen)
 	}
 	return composed, fmt.Errorf("%w: %q does not match %s — check the input components feeding name_template",
-		ErrComposedNameInvalid, composed, incarnation.NamePattern)
+		ErrComposedNameInvalid, composed, incarnation.IDPattern)
 }
 
 // sortedNames returns a deterministic sorted name list for the

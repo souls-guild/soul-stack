@@ -24,7 +24,7 @@ See also: [`docs/keeper/reaper.md` → `mark_disconnected`](../keeper/reaper.md)
 
 ## "Apply hangs in `applying` for 30 minutes+"
 
-**Symptoms.** `GET /v1/incarnations/{name}` shows `status: applying`, hangs for a long time. The run seemed to have to end.
+**Symptoms.** `GET /v1/incarnations/{id}` shows `status: applying`, hangs for a long time. The run seemed to have to end.
 
 **Possible reasons:**
 
@@ -52,7 +52,7 @@ WHERE apply_id = (SELECT apply_id FROM apply_runs ORDER BY created_at DESC LIMIT
 
 1. Check that Refuse-guard did not work (`acolytes: 0` + multi-keeper → should have refused to start; if it started, then `allow_unsafe_single_path_multi_keeper: true`).
 2. Commit `acolytes: > 0` to `keeper.yml` of all instances - this is not a reload-able change, it requires a restart of the Keeper cluster ([scaling.md](scaling.md)).
-3. Close stuck run. Endpoint `POST /v1/incarnations/{name}/unlock` is **not suitable** here - it only removes `error_locked` (`409`, if the status is `applying`, [operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)). For the hanging `applying` live owner there is no API transition - the last resort is direct SQL:
+3. Close stuck run. Endpoint `POST /v1/incarnations/{id}/unlock` is **not suitable** here - it only removes `error_locked` (`409`, if the status is `applying`, [operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)). For the hanging `applying` live owner there is no API transition - the last resort is direct SQL:
    ```sql
    UPDATE incarnation SET status = 'ready' WHERE name = '<name>' AND status = 'applying';
    ```
@@ -80,7 +80,7 @@ If the scenario uses `serial:` - Acolyte brands the entire serial-blok with one 
 
 **Action:** optimize the scenario or accept that the run is long-running.
 
-## "`POST /v1/incarnations/{name}/check-drift` returns 404"
+## "`POST /v1/incarnations/{id}/check-drift` returns 404"
 
 **Symptoms.** A saved curl, a script or an old client gets `404` (or `405`) from the drift-check endpoint. The MCP tool `keeper.incarnation.check-drift` is not in `tools/list`. `soulctl incarnation check-drift` is not a command.
 
@@ -220,13 +220,13 @@ See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper)
 
 ## "`incarnation.run` returns `409 incarnation already applying`"
 
-**Symptoms.** Request `POST /v1/incarnations/{name}/run` returns 409.
+**Symptoms.** Request `POST /v1/incarnations/{id}/run` returns 409.
 
 **Root.** Atomicity of the apply model ([architecture.md → Atomicity and error_locked](../architecture.md)): You cannot run a new apply on an incarnation until the previous one has completed.
 
 **Action:**
 
-1. Check status: `GET /v1/incarnations/{name}` → `status: applying`. If so, wait for completion.
+1. Check status: `GET /v1/incarnations/{id}` → `status: applying`. If so, wait for completion.
 2. If it hangs for a long time, see § Apply hangs in applying.
 3. If the status is `error_locked` - investigate the last `state_history.changed_by_aid` and the reason; usually requires a manual solution (see [ADR-027 trade-offs](../adr/0027-apply-work-queue.md)).
 

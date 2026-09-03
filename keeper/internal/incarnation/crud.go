@@ -35,8 +35,8 @@ import (
 //   - ErrSchemaVersionMismatch    → 409 (current schema version didn't match
 //     the chain: someone upgraded between resolve and FOR UPDATE).
 var (
-	ErrIncarnationAlreadyExists = errors.New("incarnation: name already exists")
-	ErrIncarnationNotFound      = errors.New("incarnation: name not found")
+	ErrIncarnationAlreadyExists = errors.New("incarnation: id already exists")
+	ErrIncarnationNotFound      = errors.New("incarnation: id not found")
 	ErrIncarnationNotLocked     = errors.New("incarnation: not in unlockable status")
 	// ErrIncarnationNotErrorLocked — status is not error_locked: rerun-last is
 	// allowed only from error_locked (architecture.md → "Atomicity and
@@ -102,7 +102,7 @@ var (
 // (DEFAULT NOW()) in one round trip.
 const insertSQL = `
 INSERT INTO incarnation (
-    name, service, service_version, state_schema_version,
+    id, service, service_version, state_schema_version,
     state, status, status_details, created_by_aid, covens, traits,
     created_scenario, label
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
@@ -128,20 +128,20 @@ const updateLabelSQL = `
 UPDATE incarnation AS x
 SET label = $2
 FROM incarnation AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
 // selectByNameSQL — SELECT all columns by PK.
 const selectByNameSQL = `
-SELECT name, service, service_version, state_schema_version,
+SELECT id, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
        applying_apply_id,
        label
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 `
 
 // StateOp — comparison operator for a state predicate ([StateEq]). Closed
@@ -198,7 +198,7 @@ const (
 // name → SQL expression (currently 1:1, in case they diverge later).
 var sortableColumns = map[string]string{
 	"created_at": "created_at",
-	"name":       "name",
+	"id":         "id",
 	"status":     "status",
 	"service":    "service",
 }
@@ -308,7 +308,7 @@ type ScopeSQLFunc func(startIdx int) (sql string, args []any, next int)
 // progress).
 //
 // Pre-conditions:
-//   - inc.Name matches [NamePattern];
+//   - inc.Name matches [IDPattern];
 //   - inc.Service / inc.ServiceVersion are non-empty;
 //   - inc.Status is one of the valid statuses.
 //
@@ -320,8 +320,8 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 	if inc == nil {
 		return fmt.Errorf("incarnation: nil incarnation")
 	}
-	if !ValidName(inc.Name) {
-		return fmt.Errorf("incarnation: invalid name %q (must match %s)", inc.Name, NamePattern)
+	if !ValidID(inc.ID) {
+		return fmt.Errorf("incarnation: invalid id %q (must match %s)", inc.ID, IDPattern)
 	}
 	if inc.Service == "" {
 		return fmt.Errorf("incarnation: service is empty")
@@ -388,7 +388,7 @@ func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
 	}
 
 	row := db.QueryRow(ctx, insertSQL,
-		inc.Name,
+		inc.ID,
 		inc.Service,
 		inc.ServiceVersion,
 		inc.StateSchemaVersion,
@@ -440,16 +440,16 @@ func mapInsertError(err error) error {
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q (must match %s)", name, NamePattern)
+func UpdateLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, updateLabelSQL, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, updateLabelSQL, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -458,10 +458,10 @@ func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *str
 	return previous, nil
 }
 
-// SelectByName reads incarnation by PK. [ErrIncarnationNotFound] on
+// SelectByID reads incarnation by PK. [ErrIncarnationNotFound] on
 // pgx.ErrNoRows.
-func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Incarnation, error) {
-	row := db.QueryRow(ctx, selectByNameSQL, name)
+func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*Incarnation, error) {
+	row := db.QueryRow(ctx, selectByNameSQL, id)
 	return scanIncarnation(row)
 }
 
@@ -475,7 +475,7 @@ func scanIncarnation(row pgx.Row) (*Incarnation, error) {
 		traitsBytes        []byte
 	)
 	err := row.Scan(
-		&inc.Name,
+		&inc.ID,
 		&inc.Service,
 		&inc.ServiceVersion,
 		&inc.StateSchemaVersion,
@@ -562,7 +562,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope 
 	}
 
 	// Items with offset/limit, appended to the same args.
-	listSQL := `SELECT name, service, service_version, state_schema_version,
+	listSQL := `SELECT id, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
@@ -683,7 +683,7 @@ func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string,
 // it reads are whatever [ListScope.Scope] renders (rbac.PurviewSQL over the
 // incarnation row: covens, name, service, traits) plus, for the legacy state-CEL
 // adapter only, the flat Covens/StateNames fields. Exported for embedding
-// in other queries as subquery `... IN (SELECT name FROM incarnation
+// in other queries as subquery `... IN (SELECT id FROM incarnation
 // WHERE <cond>)` (global read-view of runs, applyrun) — single source of
 // scope semantics with [SelectAll]. Placeholder numbering continues from
 // passed args. Unrestricted → empty condition; empty scope → `FALSE` (fail-closed).
@@ -709,7 +709,7 @@ func ScopeCondition(args []any, scope ListScope) (string, []any) {
 	}
 	if len(scope.StateNames) > 0 {
 		args = append(args, scope.StateNames)
-		dims = append(dims, fmt.Sprintf("name = ANY($%d)", len(args)))
+		dims = append(dims, fmt.Sprintf("id = ANY($%d)", len(args)))
 	}
 	if len(dims) == 0 {
 		// fail-closed: scope introduced (not Unrestricted) but empty by dimensions —
@@ -744,7 +744,7 @@ func stateClause(path string, op StateOp, placeholder string) (string, error) {
 // direction from SortDir (default asc) and mandatory tie-break `name ASC`.
 func buildListOrderBy(f ListFilter) (string, error) {
 	if f.SortBy == "" {
-		return " ORDER BY created_at DESC, name ASC", nil
+		return " ORDER BY created_at DESC, id ASC", nil
 	}
 
 	dir, err := sortDirSQL(f.SortDir)
@@ -766,7 +766,7 @@ func buildListOrderBy(f ListFilter) (string, error) {
 		}
 		expr = col
 	}
-	return fmt.Sprintf(" ORDER BY %s %s, name ASC", expr, dir), nil
+	return fmt.Sprintf(" ORDER BY %s %s, id ASC", expr, dir), nil
 }
 
 // sortDirSQL validates sort direction. Empty → ASC (default).
@@ -801,7 +801,7 @@ var finalizableStatuses = map[Status]struct{}{
 //  1. INSERT to `state_history` transition snapshot (state_before/_after,
 //     scenario, apply_id).
 //  2. Single-winner UPDATE incarnation.state + status + status_details +
-//     updated_at = NOW() with guard `WHERE name=$1 AND status IN
+//     updated_at = NOW() with guard `WHERE id=$1 AND status IN
 //     ('applying','destroying')` + RETURNING. Only one handler wins
 //     the row: in race of recovery takeover vs original RunResult no double
 //     commit terminal happens (symmetric with single-winner DELETE in
@@ -860,7 +860,7 @@ type RunOutcome struct {
 func UpdateStateFromRun(
 	ctx context.Context,
 	tx ExecQueryRower,
-	name, scenario, applyID string,
+	id, scenario, applyID string,
 	stateBefore, stateAfter map[string]any,
 	status Status,
 	statusDetails map[string]any,
@@ -869,8 +869,8 @@ func UpdateStateFromRun(
 	engineCompat *EngineCompat,
 	outcome *RunOutcome,
 ) error {
-	if !ValidName(name) {
-		return fmt.Errorf("incarnation: invalid name %q", name)
+	if !ValidID(id) {
+		return fmt.Errorf("incarnation: invalid id %q", id)
 	}
 	if !ValidStatus(status) {
 		return fmt.Errorf("incarnation: invalid status %q", status)
@@ -945,7 +945,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
+		historyID, id, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
 		engineCompatArg,
 		runArg, runStatusArg, finishedAtArg, errorSummaryArg,
 	); err != nil {
@@ -975,11 +975,11 @@ SET state             = $2,
     applying_by_kid   = NULL,
     applying_since    = NULL,
     updated_at        = NOW()
-WHERE name = $1 AND status IN ('applying', 'destroying')
-RETURNING name
+WHERE id = $1 AND status IN ('applying', 'destroying')
+RETURNING id
 `
 	var returnedName string
-	err = tx.QueryRow(ctx, updateSQL, name, stateAfterBytes, string(status), statusDetailsArg, engineCompatArg).Scan(&returnedName)
+	err = tx.QueryRow(ctx, updateSQL, id, stateAfterBytes, string(status), statusDetailsArg, engineCompatArg).Scan(&returnedName)
 	if err == nil {
 		return nil
 	}
@@ -990,9 +990,9 @@ RETURNING name
 	// 0 rows: either row doesn't exist at all, or status already terminal/seized.
 	// Status probe disambiguates not-found (caller contract preserved) and
 	// already-finalized (single-winner no-op, someone won the row first).
-	const probeStatusSQL = `SELECT status FROM incarnation WHERE name = $1`
+	const probeStatusSQL = `SELECT status FROM incarnation WHERE id = $1`
 	var statusStr string
-	if perr := tx.QueryRow(ctx, probeStatusSQL, name).Scan(&statusStr); perr != nil {
+	if perr := tx.QueryRow(ctx, probeStatusSQL, id).Scan(&statusStr); perr != nil {
 		if errors.Is(perr, pgx.ErrNoRows) {
 			return ErrIncarnationNotFound
 		}
@@ -1165,9 +1165,9 @@ const unlockScenarioLabel = "unlock"
 //
 // reason written to audit-payload by caller (state_history schema MVP doesn't
 // carry metadata columns); previous_status returned in [UnlockResult].
-func Unlock(ctx context.Context, pool TxBeginner, name, reason, unlockedByAID, historyID string) (*UnlockResult, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+func Unlock(ctx context.Context, pool TxBeginner, id, reason, unlockedByAID, historyID string) (*UnlockResult, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
 	}
 	if reason == "" {
 		return nil, fmt.Errorf("incarnation: unlock reason is empty")
@@ -1185,14 +1185,14 @@ func Unlock(ctx context.Context, pool TxBeginner, name, reason, unlockedByAID, h
 	const selectForUpdateSQL = `
 SELECT state, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
 		stateBytes []byte
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1219,7 +1219,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $1)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, unlockScenarioLabel, stateBytes, changedByArg,
+		historyID, id, unlockScenarioLabel, stateBytes, changedByArg,
 	); err != nil {
 		return nil, fmt.Errorf("incarnation: insert unlock state_history: %w", err)
 	}
@@ -1228,9 +1228,9 @@ INSERT INTO state_history (
 	const updateSQL = `
 UPDATE incarnation
 SET status = $2, status_details = NULL, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
-	if _, err := tx.Exec(ctx, updateSQL, name, string(StatusReady)); err != nil {
+	if _, err := tx.Exec(ctx, updateSQL, id, string(StatusReady)); err != nil {
 		return nil, fmt.Errorf("incarnation: unlock update: %w", err)
 	}
 
@@ -1295,9 +1295,9 @@ const orphanReleaseScenarioLabel = "voyage-orphan-release"
 //     reclaim and release).
 //   - [ErrOrphanLockNotReleased] — nothing to release (not applying / orphan apply_id
 //     not ours): caller continues re-run without release.
-func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, name, orphanApplyID, historyID string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("incarnation: invalid name %q", name)
+func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, id, orphanApplyID, historyID string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("incarnation: invalid id %q", id)
 	}
 	if orphanApplyID == "" {
 		return fmt.Errorf("incarnation: empty orphan apply_id")
@@ -1315,14 +1315,14 @@ func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, name, orphanApp
 	const selectForUpdateSQL = `
 SELECT state, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
 		stateBytes []byte
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrIncarnationNotFound
 		}
@@ -1352,7 +1352,7 @@ SELECT EXISTS (
 )
 `
 	var hasRival bool
-	if err := tx.QueryRow(ctx, liveRivalSQL, name, orphanApplyID).Scan(&hasRival); err != nil {
+	if err := tx.QueryRow(ctx, liveRivalSQL, id, orphanApplyID).Scan(&hasRival); err != nil {
 		return fmt.Errorf("incarnation: orphan-release live-rival check: %w", err)
 	}
 	if hasRival {
@@ -1370,7 +1370,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, NULL, $5)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, orphanReleaseScenarioLabel, stateBytes, orphanApplyID,
+		historyID, id, orphanReleaseScenarioLabel, stateBytes, orphanApplyID,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert orphan-release state_history: %w", err)
 	}
@@ -1391,9 +1391,9 @@ SET status            = $2,
     applying_by_kid   = NULL,
     applying_since    = NULL,
     updated_at        = NOW()
-WHERE name = $1 AND status = 'applying'
+WHERE id = $1 AND status = 'applying'
 `
-	tag, err := tx.Exec(ctx, updateSQL, name, string(StatusReady))
+	tag, err := tx.Exec(ctx, updateSQL, id, string(StatusReady))
 	if err != nil {
 		return fmt.Errorf("incarnation: orphan-release update: %w", err)
 	}
@@ -1466,8 +1466,8 @@ var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not neede
 //
 // reason written to audit-payload by caller (state_history-schema MVP doesn't carry
 // metadata-columns); previous_status returned in [UnlockResult].
-func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByAID, historyID, applyID string) (*UnlockResult, error) {
-	return UnlockForRerunWithInput(ctx, pool, name, reason, rerunByAID, historyID, applyID, nil)
+func UnlockForRerun(ctx context.Context, pool TxBeginner, id, reason, rerunByAID, historyID, applyID string) (*UnlockResult, error) {
+	return UnlockForRerunWithInput(ctx, pool, id, reason, rerunByAID, historyID, applyID, nil)
 }
 
 // UnlockForRerunWithInput is [UnlockForRerun] with an operator-supplied input for
@@ -1487,9 +1487,9 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, name, reason, rerunByA
 // snapshot there is no record of it, so the caller falls back to the incarnation's
 // current pin — the pre-NIM-408 behaviour, and the reason this path is a last
 // resort rather than an equal one.
-func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, name, reason, rerunByAID, historyID, applyID string, fallbackInput map[string]any) (*UnlockResult, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, id, reason, rerunByAID, historyID, applyID string, fallbackInput map[string]any) (*UnlockResult, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
 	}
 	if reason == "" {
 		return nil, fmt.Errorf("incarnation: rerun-last reason is empty")
@@ -1514,14 +1514,14 @@ func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, name, reason,
 	const selectForUpdateSQL = `
 SELECT state, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
 		stateBytes []byte
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1554,7 +1554,7 @@ LIMIT 1
 		lastApplyID  string
 		lastRun      []byte
 	)
-	if err := tx.QueryRow(ctx, lastRunSQL, name, rerunLastScenarioLabel).Scan(&lastScenario, &lastApplyID, &lastRun); err != nil {
+	if err := tx.QueryRow(ctx, lastRunSQL, id, rerunLastScenarioLabel).Scan(&lastScenario, &lastApplyID, &lastRun); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			// error_locked without single snapshot — unachievable normally (lockIncarnation
 			// always writes state_history on failure). Fail-closed: without trace of failed
@@ -1629,7 +1629,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $6)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, rerunLastScenarioLabel, stateBytes, changedByArg, applyID,
+		historyID, id, rerunLastScenarioLabel, stateBytes, changedByArg, applyID,
 	); err != nil {
 		return nil, fmt.Errorf("incarnation: insert rerun-last state_history: %w", err)
 	}
@@ -1640,9 +1640,9 @@ INSERT INTO state_history (
 	const updateSQL = `
 UPDATE incarnation
 SET status = $2, status_details = NULL, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
-	if _, err := tx.Exec(ctx, updateSQL, name, string(StatusApplying)); err != nil {
+	if _, err := tx.Exec(ctx, updateSQL, id, string(StatusApplying)); err != nil {
 		return nil, fmt.Errorf("incarnation: rerun-last update: %w", err)
 	}
 
@@ -1682,7 +1682,7 @@ const upgradeDriftScenarioLabel = "upgrade-pending-apply"
 // [artifact.ServiceLoader.LoadMigrationChain], and generates ApplyID (ULID of single
 // upgrade operation, common to all chain steps).
 type UpgradeInput struct {
-	Name             string
+	ID               string
 	TargetServiceVer string                 // git-ref of target service version (ADR-007)
 	TargetSchemaVer  int                    // state_schema_version from service.yml snapshot
 	Chain            statemigrate.Chain     // chain current→target (empty = no-op ref-bump)
@@ -1752,8 +1752,8 @@ type UpgradeResult struct {
 //
 // Returns [ErrIncarnationNotFound] if row doesn't exist.
 func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeResult, error) {
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", in.Name)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", in.ID)
 	}
 	if in.TargetServiceVer == "" {
 		return nil, fmt.Errorf("incarnation: empty target service_version")
@@ -1809,7 +1809,7 @@ func upgradeTx(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeR
 	const selectForUpdateSQL = `
 SELECT state, state_schema_version, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
@@ -1817,7 +1817,7 @@ FOR UPDATE
 		currentVer int
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, in.Name).Scan(&stateBytes, &currentVer, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, in.ID).Scan(&stateBytes, &currentVer, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -1861,7 +1861,7 @@ FOR UPDATE
 
 	applyRes, err := statemigrate.Apply(ctx, currentState, in.Chain, in.Evaluator)
 	if err != nil {
-		return nil, fmt.Errorf("incarnation: migration %q: %w", in.Name, err)
+		return nil, fmt.Errorf("incarnation: migration %q: %w", in.ID, err)
 	}
 
 	if err := writeMigrationHistory(ctx, tx, in, currentState, applyRes); err != nil {
@@ -1897,9 +1897,9 @@ SET state                = $2,
     status               = '%s',
     status_details       = NULL,
     updated_at           = NOW()
-WHERE name = $1
+WHERE id = $1
 `, finalStatus)
-	if _, err := tx.Exec(ctx, updateSQL, in.Name, finalBytes, in.TargetSchemaVer, in.TargetServiceVer); err != nil {
+	if _, err := tx.Exec(ctx, updateSQL, in.ID, finalBytes, in.TargetSchemaVer, in.TargetServiceVer); err != nil {
 		return nil, fmt.Errorf("incarnation: upgrade update: %w", err)
 	}
 
@@ -1946,7 +1946,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $6)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		audit.NewULID(), in.Name, upgradeDriftScenarioLabel, stateBytes, changedByArg, in.ApplyID,
+		audit.NewULID(), in.ID, upgradeDriftScenarioLabel, stateBytes, changedByArg, in.ApplyID,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert drift-transition state_history: %w", err)
 	}
@@ -1975,7 +1975,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $6)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		audit.NewULID(), in.Name, in.UpgradeSlug, stateBytes, changedByArg, in.RunApplyID,
+		audit.NewULID(), in.ID, in.UpgradeSlug, stateBytes, changedByArg, in.RunApplyID,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert upgrade-run state_history: %w", err)
 	}
@@ -2005,7 +2005,7 @@ INSERT INTO state_history (
 			return fmt.Errorf("incarnation: marshal state (no-op history): %w", err)
 		}
 		if _, err := tx.Exec(ctx, historyInsertSQL,
-			audit.NewULID(), in.Name, migrationScenarioLabel, stateBytes, stateBytes, changedByArg, in.ApplyID,
+			audit.NewULID(), in.ID, migrationScenarioLabel, stateBytes, stateBytes, changedByArg, in.ApplyID,
 		); err != nil {
 			return fmt.Errorf("incarnation: insert migration state_history (no-op): %w", err)
 		}
@@ -2022,7 +2022,7 @@ INSERT INTO state_history (
 			return fmt.Errorf("incarnation: marshal step state_after: %w", err)
 		}
 		if _, err := tx.Exec(ctx, historyInsertSQL,
-			audit.NewULID(), in.Name, migrationScenarioLabel, beforeBytes, afterBytes, changedByArg, in.ApplyID,
+			audit.NewULID(), in.ID, migrationScenarioLabel, beforeBytes, afterBytes, changedByArg, in.ApplyID,
 		); err != nil {
 			return fmt.Errorf("incarnation: insert migration state_history (step %d): %w", i, err)
 		}
@@ -2057,9 +2057,9 @@ func markMigrationFailed(pool TxBeginner, in UpgradeInput, cause error) error {
 	const updateSQL = `
 UPDATE incarnation
 SET status = 'migration_failed', status_details = $2, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
-	if _, err := tx.Exec(wctx, updateSQL, in.Name, detailsBytes); err != nil {
+	if _, err := tx.Exec(wctx, updateSQL, in.ID, detailsBytes); err != nil {
 		return fmt.Errorf("incarnation: migration_failed update: %w", err)
 	}
 	if err := tx.Commit(wctx); err != nil {
@@ -2106,9 +2106,9 @@ type HistoryFilter struct {
 // The count follows the same predicate, so pagination stays exact.
 //
 // Return ([], 0, nil) for non-existent incarnation — no need to check existence
-// with separate query: caller (handler) should first call [SelectByName] to return 404,
+// with separate query: caller (handler) should first call [SelectByID] to return 404,
 // or accept empty history as valid for an existing incarnation.
-func HistorySelectByName(ctx context.Context, db ExecQueryRower, name string, filter HistoryFilter, offset, limit int) ([]*HistoryEntry, int, error) {
+func HistorySelectByName(ctx context.Context, db ExecQueryRower, id string, filter HistoryFilter, offset, limit int) ([]*HistoryEntry, int, error) {
 	if offset < 0 {
 		return nil, 0, fmt.Errorf("incarnation: history offset must be >= 0, got %d", offset)
 	}
@@ -2116,7 +2116,7 @@ func HistorySelectByName(ctx context.Context, db ExecQueryRower, name string, fi
 		return nil, 0, fmt.Errorf("incarnation: history limit must be >= 1, got %d", limit)
 	}
 
-	args := []any{name}
+	args := []any{id}
 	where := "WHERE incarnation_name = $1"
 	if !filter.IncludeArchived {
 		where += " AND archived_at IS NULL"

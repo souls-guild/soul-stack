@@ -34,11 +34,11 @@ type LabelSetInput struct {
 // reads, in that registry's own view type) plus the audit fields.
 //
 // Generic over the view because the ten registries return ten different rows
-// while sharing one audit payload. Name addresses the row and is never written —
+// while sharing one audit payload. ID addresses the row and is never written —
 // the identifier is immutable and this endpoint has no way to change it.
 type LabelWriteReply[V any] struct {
 	Body V
-	Name string
+	ID   string
 	// Label is the caption as it now reads; Previous is what the row held before
 	// the write. Both nil-able, and a nil means the caption was absent on that
 	// side of the transition rather than that it is unknown — the pair is read
@@ -50,7 +50,7 @@ type LabelWriteReply[V any] struct {
 // AuditPayload assembles the audit payload of a label-set route: the identifier
 // that was addressed, and the caption on both sides of the change.
 //
-// `{name, old_label, new_label}`, following `incarnation.traits_changed`
+// `{id, old_label, new_label}`, following `incarnation.traits_changed`
 // (`{name, old_keys, new_keys}`) — the event this family is named after. A
 // caption is display text and the trail can afford to carry it whole, so unlike
 // traits (which record KEYS only, because a value may be sensitive) both values
@@ -62,9 +62,26 @@ type LabelWriteReply[V any] struct {
 // it always describes a transition that actually happened — a read-then-write
 // could interleave with a concurrent edit and report one that did not.
 func (r LabelWriteReply[V]) AuditPayload() middleware.AuditPayload {
+	return LabelAuditPayload(r.ID, r.Previous, r.Label)
+}
+
+// LabelAuditPayload builds the `<resource>.label_changed` payload from the three
+// values it carries.
+//
+// Split out of the method above because not every label route can BE that
+// method: `incarnation.label-set` assembles its own audit event inline
+// (incarnation_typed.go) rather than returning a [LabelWriteReply], and its MCP
+// twin writes the payload directly. Those two were the exceptions that let the
+// key drift — the shared struct was renamed to `id` ([ADR-0085], NIM-729) and
+// the two hand-written copies were not, so nine registries wrote `id` and one
+// wrote `name` for the same event family.
+//
+// A function all three call makes the parity a consequence instead of a rule
+// somebody has to remember.
+func LabelAuditPayload(id string, previous, current *string) middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":      r.Name,
-		"old_label": r.Previous,
-		"new_label": r.Label,
+		"id":        id,
+		"old_label": previous,
+		"new_label": current,
 	}
 }

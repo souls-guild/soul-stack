@@ -65,7 +65,7 @@ func writeEntities() []writeEntity {
 			kind:       "push-provider",
 			listPath:   "/v1/push-providers",
 			createPath: "/v1/push-providers",
-			createBody: func(name string) []byte { return jsonBody(map[string]any{"name": name}) },
+			createBody: func(name string) []byte { return jsonBody(map[string]any{"id": name}) },
 			deletePath: func(name string) string { return "/v1/push-providers/" + name },
 		},
 		{
@@ -74,7 +74,7 @@ func writeEntities() []writeEntity {
 			createPath: "/v1/heralds",
 			createBody: func(name string) []byte {
 				return jsonBody(map[string]any{
-					"name": name,
+					"id":   name,
 					"type": "webhook",
 					"config": map[string]any{
 						// MUST be https:// — netguard blocks http/loopback.
@@ -314,29 +314,43 @@ func listResidualNames(ctx context.Context, client *http.Client, base, jwt, list
 		return nil
 	}
 
-	// First try the wrapper {"items":[{name}...]}, then a flat array [{name}].
+	// First try the wrapper {"items":[…]}, then a flat array.
+	//
+	// BOTH identifier keys are read, and one decoder has to because the four
+	// kinds in `writeKinds` no longer agree: `push-provider` and `herald` are
+	// spelled `id` since [ADR-0085] / NIM-729, while `synod` and `role` are
+	// still `name` until NIM-732. Reading one key would silently yield "" for
+	// half the kinds — the residual sweep would then find nothing to delete and
+	// report a clean run over rows it never looked at. Accepting both also
+	// means NIM-732 flipping the other two needs no edit here.
+	type entry struct {
+		ID   string `json:"id"`
+		Name string `json:"name"`
+	}
+	ident := func(e entry) string {
+		if e.ID != "" {
+			return e.ID
+		}
+		return e.Name
+	}
 	var wrapped struct {
-		Items []struct {
-			Name string `json:"name"`
-		} `json:"items"`
+		Items []entry `json:"items"`
 	}
 	if json.Unmarshal(raw, &wrapped) == nil && len(wrapped.Items) > 0 {
 		out := make([]string, 0, len(wrapped.Items))
 		for _, it := range wrapped.Items {
-			if it.Name != "" {
-				out = append(out, it.Name)
+			if id := ident(it); id != "" {
+				out = append(out, id)
 			}
 		}
 		return out
 	}
-	var flat []struct {
-		Name string `json:"name"`
-	}
+	var flat []entry
 	if json.Unmarshal(raw, &flat) == nil {
 		out := make([]string, 0, len(flat))
 		for _, it := range flat {
-			if it.Name != "" {
-				out = append(out, it.Name)
+			if id := ident(it); id != "" {
+				out = append(out, id)
 			}
 		}
 		return out

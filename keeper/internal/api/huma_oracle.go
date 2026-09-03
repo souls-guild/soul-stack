@@ -36,7 +36,7 @@ func registerHumaVigilCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 			return nil, oracleMissingClaims()
 		}
 		reply, err := oracleH.CreateVigilTyped(ctx, claims, handlers.VigilCreateInput{
-			Name:     in.Body.Name,
+			ID:       in.Body.ID,
 			Subject:  in.Body.Subject.selector(),
 			Interval: in.Body.Interval,
 			Check:    in.Body.Check,
@@ -67,7 +67,7 @@ func registerHumaVigilList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaVigilGet mounts GET /v1/vigils/{name} via huma (READ-with-path,
+// registerHumaVigilGet mounts GET /v1/vigils/{id} via huma (READ-with-path,
 // no audit). oracleH nil → no-op. Handler: GetVigilTyped(name) → typed output
 // (404/422 via problem). RBAC vigil.list (read is covered by the list permission) — on the group.
 func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
@@ -75,7 +75,7 @@ func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 		return
 	}
 	huma.Register(humaAPI, vigilGetOperation(), func(ctx context.Context, in *vigilGetInput) (*vigilGetOutput, error) {
-		reply, err := oracleH.GetVigilTyped(ctx, in.Name)
+		reply, err := oracleH.GetVigilTyped(ctx, in.ID)
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -83,14 +83,14 @@ func registerHumaVigilGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaVigilSetLabel mounts PUT /v1/vigils/{name}/label via huma
+// registerHumaVigilSetLabel mounts PUT /v1/vigils/{id}/label via huma
 // (WRITE+AUDIT variant B — event vigil.label_changed). oracleH nil → no-op.
 func registerHumaVigilSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
 	}
 	huma.Register(humaAPI, vigilSetLabelOperation(), func(ctx context.Context, in *vigilSetLabelInput) (*vigilSetLabelOutput, error) {
-		reply, err := oracleH.SetVigilLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := oracleH.SetVigilLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -99,7 +99,7 @@ func registerHumaVigilSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler
 	})
 }
 
-// registerHumaVigilDelete mounts DELETE /v1/vigils/{name} via huma (WRITE+AUDIT
+// registerHumaVigilDelete mounts DELETE /v1/vigils/{id} via huma (WRITE+AUDIT
 // variant B — event vigil.deleted). oracleH nil → no-op. Handler: DeleteVigilTyped →
 // audit payload → empty 204 output.
 func registerHumaVigilDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) {
@@ -107,7 +107,7 @@ func registerHumaVigilDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 		return
 	}
 	huma.Register(humaAPI, vigilDeleteOperation(), func(ctx context.Context, in *vigilDeleteInput) (*oracleNoContentOutput, error) {
-		reply, err := oracleH.DeleteVigilTyped(ctx, in.Name)
+		reply, err := oracleH.DeleteVigilTyped(ctx, in.ID)
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -129,7 +129,7 @@ func registerHumaDecreeCreate(humaAPI huma.API, oracleH *handlers.OracleHandler)
 			return nil, oracleMissingClaims()
 		}
 		reply, err := oracleH.CreateDecreeTyped(ctx, claims, handlers.DecreeCreateInput{
-			Name:            in.Body.Name,
+			ID:              in.Body.ID,
 			OnBeacon:        in.Body.OnBeacon,
 			Subject:         in.Body.Subject.selector(),
 			IncarnationName: in.Body.IncarnationName,
@@ -163,7 +163,7 @@ func registerHumaDecreeList(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaDecreeGet mounts GET /v1/decrees/{name} via huma (READ-with-path,
+// registerHumaDecreeGet mounts GET /v1/decrees/{id} via huma (READ-with-path,
 // no audit). oracleH nil → no-op. Handler: GetDecreeTyped(name) → typed output
 // (404/422 via problem). RBAC decree.list (read is covered by the list permission) — on the group.
 func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
@@ -171,7 +171,7 @@ func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 		return
 	}
 	huma.Register(humaAPI, decreeGetOperation(), func(ctx context.Context, in *decreeGetInput) (*decreeGetOutput, error) {
-		reply, err := oracleH.GetDecreeTyped(ctx, in.Name)
+		reply, err := oracleH.GetDecreeTyped(ctx, in.ID)
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -179,14 +179,14 @@ func registerHumaDecreeGet(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	})
 }
 
-// registerHumaDecreeSetLabel mounts PUT /v1/decrees/{name}/label via huma
+// registerHumaDecreeSetLabel mounts PUT /v1/decrees/{id}/label via huma
 // (WRITE+AUDIT variant B — event decree.label_changed). oracleH nil → no-op.
 func registerHumaDecreeSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler) {
 	if oracleH == nil {
 		return
 	}
 	huma.Register(humaAPI, decreeSetLabelOperation(), func(ctx context.Context, in *decreeSetLabelInput) (*decreeSetLabelOutput, error) {
-		reply, err := oracleH.SetDecreeLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := oracleH.SetDecreeLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -195,7 +195,7 @@ func registerHumaDecreeSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandle
 	})
 }
 
-// registerHumaDecreeDelete mounts DELETE /v1/decrees/{name} via huma (WRITE+AUDIT
+// registerHumaDecreeDelete mounts DELETE /v1/decrees/{id} via huma (WRITE+AUDIT
 // variant B — event decree.deleted). oracleH nil → no-op. Handler: DeleteDecreeTyped
 // → audit payload → empty 204 output.
 func registerHumaDecreeDelete(humaAPI huma.API, oracleH *handlers.OracleHandler) {
@@ -203,7 +203,7 @@ func registerHumaDecreeDelete(humaAPI huma.API, oracleH *handlers.OracleHandler)
 		return
 	}
 	huma.Register(humaAPI, decreeDeleteOperation(), func(ctx context.Context, in *decreeDeleteInput) (*oracleNoContentOutput, error) {
-		reply, err := oracleH.DeleteDecreeTyped(ctx, in.Name)
+		reply, err := oracleH.DeleteDecreeTyped(ctx, in.ID)
 		if err != nil {
 			return nil, oracleProblem(err)
 		}

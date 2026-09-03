@@ -73,7 +73,7 @@ type ServiceSnapshotLoader interface {
 //  6. NewEvaluator → migration-CEL.
 //  7. Assemble UpgradeInput (ApplyID / ChangedByAID passed by the caller).
 //
-// inc arrives already loaded (the caller does SelectByName itself — for
+// inc arrives already loaded (the caller does SelectByID itself — for
 // 404 semantics and the FOR UPDATE race). evaluator/chain are only prepared
 // here; atomic application happens in [UpgradeStateSchema].
 func PrepareUpgrade(
@@ -141,13 +141,13 @@ func PrepareUpgrade(
 		// Not silent: a real scan failure (upgrade/ exists but is unreadable) would
 		// otherwise look like "no scenario". slog.Default keeps the signature clean of a transport logger.
 		slog.Default().Warn("incarnation: upgrade scan failed, falling back to legacy",
-			slog.String("incarnation", inc.Name), slog.String("service", inc.Service),
+			slog.String("incarnation", inc.ID), slog.String("service", inc.Service),
 			slog.String("to_version", toVersion), slog.Any("error", uerr))
 	}
 	slug, _ := artifact.ResolveUpgradeScenario(upgrades, inc.ServiceVersion)
 
 	return UpgradeInput{
-		Name:             inc.Name,
+		ID:               inc.ID,
 		TargetServiceVer: toVersion,
 		TargetSchemaVer:  target,
 		Chain:            chain,

@@ -16,11 +16,11 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// === POST /v1/incarnations/{name}/members (bind) — WRITE-SELF-AUDIT incarnation.member_bound (200+body) ===
+// === POST /v1/incarnations/{id}/members (bind) — WRITE-SELF-AUDIT incarnation.member_bound (200+body) ===
 
 // memberBindInput — huma input POST .../members. Name — path; Body — typed body.
 type memberBindInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationMemberBindRequest
 }
 
@@ -54,7 +54,7 @@ func memberBindOperation() huma.Operation {
 	return huma.Operation{
 		OperationID: "bindIncarnationMembers",
 		Method:      http.MethodPost,
-		Path:        "/{name}/members",
+		Path:        "/{id}/members",
 		Summary:     "Bind hosts to an incarnation",
 		Description: "Binds already-onboarded, connected Souls to the incarnation's roster so a scenario can subsequently roll onto them (ADR-008 amendment, NIM-209). Idempotent: re-binding a member is a no-op reported in already_member. Permission incarnation.bind-member; EVERY target SID must also be inside the caller's soul scope (all-or-nothing) - otherwise 403. 422 - unknown SID or a host that is not connected.",
 		Tags:        []string{"incarnation"},
@@ -62,11 +62,11 @@ func memberBindOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/members (roster read) — READ (no audit) ===
+// === GET /v1/incarnations/{id}/members (roster read) — READ (no audit) ===
 
 // memberListInput — huma input GET .../members. Name — path.
 type memberListInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID string `path:"id" doc:"incarnation id"`
 }
 
 // IncarnationMember — the native wire form of one roster entry. `status` is the HOST's
@@ -100,7 +100,7 @@ func memberListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID: "listIncarnationMembers",
 		Method:      http.MethodGet,
-		Path:        "/{name}/members",
+		Path:        "/{id}/members",
 		Summary:     "List the incarnation's roster",
 		Description: "Member hosts of the incarnation (incarnation_membership, ADR-008 amendment / NIM-124), with bound_at / bound_by_aid. Permission incarnation.get. Narrowed to the hosts inside the caller's soul scope. Read-only, no audit.",
 		Tags:        []string{"incarnation"},
@@ -108,12 +108,12 @@ func memberListOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/incarnations/{name}/members/{sid} (unbind) — WRITE-SELF-AUDIT incarnation.member_unbound (204) ===
+// === DELETE /v1/incarnations/{id}/members/{sid} (unbind) — WRITE-SELF-AUDIT incarnation.member_unbound (204) ===
 
 // memberUnbindInput — huma input DELETE .../members/{sid}. Name/SID — path.
 type memberUnbindInput struct {
-	Name string `path:"name" doc:"incarnation name"`
-	SID  string `path:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of the host to unbind"`
+	ID  string `path:"id" doc:"incarnation id"`
+	SID string `path:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of the host to unbind"`
 }
 
 // memberUnbindOutput — huma output DELETE .../members/{sid} (FULL-TYPED). Status=204.
@@ -128,7 +128,7 @@ func memberUnbindOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "unbindIncarnationMember",
 		Method:        http.MethodDelete,
-		Path:          "/{name}/members/{sid}",
+		Path:          "/{id}/members/{sid}",
 		Summary:       "Unbind a host from an incarnation",
 		Description:   "Removes the host from the incarnation's roster - it stops being a target of every FUTURE run (ADR-008 amendment, NIM-209). Idempotent: unbinding a non-member succeeds unchanged. Permission incarnation.unbind-member; the SID must also be inside the caller's soul scope.",
 		Tags:          []string{"incarnation"},

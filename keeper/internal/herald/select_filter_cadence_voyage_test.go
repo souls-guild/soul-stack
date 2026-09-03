@@ -53,7 +53,7 @@ func TestDispatch_CadenceNotifyDelivery(t *testing.T) {
 	// an origin marker and does not affect matching, but the production rule shape
 	// is fixed here.
 	cadenceNotifyRule := &Tiding{
-		Name:                 "cadence-notify",
+		ID:                   "cadence-notify",
 		Herald:               "ops",
 		EventTypes:           []string{"scenario_run.failed"},
 		Cadence:              strPtr(cadenceULID),
@@ -86,7 +86,7 @@ func TestDispatch_CadenceNotify_AllTerminals(t *testing.T) {
 		t.Run(c.name, func(t *testing.T) {
 			event := ev(c.et, scenarioTerminal(map[string]any{"cadence_id": cadenceULID}))
 			rule := &Tiding{
-				Name: "cadence-notify", Herald: "ops",
+				ID: "cadence-notify", Herald: "ops",
 				EventTypes: []string{string(c.et)},
 				Cadence:    strPtr(cadenceULID),
 				Enabled:    true,
@@ -110,7 +110,7 @@ func TestDispatch_CadenceNotify_PartialGlob(t *testing.T) {
 		"summary":    map[string]any{"total": 3, "succeeded": 2, "failed": 1, "cancelled": 0},
 	}))
 	rule := &Tiding{
-		Name: "cadence-notify", Herald: "ops",
+		ID: "cadence-notify", Herald: "ops",
 		EventTypes: []string{"scenario_run.*"},
 		Cadence:    strPtr(cadenceULID),
 		Enabled:    true,
@@ -128,7 +128,7 @@ func TestDispatch_CadenceNotify_CommandTerminal(t *testing.T) {
 
 	completed := ev(audit.EventCommandRunCompleted, commandTerminal(map[string]any{"cadence_id": cadenceULID}))
 	rule := &Tiding{
-		Name: "cadence-notify", Herald: "ops",
+		ID: "cadence-notify", Herald: "ops",
 		EventTypes: []string{"command_run.*"},
 		Cadence:    strPtr(cadenceULID),
 		Enabled:    true,
@@ -145,7 +145,7 @@ func TestDispatch_CadenceNotify_ManualVoyageNotMatched(t *testing.T) {
 
 	manual := ev(audit.EventScenarioRunFailed, scenarioTerminal(nil)) // Without cadence_id.
 	rule := &Tiding{
-		Name: "cadence-notify", Herald: "ops",
+		ID: "cadence-notify", Herald: "ops",
 		EventTypes: []string{"scenario_run.failed"},
 		Cadence:    strPtr(cadenceULID),
 		Enabled:    true,
@@ -160,7 +160,7 @@ func TestDispatch_CadenceNotify_ManualVoyageNotMatched(t *testing.T) {
 func TestDispatch_CadenceNotify_MismatchedID(t *testing.T) {
 	other := ev(audit.EventScenarioRunFailed, scenarioTerminal(map[string]any{"cadence_id": "cd_other"}))
 	rule := &Tiding{
-		Name: "cadence-notify", Herald: "ops",
+		ID: "cadence-notify", Herald: "ops",
 		EventTypes: []string{"scenario_run.failed"},
 		Cadence:    strPtr("cd_mine"),
 		Enabled:    true,

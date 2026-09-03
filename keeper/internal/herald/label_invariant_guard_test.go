@@ -55,7 +55,7 @@ func TestHeraldLabel_NotInDerivedVaultPath(t *testing.T) {
 	label := guardHeraldLabel
 	secret := "s3cr3t-signing-value"
 	h := &Herald{
-		Name:   guardHeraldID,
+		ID:     guardHeraldID,
 		Label:  &label,
 		Type:   HeraldWebhook,
 		Config: map[string]any{"url": "https://example.test/hook"},
@@ -111,7 +111,7 @@ func TestHeraldLabel_DerivedPathIgnoresCaptionChanges(t *testing.T) {
 		t.Helper()
 		secret := "s3cr3t-signing-value"
 		h := &Herald{
-			Name:   guardHeraldID,
+			ID:     guardHeraldID,
 			Label:  label,
 			Type:   HeraldWebhook,
 			Config: map[string]any{"url": "https://example.test/hook"},

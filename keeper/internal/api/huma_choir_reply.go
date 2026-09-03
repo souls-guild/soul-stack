@@ -16,7 +16,7 @@ package api
 // OUTPUT-PATTERN (documentation only, NOT runtime validation): huma does NOT validate
 // the response body (empirically 200, not 500). created_by_aid/added_by_aid ←
 // operator.AIDPattern; Voice.sid ← soul.SIDPattern; incarnation_name ←
-// incarnation.NamePattern (batch 5, FK to incarnation; path-{name} on write). The
+// incarnation.IDPattern (batch 5, FK to incarnation; path-{name} on write). The
 // format is for client codegen; the pattern does not affect json.Marshal (golden
 // byte-exact stays intact). choir_name is NOT tagged: it has its own grammar
 // choir.choirNamePattern (kebab+`_`), outside this batch's name scope.
@@ -37,7 +37,7 @@ type Choir struct {
 	CreatedAt       time.Time `json:"created_at"`
 	CreatedByAID    *string   `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	Description     *string   `json:"description"`
-	IncarnationName string    `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	IncarnationName string    `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
 	MaxSize         *int      `json:"max_size"`
 	MinSize         *int      `json:"min_size"`
 }
@@ -49,7 +49,7 @@ type Voice struct {
 	AddedAt         time.Time `json:"added_at"`
 	AddedByAID      *string   `json:"added_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	ChoirName       string    `json:"choir_name"`
-	IncarnationName string    `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	IncarnationName string    `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
 	Position        *int      `json:"position"`
 	Role            *string   `json:"role"`
 	SID             string    `json:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$"` // ← soul.SIDPattern

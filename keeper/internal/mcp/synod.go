@@ -45,7 +45,7 @@ func (h *Handler) callSynodCreate(ctx context.Context, claims *jwt.Claims, req j
 		}
 	}
 	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if len(a.Description) > rbac.SynodDescriptionMaxLen {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'description' exceeds max length")
@@ -90,7 +90,7 @@ func (h *Handler) callSynodDelete(ctx context.Context, claims *jwt.Claims, req j
 		}
 	}
 	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if err := h.deps.RBACRoles.DeleteSynod(ctx, a.Name); err != nil {
 		code, detail := mapSynodErrorToMCP(err)
@@ -132,7 +132,7 @@ func (h *Handler) callSynodUpdate(ctx context.Context, claims *jwt.Claims, req j
 		}
 	}
 	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if a.Description == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'description' is required")

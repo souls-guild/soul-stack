@@ -14,7 +14,7 @@ import (
 )
 
 // keeper.incarnation.traits-set — parity with REST PUT
-// /v1/incarnations/{name}/traits (IncarnationHandler.SetTraitsTyped, ADR-060).
+// /v1/incarnations/{id}/traits (IncarnationHandler.SetTraitsTyped, ADR-060).
 // Wholesale REPLACES the incarnation's operator-set trait labels in one FOR
 // UPDATE tx. The write ends there, in both senses: nothing is projected onto a
 // host row, and no member host reads these labels either (NIM-281). A host
@@ -39,7 +39,7 @@ import (
 // holding the label is a separate question, and this is where it is asked.
 
 type incarnationTraitsSetArgs struct {
-	Name   string         `json:"name"`
+	ID     string         `json:"id"`
 	Traits map[string]any `json:"traits,omitempty"`
 }
 
@@ -62,12 +62,12 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	// trait format/value (no nesting) — parity with REST SetTraitsTyped.
 	if err := soul.ValidateTraitDelta(a.Traits); err != nil {
@@ -80,13 +80,13 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 	// probe-SelectByName (unlock/destroy pattern). A failed probe →
 	// fail-closed (scoped deny, bare/`*` pass through → UpdateTraits returns
 	// 404/500).
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "traits-set", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "traits-set", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.traits-set")
 		}
-	} else if scopeErr := h.checkIncarnationScope(claims, "traits-set", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	} else if scopeErr := h.checkIncarnationScope(claims, "traits-set", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.traits-set")
 	}
@@ -101,18 +101,18 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, outOfScope.Error())
 		}
 		h.deps.Logger.Error("mcp: incarnation.traits-set trait-scope gate unavailable",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("name", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update incarnation traits failed")
 	}
 
-	res, err := incarnation.UpdateTraits(ctx, h.deps.IncarnationDB, a.Name, a.Traits)
+	res, err := incarnation.UpdateTraits(ctx, h.deps.IncarnationDB, a.ID, a.Traits)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
-				"incarnation "+a.Name+" not found")
+				"incarnation "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: incarnation.traits-set failed",
-			slog.String("name", a.Name),
+			slog.String("name", a.ID),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err),
 		)
@@ -126,13 +126,13 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 	// source=mcp (writeAudit). trait VALUES are not included — parity with
 	// REST (secret hygiene).
 	h.writeAudit(audit.EventIncarnationTraitsChanged, claims.Subject, map[string]any{
-		"name":     a.Name,
+		"id":       a.ID,
 		"old_keys": res.OldKeys,
 		"new_keys": res.NewKeys,
 	})
 
 	return h.toolResult(req.ID, incarnationTraitsSetOutput{
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		Keys:        res.NewKeys,
 	})
 }

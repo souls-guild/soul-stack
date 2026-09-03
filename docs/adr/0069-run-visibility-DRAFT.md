@@ -27,8 +27,8 @@
 **Sub-forks:**
 
 - **A (SSE auth) — RESOLVED: fetch-streaming.** `fetch(url,{headers:{Authorization}})` + `response.body.getReader()` + manual parsing of SSE frames. An ordinary Bearer (like all requests) → **no token in the URL, no rotation**. The cost — auto-reconnect/event parsing by hand (EventSource gives them for free), acceptable. **Discarded:** a short-lived query-token (`EventSource('…?access_token=')` + `POST /v1/sse-token`) — a token in the URL settles in logs + TTL≪stream lifetime → rotation. Cookie rejected (`tokenStore.ts`).
-- **B (linking incarnation→run) → architect.** Candidate: expose the already-written column `applying_apply_id` (`lockRun` [`state.go:45`](../../keeper/internal/scenario/state.go), cleared [`crud.go:849,1197`](../../keeper/internal/incarnation/crud.go)) in `GET /v1/incarnations/{name}` — non-null while the run is in flight. "The last completed" — top-1 from `GET /v1/incarnations/{name}/runs`. Implemented in S37-1; the final form is confirmed by architect.
-- **C (live endpoint) ✓.** `GET /v1/incarnations/{name}/runs/{apply_id}/events` — symmetry with the `RunDetail` path + the precedent `/v1/voyages/{id}/events`.
+- **B (linking incarnation→run) → architect.** Candidate: expose the already-written column `applying_apply_id` (`lockRun` [`state.go:45`](../../keeper/internal/scenario/state.go), cleared [`crud.go:849,1197`](../../keeper/internal/incarnation/crud.go)) in `GET /v1/incarnations/{id}` — non-null while the run is in flight. "The last completed" — top-1 from `GET /v1/incarnations/{id}/runs`. Implemented in S37-1; the final form is confirmed by architect.
+- **C (live endpoint) ✓.** `GET /v1/incarnations/{id}/runs/{apply_id}/events` — symmetry with the `RunDetail` path + the precedent `/v1/voyages/{id}/events`.
 - **D (one ADR) ✓.** Both tickets — one ADR-0069.
 
 ---
@@ -37,7 +37,7 @@
 
 **NIM-37.** On the incarnation page there is **no runs tab** — "History" shows `state_history` (state snapshots), not the apply progress. The operator sees neither the live nor the history of runs (which scenario ran, which task, whether anything changed). Meanwhile:
 
-- The ready client `keeperApi.incarnations.runs(name)` → `GET /v1/incarnations/{name}/runs` (`keeper.ts:541`) **is called nowhere**.
+- The ready client `keeperApi.incarnations.runs(name)` → `GET /v1/incarnations/{id}/runs` (`keeper.ts:541`) **is called nowhere**.
 - **A live stream already exists**: SSE `GET /mcp/events?apply_id=<ULID>` ([`sse.go:145`](../../keeper/internal/mcp/sse.go)); applybus ([`bus.go`](../../keeper/internal/applybus/bus.go)) publishes `task.executed` ([`events_taskevent.go:322`](../../keeper/internal/grpc/events_taskevent.go)) `{apply_id, sid, task_idx, task_status, passage, error?}` and `apply.completed/failed/cancelled` ([`events_runresult.go:248`](../../keeper/internal/grpc/events_runresult.go)). **There is no consumer in web**: the only `new EventSource` — `errandRuns.events` (`keeper.ts:996`), a stub, called by no one. Even the live Voyage pages (`VoyageDetail.tsx:586`, `VoyageTargets.tsx:36`) go by **polling**. → our SSE consumer is the **first authorized** one in web (a handshake from scratch).
 - **History is already written** (the key fact for Q1b): each task's `task.executed` (Soul + keeper) is **persisted to `audit_log`** — [`events_taskevent.go:91`](../../keeper/internal/grpc/events_taskevent.go) (`AuditWriter.Write`, EventType `task.executed`) + keeper-side [`keeper_dispatch.go`](../../keeper/internal/scenario/keeper_dispatch.go); plus `incarnation.run_completed` with `changed_tasks[]` ([ADR-052 §k](0052-herald-notifications.md)). The `audit_log` table (migration 001) has `correlation_id` (= apply_id) **with an index** `audit_log_correlation_id_idx` and retention `purge_audit_old(max_age)` from `audit.retention_days` ([ADR-022](0022-audit-pipeline.md)). That is, a run's progress is reconstructable from the journal — only a UI reader is missing.
 - **What is NOT in PG (apply_runs)**: per-task progress is not stored in the operational runs tables ([ADR-012](0012-keeper-soul-grpc.md); [`runsview.go:13-18`](../../keeper/internal/applyrun/runsview.go)) — there is only per-host status + the failed task. **This is separate storage from `audit_log`** — the journal writes per-task, the operational table does not.
@@ -57,7 +57,7 @@
 
 ### A1. Linking incarnation → current run (B)
 
-`GET /v1/incarnations/{name}` returns a nullable `applying_apply_id` (the `incarnation.applying_apply_id` column, written in `lockRun`; non-null while the run is in flight). The UI immediately knows the apply_id to subscribe to — without a race on `/v1/runs?status=applying`. "The last completed" — top-1 from `/v1/incarnations/{name}/runs`.
+`GET /v1/incarnations/{id}` returns a nullable `applying_apply_id` (the `incarnation.applying_apply_id` column, written in `lockRun`; non-null while the run is in flight). The UI immediately knows the apply_id to subscribe to — without a race on `/v1/runs?status=applying`. "The last completed" — top-1 from `/v1/incarnations/{id}/runs`.
 
 ### A2. keeper-side task.executed → applybus (Q2)
 
@@ -73,7 +73,7 @@ The `apply.started` publisher is absent in the canon — not required for live (
 
 ### A3. SSE endpoint of the Operator API (A, C)
 
-A new route **`GET /v1/incarnations/{name}/runs/{apply_id}/events`** (`text/event-stream`), the stream via `applybus.Subscribe(ctx, applyID)`; frame `event:/id:/data:`, heartbeat 30s, max-lifetime 30min, stream limits (the common SSE helper from `mcp/sse.go` or a narrow duplicate).
+A new route **`GET /v1/incarnations/{id}/runs/{apply_id}/events`** (`text/event-stream`), the stream via `applybus.Subscribe(ctx, applyID)`; frame `event:/id:/data:`, heartbeat 30s, max-lifetime 30min, stream limits (the common SSE helper from `mcp/sse.go` or a narrow duplicate).
 
 **RBAC** — like `/mcp/events` `authorizeSSE` ([`sse.go:286`](../../keeper/internal/mcp/sse.go)): the run initiator OR `incarnation.get`/`incarnation.history`. A nonexistent/foreign apply_id → **403** (anti-enum). Backend RBAC **does not depend** on the auth method (A0).
 
@@ -135,7 +135,7 @@ The pipeline — `developer → review → qa (→ docs-writer)`. S37-1/S38-1 ar
 
 ### S37-1 — backend live (NIM-37) · IN PROGRESS (backend wave)
 
-- **Files:** `incarnation.go`(+`crud.go` SELECT) — `ApplyingApplyID *string`; `incarnation_view.go` — the field in `IncarnationGetView` + projection; `keeper_dispatch.go` — `publishKeeperTaskExecuted` + `ApplyBus` in the `Runner` deps; the new SSE route `/v1/incarnations/{name}/runs/{apply_id}/events` (under `RequireJWT`); `vendor/openapi/keeper.yaml`. `POST /v1/sse-token` is **NOT needed** (A0=fetch-streaming: web sends the `Authorization` header; if already committed in S37-1 — remove it or leave it dead, at the coordinator's discretion).
+- **Files:** `incarnation.go`(+`crud.go` SELECT) — `ApplyingApplyID *string`; `incarnation_view.go` — the field in `IncarnationGetView` + projection; `keeper_dispatch.go` — `publishKeeperTaskExecuted` + `ApplyBus` in the `Runner` deps; the new SSE route `/v1/incarnations/{id}/runs/{apply_id}/events` (under `RequireJWT`); `vendor/openapi/keeper.yaml`. `POST /v1/sse-token` is **NOT needed** (A0=fetch-streaming: web sends the `Authorization` header; if already committed in S37-1 — remove it or leave it dead, at the coordinator's discretion).
 - **Guard invariants:** (1) `applying_apply_id` non-null during applying, null on terminal; (2) keeper-side publishes `task.executed` with `sid="keeper"`, the payload symmetric to the Soul-side one; (3) secret hygiene of the keeper-side SSE (no output/message, failed → `error{code,module}`); (4) SSE-route RBAC deny without `incarnation.get`; a foreign apply_id → 403; accepts `Authorization: Bearer` (fetch-streaming).
 - **Dependencies:** none.
 

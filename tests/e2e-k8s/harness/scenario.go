@@ -32,7 +32,7 @@ func (s *Stack) CreateIncarnation(t *testing.T, name, serviceRef string, spec ma
 	}
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
-		"name":    name,
+		"id":      name,
 		"service": service,
 	}
 	if spec != nil {

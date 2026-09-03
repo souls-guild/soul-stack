@@ -2,10 +2,10 @@ package api
 
 // FULL-TYPED reveal of incarnation secrets (NIM-74, code-first OpenAPI source). Two
 // routes under the incarnation.view-secrets right:
-//   - POST /v1/incarnations/{name}/secrets/reveal — plaintext reveal (SELF-AUDIT
+//   - POST /v1/incarnations/{id}/secrets/reveal — plaintext reveal (SELF-AUDIT
 //     incarnation.secret_revealed inside RevealSecretTyped; newHumaCadenceAPI,
 //     without middleware wiring);
-//   - GET /v1/incarnations/{name}/secrets/revealable — discovery (READ, no audit).
+//   - GET /v1/incarnations/{id}/secrets/revealable — discovery (READ, no audit).
 // The Go types are the single source of truth for the schema.
 
 import (
@@ -24,7 +24,7 @@ import (
 // {secret_id, key}. The client does NOT set the service version (taken from
 // inc.ServiceVersion).
 type incRevealSecretInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationRevealSecretRequest
 }
 
@@ -53,7 +53,7 @@ func incRevealSecretOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationRevealSecret",
 		Method:        http.MethodPost,
-		Path:          "/{name}/secrets/reveal",
+		Path:          "/{id}/secrets/reveal",
 		Summary:       "Reveal plaintext of an incarnation secret",
 		Description:   "Resolves the plaintext of a secret the service declared as type: secret in its state_schema, from Vault at the derived path. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be present in the current-state collection, and must be empty for a scalar secret. Audit incarnation.secret_revealed (without the value). Out of scope -> 404.",
 		Tags:          []string{"incarnation"},
@@ -74,7 +74,7 @@ func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.Incarn
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		res, err := incH.RevealSecretTyped(ctx, claims, in.Name, in.Body.SecretID, in.Body.Key)
+		res, err := incH.RevealSecretTyped(ctx, claims, in.ID, in.Body.SecretID, in.Body.Key)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -86,7 +86,7 @@ func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.Incarn
 
 // incRevealableSecretsInput — huma-input GET .../secrets/revealable.
 type incRevealableSecretsInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID string `path:"id" doc:"incarnation id"`
 }
 
 // IncarnationRevealableSecretItem — one item of the discovery response.
@@ -115,7 +115,7 @@ func incRevealableSecretsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationRevealableSecrets",
 		Method:        http.MethodGet,
-		Path:          "/{name}/secrets/revealable",
+		Path:          "/{id}/secrets/revealable",
 		Summary:       "List revealable secrets of an incarnation",
 		Description:   "Discovery of the secrets the service declared as type: secret in its state_schema + the keys present in the current state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404.",
 		Tags:          []string{"incarnation"},
@@ -135,7 +135,7 @@ func registerHumaIncarnationRevealableSecrets(humaAPI huma.API, incH *handlers.I
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		res, err := incH.RevealableSecretsTyped(ctx, claims, in.Name)
+		res, err := incH.RevealableSecretsTyped(ctx, claims, in.ID)
 		if err != nil {
 			return nil, incProblem(err)
 		}

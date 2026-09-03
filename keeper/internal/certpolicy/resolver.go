@@ -36,7 +36,7 @@ type Policy struct {
 	KnownScenarios []string
 }
 
-// IncarnationReader — the read surface of incarnation for [incarnation.SelectByName].
+// IncarnationReader — the read surface of incarnation for [incarnation.SelectByID].
 // Matches [incarnation.ExecQueryRower] (that one requires Exec/QueryRow/Query, not
 // just QueryRow); production supplies pgxpool.Pool, tests — a fake.
 type IncarnationReader interface {
@@ -77,7 +77,7 @@ func NewResolver(db IncarnationReader, services ServiceRefResolver, lister Polic
 // PKI role only, still Present/Enabled false. A Threshold parse error is swallowed
 // as 0 (the threshold is currently informational, not critical).
 func (r *Resolver) Resolve(ctx context.Context, incarnationName string) (Policy, error) {
-	inc, err := incarnation.SelectByName(ctx, r.db, incarnationName)
+	inc, err := incarnation.SelectByID(ctx, r.db, incarnationName)
 	if err != nil {
 		return Policy{}, fmt.Errorf("certpolicy: load incarnation %q: %w", incarnationName, err)
 	}

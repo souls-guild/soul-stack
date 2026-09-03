@@ -98,7 +98,7 @@ func TestAllRunsTyped_ValidSort_OK(t *testing.T) {
 func TestAllRunsTyped_ServiceLongName_NoValidation422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
-	longSvc := strings.Repeat("a", 80) // valid for the registry, but longer than the old ValidName=63 cap
+	longSvc := strings.Repeat("a", 80) // valid for the registry, but longer than the old ValidID=63 cap
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
 		AllRunsInput{Service: longSvc, Offset: 0, Limit: 50}); err != nil {
 		t.Fatalf("AllRunsTyped(long service): unexpected 422/error on a valid service: %v", err)
@@ -254,7 +254,7 @@ func TestAllRunsTyped_ScopePushdownSQL(t *testing.T) {
 	if !db.runsCalled {
 		t.Fatal("store was not called (expected scope-pushdown, not fail-closed)")
 	}
-	if !strings.Contains(db.lastRunsSQL, "IN (SELECT name FROM incarnation WHERE") {
+	if !strings.Contains(db.lastRunsSQL, "IN (SELECT id FROM incarnation WHERE") {
 		t.Errorf("scope did not reach SQL as an incarnation subquery:\n%s", db.lastRunsSQL)
 	}
 	if !strings.Contains(db.lastRunsSQL, "covens &&") {
@@ -279,7 +279,7 @@ func TestAllRunsTyped_Unrestricted_NoScopeSubquery(t *testing.T) {
 	if _, err := h.AllRunsTyped(context.Background(), runsClaims(), AllRunsInput{Offset: 0, Limit: 50}); err != nil {
 		t.Fatalf("AllRunsTyped: %v", err)
 	}
-	if strings.Contains(db.lastRunsSQL, "SELECT name FROM incarnation") {
+	if strings.Contains(db.lastRunsSQL, "SELECT id FROM incarnation") {
 		t.Errorf("Unrestricted must not carry a scope subquery:\n%s", db.lastRunsSQL)
 	}
 }

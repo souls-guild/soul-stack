@@ -30,7 +30,7 @@ const AutoImportSystemAID = "archon-system"
 // [PushProviderResolver]; split into its own interface so a unit test can
 // swap in a fake without spinning up Postgres.
 type AutoImporterReader interface {
-	SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error)
+	SelectByID(ctx context.Context, name string) (*pushprovider.PushProvider, error)
 }
 
 // AutoImporterInserter — a narrow write surface for INSERT push_providers
@@ -209,7 +209,7 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 			skipped++
 			continue
 		}
-		_, err := i.deps.ProviderReader.SelectByName(ctx, p.Name)
+		_, err := i.deps.ProviderReader.SelectByID(ctx, p.Name)
 		if err == nil {
 			// The PG canonical source already has the row — skip.
 			skipped++
@@ -220,7 +220,10 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 		}
 
 		entry := &pushprovider.PushProvider{
-			Name:         p.Name,
+			// p.Name is the keeper.yml `push.providers[].name` key, which the
+			// rename does not touch: a config key is not a registry column, a
+			// wire field, an MCP argument or a URL ([ADR-0085], NIM-729).
+			ID:           p.Name,
 			Params:       p.Params,
 			CreatedByAID: AutoImportSystemAID,
 		}
@@ -234,7 +237,12 @@ func (i *AutoImporter) importProviders(ctx context.Context, providers []config.K
 			EventType: audit.EventPushProviderImportedFromConfig,
 			Source:    audit.SourceConfigBootstrap,
 			Payload: map[string]any{
-				"name":        p.Name,
+				// `id`, matching `push-provider.created` ([ADR-0085], NIM-729).
+				// The VALUE still comes from the keeper.yml `push.providers[].name`
+				// key, which the rename leaves alone — a config key is not a
+				// registry column — but the audit trail records the identifier of
+				// the row that was inserted, and that is spelled `id` everywhere.
+				"id":          p.Name,
 				"params_keys": paramsKeys(p.Params),
 			},
 		})
@@ -319,8 +327,8 @@ func NewPGProviderReadWriter(db pushprovider.ExecQueryRower) interface {
 	return &pgProviderReadWriter{db: db}
 }
 
-func (a *pgProviderReadWriter) SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error) {
-	return pushprovider.SelectByName(ctx, a.db, name)
+func (a *pgProviderReadWriter) SelectByID(ctx context.Context, name string) (*pushprovider.PushProvider, error) {
+	return pushprovider.SelectByID(ctx, a.db, name)
 }
 
 func (a *pgProviderReadWriter) Insert(ctx context.Context, p *pushprovider.PushProvider) error {

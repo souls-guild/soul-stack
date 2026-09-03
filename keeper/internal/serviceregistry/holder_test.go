@@ -43,7 +43,7 @@ func snapWith(dds string, names ...string) *Snapshot {
 		defaultDestinySource: dds,
 	}
 	for _, n := range names {
-		s.services[n] = ServiceEntry{Name: n, Git: "git@x:" + n + ".git", Ref: "main"}
+		s.services[n] = ServiceEntry{ID: n, Git: "git@x:" + n + ".git", Ref: "main"}
 	}
 	return s
 }
@@ -54,7 +54,7 @@ func TestHolder_InitialSnapshot_FromSource(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHolder: %v", err)
 	}
-	if e, ok := h.Resolve("web"); !ok || e.Name != "web" {
+	if e, ok := h.Resolve("web"); !ok || e.ID != "web" {
 		t.Errorf("Resolve(web) = %+v ok=%v, want web/true", e, ok)
 	}
 	if _, ok := h.Resolve("missing"); ok {

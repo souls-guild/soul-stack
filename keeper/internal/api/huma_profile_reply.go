@@ -18,10 +18,10 @@ type Profile struct {
 	CreatedAt    time.Time `json:"created_at"`
 	CreatedByAID *string   `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	// Label — the display caption (ADR-0085), free text and mutable via
-	// PUT /v1/profiles/{name}/label. Absent means the row carries none and the
+	// PUT /v1/profiles/{id}/label. Absent means the row carries none and the
 	// consumer shows `name`.
 	Label    *string                `json:"label,omitempty"`
-	Name     string                 `json:"name"`
+	ID       string                 `json:"id"`
 	Params   map[string]interface{} `json:"params"`
 	Provider string                 `json:"provider"`
 }

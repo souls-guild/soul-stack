@@ -21,7 +21,7 @@ import (
 // are optional. covens — declared env-Coven labels (passed into the
 // incarnation, affect RBAC-scope create); input — parameters for scenario `create`.
 type incarnationCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.incarnation.label-set. Unlike Name it is never composed by a
 	// `name_template`.
@@ -94,18 +94,18 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// scenario carrying a `name_template` composes it from input components, and
 	// only the resolved plan knows whether there is one. A non-empty name is
 	// format-checked up front; "name is required" is deferred until after the plan.
-	if a.Name != "" && !incarnation.ValidName(a.Name) {
+	if a.ID != "" && !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.Service == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'service' is required")
 	}
 	// Sanity-check the service name against the same kebab-case grammar (parity
 	// with REST): guards against garbage in the DB (a `/` would break git-resolve paths).
-	if !incarnation.ValidName(a.Service) {
+	if !incarnation.ValidID(a.Service) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'service' must match "+incarnation.NamePattern)
+			"field 'service' must match "+incarnation.IDPattern)
 	}
 	// covens — declared env tags (ADR-008 amendment a): each must match
 	// CovenPattern (mirrors soul.Create / REST create). An invalid label →
@@ -122,7 +122,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// handlers.IncarnationCreateContexts as REST (single source of truth), which
 	// scopes on `service=`/`coven=` when `name` is absent under a `name_template`
 	// (NIM-333) instead of admitting only unrestricted roles.
-	if err := h.checkIncarnationCreateScope(claims, a.Name, a.Service, a.Covens); err != nil {
+	if err := h.checkIncarnationCreateScope(claims, a.ID, a.Service, a.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.create")
 	}
@@ -150,10 +150,10 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// bareNoScenario — service without `create: true` (ready without a run,
 	// created_scenario=NULL); autoCreate — lifecycle.auto_create policy
 	// (default true): false → ready without a run, but created_scenario is non-empty.
-	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.Name, serviceRef, a.CreateScenario, a.Input, claims.Subject,
+	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.ID, serviceRef, a.CreateScenario, a.Input, claims.Subject,
 		scenario.WithIncarnationLabels(a.Covens, a.Traits))
 	if perr != nil {
-		return h.createPlanToolError(req, toolName, a.Name, a.Service, perr)
+		return h.createPlanToolError(req, toolName, a.ID, a.Service, perr)
 	}
 	createScenario := plan.CreateScenario
 	bareNoScenario := plan.BareNoScenario
@@ -161,9 +161,9 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// name — the EFFECTIVE incarnation name (ADR-0079): the operator's `name`, or
 	// the one the create scenario composed from `name_template`. Everything past
 	// this point uses it, never a.Name.
-	name := plan.EffectiveName(a.Name)
+	name := plan.EffectiveName(a.ID)
 	if name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	// Gate (b), mirroring REST CreateTyped (NIM-333/NIM-338): the effective name and
@@ -217,7 +217,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Label:              a.Label,
 		Service:            a.Service,
 		ServiceVersion:     serviceRef.Ref,
@@ -264,7 +264,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		// a roster that appeared at birth and one bound a second later are the same
 		// fact about the incarnation (parity with REST bindCreateRoster).
 		h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
-			"name":           name,
+			"id":             name,
 			"sids":           roster.SIDs,
 			"bound":          emptyIfNilSIDs(bound),
 			"already_member": []string{},
@@ -314,7 +314,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		out.ApplyID = &applyID
 	}
 	h.writeAudit(audit.EventIncarnationCreated, claims.Subject, map[string]any{
-		"name":     name,
+		"id":       name,
 		"service":  a.Service,
 		"covens":   auditCovens,
 		"apply_id": auditApplyID,

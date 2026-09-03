@@ -138,8 +138,8 @@ func TestDestroy_AuditEvent(t *testing.T) {
 	if ev.ArchonAID != "archon-bob" {
 		t.Errorf("ArchonAID = %q, want archon-bob", ev.ArchonAID)
 	}
-	if ev.Payload["name"] != "redis-prod" {
-		t.Errorf("payload.name = %v, want redis-prod", ev.Payload["name"])
+	if ev.Payload["id"] != "redis-prod" {
+		t.Errorf("payload.id = %v, want redis-prod", ev.Payload["id"])
 	}
 	if ev.Payload["previous_status"] != "ready" {
 		t.Errorf("payload.previous_status = %v, want ready", ev.Payload["previous_status"])

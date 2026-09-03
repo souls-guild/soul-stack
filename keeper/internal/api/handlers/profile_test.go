@@ -72,13 +72,13 @@ func (f *fakeProfilePool) QueryRow(_ context.Context, sql string, args ...any) p
 			label = &s
 		}
 		f.entries[name] = &profile.Profile{
-			Name: name, Label: label, Provider: providerName, Params: params,
+			ID: name, Label: label, Provider: providerName, Params: params,
 			CloudInit: cloudInit, CreatedByAID: createdBy, CreatedAt: now,
 		}
 		return scanRowProv{values: []any{now}}
 	case strings.Contains(sql, "COUNT(*) FROM profiles"):
 		return scanRowProv{values: []any{len(f.entries)}}
-	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE name = $1"):
+	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE id = $1"):
 		name := args[0].(string)
 		p, ok := f.entries[name]
 		if !ok {
@@ -102,7 +102,7 @@ func profileScanValues(p *profile.Profile) []any {
 	if p.Params != nil {
 		paramsBytes, _ = json.Marshal(p.Params)
 	}
-	return []any{p.Name, p.Provider, paramsBytes, p.CloudInit, p.CreatedByAID, p.CreatedAt, p.Label}
+	return []any{p.ID, p.Provider, paramsBytes, p.CloudInit, p.CreatedByAID, p.CreatedAt, p.Label}
 }
 
 func newProfileHandler(t *testing.T, pool *fakeProfilePool) *ProfileHandler {
@@ -120,12 +120,12 @@ func TestProfileHandler_CreateGetListDelete(t *testing.T) {
 	params := map[string]any{"image": "ubuntu-22", "ram_mb": float64(2048)}
 
 	reply, err := h.CreateTyped(ctx, cloudClaims(), ProfileCreateInput{
-		Name: "web-small", Provider: "example-cloud", Params: &params,
+		ID: "web-small", Provider: "example-cloud", Params: &params,
 	})
 	if err != nil {
 		t.Fatalf("CreateTyped: %v", err)
 	}
-	if reply.Body.Name != "web-small" || reply.Body.Provider != "example-cloud" {
+	if reply.Body.ID != "web-small" || reply.Body.Provider != "example-cloud" {
 		t.Fatalf("create body = %+v", reply.Body)
 	}
 	// Audit carries params_keys (no values — secret hygiene).
@@ -161,7 +161,7 @@ func TestProfileHandler_CreateGetListDelete(t *testing.T) {
 func TestProfileHandler_DuplicateConflict(t *testing.T) {
 	h := newProfileHandler(t, newFakeProfilePool("example-cloud"))
 	ctx := context.Background()
-	in := ProfileCreateInput{Name: "dup", Provider: "example-cloud"}
+	in := ProfileCreateInput{ID: "dup", Provider: "example-cloud"}
 	if _, err := h.CreateTyped(ctx, cloudClaims(), in); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -174,7 +174,7 @@ func TestProfileHandler_DuplicateConflict(t *testing.T) {
 func TestProfileHandler_MissingProvider422(t *testing.T) {
 	h := newProfileHandler(t, newFakeProfilePool()) // no Provider at all
 	_, err := h.CreateTyped(context.Background(), cloudClaims(), ProfileCreateInput{
-		Name: "orphan", Provider: "ghost",
+		ID: "orphan", Provider: "ghost",
 	})
 	if got := provProblemType(t, err); got != problem.TypeValidationFailed {
 		t.Fatalf("missing provider: %q, want validation-failed (422)", got)
@@ -189,9 +189,9 @@ func TestProfileHandler_Validation(t *testing.T) {
 		in   ProfileCreateInput
 	}{
 		{"empty-name", ProfileCreateInput{Provider: "example-cloud"}},
-		{"bad-name", ProfileCreateInput{Name: "Web_Small", Provider: "example-cloud"}},
-		{"empty-provider", ProfileCreateInput{Name: "web"}},
-		{"bad-provider", ProfileCreateInput{Name: "web", Provider: "nonexistent"}},
+		{"bad-name", ProfileCreateInput{ID: "Web_Small", Provider: "example-cloud"}},
+		{"empty-provider", ProfileCreateInput{ID: "web"}},
+		{"bad-provider", ProfileCreateInput{ID: "web", Provider: "nonexistent"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -206,7 +206,7 @@ func TestProfileHandler_Validation(t *testing.T) {
 func TestProfileHandler_ListByProvider(t *testing.T) {
 	h := newProfileHandler(t, newFakeProfilePool("example-cloud"))
 	ctx := context.Background()
-	if _, err := h.CreateTyped(ctx, cloudClaims(), ProfileCreateInput{Name: "a", Provider: "example-cloud"}); err != nil {
+	if _, err := h.CreateTyped(ctx, cloudClaims(), ProfileCreateInput{ID: "a", Provider: "example-cloud"}); err != nil {
 		t.Fatalf("create a: %v", err)
 	}
 	page, err := h.ListTyped(ctx, "example-cloud", 0, 50)

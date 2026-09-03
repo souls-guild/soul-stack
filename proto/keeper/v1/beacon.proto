@@ -32,7 +32,11 @@ option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;ke
 // (typed-field access), and keeps reading `event.data.<field>` for legacy `data`
 // (backward-compat).
 message PortentEvent {
-  // Name of the Vigil that fired (vigils.name) — which check raised the event.
+  // Id of the Vigil that fired (vigils.id) — which check raised the event.
+  //
+  // The FIELD keeps the name `beacon_name`: [ADR-0085] / NIM-729 renamed the
+  // registry column, and ADR-012's forward-compat rule governs this contract, so
+  // moving the field is a separate decision rather than a consequence.
   // Oracle matches Decree (`on_vigil`) against it.
   string beacon_name = 1;
 
@@ -176,7 +180,7 @@ message InotifyEvent {
 // via OpenAPI/MCP, ADR-030); the set is resolved by the host's covens and sent to
 // it via VigilSnapshot.
 message VigilDef {
-  // Vigil name (vigils.name, kebab-case) — stable identifier; sent back in
+  // Vigil id (vigils.id, kebab-case) — stable identifier; sent back in
   // PortentEvent.beacon_name.
   string name = 1;
 

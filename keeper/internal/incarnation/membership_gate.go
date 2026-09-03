@@ -2,7 +2,7 @@ package incarnation
 
 // Screening of the hosts an OPERATOR bind targets (ADR-008 amendment 2026-07-28,
 // NIM-209). Lives in the domain, not in a handler, because BOTH operator surfaces
-// go through it — REST `POST /v1/incarnations/{name}/members` and the MCP mirror
+// go through it — REST `POST /v1/incarnations/{id}/members` and the MCP mirror
 // `keeper.incarnation.bind-member`. MCP has no chi middleware, so a check that
 // existed only on the REST side would be a hole rather than a gate.
 //

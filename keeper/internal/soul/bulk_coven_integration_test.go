@@ -45,7 +45,7 @@ func covenOf(t *testing.T, sid string) []string {
 func seedIncarnationRow(t *testing.T, name string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
-		`INSERT INTO incarnation (name, service, service_version, status)
+		`INSERT INTO incarnation (id, service, service_version, status)
 		 VALUES ($1, 'redis', 'v1.0.0', 'ready')`, name); err != nil {
 		t.Fatalf("seedIncarnationRow(%s): %v", name, err)
 	}

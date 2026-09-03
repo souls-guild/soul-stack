@@ -12,7 +12,7 @@ import (
 //
 // This lives here, in the package every state-touching operation already imports,
 // because more than one surface needs the same answer and the copies do not stay
-// equal. The read path (`GET /v1/incarnations/{name}`) had the only walk, private
+// equal. The read path (`GET /v1/incarnations/{id}`) had the only walk, private
 // to the handlers package; the force-destroy capture could not reach it and
 // therefore masked `state` with the vault+regex layers alone, so a key a service
 // declared `secret: true` — and nothing else gave away — was masked on the read

@@ -17,8 +17,8 @@ import (
 //   - ErrPushProviderAlreadyExists → 409 push-provider-already-exists.
 //   - ErrPushProviderNotFound      → 404 not-found.
 var (
-	ErrPushProviderAlreadyExists = errors.New("pushprovider: name already exists")
-	ErrPushProviderNotFound      = errors.New("pushprovider: name not found")
+	ErrPushProviderAlreadyExists = errors.New("pushprovider: id already exists")
+	ErrPushProviderNotFound      = errors.New("pushprovider: id not found")
 )
 
 const (
@@ -46,23 +46,23 @@ var (
 // ListFilter is the filter parameters for GET /v1/push-providers.
 // Empty fields mean no filter.
 type ListFilter struct {
-	// NamePattern is the LIKE form for prefix filtering by name
+	// IDPattern is the LIKE form for prefix filtering by name
 	// (e.g., "vault%"). Empty string means no filter.
-	NamePattern string
+	IDPattern string
 }
 
-const selectColumns = `name, params, created_at, updated_at, created_by_aid, updated_by_aid, label`
+const selectColumns = `id, params, created_at, updated_at, created_by_aid, updated_by_aid, label`
 
 const insertSQL = `
-INSERT INTO push_providers (name, params, created_by_aid, label)
+INSERT INTO push_providers (id, params, created_by_aid, label)
 VALUES ($1, $2, $3, $4)
 RETURNING created_at, updated_at
 `
 
-const selectByNameSQL = `
+const selectByIDSQL = `
 SELECT ` + selectColumns + `
 FROM push_providers
-WHERE name = $1
+WHERE id = $1
 `
 
 const updateSQL = `
@@ -70,10 +70,10 @@ UPDATE push_providers
 SET params = $2,
     updated_at = NOW(),
     updated_by_aid = $3
-WHERE name = $1
+WHERE id = $1
 `
 
-const deleteSQL = `DELETE FROM push_providers WHERE name = $1`
+const deleteSQL = `DELETE FROM push_providers WHERE id = $1`
 
 // updateLabelSQL replaces the display caption of one row ([ADR-0085]).
 //
@@ -88,14 +88,14 @@ const updateLabelSQL = `
 UPDATE push_providers AS x
 SET label = $2
 FROM push_providers AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
 // Insert inserts a new PushProvider record.
 //
 // Pre-conditions:
-//   - p.Name matches [NamePattern].
+//   - p.Name matches [IDPattern].
 //   - p.CreatedByAID is not empty (NOT NULL in schema).
 //
 // Returns:
@@ -106,8 +106,8 @@ func Insert(ctx context.Context, db ExecQueryRower, p *PushProvider) error {
 	if p == nil {
 		return fmt.Errorf("pushprovider: nil push provider")
 	}
-	if !ValidName(p.Name) {
-		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", p.Name, NamePattern)
+	if !ValidID(p.ID) {
+		return fmt.Errorf("pushprovider: invalid id %q (must match %s)", p.ID, IDPattern)
 	}
 	if p.CreatedByAID == "" {
 		return fmt.Errorf("pushprovider: created_by_aid is empty")
@@ -126,7 +126,7 @@ func Insert(ctx context.Context, db ExecQueryRower, p *PushProvider) error {
 		label = *p.Label
 	}
 
-	row := db.QueryRow(ctx, insertSQL, p.Name, paramsBytes, p.CreatedByAID, label)
+	row := db.QueryRow(ctx, insertSQL, p.ID, paramsBytes, p.CreatedByAID, label)
 	if err := row.Scan(&p.CreatedAt, &p.UpdatedAt); err != nil {
 		return mapInsertError(err)
 	}
@@ -149,9 +149,9 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("pushprovider: insert: %w", err)
 }
 
-// SelectByName reads a record by PK. Returns [ErrPushProviderNotFound] on pgx.ErrNoRows.
-func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*PushProvider, error) {
-	row := db.QueryRow(ctx, selectByNameSQL, name)
+// SelectByID reads a record by PK. Returns [ErrPushProviderNotFound] on pgx.ErrNoRows.
+func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*PushProvider, error) {
+	row := db.QueryRow(ctx, selectByIDSQL, id)
 	return scanPushProvider(row)
 }
 
@@ -163,7 +163,7 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 		label        *string
 	)
 	err := row.Scan(
-		&p.Name,
+		&p.ID,
 		&paramsBytes,
 		&p.CreatedAt,
 		&p.UpdatedAt,
@@ -204,16 +204,16 @@ func scanPushProvider(row pgx.Row) (*PushProvider, error) {
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
+func UpdateLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("pushprovider: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, updateLabelSQL, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, updateLabelSQL, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrPushProviderNotFound
 		}
@@ -225,9 +225,9 @@ func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *str
 // Update replaces params of an existing record (replace semantics).
 //
 // Returns [ErrPushProviderNotFound] if PK is not found (RowsAffected==0).
-func Update(ctx context.Context, db ExecQueryRower, name string, params map[string]any, updatedByAID string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
+func Update(ctx context.Context, db ExecQueryRower, id string, params map[string]any, updatedByAID string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("pushprovider: invalid id %q (must match %s)", id, IDPattern)
 	}
 	paramsBytes, err := marshalParams(params)
 	if err != nil {
@@ -237,7 +237,7 @@ func Update(ctx context.Context, db ExecQueryRower, name string, params map[stri
 	if updatedByAID != "" {
 		updatedBy = updatedByAID
 	}
-	tag, err := db.Exec(ctx, updateSQL, name, paramsBytes, updatedBy)
+	tag, err := db.Exec(ctx, updateSQL, id, paramsBytes, updatedBy)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
@@ -253,11 +253,11 @@ func Update(ctx context.Context, db ExecQueryRower, name string, params map[stri
 
 // Delete removes a record by PK. Returns [ErrPushProviderNotFound] if the record
 // does not exist (RowsAffected==0).
-func Delete(ctx context.Context, db ExecQueryRower, name string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
+func Delete(ctx context.Context, db ExecQueryRower, id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("pushprovider: invalid id %q (must match %s)", id, IDPattern)
 	}
-	tag, err := db.Exec(ctx, deleteSQL, name)
+	tag, err := db.Exec(ctx, deleteSQL, id)
 	if err != nil {
 		return fmt.Errorf("pushprovider: delete: %w", err)
 	}
@@ -292,7 +292,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, f ListFilter, offset, lim
 
 	listSQL := `SELECT ` + selectColumns + `
 FROM push_providers` + whereSQL + `
-ORDER BY updated_at DESC, name ASC
+ORDER BY updated_at DESC, id ASC
 OFFSET $` + itoa(len(args)+1) + ` LIMIT $` + itoa(len(args)+2)
 	args = append(args, offset, limit)
 
@@ -317,10 +317,10 @@ OFFSET $` + itoa(len(args)+1) + ` LIMIT $` + itoa(len(args)+2)
 }
 
 func buildWhere(f ListFilter) (string, []any) {
-	if f.NamePattern == "" {
+	if f.IDPattern == "" {
 		return "", nil
 	}
-	return " WHERE name LIKE $1", []any{f.NamePattern}
+	return " WHERE id LIKE $1", []any{f.IDPattern}
 }
 
 // marshalParams serializes params to JSON bytes for direct insertion

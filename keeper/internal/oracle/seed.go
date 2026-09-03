@@ -30,7 +30,7 @@ func InsertVigil(ctx context.Context, db ExecQueryRower, v *Vigil) error {
 		return fmt.Errorf("oracle: nil vigil")
 	}
 	const sql = `
-INSERT INTO vigils (name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_by_aid, label)
+INSERT INTO vigils (id, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, COALESCE($10, '{}'::jsonb), $11, $12, $13)
 RETURNING created_at, updated_at`
 	var paramsArg any
@@ -41,7 +41,7 @@ RETURNING created_at, updated_at`
 	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
 	v.Label = registrylabel.Normalize(v.Label)
 	row := db.QueryRow(ctx, sql,
-		v.Name, v.SID, v.Service, v.Incarnation, v.Coven, v.TraitKey, v.TraitValue,
+		v.ID, v.SID, v.Service, v.Incarnation, v.Coven, v.TraitKey, v.TraitValue,
 		v.IntervalSpec, v.CheckAddr,
 		paramsArg, v.Enabled, v.CreatedByAID, v.Label,
 	)
@@ -71,7 +71,7 @@ func InsertDecree(ctx context.Context, db ExecQueryRower, d *Decree) error {
 		cooldown = "0s"
 	}
 	const sql = `
-INSERT INTO decrees (name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid, label)
+INSERT INTO decrees (id, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, COALESCE($12, '{}'::jsonb), $13, $14, $15, $16)
 RETURNING cooldown, created_at, updated_at`
 	var inputArg any
@@ -81,7 +81,7 @@ RETURNING cooldown, created_at, updated_at`
 	// The label is canonicalised, never validated ([ADR-0085]).
 	d.Label = registrylabel.Normalize(d.Label)
 	row := db.QueryRow(ctx, sql,
-		d.Name, d.OnBeacon, d.WhereCEL,
+		d.ID, d.OnBeacon, d.WhereCEL,
 		d.SubjectSID, d.SubjectService, d.SubjectIncarnation, d.SubjectCoven,
 		d.SubjectTraitKey, d.SubjectTraitValue,
 		d.IncarnationName, d.ActionScenario, inputArg, cooldown, d.Enabled, d.CreatedByAID,

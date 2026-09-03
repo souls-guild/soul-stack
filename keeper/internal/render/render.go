@@ -101,6 +101,14 @@ var ErrAssertFailed = errors.New("render: assert failed")
 // cel.Vars.Incarnation; host_count is auto-filled from the number of targeted
 // hosts (used in scenario predicates like
 // `size(register.x) < incarnation.host_count`, see add_user/main.yml).
+// The FIELD NAMES here mirror the CEL keys, not the registry columns. The
+// identifier column is `id` since [ADR-0085] / NIM-729, but the CEL root is
+// still spelled `incarnation.name` — moving THAT is NIM-730, which owns the
+// compatibility window every service repository needs. So callers fill
+// `Name` from `incarnation.Incarnation.ID`, and the two spellings converge
+// when NIM-730 lands.
+//
+// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
 type IncarnationMeta struct {
 	Name           string
 	Service        string

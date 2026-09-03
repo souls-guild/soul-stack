@@ -46,7 +46,7 @@ func TestIntegration_LockApplyingWithEpoch_Atomic(t *testing.T) {
 	const q = `
 SELECT status, applying_apply_id, applying_attempt, applying_by_kid,
        applying_since::text
-FROM incarnation WHERE name = $1`
+FROM incarnation WHERE id = $1`
 	if err := integrationPool.QueryRow(ctx, q, name).Scan(
 		&status, &gotApply, &gotAtt, &gotKID, &gotSince,
 	); err != nil {
@@ -91,7 +91,7 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	// The row starts from error_locked + the last failed scenario = create
 	// (scope=create gate in UnlockForRerun).
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "noop", ServiceVersion: "master",
+		ID: name, Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 	}
 	if err := incarnation.Create(ctx, integrationPool, inc); err != nil {
@@ -135,7 +135,7 @@ func TestIntegration_LockApplyingWithEpoch_FromLocked(t *testing.T) {
 	const q = `
 SELECT status, applying_apply_id, applying_attempt, applying_by_kid,
        applying_since::text
-FROM incarnation WHERE name = $1`
+FROM incarnation WHERE id = $1`
 	if err := integrationPool.QueryRow(ctx, q, name).Scan(
 		&status, &gotApply, &gotAtt, &gotKID, &gotSince,
 	); err != nil {
@@ -190,7 +190,7 @@ func TestIntegration_LockApplyingWithEpoch_RollbackLeavesNoEpoch(t *testing.T) {
 		gotApply *string
 		gotKID   *string
 	)
-	const q = `SELECT status, applying_apply_id, applying_by_kid FROM incarnation WHERE name = $1`
+	const q = `SELECT status, applying_apply_id, applying_by_kid FROM incarnation WHERE id = $1`
 	if err := integrationPool.QueryRow(ctx, q, name).Scan(&status, &gotApply, &gotKID); err != nil {
 		t.Fatalf("read back: %v", err)
 	}

@@ -67,9 +67,9 @@ type UpdateTraitsResult struct {
 // "clear labels" (column → `{}`). Returns [ErrIncarnationNotFound] (404) if
 // name doesn't exist. Status-gate intentionally absent: traits are operator-set
 // labels, not run state/spec; a replace is safe at any status.
-func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[string]any) (*UpdateTraitsResult, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+func UpdateTraits(ctx context.Context, pool TxBeginner, id string, traits map[string]any) (*UpdateTraitsResult, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
 	}
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
@@ -79,17 +79,17 @@ func UpdateTraits(ctx context.Context, pool TxBeginner, name string, traits map[
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	const selectForUpdateSQL = `
-SELECT name, service, service_version, state_schema_version,
+SELECT id, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits,
        created_scenario,
        applying_apply_id,
        label
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
-	inc, err := scanIncarnation(tx.QueryRow(ctx, selectForUpdateSQL, name))
+	inc, err := scanIncarnation(tx.QueryRow(ctx, selectForUpdateSQL, id))
 	if err != nil {
 		return nil, err
 	}
@@ -113,10 +113,10 @@ FOR UPDATE
 UPDATE incarnation
 SET traits     = $2,
     updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 RETURNING updated_at, traits
 `
-	if err := tx.QueryRow(ctx, updateSQL, name, traitsBytes).Scan(&inc.UpdatedAt, &inc.TraitsRaw); err != nil {
+	if err := tx.QueryRow(ctx, updateSQL, id, traitsBytes).Scan(&inc.UpdatedAt, &inc.TraitsRaw); err != nil {
 		return nil, fmt.Errorf("incarnation: update traits: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

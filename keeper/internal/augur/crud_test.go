@@ -16,7 +16,7 @@ import (
 )
 
 // fakeDB is an ExecQueryRower stub. queryRowFunc receives SQL and call ordinal number.
-// InsertRite makes two QueryRow calls: SelectOmenByName, then INSERT.
+// InsertRite makes two QueryRow calls: SelectOmenByID, then INSERT.
 type fakeDB struct {
 	queryRowSQL   string
 	queryRowArgs  []any
@@ -166,7 +166,7 @@ func omenRow(name, src, endpoint, authRef string, aid any) []any {
 
 func validOmen() *Omen {
 	return &Omen{
-		Name:         "vault-prod",
+		ID:           "vault-prod",
 		SourceType:   SourceVault,
 		Endpoint:     "https://vault.internal:8200",
 		AuthRef:      "vault:secret/keeper/augur/vault-prod",
@@ -211,10 +211,10 @@ func TestInsertOmen_NilCreatedBy(t *testing.T) {
 func TestInsertOmen_RejectsBadName(t *testing.T) {
 	f := &fakeDB{}
 	o := validOmen()
-	o.Name = "Vault_Prod"
+	o.ID = "Vault_Prod"
 	if err := InsertOmen(context.Background(), f, o); err == nil ||
-		!strings.Contains(err.Error(), "invalid omen name") {
-		t.Fatalf("err = %v, want invalid omen name", err)
+		!strings.Contains(err.Error(), "invalid omen id") {
+		t.Fatalf("err = %v, want invalid omen id", err)
 	}
 	if f.queryRowCalls != 0 {
 		t.Errorf("queryRowCalls = %d on bad name; want 0", f.queryRowCalls)
@@ -264,15 +264,15 @@ func TestInsertOmen_MapsUniqueViolation(t *testing.T) {
 	}
 }
 
-// --- SelectOmenByName / SelectAllOmens / DeleteOmen -------------------
+// --- SelectOmenByID / SelectAllOmens / DeleteOmen -------------------
 
 func TestSelectOmenByName_HappyPath(t *testing.T) {
 	f := &fakeDB{queryRowFunc: func(_ int, _ string) pgx.Row {
 		return staticRow{values: omenRow("prom-main", "prometheus", "https://prom:9090", "vault:secret/k/prom", any("archon-alice"))}
 	}}
-	o, err := SelectOmenByName(context.Background(), f, "prom-main")
+	o, err := SelectOmenByID(context.Background(), f, "prom-main")
 	if err != nil {
-		t.Fatalf("SelectOmenByName: %v", err)
+		t.Fatalf("SelectOmenByID: %v", err)
 	}
 	if o.SourceType != SourcePrometheus {
 		t.Errorf("SourceType = %q", o.SourceType)
@@ -284,7 +284,7 @@ func TestSelectOmenByName_HappyPath(t *testing.T) {
 
 func TestSelectOmenByName_NotFound(t *testing.T) {
 	f := &fakeDB{}
-	if _, err := SelectOmenByName(context.Background(), f, "missing"); !errors.Is(err, ErrOmenNotFound) {
+	if _, err := SelectOmenByID(context.Background(), f, "missing"); !errors.Is(err, ErrOmenNotFound) {
 		t.Fatalf("err = %v, want ErrOmenNotFound", err)
 	}
 }

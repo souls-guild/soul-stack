@@ -28,7 +28,7 @@ const heraldNotConfigured = "herald registry is not configured"
 
 // heraldView — output form of a Herald (same as REST toHeraldResponse).
 type heraldView struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent when the row carries none, and
 	// a consumer then shows `name`. NOT the derived Vault `<entity>` segment.
 	Label        *string        `json:"label,omitempty"`
@@ -47,7 +47,7 @@ func toHeraldView(h *herald.Herald) heraldView {
 		config = map[string]any{}
 	}
 	return heraldView{
-		Name:         h.Name,
+		ID:           h.ID,
 		Label:        h.Label,
 		Type:         string(h.Type),
 		Config:       config,
@@ -62,7 +62,7 @@ func toHeraldView(h *herald.Herald) heraldView {
 // --- Herald: args ----------------------------------------------------
 
 type heraldCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.herald.label-set.
 	Label     *string        `json:"label"`
@@ -78,7 +78,7 @@ type heraldCreateArgs struct {
 }
 
 type heraldUpdateArgs struct {
-	Name      string         `json:"name"`
+	ID        string         `json:"id"`
 	Type      string         `json:"type"`
 	Config    map[string]any `json:"config"`
 	SecretRef *string        `json:"secret_ref"`
@@ -86,8 +86,8 @@ type heraldUpdateArgs struct {
 	Enabled   *bool          `json:"enabled"`
 }
 
-type heraldByNameArgs struct {
-	Name string `json:"name"`
+type heraldByIDArgs struct {
+	ID string `json:"id"`
 }
 
 type heraldListArgs struct {
@@ -118,15 +118,15 @@ func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req 
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	enabled := true
 	if a.Enabled != nil {
 		enabled = *a.Enabled
 	}
 	created, err := h.deps.HeraldSvc.CreateHerald(ctx, &herald.Herald{
-		Name:         a.Name,
+		ID:           a.ID,
 		Label:        a.Label,
 		Type:         herald.HeraldType(a.Type),
 		Config:       a.Config,
@@ -136,7 +136,7 @@ func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req 
 		CreatedByAID: aidArgMCP(claims.Subject),
 	})
 	if err != nil {
-		return h.heraldErr(req.ID, toolName, err, "herald.create", a.Name)
+		return h.heraldErr(req.ID, toolName, err, "herald.create", a.ID)
 	}
 	h.writeAudit(audit.EventHeraldCreated, claims.Subject, heraldAuditMCP(created))
 	return h.toolResult(req.ID, toHeraldView(created))
@@ -156,15 +156,15 @@ func (h *Handler) callHeraldUpdate(ctx context.Context, claims *jwt.Claims, req 
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	enabled := true
 	if a.Enabled != nil {
 		enabled = *a.Enabled
 	}
 	updated, err := h.deps.HeraldSvc.UpdateHerald(ctx, &herald.Herald{
-		Name:      a.Name,
+		ID:        a.ID,
 		Type:      herald.HeraldType(a.Type),
 		Config:    a.Config,
 		SecretRef: a.SecretRef,
@@ -172,7 +172,7 @@ func (h *Handler) callHeraldUpdate(ctx context.Context, claims *jwt.Claims, req 
 		Enabled:   enabled,
 	})
 	if err != nil {
-		return h.heraldErr(req.ID, toolName, err, "herald.update", a.Name)
+		return h.heraldErr(req.ID, toolName, err, "herald.update", a.ID)
 	}
 	h.writeAudit(audit.EventHeraldUpdated, claims.Subject, heraldAuditMCP(updated))
 	return h.toolResult(req.ID, toHeraldView(updated))
@@ -186,19 +186,19 @@ func (h *Handler) callHeraldDelete(ctx context.Context, claims *jwt.Claims, req 
 	if err := h.deps.RBAC.Check(claims.Subject, "herald", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission herald.delete")
 	}
-	var a heraldByNameArgs
+	var a heraldByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if err := h.deps.HeraldSvc.DeleteHerald(ctx, a.Name); err != nil {
-		return h.heraldErr(req.ID, toolName, err, "herald.delete", a.Name)
+	if err := h.deps.HeraldSvc.DeleteHerald(ctx, a.ID); err != nil {
+		return h.heraldErr(req.ID, toolName, err, "herald.delete", a.ID)
 	}
-	h.writeAudit(audit.EventHeraldDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(audit.EventHeraldDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 
@@ -210,18 +210,18 @@ func (h *Handler) callHeraldRead(ctx context.Context, claims *jwt.Claims, req js
 	if err := h.deps.RBAC.Check(claims.Subject, "herald", "read", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission herald.read")
 	}
-	var a heraldByNameArgs
+	var a heraldByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	hr, err := h.deps.HeraldSvc.GetHerald(ctx, a.Name)
+	hr, err := h.deps.HeraldSvc.GetHerald(ctx, a.ID)
 	if err != nil {
-		return h.heraldErr(req.ID, toolName, err, "herald.read", a.Name)
+		return h.heraldErr(req.ID, toolName, err, "herald.read", a.ID)
 	}
 	return h.toolResult(req.ID, toHeraldView(hr))
 }
@@ -256,16 +256,16 @@ func (h *Handler) callHeraldList(ctx context.Context, claims *jwt.Claims, req js
 }
 
 // heraldErr — shared mapper of Herald errors to an MCP response; internal-error is logged.
-func (h *Handler) heraldErr(id json.RawMessage, toolName string, err error, op, name string) jsonRPCResponse {
+func (h *Handler) heraldErr(reqID json.RawMessage, toolName string, err error, op, id string) jsonRPCResponse {
 	code, detail := mapHeraldErrorToMCP(err)
 	if code == mcpCodeInternalError {
-		h.deps.Logger.Error("mcp: "+op+" failed", slog.String("name", name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: "+op+" failed", slog.String("id", id), slog.Any("error", err))
 	}
-	return h.toolError(id, toolName, code, detail)
+	return h.toolError(reqID, toolName, code, detail)
 }
 
 func heraldAuditMCP(h *herald.Herald) map[string]any {
-	p := map[string]any{"name": h.Name, "label": h.Label, "type": string(h.Type), "enabled": h.Enabled}
+	p := map[string]any{"id": h.ID, "label": h.Label, "type": string(h.Type), "enabled": h.Enabled}
 	if url, ok := h.Config["url"].(string); ok {
 		p["url"] = url
 	}
@@ -283,7 +283,7 @@ func heraldAuditMCP(h *herald.Herald) map[string]any {
 }
 
 // callHeraldSetLabel — keeper.herald.label-set, the MCP mirror of
-// PUT /v1/heralds/{name}/label (ADR-0085). Narrower than keeper.herald.update,
+// PUT /v1/heralds/{id}/label (ADR-0085). Narrower than keeper.herald.update,
 // which replaces the channel including its secret_ref.
 func (h *Handler) callHeraldSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[heraldView]{
@@ -291,17 +291,17 @@ func (h *Handler) callHeraldSetLabel(ctx context.Context, claims *jwt.Claims, re
 		resource:      "herald",
 		configured:    h.deps.HeraldSvc != nil,
 		notConfigured: heraldNotConfigured,
-		validName:     herald.ValidName,
-		namePattern:   herald.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (heraldView, *string, error) {
-			updated, previous, err := h.deps.HeraldSvc.SetHeraldLabel(ctx, name, label)
+		validID:       herald.ValidID,
+		idPattern:     herald.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (heraldView, *string, error) {
+			updated, previous, err := h.deps.HeraldSvc.SetHeraldLabel(ctx, id, label)
 			if err != nil {
 				return heraldView{}, nil, err
 			}
 			return toHeraldView(updated), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrHeraldNotFound) },
-		notFoundf:  func(name string) string { return "herald " + name + " not found" },
+		notFoundf:  func(id string) string { return "herald " + id + " not found" },
 		failMsg:    "set herald label failed",
 		event:      audit.EventHeraldLabelChanged,
 	})
@@ -310,7 +310,7 @@ func (h *Handler) callHeraldSetLabel(ctx context.Context, claims *jwt.Claims, re
 // --- Tiding: output projections -----------------------------------------
 
 type tidingView struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
 	Label        *string  `json:"label,omitempty"`
 	Herald       string   `json:"herald"`
@@ -332,7 +332,7 @@ func toTidingView(t *herald.Tiding) tidingView {
 		eventTypes = []string{}
 	}
 	return tidingView{
-		Name:         t.Name,
+		ID:           t.ID,
 		Label:        t.Label,
 		Herald:       t.Herald,
 		EventTypes:   eventTypes,
@@ -351,7 +351,7 @@ func toTidingView(t *herald.Tiding) tidingView {
 // --- Tiding: args ----------------------------------------------------
 
 type tidingCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.tiding.label-set.
 	Label        *string  `json:"label"`
@@ -366,7 +366,7 @@ type tidingCreateArgs struct {
 }
 
 type tidingUpdateArgs struct {
-	Name         string   `json:"name"`
+	ID           string   `json:"id"`
 	Herald       string   `json:"herald"`
 	EventTypes   []string `json:"event_types"`
 	OnlyFailures *bool    `json:"only_failures"`
@@ -377,8 +377,8 @@ type tidingUpdateArgs struct {
 	Enabled      *bool    `json:"enabled"`
 }
 
-type tidingByNameArgs struct {
-	Name string `json:"name"`
+type tidingByIDArgs struct {
+	ID string `json:"id"`
 }
 
 type tidingListArgs struct {
@@ -410,11 +410,11 @@ func (h *Handler) callTidingCreate(ctx context.Context, claims *jwt.Claims, req 
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	created, err := h.deps.HeraldSvc.CreateTiding(ctx, &herald.Tiding{
-		Name:         a.Name,
+		ID:           a.ID,
 		Label:        a.Label,
 		Herald:       a.Herald,
 		EventTypes:   a.EventTypes,
@@ -427,7 +427,7 @@ func (h *Handler) callTidingCreate(ctx context.Context, claims *jwt.Claims, req 
 		CreatedByAID: aidArgMCP(claims.Subject),
 	})
 	if err != nil {
-		return h.tidingErr(req.ID, toolName, err, "tiding.create", a.Name)
+		return h.tidingErr(req.ID, toolName, err, "tiding.create", a.ID)
 	}
 	h.writeAudit(audit.EventTidingCreated, claims.Subject, tidingAuditMCP(created))
 	return h.toolResult(req.ID, toTidingView(created))
@@ -447,11 +447,11 @@ func (h *Handler) callTidingUpdate(ctx context.Context, claims *jwt.Claims, req 
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	updated, err := h.deps.HeraldSvc.UpdateTiding(ctx, &herald.Tiding{
-		Name:         a.Name,
+		ID:           a.ID,
 		Herald:       a.Herald,
 		EventTypes:   a.EventTypes,
 		OnlyFailures: boolOrMCP(a.OnlyFailures, false),
@@ -463,7 +463,7 @@ func (h *Handler) callTidingUpdate(ctx context.Context, claims *jwt.Claims, req 
 		Enabled: boolOrMCP(a.Enabled, true),
 	})
 	if err != nil {
-		return h.tidingErr(req.ID, toolName, err, "tiding.update", a.Name)
+		return h.tidingErr(req.ID, toolName, err, "tiding.update", a.ID)
 	}
 	h.writeAudit(audit.EventTidingUpdated, claims.Subject, tidingAuditMCP(updated))
 	return h.toolResult(req.ID, toTidingView(updated))
@@ -477,19 +477,19 @@ func (h *Handler) callTidingDelete(ctx context.Context, claims *jwt.Claims, req 
 	if err := h.deps.RBAC.Check(claims.Subject, "tiding", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission tiding.delete")
 	}
-	var a tidingByNameArgs
+	var a tidingByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if err := h.deps.HeraldSvc.DeleteTiding(ctx, a.Name); err != nil {
-		return h.tidingErr(req.ID, toolName, err, "tiding.delete", a.Name)
+	if err := h.deps.HeraldSvc.DeleteTiding(ctx, a.ID); err != nil {
+		return h.tidingErr(req.ID, toolName, err, "tiding.delete", a.ID)
 	}
-	h.writeAudit(audit.EventTidingDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(audit.EventTidingDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 
@@ -501,18 +501,18 @@ func (h *Handler) callTidingRead(ctx context.Context, claims *jwt.Claims, req js
 	if err := h.deps.RBAC.Check(claims.Subject, "tiding", "read", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission tiding.read")
 	}
-	var a tidingByNameArgs
+	var a tidingByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	tg, err := h.deps.HeraldSvc.GetTiding(ctx, a.Name)
+	tg, err := h.deps.HeraldSvc.GetTiding(ctx, a.ID)
 	if err != nil {
-		return h.tidingErr(req.ID, toolName, err, "tiding.read", a.Name)
+		return h.tidingErr(req.ID, toolName, err, "tiding.read", a.ID)
 	}
 	return h.toolResult(req.ID, toTidingView(tg))
 }
@@ -547,33 +547,33 @@ func (h *Handler) callTidingList(ctx context.Context, claims *jwt.Claims, req js
 }
 
 // tidingErr — shared mapper of Tiding errors to an MCP response; internal-error is logged.
-func (h *Handler) tidingErr(id json.RawMessage, toolName string, err error, op, name string) jsonRPCResponse {
+func (h *Handler) tidingErr(reqID json.RawMessage, toolName string, err error, op, id string) jsonRPCResponse {
 	code, detail := mapTidingErrorToMCP(err)
 	if code == mcpCodeInternalError {
-		h.deps.Logger.Error("mcp: "+op+" failed", slog.String("name", name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: "+op+" failed", slog.String("id", id), slog.Any("error", err))
 	}
-	return h.toolError(id, toolName, code, detail)
+	return h.toolError(reqID, toolName, code, detail)
 }
 
 // callTidingSetLabel — keeper.tiding.label-set, the MCP mirror of
-// PUT /v1/tidings/{name}/label (ADR-0085).
+// PUT /v1/tidings/{id}/label (ADR-0085).
 func (h *Handler) callTidingSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[tidingView]{
 		tool:          "keeper.tiding.label-set",
 		resource:      "tiding",
 		configured:    h.deps.HeraldSvc != nil,
 		notConfigured: heraldNotConfigured,
-		validName:     herald.ValidName,
-		namePattern:   herald.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (tidingView, *string, error) {
-			updated, previous, err := h.deps.HeraldSvc.SetTidingLabel(ctx, name, label)
+		validID:       herald.ValidID,
+		idPattern:     herald.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (tidingView, *string, error) {
+			updated, previous, err := h.deps.HeraldSvc.SetTidingLabel(ctx, id, label)
 			if err != nil {
 				return tidingView{}, nil, err
 			}
 			return toTidingView(updated), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, herald.ErrTidingNotFound) },
-		notFoundf:  func(name string) string { return "tiding " + name + " not found" },
+		notFoundf:  func(id string) string { return "tiding " + id + " not found" },
 		failMsg:    "set tiding label failed",
 		event:      audit.EventTidingLabelChanged,
 	})
@@ -581,7 +581,7 @@ func (h *Handler) callTidingSetLabel(ctx context.Context, claims *jwt.Claims, re
 
 func tidingAuditMCP(t *herald.Tiding) map[string]any {
 	p := map[string]any{
-		"name":          t.Name,
+		"id":            t.ID,
 		"label":         t.Label,
 		"herald":        t.Herald,
 		"event_types":   t.EventTypes,

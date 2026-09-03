@@ -20,10 +20,10 @@ type Provider struct {
 	CredentialsRef string    `json:"credentials_ref"`
 	FQDNSuffix     *string   `json:"fqdn_suffix,omitempty"`
 	// Label — the display caption (ADR-0085), free text and mutable via
-	// PUT /v1/providers/{name}/label. Absent means the row carries none and the
+	// PUT /v1/providers/{id}/label. Absent means the row carries none and the
 	// consumer shows `name`.
 	Label  *string `json:"label,omitempty"`
-	Name   string  `json:"name"`
+	ID     string  `json:"id"`
 	Region string  `json:"region"`
 	Type   string  `json:"type"`
 }

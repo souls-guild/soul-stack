@@ -426,6 +426,28 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 	if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l1-failure.py "$$log" || true; fi; \
 	exit "$$rc"
 
+# Run one long tier DETACHED, in its own process group ([scripts/run-detached.sh]).
+#
+# `test-integration` is 12-15 minutes and `e2e-live` is longer — longer than the
+# lifetime of whatever starts them interactively. When that caller goes away it
+# tears down its process group and every child takes the SIGTERM, leaving a
+# truncated log whose last line is `Terminated` and NO exit code. Read
+# carelessly, the packages the run never reached look like packages that passed.
+#
+# The tier targets themselves are deliberately left attached: CI waits on them
+# and needs their exit status, and detaching there would report success for a run
+# nobody waited for.
+#
+#   make detached T=test-integration
+#   make detached T=e2e-live LOG=/tmp/nightly.log
+#
+# The `<log>.rc` file is the completion marker — absent means "still running or
+# killed", never "passed".
+.PHONY: detached
+detached: ## run a long tier in its own process group (T=test-integration); survives a caller teardown
+	@test -n "$(T)" || { echo "detached: set T=<target>, e.g. make detached T=test-integration"; exit 2; }
+	@scripts/run-detached.sh "$(T)" $(DETACHED_ARGS)
+
 # L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
 # a real Keeper process + a soul-stub with live gRPC-mTLS. A separate go module
 # tests/e2e/ under the `e2e` build tag (testcontainers deps don't leak into the main
@@ -1592,8 +1614,15 @@ check-all:
 # differ from the canonical format; a non-empty list is a gate failure.
 # Scoped by module roots (gofmt recurses into directories itself), we aggregate
 # the output of a single `gofmt -l` and fail if anything was found.
+#
+# $(MODULES) is not the whole tree: the e2e harnesses under tests/ and the Go
+# module examples under examples/ are their own modules and were outside this
+# gate, so unformatted code there passed `make check` and was found later by a
+# reader. They are added explicitly (NIM-729, which edited an e2e harness and
+# got a green gate over a formatting break). Both trees are gofmt-clean as of
+# this change, so widening the scope reddens nothing that was already green.
 check-fmt:
-	@out=$$(gofmt -l $(MODULES) 2>/dev/null); \
+	@out=$$(gofmt -l $(MODULES) tests examples 2>/dev/null); \
 	if [ -n "$$out" ]; then \
 		echo "gofmt: the following files are not formatted:"; \
 		echo "$$out"; \
@@ -2008,6 +2037,8 @@ help:
 	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
 	@echo "  docker-build-keeper  build the keeper:e2e-k8s image (for L3c kind load docker-image)"
 	@echo "  docker-build-soul    build the soul:e2e-k8s image (privileged systemd Debian-12 for L3c-3+)"
+	@echo "  detached          run a long tier in its own process group (T=test-integration)"
+	@echo "                    — survives a caller teardown; <log>.rc appears only on completion"
 	@echo "  tidy              go mod tidy across all modules"
 	@echo ""
 	@echo "Checks/gate:"

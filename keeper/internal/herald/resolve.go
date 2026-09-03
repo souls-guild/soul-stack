@@ -16,7 +16,7 @@ import (
 
 // HeraldReader is narrow surface of heralds registry, needed by worker: resolution
 // of channel by name at delivery time. Real implementation is closure over
-// [SelectHeraldByName]; narrow interface allows fake in unit tests without PG.
+// [SelectHeraldByID]; narrow interface allows fake in unit tests without PG.
 type HeraldReader interface {
 	HeraldByName(ctx context.Context, name string) (*Herald, error)
 }
@@ -43,11 +43,11 @@ type webhookTarget struct {
 // as terminal-fail of this job delivery, secret does not leak into error text).
 func resolveWebhookTarget(ctx context.Context, h *Herald, kv KVReader) (*webhookTarget, error) {
 	if h.Type != HeraldWebhook {
-		return nil, fmt.Errorf("herald: channel %q is not webhook (type %q)", h.Name, h.Type)
+		return nil, fmt.Errorf("herald: channel %q is not webhook (type %q)", h.ID, h.Type)
 	}
 	rawURL, _ := h.Config["url"].(string)
 	if rawURL == "" {
-		return nil, fmt.Errorf("herald: channel %q webhook config has no url", h.Name)
+		return nil, fmt.Errorf("herald: channel %q webhook config has no url", h.ID)
 	}
 	t := &webhookTarget{
 		url:          rawURL,

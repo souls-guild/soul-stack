@@ -19,8 +19,8 @@ package api
 // the items/offset/limit/total shape 1:1.
 
 // OUTPUT NAME-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
-// the response body (empirically 200, not 500). name ← oracle.NamePattern (kebab, Vigil/Decree);
-// on_beacon — FK to a Vigil name by the same oracle.NamePattern; incarnation_name ←
+// the response body (empirically 200, not 500). name ← oracle.IDPattern (kebab, Vigil/Decree);
+// on_beacon — FK to a Vigil name by the same oracle.IDPattern; incarnation_name ←
 // oracle.IncarnationPattern (same const as INPUT decree.create incarnation_name). Format
 // for client codegen; the pattern does not affect json.Marshal (golden byte-exact intact). Output types
 // are not shared with the request Body (create — separate *Request) → no input-422 risk. coven is NOT
@@ -46,9 +46,9 @@ type VigilView struct {
 	Enabled      bool      `json:"enabled"`
 	Interval     string    `json:"interval"`
 	// Label — the display caption (ADR-0085), mutable via
-	// PUT /v1/vigils/{name}/label. Absent → the consumer shows `name`.
+	// PUT /v1/vigils/{id}/label. Absent → the consumer shows `name`.
 	Label     *string         `json:"label,omitempty"`
-	Name      string          `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern
+	ID        string          `json:"id" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.IDPattern
 	Params    json.RawMessage `json:"params"`
 	Subject   Subject         `json:"subject"`
 	UpdatedAt time.Time       `json:"updated_at"`
@@ -68,10 +68,10 @@ type DecreeView struct {
 	Enabled         bool            `json:"enabled"`
 	IncarnationName string          `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← oracle.IncarnationPattern
 	// Label — the display caption (ADR-0085), mutable via
-	// PUT /v1/decrees/{name}/label. Absent → the consumer shows `name`.
+	// PUT /v1/decrees/{id}/label. Absent → the consumer shows `name`.
 	Label     *string   `json:"label,omitempty"`
-	Name      string    `json:"name" pattern:"^[a-z0-9-]{1,63}$"`      // ← oracle.NamePattern
-	OnBeacon  string    `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.NamePattern (FK to a Vigil name)
+	ID        string    `json:"id" pattern:"^[a-z0-9-]{1,63}$"`        // ← oracle.IDPattern
+	OnBeacon  string    `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.IDPattern (FK to a Vigil name)
 	Subject   Subject   `json:"subject"`
 	UpdatedAt time.Time `json:"updated_at"`
 	Where     *string   `json:"where,omitempty"`
@@ -107,7 +107,7 @@ func newVigilView(v handlers.VigilView) VigilView {
 		Enabled:      v.Enabled,
 		Interval:     v.Interval,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		Params:       v.Params,
 		Subject:      newSubject(v.Subject),
 		UpdatedAt:    v.UpdatedAt,
@@ -125,7 +125,7 @@ func newDecreeView(d handlers.DecreeView) DecreeView {
 		Enabled:         d.Enabled,
 		IncarnationName: d.IncarnationName,
 		Label:           d.Label,
-		Name:            d.Name,
+		ID:              d.ID,
 		OnBeacon:        d.OnBeacon,
 		Subject:         newSubject(d.Subject),
 		UpdatedAt:       d.UpdatedAt,

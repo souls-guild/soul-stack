@@ -51,7 +51,7 @@ func newDestroyHandler(db *fakeIncDB, destroyer *fakeDestroyer, aw *fakeAuditWri
 	return NewIncarnationHandler(db, &fakeStarter{}, destroyer, &fakeResolver{ok: true}, loader, aw, nil, nil)
 }
 
-// destroyDB builds a fakeIncDB for the full destroy flow: SelectByName
+// destroyDB builds a fakeIncDB for the full destroy flow: SelectByID
 // (prepare/404) returns a row with the given status; Destroy's SELECT FOR UPDATE
 // (state, status) returns the same status.
 func destroyDB(name, status string) *fakeIncDB {

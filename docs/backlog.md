@@ -23,7 +23,7 @@ Related sources of beta and GA limits are [known-limitations.md](known-limitatio
 - ~~amend [ADR-008](adr/0008-coven-stable-tags.md) - unbind `incarnation.name` from the Coven label~~ — **DONE by NIM-124** (membership is now `incarnation_membership`, the name is not a coven);
 - enter a synthetic incarnation-id (PK), and make `(service, name)` composite-unique;
 - composite-FK `(service, name)` on >5 tables: `state_history` (006), `apply_runs` (018), `incarnation_choirs` + `incarnation_voices` (060), plus soft-links `decrees` (041), `tides` (055), `voyages` (059), `incarnation_archive` (039);
-- breaking change Operator API: path `/v1/incarnations/{name}` → `/v1/incarnations/{service}/{name}` - breaks UI routing, `soulctl` and `types.gen.ts`;
+- breaking change Operator API: path `/v1/incarnations/{id}` → `/v1/incarnations/{service}/{name}` - breaks UI routing, `soulctl` and `types.gen.ts`;
 - RBAC revision [Purview](adr/0047-purview.md): the incarnation RBAC scope is now `service=` + declared `covens` + the `incarnation=<name>` dimension (NIM-124 dropped the former `covens ∪ {name}`), and the name is no longer globally unique.
 
 **Related desired end-state (take into account when developing the epic).** The user wants a hierarchy of rights like `<services>.<incarnations>.<other>`; [Trait](naming-rules.md) tags work according to rights **only within the framework of their services** and **narrow** the scope of visibility (first "show service incarnations", then limit traits from above). This intersects with the deferred slice "RBAC-scope by traits" ([ADR-0060](adr/0060-traits.md): RBAC-scope by traits - pilot includes only targeting + metadata, scope is deferred).

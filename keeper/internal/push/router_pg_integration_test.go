@@ -95,7 +95,7 @@ func seedRouterIncarnation(t *testing.T, pool *pgxpool.Pool, name string, covens
 	t.Helper()
 	ctx := context.Background()
 	if _, err := pool.Exec(ctx,
-		`INSERT INTO incarnation (name, service, service_version, status, covens)
+		`INSERT INTO incarnation (id, service, service_version, status, covens)
 		 VALUES ($1, 'redis', 'v1.0.0', 'ready', $2)`, name, covens); err != nil {
 		t.Fatalf("seedRouterIncarnation(%s): %v", name, err)
 	}

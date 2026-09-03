@@ -32,7 +32,7 @@ func newPushProvider(v handlers.PushProviderView) PushProvider {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		Params:       v.Params,
 		UpdatedAt:    v.UpdatedAt,
 		UpdatedByAID: v.UpdatedByAID,
@@ -65,7 +65,7 @@ func registerHumaPushProviderCreate(humaAPI huma.API, pushProviderH *handlers.Pu
 		if !ok {
 			return nil, pushProviderMissingClaims()
 		}
-		req := handlers.PushProviderCreateInput{Name: in.Body.Name}
+		req := handlers.PushProviderCreateInput{ID: in.Body.ID}
 		if in.Body.Params != nil {
 			p := in.Body.Params
 			req.Params = &p
@@ -87,7 +87,7 @@ func registerHumaPushProviderList(humaAPI huma.API, pushProviderH *handlers.Push
 		return
 	}
 	huma.Register(humaAPI, pushProviderListOperation(), func(ctx context.Context, in *pushProviderListInput) (*pushProviderListOutput, error) {
-		reply, err := pushProviderH.ListTyped(ctx, in.NamePattern, int(in.Offset), int(in.Limit))
+		reply, err := pushProviderH.ListTyped(ctx, in.IDPattern, int(in.Offset), int(in.Limit))
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}
@@ -95,7 +95,7 @@ func registerHumaPushProviderList(humaAPI huma.API, pushProviderH *handlers.Push
 	})
 }
 
-// registerHumaPushProviderGet mounts GET /v1/push-providers/{name} via huma
+// registerHumaPushProviderGet mounts GET /v1/push-providers/{id} via huma
 // (READ with path, no audit). pushProviderH nil → no-op. Handler: GetTyped(name) →
 // typed output (404/422 via problem). RBAC push-provider.read — on the group.
 func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
@@ -103,7 +103,7 @@ func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushP
 		return
 	}
 	huma.Register(humaAPI, pushProviderGetOperation(), func(ctx context.Context, in *pushProviderGetInput) (*pushProviderGetOutput, error) {
-		reply, err := pushProviderH.GetTyped(ctx, in.Name)
+		reply, err := pushProviderH.GetTyped(ctx, in.ID)
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}
@@ -111,14 +111,14 @@ func registerHumaPushProviderGet(humaAPI huma.API, pushProviderH *handlers.PushP
 	})
 }
 
-// registerHumaPushProviderSetLabel mounts PUT /v1/push-providers/{name}/label
+// registerHumaPushProviderSetLabel mounts PUT /v1/push-providers/{id}/label
 // (WRITE+AUDIT variant B — event push-provider.label_changed). nil → no-op.
 func registerHumaPushProviderSetLabel(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
 	if pushProviderH == nil {
 		return
 	}
 	huma.Register(humaAPI, pushProviderSetLabelOperation(), func(ctx context.Context, in *pushProviderSetLabelInput) (*pushProviderSetLabelOutput, error) {
-		reply, err := pushProviderH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := pushProviderH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}
@@ -127,7 +127,7 @@ func registerHumaPushProviderSetLabel(humaAPI huma.API, pushProviderH *handlers.
 	})
 }
 
-// registerHumaPushProviderUpdate mounts PUT /v1/push-providers/{name} via huma
+// registerHumaPushProviderUpdate mounts PUT /v1/push-providers/{id} via huma
 // (WRITE+AUDIT variant B — event push-provider.updated). pushProviderH nil → no-op.
 // Handler: claims → UpdateTyped (replace params) → audit-payload → 200 WITH BODY.
 func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
@@ -139,7 +139,7 @@ func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.Pu
 		if !ok {
 			return nil, pushProviderMissingClaims()
 		}
-		reply, err := pushProviderH.UpdateTyped(ctx, claims, in.Name, handlers.PushProviderUpdateInput{Params: in.Body.Params})
+		reply, err := pushProviderH.UpdateTyped(ctx, claims, in.ID, handlers.PushProviderUpdateInput{Params: in.Body.Params})
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}
@@ -148,7 +148,7 @@ func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.Pu
 	})
 }
 
-// registerHumaPushProviderDelete mounts DELETE /v1/push-providers/{name} via huma
+// registerHumaPushProviderDelete mounts DELETE /v1/push-providers/{id} via huma
 // (WRITE+AUDIT variant B — event push-provider.deleted). pushProviderH nil → no-op.
 // Handler: DeleteTyped → audit-payload → empty 204 output.
 func registerHumaPushProviderDelete(humaAPI huma.API, pushProviderH *handlers.PushProviderHandler) {
@@ -156,7 +156,7 @@ func registerHumaPushProviderDelete(humaAPI huma.API, pushProviderH *handlers.Pu
 		return
 	}
 	huma.Register(humaAPI, pushProviderDeleteOperation(), func(ctx context.Context, in *pushProviderDeleteInput) (*pushProviderNoContentOutput, error) {
-		reply, err := pushProviderH.DeleteTyped(ctx, in.Name)
+		reply, err := pushProviderH.DeleteTyped(ctx, in.ID)
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}

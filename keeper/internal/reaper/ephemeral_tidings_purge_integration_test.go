@@ -41,7 +41,7 @@ func seedHeraldRaw(t *testing.T, ctx context.Context, name, aid string) {
 	t.Helper()
 	cfg, _ := json.Marshal(map[string]any{"url": "https://hooks.example.com/" + name})
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO heralds (name, type, config, enabled, created_by_aid)
+		`INSERT INTO heralds (id, type, config, enabled, created_by_aid)
 		 VALUES ($1, 'webhook', $2, true, $3)`, name, cfg, aid); err != nil {
 		t.Fatalf("seedHeraldRaw(%s): %v", name, err)
 	}
@@ -79,7 +79,7 @@ func seedVoyageRunning(t *testing.T, ctx context.Context, voyageID, aid string) 
 func seedEphemeralTiding(t *testing.T, ctx context.Context, name, herald, voyageID string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO tidings (name, herald, event_types, ephemeral, voyage_id, enabled)
+		`INSERT INTO tidings (id, herald, event_types, ephemeral, voyage_id, enabled)
 		 VALUES ($1, $2, ARRAY['command_run.completed'], true, $3, true)`,
 		name, herald, voyageID); err != nil {
 		t.Fatalf("seedEphemeralTiding(%s): %v", name, err)
@@ -91,7 +91,7 @@ func seedEphemeralTiding(t *testing.T, ctx context.Context, name, herald, voyage
 func seedPersistentTiding(t *testing.T, ctx context.Context, name, herald string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO tidings (name, herald, event_types, ephemeral, enabled)
+		`INSERT INTO tidings (id, herald, event_types, ephemeral, enabled)
 		 VALUES ($1, $2, ARRAY['command_run.completed'], false, true)`,
 		name, herald); err != nil {
 		t.Fatalf("seedPersistentTiding(%s): %v", name, err)
@@ -102,7 +102,7 @@ func tidingExists(t *testing.T, ctx context.Context, name string) bool {
 	t.Helper()
 	var n int
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT COUNT(*) FROM tidings WHERE name = $1`, name).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM tidings WHERE id = $1`, name).Scan(&n); err != nil {
 		t.Fatalf("tidingExists(%s): %v", name, err)
 	}
 	return n > 0

@@ -30,18 +30,18 @@ func TestGoldenWire_PushProviderReply(t *testing.T) {
 
 	// --- PushProvider: updated_by_aid set + params populated ---
 	goldenPushProviderWire(t, "PushProvider/full",
-		PushProvider{CreatedAt: ts, CreatedByAID: aid, Name: "openssh", Params: params, UpdatedAt: ts2, UpdatedByAID: &aid},
-		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","name":"openssh","params":{"role":"push","vault_addr":"https://vault:8200"},"updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}`)
+		PushProvider{CreatedAt: ts, CreatedByAID: aid, ID: "openssh", Params: params, UpdatedAt: ts2, UpdatedByAID: &aid},
+		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","id":"openssh","params":{"role":"push","vault_addr":"https://vault:8200"},"updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}`)
 	// updated_by_aid nil → key omitted (omitempty); params empty {} (handler normalizes).
 	goldenPushProviderWire(t, "PushProvider/nil_updated_by",
-		PushProvider{CreatedAt: ts, CreatedByAID: aid, Name: "openssh", Params: map[string]interface{}{}, UpdatedAt: ts, UpdatedByAID: nil},
-		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","name":"openssh","params":{},"updated_at":"2026-06-14T12:34:56.789012345Z"}`)
+		PushProvider{CreatedAt: ts, CreatedByAID: aid, ID: "openssh", Params: map[string]interface{}{}, UpdatedAt: ts, UpdatedByAID: nil},
+		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","id":"openssh","params":{},"updated_at":"2026-06-14T12:34:56.789012345Z"}`)
 
 	// --- PushProviderListReply (envelope as top-level reply DTO) ---
-	pvN := PushProvider{CreatedAt: ts, CreatedByAID: aid, Name: "openssh", Params: params, UpdatedAt: ts2, UpdatedByAID: &aid}
+	pvN := PushProvider{CreatedAt: ts, CreatedByAID: aid, ID: "openssh", Params: params, UpdatedAt: ts2, UpdatedByAID: &aid}
 	goldenPushProviderWire(t, "PushProviderListReply/full",
 		PushProviderListReply{Items: []PushProvider{pvN}, Limit: 50, Offset: 0, Total: 1},
-		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","name":"openssh","params":{"role":"push","vault_addr":"https://vault:8200"},"updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}],"limit":50,"offset":0,"total":1}`)
+		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","id":"openssh","params":{"role":"push","vault_addr":"https://vault:8200"},"updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}],"limit":50,"offset":0,"total":1}`)
 	goldenPushProviderWire(t, "PushProviderListReply/empty_items",
 		PushProviderListReply{Items: []PushProvider{}, Limit: 50, Offset: 10, Total: 0},
 		`{"items":[],"limit":50,"offset":10,"total":0}`)

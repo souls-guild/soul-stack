@@ -34,9 +34,9 @@ Payload notifications do NOT carry resolved-secrets (`input`/vault-resolved valu
 
 Permission: `herald.create`. MCP-tool: `keeper.herald.create`.
 
-**Request `HeraldCreateRequest`** (`required: name, type, config`): `{name (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, omitted → true)}`.
+**Request `HeraldCreateRequest`** (`required: id, type, config`): `{id (^[a-z0-9-]{1,63}$), type (enum: webhook), config (object), secret_ref? (vault-ref|null), enabled? (bool, omitted → true)}`.
 
-**Response `201 Herald`:** `{name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid}`.
+**Response `201 Herald`:** `{id, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid}`.
 
 Errors: `400` (broken JSON / unknown strict-probe field), `409` (`name` busy), `422 validation-failed` (broken `name`/`type`/`config`/`secret_ref` or SSRF circuit violation). Audit: `herald.created`.
 
@@ -44,11 +44,11 @@ Errors: `400` (broken JSON / unknown strict-probe field), `409` (`name` busy), `
 
 Permission: `herald.list`. MCP-tool: `keeper.herald.list`. Query `offset`/`limit`. Sort `updated_at` DESC, `name` ASC. Response `200 HeraldListReply` (`{items, offset, limit, total}`).
 
-### `GET /v1/heralds/{name}` - read one channel
+### `GET /v1/heralds/{id}` - read one channel
 
 Permission: `herald.read`. MCP-tool: `keeper.herald.read`. Response `200 Herald`; `404 not-found` - no entry.
 
-### `PUT /v1/heralds/{name}` — replace channel (replace semantics)
+### `PUT /v1/heralds/{id}` — replace channel (replace semantics)
 
 Permission: `herald.update`. MCP-tool: `keeper.herald.update`. **Replace** - body completely replaces mutable fields (`type`/`config`/`secret_ref`/`enabled`); `name` (PK) immutable. Like Push-Provider - `PUT` (complete replacement), not `PATCH`. The SSRF invariant is the same as that of create.
 
@@ -56,17 +56,17 @@ Permission: `herald.update`. MCP-tool: `keeper.herald.update`. **Replace** - bod
 
 **Response `200 Herald`.** Errors: `400`, `404 not-found`, `422 validation-failed`. Audit: `herald.updated`.
 
-### `PUT /v1/heralds/{name}/label` — set the display caption
+### `PUT /v1/heralds/{id}/label` — set the display caption
 
 Permission: `herald.label-set`. MCP-tool: `keeper.herald.label-set`. OperationID: `setHeraldLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
 
-Deliberately narrower than `PUT /v1/heralds/{name}` above, which REPLACES the channel: granting a caption edit through that one would have granted a rewrite of `secret_ref`. And the caption is **not** the `<entity>` segment of `secret/herald/<entity>/<field>` — `name` is — which matters more here than anywhere else: that path is one hop from the registry row with nothing in between to notice, and `secretwrite` replaces rather than merges, so a caption there would orphan the channel's signing secret in silence.
+Deliberately narrower than `PUT /v1/heralds/{id}` above, which REPLACES the channel: granting a caption edit through that one would have granted a rewrite of `secret_ref`. And the caption is **not** the `<entity>` segment of `secret/herald/<entity>/<field>` — `name` is — which matters more here than anywhere else: that path is one hop from the registry row with nothing in between to notice, and `secretwrite` replaces rather than merges, so a caption there would orphan the channel's signing secret in silence.
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 Herald`** — the channel as it now reads. Errors: `400`, `403`, `404 not-found`, `422` (invalid path-`name`). Audit: `herald.label_changed`, payload `{name, old_label, new_label}` (`label` explicitly `null` when cleared).
+**Response `200 Herald`** — the channel as it now reads. Errors: `400`, `403`, `404 not-found`, `422` (invalid path-`name`). Audit: `herald.label_changed`, payload `{id, old_label, new_label}` (`label` explicitly `null` when cleared).
 
-### `DELETE /v1/heralds/{name}` — delete channel
+### `DELETE /v1/heralds/{id}` — delete channel
 
 Permission: `herald.delete`. MCP-tool: `keeper.herald.delete`. Cascadingly demolishes associated Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Response `204`; `404 not-found`. Audit: `herald.deleted`.
 

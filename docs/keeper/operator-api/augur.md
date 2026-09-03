@@ -12,9 +12,9 @@ Augur registries - Omen (external system) and Rite (grant) ([ADR-025](../../adr/
 
 Permission: `omen.create`. MCP-tool: `keeper.augur.omen.create`.
 
-**Request `OmenCreateRequest`:** `{name, source_type, endpoint, auth_ref}` - `name` kebab `^[a-z0-9-]{1,63}$`; `source_type` ∈ `vault`/`prometheus`/`elk`; `endpoint` - URL (not secret); `auth_ref` - vault-ref `vault:<mount>/<path>`.
+**Request `OmenCreateRequest`:** `{id, source_type, endpoint, auth_ref}` - `name` kebab `^[a-z0-9-]{1,63}$`; `source_type` ∈ `vault`/`prometheus`/`elk`; `endpoint` - URL (not secret); `auth_ref` - vault-ref `vault:<mount>/<path>`.
 
-**Response `201` `OmenView`:** `{name, source_type, endpoint, auth_ref, created_by_aid?, created_at}`.
+**Response `201` `OmenView`:** `{id, source_type, endpoint, auth_ref, created_by_aid?, created_at}`.
 
 Errors: `400` (broken JSON), `409 omen-already-exists` (`name` busy), `422 validation-failed` (broken `name`/`source_type`/`endpoint`/`auth_ref`). Audit: `omen.created`.
 
@@ -22,11 +22,11 @@ Errors: `400` (broken JSON), `409 omen-already-exists` (`name` busy), `422 valid
 
 Permission: `omen.list`. MCP-tool: `keeper.augur.omen.list`. Query — `offset`/`limit` ([§ Pagination](../operator-api.md#pagination)). Response `200` — `PagedResponse<OmenView>` (`{items, offset, limit, total}`).
 
-### `GET /v1/augur/omens/{name}` — read Omen
+### `GET /v1/augur/omens/{id}` — read Omen
 
 Permission: `omen.list`. MCP-tool: `keeper.augur.omen.list` (one permission covers list and get). Response `200` `OmenView`; `404 not-found` - no entry; `422 validation-failed` - broken `name`.
 
-### `PUT /v1/augur/omens/{name}/label` — set the display caption
+### `PUT /v1/augur/omens/{id}/label` — set the display caption
 
 Permission: `omen.label-set`. MCP-tool: `keeper.augur.omen.label-set`. OperationID: `setOmenLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
 
@@ -34,9 +34,9 @@ This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable s
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 OmenView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `omen.label_changed`, payload `{name, old_label, new_label}`.
+**Response `200 OmenView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `omen.label_changed`, payload `{id, old_label, new_label}`.
 
-### `DELETE /v1/augur/omens/{name}` - remove Omen
+### `DELETE /v1/augur/omens/{id}` - remove Omen
 
 Permission: `omen.delete`. MCP-tool: `keeper.augur.omen.delete`. Cascade deletes associated Rites (`ON DELETE CASCADE`). Response `204`; `404 not-found` - no entry. Audit: `omen.revoked`.
 

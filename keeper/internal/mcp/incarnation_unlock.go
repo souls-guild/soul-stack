@@ -15,14 +15,14 @@ import (
 // (schemaIncarnationUnlockInput): name + reason required. reason is written
 // to the audit payload (parity with REST).
 type incarnationUnlockArgs struct {
-	Name   string `json:"name"`
+	ID     string `json:"id"`
 	Reason string `json:"reason"`
 }
 
 // incarnationUnlockOutput — output of keeper.incarnation.unlock. Mirrors
 // REST unlockResponse (IncarnationUnlockReply).
 type incarnationUnlockOutput struct {
-	Name           string    `json:"name"`
+	ID             string    `json:"id"`
 	PreviousStatus string    `json:"previous_status"`
 	Status         string    `json:"status"`
 	UnlockedByAID  string    `json:"unlocked_by_aid"`
@@ -47,12 +47,12 @@ func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims,
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.Reason == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'reason' is required")
@@ -64,24 +64,24 @@ func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims,
 	// probe-SelectByName (same cold RBAC round-trip as REST
 	// IncarnationScopeSelector). A failed probe → fail-closed (scoped deny,
 	// bare/`*` pass through → Unlock returns 404/500).
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "unlock", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "unlock", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.unlock")
 		}
-	} else if scopeErr := h.checkIncarnationScope(claims, "unlock", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	} else if scopeErr := h.checkIncarnationScope(claims, "unlock", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.unlock")
 	}
 
 	historyID := audit.NewULID()
-	res, err := incarnation.Unlock(ctx, h.deps.IncarnationDB, a.Name, a.Reason, claims.Subject, historyID)
+	res, err := incarnation.Unlock(ctx, h.deps.IncarnationDB, a.ID, a.Reason, claims.Subject, historyID)
 	if err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.unlock failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -90,13 +90,13 @@ func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims,
 	}
 
 	h.writeAudit(audit.EventIncarnationUnlocked, claims.Subject, map[string]any{
-		"name":            a.Name,
+		"id":              a.ID,
 		"previous_status": string(res.PreviousStatus),
 		"reason":          a.Reason,
 	})
 
 	return h.toolResult(req.ID, incarnationUnlockOutput{
-		Name:           a.Name,
+		ID:             a.ID,
 		PreviousStatus: string(res.PreviousStatus),
 		Status:         string(incarnation.StatusReady),
 		UnlockedByAID:  claims.Subject,

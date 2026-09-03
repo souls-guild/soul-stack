@@ -56,7 +56,7 @@ type incarnationListReply struct {
 	Total  int32                 `json:"total" doc:"total number of entries in set"`
 }
 
-// incarnationHistoryReply — the alias target schema for the GET /v1/incarnations/{name}/history envelope.
+// incarnationHistoryReply — the alias target schema for the GET /v1/incarnations/{id}/history envelope.
 // The shape is checked against the committed hand-written spec (docs/keeper/openapi.yaml → IncarnationHistoryReply):
 // EXACTLY 4 int32 fields (items/offset/limit/total), all required, with no cursor fields. items.$ref
 // to the contract native element StateHistoryEntry (T5a). The type name = the contract schema name.
@@ -67,7 +67,7 @@ type incarnationHistoryReply struct {
 	Total  int32               `json:"total" doc:"total number of entries in set"`
 }
 
-// incarnationRunsReply — the alias target schema for the GET /v1/incarnations/{name}/runs envelope.
+// incarnationRunsReply — the alias target schema for the GET /v1/incarnations/{id}/runs envelope.
 // The same contract shape (4 int32 fields items/offset/limit/total, all required, with no
 // cursor fields), items.$ref to the native element RunSummaryEntry. The type name = the contract
 // schema name (huma DefaultSchemaNamer capitalizes → "IncarnationRunsReply").

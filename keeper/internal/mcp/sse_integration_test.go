@@ -51,7 +51,7 @@ func seedApplyRunForSSE(t *testing.T, applyID, ownerAID string) {
 	}
 	owner := ownerAID
 	inc := &incarnation.Incarnation{
-		Name: "sse-inc", Service: "noop", ServiceVersion: "v1",
+		ID: "sse-inc", Service: "noop", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady, CreatedByAID: &owner,
 	}
 	if err := incarnation.Create(ctx, integrationPool, inc); err != nil {

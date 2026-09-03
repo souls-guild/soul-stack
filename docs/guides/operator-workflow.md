@@ -24,7 +24,7 @@ soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wa
 - `--input '<json>'` — script input (validated by Keeper against the `input:` contract **before** launch);
 - `--wait-timeout 5m` is the waiting ceiling for `--wait`.
 
-Under the hood it's `POST /v1/incarnations/{name}/scenarios/{scenario}` ([operator-api/incarnations.md](../keeper/operator-api/incarnations.md)). Changing the input of the incarnation is a re-run with the new `--input`: state will be rewritten only after success on **all** hosts (cross-host barrier, [orchestration.md → §7](../scenario/orchestration.md)), otherwise the incarnation goes to `error_locked` (section 6).
+Under the hood it's `POST /v1/incarnations/{id}/scenarios/{scenario}` ([operator-api/incarnations.md](../keeper/operator-api/incarnations.md)). Changing the input of the incarnation is a re-run with the new `--input`: state will be rewritten only after success on **all** hosts (cross-host barrier, [orchestration.md → §7](../scenario/orchestration.md)), otherwise the incarnation goes to `error_locked` (section 6).
 
 View what is recorded in state and the history of runs:
 
@@ -105,7 +105,7 @@ tasks:
     params: { path: /tmp/owner, content: dba }
 ```
 
-Set a trait on the incarnation at create time (`traits` in `POST /v1/incarnations`) or later with `PUT /v1/incarnations/{name}/traits`; on a host with `POST /v1/souls/traits`.
+Set a trait on the incarnation at create time (`traits` in `POST /v1/incarnations`) or later with `PUT /v1/incarnations/{id}/traits`; on a host with `POST /v1/souls/traits`.
 
 **A key set at both levels holds both values.** With `owner=dba` on the incarnation and `owner=bobik` on the host, that host's `owner` is the list `[bobik, dba]` — neither wins, and both grant. So write `'dba' in soulprint.self.traits.owner` rather than `soulprint.self.traits.owner == 'dba'` for any key you set in both places, or the predicate stops matching the moment the second level is used.
 
@@ -113,7 +113,7 @@ Set a trait on the incarnation at create time (`traits` in `POST /v1/incarnation
 
 ## 4. Upgrade the service version
 
-The service version is the git-ref (tag or branch) under which its files are committed; there is no `version:` field in the manifest ([ADR-007](../adr/0007-versioning-git-ref.md)). Upgrading an incarnation to a new version - `POST /v1/incarnations/{name}/upgrade` with a target `to_version` (this operation is not available in `soulctl` - via the API):
+The service version is the git-ref (tag or branch) under which its files are committed; there is no `version:` field in the manifest ([ADR-007](../adr/0007-versioning-git-ref.md)). Upgrading an incarnation to a new version - `POST /v1/incarnations/{id}/upgrade` with a target `to_version` (this operation is not available in `soulctl` - via the API):
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/v1/incarnations/hello-demo/upgrade \
@@ -126,7 +126,7 @@ Reply `202 Accepted` with `apply_id` is an asynchronous operation. `to_version` 
 
 **When `state_schema_version` changes.** The incarnation's `state_schema_version` is the number you see in the API and the UI. If a new version of the service adds steps to its `migrations/` ladder (breaking change in the `incarnation.state` structure), that number rises, and upgrade will apply the `migrations/<NNN>_<slug>/main.yml` steps atomically in one PG transaction: on failure - rollback and status `migration_failed` (section 6). This is an **explicit statement step**, not lazy; `state_history` stores snapshot per-change for recovery. Backup before upgrade with schema change, rollback and migration form - [operations/upgrade.md → State_schema migrations](../operations/upgrade.md#state_schema-migrations) and DSL standard grammar ([migrations.md](../migrations.md), [ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)).
 
-Available refs for upgrade (tags + service branches) - `GET /v1/services/{name}/refs`.
+Available refs for upgrade (tags + service branches) - `GET /v1/services/{id}/refs`.
 
 ## 5. Scale - add host to coven
 
@@ -153,7 +153,7 @@ curl -s "http://127.0.0.1:8080/v1/audit?correlation_id=<apply_id>" \
   -H "Authorization: Bearer $TOKEN"
 ```
 
-**How to unlock.** `POST /v1/incarnations/{name}/unlock` with the required field `reason` (this command is not in `soulctl` - via API):
+**How to unlock.** `POST /v1/incarnations/{id}/unlock` with the required field `reason` (this command is not in `soulctl` - via API):
 
 ```sh
 curl -s -X POST http://127.0.0.1:8080/v1/incarnations/hello-demo/unlock \

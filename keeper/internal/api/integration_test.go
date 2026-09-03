@@ -995,7 +995,7 @@ func seedIncarnation(t *testing.T, name, service, creator string) {
 	ctx := context.Background()
 	c := creator
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            service,
 		ServiceVersion:     "v1",
 		StateSchemaVersion: 1,
@@ -1015,7 +1015,7 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	body := bytesReader(`{"name":"redis-test","service":"redis","input":{}}`)
+	body := bytesReader(`{"id":"redis-test","service":"redis","input":{}}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/incarnations", body)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -1045,9 +1045,9 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 	}
 
 	// Row in the DB.
-	got, err := incarnation.SelectByName(context.Background(), integrationPool, "redis-test")
+	got, err := incarnation.SelectByID(context.Background(), integrationPool, "redis-test")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Service != "redis" || got.Status != incarnation.StatusReady {
 		t.Errorf("row = %+v", got)
@@ -1068,7 +1068,7 @@ func TestIntegration_Incarnation_Create_202(t *testing.T) {
 	if err := integrationPool.QueryRow(context.Background(),
 		`SELECT COUNT(*),
 		        MAX(payload->>'apply_id'),
-		        MAX(payload->>'name'),
+		        MAX(payload->>'id'),
 		        MAX(payload->>'service')
 		   FROM audit_log
 		  WHERE event_type='incarnation.created' AND archon_aid='archon-alice'`).
@@ -1098,7 +1098,7 @@ func TestIntegration_Incarnation_Create_DuplicateName_409(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	body := bytesReader(`{"name":"redis-test","service":"redis"}`)
+	body := bytesReader(`{"id":"redis-test","service":"redis"}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/incarnations", body)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
@@ -1136,8 +1136,8 @@ func TestIntegration_Incarnation_Get_200(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&dto); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if dto["name"] != "redis-test" {
-		t.Errorf("name = %v", dto["name"])
+	if dto["id"] != "redis-test" {
+		t.Errorf("id = %v", dto["id"])
 	}
 	if dto["status"] != "ready" {
 		t.Errorf("status = %v", dto["status"])
@@ -1614,7 +1614,7 @@ func TestIntegration_Incarnation_Create_BodyTooLarge_413(t *testing.T) {
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 	// 2 MiB of random valid JSON (a huge input object).
 	big := strings.Repeat("a", 2<<20)
-	body := bytesReader(`{"name":"redis-test","service":"redis","input":{"x":"` + big + `"}}`)
+	body := bytesReader(`{"id":"redis-test","service":"redis","input":{"x":"` + big + `"}}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/incarnations", body)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -1637,7 +1637,7 @@ func TestIntegration_Incarnation_403_NoPermission(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-viewer", []string{"viewer"})
-	body := bytesReader(`{"name":"redis-test","service":"redis"}`)
+	body := bytesReader(`{"id":"redis-test","service":"redis"}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/incarnations", body)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
@@ -2960,7 +2960,7 @@ func seedIncarnationFull(t *testing.T, name, service, creator string, covens []s
 	t.Helper()
 	c := creator
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            service,
 		ServiceVersion:     "v1",
 		StateSchemaVersion: 1,
@@ -3047,13 +3047,13 @@ func TestIntegration_Incarnation_List_CovenScope_NoContext_200(t *testing.T) {
 	}
 }
 
-// getIncStatus — GET /v1/incarnations/{name} → HTTP status.
+// getIncStatus — GET /v1/incarnations/{id} → HTTP status.
 func getIncStatus(t *testing.T, base, tok, name string) int {
 	t.Helper()
 	return getReadStatus(t, base, tok, "/v1/incarnations/"+name)
 }
 
-// historyIncStatus — GET /v1/incarnations/{name}/history → HTTP status.
+// historyIncStatus — GET /v1/incarnations/{id}/history → HTTP status.
 func historyIncStatus(t *testing.T, base, tok, name string) int {
 	t.Helper()
 	return getReadStatus(t, base, tok, "/v1/incarnations/"+name+"/history")
@@ -3970,7 +3970,7 @@ func TestIntegration_Service_Register_201(t *testing.T) {
 	defer stop()
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
-	body := bytesReader(`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`)
+	body := bytesReader(`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`)
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/services", body)
 	req.Header.Set("Authorization", "Bearer "+tok)
 	req.Header.Set("Content-Type", "application/json")
@@ -3987,32 +3987,32 @@ func TestIntegration_Service_Register_201(t *testing.T) {
 	// The record is materialized in the DB with created_by_aid.
 	var createdBy *string
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT created_by_aid FROM service_registry WHERE name='web'`).Scan(&createdBy); err != nil {
+		`SELECT created_by_aid FROM service_registry WHERE id='web'`).Scan(&createdBy); err != nil {
 		t.Fatalf("created_by: %v", err)
 	}
 	if createdBy == nil || *createdBy != "archon-alice" {
 		t.Errorf("created_by_aid = %v, want archon-alice", createdBy)
 	}
 
-	// Audit row + payload {name, git, ref, created_by_aid}. The git URL is not a secret.
+	// Audit row + payload {id, git, ref, created_by_aid}. The git URL is not a secret.
 	var (
 		cnt          int64
-		payloadName  string
+		payloadID    string
 		payloadGit   string
 		payloadByAID string
 	)
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT COUNT(*), MAX(payload->>'name'), MAX(payload->>'git'), MAX(payload->>'created_by_aid')
+		`SELECT COUNT(*), MAX(payload->>'id'), MAX(payload->>'git'), MAX(payload->>'created_by_aid')
 		   FROM audit_log
 		  WHERE event_type='service.registered' AND archon_aid='archon-alice'`).
-		Scan(&cnt, &payloadName, &payloadGit, &payloadByAID); err != nil {
+		Scan(&cnt, &payloadID, &payloadGit, &payloadByAID); err != nil {
 		t.Fatalf("audit probe: %v", err)
 	}
 	if cnt != 1 {
 		t.Errorf("audit count = %d, want 1", cnt)
 	}
-	if payloadName != "web" {
-		t.Errorf("payload.name = %q, want web", payloadName)
+	if payloadID != "web" {
+		t.Errorf("payload.id = %q, want web", payloadID)
 	}
 	if payloadGit != "https://git/web.git" {
 		t.Errorf("payload.git = %q", payloadGit)
@@ -4033,7 +4033,7 @@ func TestIntegration_Service_Register_Duplicate_409(t *testing.T) {
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 	do := func() *http.Response {
 		req, _ := http.NewRequest(http.MethodPost, base+"/v1/services",
-			bytesReader(`{"name":"web","git":"g","ref":"v1"}`))
+			bytesReader(`{"id":"web","git":"g","ref":"v1"}`))
 		req.Header.Set("Authorization", "Bearer "+tok)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -4069,7 +4069,7 @@ func TestIntegration_Service_Register_403_NoPermission(t *testing.T) {
 
 	tok := newValidTokenFor(t, "archon-viewer", []string{"viewer"})
 	req, _ := http.NewRequest(http.MethodPost, base+"/v1/services",
-		bytesReader(`{"name":"web","git":"g","ref":"v1"}`))
+		bytesReader(`{"id":"web","git":"g","ref":"v1"}`))
 	req.Header.Set("Authorization", "Bearer "+tok)
 	resp, err := http.DefaultClient.Do(req)
 	if err != nil {
@@ -4102,7 +4102,7 @@ func TestIntegration_Service_List_And_Get_200(t *testing.T) {
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 	for _, name := range []string{"api", "web"} {
 		req, _ := http.NewRequest(http.MethodPost, base+"/v1/services",
-			bytesReader(`{"name":"`+name+`","git":"g","ref":"v1"}`))
+			bytesReader(`{"id":"`+name+`","git":"g","ref":"v1"}`))
 		req.Header.Set("Authorization", "Bearer "+tok)
 		resp, err := http.DefaultClient.Do(req)
 		if err != nil {
@@ -4127,7 +4127,7 @@ func TestIntegration_Service_List_And_Get_200(t *testing.T) {
 	}
 	var listBody struct {
 		Items []struct {
-			Name string `json:"name"`
+			ID string `json:"id"`
 		} `json:"items"`
 	}
 	if err := json.NewDecoder(listResp.Body).Decode(&listBody); err != nil {
@@ -4160,7 +4160,7 @@ func TestIntegration_Service_Update_200(t *testing.T) {
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 	regReq, _ := http.NewRequest(http.MethodPost, base+"/v1/services",
-		bytesReader(`{"name":"web","git":"g","ref":"v1"}`))
+		bytesReader(`{"id":"web","git":"g","ref":"v1"}`))
 	regReq.Header.Set("Authorization", "Bearer "+tok)
 	regResp, err := http.DefaultClient.Do(regReq)
 	if err != nil {
@@ -4183,7 +4183,7 @@ func TestIntegration_Service_Update_200(t *testing.T) {
 
 	var ref string
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT ref FROM service_registry WHERE name='web'`).Scan(&ref); err != nil {
+		`SELECT ref FROM service_registry WHERE id='web'`).Scan(&ref); err != nil {
 		t.Fatalf("ref probe: %v", err)
 	}
 	if ref != "v2.0.0" {
@@ -4211,7 +4211,7 @@ func TestIntegration_Service_Deregister_204(t *testing.T) {
 
 	tok := newValidTokenFor(t, "archon-alice", []string{"cluster-admin"})
 	regReq, _ := http.NewRequest(http.MethodPost, base+"/v1/services",
-		bytesReader(`{"name":"web","git":"g","ref":"v1"}`))
+		bytesReader(`{"id":"web","git":"g","ref":"v1"}`))
 	regReq.Header.Set("Authorization", "Bearer "+tok)
 	regResp, err := http.DefaultClient.Do(regReq)
 	if err != nil {
@@ -4233,7 +4233,7 @@ func TestIntegration_Service_Deregister_204(t *testing.T) {
 
 	var n int64
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM service_registry WHERE name='web'`).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM service_registry WHERE id='web'`).Scan(&n); err != nil {
 		t.Fatalf("row probe: %v", err)
 	}
 	if n != 0 {

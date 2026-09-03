@@ -7,7 +7,7 @@ The choice depends on the semantics of the work and on access to the Soul agent.
 
 | What I want | Endpoint | Transport | Mutates state | When |
 |---|---|---|---|---|
-| Apply a scenario to ONE incarnation | `POST /v1/incarnations/{name}/scenarios/{scenario}` (single-incarnation scenario-run, `incarnation.run`) | agent (mTLS EventStream) | yes | Stateful infra operation (deploy, configure, upgrade) |
+| Apply a scenario to ONE incarnation | `POST /v1/incarnations/{id}/scenarios/{scenario}` (single-incarnation scenario-run, `incarnation.run`) | agent (mTLS EventStream) | yes | Stateful infra operation (deploy, configure, upgrade) |
 | Same, but as a batch (several incarnations / 1000+ hosts) | `POST /v1/voyages` (`kind=scenario`) + `batch_size`/`concurrency` (batch = N incarnations, Leg) | agent | yes | Crowd control / canary / zonal rollout |
 | Ad-hoc command on ONE Soul | `POST /v1/souls/{sid}/exec` | agent | no | Diagnostics of a single host, sync-30s response |
 | Ad-hoc command on MANY Souls | `POST /v1/voyages` (`kind=command`, [ADR-043](../adr/0043-voyage.md)) | agent | no | `uptime` on a coven, Souls state check |

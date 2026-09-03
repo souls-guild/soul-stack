@@ -61,6 +61,61 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A registry entity's identifier is spelled `id`, not `name`**
+  ([ADR-0085](docs/adr/0085-entity-id-and-label.md), NIM-729). **Breaking on every
+  surface an operator touches.** Landing registry by registry; **done so far:
+  ALL TEN — `service_registry`, `providers`, `profiles`, `push_providers`,
+  `omens`, `heralds`, `tidings`, `vigils`, `decrees`, `incarnation`** — the DB column
+  (migration `118`), the Go field and each package's `NamePattern`/`ValidName`
+  pair (now `IDPattern`/`ValidID`), the REST body field `name` → `id`, every
+  `/v1/<collection>/{name}*` path template on those registries → `{id}`, the
+  matching MCP tool arguments, and the audit payload key on each registry's own
+  events. The push-provider list filter moves with them: `?name_pattern=` →
+  `?id_pattern=`.
+  **The CEL root does NOT move either.** `incarnation.name` stays spelled that
+  way: it is NIM-730's, together with the `name_template` family, because moving
+  it breaks every service repository and needs the compatibility window that
+  ticket owns. So `render.IncarnationMeta` and `servicevars.IncarnationContext`
+  keep FIELD names mirroring the CEL keys and are filled from the renamed
+  identifier — the two spellings converge when NIM-730 lands, and both structs
+  now say so in their godoc.
+  **The `*_name` FK columns do NOT move.** `state_history.incarnation_name` and
+  four siblings stay, and convert in NIM-732 beside `rbac_roles` and `synods` —
+  the paragraph of ADR-0085 Scope they are listed in. A foreign key is stored
+  against column identity, so every constraint keeps working; what is left is a
+  column named after a concept the row no longer uses, with a ticket against it.
+  On its own that tail is ~898 occurrences and nine `json:"incarnation_name"`
+  wire fields, so folding it in would have doubled this change.
+  **The Keeper↔Soul proto does NOT move.** `PortentEvent.beacon_name` and
+  `AugurAccessRequest.omen_name` keep their spellings: that contract is governed
+  by [ADR-012](docs/adr/0012-keeper-soul-grpc.md)'s forward-compat rule and is
+  named neither by this ticket nor by ADR-0085's consequences, so moving it is a
+  separate decision. Their comments now cite `vigils.id` / `omens.id`, the
+  columns that actually exist. Untouched for the same class of reason:
+  `augur.Rite.ID` (the int64 surrogate ADR-0085 carves out by name), the RBAC
+  subject selector's `incarnation` dimension, and `decrees.incarnation_name` —
+  all three belong to registries this change has not reached.
+  **The grammar does NOT move with the spelling** — each registry's regex is
+  character-for-character what it was, and migration `118` carries it over with
+  `RENAME CONSTRAINT` rather than a DROP + ADD, so no row that is legal today can
+  fail the migration and no revalidation scan runs. ADR-0085's single `IDPattern`
+  for all eight registries is a NARROWING on most of them and is scheduled apart
+  from the rename; a new guard
+  (`keeper/migrations/id_grammar_guard_test.go`) fails if the Go constant and the
+  SQL CHECK ever drift from each other in either direction.
+  Two changes land for **all ten** registries at once, because both are stated
+  once and shared: the `keeper.<resource>.label-set` MCP argument is now `id`, and
+  the `<resource>.label_changed` audit payload is `{id, old_label, new_label}`.
+  The one registry whose label route is hand-written rather than shared
+  (`incarnation`, on both REST and MCP) now calls the same payload builder as the
+  other nine instead of restating it — that second copy is exactly where the key
+  drifted while this change was being made.
+  Internal Go structs that merely carry a copy of an identifier — notably
+  `artifact.ServiceRef.Name` — keep their spelling: they are neither a column, a
+  wire field, an MCP argument nor a URL, and the rename follows the identifier
+  across the surfaces an operator reads.
+  **`soul-stack-web` and any external API client break** and must move with it;
+  `docs/keeper/openapi.yaml` is regenerated.
 - **The redis plugin is laid out by OBJECT, and its addresses lose the
   origin-grouping level** ([ADR-020 amendment 2026-09-02](docs/adr/0020-plugin-infrastructure.md),
   NIM-766, closing NIM-525). `soul-mod-community-redis` is **`soul-mod-redis`**,

@@ -27,7 +27,7 @@ func newProvider(v handlers.ProviderView) Provider {
 		CredentialsRef: v.CredentialsRef,
 		FQDNSuffix:     v.FQDNSuffix,
 		Label:          v.Label,
-		Name:           v.Name,
+		ID:             v.ID,
 		Region:         v.Region,
 		Type:           v.Type,
 	}
@@ -59,7 +59,7 @@ func registerHumaProviderCreate(humaAPI huma.API, providerH *handlers.ProviderHa
 			return nil, providerMissingClaims()
 		}
 		reply, err := providerH.CreateTyped(ctx, claims, handlers.ProviderCreateInput{
-			Name:           in.Body.Name,
+			ID:             in.Body.ID,
 			Type:           in.Body.Type,
 			Region:         in.Body.Region,
 			CredentialsRef: in.Body.CredentialsRef,
@@ -89,14 +89,14 @@ func registerHumaProviderList(humaAPI huma.API, providerH *handlers.ProviderHand
 	})
 }
 
-// registerHumaProviderGet mounts GET /v1/providers/{name} (READ with path,
+// registerHumaProviderGet mounts GET /v1/providers/{id} (READ with path,
 // no audit). RBAC provider.read — on the group.
 func registerHumaProviderGet(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
 		return
 	}
 	huma.Register(humaAPI, providerGetOperation(), func(ctx context.Context, in *providerGetInput) (*providerGetOutput, error) {
-		reply, err := providerH.GetTyped(ctx, in.Name)
+		reply, err := providerH.GetTyped(ctx, in.ID)
 		if err != nil {
 			return nil, providerProblem(err)
 		}
@@ -104,14 +104,14 @@ func registerHumaProviderGet(humaAPI huma.API, providerH *handlers.ProviderHandl
 	})
 }
 
-// registerHumaProviderSetLabel mounts PUT /v1/providers/{name}/label (WRITE+AUDIT —
+// registerHumaProviderSetLabel mounts PUT /v1/providers/{id}/label (WRITE+AUDIT —
 // provider.label_changed). providerH nil → no-op.
 func registerHumaProviderSetLabel(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
 		return
 	}
 	huma.Register(humaAPI, providerSetLabelOperation(), func(ctx context.Context, in *providerSetLabelInput) (*providerSetLabelOutput, error) {
-		reply, err := providerH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := providerH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, providerProblem(err)
 		}
@@ -120,14 +120,14 @@ func registerHumaProviderSetLabel(humaAPI huma.API, providerH *handlers.Provider
 	})
 }
 
-// registerHumaProviderDelete mounts DELETE /v1/providers/{name} (WRITE+AUDIT —
+// registerHumaProviderDelete mounts DELETE /v1/providers/{id} (WRITE+AUDIT —
 // provider.deleted). providerH nil → no-op.
 func registerHumaProviderDelete(humaAPI huma.API, providerH *handlers.ProviderHandler) {
 	if providerH == nil {
 		return
 	}
 	huma.Register(humaAPI, providerDeleteOperation(), func(ctx context.Context, in *providerDeleteInput) (*providerNoContentOutput, error) {
-		reply, err := providerH.DeleteTyped(ctx, in.Name)
+		reply, err := providerH.DeleteTyped(ctx, in.ID)
 		if err != nil {
 			return nil, providerProblem(err)
 		}

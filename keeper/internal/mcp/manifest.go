@@ -219,8 +219,8 @@ var catalogManifest = []toolEntry{
 	// All 10 tools (create/run/get/list/history/unlock/rerun-last/upgrade/
 	// destroy/traits-set) implemented: dispatch branches wired, bodies at
 	// parity with REST IncarnationHandler. destroy wired in S-D4
-	// (DELETE /v1/incarnations/{name}). traits-set — ADR-060 amend R1 (PUT
-	// /v1/incarnations/{name}/traits, relocated from per-soul).
+	// (DELETE /v1/incarnations/{id}). traits-set — ADR-060 amend R1 (PUT
+	// /v1/incarnations/{id}/traits, relocated from per-soul).
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -547,7 +547,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.service.label-set",
-			Description:  "Replaces the display caption of a Service registry entry (ADR-0085). Permission: service.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `name`. Narrower than keeper.service.update, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - notably not segment 2 of <mount>/<service>/<incarnation>/<state-field> and not the artifact cache directory - so changing it orphans no secret. code=not-found if the entry doesn't exist.",
+			Description:  "Replaces the display caption of a Service registry entry (ADR-0085). Permission: service.label-set. The caption is free text - capitals and spaces are allowed and nothing validates its form; null (or omitted) clears it and consumers fall back to showing `id`. Narrower than keeper.service.update, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - notably not segment 2 of <mount>/<service>/<incarnation>/<state-field> and not the artifact cache directory - so changing it orphans no secret. code=not-found if the entry doesn't exist.",
 			InputSchema:  schemaServiceLabelSetInput,
 			OutputSchema: schemaServiceView,
 		},
@@ -1490,7 +1490,7 @@ var (
 "additionalProperties":false,
 "required":["service"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance name (kebab-case). Omit when the chosen create scenario declares name_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance id (kebab-case). Omit when the chosen create scenario declares name_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - not the Vault path segment, not the RBAC incarnation= scope value, not the CEL root (incarnation.label does not resolve). Unlike name it is never composed by a name_template."},
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven labels for the incarnation (ADR-008 amendment a). Affect RBAC create-scope: an operator with scoped-permission incarnation.create on coven=X can only create an incarnation with covens within their scope."},
@@ -1502,9 +1502,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","scenario"],
+"required":["id","scenario"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "scenario":{"type":"string"},
 "input":{"type":"object"}}}`)
 
@@ -1519,9 +1519,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string"}}}`)
+"id":{"type":"string"}}}`)
 
 	schemaIncarnationGetOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1542,9 +1542,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "apply_id":{"type":"string"},
 "include_transitions":{"type":"boolean"},
 "include_archived":{"type":"boolean"},
@@ -1555,18 +1555,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","reason"],
+"required":["id","reason"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "reason":{"type":"string","minLength":1,"maxLength":500}}}`)
 
 	schemaIncarnationRerunLastInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","reason"],
+"required":["id","reason"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "reason":{"type":"string","minLength":1,"maxLength":500,"description":"Free-form operator confirmation text; written to audit incarnation.rerun_last."},
 "input":{"type":"object","description":"Operator input for the restart. Used ONLY when the failed attempt carries no replayable snapshot in its history row (a terminal recorded without one, or a row predating NIM-408); with a snapshot present the snapshot wins. A recovery path, not an override."}}}`)
 
@@ -1584,9 +1584,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","previous_status","status","unlocked_by_aid","unlocked_at"],
+"required":["id","previous_status","status","unlocked_by_aid","unlocked_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "previous_status":{"type":"string"},
 "status":{"type":"string"},
 "unlocked_by_aid":{"type":"string"},
@@ -1596,18 +1596,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","to_version"],
+"required":["id","to_version"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "to_version":{"type":"string"}}}`)
 
 	schemaIncarnationDestroyInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","allow_destroy"],
+"required":["id","allow_destroy"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "allow_destroy":{"type":"boolean"}}}`)
 
 	// traits-set: wholesale replacement of incarnation.traits (ADR-060).
@@ -1617,18 +1617,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
 "traits":{"type":"object","additionalProperties":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"},{"type":"array","items":{"oneOf":[{"type":"string"},{"type":"number"},{"type":"boolean"}]}}]},"propertyNames":{"pattern":"^[a-z][a-z0-9]*([_-][a-z0-9]+)*$"},"description":"Full set of operator-set trait labels key->(scalar|list of scalars). Empty/omitted = clear labels. Wholesale replaces incarnation.traits."}}}`)
 
 	schemaIncarnationLabelSetInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name. Addresses the row; NOT changed by this tool - and it, not the caption, is the Vault path segment, the RBAC incarnation= scope value and the CEL root."},
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id. Addresses the row; NOT changed by this tool - and it, not the caption, is the Vault path segment, the RBAC incarnation= scope value and the CEL root."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it, after which consumers show name again."}}}`)
 
 	schemaIncarnationLabelSetOutput = json.RawMessage(`{
@@ -1656,9 +1656,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","sids"],
+"required":["id","sids"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
 "sids":{"type":"array","minItems":1,"maxItems":200,"items":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$"},"description":"SIDs (FQDN) of already-onboarded, connected hosts to bind. Every SID must be inside the caller's soul scope - one outside it rejects the whole call."}}}`)
 
 	schemaIncarnationBindMemberOutput = json.RawMessage(`{
@@ -1675,9 +1675,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","sid"],
+"required":["id","sid"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."},
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."},
 "sid":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$","description":"SID (FQDN) of the host to unbind."}}}`)
 
 	schemaIncarnationUnbindMemberOutput = json.RawMessage(`{
@@ -1694,9 +1694,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation name."}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9][a-z0-9-]{0,62}$","description":"Incarnation id."}}}`)
 
 	schemaIncarnationMembersOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -1995,10 +1995,10 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","git","ref"],
+"required":["id","git","ref"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service name (kebab-case)."},
-"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - notably not segment 2 of the derived secret path."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service id (kebab-case, immutable)."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show id instead. Never used to derive anything - notably not segment 2 of the derived secret path."},
 "git":{"type":"string","description":"git source of the service repo (URL; not a secret)."},
 "ref":{"type":"string","description":"git ref (tag/branch) - the Service's version (ADR-007)."},
 "refresh":{"type":"string","description":"Opt. auto-refresh duration ('5m'); omitted - no auto-refresh."}}}`)
@@ -2007,18 +2007,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service name. Addresses the row; NOT changed by this tool - and it, not the caption, is segment 2 of every derived secret path."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service id. Addresses the row; NOT changed by this tool - and it, not the caption, is segment 2 of every derived secret path."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaServiceUpdateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","git","ref"],
+"required":["id","git","ref"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service name (record key, unchanged)."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Service id (record key, unchanged)."},
 "git":{"type":"string","description":"New git source (replace semantics)."},
 "ref":{"type":"string","description":"New git ref (replace semantics)."},
 "refresh":{"type":"string","description":"Opt. auto-refresh duration ('5m')."}}}`)
@@ -2027,18 +2027,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"}}}`)
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$"}}}`)
 
 	schemaServiceView = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","git","ref","created_at","updated_at"],
+"required":["id","git","ref","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
-"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
+"id":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show id instead."},
 "git":{"type":"string"},
 "ref":{"type":"string"},
 "refresh":{"type":"string"},
@@ -2114,9 +2114,10 @@ var (
 "services":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","git","ref","created_at","updated_at"],
+"required":["id","git","ref","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
+"label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show id instead."},
 "git":{"type":"string"},
 "ref":{"type":"string"},
 "refresh":{"type":"string"},
@@ -2129,9 +2130,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","source_type","endpoint","auth_ref"],
+"required":["id","source_type","endpoint","auth_ref"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen name (kebab-case)."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen id (kebab-case)."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "source_type":{"type":"string","enum":["vault","prometheus","elk"],"description":"External system type."},
 "endpoint":{"type":"string","description":"External system URL (not a secret)."},
@@ -2149,26 +2150,26 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen name. Addresses the row; NOT changed by this tool - Rites grant against it by FK."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Omen id. Addresses the row; NOT changed by this tool - Rites grant against it by FK."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaOmenDeleteInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
 
 	schemaOmenView = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","source_type","endpoint","auth_ref","created_at"],
+"required":["id","source_type","endpoint","auth_ref","created_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "source_type":{"type":"string","enum":["vault","prometheus","elk"]},
 "endpoint":{"type":"string"},
@@ -2186,9 +2187,9 @@ var (
 "omens":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","source_type","endpoint","auth_ref","created_at"],
+"required":["id","source_type","endpoint","auth_ref","created_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "source_type":{"type":"string","enum":["vault","prometheus","elk"]},
 "endpoint":{"type":"string"},
 "auth_ref":{"type":"string"},
@@ -2283,30 +2284,30 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
 
 	// schemaOracleLabelSetInput — the argument shape of
 	// keeper.oracle.vigil.label-set and keeper.oracle.decree.label-set. One
-	// schema for both: Vigil and Decree share [oracle.NamePattern], and a caption
+	// schema for both: Vigil and Decree share [oracle.IDPattern], and a caption
 	// is one column with one meaning on either.
 	schemaOracleLabelSetInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil / Decree name. Addresses the row; NOT changed by this tool."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil / Decree id. Addresses the row; NOT changed by this tool."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaVigilCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","subject","interval","check"],
+"required":["id","subject","interval","check"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil name (kebab-case)."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Vigil id (kebab-case)."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 ` + schemaSubjectProperty + `,
 "interval":{"type":"string","description":"Check frequency (duration convention, e.g. '30s')."},
@@ -2318,9 +2319,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","subject","interval","check","params","enabled","created_at","updated_at"],
+"required":["id","subject","interval","check","params","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 ` + schemaSubjectProperty + `,
 "interval":{"type":"string"},
@@ -2341,9 +2342,9 @@ var (
 "vigils":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","subject","interval","check","params","enabled","created_at","updated_at"],
+"required":["id","subject","interval","check","params","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 ` + schemaSubjectProperty + `,
 "interval":{"type":"string"},
 "check":{"type":"string"},
@@ -2357,9 +2358,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","on_beacon","subject","incarnation_name","action_scenario"],
+"required":["id","on_beacon","subject","incarnation_name","action_scenario"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Decree name (kebab-case)."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Decree id (kebab-case)."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "on_beacon":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Name of the Vigil whose Portent the rule reacts to."},
 "where":{"type":"string","description":"Opt. CEL predicate over event.data (e.g. 'event.data.severity == \"critical\"'); compile-checked on create."},
@@ -2374,9 +2375,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","on_beacon","subject","incarnation_name","action_scenario","action_input","cooldown","enabled","created_at","updated_at"],
+"required":["id","on_beacon","subject","incarnation_name","action_scenario","action_input","cooldown","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "on_beacon":{"type":"string"},
 "where":{"type":"string"},
@@ -2400,9 +2401,9 @@ var (
 "decrees":{"type":"array","items":{
 "type":"object",
 "additionalProperties":false,
-"required":["name","on_beacon","subject","incarnation_name","action_scenario","action_input","cooldown","enabled","created_at","updated_at"],
+"required":["id","on_beacon","subject","incarnation_name","action_scenario","action_input","cooldown","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "on_beacon":{"type":"string"},
 "where":{"type":"string"},
 ` + schemaSubjectProperty + `,
@@ -2441,9 +2442,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","type","region","credentials_ref"],
+"required":["id","type","region","credentials_ref"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "type":{"type":"string"},
 "region":{"type":"string"},
@@ -2453,9 +2454,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","type","region","credentials_ref","created_at","created_by_aid"],
+"required":["id","type","region","credentials_ref","created_at","created_by_aid"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "type":{"type":"string"},
 "region":{"type":"string"},
@@ -2467,18 +2468,18 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Provider name. Addresses the row; NOT changed by this tool."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Provider id. Addresses the row; NOT changed by this tool."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaProfileCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","provider","params"],
+"required":["id","provider","params"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "provider":{"type":"string"},
 "params":{"type":"object"},
@@ -2488,9 +2489,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Profile name. Addresses the row; NOT changed by this tool."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud Profile id. Addresses the row; NOT changed by this tool."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	// --- Errand (ADR-033) ---
@@ -2731,9 +2732,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","provider","params","created_at","created_by_aid"],
+"required":["id","provider","params","created_at","created_by_aid"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "provider":{"type":"string"},
 "params":{"type":"object"},
@@ -2742,14 +2743,14 @@ var (
 "created_by_aid":{"type":"string"}}}`)
 
 	// Cloud Provider/Profile — read/delete (by-name) and list (paged) input
-	// schemas (ADR-017). name pattern mirrors provider/profile.NamePattern (kebab 1..63).
+	// schemas (ADR-017). name pattern mirrors provider/profile.IDPattern (kebab 1..63).
 	schemaProviderByNameInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud-Provider name."}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud-Provider name."}}}`)
 
 	schemaProviderListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2763,9 +2764,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud-Profile name."}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Cloud-Profile name."}}}`)
 
 	schemaProfileListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2777,14 +2778,14 @@ var (
 "limit":{"type":"integer","minimum":1,"description":"Page size (default 100)."}}}`)
 
 	// Push-Provider (S7-2) — input/output schemas. name pattern mirrors
-	// pushprovider.NamePattern (`^[a-z][a-z0-9-]{0,62}$` — env-var-name-safe).
+	// pushprovider.IDPattern (`^[a-z][a-z0-9-]{0,62}$` — env-var-name-safe).
 	schemaPushProviderCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Plugin name (= plugins.ssh_providers[].name)."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Plugin name (= plugins.ssh_providers[].name)."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - including the SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS env-var name."},
 "params":{"type":"object","description":"Opaque per-provider params. Sensitive keys (secret_id/token/password/private_key) MUST be vault-refs (vault:<path>)."}}}`)
 
@@ -2792,34 +2793,34 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Push-Provider name. Addresses the row; NOT changed by this tool."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$","description":"Push-Provider id. Addresses the row; NOT changed by this tool."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaPushProviderUpdateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","params"],
+"required":["id","params"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$"},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$"},
 "params":{"type":"object","description":"Full new set of params (replace semantics)."}}}`)
 
 	schemaPushProviderByNameInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$"}}}`)
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]{0,62}$"}}}`)
 
 	schemaPushProviderListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
 "properties":{
-"name_pattern":{"type":"string","description":"LIKE-form name filter (e.g. vault%)."},
+"id_pattern":{"type":"string","description":"LIKE-form id filter (e.g. vault%)."},
 "offset":{"type":"integer","minimum":0},
 "limit":{"type":"integer","minimum":1,"maximum":1000}}}`)
 
@@ -2827,9 +2828,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","params","created_at","updated_at","created_by_aid"],
+"required":["id","params","created_at","updated_at","created_by_aid"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "params":{"type":"object"},
 "created_at":{"type":"string","format":"date-time"},
@@ -2842,9 +2843,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","type","config"],
+"required":["id","type","config"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel name (kebab-case)."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel name (kebab-case)."},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "type":{"type":"string","enum":["webhook"],"description":"Channel type (webhook in MVP)."},
 "config":{"type":"object","description":"Per-type config (webhook - { url, opt. headers, opt. http_allowed/allow_private })."},
@@ -2855,9 +2856,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","type","config"],
+"required":["id","type","config"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "type":{"type":"string","enum":["webhook"]},
 "config":{"type":"object","description":"Full new config (replace semantics)."},
 "secret_ref":{"type":["string","null"]},
@@ -2867,27 +2868,27 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel name. Addresses the row; NOT changed by this tool - and it, not the caption, is the <entity> segment of secret/herald/<entity>/<field>."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Herald channel id. Addresses the row; NOT changed by this tool - and it, not the caption, is the <entity> segment of secret/herald/<entity>/<field>."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaTidingLabelSetInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Tiding rule name. Addresses the row; NOT changed by this tool."},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$","description":"Tiding rule id. Addresses the row; NOT changed by this tool."},
 "label":{"type":["string","null"],"description":"New display caption. null or omitted clears it."}}}`)
 
 	schemaHeraldByNameInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
 
 	schemaHeraldListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2901,9 +2902,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","type","config","enabled","created_at","updated_at"],
+"required":["id","type","config","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "type":{"type":"string","enum":["webhook"]},
 "config":{"type":"object"},
@@ -2917,9 +2918,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","herald","event_types"],
+"required":["id","herald","event_types"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything."},
 "herald":{"type":"string","description":"Delivery Herald channel name (FK)."},
 "event_types":{"type":"array","items":{"type":"string"},"description":"area-glob scenario_run.* within run scope (scenario_run/command_run/voyage/cadence + incarnation.run_completed)."},
@@ -2934,9 +2935,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","herald","event_types"],
+"required":["id","herald","event_types"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"},
 "herald":{"type":"string"},
 "event_types":{"type":"array","items":{"type":"string"}},
 "only_failures":{"type":"boolean"},
@@ -2950,9 +2951,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name"],
+"required":["id"],
 "properties":{
-"name":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
+"id":{"type":"string","pattern":"^[a-z0-9-]{1,63}$"}}}`)
 
 	schemaTidingListInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
@@ -2967,9 +2968,9 @@ var (
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["name","herald","event_types","only_failures","only_changes","enabled","created_at","updated_at"],
+"required":["id","herald","event_types","only_failures","only_changes","enabled","created_at","updated_at"],
 "properties":{
-"name":{"type":"string"},
+"id":{"type":"string"},
 "label":{"type":"string","description":"Display caption (ADR-0085); absent when the row carries none - show name instead."},
 "herald":{"type":"string"},
 "event_types":{"type":"array","items":{"type":"string"}},

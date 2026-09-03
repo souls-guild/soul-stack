@@ -50,9 +50,9 @@ func ProviderSpecStub() *ProviderHandler {
 
 // ProviderCreateInput — NATIVE request form of POST /v1/providers (handler-native).
 type ProviderCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/providers/{name}/label. nil/blank → NULL, and the consumer shows
+	// by PUT /v1/providers/{id}/label. nil/blank → NULL, and the consumer shows
 	// Name.
 	Label          *string
 	Type           string
@@ -70,7 +70,7 @@ type ProviderCreateInput struct {
 // created_at — nanosecond time-wire; created_by_aid — an optional pointer (NULL for
 // rows that outlived the operator's deletion).
 type ProviderView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label          *string
@@ -92,7 +92,7 @@ type ProviderListPage struct {
 
 func toProviderView(p *provider.Provider) ProviderView {
 	return ProviderView{
-		Name:           p.Name,
+		ID:             p.ID,
 		Label:          p.Label,
 		Type:           p.Type,
 		Region:         p.Region,
@@ -107,7 +107,7 @@ func toProviderView(p *provider.Provider) ProviderView {
 // credentials_ref is written to audit as a PATH (not a secret; vault:<path>).
 type ProviderWriteReply struct {
 	Body           ProviderView
-	Name           string
+	ID             string
 	Label          *string
 	Type           string
 	Region         string
@@ -120,7 +120,7 @@ type ProviderWriteReply struct {
 // AuditPayload assembles the audit payload of the Provider create route.
 func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{
-		"name":            r.Name,
+		"id":              r.ID,
 		"type":            r.Type,
 		"region":          r.Region,
 		"credentials_ref": r.CredentialsRef,
@@ -138,12 +138,12 @@ func (r ProviderWriteReply) AuditPayload() middleware.AuditPayload {
 
 // ProviderDeleteReply — result of DeleteTyped (audit fields; HTTP response 204).
 type ProviderDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload assembles the audit payload of the delete route.
 func (r ProviderDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
 // CreateTyped — domain function for POST /v1/providers (handler-native): validates
@@ -151,16 +151,16 @@ func (r ProviderDeleteReply) AuditPayload() middleware.AuditPayload {
 // name/type/region/credentials_ref.
 func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req ProviderCreateInput) (ProviderWriteReply, error) {
 	var zero ProviderWriteReply
-	if req.Name == "" {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'name' is required")}
+	if req.ID == "" {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'id' is required")}
 	}
-	if !provider.ValidName(req.Name) {
+	if !provider.ValidID(req.ID) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'name' must match "+provider.NamePattern)}
+			"field 'id' must match "+provider.IDPattern)}
 	}
-	if !provider.ValidName(req.Type) {
+	if !provider.ValidID(req.Type) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'type' must match "+provider.NamePattern)}
+			"field 'type' must match "+provider.IDPattern)}
 	}
 	if req.Region == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'region' is required")}
@@ -178,7 +178,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 	}
 
 	p, err := h.svc.Create(ctx, provider.CreateInput{
-		Name:           req.Name,
+		ID:             req.ID,
 		Label:          req.Label,
 		Type:           req.Type,
 		Region:         req.Region,
@@ -191,7 +191,7 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 	case err == nil:
 		return ProviderWriteReply{
 			Body:           toProviderView(p),
-			Name:           p.Name,
+			ID:             p.ID,
 			Label:          p.Label,
 			Type:           p.Type,
 			Region:         p.Region,
@@ -201,81 +201,81 @@ func (h *ProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Cla
 		}, nil
 	case errors.Is(err, provider.ErrProviderAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypeProviderExists, "",
-			"provider "+req.Name+" already exists")}
+			"provider "+req.ID+" already exists")}
 	case provider.IsValidationError(err):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", provider.PublicMessage(err))}
 	default:
 		h.logger.Error("provider.create: service failed",
-			slog.String("name", req.Name),
+			slog.String("id", req.ID),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "create provider failed")}
 	}
 }
 
-// GetTyped — domain function for GET /v1/providers/{name} (read, no audit).
-func (h *ProviderHandler) GetTyped(ctx context.Context, name string) (ProviderView, error) {
+// GetTyped — domain function for GET /v1/providers/{id} (read, no audit).
+func (h *ProviderHandler) GetTyped(ctx context.Context, id string) (ProviderView, error) {
 	var zero ProviderView
-	if !provider.ValidName(name) {
+	if !provider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+provider.NamePattern)}
+			"path 'id' must match "+provider.IDPattern)}
 	}
-	p, err := h.svc.Get(ctx, name)
+	p, err := h.svc.Get(ctx, id)
 	switch {
 	case err == nil:
 		return toProviderView(p), nil
 	case errors.Is(err, provider.ErrProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+id+" not found")}
 	default:
-		h.logger.Error("provider.get: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("provider.get: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get provider failed")}
 	}
 }
 
-// DeleteTyped — domain function for DELETE /v1/providers/{name}: 404 if absent,
+// DeleteTyped — domain function for DELETE /v1/providers/{id}: 404 if absent,
 // 409 on dependent Profiles (FK RESTRICT).
-func (h *ProviderHandler) DeleteTyped(ctx context.Context, name string) (ProviderDeleteReply, error) {
+func (h *ProviderHandler) DeleteTyped(ctx context.Context, id string) (ProviderDeleteReply, error) {
 	var zero ProviderDeleteReply
-	if !provider.ValidName(name) {
+	if !provider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+provider.NamePattern)}
+			"path 'id' must match "+provider.IDPattern)}
 	}
-	err := h.svc.Delete(ctx, name)
+	err := h.svc.Delete(ctx, id)
 	switch {
 	case err == nil:
-		return ProviderDeleteReply{Name: name}, nil
+		return ProviderDeleteReply{ID: id}, nil
 	case errors.Is(err, provider.ErrProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+id+" not found")}
 	case errors.Is(err, provider.ErrProviderHasProfiles):
 		return zero, &problemError{problem.New(problem.TypeProviderHasProfiles, "",
-			"provider "+name+" has dependent profiles; delete them first")}
+			"provider "+id+" has dependent profiles; delete them first")}
 	default:
-		h.logger.Error("provider.delete: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("provider.delete: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete provider failed")}
 	}
 }
 
-// SetLabelTyped — domain function for PUT /v1/providers/{name}/label
+// SetLabelTyped — domain function for PUT /v1/providers/{id}/label
 // (WRITE+AUDIT provider.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only 422 this route
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row.
-func (h *ProviderHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ProviderView], error) {
+func (h *ProviderHandler) SetLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[ProviderView], error) {
 	var zero LabelWriteReply[ProviderView]
-	if !provider.ValidName(name) {
+	if !provider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+provider.NamePattern)}
+			"path 'id' must match "+provider.IDPattern)}
 	}
-	p, previous, err := h.svc.SetLabel(ctx, name, req.Label)
+	p, previous, err := h.svc.SetLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[ProviderView]{Body: toProviderView(p), Name: name, Label: p.Label, Previous: previous}, nil
+		return LabelWriteReply[ProviderView]{Body: toProviderView(p), ID: id, Label: p.Label, Previous: previous}, nil
 	case errors.Is(err, provider.ErrProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "provider "+id+" not found")}
 	default:
-		h.logger.Error("provider.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("provider.label-set: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set provider label failed")}
 	}
 }

@@ -54,17 +54,17 @@ func TestValidateFields(t *testing.T) {
 		{"ok-no-refresh", "web", "git@x:web.git", "v1.0.0", nil, nil},
 		{"ok-refresh", "web", "git@x:web.git", "main", ptr("5m"), nil},
 		{"ok-refresh-days", "web", "git@x:web.git", "main", ptr("30d"), nil},
-		{"bad-name-upper", "Web", "g", "r", nil, ErrInvalidName},
-		{"bad-name-underscore", "web_svc", "g", "r", nil, ErrInvalidName},
-		{"bad-name-leading-digit", "1web", "g", "r", nil, ErrInvalidName},
-		// ★ NIM-706. Well-formed kebab-case, so ValidName passes — the refusal has to
+		{"bad-name-upper", "Web", "g", "r", nil, ErrInvalidID},
+		{"bad-name-underscore", "web_svc", "g", "r", nil, ErrInvalidID},
+		{"bad-name-leading-digit", "1web", "g", "r", nil, ErrInvalidID},
+		// ★ NIM-706. Well-formed kebab-case, so ValidID passes — the refusal has to
 		// come from the reserved rule standing on its own, and it must be a DISTINCT
-		// sentinel from ErrInvalidName: "invalid service name" would send an operator
+		// sentinel from ErrInvalidID: "invalid service name" would send an operator
 		// looking for a typo in a name that has none.
-		{"reserved-keeper", "keeper", "g", "r", nil, ErrReservedName},
-		{"reserved-herald", "herald", "g", "r", nil, ErrReservedName},
-		{"reserved-provider", "provider", "g", "r", nil, ErrReservedName},
-		{"reserved-internal", "internal", "g", "r", nil, ErrReservedName},
+		{"reserved-keeper", "keeper", "g", "r", nil, ErrReservedID},
+		{"reserved-herald", "herald", "g", "r", nil, ErrReservedID},
+		{"reserved-provider", "provider", "g", "r", nil, ErrReservedID},
+		{"reserved-internal", "internal", "g", "r", nil, ErrReservedID},
 		// Whole-word: a neighbouring name is a different Vault namespace.
 		{"ok-name-resembling-reserved", "heralds", "g", "r", nil, nil},
 		{"ok-name-prefixed-reserved", "keeper-notes", "g", "r", nil, nil},
@@ -175,10 +175,10 @@ func TestService_CreateValidationBeforeDB(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	_, gotErr := svc.CreateService(t.Context(), CreateServiceInput{
-		Name: "Bad_Name", Git: "g", Ref: "r",
+		ID: "Bad_Name", Git: "g", Ref: "r",
 	})
-	if !errors.Is(gotErr, ErrInvalidName) {
-		t.Fatalf("CreateService = %v, want ErrInvalidName", gotErr)
+	if !errors.Is(gotErr, ErrInvalidID) {
+		t.Fatalf("CreateService = %v, want ErrInvalidID", gotErr)
 	}
 }
 
@@ -193,9 +193,9 @@ func TestService_CreateRefusesReservedName(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 	for _, name := range []string{"keeper", "herald", "provider", "internal"} {
-		_, gotErr := svc.CreateService(t.Context(), CreateServiceInput{Name: name, Git: "g", Ref: "r"})
-		if !errors.Is(gotErr, ErrReservedName) {
-			t.Fatalf("CreateService(%q) = %v, want ErrReservedName", name, gotErr)
+		_, gotErr := svc.CreateService(t.Context(), CreateServiceInput{ID: name, Git: "g", Ref: "r"})
+		if !errors.Is(gotErr, ErrReservedID) {
+			t.Fatalf("CreateService(%q) = %v, want ErrReservedID", name, gotErr)
 		}
 		if !strings.Contains(gotErr.Error(), name) {
 			t.Errorf("CreateService(%q) error %q does not name the offending word — an operator cannot tell what to change", name, gotErr)
@@ -211,9 +211,9 @@ func TestService_UpdateRefusesReservedName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewService: %v", err)
 	}
-	_, gotErr := svc.UpdateService(t.Context(), UpdateServiceInput{Name: "herald", Git: "g", Ref: "r"})
-	if !errors.Is(gotErr, ErrReservedName) {
-		t.Fatalf("UpdateService = %v, want ErrReservedName", gotErr)
+	_, gotErr := svc.UpdateService(t.Context(), UpdateServiceInput{ID: "herald", Git: "g", Ref: "r"})
+	if !errors.Is(gotErr, ErrReservedID) {
+		t.Fatalf("UpdateService = %v, want ErrReservedID", gotErr)
 	}
 }
 

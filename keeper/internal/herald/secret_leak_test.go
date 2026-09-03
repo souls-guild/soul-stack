@@ -117,7 +117,7 @@ func TestWebhookSecretNoLeak(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name:   "ops-hook",
+		ID:     "ops-hook",
 		Type:   HeraldWebhook,
 		Config: map[string]any{"url": "https://example.com/hook"},
 		Secret: strptr(leakSigning),
@@ -153,7 +153,7 @@ func TestChannelTokenNoLeak(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name: "tg-alerts",
+		ID:   "tg-alerts",
 		Type: HeraldTelegram,
 		Config: map[string]any{
 			"chat_id":   "123456",
@@ -193,7 +193,7 @@ func TestSlackWebhookURLNoLeak(t *testing.T) {
 
 	const leakURL = "https://hooks.slack.com/services/T00/B00/PLAINTEXT-SLACK-4e5f6a"
 	h := &Herald{
-		Name:   "slack-alerts",
+		ID:     "slack-alerts",
 		Type:   HeraldSlack,
 		Config: map[string]any{"webhook_url": leakURL},
 	}
@@ -220,7 +220,7 @@ func TestUpdateMaterializesSecret(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name:   "ops-hook",
+		ID:     "ops-hook",
 		Type:   HeraldWebhook,
 		Config: map[string]any{"url": "https://example.com/hook"},
 		Secret: strptr(leakSigning),
@@ -245,7 +245,7 @@ func TestSecretRefModeUnchanged(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name:      "ops-hook",
+		ID:        "ops-hook",
 		Type:      HeraldWebhook,
 		Config:    map[string]any{"url": "https://example.com/hook"},
 		SecretRef: strptr("vault:secret/ops/webhook#sig"),
@@ -270,7 +270,7 @@ func TestXORRejected(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name:      "ops-hook",
+		ID:        "ops-hook",
 		Type:      HeraldWebhook,
 		Config:    map[string]any{"url": "https://example.com/hook"},
 		Secret:    strptr(leakSigning),
@@ -295,7 +295,7 @@ func TestPlaintextDisabled(t *testing.T) {
 	svc := newLeakService(t, vault, pool, false) // accept=false
 
 	h := &Herald{
-		Name:   "ops-hook",
+		ID:     "ops-hook",
 		Type:   HeraldWebhook,
 		Config: map[string]any{"url": "https://example.com/hook"},
 		Secret: strptr(leakSigning),
@@ -317,7 +317,7 @@ func TestVaultFailureNoLeak(t *testing.T) {
 	svc := newLeakService(t, vault, pool, true)
 
 	h := &Herald{
-		Name:   "ops-hook",
+		ID:     "ops-hook",
 		Type:   HeraldWebhook,
 		Config: map[string]any{"url": "https://example.com/hook"},
 		Secret: strptr(leakSigning),

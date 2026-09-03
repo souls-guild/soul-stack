@@ -44,7 +44,7 @@ type Invalidator interface {
 // disabled / unit-test without broker): single-instance degrades to TTL+
 // in-process invalidate, cluster convergence via DefaultRuleCacheTTL.
 type RedisInvalidator interface {
-	PublishHeraldInvalidate(ctx context.Context, name string) error
+	PublishHeraldInvalidate(ctx context.Context, id string) error
 }
 
 // ServiceDeps are dependencies for [Service]. Pool is required; Invalidator/Redis
@@ -105,13 +105,13 @@ func (s *Service) CreateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	if err := InsertHerald(ctx, s.pool, h); err != nil {
 		return nil, err
 	}
-	s.invalidate(ctx, h.Name)
+	s.invalidate(ctx, h.ID)
 	return h, nil
 }
 
 // GetHerald reads Herald by PK. [ErrHeraldNotFound] if missing.
-func (s *Service) GetHerald(ctx context.Context, name string) (*Herald, error) {
-	return SelectHeraldByName(ctx, s.pool, name)
+func (s *Service) GetHerald(ctx context.Context, id string) (*Herald, error) {
+	return SelectHeraldByID(ctx, s.pool, id)
 }
 
 // ListHeralds returns page of channels + total.
@@ -129,12 +129,12 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 	if err := UpdateHerald(ctx, s.pool, h); err != nil {
 		return nil, err
 	}
-	updated, err := SelectHeraldByName(ctx, s.pool, h.Name)
+	updated, err := SelectHeraldByID(ctx, s.pool, h.ID)
 	if err != nil {
 		return nil, err
 	}
 	updated.SecretWritten = h.SecretWritten // write-path marker survives re-read
-	s.invalidate(ctx, h.Name)
+	s.invalidate(ctx, h.ID)
 	return updated, nil
 }
 
@@ -148,12 +148,12 @@ func (s *Service) UpdateHerald(ctx context.Context, h *Herald) (*Herald, error) 
 // learn a word no code reads.
 //
 // [ErrHeraldNotFound] if missing.
-func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string) (*Herald, *string, error) {
-	previous, err := UpdateHeraldLabel(ctx, s.pool, name, label)
+func (s *Service) SetHeraldLabel(ctx context.Context, id string, label *string) (*Herald, *string, error) {
+	previous, err := UpdateHeraldLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	h, err := SelectHeraldByName(ctx, s.pool, name)
+	h, err := SelectHeraldByID(ctx, s.pool, id)
 	return h, previous, err
 }
 
@@ -163,22 +163,22 @@ func (s *Service) SetHeraldLabel(ctx context.Context, name string, label *string
 // [Service.SetHeraldLabel].
 //
 // [ErrTidingNotFound] if missing.
-func (s *Service) SetTidingLabel(ctx context.Context, name string, label *string) (*Tiding, *string, error) {
-	previous, err := UpdateTidingLabel(ctx, s.pool, name, label)
+func (s *Service) SetTidingLabel(ctx context.Context, id string, label *string) (*Tiding, *string, error) {
+	previous, err := UpdateTidingLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	t, err := SelectTidingByName(ctx, s.pool, name)
+	t, err := SelectTidingByID(ctx, s.pool, id)
 	return t, previous, err
 }
 
 // DeleteHerald deletes channel (its Tidings cascade delete) + invalidates.
 // [ErrHeraldNotFound] if missing.
-func (s *Service) DeleteHerald(ctx context.Context, name string) error {
-	if err := DeleteHerald(ctx, s.pool, name); err != nil {
+func (s *Service) DeleteHerald(ctx context.Context, id string) error {
+	if err := DeleteHerald(ctx, s.pool, id); err != nil {
 		return err
 	}
-	s.invalidate(ctx, name)
+	s.invalidate(ctx, id)
 	return nil
 }
 
@@ -191,13 +191,13 @@ func (s *Service) CreateTiding(ctx context.Context, t *Tiding) (*Tiding, error) 
 	if err := InsertTiding(ctx, s.pool, t); err != nil {
 		return nil, err
 	}
-	s.invalidate(ctx, t.Name)
+	s.invalidate(ctx, t.ID)
 	return t, nil
 }
 
 // GetTiding reads Tiding by PK. [ErrTidingNotFound] if missing.
-func (s *Service) GetTiding(ctx context.Context, name string) (*Tiding, error) {
-	return SelectTidingByName(ctx, s.pool, name)
+func (s *Service) GetTiding(ctx context.Context, id string) (*Tiding, error) {
+	return SelectTidingByID(ctx, s.pool, id)
 }
 
 // ListTidings returns page of rules + total. includeEphemeral=false (default)
@@ -213,20 +213,20 @@ func (s *Service) UpdateTiding(ctx context.Context, t *Tiding) (*Tiding, error) 
 	if err := UpdateTiding(ctx, s.pool, t); err != nil {
 		return nil, err
 	}
-	updated, err := SelectTidingByName(ctx, s.pool, t.Name)
+	updated, err := SelectTidingByID(ctx, s.pool, t.ID)
 	if err != nil {
 		return nil, err
 	}
-	s.invalidate(ctx, t.Name)
+	s.invalidate(ctx, t.ID)
 	return updated, nil
 }
 
 // DeleteTiding deletes rule + invalidates. [ErrTidingNotFound] if missing.
-func (s *Service) DeleteTiding(ctx context.Context, name string) error {
-	if err := DeleteTiding(ctx, s.pool, name); err != nil {
+func (s *Service) DeleteTiding(ctx context.Context, id string) error {
+	if err := DeleteTiding(ctx, s.pool, id); err != nil {
 		return err
 	}
-	s.invalidate(ctx, name)
+	s.invalidate(ctx, id)
 	return nil
 }
 
@@ -237,11 +237,11 @@ func (s *Service) DeleteTiding(ctx context.Context, name string) error {
 // of quick run against stale TTL snapshot, and ephemeral notification silently
 // misses. Call STRICTLY AFTER tx.Commit (on rollback rule is not in DB —
 // nothing to invalidate). Best-effort, nil-safe (see invalidate).
-func (s *Service) InvalidateTidings(ctx context.Context, name string) {
+func (s *Service) InvalidateTidings(ctx context.Context, id string) {
 	if s == nil {
 		return
 	}
-	s.invalidate(ctx, name)
+	s.invalidate(ctx, id)
 }
 
 // --- helpers ---------------------------------------------------------
@@ -250,11 +250,11 @@ func (s *Service) InvalidateTidings(ctx context.Context, name string) {
 // signal. Both operations best-effort: mutation already committed, loss of invalidate
 // is compensated by TTL convergence (DefaultRuleCacheTTL). Redis error
 // is logged but not returned to caller.
-func (s *Service) invalidate(ctx context.Context, name string) {
+func (s *Service) invalidate(ctx context.Context, id string) {
 	s.invalidator.InvalidateRules()
-	if err := s.redis.PublishHeraldInvalidate(ctx, name); err != nil {
+	if err := s.redis.PublishHeraldInvalidate(ctx, id); err != nil {
 		s.logger.Warn("herald: publish herald:invalidate failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 	}
 }
 

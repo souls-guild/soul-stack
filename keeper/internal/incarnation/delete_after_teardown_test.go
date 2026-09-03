@@ -129,8 +129,8 @@ func TestDeleteAfterTeardown_AuditCompleted(t *testing.T) {
 	if ev.ArchonAID != "" {
 		t.Errorf("ArchonAID = %q, want empty (keeper_internal, NULL column)", ev.ArchonAID)
 	}
-	if ev.Payload["name"] != "redis-prod" {
-		t.Errorf("payload.name = %v, want redis-prod", ev.Payload["name"])
+	if ev.Payload["id"] != "redis-prod" {
+		t.Errorf("payload.id = %v, want redis-prod", ev.Payload["id"])
 	}
 	if ev.Payload["force"] != true {
 		t.Errorf("payload.force = %v, want true", ev.Payload["force"])
@@ -289,7 +289,7 @@ func TestDeleteAfterTeardown_ForceStampsTerminalArchiveStatus(t *testing.T) {
 	}
 	// The SELECT feeding the archive must stamp $2, not copy the live column.
 	// (The INSERT's own column list still names `status` — check the SELECT.)
-	_, sel, _ := strings.Cut(tx.execSQLs[0], "SELECT name, service")
+	_, sel, _ := strings.Cut(tx.execSQLs[0], "SELECT id, service")
 	if !strings.Contains(sel, "state, $2,") {
 		t.Errorf("archive SELECT still copies `status` from the live row: %q", sel)
 	}

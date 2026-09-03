@@ -145,12 +145,12 @@ if ! psql_cli -c "SELECT to_regclass('public.service_registry') IS NOT NULL" | g
     fail "no service_registry table - was keeper init not run? (make dev-provision + keeper)"
 fi
 psql_cli <<SQL
-INSERT INTO service_registry (name, git, ref) VALUES
+INSERT INTO service_registry (id, git, ref) VALUES
     ('${SERVICE_NAME}', '${REPO_URL}', 'v1.0.0')
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 SQL
 log "registry (row for ${SERVICE_NAME}):"
-psql_cli -c "SELECT name, git, ref FROM service_registry WHERE name='${SERVICE_NAME}'" | sed 's/^/    /'
+psql_cli -c "SELECT id, git, ref FROM service_registry WHERE id='${SERVICE_NAME}'" | sed 's/^/    /'
 # A live keeper holds the registry as an in-memory snapshot (serviceregistry.Holder,
 # DefaultRefreshInterval=10s) - a direct psql write does NOT wake it up synchronously. Wait
 # until Resolve sees the service: GET .../refs goes through holder.Resolve -> 200, once

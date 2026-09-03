@@ -146,14 +146,14 @@ func (s *vigilSource) ActiveVigilsForSID(ctx context.Context, sid string) ([]*ke
 	out := make([]*keeperv1.VigilDef, 0, len(vigils))
 	for _, v := range vigils {
 		def := &keeperv1.VigilDef{
-			Name:     v.Name,
+			Name:     v.ID,
 			Interval: v.IntervalSpec,
 			Check:    v.CheckAddr,
 		}
 		if len(v.Params) > 0 {
 			params := &structpb.Struct{}
 			if err := params.UnmarshalJSON(v.Params); err != nil {
-				return nil, fmt.Errorf("grpc: vigil %q params unmarshal: %w", v.Name, err)
+				return nil, fmt.Errorf("grpc: vigil %q params unmarshal: %w", v.ID, err)
 			}
 			def.Params = params
 		}
@@ -282,7 +282,7 @@ func (h *eventStreamHandler) evaluateDecree(
 ) {
 	if !oracle.SubjectMatches(decree, host) {
 		h.logger.Debug("eventstream: oracle decree subject mismatch — skip",
-			slog.String("sid", sid), slog.String("decree", decree.Name))
+			slog.String("sid", sid), slog.String("decree", decree.ID))
 		return
 	}
 
@@ -307,7 +307,7 @@ func (h *eventStreamHandler) evaluateDecree(
 	if err != nil {
 		h.logger.Warn("eventstream: oracle decree membership resolve failed — skip (fail-closed)",
 			slog.String("sid", sid),
-			slog.String("decree", decree.Name),
+			slog.String("decree", decree.ID),
 			slog.String("incarnation", decree.IncarnationName),
 			slog.Any("error", err),
 		)
@@ -316,7 +316,7 @@ func (h *eventStreamHandler) evaluateDecree(
 	if !member {
 		h.logger.Warn("eventstream: oracle decree subject not in target incarnation — skip",
 			slog.String("sid", sid),
-			slog.String("decree", decree.Name),
+			slog.String("decree", decree.ID),
 			slog.String("incarnation", decree.IncarnationName),
 		)
 		return
@@ -329,14 +329,14 @@ func (h *eventStreamHandler) evaluateDecree(
 			// problem; default-deny: don't fire, log it for the operator.
 			h.logger.Warn("eventstream: oracle decree where-CEL compile failed — skip (default-deny)",
 				slog.String("sid", sid),
-				slog.String("decree", decree.Name),
+				slog.String("decree", decree.ID),
 				slog.Any("error", err),
 			)
 			return
 		}
 		if !ok {
 			h.logger.Debug("eventstream: oracle decree where-CEL false — skip",
-				slog.String("sid", sid), slog.String("decree", decree.Name))
+				slog.String("sid", sid), slog.String("decree", decree.ID))
 			return
 		}
 	}
@@ -344,17 +344,17 @@ func (h *eventStreamHandler) evaluateDecree(
 	now := time.Now().UTC()
 
 	// Cooldown-check per-(decree, subject) (loop-prevention, ADR-030(a)).
-	lastFired, hasFired, err := oracle.LastFiredAt(ctx, deps.DB, decree.Name, sid)
+	lastFired, hasFired, err := oracle.LastFiredAt(ctx, deps.DB, decree.ID, sid)
 	if err != nil {
 		h.logger.Warn("eventstream: oracle cooldown read failed — skip (fail-safe)",
-			slog.String("sid", sid), slog.String("decree", decree.Name), slog.Any("error", err))
+			slog.String("sid", sid), slog.String("decree", decree.ID), slog.Any("error", err))
 		return
 	}
 	if oracle.WithinCooldown(decree.Cooldown, lastFired, hasFired, now) {
 		deps.Metrics.ObserveCooldownBlocked()
 		h.logger.Debug("eventstream: oracle decree within cooldown — skip",
 			slog.String("sid", sid),
-			slog.String("decree", decree.Name),
+			slog.String("decree", decree.ID),
 			slog.String("cooldown", decree.Cooldown),
 		)
 		return
@@ -372,7 +372,7 @@ func (h *eventStreamHandler) evaluateDecree(
 	if len(decree.ActionInput) > 0 {
 		if err := json.Unmarshal(decree.ActionInput, &actionInput); err != nil {
 			h.logger.Warn("eventstream: oracle decree action_input is not a JSON object — skip",
-				slog.String("sid", sid), slog.String("decree", decree.Name), slog.Any("error", err))
+				slog.String("sid", sid), slog.String("decree", decree.ID), slog.Any("error", err))
 			return
 		}
 	}
@@ -382,12 +382,12 @@ func (h *eventStreamHandler) evaluateDecree(
 		IncarnationName: decree.IncarnationName,
 		ScenarioName:    decree.ActionScenario,
 		ActionInput:     actionInput,
-		DecreeName:      decree.Name,
+		DecreeName:      decree.ID,
 	})
 	if err != nil {
 		h.logger.Warn("eventstream: oracle scenario enqueue failed",
 			slog.String("sid", sid),
-			slog.String("decree", decree.Name),
+			slog.String("decree", decree.ID),
 			slog.String("scenario", decree.ActionScenario),
 			slog.Any("error", err),
 		)
@@ -397,13 +397,13 @@ func (h *eventStreamHandler) evaluateDecree(
 
 	// Cooldown state is recorded AFTER a successful enqueue: recording a fire
 	// without an actual enqueue would falsely block future reactions.
-	if err := oracle.RecordFire(ctx, deps.DB, decree.Name, sid, now); err != nil {
+	if err := oracle.RecordFire(ctx, deps.DB, decree.ID, sid, now); err != nil {
 		// The run is already enqueued — the fire record is best-effort: on
 		// failure, cooldown isn't activated for this pair (a repeat is possible
 		// until the next successful record), but an idempotent scenario
 		// dampens the loop at the action level (ADR-030(a)).
 		h.logger.Warn("eventstream: oracle record fire failed — cooldown not persisted",
-			slog.String("sid", sid), slog.String("decree", decree.Name), slog.Any("error", err))
+			slog.String("sid", sid), slog.String("decree", decree.ID), slog.Any("error", err))
 	}
 
 	// circuit breaker (ADR-030(a), beacons S4): the second loop-prevention
@@ -414,12 +414,12 @@ func (h *eventStreamHandler) evaluateDecree(
 	// now is the same instant as cooldown/audit.
 	h.tripCircuitIfTripped(ctx, deps, decree, now)
 
-	h.auditOracleFired(ctx, sid, beacon, decree.Name, decree.ActionScenario, applyID)
+	h.auditOracleFired(ctx, sid, beacon, decree.ID, decree.ActionScenario, applyID)
 	h.logger.Info("eventstream: oracle fired",
 		slog.String("sid", sid),
 		slog.String("session_id", sessionID),
 		slog.String("beacon", beacon),
-		slog.String("decree", decree.Name),
+		slog.String("decree", decree.ID),
 		slog.String("scenario", decree.ActionScenario),
 		slog.String("apply_id", applyID),
 	)
@@ -441,20 +441,20 @@ func (h *eventStreamHandler) tripCircuitIfTripped(ctx context.Context, deps *Ora
 		return // breaker OFF (escape-hatch)
 	}
 
-	cnt, err := oracle.BumpCircuit(ctx, deps.DB, decree.Name, now, deps.CircuitWindow)
+	cnt, err := oracle.BumpCircuit(ctx, deps.DB, decree.ID, now, deps.CircuitWindow)
 	if err != nil {
 		h.logger.Warn("eventstream: oracle circuit bump failed — breaker counter not updated",
-			slog.String("decree", decree.Name), slog.Any("error", err))
+			slog.String("decree", decree.ID), slog.Any("error", err))
 		return
 	}
 	if cnt < deps.CircuitMaxFires {
 		return
 	}
 
-	tripped, err := oracle.TripDecree(ctx, deps.DB, decree.Name, now)
+	tripped, err := oracle.TripDecree(ctx, deps.DB, decree.ID, now)
 	if err != nil {
 		h.logger.Warn("eventstream: oracle circuit trip failed — decree not auto-disabled",
-			slog.String("decree", decree.Name), slog.Any("error", err))
+			slog.String("decree", decree.ID), slog.Any("error", err))
 		return
 	}
 	if !tripped {
@@ -464,9 +464,9 @@ func (h *eventStreamHandler) tripCircuitIfTripped(ctx context.Context, deps *Ora
 	}
 
 	deps.Metrics.ObserveCircuitTripped()
-	h.auditDecreeCircuitTripped(ctx, decree.Name, cnt, deps.CircuitWindow)
+	h.auditDecreeCircuitTripped(ctx, decree.ID, cnt, deps.CircuitWindow)
 	h.logger.Warn("eventstream: oracle circuit tripped — decree auto-disabled",
-		slog.String("decree", decree.Name),
+		slog.String("decree", decree.ID),
 		slog.Int("fire_count", cnt),
 		slog.String("window", deps.CircuitWindow.String()),
 		slog.Int("max_fires", deps.CircuitMaxFires),

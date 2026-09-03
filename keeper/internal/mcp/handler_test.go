@@ -37,7 +37,7 @@ type fakePool struct {
 	revokeFn func(aid, reason string) error
 	activeFn func() ([]string, error)
 
-	// incFn — resolves incarnation by name (SelectByName + existence-probe +
+	// incFn — resolves incarnation by name (SelectByID + existence-probe +
 	// FOR UPDATE-select). nil → QueryRow on `FROM incarnation` returns
 	// pgx.ErrNoRows (→ not-found). FOR UPDATE variant (unlock/upgrade) reads
 	// state/status/version from the same inc.
@@ -282,7 +282,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
 		}}
 	}
-	// SelectByName / existence-probe (full incarnation row).
+	// SelectByID / existence-probe (full incarnation row).
 	if contains(sql, "FROM incarnation") {
 		if f.incFn == nil {
 			return errRow{err: pgx.ErrNoRows}

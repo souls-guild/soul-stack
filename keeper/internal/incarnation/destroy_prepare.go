@@ -77,7 +77,7 @@ type DestroyScenarioReader interface {
 //
 // Transport-agnostic (no HTTP/MCP): returns typed sentinel errors, the caller
 // maps them to its own error format. Wiring this into the handler is S-D4's job.
-// inc arrives already loaded (the caller does SelectByName itself — for 404
+// inc arrives already loaded (the caller does SelectByID itself — for 404
 // semantics and the FOR UPDATE race in Destroy).
 func PrepareDestroy(
 	ctx context.Context,

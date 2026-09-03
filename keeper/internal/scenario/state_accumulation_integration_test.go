@@ -128,7 +128,7 @@ func seedIncarnationStateRoster(t *testing.T, name string, state map[string]any,
 	t.Helper()
 	seedIncarnationRoster(t, name, sids...)
 	if _, err := integrationPool.Exec(context.Background(),
-		`UPDATE incarnation SET state = $2 WHERE name = $1`, name, state); err != nil {
+		`UPDATE incarnation SET state = $2 WHERE id = $1`, name, state); err != nil {
 		t.Fatalf("seed state: %v", err)
 	}
 }

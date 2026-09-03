@@ -127,7 +127,7 @@ func (s *Stack) AssertIncarnationState(t *testing.T, name string, expectedSubset
 
 	var stateJSON []byte
 	err := s.db.QueryRow(ctx,
-		"SELECT state FROM incarnation WHERE name = $1", name).Scan(&stateJSON)
+		"SELECT state FROM incarnation WHERE id = $1", name).Scan(&stateJSON)
 	if err != nil {
 		t.Fatalf("AssertIncarnationState %s: query: %v", name, err)
 	}

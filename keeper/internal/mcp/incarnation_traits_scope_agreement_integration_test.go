@@ -5,7 +5,7 @@
 //
 //	REST — POST /v1/souls/traits                    → handlers.SoulHandler.AssignTraitsTyped
 //	MCP  — keeper.soul.traits-assign
-//	REST — PUT  /v1/incarnations/{name}/traits      → handlers.IncarnationHandler.SetTraitsTyped
+//	REST — PUT  /v1/incarnations/{id}/traits      → handlers.IncarnationHandler.SetTraitsTyped
 //	MCP  — keeper.incarnation.traits-set
 //
 // Why this test is not "the NIM-529 guard, again, for incarnations". The NIM-529
@@ -129,7 +129,7 @@ func TestIntegration_TraitWriteGate_AllSurfacesAgree(t *testing.T) {
 			resetTraits(t, sid)
 
 			accepted = runIncarnationTraitsSetREST(t, cfg, incName, tc.payload)
-			outcomes = append(outcomes, traitWriteOutcome{"REST /v1/incarnations/{name}/traits", accepted, readIncTraits(t, incName)})
+			outcomes = append(outcomes, traitWriteOutcome{"REST /v1/incarnations/{id}/traits", accepted, readIncTraits(t, incName)})
 			resetIncTraits(t, incName)
 
 			accepted = runIncarnationTraitsSetMCP(t, cfg, incName, tc.payload)
@@ -188,7 +188,7 @@ func TestIntegration_TraitWriteGate_AllSurfacesAgree(t *testing.T) {
 
 // --- surfaces ---
 
-// runIncarnationTraitsSetREST drives PUT /v1/incarnations/{name}/traits through
+// runIncarnationTraitsSetREST drives PUT /v1/incarnations/{id}/traits through
 // the typed entry point the HTTP layer calls, with the live pool and a real
 // enforcer. Same contract as the soul drivers: anything that is not the scope
 // refusal is fatal, so a 500 cannot be counted as a "no" and match another
@@ -241,7 +241,7 @@ func runIncarnationTraitsSetMCP(t *testing.T, cfg *rbactest.Config, name, payloa
 		"params": map[string]any{
 			"name": "keeper.incarnation.traits-set",
 			"arguments": json.RawMessage(fmt.Sprintf(
-				`{"name":%q,"traits":%s}`, name, payload)),
+				`{"id":%q,"traits":%s}`, name, payload)),
 		},
 	})
 	if resp.Error == nil {
@@ -299,7 +299,7 @@ func seedTraitGateIncarnation(t *testing.T, name string) {
 	t.Helper()
 	ctx := context.Background()
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            traitGateService,
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
@@ -312,14 +312,14 @@ func seedTraitGateIncarnation(t *testing.T, name string) {
 		t.Fatalf("seed incarnation %s: %v", name, err)
 	}
 	t.Cleanup(func() {
-		_, _ = integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE name = $1`, name)
+		_, _ = integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE id = $1`, name)
 	})
 }
 
 func resetIncTraits(t *testing.T, name string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
-		`UPDATE incarnation SET traits = '{}'::jsonb WHERE name = $1`, name); err != nil {
+		`UPDATE incarnation SET traits = '{}'::jsonb WHERE id = $1`, name); err != nil {
 		t.Fatalf("reset traits on incarnation %s: %v", name, err)
 	}
 }
@@ -328,7 +328,7 @@ func readIncTraits(t *testing.T, name string) string {
 	t.Helper()
 	var out string
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT traits::text FROM incarnation WHERE name = $1`, name).Scan(&out); err != nil {
+		`SELECT traits::text FROM incarnation WHERE id = $1`, name).Scan(&out); err != nil {
 		t.Fatalf("read traits of incarnation %s: %v", name, err)
 	}
 	return out

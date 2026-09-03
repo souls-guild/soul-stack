@@ -21,12 +21,12 @@ const serviceRegistryNotConfigured = "service registry is not configured"
 
 // serviceView — output projection of a registry entry for service-tools
 // (schemaServiceView). 1:1 with REST serviceResponse / [serviceregistry.
-// ServiceEntry]: name + git/ref/refresh + audit metadata. created_by_aid /
+// ServiceEntry]: id + git/ref/refresh + audit metadata. created_by_aid /
 // updated_by_aid / refresh are optional (omitempty; nil = NULL in the DB).
 type serviceView struct {
-	Name string `json:"name"`
-	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
-	// NOT segment 2 of a derived secret path; `name` is.
+	ID string `json:"id"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `id`.
+	// NOT segment 2 of a derived secret path; `id` is.
 	Label        *string `json:"label,omitempty"`
 	Git          string  `json:"git"`
 	Ref          string  `json:"ref"`
@@ -41,7 +41,7 @@ type serviceView struct {
 // (dates are RFC 3339). Shared helper for register/update/list-tools.
 func toServiceView(e *serviceregistry.ServiceEntry) serviceView {
 	return serviceView{
-		Name:         e.Name,
+		ID:           e.ID,
 		Label:        e.Label,
 		Git:          e.Git,
 		Ref:          e.Ref,
@@ -54,7 +54,7 @@ func toServiceView(e *serviceregistry.ServiceEntry) serviceView {
 }
 
 // callServiceSetLabel — keeper.service.label-set, the MCP mirror of
-// PUT /v1/services/{name}/label (ADR-0085). Narrower than keeper.service.update,
+// PUT /v1/services/{id}/label (ADR-0085). Narrower than keeper.service.update,
 // which re-points git/ref and invalidates every artifact cache.
 func (h *Handler) callServiceSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[serviceView]{
@@ -62,8 +62,8 @@ func (h *Handler) callServiceSetLabel(ctx context.Context, claims *jwt.Claims, r
 		resource:      "service",
 		configured:    h.deps.ServiceSvc != nil,
 		notConfigured: serviceRegistryNotConfigured,
-		validName:     serviceregistry.ValidName,
-		namePattern:   serviceregistry.NamePattern,
+		validID:       serviceregistry.ValidID,
+		idPattern:     serviceregistry.IDPattern,
 		set: func(ctx context.Context, name string, label *string) (serviceView, *string, error) {
 			entry, previous, err := h.deps.ServiceSvc.SetServiceLabel(ctx, name, label)
 			if err != nil {
@@ -79,9 +79,9 @@ func (h *Handler) callServiceSetLabel(ctx context.Context, claims *jwt.Claims, r
 }
 
 // serviceRegisterArgs — arguments for keeper.service.register
-// (schemaServiceRegisterInput): name + git + ref are required, refresh is optional.
+// (schemaServiceRegisterInput): id + git + ref are required, refresh is optional.
 type serviceRegisterArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.service.label-set.
 	Label   *string `json:"label"`
@@ -119,13 +119,13 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	callerAID := claims.Subject
 	entry, err := h.deps.ServiceSvc.CreateService(ctx, serviceregistry.CreateServiceInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Label:     a.Label,
 		Git:       a.Git,
 		Ref:       a.Ref,
@@ -136,7 +136,7 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 		code, detail := mapServiceRegistryErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: service.register failed",
-				slog.String("name", a.Name),
+				slog.String("id", a.ID),
 				slog.String("by_aid", callerAID),
 				slog.Any("error", err),
 			)
@@ -144,10 +144,10 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — parallels the REST handler (ADR-028 pattern): payload {name, git,
-	// ref, created_by_aid}. The git URL isn't a secret.
+	// Audit — parallels the REST handler (ADR-028 pattern): payload {id, git,
+	// ref, created_by_aid}. The git URL is not a secret.
 	h.writeAudit(audit.EventServiceRegistered, callerAID, map[string]any{
-		"name":           entry.Name,
+		"id":             entry.ID,
 		"label":          entry.Label,
 		"git":            entry.Git,
 		"ref":            entry.Ref,

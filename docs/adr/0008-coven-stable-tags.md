@@ -131,7 +131,7 @@ That gap closes a real product surface. A run resolves its roster at start and a
 
 **Decision.**
 
-1. **Membership becomes an operator-visible sub-resource of the incarnation** — `POST /v1/incarnations/{name}/members`, `DELETE /v1/incarnations/{name}/members/{sid}`, `GET /v1/incarnations/{name}/members`, with the MCP twins `keeper.incarnation.bind-member` / `.unbind-member` / `.members`. The relation, its columns and its FKs are unchanged; this amendment adds the missing writer and reader, not a new model.
+1. **Membership becomes an operator-visible sub-resource of the incarnation** — `POST /v1/incarnations/{id}/members`, `DELETE /v1/incarnations/{id}/members/{sid}`, `GET /v1/incarnations/{id}/members`, with the MCP twins `keeper.incarnation.bind-member` / `.unbind-member` / `.members`. The relation, its columns and its FKs are unchanged; this amendment adds the missing writer and reader, not a new model.
 
 2. **Two permissions, `incarnation.bind-member` and `incarnation.unbind-member`** (the `choir.add-voice` / `choir.remove-voice` split). Unbinding is the destructive half — it removes the host from the roster of every FUTURE run — so it is grantable separately. Reading the roster rides on `incarnation.get`: a roster is part of knowing what an incarnation is.
 
@@ -161,11 +161,11 @@ That gap closes a real product surface. A run resolves its roster at start and a
 
 **What changes.** The "Decision" above named `incarnation.spec.hosts[].role` as the home of the **declared** role. That field is **removed**. A declared role is now `voice.role` — an attribute of a host's membership in a Choir ([ADR-044 amendment 2026-07-30](0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role)). Nothing else in this ADR moves: the declared/actual split, "the volatile does not live in Soulprint", "essence is role-agnostic", and the rule that the **actual** role comes only from a live probe + `register:` + `where:` are all unchanged.
 
-**Why the field could go.** [ADR-044](0044-choir.md#adr-044-choir--named-host-topology-within-an-incarnation) item 2 had already ruled that Choir absorbs the declared role, keeping `spec.hosts[].role` only as a fallback for bootstrap-`create` — the one moment where, at the time, no Voice could exist yet. The keeper-side core module `core.choir` closed that hole: a create scenario writes its Voices as an ordinary `on: keeper` step, before any host-facing step reads a role. So the fallback stopped covering anything, and a field that covers nothing but still shows up in `GET /v1/incarnations/{name}` is a false statement about the system.
+**Why the field could go.** [ADR-044](0044-choir.md#adr-044-choir--named-host-topology-within-an-incarnation) item 2 had already ruled that Choir absorbs the declared role, keeping `spec.hosts[].role` only as a fallback for bootstrap-`create` — the one moment where, at the time, no Voice could exist yet. The keeper-side core module `core.choir` closed that hole: a create scenario writes its Voices as an ordinary `on: keeper` step, before any host-facing step reads a role. So the fallback stopped covering anything, and a field that covers nothing but still shows up in `GET /v1/incarnations/{id}` is a false statement about the system.
 
 **Consequence for this ADR's own wording.** Wherever this file says the declared role "lives only in `incarnation.spec.hosts[].role`", read: lives only in `incarnation_choir_voices.role`. A host with no Voice has **no declared role** — an empty value, not a default one, symmetric to the way this ADR already treats an unlabelled host on the coven axis.
 
-**What an author writes instead.** `module: core.choir.present` with `on: keeper` inside the create scenario (params `incarnation` / `choir` / `sid` / `role` / `position`), or `POST /v1/incarnations/{name}/choirs/{choir}/voices` day-2. Both existed before this amendment; they are now the only ways.
+**What an author writes instead.** `module: core.choir.present` with `on: keeper` inside the create scenario (params `incarnation` / `choir` / `sid` / `role` / `position`), or `POST /v1/incarnations/{id}/choirs/{choir}/voices` day-2. Both existed before this amendment; they are now the only ways.
 
 ## Amendment (2026-08-03, NIM-410, [ADR-0082](0082-service-vars.md)): the assembly order collapses to one lexical layer
 

@@ -77,7 +77,7 @@ func seedAgreementFleet(t *testing.T, ctx context.Context) {
 	}
 
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: agreeInc, Service: agreeSvc, ServiceVersion: "v1",
+		ID: agreeInc, Service: agreeSvc, ServiceVersion: "v1",
 		StateSchemaVersion: 1, State: map[string]any{}, Status: incarnation.StatusReady,
 		Covens: []string{"prod"}, Traits: map[string]any{"tier": "gold"},
 		CreatedByAID: &by,
@@ -108,7 +108,7 @@ func agreementVigils(t *testing.T) map[string]subject.Selector {
 	aid := agreeAID
 	for name, sel := range sels {
 		v := &Vigil{
-			Name: name, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down",
+			ID: name, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down",
 			Enabled: true, CreatedByAID: &aid,
 		}
 		v.setSubject(sel)
@@ -139,7 +139,7 @@ func TestIntegration_SubjectSQLAndGoAgree(t *testing.T) {
 			}
 			selected := map[string]bool{}
 			for _, v := range got {
-				selected[v.Name] = true
+				selected[v.ID] = true
 			}
 
 			for name, sel := range sels {
@@ -239,7 +239,7 @@ func selectedVigilNames(t *testing.T, ctx context.Context, sid string) map[strin
 	}
 	names := map[string]bool{}
 	for _, v := range got {
-		names[v.Name] = true
+		names[v.ID] = true
 	}
 	return names
 }

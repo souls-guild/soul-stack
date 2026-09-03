@@ -83,7 +83,7 @@ func (d *AugurDeps) validate() error {
 type augurOmenReader struct{ db augur.ExecQueryRower }
 
 func (r augurOmenReader) OmenByName(ctx context.Context, name string) (*augur.Omen, error) {
-	return augur.SelectOmenByName(ctx, r.db, name)
+	return augur.SelectOmenByID(ctx, r.db, name)
 }
 
 type augurRiteReader struct{ db augur.ExecQueryRower }

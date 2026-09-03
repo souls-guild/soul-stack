@@ -55,7 +55,7 @@ func seedRecoveryIncarnation(t *testing.T, name string, state map[string]any) {
 	}
 	creator := aid
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1",
+		ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, State: state,
 		Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}); err != nil {
@@ -103,7 +103,7 @@ func readIncarnationState(t *testing.T, ctx context.Context, name string) string
 	t.Helper()
 	var s string
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT state::text FROM incarnation WHERE name = $1`, name).Scan(&s); err != nil {
+		`SELECT state::text FROM incarnation WHERE id = $1`, name).Scan(&s); err != nil {
 		t.Fatalf("read incarnation.state: %v", err)
 	}
 	return s

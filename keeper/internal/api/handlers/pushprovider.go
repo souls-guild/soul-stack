@@ -57,15 +57,15 @@ func PushProviderSpecStub() *PushProviderHandler {
 // projects it into these fields. Params — an optional pointer (*map), the handler dereferences
 // it into pushprovider.CreateInput.
 type PushProviderCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/push-providers/{name}/label. nil/blank → NULL, and the consumer
+	// by PUT /v1/push-providers/{id}/label. nil/blank → NULL, and the consumer
 	// shows Name.
 	Label  *string
 	Params *map[string]any
 }
 
-// PushProviderUpdateInput — the NATIVE request form of PUT /v1/push-providers/{name} (handler-
+// PushProviderUpdateInput — the NATIVE request form of PUT /v1/push-providers/{id} (handler-
 // native). Replaces PushProviderUpdateRequest. Replace semantics: params fully
 // replaces the existing set.
 type PushProviderUpdateInput struct {
@@ -78,7 +78,7 @@ type PushProviderUpdateInput struct {
 // Package api projects it into native PushProvider (register func huma_pushprovider.go),
 // the native type fixes the wire field order.
 type PushProviderView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -109,7 +109,7 @@ func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 		params = map[string]any{}
 	}
 	return PushProviderView{
-		Name:         p.Name,
+		ID:           p.ID,
 		Label:        p.Label,
 		Params:       params,
 		CreatedAt:    p.CreatedAt.UTC(),
@@ -125,7 +125,7 @@ func toPushProviderView(p *pushprovider.PushProvider) PushProviderView {
 // VALUEs are NOT put into audit — sensitive invariant).
 type PushProviderWriteReply struct {
 	Body       PushProviderView
-	Name       string
+	ID         string
 	Label      *string
 	ParamsKeys []string
 }
@@ -134,7 +134,7 @@ type PushProviderWriteReply struct {
 // name + params_keys without values). Source for huma variant B.
 func (r PushProviderWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":        r.Name,
+		"id":          r.ID,
 		"label":       r.Label,
 		"params_keys": r.ParamsKeys,
 	}
@@ -145,12 +145,12 @@ func (r PushProviderWriteReply) AuditPayload() middleware.AuditPayload {
 // (201 body + audit fields).
 func (h *PushProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req PushProviderCreateInput) (PushProviderWriteReply, error) {
 	var zero PushProviderWriteReply
-	if req.Name == "" {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'name' is required")}
+	if req.ID == "" {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'id' is required")}
 	}
-	if !pushprovider.ValidName(req.Name) {
+	if !pushprovider.ValidID(req.ID) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'name' must match "+pushprovider.NamePattern)}
+			"field 'id' must match "+pushprovider.IDPattern)}
 	}
 
 	var params map[string]any
@@ -158,80 +158,80 @@ func (h *PushProviderHandler) CreateTyped(ctx context.Context, claims *keeperjwt
 		params = *req.Params
 	}
 	p, err := h.svc.Create(ctx, pushprovider.CreateInput{
-		Name:      req.Name,
+		ID:        req.ID,
 		Label:     req.Label,
 		Params:    params,
 		CallerAID: claims.Subject,
 	})
 	switch {
 	case err == nil:
-		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
+		return PushProviderWriteReply{Body: toPushProviderView(p), ID: p.ID, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypePushProviderExists, "",
-			"push provider "+req.Name+" already exists")}
+			"push provider "+req.ID+" already exists")}
 	case errors.Is(err, pushprovider.ErrSensitiveNotVaultRef):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
 		h.logger.Error("push-provider.create: service failed",
-			slog.String("name", req.Name),
+			slog.String("id", req.ID),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "create push provider failed")}
 	}
 }
 
-// UpdateTyped — the domain function for PUT /v1/push-providers/{name} (handler-native):
+// UpdateTyped — the domain function for PUT /v1/push-providers/{id} (handler-native):
 // replace semantics (req.Params fully replaces the existing set — read-modify-write
 // on the client, NOT presence-tier). path-name validation + svc.Update + sentinel→problem.
 // Errors — *problemError; success — [PushProviderWriteReply] (200 body + audit fields).
-func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt.Claims, name string, req PushProviderUpdateInput) (PushProviderWriteReply, error) {
+func (h *PushProviderHandler) UpdateTyped(ctx context.Context, claims *keeperjwt.Claims, id string, req PushProviderUpdateInput) (PushProviderWriteReply, error) {
 	var zero PushProviderWriteReply
-	if !pushprovider.ValidName(name) {
+	if !pushprovider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+pushprovider.NamePattern)}
+			"path 'id' must match "+pushprovider.IDPattern)}
 	}
 	p, err := h.svc.Update(ctx, pushprovider.UpdateInput{
-		Name:      name,
+		ID:        id,
 		Params:    req.Params,
 		CallerAID: claims.Subject,
 	})
 	switch {
 	case err == nil:
-		return PushProviderWriteReply{Body: toPushProviderView(p), Name: p.Name, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
+		return PushProviderWriteReply{Body: toPushProviderView(p), ID: p.ID, Label: p.Label, ParamsKeys: paramKeysSorted(p.Params)}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+id+" not found")}
 	case errors.Is(err, pushprovider.ErrSensitiveNotVaultRef):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
 		h.logger.Error("push-provider.update: service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "update push provider failed")}
 	}
 }
 
-// SetLabelTyped — domain function for PUT /v1/push-providers/{name}/label
+// SetLabelTyped — domain function for PUT /v1/push-providers/{id}/label
 // (WRITE+AUDIT push-provider.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only 422 this route
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row.
-func (h *PushProviderHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[PushProviderView], error) {
+func (h *PushProviderHandler) SetLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[PushProviderView], error) {
 	var zero LabelWriteReply[PushProviderView]
-	if !pushprovider.ValidName(name) {
+	if !pushprovider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+pushprovider.NamePattern)}
+			"path 'id' must match "+pushprovider.IDPattern)}
 	}
-	p, previous, err := h.svc.SetLabel(ctx, name, req.Label)
+	p, previous, err := h.svc.SetLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[PushProviderView]{Body: toPushProviderView(p), Name: name, Label: p.Label, Previous: previous}, nil
+		return LabelWriteReply[PushProviderView]{Body: toPushProviderView(p), ID: id, Label: p.Label, Previous: previous}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+id+" not found")}
 	default:
-		h.logger.Error("push-provider.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("push-provider.label-set: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set push provider label failed")}
 	}
 }
@@ -239,47 +239,47 @@ func (h *PushProviderHandler) SetLabelTyped(ctx context.Context, name string, re
 // PushProviderDeleteReply — the extracted result of [PushProviderHandler.DeleteTyped]
 // (handler-native). Carries audit fields (the HTTP response is an empty 204 body).
 type PushProviderDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload assembles the audit payload for the delete route (legacy parity: name).
 func (r PushProviderDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteTyped — the domain function for DELETE /v1/push-providers/{name} (handler-native):
+// DeleteTyped — the domain function for DELETE /v1/push-providers/{id} (handler-native):
 // path-name validation + svc.Delete + sentinel→problem. Errors — *problemError; success —
 // [PushProviderDeleteReply].
-func (h *PushProviderHandler) DeleteTyped(ctx context.Context, name string) (PushProviderDeleteReply, error) {
+func (h *PushProviderHandler) DeleteTyped(ctx context.Context, id string) (PushProviderDeleteReply, error) {
 	var zero PushProviderDeleteReply
-	if !pushprovider.ValidName(name) {
+	if !pushprovider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+pushprovider.NamePattern)}
+			"path 'id' must match "+pushprovider.IDPattern)}
 	}
-	err := h.svc.Delete(ctx, name)
+	err := h.svc.Delete(ctx, id)
 	switch {
 	case err == nil:
-		return PushProviderDeleteReply{Name: name}, nil
+		return PushProviderDeleteReply{ID: id}, nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+id+" not found")}
 	default:
 		h.logger.Error("push-provider.delete: service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete push provider failed")}
 	}
 }
 
 // ListTyped — the domain function for GET /v1/push-providers (handler-native, read with typed
-// query, no audit). namePattern (LIKE prefix) + offset/limit arrive already
+// query, no audit). idPattern (LIKE prefix) + offset/limit arrive already
 // validated (huma binds int32; CheckPageBounds enforces the range → 400). A read
 // error → *problemError (500). The items wire shape (toPushProviderView) is preserved.
-func (h *PushProviderHandler) ListTyped(ctx context.Context, namePattern string, offset, limit int) (PushProviderListPage, error) {
+func (h *PushProviderHandler) ListTyped(ctx context.Context, idPattern string, offset, limit int) (PushProviderListPage, error) {
 	var zero PushProviderListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
 	}
-	items, total, err := h.svc.List(ctx, pushprovider.ListFilter{NamePattern: namePattern}, offset, limit)
+	items, total, err := h.svc.List(ctx, pushprovider.ListFilter{IDPattern: idPattern}, offset, limit)
 	if err != nil {
 		h.logger.Error("push-provider.list: service failed",
 			slog.Int("offset", offset),
@@ -299,24 +299,24 @@ func (h *PushProviderHandler) ListTyped(ctx context.Context, namePattern string,
 	}, nil
 }
 
-// GetTyped — the domain function for GET /v1/push-providers/{name} (handler-native, read with path,
+// GetTyped — the domain function for GET /v1/push-providers/{id} (handler-native, read with path,
 // no audit): path-name validation + svc.Get + sentinel→problem (404/422/500). Errors —
 // *problemError; success — [PushProviderView].
-func (h *PushProviderHandler) GetTyped(ctx context.Context, name string) (PushProviderView, error) {
+func (h *PushProviderHandler) GetTyped(ctx context.Context, id string) (PushProviderView, error) {
 	var zero PushProviderView
-	if !pushprovider.ValidName(name) {
+	if !pushprovider.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+pushprovider.NamePattern)}
+			"path 'id' must match "+pushprovider.IDPattern)}
 	}
-	p, err := h.svc.Get(ctx, name)
+	p, err := h.svc.Get(ctx, id)
 	switch {
 	case err == nil:
 		return toPushProviderView(p), nil
 	case errors.Is(err, pushprovider.ErrPushProviderNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "push provider "+id+" not found")}
 	default:
 		h.logger.Error("push-provider.get: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get push provider failed")}
 	}
 }

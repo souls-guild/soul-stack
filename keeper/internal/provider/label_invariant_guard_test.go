@@ -43,7 +43,7 @@ func (v *entityCapturingVault) WriteMap(_ context.Context, domain, entity, field
 
 func guardLabelInput(label *string) CreateInput {
 	return CreateInput{
-		Name:        guardProviderID,
+		ID:          guardProviderID,
 		Label:       label,
 		Type:        "aws",
 		Region:      "eu-west-1",

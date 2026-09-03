@@ -35,10 +35,10 @@ func mustHistoryOutput(t *testing.T, resp jsonRPCResponse) incarnationHistoryOut
 	return out
 }
 
-// readyInc — backing incarnation for the existence probe (SelectByName).
+// readyInc — backing incarnation for the existence probe (SelectByID).
 func readyInc(name string) (*incarnation.Incarnation, error) {
 	now := time.Now().UTC()
-	return &incarnation.Incarnation{Name: name, Service: "redis", ServiceVersion: "v1",
+	return &incarnation.Incarnation{ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady, CreatedAt: now, UpdatedAt: now}, nil
 }
 
@@ -55,7 +55,7 @@ func TestToolsCall_IncarnationHistory_Success(t *testing.T) {
 	}
 	h, _, rec := newTestHandler(t, pool, historianRBAC())
 
-	out := mustHistoryOutput(t, callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"redis-prod"}`))
+	out := mustHistoryOutput(t, callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"redis-prod"}`))
 	if out.Total != 1 || len(out.Items) != 1 {
 		t.Fatalf("total=%d items=%d, want 1/1", out.Total, len(out.Items))
 	}
@@ -71,7 +71,7 @@ func TestToolsCall_IncarnationHistory_Success(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationHistory_NotFound(t *testing.T) {
-	// incFn nil → existence probe SelectByName → ErrNoRows → not-found
+	// incFn nil → existence probe SelectByID → ErrNoRows → not-found
 	// (history must NOT return an empty page for a non-existent name).
 	historyCalled := false
 	pool := &fakePool{
@@ -83,7 +83,7 @@ func TestToolsCall_IncarnationHistory_NotFound(t *testing.T) {
 	pool.incFn = func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }
 	h, _, _ := newTestHandler(t, pool, historianRBAC())
 
-	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -103,7 +103,7 @@ func TestToolsCall_IncarnationHistory_RBACForbidden(t *testing.T) {
 		return readyInc(name)
 	}}
 	h, _, _ := newTestHandler(t, pool, nil)
-	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"redis-prod"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"redis-prod"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -114,7 +114,7 @@ func TestToolsCall_IncarnationHistory_RBACForbidden(t *testing.T) {
 
 func TestToolsCall_IncarnationHistory_BadApplyID(t *testing.T) {
 	h, _, _ := newTestHandler(t, &fakePool{}, historianRBAC())
-	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"redis-prod","apply_id":"not-a-ulid"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"redis-prod","apply_id":"not-a-ulid"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -136,7 +136,7 @@ func TestToolsCall_IncarnationHistory_SecretsMasked(t *testing.T) {
 		},
 	}
 	h, _, _ := newTestHandler(t, pool, historianRBAC())
-	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"redis-prod"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"redis-prod"}`)
 	out := mustHistoryOutput(t, resp)
 	if out.Items[0].StateBefore["password"] != masked {
 		t.Errorf("state_before.password not masked: %v", out.Items[0].StateBefore["password"])

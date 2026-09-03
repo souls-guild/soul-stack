@@ -90,7 +90,7 @@ func setupProvider(t *testing.T) {
 	}
 	aid := "archon-alice"
 	p := &provider.Provider{
-		Name: "aws-eu", Type: "aws", Region: "eu-central-1",
+		ID: "aws-eu", Type: "aws", Region: "eu-central-1",
 		CredentialsRef: "vault:secret/cloud/aws-eu", CreatedByAID: &aid,
 	}
 	if err := provider.Insert(ctx, integrationPool, p); err != nil {
@@ -100,7 +100,7 @@ func setupProvider(t *testing.T) {
 
 func newProfile(name, providerName, aid string) *Profile {
 	return &Profile{
-		Name:         name,
+		ID:           name,
 		Provider:     providerName,
 		Params:       map[string]any{"instance_type": "t3.small"},
 		CreatedByAID: &aid,
@@ -121,11 +121,11 @@ func TestIntegration_Insert_AndSelect(t *testing.T) {
 		t.Errorf("CreatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "web-small")
+	got, err := SelectByID(ctx, integrationPool, "web-small")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if got.Name != "web-small" || got.Provider != "aws-eu" {
+	if got.ID != "web-small" || got.Provider != "aws-eu" {
 		t.Errorf("got = %+v", got)
 	}
 	if got.Params["instance_type"] != "t3.small" {
@@ -177,19 +177,19 @@ func TestIntegration_ProviderDelete_Restricted(t *testing.T) {
 	if err := Insert(ctx, integrationPool, newProfile("web-small", "aws-eu", "archon-alice")); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	_, err := integrationPool.Exec(ctx, `DELETE FROM providers WHERE name = 'aws-eu'`)
+	_, err := integrationPool.Exec(ctx, `DELETE FROM providers WHERE id = 'aws-eu'`)
 	if err == nil {
 		t.Fatal("DELETE provider with dependent profile: expected RESTRICT violation")
 	}
 	// Profile must remain.
-	if _, err := SelectByName(ctx, integrationPool, "web-small"); err != nil {
+	if _, err := SelectByID(ctx, integrationPool, "web-small"); err != nil {
 		t.Errorf("profile gone after blocked provider delete: %v", err)
 	}
 }
 
 func TestIntegration_SelectByName_NotFound(t *testing.T) {
 	setupProvider(t)
-	_, err := SelectByName(context.Background(), integrationPool, "missing")
+	_, err := SelectByID(context.Background(), integrationPool, "missing")
 	if !errors.Is(err, ErrProfileNotFound) {
 		t.Fatalf("err = %v, want ErrProfileNotFound", err)
 	}
@@ -201,7 +201,7 @@ func TestIntegration_SelectAll_AndByProvider(t *testing.T) {
 	// Second Provider for filter verification.
 	aid := "archon-alice"
 	if err := provider.Insert(ctx, integrationPool, &provider.Provider{
-		Name: "yc-ru", Type: "yc", Region: "ru-central1",
+		ID: "yc-ru", Type: "yc", Region: "ru-central1",
 		CredentialsRef: "vault:secret/cloud/yc-ru", CreatedByAID: &aid,
 	}); err != nil {
 		t.Fatalf("seed second provider: %v", err)
@@ -233,7 +233,7 @@ func TestIntegration_SelectAll_AndByProvider(t *testing.T) {
 	}
 	for _, p := range byProv {
 		if p.Provider != "aws-eu" {
-			t.Errorf("SelectByProvider returned %q-provider profile %q", p.Provider, p.Name)
+			t.Errorf("SelectByProvider returned %q-provider profile %q", p.Provider, p.ID)
 		}
 	}
 

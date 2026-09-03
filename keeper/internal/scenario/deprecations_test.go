@@ -58,7 +58,7 @@ tasks:
 
 	byParam := map[string]*DeprecationUsage{}
 	gaps := map[string]*DeprecationGap{}
-	members := []incarnation.Incarnation{{Name: "demo-a"}, {Name: "demo-b"}}
+	members := []incarnation.Incarnation{{ID: "demo-a"}, {ID: "demo-b"}}
 	s.surveyDefinition(art, definitionKey{service: "demo", version: "v1"},
 		members, incarnationNames(members), nil, byParam, gaps)
 
@@ -111,7 +111,7 @@ tasks:
 
 	byParam := map[string]*DeprecationUsage{}
 	gaps := map[string]*DeprecationGap{}
-	members := []incarnation.Incarnation{{Name: "demo-a"}}
+	members := []incarnation.Incarnation{{ID: "demo-a"}}
 	s.surveyDefinition(art, definitionKey{service: "demo", version: "v1"},
 		members, incarnationNames(members), nil, byParam, gaps)
 
@@ -140,7 +140,7 @@ tasks:
 
 	byParam := map[string]*DeprecationUsage{}
 	gaps := map[string]*DeprecationGap{}
-	members := []incarnation.Incarnation{{Name: "redis-prod"}}
+	members := []incarnation.Incarnation{{ID: "redis-prod"}}
 	s.surveyDefinition(art, definitionKey{service: "redis", version: "v2"},
 		members, incarnationNames(members), nil, byParam, gaps)
 
@@ -170,7 +170,7 @@ func TestSurvey_UnparseableScenarioBecomesAGap(t *testing.T) {
 
 	byParam := map[string]*DeprecationUsage{}
 	gaps := map[string]*DeprecationGap{}
-	members := []incarnation.Incarnation{{Name: "demo-a"}}
+	members := []incarnation.Incarnation{{ID: "demo-a"}}
 	s.surveyDefinition(art, definitionKey{service: "demo", version: "v1"},
 		members, incarnationNames(members), nil, byParam, gaps)
 
@@ -271,7 +271,7 @@ tasks:
 
 	byParam := map[string]*DeprecationUsage{}
 	gaps := map[string]*DeprecationGap{}
-	members := []incarnation.Incarnation{{Name: "redis-prod"}, {Name: "redis-stage"}}
+	members := []incarnation.Incarnation{{ID: "redis-prod"}, {ID: "redis-stage"}}
 	s.surveyDefinition(art, definitionKey{service: "redis", version: "v2"},
 		members, incarnationNames(members), catalog, byParam, gaps)
 

@@ -130,7 +130,7 @@ func (f *fakeCadenceStore) QueryRow(_ context.Context, sql string, args ...any) 
 		}
 		return cadenceScalarRow{vals: []any{time.Now().UTC(), time.Now().UTC()}}
 	case strings.Contains(sql, "FROM heralds"):
-		// Channel existence check in prepareNotify (SelectHeraldByName). heraldKnown=nil
+		// Channel existence check in prepareNotify (SelectHeraldByID). heraldKnown=nil
 		// → any herald exists (minimal Herald row). Otherwise match by name.
 		name, _ := args[0].(string)
 		if f.heraldKnown != nil {

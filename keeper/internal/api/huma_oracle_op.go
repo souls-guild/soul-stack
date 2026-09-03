@@ -34,9 +34,9 @@ type vigilCreateInput struct {
 // CreateVigilTyped (422). required:"true" — missing→422; additionalProperties:false → unknown→400.
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec → VigilCreateRequest).
 type VigilCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name (kebab-case, 1..63)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/vigils/{name}/label.
+	// by PUT /v1/vigils/{id}/label.
 	Label    *string          `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Subject  Subject          `json:"subject" required:"true" doc:"which hosts run the check — exactly one of sid / incarnation / coven / trait"`
 	Interval string           `json:"interval" required:"true" doc:"check frequency (duration convention, e.g. '30s')"`
@@ -102,28 +102,28 @@ func vigilListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/vigils/{name} (get) — READ-with-path (no audit) ===
+// === GET /v1/vigils/{id} (get) — READ-with-path (no audit) ===
 
-// vigilGetInput — huma input GET /v1/vigils/{name}. Name — path. The name format
+// vigilGetInput — huma input GET /v1/vigils/{id}. Name — path. The name format
 // (reOracleName) is domain validation in GetVigilTyped (422).
 type vigilGetInput struct {
-	Name string `path:"name" doc:"Vigil name"`
+	ID string `path:"id" doc:"Vigil name"`
 }
 
-// vigilGetOutput — huma output GET /v1/vigils/{name} (FULL-TYPED). Body — the native
+// vigilGetOutput — huma output GET /v1/vigils/{id} (FULL-TYPED). Body — the native
 // 200 body (VigilView). The wire shape is pinned by a golden test.
 type vigilGetOutput struct {
 	Body VigilView
 }
 
-// vigilGetOperation — metadata for GET /v1/vigils/{name}. DefaultStatus=200. READ route:
+// vigilGetOperation — metadata for GET /v1/vigils/{id}. DefaultStatus=200. READ route:
 // audit not wired. Permission vigil.list (read is covered by the list permission). Errors: 403,
 // 404, 422 bad path-name, 500.
 func vigilGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getVigil",
 		Method:        http.MethodGet,
-		Path:          "/vigils/{name}",
+		Path:          "/vigils/{id}",
 		Summary:       "Vigil card",
 		Description:   "Metadata of a single Vigil by name (ADR-030). Permission vigil.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"oracle"},
@@ -132,11 +132,11 @@ func vigilGetOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/vigils/{name} (delete) — WRITE+AUDIT vigil.deleted ===
+// === DELETE /v1/vigils/{id} (delete) — WRITE+AUDIT vigil.deleted ===
 
-// vigilDeleteInput — huma input DELETE /v1/vigils/{name}. Name — path. No Body.
+// vigilDeleteInput — huma input DELETE /v1/vigils/{id}. Name — path. No Body.
 type vigilDeleteInput struct {
-	Name string `path:"name" doc:"Vigil name"`
+	ID string `path:"id" doc:"Vigil name"`
 }
 
 // oracleNoContentOutput — the shared huma output for 204 write routes of oracle (vigil.delete /
@@ -146,10 +146,10 @@ type oracleNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// === PUT /v1/vigils/{name}/label (label-set) — WRITE+AUDIT vigil.label_changed ===
+// === PUT /v1/vigils/{id}/label (label-set) — WRITE+AUDIT vigil.label_changed ===
 
 type vigilSetLabelInput struct {
-	Name string `path:"name" doc:"Vigil name"`
+	ID   string `path:"id" doc:"Vigil name"`
 	Body LabelSetRequest
 }
 
@@ -161,7 +161,7 @@ func vigilSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setVigilLabel",
 		Method:        http.MethodPut,
-		Path:          "/vigils/{name}/label",
+		Path:          "/vigils/{id}/label",
 		Summary:       "Set the Vigil display caption",
 		Description:   "Replaces the display caption of one Vigil (ADR-0085). Permission vigil.label-set, audit vigil.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a VigilSnapshot were already told what to run. The caption participates in nothing derived - a Decree reacts through `on_beacon`, which is the name - so changing it moves nothing.",
 		Tags:          []string{"oracle"},
@@ -170,14 +170,14 @@ func vigilSetLabelOperation() huma.Operation {
 	}
 }
 
-// vigilDeleteOperation — metadata for DELETE /v1/vigils/{name}. DefaultStatus=204.
+// vigilDeleteOperation — metadata for DELETE /v1/vigils/{id}. DefaultStatus=204.
 // Permission vigil.delete + audit vigil.deleted. Errors: 403, 404, 422 bad path-name,
 // 500.
 func vigilDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteVigil",
 		Method:        http.MethodDelete,
-		Path:          "/vigils/{name}",
+		Path:          "/vigils/{id}",
 		Summary:       "Delete Vigil",
 		Description:   "Deletes a Vigil from the oracle registry (ADR-030). Permission vigil.delete. 404 -- record absent.",
 		Tags:          []string{"oracle"},
@@ -204,9 +204,9 @@ type decreeCreateInput struct {
 // the first says WHO may fire it, the second WHAT the reaction acts on.
 // The struct name = the contract schema name in OpenAPI (committed hand-written spec → DecreeCreateRequest).
 type DecreeCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Decree name (kebab-case, 1..63)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/decrees/{name}/label.
+	// by PUT /v1/decrees/{id}/label.
 	Label           *string          `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	OnBeacon        string           `json:"on_beacon" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Vigil name whose Portent the rule reacts to"`
 	Subject         Subject          `json:"subject" required:"true" doc:"which hosts may fire the rule — exactly one of sid / incarnation / coven / trait"`
@@ -273,28 +273,28 @@ func decreeListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/decrees/{name} (get) — READ-with-path (no audit) ===
+// === GET /v1/decrees/{id} (get) — READ-with-path (no audit) ===
 
-// decreeGetInput — huma input GET /v1/decrees/{name}. Name — path. The name format is
+// decreeGetInput — huma input GET /v1/decrees/{id}. Name — path. The name format is
 // domain validation in GetDecreeTyped (422).
 type decreeGetInput struct {
-	Name string `path:"name" doc:"Decree name"`
+	ID string `path:"id" doc:"Decree name"`
 }
 
-// decreeGetOutput — huma output GET /v1/decrees/{name} (FULL-TYPED). Body — the native
+// decreeGetOutput — huma output GET /v1/decrees/{id} (FULL-TYPED). Body — the native
 // 200 body (DecreeView).
 type decreeGetOutput struct {
 	Body DecreeView
 }
 
-// decreeGetOperation — metadata for GET /v1/decrees/{name}. DefaultStatus=200.
+// decreeGetOperation — metadata for GET /v1/decrees/{id}. DefaultStatus=200.
 // READ route: audit not wired. Permission decree.list (read is covered by the list permission).
 // Errors: 403, 404, 422 bad path-name, 500.
 func decreeGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getDecree",
 		Method:        http.MethodGet,
-		Path:          "/decrees/{name}",
+		Path:          "/decrees/{id}",
 		Summary:       "Decree card",
 		Description:   "Metadata of a single Decree by name (ADR-030). Permission decree.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"oracle"},
@@ -303,17 +303,17 @@ func decreeGetOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/decrees/{name} (delete) — WRITE+AUDIT decree.deleted ===
+// === DELETE /v1/decrees/{id} (delete) — WRITE+AUDIT decree.deleted ===
 
-// decreeDeleteInput — huma input DELETE /v1/decrees/{name}. Name — path. No Body.
+// decreeDeleteInput — huma input DELETE /v1/decrees/{id}. Name — path. No Body.
 type decreeDeleteInput struct {
-	Name string `path:"name" doc:"Decree name"`
+	ID string `path:"id" doc:"Decree name"`
 }
 
-// === PUT /v1/decrees/{name}/label (label-set) — WRITE+AUDIT decree.label_changed ===
+// === PUT /v1/decrees/{id}/label (label-set) — WRITE+AUDIT decree.label_changed ===
 
 type decreeSetLabelInput struct {
-	Name string `path:"name" doc:"Decree name"`
+	ID   string `path:"id" doc:"Decree name"`
 	Body LabelSetRequest
 }
 
@@ -325,7 +325,7 @@ func decreeSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setDecreeLabel",
 		Method:        http.MethodPut,
-		Path:          "/decrees/{name}/label",
+		Path:          "/decrees/{id}/label",
 		Summary:       "Set the Decree display caption",
 		Description:   "Replaces the display caption of one Decree (ADR-0085). Permission decree.label-set, audit decree.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The reactor is untouched: cooldown state (oracle_fires) and the circuit breaker (oracle_circuit) are keyed on the name, so no trigger history moves and no breaker resets.",
 		Tags:          []string{"oracle"},
@@ -334,14 +334,14 @@ func decreeSetLabelOperation() huma.Operation {
 	}
 }
 
-// decreeDeleteOperation — metadata for DELETE /v1/decrees/{name}. DefaultStatus=204.
+// decreeDeleteOperation — metadata for DELETE /v1/decrees/{id}. DefaultStatus=204.
 // Permission decree.delete + audit decree.deleted (cascade clears cooldown state).
 // Errors: 403, 404, 422 bad path-name, 500.
 func decreeDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteDecree",
 		Method:        http.MethodDelete,
-		Path:          "/decrees/{name}",
+		Path:          "/decrees/{id}",
 		Summary:       "Delete Decree",
 		Description:   "Deletes a Decree cascading (cooldown state, ADR-030). Permission decree.delete. 404 -- record absent.",
 		Tags:          []string{"oracle"},

@@ -34,7 +34,7 @@ func TestIsHeraldOwnEvent(t *testing.T) {
 // (invalid on CRUD) and verify: no jobs on herald.*.
 func TestDispatch_HeraldOwnEvents_NoLoop(t *testing.T) {
 	q := &fakeQueue{}
-	rule := &Tiding{Name: "evil-loop", Herald: "ch", EventTypes: []string{"herald.*"}, Enabled: true}
+	rule := &Tiding{ID: "evil-loop", Herald: "ch", EventTypes: []string{"herald.*"}, Enabled: true}
 	d := NewDispatcher(DispatcherConfig{Source: &staticSource{rules: []*Tiding{rule}}, Queue: q})
 
 	for _, et := range []audit.EventType{audit.EventHeraldDelivered, audit.EventHeraldFailed} {
@@ -50,7 +50,7 @@ func TestDispatch_HeraldOwnEvents_NoLoop(t *testing.T) {
 // run events (regression safety: guard is not too broad).
 func TestDispatch_RunEvent_StillMatches(t *testing.T) {
 	q := &fakeQueue{}
-	rule := &Tiding{Name: "ok", Herald: "ch", EventTypes: []string{"scenario_run.*"}, Enabled: true}
+	rule := &Tiding{ID: "ok", Herald: "ch", EventTypes: []string{"scenario_run.*"}, Enabled: true}
 	d := NewDispatcher(DispatcherConfig{Source: &staticSource{rules: []*Tiding{rule}}, Queue: q})
 
 	d.Dispatch(context.Background(), &audit.Event{EventType: audit.EventScenarioRunFailed})

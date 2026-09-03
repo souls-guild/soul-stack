@@ -34,7 +34,7 @@ func TestPurviewSQL_CovenIsOwnColumnOnly(t *testing.T) {
 	if strings.Contains(sql, "incarnation_membership") {
 		t.Fatalf("coven scope reaches the host's incarnations — a label an operator never attached to the host would grant access:\n%s", sql)
 	}
-	if strings.Contains(sql, "i.name") {
+	if strings.Contains(sql, "i.id") {
 		t.Fatalf("an incarnation's name is being matched as a coven tag:\n%s", sql)
 	}
 	if len(args) != 1 {

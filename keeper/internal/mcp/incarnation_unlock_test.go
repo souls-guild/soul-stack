@@ -25,7 +25,7 @@ func unlockerRBAC() *rbactest.Config {
 func incWithStatus(status incarnation.Status) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
-		return &incarnation.Incarnation{Name: name, Service: "redis", ServiceVersion: "v1",
+		return &incarnation.Incarnation{ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: status, State: map[string]any{}, CreatedAt: now, UpdatedAt: now}, nil
 	}
 }
@@ -35,7 +35,7 @@ func TestToolsCall_IncarnationUnlock_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, unlockerRBAC(), nil, nil, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock",
-		`{"name":"redis-prod","reason":"manual recovery"}`)
+		`{"id":"redis-prod","reason":"manual recovery"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -76,7 +76,7 @@ func TestToolsCall_IncarnationUnlock_NotLocked(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	h, rec := newTestHandlerFull(t, pool, unlockerRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock",
-		`{"name":"redis-prod","reason":"x"}`)
+		`{"id":"redis-prod","reason":"x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -92,7 +92,7 @@ func TestToolsCall_IncarnationUnlock_NotFound(t *testing.T) {
 	pool := &fakePool{incFn: func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }}
 	h, _ := newTestHandlerFull(t, pool, unlockerRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock",
-		`{"name":"ghost","reason":"x"}`)
+		`{"id":"ghost","reason":"x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -108,7 +108,7 @@ func TestToolsCall_IncarnationUnlock_RBACForbidden(t *testing.T) {
 	}
 	h, rec := newTestHandlerFull(t, pool, nil, nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock",
-		`{"name":"redis-prod","reason":"x"}`)
+		`{"id":"redis-prod","reason":"x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -122,7 +122,7 @@ func TestToolsCall_IncarnationUnlock_RBACForbidden(t *testing.T) {
 
 func TestToolsCall_IncarnationUnlock_MissingReason(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, unlockerRBAC(), nil, nil, nil)
-	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock", `{"name":"redis-prod"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock", `{"id":"redis-prod"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

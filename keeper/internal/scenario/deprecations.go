@@ -225,7 +225,7 @@ func (s *DeprecationScanner) surveyDefinition(
 			}
 			for _, inc := range members {
 				agg.Sites = append(agg.Sites, DeprecationSite{
-					Incarnation:    inc.Name,
+					Incarnation:    inc.ID,
 					Service:        k.service,
 					ServiceVersion: k.version,
 					Scenario:       name,
@@ -293,7 +293,7 @@ func (s *DeprecationScanner) scenarioTasks(art *artifact.ServiceArtifact, scenar
 func incarnationNames(incs []incarnation.Incarnation) []string {
 	out := make([]string, 0, len(incs))
 	for _, i := range incs {
-		out = append(out, i.Name)
+		out = append(out, i.ID)
 	}
 	sort.Strings(out)
 	return out

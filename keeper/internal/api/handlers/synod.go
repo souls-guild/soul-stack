@@ -123,7 +123,7 @@ func (r SynodCreateReply) AuditPayload() middleware.AuditPayload {
 func (h *SynodHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, req SynodCreateInput) (SynodCreateReply, error) {
 	var zero SynodCreateReply
 	if req.Name == "" {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'name' is required")}
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'id' is required")}
 	}
 
 	var description string

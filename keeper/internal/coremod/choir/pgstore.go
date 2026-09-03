@@ -35,7 +35,7 @@ func (s *PGStore) RemoveVoice(ctx context.Context, incarnation, choirName, sid s
 	return keeperchoir.RemoveVoice(ctx, s.Pool, incarnation, choirName, sid)
 }
 
-const incarnationExistsSQL = `SELECT 1 FROM incarnation WHERE name = $1`
+const incarnationExistsSQL = `SELECT 1 FROM incarnation WHERE id = $1`
 
 // IncarnationExists is a lightweight existence check for the incarnation (SELECT 1,
 // no spec/state deserialization). Used by the module's absent branch as a substitute

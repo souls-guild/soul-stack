@@ -29,7 +29,7 @@ import (
 // Returns (name, applying_by_kid, applying_apply_id) — phase 2 queries
 // Conclave about applying_by_kid, phase 3 releases via applying_apply_id.
 const orphanApplyingCandidatesSQL = `
-SELECT name, applying_by_kid, applying_apply_id
+SELECT id, applying_by_kid, applying_apply_id
 FROM incarnation
 WHERE status = 'applying'
   AND applying_since < $1

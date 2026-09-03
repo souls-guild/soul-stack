@@ -15,7 +15,7 @@ func incWithCovens(covens []string) func(string) (*incarnation.Incarnation, erro
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
 		return &incarnation.Incarnation{
-			Name: name, Service: "redis", ServiceVersion: "v1",
+			ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusReady,
 			State: map[string]any{}, Covens: covens,
 			CreatedAt: now, UpdatedAt: now,
@@ -78,7 +78,7 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 		h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.run on coven=dev"),
 			&mcpStarter{}, &mcpResolver{ok: true}, nil)
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-			`{"name":"redis-prod","scenario":"rotate"}`)
+			`{"id":"redis-prod","scenario":"rotate"}`)
 		expectForbidden(t, resp, "run")
 	})
 
@@ -86,7 +86,7 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 		h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.upgrade on coven=dev"),
 			nil, &mcpResolver{ok: true}, &mcpLoader{targetSchema: 2})
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-			`{"name":"redis-prod","to_version":"v2"}`)
+			`{"id":"redis-prod","to_version":"v2"}`)
 		expectForbidden(t, resp, "upgrade")
 	})
 
@@ -95,7 +95,7 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 		h, _ := newTestHandlerDestroy(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.destroy on coven=dev"),
 			destroyer, true)
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-			`{"name":"redis-prod","allow_destroy":false}`)
+			`{"id":"redis-prod","allow_destroy":false}`)
 		expectForbidden(t, resp, "destroy")
 		if destroyer.calls != 0 {
 			t.Error("denied destroy must not start teardown")
@@ -104,13 +104,13 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 
 	t.Run("get", func(t *testing.T) {
 		h, _, _ := newTestHandler(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.get on coven=dev"))
-		resp := callTool(t, h, "archon-alice", "keeper.incarnation.get", `{"name":"redis-prod"}`)
+		resp := callTool(t, h, "archon-alice", "keeper.incarnation.get", `{"id":"redis-prod"}`)
 		expectForbidden(t, resp, "get")
 	})
 
 	t.Run("history", func(t *testing.T) {
 		h, _, _ := newTestHandler(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.history on coven=dev"))
-		resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"name":"redis-prod"}`)
+		resp := callTool(t, h, "archon-alice", "keeper.incarnation.history", `{"id":"redis-prod"}`)
 		expectForbidden(t, resp, "history")
 	})
 
@@ -123,7 +123,7 @@ func TestToolsCall_IncarnationScope_DevCannotTouchProd(t *testing.T) {
 		}
 		h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.unlock on coven=dev"), nil, nil, nil)
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.unlock",
-			`{"name":"redis-prod","reason":"x"}`)
+			`{"id":"redis-prod","reason":"x"}`)
 		expectForbidden(t, resp, "unlock")
 	})
 }
@@ -136,7 +136,7 @@ func TestToolsCall_IncarnationScope_MatchingCovenPasses(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.run on coven=prod"),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	expectNotForbidden(t, resp, "run")
 	if resp.Error != nil {
 		t.Fatalf("matching coven should fully pass: %+v", resp.Error)
@@ -154,7 +154,7 @@ func TestToolsCall_IncarnationScope_NameAsCovenDenied(t *testing.T) {
 	}, scopedRBAC("incarnation.run on coven=redis-prod"),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	expectForbidden(t, resp, "run")
 }
 
@@ -165,7 +165,7 @@ func TestToolsCall_IncarnationScope_NameAsIncarnationPasses(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: noCovens}, scopedRBAC("incarnation.run on incarnation=redis-prod"),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	expectNotForbidden(t, resp, "run")
 	if resp.Error != nil {
 		t.Fatalf("incarnation=<name> should fully pass: %+v", resp.Error)
@@ -180,7 +180,7 @@ func TestToolsCall_IncarnationScope_BarePermissionPasses(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, scopedRBAC("incarnation.run"),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	expectNotForbidden(t, resp, "run")
 	if resp.Error != nil {
 		t.Fatalf("bare permission should fully pass: %+v", resp.Error)
@@ -194,7 +194,7 @@ func TestToolsCall_IncarnationScope_WildcardPasses(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{incFn: prod}, wildcardRBAC(),
 		&mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	expectNotForbidden(t, resp, "run")
 	if resp.Error != nil {
 		t.Fatalf("wildcard should fully pass: %+v", resp.Error)

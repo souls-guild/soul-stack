@@ -872,9 +872,9 @@ func (h *CadenceHandler) checkTargetScopeErr(ctx context.Context, aid, kind stri
 		}
 	}
 	for _, name := range target.Incarnations {
-		if !incarnation.ValidName(name) {
+		if !incarnation.ValidID(name) {
 			return &problemError{problem.New(problem.TypeValidationFailed, "",
-				"target.incarnations: name "+name+" must match "+incarnation.NamePattern)}
+				"target.incarnations: name "+name+" must match "+incarnation.IDPattern)}
 		}
 	}
 
@@ -915,14 +915,14 @@ func (h *CadenceHandler) checkTargetScopeErr(ctx context.Context, aid, kind stri
 		return nil
 	}
 	for _, name := range resolved {
-		inc, sErr := incarnation.SelectByName(ctx, h.incReader, name)
+		inc, sErr := incarnation.SelectByID(ctx, h.incReader, name)
 		if sErr != nil {
 			h.logger.Error("cadence.scope: scope-check select failed",
 				slog.String("incarnation", name), slog.Any("error", sErr))
 			return &problemError{problem.New(problem.TypeInternalError, "",
 				"cadence scope check failed")}
 		}
-		contexts := incarnationCovenContexts(inc.Name, inc.Service, inc.Covens)
+		contexts := incarnationCovenContexts(inc.ID, inc.Service, inc.Covens)
 		if !h.allowedAnyContext(aid, "incarnation", "run", contexts) {
 			return &problemError{problem.New(problem.TypeForbidden, "",
 				"cadence recipe target outside operator scope: incarnation.run on resolved incarnation "+name)}

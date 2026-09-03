@@ -46,7 +46,7 @@ func (d *statePageDB) QueryRow(_ context.Context, sql string, args ...any) pgx.R
 }
 
 func (d *statePageDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
-	if !strings.Contains(sql, "SELECT name") {
+	if !strings.Contains(sql, "SELECT id") {
 		return nil, fmt.Errorf("statePageDB: unexpected Query: %s", sql)
 	}
 	d.queryCalls++
@@ -91,7 +91,7 @@ func incToStaticRow(inc *Incarnation) staticRow {
 	// nil columns are passed as an untyped nil: assign distinguishes NULL by
 	// `src == nil` (a typed nil pointer in interface{} != nil).
 	return staticRow{values: []any{
-		inc.Name,
+		inc.ID,
 		inc.Service,
 		"v1",
 		1,
@@ -110,7 +110,7 @@ func incToStaticRow(inc *Incarnation) staticRow {
 }
 
 func newStated(name string, state map[string]any) *Incarnation {
-	return &Incarnation{Name: name, Service: "redis", State: state}
+	return &Incarnation{ID: name, Service: "redis", State: state}
 }
 
 func collectPages(t *testing.T, l *StateLister, base statepredicate.BaseFilter) []statepredicate.Stated {

@@ -23,7 +23,7 @@ import (
 
 // providerViewOut — JSON shape of the output (same as the HTTP handler).
 type providerViewOut struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent when the row carries none, and
 	// a consumer then shows `name`.
 	Label          *string   `json:"label,omitempty"`
@@ -36,7 +36,7 @@ type providerViewOut struct {
 
 func toProviderViewOut(p *provider.Provider) providerViewOut {
 	return providerViewOut{
-		Name:           p.Name,
+		ID:             p.ID,
 		Label:          p.Label,
 		Type:           p.Type,
 		Region:         p.Region,
@@ -47,7 +47,7 @@ func toProviderViewOut(p *provider.Provider) providerViewOut {
 }
 
 type providerCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.provider.label-set.
 	Label          *string `json:"label"`
@@ -71,14 +71,14 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !provider.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+provider.NamePattern)
+	if !provider.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+provider.IDPattern)
 	}
-	if !provider.ValidName(a.Type) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'type' must match "+provider.NamePattern)
+	if !provider.ValidID(a.Type) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'type' must match "+provider.IDPattern)
 	}
 	if a.Region == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'region' is required")
@@ -91,7 +91,7 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 	}
 
 	p, err := h.deps.ProviderSvc.Create(ctx, provider.CreateInput{
-		Name:           a.Name,
+		ID:             a.ID,
 		Label:          a.Label,
 		Type:           a.Type,
 		Region:         a.Region,
@@ -101,19 +101,19 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 	})
 	if err != nil {
 		if errors.Is(err, provider.ErrProviderAlreadyExists) {
-			return h.toolError(req.ID, toolName, mcpCodeProviderExists, "provider "+a.Name+" already exists")
+			return h.toolError(req.ID, toolName, mcpCodeProviderExists, "provider "+a.ID+" already exists")
 		}
 		if provider.IsValidationError(err) {
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, provider.PublicMessage(err))
 		}
-		h.deps.Logger.Error("mcp: provider.create failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: provider.create failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create provider failed")
 	}
 
 	// Audit: credentials_ref is written as a PATH (not secret); plaintext_ingested
 	// marks that keeper wrote credentials (ADR-064), without the plaintext.
 	auditPayload := map[string]any{
-		"name":            p.Name,
+		"id":              p.ID,
 		"type":            p.Type,
 		"region":          p.Region,
 		"credentials_ref": p.CredentialsRef,
@@ -126,8 +126,8 @@ func (h *Handler) callProviderCreate(ctx context.Context, claims *jwt.Claims, re
 	return h.toolResult(req.ID, toProviderViewOut(p))
 }
 
-type providerByNameArgs struct {
-	Name string `json:"name"`
+type providerByIDArgs struct {
+	ID string `json:"id"`
 }
 
 func (h *Handler) callProviderRead(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
@@ -135,24 +135,24 @@ func (h *Handler) callProviderRead(ctx context.Context, claims *jwt.Claims, req 
 	if h.deps.ProviderSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "provider registry is not configured")
 	}
-	var a providerByNameArgs
+	var a providerByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "provider", "read", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission provider.read")
 	}
-	p, err := h.deps.ProviderSvc.Get(ctx, a.Name)
+	p, err := h.deps.ProviderSvc.Get(ctx, a.ID)
 	if err != nil {
 		if errors.Is(err, provider.ErrProviderNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "provider "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "provider "+a.ID+" not found")
 		}
-		h.deps.Logger.Error("mcp: provider.read failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: provider.read failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read provider failed")
 	}
 	return h.toolResult(req.ID, toProviderViewOut(p))
@@ -163,56 +163,56 @@ func (h *Handler) callProviderDelete(ctx context.Context, claims *jwt.Claims, re
 	if h.deps.ProviderSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "provider registry is not configured")
 	}
-	var a providerByNameArgs
+	var a providerByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !provider.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+provider.NamePattern)
+	if !provider.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+provider.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "provider", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission provider.delete")
 	}
-	err := h.deps.ProviderSvc.Delete(ctx, a.Name)
+	err := h.deps.ProviderSvc.Delete(ctx, a.ID)
 	if err != nil {
 		switch {
 		case errors.Is(err, provider.ErrProviderNotFound):
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "provider "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "provider "+a.ID+" not found")
 		case errors.Is(err, provider.ErrProviderHasProfiles):
 			return h.toolError(req.ID, toolName, mcpCodeProviderHasProfiles,
-				"provider "+a.Name+" has dependent profiles; delete them first")
+				"provider "+a.ID+" has dependent profiles; delete them first")
 		}
-		h.deps.Logger.Error("mcp: provider.delete failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: provider.delete failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "delete provider failed")
 	}
-	h.writeAudit(audit.EventProviderDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(audit.EventProviderDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 
 // callProviderSetLabel — keeper.provider.label-set, the MCP mirror of
-// PUT /v1/providers/{name}/label (ADR-0085). The registry's only mutation.
+// PUT /v1/providers/{id}/label (ADR-0085). The registry's only mutation.
 func (h *Handler) callProviderSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[providerViewOut]{
 		tool:          "keeper.provider.label-set",
 		resource:      "provider",
 		configured:    h.deps.ProviderSvc != nil,
 		notConfigured: "provider registry is not configured",
-		validName:     provider.ValidName,
-		namePattern:   provider.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (providerViewOut, *string, error) {
-			p, previous, err := h.deps.ProviderSvc.SetLabel(ctx, name, label)
+		validID:       provider.ValidID,
+		idPattern:     provider.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (providerViewOut, *string, error) {
+			p, previous, err := h.deps.ProviderSvc.SetLabel(ctx, id, label)
 			if err != nil {
 				return providerViewOut{}, nil, err
 			}
 			return toProviderViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, provider.ErrProviderNotFound) },
-		notFoundf:  func(name string) string { return "provider " + name + " not found" },
+		notFoundf:  func(id string) string { return "provider " + id + " not found" },
 		failMsg:    "set provider label failed",
 		event:      audit.EventProviderLabelChanged,
 	})

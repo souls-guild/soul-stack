@@ -18,7 +18,7 @@ type ScopeColumns struct {
 	Coven       string // TEXT[] column (overlap), e.g. "souls.coven"
 	Host        string // TEXT column matched by host, e.g. "souls.sid"
 	Service     string // TEXT column, e.g. "i.service"
-	Incarnation string // TEXT column, e.g. "i.name"
+	Incarnation string // TEXT column, e.g. "i.id"
 	Traits      string // jsonb column, e.g. "souls.traits"
 }
 

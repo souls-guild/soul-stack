@@ -36,9 +36,9 @@ type heraldCreateInput struct {
 // CreateHeraldTyped (422). The struct name = the contract schema name in the OpenAPI
 // (committed hand-written spec → HeraldCreateRequest).
 type HeraldCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), unique in the cluster"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (kebab-case, 1..63), unique in the cluster"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/heralds/{name}/label. No pattern — capitals and spaces are the
+	// by PUT /v1/heralds/{id}/label. No pattern — capitals and spaces are the
 	// point. `name`, not this, is the `<entity>` segment of the channel's
 	// derived Vault path.
 	Label     *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
@@ -110,28 +110,28 @@ func heraldListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/heralds/{name} (get) — READ-with-path (NO audit) ===
+// === GET /v1/heralds/{id} (get) — READ-with-path (NO audit) ===
 
-// heraldGetInput — huma-input GET /v1/heralds/{name}. Name — a path parameter. The
-// name format (herald.NamePattern) is domain validation in GetHeraldTyped (422).
+// heraldGetInput — huma-input GET /v1/heralds/{id}. Name — a path parameter. The
+// name format (herald.IDPattern) is domain validation in GetHeraldTyped (422).
 type heraldGetInput struct {
-	Name string `path:"name" doc:"Herald channel name"`
+	ID string `path:"id" doc:"Herald channel name"`
 }
 
-// heraldGetOutput — huma-output GET /v1/heralds/{name} (FULL-TYPED). Body — the typed
+// heraldGetOutput — huma-output GET /v1/heralds/{id} (FULL-TYPED). Body — the typed
 // 200 body (huma-native api.Herald). The wire form is pinned by a golden test.
 type heraldGetOutput struct {
 	Body Herald
 }
 
-// heraldGetOperation — metadata for GET /v1/heralds/{name}. DefaultStatus=200. A READ
+// heraldGetOperation — metadata for GET /v1/heralds/{id}. DefaultStatus=200. A READ
 // route: audit is NOT wired. Permission herald.read. Errors: 403 RBAC, 404 not-found,
 // 422 bad path-name, 500.
 func heraldGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getHerald",
 		Method:        http.MethodGet,
-		Path:          "/heralds/{name}",
+		Path:          "/heralds/{id}",
 		Summary:       "Herald channel card",
 		Description:   "Metadata of a single Herald channel by name (ADR-052). Permission herald.read. Read-only, no audit.",
 		Tags:          []string{"herald"},
@@ -140,16 +140,16 @@ func heraldGetOperation() huma.Operation {
 	}
 }
 
-// === PUT /v1/heralds/{name} (update) — WRITE+AUDIT herald.updated ===
+// === PUT /v1/heralds/{id} (update) — WRITE+AUDIT herald.updated ===
 
-// heraldUpdateInput — huma-input PUT /v1/heralds/{name}. Name — path; Body — the typed
+// heraldUpdateInput — huma-input PUT /v1/heralds/{id}. Name — path; Body — the typed
 // body (replace semantics).
 type heraldUpdateInput struct {
-	Name string `path:"name" doc:"Herald channel name (immutable)"`
+	ID   string `path:"id" doc:"Herald channel name (immutable)"`
 	Body HeraldUpdateRequest
 }
 
-// HeraldUpdateRequest — Go form of the PUT /v1/heralds/{name} body (replace semantics:
+// HeraldUpdateRequest — Go form of the PUT /v1/heralds/{id} body (replace semantics:
 // fields fully replace the existing ones, name immutable). type/config are mandatory;
 // secret_ref/enabled are optional. The struct name = the contract schema name in the OpenAPI
 // (committed hand-written spec → HeraldUpdateRequest).
@@ -161,17 +161,17 @@ type HeraldUpdateRequest struct {
 	Enabled   *bool          `json:"enabled,omitempty" doc:"channel enabled (omitted → true)"`
 }
 
-// heraldUpdateOutput — huma-output PUT /v1/heralds/{name} (FULL-TYPED). Status=200 WITH
+// heraldUpdateOutput — huma-output PUT /v1/heralds/{id} (FULL-TYPED). Status=200 WITH
 // A BODY (huma-native api.Herald — the updated record). The wire form is pinned by a golden test.
 type heraldUpdateOutput struct {
 	Status int `json:"-"`
 	Body   Herald
 }
 
-// === PUT /v1/heralds/{name}/label (label-set) — WRITE+AUDIT herald.label_changed ===
+// === PUT /v1/heralds/{id}/label (label-set) — WRITE+AUDIT herald.label_changed ===
 
 type heraldSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (immutable)"`
+	ID   string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Herald channel name (immutable)"`
 	Body LabelSetRequest
 }
 
@@ -183,23 +183,23 @@ func heraldSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setHeraldLabel",
 		Method:        http.MethodPut,
-		Path:          "/heralds/{name}/label",
+		Path:          "/heralds/{id}/label",
 		Summary:       "Set the Herald display caption",
-		Description:   "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{name}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret.",
+		Description:   "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{id}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret.",
 		Tags:          []string{"herald"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
-// heraldUpdateOperation — metadata for PUT /v1/heralds/{name}. DefaultStatus=200.
+// heraldUpdateOperation — metadata for PUT /v1/heralds/{id}. DefaultStatus=200.
 // Permission herald.update + audit herald.updated. Errors: 400 unknown/malformed,
 // 403 RBAC, 404 not-found, 422 body/path-name validation, 500.
 func heraldUpdateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "updateHerald",
 		Method:        http.MethodPut,
-		Path:          "/heralds/{name}",
+		Path:          "/heralds/{id}",
 		Summary:       "Update Herald channel (replace)",
 		Description:   "Replace semantics: fields fully replace the existing ones, name immutable (ADR-052). Permission herald.update. 404 — record absent.",
 		Tags:          []string{"herald"},
@@ -208,11 +208,11 @@ func heraldUpdateOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/heralds/{name} (delete) — WRITE+AUDIT herald.deleted ===
+// === DELETE /v1/heralds/{id} (delete) — WRITE+AUDIT herald.deleted ===
 
-// heraldDeleteInput — huma-input DELETE /v1/heralds/{name}. Name — path. No Body.
+// heraldDeleteInput — huma-input DELETE /v1/heralds/{id}. Name — path. No Body.
 type heraldDeleteInput struct {
-	Name string `path:"name" doc:"Herald channel name"`
+	ID string `path:"id" doc:"Herald channel name"`
 }
 
 // heraldNoContentOutput — the common huma-output for herald's 204 write routes (herald.delete /
@@ -222,14 +222,14 @@ type heraldNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// heraldDeleteOperation — metadata for DELETE /v1/heralds/{name}. DefaultStatus=204.
+// heraldDeleteOperation — metadata for DELETE /v1/heralds/{id}. DefaultStatus=204.
 // Permission herald.delete + audit herald.deleted (cascades to clean up related Tidings).
 // Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
 func heraldDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteHerald",
 		Method:        http.MethodDelete,
-		Path:          "/heralds/{name}",
+		Path:          "/heralds/{id}",
 		Summary:       "Delete Herald channel",
 		Description:   "Deletes the Herald cascadingly (related Tidings, ADR-052). Permission herald.delete. 404 — record absent.",
 		Tags:          []string{"herald"},
@@ -253,11 +253,11 @@ type tidingCreateInput struct {
 // projection format — domain validation in CreateTidingTyped (422/409/404). The struct name =
 // the contract schema name in the OpenAPI (committed hand-written spec → TidingCreateRequest).
 type TidingCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (kebab-case, 1..63)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (kebab-case, 1..63)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/tidings/{name}/label.
+	// by PUT /v1/tidings/{id}/label.
 	Label        *string         `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
-	Herald       string          `json:"herald" required:"true" doc:"Herald channel name for delivery (FK on heralds.name)"`
+	Herald       string          `json:"herald" required:"true" doc:"Herald channel name for delivery (FK on heralds.id)"`
 	EventTypes   []string        `json:"event_types" required:"true" doc:"list of event-types in run scope (area-glob or exact); empty -> 422"`
 	OnlyFailures *bool           `json:"only_failures,omitempty" doc:"deliver only failures (omitted → false)"`
 	OnlyChanges  *bool           `json:"only_changes,omitempty" doc:"deliver only on changes (omitted → false)"`
@@ -328,28 +328,28 @@ func tidingListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/tidings/{name} (get) — READ-with-path (NO audit) ===
+// === GET /v1/tidings/{id} (get) — READ-with-path (NO audit) ===
 
-// tidingGetInput — huma-input GET /v1/tidings/{name}. Name — a path parameter. The
-// name format (herald.NamePattern) is domain validation in GetTidingTyped (422).
+// tidingGetInput — huma-input GET /v1/tidings/{id}. Name — a path parameter. The
+// name format (herald.IDPattern) is domain validation in GetTidingTyped (422).
 type tidingGetInput struct {
-	Name string `path:"name" doc:"Tiding rule name"`
+	ID string `path:"id" doc:"Tiding rule name"`
 }
 
-// tidingGetOutput — huma-output GET /v1/tidings/{name} (FULL-TYPED). Body — the typed
+// tidingGetOutput — huma-output GET /v1/tidings/{id} (FULL-TYPED). Body — the typed
 // 200 body (huma-native api.Tiding). The wire form is pinned by a golden test.
 type tidingGetOutput struct {
 	Body Tiding
 }
 
-// tidingGetOperation — metadata for GET /v1/tidings/{name}. DefaultStatus=200. A READ
+// tidingGetOperation — metadata for GET /v1/tidings/{id}. DefaultStatus=200. A READ
 // route: audit is NOT wired. Permission tiding.read. Errors: 403 RBAC, 404 not-found,
 // 422 bad path-name, 500.
 func tidingGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getTiding",
 		Method:        http.MethodGet,
-		Path:          "/tidings/{name}",
+		Path:          "/tidings/{id}",
 		Summary:       "Tiding rule card",
 		Description:   "Metadata of a single Tiding rule by name (ADR-052). Permission tiding.read. Read-only, no audit.",
 		Tags:          []string{"tiding"},
@@ -358,16 +358,16 @@ func tidingGetOperation() huma.Operation {
 	}
 }
 
-// === PUT /v1/tidings/{name} (update) — WRITE+AUDIT tiding.updated ===
+// === PUT /v1/tidings/{id} (update) — WRITE+AUDIT tiding.updated ===
 
-// tidingUpdateInput — huma-input PUT /v1/tidings/{name}. Name — path; Body — the typed
+// tidingUpdateInput — huma-input PUT /v1/tidings/{id}. Name — path; Body — the typed
 // body (replace semantics).
 type tidingUpdateInput struct {
-	Name string `path:"name" doc:"Tiding rule name (immutable)"`
+	ID   string `path:"id" doc:"Tiding rule name (immutable)"`
 	Body TidingUpdateRequest
 }
 
-// TidingUpdateRequest — Go form of the PUT /v1/tidings/{name} body (replace semantics:
+// TidingUpdateRequest — Go form of the PUT /v1/tidings/{id} body (replace semantics:
 // fields fully replace the existing ones, name immutable; omit==clear for opt. fields —
 // lesson N4). herald/event_types are mandatory; ephemeral/voyage_id are absent (server-side).
 // The struct name = the contract schema name in the OpenAPI (committed hand-written spec → TidingUpdateRequest).
@@ -384,17 +384,17 @@ type TidingUpdateRequest struct {
 	Enabled      *bool           `json:"enabled,omitempty" doc:"rule enabled (omitted → true)"`
 }
 
-// tidingUpdateOutput — huma-output PUT /v1/tidings/{name} (FULL-TYPED). Status=200 WITH
+// tidingUpdateOutput — huma-output PUT /v1/tidings/{id} (FULL-TYPED). Status=200 WITH
 // A BODY (huma-native api.Tiding — the updated record). The wire form is pinned by a golden test.
 type tidingUpdateOutput struct {
 	Status int `json:"-"`
 	Body   Tiding
 }
 
-// === PUT /v1/tidings/{name}/label (label-set) — WRITE+AUDIT tiding.label_changed ===
+// === PUT /v1/tidings/{id}/label (label-set) — WRITE+AUDIT tiding.label_changed ===
 
 type tidingSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (immutable)"`
+	ID   string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Tiding rule name (immutable)"`
 	Body LabelSetRequest
 }
 
@@ -406,23 +406,23 @@ func tidingSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setTidingLabel",
 		Method:        http.MethodPut,
-		Path:          "/tidings/{name}/label",
+		Path:          "/tidings/{id}/label",
 		Summary:       "Set the Tiding display caption",
-		Description:   "Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{name}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.",
+		Description:   "Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{id}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.",
 		Tags:          []string{"tiding"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
-// tidingUpdateOperation — metadata for PUT /v1/tidings/{name}. DefaultStatus=200.
+// tidingUpdateOperation — metadata for PUT /v1/tidings/{id}. DefaultStatus=200.
 // Permission tiding.update + audit tiding.updated. Errors: 400 unknown/malformed,
 // 403 RBAC, 404 not-found/herald-not-found, 422 body validation, 500.
 func tidingUpdateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "updateTiding",
 		Method:        http.MethodPut,
-		Path:          "/tidings/{name}",
+		Path:          "/tidings/{id}",
 		Summary:       "Update Tiding rule (replace)",
 		Description:   "Replace semantics: fields fully replace the existing ones, name immutable (ADR-052). Permission tiding.update. 404 — record/Herald absent.",
 		Tags:          []string{"tiding"},
@@ -431,21 +431,21 @@ func tidingUpdateOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/tidings/{name} (delete) — WRITE+AUDIT tiding.deleted ===
+// === DELETE /v1/tidings/{id} (delete) — WRITE+AUDIT tiding.deleted ===
 
-// tidingDeleteInput — huma-input DELETE /v1/tidings/{name}. Name — path. No Body.
+// tidingDeleteInput — huma-input DELETE /v1/tidings/{id}. Name — path. No Body.
 type tidingDeleteInput struct {
-	Name string `path:"name" doc:"Tiding rule name"`
+	ID string `path:"id" doc:"Tiding rule name"`
 }
 
-// tidingDeleteOperation — metadata for DELETE /v1/tidings/{name}. DefaultStatus=204.
+// tidingDeleteOperation — metadata for DELETE /v1/tidings/{id}. DefaultStatus=204.
 // Permission tiding.delete + audit tiding.deleted. Errors: 403 RBAC, 404 not-found,
 // 422 bad path-name, 500.
 func tidingDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteTiding",
 		Method:        http.MethodDelete,
-		Path:          "/tidings/{name}",
+		Path:          "/tidings/{id}",
 		Summary:       "Delete Tiding rule",
 		Description:   "Removes the Tiding subscription rule by name (ADR-052). Permission tiding.delete. 404 — record absent.",
 		Tags:          []string{"tiding"},

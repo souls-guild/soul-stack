@@ -136,7 +136,7 @@ func telegramJob() *DeliveryJob {
 
 func TestResolveDelivery_Telegram(t *testing.T) {
 	kv := staticKV{data: map[string]any{"bot_token": "123456:SECRET"}}
-	h := &Herald{Name: "ch", Type: HeraldTelegram, Enabled: true, Config: map[string]any{
+	h := &Herald{ID: "ch", Type: HeraldTelegram, Enabled: true, Config: map[string]any{
 		"bot_token_ref": "vault:secret/keeper/tg#bot_token", "chat_id": "@ops", "parse_mode": "HTML",
 	}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), kv)
@@ -164,7 +164,7 @@ func TestResolveDelivery_Telegram(t *testing.T) {
 func TestResolveDelivery_Slack(t *testing.T) {
 	const url = "https://hooks.slack.com/services/T/B/XYZ"
 	kv := staticKV{data: map[string]any{"url": url}}
-	h := &Herald{Name: "ch", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/slack#url"}}
+	h := &Herald{ID: "ch", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/slack#url"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), kv)
 	if err != nil {
 		t.Fatalf("resolveDelivery: %v", err)
@@ -184,7 +184,7 @@ func TestResolveDelivery_Slack(t *testing.T) {
 func TestResolveDelivery_Mattermost(t *testing.T) {
 	const url = "https://mm.example/hooks/abc"
 	kv := staticKV{data: map[string]any{"url": url}}
-	h := &Herald{Name: "ch", Type: HeraldMattermost, Enabled: true, Config: map[string]any{
+	h := &Herald{ID: "ch", Type: HeraldMattermost, Enabled: true, Config: map[string]any{
 		"webhook_url_ref": "vault:secret/keeper/mm#url", "channel": "ops", "username": "soul",
 	}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), kv)
@@ -206,7 +206,7 @@ func TestResolveDelivery_Mattermost(t *testing.T) {
 func TestResolveDelivery_Discord(t *testing.T) {
 	const url = "https://discord.com/api/webhooks/1/abc"
 	kv := staticKV{data: map[string]any{"url": url}}
-	h := &Herald{Name: "ch", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/dc#url"}}
+	h := &Herald{ID: "ch", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/dc#url"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), kv)
 	if err != nil {
 		t.Fatalf("resolveDelivery: %v", err)
@@ -229,7 +229,7 @@ func TestResolveDelivery_DiscordTruncates(t *testing.T) {
 	// Inflate payload with a huge string so messageText exceeds 2000 characters.
 	huge := strings.Repeat("x", 5000)
 	job := &DeliveryJob{EventType: audit.EventScenarioRunFailed, Herald: "ch", Tiding: "t", PayloadCopy: map[string]any{"blob": huge}}
-	h := &Herald{Name: "ch", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/dc#url"}}
+	h := &Herald{ID: "ch", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/dc#url"}}
 	hd, err := resolveDelivery(context.Background(), h, job, kv)
 	if err != nil {
 		t.Fatalf("resolveDelivery: %v", err)
@@ -245,7 +245,7 @@ func TestResolveDelivery_DiscordTruncates(t *testing.T) {
 
 func TestResolveDelivery_Custom(t *testing.T) {
 	kv := staticKV{data: map[string]any{"token": "Bearer secret-xyz"}}
-	h := &Herald{Name: "ch", Type: HeraldCustom, Enabled: true, Config: map[string]any{
+	h := &Herald{ID: "ch", Type: HeraldCustom, Enabled: true, Config: map[string]any{
 		"url": "https://ci.example/hook", "method": "PUT",
 		"headers": map[string]any{"X-Team": "ops"}, "header_secret_ref": "vault:secret/keeper/ci#token",
 	}}
@@ -279,7 +279,7 @@ func TestResolveDelivery_Custom(t *testing.T) {
 
 // TestResolveDelivery_CustomDefaultMethod checks default method is POST.
 func TestResolveDelivery_CustomDefaultMethod(t *testing.T) {
-	h := &Herald{Name: "ch", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/hook"}}
+	h := &Herald{ID: "ch", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/hook"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), staticKV{})
 	if err != nil {
 		t.Fatalf("resolveDelivery: %v", err)
@@ -293,7 +293,7 @@ func TestResolveDelivery_CustomDefaultMethod(t *testing.T) {
 
 func TestResolveDelivery_WebhookSigned(t *testing.T) {
 	kv := staticKV{data: map[string]any{"key": "topsecret"}}
-	h := &Herald{Name: "ch", Type: HeraldWebhook, Enabled: true,
+	h := &Herald{ID: "ch", Type: HeraldWebhook, Enabled: true,
 		Config:    map[string]any{"url": "https://ci.example/hook", "headers": map[string]any{"X-A": "b"}},
 		SecretRef: strptr("vault:secret/keeper/sign#key")}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), kv)
@@ -324,10 +324,10 @@ func TestHTTPTypes_PassSSRFGuard(t *testing.T) {
 		h    *Herald
 		kv   KVReader
 	}{
-		{"telegram", &Herald{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"bot_token_ref": "vault:secret/k/t#b", "chat_id": "@o"}}, staticKV{data: map[string]any{"b": "1:A"}}},
-		{"slack", &Herald{Name: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/k/s#u"}}, staticKV{data: map[string]any{"u": "https://hooks.slack.com/x"}}},
-		{"discord", &Herald{Name: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/k/d#u"}}, staticKV{data: map[string]any{"u": "https://discord.com/api/webhooks/1/a"}}},
-		{"custom", &Herald{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/h"}}, staticKV{}},
+		{"telegram", &Herald{ID: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"bot_token_ref": "vault:secret/k/t#b", "chat_id": "@o"}}, staticKV{data: map[string]any{"b": "1:A"}}},
+		{"slack", &Herald{ID: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/k/s#u"}}, staticKV{data: map[string]any{"u": "https://hooks.slack.com/x"}}},
+		{"discord", &Herald{ID: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/k/d#u"}}, staticKV{data: map[string]any{"u": "https://discord.com/api/webhooks/1/a"}}},
+		{"custom", &Herald{ID: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/h"}}, staticKV{}},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -345,7 +345,7 @@ func TestHTTPTypes_PassSSRFGuard(t *testing.T) {
 // TestCustom_SSRFGuardRejectsPrivate checks SSRF guard rejects private custom URL
 // after resolution (config may change after create). Single control point.
 func TestCustom_SSRFGuardRejectsPrivate(t *testing.T) {
-	h := &Herald{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://169.254.169.254/latest"}}
+	h := &Herald{ID: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://169.254.169.254/latest"}}
 	hd, err := resolveDelivery(context.Background(), h, telegramJob(), staticKV{})
 	if err != nil {
 		t.Fatalf("resolveDelivery: %v", err)
@@ -361,9 +361,9 @@ func TestResolveDelivery_SecretNotInError(t *testing.T) {
 	// Vault failure while resolving secret field -> transient error, no ref/secret leak.
 	kv := staticKV{err: errors.New("vault down")}
 	cases := []*Herald{
-		{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"bot_token_ref": "vault:secret/keeper/tg#bot_token", "chat_id": "@o"}},
-		{Name: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/slack#url"}},
-		{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/h", "header_secret_ref": "vault:secret/keeper/ci#token"}},
+		{ID: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"bot_token_ref": "vault:secret/keeper/tg#bot_token", "chat_id": "@o"}},
+		{ID: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{"webhook_url_ref": "vault:secret/keeper/slack#url"}},
+		{ID: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"url": "https://ci.example/h", "header_secret_ref": "vault:secret/keeper/ci#token"}},
 	}
 	for _, h := range cases {
 		t.Run(string(h.Type), func(t *testing.T) {
@@ -382,10 +382,10 @@ func TestResolveDelivery_SecretNotInError(t *testing.T) {
 // resolve (config changed after create) -> terminal-no-retry for all types.
 func TestResolveDelivery_MissingConfigTerminal(t *testing.T) {
 	cases := []*Herald{
-		{Name: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"chat_id": "@o"}}, // no token
-		{Name: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{}},                   // no url_ref
-		{Name: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{}},                 // no url_ref
-		{Name: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"method": "POST"}},  // no url
+		{ID: "c", Type: HeraldTelegram, Enabled: true, Config: map[string]any{"chat_id": "@o"}}, // no token
+		{ID: "c", Type: HeraldSlack, Enabled: true, Config: map[string]any{}},                   // no url_ref
+		{ID: "c", Type: HeraldDiscord, Enabled: true, Config: map[string]any{}},                 // no url_ref
+		{ID: "c", Type: HeraldCustom, Enabled: true, Config: map[string]any{"method": "POST"}},  // no url
 	}
 	for _, h := range cases {
 		t.Run(string(h.Type), func(t *testing.T) {
@@ -525,7 +525,7 @@ func emailHerald(host, tlsMode string) *Herald {
 	if tlsMode != "" {
 		cfg["tls_mode"] = tlsMode
 	}
-	return &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: cfg}
+	return &Herald{ID: "mail", Type: HeraldEmail, Enabled: true, Config: cfg}
 }
 
 // TestDeliverEmail_SSRFBlocksPrivate checks email host resolving to private/
@@ -552,7 +552,7 @@ func TestDeliverEmail_SSRFBlocksPrivate(t *testing.T) {
 // TestDeliverEmail_MissingConfigTerminal checks missing required field during email
 // resolve -> terminal-no-retry (config changed after create).
 func TestDeliverEmail_MissingConfigTerminal(t *testing.T) {
-	h := &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{"smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"}}}
+	h := &Herald{ID: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{"smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"}}}
 	err := deliverEmail(context.Background(), h, telegramJob(), staticKV{}, blockResolver{ip: "1.2.3.4"})
 	if err == nil {
 		t.Fatal("email without smtp_host must fail")
@@ -566,7 +566,7 @@ func TestDeliverEmail_MissingConfigTerminal(t *testing.T) {
 // -> transient (retry), secret/ref not in error text. Resolver does not matter (fail at
 // KV earlier). Verify classification before SSRF resolve.
 func TestDeliverEmail_PasswordVaultFailureTransient(t *testing.T) {
-	h := &Herald{Name: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{
+	h := &Herald{ID: "mail", Type: HeraldEmail, Enabled: true, Config: map[string]any{
 		"smtp_host": "smtp.example.com", "smtp_port": float64(587), "from": "a@x", "to": []any{"b@y"},
 		"username": "u", "password_ref": "vault:secret/keeper/smtp#password",
 	}}

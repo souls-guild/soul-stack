@@ -16,7 +16,7 @@ import (
 // (schemaIncarnationRerunLastInput): name + reason required. reason is
 // written to the audit payload (parity with REST RerunLast).
 type incarnationRerunLastArgs struct {
-	Name   string `json:"name"`
+	ID     string `json:"id"`
 	Reason string `json:"reason"`
 	// Input — operator input for the restart, used ONLY when the failed attempt
 	// carries no replayable snapshot (NIM-408). Parity with REST: a recovery path,
@@ -54,12 +54,12 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.Reason == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'reason' is required")
@@ -72,23 +72,23 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 
 	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
 	// {name}) — mirrors REST middleware. A failed probe → fail-closed.
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "rerun-last", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "rerun-last", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.rerun-last")
 		}
 		code, detail := mapIncarnationErrorToMCP(probeErr)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.rerun-last select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", probeErr),
 			)
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	if scopeErr := h.checkIncarnationScope(claims, "rerun-last", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	if scopeErr := h.checkIncarnationScope(claims, "rerun-last", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.rerun-last")
 	}
@@ -104,7 +104,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	applyID := audit.NewULID()
 
 	// Unlock step under FOR UPDATE: error_locked → applying, skipping ready (race-free).
-	res, err := incarnation.UnlockForRerunWithInput(ctx, h.deps.IncarnationDB, a.Name, a.Reason, claims.Subject, applyID, applyID, a.Input)
+	res, err := incarnation.UnlockForRerunWithInput(ctx, h.deps.IncarnationDB, a.ID, a.Reason, claims.Subject, applyID, applyID, a.Input)
 	if errors.Is(err, incarnation.ErrRerunInputNotNeeded) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"field 'input' is not accepted here: the last failed run is replayable from its own record")
@@ -113,7 +113,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.rerun-last unlock failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -131,7 +131,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	// silently apply defaults (parity with REST RerunLastTyped).
 	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
-		IncarnationName: a.Name,
+		IncarnationName: a.ID,
 		ServiceRef:      incarnation.RerunServiceRef(serviceRef, res),
 		ScenarioName:    res.Scenario,
 		Input:           res.Input,
@@ -143,7 +143,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 		FromUpgrade: res.FromUpgrade,
 	}); err != nil {
 		h.deps.Logger.Error("mcp: incarnation.rerun-last scenario start failed",
-			slog.String("name", a.Name),
+			slog.String("name", a.ID),
 			slog.String("apply_id", applyID),
 			slog.String("scenario", res.Scenario),
 			slog.Any("error", err),
@@ -152,7 +152,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	}
 
 	h.writeAuditCorrelated(audit.EventIncarnationRerunLast, claims.Subject, applyID, map[string]any{
-		"name":            a.Name,
+		"id":              a.ID,
 		"reason":          a.Reason,
 		"scenario":        res.Scenario,
 		"previous_status": string(res.PreviousStatus),
@@ -161,7 +161,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 
 	return h.toolResult(req.ID, incarnationRerunLastOutput{
 		ApplyID:     applyID,
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		Scenario:    res.Scenario,
 	})
 }

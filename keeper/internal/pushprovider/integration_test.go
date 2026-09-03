@@ -105,7 +105,7 @@ func resetAll(t *testing.T) {
 
 func newProvider(name string) *PushProvider {
 	return &PushProvider{
-		Name:         name,
+		ID:           name,
 		Params:       map[string]any{"host": "bastion.example.com", "port": float64(22)},
 		CreatedByAID: testAID,
 	}
@@ -124,12 +124,12 @@ func TestIntegration_PushProvider_RoundTrip(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "bastion-eu")
+	got, err := SelectByID(ctx, integrationPool, "bastion-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if got.Name != "bastion-eu" {
-		t.Errorf("Name = %q, want bastion-eu", got.Name)
+	if got.ID != "bastion-eu" {
+		t.Errorf("Name = %q, want bastion-eu", got.ID)
 	}
 	if got.Params["host"] != "bastion.example.com" {
 		t.Errorf("params.host = %v, want bastion.example.com — the jsonb round-trip lost a value", got.Params["host"])
@@ -166,15 +166,15 @@ func TestIntegration_PushProvider_NameIsUnique(t *testing.T) {
 	}
 }
 
-// TestIntegration_PushProvider_NotFound — SelectByName / Update / Delete must
+// TestIntegration_PushProvider_NotFound — SelectByID / Update / Delete must
 // all agree on what "absent" means, because the handler maps that one sentinel
 // to 404. Divergence here is a 500 the operator cannot act on.
 func TestIntegration_PushProvider_NotFound(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
-	if _, err := SelectByName(ctx, integrationPool, "nope"); !errors.Is(err, ErrPushProviderNotFound) {
-		t.Errorf("SelectByName: err = %v, want ErrPushProviderNotFound", err)
+	if _, err := SelectByID(ctx, integrationPool, "nope"); !errors.Is(err, ErrPushProviderNotFound) {
+		t.Errorf("SelectByID: err = %v, want ErrPushProviderNotFound", err)
 	}
 	if err := Update(ctx, integrationPool, "nope", map[string]any{"host": "x"}, testAID); !errors.Is(err, ErrPushProviderNotFound) {
 		t.Errorf("Update: err = %v, want ErrPushProviderNotFound", err)
@@ -199,9 +199,9 @@ func TestIntegration_PushProvider_UpdateReplacesParamsAndStampsAuthor(t *testing
 		t.Fatalf("Update: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "bastion-eu")
+	got, err := SelectByID(ctx, integrationPool, "bastion-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Params["host"] != "moved.example.com" {
 		t.Errorf("params.host = %v, want moved.example.com", got.Params["host"])
@@ -245,16 +245,16 @@ func TestIntegration_PushProvider_ListAndDelete(t *testing.T) {
 		prev, cur := all[i-1], all[i]
 		if cur.UpdatedAt.After(prev.UpdatedAt) {
 			t.Errorf("SelectAll[%d] (%s) is newer than [%d] (%s) — order is not updated_at DESC",
-				i, cur.Name, i-1, prev.Name)
+				i, cur.ID, i-1, prev.ID)
 		}
-		if cur.UpdatedAt.Equal(prev.UpdatedAt) && cur.Name < prev.Name {
+		if cur.UpdatedAt.Equal(prev.UpdatedAt) && cur.ID < prev.ID {
 			t.Errorf("SelectAll: %q before %q on equal updated_at — the name ASC tiebreaker is gone",
-				prev.Name, cur.Name)
+				prev.ID, cur.ID)
 		}
 	}
 	seen := map[string]bool{}
 	for _, p := range all {
-		seen[p.Name] = true
+		seen[p.ID] = true
 	}
 	for _, n := range []string{"bastion-eu", "bastion-us", "bastion-ap"} {
 		if !seen[n] {
@@ -265,7 +265,7 @@ func TestIntegration_PushProvider_ListAndDelete(t *testing.T) {
 	if err := Delete(ctx, integrationPool, "bastion-eu"); err != nil {
 		t.Fatalf("Delete: %v", err)
 	}
-	if _, err := SelectByName(ctx, integrationPool, "bastion-eu"); !errors.Is(err, ErrPushProviderNotFound) {
+	if _, err := SelectByID(ctx, integrationPool, "bastion-eu"); !errors.Is(err, ErrPushProviderNotFound) {
 		t.Errorf("after Delete: err = %v, want ErrPushProviderNotFound", err)
 	}
 	if _, total, _ = SelectAll(ctx, integrationPool, ListFilter{}, 0, 10); total != 2 {

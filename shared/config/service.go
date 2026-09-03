@@ -219,11 +219,11 @@ type DependencyRef struct {
 var (
 	// The service-name regex left with the manifest's `name:` (NIM-726): it could only
 	// judge a name the manifest stated, and the manifest states none. What remains is
-	// serviceregistry.NamePattern at registration, and it is NOT the same rule —
+	// serviceregistry.IDPattern at registration, and it is NOT the same rule —
 	// `^[a-z][a-z0-9-]*$` admits `redis-` and `a--b`, which the retired
 	// `^[a-z][a-z0-9]*(-[a-z0-9]+)*$` refused. Deliberately left alone here: tightening
 	// it is a new refusal at the mint point, so it belongs to whoever narrows
-	// NamePattern, not to the removal of a second copy. Neither form can produce an
+	// IDPattern, not to the removal of a second copy. Neither form can produce an
 	// unsafe Vault segment — both are strict subsets of ADR-064's `^[a-zA-Z0-9_-]+$`.
 
 	// reDependencyDestinyName — kebab-case single-level destiny name in

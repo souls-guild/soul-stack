@@ -28,7 +28,7 @@ func NewService(pool ExecQueryRower) (*Service, error) {
 
 // CreateInput contains [Service.Create] parameters.
 type CreateInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetLabel]. nil/blank stores
 	// NULL and the consumer shows Name.
@@ -53,7 +53,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) 
 		createdBy = &aid
 	}
 	p := &Profile{
-		Name:         in.Name,
+		ID:           in.ID,
 		Label:        in.Label,
 		Provider:     in.Provider,
 		Params:       in.Params,
@@ -67,11 +67,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Profile, error) 
 }
 
 // Get reads one Profile by PK. [ErrProfileNotFound] when absent.
-func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
+func (s *Service) Get(ctx context.Context, id string) (*Profile, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("profile: invalid id %q (must match %s)", id, IDPattern)
 	}
-	return SelectByName(ctx, s.pool, name)
+	return SelectByID(ctx, s.pool, id)
 }
 
 // SetLabel replaces the display caption of one Profile and returns the row as it
@@ -83,18 +83,18 @@ func (s *Service) Get(ctx context.Context, name string) (*Profile, error) {
 // which that argument does not apply, because nothing reads it.
 //
 // [ErrProfileNotFound] when the row is absent.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Profile, *string, error) {
-	previous, err := UpdateLabel(ctx, s.pool, name, label)
+func (s *Service) SetLabel(ctx context.Context, id string, label *string) (*Profile, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	p, err := SelectByName(ctx, s.pool, name)
+	p, err := SelectByID(ctx, s.pool, id)
 	return p, previous, err
 }
 
 // Delete removes a Profile by PK. [ErrProfileNotFound] when absent.
-func (s *Service) Delete(ctx context.Context, name string) error {
-	return Delete(ctx, s.pool, name)
+func (s *Service) Delete(ctx context.Context, id string) error {
+	return Delete(ctx, s.pool, id)
 }
 
 // List returns a page of Profiles and total count. Non-empty providerName filters

@@ -20,20 +20,20 @@ import (
 
 // Sentinel errors of the CRUD layer. The transport side (separate slice S3)
 // maps them to HTTP codes:
-//   - ErrAlreadyExists  → 409 (UNIQUE on PK service_registry.name);
+//   - ErrAlreadyExists  → 409 (UNIQUE on PK service_registry.id);
 //   - ErrNotFound       → 404 (no row for the PK);
-//   - ErrInvalidName    → 422 (name doesn't match the format);
-//   - ErrReservedName   → 422 (name is a reserved Vault namespace, NIM-706);
+//   - ErrInvalidID      → 422 (id doesn't match the format);
+//   - ErrReservedID     → 422 (id is a reserved Vault namespace, NIM-706);
 //   - ErrInvalidGit     → 422 (git is empty);
 //   - ErrInvalidRef     → 422 (ref is empty);
 //   - ErrInvalidRefresh → 422 (refresh doesn't parse as a duration);
 //   - ErrOperatorNotFound → 404 (FK violation on created_by_aid/updated_by_aid:
 //     the referenced operator doesn't exist).
 var (
-	ErrAlreadyExists    = errors.New("serviceregistry: service name already exists")
-	ErrNotFound         = errors.New("serviceregistry: service name not found")
-	ErrInvalidName      = errors.New("serviceregistry: invalid service name")
-	ErrReservedName     = errors.New("serviceregistry: reserved service name")
+	ErrAlreadyExists    = errors.New("serviceregistry: service id already exists")
+	ErrNotFound         = errors.New("serviceregistry: service id not found")
+	ErrInvalidID        = errors.New("serviceregistry: invalid service id")
+	ErrReservedID       = errors.New("serviceregistry: reserved service id")
 	ErrInvalidGit       = errors.New("serviceregistry: git is empty")
 	ErrInvalidRef       = errors.New("serviceregistry: ref is empty")
 	ErrInvalidRefresh   = errors.New("serviceregistry: invalid refresh duration")
@@ -54,23 +54,29 @@ var (
 	ErrEmptyProvisioningMethods  = errors.New("serviceregistry: provisioning_allowed_methods is set but empty (anti-lockout)")
 )
 
-// NamePattern — canonical Service name form: matches CHECK
-// service_registry_name_format in migration 034 (like rbac.reRoleName).
+// IDPattern — canonical Service id form: matches CHECK
+// service_registry_id_format in migration 118 (like rbac.reRoleName).
 // Duplicated in Go for application-level validation before the round trip
-// (better error, no wasted DB round trip on a malformed name).
-const NamePattern = `^[a-z][a-z0-9-]*$`
+// (better error, no wasted DB round trip on a malformed id).
+//
+// The form is UNCHANGED by the `name` → `id` rename ([ADR-0085], NIM-729):
+// the identifier moved spelling, not grammar. [ADR-0085] does decide one
+// grammar for every registry, and adopting it here is a separate, narrowing
+// change — this constant and the CHECK stay in step, which is the property
+// the openapi constraint-sync guard pins.
+const IDPattern = `^[a-z][a-z0-9-]*$`
 
 // SettingKeyPattern — keeper_settings key form: matches CHECK
 // keeper_settings_key_format in migration 035 (snake_case).
 const SettingKeyPattern = `^[a-z][a-z0-9_]*$`
 
 var (
-	nameRe       = regexp.MustCompile(NamePattern)
+	idRe         = regexp.MustCompile(IDPattern)
 	settingKeyRe = regexp.MustCompile(SettingKeyPattern)
 )
 
-// ValidName checks a Service name against the canonical form.
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks a Service id against the canonical form.
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // ValidSettingKey checks a keeper_settings key against the canonical form.
 func ValidSettingKey(key string) bool { return settingKeyRe.MatchString(key) }
@@ -132,20 +138,23 @@ func ParseProvisioningMethods(csv string) (map[string]bool, error) {
 }
 
 // ServiceEntry — runtime representation of a service_registry row. Carries
-// the Service's git coordinates (Name/Git/Ref, ADR-007) plus audit metadata;
+// the Service's git coordinates (ID/Git/Ref, ADR-007) plus audit metadata;
 // the registry replaces the removed `keeper.yml::services[]` (ADR-029).
 //
 // Refresh — auto-refresh duration string ("5m"); nil = no auto-refresh (NULL
 // in the DB). CreatedByAID / UpdatedByAID — AID of the author/last editor
 // operator; nil = NULL (seed / no initiating Archon / before the first update).
 type ServiceEntry struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): lower-case kebab, set once at
+	// registration, the PRIMARY KEY of service_registry. There is no rename
+	// operation, deliberately — see Label, below.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetServiceLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead.
+	// consumer shows ID instead.
 	//
 	// It participates in nothing derived, and here that is the sharpest case in
-	// the platform: Name is segment 2 of EVERY derived secret path
+	// the platform: ID is segment 2 of EVERY derived secret path
 	// (`<mount>/<service>/<incarnation>/<state-field>[/<key>]`,
 	// [ADR-0083] §1), substituted verbatim, and it is the cache directory a
 	// service's snapshots live under. A caption that reached either would orphan

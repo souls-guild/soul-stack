@@ -50,7 +50,7 @@ func (m *capturingStateModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Ser
 
 	name := util.IncarnationFrom(ctx)
 	_, err := incarnation.CaptureState(ctx, integrationPool, incarnation.CaptureSpec{
-		Name:      name,
+		ID:        name,
 		Scenario:  scope.Scenario,
 		ApplyID:   scope.ApplyID,
 		HistoryID: audit.NewULID(),

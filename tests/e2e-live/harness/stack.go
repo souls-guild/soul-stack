@@ -714,7 +714,7 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
-		"name":    name,
+		"id":      name,
 		"service": service,
 	}
 	if spec != nil {
@@ -771,7 +771,7 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
-		"name":            name,
+		"id":              name,
 		"service":         service,
 		"create_scenario": "create",
 	}
@@ -820,7 +820,7 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 	t.Helper()
 	c := s.opClient(t)
 	body := map[string]any{
-		"name":            name,
+		"id":              name,
 		"service":         stripServiceRef(serviceRef),
 		"create_scenario": createScenario,
 	}
@@ -995,7 +995,7 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 	for time.Now().Before(deadline) {
 		var status string
 		err := s.db.QueryRow(context.Background(),
-			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+			"SELECT status FROM incarnation WHERE id = $1", incarnationName).Scan(&status)
 		if err != nil {
 			t.Fatalf("WaitIncarnationReady %s: query: %v", incarnationName, err)
 		}
@@ -1039,7 +1039,7 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, incarnationName, wantStatus 
 	for time.Now().Before(deadline) {
 		var status string
 		err := s.db.QueryRow(context.Background(),
-			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+			"SELECT status FROM incarnation WHERE id = $1", incarnationName).Scan(&status)
 		if err != nil {
 			t.Fatalf("WaitIncarnationStatus %s: query: %v", incarnationName, err)
 		}

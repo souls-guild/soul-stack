@@ -11,7 +11,7 @@ in the shipped redis example — had no way to be given those hosts.
 
 - `POST /v1/incarnations` accepted `name` / `service` / `covens` / `input` / `traits` /
   `create_scenario`. No hosts.
-- Hosts were bound AFTER the fact, through `POST /v1/incarnations/{name}/members`
+- Hosts were bound AFTER the fact, through `POST /v1/incarnations/{id}/members`
   (ADR-008 amendment / NIM-209).
 - But the bootstrap run starts DURING the create (`lifecycle.auto_create`), and a run
   resolves its roster from `incarnation_membership` at start. An empty relation aborts it

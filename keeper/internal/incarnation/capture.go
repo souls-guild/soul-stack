@@ -11,7 +11,7 @@ import (
 // CaptureSpec addresses one mid-run state capture ([ADR-0084]): which
 // incarnation is written, and which run gets the credit in `state_history`.
 type CaptureSpec struct {
-	Name         string
+	ID           string
 	Scenario     string
 	ApplyID      string
 	HistoryID    string
@@ -20,11 +20,11 @@ type CaptureSpec struct {
 
 // SelectStateForUpdate reads `incarnation.state` and locks the row for the rest
 // of the transaction. For a read that does not write the row back, use
-// [SelectByName] — this one holds a write lock until the transaction ends.
-func SelectStateForUpdate(ctx context.Context, tx ExecQueryRower, name string) (map[string]any, error) {
-	const sql = `SELECT state FROM incarnation WHERE name = $1 FOR UPDATE`
+// [SelectByID] — this one holds a write lock until the transaction ends.
+func SelectStateForUpdate(ctx context.Context, tx ExecQueryRower, id string) (map[string]any, error) {
+	const sql = `SELECT state FROM incarnation WHERE id = $1 FOR UPDATE`
 	var b []byte
-	if err := tx.QueryRow(ctx, sql, name).Scan(&b); err != nil {
+	if err := tx.QueryRow(ctx, sql, id).Scan(&b); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -47,10 +47,10 @@ func SelectStateForUpdate(ctx context.Context, tx ExecQueryRower, name string) (
 // doing the reading, so the only writer is that run's own [CaptureState] — which
 // re-reads under FOR UPDATE and re-decides there. A stale read here can waste
 // work, never produce a wrong write.
-func SelectState(ctx context.Context, db ExecQueryRower, name string) (map[string]any, error) {
-	const sql = `SELECT state FROM incarnation WHERE name = $1`
+func SelectState(ctx context.Context, db ExecQueryRower, id string) (map[string]any, error) {
+	const sql = `SELECT state FROM incarnation WHERE id = $1`
 	var b []byte
-	if err := db.QueryRow(ctx, sql, name).Scan(&b); err != nil {
+	if err := db.QueryRow(ctx, sql, id).Scan(&b); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -76,8 +76,8 @@ func SelectState(ctx context.Context, db ExecQueryRower, name string) (map[strin
 // any other status is a capture outside a run: it fails rather than writes,
 // because the run that would own the change is not the one holding the row.
 func CaptureState(ctx context.Context, pool TxBeginner, spec CaptureSpec, mutate func(map[string]any) (map[string]any, error)) (map[string]any, error) {
-	if !ValidName(spec.Name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", spec.Name)
+	if !ValidID(spec.ID) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", spec.ID)
 	}
 	if spec.ApplyID == "" {
 		return nil, fmt.Errorf("incarnation: empty apply_id")
@@ -95,14 +95,14 @@ func CaptureState(ctx context.Context, pool TxBeginner, spec CaptureSpec, mutate
 	const selectForUpdateSQL = `
 SELECT state, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
 		stateBytes []byte
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, spec.Name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, spec.ID).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -140,13 +140,13 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $5, $6, $7)
 `
 	if _, err := tx.Exec(ctx, historySQL,
-		spec.HistoryID, spec.Name, spec.Scenario, beforeBytes, afterBytes, changedByArg, spec.ApplyID,
+		spec.HistoryID, spec.ID, spec.Scenario, beforeBytes, afterBytes, changedByArg, spec.ApplyID,
 	); err != nil {
 		return nil, fmt.Errorf("incarnation: insert state_history: %w", err)
 	}
 
-	const updateSQL = `UPDATE incarnation SET state = $2, updated_at = NOW() WHERE name = $1`
-	if _, err := tx.Exec(ctx, updateSQL, spec.Name, afterBytes); err != nil {
+	const updateSQL = `UPDATE incarnation SET state = $2, updated_at = NOW() WHERE id = $1`
+	if _, err := tx.Exec(ctx, updateSQL, spec.ID, afterBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: update state: %w", err)
 	}
 	if err := tx.Commit(ctx); err != nil {

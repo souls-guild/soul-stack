@@ -59,12 +59,12 @@ func (p *oracleFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.R
 			return oracleErrRow{p.decreeInsertErr}
 		}
 		return oracleTRow{[]any{"0s", time.Now(), time.Now()}} // RETURNING cooldown, created_at, updated_at
-	case strings.Contains(sql, "FROM vigils") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM vigils") && strings.Contains(sql, "WHERE id"):
 		if p.vigilGetRow == nil {
 			return oracleErrRow{pgx.ErrNoRows}
 		}
 		return oracleTRow{p.vigilGetRow}
-	case strings.Contains(sql, "FROM decrees") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM decrees") && strings.Contains(sql, "WHERE id"):
 		if p.decreeGetRow == nil {
 			return oracleErrRow{pgx.ErrNoRows}
 		}
@@ -280,12 +280,12 @@ func TestOracleTools_NilGuard(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
+		{"keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
 		{"keeper.oracle.vigil.list", `{}`},
-		{"keeper.oracle.vigil.delete", `{"name":"x"}`},
-		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
+		{"keeper.oracle.vigil.delete", `{"id":"x"}`},
+		{"keeper.oracle.decree.create", `{"id":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
 		{"keeper.oracle.decree.list", `{}`},
-		{"keeper.oracle.decree.delete", `{"name":"x"}`},
+		{"keeper.oracle.decree.delete", `{"id":"x"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -309,9 +309,9 @@ func TestOracleTools_RBACForbidden(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
-		{"keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
-		{"keeper.oracle.decree.delete", `{"name":"x"}`},
+		{"keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`},
+		{"keeper.oracle.decree.create", `{"id":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`},
+		{"keeper.oracle.decree.delete", `{"id":"x"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -337,18 +337,18 @@ func TestOracleTools_Validation(t *testing.T) {
 		want string
 	}{
 		{"vigil-no-name", "keeper.oracle.vigil.create", `{"subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-bad-interval", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"nope","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-unknown-check", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.bogus"}`, mcpCodeValidationFailed},
+		{"vigil-bad-interval", "keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"]},"interval":"nope","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-unknown-check", "keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.bogus"}`, mcpCodeValidationFailed},
 		// Exactly-one-of, both ways round: two dimensions at once and none at all.
-		{"vigil-two-subject-dimensions", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"],"sid":["h1"]},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
-		{"vigil-empty-subject", "keeper.oracle.vigil.create", `{"name":"x","subject":{},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-two-subject-dimensions", "keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"],"sid":["h1"]},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
+		{"vigil-empty-subject", "keeper.oracle.vigil.create", `{"id":"x","subject":{},"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeValidationFailed},
 		// The flat `coven`/`sid` keys of the old shape are gone, so spelling one is an
 		// unknown field — malformed-request, not a subject diagnostic.
-		{"vigil-flat-coven-gone", "keeper.oracle.vigil.create", `{"name":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeMalformedRequest},
-		{"vigil-unknown-field", "keeper.oracle.vigil.create", `{"name":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed","z":1}`, mcpCodeMalformedRequest},
+		{"vigil-flat-coven-gone", "keeper.oracle.vigil.create", `{"id":"x","coven":["web"],"interval":"30s","check":"core.beacon.file_changed"}`, mcpCodeMalformedRequest},
+		{"vigil-unknown-field", "keeper.oracle.vigil.create", `{"id":"x","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed","z":1}`, mcpCodeMalformedRequest},
 		{"decree-no-name", "keeper.oracle.decree.create", `{"on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service"}`, mcpCodeValidationFailed},
-		{"decree-bad-scenario", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"Bad-Scenario"}`, mcpCodeValidationFailed},
-		{"decree-bad-where", "keeper.oracle.decree.create", `{"name":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.x =="}`, mcpCodeValidationFailed},
+		{"decree-bad-scenario", "keeper.oracle.decree.create", `{"id":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"Bad-Scenario"}`, mcpCodeValidationFailed},
+		{"decree-bad-where", "keeper.oracle.decree.create", `{"id":"x","on_beacon":"b","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.x =="}`, mcpCodeValidationFailed},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -368,7 +368,7 @@ func TestOracleTools_Validation(t *testing.T) {
 func TestOracleVigilCreate_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.create",
-		`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
+		`{"id":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -381,7 +381,7 @@ func TestOracleVigilCreate_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if out.Name != "web-conf" || out.Check != "core.beacon.file_changed" {
+	if out.ID != "web-conf" || out.Check != "core.beacon.file_changed" {
 		t.Errorf("output = %+v", out)
 	}
 
@@ -395,7 +395,7 @@ func TestOracleVigilCreate_Success(t *testing.T) {
 	if ev.Source != audit.SourceMCP {
 		t.Errorf("source = %q, want mcp", ev.Source)
 	}
-	assertPayload(t, ev.Payload, "name", "web-conf")
+	assertPayload(t, ev.Payload, "id", "web-conf")
 	assertPayload(t, ev.Payload, "subject", "coven=web")
 	assertPayload(t, ev.Payload, "created_by_aid", "archon-alice")
 	if _, ok := ev.Payload["params"]; ok {
@@ -408,7 +408,7 @@ func TestOracleVigilCreate_Duplicate409(t *testing.T) {
 		vigilInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "vigils_pkey"},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.create",
-		`{"name":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
+		`{"id":"web-conf","subject":{"coven":["web"]},"interval":"30s","check":"core.beacon.file_changed"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -469,19 +469,19 @@ func TestOracleVigilList_LimitTooLarge(t *testing.T) {
 
 func TestOracleVigilDelete_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{vigilDeleteRows: 1})
-	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.delete", `{"name":"web-conf"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.delete", `{"id":"web-conf"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventVigilDeleted {
 		t.Fatalf("expected vigil.deleted audit, got %+v", rec.events)
 	}
-	assertPayload(t, rec.events[0].Payload, "name", "web-conf")
+	assertPayload(t, rec.events[0].Payload, "id", "web-conf")
 }
 
 func TestOracleVigilDelete_NotFound404(t *testing.T) {
 	h, _ := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{vigilDeleteRows: 0})
-	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.delete", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.oracle.vigil.delete", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -495,7 +495,7 @@ func TestOracleVigilDelete_NotFound404(t *testing.T) {
 func TestOracleDecreeCreate_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.create",
-		`{"name":"restart-on-down","on_beacon":"db-svc","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.severity == \"critical\""}`)
+		`{"id":"restart-on-down","on_beacon":"db-svc","subject":{"coven":["db"]},"incarnation_name":"prod-db","action_scenario":"restart_service","where":"event.data.severity == \"critical\""}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -507,7 +507,7 @@ func TestOracleDecreeCreate_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if out.Name != "restart-on-down" || out.ActionScenario != "restart_service" {
+	if out.ID != "restart-on-down" || out.ActionScenario != "restart_service" {
 		t.Errorf("output = %+v", out)
 	}
 
@@ -562,7 +562,7 @@ func TestOracleDecreeList_Success(t *testing.T) {
 
 func TestOracleDecreeDelete_Success(t *testing.T) {
 	h, rec := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{decreeDeleteRows: 1})
-	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.delete", `{"name":"restart-on-down"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.delete", `{"id":"restart-on-down"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -573,7 +573,7 @@ func TestOracleDecreeDelete_Success(t *testing.T) {
 
 func TestOracleDecreeDelete_NotFound404(t *testing.T) {
 	h, _ := newOracleToolHandler(t, oracleAdminCfg(), &oracleFakePool{decreeDeleteRows: 0})
-	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.delete", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.oracle.decree.delete", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

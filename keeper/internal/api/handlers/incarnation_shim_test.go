@@ -61,7 +61,7 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
 	var body struct {
-		Name           string         `json:"name"`
+		ID             string         `json:"id"`
 		Service        string         `json:"service"`
 		Covens         []string       `json:"covens"`
 		Input          map[string]any `json:"input"`
@@ -70,7 +70,7 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	}
 	_ = json.NewDecoder(r.Body).Decode(&body)
 	reply, err := h.CreateTyped(r.Context(), claims, IncarnationCreateRequestInput{
-		Name: body.Name, Service: body.Service, Covens: body.Covens, Input: body.Input, Traits: body.Traits,
+		ID: body.ID, Service: body.Service, Covens: body.Covens, Input: body.Input, Traits: body.Traits,
 		CreateScenario: body.CreateScenario,
 	})
 	if err != nil {
@@ -85,7 +85,7 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	return rec
 }
 
-// incGet — shim for GET /v1/incarnations/{name}.
+// incGet — shim for GET /v1/incarnations/{id}.
 func incGet(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -140,7 +140,7 @@ func incList(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder 
 	return rec
 }
 
-// incHistory — shim for GET /v1/incarnations/{name}/history.
+// incHistory — shim for GET /v1/incarnations/{id}/history.
 func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -175,7 +175,7 @@ func incHistory(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	return rec
 }
 
-// incRun — shim for POST /v1/incarnations/{name}/scenarios/{scenario}.
+// incRun — shim for POST /v1/incarnations/{id}/scenarios/{scenario}.
 func incRun(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -199,7 +199,7 @@ func incRun(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	return rec
 }
 
-// incUnlock — shim for POST /v1/incarnations/{name}/unlock.
+// incUnlock — shim for POST /v1/incarnations/{id}/unlock.
 func incUnlock(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -215,16 +215,16 @@ func incUnlock(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	}
 	middleware.SetAuditPayload(r, reply.AuditPayload)
 	writeJSON(rec, http.StatusOK, struct {
-		Name           string `json:"name"`
+		ID             string `json:"id"`
 		PreviousStatus string `json:"previous_status"`
 		Status         string `json:"status"`
 		UnlockedAt     string `json:"unlocked_at"`
 		UnlockedByAID  string `json:"unlocked_by_aid"`
-	}{reply.Body.Name, reply.Body.PreviousStatus, reply.Body.Status, rfc3339Nano(reply.Body.UnlockedAt), reply.Body.UnlockedByAID}, shimLogger)
+	}{reply.Body.ID, reply.Body.PreviousStatus, reply.Body.Status, rfc3339Nano(reply.Body.UnlockedAt), reply.Body.UnlockedByAID}, shimLogger)
 	return rec
 }
 
-// incUpgrade — shim for POST /v1/incarnations/{name}/upgrade.
+// incUpgrade — shim for POST /v1/incarnations/{id}/upgrade.
 func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
 	claims, _ := shimClaims(r)
@@ -246,7 +246,7 @@ func incUpgrade(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecord
 	return rec
 }
 
-// incSetTraits — shim for PUT /v1/incarnations/{name}/traits: decode body.traits →
+// incSetTraits — shim for PUT /v1/incarnations/{id}/traits: decode body.traits →
 // SetTraitsTyped.
 func incSetTraits(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorder {
 	rec := httptest.NewRecorder()
@@ -273,7 +273,7 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 		Covens             []string        `json:"covens"`
 		CreatedAt          string          `json:"created_at"`
 		CreatedByAID       *string         `json:"created_by_aid"`
-		Name               string          `json:"name"`
+		ID                 string          `json:"id"`
 		Service            string          `json:"service"`
 		ServiceVersion     string          `json:"service_version"`
 		State              *map[string]any `json:"state"`
@@ -283,7 +283,7 @@ func shimGetReplyJSON(v IncarnationGetView) any {
 		UpdatedAt          string          `json:"updated_at"`
 	}{
 		Covens: v.Covens, CreatedAt: rfc3339Nano(v.CreatedAt), CreatedByAID: v.CreatedByAID,
-		Name: v.Name, Service: v.Service, ServiceVersion: v.ServiceVersion,
+		ID: v.ID, Service: v.Service, ServiceVersion: v.ServiceVersion,
 		State: ptrMapShim(v.State), StateSchemaVersion: v.StateSchemaVersion,
 		Status: v.Status, StatusDetails: ptrMapShim(v.StatusDetails), UpdatedAt: rfc3339Nano(v.UpdatedAt),
 	}
@@ -317,7 +317,7 @@ func ptrMapShim(m map[string]any) *map[string]any {
 // incDTOJSON — the decode shape of the GET/PATCH-hosts incarnation wire body for tests (mirrors
 // the keys of the former incarnationDTO). Tests decode the shim's body into it and check the fields.
 type incDTOJSON struct {
-	Name          string         `json:"name"`
+	ID            string         `json:"id"`
 	Status        string         `json:"status"`
 	State         map[string]any `json:"state"`
 	StatusDetails map[string]any `json:"status_details"`

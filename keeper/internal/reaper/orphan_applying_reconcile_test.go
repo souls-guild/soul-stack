@@ -142,7 +142,7 @@ func TestOrphanApplyingSQL_FiltersNullEpoch(t *testing.T) {
 		"status = 'applying'",
 		"applying_since < $1",
 		"applying_by_kid IS NOT NULL",
-		"SELECT name, applying_by_kid, applying_apply_id",
+		"SELECT id, applying_by_kid, applying_apply_id",
 	} {
 		if !strings.Contains(orphanApplyingCandidatesSQL, frag) {
 			t.Errorf("orphanApplyingCandidatesSQL missing %q\nSQL: %s", frag, orphanApplyingCandidatesSQL)

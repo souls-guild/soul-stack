@@ -186,11 +186,11 @@ func TestHeraldTools_InManifest(t *testing.T) {
 func TestHeraldTools_NilGuard(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), nil, nil) // HeraldSvc == nil
 	cases := []struct{ tool, args string }{
-		{"keeper.herald.create", `{"name":"x","type":"webhook","config":{"url":"https://x/y"}}`},
+		{"keeper.herald.create", `{"id":"x","type":"webhook","config":{"url":"https://x/y"}}`},
 		{"keeper.herald.list", `{}`},
-		{"keeper.herald.read", `{"name":"x"}`},
-		{"keeper.tiding.create", `{"name":"t","herald":"x","event_types":["scenario_run.*"]}`},
-		{"keeper.tiding.delete", `{"name":"t"}`},
+		{"keeper.herald.read", `{"id":"x"}`},
+		{"keeper.tiding.create", `{"id":"t","herald":"x","event_types":["scenario_run.*"]}`},
+		{"keeper.tiding.delete", `{"id":"t"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -211,9 +211,9 @@ func TestHeraldTools_RBACForbidden(t *testing.T) {
 	// archon-alice without herald/tiding-permissions (empty RBAC → deny all).
 	h, _ := newHeraldToolHandler(t, nil, &heraldFakePool{}, nil)
 	cases := []struct{ tool, args string }{
-		{"keeper.herald.create", `{"name":"x","type":"webhook","config":{"url":"https://x/y"}}`},
-		{"keeper.tiding.create", `{"name":"t","herald":"x","event_types":["scenario_run.*"]}`},
-		{"keeper.tiding.delete", `{"name":"t"}`},
+		{"keeper.herald.create", `{"id":"x","type":"webhook","config":{"url":"https://x/y"}}`},
+		{"keeper.tiding.create", `{"id":"t","herald":"x","event_types":["scenario_run.*"]}`},
+		{"keeper.tiding.delete", `{"id":"t"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -234,7 +234,7 @@ func TestHeraldCreate_Success_AuditAndInvalidate(t *testing.T) {
 	inv := &fakeInvalidator{}
 	h, rec := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, inv)
 	resp := callTool(t, h, "archon-alice", "keeper.herald.create",
-		`{"name":"slack-ops","type":"webhook","config":{"url":"https://hooks.example.com/x"}}`)
+		`{"id":"slack-ops","type":"webhook","config":{"url":"https://hooks.example.com/x"}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -250,7 +250,7 @@ func TestHeraldCreate_Duplicate409(t *testing.T) {
 	pool := &heraldFakePool{insertErr: &pgconn.PgError{Code: "23505", ConstraintName: "heralds_pkey"}}
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), pool, &fakeInvalidator{})
 	resp := callTool(t, h, "archon-alice", "keeper.herald.create",
-		`{"name":"dup","type":"webhook","config":{"url":"https://x/y"}}`)
+		`{"id":"dup","type":"webhook","config":{"url":"https://x/y"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -261,7 +261,7 @@ func TestHeraldCreate_Duplicate409(t *testing.T) {
 
 func TestHeraldRead_NotFound404(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, &fakeInvalidator{})
-	resp := callTool(t, h, "archon-alice", "keeper.herald.read", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.herald.read", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -274,7 +274,7 @@ func TestHeraldCreate_BadConfig_Validation422(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, &fakeInvalidator{})
 	// http:// + private IP without opt-out → SSRF-guard → validation-failed.
 	resp := callTool(t, h, "archon-alice", "keeper.herald.create",
-		`{"name":"insecure","type":"webhook","config":{"url":"http://10.0.0.1/h"}}`)
+		`{"id":"insecure","type":"webhook","config":{"url":"http://10.0.0.1/h"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation error")
 	}
@@ -289,7 +289,7 @@ func TestTidingCreate_MissingHerald404(t *testing.T) {
 	pool := &heraldFakePool{insertErr: &pgconn.PgError{Code: "23503", ConstraintName: "tidings_herald_fk"}}
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), pool, &fakeInvalidator{})
 	resp := callTool(t, h, "archon-alice", "keeper.tiding.create",
-		`{"name":"t1","herald":"ghost","event_types":["scenario_run.*"]}`)
+		`{"id":"t1","herald":"ghost","event_types":["scenario_run.*"]}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -301,7 +301,7 @@ func TestTidingCreate_MissingHerald404(t *testing.T) {
 func TestTidingCreate_BadEventTypes422(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, &fakeInvalidator{})
 	resp := callTool(t, h, "archon-alice", "keeper.tiding.create",
-		`{"name":"t1","herald":"ch","event_types":["operator.created"]}`)
+		`{"id":"t1","herald":"ch","event_types":["operator.created"]}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation error")
 	}
@@ -314,7 +314,7 @@ func TestTidingDelete_Success_Invalidate(t *testing.T) {
 	inv := &fakeInvalidator{}
 	pool := &heraldFakePool{updateTag: 1}
 	h, rec := newHeraldToolHandler(t, heraldAdminCfg(), pool, inv)
-	resp := callTool(t, h, "archon-alice", "keeper.tiding.delete", `{"name":"t1"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.tiding.delete", `{"id":"t1"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -331,7 +331,7 @@ func TestTidingDelete_Success_Invalidate(t *testing.T) {
 func TestHeraldCreate_UnknownField400(t *testing.T) {
 	h, _ := newHeraldToolHandler(t, heraldAdminCfg(), &heraldFakePool{}, &fakeInvalidator{})
 	resp := callTool(t, h, "archon-alice", "keeper.herald.create",
-		`{"name":"x","type":"webhook","config":{"url":"https://x/y"},"bogus":true}`)
+		`{"id":"x","type":"webhook","config":{"url":"https://x/y"},"bogus":true}`)
 	if resp.Error == nil {
 		t.Fatal("expected malformed error")
 	}

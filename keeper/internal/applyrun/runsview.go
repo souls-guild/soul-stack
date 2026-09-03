@@ -7,7 +7,7 @@ import (
 	"time"
 )
 
-// Read-view of incarnation runs for the Operator API (GET /v1/incarnations/{name}/runs
+// Read-view of incarnation runs for the Operator API (GET /v1/incarnations/{id}/runs
 // and .../runs/{apply_id}). Separated from write-CRUD (crud.go): here only
 // aggregating SELECTs for the UI "execution status / current job" display.
 //

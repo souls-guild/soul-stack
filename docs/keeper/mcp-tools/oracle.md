@@ -12,9 +12,9 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.oracle.vigi
 
 Creates a Vigil at `vigils` (Soul-side check beacons: `check` - core-beacon address + `interval` + a four-dimension `subject`). Read-only by design. Permission: `vigil.create`. Endpoint: [`POST /v1/vigils`](../operator-api/oracle.md). Async: no.
 
-**Input** (`required: name, subject, interval, check`): `{name (kebab 1..63), subject (object, exactly one of sid / incarnation / coven / trait), interval (duration), check (core-beacon address), params? (object), enabled? (default true)}`.
+**Input** (`required: id, subject, interval, check`): `{id (kebab 1..63), subject (object, exactly one of sid / incarnation / coven / trait), interval (duration), check (core-beacon address), params? (object), enabled? (default true)}`.
 
-**Output:** `VigilView` — `{name, subject, interval, check, params, enabled, created_by_aid?, created_at, updated_at}`; `subject` carries only the dimension the Vigil was written with.
+**Output:** `VigilView` — `{id, subject, interval, check, params, enabled, created_by_aid?, created_at, updated_at}`; `subject` carries only the dimension the Vigil was written with.
 
 Errors: `vigil-already-exists` (`name` busy), `validation-failed` (broken `name`/`interval`/`check`, or a subject with zero / two dimensions or half a pair).
 
@@ -26,13 +26,13 @@ Enumeration of Vigils (sort `created_at` DESC, `name` ASC). Permission: `vigil.l
 
 #### `keeper.oracle.vigil.label-set`
 
-Replaces the Vigil's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only operator mutation: `interval`, `check` and the subject stay immutable because the Souls holding a `VigilSnapshot` were already told what to run. A Decree reacts through `on_beacon`, which is the name, so changing the caption moves nothing. Permission: `vigil.label-set`. Endpoint: [`PUT /v1/vigils/{name}/label`](../operator-api/oracle.md). Async: no.
+Replaces the Vigil's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only operator mutation: `interval`, `check` and the subject stay immutable because the Souls holding a `VigilSnapshot` were already told what to run. A Decree reacts through `on_beacon`, which is the name, so changing the caption moves nothing. Permission: `vigil.label-set`. Endpoint: [`PUT /v1/vigils/{id}/label`](../operator-api/oracle.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Vigil` - the row as it now reads. Errors: `not-found`.
+**Input** (`required: id`): `{id (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Vigil` - the row as it now reads. Errors: `not-found`.
 
 #### `keeper.oracle.vigil.delete`
 
-Deletes Vigil by name (stops distributing to hosts in `VigilSnapshot`; Decrees do NOT cascade). Permission: `vigil.delete`. Endpoint: [`DELETE /v1/vigils/{name}`](../operator-api/oracle.md). Async: no.
+Deletes Vigil by name (stops distributing to hosts in `VigilSnapshot`; Decrees do NOT cascade). Permission: `vigil.delete`. Endpoint: [`DELETE /v1/vigils/{id}`](../operator-api/oracle.md). Async: no.
 
 **Input:** `{name}`. **Output:** empty object (REST equivalent - 204). Errors: `not-found`.
 
@@ -40,9 +40,9 @@ Deletes Vigil by name (stops distributing to hosts in `VigilSnapshot`; Decrees d
 
 Creates Decree (reactor rule): `on_beacon` (Vigil) × `subject` (who may fire) × `incarnation_name` (what the reaction acts on) → `action_scenario` (named, whitelist) + opt. `where`-CEL predicate over `event.data` + `cooldown`. Default-deny. Permission: `decree.create`. Endpoint: [`POST /v1/decrees`](../operator-api/oracle.md). Async: no.
 
-**Input** (`required: name, on_beacon, subject, incarnation_name, action_scenario`): `{name (kebab 1..63), on_beacon (kebab), subject (object, exactly one of sid / incarnation / coven / trait), incarnation_name, action_scenario (named, ^[a-z][a-z0-9_]*$), where? (CEL), action_input? (object), cooldown? (duration), enabled? (default true)}`.
+**Input** (`required: id, on_beacon, subject, incarnation_name, action_scenario`): `{id (kebab 1..63), on_beacon (kebab), subject (object, exactly one of sid / incarnation / coven / trait), incarnation_name, action_scenario (named, ^[a-z][a-z0-9_]*$), where? (CEL), action_input? (object), cooldown? (duration), enabled? (default true)}`.
 
-**Output:** `DecreeView` — `{name, on_beacon, where?, subject, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid?, created_at, updated_at}`.
+**Output:** `DecreeView` — `{id, on_beacon, where?, subject, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid?, created_at, updated_at}`.
 
 Errors: `decree-already-exists` (`name` busy), `validation-failed` (broken `name`/`on_beacon`/`incarnation_name`/`action_scenario`/`where`-CEL/`cooldown`, or a subject with zero / two dimensions or half a pair).
 
@@ -54,12 +54,12 @@ Enumeration of Decrees (sort `created_at` DESC, `name` ASC). Permission: `decree
 
 #### `keeper.oracle.decree.label-set`
 
-Replaces the Decree's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breaker (`oracle_circuit`) are keyed on the name, so no trigger history moves and no breaker resets. Permission: `decree.label-set`. Endpoint: [`PUT /v1/decrees/{name}/label`](../operator-api/oracle.md). Async: no.
+Replaces the Decree's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breaker (`oracle_circuit`) are keyed on the name, so no trigger history moves and no breaker resets. Permission: `decree.label-set`. Endpoint: [`PUT /v1/decrees/{id}/label`](../operator-api/oracle.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Decree` - the row as it now reads. Errors: `not-found`.
+**Input** (`required: id`): `{id (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Decree` - the row as it now reads. Errors: `not-found`.
 
 #### `keeper.oracle.decree.delete`
 
-Removes Decree by name; cascade clears cooldown-state (`oracle_fires`, `ON DELETE CASCADE`). Permission: `decree.delete`. Endpoint: [`DELETE /v1/decrees/{name}`](../operator-api/oracle.md). Async: no.
+Removes Decree by name; cascade clears cooldown-state (`oracle_fires`, `ON DELETE CASCADE`). Permission: `decree.delete`. Endpoint: [`DELETE /v1/decrees/{id}`](../operator-api/oracle.md). Async: no.
 
 **Input:** `{name}`. **Output:** empty object (REST equivalent - 204). Errors: `not-found`.

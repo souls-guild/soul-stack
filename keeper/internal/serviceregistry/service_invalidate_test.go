@@ -102,7 +102,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 		s := mustService(t, &hookPool{queryRowErr: nil})
 		s.SetInvalidator(inv)
 		if _, err := s.CreateService(context.Background(), CreateServiceInput{
-			Name: "web", Git: "git@x:web.git", Ref: "main",
+			ID: "web", Git: "git@x:web.git", Ref: "main",
 		}); err != nil {
 			t.Fatalf("CreateService: %v", err)
 		}
@@ -118,7 +118,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 		s := mustService(t, &hookPool{queryRowErr: pgErr})
 		s.SetInvalidator(inv)
 		if _, err := s.CreateService(context.Background(), CreateServiceInput{
-			Name: "web", Git: "git@x:web.git", Ref: "main",
+			ID: "web", Git: "git@x:web.git", Ref: "main",
 		}); !errors.Is(err, ErrAlreadyExists) {
 			t.Fatalf("CreateService = %v, want ErrAlreadyExists", err)
 		}
@@ -132,7 +132,7 @@ func TestService_Invalidate_OnlyAfterSuccessfulCommit(t *testing.T) {
 		s := mustService(t, &hookPool{queryRowErr: nil})
 		s.SetInvalidator(inv)
 		if _, err := s.UpdateService(context.Background(), UpdateServiceInput{
-			Name: "web", Git: "git@x:web.git", Ref: "v2",
+			ID: "web", Git: "git@x:web.git", Ref: "v2",
 		}); err != nil {
 			t.Fatalf("UpdateService: %v", err)
 		}

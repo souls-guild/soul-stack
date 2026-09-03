@@ -15,7 +15,7 @@ import (
 // semantics for mutable fields), refresh is optional. name is the record key
 // and doesn't change.
 type serviceUpdateArgs struct {
-	Name    string  `json:"name"`
+	ID      string  `json:"id"`
 	Git     string  `json:"git"`
 	Ref     string  `json:"ref"`
 	Refresh *string `json:"refresh"`
@@ -49,13 +49,13 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	callerAID := claims.Subject
 	entry, err := h.deps.ServiceSvc.UpdateService(ctx, serviceregistry.UpdateServiceInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Git:       a.Git,
 		Ref:       a.Ref,
 		Refresh:   a.Refresh,
@@ -65,7 +65,7 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 		code, detail := mapServiceRegistryErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: service.update failed",
-				slog.String("name", a.Name),
+				slog.String("id", a.ID),
 				slog.String("by_aid", callerAID),
 				slog.Any("error", err),
 			)
@@ -76,9 +76,9 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 	// Audit — parallels the REST handler: payload {name, git, ref}. The git
 	// URL isn't a secret.
 	h.writeAudit(audit.EventServiceUpdated, callerAID, map[string]any{
-		"name": entry.Name,
-		"git":  entry.Git,
-		"ref":  entry.Ref,
+		"id":  entry.ID,
+		"git": entry.Git,
+		"ref": entry.Ref,
 	})
 
 	return h.toolResult(req.ID, toServiceView(entry))

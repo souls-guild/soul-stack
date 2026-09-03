@@ -194,7 +194,7 @@ func rosterHandler(t *testing.T, db *fakeRosterDB, starter ScenarioStarter, scop
 // createFromSoulsBody — a create request against the roster-declaring scenario.
 func createFromSoulsBody(sids ...string) *bytes.Reader {
 	body, _ := json.Marshal(map[string]any{
-		"name":            "redis-roster",
+		"id":              "redis-roster",
 		"service":         "redis",
 		"covens":          []string{"prod"},
 		"create_scenario": "create_from_souls",
@@ -426,7 +426,7 @@ func TestCreateWithoutRoster_UnaffectedByBindMemberPermission(t *testing.T) {
 	h.SetPermissionChecker(bindMemberDenyingChecker{})
 
 	body, _ := json.Marshal(map[string]any{
-		"name": "redis-plain", "service": "redis", "create_scenario": "create",
+		"id": "redis-plain", "service": "redis", "create_scenario": "create",
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", bytes.NewReader(body))
 	req = withClaims(req, "archon-alice")
@@ -448,7 +448,7 @@ func TestCreateRoster_ScenarioWithoutDeclarationBindsNothing(t *testing.T) {
 	h := rosterHandler(t, db, starter, memberScoper{unrestricted: true}, &memberAuditCapture{})
 
 	body, _ := json.Marshal(map[string]any{
-		"name": "redis-plain", "service": "redis", "create_scenario": "create",
+		"id": "redis-plain", "service": "redis", "create_scenario": "create",
 		"input": map[string]any{"replicas": 2},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", bytes.NewReader(body))
@@ -474,7 +474,7 @@ func TestCreateRoster_EmptyRosterRefusedByInputGate(t *testing.T) {
 	h := rosterHandler(t, db, &fakeStarter{}, memberScoper{unrestricted: true}, &memberAuditCapture{})
 
 	body, _ := json.Marshal(map[string]any{
-		"name": "redis-roster", "service": "redis", "create_scenario": "create_from_souls",
+		"id": "redis-roster", "service": "redis", "create_scenario": "create_from_souls",
 		"input": map[string]any{"hosts": []string{}},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", bytes.NewReader(body))
@@ -570,7 +570,7 @@ func TestCreateRoster_OverCapIs422(t *testing.T) {
 		sids[i] = "node-" + strconv.Itoa(i) + ".example.com"
 	}
 	body, _ := json.Marshal(map[string]any{
-		"name": "redis-roster", "service": "redis", "create_scenario": "create_from_souls",
+		"id": "redis-roster", "service": "redis", "create_scenario": "create_from_souls",
 		"input": map[string]any{"hosts": sids},
 	})
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", bytes.NewReader(body))

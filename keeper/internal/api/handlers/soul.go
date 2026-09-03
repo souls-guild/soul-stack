@@ -1431,8 +1431,8 @@ func (h *SoulHandler) AssignCovenTyped(ctx context.Context, claims *jwt.Claims, 
 	if req.Selector.Coven != "" && !soul.ValidCoven(req.Selector.Coven) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'coven' must match "+soul.CovenPattern)}
 	}
-	if req.Selector.Incarnation != "" && !incarnation.ValidName(req.Selector.Incarnation) {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
+	if req.Selector.Incarnation != "" && !incarnation.ValidID(req.Selector.Incarnation) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.IDPattern)}
 	}
 
 	// Bulk coven-assign targets hosts by coven → project the operator's boolean
@@ -1774,8 +1774,8 @@ func (h *SoulHandler) AssignTraitsTyped(ctx context.Context, claims *jwt.Claims,
 	if rawReq.Selector.Coven != "" && !soul.ValidCoven(rawReq.Selector.Coven) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'coven' must match "+soul.CovenPattern)}
 	}
-	if rawReq.Selector.Incarnation != "" && !incarnation.ValidName(rawReq.Selector.Incarnation) {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.NamePattern)}
+	if rawReq.Selector.Incarnation != "" && !incarnation.ValidID(rawReq.Selector.Incarnation) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "selector 'incarnation' must match "+incarnation.IDPattern)}
 	}
 
 	// Bulk traits-assign narrows target hosts by coven scope (gate a) → project
@@ -1990,8 +1990,8 @@ func (h *SoulHandler) UpdateSshTargetTyped(ctx context.Context, sid string, req 
 	// P2 W-1: optional `ssh_provider` — the kebab-case plugin name. Empty → routing
 	// goes to the coven_default/cluster_default levels.
 	provider := req.SSHProvider
-	if provider != "" && !pushprovider.ValidName(provider) {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'ssh_provider' must match "+pushprovider.NamePattern)}
+	if provider != "" && !pushprovider.ValidID(provider) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'ssh_provider' must match "+pushprovider.IDPattern)}
 	}
 
 	target := &soul.SSHTarget{SSHPort: req.SSHPort, SSHUser: req.SSHUser, SoulPath: req.SoulPath}

@@ -38,9 +38,9 @@ func TestToolsCall_IncarnationList_Success(t *testing.T) {
 	pool := &fakePool{
 		incListFn: func(_ incarnation.ListFilter) ([]*incarnation.Incarnation, int) {
 			return []*incarnation.Incarnation{
-				{Name: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1,
+				{ID: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1,
 					CreatedAt: now, UpdatedAt: now},
-				{Name: "pg-prod", Service: "postgres", ServiceVersion: "v2", StateSchemaVersion: 3,
+				{ID: "pg-prod", Service: "postgres", ServiceVersion: "v2", StateSchemaVersion: 3,
 					Status: incarnation.StatusApplying, CreatedAt: now, UpdatedAt: now},
 			}, 2
 		},
@@ -54,7 +54,7 @@ func TestToolsCall_IncarnationList_Success(t *testing.T) {
 	if out.Limit != listDefaultLimit || out.Offset != 0 {
 		t.Errorf("offset/limit defaults: %d/%d", out.Offset, out.Limit)
 	}
-	if out.Items[0].Name != "redis-prod" || out.Items[1].Service != "postgres" {
+	if out.Items[0].ID != "redis-prod" || out.Items[1].Service != "postgres" {
 		t.Errorf("items mismatch: %+v", out.Items)
 	}
 	// reads are NOT audited (parity with REST List).
@@ -126,7 +126,7 @@ func TestToolsCall_IncarnationList_SecretsMasked(t *testing.T) {
 	pool := &fakePool{
 		incListFn: func(_ incarnation.ListFilter) ([]*incarnation.Incarnation, int) {
 			return []*incarnation.Incarnation{
-				{Name: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1,
+				{ID: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1,
 					State:  map[string]any{"tls_cert": "vault:secret/redis/tls"},
 					Status: incarnation.StatusReady, CreatedAt: time.Now(), UpdatedAt: time.Now()},
 			}, 1

@@ -20,18 +20,18 @@ Module inside the `keeper` binary, responsible for cloud operations (creating / 
 
 | Method + path | Permission | MCP-tool | Destination |
 |---|---|---|---|
-| `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Create Provider; `409 provider-already-exists` for take `name`. |
+| `POST /v1/providers` | `provider.create` | `keeper.provider.create` | Create Provider; `409 provider-already-exists` for take `id`. |
 | `GET /v1/providers` | `provider.read` | `keeper.provider.list` | Enumerate (paged `offset`/`limit`). |
-| `GET /v1/providers/{name}` | `provider.read` | `keeper.provider.get` | Read one; `404 not-found`. |
-| `DELETE /v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` | Delete; `404 not-found`; `409 provider-has-profiles` with linked Profiles (FK RESTRICT, migration 020). |
-| `POST /v1/profiles` | `profile.create` | `keeper.profile.create` | Create Profile; `409 profile-already-exists` per take `name`; `422 validation-failed` to a reference to a non-existent Provider (FK). |
+| `GET /v1/providers/{id}` | `provider.read` | `keeper.provider.get` | Read one; `404 not-found`. |
+| `DELETE /v1/providers/{id}` | `provider.delete` | `keeper.provider.delete` | Delete; `404 not-found`; `409 provider-has-profiles` with linked Profiles (FK RESTRICT, migration 020). |
+| `POST /v1/profiles` | `profile.create` | `keeper.profile.create` | Create Profile; `409 profile-already-exists` per take `id`; `422 validation-failed` to a reference to a non-existent Provider (FK). |
 | `GET /v1/profiles` | `profile.read` | `keeper.profile.list` | Enumerate (optional filter `provider=`). |
-| `GET /v1/profiles/{name}` | `profile.read` | `keeper.profile.get` | Read one; `404 not-found`. |
-| `DELETE /v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` | Delete; `404 not-found`. |
+| `GET /v1/profiles/{id}` | `profile.read` | `keeper.profile.get` | Read one; `404 not-found`. |
+| `DELETE /v1/profiles/{id}` | `profile.delete` | `keeper.profile.delete` | Delete; `404 not-found`. |
 
 **Immutability.** `update` operations **no**: Provider/Profile are immutable, change parameters = `delete` + `create`. This is protection against partial mutation `spec` of already living VMs (it is impossible to replace the region/credentials under a running fleet on the fly). Therefore, in the directory [rbac.md](rbac.md#cloud-8--cloudmd) there is `create`/`read`/`delete` and no `update`, and MCP-tools is `create`/`list`/`get`/`delete`.
 
-**The one exception is the display caption** ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728): `PUT /v1/providers/{name}/label` and `PUT /v1/profiles/{name}/label` (permissions `provider.label-set` / `profile.label-set`, MCP `keeper.provider.label-set` / `keeper.profile.label-set`) replace the row's free-text caption. It does not weaken the rule above — the argument for immutability is that a partial mutation of a live cloud spec is dangerous, and a caption is the one field for which that argument does not apply, because **nothing reads it**: not a Vault path segment, not an RBAC scope, not the self-onboard FQDN prediction `<name>-<index>.<fqdn_suffix>`. The `name` remains immutable and remains what everything derives from.
+**The one exception is the display caption** ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728): `PUT /v1/providers/{id}/label` and `PUT /v1/profiles/{id}/label` (permissions `provider.label-set` / `profile.label-set`, MCP `keeper.provider.label-set` / `keeper.profile.label-set`) replace the row's free-text caption. It does not weaken the rule above — the argument for immutability is that a partial mutation of a live cloud spec is dangerous, and a caption is the one field for which that argument does not apply, because **nothing reads it**: not a Vault path segment, not an RBAC scope, not the self-onboard FQDN prediction `<name>-<index>.<fqdn_suffix>` (whose `<name>` is the `core.cloud.provisioned` step's own `name` param, not this row's identifier at all). The `id` remains immutable and remains what everything derives from ([ADR-0085](../adr/0085-entity-id-and-label.md) / NIM-729 renamed it from `name`).
 
 **`credentials_ref` — vault path only.** The field accepts the string `vault:<mount>/<path>`; The credentials API themselves **DO NOT resolve and DO NOT return** - returns `credentials_ref` as a path (secret-hygiene, symmetry with jwt-signing-key-ref). The vault secret resolution occurs on the scenario layer when calling `core.cloud.provisioned` (see [Credentials-flow](#credentials-flow)), not in CRUD.
 

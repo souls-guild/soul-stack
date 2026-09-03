@@ -60,7 +60,7 @@ func seedHerald(t *testing.T, name, aid string) {
 	t.Helper()
 	cfg, _ := json.Marshal(map[string]any{"url": "https://hooks.example.com/" + name})
 	if _, err := integrationPool.Exec(context.Background(),
-		`INSERT INTO heralds (name, type, config, enabled, created_by_aid)
+		`INSERT INTO heralds (id, type, config, enabled, created_by_aid)
 		 VALUES ($1, 'webhook', $2, true, $3)`, name, cfg, aid); err != nil {
 		t.Fatalf("seedHerald(%s): %v", name, err)
 	}
@@ -84,9 +84,9 @@ type ephemeralTidingRow struct {
 func selectTidingsByVoyage(t *testing.T, voyageID string) []ephemeralTidingRow {
 	t.Helper()
 	rows, err := integrationPool.Query(context.Background(),
-		`SELECT name, herald, event_types, only_failures, only_changes, ephemeral,
+		`SELECT id, herald, event_types, only_failures, only_changes, ephemeral,
 		        voyage_id, annotations::text, projection, created_by_aid
-		 FROM tidings WHERE voyage_id = $1 ORDER BY name`, voyageID)
+		 FROM tidings WHERE voyage_id = $1 ORDER BY id`, voyageID)
 	if err != nil {
 		t.Fatalf("selectTidingsByVoyage: %v", err)
 	}

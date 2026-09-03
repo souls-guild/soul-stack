@@ -23,10 +23,10 @@ var unrestrictedScope = incarnation.ListScope{Unrestricted: true}
 // [rbac.PurviewSQL] (handlers.incScopeColumns). It is duplicated rather than
 // imported because api/handlers imports this package. The names are bare
 // (unaliased) because [incarnation.ScopeCondition] is embedded in
-// `... IN (SELECT name FROM incarnation WHERE <cond>)`.
+// `... IN (SELECT id FROM incarnation WHERE <cond>)`.
 var runsScopeColumns = rbac.ScopeColumns{
 	Coven:       "covens",
-	Incarnation: "name",
+	Incarnation: "id",
 	Service:     "service",
 	Traits:      "traits",
 }
@@ -209,7 +209,7 @@ func TestIntegration_ListRuns_Scope(t *testing.T) {
 
 	// redis-staging receives env tag team-x (covens[] side of scope).
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET covens = ARRAY['team-x'] WHERE name = 'redis-staging'`); err != nil {
+		`UPDATE incarnation SET covens = ARRAY['team-x'] WHERE id = 'redis-staging'`); err != nil {
 		t.Fatalf("UPDATE covens: %v", err)
 	}
 
@@ -422,7 +422,7 @@ func TestIntegration_ListRuns_ServiceFilter(t *testing.T) {
 
 	// pg-main -> service postgres (seedIncarnation sets redis by default).
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET service = 'postgres' WHERE name = 'pg-main'`); err != nil {
+		`UPDATE incarnation SET service = 'postgres' WHERE id = 'pg-main'`); err != nil {
 		t.Fatalf("UPDATE service: %v", err)
 	}
 
@@ -473,7 +473,7 @@ func TestIntegration_ListRuns_QFilter(t *testing.T) {
 
 	// gamma-inc -> unique service mysvc (others have service='redis').
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET service = 'mysvc' WHERE name = 'gamma-inc'`); err != nil {
+		`UPDATE incarnation SET service = 'mysvc' WHERE id = 'gamma-inc'`); err != nil {
 		t.Fatalf("UPDATE service: %v", err)
 	}
 
@@ -702,9 +702,9 @@ func TestIntegration_ListRuns_SortService(t *testing.T) {
 
 	// inc-a,inc-b -> service 'aaa' (equal -> tie-break apply_id DESC); inc-c -> 'bbb'.
 	if _, err := integrationPool.Exec(ctx, `
-		UPDATE incarnation SET service = CASE name
+		UPDATE incarnation SET service = CASE id
 			WHEN 'inc-c' THEN 'bbb' ELSE 'aaa' END
-		WHERE name IN ('inc-a','inc-b','inc-c')`); err != nil {
+		WHERE id IN ('inc-a','inc-b','inc-c')`); err != nil {
 		t.Fatalf("UPDATE service: %v", err)
 	}
 

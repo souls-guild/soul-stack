@@ -140,7 +140,7 @@ func toFilter(req FormPrepInput) (FormPrepFilter, string) {
 	case hasInc && hasChoir:
 		return FormPrepFilter{}, "source must specify exactly one of incarnation_hosts/choir"
 	case hasInc:
-		if !incarnation.ValidName(inc) {
+		if !incarnation.ValidID(inc) {
 			return FormPrepFilter{}, "invalid incarnation name"
 		}
 		return FormPrepFilter{IncarnationHosts: inc, Prefix: prefix}, ""
@@ -149,7 +149,7 @@ func toFilter(req FormPrepInput) (FormPrepFilter, string) {
 		if c.Incarnation == "" || c.Name == "" {
 			return FormPrepFilter{}, "choir source requires incarnation and name"
 		}
-		if !incarnation.ValidName(c.Incarnation) {
+		if !incarnation.ValidID(c.Incarnation) {
 			return FormPrepFilter{}, "invalid incarnation name"
 		}
 		return FormPrepFilter{Choir: c, Prefix: prefix}, ""

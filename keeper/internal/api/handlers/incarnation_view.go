@@ -42,7 +42,7 @@ type IncarnationGetView struct {
 	// operator-written display text, so no secret can be in it that the operator
 	// did not put there deliberately.
 	Label              *string
-	Name               string
+	ID                 string
 	Service            string
 	ServiceVersion     string
 	State              map[string]any
@@ -91,7 +91,7 @@ func toIncarnationGetView(inc *incarnation.Incarnation, schema audit.SecretSchem
 		CreatedByAID:       inc.CreatedByAID,
 		CreatedScenario:    derefString(inc.CreatedScenario),
 		Label:              inc.Label,
-		Name:               inc.Name,
+		ID:                 inc.ID,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,
 		State:              maskWithSchema(inc.State, schema),

@@ -26,7 +26,7 @@ func newProfile(v handlers.ProfileView) Profile {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		Params:       v.Params,
 		Provider:     v.Provider,
 	}
@@ -56,7 +56,7 @@ func registerHumaProfileCreate(humaAPI huma.API, profileH *handlers.ProfileHandl
 			return nil, profileMissingClaims()
 		}
 		req := handlers.ProfileCreateInput{
-			Name:      in.Body.Name,
+			ID:        in.Body.ID,
 			Provider:  in.Body.Provider,
 			CloudInit: in.Body.CloudInit,
 		}
@@ -88,14 +88,14 @@ func registerHumaProfileList(humaAPI huma.API, profileH *handlers.ProfileHandler
 	})
 }
 
-// registerHumaProfileGet mounts GET /v1/profiles/{name} (READ with path,
+// registerHumaProfileGet mounts GET /v1/profiles/{id} (READ with path,
 // no audit). RBAC profile.read — on the group.
 func registerHumaProfileGet(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
 		return
 	}
 	huma.Register(humaAPI, profileGetOperation(), func(ctx context.Context, in *profileGetInput) (*profileGetOutput, error) {
-		reply, err := profileH.GetTyped(ctx, in.Name)
+		reply, err := profileH.GetTyped(ctx, in.ID)
 		if err != nil {
 			return nil, profileProblem(err)
 		}
@@ -103,14 +103,14 @@ func registerHumaProfileGet(humaAPI huma.API, profileH *handlers.ProfileHandler)
 	})
 }
 
-// registerHumaProfileSetLabel mounts PUT /v1/profiles/{name}/label (WRITE+AUDIT —
+// registerHumaProfileSetLabel mounts PUT /v1/profiles/{id}/label (WRITE+AUDIT —
 // profile.label_changed). profileH nil → no-op.
 func registerHumaProfileSetLabel(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
 		return
 	}
 	huma.Register(humaAPI, profileSetLabelOperation(), func(ctx context.Context, in *profileSetLabelInput) (*profileSetLabelOutput, error) {
-		reply, err := profileH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := profileH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, profileProblem(err)
 		}
@@ -119,14 +119,14 @@ func registerHumaProfileSetLabel(humaAPI huma.API, profileH *handlers.ProfileHan
 	})
 }
 
-// registerHumaProfileDelete mounts DELETE /v1/profiles/{name} (WRITE+AUDIT —
+// registerHumaProfileDelete mounts DELETE /v1/profiles/{id} (WRITE+AUDIT —
 // profile.deleted). profileH nil → no-op.
 func registerHumaProfileDelete(humaAPI huma.API, profileH *handlers.ProfileHandler) {
 	if profileH == nil {
 		return
 	}
 	huma.Register(humaAPI, profileDeleteOperation(), func(ctx context.Context, in *profileDeleteInput) (*profileNoContentOutput, error) {
-		reply, err := profileH.DeleteTyped(ctx, in.Name)
+		reply, err := profileH.DeleteTyped(ctx, in.ID)
 		if err != nil {
 			return nil, profileProblem(err)
 		}

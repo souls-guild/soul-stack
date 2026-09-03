@@ -31,7 +31,7 @@ var ulidPattern = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 // IsValidULID does a syntactic check of a ULID string against Crockford base32
 // (length 26, chars from `0-9A-HJKMNP-TV-Z`). Used by query-param validation at
 // the API boundary (e.g. the `apply_id` filter in
-// `/v1/incarnations/{name}/history`) to reject junk before a round-trip to
+// `/v1/incarnations/{id}/history`) to reject junk before a round-trip to
 // Postgres.
 func IsValidULID(s string) bool {
 	return ulidPattern.MatchString(s)

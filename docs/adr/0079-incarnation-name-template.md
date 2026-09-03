@@ -204,7 +204,7 @@
   The preview therefore rejects *less*, never *differently*.
 
   **Occupancy is answered here, deliberately.** The form must not probe
-  `GET /v1/incarnations/{name}`: that turns the status code into an existence oracle
+  `GET /v1/incarnations/{id}`: that turns the status code into an existence oracle
   and lets a scoped operator walk names outside their scope. The reply is scope-aware
   in two grains — "taken" for anyone who could create the name, "taken by service X"
   only for a caller who may already see that incarnation — and the same rule now

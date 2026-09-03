@@ -12,38 +12,38 @@ Mapping endpoint ↔ MCP-tool ↔ permission (table of 5 routes) - in the root [
 
 Permission: `push-provider.create`. MCP-tool: `keeper.push-provider.create`.
 
-**Request `PushProviderCreateRequest`** (`required: name`): `{name (^[a-z][a-z0-9-]{0,62}$, = plugins.ssh_providers[].name), params? (object; sensitive — vault-refs)}`.
+**Request `PushProviderCreateRequest`** (`required: id`): `{id (^[a-z][a-z0-9-]{0,62}$, = plugins.ssh_providers[].name — the keeper.yml config key keeps its own spelling), params? (object; sensitive — vault-refs)}`.
 
 **Response `201 PushProvider`:** `{name, params, created_at, updated_at, created_by_aid, updated_by_aid?}`.
 
-Errors: `400` (broken JSON), `409` (`name` busy), `422 validation-failed` (sensitive parameter not vault-ref / broken `name`). Audit: `push_provider.created` (payload - `name` + keys `params` without values).
+Errors: `400` (broken JSON), `409` (`id` busy), `422 validation-failed` (sensitive parameter not vault-ref / broken `id`). Audit: `push_provider.created` (payload - `id` + keys `params` without values).
 
 ### `GET /v1/push-providers` — list of Push Providers
 
-Permission: `push-provider.list`. MCP-tool: `keeper.push-provider.list`. Query `name_pattern` (LIKE prefix, e.g. `vault%`) + `offset`/`limit`. Sort `updated_at` DESC. Response `200 PushProviderListReply` (`{items, offset, limit, total}`).
+Permission: `push-provider.list`. MCP-tool: `keeper.push-provider.list`. Query `id_pattern` (LIKE prefix, e.g. `vault%`) + `offset`/`limit`. Sort `updated_at` DESC. Response `200 PushProviderListReply` (`{items, offset, limit, total}`).
 
-### `GET /v1/push-providers/{name}` - read one entry
+### `GET /v1/push-providers/{id}` - read one entry
 
 Permission: `push-provider.read`. MCP-tool: `keeper.push-provider.read`. Response `200 PushProvider`; `404 not-found` - no entry.
 
-### `PUT /v1/push-providers/{name}` — replace params (replace semantics)
+### `PUT /v1/push-providers/{id}` — replace params (replace semantics)
 
-Permission: `push-provider.update`. MCP-tool: `keeper.push-provider.update`. `name` - key, does not change. The sensitive invariant is the same as that of create.
+Permission: `push-provider.update`. MCP-tool: `keeper.push-provider.update`. `id` - key, does not change. The sensitive invariant is the same as that of create.
 
 **Request `PushProviderUpdateRequest`** (`required: params`): `{params (object; sensitive — vault-refs)}`.
 
 **Response `200 PushProvider`.** Errors: `400`, `404 not-found`, `422 validation-failed`. Audit: `push_provider.updated`.
 
-### `PUT /v1/push-providers/{name}/label` — set the display caption
+### `PUT /v1/push-providers/{id}/label` — set the display caption
 
-Permission: `push-provider.label-set`. MCP-tool: `keeper.push-provider.label-set`. OperationID: `setPushProviderLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` env-var name — which is why `name` keeps its letter-first rule and the caption needs no rule at all.
+Permission: `push-provider.label-set`. MCP-tool: `keeper.push-provider.label-set`. OperationID: `setPushProviderLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `id` addresses the row and does not change; there is no rename operation anywhere. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(id)>_PARAMS` env-var name — which is why `id` keeps its letter-first rule and the caption needs no rule at all.
 
-Unlike `PUT /v1/push-providers/{name}` above, this publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them.
+Unlike `PUT /v1/push-providers/{id}` above, this publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them.
 
-**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
+**Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `id` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 PushProvider`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `push-provider.label_changed`, payload `{name, old_label, new_label}`.
+**Response `200 PushProvider`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `push-provider.label_changed`, payload `{id, old_label, new_label}`.
 
-### `DELETE /v1/push-providers/{name}` - delete entry
+### `DELETE /v1/push-providers/{id}` - delete entry
 
 Permission: `push-provider.delete`. MCP-tool: `keeper.push-provider.delete`. Response `204`; `404 not-found`. Audit: `push_provider.deleted`.

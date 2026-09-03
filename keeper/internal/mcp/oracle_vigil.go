@@ -13,24 +13,24 @@ import (
 )
 
 // callOracleVigilSetLabel — keeper.oracle.vigil.label-set, the MCP mirror of
-// PUT /v1/vigils/{name}/label (ADR-0085). The registry's only operator mutation.
+// PUT /v1/vigils/{id}/label (ADR-0085). The registry's only operator mutation.
 func (h *Handler) callOracleVigilSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[vigilView]{
 		tool:          "keeper.oracle.vigil.label-set",
 		resource:      "vigil",
 		configured:    h.deps.OracleSvc != nil,
 		notConfigured: oracleNotConfigured,
-		validName:     oracle.ValidName,
-		namePattern:   oracle.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (vigilView, *string, error) {
-			v, previous, err := h.deps.OracleSvc.SetVigilLabel(ctx, name, label)
+		validID:       oracle.ValidID,
+		idPattern:     oracle.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (vigilView, *string, error) {
+			v, previous, err := h.deps.OracleSvc.SetVigilLabel(ctx, id, label)
 			if err != nil {
 				return vigilView{}, nil, err
 			}
 			return toVigilView(v), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrVigilNotFound) },
-		notFoundf:  func(name string) string { return "vigil " + name + " not found" },
+		notFoundf:  func(id string) string { return "vigil " + id + " not found" },
 		failMsg:    "set vigil label failed",
 		event:      audit.EventVigilLabelChanged,
 	})
@@ -45,7 +45,7 @@ const oracleNotConfigured = "oracle registry is not configured"
 // vigilView — output projection of a Vigil for oracle-tools (schemaVigilView).
 // 1:1 with REST vigilResponse / [oracle.Vigil].
 type vigilView struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
 	Label        *string         `json:"label,omitempty"`
 	Subject      subjectPayload  `json:"subject"`
@@ -64,7 +64,7 @@ func toVigilView(v *oracle.Vigil) vigilView {
 		params = json.RawMessage("{}")
 	}
 	return vigilView{
-		Name:         v.Name,
+		ID:           v.ID,
 		Label:        v.Label,
 		Subject:      toSubjectPayload(v.Subject()),
 		Interval:     v.IntervalSpec,
@@ -81,7 +81,7 @@ func toVigilView(v *oracle.Vigil) vigilView {
 // subject carries exactly one of the four dimensions ([subjectPayload]);
 // enabled is optional (omitted → true).
 type vigilCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.oracle.vigil.label-set.
 	Label    *string         `json:"label"`
@@ -119,8 +119,8 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	enabled := true
@@ -130,7 +130,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 
 	callerAID := claims.Subject
 	v, err := h.deps.OracleSvc.CreateVigil(ctx, oracle.CreateVigilInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Label:     a.Label,
 		Subject:   a.Subject.selector(),
 		Interval:  a.Interval,
@@ -143,7 +143,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 		code, detail := mapOracleErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: oracle.vigil.create failed",
-				slog.String("name", a.Name), slog.String("by_aid", callerAID), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", callerAID), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
@@ -151,7 +151,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 	// Audit — mirrors the REST handler: payload {name, check, interval,
 	// subject, created_by_aid}. params is NOT included in the payload.
 	h.writeAudit(audit.EventVigilCreated, callerAID, map[string]any{
-		"name":           v.Name,
+		"id":             v.ID,
 		"label":          v.Label,
 		"check":          v.CheckAddr,
 		"interval":       v.IntervalSpec,
@@ -225,7 +225,7 @@ func (h *Handler) callOracleVigilList(ctx context.Context, claims *jwt.Claims, r
 
 // vigilDeleteArgs — arguments keeper.oracle.vigil.delete.
 type vigilDeleteArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // callOracleVigilDelete — mutating-tool keeper.oracle.vigil.delete. RBAC —
@@ -248,21 +248,21 @@ func (h *Handler) callOracleVigilDelete(ctx context.Context, claims *jwt.Claims,
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
-	if err := h.deps.OracleSvc.DeleteVigil(ctx, a.Name); err != nil {
+	if err := h.deps.OracleSvc.DeleteVigil(ctx, a.ID); err != nil {
 		code, detail := mapOracleErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: oracle.vigil.delete failed",
-				slog.String("name", a.Name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
 	h.writeAudit(audit.EventVigilDeleted, claims.Subject, map[string]any{
-		"name": a.Name,
+		"id": a.ID,
 	})
 
 	// REST returns 204 No Content; the MCP equivalent is an empty output object.

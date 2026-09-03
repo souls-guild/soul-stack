@@ -131,7 +131,7 @@ func (f *oracleFakeDB) Query(_ context.Context, sql string, _ ...any) (pgx.Rows,
 	return &oracleEmptyRows{}, nil
 }
 
-// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.name,
+// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.id,
 // i.covens, i.traits — one row per membership, the host's own labels repeated in
 // each (the LEFT JOIN shape), and a single row with NULL incarnation columns when
 // the host belongs to nothing. No rows at all → the host is not registered.
@@ -239,7 +239,7 @@ func decreeRow(d *oracle.Decree) []any {
 		input = []byte("{}")
 	}
 	return []any{
-		d.Name, d.OnBeacon, deref(d.WhereCEL),
+		d.ID, d.OnBeacon, deref(d.WhereCEL),
 		d.SubjectSID, deref(d.SubjectService), deref(d.SubjectIncarnation),
 		d.SubjectCoven, deref(d.SubjectTraitKey), deref(d.SubjectTraitValue),
 		d.IncarnationName, d.ActionScenario, []byte(input), d.Cooldown, d.Enabled,
@@ -401,7 +401,7 @@ func TestPortent_MatchEnqueuesScenario(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"web", "prod"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			ActionInput: []byte(`{"service":"nginx"}`), Cooldown: "5m", Enabled: true,
 		}),
@@ -452,7 +452,7 @@ func TestPortent_SubjectMismatch(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"db"}, // host is in db, Decree is about web
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
 	}
@@ -473,7 +473,7 @@ func TestPortent_MembershipMismatch(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "other-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
@@ -507,7 +507,7 @@ func TestPortent_MembershipAloneDoesNotMatchCovenSubject(t *testing.T) {
 	db := &oracleFakeDB{
 		memberOf: []string{"web-app"}, // member, but untagged
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web-app"}, IncarnationName: "web-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
@@ -531,7 +531,7 @@ func TestPortent_TaggedMemberMatchesCovenSubject(t *testing.T) {
 		soulCoven: []string{"web-app"},
 		memberOf:  []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web-app"}, IncarnationName: "web-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
@@ -556,7 +556,7 @@ func TestPortent_CovenTagIsNotMembership(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"other-app"}, // a tag, not a membership
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-other", OnBeacon: "svc-down",
+			ID: "restart-other", OnBeacon: "svc-down",
 			SubjectCoven: []string{"other-app"}, IncarnationName: "other-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
@@ -583,7 +583,7 @@ func TestPortent_SIDDecreeEnqueues(t *testing.T) {
 	db := &oracleFakeDB{
 		memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-host", OnBeacon: "svc-down",
+			ID: "restart-host", OnBeacon: "svc-down",
 			SubjectSID: []string{"host-a.example.com"}, IncarnationName: "web-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
@@ -615,7 +615,7 @@ func TestPortent_WhereCELFilters(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-crit", OnBeacon: "svc-down",
+			ID: "restart-crit", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			WhereCEL: strptr(`event.data.severity == "critical"`), Cooldown: "5m", Enabled: true,
 		}),
@@ -644,7 +644,7 @@ func TestPortent_CooldownBlocks(t *testing.T) {
 		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		lastFired: &recent,
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
 	}
@@ -664,7 +664,7 @@ func TestPortent_MetricsEnqueuePath(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			Cooldown: "5m", Enabled: true,
 		}),
@@ -694,7 +694,7 @@ func TestPortent_MetricsCooldownPath(t *testing.T) {
 		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		lastFired: &recent,
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),
 	}
@@ -742,7 +742,7 @@ func circuitDB(bumpReturns int, tripWins bool) *oracleFakeDB {
 		bumpReturns: bumpReturns,
 		tripWins:    tripWins,
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			Cooldown: "5m", Enabled: true,
 		}),
@@ -865,7 +865,7 @@ func TestPortent_EnqueueFailNoFireNoAudit(t *testing.T) {
 		// path it must not happen.
 		recordedFnc: func([]any) { fireRecorded = true },
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			Cooldown: "5m", Enabled: true,
 		}),
@@ -902,7 +902,7 @@ func TestPortent_AuditPayloadExcludesEventData(t *testing.T) {
 	db := &oracleFakeDB{
 		soulCoven: []string{"web"}, memberOf: []string{"web-app"},
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-web", OnBeacon: "svc-down",
+			ID: "restart-web", OnBeacon: "svc-down",
 			SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart",
 			Cooldown: "5m", Enabled: true,
 		}),
@@ -962,7 +962,7 @@ func TestPortent_SIDDecreeMembershipMismatch(t *testing.T) {
 		memberOf:    []string{"web-app"},
 		recordedFnc: func([]any) { fireRecorded = true },
 		decreeRows: decreesRows(&oracle.Decree{
-			Name: "restart-host", OnBeacon: "svc-down",
+			ID: "restart-host", OnBeacon: "svc-down",
 			SubjectSID: []string{"host-a.example.com"}, IncarnationName: "other-app",
 			ActionScenario: "restart", Cooldown: "5m", Enabled: true,
 		}),

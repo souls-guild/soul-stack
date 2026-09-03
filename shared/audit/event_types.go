@@ -52,7 +52,7 @@ const (
 
 	// EventIncarnationScenarioStarted — an operator started a named scenario
 	// against an existing incarnation via the Operator API
-	// (`POST /v1/incarnations/{name}/scenarios/{scenario}`, ADR-009).
+	// (`POST /v1/incarnations/{id}/scenarios/{scenario}`, ADR-009).
 	// `source: api`, `archon_aid` is the initiator; payload: `{name,
 	// scenario, apply_id}`. Async: audit is written on request acceptance
 	// (202); the run terminal is recorded by a separate `run.completed`
@@ -60,7 +60,7 @@ const (
 	EventIncarnationScenarioStarted EventType = "incarnation.scenario_started"
 
 	// EventIncarnationUnlocked — an operator cleared the error_locked status
-	// via the Operator API (`POST /v1/incarnations/{name}/unlock`, ADR-009).
+	// via the Operator API (`POST /v1/incarnations/{id}/unlock`, ADR-009).
 	// `source: api`, `archon_aid` is the initiator; payload: `{name,
 	// previous_status, reason}`. Unlock neither rolls back nor finishes the
 	// hosts — it only clears the lock; the operator takes responsibility for
@@ -69,7 +69,7 @@ const (
 
 	// EventIncarnationRerunLast — an operator re-ran the LAST failed scenario
 	// out of error_locked via the Operator API / MCP
-	// (`POST /v1/incarnations/{name}/rerun-last`, architecture.md →
+	// (`POST /v1/incarnations/{id}/rerun-last`, architecture.md →
 	// "Atomicity and error_locked"). `source: api` / `mcp`, `archon_aid` is
 	// the initiator; payload: `{name, reason, scenario, previous_status,
 	// apply_id}` (`scenario` = name of the re-run one: bootstrap `create`/…
@@ -83,7 +83,7 @@ const (
 
 	// EventIncarnationUpgradeStarted — an operator initiated moving an
 	// incarnation to a new state_schema_version via the Operator API
-	// (`POST /v1/incarnations/{name}/upgrade`, ADR-019). `source: api`,
+	// (`POST /v1/incarnations/{id}/upgrade`, ADR-019). `source: api`,
 	// `archon_aid` is the initiator; payload: `{name, to_version, apply_id}`.
 	// sync-under-202: the migration runs synchronously within the request
 	// (one PG transaction, docs/migrations.md §Atomicity), audit is written
@@ -107,7 +107,7 @@ const (
 	// cascade V3). `source: keeper_internal` (write-path — the scenario
 	// runner after the barrier, not HTTP middleware; the initiator's AID is
 	// unavailable here, archon_aid column NULL). `correlation_id` is empty.
-	// Payload: `{name, force, archive_status}` — the fact of removal and which
+	// Payload: `{id, force, archive_status}` — the fact of removal and which
 	// terminal status the archived row was stamped with. On the force path also
 	// `teardown: "skipped"` and, when the record left anything behind,
 	// `unreleased: {provider, vm_ids, sids}` (NIM-395). The archive has no read
@@ -123,12 +123,12 @@ const (
 	// EventIncarnationTraitsChanged — an Archon fully replaced the
 	// operator-set trait labels of an incarnation (`incarnation.traits`,
 	// ADR-060 amend R1) via the Operator API
-	// (`PUT /v1/incarnations/{name}/traits`) or the MCP mirror
+	// (`PUT /v1/incarnations/{id}/traits`) or the MCP mirror
 	// (`keeper.incarnation.traits-set`). incarnation.traits is the source of
 	// truth that a sync-hook materializes into `souls.traits` of member
 	// hosts; the per-soul bulk API (`POST /v1/souls/traits`) is deprecated in
 	// favor of this path. `source: api` / `mcp`, `archon_aid` is the
-	// initiator. Payload: `{name, old_keys, new_keys}` — sorted lists of
+	// initiator. Payload: `{id, old_keys, new_keys}` — sorted lists of
 	// trait KEYS before and after; the trait VALUES themselves are NOT put in
 	// the payload (they may carry host infrastructure data — the audit trail
 	// records the fact of mutation and the key set, not the content,
@@ -137,7 +137,7 @@ const (
 
 	// EventIncarnationMemberBound / EventIncarnationMemberUnbound — an Archon
 	// changed the MEMBERSHIP of an incarnation through the Operator API
-	// (`POST /v1/incarnations/{name}/members`, `DELETE .../members/{sid}`) or
+	// (`POST /v1/incarnations/{id}/members`, `DELETE .../members/{sid}`) or
 	// the MCP mirror (ADR-008 amendment 2026-07-28, NIM-209). Membership is the
 	// roster: it decides which hosts every future run of that incarnation
 	// reaches, so both directions are audited. `source: api` / `mcp`,
@@ -160,7 +160,7 @@ const (
 	// failed on the hosts: the instance is NOT removed, the incarnation moves
 	// to `destroy_failed` (state stays last known-good). `source:
 	// keeper_internal` (write-path — the scenario runner on teardown failure,
-	// archon_aid column NULL). `correlation_id = apply_id`. Payload: `{name,
+	// archon_aid column NULL). `correlation_id = apply_id`. Payload: `{id,
 	// apply_id, reason}` — `reason` is masked (the cause may transit a
 	// vault-ref). Symmetric to `incarnation.destroy_completed`: both record
 	// the destroy terminal, differing by teardown outcome.
@@ -168,7 +168,7 @@ const (
 
 	// EventIncarnationSecretRevealed — an operator revealed an incarnation
 	// secret via the Operator API
-	// (POST /v1/incarnations/{name}/secrets/reveal). `archon_aid` is the
+	// (POST /v1/incarnations/{id}/secrets/reveal). `archon_aid` is the
 	// initiator; payload `{name, secret_id, key, path}` — the secret VALUE is
 	// NOT included (the fact, not the content).
 	EventIncarnationSecretRevealed EventType = "incarnation.secret_revealed"
@@ -565,21 +565,22 @@ const (
 	// EventServiceRegistered — an Archon registered a Service in the
 	// `service_registry` via the Operator API (`POST /v1/services`) or the MCP
 	// tool `keeper.service.register` (ADR-028 RBAC-storage pattern). `source:
-	// api` or `mcp`, `archon_aid` is the initiator. Payload: `{name, git, ref,
-	// created_by_aid}` — the git URL is not a secret and is logged.
+	// api` or `mcp`, `archon_aid` is the initiator. Payload: `{id, label, git,
+	// ref, created_by_aid}` — the git URL is not a secret and is logged. The
+	// identifier key is `id` since [ADR-0085] / NIM-729.
 	EventServiceRegistered EventType = "service.registered"
 
 	// EventServiceUpdated — an Archon replaced the mutable fields of a Service
 	// record (git/ref/refresh, replace semantics) via the Operator API
-	// (`PATCH /v1/services/{name}`) or the MCP tool `keeper.service.update`.
-	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{name,
+	// (`PATCH /v1/services/{id}`) or the MCP tool `keeper.service.update`.
+	// `source: api` or `mcp`, `archon_aid` is the initiator. Payload: `{id,
 	// git, ref}` — the git URL is not a secret and is logged.
 	EventServiceUpdated EventType = "service.updated"
 
 	// EventServiceDeregistered — an Archon removed a Service record from
-	// `service_registry` via the Operator API (`DELETE /v1/services/{name}`) or
+	// `service_registry` via the Operator API (`DELETE /v1/services/{id}`) or
 	// the MCP tool `keeper.service.deregister`. `source: api` or `mcp`,
-	// `archon_aid` is the initiator. Payload: `{name}`.
+	// `archon_aid` is the initiator. Payload: `{id}`.
 	EventServiceDeregistered EventType = "service.deregistered"
 
 	// EventSigilKeyIntroduced — an Archon introduced a new Sigil signing
@@ -617,7 +618,7 @@ const (
 	EventOmenCreated EventType = "omen.created"
 
 	// EventOmenRevoked — an Archon deleted an Omen record from `omens` via the
-	// Operator API (`DELETE /v1/augur/omens/{name}`) or the MCP tool
+	// Operator API (`DELETE /v1/augur/omens/{id}`) or the MCP tool
 	// `keeper.augur.omen.delete`. `source: api` or `mcp`, `archon_aid` is the
 	// initiator. Payload: `{name}`. All related Rites are removed by cascade
 	// (ON DELETE CASCADE) (augur.md §9).
@@ -650,7 +651,7 @@ const (
 	EventVigilCreated EventType = "vigil.created"
 
 	// EventVigilDeleted — an Archon deleted a Vigil record from `vigils` via
-	// the Operator API (`DELETE /v1/vigils/{name}`) or the MCP tool
+	// the Operator API (`DELETE /v1/vigils/{id}`) or the MCP tool
 	// `keeper.oracle.vigil.delete`. `source: api` or `mcp`, `archon_aid` is
 	// the initiator. Payload: `{name}`. The Vigil stops being handed to hosts
 	// in the VigilSnapshot; Decrees are NOT cascaded to it (decrees.on_beacon
@@ -667,7 +668,7 @@ const (
 	EventDecreeCreated EventType = "decree.created"
 
 	// EventDecreeDeleted — an Archon deleted a Decree record from `decrees` via
-	// the Operator API (`DELETE /v1/decrees/{name}`) or the MCP tool
+	// the Operator API (`DELETE /v1/decrees/{id}`) or the MCP tool
 	// `keeper.oracle.decree.delete`. `source: api` or `mcp`, `archon_aid` is
 	// the initiator. Payload: `{name}`. The cooldown state in `oracle_fires`
 	// is cleaned by cascade (ON DELETE CASCADE) (ADR-030(a)).
@@ -809,13 +810,13 @@ const (
 	EventPushProviderCreated EventType = "push-provider.created"
 
 	// EventPushProviderUpdated — an Archon replaced a Push-Provider's params
-	// (replace semantics) via `PUT /v1/push-providers/{name}` or the MCP tool
+	// (replace semantics) via `PUT /v1/push-providers/{id}` or the MCP tool
 	// `keeper.push-provider.update`. `source: api`/`mcp`, `archon_aid` is the
 	// initiator. Payload: `{name, params_keys}`.
 	EventPushProviderUpdated EventType = "push-provider.updated"
 
 	// EventPushProviderDeleted — an Archon deleted a Push-Provider record via
-	// `DELETE /v1/push-providers/{name}` or the MCP tool
+	// `DELETE /v1/push-providers/{id}` or the MCP tool
 	// `keeper.push-provider.delete`. `source: api`/`mcp`, `archon_aid` is the
 	// initiator. Payload: `{name}`. On the next `push-providers:changed`
 	// pub/sub signal SshDispatcher re-spawns the plugin without an env-payload
@@ -843,7 +844,7 @@ const (
 
 	// EventChoirCreated — an Archon created a Choir record (declared host
 	// topology within an incarnation, ADR-044, S-T3) via the Operator API
-	// (`POST /v1/incarnations/{name}/choirs`) or the MCP tool
+	// (`POST /v1/incarnations/{id}/choirs`) or the MCP tool
 	// `keeper.choir.create`. `source: api` or `mcp`, `archon_aid` = the
 	// initiator's JWT.sub (created_by_aid is taken from the context, NOT from
 	// the body). Payload: `{incarnation_name, choir_name, min_size?, max_size?,
@@ -852,7 +853,7 @@ const (
 	EventChoirCreated EventType = "choir.created"
 
 	// EventChoirDeleted — an Archon deleted a Choir record via the Operator API
-	// (`DELETE /v1/incarnations/{name}/choirs/{choir}`) or the MCP tool
+	// (`DELETE /v1/incarnations/{id}/choirs/{choir}`) or the MCP tool
 	// `keeper.choir.delete`. `source: api` or `mcp`, `archon_aid` is the
 	// initiator. Payload: `{incarnation_name, choir_name}`. All of the Choir's
 	// Voices are removed by cascade (ON DELETE CASCADE).
@@ -860,7 +861,7 @@ const (
 
 	// EventChoirVoiceAdded — an Archon added a Voice (SID membership in a Choir,
 	// ADR-044) via the Operator API
-	// (`POST /v1/incarnations/{name}/choirs/{choir}/voices`) or the MCP tool
+	// (`POST /v1/incarnations/{id}/choirs/{choir}/voices`) or the MCP tool
 	// `keeper.choir.add-voice`. `source: api` or `mcp`, `archon_aid` is the
 	// initiator (added_by_aid is taken from the context, NOT from the body).
 	// Payload: `{incarnation_name, choir_name, sid, role?, position?,
@@ -869,7 +870,7 @@ const (
 
 	// EventChoirVoiceRemoved — an Archon removed a Voice from a Choir via the
 	// Operator API
-	// (`DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid}`) or the MCP
+	// (`DELETE /v1/incarnations/{id}/choirs/{choir}/voices/{sid}`) or the MCP
 	// tool `keeper.choir.remove-voice`. `source: api` or `mcp`, `archon_aid` is
 	// the initiator. Payload: `{incarnation_name, choir_name, sid}`.
 	EventChoirVoiceRemoved EventType = "choir.voice_removed"
@@ -1177,7 +1178,7 @@ const (
 	EventProviderCreated EventType = "provider.created"
 
 	// EventProviderDeleted — an Archon deleted a Cloud Provider via
-	// `DELETE /v1/providers/{name}` or the MCP tool `keeper.provider.delete`.
+	// `DELETE /v1/providers/{id}` or the MCP tool `keeper.provider.delete`.
 	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProviderDeleted EventType = "provider.deleted"
 
@@ -1190,7 +1191,7 @@ const (
 	EventProfileCreated EventType = "profile.created"
 
 	// EventProfileDeleted — an Archon deleted a Cloud Profile via
-	// `DELETE /v1/profiles/{name}` or the MCP tool `keeper.profile.delete`.
+	// `DELETE /v1/profiles/{id}` or the MCP tool `keeper.profile.delete`.
 	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProfileDeleted EventType = "profile.deleted"
 
@@ -1260,13 +1261,16 @@ const (
 	EventAuditEnabled EventType = "audit.enabled"
 
 	// `<resource>.label_changed` — an Archon replaced the DISPLAY CAPTION of one
-	// registry row ([ADR-0085], NIM-728), via `PUT /v1/<collection>/{name}/label`
+	// registry row ([ADR-0085], NIM-728), via `PUT /v1/<collection>/{id}/label`
 	// or the mirror MCP tool `keeper.<resource>.label-set`. `source: api`/`mcp`,
 	// `archon_aid` is the initiator, permission `<resource>.label-set`.
 	//
-	// Payload for every one of the ten: `{name, old_label, new_label}` — the
+	// Payload for every one of the ten: `{id, old_label, new_label}` — the
 	// identifier that was addressed and the caption on BOTH sides of the change.
-	// This follows `incarnation.traits_changed` (`{name, old_keys, new_keys}`),
+	// The identifier key is `id` since [ADR-0085] / NIM-729 renamed it — on
+	// this family and on every other incarnation event, `traits_changed`
+	// included.
+	// This follows `incarnation.traits_changed` (`{id, old_keys, new_keys}`),
 	// the event this family is named after; a caption is display text and the
 	// trail can afford to carry it whole, so unlike traits — which record KEYS
 	// only, because a value may be sensitive — both values are recorded verbatim.
@@ -1277,7 +1281,7 @@ const (
 	// `UPDATE … RETURNING`, so it always describes a transition that really
 	// happened rather than one a concurrent edit invented between two statements.
 	//
-	// `name` is the identifier and it is NOT what changed — there is no rename
+	// `id` is the identifier and it is NOT what changed — there is no rename
 	// operation anywhere. What makes these events cheap to read is the invariant
 	// behind the field: a caption participates in nothing derived (no Vault path,
 	// no RBAC scope, no snapshot directory, no CEL root), so one of these events

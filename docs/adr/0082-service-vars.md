@@ -324,7 +324,7 @@ No proto field number moves and no field is deleted, so [ADR-012(c)](0012-keeper
 only-add is not violated; what changes is the key set inside a Struct. It is nonetheless a
 **breaking Keeper↔Soul change within the release**: a Soul from before this train reads
 `flow_context["essence"]` and finds nothing. Acceptable only because the whole train breaks
-the public contract anyway (`spec` and `essence` leave `GET /v1/incarnations/{name}`) and
+the public contract anyway (`spec` and `essence` leave `GET /v1/incarnations/{id}`) and
 both sides ship together; it is recorded here so nobody discovers it from a field report.
 
 Cheap in practice on the template side: **no `.tmpl` in `examples/` reads `.essence`** — the
@@ -383,7 +383,7 @@ the tooling. The service repositories under `examples/` and `dev/` are **NIM-415
 ### Consequences
 
 - **Breaking, for the public API and for every service repository.** `spec` and `essence`
-  leave `GET /v1/incarnations/{name}`; every service repo renames a directory and a file and
+  leave `GET /v1/incarnations/{id}`; every service repo renames a directory and a file and
   rewrites its `essence.<key>` references. In this repo that is 642 references across `examples/`
   (624 of them under the thirteen `examples/service/` trees, the rest under `examples/destiny/`),
   plus three `dev/upgrade-demo/tree/v*/essence/` fixtures; the external destiny repos are

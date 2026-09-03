@@ -16,21 +16,25 @@ import (
 	"time"
 )
 
-// NamePattern is the canonical form for PushProvider names: kebab-case,
+// IDPattern is the canonical form for PushProvider ids: kebab-case,
 // starts with a letter, length 1..63. Matches CHECK constraint
-// push_providers_name_format in migration 054 and pattern
-// ^[a-z][a-z0-9-]{0,62}$ from keeper.yml::push.providers[].name.
+// push_providers_id_format in migration 118 (push_providers_name_format before
+// it) and pattern ^[a-z][a-z0-9-]{0,62}$ from keeper.yml::push.providers[].
 //
 // Additional restriction vs cloud-Provider (^[a-z0-9-]{1,63}$):
-// name must start with a letter because it translates to an env var
-// (SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS)—a leading digit or dash
+// the id must start with a letter because it translates to an env var
+// (SOUL_SSH_<UPPER_SNAKE(id)>_PARAMS)—a leading digit or dash
 // would break the env-var-name.
-const NamePattern = `^[a-z][a-z0-9-]{0,62}$`
+//
+// The form is UNCHANGED by the `name` -> `id` rename ([ADR-0085], NIM-729): the
+// identifier moved spelling, not grammar, and this registry's letter-first rule
+// is a local mechanical constraint that survives it.
+const IDPattern = `^[a-z][a-z0-9-]{0,62}$`
 
-var nameRe = regexp.MustCompile(NamePattern)
+var idRe = regexp.MustCompile(IDPattern)
 
-// ValidName checks whether name matches the canonical form.
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks whether id matches the canonical form.
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // PushProvider is the runtime representation of a push_providers table row.
 //
@@ -40,12 +44,15 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 // (vault:<path>)—validation occurs at service layer (Service.validateSensitive),
 // not storage.
 type PushProvider struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): set once at creation, the
+	// PRIMARY KEY of `push_providers`, and the source of the env-var name
+	// SOUL_SSH_<UPPER_SNAKE(id)>_PARAMS. There is no rename operation.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead. It participates in nothing derived — in
-	// particular NOT the env-var name SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS, which
-	// is built from Name alone. That is also why Name keeps the letter-first
+	// consumer shows ID instead. It participates in nothing derived — in
+	// particular NOT the env-var name SOUL_SSH_<UPPER_SNAKE(id)>_PARAMS, which
+	// is built from ID alone. That is also why ID keeps the letter-first
 	// rule and Label needs no rule at all.
 	//
 	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md

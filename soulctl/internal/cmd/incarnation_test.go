@@ -61,7 +61,7 @@ func TestIncarnationsList(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
 					{
-						"name": "redis-prod", "service": "redis-cluster",
+						"id": "redis-prod", "service": "redis-cluster",
 						"service_version": "v1.2.3", "state_schema_version": 1,
 						"covens": []string{"prod", "dc1"}, "status": "ready",
 						"created_by_aid": "archon-alice", "created_at": "2026-05-26T10:00:00Z",
@@ -82,7 +82,7 @@ func TestIncarnationsList(t *testing.T) {
 	if atomic.LoadInt32(&called) != 1 {
 		t.Fatalf("handler was not called")
 	}
-	if len(reply.Items) != 1 || reply.Items[0].Name != "redis-prod" {
+	if len(reply.Items) != 1 || reply.Items[0].ID != "redis-prod" {
 		t.Fatalf("unexpected response: %+v", reply)
 	}
 	if reply.Total != 1 {
@@ -98,10 +98,10 @@ func TestIncarnationsListCovenClientSide(t *testing.T) {
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
-					{"name": "a", "service": "s", "service_version": "v", "state_schema_version": 1,
+					{"id": "a", "service": "s", "service_version": "v", "state_schema_version": 1,
 						"covens": []string{"prod"}, "status": "ready",
 						"created_by_aid": "archon-x", "created_at": "t", "updated_at": "t"},
-					{"name": "b", "service": "s", "service_version": "v", "state_schema_version": 1,
+					{"id": "b", "service": "s", "service_version": "v", "state_schema_version": 1,
 						"covens": []string{"dev"}, "status": "ready",
 						"created_by_aid": "archon-x", "created_at": "t", "updated_at": "t"},
 				},
@@ -114,7 +114,7 @@ func TestIncarnationsListCovenClientSide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("List: %v", err)
 	}
-	if len(reply.Items) != 1 || reply.Items[0].Name != "a" {
+	if len(reply.Items) != 1 || reply.Items[0].ID != "a" {
 		t.Fatalf("expected only incarnation 'a', got %+v", reply.Items)
 	}
 }
@@ -126,7 +126,7 @@ func TestIncarnationsGet(t *testing.T) {
 				t.Errorf("expected GET, got %s", r.Method)
 			}
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"name": "redis-prod", "service": "redis-cluster",
+				"id": "redis-prod", "service": "redis-cluster",
 				"service_version": "v1.2.3", "state_schema_version": 1,
 				"covens": []string{"prod"}, "status": "ready",
 				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",
@@ -137,8 +137,8 @@ func TestIncarnationsGet(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Get: %v", err)
 	}
-	if it.Name != "redis-prod" {
-		t.Errorf("name: got %q", it.Name)
+	if it.ID != "redis-prod" {
+		t.Errorf("id: got %q", it.ID)
 	}
 }
 
@@ -262,7 +262,7 @@ func TestWaitForApplySuccess(t *testing.T) {
 		},
 		"/v1/incarnations/redis-prod": func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"name": "redis-prod", "service": "s", "service_version": "v",
+				"id": "redis-prod", "service": "s", "service_version": "v",
 				"state_schema_version": 1, "covens": []string{}, "status": "ready",
 				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",
 			})
@@ -293,7 +293,7 @@ func TestWaitForApplyBlocking(t *testing.T) {
 		},
 		"/v1/incarnations/redis-prod": func(w http.ResponseWriter, _ *http.Request) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
-				"name": "redis-prod", "service": "s", "service_version": "v",
+				"id": "redis-prod", "service": "s", "service_version": "v",
 				"state_schema_version": 1, "covens": []string{},
 				"status":         "error_locked",
 				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",

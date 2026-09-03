@@ -8,17 +8,17 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/subject"
 )
 
-func TestValidName(t *testing.T) {
+func TestValidID(t *testing.T) {
 	good := []string{"a", "vault-prod", "prom-main", "elk-logs", "1cloud"}
 	bad := []string{"", "Upper", "with_underscore", "x:colon", strings.Repeat("a", 64)}
 	for _, n := range good {
-		if !ValidName(n) {
-			t.Errorf("ValidName(%q) = false, want true", n)
+		if !ValidID(n) {
+			t.Errorf("ValidID(%q) = false, want true", n)
 		}
 	}
 	for _, n := range bad {
-		if ValidName(n) {
-			t.Errorf("ValidName(%q) = true, want false", n)
+		if ValidID(n) {
+			t.Errorf("ValidID(%q) = true, want false", n)
 		}
 	}
 }

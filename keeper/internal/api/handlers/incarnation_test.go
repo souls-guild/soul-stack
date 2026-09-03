@@ -176,7 +176,7 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 		return errRow{err: pgx.ErrNoRows}
 	}
 	// UpdateHosts: UPDATE incarnation SET spec = ... RETURNING updated_at.
-	// This UPDATE-with-RETURNING arrives BEFORE the generic "WHERE name = $1" match
+	// This UPDATE-with-RETURNING arrives BEFORE the generic "WHERE id = $1" match
 	// (the same predicate is here too), so it is handled by a separate branch
 	// and returns a fresh timestamp to Scan(*time.Time).
 	//
@@ -201,7 +201,7 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 	}
 	// NIM-395 force-destroy capture: SELECT state … status = 'destroying', read
 	// inside the deleting tx to record what teardown never released. Must come
-	// BEFORE the generic "WHERE name = $1" match (the same predicate is here
+	// BEFORE the generic "WHERE id = $1" match (the same predicate is here
 	// too). Carries real provisioned resources rather than `{}` — an empty
 	// object would be produced by an implementation that captures nothing.
 	if strings.Contains(sql, "SELECT state") && strings.Contains(sql, "status = 'destroying'") {
@@ -209,7 +209,7 @@ func (f *fakeIncDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
 		}}
 	}
-	if strings.Contains(sql, "FROM incarnation\nWHERE name") || strings.Contains(sql, "WHERE name = $1") {
+	if strings.Contains(sql, "FROM incarnation\nWHERE id") || strings.Contains(sql, "WHERE id = $1") {
 		if f.selectByNameRow != nil {
 			return f.selectByNameRow(args[0].(string))
 		}
@@ -348,7 +348,7 @@ func (r *emptyRows) Values() ([]any, error)                       { return nil, 
 func (r *emptyRows) RawValues() [][]byte                          { return nil }
 func (r *emptyRows) Conn() *pgx.Conn                              { return nil }
 
-// makeIncarnationRow builds a pgx.Row stub for SelectByName with
+// makeIncarnationRow builds a pgx.Row stub for SelectByID with
 // preset fields. Used for the Get/History existence-probe test.
 func makeIncarnationRow(name string) pgx.Row {
 	now := time.Now()
@@ -370,7 +370,7 @@ func TestIncarnation_Create_202(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","input":{"replicas":3}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","input":{"replicas":3}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -406,7 +406,7 @@ func TestIncarnation_Create_Covens_Accepted(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["prod","dc1"]}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","covens":["prod","dc1"]}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusAccepted {
@@ -421,7 +421,7 @@ func TestIncarnation_Create_InvalidCoven_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["Bad_Coven"]}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","covens":["Bad_Coven"]}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -436,7 +436,7 @@ func TestIncarnation_Create_InvalidName_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"Bad_Name","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"Bad_Name","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -451,7 +451,7 @@ func TestIncarnation_Create_MissingService_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -469,7 +469,7 @@ func TestIncarnation_Create_DuplicateName_409(t *testing.T) {
 	}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -500,8 +500,8 @@ func TestIncarnation_Get_200(t *testing.T) {
 	if err := json.NewDecoder(rec.Body).Decode(&dto); err != nil {
 		t.Fatalf("decode: %v", err)
 	}
-	if dto.Name != "redis-prod" {
-		t.Errorf("Name = %q", dto.Name)
+	if dto.ID != "redis-prod" {
+		t.Errorf("id = %q", dto.ID)
 	}
 	if dto.Status != "ready" {
 		t.Errorf("Status = %q", dto.Status)
@@ -539,7 +539,7 @@ func TestIncarnation_Get_InvalidName_422(t *testing.T) {
 func TestToDTO_MasksSecretsInState(t *testing.T) {
 	pwd := "s3cr3t"
 	inc := &incarnation.Incarnation{
-		Name:   "redis-prod",
+		ID:     "redis-prod",
 		Status: incarnation.StatusReady,
 		State: map[string]any{
 			"admin_token": pwd,
@@ -567,7 +567,7 @@ func TestToDTO_MasksSecretsInState(t *testing.T) {
 func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
 	cs := "create_cluster"
 	inc := &incarnation.Incarnation{
-		Name:            "redis-prod",
+		ID:              "redis-prod",
 		Status:          incarnation.StatusReady,
 		CreatedScenario: &cs,
 		Traits:          map[string]any{"env": "prod", "az": []any{"a", "b"}},
@@ -585,7 +585,7 @@ func TestToIncarnationGetView_ProjectsTraitsAndCreatedScenario(t *testing.T) {
 	}
 
 	// Empty domain values pass through as-is (omitempty drops them in the wire projection).
-	empty := &incarnation.Incarnation{Name: "x", Status: incarnation.StatusReady, Traits: map[string]any{}}
+	empty := &incarnation.Incarnation{ID: "x", Status: incarnation.StatusReady, Traits: map[string]any{}}
 	emptyView := toIncarnationGetView(empty, nil)
 	if emptyView.CreatedScenario != "" {
 		t.Errorf("CreatedScenario = %q, want empty", emptyView.CreatedScenario)
@@ -984,7 +984,7 @@ func TestIncarnation_Create_InvalidService_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"Bad/Service"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"Bad/Service"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -1015,7 +1015,7 @@ func TestIncarnation_Create_NilInput_SpecEmpty(t *testing.T) {
 	db := &captureInsertDB{fakeIncDB: &fakeIncDB{}}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -1252,8 +1252,8 @@ func TestIncarnation_List_BareIncarnation_NoPanic(t *testing.T) {
 	if out.Total != 1 || len(out.Items) != 1 {
 		t.Fatalf("total/len = %d/%d, want 1/1", out.Total, len(out.Items))
 	}
-	if out.Items[0]["name"] != "redis-bare" {
-		t.Errorf("item name = %v, want redis-bare", out.Items[0]["name"])
+	if out.Items[0]["id"] != "redis-bare" {
+		t.Errorf("item id = %v, want redis-bare", out.Items[0]["id"])
 	}
 }
 
@@ -1355,8 +1355,8 @@ func TestIncarnation_List_IncarnationScope_ReachesSQL(t *testing.T) {
 	if !scopeArgHas(db.lastCountArgs, []string{"redis-prod"}) {
 		t.Errorf("incarnation-scope [redis-prod] did not reach SQL-args: %v", db.lastCountArgs)
 	}
-	if !strings.Contains(listSQL, "name = ANY") {
-		t.Errorf("incarnation pushdown (name = ANY) not in SQL: %q", listSQL)
+	if !strings.Contains(listSQL, "id = ANY") {
+		t.Errorf("incarnation pushdown (id = ANY) not in SQL: %q", listSQL)
 	}
 }
 
@@ -1601,7 +1601,7 @@ func TestIncarnationScopeSelector_ReadsRow(t *testing.T) {
 }
 
 func TestIncarnationScopeSelector_NotFound_Nil(t *testing.T) {
-	db := &fakeIncDB{} // SelectByName → ErrNoRows
+	db := &fakeIncDB{} // SelectByID → ErrNoRows
 	sel := IncarnationScopeSelector(db)
 	req := newChiRequest(http.MethodGet, "/v1/incarnations/missing", nil, "name", "missing")
 	if got := sel(req); got != nil {
@@ -1619,7 +1619,7 @@ func TestIncarnationScopeSelector_InvalidName_Nil(t *testing.T) {
 }
 
 func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
-	body := bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","covens":["prod"]}`))
+	body := bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","covens":["prod"]}`))
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", body)
 	ctxs := IncarnationCreateScopeSelector(req)
 	if !hasCovenCtx(ctxs, "redis-prod", "redis", "prod") {
@@ -1788,7 +1788,7 @@ func newChiRequestScenario(method, path string, body *bytes.Reader, name, scenar
 	return r
 }
 
-// makeIncStatusRow builds a staticRow for SelectByName with a given
+// makeIncStatusRow builds a staticRow for SelectByID with a given
 // status (for the Run-probe error_locked).
 func makeIncStatusRow(name, status string) pgx.Row {
 	now := time.Now()
@@ -1980,7 +1980,7 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 // TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Phase 2: a bare incarnation
 // (created_scenario IS NULL) runs an ORDINARY operational scenario (day-2) via
 // RunTyped normally — 202, the run starts. RunTyped resolves the incarnation by
-// SelectByName and does NOT read created_scenario for a day-2 run (it is needed only for
+// SelectByID and does NOT read created_scenario for a day-2 run (it is needed only for
 // rerun-last on the create path). Regress = the day-2 path starts requiring created_scenario non-NULL
 // (or panics on the NULL projection) → bare incarnations lose day-2 operations.
 func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
@@ -2023,7 +2023,7 @@ func TestIncarnation_Unlock_200(t *testing.T) {
 		t.Fatalf("Code = %d, body=%s", rec.Code, rec.Body.String())
 	}
 	var out struct {
-		Name           string `json:"name"`
+		ID             string `json:"id"`
 		PreviousStatus string `json:"previous_status"`
 		Status         string `json:"status"`
 		UnlockedByAID  string `json:"unlocked_by_aid"`
@@ -2040,8 +2040,8 @@ func TestIncarnation_Unlock_200(t *testing.T) {
 	if out.UnlockedByAID != "archon-alice" {
 		t.Errorf("unlocked_by_aid = %q", out.UnlockedByAID)
 	}
-	if out.Name != "redis-prod" {
-		t.Errorf("name = %q", out.Name)
+	if out.ID != "redis-prod" {
+		t.Errorf("id = %q", out.ID)
 	}
 	// Unlock writes a state_history INSERT + UPDATE → 2 Execs.
 	if len(db.execCalls) != 2 {
@@ -2250,7 +2250,7 @@ func (f *fakeLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte,
 	return nil, os.ErrNotExist
 }
 
-// makeIncRowVer builds a staticRow for SelectByName with given
+// makeIncRowVer builds a staticRow for SelectByID with given
 // service_version and state_schema_version (for the Upgrade `from` resolve).
 func makeIncRowVer(name, serviceVersion string, schema int) pgx.Row {
 	now := time.Now()
@@ -2495,7 +2495,7 @@ func TestIncarnation_Upgrade_DowngradeViaRef_409(t *testing.T) {
 	// (forward-only, ADR-019) BEFORE calling LoadMigrationChain — the real path,
 	// which used to fall into 500 (the loader on from>to returns a plain error,
 	// not ErrMigrationChainBroken). Differs from the downgrade case in
-	// SentinelMapping: there SelectByName sees a compatible schema, and downgrade
+	// SentinelMapping: there SelectByID sees a compatible schema, and downgrade
 	// is detected later under FOR UPDATE (race protection).
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncRowVer(name, "v3", 3) },
@@ -2639,7 +2639,7 @@ func TestIncarnation_Upgrade_SentinelMapping(t *testing.T) {
 			wantType:     problem.TypeIncarnationLocked,
 		},
 		{
-			// SelectByName sees schema 1, FOR UPDATE sees 5 (a resolve↔lock race)
+			// SelectByID sees schema 1, FOR UPDATE sees 5 (a resolve↔lock race)
 			// with an empty chain → schema-mismatch.
 			name:         "schema_mismatch→409",
 			upgradeRow:   func(_ string) pgx.Row { return makeUpgradeSelectRow(5, "ready") },
@@ -2746,7 +2746,7 @@ func TestIncarnation_Create_RequiredInputMissing_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{}}`)))
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create","input":{}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2767,7 +2767,7 @@ func TestIncarnation_Create_RequiredInputMissing_NilInput_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`)))
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2785,7 +2785,7 @@ func TestIncarnation_Create_RequiredInputProvided_202(t *testing.T) {
 	db := &fakeIncDB{}
 	h, starter := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)))
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2806,7 +2806,7 @@ func TestIncarnation_Create_TypeMismatch_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h, _ := newCreateHandlerWithSchema(t, db, scenarioCreateRequiredInput)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice","replicas":"x"}}`)))
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create","input":{"name":"alice","replicas":"x"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2824,7 +2824,7 @@ func TestIncarnation_Create_NoSchema_202(t *testing.T) {
 	db := &fakeIncDB{}
 	h, _ := newCreateHandlerWithSchema(t, db, "name: create\ntasks: []\n")
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`)))
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -2852,7 +2852,7 @@ func TestIncarnation_Create_AutoCreateFalse_NoRun(t *testing.T) {
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -2894,7 +2894,7 @@ func TestIncarnation_Create_AutoCreateTrueExplicit_Run(t *testing.T) {
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -2917,7 +2917,7 @@ func TestIncarnation_Create_NoLifecycleBlock_Run(t *testing.T) {
 	// lifecycle=nil in fakeLoader (a manifest without the block) → auto_create defaults to true.
 	h, starter := newCreateHandlerWithSchema(t, db, "name: create\ntasks: []\n")
 	req := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
+		bytes.NewReader([]byte(`{"id":"ba","service":"redis","create_scenario":"create"}`))), "archon-alice")
 	rec := incCreate(h, req)
 
 	if rec.Code != http.StatusAccepted {
@@ -2990,7 +2990,7 @@ func TestIncarnation_Run_RequiredInputProvided_202(t *testing.T) {
 // them (the key would then disappear and the contract would break — the client/UI expects null).
 func TestIncarnationGetReply_GoldenNullFields(t *testing.T) {
 	inc := &incarnation.Incarnation{
-		Name:               "redis-prod",
+		ID:                 "redis-prod",
 		Service:            "redis",
 		ServiceVersion:     "v1",
 		StateSchemaVersion: 1,

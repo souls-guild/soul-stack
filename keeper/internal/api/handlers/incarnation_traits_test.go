@@ -30,7 +30,7 @@ func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -73,7 +73,7 @@ func TestIncarnation_Create_NoTraits_WritesEmptyTraits(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusAccepted {
@@ -101,7 +101,7 @@ func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -112,7 +112,7 @@ func TestIncarnation_Create_InvalidTraitValue_422(t *testing.T) {
 	}
 }
 
-// --- PUT /v1/incarnations/{name}/traits (SetTraitsTyped) ---
+// --- PUT /v1/incarnations/{id}/traits (SetTraitsTyped) ---
 
 // TestIncarnation_SetTraits_200_Replaces — successful wholesale replacement: 200 +
 // incarnation.traits written with the given set (jsonb arg of the UPDATE).

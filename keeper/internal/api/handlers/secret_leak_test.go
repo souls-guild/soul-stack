@@ -69,7 +69,7 @@ func TestHeraldAuditNoPlaintext(t *testing.T) {
 	sec := leakHandlerPlaintext
 	reply, err := h.CreateHeraldTyped(context.Background(), &keeperjwt.Claims{Subject: "archon-test"},
 		HeraldCreateInput{
-			Name:   "ops-hook",
+			ID:     "ops-hook",
 			Type:   "webhook",
 			Config: map[string]any{"url": "https://example.com/hook"},
 			Secret: &sec,
@@ -102,7 +102,7 @@ func TestProviderAuditNoPlaintext(t *testing.T) {
 	h := NewProviderHandler(svc, nil)
 	reply, err := h.CreateTyped(context.Background(), &keeperjwt.Claims{Subject: "archon-test"},
 		ProviderCreateInput{
-			Name:        "aws-prod",
+			ID:          "aws-prod",
 			Type:        "aws",
 			Region:      "eu-west-1",
 			Credentials: map[string]any{"secret_key": leakHandlerPlaintext},

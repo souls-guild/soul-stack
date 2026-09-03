@@ -263,7 +263,7 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 	// in Vault and the reference in the register.
 	stateChanged := false
 	_, captureErr := m.Store.CaptureState(ctx, keeperincarnation.CaptureSpec{
-		Name:         incarnation,
+		ID:           incarnation,
 		Scenario:     scope.Scenario,
 		ApplyID:      scope.ApplyID,
 		HistoryID:    audit.NewULID(),

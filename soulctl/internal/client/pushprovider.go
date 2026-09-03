@@ -18,7 +18,7 @@ type PushProvidersAPI struct {
 
 // PushProviderBody is the body for POST /v1/push-providers (create).
 type PushProviderBody struct {
-	Name   string         `json:"name"`
+	ID     string         `json:"id"`
 	Params map[string]any `json:"params,omitempty"`
 }
 
@@ -29,7 +29,7 @@ type PushProviderUpdateBody struct {
 
 // PushProviderEntry is the JSON shape of a Push-Provider in responses.
 type PushProviderEntry struct {
-	Name         string         `json:"name"`
+	ID           string         `json:"id"`
 	Params       map[string]any `json:"params"`
 	CreatedAt    time.Time      `json:"created_at"`
 	UpdatedAt    time.Time      `json:"updated_at"`
@@ -47,14 +47,14 @@ type PushProviderListReply struct {
 
 // PushProviderListOptions holds list filters.
 type PushProviderListOptions struct {
-	NamePattern string
-	Limit       int
-	Offset      int
+	IDPattern string
+	Limit     int
+	Offset    int
 }
 
 // Create is POST /v1/push-providers. Permission: push-provider.create.
 func (a *PushProvidersAPI) Create(ctx context.Context, body PushProviderBody) (*PushProviderEntry, error) {
-	if body.Name == "" {
+	if body.ID == "" {
 		return nil, fmt.Errorf("name is empty")
 	}
 	var reply PushProviderEntry
@@ -99,8 +99,8 @@ func (a *PushProvidersAPI) Get(ctx context.Context, name string) (*PushProviderE
 // List is GET /v1/push-providers. Permission: push-provider.list.
 func (a *PushProvidersAPI) List(ctx context.Context, opts PushProviderListOptions) (*PushProviderListReply, error) {
 	q := url.Values{}
-	if opts.NamePattern != "" {
-		q.Set("name_pattern", opts.NamePattern)
+	if opts.IDPattern != "" {
+		q.Set("id_pattern", opts.IDPattern)
 	}
 	if opts.Limit > 0 {
 		q.Set("limit", strconv.Itoa(opts.Limit))

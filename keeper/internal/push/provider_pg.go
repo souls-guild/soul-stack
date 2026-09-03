@@ -26,7 +26,7 @@ var ErrPushProviderNotConfigured = errors.New("push: provider not configured in 
 // the PG resolver needs. Implemented by a wrapper over pgxpool.Pool (see
 // [NewPGPushProviderReader]); unit tests substitute a fake.
 type PushProviderResolver interface {
-	SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error)
+	SelectByID(ctx context.Context, name string) (*pushprovider.PushProvider, error)
 }
 
 // pgPoolPushProviderReader is the production implementation of
@@ -43,8 +43,8 @@ func NewPGPushProviderReader(db pushprovider.ExecQueryRower) PushProviderResolve
 	return &pgPoolPushProviderReader{db: db}
 }
 
-func (r *pgPoolPushProviderReader) SelectByName(ctx context.Context, name string) (*pushprovider.PushProvider, error) {
-	return pushprovider.SelectByName(ctx, r.db, name)
+func (r *pgPoolPushProviderReader) SelectByID(ctx context.Context, name string) (*pushprovider.PushProvider, error) {
+	return pushprovider.SelectByID(ctx, r.db, name)
 }
 
 // LegacyPushProvidersFallback is the narrow surface over resolving config
@@ -109,7 +109,7 @@ type PGFallbackProviderResolver struct {
 // ResolveParams returns env-payload params for the plugin named pluginName.
 // Semantics — see the type's doc comment.
 func (r *PGFallbackProviderResolver) ResolveParams(ctx context.Context, pluginName string) (map[string]any, error) {
-	p, err := r.Reader.SelectByName(ctx, pluginName)
+	p, err := r.Reader.SelectByID(ctx, pluginName)
 	if err == nil {
 		if p.Params == nil {
 			return map[string]any{}, nil

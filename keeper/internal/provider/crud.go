@@ -16,8 +16,8 @@ import (
 //   - ErrProviderAlreadyExists -> 409 provider-already-exists.
 //   - ErrProviderNotFound      -> 404 not-found.
 var (
-	ErrProviderAlreadyExists = errors.New("provider: name already exists")
-	ErrProviderNotFound      = errors.New("provider: name not found")
+	ErrProviderAlreadyExists = errors.New("provider: id already exists")
+	ErrProviderNotFound      = errors.New("provider: id not found")
 	// ErrProviderHasProfiles means deleting a Provider referenced by Profiles (FK
 	// profiles_provider_fk ON DELETE RESTRICT, migration 020). Handler maps it to
 	// 409 because delete is blocked by dependencies.
@@ -49,12 +49,12 @@ var (
 // insertSQL is INSERT with RETURNING to fetch server-side created_at
 // (DEFAULT NOW()) in one round trip.
 const insertSQL = `
-INSERT INTO providers (name, type, region, credentials_ref, created_by_aid, fqdn_suffix, label)
+INSERT INTO providers (id, type, region, credentials_ref, created_by_aid, fqdn_suffix, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at
 `
 
-const selectColumns = `name, type, region, credentials_ref, created_by_aid, created_at, fqdn_suffix, label`
+const selectColumns = `id, type, region, credentials_ref, created_by_aid, created_at, fqdn_suffix, label`
 
 // updateLabelSQL replaces the display caption of one row ([ADR-0085]). It touches
 // `label` and nothing else — the PK is not in the SET list, because the
@@ -63,22 +63,22 @@ const updateLabelSQL = `
 UPDATE providers AS x
 SET label = $2
 FROM providers AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const selectByNameSQL = `
+const selectByIDSQL = `
 SELECT ` + selectColumns + `
 FROM providers
-WHERE name = $1
+WHERE id = $1
 `
 
-const deleteSQL = `DELETE FROM providers WHERE name = $1`
+const deleteSQL = `DELETE FROM providers WHERE id = $1`
 
 // Insert inserts a new Provider.
 //
 // Pre-conditions:
-//   - p.Name / p.Type match [NamePattern];
+//   - p.Name / p.Type match [IDPattern];
 //   - p.Region is non-empty;
 //   - p.CredentialsRef passes [ValidCredentialsRef].
 //
@@ -90,11 +90,11 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 	if p == nil {
 		return fmt.Errorf("provider: nil provider")
 	}
-	if !ValidName(p.Name) {
-		return fmt.Errorf("provider: invalid name %q (must match %s)", p.Name, NamePattern)
+	if !ValidID(p.ID) {
+		return fmt.Errorf("provider: invalid id %q (must match %s)", p.ID, IDPattern)
 	}
-	if !ValidName(p.Type) {
-		return fmt.Errorf("provider: invalid type %q (must match %s)", p.Type, NamePattern)
+	if !ValidID(p.Type) {
+		return fmt.Errorf("provider: invalid type %q (must match %s)", p.Type, IDPattern)
 	}
 	if p.Region == "" {
 		return fmt.Errorf("provider: region is empty")
@@ -127,7 +127,7 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Provider) error {
 	}
 
 	row := db.QueryRow(ctx, insertSQL,
-		p.Name, p.Type, p.Region, p.CredentialsRef, createdByAID, fqdnSuffix, label,
+		p.ID, p.Type, p.Region, p.CredentialsRef, createdByAID, fqdnSuffix, label,
 	)
 	if err := row.Scan(&p.CreatedAt); err != nil {
 		return mapInsertError(err)
@@ -151,9 +151,9 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("provider: insert: %w", err)
 }
 
-// SelectByName reads a Provider by PK. [ErrProviderNotFound] on pgx.ErrNoRows.
-func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Provider, error) {
-	row := db.QueryRow(ctx, selectByNameSQL, name)
+// SelectByID reads a Provider by PK. [ErrProviderNotFound] on pgx.ErrNoRows.
+func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*Provider, error) {
+	row := db.QueryRow(ctx, selectByIDSQL, id)
 	return scanProvider(row)
 }
 
@@ -165,7 +165,7 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 		label        *string
 	)
 	err := row.Scan(
-		&p.Name,
+		&p.ID,
 		&p.Type,
 		&p.Region,
 		&p.CredentialsRef,
@@ -203,16 +203,16 @@ func scanProvider(row pgx.Row) (*Provider, error) {
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+func UpdateLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("provider: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, updateLabelSQL, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, updateLabelSQL, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrProviderNotFound
 		}
@@ -227,11 +227,11 @@ func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *str
 // FK profiles_provider_fk (ON DELETE RESTRICT, migration 020): deleting a Provider
 // with dependent Profiles returns a wrapped FK violation ([ErrProviderHasProfiles]).
 // Handler maps it to 409, symmetric to "delete impossible, dependencies exist".
-func Delete(ctx context.Context, db ExecQueryRower, name string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+func Delete(ctx context.Context, db ExecQueryRower, id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("provider: invalid id %q (must match %s)", id, IDPattern)
 	}
-	tag, err := db.Exec(ctx, deleteSQL, name)
+	tag, err := db.Exec(ctx, deleteSQL, id)
 	if err != nil {
 		var pgErr *pgconn.PgError
 		if errors.As(err, &pgErr) && pgErr.Code == pgErrCodeForeignKeyViolation {
@@ -268,7 +268,7 @@ func SelectAll(ctx context.Context, db ExecQueryRower, offset, limit int) ([]*Pr
 
 	const listSQL = `SELECT ` + selectColumns + `
 FROM providers
-ORDER BY created_at DESC, name ASC
+ORDER BY created_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {

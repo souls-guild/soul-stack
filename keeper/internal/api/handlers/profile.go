@@ -44,9 +44,9 @@ func ProfileSpecStub() *ProfileHandler {
 // ProfileCreateInput — the NATIVE request shape of POST /v1/profiles (handler-native).
 // Params — optional pointer (nil → {}); CloudInit — optional userdata.
 type ProfileCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/profiles/{name}/label. nil/blank → NULL, and the consumer shows
+	// by PUT /v1/profiles/{id}/label. nil/blank → NULL, and the consumer shows
 	// Name.
 	Label     *string
 	Provider  string
@@ -58,7 +58,7 @@ type ProfileCreateInput struct {
 // params normalized nil→{}; cloud_init / created_by_aid — optional pointers;
 // created_at — nanosecond time-wire.
 type ProfileView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -83,7 +83,7 @@ func toProfileView(p *profile.Profile) ProfileView {
 		params = map[string]any{}
 	}
 	return ProfileView{
-		Name:         p.Name,
+		ID:           p.ID,
 		Label:        p.Label,
 		Provider:     p.Provider,
 		Params:       params,
@@ -97,7 +97,7 @@ func toProfileView(p *profile.Profile) ProfileView {
 // provider + params_keys without values).
 type ProfileWriteReply struct {
 	Body       ProfileView
-	Name       string
+	ID         string
 	Label      *string
 	Provider   string
 	ParamsKeys []string
@@ -106,7 +106,7 @@ type ProfileWriteReply struct {
 // AuditPayload builds the audit payload of the create route. VALUE params are NOT written.
 func (r ProfileWriteReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":        r.Name,
+		"id":          r.ID,
 		"label":       r.Label,
 		"provider":    r.Provider,
 		"params_keys": r.ParamsKeys,
@@ -115,12 +115,12 @@ func (r ProfileWriteReply) AuditPayload() middleware.AuditPayload {
 
 // ProfileDeleteReply — the result of DeleteTyped (audit fields; HTTP response 204).
 type ProfileDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload builds the audit payload of the delete route.
 func (r ProfileDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
 // CreateTyped — the domain function POST /v1/profiles (handler-native): validates
@@ -128,19 +128,19 @@ func (r ProfileDeleteReply) AuditPayload() middleware.AuditPayload {
 // a reference to a nonexistent Provider (FK) or a bad name/provider.
 func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Claims, req ProfileCreateInput) (ProfileWriteReply, error) {
 	var zero ProfileWriteReply
-	if req.Name == "" {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'name' is required")}
+	if req.ID == "" {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'id' is required")}
 	}
-	if !profile.ValidName(req.Name) {
+	if !profile.ValidID(req.ID) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'name' must match "+profile.NamePattern)}
+			"field 'id' must match "+profile.IDPattern)}
 	}
 	if req.Provider == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "field 'provider' is required")}
 	}
-	if !profile.ValidName(req.Provider) {
+	if !profile.ValidID(req.Provider) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"field 'provider' must match "+profile.NamePattern)}
+			"field 'provider' must match "+profile.IDPattern)}
 	}
 
 	var params map[string]any
@@ -148,7 +148,7 @@ func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Clai
 		params = *req.Params
 	}
 	p, err := h.svc.Create(ctx, profile.CreateInput{
-		Name:      req.Name,
+		ID:        req.ID,
 		Label:     req.Label,
 		Provider:  req.Provider,
 		Params:    params,
@@ -159,85 +159,85 @@ func (h *ProfileHandler) CreateTyped(ctx context.Context, claims *keeperjwt.Clai
 	case err == nil:
 		return ProfileWriteReply{
 			Body:       toProfileView(p),
-			Name:       p.Name,
+			ID:         p.ID,
 			Label:      p.Label,
 			Provider:   p.Provider,
 			ParamsKeys: paramKeysSorted(p.Params),
 		}, nil
 	case errors.Is(err, profile.ErrProfileAlreadyExists):
 		return zero, &problemError{problem.New(problem.TypeProfileExists, "",
-			"profile "+req.Name+" already exists")}
+			"profile "+req.ID+" already exists")}
 	case errors.Is(err, profile.ErrProviderNotFound):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"referenced provider "+req.Provider+" does not exist")}
 	default:
 		h.logger.Error("profile.create: service failed",
-			slog.String("name", req.Name),
+			slog.String("id", req.ID),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "create profile failed")}
 	}
 }
 
-// GetTyped — the domain function GET /v1/profiles/{name} (read, no audit).
-func (h *ProfileHandler) GetTyped(ctx context.Context, name string) (ProfileView, error) {
+// GetTyped — the domain function GET /v1/profiles/{id} (read, no audit).
+func (h *ProfileHandler) GetTyped(ctx context.Context, id string) (ProfileView, error) {
 	var zero ProfileView
-	if !profile.ValidName(name) {
+	if !profile.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+profile.NamePattern)}
+			"path 'id' must match "+profile.IDPattern)}
 	}
-	p, err := h.svc.Get(ctx, name)
+	p, err := h.svc.Get(ctx, id)
 	switch {
 	case err == nil:
 		return toProfileView(p), nil
 	case errors.Is(err, profile.ErrProfileNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+id+" not found")}
 	default:
-		h.logger.Error("profile.get: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("profile.get: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get profile failed")}
 	}
 }
 
-// DeleteTyped — the domain function DELETE /v1/profiles/{name}: 404 when absent.
-func (h *ProfileHandler) DeleteTyped(ctx context.Context, name string) (ProfileDeleteReply, error) {
+// DeleteTyped — the domain function DELETE /v1/profiles/{id}: 404 when absent.
+func (h *ProfileHandler) DeleteTyped(ctx context.Context, id string) (ProfileDeleteReply, error) {
 	var zero ProfileDeleteReply
-	if !profile.ValidName(name) {
+	if !profile.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+profile.NamePattern)}
+			"path 'id' must match "+profile.IDPattern)}
 	}
-	err := h.svc.Delete(ctx, name)
+	err := h.svc.Delete(ctx, id)
 	switch {
 	case err == nil:
-		return ProfileDeleteReply{Name: name}, nil
+		return ProfileDeleteReply{ID: id}, nil
 	case errors.Is(err, profile.ErrProfileNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+id+" not found")}
 	default:
-		h.logger.Error("profile.delete: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("profile.delete: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete profile failed")}
 	}
 }
 
-// SetLabelTyped — domain function for PUT /v1/profiles/{name}/label
+// SetLabelTyped — domain function for PUT /v1/profiles/{id}/label
 // (WRITE+AUDIT profile.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only 422 this route
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row.
-func (h *ProfileHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ProfileView], error) {
+func (h *ProfileHandler) SetLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[ProfileView], error) {
 	var zero LabelWriteReply[ProfileView]
-	if !profile.ValidName(name) {
+	if !profile.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+profile.NamePattern)}
+			"path 'id' must match "+profile.IDPattern)}
 	}
-	p, previous, err := h.svc.SetLabel(ctx, name, req.Label)
+	p, previous, err := h.svc.SetLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[ProfileView]{Body: toProfileView(p), Name: name, Label: p.Label, Previous: previous}, nil
+		return LabelWriteReply[ProfileView]{Body: toProfileView(p), ID: id, Label: p.Label, Previous: previous}, nil
 	case errors.Is(err, profile.ErrProfileNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "profile "+id+" not found")}
 	default:
-		h.logger.Error("profile.label-set: service failed", slog.String("name", name), slog.Any("error", err))
+		h.logger.Error("profile.label-set: service failed", slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set profile label failed")}
 	}
 }

@@ -272,78 +272,78 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "SoulHandler.UpdateSshTargetTyped (ssh_port <= 65535)",
 	},
 
-	// --- kebab name name/on_beacon (oracle.NamePattern ^[a-z0-9-]{1,63}$) ---
-	// The authority — oracle.NamePattern (oracle/validate.go); the same literal is also carried by
-	// augur.NamePattern / herald.NamePattern (see below). Each source is its own —
+	// --- kebab name name/on_beacon (oracle.IDPattern ^[a-z0-9-]{1,63}$) ---
+	// The authority — oracle.IDPattern (oracle/validate.go); the same literal is also carried by
+	// augur.IDPattern / herald.IDPattern (see below). Each source is its own —
 	// we check the field against ITS OWN domain validator, not another same-shaped one.
 	{
-		name:      "vigil.create name",
+		name:      "vigil.create id",
 		structPtr: &vigilCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (CreateVigilTyped)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (CreateVigilTyped)",
 	},
 	{
-		name:      "decree.create name",
+		name:      "decree.create id",
 		structPtr: &decreeCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (CreateDecreeTyped)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (CreateDecreeTyped)",
 	},
 	{
 		name:      "decree.create on_beacon",
 		structPtr: &decreeCreateInput{},
 		fieldPath: []string{"Body", "OnBeacon"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (on_beacon = Vigil name, CreateDecreeTyped)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (on_beacon = Vigil name, CreateDecreeTyped)",
 	},
 	{
-		name:      "omen.create name",
+		name:      "omen.create id",
 		structPtr: &omenCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   augur.NamePattern,
-		source:    "augur.NamePattern (CreateOmenTyped)",
+		runtime:   augur.IDPattern,
+		source:    "augur.IDPattern (CreateOmenTyped)",
 	},
 	{
-		name:      "herald.create name",
+		name:      "herald.create id",
 		structPtr: &heraldCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (CreateHeraldTyped)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (CreateHeraldTyped)",
 	},
 	{
-		name:      "tiding.create name",
+		name:      "tiding.create id",
 		structPtr: &tidingCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (CreateTidingTyped)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (CreateTidingTyped)",
 	},
 	{
 		name:      "VoyageNotify herald (voyage.create / cadence.create notify[].herald)",
 		structPtr: &VoyageNotify{},
 		fieldPath: []string{"Herald"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (prepareNotifyTidingsErr, voyage_notify.go:103)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (prepareNotifyTidingsErr, voyage_notify.go:103)",
 	},
 
-	// --- service/synod name (^[a-z][a-z0-9-]*$) ---
-	// service name — its own serviceregistry.NamePattern (NOT rbac.RoleNamePattern,
+	// --- service id / synod name (^[a-z][a-z0-9-]*$) ---
+	// service id — its own serviceregistry.IDPattern (NOT rbac.RoleNamePattern,
 	// even though the literal matches: different domains, different SQL CHECKs). synod name — reRoleName
 	// (rbac.RoleNamePattern), shared with role name by synod.go's decision.
 	{
-		name:      "service.register name",
+		name:      "service.register id",
 		structPtr: &serviceRegisterInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   serviceregistry.NamePattern,
-		source:    "serviceregistry.NamePattern (CreateService)",
+		runtime:   serviceregistry.IDPattern,
+		source:    "serviceregistry.IDPattern (CreateService)",
 	},
 	{
 		name:      "synod.create name",
@@ -1027,60 +1027,60 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "shared/plugin.AliasPattern (sigil.ValidateAlias, RevokeTyped)",
 	},
 
-	// --- incarnation name/service (incarnation.NamePattern, 422 in CreateTyped) ---
-	// service is VALIDATED by the same incarnation.NamePattern (handler reuse, not
-	// serviceregistry.NamePattern) and 422s BEFORE service-resolve (the FK → 422 "not
+	// --- incarnation name/service (incarnation.IDPattern, 422 in CreateTyped) ---
+	// service is VALIDATED by the same incarnation.IDPattern (handler reuse, not
+	// serviceregistry.IDPattern) and 422s BEFORE service-resolve (the FK → 422 "not
 	// registered" comes LATER, format-422 comes first). NOT the coven pattern.
 	{
-		name:      "incarnation.create name",
+		name:      "incarnation.create id",
 		structPtr: &incCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (CreateTyped, incarnation_typed.go:85)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (CreateTyped, incarnation_typed.go:85)",
 	},
 	{
 		name:      "incarnation.create service",
 		structPtr: &incCreateInput{},
 		fieldPath: []string{"Body", "Service"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (CreateTyped service-format, incarnation_typed.go:91)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (CreateTyped service-format, incarnation_typed.go:91)",
 	},
 
-	// --- push-provider name (pushprovider.NamePattern, 422 BEFORE existence) ---
+	// --- push-provider id (pushprovider.IDPattern, 422 BEFORE existence) ---
 	// create body + get/update/delete path — all 422 the format BEFORE ErrAlreadyExists/404.
 	{
-		name:      "push-provider.create name",
+		name:      "push-provider.create id",
 		structPtr: &pushProviderCreateInput{},
-		fieldPath: []string{"Body", "Name"},
+		fieldPath: []string{"Body", "ID"},
 		tag:       tagPattern,
-		runtime:   pushprovider.NamePattern,
-		source:    "pushprovider.NamePattern (CreateTyped, pushprovider.go:141)",
+		runtime:   pushprovider.IDPattern,
+		source:    "pushprovider.IDPattern (CreateTyped, pushprovider.go:141)",
 	},
 	{
-		name:      "push-provider.get name (path)",
+		name:      "push-provider.get id (path)",
 		structPtr: &pushProviderGetInput{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   pushprovider.NamePattern,
-		source:    "pushprovider.NamePattern (GetTyped, pushprovider.go:271)",
+		runtime:   pushprovider.IDPattern,
+		source:    "pushprovider.IDPattern (GetTyped, pushprovider.go:271)",
 	},
 	{
-		name:      "push-provider.update name (path)",
+		name:      "push-provider.update id (path)",
 		structPtr: &pushProviderUpdateInput{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   pushprovider.NamePattern,
-		source:    "pushprovider.NamePattern (UpdateTyped, pushprovider.go:178)",
+		runtime:   pushprovider.IDPattern,
+		source:    "pushprovider.IDPattern (UpdateTyped, pushprovider.go:178)",
 	},
 	{
-		name:      "push-provider.delete name (path)",
+		name:      "push-provider.delete id (path)",
 		structPtr: &pushProviderDeleteInput{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   pushprovider.NamePattern,
-		source:    "pushprovider.NamePattern (DeleteTyped, pushprovider.go:219)",
+		runtime:   pushprovider.IDPattern,
+		source:    "pushprovider.IDPattern (DeleteTyped, pushprovider.go:219)",
 	},
 
 	// --- choir_name (choir.choirNamePattern, 422 BEFORE INSERT) ---
@@ -1154,70 +1154,70 @@ var constraintSyncCases = []constraintSyncCase{
 	// *Request/*Input) → no input-422 risk.
 	// ====================================================================
 
-	// --- kebab name name/omen/on_beacon (oracle/augur/herald.NamePattern ^[a-z0-9-]{1,63}$) ---
+	// --- kebab name name/omen/on_beacon (oracle/augur/herald.IDPattern ^[a-z0-9-]{1,63}$) ---
 	{
-		name:      "OmenView name (augur.NamePattern)",
+		name:      "OmenView id (augur.IDPattern)",
 		structPtr: &OmenView{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   augur.NamePattern,
-		source:    "augur.NamePattern (output omen name)",
+		runtime:   augur.IDPattern,
+		source:    "augur.IDPattern (output omen name)",
 	},
 	{
-		name:      "RiteView omen (augur.NamePattern, FK)",
+		name:      "RiteView omen (augur.IDPattern, FK)",
 		structPtr: &RiteView{},
 		fieldPath: []string{"Omen"},
 		tag:       tagPattern,
-		runtime:   augur.NamePattern,
-		source:    "augur.NamePattern (output rite.omen — FK on omens.name)",
+		runtime:   augur.IDPattern,
+		source:    "augur.IDPattern (output rite.omen — FK on omens.id)",
 	},
 	{
-		name:      "VigilView name (oracle.NamePattern)",
+		name:      "VigilView id (oracle.IDPattern)",
 		structPtr: &VigilView{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (output vigil name)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (output vigil name)",
 	},
 	{
-		name:      "DecreeView name (oracle.NamePattern)",
+		name:      "DecreeView id (oracle.IDPattern)",
 		structPtr: &DecreeView{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (output decree name)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (output decree name)",
 	},
 	{
-		name:      "DecreeView on_beacon (oracle.NamePattern, FK on Vigil)",
+		name:      "DecreeView on_beacon (oracle.IDPattern, FK on Vigil)",
 		structPtr: &DecreeView{},
 		fieldPath: []string{"OnBeacon"},
 		tag:       tagPattern,
-		runtime:   oracle.NamePattern,
-		source:    "oracle.NamePattern (output decree.on_beacon — Vigil name)",
+		runtime:   oracle.IDPattern,
+		source:    "oracle.IDPattern (output decree.on_beacon — Vigil name)",
 	},
 	{
-		name:      "Herald name (herald.NamePattern)",
+		name:      "Herald name (herald.IDPattern)",
 		structPtr: &Herald{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (output herald name)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (output herald name)",
 	},
 	{
-		name:      "Tiding name (herald.NamePattern)",
+		name:      "Tiding name (herald.IDPattern)",
 		structPtr: &Tiding{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (output tiding name)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (output tiding name)",
 	},
 	{
-		name:      "Tiding herald (herald.NamePattern, FK)",
+		name:      "Tiding herald (herald.IDPattern, FK)",
 		structPtr: &Tiding{},
 		fieldPath: []string{"Herald"},
 		tag:       tagPattern,
-		runtime:   herald.NamePattern,
-		source:    "herald.NamePattern (output tiding.herald — FK on heralds.name)",
+		runtime:   herald.IDPattern,
+		source:    "herald.IDPattern (output tiding.herald — FK on heralds.id)",
 	},
 
 	// --- role-name (rbac.RoleNamePattern ^[a-z][a-z0-9-]*$) ---
@@ -1248,14 +1248,14 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "rbac.RoleNamePattern (output synod.roles[] - role names)",
 	},
 
-	// --- service name (serviceregistry.NamePattern ^[a-z][a-z0-9-]*$) ---
+	// --- service id (serviceregistry.IDPattern ^[a-z][a-z0-9-]*$) ---
 	{
-		name:      "ServiceView name (serviceregistry.NamePattern)",
+		name:      "ServiceView id (serviceregistry.IDPattern)",
 		structPtr: &ServiceView{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   serviceregistry.NamePattern,
-		source:    "serviceregistry.NamePattern (output service name)",
+		runtime:   serviceregistry.IDPattern,
+		source:    "serviceregistry.IDPattern (output service id)",
 	},
 
 	// --- coven label (soul.CovenPattern ^[a-z][a-z0-9]*(-[a-z0-9]+)*$, per-element) ---
@@ -1294,57 +1294,57 @@ var constraintSyncCases = []constraintSyncCase{
 		source:    "soul.CovenPattern (output replace labels[], per-element)",
 	},
 
-	// --- incarnation_name (incarnation.NamePattern ^[a-z0-9][a-z0-9-]{0,62}$) ---
+	// --- incarnation_name (incarnation.IDPattern ^[a-z0-9][a-z0-9-]{0,62}$) ---
 	// IncarnationGetReply.name + the Incarnation echo in create/run/rerun-last + choir/voice
 	// incarnation_name. DecreeView.incarnation_name uses a separate const, oracle.IncarnationPattern
 	// (the value is identical, but decree is its own domain — checked against ITS OWN source).
 	{
-		name:      "IncarnationGetReply name (incarnation.NamePattern)",
+		name:      "IncarnationGetReply id (incarnation.IDPattern)",
 		structPtr: &IncarnationGetReply{},
-		fieldPath: []string{"Name"},
+		fieldPath: []string{"ID"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output incarnation name)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output incarnation name)",
 	},
 	{
-		name:      "IncarnationCreateReply incarnation (incarnation.NamePattern, echo)",
+		name:      "IncarnationCreateReply incarnation (incarnation.IDPattern, echo)",
 		structPtr: &IncarnationCreateReply{},
 		fieldPath: []string{"Incarnation"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output incarnation echo)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output incarnation echo)",
 	},
 	{
-		name:      "IncarnationRunReply incarnation (incarnation.NamePattern, echo)",
+		name:      "IncarnationRunReply incarnation (incarnation.IDPattern, echo)",
 		structPtr: &IncarnationRunReply{},
 		fieldPath: []string{"Incarnation"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output incarnation echo)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output incarnation echo)",
 	},
 	{
-		name:      "IncarnationRerunLastReply incarnation (incarnation.NamePattern, echo)",
+		name:      "IncarnationRerunLastReply incarnation (incarnation.IDPattern, echo)",
 		structPtr: &IncarnationRerunLastReply{},
 		fieldPath: []string{"Incarnation"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output incarnation echo)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output incarnation echo)",
 	},
 	{
-		name:      "Choir incarnation_name (incarnation.NamePattern)",
+		name:      "Choir incarnation_name (incarnation.IDPattern)",
 		structPtr: &Choir{},
 		fieldPath: []string{"IncarnationName"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output choir.incarnation_name — FK)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output choir.incarnation_name — FK)",
 	},
 	{
-		name:      "Voice incarnation_name (incarnation.NamePattern)",
+		name:      "Voice incarnation_name (incarnation.IDPattern)",
 		structPtr: &Voice{},
 		fieldPath: []string{"IncarnationName"},
 		tag:       tagPattern,
-		runtime:   incarnation.NamePattern,
-		source:    "incarnation.NamePattern (output voice.incarnation_name — FK)",
+		runtime:   incarnation.IDPattern,
+		source:    "incarnation.IDPattern (output voice.incarnation_name — FK)",
 	},
 	{
 		name:      "DecreeView incarnation_name (oracle.IncarnationPattern)",
@@ -1472,7 +1472,7 @@ var constraintSyncCases = []constraintSyncCase{
 		fieldPath: []string{"Body", "Selector", "Incarnation"},
 		tag:       tagMaxLength,
 		runtime:   covenRuntimeMaxLen,
-		source:    "incarnation.ValidName pattern {0,62}=63 (selector.incarnation != \"\", soul.go:1284)",
+		source:    "incarnation.ValidID pattern {0,62}=63 (selector.incarnation != \"\", soul.go:1284)",
 	},
 
 	// --- synod description (rbac.SynodDescriptionMaxLen=1024) ---

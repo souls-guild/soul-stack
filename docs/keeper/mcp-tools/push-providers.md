@@ -10,25 +10,25 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.push-provid
 
 Creates a Push-Provider in `push_providers` (per-provider env-payload params of the push-flow SSH plugin). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs (`vault:<path>`). After commit - cluster-wide invalidate via Redis pub/sub. Permission: `push-provider.create`. Endpoint: [`POST /v1/push-providers`](../operator-api/push-providers.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z][a-z0-9-]{0,62}$), params? (object; sensitive — vault-refs)}`.
+**Input** (`required: id`): `{id (^[a-z][a-z0-9-]{0,62}$), params? (object; sensitive — vault-refs)}`.
 
 **Output:** `PushProvider` — `{name, params, created_at, updated_at, created_by_aid, updated_by_aid?}`.
 
 #### `keeper.push-provider.update`
 
-Replaces `params` Push-Provider (replace semantics; `name` is a key, does not change). The sensitive invariant is the same. Permission: `push-provider.update`. Endpoint: [`PUT /v1/push-providers/{name}`](../operator-api/push-providers.md). Async: no.
+Replaces `params` Push-Provider (replace semantics; `id` is a key, does not change). The sensitive invariant is the same. Permission: `push-provider.update`. Endpoint: [`PUT /v1/push-providers/{id}`](../operator-api/push-providers.md). Async: no.
 
 **Input:** `{name, params (object; sensitive — vault-refs)}`. **Output:** `PushProvider`. Errors: `not-found` (no entry).
 
 #### `keeper.push-provider.label-set`
 
-Replaces the Push-Provider's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Unlike `keeper.push-provider.update` it publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` env-var name - which is why `name` keeps the letter-first rule and the caption needs no rule at all. Permission: `push-provider.label-set`. Endpoint: [`PUT /v1/push-providers/{name}/label`](../operator-api.md). Async: no.
+Replaces the Push-Provider's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `id`. `id` addresses the row and is NOT changed. Unlike `keeper.push-provider.update` it publishes **no** `push-providers:changed` invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The caption is also not the `SOUL_SSH_<UPPER_SNAKE(id)>_PARAMS` env-var name - which is why `id` keeps the letter-first rule and the caption needs no rule at all. Permission: `push-provider.label-set`. Endpoint: [`PUT /v1/push-providers/{id}/label`](../operator-api.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z][a-z0-9-]{0,62}$), label? (string|null)}`. **Output:** `PushProvider` - the row as it now reads. Errors: `not-found`.
+**Input** (`required: id`): `{id (^[a-z][a-z0-9-]{0,62}$), label? (string|null)}`. **Output:** `PushProvider` - the row as it now reads. Errors: `not-found`.
 
 #### `keeper.push-provider.delete`
 
-Deletes a Push-Provider entry. Permission: `push-provider.delete`. Endpoint: [`DELETE /v1/push-providers/{name}`](../operator-api/push-providers.md). Async: no.
+Deletes a Push-Provider entry. Permission: `push-provider.delete`. Endpoint: [`DELETE /v1/push-providers/{id}`](../operator-api/push-providers.md). Async: no.
 
 **Input:** `{name}`. **Output:** empty object (REST equivalent - 204). Errors: `not-found`.
 
@@ -40,6 +40,6 @@ Enumeration of Push-Providers (sort `updated_at` DESC). Permission: `push-provid
 
 #### `keeper.push-provider.read`
 
-Reads one Push-Provider entry by name. Permission: `push-provider.read` (separated from `list` - parallel to `operator.read`↔`operator.list`). Endpoint: [`GET /v1/push-providers/{name}`](../operator-api/push-providers.md). Async: no.
+Reads one Push-Provider entry by name. Permission: `push-provider.read` (separated from `list` - parallel to `operator.read`↔`operator.list`). Endpoint: [`GET /v1/push-providers/{id}`](../operator-api/push-providers.md). Async: no.
 
 **Input:** `{name}`. **Output:** `PushProvider`. Errors: `not-found`.

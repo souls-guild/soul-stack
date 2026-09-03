@@ -96,7 +96,7 @@ func seedOperator(t *testing.T, aid string) {
 func seedIncarnation(t *testing.T, name string) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
@@ -243,7 +243,7 @@ func TestIntegration_LoadIncarnationHosts_OwnLabelsOnly(t *testing.T) {
 	seedIncarnation(t, "redis-prod")
 	if _, err := integrationPool.Exec(ctx,
 		`UPDATE incarnation SET covens = ARRAY['dba'], traits = '{"team":"dba","owner":"dba"}'::jsonb
-		 WHERE name = 'redis-prod'`); err != nil {
+		 WHERE id = 'redis-prod'`); err != nil {
 		t.Fatalf("label the incarnation: %v", err)
 	}
 

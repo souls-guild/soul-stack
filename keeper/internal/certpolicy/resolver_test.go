@@ -14,7 +14,7 @@ import (
 )
 
 // fakeDB — IncarnationReader-stub: QueryRow returns the given row (Exec/Query are
-// unused by SelectByName, but are needed for the method set).
+// unused by SelectByID, but are needed for the method set).
 type fakeDB struct{ row pgx.Row }
 
 func (f *fakeDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -241,10 +241,10 @@ func TestResolve_IncarnationNotFound(t *testing.T) {
 		t.Fatal("expected error on missing incarnation")
 	}
 	if services.gotService != "" {
-		t.Errorf("services.Resolve should not be called on a SelectByName error")
+		t.Errorf("services.Resolve should not be called on a SelectByID error")
 	}
 	if lister.calls != 0 {
-		t.Errorf("lister should not be called on a SelectByName error")
+		t.Errorf("lister should not be called on a SelectByID error")
 	}
 }
 

@@ -32,7 +32,7 @@ type DeliveryJob struct {
 	// Attempt is current delivery attempt number (0-based). 0 on first enqueue;
 	// worker increments on requeue. Reached retryMax → terminal fail.
 	Attempt int `json:"attempt"`
-	// Herald is name of Herald channel (PK heralds.name) to send to.
+	// Herald is name of Herald channel (PK heralds.id) to send to.
 	Herald string `json:"herald"`
 	// Tiding is name of matched Tiding rule (for audit/correlation).
 	Tiding string `json:"tiding"`

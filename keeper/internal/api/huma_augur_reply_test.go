@@ -45,16 +45,16 @@ func TestGoldenWire_AugurReply(t *testing.T) {
 
 	// --- OmenView: created_by_aid omitempty (both branches) + inline enum ---
 	goldenAugur(t, "OmenView/full",
-		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: &aid, Endpoint: "https://prom:9090", Name: "prom-eu", SourceType: OmenViewSourceType("prometheus")},
-		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","endpoint":"https://prom:9090","name":"prom-eu","source_type":"prometheus"}`)
+		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: &aid, Endpoint: "https://prom:9090", ID: "prom-eu", SourceType: OmenViewSourceType("prometheus")},
+		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","endpoint":"https://prom:9090","id":"prom-eu","source_type":"prometheus"}`)
 	goldenAugur(t, "OmenView/nil_creator",
-		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: nil, Endpoint: "https://prom:9090", Name: "prom-eu", SourceType: OmenViewSourceType("vault")},
-		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"https://prom:9090","name":"prom-eu","source_type":"vault"}`)
+		OmenView{AuthRef: "vault:secret/omen", CreatedAt: ts, CreatedByAID: nil, Endpoint: "https://prom:9090", ID: "prom-eu", SourceType: OmenViewSourceType("vault")},
+		`{"auth_ref":"vault:secret/omen","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"https://prom:9090","id":"prom-eu","source_type":"vault"}`)
 
 	// --- OmenListReply: items non-nil / nil (category B) ---
 	goldenAugur(t, "OmenListReply/full",
-		OmenListReply{Items: []OmenView{{Name: "a", SourceType: "elk", CreatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
-		`{"items":[{"auth_ref":"","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"","name":"a","source_type":"elk"}],"limit":50,"offset":0,"total":1}`)
+		OmenListReply{Items: []OmenView{{ID: "a", SourceType: "elk", CreatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
+		`{"items":[{"auth_ref":"","created_at":"2026-06-14T12:34:56.789012345Z","endpoint":"","id":"a","source_type":"elk"}],"limit":50,"offset":0,"total":1}`)
 	goldenAugur(t, "OmenListReply/nil_items",
 		OmenListReply{Items: nil, Limit: 50, Offset: 10, Total: 0},
 		`{"items":null,"limit":50,"offset":10,"total":0}`)

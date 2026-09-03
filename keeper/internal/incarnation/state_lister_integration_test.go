@@ -25,7 +25,7 @@ func TestIntegration_StateLister_PushdownAndPages(t *testing.T) {
 	mk := func(name, service string, covens []string, state map[string]any) {
 		t.Helper()
 		inc := &Incarnation{
-			Name: name, Service: service, ServiceVersion: "v1",
+			ID: name, Service: service, ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 			Covens: covens, State: state,
 		}
@@ -79,7 +79,7 @@ func TestIntegration_StateLister_MultiPage(t *testing.T) {
 	const n = statePageSize + 25
 	for i := 0; i < n; i++ {
 		inc := &Incarnation{
-			Name: fmt.Sprintf("svc-inc-%05d", i), Service: "bulk", ServiceVersion: "v1",
+			ID: fmt.Sprintf("svc-inc-%05d", i), Service: "bulk", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 			State: map[string]any{"idx": i},
 		}

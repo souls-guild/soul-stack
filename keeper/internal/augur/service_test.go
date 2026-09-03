@@ -33,10 +33,10 @@ func TestService_CreateOmen_ValidationErrors(t *testing.T) {
 		name string
 		in   CreateOmenInput
 	}{
-		{"bad-name", CreateOmenInput{Name: "BAD..", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p"}},
-		{"bad-source", CreateOmenInput{Name: "x", SourceType: "redis", Endpoint: "e", AuthRef: "vault:s/p"}},
-		{"empty-endpoint", CreateOmenInput{Name: "x", SourceType: "vault", Endpoint: "", AuthRef: "vault:s/p"}},
-		{"bad-authref", CreateOmenInput{Name: "x", SourceType: "vault", Endpoint: "e", AuthRef: "plain"}},
+		{"bad-name", CreateOmenInput{ID: "BAD..", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p"}},
+		{"bad-source", CreateOmenInput{ID: "x", SourceType: "redis", Endpoint: "e", AuthRef: "vault:s/p"}},
+		{"empty-endpoint", CreateOmenInput{ID: "x", SourceType: "vault", Endpoint: "", AuthRef: "vault:s/p"}},
+		{"bad-authref", CreateOmenInput{ID: "x", SourceType: "vault", Endpoint: "e", AuthRef: "plain"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -55,13 +55,13 @@ func TestService_CreateOmen_HappyPath(t *testing.T) {
 	}}
 	svc := newSvc(t, db)
 	o, err := svc.CreateOmen(context.Background(), CreateOmenInput{
-		Name: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:secret/k/x",
+		ID: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:secret/k/x",
 		CallerAID: ptr("archon-alice"),
 	})
 	if err != nil {
 		t.Fatalf("CreateOmen: %v", err)
 	}
-	if o.Name != "vault-prod" || o.CreatedByAID == nil || *o.CreatedByAID != "archon-alice" {
+	if o.ID != "vault-prod" || o.CreatedByAID == nil || *o.CreatedByAID != "archon-alice" {
 		t.Errorf("omen = %+v", o)
 	}
 }
@@ -72,7 +72,7 @@ func TestService_CreateOmen_Duplicate(t *testing.T) {
 	}}
 	svc := newSvc(t, db)
 	_, err := svc.CreateOmen(context.Background(), CreateOmenInput{
-		Name: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p",
+		ID: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p",
 	})
 	if !errors.Is(err, ErrOmenAlreadyExists) {
 		t.Fatalf("err = %v, want ErrOmenAlreadyExists", err)

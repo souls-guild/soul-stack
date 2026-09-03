@@ -23,7 +23,7 @@ const augurNotConfigured = "augur registry is not configured"
 // auth_ref + audit metadata. No master credential in the record (auth_ref
 // is a vault-ref).
 type omenView struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
 	Label        *string `json:"label,omitempty"`
 	SourceType   string  `json:"source_type"`
@@ -35,7 +35,7 @@ type omenView struct {
 
 func toOmenView(o *augur.Omen) omenView {
 	return omenView{
-		Name:         o.Name,
+		ID:           o.ID,
 		Label:        o.Label,
 		SourceType:   string(o.SourceType),
 		Endpoint:     o.Endpoint,
@@ -47,7 +47,7 @@ func toOmenView(o *augur.Omen) omenView {
 
 // omenCreateArgs — arguments for keeper.augur.omen.create.
 type omenCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.augur.omen.label-set.
 	Label      *string `json:"label"`
@@ -83,13 +83,13 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
 	callerAID := claims.Subject
 	o, err := h.deps.AugurSvc.CreateOmen(ctx, augur.CreateOmenInput{
-		Name:       a.Name,
+		ID:         a.ID,
 		Label:      a.Label,
 		SourceType: a.SourceType,
 		Endpoint:   a.Endpoint,
@@ -100,7 +100,7 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 		code, detail := mapAugurErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: augur.omen.create failed",
-				slog.String("name", a.Name), slog.String("by_aid", callerAID), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", callerAID), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
@@ -109,7 +109,7 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	// endpoint, auth_ref, created_by_aid}. endpoint/auth_ref aren't secrets
 	// (no master cred in the record, augur.md §8).
 	h.writeAudit(audit.EventOmenCreated, callerAID, map[string]any{
-		"name":           o.Name,
+		"id":             o.ID,
 		"label":          o.Label,
 		"source_type":    string(o.SourceType),
 		"endpoint":       o.Endpoint,
@@ -121,24 +121,24 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 }
 
 // callAugurOmenSetLabel — keeper.augur.omen.label-set, the MCP mirror of
-// PUT /v1/augur/omens/{name}/label (ADR-0085). The registry's only mutation.
+// PUT /v1/augur/omens/{id}/label (ADR-0085). The registry's only mutation.
 func (h *Handler) callAugurOmenSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[omenView]{
 		tool:          "keeper.augur.omen.label-set",
 		resource:      "omen",
 		configured:    h.deps.AugurSvc != nil,
 		notConfigured: augurNotConfigured,
-		validName:     augur.ValidName,
-		namePattern:   augur.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (omenView, *string, error) {
-			o, previous, err := h.deps.AugurSvc.SetOmenLabel(ctx, name, label)
+		validID:       augur.ValidID,
+		idPattern:     augur.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (omenView, *string, error) {
+			o, previous, err := h.deps.AugurSvc.SetOmenLabel(ctx, id, label)
 			if err != nil {
 				return omenView{}, nil, err
 			}
 			return toOmenView(o), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, augur.ErrOmenNotFound) },
-		notFoundf:  func(name string) string { return "omen " + name + " not found" },
+		notFoundf:  func(id string) string { return "omen " + id + " not found" },
 		failMsg:    "set omen label failed",
 		event:      audit.EventOmenLabelChanged,
 	})
@@ -208,7 +208,7 @@ func (h *Handler) callAugurOmenList(ctx context.Context, claims *jwt.Claims, req
 
 // omenDeleteArgs — arguments for keeper.augur.omen.delete.
 type omenDeleteArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // callAugurOmenDelete — mutating tool keeper.augur.omen.delete. Cascades to
@@ -234,22 +234,22 @@ func (h *Handler) callAugurOmenDelete(ctx context.Context, claims *jwt.Claims, r
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
-	if err := h.deps.AugurSvc.DeleteOmen(ctx, a.Name); err != nil {
+	if err := h.deps.AugurSvc.DeleteOmen(ctx, a.ID); err != nil {
 		code, detail := mapAugurErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: augur.omen.delete failed",
-				slog.String("name", a.Name), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+				slog.String("id", a.ID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
 	// Audit — parallels the REST handler: payload {name}.
 	h.writeAudit(audit.EventOmenRevoked, claims.Subject, map[string]any{
-		"name": a.Name,
+		"id": a.ID,
 	})
 
 	// REST returns 204 No Content; the MCP equivalent is an empty output object.

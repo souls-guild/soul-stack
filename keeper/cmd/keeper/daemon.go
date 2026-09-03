@@ -171,34 +171,34 @@ type daemon struct {
 	// break-glass KEEPER_CONFIG_SOURCE=file is set.
 	settings *settingsstore.Store
 	// serviceRefs -- TTL cache of the git-ls-remote tag/branch listing for
-	// `GET /v1/services/{name}/refs` (UI Upgrade-modal dropdown). Per-keeper,
+	// `GET /v1/services/{id}/refs` (UI Upgrade-modal dropdown). Per-keeper,
 	// not cluster-wide (refs are read-only; lag between instances does not
 	// break registry consistency).
 	serviceRefs *serviceregistry.RefsCache
 
 	// serviceScenarios -- TTL cache of the scenario listing from a
 	// materialized snapshot of the Service's git repo for
-	// `GET /v1/services/{name}/scenarios` (UI Run-modal dropdown). Per-keeper,
+	// `GET /v1/services/{id}/scenarios` (UI Run-modal dropdown). Per-keeper,
 	// not cluster-wide -- read-only listing.
 	serviceScenarios *serviceregistry.ScenariosCache
 
 	// serviceStateSchema -- TTL cache of state_schema metadata (version +
 	// declared schema + migrations metadata) from a materialized snapshot of
-	// the Service's git repo for `GET /v1/services/{name}/state-schema` (UI
+	// the Service's git repo for `GET /v1/services/{id}/state-schema` (UI
 	// Schema explorer). Per-keeper, not cluster-wide -- read-only listing
 	// (parity with serviceScenarios).
 	serviceStateSchema *serviceregistry.StateSchemaCache
 
 	// serviceDependencies -- TTL cache of git dependencies (destiny/modules
 	// from `service.yml`) from a materialized snapshot of the Service's git
-	// repo for `GET /v1/services/{name}/dependencies` (UI Service Detail).
+	// repo for `GET /v1/services/{id}/dependencies` (UI Service Detail).
 	// Per-keeper, not cluster-wide -- read-only listing (parity with
 	// serviceStateSchema).
 	serviceDependencies *serviceregistry.DependenciesCache
 
 	// serviceDirectives -- TTL cache of the valid redis.conf directive
 	// catalog by version (vars.redis_directives) from a snapshot of the
-	// Service's git repo for `GET /v1/services/{name}/directives` (UI
+	// Service's git repo for `GET /v1/services/{id}/directives` (UI
 	// redis_settings editor). Per-keeper, not cluster-wide -- read-only
 	// catalog (parity with serviceDependencies).
 	serviceDirectives *serviceregistry.DirectivesCache
@@ -216,13 +216,13 @@ type daemon struct {
 
 	// serviceCompat — TTL cache of the engine-compat contributions of a Service
 	// snapshot (`compat:` of service.yml + one entry per declared destiny at its
-	// pinned ref) for `GET /v1/services/{name}/compat` (ADR-0076). Per-keeper,
+	// pinned ref) for `GET /v1/services/{id}/compat` (ADR-0076). Per-keeper,
 	// read-only view.
 	serviceCompat *serviceregistry.CompatCache
 
 	// serviceTelemetry — TTL cache of the default (per-service, without an incarnation's own layer)
 	// host-vitals telemetry config from the manifest of the Service git-repo
-	// snapshot for `GET /v1/services/{name}/telemetry` (UI editor, ADR-042/072).
+	// snapshot for `GET /v1/services/{id}/telemetry` (UI editor, ADR-042/072).
 	// Per-keeper, not cluster-wide — read-only config (parity with
 	// serviceDirectives).
 	serviceTelemetry *serviceregistry.TelemetryCache
@@ -1673,7 +1673,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 
 	// TTL cache of the default host-vitals telemetry config for
-	// `GET /v1/services/{name}/telemetry` (ADR-042/072). The lister loads the
+	// `GET /v1/services/{id}/telemetry` (ADR-042/072). The lister loads the
 	// snapshot via d.serviceLoader.Load → effective manifest defaults `telemetry:`
 	// (no incarnation → pure per-service default) + snapshot SHA1 (ETag). Parity
 	// with serviceDirectives.
@@ -1727,7 +1727,7 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger)
 	d.destinySource = scenario.NewDestinySource(destinyLoader, d.serviceHolder)
 
-	// TTL cache of the engine-compat window for `GET /v1/services/{name}/compat`
+	// TTL cache of the engine-compat window for `GET /v1/services/{id}/compat`
 	// (ADR-0076(h)). Built here, after destinySource: the window is per ENTITY, so
 	// the lister reads `service.yml` AND every destiny the service declares, each at
 	// its own pinned ref. Both loaders reuse their materialized snapshots by sha1,
@@ -2719,7 +2719,7 @@ func (d *daemon) setupHeraldDelivery(ctx context.Context) error {
 
 	// Keeper daemon runtime wiring note.
 	heralds := heraldReaderFunc(func(rctx context.Context, name string) (*herald.Herald, error) {
-		return herald.SelectHeraldByName(rctx, d.pool, name)
+		return herald.SelectHeraldByID(rctx, d.pool, name)
 	})
 
 	runCtx, runCancel := context.WithCancel(ctx)
@@ -5620,7 +5620,7 @@ func (d *daemon) setupVoyageWorker(ctx context.Context) error {
 
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	//   - ScenarioSpawner: incarnation.SelectByName → ServiceRegistry.Resolve →
+	//   - ScenarioSpawner: incarnation.SelectByID → ServiceRegistry.Resolve →
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -5755,7 +5755,7 @@ type voyageScenarioSpawner struct {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (string, error) {
-	inc, err := incarnation.SelectByName(ctx, s.reader, incarnationName)
+	inc, err := incarnation.SelectByID(ctx, s.reader, incarnationName)
 	if err != nil {
 		return "", fmt.Errorf("voyage scenario spawner: select incarnation %q: %w", incarnationName, err)
 	}

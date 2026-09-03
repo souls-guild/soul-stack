@@ -142,7 +142,7 @@ func TestIntegration_Unassigned_HostFreedByDestroyedIncarnation(t *testing.T) {
 		t.Fatalf("a bound host must not be offered as free, total=%d", total)
 	}
 
-	if _, err := integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE name = 'redis-old'`); err != nil {
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE id = 'redis-old'`); err != nil {
 		t.Fatalf("delete incarnation: %v", err)
 	}
 

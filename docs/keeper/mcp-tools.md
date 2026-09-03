@@ -187,7 +187,7 @@ Moved to a domain file - [mcp-tools/synods.md](mcp-tools/synods.md): `keeper.syn
 
 ### Incarnation (12)
 
-Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set`, `keeper.incarnation.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)) - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (18)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{name}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
+Moved to a domain file - [mcp-tools/incarnations.md](mcp-tools/incarnations.md): `keeper.incarnation.create`, `keeper.incarnation.rerun-last`, `keeper.incarnation.run`, `keeper.incarnation.get`, `keeper.incarnation.list`, `keeper.incarnation.history`, `keeper.incarnation.unlock`, `keeper.incarnation.upgrade`, `keeper.incarnation.destroy`, `keeper.incarnation.traits-set`, `keeper.incarnation.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)) - eleven tools with MCP pairing to REST routes [operator-api.md → Incarnation (18)](operator-api.md). Six REST-only routes do not have an MCP tool: `PATCH /v1/incarnations/{id}/hosts`, `POST …/scenarios/{scenario}/form-prefill`, `GET …/runs`, `GET …/runs/{apply_id}`, `POST …/secrets/reveal`, `GET …/secrets/revealable`; global `GET /v1/runs` + `/v1/runs/stats` ([operator-api.md → Runs (2)](operator-api.md)) - also REST-only. The source of truth for semantics is [operator-api/incarnations.md](operator-api/incarnations.md).
 
 ### Soul (8)
 
@@ -207,7 +207,7 @@ Moved to a domain file - [mcp-tools/sigils.md](mcp-tools/sigils.md): `keeper.sig
 
 ### Service (5)
 
-Service registry `service_registry` (ADR-028 RBAC-storage pattern: directory `services[]` is transferred from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table). 1:1 with REST `POST/GET/PATCH/DELETE /v1/services*` and permission (`keeper.service.<action>` ↔ `service.<action>`, selector - NoSelector, like `operator.*`/`role.*`). Business logic (validation `name`/`git`/`ref`/`refresh`, cluster-wide snapshot validation after commit) lives in `serviceregistry.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("service registry is not configured").
+Service registry `service_registry` (ADR-028 RBAC-storage pattern: directory `services[]` is transferred from static `keeper.yml` to managed-via-OpenAPI/MCP PG-table). 1:1 with REST `POST/GET/PATCH/DELETE /v1/services*` and permission (`keeper.service.<action>` ↔ `service.<action>`, selector - NoSelector, like `operator.*`/`role.*`). Business logic (validation `id`/`git`/`ref`/`refresh`, cluster-wide snapshot validation after commit) lives in `serviceregistry.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("service registry is not configured").
 
 #### `keeper.service.register`
 
@@ -217,24 +217,24 @@ Registers a Service in `service_registry`: git-source service-repo + `ref` (vers
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Service name (kebab-case `^[a-z][a-z0-9-]*$`). |
+| `id` | `string` | yes | Service id (kebab-case `^[a-z][a-z0-9-]*$`, immutable — [ADR-0085](../adr/0085-entity-id-and-label.md)). |
 | `git` | `string` | yes | git source service repo (URL; no secret). |
 | `ref` | `string` | yes | git ref (tag/branch) - version of the Service. |
 | `refresh` | `string` | no | duration auto-refresh(`5m`); omitted - no auto-refresh. |
 
-**Output:** `ServiceView` — `{name, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`.
+**Output:** `ServiceView` — `{id, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}`.
 
-Errors: `service-already-exists` (`name` busy), `not-found` (creator's AID missing from `operators`), `validation-failed` (broken `name`/`git`/`ref`/`refresh`). Audit: `service.registered`.
+Errors: `service-already-exists` (`id` busy), `not-found` (creator's AID missing from `operators`), `validation-failed` (broken `id`/`git`/`ref`/`refresh`). Audit: `service.registered`.
 
 #### `keeper.service.update`
 
-Replaces mutable fields of a Service record (`git`/`ref`/`refresh`, replace semantics); `name` - key, does not change. Permission: `service.update`. Endpoint: [`PATCH /v1/services/{name}`](operator-api.md). Async: no.
+Replaces mutable fields of a Service record (`git`/`ref`/`refresh`, replace semantics); `id` - key, does not change. Permission: `service.update`. Endpoint: [`PATCH /v1/services/{id}`](operator-api.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Service name (record key). |
+| `id` | `string` | yes | Service id (record key). |
 | `git` | `string` | yes | New git source. |
 | `ref` | `string` | yes | New git ref. |
 | `refresh` | `string` | no | duration auto-refresh (`5m`). |
@@ -245,7 +245,7 @@ Errors: `not-found` (there is no record or the editor's AID is missing in `opera
 
 #### `keeper.service.list`
 
-List of registered Services (sort `name` ASC). Permission: `service.list`. Endpoint: [`GET /v1/services`](operator-api.md). Async: no.
+List of registered Services (sort `id` ASC). Permission: `service.list`. Endpoint: [`GET /v1/services`](operator-api.md). Async: no.
 
 **Input:** empty object.
 
@@ -253,34 +253,34 @@ List of registered Services (sort `name` ASC). Permission: `service.list`. Endpo
 
 | Field | Type | Meaning |
 |---|---|---|
-| `services` | `array<ServiceView>` | Items - `{name, label?, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}` (`label` - the display caption, [ADR-0085](../adr/0085-entity-id-and-label.md); absent when the row carries none). |
+| `services` | `array<ServiceView>` | Items - `{id, label?, git, ref, refresh?, created_by_aid?, updated_by_aid?, created_at, updated_at}` (`label` - the display caption, [ADR-0085](../adr/0085-entity-id-and-label.md); absent when the row carries none). |
 
 #### `keeper.service.label-set`
 
-Replaces a registry entry's **display caption** ([ADR-0085](../adr/0085-entity-id-and-label.md)). Permission: `service.label-set`. Endpoint: [`PUT /v1/services/{name}/label`](operator-api.md). Async: no.
+Replaces a registry entry's **display caption** ([ADR-0085](../adr/0085-entity-id-and-label.md)). Permission: `service.label-set`. Endpoint: [`PUT /v1/services/{id}/label`](operator-api.md). Async: no.
 
-The caption is free text — capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. Narrower than `keeper.service.update`, which re-points `git`/`ref` and invalidates every artifact cache: the caption participates in **nothing derived** — in particular it is NOT segment 2 of the derived secret path `<mount>/<service>/<incarnation>/<state-field>` and NOT the artifact cache directory — so changing it orphans no secret and re-clones nothing.
+The caption is free text — capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `id`. Narrower than `keeper.service.update`, which re-points `git`/`ref` and invalidates every artifact cache: the caption participates in **nothing derived** — in particular it is NOT segment 2 of the derived secret path `<mount>/<service>/<incarnation>/<state-field>` and NOT the artifact cache directory — so changing it orphans no secret and re-clones nothing.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Service name. Addresses the row; NOT changed by this tool. |
+| `id` | `string` | yes | Service id. Addresses the row; NOT changed by this tool. |
 | `label` | `string` \| `null` | no | The new caption. `null` or omitted clears it. |
 
 **Output:** `ServiceView` — the entry as it now reads.
 
-Errors: `not-found` (no entry). Audit: `service.label_changed`, payload `{name, old_label, new_label}`.
+Errors: `not-found` (no entry). Audit: `service.label_changed`, payload `{id, old_label, new_label}`.
 
 #### `keeper.service.deregister`
 
-Removes a Service entry from `service_registry` by name. Permission: `service.deregister`. Endpoint: [`DELETE /v1/services/{name}`](operator-api.md). Async: no.
+Removes a Service entry from `service_registry` by id. Permission: `service.deregister`. Endpoint: [`DELETE /v1/services/{id}`](operator-api.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Service name. |
+| `id` | `string` | yes | Service id. |
 
 **Output:** empty object (REST equivalent - 204 No Content).
 
@@ -367,7 +367,7 @@ Creating a Provider. Permission: `provider.create`. Endpoint: `POST /v1/provider
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (kebab-case) | yes | Provider name. |
+| `id` | `string` (kebab-case) | yes | Provider id (immutable — [ADR-0085](../adr/0085-entity-id-and-label.md)). |
 | `type` | `string` (kebab-case) | yes | CloudDriver plugin name (`soul-cloud-<type>`). |
 | `region` | `string` | yes | Region/zone. |
 | `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref to credentials (path, no secret). |
@@ -384,13 +384,13 @@ Enumeration of Providers (paged). Permission: `provider.read`. Endpoint: `GET /v
 
 #### `keeper.provider.get`
 
-Reading one Provider by name. Permission: `provider.read`. Endpoint: `GET /v1/providers/{name}`.
+Reading one Provider by name. Permission: `provider.read`. Endpoint: `GET /v1/providers/{id}`.
 
 **Input:** `{name}`. **Output:** `providerViewOut`. Errors: `not-found`.
 
 #### `keeper.provider.delete`
 
-Removing Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{name}`. Audit: `provider.deleted`.
+Removing Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{id}`. Audit: `provider.deleted`.
 
 **Input:** `{name}`. **Output:** empty object. Errors: `not-found`; `provider-has-profiles` (`409` - Provider is referenced by Profiles, FK `ON DELETE RESTRICT`; first delete dependent Profiles).
 
@@ -402,7 +402,7 @@ Creating a Profile. Permission: `profile.create`. Endpoint: `POST /v1/profiles`.
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` (kebab-case) | yes | Profile name. |
+| `id` | `string` (kebab-case) | yes | Profile id (immutable — [ADR-0085](../adr/0085-entity-id-and-label.md)). |
 | `provider` | `string` | yes | Name of the registered Provider (FK). |
 | `params` | `object` | optional | VM parameters (freeform jsonb; validated against the `profile_schema` CloudDriver plugin on the scenario layer, not in CRUD). |
 | `cloud_init` | `string` | optional | Raw cloud-init userdata. |
@@ -419,13 +419,13 @@ Enumeration of Profiles (paged; optional filter by Provider). Permission: `profi
 
 #### `keeper.profile.get`
 
-Reading one Profile by name. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{name}`.
+Reading one Profile by name. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{id}`.
 
 **Input:** `{name}`. **Output:** `profileViewOut`. Errors: `not-found`.
 
 #### `keeper.profile.delete`
 
-Deleting Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{name}`. Audit: `profile.deleted`.
+Deleting Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{id}`. Audit: `profile.deleted`.
 
 **Input:** `{name}`. **Output:** empty object. Errors: `not-found`.
 
@@ -443,7 +443,7 @@ Moved to a domain file - [mcp-tools/tidings.md](mcp-tools/tidings.md): `keeper.t
 
 ### Cadence (0) and Choir (0) - REST-only
 
-Domains **Cadence** (`/v1/cadences*`, [ADR-046](../adr/0046-cadence.md)) and **Choir** (`/v1/incarnations/{name}/choirs*`, [ADR-044](../adr/0044-choir.md)) **do not have MCP tools** - `manifest.go` does not contain them. Stub files record the absence: [mcp-tools/cadences.md](mcp-tools/cadences.md), [mcp-tools/choirs.md](mcp-tools/choirs.md). These domains are managed only through the Operator API ([operator-api/cadences.md](operator-api/cadences.md), [operator-api/choirs.md](operator-api/choirs.md)).
+Domains **Cadence** (`/v1/cadences*`, [ADR-046](../adr/0046-cadence.md)) and **Choir** (`/v1/incarnations/{id}/choirs*`, [ADR-044](../adr/0044-choir.md)) **do not have MCP tools** - `manifest.go` does not contain them. Stub files record the absence: [mcp-tools/cadences.md](mcp-tools/cadences.md), [mcp-tools/choirs.md](mcp-tools/choirs.md). These domains are managed only through the Operator API ([operator-api/cadences.md](operator-api/cadences.md), [operator-api/choirs.md](operator-api/choirs.md)).
 
 ## What is NOT published as MCP-tool
 
@@ -551,7 +551,7 @@ No additional fields. Reserved for the scenario-runner - in M0.7.c the publisher
 | `task_idx` | integer (≥0) | yes | The task index in the `RenderedTask[]` apply-run. |
 | `task_status` | string | yes | The full name of the enum constant `TaskStatus` from proto (`TASK_STATUS_OK` / `TASK_STATUS_FAILED` / `TASK_STATUS_CANCELLED` / ...). When expanding the Soul-side enum, new values go to the payload "as is" - the SSE client must treat unknown values as the `failed` analogue for UX, and not crash. |
 | `error` | object | optional | Filled only when `task_status` ≠ OK. Structure - `{code, module}` (subset of `keeperv1.ModuleError`). **`message` (task stderr) is NOT published on SSE** (BUG-3 floor): stderr of a fallen task may carry a plaintext secret that `MaskSecrets` does not catch by vault-ref, and the SSE publish happens in the grpc layer, which on a multi-Keeper cluster holds no run context to decide per task (ADR-002, ADR-012(d)). Since [ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 removed the per-task `no_log:`, this floor is the only barrier on this channel and it applies to **every** failed task. The operator receives the detailed safe reason via `status_details` / `GET /v1/incarnations/<name>` (double `MaskSecrets` there, see `scenario.failureReason`). `code`/`module` carry triage without body stderr. |
-| `notices` | array | optional | Advisory findings about a task that **ran anyway** ([ADR-0076(u)](../adr/0076-engine-compat-window.md)) — present regardless of `task_status`, and typically on a task that SUCCEEDED. Elements are `{code, module, param, message}`; `code` is `deprecated_param` today. Key omitted when the task had nothing to report, so a client that ignores the field sees exactly the frames it saw before. **Unlike `error`, the `message` IS published**: a notice is rendered from the module's manifest (param name, versions, replacement) and never from task output, so the stderr hazard that keeps `error.message` off this channel does not apply — and a frame saying only `deprecated_param` would send the operator hunting for which param and by when. For the same reason it is **never masked**: there is no param *value* in it, and hiding it would blind the operator precisely on the tasks that handle secrets. The durable copy lives on the run (`GET /v1/incarnations/{name}/runs/{apply_id}` → `hosts[].notices`) and in the `task.executed` audit payload. |
+| `notices` | array | optional | Advisory findings about a task that **ran anyway** ([ADR-0076(u)](../adr/0076-engine-compat-window.md)) — present regardless of `task_status`, and typically on a task that SUCCEEDED. Elements are `{code, module, param, message}`; `code` is `deprecated_param` today. Key omitted when the task had nothing to report, so a client that ignores the field sees exactly the frames it saw before. **Unlike `error`, the `message` IS published**: a notice is rendered from the module's manifest (param name, versions, replacement) and never from task output, so the stderr hazard that keeps `error.message` off this channel does not apply — and a frame saying only `deprecated_param` would send the operator hunting for which param and by when. For the same reason it is **never masked**: there is no param *value* in it, and hiding it would blind the operator precisely on the tasks that handle secrets. The durable copy lives on the run (`GET /v1/incarnations/{id}/runs/{apply_id}` → `hosts[].notices`) and in the `task.executed` audit payload. |
 
 #### `apply.completed`
 

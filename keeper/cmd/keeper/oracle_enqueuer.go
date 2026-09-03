@@ -71,7 +71,7 @@ var ErrEnqueueIncarnationNotFound = errors.New("oracle enqueue: target incarnati
 //
 // Returns the apply_id of the enqueued run (audit-correlation oracle.fired).
 func (e *oracleScenarioEnqueuer) EnqueueScenario(ctx context.Context, req keepergrpc.EnqueueScenarioRequest) (string, error) {
-	inc, err := incarnation.SelectByName(ctx, e.db, req.IncarnationName)
+	inc, err := incarnation.SelectByID(ctx, e.db, req.IncarnationName)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			e.logger.Warn("oracle enqueue: target incarnation not found -- skip (fail-closed)",
@@ -87,7 +87,7 @@ func (e *oracleScenarioEnqueuer) EnqueueScenario(ctx context.Context, req keeper
 	ref, ok := e.resolver.Resolve(inc.Service)
 	if !ok {
 		return "", fmt.Errorf("oracle enqueue: service %q of incarnation %q not registered",
-			inc.Service, inc.Name)
+			inc.Service, inc.ID)
 	}
 	// The scenario runs the deployed version of the service, not the
 	// branch tip (copy of incarnation/destroy_prepare.go:88).
@@ -103,7 +103,7 @@ func (e *oracleScenarioEnqueuer) EnqueueScenario(ctx context.Context, req keeper
 	if err := applyrun.InsertPlanned(ctx, e.db, &applyrun.ApplyRun{
 		ApplyID:         applyID,
 		SID:             req.SubjectSID,
-		IncarnationName: inc.Name,
+		IncarnationName: inc.ID,
 		Scenario:        req.ScenarioName,
 		StartedByAID:    nil,
 		Recipe:          recipe,
@@ -124,7 +124,7 @@ func (e *oracleScenarioEnqueuer) EnqueueScenario(ctx context.Context, req keeper
 
 	e.logger.Info("oracle enqueue: planned job recorded",
 		slog.String("sid", req.SubjectSID),
-		slog.String("incarnation", inc.Name),
+		slog.String("incarnation", inc.ID),
 		slog.String("scenario", req.ScenarioName),
 		slog.String("apply_id", applyID),
 	)

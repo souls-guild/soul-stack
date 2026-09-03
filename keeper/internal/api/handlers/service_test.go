@@ -29,10 +29,10 @@ type svcFakePool struct {
 	updateErr error
 	// deleteRows — RowsAffected DELETE (Deregister): 0 → ErrNotFound (404).
 	deleteRows int64
-	// getRow — the outcome of SELECT … WHERE name (Get): nil → ErrNotFound; otherwise a row.
+	// getRow — the outcome of SELECT … WHERE id (Get): nil → ErrNotFound; otherwise a row.
 	getValues []any
 	getErr    error
-	// listValues — rows from SELECT … ORDER BY name (List); each is a []any of 8 columns.
+	// listValues — rows from SELECT … ORDER BY id (List); each is a []any of 8 columns.
 	listValues [][]any
 }
 
@@ -72,7 +72,7 @@ func (p *svcFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 }
 
 func (p *svcFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if contains(sql, "FROM service_registry") && contains(sql, "ORDER BY name") {
+	if contains(sql, "FROM service_registry") && contains(sql, "ORDER BY id") {
 		return &svcRows{rows: p.listValues}, nil
 	}
 	return nil, errSvcUnexpected(sql)
@@ -166,11 +166,11 @@ func claimsService() *jwt.Claims { return claimsFor("archon-alice") }
 func TestServiceHandler_Register_201(t *testing.T) {
 	h := newServiceHandler(t, &svcFakePool{})
 	reply, err := h.RegisterTyped(context.Background(), claimsService(),
-		ServiceRegisterInput{Name: "web", Git: "https://git/web.git", Ref: "v1.0.0"})
+		ServiceRegisterInput{ID: "web", Git: "https://git/web.git", Ref: "v1.0.0"})
 	if err != nil {
 		t.Fatalf("RegisterTyped: %v", err)
 	}
-	if reply.Body.Name != "web" || reply.Body.Ref != "v1.0.0" {
+	if reply.Body.ID != "web" || reply.Body.Ref != "v1.0.0" {
 		t.Errorf("reply body = %+v", reply.Body)
 	}
 }
@@ -178,14 +178,14 @@ func TestServiceHandler_Register_201(t *testing.T) {
 func TestServiceHandler_Register_EmptyName_422(t *testing.T) {
 	h := newServiceHandler(t, &svcFakePool{})
 	_, err := h.RegisterTyped(context.Background(), claimsService(),
-		ServiceRegisterInput{Name: "", Git: "g", Ref: "v1"})
+		ServiceRegisterInput{ID: "", Git: "g", Ref: "v1"})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
 func TestServiceHandler_Register_EmptyGit_422(t *testing.T) {
 	h := newServiceHandler(t, &svcFakePool{})
 	_, err := h.RegisterTyped(context.Background(), claimsService(),
-		ServiceRegisterInput{Name: "web", Git: "", Ref: "v1"})
+		ServiceRegisterInput{ID: "web", Git: "", Ref: "v1"})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -193,7 +193,7 @@ func TestServiceHandler_Register_BadRefresh_422(t *testing.T) {
 	bad := "nonsense"
 	h := newServiceHandler(t, &svcFakePool{})
 	_, err := h.RegisterTyped(context.Background(), claimsService(),
-		ServiceRegisterInput{Name: "web", Git: "g", Ref: "v1", Refresh: &bad})
+		ServiceRegisterInput{ID: "web", Git: "g", Ref: "v1", Refresh: &bad})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 
@@ -209,7 +209,7 @@ func TestServiceHandler_Register_ReservedName_422(t *testing.T) {
 	for _, name := range config.ReservedVaultNamespaceNames() {
 		h := newServiceHandler(t, &svcFakePool{})
 		_, err := h.RegisterTyped(context.Background(), claimsService(),
-			ServiceRegisterInput{Name: name, Git: "https://git/x.git", Ref: "v1"})
+			ServiceRegisterInput{ID: name, Git: "https://git/x.git", Ref: "v1"})
 		wantProblem(t, err, problem.TypeValidationFailed)
 	}
 }
@@ -221,7 +221,7 @@ func TestServiceHandler_Register_ReservedNameIsWholeWord(t *testing.T) {
 	for _, name := range []string{"keeper-notes", "heralds", "my-provider"} {
 		h := newServiceHandler(t, &svcFakePool{})
 		_, err := h.RegisterTyped(context.Background(), claimsService(),
-			ServiceRegisterInput{Name: name, Git: "https://git/x.git", Ref: "v1"})
+			ServiceRegisterInput{ID: name, Git: "https://git/x.git", Ref: "v1"})
 		if err != nil {
 			t.Errorf("Register(%q) refused: %v", name, err)
 		}
@@ -233,7 +233,7 @@ func TestServiceHandler_Register_Duplicate_409(t *testing.T) {
 		insertErr: &pgconn.PgError{Code: "23505", ConstraintName: "service_registry_pkey"},
 	})
 	_, err := h.RegisterTyped(context.Background(), claimsService(),
-		ServiceRegisterInput{Name: "web", Git: "g", Ref: "v1"})
+		ServiceRegisterInput{ID: "web", Git: "g", Ref: "v1"})
 	wantProblem(t, err, problem.TypeServiceExists)
 }
 
@@ -242,7 +242,7 @@ func TestServiceHandler_Register_FKViolation_404(t *testing.T) {
 		insertErr: &pgconn.PgError{Code: "23503", ConstraintName: "service_registry_created_by_aid_fkey"},
 	})
 	_, err := h.RegisterTyped(context.Background(), claimsFor("archon-ghost"),
-		ServiceRegisterInput{Name: "web", Git: "g", Ref: "v1"})
+		ServiceRegisterInput{ID: "web", Git: "g", Ref: "v1"})
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
@@ -256,7 +256,7 @@ func TestServiceHandler_List_200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
-	if len(page.Items) != 2 || page.Items[0].Name != "api" || page.Items[1].Name != "web" {
+	if len(page.Items) != 2 || page.Items[0].ID != "api" || page.Items[1].ID != "web" {
 		t.Errorf("page = %+v", page.Items)
 	}
 }
@@ -279,7 +279,7 @@ func TestServiceHandler_Get_200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetTyped: %v", err)
 	}
-	if view.Name != "web" {
+	if view.ID != "web" {
 		t.Errorf("view = %+v", view)
 	}
 }

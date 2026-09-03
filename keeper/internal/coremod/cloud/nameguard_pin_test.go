@@ -32,9 +32,9 @@ func TestProvisionScenariosPinVMNameBasePattern(t *testing.T) {
 	}
 }
 
-// TestVMNameBaseDomainMismatch is a domain-mismatch NIM-58: incarnation.NamePattern
+// TestVMNameBaseDomainMismatch is a domain-mismatch NIM-58: incarnation.IDPattern
 // (^[a-z0-9][a-z0-9-]{0,62}$) is a SUPERSET of VMNameBasePattern. "Bad" names pass
-// incarnation create (ValidName=true), but fail driver provision (ValidVMNameBase=false) —
+// incarnation create (ValidID=true), but fail driver provision (ValidVMNameBase=false) —
 // exactly the gap guard-assert closes pre-persist.
 func TestVMNameBaseDomainMismatch(t *testing.T) {
 	long51 := strings.Repeat("a", 51)       // >50 → fails VM base, but ≤63 → name ok
@@ -44,7 +44,7 @@ func TestVMNameBaseDomainMismatch(t *testing.T) {
 	cases := []struct {
 		name      string
 		value     string
-		validName bool // valid incarnation name (incarnation.ValidName)
+		validName bool // valid incarnation name (incarnation.ValidID)
 		validVM   bool // valid VM base (cloud.VMNameBaseRe)
 	}{
 		// Domain-mismatch: incarnation name ok, VM base NO (create passes, driver fails).
@@ -60,8 +60,8 @@ func TestVMNameBaseDomainMismatch(t *testing.T) {
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			if got := incarnation.ValidName(tc.value); got != tc.validName {
-				t.Errorf("incarnation.ValidName(%q) = %v, want %v", tc.value, got, tc.validName)
+			if got := incarnation.ValidID(tc.value); got != tc.validName {
+				t.Errorf("incarnation.ValidID(%q) = %v, want %v", tc.value, got, tc.validName)
 			}
 			if got := VMNameBaseRe.MatchString(tc.value); got != tc.validVM {
 				t.Errorf("cloud.VMNameBaseRe.MatchString(%q) = %v, want %v", tc.value, got, tc.validVM)

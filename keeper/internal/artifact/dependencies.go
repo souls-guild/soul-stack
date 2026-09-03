@@ -12,7 +12,7 @@ import (
 )
 
 // ServiceDependencies — projection of one Service-repo snapshot's git
-// dependencies for the UI Service Detail (`GET /v1/services/{name}/dependencies`):
+// dependencies for the UI Service Detail (`GET /v1/services/{id}/dependencies`):
 // the destiny building blocks and custom modules declared in `service.yml`,
 // each with its own git ref (ADR-007: version = git tag/branch). Source —
 // the manifest's top-level `destiny:` / `modules:` blocks (shared/config.ServiceManifest);

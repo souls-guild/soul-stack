@@ -39,7 +39,7 @@ func registerHumaHeraldCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 			return nil, heraldMissingClaims()
 		}
 		reply, err := heraldH.CreateHeraldTyped(ctx, claims, handlers.HeraldCreateInput{
-			Name:      in.Body.Name,
+			ID:        in.Body.ID,
 			Type:      in.Body.Type,
 			Config:    in.Body.Config,
 			SecretRef: in.Body.SecretRef,
@@ -70,7 +70,7 @@ func registerHumaHeraldList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaHeraldGet mounts GET /v1/heralds/{name} via huma (READ with path,
+// registerHumaHeraldGet mounts GET /v1/heralds/{id} via huma (READ with path,
 // no audit). heraldH nil → no-op. Handler: GetHeraldTyped(name) → typed output
 // (404/422 via problem). RBAC herald.read — on the group.
 func registerHumaHeraldGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -78,7 +78,7 @@ func registerHumaHeraldGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 		return
 	}
 	huma.Register(humaAPI, heraldGetOperation(), func(ctx context.Context, in *heraldGetInput) (*heraldGetOutput, error) {
-		reply, err := heraldH.GetHeraldTyped(ctx, in.Name)
+		reply, err := heraldH.GetHeraldTyped(ctx, in.ID)
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -86,7 +86,7 @@ func registerHumaHeraldGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaHeraldUpdate mounts PUT /v1/heralds/{name} via huma (WRITE+AUDIT
+// registerHumaHeraldUpdate mounts PUT /v1/heralds/{id} via huma (WRITE+AUDIT
 // variant B — event herald.updated). heraldH nil → no-op. Handler: UpdateHeraldTyped
 // (replace) → audit-payload → 200 WITH BODY.
 func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -94,7 +94,7 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, heraldUpdateOperation(), func(ctx context.Context, in *heraldUpdateInput) (*heraldUpdateOutput, error) {
-		reply, err := heraldH.UpdateHeraldTyped(ctx, in.Name, handlers.HeraldUpdateInput{
+		reply, err := heraldH.UpdateHeraldTyped(ctx, in.ID, handlers.HeraldUpdateInput{
 			Type:      in.Body.Type,
 			Config:    in.Body.Config,
 			SecretRef: in.Body.SecretRef,
@@ -109,14 +109,14 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaHeraldSetLabel mounts PUT /v1/heralds/{name}/label via huma
+// registerHumaHeraldSetLabel mounts PUT /v1/heralds/{id}/label via huma
 // (WRITE+AUDIT variant B — event herald.label_changed). heraldH nil → no-op.
 func registerHumaHeraldSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
 	}
 	huma.Register(humaAPI, heraldSetLabelOperation(), func(ctx context.Context, in *heraldSetLabelInput) (*heraldSetLabelOutput, error) {
-		reply, err := heraldH.SetHeraldLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := heraldH.SetHeraldLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -125,7 +125,7 @@ func registerHumaHeraldSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandle
 	})
 }
 
-// registerHumaHeraldDelete mounts DELETE /v1/heralds/{name} via huma (WRITE+AUDIT
+// registerHumaHeraldDelete mounts DELETE /v1/heralds/{id} via huma (WRITE+AUDIT
 // variant B — event herald.deleted). heraldH nil → no-op. Handler: DeleteHeraldTyped →
 // audit-payload → empty 204 output.
 func registerHumaHeraldDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -133,7 +133,7 @@ func registerHumaHeraldDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, heraldDeleteOperation(), func(ctx context.Context, in *heraldDeleteInput) (*heraldNoContentOutput, error) {
-		reply, err := heraldH.DeleteHeraldTyped(ctx, in.Name)
+		reply, err := heraldH.DeleteHeraldTyped(ctx, in.ID)
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -157,7 +157,7 @@ func registerHumaTidingCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 			return nil, heraldMissingClaims()
 		}
 		reply, err := heraldH.CreateTidingTyped(ctx, claims, handlers.TidingCreateInput{
-			Name:         in.Body.Name,
+			ID:           in.Body.ID,
 			Herald:       in.Body.Herald,
 			EventTypes:   in.Body.EventTypes,
 			OnlyFailures: in.Body.OnlyFailures,
@@ -193,7 +193,7 @@ func registerHumaTidingList(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaTidingGet mounts GET /v1/tidings/{name} via huma (READ with path,
+// registerHumaTidingGet mounts GET /v1/tidings/{id} via huma (READ with path,
 // no audit). heraldH nil → no-op. Handler: GetTidingTyped(name) → typed output
 // (404/422 via problem). RBAC tiding.read — on the group.
 func registerHumaTidingGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -201,7 +201,7 @@ func registerHumaTidingGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 		return
 	}
 	huma.Register(humaAPI, tidingGetOperation(), func(ctx context.Context, in *tidingGetInput) (*tidingGetOutput, error) {
-		reply, err := heraldH.GetTidingTyped(ctx, in.Name)
+		reply, err := heraldH.GetTidingTyped(ctx, in.ID)
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -209,7 +209,7 @@ func registerHumaTidingGet(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	})
 }
 
-// registerHumaTidingUpdate mounts PUT /v1/tidings/{name} via huma (WRITE+AUDIT
+// registerHumaTidingUpdate mounts PUT /v1/tidings/{id} via huma (WRITE+AUDIT
 // variant B — event tiding.updated). heraldH nil → no-op. Handler: UpdateTidingTyped
 // (replace) → audit-payload → 200 WITH BODY.
 func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -217,7 +217,7 @@ func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, tidingUpdateOperation(), func(ctx context.Context, in *tidingUpdateInput) (*tidingUpdateOutput, error) {
-		reply, err := heraldH.UpdateTidingTyped(ctx, in.Name, handlers.TidingUpdateInput{
+		reply, err := heraldH.UpdateTidingTyped(ctx, in.ID, handlers.TidingUpdateInput{
 			Herald:       in.Body.Herald,
 			EventTypes:   in.Body.EventTypes,
 			OnlyFailures: in.Body.OnlyFailures,
@@ -237,14 +237,14 @@ func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 	})
 }
 
-// registerHumaTidingSetLabel mounts PUT /v1/tidings/{name}/label via huma
+// registerHumaTidingSetLabel mounts PUT /v1/tidings/{id}/label via huma
 // (WRITE+AUDIT variant B — event tiding.label_changed). heraldH nil → no-op.
 func registerHumaTidingSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
 	if heraldH == nil {
 		return
 	}
 	huma.Register(humaAPI, tidingSetLabelOperation(), func(ctx context.Context, in *tidingSetLabelInput) (*tidingSetLabelOutput, error) {
-		reply, err := heraldH.SetTidingLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := heraldH.SetTidingLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -253,7 +253,7 @@ func registerHumaTidingSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandle
 	})
 }
 
-// registerHumaTidingDelete mounts DELETE /v1/tidings/{name} via huma (WRITE+AUDIT
+// registerHumaTidingDelete mounts DELETE /v1/tidings/{id} via huma (WRITE+AUDIT
 // variant B — event tiding.deleted). heraldH nil → no-op. Handler: DeleteTidingTyped →
 // audit-payload → empty 204 output.
 func registerHumaTidingDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler) {
@@ -261,7 +261,7 @@ func registerHumaTidingDelete(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, tidingDeleteOperation(), func(ctx context.Context, in *tidingDeleteInput) (*heraldNoContentOutput, error) {
-		reply, err := heraldH.DeleteTidingTyped(ctx, in.Name)
+		reply, err := heraldH.DeleteTidingTyped(ctx, in.ID)
 		if err != nil {
 			return nil, heraldProblem(err)
 		}

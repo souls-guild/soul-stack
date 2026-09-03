@@ -343,7 +343,7 @@ func TestIntegration_LockIncarnation_SingleWinnerSignal(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	// incarnation in applying — the state lockIncarnation finalizes from.
 	inc := &incarnation.Incarnation{
-		Name: "noop-prod", Service: "noop", ServiceVersion: "master",
+		ID: "noop-prod", Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusApplying,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {

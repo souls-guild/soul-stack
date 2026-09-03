@@ -157,8 +157,8 @@ func TestValidName(t *testing.T) {
 		{strings.Repeat("a", 64), false}, // > 63
 	}
 	for _, tc := range cases {
-		if got := ValidName(tc.name); got != tc.ok {
-			t.Errorf("ValidName(%q) = %v, want %v", tc.name, got, tc.ok)
+		if got := ValidID(tc.name); got != tc.ok {
+			t.Errorf("ValidID(%q) = %v, want %v", tc.name, got, tc.ok)
 		}
 	}
 }
@@ -171,7 +171,7 @@ func TestInsert_HappyPath(t *testing.T) {
 		},
 	}
 	p := &PushProvider{
-		Name:         "vault-bastion",
+		ID:           "vault-bastion",
 		Params:       map[string]any{"vault_addr": "https://vault.example.com"},
 		CreatedByAID: "archon-alice",
 	}
@@ -210,7 +210,7 @@ func TestInsert_NilParamsBecomeEmptyJSON(t *testing.T) {
 	f := &fakeDB{
 		rowFunc: func() pgx.Row { return staticRow{values: []any{time.Now(), time.Now()}} },
 	}
-	p := &PushProvider{Name: "v", Params: nil, CreatedByAID: "archon-alice"}
+	p := &PushProvider{ID: "v", Params: nil, CreatedByAID: "archon-alice"}
 	if err := Insert(context.Background(), f, p); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
@@ -222,7 +222,7 @@ func TestInsert_NilParamsBecomeEmptyJSON(t *testing.T) {
 
 func TestInsert_RejectsInvalidName(t *testing.T) {
 	f := &fakeDB{}
-	p := &PushProvider{Name: "1bad", CreatedByAID: "archon-alice"}
+	p := &PushProvider{ID: "1bad", CreatedByAID: "archon-alice"}
 	if err := Insert(context.Background(), f, p); err == nil {
 		t.Fatal("Insert(invalid name): no error")
 	}
@@ -233,7 +233,7 @@ func TestInsert_RejectsInvalidName(t *testing.T) {
 
 func TestInsert_RejectsEmptyCreatedByAID(t *testing.T) {
 	f := &fakeDB{}
-	p := &PushProvider{Name: "vault", CreatedByAID: ""}
+	p := &PushProvider{ID: "vault", CreatedByAID: ""}
 	if err := Insert(context.Background(), f, p); err == nil {
 		t.Fatal("Insert(empty AID): no error")
 	}
@@ -245,7 +245,7 @@ func TestInsert_MapsUniqueViolation(t *testing.T) {
 			return errRow{err: &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "push_providers_pkey"}}
 		},
 	}
-	p := &PushProvider{Name: "vault", CreatedByAID: "archon-alice"}
+	p := &PushProvider{ID: "vault", CreatedByAID: "archon-alice"}
 	err := Insert(context.Background(), f, p)
 	if !errors.Is(err, ErrPushProviderAlreadyExists) {
 		t.Errorf("Insert: got %v, want wrap of ErrPushProviderAlreadyExists", err)
@@ -269,12 +269,12 @@ func TestSelectByName_HappyPath(t *testing.T) {
 			}}
 		},
 	}
-	p, err := SelectByName(context.Background(), f, "vault-bastion")
+	p, err := SelectByID(context.Background(), f, "vault-bastion")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if p.Name != "vault-bastion" {
-		t.Errorf("Name: %q", p.Name)
+	if p.ID != "vault-bastion" {
+		t.Errorf("Name: %q", p.ID)
 	}
 	if p.Params["vault_addr"] != "https://vault.example.com" {
 		t.Errorf("Params: %v", p.Params)
@@ -286,7 +286,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 
 func TestSelectByName_NotFound(t *testing.T) {
 	f := &fakeDB{}
-	_, err := SelectByName(context.Background(), f, "missing")
+	_, err := SelectByID(context.Background(), f, "missing")
 	if !errors.Is(err, ErrPushProviderNotFound) {
 		t.Errorf("err = %v, want ErrPushProviderNotFound", err)
 	}
@@ -374,22 +374,22 @@ func TestSelectAll_HappyPath(t *testing.T) {
 	if len(items) != 2 {
 		t.Errorf("items len = %d", len(items))
 	}
-	if items[0].Name != "vault-bastion" {
-		t.Errorf("items[0].Name = %q", items[0].Name)
+	if items[0].ID != "vault-bastion" {
+		t.Errorf("items[0].ID = %q", items[0].ID)
 	}
 }
 
-func TestSelectAll_WithNamePatternFilter(t *testing.T) {
+func TestSelectAll_WithIDPatternFilter(t *testing.T) {
 	f := &fakeDB{
 		rowFunc:   func() pgx.Row { return countRow{n: 0} },
 		queryFunc: func() (pgx.Rows, error) { return &fakeRows{}, nil },
 	}
-	_, _, err := SelectAll(context.Background(), f, ListFilter{NamePattern: "vault%"}, 0, 10)
+	_, _, err := SelectAll(context.Background(), f, ListFilter{IDPattern: "vault%"}, 0, 10)
 	if err != nil {
 		t.Fatalf("SelectAll: %v", err)
 	}
-	if !strings.Contains(f.lastQuerySQL, "WHERE name LIKE") {
-		t.Errorf("SQL: %q (want WHERE name LIKE)", f.lastQuerySQL)
+	if !strings.Contains(f.lastQuerySQL, "WHERE id LIKE") {
+		t.Errorf("SQL: %q (want WHERE id LIKE)", f.lastQuerySQL)
 	}
 }
 

@@ -44,7 +44,7 @@ type fakeVoyageStore struct {
 	listCount        int
 	targetsRows      func() (pgx.Rows, error)
 	// notify path (ephemeral Tiding, ADR-052(g)): heraldExists makes the
-	// SelectHeraldByName existence-check "green" (otherwise notify fails 422 before
+	// SelectHeraldByID existence-check "green" (otherwise notify fails 422 before
 	// insert); insertTidings counts inserted ephemeral rules;
 	// insertTidingErr simulates an INSERT INTO tidings failure (rollback invariant).
 	heraldExists    bool
@@ -87,7 +87,7 @@ func (f *fakeVoyageStore) QueryRow(_ context.Context, sql string, args ...any) p
 		return voyageErrRow{err: pgx.ErrNoRows}
 	case strings.Contains(sql, "SELECT COUNT(*) FROM voyages"):
 		return voyageScalarRow{vals: []any{f.listCount}}
-	case strings.Contains(sql, "FROM heralds\nWHERE name = $1"):
+	case strings.Contains(sql, "FROM heralds\nWHERE id = $1"):
 		// notify existence-check: heralds(name,type,config,secret_ref,enabled,
 		// created_at,updated_at,created_by_aid,label). heraldExists=false → ErrNoRows
 		// (→ 422 in prepareNotify). The trailing nil is the display caption

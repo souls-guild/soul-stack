@@ -51,8 +51,8 @@ type hHeraldPool struct {
 	// audit event records as `old_label`. nil = the row had none.
 	heraldPreviousLabel any
 	tidingDeleteRows    int64
-	heraldGetMissing    bool // SELECT FROM heralds WHERE name → ErrNoRows (404)
-	tidingGetMissing    bool // SELECT FROM tidings WHERE name → ErrNoRows (404)
+	heraldGetMissing    bool // SELECT FROM heralds WHERE id → ErrNoRows (404)
+	tidingGetMissing    bool // SELECT FROM tidings WHERE id → ErrNoRows (404)
 	heraldListRows      [][]any
 	tidingListRows      [][]any
 }
@@ -87,12 +87,12 @@ func (p *hHeraldPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 		return hHeraldRow{values: []any{heraldAt, heraldAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "INSERT INTO tidings"):
 		return hHeraldRow{values: []any{heraldAt, heraldAt}} // RETURNING created_at, updated_at
-	case strings.Contains(sql, "FROM heralds") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM heralds") && strings.Contains(sql, "WHERE id"):
 		if p.heraldGetMissing {
 			return hHeraldRow{err: pgx.ErrNoRows}
 		}
 		return hHeraldRow{values: heraldScanRow()}
-	case strings.Contains(sql, "FROM tidings") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM tidings") && strings.Contains(sql, "WHERE id"):
 		if p.tidingGetMissing {
 			return hHeraldRow{err: pgx.ErrNoRows}
 		}
@@ -263,7 +263,7 @@ func humaHeraldRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, au
 	return r
 }
 
-const heraldCreateJSON = `{"name":"ops-webhook","type":"webhook","config":{"url":"https://hook.test/notify"}}`
+const heraldCreateJSON = `{"id":"ops-webhook","type":"webhook","config":{"url":"https://hook.test/notify"}}`
 
 // === HERALD CREATE (WRITE+AUDIT herald.created) ===
 
@@ -280,7 +280,7 @@ func TestHumaHerald_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"id":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift herald.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -290,7 +290,7 @@ func TestHumaHerald_Create_UnknownField_400(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/heralds",
-		strings.NewReader(`{"name":"x","type":"webhook","config":{"url":"https://h.test"},"bogus":1}`))
+		strings.NewReader(`{"id":"x","type":"webhook","config":{"url":"https://h.test"},"bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -314,7 +314,7 @@ func TestHumaHerald_Create_BadType_422(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/heralds",
-		strings.NewReader(`{"name":"x","type":"slack","config":{"url":"https://h.test"}}`))
+		strings.NewReader(`{"id":"x","type":"slack","config":{"url":"https://h.test"}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (bad type enum); body=%s", rec.Code, rec.Body.String())
@@ -342,7 +342,7 @@ func TestHumaAudit_HeraldCreate_RecordsOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventHeraldCreated, map[string]any{
-		"name": "ops-webhook", "type": "webhook", "enabled": true,
+		"id": "ops-webhook", "type": "webhook", "enabled": true,
 		"url": "https://hook.test/notify",
 	})
 }
@@ -392,7 +392,7 @@ func TestHumaHerald_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"id":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift herald.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -469,7 +469,7 @@ func TestHumaHerald_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"id":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift herald.get:\n got  = %s\n want = %s", got, golden)
 	}
@@ -513,7 +513,7 @@ func TestHumaHerald_Update_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"name":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-13T10:00:00Z","enabled":true,"id":"ops-webhook","type":"webhook","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift herald.update:\n got  = %s\n want = %s", got, golden)
 	}
@@ -542,7 +542,7 @@ func TestHumaAudit_HeraldUpdate_RecordsOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventHeraldUpdated, map[string]any{
-		"name": "ops-webhook", "type": "webhook", "enabled": true,
+		"id": "ops-webhook", "type": "webhook", "enabled": true,
 	})
 }
 
@@ -585,7 +585,7 @@ func TestHumaAudit_HeraldDelete_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventHeraldDeleted, map[string]any{"name": "ops-webhook"})
+	assertAuditWritten(t, auditCap, audit.EventHeraldDeleted, map[string]any{"id": "ops-webhook"})
 }
 
 func TestHumaAudit_HeraldDelete_NoAudit_OnNotFound(t *testing.T) {
@@ -604,7 +604,7 @@ func TestHumaAudit_HeraldDelete_NoAudit_OnNotFound(t *testing.T) {
 
 // === TIDING CREATE (WRITE+AUDIT tiding.created) ===
 
-const tidingCreateJSON = `{"name":"on-fail","herald":"ops-webhook","event_types":["scenario_run.*"]}`
+const tidingCreateJSON = `{"id":"on-fail","herald":"ops-webhook","event_types":["scenario_run.*"]}`
 
 func TestHumaTiding_Create_GoldenWire(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
@@ -619,7 +619,7 @@ func TestHumaTiding_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","id":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift tiding.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -629,7 +629,7 @@ func TestHumaTiding_Create_UnknownField_400(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/tidings",
-		strings.NewReader(`{"name":"x","herald":"h","event_types":["scenario_run.*"],"bogus":1}`))
+		strings.NewReader(`{"id":"x","herald":"h","event_types":["scenario_run.*"],"bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -641,7 +641,7 @@ func TestHumaTiding_Create_MissingHerald_422(t *testing.T) {
 	r := humaHeraldRouter(t, strictAllowAll{}, nil, &hHeraldPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/tidings",
-		strings.NewReader(`{"name":"x","event_types":["scenario_run.*"]}`))
+		strings.NewReader(`{"id":"x","event_types":["scenario_run.*"]}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (missing required herald); body=%s", rec.Code, rec.Body.String())
@@ -669,7 +669,7 @@ func TestHumaAudit_TidingCreate_RecordsOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventTidingCreated, map[string]any{
-		"name": "on-fail", "herald": "ops-webhook",
+		"id": "on-fail", "herald": "ops-webhook",
 		"only_failures": false, "only_changes": false, "enabled": true,
 	})
 }
@@ -690,7 +690,7 @@ func TestHumaTiding_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON-object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","enabled":true,"ephemeral":false,"event_types":["scenario_run.*"],"herald":"ops-webhook","id":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift tiding.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -759,7 +759,7 @@ func TestHumaAudit_TidingUpdate_RecordsOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventTidingUpdated, map[string]any{
-		"name": "on-fail", "herald": "ops-webhook",
+		"id": "on-fail", "herald": "ops-webhook",
 	})
 }
 
@@ -787,7 +787,7 @@ func TestHumaAudit_TidingDelete_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventTidingDeleted, map[string]any{"name": "on-fail"})
+	assertAuditWritten(t, auditCap, audit.EventTidingDeleted, map[string]any{"id": "on-fail"})
 }
 
 func TestHumaAudit_TidingDelete_NoAudit_OnNotFound(t *testing.T) {

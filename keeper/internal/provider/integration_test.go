@@ -96,7 +96,7 @@ func seedOperator(t *testing.T, aid string) {
 
 func newProvider(name, aid string) *Provider {
 	return &Provider{
-		Name:           name,
+		ID:             name,
 		Type:           "aws",
 		Region:         "eu-central-1",
 		CredentialsRef: "vault:secret/cloud/" + name,
@@ -117,11 +117,11 @@ func TestIntegration_Insert_AndSelect(t *testing.T) {
 		t.Errorf("CreatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "aws-eu")
+	got, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if got.Name != "aws-eu" || got.Type != "aws" || got.Region != "eu-central-1" {
+	if got.ID != "aws-eu" || got.Type != "aws" || got.Region != "eu-central-1" {
 		t.Errorf("got = %+v", got)
 	}
 	if got.CredentialsRef != "vault:secret/cloud/aws-eu" {
@@ -164,7 +164,7 @@ func TestIntegration_Insert_CHECKViolation_BadName(t *testing.T) {
 	ctx := context.Background()
 	// Direct INSERT bypassing Go validation: SQL CHECK must reject bad name.
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO providers (name, type, region, credentials_ref, created_by_aid)
+		`INSERT INTO providers (id, type, region, credentials_ref, created_by_aid)
 		 VALUES ($1, 'aws', 'eu', 'vault:x', $2)`,
 		"AWS_EU", "archon-alice")
 	if err == nil {
@@ -184,9 +184,9 @@ func TestIntegration_Insert_NullCreatedByOnOperatorDelete(t *testing.T) {
 		`DELETE FROM operators WHERE aid = 'archon-alice'`); err != nil {
 		t.Fatalf("DELETE operator: %v", err)
 	}
-	got, err := SelectByName(ctx, integrationPool, "aws-eu")
+	got, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName after operator delete: %v", err)
+		t.Fatalf("SelectByID after operator delete: %v", err)
 	}
 	if got.CreatedByAID != nil {
 		t.Errorf("CreatedByAID = %v after operator delete, want nil", got.CreatedByAID)
@@ -195,7 +195,7 @@ func TestIntegration_Insert_NullCreatedByOnOperatorDelete(t *testing.T) {
 
 func TestIntegration_SelectByName_NotFound(t *testing.T) {
 	resetAll(t)
-	_, err := SelectByName(context.Background(), integrationPool, "missing")
+	_, err := SelectByID(context.Background(), integrationPool, "missing")
 	if !errors.Is(err, ErrProviderNotFound) {
 		t.Fatalf("err = %v, want ErrProviderNotFound", err)
 	}
@@ -223,7 +223,7 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 		t.Errorf("len(out) = %d, want 2", len(out))
 	}
 	// DESC by created_at: last inserted (yc-c) first.
-	if out[0].Name != "yc-c" {
-		t.Errorf("out[0].Name = %q, want yc-c", out[0].Name)
+	if out[0].ID != "yc-c" {
+		t.Errorf("out[0].ID = %q, want yc-c", out[0].ID)
 	}
 }

@@ -73,7 +73,7 @@ func NewService(d ServiceDeps) (*Service, error) {
 // CreateOmenInput — CreateOmen's parameters. CallerAID is optional (nil →
 // created_by_aid IS NULL; transport fills it in from the caller's claims).
 type CreateOmenInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetOmenLabel]. nil/blank
 	// stores NULL and the consumer shows Name.
@@ -93,8 +93,8 @@ type CreateOmenInput struct {
 //   - wrapped fmt.Errorf — FK/CHECK/infra failure (500).
 func (s *Service) CreateOmen(ctx context.Context, in CreateOmenInput) (*Omen, error) {
 	src := SourceType(in.SourceType)
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("%w: invalid omen name %q (must match %s)", ErrValidation, in.Name, NamePattern)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("%w: invalid omen id %q (must match %s)", ErrValidation, in.ID, IDPattern)
 	}
 	if !ValidSourceType(src) {
 		return nil, fmt.Errorf("%w: invalid source_type %q (must be vault/prometheus/elk)", ErrValidation, in.SourceType)
@@ -107,7 +107,7 @@ func (s *Service) CreateOmen(ctx context.Context, in CreateOmenInput) (*Omen, er
 	}
 
 	o := &Omen{
-		Name:         in.Name,
+		ID:           in.ID,
 		Label:        in.Label,
 		SourceType:   src,
 		Endpoint:     in.Endpoint,
@@ -127,8 +127,8 @@ func (s *Service) ListOmens(ctx context.Context, offset, limit int) ([]*Omen, in
 }
 
 // GetOmen reads an Omen by PK. [ErrOmenNotFound] if it doesn't exist.
-func (s *Service) GetOmen(ctx context.Context, name string) (*Omen, error) {
-	return SelectOmenByName(ctx, s.pool, name)
+func (s *Service) GetOmen(ctx context.Context, id string) (*Omen, error) {
+	return SelectOmenByID(ctx, s.pool, id)
 }
 
 // SetOmenLabel replaces the display caption of one Omen and returns the row as
@@ -141,19 +141,19 @@ func (s *Service) GetOmen(ctx context.Context, name string) (*Omen, error) {
 // field for which that argument does not apply, because nothing reads it.
 //
 // [ErrOmenNotFound] if the record doesn't exist.
-func (s *Service) SetOmenLabel(ctx context.Context, name string, label *string) (*Omen, *string, error) {
-	previous, err := UpdateOmenLabel(ctx, s.pool, name, label)
+func (s *Service) SetOmenLabel(ctx context.Context, id string, label *string) (*Omen, *string, error) {
+	previous, err := UpdateOmenLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	o, err := SelectOmenByName(ctx, s.pool, name)
+	o, err := SelectOmenByID(ctx, s.pool, id)
 	return o, previous, err
 }
 
 // DeleteOmen deletes an Omen by PK (its Rites cascade). [ErrOmenNotFound]
 // if the record didn't exist.
-func (s *Service) DeleteOmen(ctx context.Context, name string) error {
-	return DeleteOmen(ctx, s.pool, name)
+func (s *Service) DeleteOmen(ctx context.Context, id string) error {
+	return DeleteOmen(ctx, s.pool, id)
 }
 
 // --- Rite -------------------------------------------------------------

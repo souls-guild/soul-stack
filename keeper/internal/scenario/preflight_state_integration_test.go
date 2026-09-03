@@ -111,7 +111,7 @@ tasks:
 func seedStatefulIncarnation(t *testing.T, name string, state map[string]any, sids ...string) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "state-assert-guard", ServiceVersion: "master",
+		ID: name, Service: "state-assert-guard", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady, State: state,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {

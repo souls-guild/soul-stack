@@ -58,7 +58,7 @@ Examples:
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			reply, err := cl.PushProviders.Create(ctx, client.PushProviderBody{Name: name, Params: params})
+			reply, err := cl.PushProviders.Create(ctx, client.PushProviderBody{ID: name, Params: params})
 			if err != nil {
 				return renderAPIError(err)
 			}
@@ -139,9 +139,9 @@ func newPushProvidersListCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 			reply, err := cl.PushProviders.List(ctx, client.PushProviderListOptions{
-				NamePattern: namePattern,
-				Limit:       limit,
-				Offset:      offset,
+				IDPattern: namePattern,
+				Limit:     limit,
+				Offset:    offset,
 			})
 			if err != nil {
 				return renderAPIError(err)

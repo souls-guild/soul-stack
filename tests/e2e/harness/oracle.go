@@ -138,7 +138,7 @@ func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilO
 	t.Helper()
 
 	body := map[string]any{
-		"name":     opts.Name,
+		"id":       opts.Name,
 		"interval": opts.Interval,
 		"check":    opts.Check,
 		"subject":  opts.Subject.body(),
@@ -162,15 +162,15 @@ func (s *Stack) CreateVigil(ctx context.Context, t *testing.T, opts CreateVigilO
 		t.Fatalf("CreateVigil(%s): status %d, body=%s", opts.Name, status, string(resp))
 	}
 	var out struct {
-		Name string `json:"name"`
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateVigil(%s): decode: %v (body=%s)", opts.Name, err, string(resp))
 	}
-	if out.Name == "" {
-		t.Fatalf("CreateVigil(%s): empty name in 201 body=%s", opts.Name, string(resp))
+	if out.ID == "" {
+		t.Fatalf("CreateVigil(%s): empty id in 201 body=%s", opts.Name, string(resp))
 	}
-	return out.Name
+	return out.ID
 }
 
 // --- CreateDecree -----------------------------------------------------
@@ -216,7 +216,7 @@ func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecre
 	t.Helper()
 
 	body := map[string]any{
-		"name":             opts.Name,
+		"id":               opts.Name,
 		"on_beacon":        opts.OnBeacon,
 		"incarnation_name": opts.IncarnationName,
 		"action_scenario":  opts.ActionScenario,
@@ -247,15 +247,15 @@ func (s *Stack) CreateDecree(ctx context.Context, t *testing.T, opts CreateDecre
 		t.Fatalf("CreateDecree(%s): status %d, body=%s", opts.Name, status, string(resp))
 	}
 	var out struct {
-		Name string `json:"name"`
+		ID string `json:"id"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateDecree(%s): decode: %v (body=%s)", opts.Name, err, string(resp))
 	}
-	if out.Name == "" {
-		t.Fatalf("CreateDecree(%s): empty name in 201 body=%s", opts.Name, string(resp))
+	if out.ID == "" {
+		t.Fatalf("CreateDecree(%s): empty id in 201 body=%s", opts.Name, string(resp))
 	}
-	return out.Name
+	return out.ID
 }
 
 // --- WaitForOracleFires -----------------------------------------------

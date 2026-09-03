@@ -106,7 +106,7 @@ func TestIntegration_Create_AndSelect(t *testing.T) {
 
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name:               "redis-prod",
+		ID:                 "redis-prod",
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
@@ -121,11 +121,11 @@ func TestIntegration_Create_AndSelect(t *testing.T) {
 		t.Errorf("CreatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if got.Name != "redis-prod" || got.Service != "redis" || got.Status != StatusReady {
+	if got.ID != "redis-prod" || got.Service != "redis" || got.Status != StatusReady {
 		t.Errorf("got = %+v", got)
 	}
 	if got.CreatedByAID == nil || *got.CreatedByAID != "archon-alice" {
@@ -143,14 +143,14 @@ func TestIntegration_Create_DuplicateName(t *testing.T) {
 
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
 		t.Fatalf("Create#1: %v", err)
 	}
 	inc2 := &Incarnation{
-		Name: "redis-prod", Service: "other", ServiceVersion: "v2",
+		ID: "redis-prod", Service: "other", ServiceVersion: "v2",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	err := Create(ctx, integrationPool, inc2)
@@ -164,7 +164,7 @@ func TestIntegration_Create_FKViolation(t *testing.T) {
 	ctx := context.Background()
 	ghost := "archon-ghost"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &ghost,
 	}
 	err := Create(ctx, integrationPool, inc)
@@ -181,13 +181,13 @@ func TestIntegration_Create_CHECKViolation_BadName(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 	creator := "archon-alice"
-	// ValidName fail-fast in Go — but SQL CHECK duplicates. Suppress Go-validation
-	// via corner case: name with characters passing NamePattern, but with
-	// uppercase (NamePattern rejects it, test already in crud_test).
+	// ValidID fail-fast in Go — but SQL CHECK duplicates. Suppress Go-validation
+	// via corner case: name with characters passing IDPattern, but with
+	// uppercase (IDPattern rejects it, test already in crud_test).
 	// Here explicitly verify SQL-side CHECK for bad-status works,
 	// if someone bypasses Go-check (e.g., direct Exec with old enum).
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO incarnation (name, service, service_version, status, created_by_aid)
+		`INSERT INTO incarnation (id, service, service_version, status, created_by_aid)
 		 VALUES ($1, 'svc', 'v1', 'destroyed', $2)`,
 		"redis-prod", creator)
 	if err == nil {
@@ -197,7 +197,7 @@ func TestIntegration_Create_CHECKViolation_BadName(t *testing.T) {
 
 func TestIntegration_SelectByName_NotFound(t *testing.T) {
 	resetAll(t)
-	_, err := SelectByName(context.Background(), integrationPool, "missing")
+	_, err := SelectByID(context.Background(), integrationPool, "missing")
 	if !errors.Is(err, ErrIncarnationNotFound) {
 		t.Fatalf("err = %v, want ErrIncarnationNotFound", err)
 	}
@@ -210,7 +210,7 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 	creator := "archon-alice"
 	for _, name := range []string{"redis-a", "redis-b", "redis-c", "mysql-d"} {
 		inc := &Incarnation{
-			Name: name, Service: "redis", ServiceVersion: "v1",
+			ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 		}
 		if name == "mysql-d" {
@@ -234,8 +234,8 @@ func TestIntegration_SelectAll_Pagination(t *testing.T) {
 		t.Errorf("len(out) = %d, want 2", len(out))
 	}
 	// DESC by created_at → last (mysql-d) first.
-	if out[0].Name != "mysql-d" {
-		t.Errorf("out[0].Name = %q, want mysql-d", out[0].Name)
+	if out[0].ID != "mysql-d" {
+		t.Errorf("out[0].ID = %q, want mysql-d", out[0].ID)
 	}
 
 	out, total, err = SelectAll(ctx, integrationPool, ListFilter{Service: "redis"}, ListScope{Unrestricted: true}, 0, 50)
@@ -266,7 +266,7 @@ func TestIntegration_SelectAll_StateFilter(t *testing.T) {
 	}
 	for _, s := range seed {
 		inc := &Incarnation{
-			Name: s.name, Service: "redis", ServiceVersion: "v1",
+			ID: s.name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 			State: s.state,
 		}
@@ -330,7 +330,7 @@ func TestIntegration_SelectAll_StateFilter_InjectionSafe(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -345,7 +345,7 @@ func TestIntegration_SelectAll_StateFilter_InjectionSafe(t *testing.T) {
 	}
 
 	// The table must remain — the row is in place.
-	if _, err := SelectByName(ctx, integrationPool, "redis-prod"); err != nil {
+	if _, err := SelectByID(ctx, integrationPool, "redis-prod"); err != nil {
 		t.Fatalf("incarnation vanished after injection attempt: %v", err)
 	}
 }
@@ -356,7 +356,7 @@ func TestIntegration_HistorySelectByName(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -398,7 +398,7 @@ func TestIntegration_HistorySelectByName_EmptyHistory(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -420,7 +420,7 @@ func TestIntegration_StateHistory_FK_OnIncarnationDelete(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -434,7 +434,7 @@ VALUES ('01HFOO', 'redis-prod', 'create', '{}', '{"x":1}', $1, '01HAPPLY')`,
 		t.Fatalf("insert history: %v", err)
 	}
 	if _, err := integrationPool.Exec(ctx,
-		`DELETE FROM incarnation WHERE name = 'redis-prod'`); err != nil {
+		`DELETE FROM incarnation WHERE id = 'redis-prod'`); err != nil {
 		t.Fatalf("DELETE incarnation: %v", err)
 	}
 	var n int
@@ -456,7 +456,7 @@ func TestIntegration_Unlock_FromErrorLocked(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": "redis-prod-01"},
 		Status:             StatusErrorLocked,
@@ -475,9 +475,9 @@ func TestIntegration_Unlock_FromErrorLocked(t *testing.T) {
 		t.Errorf("PreviousStatus = %q, want error_locked", res.PreviousStatus)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready", got.Status)
@@ -512,7 +512,7 @@ func TestIntegration_Unlock_NotLocked(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -540,7 +540,7 @@ func TestIntegration_Unlock_FromApplying(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": "redis-prod-01"},
 		Status:             StatusApplying, CreatedByAID: &creator,
@@ -554,9 +554,9 @@ func TestIntegration_Unlock_FromApplying(t *testing.T) {
 		t.Fatalf("err = %v, want ErrIncarnationNotLocked", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusApplying {
 		t.Errorf("status = %q, want applying (unchanged)", got.Status)
@@ -581,7 +581,7 @@ func TestIntegration_Unlock_FromMigrationFailed(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": "redis-prod-01"},
 		Status:             StatusMigrationFailed,
@@ -600,9 +600,9 @@ func TestIntegration_Unlock_FromMigrationFailed(t *testing.T) {
 		t.Errorf("PreviousStatus = %q, want migration_failed", res.PreviousStatus)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready", got.Status)
@@ -637,7 +637,7 @@ func seedDestroyable(t *testing.T, name string) {
 	seedOperator(t, "archon-alice")
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1.2.3",
+		ID: name, Service: "redis", ServiceVersion: "v1.2.3",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": name + "-01"},
 		Status:             StatusDestroying,
@@ -681,8 +681,8 @@ func TestIntegration_DeleteAfterTeardown_ArchiveSurvivesCascade(t *testing.T) {
 	}
 
 	// Live incarnation deleted.
-	if _, err := SelectByName(ctx, integrationPool, "redis-prod"); !errors.Is(err, ErrIncarnationNotFound) {
-		t.Errorf("SelectByName after delete: err = %v, want ErrIncarnationNotFound", err)
+	if _, err := SelectByID(ctx, integrationPool, "redis-prod"); !errors.Is(err, ErrIncarnationNotFound) {
+		t.Errorf("SelectByID after delete: err = %v, want ErrIncarnationNotFound", err)
 	}
 
 	// Cascade deleted live state_history and apply_runs.
@@ -780,7 +780,7 @@ func TestIntegration_DeleteAfterTeardown_ForceRecordsAbandonedResources(t *testi
 	// `provisioned_provider` / `provisioned_vm_ids` is the service-author
 	// convention used by examples/, not a keeper contract — read best-effort.
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1.2.3",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1.2.3",
 		StateSchemaVersion: 1,
 		State: map[string]any{
 			"provisioned_provider": "example-dev",
@@ -941,7 +941,7 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 	ctx := context.Background()
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
@@ -956,9 +956,9 @@ func TestIntegration_DeleteAfterTeardown_NotDestroying(t *testing.T) {
 		t.Error("Deleted = true, want false (guard rejects non-destroying)")
 	}
 	// Row alive.
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v (row must survive no-op)", err)
+		t.Fatalf("SelectByID: %v (row must survive no-op)", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready (untouched)", got.Status)
@@ -984,7 +984,7 @@ func seedApplyingWithApplyRun(t *testing.T, name, applyID, sid string) {
 	seedOperator(t, "archon-alice")
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1",
+		ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": name + "-01"},
 		Status:             StatusApplying, CreatedByAID: &creator,
@@ -1016,9 +1016,9 @@ func TestIntegration_ReleaseApplyingOrphan_HappyPath(t *testing.T) {
 		t.Fatalf("ReleaseApplyingOrphan: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready (orphan lock released)", got.Status)
@@ -1056,9 +1056,9 @@ func TestIntegration_ReleaseApplyingOrphan_LiveRival(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOrphanLockNotReleased (live rival)", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusApplying {
 		t.Errorf("status = %q, want applying (live-lock untouched)", got.Status)
@@ -1080,7 +1080,7 @@ func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1",
+		ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1,
 		State:              map[string]any{"primary": name + "-01"},
 		Status:             StatusApplying, CreatedByAID: &creator,
@@ -1094,9 +1094,9 @@ func TestIntegration_ReleaseApplyingOrphan_OrphanRunVanished(t *testing.T) {
 		t.Fatalf("ReleaseApplyingOrphan (orphan-run vanished): %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready (orphan lock released)", got.Status)
@@ -1117,7 +1117,7 @@ func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 	seedApplyingWithApplyRun(t, name, applyID, name+".host-01")
 	// Honest finalize moved incarnation to ready BEFORE our release.
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET status = 'ready' WHERE name = $1`, name); err != nil {
+		`UPDATE incarnation SET status = 'ready' WHERE id = $1`, name); err != nil {
 		t.Fatalf("simulate honest finalize: %v", err)
 	}
 
@@ -1126,9 +1126,9 @@ func TestIntegration_ReleaseApplyingOrphan_NotApplying(t *testing.T) {
 		t.Fatalf("err = %v, want ErrOrphanLockNotReleased (not applying)", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready (honest finalize not overwritten)", got.Status)
@@ -1155,7 +1155,7 @@ func readApplyingEpoch(t *testing.T, name string) (applyID, kid *string, attempt
 	t.Helper()
 	const q = `
 SELECT applying_apply_id, applying_attempt, applying_by_kid, applying_since::text
-FROM incarnation WHERE name = $1`
+FROM incarnation WHERE id = $1`
 	if err := integrationPool.QueryRow(context.Background(), q, name).Scan(&applyID, &attempt, &kid, &since); err != nil {
 		t.Fatalf("readApplyingEpoch(%s): %v", name, err)
 	}
@@ -1170,7 +1170,7 @@ func setApplyingEpoch(t *testing.T, name, applyID, kid string) {
 	const q = `
 UPDATE incarnation
 SET applying_apply_id = $2, applying_attempt = 0, applying_by_kid = $3, applying_since = NOW()
-WHERE name = $1`
+WHERE id = $1`
 	if _, err := integrationPool.Exec(context.Background(), q, name, applyID, kid); err != nil {
 		t.Fatalf("setApplyingEpoch(%s): %v", name, err)
 	}
@@ -1198,9 +1198,9 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnSuccess(t *testing.T) {
 		t.Fatalf("UpdateStateFromRun: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready", got.Status)
@@ -1232,9 +1232,9 @@ func TestIntegration_UpdateStateFromRun_ClearsEpoch_OnFail(t *testing.T) {
 		t.Fatalf("UpdateStateFromRun (fail): %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusErrorLocked {
 		t.Errorf("status = %q, want error_locked", got.Status)
@@ -1262,9 +1262,9 @@ func TestIntegration_ReleaseApplyingOrphan_ClearsEpoch(t *testing.T) {
 		t.Fatalf("ReleaseApplyingOrphan: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusReady {
 		t.Errorf("status = %q, want ready", got.Status)

@@ -64,8 +64,8 @@ func TestLabelSetRequest_ClearingSpellings(t *testing.T) {
 					"an absent caption must be an absent key, or a consumer cannot tell "+
 					"\"no caption\" from an empty one", got["label"])
 			}
-			if got["name"] != "ops-webhook" {
-				t.Errorf("reply `name` = %v, want the identifier — a label-set must not touch it", got["name"])
+			if got["id"] != "ops-webhook" {
+				t.Errorf("reply `id` = %v, want the identifier — a label-set must not touch it", got["id"])
 			}
 		})
 	}

@@ -130,7 +130,7 @@ func validProfile() *Profile {
 	aid := "archon-alice"
 	ci := "#cloud-config\npackages: [nginx]"
 	return &Profile{
-		Name:         "web-small",
+		ID:           "web-small",
 		Provider:     "aws-eu",
 		Params:       map[string]any{"instance_type": "t3.small"},
 		CloudInit:    &ci,
@@ -211,13 +211,13 @@ func TestInsert_NilParamsBecomesEmptyObject(t *testing.T) {
 	}
 }
 
-func TestInsert_RejectsInvalidName(t *testing.T) {
+func TestInsert_RejectsInvalidID(t *testing.T) {
 	f := &fakeDB{}
 	p := validProfile()
-	p.Name = "Web_Small"
+	p.ID = "Web_Small"
 	err := Insert(context.Background(), f, p)
-	if err == nil || !strings.Contains(err.Error(), "invalid name") {
-		t.Fatalf("err = %v, want invalid name", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid id") {
+		t.Fatalf("err = %v, want invalid id", err)
 	}
 	if f.queryRowCalls != 0 {
 		t.Errorf("queryRowCalls = %d on invalid name; want 0", f.queryRowCalls)
@@ -295,7 +295,7 @@ func TestInsert_MapsCreatedByFKToGeneric(t *testing.T) {
 	}
 }
 
-// --- SelectByName -----------------------------------------------------
+// --- SelectByID -----------------------------------------------------
 
 func TestSelectByName_HappyPath(t *testing.T) {
 	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
@@ -311,11 +311,11 @@ func TestSelectByName_HappyPath(t *testing.T) {
 			}}
 		},
 	}
-	p, err := SelectByName(context.Background(), f, "web-small")
+	p, err := SelectByID(context.Background(), f, "web-small")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if p.Name != "web-small" || p.Provider != "aws-eu" {
+	if p.ID != "web-small" || p.Provider != "aws-eu" {
 		t.Errorf("got = %+v", p)
 	}
 	if p.Params["instance_type"] != "t3.small" {
@@ -340,9 +340,9 @@ func TestSelectByName_NullCloudInit(t *testing.T) {
 			}}
 		},
 	}
-	p, err := SelectByName(context.Background(), f, "web-small")
+	p, err := SelectByID(context.Background(), f, "web-small")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if p.CloudInit != nil {
 		t.Errorf("CloudInit = %v, want nil", p.CloudInit)
@@ -354,7 +354,7 @@ func TestSelectByName_NullCloudInit(t *testing.T) {
 
 func TestSelectByName_NotFound(t *testing.T) {
 	f := &fakeDB{} // default → ErrNoRows
-	_, err := SelectByName(context.Background(), f, "missing")
+	_, err := SelectByID(context.Background(), f, "missing")
 	if !errors.Is(err, ErrProfileNotFound) {
 		t.Fatalf("err = %v, want ErrProfileNotFound", err)
 	}
@@ -472,19 +472,19 @@ func TestDelete(t *testing.T) {
 	})
 }
 
-// --- ValidName --------------------------------------------------------
+// --- ValidID --------------------------------------------------------
 
-func TestValidName(t *testing.T) {
+func TestValidID(t *testing.T) {
 	good := []string{"a", "web", "web-small", "db-large-1", "1web"}
 	bad := []string{"", "Upper", "with_underscore", "x:colon", strings.Repeat("a", 64)}
 	for _, n := range good {
-		if !ValidName(n) {
-			t.Errorf("ValidName(%q) = false, want true", n)
+		if !ValidID(n) {
+			t.Errorf("ValidID(%q) = false, want true", n)
 		}
 	}
 	for _, n := range bad {
-		if ValidName(n) {
-			t.Errorf("ValidName(%q) = true, want false", n)
+		if ValidID(n) {
+			t.Errorf("ValidID(%q) = true, want false", n)
 		}
 	}
 }

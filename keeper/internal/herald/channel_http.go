@@ -121,11 +121,11 @@ func (c telegramChannel) validateConfig(config map[string]any) error {
 func (telegramChannel) resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error) {
 	chatID, ok := configString(h.Config, "chat_id")
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: telegram channel %q has no chat_id", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: telegram channel %q has no chat_id", h.ID)}
 	}
 	tokenRef, ok := configString(h.Config, "bot_token_ref")
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: telegram channel %q has no bot_token_ref", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: telegram channel %q has no bot_token_ref", h.ID)}
 	}
 	parseMode, _ := h.Config["parse_mode"].(string)
 
@@ -287,7 +287,7 @@ func (c customChannel) validateConfig(config map[string]any) error {
 func (customChannel) resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error) {
 	rawURL, ok := configString(h.Config, "url")
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: custom channel %q has no url", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: custom channel %q has no url", h.ID)}
 	}
 	body, err := buildPayload(job)
 	if err != nil {
@@ -380,7 +380,7 @@ func payloadDigest(job *DeliveryJob) string {
 func resolveWebhookURLRef(ctx context.Context, h *Herald, kv KVReader) (string, error) {
 	ref, ok := configString(h.Config, "webhook_url_ref")
 	if !ok {
-		return "", errTerminalNoRetry{fmt.Errorf("herald: channel %q has no webhook_url_ref", h.Name)}
+		return "", errTerminalNoRetry{fmt.Errorf("herald: channel %q has no webhook_url_ref", h.ID)}
 	}
 	url, err := resolveVaultString(ctx, kv, ref)
 	if err != nil {

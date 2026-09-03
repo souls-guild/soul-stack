@@ -69,7 +69,7 @@ func (l *StateLister) ListStatePages(ctx context.Context, base statepredicate.Ba
 
 		page := make([]statepredicate.Stated, len(items))
 		for i, inc := range items {
-			page[i] = statepredicate.Stated{Name: inc.Name, State: inc.State}
+			page[i] = statepredicate.Stated{Name: inc.ID, State: inc.State}
 		}
 		if err := yield(page); err != nil {
 			return err

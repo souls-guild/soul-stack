@@ -12,7 +12,7 @@ import (
 // serviceDeregisterArgs — arguments for keeper.service.deregister
 // (schemaServiceDeregisterInput): name only.
 type serviceDeregisterArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // callServiceDeregister — mutating tool keeper.service.deregister. Transport
@@ -43,15 +43,15 @@ func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims,
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 
-	if err := h.deps.ServiceSvc.DeleteService(ctx, a.Name); err != nil {
+	if err := h.deps.ServiceSvc.DeleteService(ctx, a.ID); err != nil {
 		code, detail := mapServiceRegistryErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: service.deregister failed",
-				slog.String("name", a.Name),
+				slog.String("id", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -59,9 +59,9 @@ func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	// Audit — parallels the REST handler: payload {name}.
+	// Audit — parallels the REST handler: payload {id}.
 	h.writeAudit(audit.EventServiceDeregistered, claims.Subject, map[string]any{
-		"name": a.Name,
+		"id": a.ID,
 	})
 
 	// REST returns 204 No Content; the MCP equivalent is an empty output object.

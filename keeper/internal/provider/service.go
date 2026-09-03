@@ -93,7 +93,7 @@ func wrapValidation(err error) error {
 
 // CreateInput contains [Service.Create] parameters.
 type CreateInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetLabel]. nil/blank stores
 	// NULL and the consumer shows Name. It is not used to derive anything — the
@@ -136,7 +136,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*Provider, error)
 		createdBy = &aid
 	}
 	p := &Provider{
-		Name:           in.Name,
+		ID:             in.ID,
 		Label:          in.Label,
 		Type:           in.Type,
 		Region:         in.Region,
@@ -176,10 +176,10 @@ func (s *Service) resolveCredentials(ctx context.Context, in CreateInput) (strin
 		return "", false, wrapValidation(ErrPlaintextDisabled)
 	}
 	// entity=<name> must be a safe path segment before writing to Vault.
-	if !ValidName(in.Name) {
-		return "", false, wrapValidation(fmt.Errorf("invalid name %q (must match %s)", in.Name, NamePattern))
+	if !ValidID(in.ID) {
+		return "", false, wrapValidation(fmt.Errorf("invalid id %q (must match %s)", in.ID, IDPattern))
 	}
-	ref, err := s.secretWriter.WriteMap(ctx, secretwrite.DomainProvider, in.Name, "credentials", in.Credentials)
+	ref, err := s.secretWriter.WriteMap(ctx, secretwrite.DomainProvider, in.ID, "credentials", in.Credentials)
 	if err != nil {
 		// secretwrite errors do not carry credential values; Vault failure is internal.
 		return "", false, fmt.Errorf("provider: materialize credentials: %w", err)
@@ -188,11 +188,11 @@ func (s *Service) resolveCredentials(ctx context.Context, in CreateInput) (strin
 }
 
 // Get reads one Provider by PK. [ErrProviderNotFound] when absent.
-func (s *Service) Get(ctx context.Context, name string) (*Provider, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("provider: invalid name %q (must match %s)", name, NamePattern)
+func (s *Service) Get(ctx context.Context, id string) (*Provider, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("provider: invalid id %q (must match %s)", id, IDPattern)
 	}
-	return SelectByName(ctx, s.pool, name)
+	return SelectByID(ctx, s.pool, id)
 }
 
 // SetLabel replaces the display caption of one Provider and returns the row as it
@@ -206,19 +206,19 @@ func (s *Service) Get(ctx context.Context, name string) (*Provider, error) {
 // apply — nothing reads it.
 //
 // [ErrProviderNotFound] when the row is absent.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*Provider, *string, error) {
-	previous, err := UpdateLabel(ctx, s.pool, name, label)
+func (s *Service) SetLabel(ctx context.Context, id string, label *string) (*Provider, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	p, err := SelectByName(ctx, s.pool, name)
+	p, err := SelectByID(ctx, s.pool, id)
 	return p, previous, err
 }
 
 // Delete removes a Provider by PK. [ErrProviderNotFound] when absent,
 // [ErrProviderHasProfiles] with dependent Profiles (FK RESTRICT).
-func (s *Service) Delete(ctx context.Context, name string) error {
-	return Delete(ctx, s.pool, name)
+func (s *Service) Delete(ctx context.Context, id string) error {
+	return Delete(ctx, s.pool, id)
 }
 
 // List returns a page of Providers and total count.

@@ -28,7 +28,7 @@ This is a verb module: the only state is `fetch` (without declarative semantics
 
 | Param | Type | Required/default | Meaning |
 |---|---|---|---|
-| `omen` | string | required | The name of Omen (`omens.name`) - the external system to which access is requested. |
+| `omen` | string | required | The name of Omen (`omens.id`) - the external system to which access is requested. |
 | `query` | string | required | Query to Omen: KV-path (vault, including `#field`-projection), promQL (prometheus), index-query (elk). Verified against `Rite.allow` on Keeper. |
 
 `request_id` and `apply_id` the module sets itself (not params): `request_id`

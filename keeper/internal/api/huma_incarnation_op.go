@@ -38,11 +38,11 @@ type incCreateInput struct {
 // `name_template` composes the name server-side from input components, and whether
 // it does is only known once the service snapshot resolves — past the schema layer.
 // The domain still rejects an omitted name when nothing composes one (422
-// "field 'name' is required"), so the contract did not loosen, it moved one layer in.
+// "field 'id' is required"), so the contract did not loosen, it moved one layer in.
 type IncarnationCreateRequest struct {
-	Name string `json:"name,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components"`
+	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components. The TEMPLATE key keeps its own spelling until NIM-730."`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/incarnations/{name}/label. Unlike `name` it is never composed by
+	// by PUT /v1/incarnations/{id}/label. Unlike `name` it is never composed by
 	// a name_template — a template composes an identifier, and a caption is not one.
 	Label   *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
@@ -96,7 +96,7 @@ type incListInput struct {
 	Service string `query:"service" doc:"filter by service name"`
 	Status  string `query:"status" doc:"filter by status (ready/applying/error_locked/migration_failed); invalid → 422"`
 	Coven   string `query:"coven" doc:"exact-match by covens[] (ADR-008); invalid label → 422"`
-	SortBy  string `query:"sort" doc:"sort field (created_at/name/status/service or state.<field>)"`
+	SortBy  string `query:"sort" doc:"sort field (created_at/id/status/service or state.<field>)"`
 	SortDir string `query:"sort_dir" doc:"sort direction (asc/desc)"`
 }
 
@@ -123,14 +123,14 @@ func incListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name} (get) — READ with path (no audit) ===
+// === GET /v1/incarnations/{id} (get) — READ with path (no audit) ===
 
-// incGetInput — huma input for GET /v1/incarnations/{name}. Name — path.
+// incGetInput — huma input for GET /v1/incarnations/{id}. Name — path.
 type incGetInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID string `path:"id" doc:"incarnation id"`
 }
 
-// incGetOutput — huma output for GET /v1/incarnations/{name} (FULL-TYPED). Body — full
+// incGetOutput — huma output for GET /v1/incarnations/{id} (FULL-TYPED). Body — full
 // native IncarnationGetReply (byte-exact with legacy GET {name}).
 type incGetOutput struct {
 	Body IncarnationGetReply
@@ -140,7 +140,7 @@ func incGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnation",
 		Method:        http.MethodGet,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Get incarnation",
 		Description:   "Service runtime instance detail. Outside RBAC scope -> 404 (does not leak existence). Permission incarnation.get. Read-only.",
 		Tags:          []string{"incarnation"},
@@ -149,13 +149,13 @@ func incGetOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/history (history) — READ with typed query (no audit) ===
+// === GET /v1/incarnations/{id}/history (history) — READ with typed query (no audit) ===
 
-// incHistoryInput — huma input for GET /v1/incarnations/{name}/history. Name — path;
+// incHistoryInput — huma input for GET /v1/incarnations/{id}/history. Name — path;
 // apply_id — optional ULID filter (bad → 400 in HistoryTyped); offset/limit — int32 with
 // default (out-of-range → 400).
 type incHistoryInput struct {
-	Name    string `path:"name" doc:"incarnation name"`
+	ID      string `path:"id" doc:"incarnation id"`
 	ApplyID string `query:"apply_id" doc:"opt. ULID filter by state_history.apply_id; non-ULID → 400"`
 	// IncludeTransitions — the rerun-transition markers are excluded by default:
 	// they carry state_before == state_after and never gain an outcome, so in a
@@ -171,7 +171,7 @@ type incHistoryInput struct {
 	Limit           int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
-// incHistoryOutput — huma-output GET /v1/incarnations/{name}/history (FULL-TYPED). Body
+// incHistoryOutput — huma-output GET /v1/incarnations/{id}/history (FULL-TYPED). Body
 // — TAGGED native envelope incarnationHistoryReply (items.$ref to native StateHistoryEntry
 // with json tags: snake_case wire). Previously Body was handlers.IncarnationHistoryReply (=
 // PagedResponse[StateHistoryView]) — untagged View → PascalCase wire (contract bug #7).
@@ -185,7 +185,7 @@ func incHistoryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnationHistory",
 		Method:        http.MethodGet,
-		Path:          "/{name}/history",
+		Path:          "/{id}/history",
 		Summary:       "Incarnation state transition history (paged)",
 		Description:   "state_history with apply_id filter and pagination. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
@@ -194,17 +194,17 @@ func incHistoryOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs (runs) — READ-with-typed-query (NO audit) ===
+// === GET /v1/incarnations/{id}/runs (runs) — READ-with-typed-query (NO audit) ===
 //
 // List of incarnation runs (apply_runs folded by apply_id) + per-run details below.
 // Closes the UI bug apply_id→/voyages/ 404: an incarnation run (apply_run) is NOT a Voyage,
 // it has its own read-view. The scope gate is the same inScope predicate as History (action=
 // incarnation.history): the endpoints live in the incarnation domain, per-{name} scope in-handler.
 
-// incRunsInput — huma-input GET /v1/incarnations/{name}/runs. Name — path; offset/limit
+// incRunsInput — huma-input GET /v1/incarnations/{id}/runs. Name — path; offset/limit
 // — int32 with a default (out-of-range → 400 in RunsTyped).
 type incRunsInput struct {
-	Name   string `path:"name" doc:"incarnation name"`
+	ID     string `path:"id" doc:"incarnation id"`
 	Offset int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
 	Limit  int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
@@ -219,7 +219,7 @@ func incRunsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listIncarnationRuns",
 		Method:        http.MethodGet,
-		Path:          "/{name}/runs",
+		Path:          "/{id}/runs",
 		Summary:       "List incarnation runs (paged)",
 		Description:   "Fold apply_runs by apply_id: run status (applying/success/failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
@@ -228,12 +228,12 @@ func incRunsOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs/{apply_id} (run detail) — READ-with-path (NO audit) ===
+// === GET /v1/incarnations/{id}/runs/{apply_id} (run detail) — READ-with-path (NO audit) ===
 
 // incRunDetailInput — huma-input GET .../runs/{apply_id}. Name/ApplyID — path. The
 // apply_id format (ULID) is validated by RunDetailTyped → 400 (non-ULID), symmetric with the History filter.
 type incRunDetailInput struct {
-	Name    string `path:"name" doc:"incarnation name"`
+	ID      string `path:"id" doc:"incarnation id"`
 	ApplyID string `path:"apply_id" doc:"run ULID; non-ULID → 400"`
 }
 
@@ -247,7 +247,7 @@ func incRunDetailOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnationRun",
 		Method:        http.MethodGet,
-		Path:          "/{name}/runs/{apply_id}",
+		Path:          "/{id}/runs/{apply_id}",
 		Summary:       "Incarnation run details (per-host)",
 		Description:   "Slice by hosts of one apply_id: status per host + address of failed task (task_idx/plan_index/error). Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
@@ -256,12 +256,12 @@ func incRunDetailOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/runs/{apply_id}/tasks (run task plan + per-host) — READ (NO audit) — NIM-37 ===
+// === GET /v1/incarnations/{id}/runs/{apply_id}/tasks (run task plan + per-host) — READ (NO audit) — NIM-37 ===
 
 // incRunTasksInput — huma-input GET .../runs/{apply_id}/tasks. Name/ApplyID — path.
 // The apply_id format (ULID) is validated by RunTasksTyped → 400 (non-ULID).
 type incRunTasksInput struct {
-	Name    string `path:"name" doc:"incarnation name"`
+	ID      string `path:"id" doc:"incarnation id"`
 	ApplyID string `path:"apply_id" doc:"run ULID; non-ULID → 400"`
 }
 
@@ -275,7 +275,7 @@ func incRunTasksOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnationRunTasks",
 		Method:        http.MethodGet,
-		Path:          "/{name}/runs/{apply_id}/tasks",
+		Path:          "/{id}/runs/{apply_id}/tasks",
 		Summary:       "Incarnation run tasks (plan + per-host)",
 		Description:   "Task plan of one apply_id (plan_index/name/module/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
@@ -284,13 +284,13 @@ func incRunTasksOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/scenarios/{scenario} (run) — MIDDLEWARE-AUDIT incarnation.scenario_started (202+body) ===
+// === POST /v1/incarnations/{id}/scenarios/{scenario} (run) — MIDDLEWARE-AUDIT incarnation.scenario_started (202+body) ===
 
 // incRunInput — huma-input POST .../scenarios/{scenario}. Name/Scenario — path; Body —
 // A POINTER (opt. body: huma marks RequestBody.Required=false for *T, on an empty body
 // Body=nil — parity with legacy io.EOF→zero-value). input is optional.
 type incRunInput struct {
-	Name     string                 `path:"name" doc:"incarnation name"`
+	ID       string                 `path:"id" doc:"incarnation id"`
 	Scenario string                 `path:"scenario" doc:"scenario name"`
 	Body     *IncarnationRunRequest `doc:"opt. body: scenario input"`
 }
@@ -299,7 +299,7 @@ type incRunInput struct {
 // echoed from the path are ignored (the path is authoritative). input is optional.
 // additionalProperties:false → unknown field → 400. The name = the contract schema name (T4b).
 type IncarnationRunRequest struct {
-	Name     *string        `json:"name,omitempty" doc:"echo path-name (ignored)"`
+	ID       *string        `json:"id,omitempty" doc:"echo path-id (ignored)"`
 	Scenario *string        `json:"scenario,omitempty" doc:"echo path-scenario (ignored)"`
 	Input    map[string]any `json:"input,omitempty" doc:"scenario input"`
 }
@@ -315,7 +315,7 @@ func incRunOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "runIncarnationScenario",
 		Method:        http.MethodPost,
-		Path:          "/{name}/scenarios/{scenario}",
+		Path:          "/{id}/scenarios/{scenario}",
 		Summary:       "Run incarnation scenario",
 		Description:   "Async run of a named scenario (ADR-009). Blocked on cluster:degraded (503). Permission incarnation.run.",
 		Tags:          []string{"incarnation"},
@@ -324,11 +324,11 @@ func incRunOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/unlock (unlock) — MIDDLEWARE-AUDIT incarnation.unlocked (200+body) ===
+// === POST /v1/incarnations/{id}/unlock (unlock) — MIDDLEWARE-AUDIT incarnation.unlocked (200+body) ===
 
 // incUnlockInput — huma-input POST .../unlock. Name — path; Body — a typed body.
 type incUnlockInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationUnlockRequest
 }
 
@@ -336,7 +336,7 @@ type incUnlockInput struct {
 // is ignored. additionalProperties:false → unknown field → 400. The name = the contract
 // schema name (T4b).
 type IncarnationUnlockRequest struct {
-	Name   *string `json:"name,omitempty" doc:"echo path-name (ignored)"`
+	ID     *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
 	Reason string  `json:"reason" required:"true" minLength:"1" maxLength:"500" doc:"free text confirmation"`
 }
 
@@ -351,7 +351,7 @@ func incUnlockOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "unlockIncarnation",
 		Method:        http.MethodPost,
-		Path:          "/{name}/unlock",
+		Path:          "/{id}/unlock",
 		Summary:       "Remove incarnation blocking status",
 		Description:   "error_locked / migration_failed → ready under FOR UPDATE; state does not change (ADR-009/019). Permission incarnation.unlock.",
 		Tags:          []string{"incarnation"},
@@ -360,11 +360,11 @@ func incUnlockOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/upgrade (upgrade) — MIDDLEWARE-AUDIT incarnation.upgrade_started (202+body) ===
+// === POST /v1/incarnations/{id}/upgrade (upgrade) — MIDDLEWARE-AUDIT incarnation.upgrade_started (202+body) ===
 
 // incUpgradeInput — huma input for POST .../upgrade. Name — path; Body — typed body.
 type incUpgradeInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationUpgradeRequest
 }
 
@@ -372,7 +372,7 @@ type incUpgradeInput struct {
 // echo is ignored. additionalProperties:false → unknown field → 400. The name = the contract
 // schema name (T4b).
 type IncarnationUpgradeRequest struct {
-	Name      *string `json:"name,omitempty" doc:"echo path-name (ignored)"`
+	ID        *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
 	ToVersion string  `json:"to_version" required:"true" doc:"target service version (git-ref)"`
 }
 
@@ -387,7 +387,7 @@ func incUpgradeOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "upgradeIncarnation",
 		Method:        http.MethodPost,
-		Path:          "/{name}/upgrade",
+		Path:          "/{id}/upgrade",
 		Summary:       "Migrate incarnation to new version",
 		Description:   "Sync-under-202 migration state_schema (ADR-019) + service_version change in one tx. Permission incarnation.upgrade.",
 		Tags:          []string{"incarnation"},
@@ -396,13 +396,13 @@ func incUpgradeOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/upgrade-paths (upgrade-paths) — READ (NO audit) ===
+// === GET /v1/incarnations/{id}/upgrade-paths (upgrade-paths) — READ (NO audit) ===
 
 // incUpgradePathsInput — huma input for GET .../upgrade-paths. Name — path; To — an optional
 // query-ref for on-demand analysis of a single target (empty → a cheap list of tags).
 type incUpgradePathsInput struct {
-	Name string `path:"name" doc:"incarnation name"`
-	To   string `query:"to" doc:"opt. target git-ref for on-demand analysis of single target; empty → list of registry tags + is_current"`
+	ID string `path:"id" doc:"incarnation id"`
+	To string `query:"to" doc:"opt. target git-ref for on-demand analysis of single target; empty → list of registry tags + is_current"`
 }
 
 // incUpgradePathsOutput — huma-output GET .../upgrade-paths (FULL-TYPED). Body —
@@ -415,7 +415,7 @@ func incUpgradePathsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getIncarnationUpgradePaths",
 		Method:        http.MethodGet,
-		Path:          "/{name}/upgrade-paths",
+		Path:          "/{id}/upgrade-paths",
 		Summary:       "Incarnation upgrade paths",
 		Description:   "Cheap list of service registry refs (marking is_current) without ?to=; on-demand analysis of one target (direction / found-legacy / state migrations) with ?to=<ref> (ADR-0068 6). Permission incarnation.upgrade (read facet). Read-only, no audit.",
 		Tags:          []string{"incarnation"},
@@ -424,11 +424,11 @@ func incUpgradePathsOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/rerun-last (rerun-last) — SELF-AUDIT incarnation.rerun_last (202+body) ===
+// === POST /v1/incarnations/{id}/rerun-last (rerun-last) — SELF-AUDIT incarnation.rerun_last (202+body) ===
 
 // incRerunInput — huma input for POST .../rerun-last. Name — path; Body — typed body.
 type incRerunInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationRerunLastRequest
 }
 
@@ -455,7 +455,7 @@ func incRerunOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "rerunLastIncarnation",
 		Method:        http.MethodPost,
-		Path:          "/{name}/rerun-last",
+		Path:          "/{id}/rerun-last",
 		Summary:       "Restart the last failed scenario from error_locked",
 		Description:   "Clears error_locked and, in the same action, restarts the incarnation last failed scenario (bootstrap create/... or operational add_user/...) with the stored input of the failed run (one tx FOR UPDATE). Permission incarnation.rerun-last.",
 		Tags:          []string{"incarnation"},
@@ -464,17 +464,17 @@ func incRerunOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/incarnations/{name} (destroy) — SELF-AUDIT incarnation.destroy_started (202+body) ===
+// === DELETE /v1/incarnations/{id} (destroy) — SELF-AUDIT incarnation.destroy_started (202+body) ===
 
-// incDestroyInput — huma-input DELETE /v1/incarnations/{name}. Name — path; AllowDestroy
+// incDestroyInput — huma-input DELETE /v1/incarnations/{id}. Name — path; AllowDestroy
 // — required boolean query (confirmation-flag). huma binds bool in a typed way: missing/
 // non-boolean → 400 (parity strict required-param + legacy ParseBool).
 type incDestroyInput struct {
-	Name         string `path:"name" doc:"incarnation name"`
+	ID           string `path:"id" doc:"incarnation id"`
 	AllowDestroy bool   `query:"allow_destroy" required:"true" doc:"confirmation-flag: true -> destroy without teardown"`
 }
 
-// incDestroyOutput — huma-output DELETE /v1/incarnations/{name} (FULL-TYPED). Status=202;
+// incDestroyOutput — huma-output DELETE /v1/incarnations/{id} (FULL-TYPED). Status=202;
 // Body — native IncarnationDestroyReply (apply_id).
 type incDestroyOutput struct {
 	Status int `json:"-"`
@@ -485,7 +485,7 @@ func incDestroyOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "destroyIncarnation",
 		Method:        http.MethodDelete,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Destroy an incarnation",
 		Description:   "allow_destroy=true -> DELETE without teardown; false -> scenario destroy (S-D4). Permission incarnation.destroy.",
 		Tags:          []string{"incarnation"},
@@ -494,12 +494,12 @@ func incDestroyOperation() huma.Operation {
 	}
 }
 
-// === PUT /v1/incarnations/{name}/label (label-set) — SELF-AUDIT incarnation.label_changed (200+body) ===
+// === PUT /v1/incarnations/{id}/label (label-set) — SELF-AUDIT incarnation.label_changed (200+body) ===
 
 // incSetLabelInput — huma input for PUT .../label. Name — path; Body — the shared
 // LabelSetRequest.
 type incSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"incarnation name"`
+	ID   string `path:"id" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"incarnation id"`
 	Body LabelSetRequest
 }
 
@@ -513,7 +513,7 @@ func incSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setIncarnationLabel",
 		Method:        http.MethodPut,
-		Path:          "/{name}/label",
+		Path:          "/{id}/label",
 		Summary:       "Set the incarnation display caption",
 		Description:   "Replaces the display caption of one incarnation (ADR-0085). Permission incarnation.label-set, audit incarnation.label_changed, same incarnation scope as every other incarnation mutation. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Deliberately narrower than PUT .../traits beside it: a trait pair is a live scope dimension, so stamping one grants visibility and needs a second gate; a caption is in no dimension of anything. It is NOT segment 3 of the derived secret path, NOT the RBAC incarnation= scope value and NOT the CEL root (incarnation.label does not resolve) - so changing it moves nothing, and it is allowed while the incarnation is applying or error_locked because no run reads it.",
 		Tags:          []string{"incarnation"},
@@ -522,11 +522,11 @@ func incSetLabelOperation() huma.Operation {
 	}
 }
 
-// === PUT /v1/incarnations/{name}/traits (set-traits) — SELF-AUDIT incarnation.traits_changed (200+body) ===
+// === PUT /v1/incarnations/{id}/traits (set-traits) — SELF-AUDIT incarnation.traits_changed (200+body) ===
 
 // incSetTraitsInput — huma input for PUT .../traits. Name — path; Body — typed body.
 type incSetTraitsInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationSetTraitsRequest
 }
 
@@ -548,7 +548,7 @@ func incSetTraitsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setIncarnationTraits",
 		Method:        http.MethodPut,
-		Path:          "/{name}/traits",
+		Path:          "/{id}/traits",
 		Summary:       "Replace operator-set trait labels of an incarnation",
 		Description:   "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set, over two gates: the incarnation lies inside the operator scope, and every pair stamped must lie inside the operator's own trait-scope - an incarnation-attached pair grants every role scoped on it sight of the incarnation, so a pair the operator does not hold is refused 422 (the same rule the per-host soul.traits-assign applies).",
 		Tags:          []string{"incarnation"},

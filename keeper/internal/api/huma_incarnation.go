@@ -54,7 +54,7 @@ func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationH
 			return nil, incMissingClaims()
 		}
 		reply, err := incH.CreateTyped(ctx, claims, handlers.IncarnationCreateRequestInput{
-			Name:           in.Body.Name,
+			ID:             in.Body.ID,
 			Service:        in.Body.Service,
 			Covens:         in.Body.Covens,
 			Input:          in.Body.Input,
@@ -69,7 +69,7 @@ func registerHumaIncarnationCreate(humaAPI huma.API, incH *handlers.IncarnationH
 	})
 }
 
-// registerHumaIncarnationRun mounts POST /v1/incarnations/{name}/scenarios/{scenario}
+// registerHumaIncarnationRun mounts POST /v1/incarnations/{id}/scenarios/{scenario}
 // (MIDDLEWARE-AUDIT incarnation.scenario_started). incH nil → no-op. Toll middleware
 // (503 on degraded) — chi wiring of the group (huma inherits it).
 func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -85,7 +85,7 @@ func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHand
 		if in.Body != nil {
 			input = in.Body.Input
 		}
-		reply, err := incH.RunTyped(ctx, claims, in.Name, in.Scenario, input)
+		reply, err := incH.RunTyped(ctx, claims, in.ID, in.Scenario, input)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -94,7 +94,7 @@ func registerHumaIncarnationRun(humaAPI huma.API, incH *handlers.IncarnationHand
 	})
 }
 
-// registerHumaIncarnationUnlock mounts POST /v1/incarnations/{name}/unlock
+// registerHumaIncarnationUnlock mounts POST /v1/incarnations/{id}/unlock
 // (MIDDLEWARE-AUDIT incarnation.unlocked). incH nil → no-op.
 func registerHumaIncarnationUnlock(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -105,7 +105,7 @@ func registerHumaIncarnationUnlock(humaAPI huma.API, incH *handlers.IncarnationH
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		reply, err := incH.UnlockTyped(ctx, claims, in.Name, in.Body.Reason)
+		reply, err := incH.UnlockTyped(ctx, claims, in.ID, in.Body.Reason)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -114,7 +114,7 @@ func registerHumaIncarnationUnlock(humaAPI huma.API, incH *handlers.IncarnationH
 	})
 }
 
-// registerHumaIncarnationUpgrade mounts POST /v1/incarnations/{name}/upgrade
+// registerHumaIncarnationUpgrade mounts POST /v1/incarnations/{id}/upgrade
 // (MIDDLEWARE-AUDIT incarnation.upgrade_started). incH nil → no-op.
 func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -125,7 +125,7 @@ func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.Incarnation
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		reply, err := incH.UpgradeTyped(ctx, claims, in.Name, in.Body.ToVersion)
+		reply, err := incH.UpgradeTyped(ctx, claims, in.ID, in.Body.ToVersion)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -136,7 +136,7 @@ func registerHumaIncarnationUpgrade(humaAPI huma.API, incH *handlers.Incarnation
 
 // --- SELF-AUDIT ---
 
-// registerHumaIncarnationRerunLast mounts POST /v1/incarnations/{name}/rerun-last
+// registerHumaIncarnationRerunLast mounts POST /v1/incarnations/{id}/rerun-last
 // (SELF-AUDIT incarnation.rerun_last — written BY the handler itself inside RerunLastTyped,
 // the audit middleware is not wired). incH nil → no-op.
 func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -148,7 +148,7 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.RerunLastTyped(ctx, claims, in.Name, in.Body.Reason, in.Body.Input)
+		body, err := incH.RerunLastTyped(ctx, claims, in.ID, in.Body.Reason, in.Body.Input)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -156,7 +156,7 @@ func registerHumaIncarnationRerunLast(humaAPI huma.API, incH *handlers.Incarnati
 	})
 }
 
-// registerHumaIncarnationDestroy mounts DELETE /v1/incarnations/{name} (SELF-AUDIT
+// registerHumaIncarnationDestroy mounts DELETE /v1/incarnations/{id} (SELF-AUDIT
 // incarnation.destroy_started — written by the service layer incarnation.Destroy; the audit
 // middleware is not wired). incH nil → no-op. allow_destroy — a required boolean query (huma bind:
 // missing/non-boolean → 400).
@@ -169,7 +169,7 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.DestroyTyped(ctx, claims, in.Name, in.AllowDestroy)
+		body, err := incH.DestroyTyped(ctx, claims, in.ID, in.AllowDestroy)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -177,7 +177,7 @@ func registerHumaIncarnationDestroy(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
-// registerHumaIncarnationSetLabel mounts PUT /v1/incarnations/{name}/label
+// registerHumaIncarnationSetLabel mounts PUT /v1/incarnations/{id}/label
 // (SELF-AUDIT incarnation.label_changed — written BY the handler itself inside
 // SetLabelTyped, like the traits route beside it). incH nil → no-op.
 func registerHumaIncarnationSetLabel(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -189,7 +189,7 @@ func registerHumaIncarnationSetLabel(humaAPI huma.API, incH *handlers.Incarnatio
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.SetLabelTyped(ctx, claims, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		body, err := incH.SetLabelTyped(ctx, claims, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -197,7 +197,7 @@ func registerHumaIncarnationSetLabel(humaAPI huma.API, incH *handlers.Incarnatio
 	})
 }
 
-// registerHumaIncarnationSetTraits mounts PUT /v1/incarnations/{name}/traits
+// registerHumaIncarnationSetTraits mounts PUT /v1/incarnations/{id}/traits
 // (SELF-AUDIT incarnation.traits_changed — written BY the handler itself inside SetTraitsTyped).
 // incH nil → no-op.
 func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -209,7 +209,7 @@ func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.Incarnati
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.SetTraitsTyped(ctx, claims, in.Name, in.Body.Traits)
+		body, err := incH.SetTraitsTyped(ctx, claims, in.ID, in.Body.Traits)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -219,7 +219,7 @@ func registerHumaIncarnationSetTraits(humaAPI huma.API, incH *handlers.Incarnati
 
 // --- READ ---
 
-// registerHumaIncarnationGet mounts GET /v1/incarnations/{name} (READ, no audit).
+// registerHumaIncarnationGet mounts GET /v1/incarnations/{id} (READ, no audit).
 // The scope predicate (ADR-047) is built from claims (out of scope → 404). incH nil → no-op.
 func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -227,7 +227,7 @@ func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHand
 	}
 	huma.Register(humaAPI, incGetOperation(), func(ctx context.Context, in *incGetInput) (*incGetOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		body, err := incH.GetTyped(ctx, in.Name, incH.GetInScopeFor(claims, "get"))
+		body, err := incH.GetTyped(ctx, in.ID, incH.GetInScopeFor(claims, "get"))
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -235,7 +235,7 @@ func registerHumaIncarnationGet(humaAPI huma.API, incH *handlers.IncarnationHand
 	})
 }
 
-// registerHumaIncarnationUpgradePaths mounts GET /v1/incarnations/{name}/upgrade-paths
+// registerHumaIncarnationUpgradePaths mounts GET /v1/incarnations/{id}/upgrade-paths
 // (READ, no audit; ADR-0068 §6). The scope predicate action=upgrade (the read facet, the same
 // permission incarnation.upgrade as POST .../upgrade) → out of scope 404. incH nil → no-op.
 func registerHumaIncarnationUpgradePaths(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -244,7 +244,7 @@ func registerHumaIncarnationUpgradePaths(humaAPI huma.API, incH *handlers.Incarn
 	}
 	huma.Register(humaAPI, incUpgradePathsOperation(), func(ctx context.Context, in *incUpgradePathsInput) (*incUpgradePathsOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		view, err := incH.UpgradePathsTyped(ctx, in.Name, in.To, incH.GetInScopeFor(claims, "upgrade"))
+		view, err := incH.UpgradePathsTyped(ctx, in.ID, in.To, incH.GetInScopeFor(claims, "upgrade"))
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -288,7 +288,7 @@ func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHan
 	})
 }
 
-// registerHumaIncarnationHistory mounts GET /v1/incarnations/{name}/history (READ with
+// registerHumaIncarnationHistory mounts GET /v1/incarnations/{id}/history (READ with
 // typed query, no audit). The scope predicate (action=history) → out of scope 404. incH
 // nil → no-op.
 func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -297,7 +297,7 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	}
 	huma.Register(humaAPI, incHistoryOperation(), func(ctx context.Context, in *incHistoryInput) (*incHistoryOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.HistoryTyped(ctx, in.Name, incarnation.HistoryFilter{
+		reply, err := incH.HistoryTyped(ctx, in.ID, incarnation.HistoryFilter{
 			ApplyID:            in.ApplyID,
 			IncludeTransitions: in.IncludeTransitions,
 			IncludeArchived:    in.IncludeArchived,
@@ -318,7 +318,7 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 	})
 }
 
-// registerHumaIncarnationRuns mounts GET /v1/incarnations/{name}/runs (READ with
+// registerHumaIncarnationRuns mounts GET /v1/incarnations/{id}/runs (READ with
 // typed query, no audit). The scope predicate is the same as History (action=history) → out of
 // scope 404. incH nil → no-op.
 func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -327,7 +327,7 @@ func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHan
 	}
 	huma.Register(humaAPI, incRunsOperation(), func(ctx context.Context, in *incRunsInput) (*incRunsOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.RunsTyped(ctx, in.Name, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
+		reply, err := incH.RunsTyped(ctx, in.ID, int(in.Offset), int(in.Limit), incH.GetInScopeFor(claims, "history"))
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -344,7 +344,7 @@ func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHan
 	})
 }
 
-// registerHumaIncarnationRunDetail mounts GET /v1/incarnations/{name}/runs/{apply_id}
+// registerHumaIncarnationRunDetail mounts GET /v1/incarnations/{id}/runs/{apply_id}
 // (READ with path, no audit). The scope predicate is the same as History (action=history).
 // incH nil → no-op.
 func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -353,7 +353,7 @@ func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.Incarnati
 	}
 	huma.Register(humaAPI, incRunDetailOperation(), func(ctx context.Context, in *incRunDetailInput) (*incRunDetailOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.RunDetailTyped(ctx, in.Name, in.ApplyID, incH.GetInScopeFor(claims, "history"))
+		reply, err := incH.RunDetailTyped(ctx, in.ID, in.ApplyID, incH.GetInScopeFor(claims, "history"))
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -361,7 +361,7 @@ func registerHumaIncarnationRunDetail(humaAPI huma.API, incH *handlers.Incarnati
 	})
 }
 
-// registerHumaIncarnationRunTasks mounts GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// registerHumaIncarnationRunTasks mounts GET /v1/incarnations/{id}/runs/{apply_id}/tasks
 // (READ with path, no audit, NIM-37). The scope predicate is the same as History/RunDetail
 // (action=history). incH nil → no-op.
 func registerHumaIncarnationRunTasks(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -370,7 +370,7 @@ func registerHumaIncarnationRunTasks(humaAPI huma.API, incH *handlers.Incarnatio
 	}
 	huma.Register(humaAPI, incRunTasksOperation(), func(ctx context.Context, in *incRunTasksInput) (*incRunTasksOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		reply, err := incH.RunTasksTyped(ctx, in.Name, in.ApplyID, incH.GetInScopeFor(claims, "history"))
+		reply, err := incH.RunTasksTyped(ctx, in.ID, in.ApplyID, incH.GetInScopeFor(claims, "history"))
 		if err != nil {
 			return nil, incProblem(err)
 		}

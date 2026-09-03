@@ -130,7 +130,7 @@ func readIncarnationStamp(t *testing.T, name string) *incarnation.EngineCompat {
 	t.Helper()
 	var raw []byte
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT engine_compat FROM incarnation WHERE name = $1`, name).Scan(&raw); err != nil {
+		`SELECT engine_compat FROM incarnation WHERE id = $1`, name).Scan(&raw); err != nil {
 		t.Fatalf("read incarnation.engine_compat: %v", err)
 	}
 	if raw == nil {

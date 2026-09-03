@@ -14,14 +14,14 @@ Creates Omen in `omens`: external system (`vault`/`prometheus`/`elk`) + `endpoin
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Omen's name (kebab-case `^[a-z0-9-]{1,63}$`). |
+| `id` | `string` | yes | Omen's id (kebab-case `^[a-z0-9-]{1,63}$`, immutable). |
 | `source_type` | `string` | yes | `vault` / `prometheus` / `elk`. |
 | `endpoint` | `string` | yes | External system URL (not secret). |
 | `auth_ref` | `string` | yes | vault-ref `vault:<mount>/<path>` on master-credential. |
 
-**Output:** `OmenView` — `{name, source_type, endpoint, auth_ref, created_by_aid?, created_at}`.
+**Output:** `OmenView` — `{id, source_type, endpoint, auth_ref, created_by_aid?, created_at}`.
 
-Errors: `omen-already-exists` (`name` busy), `validation-failed` (broken `name`/`source_type`/`endpoint`/`auth_ref`). Audit: `omen.created` (payload `{name, source_type, endpoint, auth_ref, created_by_aid}` - secret values ​​are NOT included).
+Errors: `omen-already-exists` (`name` busy), `validation-failed` (broken `name`/`source_type`/`endpoint`/`auth_ref`). Audit: `omen.created` (payload `{id, source_type, endpoint, auth_ref, created_by_aid}` - secret values ​​are NOT included).
 
 #### `keeper.augur.omen.list`
 
@@ -38,13 +38,13 @@ Enumeration of Omens (sort `created_at` DESC, `name` ASC). Permission: `omen.lis
 
 #### `keeper.augur.omen.label-set`
 
-Replaces the Omen's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable so the Rites granted against an Omen cannot silently follow it to a different external system, and the caption is not the `rites.omen` FK. Permission: `omen.label-set`. Endpoint: [`PUT /v1/augur/omens/{name}/label`](../operator-api/augur.md). Async: no.
+Replaces the Omen's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable so the Rites granted against an Omen cannot silently follow it to a different external system, and the caption is not the `rites.omen` FK. Permission: `omen.label-set`. Endpoint: [`PUT /v1/augur/omens/{id}/label`](../operator-api/augur.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Omen` - the row as it now reads. Errors: `not-found`.
+**Input** (`required: id`): `{id (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Omen` - the row as it now reads. Errors: `not-found`.
 
 #### `keeper.augur.omen.delete`
 
-Removes Omen by name; cascade removes associated Rites (`ON DELETE CASCADE`). Permission: `omen.delete`. Endpoint: [`DELETE /v1/augur/omens/{name}`](../operator-api/augur.md). Async: no.
+Removes Omen by name; cascade removes associated Rites (`ON DELETE CASCADE`). Permission: `omen.delete`. Endpoint: [`DELETE /v1/augur/omens/{id}`](../operator-api/augur.md). Async: no.
 
 **Input:** `{name}`.
 

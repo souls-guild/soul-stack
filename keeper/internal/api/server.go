@@ -101,7 +101,7 @@ type Deps struct {
 	ServiceSvc *serviceregistry.Service
 
 	// ServiceRefs — a TTL cache of the git-ls-remote tag/branch listing for
-	// `GET /v1/services/{name}/refs` (UI Upgrade-modal dropdown). Optional:
+	// `GET /v1/services/{id}/refs` (UI Upgrade-modal dropdown). Optional:
 	// when nil the /refs endpoint answers 500 (feature not configured); service
 	// CRUD itself stays functional. The production wire-up in `keeper run`
 	// passes *serviceregistry.RefsCache over artifact.RefsListerFunc(
@@ -114,7 +114,7 @@ type Deps struct {
 	ModuleManifests artifact.PluginManifestSource
 
 	// ServiceScenarios — a TTL cache of the scenario listing from the materialized
-	// snapshot of the Service's git repo, for `GET /v1/services/{name}/scenarios` (UI
+	// snapshot of the Service's git repo, for `GET /v1/services/{id}/scenarios` (UI
 	// Run-modal dropdown). Optional: when nil the /scenarios endpoint answers 500
 	// (feature not configured); service CRUD itself stays functional.
 	// The production wire-up in `keeper run` passes *serviceregistry.ScenariosCache
@@ -125,7 +125,7 @@ type Deps struct {
 	// ServiceStateSchema — a TTL cache of the state_schema metadata listing
 	// (`state_schema_version` + an optional state-structure declaration + the
 	// migration chain) from the materialized snapshot of the Service's git repo, for
-	// `GET /v1/services/{name}/state-schema` (UI Schema explorer).
+	// `GET /v1/services/{id}/state-schema` (UI Schema explorer).
 	// Optional: when nil the /state-schema endpoint answers 500 (feature not
 	// configured); service CRUD itself stays functional.
 	// The production wire-up in `keeper run` passes *serviceregistry.StateSchemaCache
@@ -134,7 +134,7 @@ type Deps struct {
 	ServiceStateSchema handlers.ServiceStateSchemaLister
 
 	// ServiceDependencies — a TTL cache of the git-dependency listing (destiny/modules
-	// from `service.yml`) for `GET /v1/services/{name}/dependencies` (UI Service
+	// from `service.yml`) for `GET /v1/services/{id}/dependencies` (UI Service
 	// Detail). Optional: when nil the /dependencies endpoint answers 500 (feature not
 	// configured); service CRUD itself stays functional.
 	// The production wire-up in `keeper run` passes *serviceregistry.DependenciesCache
@@ -143,7 +143,7 @@ type Deps struct {
 	ServiceDependencies handlers.ServiceDependenciesLister
 
 	// ServiceDirectives — a TTL cache of the catalog of valid redis.conf directives by version
-	// (vars.redis_directives) for `GET /v1/services/{name}/directives` (the UI
+	// (vars.redis_directives) for `GET /v1/services/{id}/directives` (the UI
 	// redis_settings editor). Optional: when nil the /directives endpoint answers
 	// 500 (feature not configured); service CRUD itself stays functional.
 	// The production wire-up in `keeper run` passes *serviceregistry.DirectivesCache
@@ -153,7 +153,7 @@ type Deps struct {
 
 	// ServiceTelemetry — TTL cache of the default (per-service, without an incarnation's own layer) host-vitals
 	// telemetry config (manifest `telemetry:` -> effective defaults) + the allowed
-	// set of collectors for `GET /v1/services/{name}/telemetry` (UI editor,
+	// set of collectors for `GET /v1/services/{id}/telemetry` (UI editor,
 	// ADR-042/072). Optional: when nil the /telemetry endpoint responds 500 (feature not
 	// configured); service-CRUD itself stays operational. Production wire-up
 	// in `keeper run` passes *serviceregistry.TelemetryCache over TelemetryListerFunc,
@@ -163,7 +163,7 @@ type Deps struct {
 
 	// ServiceCompat — TTL cache of the engine-compat contributions of a Service
 	// snapshot (the `compat:` window of `service.yml` + one entry per declared
-	// destiny at its pinned ref) for `GET /v1/services/{name}/compat` (ADR-0076(h)).
+	// destiny at its pinned ref) for `GET /v1/services/{id}/compat` (ADR-0076(h)).
 	// Optional: when nil the /compat endpoint responds 500 (feature not configured);
 	// service CRUD itself stays operational. Production wire-up in `keeper run`
 	// passes *serviceregistry.CompatCache over CompatListerFunc.
@@ -195,7 +195,7 @@ type Deps struct {
 	TTLDefault    time.Duration
 
 	// ApplyBus — the pub/sub bus of apply events for the run's live SSE (ADR-068 §A3,
-	// GET /v1/incarnations/{name}/runs/{apply_id}/events). The same bus as the
+	// GET /v1/incarnations/{id}/runs/{apply_id}/events). The same bus as the
 	// grpc handlers + the scenario-runner (publishers). When nil the SSE route is not
 	// mounted (opt-in wire-up, VoyageDB pattern).
 	ApplyBus *applybus.EventBus
@@ -261,7 +261,7 @@ type Deps struct {
 
 	// UtilizationReader — Redis layer of host-vitals for the telemetry endpoints
 	// (NIM-86, ADR-006): GET /v1/souls/{sid}/telemetry and
-	// /v1/incarnations/{name}/telemetry read the utilization snapshot from Redis, NOT
+	// /v1/incarnations/{id}/telemetry read the utilization snapshot from Redis, NOT
 	// from PG. Optional: when nil (single-instance dev / unit without Redis) the reader
 	// is a no-op (stale/empty). Production wire-up in `keeper run` passes a wrapper
 	// over the same Redis client (keeperredis.ReadUtilization).
@@ -290,21 +290,21 @@ type Deps struct {
 	ScenarioRunner  handlers.ScenarioStarter
 	ServiceRegistry handlers.ServiceResolver
 
-	// ScenarioDestroyer — optional: needed for `DELETE /v1/incarnations/{name}`
+	// ScenarioDestroyer — optional: needed for `DELETE /v1/incarnations/{id}`
 	// (async teardown of the scenario `destroy` in TerminalDestroy, S-D2b). A separate
 	// field from ScenarioRunner — the narrow interface [handlers.DestroyStarter]
 	// (StartDestroy), though the production wire-up passes the same *scenario.Runner.
 	// When nil Destroy answers 500 (endpoint not configured).
 	ScenarioDestroyer handlers.DestroyStarter
 
-	// ServiceLoader — optional: needed for `POST /v1/incarnations/{name}/upgrade`
+	// ServiceLoader — optional: needed for `POST /v1/incarnations/{id}/upgrade`
 	// (materializing the snapshot of the target service-ref + assembling the
 	// migration chain). When nil Upgrade answers 500. The production wire-up
 	// passes *artifact.ServiceLoader.
 	ServiceLoader handlers.ServiceSnapshotLoader
 
 	// VaultClient — the Vault KV read surface for the incarnation secret reveal
-	// endpoint (NIM-74, POST/GET /v1/incarnations/{name}/secrets/*). Optional:
+	// endpoint (NIM-74, POST/GET /v1/incarnations/{id}/secrets/*). Optional:
 	// when nil RevealSecretTyped answers 404 (endpoint not configured).
 	// The production wire-up in `keeper run` passes *vault.Client (the same d.vc).
 	VaultClient handlers.VaultKVReader

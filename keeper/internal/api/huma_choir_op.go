@@ -14,12 +14,12 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 )
 
-// === POST /v1/incarnations/{name}/choirs (create) — WRITE-SELF-AUDIT choir.created (201+body) ===
+// === POST /v1/incarnations/{id}/choirs (create) — WRITE-SELF-AUDIT choir.created (201+body) ===
 
 // choirCreateInput — huma input for POST .../choirs. Name — path (incarnation name);
 // Body — typed body.
 type choirCreateInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID   string `path:"id" doc:"incarnation id"`
 	Body ChoirCreateRequest
 }
 
@@ -49,7 +49,7 @@ func choirCreateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "createChoir",
 		Method:        http.MethodPost,
-		Path:          "/{name}/choirs",
+		Path:          "/{id}/choirs",
 		Summary:       "Create Choir",
 		Description:   "Declared-topology of hosts inside the incarnation (ADR-044). created_by_aid from JWT. Permission choir.create. 409 - name taken.",
 		Tags:          []string{"choir"},
@@ -58,11 +58,11 @@ func choirCreateOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/choirs (list) — READ (no audit) ===
+// === GET /v1/incarnations/{id}/choirs (list) — READ (no audit) ===
 
 // choirListInput — huma-input GET .../choirs. Name — path.
 type choirListInput struct {
-	Name string `path:"name" doc:"incarnation name"`
+	ID string `path:"id" doc:"incarnation id"`
 }
 
 // choirListOutput — huma-output GET .../choirs (FULL-TYPED). Body — native envelope
@@ -77,7 +77,7 @@ func choirListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listChoirs",
 		Method:        http.MethodGet,
-		Path:          "/{name}/choirs",
+		Path:          "/{id}/choirs",
 		Summary:       "List Choirs of the incarnation",
 		Description:   "Topology of Choirs of the incarnation (ADR-044). Permission choir.list. Nonexistent incarnation -> items=[]. Read-only, no audit.",
 		Tags:          []string{"choir"},
@@ -86,11 +86,11 @@ func choirListOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/incarnations/{name}/choirs/{choir} (delete) — WRITE-SELF-AUDIT choir.deleted (204) ===
+// === DELETE /v1/incarnations/{id}/choirs/{choir} (delete) — WRITE-SELF-AUDIT choir.deleted (204) ===
 
 // choirDeleteInput — huma-input DELETE .../choirs/{choir}. Name/Choir — path.
 type choirDeleteInput struct {
-	Name  string `path:"name" doc:"incarnation name"`
+	ID    string `path:"id" doc:"incarnation id"`
 	Choir string `path:"choir" doc:"Choir name"`
 }
 
@@ -106,7 +106,7 @@ func choirDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteChoir",
 		Method:        http.MethodDelete,
-		Path:          "/{name}/choirs/{choir}",
+		Path:          "/{id}/choirs/{choir}",
 		Summary:       "Delete Choir",
 		Description:   "Deletes Choir (cascading its Voices). Permission choir.delete.",
 		Tags:          []string{"choir"},
@@ -115,11 +115,11 @@ func choirDeleteOperation() huma.Operation {
 	}
 }
 
-// === POST /v1/incarnations/{name}/choirs/{choir}/voices (add-voice) — WRITE-SELF-AUDIT choir.voice_added (201+body) ===
+// === POST /v1/incarnations/{id}/choirs/{choir}/voices (add-voice) — WRITE-SELF-AUDIT choir.voice_added (201+body) ===
 
 // voiceAddInput — huma-input POST .../voices. Name/Choir — path; Body — typed body.
 type voiceAddInput struct {
-	Name  string `path:"name" doc:"incarnation name"`
+	ID    string `path:"id" doc:"incarnation id"`
 	Choir string `path:"choir" doc:"Choir name"`
 	Body  VoiceAddRequest
 }
@@ -148,7 +148,7 @@ func voiceAddOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "addVoice",
 		Method:        http.MethodPost,
-		Path:          "/{name}/choirs/{choir}/voices",
+		Path:          "/{id}/choirs/{choir}/voices",
 		Summary:       "Add Voice to Choir",
 		Description:   "SID membership in the Choir (ADR-044). added_by_aid from JWT. Permission choir.add-voice. 409 - Voice already exists; 422 - SID is not a member of the incarnation.",
 		Tags:          []string{"choir"},
@@ -157,11 +157,11 @@ func voiceAddOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/incarnations/{name}/choirs/{choir}/voices (list-voices) — READ (no audit) ===
+// === GET /v1/incarnations/{id}/choirs/{choir}/voices (list-voices) — READ (no audit) ===
 
 // voiceListInput — huma-input GET .../voices. Name/Choir — path.
 type voiceListInput struct {
-	Name  string `path:"name" doc:"incarnation name"`
+	ID    string `path:"id" doc:"incarnation id"`
 	Choir string `path:"choir" doc:"Choir name"`
 }
 
@@ -177,7 +177,7 @@ func voiceListOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listVoices",
 		Method:        http.MethodGet,
-		Path:          "/{name}/choirs/{choir}/voices",
+		Path:          "/{id}/choirs/{choir}/voices",
 		Summary:       "List Voices of the Choir",
 		Description:   "Members of the Choir (ADR-044). Permission choir.list. Nonexistent Choir -> items=[]. Read-only, no audit.",
 		Tags:          []string{"choir"},
@@ -186,11 +186,11 @@ func voiceListOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid} (remove-voice) — WRITE-SELF-AUDIT choir.voice_removed (204) ===
+// === DELETE /v1/incarnations/{id}/choirs/{choir}/voices/{sid} (remove-voice) — WRITE-SELF-AUDIT choir.voice_removed (204) ===
 
 // voiceRemoveInput — huma-input DELETE .../voices/{sid}. Name/Choir/SID — path.
 type voiceRemoveInput struct {
-	Name  string `path:"name" doc:"incarnation name"`
+	ID    string `path:"id" doc:"incarnation id"`
 	Choir string `path:"choir" doc:"Choir name"`
 	SID   string `path:"sid" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SID (FQDN) of a host"`
 }
@@ -206,7 +206,7 @@ func voiceRemoveOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "removeVoice",
 		Method:        http.MethodDelete,
-		Path:          "/{name}/choirs/{choir}/voices/{sid}",
+		Path:          "/{id}/choirs/{choir}/voices/{sid}",
 		Summary:       "Remove Voice from Choir",
 		Description:   "Removes SID membership in the Choir (ADR-044). Permission choir.remove-voice.",
 		Tags:          []string{"choir"},

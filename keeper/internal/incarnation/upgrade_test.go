@@ -177,7 +177,7 @@ func TestUpgradeStateSchema_HappyMultiStep(t *testing.T) {
 	aid := "archon-alice"
 
 	res, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v3.0.0",
 		TargetSchemaVer:  3,
 		Chain:            statemigrate.Chain{setStep(1, 2), setStep(2, 3)},
@@ -321,7 +321,7 @@ func TestUpgradeStateSchema_FinalStatusDrift(t *testing.T) {
 			pool := &fakePool{txs: []*fakeTx{tx}}
 
 			_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-				Name:             "redis-prod",
+				ID:               "redis-prod",
 				TargetServiceVer: "v9.9.9",
 				TargetSchemaVer:  c.targetVer,
 				Chain:            c.chain,
@@ -375,7 +375,7 @@ func TestUpgradeStateSchema_LockedStatusNotOverwritten(t *testing.T) {
 			pool := &fakePool{txs: []*fakeTx{tx}}
 
 			_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-				Name:             "redis-prod",
+				ID:               "redis-prod",
 				TargetServiceVer: "v2.0.0",
 				TargetSchemaVer:  2,
 				Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -405,7 +405,7 @@ func TestUpgradeStateSchema_NoOpEmptyChain(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	res, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v2.1.0",
 		TargetSchemaVer:  2, // == current
 		Chain:            statemigrate.Chain{},
@@ -451,7 +451,7 @@ func TestUpgradeStateSchema_DowngradeReject(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v1.0.0",
 		TargetSchemaVer:  1, // < current 3
 		Chain:            statemigrate.Chain{},
@@ -478,7 +478,7 @@ func TestUpgradeStateSchema_VersionMismatchReject(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v3.0.0",
 		TargetSchemaVer:  3,
 		Chain:            statemigrate.Chain{setStep(1, 2), setStep(2, 3)},
@@ -501,7 +501,7 @@ func TestUpgradeStateSchema_GateBusyReject(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -521,7 +521,7 @@ func TestUpgradeStateSchema_GateLockedReject(t *testing.T) {
 		}
 		pool := &fakePool{txs: []*fakeTx{tx}}
 		_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-			Name:             "redis-prod",
+			ID:               "redis-prod",
 			TargetServiceVer: "v2.0.0",
 			TargetSchemaVer:  2,
 			Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -542,7 +542,7 @@ func TestUpgradeStateSchema_NotFound(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "ghost",
+		ID:               "ghost",
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -571,7 +571,7 @@ func TestUpgradeStateSchema_WriteError_MigrationFailed(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{upTx, failTx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -1012,7 +1012,7 @@ func TestUpgradeStateSchema_FoundModeApplyingRunHistory(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -1071,7 +1071,7 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
 	_, err := UpgradeStateSchema(context.Background(), pool, UpgradeInput{
-		Name:             "redis-prod",
+		ID:               "redis-prod",
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},

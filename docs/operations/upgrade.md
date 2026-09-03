@@ -156,9 +156,9 @@ Full migration spec - [`docs/migrations.md`](../migrations.md). Cycle for operat
 2. **Service developer** runs `make schema-stamp` and commits the regenerated `migrations/schema.lock` — it carries the new top of the ladder and the fingerprint of the edited `state_schema`, and `soul-lint` refuses a stale one on the service repo's next `make validate` — both targets wrap `soul-lint schema-stamp` and `soul-lint validate-service`, and live in the service repository, not in this core repo.
 3. **CI** runs `soul-trial` ([ADR-023](../adr/0023-trial-test-runner.md)) - migration is applied on state-fixtures, assertion `state_after`.
 4. **Service-repo** is merged, new git-ref is released ([ADR-007](../adr/0007-versioning-git-ref.md)).
-5. **Operator** updates `service_registry.ref` via Operator API: `POST /v1/services/{name}` with new `ref:`.
-6. **Operator** runs `incarnation.upgrade` via the Operator API on a specific incarnation: `POST /v1/incarnations/{name}/upgrade`. Atomic single PG transaction (see above).
-7. **Verify**: `GET /v1/incarnations/{name}` → `status: ready`, `state_schema_version: <M>`. Migration history - to `state_history` from `scenario: migration`.
+5. **Operator** updates `service_registry.ref` via Operator API: `POST /v1/services/{id}` with new `ref:`.
+6. **Operator** runs `incarnation.upgrade` via the Operator API on a specific incarnation: `POST /v1/incarnations/{id}/upgrade`. Atomic single PG transaction (see above).
+7. **Verify**: `GET /v1/incarnations/{id}` → `status: ready`, `state_schema_version: <M>`. Migration history - to `state_history` from `scenario: migration`.
 
 If the problem is `status: migration_failed`, see § Rollback state_schema.
 

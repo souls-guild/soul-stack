@@ -81,10 +81,10 @@ const (
 	TypePluginNotInCache = "https://soul-stack.com/errors/plugin-not-in-cache"
 	TypeServiceExists    = "https://soul-stack.com/errors/service-already-exists"
 	// Augur — the Omen / Rite registry (ADR-025, augur.md). omen-already-exists —
-	// UNIQUE on omens.name (409). not-found Omen / Rite — the shared TypeNotFound.
+	// UNIQUE on omens.id (409). not-found Omen / Rite — the shared TypeNotFound.
 	TypeOmenExists = "https://soul-stack.com/errors/omen-already-exists"
 	// Oracle — the Vigil / Decree registries (ADR-030, beacons S3). *-already-exists —
-	// UNIQUE on vigils.name / decrees.name (409). not-found — the shared TypeNotFound.
+	// UNIQUE on vigils.id / decrees.id (409). not-found — the shared TypeNotFound.
 	TypeVigilExists  = "https://soul-stack.com/errors/vigil-already-exists"
 	TypeDecreeExists = "https://soul-stack.com/errors/decree-already-exists"
 	// Sigil signing key rotation (ADR-026(h), R3-S7).
@@ -151,7 +151,7 @@ const (
 	// client can tell "upgrade that agent" from "our Redis is down".
 	TypeSoulCapabilityUnsupported = "https://soul-stack.com/errors/soul-capability-unsupported"
 	// TypeBadGateway — keeper itself is healthy, but the external git source returned an
-	// error (`GET /v1/services/{name}/refs` → ls-remote). 502 Bad Gateway — the correct
+	// error (`GET /v1/services/{id}/refs` → ls-remote). 502 Bad Gateway — the correct
 	// code for "upstream service unavailable"; detail carries through the original
 	// cause (DNS / auth / unsupported scheme — all "not our fault").
 	TypeBadGateway = "https://soul-stack.com/errors/bad-gateway"
@@ -176,7 +176,7 @@ const (
 	// (we don't disclose whether it was by IP or by username, locked or throttled).
 	TypeAuthThrottled = "https://soul-stack.com/errors/auth-throttled"
 	// Herald/Tiding — notifications about run events (ADR-052, S4).
-	// *-already-exists — a UNIQUE violation on heralds.name / tidings.name (409,
+	// *-already-exists — a UNIQUE violation on heralds.id / tidings.id (409,
 	// symmetric with TypeOmenExists / TypePushProviderExists). not-found Herald /
 	// Tiding — the shared TypeNotFound; FK Tiding→missing Herald — also TypeNotFound
 	// (ErrHeraldNotFound, parity with Rite→missing Omen). A broken config / event_types /

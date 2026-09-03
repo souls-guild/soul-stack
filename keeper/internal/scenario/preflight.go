@@ -229,7 +229,7 @@ func (r *Runner) preflightIncarnation(ctx context.Context, name string) (*incarn
 	if r.deps.DB == nil {
 		return nil, nil
 	}
-	inc, err := incarnation.SelectByName(ctx, r.deps.DB, name)
+	inc, err := incarnation.SelectByID(ctx, r.deps.DB, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return nil, nil
@@ -264,7 +264,7 @@ func (r *Runner) resolvePreflightServiceVars(
 		// `incarnation.service` one value at create and another on day-2, with no
 		// check anywhere between them.
 		inc = &incarnation.Incarnation{
-			Name:    spec.IncarnationName,
+			ID:      spec.IncarnationName,
 			Service: spec.ServiceRef.Name,
 			Covens:  spec.Covens,
 			Traits:  spec.Traits,

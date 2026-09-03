@@ -44,14 +44,14 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 	// entity=<name> must be safe path segment before Vault write
 	// (materializeField writes secret/herald/<name>/…). Name format checked
 	// here before write; validateHerald at Insert will check again, but write-path needs it first.
-	if !ValidName(h.Name) {
-		return wrapValidation(fmt.Errorf("invalid name %q (must match %s)", h.Name, NamePattern))
+	if !ValidID(h.ID) {
+		return wrapValidation(fmt.Errorf("invalid name %q (must match %s)", h.ID, IDPattern))
 	}
 
 	wrote := false
 
 	// --- top-level webhook signing secret (Secret XOR SecretRef) ---
-	did, err := materializeField(ctx, w, accept, h.Name, "secret",
+	did, err := materializeField(ctx, w, accept, h.ID, "secret",
 		ptrStr(h.Secret), ptrStr(h.SecretRef),
 		func(ref string) { h.SecretRef = &ref })
 	if err != nil {
@@ -74,7 +74,7 @@ func materializeHeraldSecrets(ctx context.Context, w SecretWriter, accept bool, 
 			plainVal, _ := h.Config[base].(string)
 			refVal, _ := h.Config[f.Name].(string)
 			refField := f.Name
-			did, err := materializeField(ctx, w, accept, h.Name, base,
+			did, err := materializeField(ctx, w, accept, h.ID, base,
 				plainVal, refVal,
 				func(ref string) { h.Config[refField] = ref })
 			if err != nil {

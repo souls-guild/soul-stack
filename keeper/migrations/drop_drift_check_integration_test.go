@@ -37,6 +37,12 @@ import (
 // silently re-aims at whatever migration lands next.
 const dropDriftCheckVersion = 114
 
+// This file's SQL runs against the schema AS OF MIGRATION 113 — `m.Migrate` is
+// called with `dropDriftCheckVersion - 1` before the fixture is seeded. So the
+// identifier columns here are still spelled `name`, and they must STAY that way
+// even though [ADR-0085] / NIM-729 renamed them in migration 118: a
+// ladder-position test seeds at its own version, not at HEAD.
+//
 // seedDriftFixture writes every shape block 2/3/4 must tell apart.
 func seedDriftFixture(t *testing.T, pool *pgxpool.Pool) {
 	t.Helper()

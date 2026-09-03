@@ -35,7 +35,7 @@ func registerHumaOmenCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 			return nil, augurMissingClaims()
 		}
 		reply, err := augurH.CreateOmenTyped(ctx, claims, handlers.OmenCreateInput{
-			Name:       in.Body.Name,
+			ID:         in.Body.ID,
 			SourceType: in.Body.SourceType,
 			Endpoint:   in.Body.Endpoint,
 			AuthRef:    in.Body.AuthRef,
@@ -64,7 +64,7 @@ func registerHumaOmenList(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenGet mounts GET /v1/augur/omens/{name} via huma (READ with
+// registerHumaOmenGet mounts GET /v1/augur/omens/{id} via huma (READ with
 // path, no audit). augurH nil → no-op. Handler: GetOmenTyped(name) → typed output
 // (404/422 via problem). RBAC omen.list (read is covered by the list permission) — on the group.
 func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
@@ -72,7 +72,7 @@ func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		return
 	}
 	huma.Register(humaAPI, omenGetOperation(), func(ctx context.Context, in *omenGetInput) (*omenGetOutput, error) {
-		view, err := augurH.GetOmenTyped(ctx, in.Name)
+		view, err := augurH.GetOmenTyped(ctx, in.ID)
 		if err != nil {
 			return nil, augurProblem(err)
 		}
@@ -80,14 +80,14 @@ func registerHumaOmenGet(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenSetLabel mounts PUT /v1/augur/omens/{name}/label via huma
+// registerHumaOmenSetLabel mounts PUT /v1/augur/omens/{id}/label via huma
 // (WRITE+AUDIT variant B — event omen.label_changed). augurH nil → no-op.
 func registerHumaOmenSetLabel(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	if augurH == nil {
 		return
 	}
 	huma.Register(humaAPI, omenSetLabelOperation(), func(ctx context.Context, in *omenSetLabelInput) (*omenSetLabelOutput, error) {
-		reply, err := augurH.SetOmenLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := augurH.SetOmenLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, augurProblem(err)
 		}
@@ -96,7 +96,7 @@ func registerHumaOmenSetLabel(humaAPI huma.API, augurH *handlers.AugurHandler) {
 	})
 }
 
-// registerHumaOmenDelete mounts DELETE /v1/augur/omens/{name} via huma
+// registerHumaOmenDelete mounts DELETE /v1/augur/omens/{id} via huma
 // (WRITE+AUDIT variant B — event omen.revoked). augurH nil → no-op. Handler:
 // DeleteOmenTyped(name) → audit payload → empty 204 output.
 func registerHumaOmenDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
@@ -104,7 +104,7 @@ func registerHumaOmenDelete(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		return
 	}
 	huma.Register(humaAPI, omenDeleteOperation(), func(ctx context.Context, in *omenDeleteInput) (*augurNoContentOutput, error) {
-		reply, err := augurH.DeleteOmenTyped(ctx, in.Name)
+		reply, err := augurH.DeleteOmenTyped(ctx, in.ID)
 		if err != nil {
 			return nil, augurProblem(err)
 		}
@@ -189,7 +189,7 @@ func newOmenView(v handlers.OmenView) OmenView {
 		CreatedByAID: v.CreatedByAID,
 		Endpoint:     v.Endpoint,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		SourceType:   OmenViewSourceType(v.SourceType),
 	}
 }

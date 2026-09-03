@@ -19,8 +19,8 @@ import (
 //   - ErrProviderNotFound     -> 422 unprocessable (reference to a missing
 //     Provider in the `provider` field; FK profiles_provider_fk).
 var (
-	ErrProfileAlreadyExists = errors.New("profile: name already exists")
-	ErrProfileNotFound      = errors.New("profile: name not found")
+	ErrProfileAlreadyExists = errors.New("profile: id already exists")
+	ErrProfileNotFound      = errors.New("profile: id not found")
 	ErrProviderNotFound     = errors.New("profile: referenced provider not found")
 )
 
@@ -53,12 +53,12 @@ var (
 
 // insertSQL is INSERT with RETURNING for server-side created_at in one round trip.
 const insertSQL = `
-INSERT INTO profiles (name, provider, params, cloud_init, created_by_aid, label)
+INSERT INTO profiles (id, provider, params, cloud_init, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6)
 RETURNING created_at
 `
 
-const selectColumns = `name, provider, params, cloud_init, created_by_aid, created_at, label`
+const selectColumns = `id, provider, params, cloud_init, created_by_aid, created_at, label`
 
 // updateLabelSQL replaces the display caption of one row ([ADR-0085]). It touches
 // `label` and nothing else — the PK is not in the SET list, because the
@@ -67,23 +67,23 @@ const updateLabelSQL = `
 UPDATE profiles AS x
 SET label = $2
 FROM profiles AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const selectByNameSQL = `
+const selectByIDSQL = `
 SELECT ` + selectColumns + `
 FROM profiles
-WHERE name = $1
+WHERE id = $1
 `
 
-const deleteSQL = `DELETE FROM profiles WHERE name = $1`
+const deleteSQL = `DELETE FROM profiles WHERE id = $1`
 
 // Insert inserts a new Profile.
 //
 // Pre-conditions:
-//   - p.Name matches [NamePattern];
-//   - p.Provider matches [NamePattern] (name of an existing Provider; existence is
+//   - p.Name matches [IDPattern];
+//   - p.Provider matches [IDPattern] (name of an existing Provider; existence is
 //     checked by FK).
 //
 // Returns:
@@ -96,11 +96,11 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Profile) error {
 	if p == nil {
 		return fmt.Errorf("profile: nil profile")
 	}
-	if !ValidName(p.Name) {
-		return fmt.Errorf("profile: invalid name %q (must match %s)", p.Name, NamePattern)
+	if !ValidID(p.ID) {
+		return fmt.Errorf("profile: invalid id %q (must match %s)", p.ID, IDPattern)
 	}
-	if !ValidName(p.Provider) {
-		return fmt.Errorf("profile: invalid provider %q (must match %s)", p.Provider, NamePattern)
+	if !ValidID(p.Provider) {
+		return fmt.Errorf("profile: invalid provider %q (must match %s)", p.Provider, IDPattern)
 	}
 
 	paramsBytes, err := marshalJSONB(p.Params)
@@ -125,7 +125,7 @@ func Insert(ctx context.Context, db ExecQueryRower, p *Profile) error {
 	}
 
 	row := db.QueryRow(ctx, insertSQL,
-		p.Name, p.Provider, paramsBytes, cloudInitArg, createdByAID, label,
+		p.ID, p.Provider, paramsBytes, cloudInitArg, createdByAID, label,
 	)
 	if err := row.Scan(&p.CreatedAt); err != nil {
 		return mapInsertError(err)
@@ -153,9 +153,9 @@ func mapInsertError(err error) error {
 	return fmt.Errorf("profile: insert: %w", err)
 }
 
-// SelectByName reads a Profile by PK. [ErrProfileNotFound] on pgx.ErrNoRows.
-func SelectByName(ctx context.Context, db ExecQueryRower, name string) (*Profile, error) {
-	row := db.QueryRow(ctx, selectByNameSQL, name)
+// SelectByID reads a Profile by PK. [ErrProfileNotFound] on pgx.ErrNoRows.
+func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*Profile, error) {
+	row := db.QueryRow(ctx, selectByIDSQL, id)
 	return scanProfile(row)
 }
 
@@ -168,7 +168,7 @@ func scanProfile(row pgx.Row) (*Profile, error) {
 		label        *string
 	)
 	err := row.Scan(
-		&p.Name,
+		&p.ID,
 		&p.Provider,
 		&paramsBytes,
 		&cloudInit,
@@ -208,16 +208,16 @@ func scanProfile(row pgx.Row) (*Profile, error) {
 // The name argument addresses the row; it is never written. Nothing derived moves
 // as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
+func UpdateLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("profile: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, updateLabelSQL, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, updateLabelSQL, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrProfileNotFound
 		}
@@ -229,11 +229,11 @@ func UpdateLabel(ctx context.Context, db ExecQueryRower, name string, label *str
 // Delete removes a Profile by PK. [ErrProfileNotFound] when the row is absent
 // (RowsAffected==0). Profiles are leaf records with no inbound FK references, so
 // delete does not need an FK-violation branch.
-func Delete(ctx context.Context, db ExecQueryRower, name string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("profile: invalid name %q (must match %s)", name, NamePattern)
+func Delete(ctx context.Context, db ExecQueryRower, id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("profile: invalid id %q (must match %s)", id, IDPattern)
 	}
-	tag, err := db.Exec(ctx, deleteSQL, name)
+	tag, err := db.Exec(ctx, deleteSQL, id)
 	if err != nil {
 		return fmt.Errorf("profile: delete: %w", err)
 	}
@@ -283,7 +283,7 @@ func selectPage(ctx context.Context, db ExecQueryRower, providerName string, off
 	}
 
 	listSQL := "SELECT " + selectColumns + " FROM profiles" + where +
-		fmt.Sprintf(" ORDER BY created_at DESC, name ASC OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
+		fmt.Sprintf(" ORDER BY created_at DESC, id ASC OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
 	listArgs := append(append([]any{}, args...), offset, limit)
 
 	rows, err := db.Query(ctx, listSQL, listArgs...)

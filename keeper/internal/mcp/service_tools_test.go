@@ -73,7 +73,7 @@ func (p *svcRegFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.R
 }
 
 func (p *svcRegFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM service_registry") && strings.Contains(sql, "ORDER BY name") {
+	if strings.Contains(sql, "FROM service_registry") && strings.Contains(sql, "ORDER BY id") {
 		return &svcRegRows{rows: p.listRows}, nil
 	}
 	return nil, &svcRegErr{"svcRegFakePool.Query: unexpected: " + sql}
@@ -220,10 +220,10 @@ func TestServiceTools_NilGuard(t *testing.T) {
 		tool string
 		args string
 	}{
-		{"keeper.service.register", `{"name":"web","git":"g","ref":"v1"}`},
-		{"keeper.service.update", `{"name":"web","git":"g","ref":"v1"}`},
+		{"keeper.service.register", `{"id":"web","git":"g","ref":"v1"}`},
+		{"keeper.service.update", `{"id":"web","git":"g","ref":"v1"}`},
 		{"keeper.service.list", `{}`},
-		{"keeper.service.deregister", `{"name":"web"}`},
+		{"keeper.service.deregister", `{"id":"web"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -244,7 +244,7 @@ func TestServiceTools_RBACForbidden(t *testing.T) {
 	// archon-alice has no service.* permissions (empty RBAC → deny all).
 	h, _ := newServiceToolHandler(t, nil, &svcRegFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.service.register",
-		`{"name":"web","git":"g","ref":"v1"}`)
+		`{"id":"web","git":"g","ref":"v1"}`)
 	if resp.Error == nil {
 		t.Fatal("expected forbidden error")
 	}
@@ -264,11 +264,11 @@ func TestServiceTools_Validation(t *testing.T) {
 		want string
 	}{
 		{"register-no-name", "keeper.service.register", `{"git":"g","ref":"v1"}`, mcpCodeValidationFailed},
-		{"register-empty-git", "keeper.service.register", `{"name":"web","git":"","ref":"v1"}`, mcpCodeValidationFailed},
-		{"register-bad-refresh", "keeper.service.register", `{"name":"web","git":"g","ref":"v1","refresh":"x"}`, mcpCodeValidationFailed},
+		{"register-empty-git", "keeper.service.register", `{"id":"web","git":"","ref":"v1"}`, mcpCodeValidationFailed},
+		{"register-bad-refresh", "keeper.service.register", `{"id":"web","git":"g","ref":"v1","refresh":"x"}`, mcpCodeValidationFailed},
 		{"update-no-name", "keeper.service.update", `{"git":"g","ref":"v1"}`, mcpCodeValidationFailed},
 		{"deregister-no-name", "keeper.service.deregister", `{}`, mcpCodeValidationFailed},
-		{"register-unknown-field", "keeper.service.register", `{"name":"web","git":"g","ref":"v1","x":1}`, mcpCodeMalformedRequest},
+		{"register-unknown-field", "keeper.service.register", `{"id":"web","git":"g","ref":"v1","x":1}`, mcpCodeMalformedRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -288,7 +288,7 @@ func TestServiceTools_Validation(t *testing.T) {
 func TestServiceRegister_Success(t *testing.T) {
 	h, rec := newServiceToolHandler(t, serviceAdminCfg(), &svcRegFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.service.register",
-		`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`)
+		`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -301,7 +301,7 @@ func TestServiceRegister_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if out.Name != "web" || out.Git != "https://git/web.git" || out.Ref != "v1.0.0" {
+	if out.ID != "web" || out.Git != "https://git/web.git" || out.Ref != "v1.0.0" {
 		t.Errorf("output = %+v", out)
 	}
 
@@ -316,7 +316,7 @@ func TestServiceRegister_Success(t *testing.T) {
 	if ev.Source != audit.SourceMCP {
 		t.Errorf("source = %q, want mcp", ev.Source)
 	}
-	assertPayload(t, ev.Payload, "name", "web")
+	assertPayload(t, ev.Payload, "id", "web")
 	assertPayload(t, ev.Payload, "git", "https://git/web.git")
 	assertPayload(t, ev.Payload, "ref", "v1.0.0")
 	assertPayload(t, ev.Payload, "created_by_aid", "archon-alice")
@@ -327,7 +327,7 @@ func TestServiceRegister_Duplicate409(t *testing.T) {
 		insertErr: &pgconn.PgError{Code: "23505", ConstraintName: "service_registry_pkey"},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.service.register",
-		`{"name":"web","git":"g","ref":"v1"}`)
+		`{"id":"web","git":"g","ref":"v1"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -341,7 +341,7 @@ func TestServiceRegister_FKViolation404(t *testing.T) {
 		insertErr: &pgconn.PgError{Code: "23503", ConstraintName: "service_registry_created_by_aid_fkey"},
 	})
 	resp := callTool(t, h, "archon-alice", "keeper.service.register",
-		`{"name":"web","git":"g","ref":"v1"}`)
+		`{"id":"web","git":"g","ref":"v1"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -355,7 +355,7 @@ func TestServiceRegister_FKViolation404(t *testing.T) {
 func TestServiceUpdate_Success(t *testing.T) {
 	h, rec := newServiceToolHandler(t, serviceAdminCfg(), &svcRegFakePool{})
 	resp := callTool(t, h, "archon-alice", "keeper.service.update",
-		`{"name":"web","git":"https://git/web.git","ref":"v2.0.0"}`)
+		`{"id":"web","git":"https://git/web.git","ref":"v2.0.0"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -368,7 +368,7 @@ func TestServiceUpdate_Success(t *testing.T) {
 func TestServiceUpdate_NotFound404(t *testing.T) {
 	h, _ := newServiceToolHandler(t, serviceAdminCfg(), &svcRegFakePool{updateErr: pgx.ErrNoRows})
 	resp := callTool(t, h, "archon-alice", "keeper.service.update",
-		`{"name":"ghost","git":"g","ref":"v1"}`)
+		`{"id":"ghost","git":"g","ref":"v1"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -404,19 +404,19 @@ func TestServiceList_Success(t *testing.T) {
 
 func TestServiceDeregister_Success(t *testing.T) {
 	h, rec := newServiceToolHandler(t, serviceAdminCfg(), &svcRegFakePool{deleteRows: 1})
-	resp := callTool(t, h, "archon-alice", "keeper.service.deregister", `{"name":"web"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.service.deregister", `{"id":"web"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
 	if len(rec.events) != 1 || rec.events[0].EventType != audit.EventServiceDeregistered {
 		t.Fatalf("expected service.deregistered audit, got %+v", rec.events)
 	}
-	assertPayload(t, rec.events[0].Payload, "name", "web")
+	assertPayload(t, rec.events[0].Payload, "id", "web")
 }
 
 func TestServiceDeregister_NotFound404(t *testing.T) {
 	h, _ := newServiceToolHandler(t, serviceAdminCfg(), &svcRegFakePool{deleteRows: 0})
-	resp := callTool(t, h, "archon-alice", "keeper.service.deregister", `{"name":"ghost"}`)
+	resp := callTool(t, h, "archon-alice", "keeper.service.deregister", `{"id":"ghost"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

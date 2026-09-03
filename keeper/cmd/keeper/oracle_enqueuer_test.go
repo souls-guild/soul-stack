@@ -23,7 +23,7 @@ import (
 //   - QueryRow "FROM incarnation"     → incarnation row (or ErrNoRows);
 //   - QueryRow "INSERT INTO apply_runs" → started_at + captured args.
 type enqFakeDB struct {
-	inc            *incarnation.Incarnation // nil → SelectByName gives ErrNoRows
+	inc            *incarnation.Incarnation // nil → SelectByID gives ErrNoRows
 	insertArgs     []any                    // captured InsertPlanned args
 	insertedRecipe *applyrun.Recipe         // parsed recipe from the args
 }
@@ -71,7 +71,7 @@ func (r enqIncRow) Scan(dest ...any) error {
 	if len(dest) != 15 {
 		return errors.New("enqIncRow: len mismatch")
 	}
-	*dest[0].(*string) = r.inc.Name
+	*dest[0].(*string) = r.inc.ID
 	*dest[1].(*string) = r.inc.Service
 	*dest[2].(*string) = r.inc.ServiceVersion
 	*dest[3].(*int) = r.inc.StateSchemaVersion
@@ -126,7 +126,7 @@ func newEnqueuer(t *testing.T, db oracleEnqueuerDB, res incarnation.ServiceResol
 
 func TestEnqueue_ResolvesServiceRefFromIncarnation(t *testing.T) {
 	inc := &incarnation.Incarnation{
-		Name: "web-app", Service: "web", ServiceVersion: "v2.0.0",
+		ID: "web-app", Service: "web", ServiceVersion: "v2.0.0",
 		Status: incarnation.StatusReady,
 	}
 	db := &enqFakeDB{inc: inc}
@@ -182,7 +182,7 @@ func TestEnqueue_ResolvesServiceRefFromIncarnation(t *testing.T) {
 }
 
 func TestEnqueue_IncarnationNotFound_FailClosed(t *testing.T) {
-	db := &enqFakeDB{inc: nil} // SelectByName → ErrNoRows
+	db := &enqFakeDB{inc: nil} // SelectByID → ErrNoRows
 	res := fakeResolver{ok: true}
 	e := newEnqueuer(t, db, res)
 
@@ -202,7 +202,7 @@ func TestEnqueue_IncarnationNotFound_FailClosed(t *testing.T) {
 }
 
 func TestEnqueue_ServiceNotRegistered(t *testing.T) {
-	inc := &incarnation.Incarnation{Name: "web-app", Service: "web", ServiceVersion: "v1", Status: incarnation.StatusReady}
+	inc := &incarnation.Incarnation{ID: "web-app", Service: "web", ServiceVersion: "v1", Status: incarnation.StatusReady}
 	db := &enqFakeDB{inc: inc}
 	res := fakeResolver{ok: false} // service not in the registry
 	e := newEnqueuer(t, db, res)

@@ -324,7 +324,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
-			Name:           inc.Name,
+			Name:           inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 		},
@@ -1333,7 +1333,7 @@ func (r *Runner) writeDestroyFailedAudit(ctx context.Context, spec RunSpec, reas
 		return
 	}
 	payload := map[string]any{
-		"name":     spec.IncarnationName,
+		"id":       spec.IncarnationName,
 		"apply_id": spec.ApplyID,
 		"reason":   reason,
 	}

@@ -1,6 +1,6 @@
 package handlers
 
-// Form-prefill handler of the Operator API (`POST /v1/incarnations/{name}/scenarios/
+// Form-prefill handler of the Operator API (`POST /v1/incarnations/{id}/scenarios/
 // {scenario}/form-prefill`) — day-2 pre-fill of the scenario's UI form with the CURRENT
 // incarnation.state values (docs/input.md → "Pre-fill from state").
 //
@@ -45,7 +45,7 @@ type FormPrefillResult struct {
 	Values map[string]any
 }
 
-// FormPrefillTyped — domain function for POST /v1/incarnations/{name}/scenarios/
+// FormPrefillTyped — domain function for POST /v1/incarnations/{id}/scenarios/
 // {scenario}/form-prefill (READ, no audit). inScope — the RBAC scope predicate
 // (ADR-047, action=get): out of scope → 404 (like GetTyped, we do not reveal someone
 // else's incarnation).
@@ -65,14 +65,14 @@ type FormPrefillResult struct {
 func (h *IncarnationHandler) FormPrefillTyped(ctx context.Context, name, scenarioName string, inScope func(*incarnation.Incarnation) bool) (FormPrefillResult, error) {
 	zero := FormPrefillResult{Values: map[string]any{}}
 
-	if !incarnation.ValidName(name) {
-		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'name' must match "+incarnation.NamePattern)}
+	if !incarnation.ValidID(name) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !scenario.ValidScenarioName(scenarioName) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'scenario' must match "+scenario.ScenarioNamePattern)}
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", "incarnation "+name+" not found")}

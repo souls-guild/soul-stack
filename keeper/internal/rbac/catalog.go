@@ -115,7 +115,7 @@ var AllowedPermissions = map[string]struct{}{
 	// incarnation.*
 	"incarnation.create": {},
 	// incarnation.rerun-last — restarts the last failed scenario from
-	// error_locked (`POST /v1/incarnations/{name}/rerun-last`). A separate
+	// error_locked (`POST /v1/incarnations/{id}/rerun-last`). A separate
 	// right from `incarnation.create`/`incarnation.unlock`: rerun clears
 	// error_locked and restarts the last failed scenario in one action,
 	// requires a reason. Same scope selector (incarnation/coven/service by
@@ -130,7 +130,7 @@ var AllowedPermissions = map[string]struct{}{
 	"incarnation.destroy":    {},
 	// incarnation.traits-set — a wholesale replacement of an incarnation's
 	// operator-set trait labels (`incarnation.traits` jsonb, ADR-060) via
-	// `PUT /v1/incarnations/{name}/traits`. The labels describe the
+	// `PUT /v1/incarnations/{id}/traits`. The labels describe the
 	// incarnation and reach no member host (NIM-281), so this permission and
 	// the per-HOST `soul.traits-assign` govern disjoint sets of labels —
 	// neither can produce or overwrite the other's. Action is
@@ -140,7 +140,7 @@ var AllowedPermissions = map[string]struct{}{
 	// incarnation mutations.
 	"incarnation.traits-set": {},
 	// incarnation.bind-member / incarnation.unbind-member — the OPERATOR
-	// path for incarnation membership (`POST /v1/incarnations/{name}/members`,
+	// path for incarnation membership (`POST /v1/incarnations/{id}/members`,
 	// `DELETE .../members/{sid}`; ADR-008 amendment 2026-07-28, NIM-209).
 	// Before them the only bind act was `core.soul.registered` INSIDE a
 	// scenario run, so an already-onboarded host could not be put into an

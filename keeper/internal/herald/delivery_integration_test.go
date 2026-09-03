@@ -62,7 +62,7 @@ func TestDelivery_Success_PostsSignedPayload(t *testing.T) {
 	rec := &recordingAudit{}
 	secretRef := "vault:secret/keeper/sign#token"
 	h := &Herald{
-		Name: "ok-webhook", Type: HeraldWebhook,
+		ID: "ok-webhook", Type: HeraldWebhook,
 		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, // httptest on 127.0.0.1
 		SecretRef: &secretRef, Enabled: true,
 	}
@@ -139,7 +139,7 @@ func TestDelivery_AnnotationsProjection_SignedFinalBody(t *testing.T) {
 	rec := &recordingAudit{}
 	secretRef := "vault:secret/keeper/sign#token"
 	h := &Herald{
-		Name: "shaped-webhook", Type: HeraldWebhook,
+		ID: "shaped-webhook", Type: HeraldWebhook,
 		Config:    map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true},
 		SecretRef: &secretRef, Enabled: true,
 	}
@@ -216,7 +216,7 @@ func TestDelivery_5xx_Retries(t *testing.T) {
 
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	h := &Herald{Name: "flaky", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	h := &Herald{ID: "flaky", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 
 	job := &DeliveryJob{ID: "j-flaky", Attempt: 0, Herald: "flaky", EventType: audit.EventScenarioRunFailed}
@@ -252,7 +252,7 @@ func TestDelivery_4xx_TerminalNoRetry(t *testing.T) {
 
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	h := &Herald{Name: "authfail", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	h := &Herald{ID: "authfail", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 
 	job := &DeliveryJob{ID: "j-401", Attempt: 0, Herald: "authfail", EventType: audit.EventScenarioRunFailed}
@@ -285,7 +285,7 @@ func TestDelivery_429_Retries(t *testing.T) {
 
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	h := &Herald{Name: "throttled", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	h := &Herald{ID: "throttled", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 
 	job := &DeliveryJob{ID: "j-429", Attempt: 0, Herald: "throttled", EventType: audit.EventScenarioRunFailed}
@@ -314,7 +314,7 @@ func TestDelivery_Timeout_Retries(t *testing.T) {
 	defer close(release)
 
 	backend := newFakeBackend()
-	h := &Herald{Name: "slow", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
+	h := &Herald{ID: "slow", Type: HeraldWebhook, Config: map[string]any{"url": srv.URL, "allow_private": true, "http_allowed": true}, Enabled: true}
 	w := &DeliveryWorker{
 		Queue: backend, Heralds: recordingHeralds{herald: h},
 		Logger: discardLogger(), Timeout: 150 * time.Millisecond,
@@ -350,7 +350,7 @@ func TestDelivery_SSRF_PrivateIPRejectedBeforeRequest(t *testing.T) {
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
 	// Literal private-IP, allow_private not set → guard rejects.
-	h := &Herald{Name: "ssrf", Type: HeraldWebhook, Config: map[string]any{"url": "https://10.0.0.1/hook"}, Enabled: true}
+	h := &Herald{ID: "ssrf", Type: HeraldWebhook, Config: map[string]any{"url": "https://10.0.0.1/hook"}, Enabled: true}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 
 	job := &DeliveryJob{ID: "j-ssrf", Attempt: 0, Herald: "ssrf", EventType: audit.EventScenarioRunFailed}
@@ -384,7 +384,7 @@ func TestDelivery_SSRF_DNSResolvedToPrivate_RejectedAtDial(t *testing.T) {
 
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	h := &Herald{Name: "rebind", Type: HeraldWebhook, Config: map[string]any{"url": "https://evil.example.test/hook"}, Enabled: true}
+	h := &Herald{ID: "rebind", Type: HeraldWebhook, Config: map[string]any{"url": "https://evil.example.test/hook"}, Enabled: true}
 	w := &DeliveryWorker{
 		Queue: backend, Heralds: recordingHeralds{herald: h},
 		Audit: rec, Logger: discardLogger(),

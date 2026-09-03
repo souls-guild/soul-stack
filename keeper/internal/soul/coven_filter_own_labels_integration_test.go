@@ -31,7 +31,7 @@ import (
 func seedIncarnationLabeled(t *testing.T, name string, covens []string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(),
-		`INSERT INTO incarnation (name, service, service_version, status, covens)
+		`INSERT INTO incarnation (id, service, service_version, status, covens)
 		 VALUES ($1, 'redis', 'v1.0.0', 'ready', $2)`, name, covens); err != nil {
 		t.Fatalf("seedIncarnationLabeled(%s): %v", name, err)
 	}

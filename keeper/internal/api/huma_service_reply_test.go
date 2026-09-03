@@ -34,17 +34,17 @@ func TestGoldenWire_ServiceReply(t *testing.T) {
 
 	// --- ServiceView: created_by_aid/refresh/updated_by_aid omitempty (both branches) ---
 	goldenServiceWire(t, "ServiceView/full",
-		ServiceView{CreatedAt: ts, CreatedByAID: &aid, Git: "https://git/r.git", Name: "redis", Ref: "v2.0.0", Refresh: &refresh, UpdatedAt: ts2, UpdatedByAID: &aid},
-		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","git":"https://git/r.git","name":"redis","ref":"v2.0.0","refresh":"5m","updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}`)
+		ServiceView{CreatedAt: ts, CreatedByAID: &aid, Git: "https://git/r.git", ID: "redis", Ref: "v2.0.0", Refresh: &refresh, UpdatedAt: ts2, UpdatedByAID: &aid},
+		`{"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","git":"https://git/r.git","id":"redis","ref":"v2.0.0","refresh":"5m","updated_at":"2026-06-13T01:02:03.456789012Z","updated_by_aid":"archon-alice"}`)
 	goldenServiceWire(t, "ServiceView/nil_optionals",
-		ServiceView{CreatedAt: ts, CreatedByAID: nil, Git: "https://git/r.git", Name: "redis", Ref: "main", Refresh: nil, UpdatedAt: ts2, UpdatedByAID: nil},
-		`{"created_at":"2026-06-14T12:34:56.789012345Z","git":"https://git/r.git","name":"redis","ref":"main","updated_at":"2026-06-13T01:02:03.456789012Z"}`)
+		ServiceView{CreatedAt: ts, CreatedByAID: nil, Git: "https://git/r.git", ID: "redis", Ref: "main", Refresh: nil, UpdatedAt: ts2, UpdatedByAID: nil},
+		`{"created_at":"2026-06-14T12:34:56.789012345Z","git":"https://git/r.git","id":"redis","ref":"main","updated_at":"2026-06-13T01:02:03.456789012Z"}`)
 
 	// --- ServiceListReply: items populated / empty array / nil ---
-	sv := ServiceView{CreatedAt: ts, Git: "g", Name: "redis", Ref: "v1", UpdatedAt: ts}
+	sv := ServiceView{CreatedAt: ts, Git: "g", ID: "redis", Ref: "v1", UpdatedAt: ts}
 	goldenServiceWire(t, "ServiceListReply/items",
 		ServiceListReply{Items: []ServiceView{sv}},
-		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","git":"g","name":"redis","ref":"v1","updated_at":"2026-06-14T12:34:56.789012345Z"}]}`)
+		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","git":"g","id":"redis","ref":"v1","updated_at":"2026-06-14T12:34:56.789012345Z"}]}`)
 	goldenServiceWire(t, "ServiceListReply/empty",
 		ServiceListReply{Items: []ServiceView{}},
 		`{"items":[]}`)

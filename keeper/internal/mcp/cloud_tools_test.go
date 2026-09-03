@@ -79,7 +79,7 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 			label = &s
 		}
 		p.providers[name] = &provider.Provider{
-			Name: name, Type: args[1].(string), Region: args[2].(string),
+			ID: name, Type: args[1].(string), Region: args[2].(string),
 			CredentialsRef: args[3].(string), FQDNSuffix: fqdnSuffix, CreatedByAID: createdBy, CreatedAt: now,
 			Label: label,
 		}
@@ -101,19 +101,19 @@ func (p *cloudFakePool) QueryRow(_ context.Context, sql string, args ...any) pgx
 			s := args[5].(string)
 			label = &s
 		}
-		p.profiles[name] = &profile.Profile{Name: name, Provider: prov, Params: params, CreatedAt: now, Label: label}
+		p.profiles[name] = &profile.Profile{ID: name, Provider: prov, Params: params, CreatedAt: now, Label: label}
 		return cloudRow{[]any{now}}
 	case strings.Contains(sql, "COUNT(*) FROM providers"):
 		return cloudRow{[]any{len(p.providers)}}
 	case strings.Contains(sql, "COUNT(*) FROM profiles"):
 		return cloudRow{[]any{len(p.profiles)}}
-	case strings.Contains(sql, "FROM providers") && strings.Contains(sql, "WHERE name = $1"):
+	case strings.Contains(sql, "FROM providers") && strings.Contains(sql, "WHERE id = $1"):
 		pr, ok := p.providers[args[0].(string)]
 		if !ok {
 			return cloudErrRow{pgx.ErrNoRows}
 		}
-		return cloudRow{[]any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label}}
-	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE name = $1"):
+		return cloudRow{[]any{pr.ID, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label}}
+	case strings.Contains(sql, "FROM profiles") && strings.Contains(sql, "WHERE id = $1"):
 		pr, ok := p.profiles[args[0].(string)]
 		if !ok {
 			return cloudErrRow{pgx.ErrNoRows}
@@ -127,7 +127,7 @@ func (p *cloudFakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows
 	rows := &cloudRows{}
 	if strings.Contains(sql, "FROM providers") {
 		for _, pr := range p.providers {
-			rows.data = append(rows.data, []any{pr.Name, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label})
+			rows.data = append(rows.data, []any{pr.ID, pr.Type, pr.Region, pr.CredentialsRef, pr.CreatedByAID, pr.CreatedAt, pr.FQDNSuffix, pr.Label})
 		}
 		return rows, nil
 	}
@@ -142,7 +142,7 @@ func profileRowValues(pr *profile.Profile) []any {
 	if pr.Params != nil {
 		b, _ = json.Marshal(pr.Params)
 	}
-	return []any{pr.Name, pr.Provider, b, pr.CloudInit, pr.CreatedByAID, pr.CreatedAt, pr.Label}
+	return []any{pr.ID, pr.Provider, b, pr.CloudInit, pr.CreatedByAID, pr.CreatedAt, pr.Label}
 }
 
 type cloudErrRow struct{ err error }
@@ -270,14 +270,14 @@ func TestCloudTools_InManifest(t *testing.T) {
 func TestCloudTools_NilGuard(t *testing.T) {
 	h, _ := newCloudToolHandler(t, cloudAdminCfg(), nil) // Svc == nil
 	cases := []struct{ tool, args string }{
-		{"keeper.provider.create", `{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`},
-		{"keeper.provider.read", `{"name":"example"}`},
+		{"keeper.provider.create", `{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`},
+		{"keeper.provider.read", `{"id":"example"}`},
 		{"keeper.provider.list", `{}`},
-		{"keeper.provider.delete", `{"name":"example"}`},
-		{"keeper.profile.create", `{"name":"p","provider":"example"}`},
-		{"keeper.profile.read", `{"name":"p"}`},
+		{"keeper.provider.delete", `{"id":"example"}`},
+		{"keeper.profile.create", `{"id":"p","provider":"example"}`},
+		{"keeper.profile.read", `{"id":"p"}`},
 		{"keeper.profile.list", `{}`},
-		{"keeper.profile.delete", `{"name":"p"}`},
+		{"keeper.profile.delete", `{"id":"p"}`},
 	}
 	for _, tc := range cases {
 		t.Run(tc.tool, func(t *testing.T) {
@@ -297,7 +297,7 @@ func TestCloudTools_NilGuard(t *testing.T) {
 func TestCloudTools_RBACForbidden(t *testing.T) {
 	h, _ := newCloudToolHandler(t, nil, newCloudFakePool()) // no permissions → deny
 	resp := callTool(t, h, "archon-alice", "keeper.provider.create",
-		`{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`)
+		`{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected forbidden")
 	}
@@ -312,7 +312,7 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 	h, rec := newCloudToolHandler(t, cloudAdminCfg(), newCloudFakePool())
 
 	resp := callTool(t, h, "archon-alice", "keeper.provider.create",
-		`{"name":"example","type":"example","region":"ru","credentials_ref":"vault:secret/cloud/example"}`)
+		`{"id":"example","type":"example","region":"ru","credentials_ref":"vault:secret/cloud/example"}`)
 	if resp.Error != nil {
 		t.Fatalf("create error: %+v", resp.Error)
 	}
@@ -320,7 +320,7 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 	_ = json.Unmarshal(resp.Result, &res)
 	var out providerViewOut
 	_ = json.Unmarshal(res.StructuredContent, &out)
-	if out.Name != "example" || out.CredentialsRef != "vault:secret/cloud/example" {
+	if out.ID != "example" || out.CredentialsRef != "vault:secret/cloud/example" {
 		t.Fatalf("output = %+v", out)
 	}
 	// Audit credentials_ref as a PATH (not a secret).
@@ -329,17 +329,17 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 	}
 	assertPayload(t, rec.events[0].Payload, "credentials_ref", "vault:secret/cloud/example")
 
-	if r := callTool(t, h, "archon-alice", "keeper.provider.read", `{"name":"example"}`); r.Error != nil {
+	if r := callTool(t, h, "archon-alice", "keeper.provider.read", `{"id":"example"}`); r.Error != nil {
 		t.Fatalf("read error: %+v", r.Error)
 	}
 	if r := callTool(t, h, "archon-alice", "keeper.provider.list", `{}`); r.Error != nil {
 		t.Fatalf("list error: %+v", r.Error)
 	}
-	if r := callTool(t, h, "archon-alice", "keeper.provider.delete", `{"name":"example"}`); r.Error != nil {
+	if r := callTool(t, h, "archon-alice", "keeper.provider.delete", `{"id":"example"}`); r.Error != nil {
 		t.Fatalf("delete error: %+v", r.Error)
 	}
 	// read after delete → not-found.
-	r := callTool(t, h, "archon-alice", "keeper.provider.read", `{"name":"example"}`)
+	r := callTool(t, h, "archon-alice", "keeper.provider.read", `{"id":"example"}`)
 	if data := mustToolErrorData(t, r.Error.Data); data.Code != mcpCodeNotFound {
 		t.Errorf("read after delete code = %q, want not-found", data.Code)
 	}
@@ -348,7 +348,7 @@ func TestProviderTool_CreateReadListDelete(t *testing.T) {
 func TestProviderTool_Duplicate409(t *testing.T) {
 	pool := newCloudFakePool()
 	h, _ := newCloudToolHandler(t, cloudAdminCfg(), pool)
-	args := `{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`
+	args := `{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`
 	if r := callTool(t, h, "archon-alice", "keeper.provider.create", args); r.Error != nil {
 		t.Fatalf("first create: %+v", r.Error)
 	}
@@ -362,8 +362,8 @@ func TestProviderTool_Validation(t *testing.T) {
 	h, _ := newCloudToolHandler(t, cloudAdminCfg(), newCloudFakePool())
 	cases := []struct{ name, args, want string }{
 		{"no-name", `{"type":"example","region":"ru","credentials_ref":"vault:x"}`, mcpCodeValidationFailed},
-		{"plain-creds", `{"name":"example","type":"example","region":"ru","credentials_ref":"raw"}`, mcpCodeValidationFailed},
-		{"unknown-field", `{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x","z":1}`, mcpCodeMalformedRequest},
+		{"plain-creds", `{"id":"example","type":"example","region":"ru","credentials_ref":"raw"}`, mcpCodeValidationFailed},
+		{"unknown-field", `{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x","z":1}`, mcpCodeMalformedRequest},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -382,19 +382,19 @@ func TestProfileTool_CreateAndMissingProvider(t *testing.T) {
 	h, rec := newCloudToolHandler(t, cloudAdminCfg(), pool)
 
 	// no Provider → profile.create returns validation-failed (FK).
-	r := callTool(t, h, "archon-alice", "keeper.profile.create", `{"name":"p","provider":"ghost"}`)
+	r := callTool(t, h, "archon-alice", "keeper.profile.create", `{"id":"p","provider":"ghost"}`)
 	if data := mustToolErrorData(t, r.Error.Data); data.Code != mcpCodeValidationFailed {
 		t.Fatalf("missing provider code = %q, want validation-failed", data.Code)
 	}
 
 	// create a Provider, then a Profile.
 	if r := callTool(t, h, "archon-alice", "keeper.provider.create",
-		`{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`); r.Error != nil {
+		`{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`); r.Error != nil {
 		t.Fatalf("provider create: %+v", r.Error)
 	}
 	rec.events = nil
 	if r := callTool(t, h, "archon-alice", "keeper.profile.create",
-		`{"name":"web","provider":"example","params":{"image":"ubuntu"}}`); r.Error != nil {
+		`{"id":"web","provider":"example","params":{"image":"ubuntu"}}`); r.Error != nil {
 		t.Fatalf("profile create: %+v", r.Error)
 	}
 	// Audit profile.created with params_keys (no values).
@@ -407,10 +407,10 @@ func TestProfileTool_Duplicate409(t *testing.T) {
 	pool := newCloudFakePool()
 	h, _ := newCloudToolHandler(t, cloudAdminCfg(), pool)
 	if r := callTool(t, h, "archon-alice", "keeper.provider.create",
-		`{"name":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`); r.Error != nil {
+		`{"id":"example","type":"example","region":"ru","credentials_ref":"vault:x"}`); r.Error != nil {
 		t.Fatalf("provider create: %+v", r.Error)
 	}
-	args := `{"name":"web","provider":"example"}`
+	args := `{"id":"web","provider":"example"}`
 	if r := callTool(t, h, "archon-alice", "keeper.profile.create", args); r.Error != nil {
 		t.Fatalf("first profile: %+v", r.Error)
 	}

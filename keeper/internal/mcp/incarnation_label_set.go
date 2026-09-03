@@ -13,7 +13,7 @@ import (
 )
 
 // keeper.incarnation.label-set — parity with REST PUT
-// /v1/incarnations/{name}/label (IncarnationHandler.SetLabelTyped, [ADR-0085]).
+// /v1/incarnations/{id}/label (IncarnationHandler.SetLabelTyped, [ADR-0085]).
 // Replaces the incarnation's display caption; `name` addresses the row and is
 // never written.
 //
@@ -35,9 +35,14 @@ import (
 // [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
 
 type incarnationLabelSetArgs struct {
-	Name string `json:"name"`
+	// ID addresses the row. Spelled `id` to match the schema this tool publishes
+	// and the nine siblings that go through [labelSetArgs] ([ADR-0085], NIM-729);
+	// the incarnation registry's own `name` → `id` rename is a later batch, so
+	// the FIELD this addresses is still `incarnation.name` in the database.
+	ID string `json:"id"`
 	// Label — the new caption. null or omitted CLEARS it, after which consumers
-	// show `name` again. Free text: no pattern, no length bound, no case folding.
+	// show the identifier again. Free text: no pattern, no length bound, no case
+	// folding.
 	Label *string `json:"label"`
 }
 
@@ -51,12 +56,12 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	// a.Label is NOT validated: free text with capitals, spaces and punctuation
 	// is what the field carries.
@@ -75,25 +80,25 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 	// caller already named, so a grant that matches it names exactly the row
 	// being written. Roles scoped on coven or service ARE denied, because those
 	// dimensions are unknown without the row.
-	inc, probeErr := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, probeErr := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if probeErr != nil {
-		if scopeErr := h.checkIncarnationScope(claims, "label-set", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "label-set", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.label-set")
 		}
-	} else if scopeErr := h.checkIncarnationScope(claims, "label-set", inc.Name, inc.Service, inc.Covens); scopeErr != nil {
+	} else if scopeErr := h.checkIncarnationScope(claims, "label-set", inc.ID, inc.Service, inc.Covens); scopeErr != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.label-set")
 	}
 
-	previous, err := incarnation.UpdateLabel(ctx, h.deps.IncarnationDB, a.Name, a.Label)
+	previous, err := incarnation.UpdateLabel(ctx, h.deps.IncarnationDB, a.ID, a.Label)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
-				"incarnation "+a.Name+" not found")
+				"incarnation "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: incarnation.label-set failed",
-			slog.String("name", a.Name),
+			slog.String("id", a.ID),
 			slog.String("by_aid", claims.Subject),
 			slog.Any("error", err),
 		)
@@ -105,14 +110,11 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 	// cleared. Normalized rather than echoed, so the trail records what the row
 	// holds — a caller sending "  " stored NULL and the audit must say so.
 	stored := registrylabel.Normalize(a.Label)
-	h.writeAudit(audit.EventIncarnationLabelChanged, claims.Subject, map[string]any{
-		"name":      a.Name,
-		"old_label": previous,
-		"new_label": stored,
-	})
+	h.writeAudit(audit.EventIncarnationLabelChanged, claims.Subject,
+		labelAuditPayload(a.ID, previous, stored))
 
 	return h.toolResult(req.ID, incarnationLabelSetOutput{
-		Incarnation: a.Name,
+		Incarnation: a.ID,
 		Label:       stored,
 	})
 }

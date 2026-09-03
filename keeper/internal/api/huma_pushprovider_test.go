@@ -48,7 +48,7 @@ func newHPushProviderPool() *hPushProviderPool {
 
 func (f *hPushProviderPool) seed(name string, params map[string]any) *hPushProviderPool {
 	f.entries[name] = &pushprovider.PushProvider{
-		Name:         name,
+		ID:           name,
 		Params:       params,
 		CreatedAt:    ppAt,
 		UpdatedAt:    ppAt,
@@ -94,7 +94,7 @@ func (f *hPushProviderPool) QueryRow(_ context.Context, sql string, args ...any)
 		var params map[string]any
 		_ = json.Unmarshal(args[1].([]byte), &params)
 		f.entries[name] = &pushprovider.PushProvider{
-			Name:         name,
+			ID:           name,
 			Params:       params,
 			CreatedAt:    ppAt,
 			UpdatedAt:    ppAt,
@@ -102,14 +102,14 @@ func (f *hPushProviderPool) QueryRow(_ context.Context, sql string, args ...any)
 		}
 		return hScanRowPP{values: []any{ppAt, ppAt}} // RETURNING created_at, updated_at
 	}
-	if strings.Contains(sql, "SELECT") && strings.Contains(sql, "FROM push_providers") && strings.Contains(sql, "WHERE name = $1") {
+	if strings.Contains(sql, "SELECT") && strings.Contains(sql, "FROM push_providers") && strings.Contains(sql, "WHERE id = $1") {
 		name := args[0].(string)
 		p, ok := f.entries[name]
 		if !ok {
 			return hErrRowPP{err: pgx.ErrNoRows}
 		}
 		paramsBytes, _ := json.Marshal(p.Params)
-		return hScanRowPP{values: []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label}}
+		return hScanRowPP{values: []any{p.ID, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label}}
 	}
 	if strings.Contains(sql, "SELECT COUNT(*)") {
 		return hCountRowPP{n: len(f.entries)}
@@ -121,7 +121,7 @@ func (f *hPushProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx.Ro
 	rows := make([][]any, 0, len(f.entries))
 	for _, p := range f.entries {
 		paramsBytes, _ := json.Marshal(p.Params)
-		rows = append(rows, []any{p.Name, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
+		rows = append(rows, []any{p.ID, paramsBytes, p.CreatedAt, p.UpdatedAt, p.CreatedByAID, p.UpdatedByAID, p.Label})
 	}
 	return &hRowsPP{rows: rows}, nil
 }
@@ -261,7 +261,7 @@ func TestHumaPushProvider_Create_GoldenWire(t *testing.T) {
 	r := humaPushProviderRouter(t, strictAllowAll{}, nil, newHPushProviderPool())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/push-providers",
-		strings.NewReader(`{"name":"vault-bastion","params":{"vault_addr":"https://vault.example.com"}}`))
+		strings.NewReader(`{"id":"vault-bastion","params":{"vault_addr":"https://vault.example.com"}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -271,7 +271,7 @@ func TestHumaPushProvider_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","name":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","id":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift push-provider.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -281,7 +281,7 @@ func TestHumaPushProvider_Create_UnknownField_400(t *testing.T) {
 	r := humaPushProviderRouter(t, strictAllowAll{}, nil, newHPushProviderPool())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/push-providers",
-		strings.NewReader(`{"name":"x","params":{},"bogus":1}`))
+		strings.NewReader(`{"id":"x","params":{},"bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -304,7 +304,7 @@ func TestHumaPushProvider_Create_RBACDeny_403(t *testing.T) {
 	r := humaPushProviderRouter(t, strictDenyAll{}, nil, newHPushProviderPool())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/push-providers",
-		strings.NewReader(`{"name":"vault-bastion","params":{}}`))
+		strings.NewReader(`{"id":"vault-bastion","params":{}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -316,12 +316,12 @@ func TestHumaAudit_PushProviderCreate_RecordsOnSuccess(t *testing.T) {
 	r := humaPushProviderRouter(t, strictAllowAll{}, auditCap, newHPushProviderPool())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/push-providers",
-		strings.NewReader(`{"name":"vault-bastion","params":{"vault_addr":"https://vault.example.com"}}`))
+		strings.NewReader(`{"id":"vault-bastion","params":{"vault_addr":"https://vault.example.com"}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventPushProviderCreated, map[string]any{"name": "vault-bastion"})
+	assertAuditWritten(t, auditCap, audit.EventPushProviderCreated, map[string]any{"id": "vault-bastion"})
 }
 
 func TestHumaAudit_PushProviderCreate_NoAudit_OnRBACDeny(t *testing.T) {
@@ -329,7 +329,7 @@ func TestHumaAudit_PushProviderCreate_NoAudit_OnRBACDeny(t *testing.T) {
 	r := humaPushProviderRouter(t, strictDenyAll{}, auditCap, newHPushProviderPool())
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/push-providers",
-		strings.NewReader(`{"name":"vault-bastion","params":{}}`))
+		strings.NewReader(`{"id":"vault-bastion","params":{}}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -369,7 +369,7 @@ func TestHumaPushProvider_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","name":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","id":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift push-provider.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -468,7 +468,7 @@ func TestHumaPushProvider_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","name":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","id":"vault-bastion","params":{"vault_addr":"https://vault.example.com"},"updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift push-provider.get:\n got  = %s\n want = %s", got, golden)
 	}
@@ -513,7 +513,7 @@ func TestHumaPushProvider_Update_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","name":"vault-bastion","params":{"vault_addr":"https://new.example.com"},"updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","id":"vault-bastion","params":{"vault_addr":"https://new.example.com"},"updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift push-provider.update:\n got  = %s\n want = %s", got, golden)
 	}
@@ -555,7 +555,7 @@ func TestHumaAudit_PushProviderUpdate_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusOK {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventPushProviderUpdated, map[string]any{"name": "vault-bastion"})
+	assertAuditWritten(t, auditCap, audit.EventPushProviderUpdated, map[string]any{"id": "vault-bastion"})
 }
 
 func TestHumaAudit_PushProviderUpdate_NoAudit_OnNotFound(t *testing.T) {
@@ -599,7 +599,7 @@ func TestHumaAudit_PushProviderDelete_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventPushProviderDeleted, map[string]any{"name": "vault-bastion"})
+	assertAuditWritten(t, auditCap, audit.EventPushProviderDeleted, map[string]any{"id": "vault-bastion"})
 }
 
 func TestHumaAudit_PushProviderDelete_NoAudit_OnBadName(t *testing.T) {

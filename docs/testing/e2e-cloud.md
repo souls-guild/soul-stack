@@ -199,7 +199,7 @@ EXEC_MODE=tsh INCARNATION=redis-auto \
 
 **Run success - by apply_run, not by HTTP.** `POST` returns **202 Accepted** -
 this is only "accepted", not "applied". The engine is polling
-`GET /v1/incarnations/{name}/runs/{apply_id}` (`RunDetailReply`) to the terminal:
+`GET /v1/incarnations/{id}/runs/{apply_id}` (`RunDetailReply`) to the terminal:
 
 - Unit `.status` ∈ `applying | success | failed | cancelled` (source of truth -
   `keeper/internal/applyrun/applyrun.go`). `classify_status`:
@@ -212,7 +212,7 @@ subset (e.g. `add_user` on master → replica `no_match`), considered success
 forensics of actually crashed hosts is printed: `failed_task_idx` /
   `failed_plan_index` / `error_summary`.
 
-**Secondary assertion - `incarnation.status`.** `GET /v1/incarnations/{name}` →
+**Secondary assertion - `incarnation.status`.** `GET /v1/incarnations/{id}` →
 `.status`; healthy terminal - **only `ready`** (enum from
 `keeper/internal/api/huma_enums.go`: `applying | destroy_failed | destroying |
 drift | error_locked | migration_failed | provisioning | ready`).
@@ -228,12 +228,12 @@ Confirmed Operator API routes (all under `/v1`, `Authorization: Bearer <jwt>`):
 | Operation | Route |
 |---|---|
 | create | `POST /v1/incarnations` → 202 `IncarnationCreateReply` |
-| day-2 (generic) | `POST /v1/incarnations/{name}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
-| destroy | `DELETE /v1/incarnations/{name}?allow_destroy=<bool>` → 202 `IncarnationDestroyReply` |
-| unlock | `POST /v1/incarnations/{name}/unlock` → 200 |
-| run status | `GET /v1/incarnations/{name}/runs/{apply_id}` → `RunDetailReply` |
-| list of runs | `GET /v1/incarnations/{name}/runs` → `RunSummaryEntry[]` |
-| get / state | `GET /v1/incarnations/{name}` → `.state` / `.status` / `.status_details` |
+| day-2 (generic) | `POST /v1/incarnations/{id}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
+| destroy | `DELETE /v1/incarnations/{id}?allow_destroy=<bool>` → 202 `IncarnationDestroyReply` |
+| unlock | `POST /v1/incarnations/{id}/unlock` → 200 |
+| run status | `GET /v1/incarnations/{id}/runs/{apply_id}` → `RunDetailReply` |
+| list of runs | `GET /v1/incarnations/{id}/runs` → `RunSummaryEntry[]` |
+| get / state | `GET /v1/incarnations/{id}` → `.state` / `.status` / `.status_details` |
 
 ## Report
 

@@ -9,7 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/beaconaddr"
 )
 
-func TestValidName(t *testing.T) {
+func TestValidID(t *testing.T) {
 	cases := []struct {
 		name string
 		ok   bool
@@ -21,8 +21,8 @@ func TestValidName(t *testing.T) {
 		{"", false},
 	}
 	for _, c := range cases {
-		if ValidName(c.name) != c.ok {
-			t.Errorf("ValidName(%q) = %v, want %v", c.name, !c.ok, c.ok)
+		if ValidID(c.name) != c.ok {
+			t.Errorf("ValidID(%q) = %v, want %v", c.name, !c.ok, c.ok)
 		}
 	}
 }

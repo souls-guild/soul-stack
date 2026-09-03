@@ -41,7 +41,7 @@ func TestIntegration_UnlockForRerun_Day2_ReplaysTheAttemptSnapshot(t *testing.T)
 	// the attempt below ran against v1.0.0. That gap is the point of the whole
 	// snapshot — a rerun must replay the code the attempt used.
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v2.0.0",
+		ID: name, Service: "redis", ServiceVersion: "v2.0.0",
 		StateSchemaVersion: 1, Status: StatusErrorLocked,
 		CreatedScenario: &created, CreatedByAID: &creator,
 	}
@@ -85,9 +85,9 @@ VALUES ($1, $2, 'add_user', '{}'::jsonb, '{}'::jsonb, $3,
 		t.Errorf("PreviousStatus = %q, want error_locked", res.PreviousStatus)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusApplying {
 		t.Errorf("status = %q, want applying (rerun bypasses ready)", got.Status)
@@ -113,7 +113,7 @@ func TestIntegration_UnlockForRerun_RefusesAnInputItDoesNotNeed(t *testing.T) {
 	)
 	creator, created := "archon-alice", "create"
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1.0.0",
+		ID: name, Service: "redis", ServiceVersion: "v1.0.0",
 		StateSchemaVersion: 1, Status: StatusErrorLocked,
 		CreatedScenario: &created, CreatedByAID: &creator,
 	}
@@ -140,9 +140,9 @@ VALUES ($1, $2, 'add_user', '{}'::jsonb, '{}'::jsonb, $3,
 
 	// The refusal must leave the row untouched: it happens inside the transaction
 	// and before any Exec, so a caller that retries correctly finds the same lock.
-	got, err := SelectByName(ctx, integrationPool, name)
+	got, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusErrorLocked {
 		t.Errorf("status = %q, want error_locked — a refusal must not move the incarnation", got.Status)

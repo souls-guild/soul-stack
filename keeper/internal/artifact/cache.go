@@ -11,7 +11,7 @@ import (
 // cache path's file segment, and it is the STRICTER of the two rules the name passes.
 // It used to be described as matching `shared/config`'s reServiceName; that regex left
 // with the manifest's `name:` (NIM-726), and what remains upstream is
-// serviceregistry.NamePattern — `^[a-z][a-z0-9-]*$`, which admits `redis-` and `a--b`.
+// serviceregistry.IDPattern — `^[a-z][a-z0-9-]*$`, which admits `redis-` and `a--b`.
 // So this is not a restatement of an upstream guarantee: a name the registry accepts can
 // be refused here, at artifact load. Checked independently in any case: the name comes
 // from ServiceRef before `service.yml` is even parsed. Guards against `..`/`/` in the first

@@ -76,7 +76,7 @@ func NewService(d ServiceDeps) (*Service, error) {
 
 // CreateInput are the parameters for [Service.Create].
 type CreateInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetLabel]. nil/blank stores
 	// NULL and the consumer shows Name.
@@ -97,8 +97,8 @@ type CreateInput struct {
 // Publishing is best-effort: errors are logged (if logger is set) but
 // not returned to the caller—the record is already committed.
 func (s *Service) Create(ctx context.Context, in CreateInput) (*PushProvider, error) {
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("pushprovider: invalid name %q (must match %s)", in.Name, NamePattern)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("pushprovider: invalid id %q (must match %s)", in.ID, IDPattern)
 	}
 	if in.CallerAID == "" {
 		return nil, fmt.Errorf("pushprovider: caller AID is empty")
@@ -108,7 +108,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*PushProvider, er
 	}
 
 	p := &PushProvider{
-		Name:         in.Name,
+		ID:           in.ID,
 		Label:        in.Label,
 		Params:       in.Params,
 		CreatedByAID: in.CallerAID,
@@ -116,13 +116,13 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*PushProvider, er
 	if err := Insert(ctx, s.pool, p); err != nil {
 		return nil, err
 	}
-	s.publishChanged(ctx, in.Name)
+	s.publishChanged(ctx, in.ID)
 	return p, nil
 }
 
 // UpdateInput are the parameters for [Service.Update].
 type UpdateInput struct {
-	Name      string
+	ID        string
 	Params    map[string]any
 	CallerAID string
 }
@@ -136,8 +136,8 @@ type UpdateInput struct {
 //
 // Publishing is best-effort after successful update.
 func (s *Service) Update(ctx context.Context, in UpdateInput) (*PushProvider, error) {
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("pushprovider: invalid name %q (must match %s)", in.Name, NamePattern)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("pushprovider: invalid id %q (must match %s)", in.ID, IDPattern)
 	}
 	if in.CallerAID == "" {
 		return nil, fmt.Errorf("pushprovider: caller AID is empty")
@@ -145,14 +145,14 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*PushProvider, er
 	if err := validateSensitive(in.Params); err != nil {
 		return nil, err
 	}
-	if err := Update(ctx, s.pool, in.Name, in.Params, in.CallerAID); err != nil {
+	if err := Update(ctx, s.pool, in.ID, in.Params, in.CallerAID); err != nil {
 		return nil, err
 	}
-	updated, err := SelectByName(ctx, s.pool, in.Name)
+	updated, err := SelectByID(ctx, s.pool, in.ID)
 	if err != nil {
 		return nil, err
 	}
-	s.publishChanged(ctx, in.Name)
+	s.publishChanged(ctx, in.ID)
 	return updated, nil
 }
 
@@ -165,32 +165,32 @@ func (s *Service) Update(ctx context.Context, in UpdateInput) (*PushProvider, er
 // [UpdateLabel].
 //
 // Returns [ErrPushProviderNotFound] if the record does not exist.
-func (s *Service) SetLabel(ctx context.Context, name string, label *string) (*PushProvider, *string, error) {
-	previous, err := UpdateLabel(ctx, s.pool, name, label)
+func (s *Service) SetLabel(ctx context.Context, id string, label *string) (*PushProvider, *string, error) {
+	previous, err := UpdateLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	p, err := SelectByName(ctx, s.pool, name)
+	p, err := SelectByID(ctx, s.pool, id)
 	return p, previous, err
 }
 
 // Delete removes a record and publishes invalidation.
 //
 // Returns [ErrPushProviderNotFound] if the record does not exist.
-func (s *Service) Delete(ctx context.Context, name string) error {
-	if !ValidName(name) {
-		return fmt.Errorf("pushprovider: invalid name %q (must match %s)", name, NamePattern)
+func (s *Service) Delete(ctx context.Context, id string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("pushprovider: invalid id %q (must match %s)", id, IDPattern)
 	}
-	if err := Delete(ctx, s.pool, name); err != nil {
+	if err := Delete(ctx, s.pool, id); err != nil {
 		return err
 	}
-	s.publishChanged(ctx, name)
+	s.publishChanged(ctx, id)
 	return nil
 }
 
 // Get reads a single record by PK. Returns [ErrPushProviderNotFound] if not found.
-func (s *Service) Get(ctx context.Context, name string) (*PushProvider, error) {
-	return SelectByName(ctx, s.pool, name)
+func (s *Service) Get(ctx context.Context, id string) (*PushProvider, error) {
+	return SelectByID(ctx, s.pool, id)
 }
 
 // List returns a page of records and the total count.

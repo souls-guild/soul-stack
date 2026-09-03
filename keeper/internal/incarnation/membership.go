@@ -42,8 +42,8 @@ func AddMembers(ctx context.Context, db ExecQueryRower, incName string, sids []s
 // The returned slice is sorted, so the reply and the audit payload are stable
 // regardless of insert order.
 func AddMembersReporting(ctx context.Context, db ExecQueryRower, incName string, sids []string, byAID *string) ([]string, error) {
-	if !ValidName(incName) {
-		return nil, fmt.Errorf("incarnation: add members: invalid name %q", incName)
+	if !ValidID(incName) {
+		return nil, fmt.Errorf("incarnation: add members: invalid id %q", incName)
 	}
 	if len(sids) == 0 {
 		return nil, nil
@@ -79,8 +79,8 @@ WHERE incarnation_name = $1 AND sid = $2
 // nil) — idempotent, like the bind direction. The caller still audits the
 // no-op: the intent was expressed even when nothing changed.
 func RemoveMember(ctx context.Context, db ExecQueryRower, incName, sid string) (bool, error) {
-	if !ValidName(incName) {
-		return false, fmt.Errorf("incarnation: remove member: invalid name %q", incName)
+	if !ValidID(incName) {
+		return false, fmt.Errorf("incarnation: remove member: invalid id %q", incName)
 	}
 	tag, err := db.Exec(ctx, removeOneMembershipSQL, incName, sid)
 	if err != nil {
@@ -97,8 +97,8 @@ WHERE incarnation_name = $1 AND sid = ANY($2)
 // RemoveMembers unbinds the given SIDs from incarnation `incName`. Empty sids →
 // no-op. Removing a non-member is a silent no-op (idempotent).
 func RemoveMembers(ctx context.Context, db ExecQueryRower, incName string, sids []string) error {
-	if !ValidName(incName) {
-		return fmt.Errorf("incarnation: remove members: invalid name %q", incName)
+	if !ValidID(incName) {
+		return fmt.Errorf("incarnation: remove members: invalid id %q", incName)
 	}
 	if len(sids) == 0 {
 		return nil
@@ -143,8 +143,8 @@ ORDER BY m.sid ASC
 // design: FK `sid → souls ON DELETE CASCADE` means a membership row cannot
 // outlive its host, so there is no orphan to surface.
 func ListMembers(ctx context.Context, db ExecQueryRower, incName string) ([]Member, error) {
-	if !ValidName(incName) {
-		return nil, fmt.Errorf("incarnation: list members: invalid name %q", incName)
+	if !ValidID(incName) {
+		return nil, fmt.Errorf("incarnation: list members: invalid id %q", incName)
 	}
 	rows, err := db.Query(ctx, listMembersSQL, incName)
 	if err != nil {
@@ -189,8 +189,8 @@ SELECT EXISTS (
 // something that could never be a member, and a gate must not read that as a
 // quiet "no".
 func IsMember(ctx context.Context, db ExecQueryRower, incName, sid string) (bool, error) {
-	if !ValidName(incName) {
-		return false, fmt.Errorf("incarnation: is-member: invalid name %q", incName)
+	if !ValidID(incName) {
+		return false, fmt.Errorf("incarnation: is-member: invalid id %q", incName)
 	}
 	if sid == "" {
 		return false, fmt.Errorf("incarnation: is-member: empty sid")
@@ -211,8 +211,8 @@ ORDER BY sid ASC
 // ListMemberSIDs returns the SIDs bound to incarnation `incName`, sorted. An
 // incarnation with no members → empty slice, not an error.
 func ListMemberSIDs(ctx context.Context, db ExecQueryRower, incName string) ([]string, error) {
-	if !ValidName(incName) {
-		return nil, fmt.Errorf("incarnation: list members: invalid name %q", incName)
+	if !ValidID(incName) {
+		return nil, fmt.Errorf("incarnation: list members: invalid id %q", incName)
 	}
 	rows, err := db.Query(ctx, listMemberSIDsSQL, incName)
 	if err != nil {

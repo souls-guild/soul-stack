@@ -28,7 +28,7 @@ import (
 
 func labelledIncarnation(name, aid, label string) *Incarnation {
 	return &Incarnation{
-		Name:               name,
+		ID:                 name,
 		Label:              &label,
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
@@ -54,16 +54,16 @@ func TestIntegration_Label_RoundTrip(t *testing.T) {
 		t.Fatalf("Create with a caption: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-billing")
+	got, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Label == nil || *got.Label != caption {
 		t.Fatalf("Label after round-trip = %v, want %q — the INSERT list, the SELECT list and "+
 			"the scan targets must agree, which only a real query can show", got.Label, caption)
 	}
-	if got.Name != "redis-billing" || got.Service != "redis" {
-		t.Errorf("the row moved while carrying a caption: name=%q service=%q", got.Name, got.Service)
+	if got.ID != "redis-billing" || got.Service != "redis" {
+		t.Errorf("the row moved while carrying a caption: name=%q service=%q", got.ID, got.Service)
 	}
 
 	// The list path has its own SQL and its own scan; a mismatch there is a
@@ -89,15 +89,15 @@ func TestIntegration_Label_AbsentIsNull(t *testing.T) {
 
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-billing", Service: "redis", ServiceVersion: "v1.0.0",
+		ID: "redis-billing", Service: "redis", ServiceVersion: "v1.0.0",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc); err != nil {
 		t.Fatalf("Create without a caption: %v", err)
 	}
-	got, err := SelectByName(ctx, integrationPool, "redis-billing")
+	got, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Label != nil {
 		t.Errorf("Label = %q for a row created without one, want nil (SQL NULL)", *got.Label)
@@ -116,9 +116,9 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 	if err := Create(ctx, integrationPool, labelledIncarnation("redis-billing", "archon-alice", "Redis (old)")); err != nil {
 		t.Fatalf("Create: %v", err)
 	}
-	before, err := SelectByName(ctx, integrationPool, "redis-billing")
+	before, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName(before): %v", err)
+		t.Fatalf("SelectByID(before): %v", err)
 	}
 
 	const renamed = "Redis — Billing (production)"
@@ -126,18 +126,18 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 	if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", &label); err != nil {
 		t.Fatalf("UpdateLabel: %v", err)
 	}
-	after, err := SelectByName(ctx, integrationPool, "redis-billing")
+	after, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName(after): %v", err)
+		t.Fatalf("SelectByID(after): %v", err)
 	}
 
 	if after.Label == nil || *after.Label != renamed {
 		t.Errorf("Label = %v, want %q", after.Label, renamed)
 	}
 	switch {
-	case after.Name != before.Name:
+	case after.ID != before.ID:
 		t.Errorf("name moved: %q → %q — it is the Vault path segment, the RBAC scope value AND "+
-			"the CEL root, and there is no rename operation anywhere", before.Name, after.Name)
+			"the CEL root, and there is no rename operation anywhere", before.ID, after.ID)
 	case after.Service != before.Service || after.ServiceVersion != before.ServiceVersion:
 		t.Errorf("service coordinates moved: %q@%q → %q@%q",
 			before.Service, before.ServiceVersion, after.Service, after.ServiceVersion)
@@ -172,9 +172,9 @@ func TestIntegration_UpdateLabel_AllowedWhileApplying(t *testing.T) {
 		t.Fatalf("UpdateLabel while applying: %v\n"+
 			"ADR-0085: there is deliberately no status gate — no run reads the caption.", err)
 	}
-	got, err := SelectByName(ctx, integrationPool, "redis-billing")
+	got, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Status != StatusApplying {
 		t.Errorf("status = %q after a caption edit, want it untouched at %q", got.Status, StatusApplying)
@@ -207,9 +207,9 @@ func TestIntegration_UpdateLabel_ClearsToNull(t *testing.T) {
 			if _, err := UpdateLabel(ctx, integrationPool, "redis-billing", tc.label); err != nil {
 				t.Fatalf("UpdateLabel(clear): %v", err)
 			}
-			got, err := SelectByName(ctx, integrationPool, "redis-billing")
+			got, err := SelectByID(ctx, integrationPool, "redis-billing")
 			if err != nil {
-				t.Fatalf("SelectByName: %v", err)
+				t.Fatalf("SelectByID: %v", err)
 			}
 			if got.Label != nil {
 				t.Errorf("Label = %q after clearing, want nil", *got.Label)
@@ -308,9 +308,9 @@ func TestIntegration_UpdateLabel_ReturnsThePreviousCaption(t *testing.T) {
 	}
 
 	// (d) the row really ends where the last call said it did.
-	got, err := SelectByName(ctx, integrationPool, "redis-billing")
+	got, err := SelectByID(ctx, integrationPool, "redis-billing")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Label == nil || *got.Label != first {
 		t.Errorf("final caption = %v, want %q", got.Label, first)

@@ -36,12 +36,17 @@ func NewServiceRegistry(catalog ServiceCatalog) *ServiceRegistry {
 
 // Resolve returns the ServiceRef for service and true if it's present in the
 // registry's current snapshot; otherwise a zero-value and false. The
-// ServiceEntry→ServiceRef mapping takes only the git coordinates (Name/Git/Ref);
+// ServiceEntry→ServiceRef mapping takes only the git coordinates (ID/Git/Ref);
 // the snapshot's audit metadata isn't needed for artifact loading.
+//
+// [artifact.ServiceRef.Name] keeps its spelling: it is an artifact-loader
+// coordinate, not a registry entity — no DB column, no wire field and no MCP
+// argument — and the `name` → `id` rename ([ADR-0085], NIM-729) stops at the
+// registry packages and the surfaces an operator reads.
 func (r *ServiceRegistry) Resolve(service string) (artifact.ServiceRef, bool) {
 	e, ok := r.catalog.Resolve(service)
 	if !ok {
 		return artifact.ServiceRef{}, false
 	}
-	return artifact.ServiceRef{Name: e.Name, Git: e.Git, Ref: e.Ref}, true
+	return artifact.ServiceRef{Name: e.ID, Git: e.Git, Ref: e.Ref}, true
 }

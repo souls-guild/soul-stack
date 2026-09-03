@@ -169,7 +169,7 @@ func TestIncarnation_Create_ComposedName_InAudit(t *testing.T) {
 	if err != nil {
 		t.Fatalf("CreateTyped: %v", err)
 	}
-	if got := reply.AuditPayload["name"]; got != "cache-billing-inv-redis-sentinel" {
+	if got := reply.AuditPayload["id"]; got != "cache-billing-inv-redis-sentinel" {
 		t.Errorf("audit name = %v, want the composed name", got)
 	}
 }
@@ -215,7 +215,7 @@ func TestIncarnation_Create_ExplicitNameWithTemplate_422(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newNameTemplateHandler(t, db, &fakeStarter{})
 
-	rec := postCreate(t, h, `{"name":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+	rec := postCreate(t, h, `{"id":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("Code = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
@@ -244,8 +244,8 @@ func TestIncarnation_Create_NoTemplate_NameStillRequired(t *testing.T) {
 	}
 	var p problem.Details
 	_ = json.NewDecoder(rec.Body).Decode(&p)
-	if !strings.Contains(p.Detail, "field 'name' is required") {
-		t.Errorf("Detail = %q, want \"field 'name' is required\"", p.Detail)
+	if !strings.Contains(p.Detail, "field 'id' is required") {
+		t.Errorf("Detail = %q, want \"field 'id' is required\"", p.Detail)
 	}
 	if db.insertCalls != 0 {
 		t.Errorf("insertCalls = %d, want 0", db.insertCalls)
@@ -260,7 +260,7 @@ func TestIncarnation_Create_NoTemplate_OperatorNameStands(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newCreateScenarioHandler(t, db, starter)
 
-	rec := postCreate(t, h, `{"name":"redis-prod","service":"redis","create_scenario":"create"}`)
+	rec := postCreate(t, h, `{"id":"redis-prod","service":"redis","create_scenario":"create"}`)
 	if rec.Code != http.StatusAccepted {
 		t.Fatalf("Code = %d, want 202, body=%s", rec.Code, rec.Body.String())
 	}
@@ -279,13 +279,13 @@ func TestIncarnation_Create_MalformedNameStillRejectedEarly(t *testing.T) {
 	db := &fakeIncDB{}
 	h := newCreateScenarioHandler(t, db, &fakeStarter{})
 
-	rec := postCreate(t, h, `{"name":"NOT-Kebab","service":"redis"}`)
+	rec := postCreate(t, h, `{"id":"NOT-Kebab","service":"redis"}`)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("Code = %d, want 422, body=%s", rec.Code, rec.Body.String())
 	}
 	var p problem.Details
 	_ = json.NewDecoder(rec.Body).Decode(&p)
-	if !strings.Contains(p.Detail, "field 'name' must match") {
+	if !strings.Contains(p.Detail, "field 'id' must match") {
 		t.Errorf("Detail = %q, want the name-format message", p.Detail)
 	}
 }
@@ -442,7 +442,7 @@ func TestIncarnation_Create_Named_MixedCovensRefusedWhole(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{covens: []string{"billing"}})
 
-	rec := postCreate(t, h, `{"name":"redis-prod","service":"redis","covens":["billing","prod"],"create_scenario":"create"}`)
+	rec := postCreate(t, h, `{"id":"redis-prod","service":"redis","covens":["billing","prod"],"create_scenario":"create"}`)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("Code = %d, want 403 — a named create declaring an out-of-scope coven must be refused whole; body=%s",
 			rec.Code, rec.Body.String())

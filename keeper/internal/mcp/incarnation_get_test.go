@@ -39,7 +39,7 @@ func newIncRow(inc *incarnation.Incarnation) incRow {
 	// created_scenario — NULLABLE *string (migrations 089+090): nil = bare
 	// incarnation (NULL). Pass the pointer as-is — scan returns nil on NULL.
 	return incRow{vals: []any{
-		inc.Name,
+		inc.ID,
 		inc.Service,
 		inc.ServiceVersion,
 		inc.StateSchemaVersion,
@@ -101,7 +101,7 @@ func callGet(t *testing.T, h *Handler, aid, name string) jsonRPCResponse {
 	t.Helper()
 	params, _ := json.Marshal(toolsCallParams{
 		Name:      "keeper.incarnation.get",
-		Arguments: json.RawMessage(`{"name":"` + name + `"}`),
+		Arguments: json.RawMessage(`{"id":"` + name + `"}`),
 	})
 	req := jsonRPCRequest{JSONRPC: "2.0", ID: mustRawID(70), Method: "tools/call", Params: params}
 	resp, isNot := h.Dispatch(context.Background(), claims(aid), req)
@@ -126,7 +126,7 @@ func TestToolsCall_IncarnationGet_Success(t *testing.T) {
 	pool := &fakePool{
 		incFn: func(name string) (*incarnation.Incarnation, error) {
 			return &incarnation.Incarnation{
-				Name:               name,
+				ID:                 name,
 				Service:            "redis",
 				ServiceVersion:     "v1.2.0",
 				StateSchemaVersion: 3,
@@ -155,7 +155,7 @@ func TestToolsCall_IncarnationGet_Success(t *testing.T) {
 	if err := json.Unmarshal(res.StructuredContent, &out); err != nil {
 		t.Fatalf("unmarshal structured: %v", err)
 	}
-	if out.Name != "redis-prod" || out.Service != "redis" || out.ServiceVersion != "v1.2.0" {
+	if out.ID != "redis-prod" || out.Service != "redis" || out.ServiceVersion != "v1.2.0" {
 		t.Errorf("output mismatch: %+v", out)
 	}
 	if out.StateSchemaVersion != 3 {
@@ -195,12 +195,12 @@ func TestToolsCall_IncarnationGet_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationGet_RBACForbidden(t *testing.T) {
-	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for
+	// RBAC empty → deny. SelectByID RESOLVES scope (covens ∪ {name}) for
 	// the OR-Check (mirrors REST middleware), then the enforcer denies →
 	// forbidden. Verifies the denial reaches through the real dispatch path.
 	pool := &fakePool{
 		incFn: func(name string) (*incarnation.Incarnation, error) {
-			return &incarnation.Incarnation{Name: name, Status: incarnation.StatusReady}, nil
+			return &incarnation.Incarnation{ID: name, Status: incarnation.StatusReady}, nil
 		},
 	}
 	h, _, _ := newTestHandler(t, pool, nil) // empty RBAC → deny
@@ -217,7 +217,7 @@ func TestToolsCall_IncarnationGet_RBACForbidden(t *testing.T) {
 
 func TestToolsCall_IncarnationGet_InvalidName(t *testing.T) {
 	h, _, _ := newTestHandler(t, &fakePool{}, getterRBAC())
-	// `Bad_Name` violates NamePattern → validation-failed BEFORE RBAC/SelectByName.
+	// `Bad_Name` violates IDPattern → validation-failed BEFORE RBAC/SelectByID.
 	resp := callGet(t, h, "archon-alice", "Bad_Name")
 	if resp.Error == nil {
 		t.Fatal("expected error")
@@ -236,7 +236,7 @@ func TestToolsCall_IncarnationGet_SecretsMasked(t *testing.T) {
 	pool := &fakePool{
 		incFn: func(name string) (*incarnation.Incarnation, error) {
 			return &incarnation.Incarnation{
-				Name:               name,
+				ID:                 name,
 				Service:            "redis",
 				ServiceVersion:     "v1",
 				StateSchemaVersion: 1,

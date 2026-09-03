@@ -35,7 +35,7 @@ func seedApplyingWithEpoch(t *testing.T, ctx context.Context, pool *pgxpool.Pool
 	t.Helper()
 	const incSQL = `
 INSERT INTO incarnation
-    (name, service, service_version, state_schema_version, state, status,
+    (id, service, service_version, state_schema_version, state, status,
      applying_apply_id, applying_attempt, applying_by_kid, applying_since)
 VALUES ($1, 'redis', 'v1', 1, '{"primary":"p"}'::jsonb, 'applying',
         $2, 0, $3, $4)`
@@ -53,7 +53,7 @@ VALUES ($1, $2, $3, 'deploy', 'running', NOW())`
 func incStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) string {
 	t.Helper()
 	var s string
-	if err := pool.QueryRow(ctx, `SELECT status FROM incarnation WHERE name=$1`, name).Scan(&s); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT status FROM incarnation WHERE id=$1`, name).Scan(&s); err != nil {
 		t.Fatalf("read status %s: %v", name, err)
 	}
 	return s
@@ -62,7 +62,7 @@ func incStatus(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name strin
 func incEpochNull(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) bool {
 	t.Helper()
 	var n int
-	const q = `SELECT count(*) FROM incarnation WHERE name=$1
+	const q = `SELECT count(*) FROM incarnation WHERE id=$1
         AND applying_apply_id IS NULL AND applying_attempt IS NULL
         AND applying_by_kid IS NULL AND applying_since IS NULL`
 	if err := pool.QueryRow(ctx, q, name).Scan(&n); err != nil {
@@ -77,7 +77,7 @@ func incEpochNull(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name st
 func incApplyingByKID(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) *string {
 	t.Helper()
 	var kid *string
-	if err := pool.QueryRow(ctx, `SELECT applying_by_kid FROM incarnation WHERE name=$1`, name).Scan(&kid); err != nil {
+	if err := pool.QueryRow(ctx, `SELECT applying_by_kid FROM incarnation WHERE id=$1`, name).Scan(&kid); err != nil {
 		t.Fatalf("read applying_by_kid %s: %v", name, err)
 	}
 	return kid
@@ -176,7 +176,7 @@ func TestIntegration_ReconcileOrphanApplying_NullEpoch_NotReclaimed(t *testing.T
 	const name = "orphan-null-epoch"
 	// applying WITHOUT epoch columns (NULL), a legacy row.
 	if _, err := pool.Exec(ctx, `
-INSERT INTO incarnation (name, service, service_version, state_schema_version, state, status, updated_at)
+INSERT INTO incarnation (id, service, service_version, state_schema_version, state, status, updated_at)
 VALUES ($1, 'redis', 'v1', 1, '{}'::jsonb, 'applying', $2)`,
 		name, time.Now().Add(-10*time.Minute)); err != nil {
 		t.Fatalf("seed null-epoch applying: %v", err)
@@ -317,7 +317,7 @@ func TestIntegration_DualContour_EpochOverwriteSkip(t *testing.T) {
 UPDATE incarnation
 SET applying_apply_id = $2, applying_attempt = 1, applying_by_kid = $3,
     applying_since = $4
-WHERE name = $1`,
+WHERE id = $1`,
 		name, liveAID, liveKID, time.Now().Add(-10*time.Minute)); err != nil {
 		t.Fatalf("overwrite epoch (Voyage re-run re-capture): %v", err)
 	}

@@ -162,9 +162,9 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 			"selector 'coven' must match "+soul.CovenPattern)
 	}
-	if a.Selector.Incarnation != "" && !incarnation.ValidName(a.Selector.Incarnation) {
+	if a.Selector.Incarnation != "" && !incarnation.ValidID(a.Selector.Incarnation) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"selector 'incarnation' must match "+incarnation.NamePattern)
+			"selector 'incarnation' must match "+incarnation.IDPattern)
 	}
 
 	// Gate (b), permission layer: RBAC.Check with selector `{coven: label}`

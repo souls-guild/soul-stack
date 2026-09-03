@@ -21,7 +21,7 @@ func newRerunHandler(db *fakeIncDB, starter *fakeStarter, aw *fakeAuditWriter) *
 	return NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, nil, aw, nil, nil)
 }
 
-// rerunDB constructs a fakeIncDB for the rerun flow: SelectByName (status) +
+// rerunDB constructs a fakeIncDB for the rerun flow: SelectByID (status) +
 // UnlockForRerun SELECT FOR UPDATE (state, status) the same status. The default
 // last-run probe → create (create path: last failed == created).
 func rerunDB(status string) *fakeIncDB {
@@ -329,7 +329,7 @@ func TestRerunLast_ReplaysTheRefTheAttemptUsed(t *testing.T) {
 		lastScenarioRow: func(_ string) pgx.Row {
 			return staticRow{values: []any{"add_user", "01HFAILEDBEFOREUPGRADE0000",
 				[]byte(`{"scenario_name":"add_user","input":{"user":"alice"},` +
-					`"service_ref":{"name":"redis","git":"file:///srv/redis","ref":"v1.0.0"}}`)}}
+					`"service_ref":{"id":"redis","git":"file:///srv/redis","ref":"v1.0.0"}}`)}}
 		},
 	}
 	starter := &fakeStarter{}

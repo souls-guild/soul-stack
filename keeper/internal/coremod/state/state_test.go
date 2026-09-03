@@ -872,7 +872,7 @@ func TestCapture_NamesTheRunThatCausedIt(t *testing.T) {
 		t.Fatalf("capture calls = %d, want 1", len(fs.specs))
 	}
 	spec := fs.specs[0]
-	if spec.Name != "redis-prod" || spec.Scenario != "update_users" || spec.ApplyID != "01APPLY" {
+	if spec.ID != "redis-prod" || spec.Scenario != "update_users" || spec.ApplyID != "01APPLY" {
 		t.Errorf("spec = %+v, want the run's incarnation/scenario/apply_id", spec)
 	}
 	if spec.ChangedByAID == nil || *spec.ChangedByAID != "archon-alice" {

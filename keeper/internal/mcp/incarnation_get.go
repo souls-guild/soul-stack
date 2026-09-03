@@ -14,7 +14,7 @@ import (
 // incarnationGetArgs — arguments for keeper.incarnation.get
 // (schemaIncarnationGetInput: the only required field is `name`).
 type incarnationGetArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 }
 
 // incarnationGetOutput — output of keeper.incarnation.get. Mirrors REST
@@ -26,7 +26,7 @@ type incarnationGetArgs struct {
 // (see callIncarnationGet) — defense-in-depth, parity with REST toDTO. The
 // MCP output never exposes sensitive-key values or vault-refs to the operator.
 type incarnationGetOutput struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent when the row carries none, and
 	// a consumer then shows `name`. Not masked: it is operator-written display
 	// text, not state.
@@ -47,7 +47,7 @@ type incarnationGetOutput struct {
 // step order —
 //
 //  1. strictUnmarshal arguments (DisallowUnknownFields).
-//  2. validate name via [incarnation.ValidName] (parity with REST path-name).
+//  2. validate name via [incarnation.ValidID] (parity with REST path-name).
 //  3. RBAC.Check(subject, "incarnation", "get", incarnationRBACContext(name))
 //     — name-bound selector, same as REST [handlers.IncarnationNameSelector].
 //  4. SelectByName → errors mapped via [mapIncarnationErrorToMCP]
@@ -65,25 +65,25 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		// Fail-closed RBAC when the incarnation is missing/errored (REST parity).
-		if scopeErr := h.checkIncarnationScope(claims, "get", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "get", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.get")
 		}
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.get select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -93,13 +93,13 @@ func (h *Handler) callIncarnationGet(ctx context.Context, claims *jwt.Claims, re
 
 	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
 	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
-	if err := h.checkIncarnationScope(claims, "get", inc.Name, inc.Service, inc.Covens); err != nil {
+	if err := h.checkIncarnationScope(claims, "get", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.get")
 	}
 
 	return h.toolResult(req.ID, incarnationGetOutput{
-		Name:               inc.Name,
+		ID:                 inc.ID,
 		Label:              inc.Label,
 		Service:            inc.Service,
 		ServiceVersion:     inc.ServiceVersion,

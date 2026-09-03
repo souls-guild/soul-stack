@@ -527,7 +527,7 @@ func countIncarnations(t *testing.T, name string) int {
 	t.Helper()
 	var n int
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT COUNT(*) FROM incarnation WHERE name = $1`, name).Scan(&n); err != nil {
+		`SELECT COUNT(*) FROM incarnation WHERE id = $1`, name).Scan(&n); err != nil {
 		t.Fatalf("countIncarnations: %v", err)
 	}
 	return n

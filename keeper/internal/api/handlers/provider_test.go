@@ -66,7 +66,7 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 			label = &s
 		}
 		f.entries[name] = &provider.Provider{
-			Name:           name,
+			ID:             name,
 			Label:          label,
 			Type:           args[1].(string),
 			Region:         args[2].(string),
@@ -78,13 +78,13 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 		return scanRowProv{values: []any{now}}
 	case strings.Contains(sql, "COUNT(*) FROM providers"):
 		return scanRowProv{values: []any{len(f.entries)}}
-	case strings.Contains(sql, "FROM providers") && strings.Contains(sql, "WHERE name = $1"):
+	case strings.Contains(sql, "FROM providers") && strings.Contains(sql, "WHERE id = $1"):
 		name := args[0].(string)
 		p, ok := f.entries[name]
 		if !ok {
 			return errRowProv{err: pgx.ErrNoRows}
 		}
-		return scanRowProv{values: []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix, p.Label}}
+		return scanRowProv{values: []any{p.ID, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix, p.Label}}
 	}
 	return errRowProv{err: pgx.ErrNoRows}
 }
@@ -92,7 +92,7 @@ func (f *fakeProviderPool) QueryRow(_ context.Context, sql string, args ...any) 
 func (f *fakeProviderPool) Query(_ context.Context, _ string, _ ...any) (pgx.Rows, error) {
 	rows := &fakeProvRows{}
 	for _, p := range f.entries {
-		rows.data = append(rows.data, []any{p.Name, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix, p.Label})
+		rows.data = append(rows.data, []any{p.ID, p.Type, p.Region, p.CredentialsRef, p.CreatedByAID, p.CreatedAt, p.FQDNSuffix, p.Label})
 	}
 	return rows, nil
 }
@@ -179,12 +179,12 @@ func TestProviderHandler_CreateGetListDelete(t *testing.T) {
 	ctx := context.Background()
 
 	reply, err := h.CreateTyped(ctx, cloudClaims(), ProviderCreateInput{
-		Name: "example-cloud", Type: "example", Region: "ru-1", CredentialsRef: "vault:secret/cloud/example",
+		ID: "example-cloud", Type: "example", Region: "ru-1", CredentialsRef: "vault:secret/cloud/example",
 	})
 	if err != nil {
 		t.Fatalf("CreateTyped: %v", err)
 	}
-	if reply.Body.Name != "example-cloud" || reply.Body.CredentialsRef != "vault:secret/cloud/example" {
+	if reply.Body.ID != "example-cloud" || reply.Body.CredentialsRef != "vault:secret/cloud/example" {
 		t.Fatalf("create body = %+v", reply.Body)
 	}
 	// The audit payload carries credentials_ref as a PATH (not the secret).
@@ -212,8 +212,8 @@ func TestProviderHandler_CreateGetListDelete(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteTyped: %v", err)
 	}
-	if del.Name != "example-cloud" {
-		t.Fatalf("delete name = %q", del.Name)
+	if del.ID != "example-cloud" {
+		t.Fatalf("delete name = %q", del.ID)
 	}
 
 	if _, err := h.GetTyped(ctx, "example-cloud"); provProblemType(t, err) != problem.TypeNotFound {
@@ -224,7 +224,7 @@ func TestProviderHandler_CreateGetListDelete(t *testing.T) {
 func TestProviderHandler_DuplicateConflict(t *testing.T) {
 	h := newProviderHandler(t, newFakeProviderPool())
 	ctx := context.Background()
-	in := ProviderCreateInput{Name: "dup", Type: "example", Region: "ru-1", CredentialsRef: "vault:secret/x"}
+	in := ProviderCreateInput{ID: "dup", Type: "example", Region: "ru-1", CredentialsRef: "vault:secret/x"}
 	if _, err := h.CreateTyped(ctx, cloudClaims(), in); err != nil {
 		t.Fatalf("first create: %v", err)
 	}
@@ -242,10 +242,10 @@ func TestProviderHandler_Validation(t *testing.T) {
 		in   ProviderCreateInput
 	}{
 		{"empty-name", ProviderCreateInput{Type: "example", Region: "ru", CredentialsRef: "vault:x"}},
-		{"bad-name", ProviderCreateInput{Name: "Example_Cloud", Type: "example", Region: "ru", CredentialsRef: "vault:x"}},
-		{"empty-region", ProviderCreateInput{Name: "example", Type: "example", CredentialsRef: "vault:x"}},
-		{"plain-creds", ProviderCreateInput{Name: "example", Type: "example", Region: "ru", CredentialsRef: "secret/raw"}},
-		{"empty-creds-path", ProviderCreateInput{Name: "example", Type: "example", Region: "ru", CredentialsRef: "vault:"}},
+		{"bad-name", ProviderCreateInput{ID: "Example_Cloud", Type: "example", Region: "ru", CredentialsRef: "vault:x"}},
+		{"empty-region", ProviderCreateInput{ID: "example", Type: "example", CredentialsRef: "vault:x"}},
+		{"plain-creds", ProviderCreateInput{ID: "example", Type: "example", Region: "ru", CredentialsRef: "secret/raw"}},
+		{"empty-creds-path", ProviderCreateInput{ID: "example", Type: "example", Region: "ru", CredentialsRef: "vault:"}},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -270,7 +270,7 @@ func TestProviderHandler_DeleteBlockedByProfiles(t *testing.T) {
 	h := newProviderHandler(t, pool)
 	ctx := context.Background()
 	if _, err := h.CreateTyped(ctx, cloudClaims(), ProviderCreateInput{
-		Name: "example", Type: "example", Region: "ru", CredentialsRef: "vault:x",
+		ID: "example", Type: "example", Region: "ru", CredentialsRef: "vault:x",
 	}); err != nil {
 		t.Fatalf("create: %v", err)
 	}

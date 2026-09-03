@@ -28,7 +28,7 @@ type IncarnationListOptions struct {
 // snake_case names come from UseProtoNames in Keeper's HTTP facade
 // (operator-api.md → JSON field naming).
 type IncarnationListItem struct {
-	Name               string          `json:"name"`
+	ID                 string          `json:"id"`
 	Service            string          `json:"service"`
 	ServiceVersion     string          `json:"service_version"`
 	StateSchemaVersion int32           `json:"state_schema_version"`

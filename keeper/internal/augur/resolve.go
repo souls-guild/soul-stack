@@ -45,7 +45,7 @@ func denied(reason string) *Decision { return &Decision{Allowed: false, Reason: 
 // OmenReader / RiteReader / HostReader — narrow registry surfaces needed by
 // resolve. Narrowing (instead of passing a *pgxpool.Pool) isolates
 // enforcement from CRUD and allows a fake in unit tests without spinning up
-// PG. The real implementations are closures over [SelectOmenByName] /
+// PG. The real implementations are closures over [SelectOmenByID] /
 // [SelectRitesBySubject] / [subject.LoadHost] (see the grpc-handler wire-up).
 type OmenReader interface {
 	OmenByName(ctx context.Context, name string) (*Omen, error)

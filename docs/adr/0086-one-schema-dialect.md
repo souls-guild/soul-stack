@@ -537,10 +537,10 @@ wrong files.
 Both endpoints ship the schema free-form, so nothing about §1–§3 is visible to the
 generator:
 
-- `GET /v1/services/{name}/scenarios` — `Scenario.InputSchema` is `map[string]any`
+- `GET /v1/services/{id}/scenarios` — `Scenario.InputSchema` is `map[string]any`
   (`keeper/internal/artifact/scenarios.go:82`), rendered in OpenAPI as
   `additionalProperties: {}` / `type: object` (`docs/keeper/openapi.yaml:3468-3470`);
-- `GET /v1/services/{name}/state-schema` — `ServiceStateSchemaReply.Schema` is
+- `GET /v1/services/{id}/state-schema` — `ServiceStateSchemaReply.Schema` is
   `*map[string]interface{}` (`keeper/internal/api/huma_service_reply.go:66-72`, fed from
   `keeper/internal/artifact/state_schema.go:98`), rendered the same way
   (`docs/keeper/openapi.yaml:3717-3719`).

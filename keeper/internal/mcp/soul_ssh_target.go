@@ -76,9 +76,9 @@ func (h *Handler) callSoulSshTargetUpdate(ctx context.Context, claims *jwt.Claim
 	}
 	// P2 W-1: optional `ssh_provider` — kebab-case plugin name (see the
 	// push_providers.name regex). An empty string means "not set".
-	if a.SSHProvider != "" && !pushprovider.ValidName(a.SSHProvider) {
+	if a.SSHProvider != "" && !pushprovider.ValidID(a.SSHProvider) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'ssh_provider' must match "+pushprovider.NamePattern)
+			"field 'ssh_provider' must match "+pushprovider.IDPattern)
 	}
 
 	// RBAC check — `soul.ssh-target-update` over the host's scope, `host=<sid>`

@@ -18,7 +18,7 @@
 
   - **(g) Authenticity.** Utilization is accepted only from an **authenticated SID** (mTLS peer cert, `authenticatedSIDFrom`), **NEVER from the payload** — spoofing someone else's host is impossible (pattern from [ADR-012](0012-keeper-soul-grpc.md): SID in the payload is an echo for logs, authority is the certificate).
 
-  - **(h) API.** `GET /v1/souls/{sid}/telemetry` — latest + window + freshness for one host; `GET /v1/incarnations/{name}/telemetry` — aggregate across an incarnation's hosts (scope `coven && ARRAY[name]`).
+  - **(h) API.** `GET /v1/souls/{sid}/telemetry` — latest + window + freshness for one host; `GET /v1/incarnations/{id}/telemetry` — aggregate across an incarnation's hosts (scope `coven && ARRAY[name]`).
 
 - **What it standardizes, what it defers.** **Standardizes** the layer, transport (`FromSoul` #10 / `HostUtilization`), storage (Redis latest + list-ring), invariants (liveness/freshness/authenticity), API (`/telemetry`). **Defers:** delivering config to the agent + essence-override + collector toggles — **NIM-87**; the HostsTab web panel — **NIM-88**; extensibility of the collector set (new metrics only through only-add of new `HostUtilization` fields, no generic map is introduced).
 

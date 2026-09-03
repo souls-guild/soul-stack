@@ -13,9 +13,9 @@
 // from ONE token in ONE run:
 //
 //	expected = {names GET /v1/incarnations shows}
-//	actual   = {names GET /v1/incarnations/{name} answers 200 for}
+//	actual   = {names GET /v1/incarnations/{id} answers 200 for}
 //
-// Postgres is the neutral third party: `SELECT name FROM incarnation` is the
+// Postgres is the neutral third party: `SELECT id FROM incarnation` is the
 // registry itself, not a reader of the scope boundary, so the set of names the
 // get reader is probed with cannot inherit either implementation's bug. Neither
 // reader is compared against a hand-written expectation of who-sees-what — that
@@ -127,7 +127,7 @@ func seedIncAgreementRow(t *testing.T, r incAgreementRow) {
 	t.Helper()
 	c := incAgreementSeeder
 	inc := &incarnation.Incarnation{
-		Name:               r.name,
+		ID:                 r.name,
 		Service:            r.service,
 		ServiceVersion:     "v1",
 		StateSchemaVersion: 1,
@@ -155,10 +155,10 @@ func walkIncarnationNames(t *testing.T, base, tok string, limit int) map[string]
 		p := getIncarnationsPage(t, base, tok, q)
 		total = p.Total
 		for _, it := range p.Items {
-			if _, dup := seen[it.Name]; dup {
-				t.Fatalf("DUPLICATE %s during the offset walk of /v1/incarnations", it.Name)
+			if _, dup := seen[it.ID]; dup {
+				t.Fatalf("DUPLICATE %s during the offset walk of /v1/incarnations", it.ID)
 			}
-			seen[it.Name] = struct{}{}
+			seen[it.ID] = struct{}{}
 		}
 		if len(p.Items) < limit {
 			break
@@ -173,9 +173,15 @@ func walkIncarnationNames(t *testing.T, base, tok string, limit int) map[string]
 	return seen
 }
 
+// The tag is `id`, and it has to be: a wire tag that does not match what the
+// handler emits decodes to the zero value SILENTLY — `encoding/json` ignores an
+// unknown member unless asked not to. A stale `name` here does not fail the
+// decode, it makes every item's identifier "" and the walk below then reports
+// them as duplicates of each other, which reads like a pagination bug and is
+// not one.
 type incarnationsPage struct {
 	Items []struct {
-		Name string `json:"name"`
+		ID string `json:"id"`
 	} `json:"items"`
 	Total int `json:"total"`
 }
@@ -222,7 +228,7 @@ func gettableIncarnations(t *testing.T, base, tok string, universe []string) map
 // reader of the scope boundary, so it cannot inherit either implementation's bug.
 func allIncarnationNames(t *testing.T) []string {
 	t.Helper()
-	rows, err := integrationPool.Query(context.Background(), `SELECT name FROM incarnation ORDER BY name`)
+	rows, err := integrationPool.Query(context.Background(), `SELECT id FROM incarnation ORDER BY id`)
 	if err != nil {
 		t.Fatalf("allIncarnationNames: %v", err)
 	}

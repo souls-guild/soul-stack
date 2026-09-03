@@ -70,7 +70,7 @@ A living plan for the transition from MVP to a full-fledged product solution. St
 - ✓ state_history retention: soft-delete/archive by config (Reaper rule)
 - ✓ **Recovery - `reclaim_apply_runs` runbook + GATE-1 production-gate (2026-05-26).** Operationalization of GATE-1 ([ADR-027](adr/0027-apply-work-queue.md) amend), not a new ADR. Runbook [`docs/operations/recovery-reclaim-apply-runs.md`](operations/recovery-reclaim-apply-runs.md) - three product gates (fencing-Soul for the fleet + `acolytes > 0` on all Keeper instances + Soul-reconcile S6 for `dispatched` orphans), hot-reload `enabled: true`, validation according to `keeper_reaper_rule_purged_total{rule="reclaim_apply_runs"}` / `keeper_runresult_stale_total` / audit `reaper.reclaim_apply_runs.executed` / alert `dispatched stuck`.
 - ⬜ module-registry storage (Q5) - discuss; PG `bytea` default
-- ⬜ **Toll (cluster-wide outflow-detector)** - [ADR-038](adr/0038-toll.md) fixed 2026-05-26, implementation with a separate slice (per-instance tollwatcher + Redis-leader aggregation + soft-degraded middleware on POST /v1/incarnations/{name}/scenarios/{scenario} and POST /v1/push/apply).
+- ⬜ **Toll (cluster-wide outflow-detector)** - [ADR-038](adr/0038-toll.md) fixed 2026-05-26, implementation with a separate slice (per-instance tollwatcher + Redis-leader aggregation + soft-degraded middleware on POST /v1/incarnations/{id}/scenarios/{scenario} and POST /v1/push/apply).
 - ✓ **R2 anchors-TTL** - closed without action 2026-05-26 (Outbound is already working through SoulLease `soul:<sid>:lock` with TTL=30s + refresh=10s + correct failover; phantom recording).
 
 ## Track 5 — Security hardening (T2)

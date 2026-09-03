@@ -1,7 +1,7 @@
 package api
 
 // FULL-TYPED shape of the INCARNATION form-prefill route (code-first OpenAPI source,
-// ADR-054 §Pattern). POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill
+// ADR-054 §Pattern). POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill
 // — day-2 pre-fill of the scenario's UI form with the current incarnation.state values
 // (docs/input.md → "Pre-fill from state"). A resolve (not a mutation), no body: audit is NOT
 // wired. RBAC incarnation.get + scope predicate (ADR-047) — on the group.
@@ -22,7 +22,7 @@ import (
 // is built from the scenario schema on the backend) NOR the service version: the schema is always taken
 // by inc.ServiceVersion (an anti-version-craft invariant, see FormPrefillTyped).
 type incFormPrefillInput struct {
-	Name     string `path:"name" doc:"incarnation name"`
+	ID       string `path:"id" doc:"incarnation id"`
 	Scenario string `path:"scenario" doc:"scenario name"`
 }
 
@@ -47,7 +47,7 @@ func incFormPrefillOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "incarnationFormPrefill",
 		Method:        http.MethodPost,
-		Path:          "/{name}/scenarios/{scenario}/form-prefill",
+		Path:          "/{id}/scenarios/{scenario}/form-prefill",
 		Summary:       "Pre-fill scenario form from incarnation.state",
 		Description:   "Current state values under scenario schema fields with prefill_from_state (docs/input.md). Path-whitelist (client does not set the path), secret fields excluded. Out of RBAC-scope → 404. Permission incarnation.get. Read-only, no audit.",
 		Tags:          []string{"incarnation"},
@@ -65,7 +65,7 @@ func registerHumaIncarnationFormPrefill(humaAPI huma.API, incH *handlers.Incarna
 	}
 	huma.Register(humaAPI, incFormPrefillOperation(), func(ctx context.Context, in *incFormPrefillInput) (*incFormPrefillOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		res, err := incH.FormPrefillTyped(ctx, in.Name, in.Scenario, incH.GetInScopeFor(claims, "get"))
+		res, err := incH.FormPrefillTyped(ctx, in.ID, in.Scenario, incH.GetInScopeFor(claims, "get"))
 		if err != nil {
 			return nil, incProblem(err)
 		}

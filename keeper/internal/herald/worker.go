@@ -208,7 +208,7 @@ func (w *DeliveryWorker) deliver(ctx context.Context, job *DeliveryJob) (int, er
 	}
 	if !h.Enabled {
 		// Channel disabled: do not deliver (terminal, no retry).
-		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q disabled", h.Name)}
+		return 0, errTerminalNoRetry{fmt.Errorf("herald: channel %q disabled", h.ID)}
 	}
 
 	// SMTP class has its own branch (own net/smtp transport + own SSRF guard by

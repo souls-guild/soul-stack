@@ -1,6 +1,6 @@
 package api
 
-// GET /v1/incarnations/{name}/runs/{apply_id}/events — live progress of an incarnation
+// GET /v1/incarnations/{id}/runs/{apply_id}/events — live progress of an incarnation
 // run (SSE, ADR-068 §A3). Symmetric to the existing RunDetail path + the SSE precedent
 // `/mcp/events`, but on the Operator plane /v1.
 //
@@ -96,7 +96,7 @@ func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac a
 
 // incRunEventsInput — huma input for GET .../runs/{apply_id}/events. Name/ApplyID are path params.
 type incRunEventsInput struct {
-	Name    string `path:"name" doc:"incarnation name"`
+	ID      string `path:"id" doc:"incarnation id"`
 	ApplyID string `path:"apply_id" doc:"run ULID; someone else's/nonexistent -> 403 (anti-enum)"`
 }
 
@@ -104,7 +104,7 @@ func incRunEventsOperation() huma.Operation {
 	op := huma.Operation{
 		OperationID:   "streamIncarnationRunEvents",
 		Method:        http.MethodGet,
-		Path:          "/{name}/runs/{apply_id}/events",
+		Path:          "/{id}/runs/{apply_id}/events",
 		Summary:       "Live run progress of an incarnation (SSE)",
 		Description:   "text/event-stream: task.executed/apply.completed/failed/cancelled by apply_id. Auth: Authorization: Bearer (fetch-streaming, ADR-068 §A0). Access: the initiator OR incarnation.get/history; someone else's/nonexistent apply_id -> 403 (anti-enum, parity /mcp/events). Secrets in the payload are masked.",
 		Tags:          []string{"incarnation"},
@@ -140,7 +140,7 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 		}
 		// anti-enum: ANY denial (not found / foreign incarnation / no rights) → the same
 		// 403, indistinguishable from "no access" (ULIDs are guessable, parity /mcp/events).
-		if !authorizeRunEventsSSE(ctx, deps, claims.Subject, in.Name, in.ApplyID) {
+		if !authorizeRunEventsSSE(ctx, deps, claims.Subject, in.ID, in.ApplyID) {
 			return nil, sseForbidden()
 		}
 		// conn-limit (M4): take a slot ONLY for an authorized subscription, release it in the

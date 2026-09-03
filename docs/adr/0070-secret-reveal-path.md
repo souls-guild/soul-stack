@@ -42,8 +42,8 @@ revealable_secrets:
 
 ### Endpoints
 
-- **`POST /v1/incarnations/{name}/secrets/reveal`** `{secret_id, key}` → `{value}` — reveals a single value. Self-audit `incarnation.secret_revealed` (the fact, WITHOUT the value).
-- **`GET /v1/incarnations/{name}/secrets/revealable`** → `{items: [{secret_id, label, state_path, keys}]}` — discovery: what is revealable and with which `key`s (READ, without audit). The UI builds a list from this; an empty list is valid.
+- **`POST /v1/incarnations/{id}/secrets/reveal`** `{secret_id, key}` → `{value}` — reveals a single value. Self-audit `incarnation.secret_revealed` (the fact, WITHOUT the value).
+- **`GET /v1/incarnations/{id}/secrets/revealable`** → `{items: [{secret_id, label, state_path, keys}]}` — discovery: what is revealable and with which `key`s (READ, without audit). The UI builds a list from this; an empty list is valid.
 
 ### Sanctioned reveal — a DTO past the masking
 

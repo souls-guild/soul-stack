@@ -25,7 +25,7 @@ package api
 // affect json.Marshal.
 //
 // OUTPUT-PATTERN NAMES (batch 5): incarnation_name (Name + echo Incarnation) ←
-// incarnation.NamePattern; covens[] ← soul.CovenPattern (per-element, output covens in
+// incarnation.IDPattern; covens[] ← soul.CovenPattern (per-element, output covens in
 // Incarnation* View/Reply). Reply types are output-only (create/run/upgrade/rerun-last —
 // separate *Request/*Input) → no input-422 risk. service — FK to serviceregistry,
 // format covered by the INPUT domain (incarnation.create service, batch 4) — output echo is
@@ -43,13 +43,13 @@ import (
 // (lifecycle.auto_create:false → incarnation goes ready without a run, apply_id omitted).
 type IncarnationCreateReply struct {
 	ApplyID     *string `json:"apply_id,omitempty" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-	Incarnation string  `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`       // ← incarnation.NamePattern
+	Incarnation string  `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"`       // ← incarnation.IDPattern
 }
 
 // IncarnationRunReply — native 202 body for POST .../scenarios/{scenario} (apply_id + echo).
 type IncarnationRunReply struct {
 	ApplyID     string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`     // ULID (audit.NewULID)
-	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
 	Scenario    string `json:"scenario"`
 }
 
@@ -57,7 +57,7 @@ type IncarnationRunReply struct {
 // native enum IncarnationStatus (exposed via SchemaProvider, wire form is a string). unlocked_at —
 // nanosecond time-wire (handler gives .UTC()).
 type IncarnationUnlockReply struct {
-	Name           string            `json:"name"`
+	ID             string            `json:"id"`
 	PreviousStatus IncarnationStatus `json:"previous_status"`
 	Status         IncarnationStatus `json:"status"`
 	UnlockedAt     time.Time         `json:"unlocked_at"`
@@ -114,11 +114,11 @@ type UpgradePathTarget struct {
 // IncarnationRerunLastReply — native 202 body for POST .../rerun-last (apply_id + echo + the restarted scenario).
 type IncarnationRerunLastReply struct {
 	ApplyID     string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`     // ULID (audit.NewULID)
-	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	Incarnation string `json:"incarnation" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
 	Scenario    string `json:"scenario" pattern:"^[a-z][a-z0-9_]*$"`            // name of the restarted scenario (the last one that failed)
 }
 
-// IncarnationDestroyReply — native 202 body for DELETE /v1/incarnations/{name} (apply_id).
+// IncarnationDestroyReply — native 202 body for DELETE /v1/incarnations/{id} (apply_id).
 type IncarnationDestroyReply struct {
 	ApplyID string `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
 	// Unreleased — present ONLY when teardown was skipped (allow_destroy=true, or a
@@ -149,7 +149,7 @@ type UnreleasedResourcesReply struct {
 	SIDs     []string `json:"sids,omitempty" doc:"member hosts (incarnation_membership) whose souls, seeds and bootstrap tokens were NOT revoked — the membership rows themselves are gone with the record"`
 }
 
-// IncarnationGetReply — native body for GET /v1/incarnations/{name} (and PATCH .../hosts, list element).
+// IncarnationGetReply — native body for GET /v1/incarnations/{id} (and PATCH .../hosts, list element).
 // Form is 1:1 with the former IncarnationGetReply: covens is always an array (WITHOUT omitempty, never nil);
 // created_by_aid/spec/state/status_details — `*map`/`*string` WITHOUT omitempty (nil → `null`);
 // created_scenario/traits — WITH omitempty (nil/empty →
@@ -164,11 +164,11 @@ type IncarnationGetReply struct {
 	CreatedByAID    *string   `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	CreatedScenario string    `json:"created_scenario,omitempty"`                             // starting scenario (multiple-create mechanism); empty → omitted
 	// Label — the display caption ([ADR-0085]), free text and mutable via
-	// PUT /v1/incarnations/{name}/label. Absent means the row carries none and
+	// PUT /v1/incarnations/{id}/label. Absent means the row carries none and
 	// the consumer shows `name`. NOT the Vault path segment, NOT the RBAC
 	// `incarnation=` scope value and NOT the CEL root — `name` is all three.
 	Label              *string                 `json:"label,omitempty"`
-	Name               string                  `json:"name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.NamePattern
+	ID                 string                  `json:"id" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← incarnation.IDPattern
 	Service            string                  `json:"service"`
 	ServiceVersion     string                  `json:"service_version"`
 	State              *map[string]interface{} `json:"state"`
@@ -206,7 +206,7 @@ func newIncarnationRunReply(v handlers.IncarnationRunView) IncarnationRunReply {
 
 func newIncarnationUnlockReply(v handlers.IncarnationUnlockView) IncarnationUnlockReply {
 	return IncarnationUnlockReply{
-		Name:           v.Name,
+		ID:             v.ID,
 		PreviousStatus: IncarnationStatus(v.PreviousStatus),
 		Status:         IncarnationStatus(v.Status),
 		UnlockedAt:     v.UnlockedAt,
@@ -282,7 +282,7 @@ func newIncarnationGetReply(v handlers.IncarnationGetView) IncarnationGetReply {
 		CreatedByAID:       v.CreatedByAID,
 		CreatedScenario:    v.CreatedScenario,
 		Label:              v.Label,
-		Name:               v.Name,
+		ID:                 v.ID,
 		Service:            v.Service,
 		ServiceVersion:     v.ServiceVersion,
 		State:              ptrMap(v.State),
@@ -310,7 +310,7 @@ func newStateHistoryEntry(v handlers.StateHistoryView) StateHistoryEntry {
 
 // === runs reply-DTO (list of incarnation runs + per-host details) ===
 
-// RunSummaryEntry — native element of runs.items (GET /v1/incarnations/{name}/runs).
+// RunSummaryEntry — native element of runs.items (GET /v1/incarnations/{id}/runs).
 // status — aggregate run status (applying/success/failed/cancelled). finished_at
 // / started_by_aid — omitempty (nil → key omitted: run still applying / initiator
 // removed). Form is symmetric with StateHistoryEntry.
@@ -357,7 +357,7 @@ type RunNoticeEntry struct {
 	Message string `json:"message"`
 }
 
-// RunDetailReply — native body for GET /v1/incarnations/{name}/runs/{apply_id}: run
+// RunDetailReply — native body for GET /v1/incarnations/{id}/runs/{apply_id}: run
 // header (apply_id/scenario/status/time/initiator) + a slice of hosts. hosts is non-nil
 // (an empty run with no host rows is impossible — SelectRunDetail would return not-found).
 // input omitempty — the masked snapshot of the operator input for the run (secret
@@ -462,13 +462,13 @@ type RunTaskHostEntry struct {
 type RunTaskEntry struct {
 	PlanIndex int                     `json:"plan_index"`
 	Passage   int                     `json:"passage"`
-	Name      string                  `json:"name"`
+	ID        string                  `json:"id"`
 	Module    string                  `json:"module"`
 	Params    *map[string]interface{} `json:"params,omitempty"`
 	Hosts     []RunTaskHostEntry      `json:"hosts"`
 }
 
-// RunTasksReply — native body for GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// RunTasksReply — native body for GET /v1/incarnations/{id}/runs/{apply_id}/tasks
 // (NIM-37): the run's task plan + per-host results joined from audit_log. tasks
 // is non-nil (empty plan → `[]`).
 type RunTasksReply struct {
@@ -491,7 +491,7 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 		tasks[i] = RunTaskEntry{
 			PlanIndex: t.PlanIndex,
 			Passage:   t.Passage,
-			Name:      t.Name,
+			ID:        t.Name,
 			Module:    t.Module,
 			Params:    ptrMap(t.Params),
 			Hosts:     hosts,

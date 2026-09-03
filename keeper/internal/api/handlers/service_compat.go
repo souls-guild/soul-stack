@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// `GET /v1/services/{name}/compat` — the engine-compat window of a Service
+// `GET /v1/services/{id}/compat` — the engine-compat window of a Service
 // BEFORE any run (ADR-0076(h)).
 //
 // The window is computed here, from the per-entity declarations, and never
@@ -55,13 +55,13 @@ type CompatWindowView struct {
 // and for a build with no comparable version (nothing was enforced).
 type CompatEntityView struct {
 	Kind       string            `json:"kind"`
-	Name       string            `json:"name"`
+	Name       string            `json:"id"`
 	Ref        string            `json:"ref,omitempty"`
 	Window     *CompatWindowView `json:"window"`
 	Compatible bool              `json:"compatible"`
 }
 
-// ServiceCompatReply — `GET /v1/services/{name}/compat` body. Self-contained
+// ServiceCompatReply — `GET /v1/services/{id}/compat` body. Self-contained
 // (like [ServiceTelemetryReply]): service + ref echo, snapshot sha1 (== ETag),
 // the running keeper's version, the verdict, the effective window and the
 // per-entity contributions that produced it.
@@ -83,27 +83,27 @@ type ServiceCompatReply struct {
 	Entities        []CompatEntityView `json:"entities"`
 }
 
-// ListServiceCompatTyped — `GET /v1/services/{name}/compat` (READ without
+// ListServiceCompatTyped — `GET /v1/services/{id}/compat` (READ without
 // audit): registry lookup + the declared windows of the service snapshot and of
 // every destiny it pulls → the effective window and the verdict for THIS keeper
 // instance (its build version comes from the handler, not the request). name/ref
 // come in as arguments (ref="" → the registry default). Errors are *problemError
 // (500 no lister / registry failure, 404 not-found, 502 loader failed); success is
 // [ServiceCompatReply].
-func (h *ServiceHandler) ListServiceCompatTyped(ctx context.Context, name, ref string) (ServiceCompatReply, error) {
+func (h *ServiceHandler) ListServiceCompatTyped(ctx context.Context, id, ref string) (ServiceCompatReply, error) {
 	var zero ServiceCompatReply
 	if h.compat == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service compat lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.compat: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -113,24 +113,24 @@ func (h *ServiceHandler) ListServiceCompatTyped(ctx context.Context, name, ref s
 		ref = entry.Ref
 	}
 
-	catalog, err := h.compat.ListServiceCompat(ctx, entry.Name, entry.Git, ref)
+	catalog, err := h.compat.ListServiceCompat(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.compat: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "compat loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "compat loader failed for service "+id+": "+err.Error())}
 	}
 	if catalog == nil {
 		// Defensive: the lister must return non-nil when err=nil (the
 		// ListServiceTelemetry pattern).
-		h.logger.Error("service.compat: loader returned nil without error", slog.String("name", name))
+		h.logger.Error("service.compat: loader returned nil without error", slog.String("id", id))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "compat loader returned empty result")}
 	}
 
-	return buildServiceCompatReply(entry.Name, ref, catalog, h.keeperVersion), nil
+	return buildServiceCompatReply(entry.ID, ref, catalog, h.keeperVersion), nil
 }
 
 // buildServiceCompatReply assembles the wire view from the declared
@@ -217,15 +217,15 @@ func toCompatWindowView(w *config.VersionWindow) *CompatWindowView {
 //
 // Returns a 422 *problemError when the declared window provably excludes this
 // keeper, or when the declarations cannot overlap at all.
-func (h *ServiceHandler) EarlyCompatCheck(ctx context.Context, op, name, gitURL, ref string) error {
+func (h *ServiceHandler) EarlyCompatCheck(ctx context.Context, op, id, gitURL, ref string) error {
 	if h.compat == nil {
 		return nil
 	}
-	catalog, err := h.compat.ListServiceCompat(ctx, name, gitURL, ref)
+	catalog, err := h.compat.ListServiceCompat(ctx, id, gitURL, ref)
 	if err != nil || catalog == nil {
 		h.logger.Warn("service.compat: early window check skipped - snapshot unavailable (ADR-0076)",
 			slog.String("op", op),
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", gitURL),
 			slog.String("ref", ref),
 			slog.Any("error", err),
@@ -236,7 +236,7 @@ func (h *ServiceHandler) EarlyCompatCheck(ctx context.Context, op, name, gitURL,
 	effective := config.IntersectKeeperWindows(catalog.Entities)
 	if effective.IsEmpty() {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
-			"compat_window_empty: the declared keeper windows of service "+name+" and its destinies do not overlap (effective "+
+			"compat_window_empty: the declared keeper windows of service "+id+" and its destinies do not overlap (effective "+
 				effective.String()+", max is exclusive) - no keeper version can render this definition")}
 	}
 

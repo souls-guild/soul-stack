@@ -18,7 +18,7 @@ import (
 // force↔allow_destroy): false — destroy via the `destroy` teardown scenario;
 // true — removal without teardown (force-DELETE).
 type incarnationDestroyArgs struct {
-	Name         string `json:"name"`
+	ID           string `json:"id"`
 	AllowDestroy *bool  `json:"allow_destroy"`
 }
 
@@ -72,12 +72,12 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.AllowDestroy == nil {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'allow_destroy' is required (boolean confirmation flag)")
@@ -91,17 +91,17 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "destroy is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		// Fail-closed RBAC on a not-found/failed incarnation lookup (parity with REST).
-		if scopeErr := h.checkIncarnationScope(claims, "destroy", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "destroy", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.destroy")
 		}
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.destroy select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -111,7 +111,7 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 
 	// RBAC OR-check over the incarnation's coven/service scope (covens ∪ {name})
 	// — mirrors the REST middleware, scope from inc.Service / inc.Covens.
-	if err := h.checkIncarnationScope(claims, "destroy", inc.Name, inc.Service, inc.Covens); err != nil {
+	if err := h.checkIncarnationScope(claims, "destroy", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.destroy")
 	}
@@ -123,7 +123,7 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.destroy prepare failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("service", inc.Service),
 				slog.Any("error", err),
 			)
@@ -147,7 +147,7 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 		hasScenario, herr := incarnation.HasDestroyScenario(h.deps.ServiceLoader, art)
 		if herr != nil {
 			h.deps.Logger.Error("mcp: incarnation.destroy scenario probe failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("service", inc.Service),
 				slog.Any("error", herr),
 			)
@@ -164,12 +164,12 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 	// S-D1: transition to destroying + audit destroy_started (source=mcp).
 	// AuditWriter is narrowed to mcp.AuditWriter, structurally = audit.Writer
 	// (Destroy accepts it).
-	if _, err := incarnation.Destroy(ctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.Name, effectiveForce,
+	if _, err := incarnation.Destroy(ctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.ID, effectiveForce,
 		audit.SourceMCP, claims.Subject, applyID, h.deps.Logger); err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.destroy transition failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.String("apply_id", applyID),
 				slog.Any("error", err),
@@ -184,11 +184,11 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 	if effectiveForce {
 		dctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), destroyForceDeleteTimeout)
 		defer cancel()
-		res, err := incarnation.DeleteAfterTeardown(dctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.Name, effectiveForce,
+		res, err := incarnation.DeleteAfterTeardown(dctx, h.deps.IncarnationDB, h.deps.AuditWriter, a.ID, effectiveForce,
 			incarnation.StateSchemaSecrets(art), h.deps.Logger)
 		if err != nil {
 			h.deps.Logger.Error("mcp: incarnation.destroy force delete failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("apply_id", applyID),
 				slog.Any("error", err),
 			)
@@ -206,7 +206,7 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 				SIDs:     res.Unreleased.SIDs,
 			}
 			h.deps.Logger.Warn("mcp: incarnation.destroy force-destroy left resources unreleased",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("apply_id", applyID),
 				slog.String("provider", res.Unreleased.Provider),
 				slog.Any("vm_ids", res.Unreleased.VMIDs),
@@ -221,18 +221,18 @@ func (h *Handler) callIncarnationDestroy(ctx context.Context, claims *jwt.Claims
 	if !ok {
 		// A service-deregistration race between the pre-check and starting teardown.
 		h.deps.Logger.Error("mcp: incarnation.destroy service deregistered between prepare and teardown",
-			slog.String("name", a.Name), slog.String("service", inc.Service))
+			slog.String("name", a.ID), slog.String("service", inc.Service))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "service "+inc.Service+" is not registered")
 	}
 	serviceRef.Ref = inc.ServiceVersion
 	if err := h.deps.ScenarioDestroyer.StartDestroy(ctx, scenario.RunSpec{
 		ApplyID:         applyID,
-		IncarnationName: a.Name,
+		IncarnationName: a.ID,
 		ServiceRef:      serviceRef,
 		StartedByAID:    claims.Subject,
 	}); err != nil {
 		h.deps.Logger.Error("mcp: incarnation.destroy teardown start failed",
-			slog.String("name", a.Name),
+			slog.String("name", a.ID),
 			slog.String("apply_id", applyID),
 			slog.Any("error", err),
 		)

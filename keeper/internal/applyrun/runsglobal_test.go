@@ -166,7 +166,7 @@ func TestBuildRunsQuery_QScopeAndBinding(t *testing.T) {
 	}
 	// Closing group parenthesis sits right before ` AND <scope-subquery>`: the
 	// whole group is AND-bound to scope, not "...OR d AND scope".
-	const wantBinding = "ar.started_by_aid ILIKE $1) AND ar.incarnation_name IN (SELECT name FROM incarnation WHERE"
+	const wantBinding = "ar.started_by_aid ILIKE $1) AND ar.incarnation_name IN (SELECT id FROM incarnation WHERE"
 	if !strings.Contains(sub, wantBinding) {
 		t.Errorf("q group is not parenthesized / not AND-bound to scope (Purview leak risk):\n%s", sub)
 	}

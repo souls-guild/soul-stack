@@ -63,9 +63,9 @@ func (s *Stack) registerExampleService(t *testing.T) {
 
 	c := s.opClient(t)
 	resp, status, err := c.post(context.Background(), "/v1/services", map[string]any{
-		"name": s.cfg.ServiceName,
-		"git":  gitURL,
-		"ref":  "main",
+		"id":  s.cfg.ServiceName,
+		"git": gitURL,
+		"ref": "main",
 	})
 	if err != nil {
 		t.Fatalf("registerExampleService %s: http: %v", s.cfg.ServiceName, err)
@@ -74,14 +74,14 @@ func (s *Stack) registerExampleService(t *testing.T) {
 		t.Fatalf("registerExampleService %s: status %d, body=%s", s.cfg.ServiceName, status, string(resp))
 	}
 	var out struct {
-		Name string `json:"name"`
-		Git  string `json:"git"`
-		Ref  string `json:"ref"`
+		ID  string `json:"id"`
+		Git string `json:"git"`
+		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("registerExampleService %s: decode: %v (body=%s)", s.cfg.ServiceName, err, string(resp))
 	}
-	t.Logf("registerExampleService: registered name=%s git=%s ref=%s (status=%d)", out.Name, gitURL, out.Ref, status)
+	t.Logf("registerExampleService: registered id=%s git=%s ref=%s (status=%d)", out.ID, gitURL, out.Ref, status)
 }
 
 // materializeServiceRepo copies the example directory into a per-test git

@@ -61,7 +61,7 @@ func (s *Stack) IncarnationApplyingEpochSnapshot(t *testing.T, name string) Inca
 	)
 	if err := s.db.QueryRow(ctx,
 		`SELECT applying_apply_id, applying_attempt, applying_by_kid, applying_since
-		   FROM incarnation WHERE name = $1`,
+		   FROM incarnation WHERE id = $1`,
 		name).Scan(&ep.ApplyID, &ep.Attempt, &ep.ByKID, &since); err != nil {
 		t.Fatalf("IncarnationApplyingEpochSnapshot(%s): %v", name, err)
 	}
@@ -88,7 +88,7 @@ func (s *Stack) WaitIncarnationStatus(t *testing.T, name string, want []string, 
 	var last string
 	for time.Now().Before(deadline) {
 		ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-		err := s.db.QueryRow(ctx, "SELECT status FROM incarnation WHERE name = $1", name).Scan(&last)
+		err := s.db.QueryRow(ctx, "SELECT status FROM incarnation WHERE id = $1", name).Scan(&last)
 		cancel()
 		if err == nil {
 			for _, w := range want {

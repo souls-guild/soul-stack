@@ -12,7 +12,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// makeIncRowWithState — a pgx.Row stub for SelectByName with a controlled jsonb
+// makeIncRowWithState — a pgx.Row stub for SelectByID with a controlled jsonb
 // state (for form-prefill tests: the values from which prefill is resolved).
 // Mirrors makeIncarnationRow but gives control over the state column (idx 5).
 func makeIncRowWithState(name string, state map[string]any) pgx.Row {

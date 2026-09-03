@@ -32,7 +32,7 @@ Both halves of `incarnation` (`service` + `name`) and of `trait` (`key` + `value
 
 Permission: `vigil.create`. MCP-tool: `keeper.oracle.vigil.create`. Read-only by design (observes, does not mutate the host).
 
-**Request `VigilCreateRequest`** (`required: name, subject, interval, check`):
+**Request `VigilCreateRequest`** (`required: id, subject, interval, check`):
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -43,7 +43,7 @@ Permission: `vigil.create`. MCP-tool: `keeper.oracle.vigil.create`. Read-only by
 | `params` | `object` | no | Scan parameters; form depends on `check` (typed schema deferred). |
 | `enabled` | `boolean` | no | Whether the check is active. Default `true`. |
 
-**Response `201 VigilView`:** `{name, subject, interval, check, params, enabled, created_by_aid?, created_at, updated_at}`.
+**Response `201 VigilView`:** `{id, subject, interval, check, params, enabled, created_by_aid?, created_at, updated_at}`.
 
 Errors: `400` (broken JSON), `409 vigil-already-exists` (`name` busy), `422 validation-failed` (broken `name`/`interval`/`check`, or a subject with zero / two dimensions or half a pair). Audit: `vigil.created`.
 
@@ -51,11 +51,11 @@ Errors: `400` (broken JSON), `409 vigil-already-exists` (`name` busy), `422 vali
 
 Permission: `vigil.list`. MCP-tool: `keeper.oracle.vigil.list`. Query `offset`/`limit`. Sort `created_at` DESC, `name` ASC. Response `200 VigilListReply` (`{items, offset, limit, total}`).
 
-### `GET /v1/vigils/{name}` — read Vigil
+### `GET /v1/vigils/{id}` — read Vigil
 
 Permission: `vigil.list` (one permission covers list+get). MCP-tool: `keeper.oracle.vigil.list`. Response `200 VigilView`; `404 not-found` - no entry.
 
-### `PUT /v1/vigils/{name}/label` — set the display caption
+### `PUT /v1/vigils/{id}/label` — set the display caption
 
 Permission: `vigil.label-set`. MCP-tool: `keeper.oracle.vigil.label-set`. OperationID: `setVigilLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
 
@@ -63,9 +63,9 @@ This is the registry's only operator mutation: `interval`, `check` and the subje
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 VigilView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `vigil.label_changed`, payload `{name, old_label, new_label}`.
+**Response `200 VigilView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `vigil.label_changed`, payload `{id, old_label, new_label}`.
 
-### `DELETE /v1/vigils/{name}` - remove Vigil
+### `DELETE /v1/vigils/{id}` - remove Vigil
 
 Permission: `vigil.delete`. MCP-tool: `keeper.oracle.vigil.delete`. Stops distributing to hosts in `VigilSnapshot`; connected Decrees **DO NOT cascade**. Response `204`; `404 not-found`. Audit: `vigil.deleted`.
 
@@ -73,7 +73,7 @@ Permission: `vigil.delete`. MCP-tool: `keeper.oracle.vigil.delete`. Stops distri
 
 Permission: `decree.create`. MCP-tool: `keeper.oracle.decree.create`. Default-deny: the rule is triggered only on its `on_beacon` × subject × `incarnation_name`.
 
-**Request `DecreeCreateRequest`** (`required: name, on_beacon, subject, incarnation_name, action_scenario`):
+**Request `DecreeCreateRequest`** (`required: id, on_beacon, subject, incarnation_name, action_scenario`):
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
@@ -87,7 +87,7 @@ Permission: `decree.create`. MCP-tool: `keeper.oracle.decree.create`. Default-de
 | `cooldown` | `string` (duration) | no | Minimum interval between triggers per-(decree, subject). |
 | `enabled` | `boolean` | no | Is the rule active? Default `true`. |
 
-**Response `201 DecreeView`:** `{name, on_beacon, where?, subject, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid?, created_at, updated_at}`.
+**Response `201 DecreeView`:** `{id, on_beacon, where?, subject, incarnation_name, action_scenario, action_input, cooldown, enabled, created_by_aid?, created_at, updated_at}`.
 
 Errors: `400` (broken JSON), `409 decree-already-exists` (`name` busy), `422 validation-failed` (broken `name`/`on_beacon`/`incarnation_name`/`action_scenario`/`where`-CEL/`cooldown`, or a subject with zero / two dimensions or half a pair). Audit: `decree.created`.
 
@@ -95,11 +95,11 @@ Errors: `400` (broken JSON), `409 decree-already-exists` (`name` busy), `422 val
 
 Permission: `decree.list`. MCP-tool: `keeper.oracle.decree.list`. Query `offset`/`limit`. Sort `created_at` DESC, `name` ASC. Response `200 DecreeListReply`.
 
-### `GET /v1/decrees/{name}` — read Decree
+### `GET /v1/decrees/{id}` — read Decree
 
 Permission: `decree.list`. MCP-tool: `keeper.oracle.decree.list`. Response `200 DecreeView`; `404 not-found`.
 
-### `PUT /v1/decrees/{name}/label` — set the display caption
+### `PUT /v1/decrees/{id}/label` — set the display caption
 
 Permission: `decree.label-set`. MCP-tool: `keeper.oracle.decree.label-set`. OperationID: `setDecreeLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere.
 
@@ -107,9 +107,9 @@ The reactor is untouched: cooldown state (`oracle_fires`) and the circuit breake
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 DecreeView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `decree.label_changed`, payload `{name, old_label, new_label}`.
+**Response `200 DecreeView`** — the row as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `decree.label_changed`, payload `{id, old_label, new_label}`.
 
-### `DELETE /v1/decrees/{name}` - remove Decree
+### `DELETE /v1/decrees/{id}` - remove Decree
 
 Permission: `decree.delete`. MCP-tool: `keeper.oracle.decree.delete`. Cascade cleans cooldown-state (`oracle_fires`, `ON DELETE CASCADE`). Response `204`; `404 not-found`. Audit: `decree.deleted`.
 

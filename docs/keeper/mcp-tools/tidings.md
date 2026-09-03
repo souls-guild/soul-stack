@@ -12,25 +12,25 @@ Creates a PERMANENT Tiding subscription rule: for which `event_types` (area-glob
 
 `task` (string|null, [ADR-052 §l](../../adr/0052-herald-notifications.md)) - opt. Subscription selector for a specific task at `register ∪ id`. A non-empty `task` narrows the match only to `incarnation.run_completed`, whose `changed_tasks` has an entry with `register == task` OR `id == task` (see [operator-api/tidings.md → "Task selector"](../operator-api/tidings.md)). To trigger the `task` rule in `event_types`, you need `incarnation.run_completed`.
 
-**Input** (`required: name, herald, event_types`): `{name (^[a-z0-9-]{1,63}$), herald (FK to Herald), event_types (array<string>, area-glob), only_failures?, only_changes?, incarnation? (|null), cadence? (|null), task? (|null), annotations? (object), projection? (array<string>), enabled? (omitted -> true)}`. Fields `ephemeral`/`voyage_id` - server fields ([ADR-052(g)](../../adr/0052-herald-notifications.md)): are not accepted for input, the one-time rule materializes the keeper from the Voyage notify block.
+**Input** (`required: id, herald, event_types`): `{id (^[a-z0-9-]{1,63}$), herald (FK to Herald), event_types (array<string>, area-glob), only_failures?, only_changes?, incarnation? (|null), cadence? (|null), task? (|null), annotations? (object), projection? (array<string>), enabled? (omitted -> true)}`. Fields `ephemeral`/`voyage_id` - server fields ([ADR-052(g)](../../adr/0052-herald-notifications.md)): are not accepted for input, the one-time rule materializes the keeper from the Voyage notify block.
 
-**Output:** `Tiding` - `{name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, annotations, projection, ephemeral, voyage_id, enabled, created_at, updated_at, created_by_aid}` (`ephemeral`/`voyage_id` - read-only; permanent rule has `ephemeral=false`, `voyage_id=null`). Errors: `tiding-already-exists` (`name` busy), `not-found` (`herald` does not exist), `validation-failed` (broken `name`/`event_types`, arbitrary wildcard, `annotations` non-object, broken path `projection`).
+**Output:** `Tiding` - `{id, herald, event_types, only_failures, only_changes, incarnation, cadence, task, annotations, projection, ephemeral, voyage_id, enabled, created_at, updated_at, created_by_aid}` (`ephemeral`/`voyage_id` - read-only; permanent rule has `ephemeral=false`, `voyage_id=null`). Errors: `tiding-already-exists` (`name` busy), `not-found` (`herald` does not exist), `validation-failed` (broken `name`/`event_types`, arbitrary wildcard, `annotations` non-object, broken path `projection`).
 
 #### `keeper.tiding.update`
 
-Replaces the mutable fields of the Tiding rule (replace semantics; `name` is the key). Permission: `tiding.update`. Endpoint: [`PUT /v1/tidings/{name}`](../operator-api/tidings.md). Async: no.
+Replaces the mutable fields of the Tiding rule (replace semantics; `name` is the key). Permission: `tiding.update`. Endpoint: [`PUT /v1/tidings/{id}`](../operator-api/tidings.md). Async: no.
 
-**Input** (`required: name, herald, event_types`): `{name, herald, event_types, only_failures?, only_changes?, incarnation? (|null), cadence? (|null), task? (|null), annotations? (object), projection? (array<string>), enabled?}` (replace: omitted `incarnation`/`cadence`/`task`/`annotations`/`projection` are cleared - omit==clear; `ephemeral`/`voyage_id` are not accepted for input - server ones). **Output:** `Tiding`. Errors: `not-found` (no rule or `herald` by FK does not exist).
+**Input** (`required: id, herald, event_types`): `{id, herald, event_types, only_failures?, only_changes?, incarnation? (|null), cadence? (|null), task? (|null), annotations? (object), projection? (array<string>), enabled?}` (replace: omitted `incarnation`/`cadence`/`task`/`annotations`/`projection` are cleared - omit==clear; `ephemeral`/`voyage_id` are not accepted for input - server ones). **Output:** `Tiding`. Errors: `not-found` (no rule or `herald` by FK does not exist).
 
 #### `keeper.tiding.label-set`
 
-Replaces the rule's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Narrower than `keeper.tiding.update`, which replaces the whole rule; the caption is not the `herald` FK and participates in nothing derived. Permission: `tiding.label-set`. Endpoint: [`PUT /v1/tidings/{name}/label`](../operator-api/tidings.md). Async: no.
+Replaces the rule's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Narrower than `keeper.tiding.update`, which replaces the whole rule; the caption is not the `herald` FK and participates in nothing derived. Permission: `tiding.label-set`. Endpoint: [`PUT /v1/tidings/{id}/label`](../operator-api/tidings.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Tiding` - the rule as it now reads. Errors: `not-found`.
+**Input** (`required: id`): `{id (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Tiding` - the rule as it now reads. Errors: `not-found`.
 
 #### `keeper.tiding.delete`
 
-Removes a Tiding rule by name. Permission: `tiding.delete`. Endpoint: [`DELETE /v1/tidings/{name}`](../operator-api/tidings.md). Async: no.
+Removes a Tiding rule by name. Permission: `tiding.delete`. Endpoint: [`DELETE /v1/tidings/{id}`](../operator-api/tidings.md). Async: no.
 
 **Input:** `{name}`. **Output:** empty object (REST equivalent - 204). Errors: `not-found`.
 
@@ -42,6 +42,6 @@ Enumeration of Tiding rules (sort `updated_at` DESC, `name` ASC). Permission: `t
 
 #### `keeper.tiding.read`
 
-Reads one Tiding rule by name. Permission: `tiding.read`. Endpoint: [`GET /v1/tidings/{name}`](../operator-api/tidings.md). Async: no.
+Reads one Tiding rule by name. Permission: `tiding.read`. Endpoint: [`GET /v1/tidings/{id}`](../operator-api/tidings.md). Async: no.
 
 **Input:** `{name}`. **Output:** `Tiding`. Errors: `not-found`.

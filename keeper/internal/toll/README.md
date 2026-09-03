@@ -36,7 +36,7 @@ observes and blocks the write API.
                          │
                   middleware reads
                          ▼
-               POST /v1/incarnations/{name}/scenarios/{scenario} → 503 Retry-After
+               POST /v1/incarnations/{id}/scenarios/{scenario} → 503 Retry-After
                POST /v1/push/apply                                 → 503 Retry-After
                (read-API, RBAC, unlock, destroy, Errand           — NOT blocked)
 ```

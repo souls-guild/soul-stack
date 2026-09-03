@@ -116,7 +116,7 @@ func TestMatchTiding_TaskSelector(t *testing.T) {
 
 	taskRule := func() *Tiding {
 		return &Tiding{
-			Name: "t", Herald: "h",
+			ID: "t", Herald: "h",
 			EventTypes: []string{"incarnation.run_completed"},
 			Task:       strPtr("nginx_pkg"),
 			Enabled:    true,
@@ -155,7 +155,7 @@ func TestHasChanges_RunCompleted(t *testing.T) {
 
 	// only_changes rule: passes event with changes, filters out empty.
 	onlyChanges := &Tiding{
-		Name: "t", Herald: "h",
+		ID: "t", Herald: "h",
 		EventTypes:  []string{"incarnation.run_completed"},
 		OnlyChanges: true,
 		Enabled:     true,
@@ -169,7 +169,7 @@ func TestHasChanges_RunCompleted(t *testing.T) {
 
 	// Combination of only_changes + task selector: both must pass together.
 	combo := &Tiding{
-		Name: "t", Herald: "h",
+		ID: "t", Herald: "h",
 		EventTypes:  []string{"incarnation.run_completed"},
 		OnlyChanges: true,
 		Task:        strPtr("nginx_pkg"),
@@ -199,7 +199,7 @@ func TestMatchCadence_RunCompleted(t *testing.T) {
 
 	cadenceRule := func(et string) *Tiding {
 		return &Tiding{
-			Name: "t", Herald: "h",
+			ID: "t", Herald: "h",
 			EventTypes: []string{et},
 			Cadence:    strPtr("cd_nightly"),
 			Enabled:    true,
@@ -218,7 +218,7 @@ func TestMatchCadence_RunCompleted(t *testing.T) {
 	}
 	// Mismatched cadence_id on run_completed → no match.
 	if matchTiding(&Tiding{
-		Name: "t", Herald: "h",
+		ID: "t", Herald: "h",
 		EventTypes: []string{"incarnation.run_completed"},
 		Cadence:    strPtr("cd_other"),
 		Enabled:    true,

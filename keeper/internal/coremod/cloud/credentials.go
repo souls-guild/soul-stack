@@ -59,16 +59,16 @@ type ProviderResolver interface {
 	ResolveProfile(ctx context.Context, profileName string) (map[string]any, error)
 }
 
-// ProviderReader is narrow subset of provider-CRUD (SelectByName), needed by
+// ProviderReader is narrow subset of provider-CRUD (SelectByID), needed by
 // resolver. Narrow interface simplifies unit tests without PG.
 type ProviderReader interface {
-	SelectByName(ctx context.Context, name string) (*provider.Provider, error)
+	SelectByID(ctx context.Context, name string) (*provider.Provider, error)
 }
 
-// ProfileReader is narrow subset of profile-CRUD (SelectByName), symmetric to
+// ProfileReader is narrow subset of profile-CRUD (SelectByID), symmetric to
 // [ProviderReader]. Narrow interface simplifies unit tests without PG.
 type ProfileReader interface {
-	SelectByName(ctx context.Context, name string) (*profile.Profile, error)
+	SelectByID(ctx context.Context, name string) (*profile.Profile, error)
 }
 
 // VaultReader is narrow subset of keeper/internal/vault.Client (ReadKV),
@@ -95,36 +95,36 @@ func NewCredentialsResolverPG(p ProviderReader, profiles ProfileReader, v VaultR
 	return &CredentialsResolverPG{Providers: p, Profiles: profiles, Vault: v}
 }
 
-// providerReaderFunc adapts package function provider.SelectByName
+// providerReaderFunc adapts package function provider.SelectByID
 // (free function, not method) to [ProviderReader]. db fixed at wire-up.
 type providerReaderFunc struct {
 	db provider.ExecQueryRower
 }
 
 // NewProviderReaderPG wraps pgxpool.Pool (or Conn/Tx) into [ProviderReader]
-// using free function provider.SelectByName.
+// using free function provider.SelectByID.
 func NewProviderReaderPG(db provider.ExecQueryRower) ProviderReader {
 	return providerReaderFunc{db: db}
 }
 
-func (r providerReaderFunc) SelectByName(ctx context.Context, name string) (*provider.Provider, error) {
-	return provider.SelectByName(ctx, r.db, name)
+func (r providerReaderFunc) SelectByID(ctx context.Context, name string) (*provider.Provider, error) {
+	return provider.SelectByID(ctx, r.db, name)
 }
 
-// profileReaderFunc adapts package function profile.SelectByName to
+// profileReaderFunc adapts package function profile.SelectByID to
 // [ProfileReader], symmetric to [providerReaderFunc].
 type profileReaderFunc struct {
 	db profile.ExecQueryRower
 }
 
 // NewProfileReaderPG wraps pgxpool.Pool (or Conn/Tx) into [ProfileReader]
-// using free function profile.SelectByName.
+// using free function profile.SelectByID.
 func NewProfileReaderPG(db profile.ExecQueryRower) ProfileReader {
 	return profileReaderFunc{db: db}
 }
 
-func (r profileReaderFunc) SelectByName(ctx context.Context, name string) (*profile.Profile, error) {
-	return profile.SelectByName(ctx, r.db, name)
+func (r profileReaderFunc) SelectByID(ctx context.Context, name string) (*profile.Profile, error) {
+	return profile.SelectByID(ctx, r.db, name)
 }
 
 // Resolve reads Provider by name, resolves credentials_ref via Vault and
@@ -133,7 +133,7 @@ func (r profileReaderFunc) SelectByName(ctx context.Context, name string) (*prof
 // Security: returned Credentials contain plain secret — caller must
 // run it through audit.MaskSecrets on ANY output (see provisioned.go).
 func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string) (*ResolvedProvider, error) {
-	p, err := r.Providers.SelectByName(ctx, providerName)
+	p, err := r.Providers.SelectByID(ctx, providerName)
 	if err != nil {
 		return nil, fmt.Errorf("resolve provider %q: %w", providerName, err)
 	}
@@ -170,7 +170,7 @@ func (r *CredentialsResolverPG) Resolve(ctx context.Context, providerName string
 // /v1/profiles). Name not found → [profile.ErrProfileNotFound] (caller returns
 // SendFailed). Params may be nil (profile without VM-spec — valid).
 func (r *CredentialsResolverPG) ResolveProfile(ctx context.Context, profileName string) (map[string]any, error) {
-	p, err := r.Profiles.SelectByName(ctx, profileName)
+	p, err := r.Profiles.SelectByID(ctx, profileName)
 	if err != nil {
 		return nil, fmt.Errorf("resolve profile %q: %w", profileName, err)
 	}

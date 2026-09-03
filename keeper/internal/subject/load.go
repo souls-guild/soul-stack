@@ -38,12 +38,12 @@ var ErrHostUnknown = errors.New("subject: sid not found in souls registry")
 // those two apart (NIM-280).
 func LoadHost(ctx context.Context, db Querier, sid string) (Host, error) {
 	const sql = `
-SELECT s.coven, s.traits, i.service, i.name, i.covens, i.traits
+SELECT s.coven, s.traits, i.service, i.id, i.covens, i.traits
 FROM souls s
 LEFT JOIN incarnation_membership m ON m.sid = s.sid
-LEFT JOIN incarnation i ON i.name = m.incarnation_name
+LEFT JOIN incarnation i ON i.id = m.incarnation_name
 WHERE s.sid = $1
-ORDER BY i.service NULLS FIRST, i.name NULLS FIRST`
+ORDER BY i.service NULLS FIRST, i.id NULLS FIRST`
 
 	rows, err := db.Query(ctx, sql, sid)
 	if err != nil {
@@ -105,7 +105,7 @@ ORDER BY i.service NULLS FIRST, i.name NULLS FIRST`
 // never reached, and nothing in the system ever says so. This turns that into a
 // 422 the operator reads immediately.
 func ExistsIncarnation(ctx context.Context, db Querier, service, name string) (bool, error) {
-	const sql = `SELECT EXISTS (SELECT 1 FROM incarnation WHERE service = $1 AND name = $2)`
+	const sql = `SELECT EXISTS (SELECT 1 FROM incarnation WHERE service = $1 AND id = $2)`
 	var ok bool
 	if err := db.QueryRow(ctx, sql, service, name).Scan(&ok); err != nil {
 		return false, fmt.Errorf("subject: check incarnation %s.%s: %w", service, name, err)

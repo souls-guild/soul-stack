@@ -19,7 +19,7 @@ type fakeProviderReader struct {
 	lastName string
 }
 
-func (r *fakeProviderReader) SelectByName(_ context.Context, name string) (*provider.Provider, error) {
+func (r *fakeProviderReader) SelectByID(_ context.Context, name string) (*provider.Provider, error) {
 	r.lastName = name
 	if r.err != nil {
 		return nil, r.err
@@ -36,7 +36,7 @@ type fakeProfileReader struct {
 	lastName string
 }
 
-func (r *fakeProfileReader) SelectByName(_ context.Context, name string) (*profile.Profile, error) {
+func (r *fakeProfileReader) SelectByID(_ context.Context, name string) (*profile.Profile, error) {
 	r.lastName = name
 	if r.err != nil {
 		return nil, r.err
@@ -62,7 +62,7 @@ func (v *fakeVault) ReadKV(_ context.Context, path string) (map[string]any, erro
 
 func TestCredentialsResolver_Resolve_OK(t *testing.T) {
 	pr := &fakeProviderReader{p: &provider.Provider{
-		Name:           "aws-prod",
+		ID:             "aws-prod",
 		Type:           "aws",
 		Region:         "eu-west-1",
 		CredentialsRef: "vault:secret/cloud/aws-prod",
@@ -97,7 +97,7 @@ func TestCredentialsResolver_Resolve_OK(t *testing.T) {
 
 func TestCredentialsResolver_RegionOverridesSecret(t *testing.T) {
 	pr := &fakeProviderReader{p: &provider.Provider{
-		Name: "p", Type: "aws", Region: "us-east-1",
+		ID: "p", Type: "aws", Region: "us-east-1",
 		CredentialsRef: "vault:secret/p",
 	}}
 	vlt := &fakeVault{byPath: map[string]map[string]any{
@@ -124,7 +124,7 @@ func TestCredentialsResolver_ProviderNotFound(t *testing.T) {
 
 func TestCredentialsResolver_BadCredentialsRef(t *testing.T) {
 	pr := &fakeProviderReader{p: &provider.Provider{
-		Name: "p", Type: "aws", Region: "r",
+		ID: "p", Type: "aws", Region: "r",
 		CredentialsRef: "not-a-vault-ref",
 	}}
 	r := coremodcloud.NewCredentialsResolverPG(pr, &fakeProfileReader{}, &fakeVault{})
@@ -135,7 +135,7 @@ func TestCredentialsResolver_BadCredentialsRef(t *testing.T) {
 
 func TestCredentialsResolver_VaultError(t *testing.T) {
 	pr := &fakeProviderReader{p: &provider.Provider{
-		Name: "p", Type: "aws", Region: "r",
+		ID: "p", Type: "aws", Region: "r",
 		CredentialsRef: "vault:secret/p",
 	}}
 	vlt := &fakeVault{err: errors.New("vault down")}
@@ -149,7 +149,7 @@ func TestCredentialsResolver_VaultError(t *testing.T) {
 // a Profile by name and returns its params (VM spec for the driver).
 func TestCredentialsResolver_ResolveProfile_OK(t *testing.T) {
 	prof := &fakeProfileReader{p: &profile.Profile{
-		Name:     "redis-small",
+		ID:       "redis-small",
 		Provider: "example-dev",
 		Params:   map[string]any{"image_id": "ami-0001", "flavor": "s2.medium"},
 	}}
@@ -160,7 +160,7 @@ func TestCredentialsResolver_ResolveProfile_OK(t *testing.T) {
 		t.Fatalf("ResolveProfile: %v", err)
 	}
 	if prof.lastName != "redis-small" {
-		t.Errorf("SelectByName got %q, want redis-small", prof.lastName)
+		t.Errorf("SelectByID got %q, want redis-small", prof.lastName)
 	}
 	if params["image_id"] != "ami-0001" || params["flavor"] != "s2.medium" {
 		t.Errorf("profile params not returned: %v", params)

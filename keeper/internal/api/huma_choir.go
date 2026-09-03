@@ -20,7 +20,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 )
 
-// registerHumaChoirCreate mounts POST /v1/incarnations/{name}/choirs via huma
+// registerHumaChoirCreate mounts POST /v1/incarnations/{id}/choirs via huma
 // (WRITE-SELF-AUDIT: choir.created is written by the handler ITSELF inside CreateTyped).
 // choirH nil → no-op. Handler: claims → convert the typed body → CreateTyped (create +
 // self-audit) → 201 WITH BODY.
@@ -33,7 +33,7 @@ func registerHumaChoirCreate(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		view, err := choirH.CreateTyped(ctx, claims, in.Name, handlers.ChoirCreateInput{
+		view, err := choirH.CreateTyped(ctx, claims, in.ID, handlers.ChoirCreateInput{
 			ChoirName:   in.Body.ChoirName,
 			Description: in.Body.Description,
 			MinSize:     in.Body.MinSize,
@@ -46,14 +46,14 @@ func registerHumaChoirCreate(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaChoirList mounts GET /v1/incarnations/{name}/choirs via huma (READ,
+// registerHumaChoirList mounts GET /v1/incarnations/{id}/choirs via huma (READ,
 // no audit). choirH nil → no-op.
 func registerHumaChoirList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
 	}
 	huma.Register(humaAPI, choirListOperation(), func(ctx context.Context, in *choirListInput) (*choirListOutput, error) {
-		reply, err := choirH.ListChoirsTyped(ctx, in.Name)
+		reply, err := choirH.ListChoirsTyped(ctx, in.ID)
 		if err != nil {
 			return nil, choirProblem(err)
 		}
@@ -61,7 +61,7 @@ func registerHumaChoirList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaChoirDelete mounts DELETE /v1/incarnations/{name}/choirs/{choir} via
+// registerHumaChoirDelete mounts DELETE /v1/incarnations/{id}/choirs/{choir} via
 // huma (WRITE-SELF-AUDIT: choir.deleted is written by the handler ITSELF inside DeleteTyped).
 func registerHumaChoirDelete(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
@@ -72,14 +72,14 @@ func registerHumaChoirDelete(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		if err := choirH.DeleteTyped(ctx, claims, in.Name, in.Choir); err != nil {
+		if err := choirH.DeleteTyped(ctx, claims, in.ID, in.Choir); err != nil {
 			return nil, choirProblem(err)
 		}
 		return &choirDeleteOutput{Status: http.StatusNoContent}, nil
 	})
 }
 
-// registerHumaVoiceAdd mounts POST /v1/incarnations/{name}/choirs/{choir}/voices via
+// registerHumaVoiceAdd mounts POST /v1/incarnations/{id}/choirs/{choir}/voices via
 // huma (WRITE-SELF-AUDIT: choir.voice_added is written by the handler ITSELF inside AddVoiceTyped).
 func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
@@ -90,7 +90,7 @@ func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		view, err := choirH.AddVoiceTyped(ctx, claims, in.Name, in.Choir, handlers.VoiceAddInput{
+		view, err := choirH.AddVoiceTyped(ctx, claims, in.ID, in.Choir, handlers.VoiceAddInput{
 			SID:      in.Body.SID,
 			Role:     in.Body.Role,
 			Position: in.Body.Position,
@@ -102,14 +102,14 @@ func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaVoiceList mounts GET /v1/incarnations/{name}/choirs/{choir}/voices via
+// registerHumaVoiceList mounts GET /v1/incarnations/{id}/choirs/{choir}/voices via
 // huma (READ, no audit).
 func registerHumaVoiceList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
 		return
 	}
 	huma.Register(humaAPI, voiceListOperation(), func(ctx context.Context, in *voiceListInput) (*voiceListOutput, error) {
-		reply, err := choirH.ListVoicesTyped(ctx, in.Name, in.Choir)
+		reply, err := choirH.ListVoicesTyped(ctx, in.ID, in.Choir)
 		if err != nil {
 			return nil, choirProblem(err)
 		}
@@ -117,7 +117,7 @@ func registerHumaVoiceList(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	})
 }
 
-// registerHumaVoiceRemove mounts DELETE /v1/incarnations/{name}/choirs/{choir}/
+// registerHumaVoiceRemove mounts DELETE /v1/incarnations/{id}/choirs/{choir}/
 // voices/{sid} via huma (WRITE-SELF-AUDIT: choir.voice_removed is written by the handler ITSELF).
 func registerHumaVoiceRemove(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 	if choirH == nil {
@@ -128,7 +128,7 @@ func registerHumaVoiceRemove(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		if err := choirH.RemoveVoiceTyped(ctx, claims, in.Name, in.Choir, in.SID); err != nil {
+		if err := choirH.RemoveVoiceTyped(ctx, claims, in.ID, in.Choir, in.SID); err != nil {
 			return nil, choirProblem(err)
 		}
 		return &voiceRemoveOutput{Status: http.StatusNoContent}, nil

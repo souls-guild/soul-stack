@@ -1,6 +1,6 @@
 // Package incarnation — runtime instance of a Service in Postgres under ADR-009.
 //
-// M0.6c-1: types + CRUD (Create / SelectByName / SelectAll / HistorySelectByName).
+// M0.6c-1: types + CRUD (Create / SelectByID / SelectAll / HistorySelectByName).
 // Scenario-execution / migrate-executor are the next slices (M0.6c-2/3),
 // blocked on Soul gRPC infrastructure (M2.x).
 package incarnation
@@ -54,10 +54,15 @@ const (
 	StatusDrift Status = "drift"
 )
 
-// NamePattern — canonical form of an incarnation name: kebab-case, starts
-// with a letter/digit, length 1..63. Same as CHECK incarnation_name_format
-// in the migration.
-const NamePattern = `^[a-z0-9][a-z0-9-]{0,62}$`
+// IDPattern — canonical form of an incarnation id: kebab-case, starts
+// with a letter/digit, length 1..63. Same as CHECK incarnation_id_format
+// in migration 118 (incarnation_name_format before it).
+//
+// The form is UNCHANGED by the `name` -> `id` rename ([ADR-0085], NIM-729): the
+// identifier moved spelling, not grammar. [ADR-0085] adopts THIS pattern as the
+// one grammar for every registry, so here alone the rename and the unification
+// coincide -- and even here the constant's VALUE does not move.
+const IDPattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 
 // ReasonMaxLen — upper bound on the free-text confirmation reason for
 // unlock / rerun-last. Single source for the huma maxLength tag and the
@@ -66,10 +71,10 @@ const NamePattern = `^[a-z0-9][a-z0-9-]{0,62}$`
 // check `reason == ""`.
 const ReasonMaxLen = 500
 
-var nameRe = regexp.MustCompile(NamePattern)
+var idRe = regexp.MustCompile(IDPattern)
 
-// ValidName reports whether name matches the canonical form.
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID reports whether id matches the canonical form.
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // Incarnation — runtime representation of an `incarnation` registry row.
 //
@@ -77,16 +82,27 @@ func ValidName(name string) bool { return nameRe.MatchString(name) }
 // freeform data; typing for a concrete service / scenario lives in their
 // manifests, not in this layer.
 type Incarnation struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `incarnation`. There is no rename operation,
+	// and this is the entity where that matters most -- see Label below for the
+	// three derivations it feeds.
+	//
+	// The CEL root stays spelled `incarnation.name` for now: that key is built
+	// in keeper/internal/render/dispatch.go and belongs to NIM-730, which owns
+	// the compatibility window for every service repository. So this field is
+	// `ID` and the map key it fills is still `"name"` -- deliberately, until
+	// that window opens.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead.
+	// consumer shows ID instead.
 	//
 	// It participates in NOTHING derived, and this is the entity where that
-	// matters most. Name is segment 3 of every derived secret path
+	// matters most. ID is segment 3 of every derived secret path
 	// (`<mount>/<service>/<incarnation>/<state-field>[/<key>]`, [ADR-0083] §1),
 	// substituted verbatim with no case folding; it is the value of the RBAC
-	// `incarnation=` scope dimension; and it is the CEL root `incarnation.name`.
+	// `incarnation=` scope dimension; and it is the CEL root `incarnation.name`
+	// (that CEL spelling is NIM-730's to move, not this ticket's).
 	// Label reaches none of the three — deliberately, and guarded by
 	// keeper/internal/render/label_invariant_guard_test.go and
 	// keeper/internal/servicevars/label_invariant_guard_test.go (the CEL roots,

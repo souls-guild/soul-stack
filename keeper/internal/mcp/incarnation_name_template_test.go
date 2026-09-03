@@ -98,7 +98,7 @@ func TestToolsCall_IncarnationCreate_ExplicitNameWithTemplate(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarterAssert{}, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
+		`{"id":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
 	if resp.Error == nil {
 		t.Fatalf("expected an error when both name and name_template are present")
 	}
@@ -123,8 +123,8 @@ func TestToolsCall_IncarnationCreate_NoTemplate_NameStillRequired(t *testing.T) 
 	if resp.Error == nil {
 		t.Fatalf("expected an error for a missing name without a template")
 	}
-	if !strings.Contains(resp.Error.Message, "field 'name' is required") {
-		t.Errorf("message = %q, want \"field 'name' is required\"", resp.Error.Message)
+	if !strings.Contains(resp.Error.Message, "field 'id' is required") {
+		t.Errorf("message = %q, want \"field 'id' is required\"", resp.Error.Message)
 	}
 	if len(pool.insertIncArgs) != 0 {
 		t.Errorf("insert happened for a nameless request: %v", pool.insertIncArgs)

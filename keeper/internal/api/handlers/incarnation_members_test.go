@@ -68,7 +68,7 @@ func (f *fakeMemberDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 }
 
 func (f *fakeMemberDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
-	if strings.Contains(sql, "FROM incarnation") && strings.Contains(sql, "WHERE name") {
+	if strings.Contains(sql, "FROM incarnation") && strings.Contains(sql, "WHERE id") {
 		if !f.incarnationExists {
 			return memberErrRow{pgx.ErrNoRows}
 		}
@@ -143,7 +143,7 @@ type memberErrRow struct{ err error }
 
 func (r memberErrRow) Scan(_ ...any) error { return r.err }
 
-// memberIncRow feeds incarnation.SelectByName: only the identity columns matter
+// memberIncRow feeds incarnation.SelectByID: only the identity columns matter
 // to the membership paths, the rest are zero values of the right shape.
 type memberIncRow struct{ name string }
 

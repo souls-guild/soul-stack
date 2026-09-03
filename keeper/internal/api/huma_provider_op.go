@@ -27,9 +27,9 @@ type providerCreateInput struct {
 // (huma default) → an unknown field → 400. Domain format validation is in
 // CreateTyped (422).
 type ProviderCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name (kebab)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider id (kebab, immutable)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/providers/{name}/label. No pattern — capitals and spaces are the
+	// by PUT /v1/providers/{id}/label. No pattern — capitals and spaces are the
 	// point. Omitted → NULL, and consumers show `name`.
 	Label  *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Type   string  `json:"type" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"CloudDriver plugin name (= plugins.cloud_drivers[].name)"`
@@ -85,10 +85,10 @@ func providerListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/providers/{name} (get) — READ with path (no audit) ===
+// === GET /v1/providers/{id} (get) — READ with path (no audit) ===
 
 type providerGetInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
+	ID string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider id"`
 }
 
 type providerGetOutput struct {
@@ -99,7 +99,7 @@ func providerGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getProvider",
 		Method:        http.MethodGet,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Cloud-Provider detail",
 		Description:   "Metadata of one Cloud-Provider by name (ADR-017). Permission provider.read. Read-only, no audit. credentials_ref is a path, the secret is not resolved.",
 		Tags:          []string{"provider"},
@@ -108,10 +108,10 @@ func providerGetOperation() huma.Operation {
 	}
 }
 
-// === PUT /v1/providers/{name}/label (label-set) — WRITE+AUDIT provider.label_changed ===
+// === PUT /v1/providers/{id}/label (label-set) — WRITE+AUDIT provider.label_changed ===
 
 type providerSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
+	ID   string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider id"`
 	Body LabelSetRequest
 }
 
@@ -123,7 +123,7 @@ func providerSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setProviderLabel",
 		Method:        http.MethodPut,
-		Path:          "/{name}/label",
+		Path:          "/{id}/label",
 		Summary:       "Set the Cloud-Provider display caption",
 		Description:   "Replaces the display caption of one Cloud-Provider (ADR-0085). Permission provider.label-set, audit provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched and has no rename operation anywhere: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing.",
 		Tags:          []string{"provider"},
@@ -132,10 +132,10 @@ func providerSetLabelOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/providers/{name} (delete) — WRITE+AUDIT provider.deleted ===
+// === DELETE /v1/providers/{id} (delete) — WRITE+AUDIT provider.deleted ===
 
 type providerDeleteInput struct {
-	Name string `path:"name" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider name"`
+	ID string `path:"id" pattern:"^[a-z0-9-]{1,63}$" doc:"Cloud Provider id"`
 }
 
 // providerNoContentOutput — 204 No Content (no Body).
@@ -147,7 +147,7 @@ func providerDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteProvider",
 		Method:        http.MethodDelete,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Delete Cloud-Provider",
 		Description:   "Deletes a Cloud-Provider record (ADR-017). Permission provider.delete. 404 - record not found; 409 - dependent Profiles exist (FK RESTRICT).",
 		Tags:          []string{"provider"},

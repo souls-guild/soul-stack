@@ -14,7 +14,7 @@ Dispatcher for each successfully recorded audit event of the run matches the ena
 - **filters** `only_failures` / `only_changes` (bool);
 - **opt. selectors** `incarnation` / `cadence` / `task` (nullable) - binding to the source of the run. `incarnation` matches **only** `incarnation.run_completed` events of that instance (its payload is the one that names a single incarnation; Voyage terminals span many, cadence events bind to `cadence_id`) - so a rule using it should carry `incarnation.run_completed` in `event_types`. Until NIM-446 the binding came from `incarnation.drift_checked` instead. See the separate section "`task` Selector" below.
 
-Each match is assigned a delivery task via `herald` (FK on `heralds.name`).
+Each match is assigned a delivery task via `herald` (FK on `heralds.id`).
 
 ### Selector `task` - subscription to change a specific task
 
@@ -52,9 +52,9 @@ Permanent Tiding can be created not only directly through `POST /v1/tidings`, bu
 
 Permission: `tiding.create`. MCP-tool: `keeper.tiding.create`.
 
-**Request `TidingCreateRequest`** (`required: name, herald, event_types`): `{name (^[a-z0-9-]{1,63}$), herald (Herald channel name, FK), event_types (array<string>, non-empty, area-glob), only_failures? (bool), only_changes? (bool), incarnation? (string|null), cadence? (string|null), task? (string|null - register∪id address, see "Task selector"), annotations? (object), projection? (array<string>), enabled? (bool, omitted -> true)}`. There are no `ephemeral`/`voyage_id` fields in the request - server ones (see above).
+**Request `TidingCreateRequest`** (`required: id, herald, event_types`): `{id (^[a-z0-9-]{1,63}$), herald (Herald channel name, FK), event_types (array<string>, non-empty, area-glob), only_failures? (bool), only_changes? (bool), incarnation? (string|null), cadence? (string|null), task? (string|null - register∪id address, see "Task selector"), annotations? (object), projection? (array<string>), enabled? (bool, omitted -> true)}`. There are no `ephemeral`/`voyage_id` fields in the request - server ones (see above).
 
-**Response `201 Tiding`:** `{name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, annotations, projection, ephemeral, voyage_id, enabled, created_at, updated_at, created_by_aid}`.
+**Response `201 Tiding`:** `{id, herald, event_types, only_failures, only_changes, incarnation, cadence, task, annotations, projection, ephemeral, voyage_id, enabled, created_at, updated_at, created_by_aid}`.
 
 Errors: `400` (broken JSON / unknown field), `404 not-found` (`herald` does not exist according to FK), `409` (`name` busy), `422 validation-failed` (broken `name`/`event_types`, arbitrary wildcard, `annotations` non-object, broken path `projection`). Audit: `tiding.created`.
 
@@ -62,11 +62,11 @@ Errors: `400` (broken JSON / unknown field), `404 not-found` (`herald` does not 
 
 Permission: `tiding.list`. MCP-tool: `keeper.tiding.list`. Query `offset`/`limit`. Sort `updated_at` DESC, `name` ASC. Response `200 TidingListReply` (`{items, offset, limit, total}`).
 
-### `GET /v1/tidings/{name}` - read one rule
+### `GET /v1/tidings/{id}` - read one rule
 
 Permission: `tiding.read`. MCP-tool: `keeper.tiding.read`. Response `200 Tiding`; `404 not-found` - no entry.
 
-### `PUT /v1/tidings/{name}` — replace the rule (replace semantics)
+### `PUT /v1/tidings/{id}` — replace the rule (replace semantics)
 
 Permission: `tiding.update`. MCP-tool: `keeper.tiding.update`. **Replace** — the body completely replaces the mutable fields; `name` (PK) immutable. Like Push-Provider/Herald - `PUT` (complete replacement), not `PATCH`.
 
@@ -74,15 +74,15 @@ Permission: `tiding.update`. MCP-tool: `keeper.tiding.update`. **Replace** — t
 
 **Response `200 Tiding`.** Errors: `400`, `404 not-found` (no rule or `herald` by FK does not exist), `422 validation-failed`. Audit: `tiding.updated`.
 
-### `PUT /v1/tidings/{name}/label` — set the display caption
+### `PUT /v1/tidings/{id}/label` — set the display caption
 
-Permission: `tiding.label-set`. MCP-tool: `keeper.tiding.label-set`. OperationID: `setTidingLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere. In particular the caption is not the `herald` FK. Narrower than `PUT /v1/tidings/{name}` above, which replaces the whole rule.
+Permission: `tiding.label-set`. MCP-tool: `keeper.tiding.label-set`. OperationID: `setTidingLabel`. The caption participates in **nothing derived** — no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../../adr/0085-entity-id-and-label.md)) — which is what makes *"I changed the label and nothing moved"* a guarantee rather than a hope. `name` addresses the row and does not change; there is no rename operation anywhere. In particular the caption is not the `herald` FK. Narrower than `PUT /v1/tidings/{id}` above, which replaces the whole rule.
 
 **Request `LabelSetRequest`:** `{label? (string|null)}` — free text with capitals, spaces and punctuation; no `pattern`, no `maxLength`. `null`, an omitted field or an empty body `{}` **clears** the caption, after which consumers show `name` again; surrounding whitespace is trimmed and an all-whitespace value stores NULL.
 
-**Response `200 Tiding`** — the rule as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `tiding.label_changed`, payload `{name, old_label, new_label}`.
+**Response `200 Tiding`** — the rule as it now reads. Errors: `400`, `403`, `404 not-found`, `422`. Audit: `tiding.label_changed`, payload `{id, old_label, new_label}`.
 
-### `DELETE /v1/tidings/{name}` - delete rule
+### `DELETE /v1/tidings/{id}` - delete rule
 
 Permission: `tiding.delete`. MCP-tool: `keeper.tiding.delete`. Response `204`; `404 not-found`. Audit: `tiding.deleted`. (Demolition of the Herald channel cascades away its Tiding subscriptions - Tiding does not have an inverse cascade dependence.)
 

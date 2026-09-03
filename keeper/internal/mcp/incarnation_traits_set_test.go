@@ -16,7 +16,7 @@ import (
 )
 
 // MCP tool keeper.incarnation.traits-set (ADR-060 amend R1) — REST parity
-// with PUT /v1/incarnations/{name}/traits. Relocated per-soul → per-incarnation.
+// with PUT /v1/incarnations/{id}/traits. Relocated per-soul → per-incarnation.
 
 func traitsSetRBAC() *rbactest.Config {
 	return &rbactest.Config{
@@ -33,7 +33,7 @@ func incForTraits(traits map[string]any) func(string) (*incarnation.Incarnation,
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
 		return &incarnation.Incarnation{
-			Name: name, Service: "redis", ServiceVersion: "v1",
+			ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusReady,
 			State: map[string]any{}, Traits: traits, CreatedAt: now, UpdatedAt: now,
 		}, nil
@@ -75,7 +75,7 @@ func TestIncarnationTraitsSet_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, traitsSetRBAC(), nil, nil, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"env":"prod","az":"a"}}`)
+		`{"id":"redis-prod","traits":{"env":"prod","az":"a"}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -112,7 +112,7 @@ func TestIncarnationTraitsSet_InvalidValue(t *testing.T) {
 	}
 	h, rec := newTestHandlerFull(t, pool, traitsSetRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"bad":{"nested":1}}}`)
+		`{"id":"redis-prod","traits":{"bad":{"nested":1}}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -128,7 +128,7 @@ func TestIncarnationTraitsSet_NotFound(t *testing.T) {
 	pool := &fakePool{incFn: func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }}
 	h, _ := newTestHandlerFull(t, pool, traitsSetRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"ghost","traits":{"team":"dba"}}`)
+		`{"id":"ghost","traits":{"team":"dba"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -145,7 +145,7 @@ func TestIncarnationTraitsSet_RBACForbidden(t *testing.T) {
 	}
 	h, rec := newTestHandlerFull(t, pool, nil, nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"team":"dba"}}`)
+		`{"id":"redis-prod","traits":{"team":"dba"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -213,7 +213,7 @@ func TestIncarnationTraitsSet_PairOutsideTraitScope(t *testing.T) {
 		traitsSetScopedRBAC(`incarnation.traits-set on trait.env="prod"`), nil, nil, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"env":"staging"}}`)
+		`{"id":"redis-prod","traits":{"env":"staging"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -241,7 +241,7 @@ func TestIncarnationTraitsSet_PairInsideTraitScope(t *testing.T) {
 		traitsSetScopedRBAC(`incarnation.traits-set on trait.env="prod"`), nil, nil, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"env":"prod"}}`)
+		`{"id":"redis-prod","traits":{"env":"prod"}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -268,7 +268,7 @@ func TestIncarnationTraitsSet_ScopedOnAnotherDimension(t *testing.T) {
 		}
 		h, rec := newTestHandlerFull(t, pool, traitsSetScopedRBAC(), nil, nil, nil)
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-			`{"name":"redis-prod","traits":{"team":"dba"}}`)
+			`{"id":"redis-prod","traits":{"team":"dba"}}`)
 		if resp.Error == nil {
 			t.Fatal("expected error")
 		}
@@ -284,7 +284,7 @@ func TestIncarnationTraitsSet_ScopedOnAnotherDimension(t *testing.T) {
 		pool := &fakePool{incFn: incForTraitsInCoven(map[string]any{"team": "dba"})}
 		h, _ := newTestHandlerFull(t, pool, traitsSetScopedRBAC(), nil, nil, nil)
 		resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-			`{"name":"redis-prod"}`)
+			`{"id":"redis-prod"}`)
 		if resp.Error != nil {
 			t.Fatalf("clearing labels must pass an empty trait-scope, got: %+v", resp.Error)
 		}
@@ -334,7 +334,7 @@ func TestIncarnationTraitsSet_NoPurviewResolver(t *testing.T) {
 	}
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.traits-set",
-		`{"name":"redis-prod","traits":{"env":"prod"}}`)
+		`{"id":"redis-prod","traits":{"env":"prod"}}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

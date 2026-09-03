@@ -38,10 +38,10 @@ const (
 
 // --- service_registry -------------------------------------------------
 
-const serviceColumns = `name, git, ref, refresh, created_by_aid, updated_by_aid, created_at, updated_at, label`
+const serviceColumns = `id, git, ref, refresh, created_by_aid, updated_by_aid, created_at, updated_at, label`
 
 const insertServiceSQL = `
-INSERT INTO service_registry (name, git, ref, refresh, created_by_aid, updated_by_aid, label)
+INSERT INTO service_registry (id, git, ref, refresh, created_by_aid, updated_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at, updated_at
 `
@@ -60,14 +60,14 @@ const updateLabelServiceSQL = `
 UPDATE service_registry AS x
 SET label = $2
 FROM service_registry AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const selectServiceByNameSQL = `
+const selectServiceByIDSQL = `
 SELECT ` + serviceColumns + `
 FROM service_registry
-WHERE name = $1
+WHERE id = $1
 `
 
 // updateServiceSQL leaves `label` alone: a re-point of git/ref must not clear a
@@ -77,17 +77,17 @@ WHERE name = $1
 const updateServiceSQL = `
 UPDATE service_registry
 SET git = $2, ref = $3, refresh = $4, updated_by_aid = $5, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 RETURNING created_at, updated_at, label
 `
 
-const deleteServiceSQL = `DELETE FROM service_registry WHERE name = $1`
+const deleteServiceSQL = `DELETE FROM service_registry WHERE id = $1`
 
 // InsertService inserts a new Service record and fills CreatedAt/UpdatedAt
 // from RETURNING. Field validation happens at the service layer (service.go) BEFORE the call.
 //
 // Returns:
-//   - [ErrAlreadyExists]    — UNIQUE on PK service_registry.name (23505);
+//   - [ErrAlreadyExists]    — UNIQUE on PK service_registry.id (23505);
 //   - [ErrOperatorNotFound] — FK violation on created_by_aid/updated_by_aid;
 //   - wrapped fmt.Errorf for CHECK violation / other.
 func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) error {
@@ -98,7 +98,7 @@ func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
 	e.Label = registrylabel.Normalize(e.Label)
 	row := db.QueryRow(ctx, insertServiceSQL,
-		e.Name, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.CreatedByAID), strOrNil(e.UpdatedByAID),
+		e.ID, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.CreatedByAID), strOrNil(e.UpdatedByAID),
 		strOrNil(e.Label),
 	)
 	if err := row.Scan(&e.CreatedAt, &e.UpdatedAt); err != nil {
@@ -108,16 +108,16 @@ func InsertService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 }
 
 // GetService reads a Service record by PK. [ErrNotFound] on pgx.ErrNoRows.
-func GetService(ctx context.Context, db ExecQueryRower, name string) (*ServiceEntry, error) {
-	return scanService(db.QueryRow(ctx, selectServiceByNameSQL, name))
+func GetService(ctx context.Context, db ExecQueryRower, id string) (*ServiceEntry, error) {
+	return scanService(db.QueryRow(ctx, selectServiceByIDSQL, id))
 }
 
-// ListServices returns all Service records. Sorted by `name ASC`
+// ListServices returns all Service records. Sorted by `id ASC`
 // (deterministic list order; the data volume is small, pagination isn't needed).
 func ListServices(ctx context.Context, db ExecQueryRower) ([]*ServiceEntry, error) {
 	const listSQL = `SELECT ` + serviceColumns + `
 FROM service_registry
-ORDER BY name ASC`
+ORDER BY id ASC`
 	rows, err := db.Query(ctx, listSQL)
 	if err != nil {
 		return nil, fmt.Errorf("serviceregistry: list services query: %w", wrapPgErr(err))
@@ -139,7 +139,7 @@ ORDER BY name ASC`
 }
 
 // UpdateService replaces the mutable fields of a record (git/ref/refresh/updated_by_aid) and
-// bumps updated_at. Name is the PK, it doesn't change (rename = delete+insert). Fills
+// bumps updated_at. ID is the PK, it doesn't change (rename = delete+insert). Fills
 // CreatedAt/UpdatedAt from RETURNING.
 //
 // Returns:
@@ -151,7 +151,7 @@ func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 		return fmt.Errorf("serviceregistry: nil service entry")
 	}
 	row := db.QueryRow(ctx, updateServiceSQL,
-		e.Name, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.UpdatedByAID),
+		e.ID, e.Git, e.Ref, strOrNil(e.Refresh), strOrNil(e.UpdatedByAID),
 	)
 	if err := row.Scan(&e.CreatedAt, &e.UpdatedAt, &e.Label); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -166,19 +166,19 @@ func UpdateService(ctx context.Context, db ExecQueryRower, e *ServiceEntry) erro
 // [ErrNotFound] when the row is absent (RowsAffected==0).
 //
 // label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
-// the caption back to NULL, and the consumer falls back to showing the name.
+// the caption back to NULL, and the consumer falls back to showing the id.
 // Anything else is stored as given: capitals, spaces and punctuation are what
 // the field is for, so there is no format check to fail.
 //
-// The name argument addresses the row; it is never written, and it — not the
+// The id argument addresses the row; it is never written, and it — not the
 // caption — is segment 2 of every path this service's secrets derive onto.
 // Nothing derived moves as a result of this call.
-func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("serviceregistry: invalid name %q (must match %s)", name, NamePattern)
+func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("serviceregistry: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var previous *string
-	err := db.QueryRow(ctx, updateLabelServiceSQL, name, strOrNil(registrylabel.Normalize(label))).Scan(&previous)
+	err := db.QueryRow(ctx, updateLabelServiceSQL, id, strOrNil(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound
@@ -189,8 +189,8 @@ func UpdateServiceLabel(ctx context.Context, db ExecQueryRower, name string, lab
 }
 
 // DeleteService deletes a Service record by PK. [ErrNotFound] if the row didn't exist.
-func DeleteService(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, deleteServiceSQL, name)
+func DeleteService(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, deleteServiceSQL, id)
 	if err != nil {
 		return fmt.Errorf("serviceregistry: delete service: %w", wrapPgErr(err))
 	}
@@ -208,7 +208,7 @@ func scanService(row pgx.Row) (*ServiceEntry, error) {
 		updatedByAID *string
 		label        *string
 	)
-	err := row.Scan(&e.Name, &e.Git, &e.Ref, &refresh, &createdByAID, &updatedByAID, &e.CreatedAt, &e.UpdatedAt, &label)
+	err := row.Scan(&e.ID, &e.Git, &e.Ref, &refresh, &createdByAID, &updatedByAID, &e.CreatedAt, &e.UpdatedAt, &label)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrNotFound

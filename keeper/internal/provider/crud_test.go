@@ -123,7 +123,7 @@ func (r *fakeRows) Conn() *pgx.Conn                              { return nil }
 func validProvider() *Provider {
 	aid := "archon-alice"
 	return &Provider{
-		Name:           "aws-eu",
+		ID:             "aws-eu",
 		Type:           "aws",
 		Region:         "eu-central-1",
 		CredentialsRef: "vault:secret/cloud/aws-eu",
@@ -183,13 +183,13 @@ func TestInsert_NilCreatedByAID(t *testing.T) {
 	}
 }
 
-func TestInsert_RejectsInvalidName(t *testing.T) {
+func TestInsert_RejectsInvalidID(t *testing.T) {
 	f := &fakeDB{}
 	p := validProvider()
-	p.Name = "AWS_EU"
+	p.ID = "AWS_EU"
 	err := Insert(context.Background(), f, p)
-	if err == nil || !strings.Contains(err.Error(), "invalid name") {
-		t.Fatalf("err = %v, want invalid name", err)
+	if err == nil || !strings.Contains(err.Error(), "invalid id") {
+		t.Fatalf("err = %v, want invalid id", err)
 	}
 	if f.queryRowCalls != 0 {
 		t.Errorf("queryRowCalls = %d on invalid name; want 0", f.queryRowCalls)
@@ -275,7 +275,7 @@ func TestInsert_MapsFKViolation(t *testing.T) {
 	}
 }
 
-// --- SelectByName -----------------------------------------------------
+// --- SelectByID -----------------------------------------------------
 
 func TestSelectByName_HappyPath(t *testing.T) {
 	now := time.Date(2026, 5, 22, 12, 0, 0, 0, time.UTC)
@@ -288,11 +288,11 @@ func TestSelectByName_HappyPath(t *testing.T) {
 			}}
 		},
 	}
-	p, err := SelectByName(context.Background(), f, "aws-eu")
+	p, err := SelectByID(context.Background(), f, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
-	if p.Name != "aws-eu" || p.Type != "aws" || p.Region != "eu-central-1" {
+	if p.ID != "aws-eu" || p.Type != "aws" || p.Region != "eu-central-1" {
 		t.Errorf("got = %+v", p)
 	}
 	if p.CredentialsRef != "vault:secret/cloud/aws-eu" {
@@ -305,7 +305,7 @@ func TestSelectByName_HappyPath(t *testing.T) {
 
 func TestSelectByName_NotFound(t *testing.T) {
 	f := &fakeDB{} // default → ErrNoRows
-	_, err := SelectByName(context.Background(), f, "missing")
+	_, err := SelectByID(context.Background(), f, "missing")
 	if !errors.Is(err, ErrProviderNotFound) {
 		t.Fatalf("err = %v, want ErrProviderNotFound", err)
 	}
@@ -333,8 +333,8 @@ func TestSelectAll_HappyPath(t *testing.T) {
 	if total != 2 || len(out) != 2 {
 		t.Fatalf("total = %d, len = %d, want 2/2", total, len(out))
 	}
-	if out[0].Name != "aws-eu" || out[1].Name != "yc-ru" {
-		t.Errorf("names = %s, %s", out[0].Name, out[1].Name)
+	if out[0].ID != "aws-eu" || out[1].ID != "yc-ru" {
+		t.Errorf("names = %s, %s", out[0].ID, out[1].ID)
 	}
 	if !strings.Contains(f.querySQL, "ORDER BY created_at DESC") {
 		t.Errorf("ORDER missing in: %q", f.querySQL)
@@ -358,7 +358,7 @@ func TestSelectAll_RejectsZeroLimit(t *testing.T) {
 	}
 }
 
-// --- ValidName / ValidCredentialsRef ----------------------------------
+// --- ValidID / ValidCredentialsRef ----------------------------------
 
 // execDB is a fakeDB variant with controlled Exec result for Delete tests.
 type execDB struct {
@@ -408,17 +408,17 @@ func TestDelete(t *testing.T) {
 	})
 }
 
-func TestValidName(t *testing.T) {
+func TestValidID(t *testing.T) {
 	good := []string{"a", "aws", "aws-eu", "yc-ru-1", "1cloud"}
 	bad := []string{"", "Upper", "with_underscore", "x:colon", strings.Repeat("a", 64)}
 	for _, n := range good {
-		if !ValidName(n) {
-			t.Errorf("ValidName(%q) = false, want true", n)
+		if !ValidID(n) {
+			t.Errorf("ValidID(%q) = false, want true", n)
 		}
 	}
 	for _, n := range bad {
-		if ValidName(n) {
-			t.Errorf("ValidName(%q) = true, want false", n)
+		if ValidID(n) {
+			t.Errorf("ValidID(%q) = true, want false", n)
 		}
 	}
 }

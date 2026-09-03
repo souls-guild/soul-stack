@@ -49,7 +49,7 @@ var gitFixtureEnv = []string{
 //  1. git init -b main + add -A + commit (deterministic SHA) into
 //     $TMP/repos/<serviceName>.git (a working tree, not bare — the keeper's
 //     file:// clone reads a checked-out repo).
-//  2. POST /v1/services {name, git: file://..., ref: main}; 201 -> a row in
+//  2. POST /v1/services {id, git: file://..., ref: main}; 201 -> a row in
 //     service_registry, visible to CreateIncarnation/RunScenario.
 //
 // relativePath is resolved from repo-root (like locateKeeperBinary). Any
@@ -62,9 +62,9 @@ func (s *Stack) RegisterService(t *testing.T, serviceName, relativePath string) 
 
 	c := s.opClient(t)
 	resp, status, err := c.post(context.Background(), "/v1/services", map[string]any{
-		"name": serviceName,
-		"git":  gitURL,
-		"ref":  "main",
+		"id":  serviceName,
+		"git": gitURL,
+		"ref": "main",
 	})
 	if err != nil {
 		t.Fatalf("RegisterService %s: http: %v", serviceName, err)
@@ -73,9 +73,9 @@ func (s *Stack) RegisterService(t *testing.T, serviceName, relativePath string) 
 		t.Fatalf("RegisterService %s: status %d, body=%s", serviceName, status, string(resp))
 	}
 	var out struct {
-		Name string `json:"name"`
-		Git  string `json:"git"`
-		Ref  string `json:"ref"`
+		ID  string `json:"id"`
+		Git string `json:"git"`
+		Ref string `json:"ref"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("RegisterService %s: decode: %v (body=%s)", serviceName, err, string(resp))

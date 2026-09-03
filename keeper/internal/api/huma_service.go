@@ -36,7 +36,7 @@ func registerHumaServiceRegister(humaAPI huma.API, serviceH *handlers.ServiceHan
 			return nil, serviceMissingClaims()
 		}
 		reply, err := serviceH.RegisterTyped(ctx, claims, handlers.ServiceRegisterInput{
-			Name:    in.Body.Name,
+			ID:      in.Body.ID,
 			Git:     in.Body.Git,
 			Ref:     in.Body.Ref,
 			Refresh: in.Body.Refresh,
@@ -64,7 +64,7 @@ func registerHumaServiceList(humaAPI huma.API, serviceH *handlers.ServiceHandler
 	})
 }
 
-// registerHumaServiceGet mounts GET /v1/services/{name} via huma (READ with path, no
+// registerHumaServiceGet mounts GET /v1/services/{id} via huma (READ with path, no
 // audit). serviceH nil → no-op. Handler: GetTyped(name) → typed output (404 via problem).
 // RBAC service.list — on the group.
 func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -72,7 +72,7 @@ func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler)
 		return
 	}
 	huma.Register(humaAPI, serviceGetOperation(), func(ctx context.Context, in *serviceGetInput) (*serviceGetOutput, error) {
-		reply, err := serviceH.GetTyped(ctx, in.Name)
+		reply, err := serviceH.GetTyped(ctx, in.ID)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -80,14 +80,14 @@ func registerHumaServiceGet(humaAPI huma.API, serviceH *handlers.ServiceHandler)
 	})
 }
 
-// registerHumaServiceSetLabel mounts PUT /v1/services/{name}/label via huma
+// registerHumaServiceSetLabel mounts PUT /v1/services/{id}/label via huma
 // (WRITE+AUDIT variant B — event service.label_changed). serviceH nil → no-op.
 func registerHumaServiceSetLabel(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
 	if serviceH == nil {
 		return
 	}
 	huma.Register(humaAPI, serviceSetLabelOperation(), func(ctx context.Context, in *serviceSetLabelInput) (*serviceSetLabelOutput, error) {
-		reply, err := serviceH.SetLabelTyped(ctx, in.Name, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := serviceH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -96,7 +96,7 @@ func registerHumaServiceSetLabel(humaAPI huma.API, serviceH *handlers.ServiceHan
 	})
 }
 
-// registerHumaServiceUpdate mounts PATCH /v1/services/{name} via huma (WRITE+AUDIT variant
+// registerHumaServiceUpdate mounts PATCH /v1/services/{id} via huma (WRITE+AUDIT variant
 // B — event service.updated). serviceH nil → no-op. Handler: claims → UpdateTyped
 // (replace + invalidate) → audit payload → 200 WITH BODY.
 func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -108,7 +108,7 @@ func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandl
 		if !ok {
 			return nil, serviceMissingClaims()
 		}
-		reply, err := serviceH.UpdateTyped(ctx, claims, in.Name, handlers.ServiceUpdateInput{
+		reply, err := serviceH.UpdateTyped(ctx, claims, in.ID, handlers.ServiceUpdateInput{
 			Git:     in.Body.Git,
 			Ref:     in.Body.Ref,
 			Refresh: in.Body.Refresh,
@@ -121,7 +121,7 @@ func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandl
 	})
 }
 
-// registerHumaServiceDeregister mounts DELETE /v1/services/{name} via huma (WRITE+AUDIT
+// registerHumaServiceDeregister mounts DELETE /v1/services/{id} via huma (WRITE+AUDIT
 // variant B — event service.deregistered). serviceH nil → no-op. Handler: DeregisterTyped
 // (deletion + invalidate) → audit payload → empty 204 output.
 func registerHumaServiceDeregister(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -129,16 +129,16 @@ func registerHumaServiceDeregister(humaAPI huma.API, serviceH *handlers.ServiceH
 		return
 	}
 	huma.Register(humaAPI, serviceDeregisterOperation(), func(ctx context.Context, in *serviceDeregisterInput) (*serviceNoContentOutput, error) {
-		reply, err := serviceH.DeregisterTyped(ctx, in.Name)
+		reply, err := serviceH.DeregisterTyped(ctx, in.ID)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
-		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload{"name": reply.Name})
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload{"id": reply.ID})
 		return &serviceNoContentOutput{Status: 204}, nil
 	})
 }
 
-// registerHumaServiceRefs mounts GET /v1/services/{name}/refs via huma (READ with path, no
+// registerHumaServiceRefs mounts GET /v1/services/{id}/refs via huma (READ with path, no
 // audit). serviceH nil → no-op. Handler: ListRefsTyped(name) → typed output (404/502 via
 // problem). RBAC service.list — on the group.
 func registerHumaServiceRefs(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -146,7 +146,7 @@ func registerHumaServiceRefs(humaAPI huma.API, serviceH *handlers.ServiceHandler
 		return
 	}
 	huma.Register(humaAPI, serviceRefsOperation(), func(ctx context.Context, in *serviceRefsInput) (*serviceRefsOutput, error) {
-		reply, err := serviceH.ListRefsTyped(ctx, in.Name)
+		reply, err := serviceH.ListRefsTyped(ctx, in.ID)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -154,7 +154,7 @@ func registerHumaServiceRefs(humaAPI huma.API, serviceH *handlers.ServiceHandler
 	})
 }
 
-// registerHumaServiceScenarios mounts GET /v1/services/{name}/scenarios via huma (READ with
+// registerHumaServiceScenarios mounts GET /v1/services/{id}/scenarios via huma (READ with
 // path+query, no audit). serviceH nil → no-op. Handler: ListScenariosTyped (name + optional
 // ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceScenarios(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -162,7 +162,7 @@ func registerHumaServiceScenarios(humaAPI huma.API, serviceH *handlers.ServiceHa
 		return
 	}
 	huma.Register(humaAPI, serviceScenariosOperation(), func(ctx context.Context, in *serviceScenariosInput) (*serviceScenariosOutput, error) {
-		reply, err := serviceH.ListScenariosTyped(ctx, in.Name, in.Ref)
+		reply, err := serviceH.ListScenariosTyped(ctx, in.ID, in.Ref)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -170,7 +170,7 @@ func registerHumaServiceScenarios(humaAPI huma.API, serviceH *handlers.ServiceHa
 	})
 }
 
-// registerHumaServiceStateSchema mounts GET /v1/services/{name}/state-schema via huma (READ
+// registerHumaServiceStateSchema mounts GET /v1/services/{id}/state-schema via huma (READ
 // with path+query, no audit). serviceH nil → no-op. Handler: ListStateSchemaTyped (name +
 // optional ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceStateSchema(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -178,7 +178,7 @@ func registerHumaServiceStateSchema(humaAPI huma.API, serviceH *handlers.Service
 		return
 	}
 	huma.Register(humaAPI, serviceStateSchemaOperation(), func(ctx context.Context, in *serviceStateSchemaInput) (*serviceStateSchemaOutput, error) {
-		reply, err := serviceH.ListStateSchemaTyped(ctx, in.Name, in.Ref)
+		reply, err := serviceH.ListStateSchemaTyped(ctx, in.ID, in.Ref)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -186,7 +186,7 @@ func registerHumaServiceStateSchema(humaAPI huma.API, serviceH *handlers.Service
 	})
 }
 
-// registerHumaServiceDependencies mounts GET /v1/services/{name}/dependencies via huma
+// registerHumaServiceDependencies mounts GET /v1/services/{id}/dependencies via huma
 // (READ with path+query, no audit). serviceH nil → no-op. Handler: ListDependenciesTyped
 // (name + optional ref) → typed output (404/502 via problem). RBAC service.list — on the group.
 func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.ServiceHandler) {
@@ -194,7 +194,7 @@ func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.Servic
 		return
 	}
 	huma.Register(humaAPI, serviceDependenciesOperation(), func(ctx context.Context, in *serviceDependenciesInput) (*serviceDependenciesOutput, error) {
-		reply, err := serviceH.ListDependenciesTyped(ctx, in.Name, in.Ref)
+		reply, err := serviceH.ListDependenciesTyped(ctx, in.ID, in.Ref)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -202,7 +202,7 @@ func registerHumaServiceDependencies(humaAPI huma.API, serviceH *handlers.Servic
 	})
 }
 
-// registerHumaServiceDirectives mounts GET /v1/services/{name}/directives via huma (READ
+// registerHumaServiceDirectives mounts GET /v1/services/{id}/directives via huma (READ
 // with path+query, no audit). serviceH nil → no-op. Handler: ListDirectivesTyped (name +
 // optional ref/version) → typed output (404/502 via problem) + ETag/Cache-Control (the
 // catalog is immutable per git-ref); If-None-Match matched SHA1 → 304 without a body. RBAC
@@ -212,7 +212,7 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 		return
 	}
 	huma.Register(humaAPI, serviceDirectivesOperation(), func(ctx context.Context, in *serviceDirectivesInput) (*serviceDirectivesOutput, error) {
-		reply, err := serviceH.ListDirectivesTyped(ctx, in.Name, in.Ref, in.Version)
+		reply, err := serviceH.ListDirectivesTyped(ctx, in.ID, in.Ref, in.Version)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -227,7 +227,7 @@ func registerHumaServiceDirectives(humaAPI huma.API, serviceH *handlers.ServiceH
 	})
 }
 
-// registerHumaServiceTelemetry mounts GET /v1/services/{name}/telemetry via huma
+// registerHumaServiceTelemetry mounts GET /v1/services/{id}/telemetry via huma
 // (READ-with-path+query, NO audit). serviceH nil → no-op. Handler:
 // ListServiceTelemetryTyped (name + optional ref) → typed output (404/502 via problem) +
 // ETag/Cache-Control (config immutable on git-ref); If-None-Match matches SHA1 → 304
@@ -237,7 +237,7 @@ func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHa
 		return
 	}
 	huma.Register(humaAPI, serviceTelemetryOperation(), func(ctx context.Context, in *serviceTelemetryInput) (*serviceTelemetryOutput, error) {
-		reply, err := serviceH.ListServiceTelemetryTyped(ctx, in.Name, in.Ref)
+		reply, err := serviceH.ListServiceTelemetryTyped(ctx, in.ID, in.Ref)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -252,7 +252,7 @@ func registerHumaServiceTelemetry(humaAPI huma.API, serviceH *handlers.ServiceHa
 	})
 }
 
-// registerHumaServiceCompat mounts GET /v1/services/{name}/compat via huma
+// registerHumaServiceCompat mounts GET /v1/services/{id}/compat via huma
 // (READ-with-path+query, NO audit). serviceH nil → no-op. Handler:
 // ListServiceCompatTyped (name + optional ref + THIS instance's build version) →
 // typed output (404/502 via problem) + ETag/Cache-Control (the declared windows are
@@ -265,7 +265,7 @@ func registerHumaServiceCompat(humaAPI huma.API, serviceH *handlers.ServiceHandl
 		return
 	}
 	huma.Register(humaAPI, serviceCompatOperation(), func(ctx context.Context, in *serviceCompatInput) (*serviceCompatOutput, error) {
-		reply, err := serviceH.ListServiceCompatTyped(ctx, in.Name, in.Ref)
+		reply, err := serviceH.ListServiceCompatTyped(ctx, in.ID, in.Ref)
 		if err != nil {
 			return nil, serviceProblem(err)
 		}

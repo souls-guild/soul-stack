@@ -45,7 +45,7 @@ func TestTap_BufferFull_DropsAndCounts(t *testing.T) {
 	// Rule that matches all scenario_run events. The consumer calls Enqueue for
 	// each, and Enqueue is blocked, so the consumer gets stuck on the first one.
 	src := &staticSource{rules: []*Tiding{
-		{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+		{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 	}}
 	bq := newBlockingQueue()
 	d := NewDispatcher(DispatcherConfig{Source: src, Queue: bq})
@@ -91,7 +91,7 @@ func TestTap_Observe_NeverBlocks(t *testing.T) {
 	bq := newBlockingQueue()
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 		}},
 		Queue: bq,
 	})
@@ -207,7 +207,7 @@ func TestTap_DeliversToDispatcher(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 		}},
 		Queue: q,
 	})

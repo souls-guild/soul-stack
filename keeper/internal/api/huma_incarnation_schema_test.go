@@ -87,7 +87,7 @@ func TestSchemaNames_Incarnation(t *testing.T) {
 // TestTraitAxes_OpenAPI — gate for Trait being an axis on BOTH levels, which are
 // independent places an operator attaches a pair and neither reaches the other
 // (NIM-281): (1) POST /v1/incarnations carries a top-level `traits` field; (2) PUT
-// /v1/incarnations/{name}/traits is mounted (operationId setIncarnationTraits);
+// /v1/incarnations/{id}/traits is mounted (operationId setIncarnationTraits);
 // (3) per-soul POST /v1/souls/traits is present and NOT deprecated — the host is the
 // ONLY place a host's own labels are written, not a leftover of the ADR-060
 // relocation. Losing either surface, or re-deprecating the per-soul one, reddens it.
@@ -115,12 +115,12 @@ func TestTraitAxes_OpenAPI(t *testing.T) {
 	}
 
 	// (2) PUT .../traits is mounted.
-	put, ok := doc.Paths["/v1/incarnations/{name}/traits"]
+	put, ok := doc.Paths["/v1/incarnations/{id}/traits"]
 	if !ok {
-		t.Fatal("path /v1/incarnations/{name}/traits MISSING from spec")
+		t.Fatal("path /v1/incarnations/{id}/traits MISSING from spec")
 	}
 	if _, ok := put["put"]; !ok {
-		t.Errorf("/v1/incarnations/{name}/traits has no PUT operation: %v", put)
+		t.Errorf("/v1/incarnations/{id}/traits has no PUT operation: %v", put)
 	}
 	if !strings.Contains(y, "setIncarnationTraits") {
 		t.Error("operationId setIncarnationTraits missing from spec")

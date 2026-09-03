@@ -100,7 +100,7 @@ func IsLifecycleScenario(name string) bool {
 // the Run form (ADR-042 "dumb frontend": UI reads the flag from the catalog,
 // doesn't hardcode names). Canon: lifecycle-create=true (bootstrap a new
 // incarnation), lifecycle-destroy=false (deletion is the DELETE
-// /v1/incarnations/{name} flow, not a run), operational=true (free-form state
+// /v1/incarnations/{id} flow, not a run), operational=true (free-form state
 // operation). Tags [artifact.Scenario.Runnable] in the listing handler.
 func IsRunnableScenario(name string) bool {
 	return name != DestroyScenarioName

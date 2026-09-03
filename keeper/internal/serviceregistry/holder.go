@@ -74,7 +74,7 @@ func (s PoolSource) Load(ctx context.Context) (*Snapshot, error) {
 	}
 	services := make(map[string]ServiceEntry, len(entries))
 	for _, e := range entries {
-		services[e.Name] = *e
+		services[e.ID] = *e
 	}
 
 	dds, err := loadSettingValue(ctx, s.DB, SettingDefaultDestinySource)

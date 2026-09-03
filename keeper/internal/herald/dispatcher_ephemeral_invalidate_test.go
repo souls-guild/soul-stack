@@ -73,7 +73,7 @@ func TestEphemeralTiding_InvalidateDeliversWithWarmCache(t *testing.T) {
 
 	// 2. Ephemeral-Tiding appears in DB (insert in voyage-tx, bypass invalidation).
 	src.add(&Tiding{
-		Name:       "eph-vy-fast",
+		ID:         "eph-vy-fast",
 		Herald:     "ops-webhook",
 		EventTypes: []string{"scenario_run.completed"},
 		Ephemeral:  true,

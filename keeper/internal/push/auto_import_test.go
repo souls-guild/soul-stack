@@ -64,7 +64,7 @@ func newFakeProviderRW() *fakeProviderReadWriter {
 	return &fakeProviderReadWriter{rows: map[string]*pushprovider.PushProvider{}}
 }
 
-func (f *fakeProviderReadWriter) SelectByName(_ context.Context, name string) (*pushprovider.PushProvider, error) {
+func (f *fakeProviderReadWriter) SelectByID(_ context.Context, name string) (*pushprovider.PushProvider, error) {
 	f.selectCalls++
 	if f.selectErr != nil {
 		return nil, f.selectErr
@@ -81,13 +81,13 @@ func (f *fakeProviderReadWriter) Insert(_ context.Context, p *pushprovider.PushP
 	if f.insertErr != nil {
 		return f.insertErr
 	}
-	if _, exists := f.rows[p.Name]; exists {
+	if _, exists := f.rows[p.ID]; exists {
 		return pushprovider.ErrPushProviderAlreadyExists
 	}
 	// Copy the value so the test sees the row as it arrived, without later
 	// caller mutations (defense, mimicking a PG INSERT).
 	row := *p
-	f.rows[p.Name] = &row
+	f.rows[p.ID] = &row
 	return nil
 }
 
@@ -330,7 +330,7 @@ func TestAutoImporter_Providers_NotInPG_Imports(t *testing.T) {
 func TestAutoImporter_Providers_Existing_Skip(t *testing.T) {
 	tw := newFakeTargetRW()
 	pw := newFakeProviderRW()
-	pw.rows["vault"] = &pushprovider.PushProvider{Name: "vault", CreatedByAID: "archon-alice"}
+	pw.rows["vault"] = &pushprovider.PushProvider{ID: "vault", CreatedByAID: "archon-alice"}
 	au := &fakeAuditor{}
 	imp := newImporter(t, tw, pw, au)
 

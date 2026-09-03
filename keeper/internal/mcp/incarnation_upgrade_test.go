@@ -22,12 +22,12 @@ func upgraderRBAC() *rbactest.Config {
 	}
 }
 
-// incAtVersion — backing incFn for upgrade: SelectByName (full row) and the
+// incAtVersion — backing incFn for upgrade: SelectByID (full row) and the
 // FOR UPDATE select read the same inc (serviceVersion / schema / status).
 func incAtVersion(serviceVer string, schema int, status incarnation.Status) func(string) (*incarnation.Incarnation, error) {
 	return func(name string) (*incarnation.Incarnation, error) {
 		now := time.Now().UTC()
-		return &incarnation.Incarnation{Name: name, Service: "redis", ServiceVersion: serviceVer,
+		return &incarnation.Incarnation{ID: name, Service: "redis", ServiceVersion: serviceVer,
 			StateSchemaVersion: schema, Status: status, State: map[string]any{}, CreatedAt: now, UpdatedAt: now}, nil
 	}
 }
@@ -47,7 +47,7 @@ func TestToolsCall_IncarnationUpgrade_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v2"}`)
+		`{"id":"redis-prod","to_version":"v2"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -79,7 +79,7 @@ func TestToolsCall_IncarnationUpgrade_Downgrade(t *testing.T) {
 	loader := &mcpLoader{targetSchema: 2}
 	h, rec := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v2"}`)
+		`{"id":"redis-prod","to_version":"v2"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -97,7 +97,7 @@ func TestToolsCall_IncarnationUpgrade_Noop(t *testing.T) {
 	loader := &mcpLoader{targetSchema: 1, chain: statemigrate.Chain{}}
 	h, _ := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v1"}`)
+		`{"id":"redis-prod","to_version":"v1"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -111,7 +111,7 @@ func TestToolsCall_IncarnationUpgrade_ChainBroken(t *testing.T) {
 	loader := &mcpLoader{targetSchema: 3, chainErr: artifact.ErrMigrationChainBroken}
 	h, _ := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v3"}`)
+		`{"id":"redis-prod","to_version":"v3"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -129,7 +129,7 @@ func TestToolsCall_IncarnationUpgrade_Locked(t *testing.T) {
 	loader := &mcpLoader{targetSchema: 2, chain: oneStepChain(t)}
 	h, rec := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, loader)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v2"}`)
+		`{"id":"redis-prod","to_version":"v2"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -145,7 +145,7 @@ func TestToolsCall_IncarnationUpgrade_NotFound(t *testing.T) {
 	pool := &fakePool{incFn: func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }}
 	h, _ := newTestHandlerFull(t, pool, upgraderRBAC(), nil, &mcpResolver{ok: true}, &mcpLoader{targetSchema: 2})
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"ghost","to_version":"v2"}`)
+		`{"id":"ghost","to_version":"v2"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -155,12 +155,12 @@ func TestToolsCall_IncarnationUpgrade_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationUpgrade_RBACForbidden(t *testing.T) {
-	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for the
+	// RBAC empty → deny. SelectByID RESOLVES scope (covens ∪ {name}) for the
 	// OR-Check (mirrors REST middleware), then the enforcer denies → forbidden.
 	pool := &fakePool{incFn: incAtVersion("v1", 1, incarnation.StatusReady)}
 	h, rec := newTestHandlerFull(t, pool, nil, nil, &mcpResolver{ok: true}, &mcpLoader{targetSchema: 2})
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v2"}`)
+		`{"id":"redis-prod","to_version":"v2"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -175,7 +175,7 @@ func TestToolsCall_IncarnationUpgrade_RBACForbidden(t *testing.T) {
 func TestToolsCall_IncarnationUpgrade_LoaderNotConfigured(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, upgraderRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.upgrade",
-		`{"name":"redis-prod","to_version":"v2"}`)
+		`{"id":"redis-prod","to_version":"v2"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

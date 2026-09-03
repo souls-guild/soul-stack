@@ -86,7 +86,7 @@ func TestNotifyEventTypes_UnknownTerminal(t *testing.T) {
 }
 
 // TestStampEphemeralTidings_NameAndVoyageID — the stamp assigns unique names
-// (valid per NamePattern) and a shared voyage_id to all templates.
+// (valid per IDPattern) and a shared voyage_id to all templates.
 func TestStampEphemeralTidings_NameAndVoyageID(t *testing.T) {
 	const vid = "01HZZZZZZZZZZZZZZZZZZZZZZZZ"
 	tpls := []herald.Tiding{
@@ -100,16 +100,16 @@ func TestStampEphemeralTidings_NameAndVoyageID(t *testing.T) {
 		if tpls[i].VoyageID == nil || *tpls[i].VoyageID != vid {
 			t.Fatalf("tpls[%d].VoyageID = %v, want %s", i, tpls[i].VoyageID, vid)
 		}
-		if !herald.ValidName(tpls[i].Name) {
-			t.Fatalf("tpls[%d].Name = %q does not match NamePattern", i, tpls[i].Name)
+		if !herald.ValidID(tpls[i].ID) {
+			t.Fatalf("tpls[%d].Name = %q does not match IDPattern", i, tpls[i].ID)
 		}
-		if !strings.HasPrefix(tpls[i].Name, "eph-") {
-			t.Errorf("tpls[%d].Name = %q, want prefix eph-", i, tpls[i].Name)
+		if !strings.HasPrefix(tpls[i].ID, "eph-") {
+			t.Errorf("tpls[%d].Name = %q, want prefix eph-", i, tpls[i].ID)
 		}
-		if _, dup := names[tpls[i].Name]; dup {
-			t.Fatalf("name %q repeated - uniqueness violated (ephemeral name collision)", tpls[i].Name)
+		if _, dup := names[tpls[i].ID]; dup {
+			t.Fatalf("name %q repeated - uniqueness violated (ephemeral name collision)", tpls[i].ID)
 		}
-		names[tpls[i].Name] = struct{}{}
+		names[tpls[i].ID] = struct{}{}
 		// A stamped template must satisfy the domain invariant ephemeral⟺voyage_id.
 		if !tpls[i].Ephemeral || tpls[i].VoyageID == nil {
 			t.Errorf("tpls[%d] violates ephemeral<=>voyage_id", i)

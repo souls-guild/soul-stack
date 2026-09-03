@@ -64,7 +64,7 @@ func (f *fakePrepLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.S
 }
 
 func prepInc(serviceVersion string, schema int) *Incarnation {
-	return &Incarnation{Name: "redis-prod", Service: "redis", ServiceVersion: serviceVersion, StateSchemaVersion: schema}
+	return &Incarnation{ID: "redis-prod", Service: "redis", ServiceVersion: serviceVersion, StateSchemaVersion: schema}
 }
 
 func TestPrepareUpgrade_Happy(t *testing.T) {
@@ -80,7 +80,7 @@ func TestPrepareUpgrade_Happy(t *testing.T) {
 	if err != nil {
 		t.Fatalf("PrepareUpgrade: %v", err)
 	}
-	if in.Name != "redis-prod" || in.TargetServiceVer != "v2" || in.TargetSchemaVer != 2 {
+	if in.ID != "redis-prod" || in.TargetServiceVer != "v2" || in.TargetSchemaVer != 2 {
 		t.Errorf("UpgradeInput = %+v", in)
 	}
 	if len(in.Chain) != 1 {

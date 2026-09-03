@@ -38,7 +38,7 @@ func incLocked(covens []string, createdScenario string) func(string) (*incarnati
 			cs = &createdScenario
 		}
 		return &incarnation.Incarnation{
-			Name: name, Service: "redis", ServiceVersion: "v1",
+			ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 			State: map[string]any{}, Covens: covens,
 			CreatedScenario: cs,
@@ -60,7 +60,7 @@ func TestToolsCall_IncarnationRerunLast_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"rerun bootstrap verified"}`)
+		`{"id":"redis-prod","reason":"rerun bootstrap verified"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -130,7 +130,7 @@ func incLockedSpec(spec map[string]any) func(string) (*incarnation.Incarnation, 
 		now := time.Now().UTC()
 		cs := "create"
 		return &incarnation.Incarnation{
-			Name: name, Service: "redis", ServiceVersion: "v1",
+			ID: name, Service: "redis", ServiceVersion: "v1",
 			StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 			State: map[string]any{}, CreatedScenario: &cs,
 			CreatedAt: now, UpdatedAt: now,
@@ -153,7 +153,7 @@ func TestToolsCall_IncarnationRerunLast_ReusesStoredInput(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-cluster-prod","reason":"rerun cluster bootstrap"}`)
+		`{"id":"redis-cluster-prod","reason":"rerun cluster bootstrap"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -189,7 +189,7 @@ func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"rerun no-input bootstrap"}`)
+		`{"id":"redis-prod","reason":"rerun no-input bootstrap"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -219,7 +219,7 @@ func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"rerun add_user verified"}`)
+		`{"id":"redis-prod","reason":"rerun add_user verified"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -269,7 +269,7 @@ func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"rerun upgrade verified ok"}`)
+		`{"id":"redis-prod","reason":"rerun upgrade verified ok"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -300,7 +300,7 @@ func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-bare","reason":"rerun bare day-2"}`)
+		`{"id":"redis-bare","reason":"rerun bare day-2"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -331,7 +331,7 @@ func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"rerun add_user"}`)
+		`{"id":"redis-prod","reason":"rerun add_user"}`)
 	if resp.Error == nil {
 		t.Fatal("expected rerun-input-unavailable (no replayable snapshot)")
 	}
@@ -360,7 +360,7 @@ func TestToolsCall_IncarnationRerunLast_ScopeDeniesForeignCoven(t *testing.T) {
 		starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"x"}`)
+		`{"id":"redis-prod","reason":"x"}`)
 	expectForbidden(t, resp, "rerun-last")
 	if starter.calls != 0 {
 		t.Error("denied rerun must not start scenario")
@@ -380,7 +380,7 @@ func TestToolsCall_IncarnationRerunLast_ScopeAllowsMatchingCoven(t *testing.T) {
 		starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"matching scope"}`)
+		`{"id":"redis-prod","reason":"matching scope"}`)
 	expectNotForbidden(t, resp, "rerun-last")
 	if resp.Error != nil {
 		t.Fatalf("matching coven should fully pass: %+v", resp.Error)
@@ -399,7 +399,7 @@ func TestToolsCall_IncarnationRerunLast_NotErrorLocked(t *testing.T) {
 				now := time.Now().UTC()
 				cs := "create"
 				return &incarnation.Incarnation{
-					Name: name, Service: "redis", ServiceVersion: "v1",
+					ID: name, Service: "redis", ServiceVersion: "v1",
 					StateSchemaVersion: 1, Status: status,
 					State: map[string]any{}, CreatedScenario: &cs,
 					CreatedAt: now, UpdatedAt: now,
@@ -409,7 +409,7 @@ func TestToolsCall_IncarnationRerunLast_NotErrorLocked(t *testing.T) {
 			h, rec := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 			resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-				`{"name":"redis-prod","reason":"x"}`)
+				`{"id":"redis-prod","reason":"x"}`)
 			if resp.Error == nil {
 				t.Fatalf("status=%s: expected incarnation-locked", status)
 			}
@@ -428,12 +428,12 @@ func TestToolsCall_IncarnationRerunLast_NotErrorLocked(t *testing.T) {
 
 // TestToolsCall_IncarnationRerunLast_NotFound — a nonexistent incarnation → 404.
 func TestToolsCall_IncarnationRerunLast_NotFound(t *testing.T) {
-	pool := &fakePool{} // incFn nil → SelectByName returns pgx.ErrNoRows
+	pool := &fakePool{} // incFn nil → SelectByID returns pgx.ErrNoRows
 	starter := &mcpStarter{}
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"ghost","reason":"x"}`)
+		`{"id":"ghost","reason":"x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected not-found")
 	}
@@ -452,7 +452,7 @@ func TestToolsCall_IncarnationRerunLast_EmptyReason(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":""}`)
+		`{"id":"redis-prod","reason":""}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation-failed for empty reason")
 	}
@@ -469,7 +469,7 @@ func TestToolsCall_IncarnationRerunLast_EmptyReason(t *testing.T) {
 func TestToolsCall_IncarnationRerunLast_RunnerNotConfigured(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, rerunRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"name":"redis-prod","reason":"x"}`)
+		`{"id":"redis-prod","reason":"x"}`)
 	if resp.Error == nil {
 		t.Fatal("expected internal-error")
 	}

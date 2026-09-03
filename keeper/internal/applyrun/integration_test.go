@@ -102,7 +102,7 @@ func seedIncarnation(t *testing.T, name, aid string) {
 	t.Helper()
 	creator := aid
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1",
+		ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady, CreatedByAID: &creator,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -381,7 +381,7 @@ func TestIntegration_ApplyRuns_FK_OnIncarnationDelete(t *testing.T) {
 		t.Fatalf("Insert: %v", err)
 	}
 	if _, err := integrationPool.Exec(ctx,
-		`DELETE FROM incarnation WHERE name = 'redis-prod'`); err != nil {
+		`DELETE FROM incarnation WHERE id = 'redis-prod'`); err != nil {
 		t.Fatalf("DELETE incarnation: %v", err)
 	}
 	var n int
@@ -1677,7 +1677,7 @@ func TestIntegration_UpdateStatus_NoMatchSetsFinishedAt(t *testing.T) {
 	}
 }
 
-// --- run read-view (GET /v1/incarnations/{name}/runs[/{apply_id}]) ---
+// --- run read-view (GET /v1/incarnations/{id}/runs[/{apply_id}]) ---
 
 // TestIntegration_ListRunsByIncarnation - folds apply_runs by apply_id: list of
 // incarnation runs with aggregate status, time bounds, and exclusion of runs from

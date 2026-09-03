@@ -35,16 +35,16 @@ func TestGoldenWire_HeraldReply(t *testing.T) {
 
 	// --- Herald: full (created_by_aid/secret_ref set) and nil branches omitempty ---
 	goldenHerald(t, "Herald/full",
-		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: &aid, Enabled: true, Name: "ops", SecretRef: &ref, Type: HeraldTypeWebhook, UpdatedAt: ts},
-		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","enabled":true,"name":"ops","secret_ref":"vault:secret/hook","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
+		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: &aid, Enabled: true, ID: "ops", SecretRef: &ref, Type: HeraldTypeWebhook, UpdatedAt: ts},
+		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","enabled":true,"id":"ops","secret_ref":"vault:secret/hook","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
 	goldenHerald(t, "Herald/nil_optionals",
-		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: nil, Enabled: false, Name: "ops", SecretRef: nil, Type: HeraldTypeWebhook, UpdatedAt: ts},
-		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":false,"name":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
+		Herald{Config: cfg, CreatedAt: ts, CreatedByAID: nil, Enabled: false, ID: "ops", SecretRef: nil, Type: HeraldTypeWebhook, UpdatedAt: ts},
+		`{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":false,"id":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}`)
 
 	// --- HeraldListReply: non-nil items, empty items ([]), nil items (null) ---
 	goldenHerald(t, "HeraldListReply/full",
-		HeraldListReply{Items: []Herald{{Config: cfg, CreatedAt: ts, Enabled: true, Name: "ops", Type: HeraldTypeWebhook, UpdatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
-		`{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":true,"name":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}],"limit":50,"offset":0,"total":1}`)
+		HeraldListReply{Items: []Herald{{Config: cfg, CreatedAt: ts, Enabled: true, ID: "ops", Type: HeraldTypeWebhook, UpdatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
+		`{"items":[{"config":{"url":"https://hook.test/notify"},"created_at":"2026-06-14T12:34:56.789012345Z","enabled":true,"id":"ops","type":"webhook","updated_at":"2026-06-14T12:34:56.789012345Z"}],"limit":50,"offset":0,"total":1}`)
 	goldenHerald(t, "HeraldListReply/empty",
 		HeraldListReply{Items: []Herald{}, Limit: 50, Offset: 0, Total: 0},
 		`{"items":[],"limit":50,"offset":0,"total":0}`)
@@ -61,16 +61,16 @@ func TestGoldenWire_HeraldReply(t *testing.T) {
 	task := "restart"
 	vid := "01J0VOYAGEULID"
 	goldenHerald(t, "Tiding/full",
-		Tiding{Annotations: &ann, Cadence: &cad, CreatedAt: ts, CreatedByAID: &aid, Enabled: true, Ephemeral: &yes, EventTypes: []string{"scenario_run.*"}, Herald: "ops", Incarnation: &inc, Name: "on-fail", OnlyChanges: true, OnlyFailures: true, Projection: &proj, Task: &task, UpdatedAt: ts, VoyageID: &vid},
-		`{"annotations":{"env":"prod"},"cadence":"nightly","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","enabled":true,"ephemeral":true,"event_types":["scenario_run.*"],"herald":"ops","incarnation":"redis-prod","name":"on-fail","only_changes":true,"only_failures":true,"projection":["summary.succeeded"],"task":"restart","updated_at":"2026-06-14T12:34:56.789012345Z","voyage_id":"01J0VOYAGEULID"}`)
+		Tiding{Annotations: &ann, Cadence: &cad, CreatedAt: ts, CreatedByAID: &aid, Enabled: true, Ephemeral: &yes, EventTypes: []string{"scenario_run.*"}, Herald: "ops", Incarnation: &inc, ID: "on-fail", OnlyChanges: true, OnlyFailures: true, Projection: &proj, Task: &task, UpdatedAt: ts, VoyageID: &vid},
+		`{"annotations":{"env":"prod"},"cadence":"nightly","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","enabled":true,"ephemeral":true,"event_types":["scenario_run.*"],"herald":"ops","incarnation":"redis-prod","id":"on-fail","only_changes":true,"only_failures":true,"projection":["summary.succeeded"],"task":"restart","updated_at":"2026-06-14T12:34:56.789012345Z","voyage_id":"01J0VOYAGEULID"}`)
 	goldenHerald(t, "Tiding/nil_optionals",
-		Tiding{CreatedAt: ts, Enabled: false, EventTypes: []string{"voyage.*"}, Herald: "ops", Name: "on-fail", OnlyChanges: false, OnlyFailures: false, UpdatedAt: ts},
-		`{"created_at":"2026-06-14T12:34:56.789012345Z","enabled":false,"event_types":["voyage.*"],"herald":"ops","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-14T12:34:56.789012345Z"}`)
+		Tiding{CreatedAt: ts, Enabled: false, EventTypes: []string{"voyage.*"}, Herald: "ops", ID: "on-fail", OnlyChanges: false, OnlyFailures: false, UpdatedAt: ts},
+		`{"created_at":"2026-06-14T12:34:56.789012345Z","enabled":false,"event_types":["voyage.*"],"herald":"ops","id":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-14T12:34:56.789012345Z"}`)
 
 	// --- TidingListReply: non-nil / nil items ---
 	goldenHerald(t, "TidingListReply/full",
-		TidingListReply{Items: []Tiding{{CreatedAt: ts, Enabled: true, EventTypes: []string{"scenario_run.*"}, Herald: "ops", Name: "on-fail", UpdatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
-		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","enabled":true,"event_types":["scenario_run.*"],"herald":"ops","name":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-14T12:34:56.789012345Z"}],"limit":50,"offset":0,"total":1}`)
+		TidingListReply{Items: []Tiding{{CreatedAt: ts, Enabled: true, EventTypes: []string{"scenario_run.*"}, Herald: "ops", ID: "on-fail", UpdatedAt: ts}}, Limit: 50, Offset: 0, Total: 1},
+		`{"items":[{"created_at":"2026-06-14T12:34:56.789012345Z","enabled":true,"event_types":["scenario_run.*"],"herald":"ops","id":"on-fail","only_changes":false,"only_failures":false,"updated_at":"2026-06-14T12:34:56.789012345Z"}],"limit":50,"offset":0,"total":1}`)
 	goldenHerald(t, "TidingListReply/nil_items",
 		TidingListReply{Items: nil, Limit: 50, Offset: 0, Total: 0},
 		`{"items":null,"limit":50,"offset":0,"total":0}`)

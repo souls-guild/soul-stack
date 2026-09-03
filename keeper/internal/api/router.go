@@ -49,16 +49,16 @@ import (
 //	POST   /v1/incarnations                          — create incarnation, stub (M0.6c-1).
 //	POST   /v1/incarnations/resolve-name             — name a create would compose + availability (NIM-331).
 //	GET    /v1/incarnations                          — list incarnations (M0.6c-1).
-//	GET    /v1/incarnations/{name}                   — get incarnation (M0.6c-1).
-//	GET    /v1/incarnations/{name}/history           — state_history (M0.6c-1).
-//	POST   /v1/incarnations/{name}/scenarios/{scenario} — run named scenario (M0.6c).
-//	POST   /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2 form prefill from state (docs/input.md).
-//	POST   /v1/incarnations/{name}/unlock            — clear error_locked (M0.6c).
-//	POST   /v1/incarnations/{name}/upgrade           — migrate state_schema_version (ADR-019).
-//	GET    /v1/incarnations/{name}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
-//	DELETE /v1/incarnations/{name}                   — destroy incarnation (S-D4).
-//	PUT    /v1/incarnations/{name}/traits            — replace operator-set trait labels (ADR-060).
-//	PUT    /v1/incarnations/{name}/label             — set the display caption ([ADR-0085]).
+//	GET    /v1/incarnations/{id}                   — get incarnation (M0.6c-1).
+//	GET    /v1/incarnations/{id}/history           — state_history (M0.6c-1).
+//	POST   /v1/incarnations/{id}/scenarios/{scenario} — run named scenario (M0.6c).
+//	POST   /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2 form prefill from state (docs/input.md).
+//	POST   /v1/incarnations/{id}/unlock            — clear error_locked (M0.6c).
+//	POST   /v1/incarnations/{id}/upgrade           — migrate state_schema_version (ADR-019).
+//	GET    /v1/incarnations/{id}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
+//	DELETE /v1/incarnations/{id}                   — destroy incarnation (S-D4).
+//	PUT    /v1/incarnations/{id}/traits            — replace operator-set trait labels (ADR-060).
+//	PUT    /v1/incarnations/{id}/label             — set the display caption ([ADR-0085]).
 //	POST   /v1/voyages                               — create Voyage (ADR-043 S5, RBAC-by-kind).
 //	POST   /v1/voyages/preview                       — dry-resolve scope without creating a Voyage (ADR-043 amendment §4).
 //	GET    /v1/voyages                                — list Voyage runs (ADR-043 S5).
@@ -89,42 +89,42 @@ import (
 //	DELETE /v1/sigil/keys/{key_id}                   — retire signing key (R3-S7).
 //	POST   /v1/services                              — register Service (ADR-028 S3).
 //	GET    /v1/services                               — list Services (ADR-028 S3).
-//	GET    /v1/services/{name}                       — get Service (ADR-028 S3).
-//	PATCH  /v1/services/{name}                       — update Service (ADR-028 S3).
-//	DELETE /v1/services/{name}                       — deregister Service (ADR-028 S3).
-//	GET    /v1/services/{name}/refs                  — list git-tags + branches (UI upgrade-modal).
-//	GET    /v1/services/{name}/dependencies          — destiny/module git-refs (UI Service Detail).
+//	GET    /v1/services/{id}                       — get Service (ADR-028 S3).
+//	PATCH  /v1/services/{id}                       — update Service (ADR-028 S3).
+//	DELETE /v1/services/{id}                       — deregister Service (ADR-028 S3).
+//	GET    /v1/services/{id}/refs                  — list git-tags + branches (UI upgrade-modal).
+//	GET    /v1/services/{id}/dependencies          — destiny/module git-refs (UI Service Detail).
 //	POST   /v1/augur/omens                           — create Omen (ADR-025).
 //	GET    /v1/augur/omens                            — list Omens (ADR-025).
-//	GET    /v1/augur/omens/{name}                    — get Omen (ADR-025).
-//	DELETE /v1/augur/omens/{name}                    — delete Omen (ADR-025).
+//	GET    /v1/augur/omens/{id}                    — get Omen (ADR-025).
+//	DELETE /v1/augur/omens/{id}                    — delete Omen (ADR-025).
 //	POST   /v1/augur/rites                           — create Rite (ADR-025).
 //	GET    /v1/augur/rites                            — list Rites by omen (ADR-025).
 //	DELETE /v1/augur/rites/{id}                      — delete Rite (ADR-025).
 //	POST   /v1/vigils                                — create Vigil (ADR-030).
 //	GET    /v1/vigils                                 — list Vigils (ADR-030).
-//	GET    /v1/vigils/{name}                         — get Vigil (ADR-030).
-//	DELETE /v1/vigils/{name}                         — delete Vigil (ADR-030).
+//	GET    /v1/vigils/{id}                         — get Vigil (ADR-030).
+//	DELETE /v1/vigils/{id}                         — delete Vigil (ADR-030).
 //	POST   /v1/decrees                               — create Decree (ADR-030).
 //	GET    /v1/decrees                                — list Decrees (ADR-030).
-//	GET    /v1/decrees/{name}                        — get Decree (ADR-030).
-//	DELETE /v1/decrees/{name}                        — delete Decree (ADR-030).
+//	GET    /v1/decrees/{id}                        — get Decree (ADR-030).
+//	DELETE /v1/decrees/{id}                        — delete Decree (ADR-030).
 //	POST   /v1/push-providers                        — create Push-Provider (ADR-032 amend S7-2).
 //	GET    /v1/push-providers                         — list Push-Providers (S7-2).
-//	GET    /v1/push-providers/{name}                 — read Push-Provider (S7-2).
-//	PUT    /v1/push-providers/{name}                 — update Push-Provider (S7-2).
-//	PUT    /v1/push-providers/{name}/label           — set Push-Provider caption ([ADR-0085]).
-//	DELETE /v1/push-providers/{name}                 — delete Push-Provider (S7-2).
+//	GET    /v1/push-providers/{id}                 — read Push-Provider (S7-2).
+//	PUT    /v1/push-providers/{id}                 — update Push-Provider (S7-2).
+//	PUT    /v1/push-providers/{id}/label           — set Push-Provider caption ([ADR-0085]).
+//	DELETE /v1/push-providers/{id}                 — delete Push-Provider (S7-2).
 //	POST   /v1/providers                             — create Cloud-Provider (ADR-017).
 //	GET    /v1/providers                             — list Cloud-Providers (ADR-017).
-//	GET    /v1/providers/{name}                      — read Cloud-Provider (ADR-017).
-//	PUT    /v1/providers/{name}/label                — set Cloud-Provider caption ([ADR-0085]).
-//	DELETE /v1/providers/{name}                      — delete Cloud-Provider (ADR-017).
+//	GET    /v1/providers/{id}                      — read Cloud-Provider (ADR-017).
+//	PUT    /v1/providers/{id}/label                — set Cloud-Provider caption ([ADR-0085]).
+//	DELETE /v1/providers/{id}                      — delete Cloud-Provider (ADR-017).
 //	POST   /v1/profiles                              — create Cloud-Profile (ADR-017).
 //	GET    /v1/profiles                              — list Cloud-Profiles (ADR-017).
-//	GET    /v1/profiles/{name}                       — read Cloud-Profile (ADR-017).
-//	PUT    /v1/profiles/{name}/label                 — set Cloud-Profile caption ([ADR-0085]).
-//	DELETE /v1/profiles/{name}                       — delete Cloud-Profile (ADR-017).
+//	GET    /v1/profiles/{id}                       — read Cloud-Profile (ADR-017).
+//	PUT    /v1/profiles/{id}/label                 — set Cloud-Profile caption ([ADR-0085]).
+//	DELETE /v1/profiles/{id}                       — delete Cloud-Profile (ADR-017).
 //	POST   /v1/modules/{name}/form-prep              — resolver of source catalogs for the module UI form (ADR-045 S3).
 //	GET    /v1/permissions                           — catalog of RBAC permissions (auth-only, fixes UI hardcode).
 //	GET    /v1/event-types                           — catalog of event-types for Tiding subscription (auth-only, fixes UI hardcode).
@@ -573,7 +573,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationGet(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/telemetry — aggregate host-vitals of
+			// GET /v1/incarnations/{id}/telemetry — aggregate host-vitals of
 			// the incarnation's hosts from Redis (NIM-86). READ (WITHOUT
 			// audit). Existence-gate incarnation.get (the same read-tier as
 			// incarnation-read); host visibility is narrowed by the
@@ -585,7 +585,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationTelemetry(newHumaCadenceAPI(r), telemetryH)
 			})
 
-			// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
+			// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2
 			// pre-fill of the scenario UI form from incarnation.state (docs/input.md). A READ
 			// resolve (not a mutation): audit is NOT wired, newHumaCadenceAPI. Permission
 			// incarnation.get (reuse: whoever reads the incarnation also gets the prefill of its
@@ -598,7 +598,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationFormPrefill(newHumaCadenceAPI(r), incH)
 			})
 
-			// POST /v1/incarnations/{name}/secrets/reveal — reveal a plaintext secret
+			// POST /v1/incarnations/{id}/secrets/reveal — reveal a plaintext secret
 			// (NIM-74). WRITE-SELF-AUDIT: incarnation.secret_revealed is written by the handler itself
 			// inside RevealSecretTyped AFTER ReadKV (the value is NOT in the payload; audit-middleware
 			// is NOT wired, newHumaCadenceAPI). Permission incarnation.view-secrets (unmasking,
@@ -609,7 +609,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/secrets/revealable — discovery of revealable
+			// GET /v1/incarnations/{id}/secrets/revealable — discovery of revealable
 			// secrets + keys from state (NIM-74). READ (no audit, newHumaCadenceAPI).
 			// Existence-gate RequireAction(view-secrets); per-{name} scope — in-handler
 			// inScope (GetInScopeFor, action=view-secrets), as get/form-prefill.
@@ -619,7 +619,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationRevealableSecrets(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/upgrade-paths — read analysis of upgrade paths
+			// GET /v1/incarnations/{id}/upgrade-paths — read analysis of upgrade paths
 			// (ADR-0068 §6): a cheap list of registry tags + on-demand ?to= per-target.
 			// READ (no audit, newHumaCadenceAPI). Permission incarnation.upgrade (the read
 			// facet, the same as POST .../upgrade); existence-gate RequireAction(action=
@@ -637,7 +637,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationHistory(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/runs[/{apply_id}] — read-view of runs
+			// GET /v1/incarnations/{id}/runs[/{apply_id}] — read-view of runs
 			// (apply_runs), for the UI "execution status / current job". A run
 			// (apply_run) is NOT a Voyage: closes the UI bug apply_id→/voyages/ 404. READ
 			// (no audit, newHumaCadenceAPI). Permission incarnation.history (reuse of the
@@ -656,7 +656,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationRunTasks(newHumaCadenceAPI(r), incH)
 			})
 
-			// GET /v1/incarnations/{name}/runs/{apply_id}/events — live SSE of a run
+			// GET /v1/incarnations/{id}/runs/{apply_id}/events — live SSE of a run
 			// (ADR-068 §A3). NO chi-RequireAction: the RBAC "initiator OR incarnation.get/
 			// history" is not expressible via an existence-gate (the initiator may lack the permission) —
 			// all authorization is in-handler (parity with /mcp/events authorizeSSE). Inherits
@@ -668,7 +668,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				})
 			}
 
-			// POST /v1/incarnations/{name}/scenarios/{scenario} — run a named
+			// POST /v1/incarnations/{id}/scenarios/{scenario} — run a named
 			// scenario. Blocked by the Toll-middleware on cluster:degraded (ADR-038):
 			// 503 + Retry-After. The Toll-middleware is FIRST in the chain (outermost), so a 503
 			// on a degraded cluster returns BEFORE RBAC/Audit: a blocked request must
@@ -692,7 +692,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationUpgrade(newHumaIncarnationAPI(r, auditWriter, audit.EventIncarnationUpgradeStarted, logger), incH)
 			})
 
-			// POST /v1/incarnations/{name}/rerun-last — clear error_locked + rerun the
+			// POST /v1/incarnations/{id}/rerun-last — clear error_locked + rerun the
 			// last failed scenario. WRITE-SELF-AUDIT: incarnation.rerun_last is written by the handler
 			// itself (the payload is known only after UnlockForRerun; audit-middleware is NOT
 			// wired). Permission incarnation.rerun-last, scope incScope.
@@ -702,7 +702,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
 			})
 
-			// DELETE /v1/incarnations/{name} — destroy (S-D4). WRITE-SELF-AUDIT:
+			// DELETE /v1/incarnations/{id} — destroy (S-D4). WRITE-SELF-AUDIT:
 			// destroy_started is written by the service layer [incarnation.Destroy] itself (it needs
 			// source/previous_status/force, not uniformly available to the middleware);
 			// audit-middleware is NOT wired. Permission incarnation.destroy, scope incScope.
@@ -712,7 +712,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
 			})
 
-			// PUT /v1/incarnations/{name}/traits — wholesale replacement of operator-set
+			// PUT /v1/incarnations/{id}/traits — wholesale replacement of operator-set
 			// trait labels (ADR-060 amend R1, relocation per-soul → per-incarnation).
 			// incarnation.traits is the source of truth, projected into souls.traits of
 			// the member hosts. Permission incarnation.traits-set, scope incScope.
@@ -724,7 +724,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationSetTraits(newHumaCadenceAPI(r), incH)
 			})
 
-			// PUT /v1/incarnations/{name}/label — replace the display caption
+			// PUT /v1/incarnations/{id}/label — replace the display caption
 			// ([ADR-0085], NIM-728). Permission incarnation.label-set, scope incScope
 			// (the same boundary as every other incarnation mutation).
 			// WRITE-SELF-AUDIT: incarnation.label_changed is written by the handler
@@ -740,7 +740,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationSetLabel(newHumaCadenceAPI(r), incH)
 			})
 
-			// /v1/incarnations/{name}/members — the OPERATOR path for membership
+			// /v1/incarnations/{id}/members — the OPERATOR path for membership
 			// (ADR-008 amendment 2026-07-28, NIM-209). Before it the only bind act was
 			// `core.soul.registered` INSIDE a run, so a scenario that deploys onto a ready
 			// roster (`create_from_souls`) was unreachable: the run resolves its roster at
@@ -775,7 +775,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationListMembers(newHumaCadenceAPI(r), incH)
 			})
 
-			// /v1/incarnations/{name}/choirs — CRUD of the Choir/Voice topology (ADR-044,
+			// /v1/incarnations/{id}/choirs — CRUD of the Choir/Voice topology (ADR-044,
 			// S-T3). A Choir belongs to an incarnation → the same scope selector incScope
 			// (incarnation/service/coven by path-{name}) as incarnation mutations.
 			// resource — `choir`; actions — create / delete / list + add-voice /
@@ -1161,7 +1161,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					registerHumaServiceList(newHumaCadenceAPI(r), serviceH)
 				})
 
-				// GET /v1/services/{name} — detail. Permission service.list (read
+				// GET /v1/services/{id} — detail. Permission service.list (read
 				// covered by the list permission). The huma op carries the full path /{name} (NOT nested in
 				// r.Route("/{name}") — otherwise chi would double the prefix).
 				r.With(
@@ -1237,7 +1237,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				// telemetry config + allowed collector set (known_collectors)
 				// for the UI (ADR-042 backend-driven, ADR-072). permission
 				// service.list. ETag=snapshot SHA1. 502 → loader failed. Not to
-				// be confused with /v1/incarnations/{name}/telemetry (runtime
+				// be confused with /v1/incarnations/{id}/telemetry (runtime
 				// host-vitals, NIM-86).
 				r.With(
 					apimiddleware.RequirePermission(enforcer, "service", "list", apimiddleware.NoSelector),
@@ -1604,7 +1604,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		if pushH != nil {
 			r.Route("/push", func(r chi.Router) {
 				// POST /v1/push/apply — blocked by Toll on cluster:degraded
-				// (ADR-038): parity with POST /v1/incarnations/{name}/scenarios/{scenario},
+				// (ADR-038): parity with POST /v1/incarnations/{id}/scenarios/{scenario},
 				// outermost-middleware → 503 BEFORE RBAC/Audit. GET /v1/push/{apply_id}
 				// (below) — a read-API, NOT blocked (recovery-friendly reading of the
 				// run status while degraded).
@@ -1654,7 +1654,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// (huma-audit-middleware; full-typed huma writes the response ITSELF, so
 		// the StatusRecorder from apimiddleware.Audit does not apply — audit holds
 		// hctx.Status() + a carrier payload, otherwise an S6 relapse). list/get — read (WITHOUT
-		// audit; list — read-with-typed-query int32-pagination→400 + name_pattern;
+		// audit; list — read-with-typed-query int32-pagination→400 + id_pattern;
 		// update — PUT replace semantics, NOT a presence-tier). Each write route has its OWN
 		// chi group with its own event type (newHumaPushProviderAPI(evt)).
 		// RequirePermission is the group chi-middleware (huma inherits it). MCP

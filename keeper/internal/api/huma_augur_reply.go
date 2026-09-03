@@ -19,8 +19,8 @@ package api
 // $ref). allow is json.RawMessage byte-passthrough (ADR-051 category D).
 
 // OUTPUT-PATTERN NAMES (documentation-only, NOT runtime validation): huma does NOT validate
-// the response body (empirically 200, not 500). name ← augur.NamePattern (kebab); RiteView.omen is
-// an FK reference to the same augur.NamePattern (the Omen name). Format is for client codegen; the
+// the response body (empirically 200, not 500). name ← augur.IDPattern (kebab); RiteView.omen is
+// an FK reference to the same augur.IDPattern (the Omen name). Format is for client codegen; the
 // pattern doesn't affect json.Marshal (golden byte-exact intact). Output types aren't shared with
 // request Body (create/grant use separate *Request) → no input-422 risk.
 
@@ -39,9 +39,9 @@ type OmenView struct {
 	CreatedByAID *string   `json:"created_by_aid,omitempty"`
 	Endpoint     string    `json:"endpoint"`
 	// Label — the display caption (ADR-0085), free text and mutable via
-	// PUT /v1/augur/omens/{name}/label. Absent → the consumer shows `name`.
+	// PUT /v1/augur/omens/{id}/label. Absent → the consumer shows `name`.
 	Label      *string            `json:"label,omitempty"`
-	Name       string             `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.NamePattern
+	ID         string             `json:"id" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.IDPattern
 	SourceType OmenViewSourceType `json:"source_type"`
 }
 
@@ -65,7 +65,7 @@ type RiteView struct {
 	CreatedByAID *string         `json:"created_by_aid,omitempty"`
 	Delegate     bool            `json:"delegate"`
 	ID           int64           `json:"id"`
-	Omen         string          `json:"omen" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.NamePattern (FK to omens.name)
+	Omen         string          `json:"omen" pattern:"^[a-z0-9-]{1,63}$"` // ← augur.IDPattern (FK to omens.id)
 	Subject      Subject         `json:"subject"`
 	TokenNumUses *int            `json:"token_num_uses,omitempty"`
 	TokenTTL     *string         `json:"token_ttl,omitempty"`

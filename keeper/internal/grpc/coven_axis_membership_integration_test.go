@@ -110,7 +110,7 @@ func seedCovenAxis(t *testing.T, ctx context.Context, incCovens []string) {
 		t.Fatalf("soul.Insert(outsider): %v", err)
 	}
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: covenAxisInc, Service: covenAxisSvc, ServiceVersion: "v1",
+		ID: covenAxisInc, Service: covenAxisSvc, ServiceVersion: "v1",
 		StateSchemaVersion: 1, State: map[string]any{},
 		Status: incarnation.StatusReady, Covens: incCovens, CreatedByAID: &creator,
 	}); err != nil {
@@ -248,7 +248,7 @@ func seedCovenAxisRite(t *testing.T, ctx context.Context, sel subject.Selector) 
 	t.Helper()
 	creator := covenAxisAID
 	if err := augur.InsertOmen(ctx, integrationPool, &augur.Omen{
-		Name: covenAxisOmen, SourceType: augur.SourceVault,
+		ID: covenAxisOmen, SourceType: augur.SourceVault,
 		Endpoint: "https://vault:8200", AuthRef: "vault:secret/keeper/augur/" + covenAxisOmen,
 		CreatedByAID: &creator,
 	}); err != nil {
@@ -413,7 +413,7 @@ func TestIntegration_AugurIncarnationTraitReachesMembers(t *testing.T) {
 		t.Fatalf("precondition: status = %v, want DENIED before the trait is set anywhere", got)
 	}
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET traits = '{"owner":"dba"}'::jsonb WHERE name = $1`, covenAxisInc); err != nil {
+		`UPDATE incarnation SET traits = '{"owner":"dba"}'::jsonb WHERE id = $1`, covenAxisInc); err != nil {
 		t.Fatalf("set incarnation trait: %v", err)
 	}
 

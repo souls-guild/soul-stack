@@ -67,7 +67,7 @@ func HeraldSpecStub() *HeraldHandler {
 // (package api projects to the native enum HeraldType). created_at/updated_at — UTC
 // (nanosecond wire, no Truncate — parity with the legacy `.UTC()`).
 type HeraldView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -86,7 +86,7 @@ func toHeraldView(h *herald.Herald) HeraldView {
 		config = map[string]any{}
 	}
 	return HeraldView{
-		Name:         h.Name,
+		ID:           h.ID,
 		Label:        h.Label,
 		Type:         string(h.Type),
 		Config:       config,
@@ -103,9 +103,9 @@ func toHeraldView(h *herald.Herald) HeraldView {
 // (per-type) + optional secret_ref (vault-ref) + optional enabled. The service
 // validates field formats.
 type HeraldCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/heralds/{name}/label. nil/blank → NULL, and the consumer shows
+	// by PUT /v1/heralds/{id}/label. nil/blank → NULL, and the consumer shows
 	// Name.
 	Label     *string
 	Type      string
@@ -117,7 +117,7 @@ type HeraldCreateInput struct {
 	Enabled *bool
 }
 
-// HeraldUpdateInput is the NATIVE request form of PUT /v1/heralds/{name}
+// HeraldUpdateInput is the NATIVE request form of PUT /v1/heralds/{id}
 // (handler-native, replace semantics). name from path. Replaces HeraldUpdateRequest.
 type HeraldUpdateInput struct {
 	Type      string
@@ -150,7 +150,7 @@ func (r HeraldWriteReply) AuditPayload() middleware.AuditPayload {
 func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt.Claims, req HeraldCreateInput) (HeraldWriteReply, error) {
 	var zero HeraldWriteReply
 	hr := &herald.Herald{
-		Name:         req.Name,
+		ID:           req.ID,
 		Label:        req.Label,
 		Type:         herald.HeraldType(req.Type),
 		Config:       req.Config,
@@ -161,19 +161,19 @@ func (h *HeraldHandler) CreateHeraldTyped(ctx context.Context, claims *keeperjwt
 	}
 	created, err := h.svc.CreateHerald(ctx, hr)
 	if err != nil {
-		return zero, h.heraldError(err, req.Name, "create")
+		return zero, h.heraldError(err, req.ID, "create")
 	}
 	return HeraldWriteReply{View: toHeraldView(created), herald: created}, nil
 }
 
-// UpdateHeraldTyped is the domain function for PUT /v1/heralds/{name} (handler-native,
+// UpdateHeraldTyped is the domain function for PUT /v1/heralds/{id} (handler-native,
 // replace semantics). name from path; convert native req → domain model +
 // svc.UpdateHerald + sentinel→problem. Errors — *problemError; success —
 // [HeraldWriteReply] (200 view + audit fields).
-func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req HeraldUpdateInput) (HeraldWriteReply, error) {
+func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, id string, req HeraldUpdateInput) (HeraldWriteReply, error) {
 	var zero HeraldWriteReply
 	hr := &herald.Herald{
-		Name:      name,
+		ID:        id,
 		Type:      herald.HeraldType(req.Type),
 		Config:    req.Config,
 		SecretRef: req.SecretRef,
@@ -182,12 +182,12 @@ func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req 
 	}
 	updated, err := h.svc.UpdateHerald(ctx, hr)
 	if err != nil {
-		return zero, h.heraldError(err, name, "update")
+		return zero, h.heraldError(err, id, "update")
 	}
 	return HeraldWriteReply{View: toHeraldView(updated), herald: updated}, nil
 }
 
-// SetHeraldLabelTyped — domain function for PUT /v1/heralds/{name}/label
+// SetHeraldLabelTyped — domain function for PUT /v1/heralds/{id}/label
 // (WRITE+AUDIT herald.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
@@ -195,73 +195,73 @@ func (h *HeraldHandler) UpdateHeraldTyped(ctx context.Context, name string, req 
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row — and because THAT name, not the caption, is the
 // `<entity>` segment of the channel's derived Vault path.
-func (h *HeraldHandler) SetHeraldLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[HeraldView], error) {
+func (h *HeraldHandler) SetHeraldLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[HeraldView], error) {
 	var zero LabelWriteReply[HeraldView]
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	updated, previous, err := h.svc.SetHeraldLabel(ctx, name, req.Label)
+	updated, previous, err := h.svc.SetHeraldLabel(ctx, id, req.Label)
 	if err != nil {
-		return zero, h.heraldError(err, name, "label-set")
+		return zero, h.heraldError(err, id, "label-set")
 	}
-	return LabelWriteReply[HeraldView]{Body: toHeraldView(updated), Name: name, Label: updated.Label, Previous: previous}, nil
+	return LabelWriteReply[HeraldView]{Body: toHeraldView(updated), ID: id, Label: updated.Label, Previous: previous}, nil
 }
 
-// SetTidingLabelTyped — domain function for PUT /v1/tidings/{name}/label
+// SetTidingLabelTyped — domain function for PUT /v1/tidings/{id}/label
 // (WRITE+AUDIT tiding.label_changed). 404 if absent. Same contract as
 // [HeraldHandler.SetHeraldLabelTyped].
-func (h *HeraldHandler) SetTidingLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[TidingView], error) {
+func (h *HeraldHandler) SetTidingLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[TidingView], error) {
 	var zero LabelWriteReply[TidingView]
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	updated, previous, err := h.svc.SetTidingLabel(ctx, name, req.Label)
+	updated, previous, err := h.svc.SetTidingLabel(ctx, id, req.Label)
 	if err != nil {
-		return zero, h.tidingError(err, name, "label-set")
+		return zero, h.tidingError(err, id, "label-set")
 	}
-	return LabelWriteReply[TidingView]{Body: toTidingView(updated), Name: name, Label: updated.Label, Previous: previous}, nil
+	return LabelWriteReply[TidingView]{Body: toTidingView(updated), ID: id, Label: updated.Label, Previous: previous}, nil
 }
 
 // HeraldDeleteReply is the extracted result of [HeraldHandler.DeleteHeraldTyped]
 // (handler-native). Carries audit fields (HTTP response — empty 204 body).
 type HeraldDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload assembles the audit payload of the herald.delete route (parity with legacy: name).
 func (r HeraldDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteHeraldTyped is the domain function for DELETE /v1/heralds/{name}
+// DeleteHeraldTyped is the domain function for DELETE /v1/heralds/{id}
 // (handler-native): validate path name + svc.DeleteHerald + sentinel→problem (cascade
 // removes Tidings). Errors — *problemError; success — [HeraldDeleteReply].
-func (h *HeraldHandler) DeleteHeraldTyped(ctx context.Context, name string) (HeraldDeleteReply, error) {
+func (h *HeraldHandler) DeleteHeraldTyped(ctx context.Context, id string) (HeraldDeleteReply, error) {
 	var zero HeraldDeleteReply
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	if err := h.svc.DeleteHerald(ctx, name); err != nil {
-		return zero, h.heraldError(err, name, "delete")
+	if err := h.svc.DeleteHerald(ctx, id); err != nil {
+		return zero, h.heraldError(err, id, "delete")
 	}
-	return HeraldDeleteReply{Name: name}, nil
+	return HeraldDeleteReply{ID: id}, nil
 }
 
-// GetHeraldTyped is the domain function for GET /v1/heralds/{name} (handler-native,
+// GetHeraldTyped is the domain function for GET /v1/heralds/{id} (handler-native,
 // read-with-path, no audit): validate path name + svc.GetHerald + sentinel→problem
 // (404/422/500). Errors — *problemError; success — [HeraldView].
-func (h *HeraldHandler) GetHeraldTyped(ctx context.Context, name string) (HeraldView, error) {
+func (h *HeraldHandler) GetHeraldTyped(ctx context.Context, id string) (HeraldView, error) {
 	var zero HeraldView
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	hr, err := h.svc.GetHerald(ctx, name)
+	hr, err := h.svc.GetHerald(ctx, id)
 	if err != nil {
-		return zero, h.heraldError(err, name, "get")
+		return zero, h.heraldError(err, id, "get")
 	}
 	return toHeraldView(hr), nil
 }
@@ -299,17 +299,17 @@ func (h *HeraldHandler) ListHeraldsTyped(ctx context.Context, offset, limit int)
 // heraldError maps sentinel errors of the herald layer to *problemError. exists→409,
 // not-found→404, validation (bad config/secret_ref/type)→422, other→500 (raw err is
 // not propagated to the client, only logged).
-func (h *HeraldHandler) heraldError(err error, name, op string) error {
+func (h *HeraldHandler) heraldError(err error, id, op string) error {
 	switch {
 	case errors.Is(err, herald.ErrHeraldExists):
-		return &problemError{problem.New(problem.TypeHeraldExists, "", "herald "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeHeraldExists, "", "herald "+id+" already exists")}
 	case errors.Is(err, herald.ErrHeraldNotFound):
-		return &problemError{problem.New(problem.TypeNotFound, "", "herald "+name+" not found")}
+		return &problemError{problem.New(problem.TypeNotFound, "", "herald "+id+" not found")}
 	case herald.IsValidationError(err):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", herald.PublicMessage(err))}
 	default:
 		h.logger.Error("herald."+op+": service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" herald failed")}
 	}
 }
@@ -319,7 +319,7 @@ func (h *HeraldHandler) heraldError(err error, name, op string) error {
 // created_by_aid. The url value is taken from config (for webhook, config.url).
 func heraldAuditPayload(h *herald.Herald) middleware.AuditPayload {
 	p := middleware.AuditPayload{
-		"name":    h.Name,
+		"id":      h.ID,
 		"label":   h.Label,
 		"type":    string(h.Type),
 		"enabled": h.Enabled,
@@ -356,7 +356,7 @@ func aidPtr(aid string) *string {
 // *map with omitempty; cadence/created_by_aid/ephemeral/incarnation/projection/task/
 // voyage_id — optional pointers with omitempty. created_at/updated_at — UTC (nanosecond wire).
 type TidingView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -384,7 +384,7 @@ func toTidingView(t *herald.Tiding) TidingView {
 	}
 	ephemeral := t.Ephemeral
 	return TidingView{
-		Name:         t.Name,
+		ID:           t.ID,
 		Label:        t.Label,
 		Herald:       t.Herald,
 		EventTypes:   eventTypes,
@@ -409,9 +409,9 @@ func toTidingView(t *herald.Tiding) TidingView {
 // optional filters/selectors + annotations/projection. ephemeral/voyage_id are absent —
 // server-side (ADR-052(g)). The service validates field formats.
 type TidingCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/tidings/{name}/label.
+	// by PUT /v1/tidings/{id}/label.
 	Label        *string
 	Herald       string
 	EventTypes   []string
@@ -425,7 +425,7 @@ type TidingCreateInput struct {
 	Enabled      *bool
 }
 
-// TidingUpdateInput is the NATIVE request form of PUT /v1/tidings/{name}
+// TidingUpdateInput is the NATIVE request form of PUT /v1/tidings/{id}
 // (handler-native, replace semantics: omit==clear for optional fields — lesson N4).
 // name from path. Replaces TidingUpdateRequest.
 type TidingUpdateInput struct {
@@ -461,7 +461,7 @@ func (r TidingWriteReply) AuditPayload() middleware.AuditPayload {
 func (h *HeraldHandler) CreateTidingTyped(ctx context.Context, claims *keeperjwt.Claims, req TidingCreateInput) (TidingWriteReply, error) {
 	var zero TidingWriteReply
 	tg := &herald.Tiding{
-		Name:         req.Name,
+		ID:           req.ID,
 		Label:        req.Label,
 		Herald:       req.Herald,
 		EventTypes:   req.EventTypes,
@@ -477,20 +477,20 @@ func (h *HeraldHandler) CreateTidingTyped(ctx context.Context, claims *keeperjwt
 	}
 	created, err := h.svc.CreateTiding(ctx, tg)
 	if err != nil {
-		return zero, h.tidingError(err, req.Name, "create")
+		return zero, h.tidingError(err, req.ID, "create")
 	}
 	return TidingWriteReply{View: toTidingView(created), tiding: created}, nil
 }
 
-// UpdateTidingTyped is the domain function for PUT /v1/tidings/{name} (handler-native,
+// UpdateTidingTyped is the domain function for PUT /v1/tidings/{id} (handler-native,
 // replace semantics). name from path. PUT-replace: omit==clear (lesson N4) — req.Task=
 // nil/incarnation/cadence/annotations/projection are cleared, the FE sends the whole
 // rule. svc.UpdateTiding + sentinel→problem. Errors — *problemError; success —
 // [TidingWriteReply] (200 view + audit fields).
-func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, name string, req TidingUpdateInput) (TidingWriteReply, error) {
+func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, id string, req TidingUpdateInput) (TidingWriteReply, error) {
 	var zero TidingWriteReply
 	tg := &herald.Tiding{
-		Name:         name,
+		ID:           id,
 		Herald:       req.Herald,
 		EventTypes:   req.EventTypes,
 		OnlyFailures: boolOr(req.OnlyFailures, false),
@@ -504,7 +504,7 @@ func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, name string, req 
 	}
 	updated, err := h.svc.UpdateTiding(ctx, tg)
 	if err != nil {
-		return zero, h.tidingError(err, name, "update")
+		return zero, h.tidingError(err, id, "update")
 	}
 	return TidingWriteReply{View: toTidingView(updated), tiding: updated}, nil
 }
@@ -512,41 +512,41 @@ func (h *HeraldHandler) UpdateTidingTyped(ctx context.Context, name string, req 
 // TidingDeleteReply is the extracted result of [HeraldHandler.DeleteTidingTyped]
 // (handler-native). Carries audit fields (HTTP response — empty 204 body).
 type TidingDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload assembles the audit payload of the tiding.delete route (parity with legacy: name).
 func (r TidingDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteTidingTyped is the domain function for DELETE /v1/tidings/{name}
+// DeleteTidingTyped is the domain function for DELETE /v1/tidings/{id}
 // (handler-native): validate path name + svc.DeleteTiding + sentinel→problem. Errors —
 // *problemError; success — [TidingDeleteReply].
-func (h *HeraldHandler) DeleteTidingTyped(ctx context.Context, name string) (TidingDeleteReply, error) {
+func (h *HeraldHandler) DeleteTidingTyped(ctx context.Context, id string) (TidingDeleteReply, error) {
 	var zero TidingDeleteReply
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	if err := h.svc.DeleteTiding(ctx, name); err != nil {
-		return zero, h.tidingError(err, name, "delete")
+	if err := h.svc.DeleteTiding(ctx, id); err != nil {
+		return zero, h.tidingError(err, id, "delete")
 	}
-	return TidingDeleteReply{Name: name}, nil
+	return TidingDeleteReply{ID: id}, nil
 }
 
-// GetTidingTyped is the domain function for GET /v1/tidings/{name} (handler-native,
+// GetTidingTyped is the domain function for GET /v1/tidings/{id} (handler-native,
 // read-with-path, no audit): validate path name + svc.GetTiding + sentinel→problem
 // (404/422/500). Errors — *problemError; success — [TidingView].
-func (h *HeraldHandler) GetTidingTyped(ctx context.Context, name string) (TidingView, error) {
+func (h *HeraldHandler) GetTidingTyped(ctx context.Context, id string) (TidingView, error) {
 	var zero TidingView
-	if !herald.ValidName(name) {
+	if !herald.ValidID(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+herald.NamePattern)}
+			"path 'id' must match "+herald.IDPattern)}
 	}
-	tg, err := h.svc.GetTiding(ctx, name)
+	tg, err := h.svc.GetTiding(ctx, id)
 	if err != nil {
-		return zero, h.tidingError(err, name, "get")
+		return zero, h.tidingError(err, id, "get")
 	}
 	return toTidingView(tg), nil
 }
@@ -585,19 +585,19 @@ func (h *HeraldHandler) ListTidingsTyped(ctx context.Context, includeEphemeral b
 // tiding-not-found→404, herald-not-found (FK)→404, validation→422, other→500.
 // ErrHeraldNotFound is checked BEFORE ErrTidingNotFound: an FK violation on a missing
 // herald has a distinct meaning (a rule is created for a nonexistent channel).
-func (h *HeraldHandler) tidingError(err error, name, op string) error {
+func (h *HeraldHandler) tidingError(err error, id, op string) error {
 	switch {
 	case errors.Is(err, herald.ErrTidingExists):
-		return &problemError{problem.New(problem.TypeTidingExists, "", "tiding "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeTidingExists, "", "tiding "+id+" already exists")}
 	case errors.Is(err, herald.ErrHeraldNotFound):
 		return &problemError{problem.New(problem.TypeNotFound, "", "referenced herald not found")}
 	case errors.Is(err, herald.ErrTidingNotFound):
-		return &problemError{problem.New(problem.TypeNotFound, "", "tiding "+name+" not found")}
+		return &problemError{problem.New(problem.TypeNotFound, "", "tiding "+id+" not found")}
 	case herald.IsValidationError(err):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", herald.PublicMessage(err))}
 	default:
 		h.logger.Error("tiding."+op+": service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" tiding failed")}
 	}
 }
@@ -607,7 +607,7 @@ func (h *HeraldHandler) tidingError(err error, name, op string) error {
 // written only when set.
 func tidingAuditPayload(t *herald.Tiding) middleware.AuditPayload {
 	p := middleware.AuditPayload{
-		"name":          t.Name,
+		"id":            t.ID,
 		"label":         t.Label,
 		"herald":        t.Herald,
 		"event_types":   t.EventTypes,

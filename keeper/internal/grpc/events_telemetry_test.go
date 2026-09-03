@@ -382,7 +382,7 @@ func TestResolveForSID_PassesIncarnationTraitsToTheStack(t *testing.T) {
 
 // TestIncarnationForSID — v1 policy for picking one incarnation out of a host's
 // memberships: ≥2 → the first by name, 1 → that one, 0 → (nil,nil). Determinism
-// of "the first" in prod comes from ORDER BY i.name in
+// of "the first" in prod comes from ORDER BY i.id in
 // selectIncarnationsForSIDSQL; the fake returns rows in insertion order, so the
 // multi-membership case is already sorted by name (as live PG would return it) —
 // the fake itself does not sort.
@@ -425,7 +425,7 @@ func TestIncarnationForSID(t *testing.T) {
 				}
 				return
 			}
-			if inc == nil || inc.Name != tc.wantName {
+			if inc == nil || inc.ID != tc.wantName {
 				t.Fatalf("inc = %+v, want name=%q", inc, tc.wantName)
 			}
 		})

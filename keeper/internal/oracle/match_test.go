@@ -14,7 +14,7 @@ func strptr(s string) *string { return &s }
 func hostA(sid string) subject.Host { return subject.Host{SID: sid} }
 
 func TestSubjectMatches_SID(t *testing.T) {
-	d := &Decree{Name: "d", SubjectSID: []string{"host-a.example.com"}}
+	d := &Decree{ID: "d", SubjectSID: []string{"host-a.example.com"}}
 
 	if !SubjectMatches(d, hostA("host-a.example.com")) {
 		t.Error("sid-Decree should match a matching SID")
@@ -25,7 +25,7 @@ func TestSubjectMatches_SID(t *testing.T) {
 }
 
 func TestSubjectMatches_Coven(t *testing.T) {
-	d := &Decree{Name: "d", SubjectCoven: []string{"web", "prod"}}
+	d := &Decree{ID: "d", SubjectCoven: []string{"web", "prod"}}
 
 	if !SubjectMatches(d, subject.Host{SID: "host-a", Covens: []string{"prod", "eu"}}) {
 		t.Error("coven-Decree should match on intersection (prod)")
@@ -45,7 +45,7 @@ func TestSubjectMatches_Coven(t *testing.T) {
 // inheritance — the label is still only where an operator attached it, but a rule
 // reads both places.
 func TestSubjectMatches_CovenReachesIncarnationMembers(t *testing.T) {
-	d := &Decree{Name: "d", SubjectCoven: []string{"prod"}}
+	d := &Decree{ID: "d", SubjectCoven: []string{"prod"}}
 
 	member := subject.Host{
 		SID:    "host-a",
@@ -72,7 +72,7 @@ func TestSubjectMatches_CovenReachesIncarnationMembers(t *testing.T) {
 // exactly the escalation NIM-281 closed.
 func TestSubjectMatches_Incarnation(t *testing.T) {
 	d := &Decree{
-		Name:               "d",
+		ID:                 "d",
 		SubjectService:     strptr("redis"),
 		SubjectIncarnation: strptr("redis-prod"),
 	}
@@ -102,7 +102,7 @@ func TestSubjectMatches_Incarnation(t *testing.T) {
 }
 
 func TestSubjectMatches_Trait(t *testing.T) {
-	d := &Decree{Name: "d", SubjectTraitKey: strptr("tier"), SubjectTraitValue: strptr("gold")}
+	d := &Decree{ID: "d", SubjectTraitKey: strptr("tier"), SubjectTraitValue: strptr("gold")}
 
 	own := subject.Host{SID: "host-a", Traits: map[string]any{"tier": "gold"}}
 	if !SubjectMatches(d, own) {
@@ -130,7 +130,7 @@ func TestSubjectMatches_Trait(t *testing.T) {
 func TestSubjectMatches_EmptySubjectFailSafe(t *testing.T) {
 	// The schema's exactly-one-of invariant won't allow such a row, but this is a
 	// fail-safe for a programming error: empty subject → no match (default-deny).
-	d := &Decree{Name: "d"}
+	d := &Decree{ID: "d"}
 	full := subject.Host{
 		SID:    "host-a",
 		Covens: []string{"web"},

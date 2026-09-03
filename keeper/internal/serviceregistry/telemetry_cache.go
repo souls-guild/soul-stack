@@ -24,7 +24,7 @@ type TelemetryCatalog struct {
 // TelemetryLister - a read surface for the default (per-service, without an incarnation)
 // telemetry config of a service + a snapshot SHA1 (for ETag) from the materialized
 // Service repo snapshot for `(name, ref)`. Parity [DirectiveLister]. When nil,
-// `GET /v1/services/{name}/telemetry` responds 500 "not configured".
+// `GET /v1/services/{id}/telemetry` responds 500 "not configured".
 type TelemetryLister interface {
 	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*TelemetryCatalog, error)
 }

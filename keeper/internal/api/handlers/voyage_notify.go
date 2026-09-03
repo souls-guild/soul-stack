@@ -100,9 +100,9 @@ func prepareNotifyTidingsErr(
 		n := &notify[i]
 		idx := "notify[" + strconv.Itoa(i) + "]"
 
-		if !herald.ValidName(n.Herald) {
+		if !herald.ValidID(n.Herald) {
 			return nil, problemDetailsPtr(problem.TypeValidationFailed,
-				idx+".herald: name "+n.Herald+" must match "+herald.NamePattern)
+				idx+".herald: name "+n.Herald+" must match "+herald.IDPattern)
 		}
 		eventTypes, etErr := notifyEventTypes(kind, n.On)
 		if etErr != "" {
@@ -121,7 +121,7 @@ func prepareNotifyTidingsErr(
 		// Channel existence: a nonexistent herald → 422 (not an FK-500 on insert in
 		// the tx). The same store pool as the parent CRUD (herald.ExecQueryRower ⊂
 		// voyage/cadence.ExecQueryRower).
-		if _, err := herald.SelectHeraldByName(ctx, deps.store, n.Herald); err != nil {
+		if _, err := herald.SelectHeraldByID(ctx, deps.store, n.Herald); err != nil {
 			if errors.Is(err, herald.ErrHeraldNotFound) {
 				return nil, problemDetailsPtr(problem.TypeValidationFailed,
 					idx+": herald "+n.Herald+" does not exist")
@@ -158,7 +158,7 @@ func prepareNotifyTidingsErr(
 			cadenceID := shape.cadenceID
 			t.Cadence = &cadenceID
 			t.CreatedFromCadenceID = &cadenceID
-			t.Name = permanentNotifyName(shape.namePrefix, i)
+			t.ID = permanentNotifyName(shape.namePrefix, i)
 		}
 		templates = append(templates, t)
 	}
@@ -209,7 +209,7 @@ func stampEphemeralTidings(templates []herald.Tiding, voyageID string) {
 	for i := range templates {
 		vid := voyageID
 		templates[i].VoyageID = &vid
-		templates[i].Name = "eph-" + strings.ToLower(audit.NewULID())
+		templates[i].ID = "eph-" + strings.ToLower(audit.NewULID())
 	}
 }
 

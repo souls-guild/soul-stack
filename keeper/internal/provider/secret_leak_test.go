@@ -45,7 +45,7 @@ func newCredService(t *testing.T, v SecretWriter, db *fakeDB, accept bool) *Serv
 
 func credInput() CreateInput {
 	return CreateInput{
-		Name:        "aws-prod",
+		ID:          "aws-prod",
 		Type:        "aws",
 		Region:      "eu-west-1",
 		Credentials: map[string]any{"access_key": "AKIA0000", "secret_key": leakCred},
@@ -91,7 +91,7 @@ func TestProviderRefModeUnchanged(t *testing.T) {
 	svc := newCredService(t, v, db, true)
 
 	p, err := svc.Create(context.Background(), CreateInput{
-		Name: "aws-prod", Type: "aws", Region: "eu-west-1",
+		ID: "aws-prod", Type: "aws", Region: "eu-west-1",
 		CredentialsRef: "vault:secret/keeper/providers/aws",
 	})
 	if err != nil {
@@ -132,7 +132,7 @@ func TestProviderCredentialsRequired(t *testing.T) {
 	db := &fakeDB{}
 	svc := newCredService(t, v, db, true)
 
-	_, err := svc.Create(context.Background(), CreateInput{Name: "aws-prod", Type: "aws", Region: "eu-west-1"})
+	_, err := svc.Create(context.Background(), CreateInput{ID: "aws-prod", Type: "aws", Region: "eu-west-1"})
 	if err == nil || !IsValidationError(err) {
 		t.Fatalf("neither: err=%v, want ErrValidation", err)
 	}

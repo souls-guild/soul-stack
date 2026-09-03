@@ -79,20 +79,20 @@ func seedMembershipFixture(t *testing.T, ctx context.Context, subjectCoven, memb
 		}
 	}
 	if err := incarnation.Create(ctx, integrationPool, &incarnation.Incarnation{
-		Name: membershipInc, Service: membershipSvc, ServiceVersion: "v1",
+		ID: membershipInc, Service: membershipSvc, ServiceVersion: "v1",
 		StateSchemaVersion: 1, State: map[string]any{},
 		Status: incarnation.StatusReady, Covens: incarnationCovens, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("incarnation.Create: %v", err)
 	}
 	if err := oracle.InsertVigil(ctx, integrationPool, &oracle.Vigil{
-		Name: membershipBeacon, Coven: subjectCoven, IntervalSpec: "30s",
+		ID: membershipBeacon, Coven: subjectCoven, IntervalSpec: "30s",
 		CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {
 		t.Fatalf("InsertVigil: %v", err)
 	}
 	if err := oracle.InsertDecree(ctx, integrationPool, &oracle.Decree{
-		Name: membershipDecree, OnBeacon: membershipBeacon,
+		ID: membershipDecree, OnBeacon: membershipBeacon,
 		SubjectCoven: subjectCoven, IncarnationName: membershipInc,
 		ActionScenario: "restart_service", Cooldown: "5m", Enabled: true, CreatedByAID: &creator,
 	}); err != nil {

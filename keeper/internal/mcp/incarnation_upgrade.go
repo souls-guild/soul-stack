@@ -14,7 +14,7 @@ import (
 // (schemaIncarnationUpgradeInput): name + to_version required. to_version is
 // the git-ref of the target service version (ADR-007).
 type incarnationUpgradeArgs struct {
-	Name      string `json:"name"`
+	ID        string `json:"id"`
 	ToVersion string `json:"to_version"`
 }
 
@@ -49,12 +49,12 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 	if a.ToVersion == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'to_version' is required")
@@ -67,17 +67,17 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 			"service loader is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		// Fail-closed RBAC on a not-found/failed incarnation lookup (parity with REST).
-		if scopeErr := h.checkIncarnationScope(claims, "upgrade", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "upgrade", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.upgrade")
 		}
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.upgrade select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -87,7 +87,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 
 	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
 	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
-	if err := h.checkIncarnationScope(claims, "upgrade", inc.Name, inc.Service, inc.Covens); err != nil {
+	if err := h.checkIncarnationScope(claims, "upgrade", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.upgrade")
 	}
@@ -99,7 +99,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.upgrade prepare failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("service", inc.Service),
 				slog.String("to_version", a.ToVersion),
 				slog.String("by_aid", claims.Subject),
@@ -113,7 +113,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.upgrade failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("to_version", a.ToVersion),
 				slog.String("apply_id", applyID),
 				slog.String("by_aid", claims.Subject),
@@ -124,7 +124,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 	}
 
 	h.writeAudit(audit.EventIncarnationUpgradeStarted, claims.Subject, map[string]any{
-		"name":       a.Name,
+		"id":         a.ID,
 		"to_version": a.ToVersion,
 		"apply_id":   applyID,
 	})

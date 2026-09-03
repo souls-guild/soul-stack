@@ -84,7 +84,7 @@ type emailTarget struct {
 func resolveEmailTarget(ctx context.Context, h *Herald, kv KVReader) (*emailTarget, error) {
 	host, ok := configString(h.Config, "smtp_host")
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no smtp_host", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no smtp_host", h.ID)}
 	}
 	port, err := configPort(h.Config)
 	if err != nil {
@@ -92,11 +92,11 @@ func resolveEmailTarget(ctx context.Context, h *Herald, kv KVReader) (*emailTarg
 	}
 	from, ok := configString(h.Config, "from")
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no from", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no from", h.ID)}
 	}
 	to := configStringList(h.Config, "to")
 	if len(to) == 0 {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no recipients", h.Name)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: email channel %q has no recipients", h.ID)}
 	}
 
 	tlsMode := emailTLSStartTLS

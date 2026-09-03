@@ -89,7 +89,7 @@ _dryrun_synth() {
 	"POST /v1/incarnations")
 		printf '{"apply_id":"%s","incarnation":"%s"}\n%s' "$aid" "${INCARNATION:-redis-auto}" 202 ;;
 	"POST "*/unlock)
-		printf '{"name":"%s","previous_status":"error_locked","status":"ready","unlocked_at":"%s","unlocked_by_aid":"%s"}\n%s' \
+		printf '{"id":"%s","previous_status":"error_locked","status":"ready","unlocked_at":"%s","unlocked_by_aid":"%s"}\n%s' \
 			"${INCARNATION:-redis-auto}" "$now" "${AID:-archon-alice}" 200 ;;
 	"POST "*/scenarios/*)
 		local sc="${path##*/scenarios/}"
@@ -104,7 +104,7 @@ _dryrun_synth() {
 	"GET "*/history)
 		printf '{"items":[],"offset":0,"limit":50,"total":0}\n%s' 200 ;;
 	"GET "*)
-		printf '{"covens":["%s"],"created_at":"%s","created_by_aid":"%s","name":"%s","service":"%s","service_version":"dry","spec":null,"state":{"users":[]},"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"%s"}\n%s' \
+		printf '{"covens":["%s"],"created_at":"%s","created_by_aid":"%s","id":"%s","service":"%s","service_version":"dry","spec":null,"state":{"users":[]},"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"%s"}\n%s' \
 			"${INCARNATION:-redis-auto}" "$now" "${AID:-archon-alice}" "${INCARNATION:-redis-auto}" "${SERVICE:-example-cloud-bootstrap}" "$now" 200 ;;
 	*)
 		printf '{}\n%s' 200 ;;

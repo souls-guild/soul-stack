@@ -32,7 +32,7 @@ import (
 // incarnation lends the host nothing, while a label on the incarnation reaches
 // its members (NIM-280), and those are different sentences.
 type augurFakeDB struct {
-	omenRow  func() pgx.Row // SelectOmenByName
+	omenRow  func() pgx.Row // SelectOmenByID
 	riteRows func() (pgx.Rows, error)
 
 	// hostCovens / hostTraits — labels an operator attached to THIS host.
@@ -79,7 +79,7 @@ func (f *augurFakeDB) Query(_ context.Context, sql string, args ...any) (pgx.Row
 	return &augurEmptyRows{}, nil
 }
 
-// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.name,
+// hostRows answers [subject.LoadHost]: s.coven, s.traits, i.service, i.id,
 // i.covens, i.traits — one row per membership, the host's own labels repeated in
 // each, and a single NULL-incarnation row when the host belongs to nothing.
 func (f *augurFakeDB) hostRows() pgx.Rows {

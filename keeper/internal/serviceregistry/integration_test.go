@@ -112,7 +112,7 @@ func TestIntegration_Service_CRUDRoundTrip(t *testing.T) {
 	aid := "archon-alice"
 
 	created, err := svc.CreateService(ctx, CreateServiceInput{
-		Name: "web", Git: "git@example.com:web.git", Ref: "v1.0.0",
+		ID: "web", Git: "git@example.com:web.git", Ref: "v1.0.0",
 		Refresh: ptrStr("5m"), CallerAID: &aid,
 	})
 	if err != nil {
@@ -137,7 +137,7 @@ func TestIntegration_Service_CRUDRoundTrip(t *testing.T) {
 	}
 
 	updated, err := svc.UpdateService(ctx, UpdateServiceInput{
-		Name: "web", Git: "git@example.com:web.git", Ref: "main",
+		ID: "web", Git: "git@example.com:web.git", Ref: "main",
 		Refresh: nil, CallerAID: &aid,
 	})
 	if err != nil {
@@ -155,27 +155,27 @@ func TestIntegration_Service_CRUDRoundTrip(t *testing.T) {
 	}
 }
 
-func TestIntegration_Service_DuplicateName(t *testing.T) {
+func TestIntegration_Service_DuplicateID(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	svc := newService(t)
-	if _, err := svc.CreateService(ctx, CreateServiceInput{Name: "web", Git: "g", Ref: "v1"}); err != nil {
+	if _, err := svc.CreateService(ctx, CreateServiceInput{ID: "web", Git: "g", Ref: "v1"}); err != nil {
 		t.Fatalf("CreateService#1: %v", err)
 	}
-	_, err := svc.CreateService(ctx, CreateServiceInput{Name: "web", Git: "g2", Ref: "v2"})
+	_, err := svc.CreateService(ctx, CreateServiceInput{ID: "web", Git: "g2", Ref: "v2"})
 	if !errors.Is(err, ErrAlreadyExists) {
 		t.Fatalf("err = %v, want ErrAlreadyExists", err)
 	}
 }
 
-func TestIntegration_Service_NameFormatCHECK(t *testing.T) {
+func TestIntegration_Service_IDFormatCHECK(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	// Direct INSERT bypassing Go validation: the SQL CHECK must reject a bad name.
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO service_registry (name, git, ref) VALUES ('Bad_Name', 'g', 'r')`)
+		`INSERT INTO service_registry (id, git, ref) VALUES ('Bad_Name', 'g', 'r')`)
 	if err == nil {
-		t.Fatal("expected CHECK violation for name='Bad_Name'")
+		t.Fatal("expected CHECK violation for id='Bad_Name'")
 	}
 }
 
@@ -184,12 +184,12 @@ func TestIntegration_Service_GitRefNonemptyCHECK(t *testing.T) {
 	ctx := context.Background()
 	// Direct INSERT: empty git → CHECK service_registry_git_nonempty.
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO service_registry (name, git, ref) VALUES ('web', '', 'r')`); err == nil {
+		`INSERT INTO service_registry (id, git, ref) VALUES ('web', '', 'r')`); err == nil {
 		t.Fatal("expected CHECK violation for empty git")
 	}
 	// Empty ref → CHECK service_registry_ref_nonempty.
 	if _, err := integrationPool.Exec(ctx,
-		`INSERT INTO service_registry (name, git, ref) VALUES ('web', 'g', '')`); err == nil {
+		`INSERT INTO service_registry (id, git, ref) VALUES ('web', 'g', '')`); err == nil {
 		t.Fatal("expected CHECK violation for empty ref")
 	}
 }
@@ -198,7 +198,7 @@ func TestIntegration_Service_UpdateNotFound(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 	svc := newService(t)
-	_, err := svc.UpdateService(ctx, UpdateServiceInput{Name: "ghost", Git: "g", Ref: "r"})
+	_, err := svc.UpdateService(ctx, UpdateServiceInput{ID: "ghost", Git: "g", Ref: "r"})
 	if !errors.Is(err, ErrNotFound) {
 		t.Fatalf("UpdateService missing = %v, want ErrNotFound", err)
 	}
@@ -219,7 +219,7 @@ func TestIntegration_Service_UnknownOperatorFK(t *testing.T) {
 	svc := newService(t)
 	// Operator not seeded → FK-violation on created_by_aid.
 	_, err := svc.CreateService(ctx, CreateServiceInput{
-		Name: "web", Git: "g", Ref: "r", CallerAID: ptrStr("archon-ghost"),
+		ID: "web", Git: "g", Ref: "r", CallerAID: ptrStr("archon-ghost"),
 	})
 	if !errors.Is(err, ErrOperatorNotFound) {
 		t.Fatalf("CreateService unknown operator = %v, want ErrOperatorNotFound", err)
@@ -231,7 +231,7 @@ func TestIntegration_Service_List(t *testing.T) {
 	ctx := context.Background()
 	svc := newService(t)
 	for _, n := range []string{"web", "api", "db"} {
-		if _, err := svc.CreateService(ctx, CreateServiceInput{Name: n, Git: "g", Ref: "v1"}); err != nil {
+		if _, err := svc.CreateService(ctx, CreateServiceInput{ID: n, Git: "g", Ref: "v1"}); err != nil {
 			t.Fatalf("CreateService(%s): %v", n, err)
 		}
 	}
@@ -242,9 +242,9 @@ func TestIntegration_Service_List(t *testing.T) {
 	if len(got) != 3 {
 		t.Fatalf("len = %d, want 3", len(got))
 	}
-	// ORDER BY name ASC.
-	if got[0].Name != "api" || got[1].Name != "db" || got[2].Name != "web" {
-		t.Errorf("order mismatch: %s, %s, %s", got[0].Name, got[1].Name, got[2].Name)
+	// ORDER BY id ASC.
+	if got[0].ID != "api" || got[1].ID != "db" || got[2].ID != "web" {
+		t.Errorf("order mismatch: %s, %s, %s", got[0].ID, got[1].ID, got[2].ID)
 	}
 }
 
@@ -314,7 +314,7 @@ func TestIntegration_Service_NullCreatedByOnOperatorDelete(t *testing.T) {
 	svc := newService(t)
 	aid := "archon-alice"
 	// CreateService fills both created_by_aid AND updated_by_aid with the author.
-	if _, err := svc.CreateService(ctx, CreateServiceInput{Name: "web", Git: "g", Ref: "r", CallerAID: &aid}); err != nil {
+	if _, err := svc.CreateService(ctx, CreateServiceInput{ID: "web", Git: "g", Ref: "r", CallerAID: &aid}); err != nil {
 		t.Fatalf("CreateService: %v", err)
 	}
 	// FK on created_by_aid / updated_by_aid — ON DELETE SET NULL: deleting

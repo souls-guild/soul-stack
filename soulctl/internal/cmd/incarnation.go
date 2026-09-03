@@ -61,12 +61,12 @@ func newIncarnationListCmd() *cobra.Command {
 			rows := make([][]string, 0, len(reply.Items))
 			for _, it := range reply.Items {
 				rows = append(rows, []string{
-					it.Name, it.Service, it.ServiceVersion, it.Status,
+					it.ID, it.Service, it.ServiceVersion, it.Status,
 					output.JoinList(it.Covens),
 				})
 			}
 			return output.Table(cmd.OutOrStdout(),
-				[]string{"NAME", "SERVICE", "VERSION", "STATUS", "COVENS"},
+				[]string{"ID", "SERVICE", "VERSION", "STATUS", "COVENS"},
 				rows)
 		},
 	}

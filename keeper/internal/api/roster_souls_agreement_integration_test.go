@@ -13,7 +13,7 @@
 // readers, from ONE token in ONE run:
 //
 //	expected = {SIDs GET /v1/souls shows} ∩ {true members, read straight from PG}
-//	actual   = {SIDs GET /v1/incarnations/{name}/members shows}
+//	actual   = {SIDs GET /v1/incarnations/{id}/members shows}
 //
 // Postgres is the neutral third party: `incarnation_membership` is the relation
 // itself (NIM-124, migration 099), not a reader of the scope boundary, so a bug
@@ -169,7 +169,7 @@ type rosterPage struct {
 	Total  int `json:"total"`
 }
 
-// getRoster — GET /v1/incarnations/{name}/members. Returns the decoded page and
+// getRoster — GET /v1/incarnations/{id}/members. Returns the decoded page and
 // the HTTP status; a non-200 yields the zero page (the caller decides whether
 // that is the case under test).
 func getRoster(t *testing.T, base, tok, name string) (rosterPage, int) {

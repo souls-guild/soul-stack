@@ -25,7 +25,7 @@ import (
 	"github.com/jackc/pgx/v5"
 )
 
-// incTraitRow — a staticRow for SelectByName/SelectAll (16 scanIncarnation columns)
+// incTraitRow — a staticRow for SelectByID/SelectAll (16 scanIncarnation columns)
 // with a given traits map (column $13 / index 12). Mirror of incListRow, but with
 // arbitrary traits (incListRow hardcodes `{}`); covens/state are omitted (nil).
 func incTraitRow(name string, traits map[string]any) staticRow {

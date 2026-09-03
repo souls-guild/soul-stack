@@ -23,7 +23,10 @@ message AugurRequest {
   // (the `augur.*` audit event is written with correlation_id = apply_id, ADR-025).
   string apply_id = 2;
 
-  // Omen name (omens.name) — the external system access is being requested for.
+  // Omen id (omens.id) — the external system access is being requested for.
+  //
+  // The FIELD keeps the name `omen_name`, for the reason above: the registry
+  // column moved ([ADR-0085] / NIM-729), this wire contract did not.
   string omen_name = 3;
 
   // The query sent to the Omen: a KV path (vault) / promQL (prometheus) /

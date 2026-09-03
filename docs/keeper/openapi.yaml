@@ -688,9 +688,9 @@ components:
       properties:
         compatible:
           type: boolean
-        kind:
+        id:
           type: string
-        name:
+        kind:
           type: string
         ref:
           type: string
@@ -698,7 +698,7 @@ components:
           $ref: "#/components/schemas/CompatWindowView"
       required:
         - kind
-        - name
+        - id
         - window
         - compatible
       type: object
@@ -817,16 +817,16 @@ components:
         enabled:
           description: whether the rule is active (default true)
           type: boolean
+        id:
+          description: Decree name (kebab-case, 1..63)
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         incarnation_name:
           description: target incarnation of the reaction (required)
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Decree name (kebab-case, 1..63)
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         on_beacon:
           description: Vigil name whose Portent the rule reacts to
@@ -839,7 +839,7 @@ components:
           description: opt. CEL predicate over event.data; compile-checked
           type: string
       required:
-        - name
+        - id
         - on_beacon
         - subject
         - incarnation_name
@@ -884,13 +884,13 @@ components:
           type: string
         enabled:
           type: boolean
+        id:
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         incarnation_name:
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         label:
-          type: string
-        name:
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         on_beacon:
           pattern: ^[a-z0-9-]{1,63}$
@@ -909,7 +909,7 @@ components:
         - created_at
         - enabled
         - incarnation_name
-        - name
+        - id
         - on_beacon
         - subject
         - updated_at
@@ -1231,10 +1231,10 @@ components:
           type: string
         enabled:
           type: boolean
-        label:
-          type: string
-        name:
+        id:
           pattern: ^[a-z0-9-]{1,63}$
+          type: string
+        label:
           type: string
         secret_ref:
           type: string
@@ -1247,7 +1247,7 @@ components:
         - config
         - created_at
         - enabled
-        - name
+        - id
         - type
         - updated_at
       type: object
@@ -1261,12 +1261,12 @@ components:
         enabled:
           description: channel enabled (omitted → true)
           type: boolean
-        label:
-          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
+        id:
           description: Herald channel name (kebab-case, 1..63), unique in the cluster
           pattern: ^[a-z0-9-]{1,63}$
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         secret:
           description: "opt. plaintext webhook signing-token (dual-mode, ADR-064): keeper writes it into Vault itself; XOR with secret_ref. Requires TLS-front (secret_ingest.accept_plaintext)"
@@ -1286,7 +1286,7 @@ components:
             - webhook
           type: string
       required:
-        - name
+        - id
         - type
         - config
       type: object
@@ -1464,16 +1464,16 @@ components:
           description: "name of start scenario (mechanism for multiple creates, scenario with create:true). Empty: service offers create scenarios → 422 create_scenario_required; service without them → bare incarnation (ready without run)"
           pattern: ^[a-z][a-z0-9_]*$
           type: string
+        id:
+          description: new instance id (kebab-case, immutable); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components. The TEMPLATE key keeps its own spelling until NIM-730.
+          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
         input:
           additionalProperties: {}
           description: input for selected create scenario
           type: object
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"
-          type: string
-        name:
-          description: new instance name (kebab-case); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components
-          pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         service:
           description: service name from registry (ADR-029)
@@ -1530,10 +1530,10 @@ components:
             - "null"
         created_scenario:
           type: string
-        label:
-          type: string
-        name:
+        id:
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
+          type: string
+        label:
           type: string
         service:
           type: string
@@ -1560,7 +1560,7 @@ components:
         - covens
         - created_at
         - created_by_aid
-        - name
+        - id
         - service
         - service_version
         - state
@@ -1882,13 +1882,13 @@ components:
     IncarnationRunRequest:
       additionalProperties: false
       properties:
+        id:
+          description: echo path-id (ignored)
+          type: string
         input:
           additionalProperties: {}
           description: scenario input
           type: object
-        name:
-          description: echo path-name (ignored)
-          type: string
         scenario:
           description: echo path-scenario (ignored)
           type: string
@@ -1963,7 +1963,7 @@ components:
     IncarnationUnlockReply:
       additionalProperties: false
       properties:
-        name:
+        id:
           type: string
         previous_status:
           $ref: "#/components/schemas/IncarnationStatus"
@@ -1976,7 +1976,7 @@ components:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
       required:
-        - name
+        - id
         - previous_status
         - status
         - unlocked_at
@@ -1985,8 +1985,8 @@ components:
     IncarnationUnlockRequest:
       additionalProperties: false
       properties:
-        name:
-          description: echo path-name (ignored)
+        id:
+          description: echo path-id (ignored)
           type: string
         reason:
           description: free text confirmation
@@ -2031,8 +2031,8 @@ components:
     IncarnationUpgradeRequest:
       additionalProperties: false
       properties:
-        name:
-          description: echo path-name (ignored)
+        id:
+          description: echo path-id (ignored)
           type: string
         to_version:
           description: target service version (git-ref)
@@ -2278,12 +2278,12 @@ components:
         endpoint:
           description: external system URL (not a secret)
           type: string
-        label:
-          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
+        id:
           description: Omen name (kebab-case, 1..63)
           pattern: ^[a-z0-9-]{1,63}$
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         source_type:
           description: external system type; a value outside the enum -> 422
@@ -2293,7 +2293,7 @@ components:
             - elk
           type: string
       required:
-        - name
+        - id
         - source_type
         - endpoint
         - auth_ref
@@ -2334,10 +2334,10 @@ components:
           type: string
         endpoint:
           type: string
-        label:
-          type: string
-        name:
+        id:
           pattern: ^[a-z0-9-]{1,63}$
+          type: string
+        label:
           type: string
         source_type:
           type: string
@@ -2345,7 +2345,7 @@ components:
         - auth_ref
         - created_at
         - endpoint
-        - name
+        - id
         - source_type
       type: object
     Operator:
@@ -2601,9 +2601,9 @@ components:
         created_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
-        label:
+        id:
           type: string
-        name:
+        label:
           type: string
         params:
           additionalProperties: {}
@@ -2612,7 +2612,7 @@ components:
           type: string
       required:
         - created_at
-        - name
+        - id
         - params
         - provider
       type: object
@@ -2622,12 +2622,12 @@ components:
         cloud_init:
           description: raw cloud-init userdata (optional)
           type: string
+        id:
+          description: Cloud Profile id (kebab, immutable)
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Cloud Profile name (kebab)
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         params:
           additionalProperties: {}
@@ -2638,7 +2638,7 @@ components:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
       required:
-        - name
+        - id
         - provider
       type: object
     ProfileListReply:
@@ -2678,9 +2678,9 @@ components:
           type: string
         fqdn_suffix:
           type: string
-        label:
+        id:
           type: string
-        name:
+        label:
           type: string
         region:
           type: string
@@ -2689,7 +2689,7 @@ components:
       required:
         - created_at
         - credentials_ref
-        - name
+        - id
         - region
         - type
       type: object
@@ -2706,12 +2706,12 @@ components:
         fqdn_suffix:
           description: "VM FQDN suffix (self-onboard: keeper predicts FQDN=<name>-<index>.<fqdn_suffix>). If omitted, self-onboard is unavailable"
           type: string
+        id:
+          description: Cloud Provider id (kebab, immutable)
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Cloud Provider name (kebab)
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         region:
           description: provider region
@@ -2721,7 +2721,7 @@ components:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
       required:
-        - name
+        - id
         - type
         - region
       type: object
@@ -2870,9 +2870,9 @@ components:
         created_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
-        label:
+        id:
           type: string
-        name:
+        label:
           type: string
         params:
           additionalProperties: {}
@@ -2886,26 +2886,26 @@ components:
       required:
         - created_at
         - created_by_aid
-        - name
+        - id
         - params
         - updated_at
       type: object
     PushProviderCreateRequest:
       additionalProperties: false
       properties:
+        id:
+          description: Push Provider id (= plugins.ssh_providers[].name)
+          pattern: ^[a-z][a-z0-9-]{0,62}$
+          type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Push Provider name (= plugins.ssh_providers[].name)
-          pattern: ^[a-z][a-z0-9-]{0,62}$
           type: string
         params:
           additionalProperties: {}
           description: opaque params; sensitive — vault-refs (values are not logged)
           type: object
       required:
-        - name
+        - id
       type: object
     PushProviderListReply:
       additionalProperties: false
@@ -3360,9 +3360,9 @@ components:
           type:
             - array
             - "null"
-        module:
+        id:
           type: string
-        name:
+        module:
           type: string
         params:
           additionalProperties: {}
@@ -3376,7 +3376,7 @@ components:
       required:
         - plan_index
         - passage
-        - name
+        - id
         - module
         - hosts
       type: object
@@ -3721,12 +3721,12 @@ components:
         git:
           description: git source of the service repo (URL; not a secret)
           type: string
-        label:
-          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Service name (kebab-case)
+        id:
+          description: Service id (kebab-case, immutable)
           pattern: ^[a-z][a-z0-9-]*$
+          type: string
+        label:
+          description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the id instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
           type: string
         ref:
           description: git ref (tag/branch) - Service version (ADR-007)
@@ -3735,7 +3735,7 @@ components:
           description: opt. auto-refresh duration ('5m'); omitted - no auto-refresh
           type: string
       required:
-        - name
+        - id
         - git
         - ref
       type: object
@@ -3846,10 +3846,10 @@ components:
           type: string
         git:
           type: string
-        label:
-          type: string
-        name:
+        id:
           pattern: ^[a-z][a-z0-9-]*$
+          type: string
+        label:
           type: string
         ref:
           type: string
@@ -3863,7 +3863,7 @@ components:
       required:
         - created_at
         - git
-        - name
+        - id
         - ref
         - updated_at
       type: object
@@ -4912,12 +4912,12 @@ components:
         herald:
           pattern: ^[a-z0-9-]{1,63}$
           type: string
+        id:
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         incarnation:
           type: string
         label:
-          type: string
-        name:
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         only_changes:
           type: boolean
@@ -4939,7 +4939,7 @@ components:
         - enabled
         - event_types
         - herald
-        - name
+        - id
         - only_changes
         - only_failures
         - updated_at
@@ -4965,17 +4965,17 @@ components:
             - array
             - "null"
         herald:
-          description: Herald channel name for delivery (FK on heralds.name)
+          description: Herald channel name for delivery (FK on heralds.id)
+          type: string
+        id:
+          description: Tiding rule name (kebab-case, 1..63)
+          pattern: ^[a-z0-9-]{1,63}$
           type: string
         incarnation:
           description: opt. selector binding to the source incarnation
           type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Tiding rule name (kebab-case, 1..63)
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         only_changes:
           description: deliver only on changes (omitted → false)
@@ -4992,7 +4992,7 @@ components:
           description: opt. selector subscribing to a specific task (register ∪ id from changed_tasks)
           type: string
       required:
-        - name
+        - id
         - herald
         - event_types
       type: object
@@ -5239,15 +5239,15 @@ components:
         enabled:
           description: whether the check is active (default true)
           type: boolean
+        id:
+          description: Vigil name (kebab-case, 1..63)
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         interval:
           description: check frequency (duration convention, e.g. '30s')
           type: string
         label:
           description: "Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"
-          type: string
-        name:
-          description: Vigil name (kebab-case, 1..63)
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         params:
           description: check parameters; shape depends on check (passed through as-is)
@@ -5255,7 +5255,7 @@ components:
           $ref: "#/components/schemas/Subject"
           description: which hosts run the check — exactly one of sid / incarnation / coven / trait
       required:
-        - name
+        - id
         - subject
         - interval
         - check
@@ -5296,12 +5296,12 @@ components:
           type: string
         enabled:
           type: boolean
+        id:
+          pattern: ^[a-z0-9-]{1,63}$
+          type: string
         interval:
           type: string
         label:
-          type: string
-        name:
-          pattern: ^[a-z0-9-]{1,63}$
           type: string
         params: {}
         subject:
@@ -5314,7 +5314,7 @@ components:
         - created_at
         - enabled
         - interval
-        - name
+        - id
         - params
         - subject
         - updated_at
@@ -6225,14 +6225,14 @@ paths:
       summary: Create Omen
       tags:
         - augur
-  /v1/augur/omens/{name}:
+  /v1/augur/omens/{id}:
     delete:
       description: Deletes an Omen cascadingly (related Rites, ADR-025). Permission omen.delete. 404 - record absent.
       operationId: deleteOmen
       parameters:
         - description: Omen name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Omen name
@@ -6273,7 +6273,7 @@ paths:
       parameters:
         - description: Omen name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Omen name
@@ -6312,14 +6312,14 @@ paths:
       summary: Omen card
       tags:
         - augur
-  /v1/augur/omens/{name}/label:
+  /v1/augur/omens/{id}/label:
     put:
       description: "Replaces the display caption of one Omen (ADR-0085). Permission omen.label-set, audit omen.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only mutation: endpoint and auth_ref stay immutable, because the Rites granted against an Omen must not silently follow it to a different external system. The caption participates in nothing derived, so changing it moves nothing."
       operationId: setOmenLabel
       parameters:
         - description: Omen name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Omen name
@@ -7271,14 +7271,14 @@ paths:
       summary: Create Decree
       tags:
         - oracle
-  /v1/decrees/{name}:
+  /v1/decrees/{id}:
     delete:
       description: Deletes a Decree cascading (cooldown state, ADR-030). Permission decree.delete. 404 -- record absent.
       operationId: deleteDecree
       parameters:
         - description: Decree name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Decree name
@@ -7319,7 +7319,7 @@ paths:
       parameters:
         - description: Decree name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Decree name
@@ -7358,14 +7358,14 @@ paths:
       summary: Decree card
       tags:
         - oracle
-  /v1/decrees/{name}/label:
+  /v1/decrees/{id}/label:
     put:
       description: "Replaces the display caption of one Decree (ADR-0085). Permission decree.label-set, audit decree.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The reactor is untouched: cooldown state (oracle_fires) and the circuit breaker (oracle_circuit) are keyed on the name, so no trigger history moves and no breaker resets."
       operationId: setDecreeLabel
       parameters:
         - description: Decree name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Decree name
@@ -7783,14 +7783,14 @@ paths:
       summary: Create Herald channel
       tags:
         - herald
-  /v1/heralds/{name}:
+  /v1/heralds/{id}:
     delete:
       description: Deletes the Herald cascadingly (related Tidings, ADR-052). Permission herald.delete. 404 — record absent.
       operationId: deleteHerald
       parameters:
         - description: Herald channel name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Herald channel name
@@ -7831,7 +7831,7 @@ paths:
       parameters:
         - description: Herald channel name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Herald channel name
@@ -7876,7 +7876,7 @@ paths:
       parameters:
         - description: Herald channel name (immutable)
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Herald channel name (immutable)
@@ -7927,14 +7927,14 @@ paths:
       summary: Update Herald channel (replace)
       tags:
         - herald
-  /v1/heralds/{name}/label:
+  /v1/heralds/{id}/label:
     put:
-      description: "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{name}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret."
+      description: "Replaces the display caption of one Herald channel (ADR-0085). Permission herald.label-set, audit herald.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/heralds/{id}, deliberately: that one REPLACES the channel, so granting a caption edit through it would have granted a rewrite of secret_ref. The caption participates in nothing derived - in particular it is NOT the `<entity>` segment of secret/herald/<entity>/<field>, which is `name` - so changing it moves nothing and orphans no signing secret."
       operationId: setHeraldLabel
       parameters:
         - description: Herald channel name (immutable)
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Herald channel name (immutable)
@@ -8030,12 +8030,12 @@ paths:
           schema:
             description: exact-match by covens[] (ADR-008); invalid label → 422
             type: string
-        - description: sort field (created_at/name/status/service or state.<field>)
+        - description: sort field (created_at/id/status/service or state.<field>)
           explode: false
           in: query
           name: sort
           schema:
-            description: sort field (created_at/name/status/service or state.<field>)
+            description: sort field (created_at/id/status/service or state.<field>)
             type: string
         - description: sort direction (asc/desc)
           explode: false
@@ -8165,17 +8165,17 @@ paths:
       summary: Resolve the name a create would compose
       tags:
         - incarnation
-  /v1/incarnations/{name}:
+  /v1/incarnations/{id}:
     delete:
       description: allow_destroy=true -> DELETE without teardown; false -> scenario destroy (S-D4). Permission incarnation.destroy.
       operationId: destroyIncarnation
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: "confirmation-flag: true -> destroy without teardown"
           explode: false
@@ -8235,12 +8235,12 @@ paths:
       description: Service runtime instance detail. Outside RBAC scope -> 404 (does not leak existence). Permission incarnation.get. Read-only.
       operationId: getIncarnation
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       responses:
         "200":
@@ -8276,17 +8276,17 @@ paths:
       summary: Get incarnation
       tags:
         - incarnation
-  /v1/incarnations/{name}/choirs:
+  /v1/incarnations/{id}/choirs:
     get:
       description: Topology of Choirs of the incarnation (ADR-044). Permission choir.list. Nonexistent incarnation -> items=[]. Read-only, no audit.
       operationId: listChoirs
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       responses:
         "200":
@@ -8320,12 +8320,12 @@ paths:
       description: Declared-topology of hosts inside the incarnation (ADR-044). created_by_aid from JWT. Permission choir.create. 409 - name taken.
       operationId: createChoir
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -8379,17 +8379,17 @@ paths:
       summary: Create Choir
       tags:
         - choir
-  /v1/incarnations/{name}/choirs/{choir}:
+  /v1/incarnations/{id}/choirs/{choir}:
     delete:
       description: Deletes Choir (cascading its Voices). Permission choir.delete.
       operationId: deleteChoir
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: Choir name
           in: path
@@ -8428,17 +8428,17 @@ paths:
       summary: Delete Choir
       tags:
         - choir
-  /v1/incarnations/{name}/choirs/{choir}/voices:
+  /v1/incarnations/{id}/choirs/{choir}/voices:
     get:
       description: Members of the Choir (ADR-044). Permission choir.list. Nonexistent Choir -> items=[]. Read-only, no audit.
       operationId: listVoices
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: Choir name
           in: path
@@ -8479,12 +8479,12 @@ paths:
       description: SID membership in the Choir (ADR-044). added_by_aid from JWT. Permission choir.add-voice. 409 - Voice already exists; 422 - SID is not a member of the incarnation.
       operationId: addVoice
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: Choir name
           in: path
@@ -8545,17 +8545,17 @@ paths:
       summary: Add Voice to Choir
       tags:
         - choir
-  /v1/incarnations/{name}/choirs/{choir}/voices/{sid}:
+  /v1/incarnations/{id}/choirs/{choir}/voices/{sid}:
     delete:
       description: Removes SID membership in the Choir (ADR-044). Permission choir.remove-voice.
       operationId: removeVoice
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: Choir name
           in: path
@@ -8602,17 +8602,17 @@ paths:
       summary: Remove Voice from Choir
       tags:
         - choir
-  /v1/incarnations/{name}/history:
+  /v1/incarnations/{id}/history:
     get:
       description: state_history with apply_id filter and pagination. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.
       operationId: getIncarnationHistory
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: opt. ULID filter by state_history.apply_id; non-ULID → 400
           explode: false
@@ -8695,17 +8695,17 @@ paths:
       summary: Incarnation state transition history (paged)
       tags:
         - incarnation
-  /v1/incarnations/{name}/label:
+  /v1/incarnations/{id}/label:
     put:
       description: "Replaces the display caption of one incarnation (ADR-0085). Permission incarnation.label-set, audit incarnation.label_changed, same incarnation scope as every other incarnation mutation. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Deliberately narrower than PUT .../traits beside it: a trait pair is a live scope dimension, so stamping one grants visibility and needs a second gate; a caption is in no dimension of anything. It is NOT segment 3 of the derived secret path, NOT the RBAC incarnation= scope value and NOT the CEL root (incarnation.label does not resolve) - so changing it moves nothing, and it is allowed while the incarnation is applying or error_locked because no run reads it."
       operationId: setIncarnationLabel
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             pattern: ^[a-z0-9][a-z0-9-]{0,62}$
             type: string
       requestBody:
@@ -8754,17 +8754,17 @@ paths:
       summary: Set the incarnation display caption
       tags:
         - incarnation
-  /v1/incarnations/{name}/members:
+  /v1/incarnations/{id}/members:
     get:
       description: Member hosts of the incarnation (incarnation_membership, ADR-008 amendment / NIM-124), with bound_at / bound_by_aid. Permission incarnation.get. Narrowed to the hosts inside the caller's soul scope. Read-only, no audit.
       operationId: listIncarnationMembers
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       responses:
         "200":
@@ -8804,12 +8804,12 @@ paths:
       description: "Binds already-onboarded, connected Souls to the incarnation's roster so a scenario can subsequently roll onto them (ADR-008 amendment, NIM-209). Idempotent: re-binding a member is a no-op reported in already_member. Permission incarnation.bind-member; EVERY target SID must also be inside the caller's soul scope (all-or-nothing) - otherwise 403. 422 - unknown SID or a host that is not connected."
       operationId: bindIncarnationMembers
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -8857,17 +8857,17 @@ paths:
       summary: Bind hosts to an incarnation
       tags:
         - incarnation
-  /v1/incarnations/{name}/members/{sid}:
+  /v1/incarnations/{id}/members/{sid}:
     delete:
       description: "Removes the host from the incarnation's roster - it stops being a target of every FUTURE run (ADR-008 amendment, NIM-209). Idempotent: unbinding a non-member succeeds unchanged. Permission incarnation.unbind-member; the SID must also be inside the caller's soul scope."
       operationId: unbindIncarnationMember
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: SID (FQDN) of the host to unbind
           in: path
@@ -8907,17 +8907,17 @@ paths:
       summary: Unbind a host from an incarnation
       tags:
         - incarnation
-  /v1/incarnations/{name}/rerun-last:
+  /v1/incarnations/{id}/rerun-last:
     post:
       description: Clears error_locked and, in the same action, restarts the incarnation last failed scenario (bootstrap create/... or operational add_user/...) with the stored input of the failed run (one tx FOR UPDATE). Permission incarnation.rerun-last.
       operationId: rerunLastIncarnation
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -8965,17 +8965,17 @@ paths:
       summary: Restart the last failed scenario from error_locked
       tags:
         - incarnation
-  /v1/incarnations/{name}/runs:
+  /v1/incarnations/{id}/runs:
     get:
       description: "Fold apply_runs by apply_id: run status (applying/success/failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only."
       operationId: listIncarnationRuns
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: offset from start of set, ≥0 (out-of-range → 400)
           explode: false
@@ -9035,17 +9035,17 @@ paths:
       summary: List incarnation runs (paged)
       tags:
         - incarnation
-  /v1/incarnations/{name}/runs/{apply_id}:
+  /v1/incarnations/{id}/runs/{apply_id}:
     get:
       description: "Slice by hosts of one apply_id: status per host + address of failed task (task_idx/plan_index/error). Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only."
       operationId: getIncarnationRun
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: run ULID; non-ULID → 400
           in: path
@@ -9094,17 +9094,17 @@ paths:
       summary: Incarnation run details (per-host)
       tags:
         - incarnation
-  /v1/incarnations/{name}/runs/{apply_id}/events:
+  /v1/incarnations/{id}/runs/{apply_id}/events:
     get:
       description: "text/event-stream: task.executed/apply.completed/failed/cancelled by apply_id. Auth: Authorization: Bearer (fetch-streaming, ADR-068 §A0). Access: the initiator OR incarnation.get/history; someone else's/nonexistent apply_id -> 403 (anti-enum, parity /mcp/events). Secrets in the payload are masked."
       operationId: streamIncarnationRunEvents
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: run ULID; someone else's/nonexistent -> 403 (anti-enum)
           in: path
@@ -9153,17 +9153,17 @@ paths:
       summary: Live run progress of an incarnation (SSE)
       tags:
         - incarnation
-  /v1/incarnations/{name}/runs/{apply_id}/tasks:
+  /v1/incarnations/{id}/runs/{apply_id}/tasks:
     get:
       description: Task plan of one apply_id (plan_index/name/module/passage) + per-host status/output/error from the audit log (task.executed) joined by plan_index. Foreign apply_id / outside RBAC scope -> 404. Permission incarnation.history. Read-only.
       operationId: getIncarnationRunTasks
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: run ULID; non-ULID → 400
           in: path
@@ -9212,17 +9212,17 @@ paths:
       summary: Incarnation run tasks (plan + per-host)
       tags:
         - incarnation
-  /v1/incarnations/{name}/scenarios/{scenario}:
+  /v1/incarnations/{id}/scenarios/{scenario}:
     post:
       description: Async run of a named scenario (ADR-009). Blocked on cluster:degraded (503). Permission incarnation.run.
       operationId: runIncarnationScenario
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: scenario name
           in: path
@@ -9289,17 +9289,17 @@ paths:
       summary: Run incarnation scenario
       tags:
         - incarnation
-  /v1/incarnations/{name}/scenarios/{scenario}/form-prefill:
+  /v1/incarnations/{id}/scenarios/{scenario}/form-prefill:
     post:
       description: Current state values under scenario schema fields with prefill_from_state (docs/input.md). Path-whitelist (client does not set the path), secret fields excluded. Out of RBAC-scope → 404. Permission incarnation.get. Read-only, no audit.
       operationId: incarnationFormPrefill
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: scenario name
           in: path
@@ -9342,17 +9342,17 @@ paths:
       summary: Pre-fill scenario form from incarnation.state
       tags:
         - incarnation
-  /v1/incarnations/{name}/secrets/reveal:
+  /v1/incarnations/{id}/secrets/reveal:
     post:
       description: "Resolves the plaintext of a secret the service declared as type: secret in its state_schema, from Vault at the derived path. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be present in the current-state collection, and must be empty for a scalar secret. Audit incarnation.secret_revealed (without the value). Out of scope -> 404."
       operationId: incarnationRevealSecret
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -9394,17 +9394,17 @@ paths:
       summary: Reveal plaintext of an incarnation secret
       tags:
         - incarnation
-  /v1/incarnations/{name}/secrets/revealable:
+  /v1/incarnations/{id}/secrets/revealable:
     get:
       description: "Discovery of the secrets the service declared as type: secret in its state_schema + the keys present in the current state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404."
       operationId: incarnationRevealableSecrets
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       responses:
         "200":
@@ -9440,17 +9440,17 @@ paths:
       summary: List revealable secrets of an incarnation
       tags:
         - incarnation
-  /v1/incarnations/{name}/telemetry:
+  /v1/incarnations/{id}/telemetry:
     get:
       description: Aggregate of the latest utilization snapshots across incarnation hosts (latest+stale per host, without a window) from Redis (NIM-86). Permission incarnation.get; host visibility - soul-read-scope. Empty souls / out of scope -> hosts:[]. Read-only, without audit.
       operationId: getIncarnationTelemetry
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       responses:
         "200":
@@ -9480,17 +9480,17 @@ paths:
       summary: Host-vitals of incarnation hosts
       tags:
         - incarnation
-  /v1/incarnations/{name}/traits:
+  /v1/incarnations/{id}/traits:
     put:
       description: "Wholesale replacement of incarnation.traits (ADR-060) - the labels of the incarnation itself. Member hosts are not touched: a host carries only the traits an operator set on it (NIM-281). Permission incarnation.traits-set, over two gates: the incarnation lies inside the operator scope, and every pair stamped must lie inside the operator's own trait-scope - an incarnation-attached pair grants every role scoped on it sight of the incarnation, so a pair the operator does not hold is refused 422 (the same rule the per-host soul.traits-assign applies)."
       operationId: setIncarnationTraits
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -9538,17 +9538,17 @@ paths:
       summary: Replace operator-set trait labels of an incarnation
       tags:
         - incarnation
-  /v1/incarnations/{name}/unlock:
+  /v1/incarnations/{id}/unlock:
     post:
       description: error_locked / migration_failed → ready under FOR UPDATE; state does not change (ADR-009/019). Permission incarnation.unlock.
       operationId: unlockIncarnation
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -9602,17 +9602,17 @@ paths:
       summary: Remove incarnation blocking status
       tags:
         - incarnation
-  /v1/incarnations/{name}/upgrade:
+  /v1/incarnations/{id}/upgrade:
     post:
       description: Sync-under-202 migration state_schema (ADR-019) + service_version change in one tx. Permission incarnation.upgrade.
       operationId: upgradeIncarnation
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
       requestBody:
         content:
@@ -9666,17 +9666,17 @@ paths:
       summary: Migrate incarnation to new version
       tags:
         - incarnation
-  /v1/incarnations/{name}/upgrade-paths:
+  /v1/incarnations/{id}/upgrade-paths:
     get:
       description: Cheap list of service registry refs (marking is_current) without ?to=; on-demand analysis of one target (direction / found-legacy / state migrations) with ?to=<ref> (ADR-0068 6). Permission incarnation.upgrade (read facet). Read-only, no audit.
       operationId: getIncarnationUpgradePaths
       parameters:
-        - description: incarnation name
+        - description: incarnation id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: incarnation name
+            description: incarnation id
             type: string
         - description: opt. target git-ref for on-demand analysis of single target; empty → list of registry tags + is_current
           explode: false
@@ -10434,17 +10434,17 @@ paths:
       summary: Create a Cloud Profile
       tags:
         - profile
-  /v1/profiles/{name}:
+  /v1/profiles/{id}:
     delete:
       description: Deletes a Cloud Profile record (ADR-017). Permission profile.delete. 404 - record absent.
       operationId: deleteProfile
       parameters:
-        - description: Cloud Profile name
+        - description: Cloud Profile id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Profile name
+            description: Cloud Profile id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       responses:
@@ -10481,12 +10481,12 @@ paths:
       description: Metadata of a single Cloud Profile by name (ADR-017). Permission profile.read. Read-only, no audit.
       operationId: getProfile
       parameters:
-        - description: Cloud Profile name
+        - description: Cloud Profile id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Profile name
+            description: Cloud Profile id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       responses:
@@ -10523,17 +10523,17 @@ paths:
       summary: Cloud Profile card
       tags:
         - profile
-  /v1/profiles/{name}/label:
+  /v1/profiles/{id}/label:
     put:
       description: "Replaces the display caption of one Cloud-Profile (ADR-0085). Permission profile.label-set, audit profile.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing."
       operationId: setProfileLabel
       parameters:
-        - description: Cloud Profile name
+        - description: Cloud Profile id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Profile name
+            description: Cloud Profile id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       requestBody:
@@ -10688,17 +10688,17 @@ paths:
       summary: Create Cloud-Provider
       tags:
         - provider
-  /v1/providers/{name}:
+  /v1/providers/{id}:
     delete:
       description: Deletes a Cloud-Provider record (ADR-017). Permission provider.delete. 404 - record not found; 409 - dependent Profiles exist (FK RESTRICT).
       operationId: deleteProvider
       parameters:
-        - description: Cloud Provider name
+        - description: Cloud Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Provider name
+            description: Cloud Provider id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       responses:
@@ -10741,12 +10741,12 @@ paths:
       description: Metadata of one Cloud-Provider by name (ADR-017). Permission provider.read. Read-only, no audit. credentials_ref is a path, the secret is not resolved.
       operationId: getProvider
       parameters:
-        - description: Cloud Provider name
+        - description: Cloud Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Provider name
+            description: Cloud Provider id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       responses:
@@ -10783,17 +10783,17 @@ paths:
       summary: Cloud-Provider detail
       tags:
         - provider
-  /v1/providers/{name}/label:
+  /v1/providers/{id}/label:
     put:
       description: "Replaces the display caption of one Cloud-Provider (ADR-0085). Permission provider.label-set, audit provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. The identifier in the path is NOT touched and has no rename operation anywhere: the caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root), which is what makes changing it move nothing."
       operationId: setProviderLabel
       parameters:
-        - description: Cloud Provider name
+        - description: Cloud Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Cloud Provider name
+            description: Cloud Provider id
             pattern: ^[a-z0-9-]{1,63}$
             type: string
       requestBody:
@@ -10919,15 +10919,15 @@ paths:
         - provisioning
   /v1/push-providers:
     get:
-      description: Registry of Push Providers with pagination and name_pattern filter (ADR-032 S7-2). Permission push-provider.list. Read-only, no audit.
+      description: Registry of Push Providers with pagination and id_pattern filter (ADR-032 S7-2). Permission push-provider.list. Read-only, no audit.
       operationId: listPushProviders
       parameters:
-        - description: LIKE-prefix filter by name (optional)
+        - description: LIKE-prefix filter by id (optional)
           explode: false
           in: query
-          name: name_pattern
+          name: id_pattern
           schema:
-            description: LIKE-prefix filter by name (optional)
+            description: LIKE-prefix filter by id (optional)
             type: string
         - description: offset from start of set, ≥0 (out-of-range → 400)
           explode: false
@@ -11030,17 +11030,17 @@ paths:
       summary: Create a Push Provider
       tags:
         - push-provider
-  /v1/push-providers/{name}:
+  /v1/push-providers/{id}:
     delete:
       description: Deletes a Push Provider record (ADR-032 S7-2). Permission push-provider.delete. 404 — record absent.
       operationId: deletePushProvider
       parameters:
-        - description: Push Provider name
+        - description: Push Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Push Provider name
+            description: Push Provider id
             pattern: ^[a-z][a-z0-9-]{0,62}$
             type: string
       responses:
@@ -11077,12 +11077,12 @@ paths:
       description: Metadata of a single Push Provider by name (ADR-032 S7-2). Permission push-provider.read. Read-only, no audit.
       operationId: getPushProvider
       parameters:
-        - description: Push Provider name
+        - description: Push Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Push Provider name
+            description: Push Provider id
             pattern: ^[a-z][a-z0-9-]{0,62}$
             type: string
       responses:
@@ -11123,12 +11123,12 @@ paths:
       description: "Replace semantics: params fully replaces the existing set (ADR-032 S7-2). Permission push-provider.update. 404 — record absent."
       operationId: updatePushProvider
       parameters:
-        - description: Push Provider name
+        - description: Push Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Push Provider name
+            description: Push Provider id
             pattern: ^[a-z][a-z0-9-]{0,62}$
             type: string
       requestBody:
@@ -11177,17 +11177,17 @@ paths:
       summary: Replace a Push Provider's params
       tags:
         - push-provider
-  /v1/push-providers/{name}/label:
+  /v1/push-providers/{id}/label:
     put:
-      description: "Replaces the display caption of one Push-Provider (ADR-0085). Permission push-provider.label-set, audit push-provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Unlike PUT /v1/push-providers/{name} this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The identifier in the path is NOT touched."
+      description: "Replaces the display caption of one Push-Provider (ADR-0085). Permission push-provider.label-set, audit push-provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Unlike PUT /v1/push-providers/{id} this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The identifier in the path is NOT touched."
       operationId: setPushProviderLabel
       parameters:
-        - description: Push Provider name
+        - description: Push Provider id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Push Provider name
+            description: Push Provider id
             pattern: ^[a-z][a-z0-9-]{0,62}$
             type: string
       requestBody:
@@ -11838,7 +11838,7 @@ paths:
         - runs
   /v1/services:
     get:
-      description: Registry of Services (sort name ASC, ADR-028). Permission service.list. Read-only, no audit.
+      description: Registry of Services (sort id ASC, ADR-028). Permission service.list. Read-only, no audit.
       operationId: listServices
       responses:
         "200":
@@ -11863,7 +11863,7 @@ paths:
       tags:
         - service
     post:
-      description: Registers the Service in the service_registry (ADR-028). Permission service.register. 409 - name taken. 404 - caller AID missing from the operator registry.
+      description: Registers the Service in the service_registry (ADR-028). Permission service.register. 409 - id taken. 404 - caller AID missing from the operator registry.
       operationId: registerService
       requestBody:
         content:
@@ -11917,17 +11917,17 @@ paths:
       summary: Register a Service
       tags:
         - service
-  /v1/services/{name}:
+  /v1/services/{id}:
     delete:
-      description: Deletes the registry entry by name + invalidates caches (ADR-028). Permission service.deregister. 404 - entry absent.
+      description: Deletes the registry entry by id + invalidates caches (ADR-028). Permission service.deregister. 404 - entry absent.
       operationId: deregisterService
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
       responses:
         "204":
@@ -11960,15 +11960,15 @@ paths:
       tags:
         - service
     get:
-      description: Metadata of a single registry entry by name (ADR-028). Permission service.list. Read-only, no audit.
+      description: Metadata of a single registry entry by id (ADR-028). Permission service.list. Read-only, no audit.
       operationId: getService
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
       responses:
         "200":
@@ -12008,12 +12008,12 @@ paths:
       description: Replace semantics for git/ref/refresh, name is immutable (ADR-028). Permission service.update. 404 - entry absent.
       operationId: updateService
       parameters:
-        - description: Service name (immutable)
+        - description: Service id (immutable)
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name (immutable)
+            description: Service id (immutable)
             type: string
       requestBody:
         content:
@@ -12061,17 +12061,17 @@ paths:
       summary: Update a Service (replace mutable-fields)
       tags:
         - service
-  /v1/services/{name}/compat:
+  /v1/services/{id}/compat:
     get:
       description: "Effective keeper-version window of the service (ADR-0076): the intersection of the `compat:` block declared by service.yml and by EVERY destiny the service pulls at its pinned ref - the narrowest wins. `entities[]` carries each contribution so a narrow bound is attributable to the artifact that set it; `effective_window` is null when nothing declares one (unbounded - existing services keep working). `status` is a backend catalog value the UI renders as-is: ok | unsupported (a run on this instance is rejected with keeper_version_unsupported) | not_enforced (this build carries no comparable version, e.g. 0.0.0-dev) | window_empty (the declarations do not overlap - an authoring error). `keeper_version` is the raw build string of the instance serving the request, `keeper_release` the release core actually compared - during a rolling upgrade instances differ, and enforcement belongs to the instance that renders. Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache. 502 - loader failed (service or destiny repo unreachable)."
       operationId: getServiceCompat
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: optional git-ref override (omitted -> ref from registry)
           explode: false
@@ -12133,17 +12133,17 @@ paths:
       summary: engine-compat window of a Service (declared keeper versions) + this keeper's version
       tags:
         - service
-  /v1/services/{name}/dependencies:
+  /v1/services/{id}/dependencies:
     get:
       description: Destiny building blocks + custom modules declared in service.yml with their own git refs, for the UI Service Detail (ADR-007/028). Permission service.list. Read-only, no audit. 502 - loader failed.
       operationId: listServiceDependencies
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: opt. git-ref override (omitted → ref from registry)
           explode: false
@@ -12192,17 +12192,17 @@ paths:
       summary: git dependencies of a Service
       tags:
         - service
-  /v1/services/{name}/directives:
+  /v1/services/{id}/directives:
     get:
       description: "Catalog of valid service directive names (vars.redis_directives, major.minor series map -> names) for the UI redis_settings editor (ADR-042). Permission service.list. Read-only, no audit. ?version=X.Y.Z narrows to the series. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache (branch/tag mutable - revalidation via ETag/304). Service without a catalog -> directives:{} + 200. 502 - loader failed."
       operationId: listServiceDirectives
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: opt. git-ref override (omitted → ref from registry)
           explode: false
@@ -12271,17 +12271,17 @@ paths:
       summary: catalog of valid redis.conf directives by version
       tags:
         - service
-  /v1/services/{name}/label:
+  /v1/services/{id}/label:
     put:
-      description: Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PATCH /v1/services/{name}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.
+      description: Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `id`. Narrower than PATCH /v1/services/{id}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.
       operationId: setServiceLabel
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             pattern: ^[a-z][a-z0-9-]*$
             type: string
       requestBody:
@@ -12330,17 +12330,17 @@ paths:
       summary: Set the Service display caption
       tags:
         - service
-  /v1/services/{name}/refs:
+  /v1/services/{id}/refs:
     get:
       description: List of git refs of the Service remote repository for the UI Upgrade-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - git source unreachable.
       operationId: listServiceRefs
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
       responses:
         "200":
@@ -12382,17 +12382,17 @@ paths:
       summary: git tags + branches of a Service
       tags:
         - service
-  /v1/services/{name}/scenarios:
+  /v1/services/{id}/scenarios:
     get:
       description: List of scenarios from a materialized snapshot of the Service git repo for the UI Run-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - loader failed.
       operationId: listServiceScenarios
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: opt. git-ref override (omitted → ref from registry)
           explode: false
@@ -12441,17 +12441,17 @@ paths:
       summary: scenario from a snapshot of the Service repo
       tags:
         - service
-  /v1/services/{name}/state-schema:
+  /v1/services/{id}/state-schema:
     get:
       description: state_schema version + structure declaration + migration chain (metadata-only) for the UI Schema explorer (ADR-019/028). Permission service.list. Read-only, no audit. 502 - loader failed.
       operationId: listServiceStateSchema
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: opt. git-ref override (omitted → ref from registry)
           explode: false
@@ -12500,17 +12500,17 @@ paths:
       summary: state_schema metadata of a Service
       tags:
         - service
-  /v1/services/{name}/telemetry:
+  /v1/services/{id}/telemetry:
     get:
-      description: "Effective default (per-service, without an incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86)."
+      description: "Effective default (per-service, without an incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{id}/telemetry (runtime host-vitals from Redis, NIM-86)."
       operationId: getServiceTelemetry
       parameters:
-        - description: Service name
+        - description: Service id
           in: path
-          name: name
+          name: id
           required: true
           schema:
-            description: Service name
+            description: Service id
             type: string
         - description: optional git-ref override (omitted -> ref from registry)
           explode: false
@@ -14152,14 +14152,14 @@ paths:
       summary: Create Tiding rule
       tags:
         - tiding
-  /v1/tidings/{name}:
+  /v1/tidings/{id}:
     delete:
       description: Removes the Tiding subscription rule by name (ADR-052). Permission tiding.delete. 404 — record absent.
       operationId: deleteTiding
       parameters:
         - description: Tiding rule name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Tiding rule name
@@ -14200,7 +14200,7 @@ paths:
       parameters:
         - description: Tiding rule name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Tiding rule name
@@ -14245,7 +14245,7 @@ paths:
       parameters:
         - description: Tiding rule name (immutable)
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Tiding rule name (immutable)
@@ -14296,14 +14296,14 @@ paths:
       summary: Update Tiding rule (replace)
       tags:
         - tiding
-  /v1/tidings/{name}/label:
+  /v1/tidings/{id}/label:
     put:
-      description: Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{name}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.
+      description: Replaces the display caption of one Tiding rule (ADR-0085). Permission tiding.label-set, audit tiding.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PUT /v1/tidings/{id}, which replaces the whole rule. The caption participates in nothing derived and is not the `herald` FK.
       operationId: setTidingLabel
       parameters:
         - description: Tiding rule name (immutable)
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Tiding rule name (immutable)
@@ -14461,14 +14461,14 @@ paths:
       summary: Create Vigil
       tags:
         - oracle
-  /v1/vigils/{name}:
+  /v1/vigils/{id}:
     delete:
       description: Deletes a Vigil from the oracle registry (ADR-030). Permission vigil.delete. 404 -- record absent.
       operationId: deleteVigil
       parameters:
         - description: Vigil name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Vigil name
@@ -14509,7 +14509,7 @@ paths:
       parameters:
         - description: Vigil name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Vigil name
@@ -14548,14 +14548,14 @@ paths:
       summary: Vigil card
       tags:
         - oracle
-  /v1/vigils/{name}/label:
+  /v1/vigils/{id}/label:
     put:
       description: "Replaces the display caption of one Vigil (ADR-0085). Permission vigil.label-set, audit vigil.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only operator mutation: interval, check and subject stay immutable because the Souls holding a VigilSnapshot were already told what to run. The caption participates in nothing derived - a Decree reacts through `on_beacon`, which is the name - so changing it moves nothing."
       operationId: setVigilLabel
       parameters:
         - description: Vigil name
           in: path
-          name: name
+          name: id
           required: true
           schema:
             description: Vigil name

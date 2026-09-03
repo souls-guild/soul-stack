@@ -33,7 +33,7 @@ func readEngineCompat(t *testing.T, name string) (stamp EngineCompat, ok bool) {
 	t.Helper()
 	var raw []byte
 	if err := integrationPool.QueryRow(context.Background(),
-		`SELECT engine_compat FROM incarnation WHERE name = $1`, name).Scan(&raw); err != nil {
+		`SELECT engine_compat FROM incarnation WHERE id = $1`, name).Scan(&raw); err != nil {
 		t.Fatalf("read incarnation.engine_compat: %v", err)
 	}
 	if raw == nil {
@@ -134,7 +134,7 @@ func TestIntegration_EngineCompat_FailedRunKeepsPreviousStamp(t *testing.T) {
 
 	// Back to applying for a second run that fails.
 	if _, err := integrationPool.Exec(ctx,
-		`UPDATE incarnation SET status = 'applying' WHERE name = $1`, name); err != nil {
+		`UPDATE incarnation SET status = 'applying' WHERE id = $1`, name); err != nil {
 		t.Fatalf("re-arm applying: %v", err)
 	}
 	if err := UpdateStateFromRun(ctx, integrationPool, name, "deploy", applyBad,
@@ -178,7 +178,7 @@ func TestIntegration_EngineCompat_SurvivesStateSchemaUpgrade(t *testing.T) {
 	}
 
 	if _, err := UpgradeStateSchema(ctx, integrationPool, UpgradeInput{
-		Name:             name,
+		ID:               name,
 		TargetServiceVer: "v2.0.0",
 		TargetSchemaVer:  2,
 		Chain:            statemigrate.Chain{setStep(1, 2)},
@@ -190,7 +190,7 @@ func TestIntegration_EngineCompat_SurvivesStateSchemaUpgrade(t *testing.T) {
 
 	var schemaVer int
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT state_schema_version FROM incarnation WHERE name = $1`, name).Scan(&schemaVer); err != nil {
+		`SELECT state_schema_version FROM incarnation WHERE id = $1`, name).Scan(&schemaVer); err != nil {
 		t.Fatalf("read state_schema_version: %v", err)
 	}
 	if schemaVer != 2 {
@@ -231,9 +231,9 @@ func TestIntegration_EngineCompat_UnstampedRowsReadFine(t *testing.T) {
 		t.Fatal("a nil stamp wrote a non-NULL engine_compat")
 	}
 
-	inc, err := SelectByName(ctx, integrationPool, name)
+	inc, err := SelectByID(ctx, integrationPool, name)
 	if err != nil {
-		t.Fatalf("SelectByName on an unstamped incarnation: %v", err)
+		t.Fatalf("SelectByID on an unstamped incarnation: %v", err)
 	}
 	if inc.Status != StatusReady {
 		t.Errorf("status = %q, want ready", inc.Status)

@@ -18,7 +18,7 @@ package handlers
 // ([scenario.ComposeName], shared with the create path) and the form only displays
 // the answer.
 //
-// Occupancy is answered HERE and not by probing `GET /v1/incarnations/{name}` from
+// Occupancy is answered HERE and not by probing `GET /v1/incarnations/{id}` from
 // the form. That probe is an existence oracle: a scoped operator could walk names
 // outside their scope and read their existence off the status code (the NIM-148
 // shape, where a 403 leaked exactly that). The reply is scope-aware in the same
@@ -100,8 +100,8 @@ func (h *IncarnationHandler) ResolveNameTyped(ctx context.Context, claims *jwt.C
 	if req.Service == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'service' is required")
 	}
-	if !incarnation.ValidName(req.Service) {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'service' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(req.Service) {
+		return zero, incProblem(problem.TypeValidationFailed, "field 'service' must match "+incarnation.IDPattern)
 	}
 	if claims == nil {
 		return zero, incProblem(problem.TypeForbidden, "incarnation.create denied: no operator identity on the request")
@@ -193,7 +193,7 @@ func (h *IncarnationHandler) ResolveNameTyped(ctx context.Context, claims *jwt.C
 // — the caller decides whether that is a 500 or, on the create path, a detail worth
 // dropping.
 func (h *IncarnationHandler) nameOccupant(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool) (bool, string, error) {
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return false, "", nil

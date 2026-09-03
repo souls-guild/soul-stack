@@ -111,7 +111,7 @@ func TestMatchTiding_Table(t *testing.T) {
 	heraldCreated := ev(audit.EventType("herald.created"), map[string]any{"name": "x"})
 
 	rule := func(mut func(*Tiding)) *Tiding {
-		t := &Tiding{Name: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}
+		t := &Tiding{ID: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}
 		if mut != nil {
 			mut(t)
 		}
@@ -222,7 +222,7 @@ func TestMatchTiding_Table(t *testing.T) {
 func TestDispatch_DisabledRuleNotInSource(t *testing.T) {
 	// Source returns only enabled (PG WHERE enabled=true). Disabled rule
 	// simply absent from snapshot — no match.
-	disabled := &Tiding{Name: "off", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: false}
+	disabled := &Tiding{ID: "off", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: false}
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: nil}, // source already filtered disabled
@@ -239,9 +239,9 @@ func TestDispatch_MultipleMatches_OneJobPerRule(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h1", EventTypes: []string{"scenario_run.*"}, Enabled: true},
-			{Name: "b", Herald: "h2", EventTypes: []string{"scenario_run.completed"}, Enabled: true},
-			{Name: "c", Herald: "h3", EventTypes: []string{"command_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h1", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "b", Herald: "h2", EventTypes: []string{"scenario_run.completed"}, Enabled: true},
+			{ID: "c", Herald: "h3", EventTypes: []string{"command_run.*"}, Enabled: true},
 		}},
 		Queue: q,
 	})
@@ -261,7 +261,7 @@ func TestDispatch_JobCarriesPayloadCopy(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 		}},
 		Queue: q,
 	})
@@ -296,7 +296,7 @@ func TestDispatch_JobCarriesAnnotationsProjection(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{{
-			Name:        "a",
+			ID:          "a",
 			Herald:      "h",
 			EventTypes:  []string{"scenario_run.*"},
 			Enabled:     true,
@@ -334,7 +334,7 @@ func TestDispatch_PayloadCopy_ShallowByDesign(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 		}},
 		Queue: q,
 	})
@@ -371,7 +371,7 @@ func TestDispatch_EnqueueError_ContinuesOtherRules(t *testing.T) {
 	q := &fakeQueue{err: errors.New("queue full")}
 	d := NewDispatcher(DispatcherConfig{
 		Source: &staticSource{rules: []*Tiding{
-			{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+			{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 		}},
 		Queue: q,
 	})
@@ -381,7 +381,7 @@ func TestDispatch_EnqueueError_ContinuesOtherRules(t *testing.T) {
 
 func TestRuleCache_TTLAndInvalidation(t *testing.T) {
 	src := &staticSource{rules: []*Tiding{
-		{Name: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
+		{ID: "a", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true},
 	}}
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{Source: src, Queue: q, TTL: time.Hour})
@@ -427,7 +427,7 @@ func TestRuleCache_TTLExpiry(t *testing.T) {
 func TestDispatch_OccurredAt_FallbackToMatchTime(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
-		Source: &staticSource{rules: []*Tiding{{Name: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}}},
+		Source: &staticSource{rules: []*Tiding{{ID: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}}},
 		Queue:  q,
 	})
 	matchTime := time.Date(2026, 6, 11, 10, 30, 0, 0, time.UTC)
@@ -456,7 +456,7 @@ func TestDispatch_OccurredAt_FallbackToMatchTime(t *testing.T) {
 func TestDispatch_OccurredAt_PrefersExplicitCreatedAt(t *testing.T) {
 	q := &fakeQueue{}
 	d := NewDispatcher(DispatcherConfig{
-		Source: &staticSource{rules: []*Tiding{{Name: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}}},
+		Source: &staticSource{rules: []*Tiding{{ID: "t", Herald: "h", EventTypes: []string{"scenario_run.*"}, Enabled: true}}},
 		Queue:  q,
 	})
 	d.clock = func() time.Time { return time.Date(2026, 6, 11, 10, 30, 0, 0, time.UTC) }

@@ -15,7 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// makeIncRowSvc is a pgx.Row stub for SelectByName with a custom service (idx 1) and
+// makeIncRowSvc is a pgx.Row stub for SelectByID with a custom service (idx 1) and
 // state; version "v1". Needed by the reveal tests where the service is a derived path
 // segment (floor backstop, unsafe-segment defense).
 func makeIncRowSvc(name, service string, state map[string]any) pgx.Row {
@@ -391,7 +391,7 @@ func TestRevealSecret_LeakGuard(t *testing.T) {
 	if ev.Payload["result"] != "ok" {
 		t.Errorf("payload result = %#v, want ok", ev.Payload["result"])
 	}
-	if ev.Payload["name"] != "redis-prod" || ev.Payload["secret_id"] != userPasswordID || ev.Payload["key"] != "alice" {
+	if ev.Payload["id"] != "redis-prod" || ev.Payload["secret_id"] != userPasswordID || ev.Payload["key"] != "alice" {
 		t.Errorf("payload fields missing/incorrect: %#v", ev.Payload)
 	}
 	if ev.Payload["path"] != "secret/redis/redis-prod/redis_users/alice" {
@@ -554,7 +554,7 @@ func TestRevealSecret_DeniedAudit_KeyNotInState(t *testing.T) {
 	if ev.Payload["result"] != "denied" || ev.Payload["reason"] != "key_not_in_state" {
 		t.Errorf("payload = %#v, want result=denied reason=key_not_in_state", ev.Payload)
 	}
-	if ev.Payload["name"] != "redis-prod" || ev.Payload["secret_id"] != userPasswordID || ev.Payload["key"] != "bob" {
+	if ev.Payload["id"] != "redis-prod" || ev.Payload["secret_id"] != userPasswordID || ev.Payload["key"] != "bob" {
 		t.Errorf("payload identifiers incorrect: %#v", ev.Payload)
 	}
 	pj, _ := json.Marshal(ev.Payload)

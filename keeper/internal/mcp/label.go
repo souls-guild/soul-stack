@@ -11,11 +11,11 @@ import (
 )
 
 // keeper.<resource>.label-set — the MCP mirror of PUT
-// /v1/<collection>/{name}/label, stated once for all ten registries ([ADR-0085],
+// /v1/<collection>/{id}/label, stated once for all ten registries ([ADR-0085],
 // NIM-728).
 //
 // MCP is a PRIMARY operator surface (ADR-004), not a wrapper around REST, so
-// each of the ten registries publishes its own tool with its own name grammar
+// each of the ten registries publishes its own tool with its own id grammar
 // and its own row shape. What they share — argument shape, permission spelling,
 // audit payload, the order of the checks — is written here rather than copied
 // ten times, because ten copies is ten places for the audit key or the
@@ -29,7 +29,7 @@ import (
 // body does: there is no third state on an endpoint whose only field is the one
 // being written.
 type labelSetArgs struct {
-	Name  string  `json:"name"`
+	ID    string  `json:"id"`
 	Label *string `json:"label"`
 }
 
@@ -49,18 +49,18 @@ type labelSetSpec[V any] struct {
 	configured bool
 	// notConfigured is the message for that case ("<registry> is not configured").
 	notConfigured string
-	// validName / namePattern check the IDENTIFIER in the arguments — not the
+	// validID / idPattern check the IDENTIFIER in the arguments — not the
 	// label. The label is free text and has no form to fail ([ADR-0085]); the
 	// identifier still has to be well-formed because it addresses the row.
-	validName   func(string) bool
-	namePattern string
+	validID   func(string) bool
+	idPattern string
 	// set performs the write and returns the row as it now reads, plus the
 	// caption it held BEFORE — which the audit event records as `old_label`.
-	set func(ctx context.Context, name string, label *string) (V, *string, error)
+	set func(ctx context.Context, id string, label *string) (V, *string, error)
 	// isNotFound recognises the registry's own not-found sentinel.
 	isNotFound func(error) bool
 	// notFoundf and failMsg build the two error messages.
-	notFoundf func(name string) string
+	notFoundf func(id string) string
 	failMsg   string
 	// event is the `<resource>.label_changed` audit type.
 	event audit.EventType
@@ -82,11 +82,11 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 			return h.toolError(req.ID, spec.tool, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, spec.tool, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, spec.tool, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !spec.validName(a.Name) {
-		return h.toolError(req.ID, spec.tool, mcpCodeValidationFailed, "field 'name' must match "+spec.namePattern)
+	if !spec.validID(a.ID) {
+		return h.toolError(req.ID, spec.tool, mcpCodeValidationFailed, "field 'id' must match "+spec.idPattern)
 	}
 	// No check on a.Label on purpose: free text with capitals, spaces and
 	// punctuation is what the field carries.
@@ -94,12 +94,12 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, spec.tool, mcpCodeForbidden,
 			"operator lacks required permission "+spec.resource+".label-set")
 	}
-	view, previous, err := spec.set(ctx, a.Name, a.Label)
+	view, previous, err := spec.set(ctx, a.ID, a.Label)
 	if err != nil {
 		if spec.isNotFound(err) {
-			return h.toolError(req.ID, spec.tool, mcpCodeNotFound, spec.notFoundf(a.Name))
+			return h.toolError(req.ID, spec.tool, mcpCodeNotFound, spec.notFoundf(a.ID))
 		}
-		h.deps.Logger.Error("mcp: "+spec.tool+" failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: "+spec.tool+" failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, spec.tool, mcpCodeInternalError, spec.failMsg)
 	}
 	// Payload parity with REST (handlers.LabelWriteReply.AuditPayload): the
@@ -108,10 +108,23 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 	// caller sending "  " stored NULL and the audit must say so; the OLD value
 	// comes off the UPDATE itself, so the pair always describes a transition that
 	// really happened.
-	h.writeAudit(spec.event, claims.Subject, map[string]any{
-		"name":      a.Name,
-		"old_label": previous,
-		"new_label": registrylabel.Normalize(a.Label),
-	})
+	h.writeAudit(spec.event, claims.Subject,
+		labelAuditPayload(a.ID, previous, registrylabel.Normalize(a.Label)))
 	return h.toolResult(req.ID, view)
+}
+
+// labelAuditPayload builds the `<resource>.label_changed` payload for the MCP
+// side, mirroring [handlers.LabelAuditPayload] key for key.
+//
+// A function rather than a literal because one label tool does not go through
+// [callLabelSet]: `keeper.incarnation.label-set` is hand-written
+// (incarnation_label_set.go) and writes its own audit. That exception is exactly
+// where the identifier key drifted when the shared struct was renamed to `id`
+// ([ADR-0085], NIM-729), so the payload is stated once and called twice.
+func labelAuditPayload(id string, previous, stored *string) map[string]any {
+	return map[string]any{
+		"id":        id,
+		"old_label": previous,
+		"new_label": stored,
+	}
 }

@@ -89,7 +89,7 @@ func TestToolsCall_IncarnationDestroy_Teardown_Success(t *testing.T) {
 	h, rec := newTestHandlerDestroy(t, pool, destroyerRBAC(), destroyer, true)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":false}`)
+		`{"id":"redis-prod","allow_destroy":false}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -130,7 +130,7 @@ func TestToolsCall_IncarnationDestroy_NoScenario_NoForce(t *testing.T) {
 	h, rec := newTestHandlerDestroy(t, pool, destroyerRBAC(), destroyer, false)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":false}`)
+		`{"id":"redis-prod","allow_destroy":false}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -158,7 +158,7 @@ func TestToolsCall_IncarnationDestroy_Force_Delete(t *testing.T) {
 	h.deps.Logger = slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn}))
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":true}`)
+		`{"id":"redis-prod","allow_destroy":true}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -274,7 +274,7 @@ func TestToolsCall_IncarnationDestroy_Force_DeleteNoOp(t *testing.T) {
 	h, rec := newTestHandlerDestroy(t, pool, destroyerRBAC(), &mcpDestroyer{}, false)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":true}`)
+		`{"id":"redis-prod","allow_destroy":true}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -291,7 +291,7 @@ func TestToolsCall_IncarnationDestroy_NotDestroyable(t *testing.T) {
 	h, _ := newTestHandlerDestroy(t, pool, destroyerRBAC(), destroyer, true)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":false}`)
+		`{"id":"redis-prod","allow_destroy":false}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -310,7 +310,7 @@ func TestToolsCall_IncarnationDestroy_NotFound(t *testing.T) {
 	h, _ := newTestHandlerDestroy(t, pool, destroyerRBAC(), &mcpDestroyer{}, true)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"ghost","allow_destroy":false}`)
+		`{"id":"ghost","allow_destroy":false}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -322,7 +322,7 @@ func TestToolsCall_IncarnationDestroy_NotFound(t *testing.T) {
 // --- RBAC forbidden ---------------------------------------------------
 
 func TestToolsCall_IncarnationDestroy_RBACForbidden(t *testing.T) {
-	// RBAC is empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for
+	// RBAC is empty → deny. SelectByID RESOLVES scope (covens ∪ {name}) for
 	// the OR-check (mirrors the REST middleware), then the enforcer denies →
 	// forbidden. teardown/audit do NOT start on denial.
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
@@ -330,7 +330,7 @@ func TestToolsCall_IncarnationDestroy_RBACForbidden(t *testing.T) {
 	h, rec := newTestHandlerDestroy(t, pool, nil, destroyer, true)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":false}`)
+		`{"id":"redis-prod","allow_destroy":false}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -349,7 +349,7 @@ func TestToolsCall_IncarnationDestroy_MissingAllowDestroy(t *testing.T) {
 	h, _ := newTestHandlerDestroy(t, pool, destroyerRBAC(), &mcpDestroyer{}, true)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod"}`)
+		`{"id":"redis-prod"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -366,7 +366,7 @@ func TestToolsCall_IncarnationDestroy_NotConfigured(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, destroyerRBAC(), nil, &mcpResolver{ok: true}, &mcpLoader{hasDestroyScenario: true})
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.destroy",
-		`{"name":"redis-prod","allow_destroy":false}`)
+		`{"id":"redis-prod","allow_destroy":false}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

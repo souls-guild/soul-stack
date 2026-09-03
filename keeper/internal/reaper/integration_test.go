@@ -248,7 +248,7 @@ func seedSeed(t *testing.T, ctx context.Context, pool *pgxpool.Pool, sid, status
 // status='ready' is a valid terminal enum.
 func seedIncarnation(t *testing.T, ctx context.Context, pool *pgxpool.Pool, name string) {
 	t.Helper()
-	const q = `INSERT INTO incarnation (name, service, service_version, status)
+	const q = `INSERT INTO incarnation (id, service, service_version, status)
 		VALUES ($1, 'svc-test', 'v1.0.0', 'ready')`
 	if _, err := pool.Exec(ctx, q, name); err != nil {
 		t.Fatalf("seed incarnation %s: %v", name, err)
@@ -1163,7 +1163,7 @@ func TestIntegration_PurgeVoyages(t *testing.T) {
 	// not leave a broken reference.
 	var ephLeft int64
 	if err := pool.QueryRow(ctx,
-		"SELECT COUNT(*) FROM tidings WHERE name = 'eph-old-from-cadence'").Scan(&ephLeft); err != nil {
+		"SELECT COUNT(*) FROM tidings WHERE id = 'eph-old-from-cadence'").Scan(&ephLeft); err != nil {
 		t.Fatalf("count ephemeral tiding: %v", err)
 	}
 	if ephLeft != 1 {

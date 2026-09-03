@@ -141,7 +141,7 @@ func seedOperator(t *testing.T, aid string) {
 func seedIncarnation(t *testing.T, name string) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "noop", ServiceVersion: "master",
+		ID: name, Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -484,9 +484,9 @@ WHERE incarnation_name = $1 AND apply_id = $2 AND run_status IS NOT NULL
 			t.Fatalf("terminal history probe: %v", err)
 		}
 		if total > 0 {
-			inc, err := incarnation.SelectByName(context.Background(), integrationPool, name)
+			inc, err := incarnation.SelectByID(context.Background(), integrationPool, name)
 			if err != nil {
-				t.Fatalf("SelectByName: %v", err)
+				t.Fatalf("SelectByID: %v", err)
 			}
 			if inc.Status != want {
 				t.Fatalf("incarnation status = %q, want %q (details=%v)", inc.Status, want, inc.StatusDetails)
@@ -727,9 +727,9 @@ func TestIntegration_RequestCancel_TerminalNoOp(t *testing.T) {
 	if found {
 		t.Error("RequestCancel found = true for a finished run, want false (no-op)")
 	}
-	inc, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	inc, err := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if inc.Status != incarnation.StatusReady {
 		t.Errorf("incarnation status = %q, want ready (Cancel must not touch a finished run)", inc.Status)
@@ -1268,7 +1268,7 @@ func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	// Incarnation already applying — lockRun must refuse.
 	inc := &incarnation.Incarnation{
-		Name: "noop-prod", Service: "noop", ServiceVersion: "master",
+		ID: "noop-prod", Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusApplying,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -1298,7 +1298,7 @@ func TestIntegration_AlreadyApplying_Rejected(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	got, _ := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusApplying {
 		t.Errorf("status = %q, want applying (unchanged)", got.Status)
 	}
@@ -1311,7 +1311,7 @@ func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	inc := &incarnation.Incarnation{
-		Name: "noop-prod", Service: "noop", ServiceVersion: "main",
+		ID: "noop-prod", Service: "noop", ServiceVersion: "main",
 		StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -1341,7 +1341,7 @@ func TestIntegration_ErrorLocked_Rejected(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	got, _ := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusErrorLocked {
 		t.Errorf("status = %q, want error_locked (unchanged)", got.Status)
 	}
@@ -1366,7 +1366,7 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 			resetAll(t)
 			seedOperator(t, "archon-alice")
 			inc := &incarnation.Incarnation{
-				Name: "noop-prod", Service: "noop", ServiceVersion: "main",
+				ID: "noop-prod", Service: "noop", ServiceVersion: "main",
 				StateSchemaVersion: 1, Status: tc.status,
 			}
 			if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -1396,7 +1396,7 @@ func TestIntegration_NonRunnableStatus_Rejected(t *testing.T) {
 				}
 				time.Sleep(20 * time.Millisecond)
 			}
-			got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+			got, _ := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 			if got.Status != tc.status {
 				t.Errorf("status = %q, want %q (unchanged)", got.Status, tc.status)
 			}
@@ -2881,7 +2881,7 @@ VALUES ($1, $2, 'create', '{}'::jsonb, '{}'::jsonb, $1,
 		t.Fatalf("seedCreateHistory: %v", err)
 	}
 	if _, err := integrationPool.Exec(context.Background(),
-		`UPDATE incarnation SET created_scenario = 'create' WHERE name = $1`, name); err != nil {
+		`UPDATE incarnation SET created_scenario = 'create' WHERE id = $1`, name); err != nil {
 		t.Fatalf("seedCreateHistory (created_scenario): %v", err)
 	}
 }
@@ -2894,9 +2894,9 @@ func waitIncarnationStatus(t *testing.T, name string, want incarnation.Status) *
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		inc, err := incarnation.SelectByName(context.Background(), integrationPool, name)
+		inc, err := incarnation.SelectByID(context.Background(), integrationPool, name)
 		if err != nil {
-			t.Fatalf("SelectByName: %v", err)
+			t.Fatalf("SelectByID: %v", err)
 		}
 		if inc.Status == want {
 			return inc
@@ -2919,7 +2919,7 @@ func TestIntegration_FromLocked_RerunLast_DrivesRun(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	inc := &incarnation.Incarnation{
-		Name: "noop-prod", Service: "noop", ServiceVersion: "master",
+		ID: "noop-prod", Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusErrorLocked,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {
@@ -2997,7 +2997,7 @@ func TestIntegration_FromLocked_FailClosed_RejectsNonApplying(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	got, _ := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusReady {
 		t.Errorf("status = %q, want ready (unchanged - fail-closed must not touch status)", got.Status)
 	}

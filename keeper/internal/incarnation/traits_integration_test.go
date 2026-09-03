@@ -42,7 +42,7 @@ func seedSoul(t *testing.T, sid string, coven []string) {
 func seedIncarnationRow(t *testing.T, name string) {
 	t.Helper()
 	inc := &Incarnation{
-		Name: name, Service: "redis", ServiceVersion: "v1",
+		ID: name, Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 	}
 	if err := Create(context.Background(), integrationPool, inc); err != nil {
@@ -74,7 +74,7 @@ func setIncarnationLabels(t *testing.T, name string, covens []string, traitsJSON
 		covens = []string{}
 	}
 	_, err := integrationPool.Exec(context.Background(),
-		`UPDATE incarnation SET covens = $2, traits = $3::jsonb WHERE name = $1`,
+		`UPDATE incarnation SET covens = $2, traits = $3::jsonb WHERE id = $1`,
 		name, covens, traitsJSON)
 	if err != nil {
 		t.Fatalf("setIncarnationLabels(%s): %v", name, err)
@@ -108,7 +108,7 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 
 	creator := "archon-alice"
 	inc := &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 		Traits: map[string]any{
 			"team":   "dba",
@@ -119,9 +119,9 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 		t.Fatalf("Create: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "redis-prod")
+	got, err := SelectByID(ctx, integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Traits["team"] != "dba" {
 		t.Errorf("Traits.team = %v, want dba", got.Traits["team"])
@@ -133,13 +133,13 @@ func TestIntegration_IncarnationTraits_RoundTrip(t *testing.T) {
 
 	// Empty traits → `{}` (NOT NULL DEFAULT), not nil.
 	inc2 := &Incarnation{
-		Name: "redis-dev", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-dev", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 	}
 	if err := Create(ctx, integrationPool, inc2); err != nil {
 		t.Fatalf("Create#2: %v", err)
 	}
-	got2, _ := SelectByName(ctx, integrationPool, "redis-dev")
+	got2, _ := SelectByID(ctx, integrationPool, "redis-dev")
 	if len(got2.Traits) != 0 {
 		t.Errorf("empty traits = %v, want empty map", got2.Traits)
 	}
@@ -241,7 +241,7 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 
 	creator := "archon-alice"
 	if err := Create(ctx, integrationPool, &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 		Traits: map[string]any{"team": "dba"},
 	}); err != nil {
@@ -261,7 +261,7 @@ func TestIntegration_UpdateTraits_PersistsAndReturnsKeys(t *testing.T) {
 	}
 
 	// The column is replaced WHOLESALE (the old team key is gone).
-	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
+	got, _ := SelectByID(ctx, integrationPool, "redis-prod")
 	if got.Traits["env"] != "prod" || got.Traits["az"] != "a" {
 		t.Errorf("persisted traits = %v, want env=prod az=a", got.Traits)
 	}
@@ -300,7 +300,7 @@ func TestIntegration_UpdateTraits_ReturnsPostgresSpelling(t *testing.T) {
 
 	creator := "archon-alice"
 	if err := Create(ctx, integrationPool, &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 		Traits: map[string]any{"team": "dba"},
 	}); err != nil {
@@ -316,7 +316,7 @@ func TestIntegration_UpdateTraits_ReturnsPostgresSpelling(t *testing.T) {
 	// What the column actually holds, read back independently of the struct.
 	var stored string
 	if err := integrationPool.QueryRow(ctx,
-		`SELECT traits::text FROM incarnation WHERE name = $1`, "redis-prod").Scan(&stored); err != nil {
+		`SELECT traits::text FROM incarnation WHERE id = $1`, "redis-prod").Scan(&stored); err != nil {
 		t.Fatalf("read back traits: %v", err)
 	}
 	if got := string(res.Incarnation.TraitsRaw); got != stored {
@@ -350,7 +350,7 @@ func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
 
 	creator := "archon-alice"
 	if err := Create(ctx, integrationPool, &Incarnation{
-		Name: "redis-prod", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-prod", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady, CreatedByAID: &creator,
 		Traits: map[string]any{"team": "dba"},
 	}); err != nil {
@@ -364,7 +364,7 @@ func TestIntegration_UpdateTraits_EmptyClears(t *testing.T) {
 	if len(res.NewKeys) != 0 {
 		t.Errorf("NewKeys = %v, want [] (cleared)", res.NewKeys)
 	}
-	got, _ := SelectByName(ctx, integrationPool, "redis-prod")
+	got, _ := SelectByID(ctx, integrationPool, "redis-prod")
 	if len(got.Traits) != 0 {
 		t.Errorf("traits after clear = %v, want empty", got.Traits)
 	}

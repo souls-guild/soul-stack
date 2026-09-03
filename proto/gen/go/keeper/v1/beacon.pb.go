@@ -49,7 +49,11 @@ const (
 // (backward-compat).
 type PortentEvent struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Name of the Vigil that fired (vigils.name) — which check raised the event.
+	// Id of the Vigil that fired (vigils.id) — which check raised the event.
+	//
+	// The FIELD keeps the name `beacon_name`: [ADR-0085] / NIM-729 renamed the
+	// registry column, and ADR-012's forward-compat rule governs this contract, so
+	// moving the field is a separate decision rather than a consequence.
 	// Oracle matches Decree (`on_vigil`) against it.
 	BeaconName string `protobuf:"bytes,1,opt,name=beacon_name,json=beaconName,proto3" json:"beacon_name,omitempty"`
 	// DEPRECATED (ADR-030 amendment 2026-05-26): legacy free-form payload. For one
@@ -795,7 +799,7 @@ func (x *InotifyEvent) GetAt() int64 {
 // it via VigilSnapshot.
 type VigilDef struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
-	// Vigil name (vigils.name, kebab-case) — stable identifier; sent back in
+	// Vigil id (vigils.id, kebab-case) — stable identifier; sent back in
 	// PortentEvent.beacon_name.
 	Name string `protobuf:"bytes,1,opt,name=name,proto3" json:"name,omitempty"`
 	// Check polling interval. Format is Soul Stack's `duration` convention

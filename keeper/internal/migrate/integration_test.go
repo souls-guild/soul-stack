@@ -596,6 +596,16 @@ func TestIntegration_MigrateApply_CtxCanceled(t *testing.T) {
 // applyUpTo(81)->insert->applyUpTo(82) on one iofs source: golang-migrate
 // Migrate(version) runs migrations up to the exact version, giving a data
 // insertion point BETWEEN steps (reuse of DownThenUp harness).
+// This test stops the ladder at 082 and every statement below speaks the schema
+// AS OF THAT VERSION, not the current one. So the identifier column here is
+// `name`: NIM-729 renames it to `id` in migration 118, which is 36 steps above
+// where this test ever climbs, and spelling it `id` fails with `column "id" of
+// relation "incarnation" does not exist` — the fixture would be describing a
+// schema that does not exist yet at the point it runs.
+//
+// The same invariant governs `keeper/migrations/*_integration_test.go`, which
+// seed at `<version> - 1` for their own version. A ladder-position test is the
+// one place a repo-wide rename must NOT reach.
 func TestIntegration_Migrate082_OverPopulated(t *testing.T) {
 	resetSchema(t)
 	ctx := context.Background()

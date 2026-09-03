@@ -134,8 +134,8 @@ TOKEN="$(bash "${REPO_ROOT}/dev/mint-jwt.sh" 2>/dev/null)" || fail "mint-jwt fai
 [ -n "${TOKEN}" ] || fail "empty JWT"
 AUTH=(-H "Authorization: Bearer ${TOKEN}")
 psql_cli <<SQL
-INSERT INTO service_registry (name, git, ref) VALUES ('${SERVICE}', '${REPO_URL}', 'v1.0.0')
-ON CONFLICT (name) DO UPDATE SET git=EXCLUDED.git, ref=EXCLUDED.ref;
+INSERT INTO service_registry (id, git, ref) VALUES ('${SERVICE}', '${REPO_URL}', 'v1.0.0')
+ON CONFLICT (id) DO UPDATE SET git=EXCLUDED.git, ref=EXCLUDED.ref;
 SQL
 for i in $(seq 1 20); do [ "$(curl -s -o /dev/null -w '%{http_code}' "${AUTH[@]}" "${API}/v1/services/${SERVICE}/refs")" = 200 ] && { log "holder saw ${SERVICE} (~${i}s)"; break; }; sleep 1; done
 

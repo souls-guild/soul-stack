@@ -22,7 +22,7 @@ type PGRuleSource struct {
 const enabledTidingsSQL = `SELECT ` + tidingColumns + `
 FROM tidings
 WHERE enabled = true
-ORDER BY name ASC`
+ORDER BY id ASC`
 
 // EnabledTidings returns the current snapshot of enabled Tiding rules.
 func (s PGRuleSource) EnabledTidings(ctx context.Context) ([]*Tiding, error) {

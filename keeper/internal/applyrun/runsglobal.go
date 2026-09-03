@@ -113,7 +113,7 @@ SELECT ar.apply_id,
          ELSE '%[8]s'
        END                                             AS status
 FROM apply_runs ar
-LEFT JOIN incarnation i ON ar.incarnation_name = i.name`,
+LEFT JOIN incarnation i ON ar.incarnation_name = i.id`,
 	terminalStatusesSQL(), RunStatusApplying,
 	StatusFailed, StatusOrphaned, RunStatusFailed,
 	StatusCancelled, RunStatusCancelled,
@@ -154,7 +154,7 @@ func buildRunsQuery(filter RunsFilter, scope incarnation.ListScope) (sub, outerW
 	// WHERE FALSE in the subquery → no runs).
 	cond, args := incarnation.ScopeCondition(args, scope)
 	if cond != "" {
-		clauses = append(clauses, "ar.incarnation_name IN (SELECT name FROM incarnation WHERE "+cond+")")
+		clauses = append(clauses, "ar.incarnation_name IN (SELECT id FROM incarnation WHERE "+cond+")")
 	}
 
 	sub = runsAggregateSelect

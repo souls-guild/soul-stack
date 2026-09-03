@@ -69,11 +69,11 @@ func NewTelemetrySource(db soul.ExecQueryRower, resolver incarnation.ServiceReso
 // amendment 2026-07-28). The reverse substitution is dead too — a bind attaches
 // no label (NIM-281), so the relation is the only place this answer lives.
 const selectIncarnationsForSIDSQL = `
-SELECT i.name, i.service, i.service_version, i.covens, i.traits
+SELECT i.id, i.service, i.service_version, i.covens, i.traits
 FROM incarnation_membership m
-JOIN incarnation i ON i.name = m.incarnation_name
+JOIN incarnation i ON i.id = m.incarnation_name
 WHERE m.sid = $1
-ORDER BY i.name
+ORDER BY i.id
 `
 
 // ResolveForSID resolves the host's effective telemetry config (ADR-072, NIM-87):
@@ -117,7 +117,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 
 	ref, ok := s.resolver.Resolve(inc.Service)
 	if !ok {
-		return nil, fmt.Errorf("telemetry: service %q of incarnation %q not registered", inc.Service, inc.Name)
+		return nil, fmt.Errorf("telemetry: service %q of incarnation %q not registered", inc.Service, inc.ID)
 	}
 	if inc.ServiceVersion != "" {
 		// Roll out with the deployed service version, not the branch tip (mirrors
@@ -133,7 +133,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	serviceVars, err := s.vars.Resolve(servicevars.ResolveInput{
 		ServiceDir: art.LocalDir,
 		Incarnation: servicevars.IncarnationContext{
-			Name:           inc.Name,
+			Name:           inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 			Covens:         inc.Covens,
@@ -141,14 +141,14 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		},
 	})
 	if err != nil {
-		return nil, fmt.Errorf("telemetry: service-vars resolve (%q): %w", inc.Name, err)
+		return nil, fmt.Errorf("telemetry: service-vars resolve (%q): %w", inc.ID, err)
 	}
 
 	// An operator typo in collectors named in the service vars (unknown names are silently
 	// filtered out) - made visible in the logs, otherwise there is nothing to diagnose it with.
 	if unknown := servicevars.UnknownTelemetryCollectors(serviceVars); len(unknown) > 0 {
 		s.logger.Warn("telemetry: ignored unknown telemetry collectors in the service vars",
-			slog.String("incarnation", inc.Name),
+			slog.String("incarnation", inc.ID),
 			slog.Any("unknown", unknown),
 		)
 	}
@@ -187,12 +187,12 @@ func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*i
 			inc         incarnation.Incarnation
 			traitsBytes []byte
 		)
-		if err := rows.Scan(&inc.Name, &inc.Service, &inc.ServiceVersion, &inc.Covens, &traitsBytes); err != nil {
+		if err := rows.Scan(&inc.ID, &inc.Service, &inc.ServiceVersion, &inc.Covens, &traitsBytes); err != nil {
 			return nil, fmt.Errorf("telemetry: scan incarnation: %w", err)
 		}
 		if len(traitsBytes) > 0 {
 			if err := json.Unmarshal(traitsBytes, &inc.Traits); err != nil {
-				return nil, fmt.Errorf("telemetry: unmarshal incarnation traits %q: %w", inc.Name, err)
+				return nil, fmt.Errorf("telemetry: unmarshal incarnation traits %q: %w", inc.ID, err)
 			}
 			inc.TraitsRaw = traitsBytes // scope reads the raw jsonb, never the map (NIM-521)
 		}
@@ -209,11 +209,11 @@ func (s *telemetrySource) incarnationForSID(ctx context.Context, sid string) (*i
 	if len(matches) > 1 {
 		names := make([]string, len(matches))
 		for i, m := range matches {
-			names[i] = m.Name
+			names[i] = m.ID
 		}
 		s.logger.Warn("telemetry: host is a member of several incarnations - serving the first by name (v1)",
 			slog.String("sid", sid),
-			slog.String("chosen", matches[0].Name),
+			slog.String("chosen", matches[0].ID),
 			slog.Any("incarnations", names))
 	}
 	return matches[0], nil

@@ -377,9 +377,9 @@ func TestIntegration_SerialStaged_FailStopInWave(t *testing.T) {
 	r := newRunner(t, disp, gitURL)
 
 	// state before the run — a snapshot to verify "not committed".
-	incBefore, err := incarnation.SelectByName(context.Background(), integrationPool, "redis-prod")
+	incBefore, err := incarnation.SelectByID(context.Background(), integrationPool, "redis-prod")
 	if err != nil {
-		t.Fatalf("SelectByName before: %v", err)
+		t.Fatalf("SelectByID before: %v", err)
 	}
 
 	applyID := audit.NewULID()

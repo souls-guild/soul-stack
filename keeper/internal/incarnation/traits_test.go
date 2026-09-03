@@ -75,7 +75,7 @@ func TestCreate_TraitsPassedThrough(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		Traits: map[string]any{"team": "dba"},
 	}
@@ -104,7 +104,7 @@ func TestCreate_NilTraitsBecomesEmptyObject(t *testing.T) {
 		},
 	}
 	inc := &Incarnation{
-		Name: "redis-x", Service: "redis", ServiceVersion: "v1",
+		ID: "redis-x", Service: "redis", ServiceVersion: "v1",
 		StateSchemaVersion: 1, Status: StatusReady,
 		// Traits nil
 	}

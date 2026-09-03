@@ -21,7 +21,7 @@ import (
 
 // profileViewOut — JSON form of the output (same as the HTTP handler).
 type profileViewOut struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent when the row carries none, and
 	// a consumer then shows `name`.
 	Label        *string        `json:"label,omitempty"`
@@ -38,7 +38,7 @@ func toProfileViewOut(p *profile.Profile) profileViewOut {
 		params = map[string]any{}
 	}
 	return profileViewOut{
-		Name:         p.Name,
+		ID:           p.ID,
 		Label:        p.Label,
 		Provider:     p.Provider,
 		Params:       params,
@@ -49,7 +49,7 @@ func toProfileViewOut(p *profile.Profile) profileViewOut {
 }
 
 type profileCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.profile.label-set.
 	Label     *string        `json:"label"`
@@ -69,24 +69,24 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !profile.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+profile.NamePattern)
+	if !profile.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+profile.IDPattern)
 	}
 	if a.Provider == "" {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'provider' is required")
 	}
-	if !profile.ValidName(a.Provider) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'provider' must match "+profile.NamePattern)
+	if !profile.ValidID(a.Provider) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'provider' must match "+profile.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "profile", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission profile.create")
 	}
 
 	p, err := h.deps.ProfileSvc.Create(ctx, profile.CreateInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Label:     a.Label,
 		Provider:  a.Provider,
 		Params:    a.Params,
@@ -96,17 +96,17 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 	if err != nil {
 		switch {
 		case errors.Is(err, profile.ErrProfileAlreadyExists):
-			return h.toolError(req.ID, toolName, mcpCodeProfileExists, "profile "+a.Name+" already exists")
+			return h.toolError(req.ID, toolName, mcpCodeProfileExists, "profile "+a.ID+" already exists")
 		case errors.Is(err, profile.ErrProviderNotFound):
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 				"referenced provider "+a.Provider+" does not exist")
 		}
-		h.deps.Logger.Error("mcp: profile.create failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: profile.create failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create profile failed")
 	}
 
 	h.writeAudit(audit.EventProfileCreated, claims.Subject, map[string]any{
-		"name":        p.Name,
+		"id":          p.ID,
 		"label":       p.Label,
 		"provider":    p.Provider,
 		"params_keys": paramKeysSortedMCP(p.Params),
@@ -114,29 +114,29 @@ func (h *Handler) callProfileCreate(ctx context.Context, claims *jwt.Claims, req
 	return h.toolResult(req.ID, toProfileViewOut(p))
 }
 
-type profileByNameArgs struct {
-	Name string `json:"name"`
+type profileByIDArgs struct {
+	ID string `json:"id"`
 }
 
 // callProfileSetLabel — keeper.profile.label-set, the MCP mirror of
-// PUT /v1/profiles/{name}/label (ADR-0085). The registry's only mutation.
+// PUT /v1/profiles/{id}/label (ADR-0085). The registry's only mutation.
 func (h *Handler) callProfileSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[profileViewOut]{
 		tool:          "keeper.profile.label-set",
 		resource:      "profile",
 		configured:    h.deps.ProfileSvc != nil,
 		notConfigured: "profile registry is not configured",
-		validName:     profile.ValidName,
-		namePattern:   profile.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (profileViewOut, *string, error) {
-			p, previous, err := h.deps.ProfileSvc.SetLabel(ctx, name, label)
+		validID:       profile.ValidID,
+		idPattern:     profile.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (profileViewOut, *string, error) {
+			p, previous, err := h.deps.ProfileSvc.SetLabel(ctx, id, label)
 			if err != nil {
 				return profileViewOut{}, nil, err
 			}
 			return toProfileViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, profile.ErrProfileNotFound) },
-		notFoundf:  func(name string) string { return "profile " + name + " not found" },
+		notFoundf:  func(id string) string { return "profile " + id + " not found" },
 		failMsg:    "set profile label failed",
 		event:      audit.EventProfileLabelChanged,
 	})
@@ -147,24 +147,24 @@ func (h *Handler) callProfileRead(ctx context.Context, claims *jwt.Claims, req j
 	if h.deps.ProfileSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "profile registry is not configured")
 	}
-	var a profileByNameArgs
+	var a profileByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "profile", "read", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission profile.read")
 	}
-	p, err := h.deps.ProfileSvc.Get(ctx, a.Name)
+	p, err := h.deps.ProfileSvc.Get(ctx, a.ID)
 	if err != nil {
 		if errors.Is(err, profile.ErrProfileNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "profile "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "profile "+a.ID+" not found")
 		}
-		h.deps.Logger.Error("mcp: profile.read failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: profile.read failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read profile failed")
 	}
 	return h.toolResult(req.ID, toProfileViewOut(p))
@@ -175,30 +175,30 @@ func (h *Handler) callProfileDelete(ctx context.Context, claims *jwt.Claims, req
 	if h.deps.ProfileSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "profile registry is not configured")
 	}
-	var a profileByNameArgs
+	var a profileByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !profile.ValidName(a.Name) {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' must match "+profile.NamePattern)
+	if !profile.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' must match "+profile.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "profile", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden, "operator lacks required permission profile.delete")
 	}
-	err := h.deps.ProfileSvc.Delete(ctx, a.Name)
+	err := h.deps.ProfileSvc.Delete(ctx, a.ID)
 	if err != nil {
 		if errors.Is(err, profile.ErrProfileNotFound) {
-			return h.toolError(req.ID, toolName, mcpCodeNotFound, "profile "+a.Name+" not found")
+			return h.toolError(req.ID, toolName, mcpCodeNotFound, "profile "+a.ID+" not found")
 		}
-		h.deps.Logger.Error("mcp: profile.delete failed", slog.String("name", a.Name), slog.Any("error", err))
+		h.deps.Logger.Error("mcp: profile.delete failed", slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "delete profile failed")
 	}
-	h.writeAudit(audit.EventProfileDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(audit.EventProfileDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 

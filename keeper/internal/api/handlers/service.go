@@ -34,16 +34,16 @@ import (
 // nil, the corresponding /refs endpoint responds 500 "not configured" (the
 // ServiceLoader/PushRun pattern: the feature is optional, returns 5xx until wired up).
 type ServiceRefsLister interface {
-	ListRefs(ctx context.Context, name, gitURL string) ([]artifact.GitRef, error)
+	ListRefs(ctx context.Context, id, gitURL string) ([]artifact.GitRef, error)
 }
 
 // ServiceScenarioLister — the listing surface for scenarios from a materialized
 // snapshot of the Service repo for a single `(name, ref)`. Symmetric to [ServiceRefsLister]:
 // the handler takes a minimal dependency, the real git-clone + parsing of
 // scenario/*/main.yml lives inside the implementation (TTL cache + ServiceLoader). When nil,
-// `GET /v1/services/{name}/scenarios` responds 500 "not configured".
+// `GET /v1/services/{id}/scenarios` responds 500 "not configured".
 type ServiceScenarioLister interface {
-	ListScenarios(ctx context.Context, name, gitURL, ref string) ([]artifact.Scenario, error)
+	ListScenarios(ctx context.Context, id, gitURL, ref string) ([]artifact.Scenario, error)
 }
 
 // ServiceStateSchemaLister — the listing surface for state-schema metadata
@@ -52,9 +52,9 @@ type ServiceScenarioLister interface {
 // Symmetric to [ServiceScenarioLister]: the handler takes a minimal
 // dependency, the real git-clone + parsing of service.yml + scanning migrations/
 // lives inside the implementation (TTL cache + ServiceLoader). When nil,
-// `GET /v1/services/{name}/state-schema` responds 500 "not configured".
+// `GET /v1/services/{id}/state-schema` responds 500 "not configured".
 type ServiceStateSchemaLister interface {
-	ListStateSchema(ctx context.Context, name, gitURL, ref string) (*artifact.StateSchemaInfo, error)
+	ListStateSchema(ctx context.Context, id, gitURL, ref string) (*artifact.StateSchemaInfo, error)
 }
 
 // ServiceDependenciesLister — the listing surface for git dependencies
@@ -62,9 +62,9 @@ type ServiceStateSchemaLister interface {
 // `(name, ref)`. Symmetric to [ServiceStateSchemaLister]: the handler takes a
 // minimal dependency, the real git-clone + parsing of service.yml lives inside
 // the implementation (TTL cache + ServiceLoader). When nil,
-// `GET /v1/services/{name}/dependencies` responds 500 "not configured".
+// `GET /v1/services/{id}/dependencies` responds 500 "not configured".
 type ServiceDependenciesLister interface {
-	ListDependencies(ctx context.Context, name, gitURL, ref string) (*artifact.ServiceDependencies, error)
+	ListDependencies(ctx context.Context, id, gitURL, ref string) (*artifact.ServiceDependencies, error)
 }
 
 // ServiceDirectivesLister — the surface for reading the FULL directive catalog (all
@@ -73,9 +73,9 @@ type ServiceDependenciesLister interface {
 // minimal dependency, the real git-clone + reading vars/00-base.yaml lives
 // inside the implementation (TTL cache + ServiceLoader). Version narrowing is done by the handler
 // over the result (the cache is version-agnostic). When nil,
-// `GET /v1/services/{name}/directives` responds 500 "not configured".
+// `GET /v1/services/{id}/directives` responds 500 "not configured".
 type ServiceDirectivesLister interface {
-	ListDirectives(ctx context.Context, name, gitURL, ref string) (*artifact.DirectiveCatalog, error)
+	ListDirectives(ctx context.Context, id, gitURL, ref string) (*artifact.DirectiveCatalog, error)
 }
 
 // ServiceTelemetryLister — read surface for the default (per-service, without an incarnation)
@@ -84,9 +84,9 @@ type ServiceDirectivesLister interface {
 // [ServiceDirectivesLister]: the handler takes a minimal dependency, the real
 // git-clone + manifest read (`telemetry:`) + effective-defaults resolution live
 // inside the implementation (TTL cache + ServiceLoader). With nil,
-// `GET /v1/services/{name}/telemetry` returns 500 "not configured".
+// `GET /v1/services/{id}/telemetry` returns 500 "not configured".
 type ServiceTelemetryLister interface {
-	ListServiceTelemetry(ctx context.Context, name, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error)
+	ListServiceTelemetry(ctx context.Context, id, gitURL, ref string) (*serviceregistry.TelemetryCatalog, error)
 }
 
 // ServiceCompatLister — read surface for the engine-compat contributions of a
@@ -95,9 +95,9 @@ type ServiceTelemetryLister interface {
 // ETag). Symmetric to [ServiceTelemetryLister]: the handler takes a minimal
 // dependency, and the git-clone of the service repo AND of every declared destiny
 // lives inside the implementation (TTL cache + loaders). With nil,
-// `GET /v1/services/{name}/compat` returns 500 "not configured".
+// `GET /v1/services/{id}/compat` returns 500 "not configured".
 type ServiceCompatLister interface {
-	ListServiceCompat(ctx context.Context, name, gitURL, ref string) (*serviceregistry.CompatCatalog, error)
+	ListServiceCompat(ctx context.Context, id, gitURL, ref string) (*serviceregistry.CompatCatalog, error)
 }
 
 // ServiceHandler — the Service registry endpoints (register / list / get /
@@ -150,21 +150,21 @@ func ServiceSpecStub() *ServiceHandler {
 }
 
 // ServiceRegisterInput — the NATIVE request shape for POST /v1/services (handler-native
-// T5d). name+git+ref are required, refresh is optional (`*string`). Replaces
+// T5d). id+git+ref are required, refresh is optional (`*string`). Replaces
 // ServiceRegisterRequest.
 type ServiceRegisterInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/services/{name}/label. nil/blank → NULL, and the consumer shows
-	// Name.
+	// by PUT /v1/services/{id}/label. nil/blank → NULL, and the consumer shows
+	// ID.
 	Label   *string
 	Git     string
 	Ref     string
 	Refresh *string
 }
 
-// ServiceUpdateInput — the NATIVE request shape for PATCH /v1/services/{name} (handler-
-// native T5d). name is a path parameter (a key, not in the body); git+ref are required
+// ServiceUpdateInput — the NATIVE request shape for PATCH /v1/services/{id} (handler-
+// native T5d). id is a path parameter (a key, not in the body); git+ref are required
 // (replace semantics for mutable fields), refresh is optional.
 type ServiceUpdateInput struct {
 	Git     string
@@ -177,9 +177,9 @@ type ServiceUpdateInput struct {
 // updated_by_aid are `*string` (nil → key omitted in the native projection); dates are
 // truncated to seconds (UTC). Package api projects this into the native ServiceView schema.
 type ServiceView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
-	// consumer then shows Name.
+	// consumer then shows ID.
 	Label        *string
 	Git          string
 	Ref          string
@@ -196,11 +196,11 @@ type ServiceListPage struct {
 }
 
 // ServiceRegisterReply — the result of [ServiceHandler.RegisterTyped] (handler-native
-// T5d). Carries the 201 body (flat ServiceView) + audit fields (name/git/ref + caller AID;
+// T5d). Carries the 201 body (flat ServiceView) + audit fields (id/git/ref + caller AID;
 // the git URL is not a secret).
 type ServiceRegisterReply struct {
 	Body         ServiceView
-	Name         string
+	ID           string
 	Label        *string
 	Git          string
 	Ref          string
@@ -211,7 +211,7 @@ type ServiceRegisterReply struct {
 // The SINGLE source for both the (w,r) wrapper AND the huma variant B.
 func (r ServiceRegisterReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":           r.Name,
+		"id":             r.ID,
 		"label":          r.Label,
 		"git":            r.Git,
 		"ref":            r.Ref,
@@ -229,11 +229,11 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 	// Engine-compat convenience check (ADR-0076(f)): reject an obviously
 	// incompatible pin NOW, while the operator can still choose another ref. The
 	// authority stays on the render path; an unreachable repo is allowed through.
-	if err := h.EarlyCompatCheck(ctx, "service.register", req.Name, req.Git, req.Ref); err != nil {
+	if err := h.EarlyCompatCheck(ctx, "service.register", req.ID, req.Git, req.Ref); err != nil {
 		return zero, err
 	}
 	entry, err := h.svc.CreateService(ctx, serviceregistry.CreateServiceInput{
-		Name:      req.Name,
+		ID:        req.ID,
 		Label:     req.Label,
 		Git:       req.Git,
 		Ref:       req.Ref,
@@ -241,12 +241,12 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 		CallerAID: &callerAID,
 	})
 	if err != nil {
-		return zero, h.mapServiceError("service.register", req.Name, callerAID, err)
+		return zero, h.mapServiceError("service.register", req.ID, callerAID, err)
 	}
 
 	return ServiceRegisterReply{
 		Body:         toServiceResponse(entry),
-		Name:         entry.Name,
+		ID:           entry.ID,
 		Label:        entry.Label,
 		Git:          entry.Git,
 		Ref:          entry.Ref,
@@ -255,7 +255,7 @@ func (h *ServiceHandler) RegisterTyped(ctx context.Context, claims *jwt.Claims, 
 }
 
 // ListTyped — the domain function for GET /v1/services (handler-native T5d, READ without audit):
-// reads the registry (sort name ASC) and assembles [ServiceListPage] (flat ServiceView)
+// reads the registry (sort id ASC) and assembles [ServiceListPage] (flat ServiceView)
 // without http.ResponseWriter/*http.Request. A read error → *problemError (500).
 // The wire form of items is built by the native projection in api.
 func (h *ServiceHandler) ListTyped(ctx context.Context) (ServiceListPage, error) {
@@ -272,57 +272,57 @@ func (h *ServiceHandler) ListTyped(ctx context.Context) (ServiceListPage, error)
 	return ServiceListPage{Items: items}, nil
 }
 
-// GetTyped — the domain function for GET /v1/services/{name} (handler-native T5d, READ
-// without audit): reads a single entry by name without http.ResponseWriter/*http.Request. name
+// GetTyped — the domain function for GET /v1/services/{id} (handler-native T5d, READ
+// without audit): reads a single entry by id without http.ResponseWriter/*http.Request. id
 // comes in as an argument; errors are *problemError (404 not-found / 500), success is the flat
 // [ServiceView].
-func (h *ServiceHandler) GetTyped(ctx context.Context, name string) (ServiceView, error) {
-	entry, err := h.svc.GetService(ctx, name)
+func (h *ServiceHandler) GetTyped(ctx context.Context, id string) (ServiceView, error) {
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 		return toServiceResponse(entry), nil
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return ServiceView{}, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return ServiceView{}, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.get: service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return ServiceView{}, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
 	}
 }
 
-// SetLabelTyped — domain function for PUT /v1/services/{name}/label
+// SetLabelTyped — domain function for PUT /v1/services/{id}/label
 // (WRITE+AUDIT service.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only error this route
 // raises besides 404 is on the caller's own path parameter, which huma has
-// already checked against the name grammar.
+// already checked against the id grammar.
 //
 // None of the artifact caches are invalidated, unlike UpdateTyped: every one of
-// them keys on the service NAME and holds material derived from git/ref, and a
+// them keys on the service ID and holds material derived from git/ref, and a
 // caption is neither.
-func (h *ServiceHandler) SetLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[ServiceView], error) {
+func (h *ServiceHandler) SetLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[ServiceView], error) {
 	var zero LabelWriteReply[ServiceView]
-	entry, previous, err := h.svc.SetServiceLabel(ctx, name, req.Label)
+	entry, previous, err := h.svc.SetServiceLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[ServiceView]{Body: toServiceResponse(entry), Name: name, Label: entry.Label, Previous: previous}, nil
+		return LabelWriteReply[ServiceView]{Body: toServiceResponse(entry), ID: id, Label: entry.Label, Previous: previous}, nil
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.label-set: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set service label failed")}
 	}
 }
 
 // ServiceUpdateReply — the result of [ServiceHandler.UpdateTyped] (handler-native T5d).
-// Carries the 200 body (flat ServiceView) + audit fields (name/git/ref).
+// Carries the 200 body (flat ServiceView) + audit fields (id/git/ref).
 type ServiceUpdateReply struct {
 	Body ServiceView
-	Name string
+	ID   string
 	Git  string
 	Ref  string
 }
@@ -330,86 +330,86 @@ type ServiceUpdateReply struct {
 // AuditPayload assembles the audit payload for the update route (parity with the legacy SetAuditPayload).
 func (r ServiceUpdateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name": r.Name,
-		"git":  r.Git,
-		"ref":  r.Ref,
+		"id":  r.ID,
+		"git": r.Git,
+		"ref": r.Ref,
 	}
 }
 
-// UpdateTyped — the extracted domain function for PATCH /v1/services/{name} (the FULL-TYPED
+// UpdateTyped — the extracted domain function for PATCH /v1/services/{id} (the FULL-TYPED
 // unfolding of ADR-054 §Pattern (b)): replaces mutable fields git/ref/refresh +
-// cache invalidate hooks, without http.ResponseWriter/*http.Request. claims/name/req
+// cache invalidate hooks, without http.ResponseWriter/*http.Request. claims/id/req
 // come in as arguments; errors are *problemError (via mapServiceError), success is
 // [ServiceUpdateReply] (200 body + audit fields).
-func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, name string, req ServiceUpdateInput) (ServiceUpdateReply, error) {
+func (h *ServiceHandler) UpdateTyped(ctx context.Context, claims *jwt.Claims, id string, req ServiceUpdateInput) (ServiceUpdateReply, error) {
 	var zero ServiceUpdateReply
 	callerAID := claims.Subject
 	// Same convenience check as register: a pin change is the other moment an
 	// operator can still pick a different ref (ADR-0076(f)).
-	if err := h.EarlyCompatCheck(ctx, "service.update", name, req.Git, req.Ref); err != nil {
+	if err := h.EarlyCompatCheck(ctx, "service.update", id, req.Git, req.Ref); err != nil {
 		return zero, err
 	}
 	entry, err := h.svc.UpdateService(ctx, serviceregistry.UpdateServiceInput{
-		Name:      name,
+		ID:        id,
 		Git:       req.Git,
 		Ref:       req.Ref,
 		Refresh:   req.Refresh,
 		CallerAID: &callerAID,
 	})
 	if err != nil {
-		return zero, h.mapServiceError("service.update", name, callerAID, err)
+		return zero, h.mapServiceError("service.update", id, callerAID, err)
 	}
-	h.invalidateRefs(entry.Name)
-	h.invalidateScenarios(entry.Name)
-	h.invalidateStateSchema(entry.Name)
-	h.invalidateDependencies(entry.Name)
-	h.invalidateDirectives(entry.Name)
-	h.invalidateTelemetry(entry.Name)
-	h.invalidateCompat(entry.Name)
+	h.invalidateRefs(entry.ID)
+	h.invalidateScenarios(entry.ID)
+	h.invalidateStateSchema(entry.ID)
+	h.invalidateDependencies(entry.ID)
+	h.invalidateDirectives(entry.ID)
+	h.invalidateTelemetry(entry.ID)
+	h.invalidateCompat(entry.ID)
 
 	return ServiceUpdateReply{
 		Body: toServiceResponse(entry),
-		Name: entry.Name,
+		ID:   entry.ID,
 		Git:  entry.Git,
 		Ref:  entry.Ref,
 	}, nil
 }
 
-// ServiceNameReply — the result of write operations whose audit payload carries only the
-// Service name (deregister). The 204 body is empty; reply is METADATA for audit.
-type ServiceNameReply struct {
-	Name string
+// ServiceIDReply — the result of write operations whose audit payload carries only the
+// Service id (deregister). The 204 body is empty; reply is METADATA for audit.
+type ServiceIDReply struct {
+	ID string
 }
 
-// DeregisterTyped — the extracted domain function for DELETE /v1/services/{name}
+// DeregisterTyped — the extracted domain function for DELETE /v1/services/{id}
 // (the FULL-TYPED unfolding of ADR-054 §Pattern (b)): deletion by PK + cache invalidate
-// hooks, without http.ResponseWriter/*http.Request. name comes in as an argument; errors are
-// *problemError (404 not-found / 500), success is [ServiceNameReply] (audit payload).
+// hooks, without http.ResponseWriter/*http.Request. id comes in as an argument; errors are
+// *problemError (404 not-found / 500), success is [ServiceIDReply] (audit payload).
 // The 204 body is empty.
-func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (ServiceNameReply, error) {
-	var zero ServiceNameReply
-	err := h.svc.DeleteService(ctx, name)
+func (h *ServiceHandler) DeregisterTyped(ctx context.Context, id string) (ServiceIDReply, error) {
+	var zero ServiceIDReply
+	err := h.svc.DeleteService(ctx, id)
 	switch {
 	case err == nil:
 		// fall through to reply.
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.deregister: service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "deregister service failed")}
 	}
 
-	h.invalidateRefs(name)
-	h.invalidateScenarios(name)
-	h.invalidateStateSchema(name)
-	h.invalidateDependencies(name)
-	h.invalidateDirectives(name)
-	h.invalidateTelemetry(name)
-	h.invalidateCompat(name)
-	return ServiceNameReply{Name: name}, nil
+	h.invalidateRefs(id)
+	h.invalidateScenarios(id)
+	h.invalidateStateSchema(id)
+	h.invalidateDependencies(id)
+	h.invalidateDirectives(id)
+	h.invalidateTelemetry(id)
+	h.invalidateCompat(id)
+	return ServiceIDReply{ID: id}, nil
 }
 
 // invalidateRefs — best-effort eviction of the refs cache entry for name after
@@ -419,12 +419,12 @@ func (h *ServiceHandler) DeregisterTyped(ctx context.Context, name string) (Serv
 // The "refs of the new git source will be picked up on the next request" semantics matters
 // for UX: after a Service's git URL changes, the first time the Upgrade modal opens it should
 // show tags from the new repo, not cached ones from the old one.
-func (h *ServiceHandler) invalidateRefs(name string) {
+func (h *ServiceHandler) invalidateRefs(id string) {
 	if h.refs == nil {
 		return
 	}
 	if inv, ok := h.refs.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -432,12 +432,12 @@ func (h *ServiceHandler) invalidateRefs(name string) {
 // Update/Deregister of a Service (paired semantics with [invalidateRefs]). After
 // a git URL change or entry deletion, cached scenarios must disappear
 // so the UI "Choose scenario" dropdown picks up the listing from the new source.
-func (h *ServiceHandler) invalidateScenarios(name string) {
+func (h *ServiceHandler) invalidateScenarios(id string) {
 	if h.scenarios == nil {
 		return
 	}
 	if inv, ok := h.scenarios.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -445,12 +445,12 @@ func (h *ServiceHandler) invalidateScenarios(name string) {
 // (paired semantics with [invalidateScenarios]). After a git URL change or
 // entry deletion, the cached state-schema must disappear so the UI
 // Schema explorer picks up the listing from the new source.
-func (h *ServiceHandler) invalidateStateSchema(name string) {
+func (h *ServiceHandler) invalidateStateSchema(id string) {
 	if h.stateSchema == nil {
 		return
 	}
 	if inv, ok := h.stateSchema.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -458,12 +458,12 @@ func (h *ServiceHandler) invalidateStateSchema(name string) {
 // (paired semantics with [invalidateStateSchema]). After a git URL change or
 // entry deletion, cached dependencies must disappear so the UI
 // Service Detail picks up the listing from the new source.
-func (h *ServiceHandler) invalidateDependencies(name string) {
+func (h *ServiceHandler) invalidateDependencies(id string) {
 	if h.dependencies == nil {
 		return
 	}
 	if inv, ok := h.dependencies.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -471,12 +471,12 @@ func (h *ServiceHandler) invalidateDependencies(name string) {
 // semantics with [invalidateDependencies]). After a git URL change or entry deletion,
 // the cached catalog must disappear so the UI redis_settings editor
 // picks up the catalog from the new source.
-func (h *ServiceHandler) invalidateDirectives(name string) {
+func (h *ServiceHandler) invalidateDirectives(id string) {
 	if h.directives == nil {
 		return
 	}
 	if inv, ok := h.directives.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -484,24 +484,24 @@ func (h *ServiceHandler) invalidateDirectives(name string) {
 // semantics with [invalidateDirectives]). After a git-URL change or record deletion,
 // the cached telemetry config must disappear so the UI picks up the defaults of
 // the new source.
-func (h *ServiceHandler) invalidateTelemetry(name string) {
+func (h *ServiceHandler) invalidateTelemetry(id string) {
 	if h.telemetry == nil {
 		return
 	}
 	if inv, ok := h.telemetry.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
 // invalidateCompat — best-effort compat-cache invalidation by name (paired
 // semantics with [invalidateTelemetry]). A git-URL/ref change repoints the
 // service at different manifests, so the cached window must disappear.
-func (h *ServiceHandler) invalidateCompat(name string) {
+func (h *ServiceHandler) invalidateCompat(id string) {
 	if h.compat == nil {
 		return
 	}
 	if inv, ok := h.compat.(interface{ Invalidate(string) }); ok {
-		inv.Invalidate(name)
+		inv.Invalidate(id)
 	}
 }
 
@@ -513,31 +513,31 @@ func (h *ServiceHandler) invalidateCompat(name string) {
 //   - ErrAlreadyExists      → service-already-exists (409).
 //   - ErrNotFound           → not-found (404; update of a nonexistent entry).
 //   - ErrOperatorNotFound   → not-found (404; CallerAID missing from operators).
-//   - ErrInvalidName / ErrReservedName / ErrInvalidGit / ErrInvalidRef /
-//     ErrInvalidRefresh → validation-failed (422). ErrReservedName is a validation
-//     failure and not a conflict: nothing holds the name, it is unusable by
+//   - ErrInvalidID / ErrReservedID / ErrInvalidGit / ErrInvalidRef /
+//     ErrInvalidRefresh → validation-failed (422). ErrReservedID is a validation
+//     failure and not a conflict: nothing holds the id, it is unusable by
 //     construction (NIM-706), and 409 would send the operator hunting for the
 //     service that supposedly owns it.
 //
 // For unknown errors — internal-error (500) + a generic detail (the raw err.Error()
 // is not surfaced to the client; diagnostics go to the logs).
-func (h *ServiceHandler) mapServiceError(op, name, callerAID string, err error) error {
+func (h *ServiceHandler) mapServiceError(op, id, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, serviceregistry.ErrAlreadyExists):
-		return &problemError{problem.New(problem.TypeServiceExists, "", "service "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeServiceExists, "", "service "+id+" already exists")}
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	case errors.Is(err, serviceregistry.ErrOperatorNotFound):
 		return &problemError{problem.New(problem.TypeNotFound, "", "caller AID "+callerAID+" not found in operators registry")}
-	case errors.Is(err, serviceregistry.ErrInvalidName),
-		errors.Is(err, serviceregistry.ErrReservedName),
+	case errors.Is(err, serviceregistry.ErrInvalidID),
+		errors.Is(err, serviceregistry.ErrReservedID),
 		errors.Is(err, serviceregistry.ErrInvalidGit),
 		errors.Is(err, serviceregistry.ErrInvalidRef),
 		errors.Is(err, serviceregistry.ErrInvalidRefresh):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	default:
 		h.logger.Error(op+": service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("by_aid", callerAID),
 			slog.Any("error", err),
 		)
@@ -555,53 +555,53 @@ type GitRefView struct {
 	IsDefault bool
 }
 
-// ServiceRefsList — the FLAT domain body for GET /v1/services/{name}/refs (handler-
+// ServiceRefsList — the FLAT domain body for GET /v1/services/{id}/refs (handler-
 // native T5d): service + refs[]. Package api projects this into the native ServiceRefsListReply.
 type ServiceRefsList struct {
 	Service string
 	Refs    []GitRefView
 }
 
-// ListRefsTyped — the domain function for GET /v1/services/{name}/refs (handler-native T5d,
+// ListRefsTyped — the domain function for GET /v1/services/{id}/refs (handler-native T5d,
 // READ without audit): resolves the entry + ls-remote of git tags/branches, without http.
 // ResponseWriter/*http.Request. name comes in as an argument; errors are *problemError
 // (500 no lister/read failure, 404 not-found, 502 ls-remote failed), success is
 // [ServiceRefsList].
-func (h *ServiceHandler) ListRefsTyped(ctx context.Context, name string) (ServiceRefsList, error) {
+func (h *ServiceHandler) ListRefsTyped(ctx context.Context, id string) (ServiceRefsList, error) {
 	var zero ServiceRefsList
 	if h.refs == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service refs lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.refs: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
 	}
 
-	refs, err := h.refs.ListRefs(ctx, entry.Name, entry.Git)
+	refs, err := h.refs.ListRefs(ctx, entry.ID, entry.Git)
 	if err != nil {
 		h.logger.Warn("service.refs: ls-remote failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "ls-remote failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "ls-remote failed for service "+id+": "+err.Error())}
 	}
 	return ServiceRefsList{
-		Service: entry.Name,
+		Service: entry.ID,
 		Refs:    toGitRefViews(refs),
 	}, nil
 }
 
-// ServiceScenariosReply — the GET /v1/services/{name}/scenarios body. The service +
+// ServiceScenariosReply — the GET /v1/services/{id}/scenarios body. The service +
 // ref fields duplicate the path parameter / selected ref for client convenience (one
 // object is self-contained JSON; the UI puts the ref label next to the dropdown).
 //
@@ -618,7 +618,7 @@ type ServiceScenariosReply struct {
 	Scenarios []artifact.Scenario `json:"scenarios"`
 }
 
-// ListScenarios — GET /v1/services/{name}/scenarios. Returns the list of
+// ListScenarios — GET /v1/services/{id}/scenarios. Returns the list of
 // scenario metadata from a materialized snapshot of the Service's git repo (for
 // the "Choose scenario" UI dropdown in the Run modal — paired with /refs for the Upgrade modal).
 // Permission — service.list (the same Service-entry projection as /refs).
@@ -634,26 +634,26 @@ type ServiceScenariosReply struct {
 //   - 500 — internal failure (no lister / unexpected registry read error).
 //   - 502 (bad-gateway) — git-clone / manifest parse failed on the loader side.
 //
-// ListScenariosTyped — the extracted domain function for GET /v1/services/{name}/
+// ListScenariosTyped — the extracted domain function for GET /v1/services/{id}/
 // scenarios (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit): resolves
 // the entry + lists scenarios from the git repo snapshot + tags kind/runnable, without
 // http.ResponseWriter/*http.Request. name/ref come in as arguments (ref="" →
 // default from the registry); errors are *problemError (500/404/502), success is
 // [ServiceScenariosReply].
-func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref string) (ServiceScenariosReply, error) {
+func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, id, ref string) (ServiceScenariosReply, error) {
 	var zero ServiceScenariosReply
 	if h.scenarios == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service scenarios lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.scenarios: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -664,15 +664,15 @@ func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref strin
 		ref = entry.Ref
 	}
 
-	scenarios, err := h.scenarios.ListScenarios(ctx, entry.Name, entry.Git, ref)
+	scenarios, err := h.scenarios.ListScenarios(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.scenarios: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "scenarios loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "scenarios loader failed for service "+id+": "+err.Error())}
 	}
 	if scenarios == nil {
 		scenarios = []artifact.Scenario{}
@@ -689,7 +689,7 @@ func (h *ServiceHandler) ListScenariosTyped(ctx context.Context, name, ref strin
 		scenarios[i].Runnable = scenario.IsRunnableScenario(scenarios[i].Name)
 	}
 	return ServiceScenariosReply{
-		Service:   entry.Name,
+		Service:   entry.ID,
 		Ref:       ref,
 		Scenarios: scenarios,
 	}, nil
@@ -703,7 +703,7 @@ type StateSchemaMigration struct {
 	Path string
 }
 
-// ServiceStateSchema — the FLAT domain body for GET /v1/services/{name}/state-schema
+// ServiceStateSchema — the FLAT domain body for GET /v1/services/{id}/state-schema
 // (handler-native T5d). Schema is `map[string]any` (the native projection omits an empty
 // map); Migrations is []StateSchemaMigration. Package api projects this into the native schema.
 type ServiceStateSchema struct {
@@ -714,7 +714,7 @@ type ServiceStateSchema struct {
 	Migrations         []StateSchemaMigration
 }
 
-// ListStateSchema — GET /v1/services/{name}/state-schema. Returns the
+// ListStateSchema — GET /v1/services/{id}/state-schema. Returns the
 // service's state_schema metadata for the UI Schema explorer: the current version
 // (`state_schema_version`), an optional state structure declaration (if
 // the service declared one in `service.yml::state_schema`), and a flat list of
@@ -733,25 +733,25 @@ type ServiceStateSchema struct {
 //   - 502 (bad-gateway) — git-clone / manifest parse / migration scan failed
 //     on the loader side.
 //
-// ListStateSchemaTyped — the extracted domain function for GET /v1/services/{name}/
+// ListStateSchemaTyped — the extracted domain function for GET /v1/services/{id}/
 // state-schema (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit):
 // resolves the entry + lists state-schema metadata, without http.ResponseWriter/*http.
 // Request. name/ref come in as arguments (ref="" → default from the registry); errors are
 // *problemError (500/404/502), success is [ServiceStateSchema].
-func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, name, ref string) (ServiceStateSchema, error) {
+func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, id, ref string) (ServiceStateSchema, error) {
 	var zero ServiceStateSchema
 	if h.stateSchema == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service state-schema lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.state-schema: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -761,26 +761,26 @@ func (h *ServiceHandler) ListStateSchemaTyped(ctx context.Context, name, ref str
 		ref = entry.Ref
 	}
 
-	info, err := h.stateSchema.ListStateSchema(ctx, entry.Name, entry.Git, ref)
+	info, err := h.stateSchema.ListStateSchema(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.state-schema: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "state-schema loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "state-schema loader failed for service "+id+": "+err.Error())}
 	}
 	if info == nil {
 		// Defensive: the lister must return non-nil when err=nil; otherwise we return
 		// 502 — the implementation diverges from the contract.
 		h.logger.Error("service.state-schema: loader returned nil info without error",
-			slog.String("name", name))
+			slog.String("id", id))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "state-schema loader returned empty result")}
 	}
 
 	return ServiceStateSchema{
-		Service:            entry.Name,
+		Service:            entry.ID,
 		Ref:                ref,
 		StateSchemaVersion: info.Version,
 		Schema:             info.Schema,
@@ -797,7 +797,7 @@ type ServiceDependency struct {
 	Git  string
 }
 
-// ServiceDependenciesList — the FLAT domain body for GET /v1/services/{name}/dependencies
+// ServiceDependenciesList — the FLAT domain body for GET /v1/services/{id}/dependencies
 // (handler-native T5d): service/ref + destiny[]/modules[]. Package api projects this into
 // the native ServiceDependenciesReply.
 type ServiceDependenciesList struct {
@@ -807,7 +807,7 @@ type ServiceDependenciesList struct {
 	Modules []ServiceDependency
 }
 
-// ListDependencies — GET /v1/services/{name}/dependencies. Returns the
+// ListDependencies — GET /v1/services/{id}/dependencies. Returns the
 // service's git dependencies for the UI Service Detail: destiny bricks and custom
 // modules declared in `service.yml`, each with its own git ref
 // (ADR-007: version = git tag/branch). Permission — service.list (the same
@@ -823,25 +823,25 @@ type ServiceDependenciesList struct {
 //   - 500 — internal failure (no lister / unexpected registry read error).
 //   - 502 (bad-gateway) — git-clone / manifest parse failed on the loader side.
 //
-// ListDependenciesTyped — the extracted domain function for GET /v1/services/{name}/
+// ListDependenciesTyped — the extracted domain function for GET /v1/services/{id}/
 // dependencies (the FULL-TYPED unfolding of ADR-054 §Pattern, READ variant without audit):
 // resolves the entry + lists git dependencies, without http.ResponseWriter/*http.Request.
 // name/ref come in as arguments (ref="" → default from the registry); errors are
 // *problemError (500/404/502), success is [ServiceDependenciesList].
-func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref string) (ServiceDependenciesList, error) {
+func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, id, ref string) (ServiceDependenciesList, error) {
 	var zero ServiceDependenciesList
 	if h.dependencies == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service dependencies lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.dependencies: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -851,33 +851,33 @@ func (h *ServiceHandler) ListDependenciesTyped(ctx context.Context, name, ref st
 		ref = entry.Ref
 	}
 
-	deps, err := h.dependencies.ListDependencies(ctx, entry.Name, entry.Git, ref)
+	deps, err := h.dependencies.ListDependencies(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.dependencies: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "dependencies loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "dependencies loader failed for service "+id+": "+err.Error())}
 	}
 	if deps == nil {
 		// Defensive: the lister must return non-nil when err=nil; otherwise we return
 		// 502 — the implementation diverges from the contract (same pattern as ListStateSchema).
 		h.logger.Error("service.dependencies: loader returned nil without error",
-			slog.String("name", name))
+			slog.String("id", id))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "dependencies loader returned empty result")}
 	}
 
 	return ServiceDependenciesList{
-		Service: entry.Name,
+		Service: entry.ID,
 		Ref:     ref,
 		Destiny: toDependencyViews(deps.Destiny),
 		Modules: toDependencyViews(deps.Modules),
 	}, nil
 }
 
-// ServiceDirectivesReply — the GET /v1/services/{name}/directives body. Self-contained
+// ServiceDirectivesReply — the GET /v1/services/{id}/directives body. Self-contained
 // JSON (like ServiceScenariosReply): service + ref are echoed duplicates, sha1 is the snapshot hash (== ETag),
 // directives is a map of `series(major.minor) → sorted names`. A service without a catalog
 // → directives:{} (not null). Body directly (not a native DTO): elements are primitive
@@ -890,26 +890,26 @@ type ServiceDirectivesReply struct {
 	Directives map[string][]string `json:"directives"`
 }
 
-// ListDirectivesTyped — GET /v1/services/{name}/directives (READ without audit): resolves
+// ListDirectivesTyped — GET /v1/services/{id}/directives (READ without audit): resolves
 // the entry + reads the FULL directive catalog from the snapshot + version narrowing (optional).
 // name/ref/version come in as arguments (ref="" → default from the registry; version="" →
 // the entire catalog). Errors are *problemError (500 no lister/registry failure, 404 not-found,
 // 502 loader failed), success is [ServiceDirectivesReply] with a non-nil (possibly empty)
 // directives map.
-func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, version string) (ServiceDirectivesReply, error) {
+func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, id, ref, version string) (ServiceDirectivesReply, error) {
 	var zero ServiceDirectivesReply
 	if h.directives == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service directives lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.directives: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -919,20 +919,20 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 		ref = entry.Ref
 	}
 
-	catalog, err := h.directives.ListDirectives(ctx, entry.Name, entry.Git, ref)
+	catalog, err := h.directives.ListDirectives(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.directives: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader failed for service "+id+": "+err.Error())}
 	}
 	if catalog == nil {
 		// Defensive: the lister must return non-nil when err=nil (same pattern as ListStateSchema).
 		h.logger.Error("service.directives: loader returned nil without error",
-			slog.String("name", name))
+			slog.String("id", id))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "directives loader returned empty result")}
 	}
 
@@ -943,14 +943,14 @@ func (h *ServiceHandler) ListDirectivesTyped(ctx context.Context, name, ref, ver
 		dirs = map[string][]string{}
 	}
 	return ServiceDirectivesReply{
-		Service:    entry.Name,
+		Service:    entry.ID,
 		Ref:        ref,
 		SHA1:       catalog.SHA1,
 		Directives: dirs,
 	}, nil
 }
 
-// ServiceTelemetryReply — GET /v1/services/{name}/telemetry body. Self-contained
+// ServiceTelemetryReply — GET /v1/services/{id}/telemetry body. Self-contained
 // JSON (like ServiceDirectivesReply): service + ref echo-duplicates, snapshot sha1 (== ETag),
 // the effective default (per-service, without an incarnation) host-vitals config
 // (enabled/interval_sec/collectors) + known_collectors — the full allowed set of
@@ -967,25 +967,25 @@ type ServiceTelemetryReply struct {
 	KnownCollectors []string `json:"known_collectors"`
 }
 
-// ListServiceTelemetryTyped — GET /v1/services/{name}/telemetry (READ without audit):
+// ListServiceTelemetryTyped — GET /v1/services/{id}/telemetry (READ without audit):
 // record resolution + reading the default telemetry config from the manifest snapshot + the full
 // set of allowed collectors (config.KnownCollectors) for the UI. name/ref come in
 // as arguments (ref="" → registry default). Errors — *problemError (500 no lister/
 // registry failure, 404 not-found, 502 loader failed), success — [ServiceTelemetryReply].
-func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, ref string) (ServiceTelemetryReply, error) {
+func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, id, ref string) (ServiceTelemetryReply, error) {
 	var zero ServiceTelemetryReply
 	if h.telemetry == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "service telemetry lister not configured")}
 	}
 
-	entry, err := h.svc.GetService(ctx, name)
+	entry, err := h.svc.GetService(ctx, id)
 	switch {
 	case err == nil:
 	case errors.Is(err, serviceregistry.ErrNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "service "+id+" not found")}
 	default:
 		h.logger.Error("service.telemetry: get service failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.Any("error", err),
 		)
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get service failed")}
@@ -995,20 +995,20 @@ func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, re
 		ref = entry.Ref
 	}
 
-	catalog, err := h.telemetry.ListServiceTelemetry(ctx, entry.Name, entry.Git, ref)
+	catalog, err := h.telemetry.ListServiceTelemetry(ctx, entry.ID, entry.Git, ref)
 	if err != nil {
 		h.logger.Warn("service.telemetry: loader failed",
-			slog.String("name", name),
+			slog.String("id", id),
 			slog.String("git", entry.Git),
 			slog.String("ref", ref),
 			slog.Any("error", err),
 		)
-		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader failed for service "+name+": "+err.Error())}
+		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader failed for service "+id+": "+err.Error())}
 	}
 	if catalog == nil || catalog.Telemetry == nil {
 		// Defensive: the lister must return non-nil when err=nil (ListStateSchema pattern).
 		h.logger.Error("service.telemetry: loader returned nil without error",
-			slog.String("name", name))
+			slog.String("id", id))
 		return zero, &problemError{problem.New(problem.TypeBadGateway, "", "telemetry loader returned empty result")}
 	}
 
@@ -1022,7 +1022,7 @@ func (h *ServiceHandler) ListServiceTelemetryTyped(ctx context.Context, name, re
 	copy(known, config.KnownCollectors)
 
 	return ServiceTelemetryReply{
-		Service:         entry.Name,
+		Service:         entry.ID,
 		Ref:             ref,
 		SHA1:            catalog.SHA1,
 		Enabled:         catalog.Telemetry.GetEnabled(),
@@ -1068,7 +1068,7 @@ func toDependencyViews(in []artifact.Dependency) []ServiceDependency {
 // wire form (no nanoseconds).
 func toServiceResponse(e *serviceregistry.ServiceEntry) ServiceView {
 	return ServiceView{
-		Name:         e.Name,
+		ID:           e.ID,
 		Label:        e.Label,
 		Git:          e.Git,
 		Ref:          e.Ref,

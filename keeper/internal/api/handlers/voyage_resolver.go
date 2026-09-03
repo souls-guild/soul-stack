@@ -111,7 +111,7 @@ func NewVoyageScenarioPGResolver(db voyageResolverDB) *VoyageScenarioPGResolver 
 // incarnation names (deterministic for audit/snapshot).
 //
 // Algorithm:
-//  1. Explicit incarnations[] — each is checked via [incarnation.SelectByName]
+//  1. Explicit incarnations[] — each is checked via [incarnation.SelectByID]
 //     (nonexistent → ErrIncarnationNotFound, the handler maps to 422:
 //     a run cannot start on a missing target).
 //  2. service= / coven= filter → [incarnation.SelectAll] with ListFilter (the same
@@ -124,10 +124,10 @@ func (r *VoyageScenarioPGResolver) ResolveIncarnations(ctx context.Context, filt
 	set := make(map[string]struct{})
 
 	for _, name := range filter.Incarnations {
-		if !incarnation.ValidName(name) {
+		if !incarnation.ValidID(name) {
 			return nil, fmt.Errorf("voyage resolver: invalid incarnation name %q", name)
 		}
-		if _, err := incarnation.SelectByName(ctx, r.db, name); err != nil {
+		if _, err := incarnation.SelectByID(ctx, r.db, name); err != nil {
 			if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 				return nil, fmt.Errorf("%w: %s", incarnation.ErrIncarnationNotFound, name)
 			}
@@ -148,7 +148,7 @@ func (r *VoyageScenarioPGResolver) ResolveIncarnations(ctx context.Context, filt
 				return nil, fmt.Errorf("voyage resolver: list incarnations: %w", err)
 			}
 			for _, inc := range items {
-				set[inc.Name] = struct{}{}
+				set[inc.ID] = struct{}{}
 			}
 			if offset+pageSize >= total || len(items) == 0 {
 				break

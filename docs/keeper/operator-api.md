@@ -31,7 +31,7 @@ Operator API **does not overlap** with Keeper↔Soul gRPC: Souls do not go to Op
 | **JSON field naming** | `snake_case` for all request/response body fields. Go body types (huma full-typed handler-structs) carry `json:"<snake_case>"` tags and are serialized with the standard `encoding/json`; the same tags power the huma circuit of the derivative [`openapi.yaml`](openapi.yaml). | Same as `keeper.yml` / `soul.yml` convention; produces readable JSON symmetrical to `components/schemas` in [`openapi.yaml`](openapi.yaml). |
 | **Enum serialization** | In the JSON API, enum values ​​are short lowercase forms without family-prefix (`"ready"` / `"connected"` / `"agent"`). The canonical list of values ​​for each enum is specified in Go code - native enum directory `keeper/internal/api/huma_enums.go` (for example `IncarnationStatus`); `enum: […]` in the derivative [`openapi.yaml`](openapi.yaml) is its huma-generator. The historical remark "the proto-constant would have the form `INCARNATION_STATUS_READY`" is left in the circuit descriptions for context, but is not used in the wire format. | Short forms in JSON are the convention of this API; source of the list - Go-catalog, derivative spec. |
 | **Schema names** | `CamelCase` for schema names in `components/schemas` derived [`openapi.yaml`](openapi.yaml) (`OperatorCreateRequest`, `IncarnationGetReply`, `ProblemDetails`); The names of the schemes are derived by huma from the Go-struct handlers of the same name (`keeper/internal/api/huma_*.go`). | OpenAPI standard. |
-| **ID in path** | `name` for Incarnation (`/v1/incarnations/{name}`), AID for Operator (`/v1/operators/{aid}`, regex `^[a-z0-9][a-z0-9._@-]{1,127}$` from [naming-rules.md → Identifiers](../naming-rules.md); AID may contain `.`/`@` for email-like external names - in path segment they are **URL-encoded**, like FQDN-SID), SID for Soul (FQDN). SID is used in path in `/v1/souls/{sid}/issue-token` (sub-resource action) - FQDN **URL-encoded** in the path segment (dots are allowed in path without escaping; only reserved characters according to RFC 3986 are escaped, which are not in a valid FQDN). In the list response, the SID is given as is. Read-by-SID (`GET /v1/souls/{sid}`) remains deferred - no permission `soul.get`. |
+| **ID in path** | `name` for Incarnation (`/v1/incarnations/{id}`), AID for Operator (`/v1/operators/{aid}`, regex `^[a-z0-9][a-z0-9._@-]{1,127}$` from [naming-rules.md → Identifiers](../naming-rules.md); AID may contain `.`/`@` for email-like external names - in path segment they are **URL-encoded**, like FQDN-SID), SID for Soul (FQDN). SID is used in path in `/v1/souls/{sid}/issue-token` (sub-resource action) - FQDN **URL-encoded** in the path segment (dots are allowed in path without escaping; only reserved characters according to RFC 3986 are escaped, which are not in a valid FQDN). In the list response, the SID is given as is. Read-by-SID (`GET /v1/souls/{sid}`) remains deferred - no permission `soul.get`. |
 | **Pagination** | Query `offset` (int, ≥0, default `0`) + `limit` (int, 1..1000, default `50`). The list endpoint's response is `{items: [...], offset, limit, total}`. Cursor-pagination - post-MVP if necessary. |
 | **Async operations** | See [§ Async operations](#async-operations) below. |
 | **Status codes** | `200` (sync read/update), `201` (POST resource created), `202` (async accepted), `204` (delete/revoke without body), `400` (malformed JSON/syntactic), `401` (no/invalid JWT, **or a valid token whose Archon is revoked** — NIM-421), `403` (RBAC deny), `404` (not found), `409` (conflict - `error_locked`, self-lockout invariant), `422` (validation error - semantic), `500` (internal error). |
@@ -45,8 +45,8 @@ Endpoints that trigger long runs (creating/changing incarnation, push) return `2
 
 Poll status in MVP - through two endpoints:
 
-- `GET /v1/incarnations/{name}` - current `status` (`ready`/`applying`/`error_locked`/`migration_failed`/...) and `status_details`.
-- `GET /v1/incarnations/{name}/history` - records `state_history` with field `apply_id`; an entry with the specific `<ULID>` appears after a successful commit. Polling clients can pass `?apply_id=<ULID>` to directly search for a row of a specific run (see below).
+- `GET /v1/incarnations/{id}` - current `status` (`ready`/`applying`/`error_locked`/`migration_failed`/...) and `status_details`.
+- `GET /v1/incarnations/{id}/history` - records `state_history` with field `apply_id`; an entry with the specific `<ULID>` appears after a successful commit. Polling clients can pass `?apply_id=<ULID>` to directly search for a row of a specific run (see below).
 
 There is no separate `/v1/applies/{apply_id}` endpoint **in MVP** - there are no corresponding `apply.*` permissions in the [rbac.md](rbac.md) directory either. Will appear as a separate task if necessary.
 
@@ -95,8 +95,8 @@ Specific implementation - middleware on OTel-exporter / log-pipeline; normalizin
 
 Masking applies not only to observability channels, but also to the **JSON response itself** reading incarnation:
 
-- `GET /v1/incarnations/{name}` and `GET /v1/incarnations` - The `state` and `spec` fields are run through `shared/audit.MaskSecrets` before serialization.
-- `GET /v1/incarnations/{name}/history` - fields `state_before` and `state_after` are run through the same masking.
+- `GET /v1/incarnations/{id}` and `GET /v1/incarnations` - The `state` and `spec` fields are run through `shared/audit.MaskSecrets` before serialization.
+- `GET /v1/incarnations/{id}/history` - fields `state_before` and `state_after` are run through the same masking.
 
 The rule is the same as for observability (substring-match by sensitive-key: `token`/`secret`/`password`/`private_key`/… and vault-ref-marker `vault:secret/`); sensitive values ​​are replaced with `***MASKED***`, non-sensitive fields and object structure are preserved.
 
@@ -117,7 +117,7 @@ All errors `4xx`/`5xx` are returned as `application/problem+json`:
   "type": "https://soul-stack.com/errors/incarnation-locked",
   "title": "Incarnation is in error_locked state",
   "status": 409,
-  "detail": "Incarnation 'redis-prod' is locked after failed apply 01HABCDEFGHJKMNPQRSTVWXYZ; use POST /v1/incarnations/{name}/unlock first",
+  "detail": "Incarnation 'redis-prod' is locked after failed apply 01HABCDEFGHJKMNPQRSTVWXYZ; use POST /v1/incarnations/{id}/unlock first",
   "instance": "/v1/incarnations/redis-prod/scenarios/restart"
 }
 ```
@@ -141,11 +141,11 @@ All `type` are stable URNs under the `https://soul-stack.com/errors/` domain. Li
 | `forbidden` | 403 | RBAC check failed — this identity is valid and may not do this. `detail` contains the required permission and context. A revoked Archon is **not** in this class (see the row above): 403 is answerable by a grant, 401 is not. | Any `/v1/*` endpoint after JWT authentication. |
 | `not-found` | 404 | The resource does not exist. | Any endpoint with path-param. |
 | `validation-failed` | 422 | Semantic validation error: incarnation input does not match scenario `input:`-scheme ([destiny/input](../input.md)); `create_scenario` in `POST /v1/incarnations` is empty if there are create scenarios (`detail` starts with `create_scenario_required:` + list of valid ones) or points to a scenario outside the create set (`create_scenario_invalid:`, see [operator-api/incarnations.md → Selecting a starting scenario](operator-api/incarnations.md)); profile `params` does not match CloudDriver `profile_schema` ([cloud.md](cloud.md)); request `issue-token` for Soul with `transport: ssh` (ssh host does not have bootstrap phase - `POST /v1/souls/{sid}/issue-token`). `detail` - path to a specific field or reason. |
-| `assert-failed` | 422 | Scenario `assert:`-predicate did not pass at the pre-flight gate of the run CREATION ([ADR-009](../adr/0009-scenario-dsl.md)/[ADR-027](../adr/0027-apply-work-queue.md) amendment 2026-06-23, form A). **Incarnation is NOT created**, fail status (`error_locked`) is NOT set - failure at the model stage BEFORE committing. `detail` — `message` assert tasks + text of the failed predicate. Separate URN from `validation-failed`: "topology does not match" ≠ "input field does not match the schema." **Since 2026-07-28 ([ADR-009 amendment, NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)) a TOPOLOGY assert no longer answers on the CREATE path:** the gate stands before `incarnation.Create`, and since membership FKs that row the run has no roster to measure yet, so an assert reading `soulprint.*` is deferred to the render fail-safe (failure there = `error_locked`, not this 422). What reaches this code on create is an assert over `input.` / `vars.` / `incarnation.` — for example a cross-field ceiling the `input:` schema cannot express. **On the RUN path a topology assert DOES answer here ([NIM-270](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-270-the-pre-flight-gate-moves-to-where-the-roster-is-real))** — the incarnation exists and its roster is bound, so a mismatch is rejected synchronously instead of becoming an `error_locked`; the exception is a plan that builds its own roster (all-keeper, or carrying a refresh emitter), which is deferred for the same reason as create. Where each assert is answered — [`docs/scenario/orchestration.md §2.3.1`](../scenario/orchestration.md). | `POST /v1/incarnations` (create scenario with a non-roster `assert:`) and **`POST /v1/incarnations/{name}/scenarios/{scenario}`** (any `assert:` the run's own roster can answer). |
+| `assert-failed` | 422 | Scenario `assert:`-predicate did not pass at the pre-flight gate of the run CREATION ([ADR-009](../adr/0009-scenario-dsl.md)/[ADR-027](../adr/0027-apply-work-queue.md) amendment 2026-06-23, form A). **Incarnation is NOT created**, fail status (`error_locked`) is NOT set - failure at the model stage BEFORE committing. `detail` — `message` assert tasks + text of the failed predicate. Separate URN from `validation-failed`: "topology does not match" ≠ "input field does not match the schema." **Since 2026-07-28 ([ADR-009 amendment, NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)) a TOPOLOGY assert no longer answers on the CREATE path:** the gate stands before `incarnation.Create`, and since membership FKs that row the run has no roster to measure yet, so an assert reading `soulprint.*` is deferred to the render fail-safe (failure there = `error_locked`, not this 422). What reaches this code on create is an assert over `input.` / `vars.` / `incarnation.` — for example a cross-field ceiling the `input:` schema cannot express. **On the RUN path a topology assert DOES answer here ([NIM-270](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-270-the-pre-flight-gate-moves-to-where-the-roster-is-real))** — the incarnation exists and its roster is bound, so a mismatch is rejected synchronously instead of becoming an `error_locked`; the exception is a plan that builds its own roster (all-keeper, or carrying a refresh emitter), which is deferred for the same reason as create. Where each assert is answered — [`docs/scenario/orchestration.md §2.3.1`](../scenario/orchestration.md). | `POST /v1/incarnations` (create scenario with a non-roster `assert:`) and **`POST /v1/incarnations/{id}/scenarios/{scenario}`** (any `assert:` the run's own roster can answer). |
 | `malformed-request` | 400 | JSON syntax / incorrect query params. |
-| `incarnation-locked` | 409 | Incarnation in `error_locked` - `POST /v1/incarnations/{name}/unlock` is needed before a new run ([architecture.md → Atomicity and `error_locked`](../architecture.md)). For `rerun-last` - also "status not `error_locked`" (nothing to restart). | `POST /v1/incarnations/{name}/scenarios/{scenario}`, `DELETE /v1/incarnations/{name}`, `POST /v1/incarnations/{name}/upgrade`, `POST /v1/incarnations/{name}/rerun-last`. |
-| `rerun-input-unavailable` | 409 | `rerun-last` cannot restore the input of a fallen day-2 run (fail-closed): `apply_runs.recipe` is unavailable - the run fell to dispatch (render_failed / no_hosts / pre-flight, the terminal line was written without a recipe), the recipe was cleared by retention Reaper (`purge_apply_runs`) or a legacy run without a saved recipe (`recipe IS NULL`). Separate URN from `incarnation-locked` (machine-readable difference "input lost → `unlock` + manual `run` with explicit input" from "status not `error_locked`"). | `POST /v1/incarnations/{name}/rerun-last`. |
-| `migration-failed` | 409 | Incarnation in `migration_failed` - manual parsing of state_history ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) is required. | `POST /v1/incarnations/{name}/scenarios/{scenario}`, `POST /v1/incarnations/{name}/upgrade`. |
+| `incarnation-locked` | 409 | Incarnation in `error_locked` - `POST /v1/incarnations/{id}/unlock` is needed before a new run ([architecture.md → Atomicity and `error_locked`](../architecture.md)). For `rerun-last` - also "status not `error_locked`" (nothing to restart). | `POST /v1/incarnations/{id}/scenarios/{scenario}`, `DELETE /v1/incarnations/{id}`, `POST /v1/incarnations/{id}/upgrade`, `POST /v1/incarnations/{id}/rerun-last`. |
+| `rerun-input-unavailable` | 409 | `rerun-last` cannot restore the input of a fallen day-2 run (fail-closed): `apply_runs.recipe` is unavailable - the run fell to dispatch (render_failed / no_hosts / pre-flight, the terminal line was written without a recipe), the recipe was cleared by retention Reaper (`purge_apply_runs`) or a legacy run without a saved recipe (`recipe IS NULL`). Separate URN from `incarnation-locked` (machine-readable difference "input lost → `unlock` + manual `run` with explicit input" from "status not `error_locked`"). | `POST /v1/incarnations/{id}/rerun-last`. |
+| `migration-failed` | 409 | Incarnation in `migration_failed` - manual parsing of state_history ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) is required. | `POST /v1/incarnations/{id}/scenarios/{scenario}`, `POST /v1/incarnations/{id}/upgrade`. |
 | `would-lock-out-cluster` | 409 | The operation would leave the cluster without an active Archon with an effective `*`-permission (an effective `*` may come through Synod). Only a bare `*` on a **plain** role counts — a derived role is never a source ([ADR-078(i)](../adr/0078-rbac-derived-roles.md)), so turning the last `*`-granting role derived is refused here too. | `POST /v1/operators/{aid}/revoke`; role-operations (`DELETE /v1/roles/{name}`, `PATCH /v1/roles/{name}/permissions`, `DELETE /v1/roles/{name}/operators/{aid}`); synod operations (`DELETE /v1/synods/{name}`, `DELETE /v1/synods/{name}/operators/{aid}`, `DELETE /v1/synods/{name}/roles/{role_name}`). |
 | `role-has-children` | 409 | The role is still someone's `parent_role` — the fail-closed orphan policy of [ADR-078(g)](../adr/0078-rbac-derived-roles.md) (self-FK `ON DELETE RESTRICT`). Clearing the link instead would turn each child's delta into an absolute scope, i.e. a widening; the operator re-parents or deletes the children explicitly. | `DELETE /v1/roles/{name}`. |
 | `synod-not-found` | 404 | The synod group with the specified `name` is not in the registry `synods` ([ADR-049](../adr/0049-synod.md)). | `PATCH /v1/synods/{name}`, `DELETE /v1/synods/{name}`, `POST /v1/synods/{name}/operators`, `POST /v1/synods/{name}/roles`. |
@@ -164,7 +164,7 @@ All `type` are stable URNs under the `https://soul-stack.com/errors/` domain. Li
 | `soul-capability-unsupported` | 409 | The target Soul is connected, but its announced capability set does not cover what the request needs of it ([ADR-0076(i)](../adr/0076-engine-compat-window.md)). Sole user: `dry_run`, refused before dispatch because a binary that ignores the flag applies for real instead of planning ([ADR-031(b)](../adr/0031-scry-drift.md), [ADR-033 Amendment 2026-08-06](../adr/0033-errand.md)). Also covers "support could not be confirmed" — no presence source, or the check itself failed — which fails closed the same way; `detail` says which, because one is fixed by upgrading the agent and the other by restoring Redis. Distinct from `not-found`, which the same route uses for a Soul that is not connected at all. | `POST /v1/souls/{sid}/exec`. |
 | `tempo-exceeded` | 429 | Per-AID rate-limit [Tempo](config.md#tempo) has been exceeded - the operator pulls the resolver-heavy write endpoint too often ([ADR-050](../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)). The response carries the header **`Retry-After`** (seconds until at least one token is replenished). Per-AID limit (by `claims.Subject`), not cluster-wide. | `POST /v1/voyages`, `POST /v1/voyages/preview`. |
 | `internal-error` | 500 | Unplanned error. `detail` - generic; full diagnostics only in logs/OTel-trace, which the client can find by `traceparent`-header in the response. |
-| `cluster-degraded` | 503 | The cluster is in degraded mode — [Toll](../adr/0038-toll.md) saw a mass outflow of Souls and sheds the write path until the flag clears. Carries `Retry-After`. A property of the CLUSTER, not of this request: nothing about the request is wrong and nothing was attempted. Raised and cleared by the Toll middleware, which sits outermost so the 503 returns **before** RBAC and before any audit event is written; it has its own `cluster.degraded_set` / `cluster.degraded_cleared` audit events and the `keeper_cluster_degraded` metric. Distinct from `tempo-exceeded` (429, per-AID frequency) and from `teardown-unavailable` (503, one request's own dependency). | `POST /v1/incarnations/{name}/scenarios/{scenario}`, `POST /v1/push/apply`. |
+| `cluster-degraded` | 503 | The cluster is in degraded mode — [Toll](../adr/0038-toll.md) saw a mass outflow of Souls and sheds the write path until the flag clears. Carries `Retry-After`. A property of the CLUSTER, not of this request: nothing about the request is wrong and nothing was attempted. Raised and cleared by the Toll middleware, which sits outermost so the 503 returns **before** RBAC and before any audit event is written; it has its own `cluster.degraded_set` / `cluster.degraded_cleared` audit events and the `keeper_cluster_degraded` metric. Distinct from `tempo-exceeded` (429, per-AID frequency) and from `teardown-unavailable` (503, one request's own dependency). | `POST /v1/incarnations/{id}/scenarios/{scenario}`, `POST /v1/push/apply`. |
 | `teardown-unavailable` | 503 | Forgetting a Soul stopped **before it deleted anything**: the cluster-wide teardown notice could not be published, so a stream held on another Keeper instance could not be closed ([NIM-386](operator-api/souls.md)). The host is still registered and still holds what it held — retry once Redis is reachable. A separate URN from `cluster-degraded` on purpose: same status code, different fact. `cluster-degraded` says the cluster is shedding writes and this request never ran; this one says the request ran, found its own dependency missing and refused to half-finish. A client branching on the type must not read one as the other, and an operator who reads `cluster-degraded` here goes looking for a Toll audit event that was never written. | `DELETE /v1/souls/{sid}`. |
 
 ## Pagination
@@ -267,33 +267,33 @@ Source of truth for semantics, bodies and CRUD error codes - [rbac.md → REST `
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
 | `POST` | `/v1/incarnations` | `incarnation.create` | `keeper.incarnation.create` |
-| `POST` | `/v1/incarnations/{name}/rerun-last` | `incarnation.rerun-last` | `keeper.incarnation.rerun-last` |
-| `POST` | `/v1/incarnations/{name}/scenarios/{scenario}` | `incarnation.run` | `keeper.incarnation.run` |
-| `POST` | `/v1/incarnations/{name}/scenarios/{scenario}/form-prefill` | `incarnation.get` | — (REST only) |
-| `GET` | `/v1/incarnations/{name}` | `incarnation.get` | `keeper.incarnation.get` |
+| `POST` | `/v1/incarnations/{id}/rerun-last` | `incarnation.rerun-last` | `keeper.incarnation.rerun-last` |
+| `POST` | `/v1/incarnations/{id}/scenarios/{scenario}` | `incarnation.run` | `keeper.incarnation.run` |
+| `POST` | `/v1/incarnations/{id}/scenarios/{scenario}/form-prefill` | `incarnation.get` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}` | `incarnation.get` | `keeper.incarnation.get` |
 | `GET` | `/v1/incarnations` | `incarnation.list` | `keeper.incarnation.list` |
-| `GET` | `/v1/incarnations/{name}/history` | `incarnation.history` | `keeper.incarnation.history` |
-| `GET` | `/v1/incarnations/{name}/runs` | `incarnation.history` | — (REST only) |
-| `GET` | `/v1/incarnations/{name}/runs/{apply_id}` | `incarnation.history` | — (REST only) |
-| `POST` | `/v1/incarnations/{name}/unlock` | `incarnation.unlock` | `keeper.incarnation.unlock` |
-| `POST` | `/v1/incarnations/{name}/upgrade` | `incarnation.upgrade` | `keeper.incarnation.upgrade` |
-| `DELETE` | `/v1/incarnations/{name}` | `incarnation.destroy` | `keeper.incarnation.destroy` |
-| `PUT` | `/v1/incarnations/{name}/traits` | `incarnation.traits-set` | `keeper.incarnation.traits-set` |
-| `PUT` | `/v1/incarnations/{name}/label` | `incarnation.label-set` | `keeper.incarnation.label-set` |
-| `POST` | `/v1/incarnations/{name}/secrets/reveal` | `incarnation.view-secrets` | — (REST only) |
-| `GET` | `/v1/incarnations/{name}/secrets/revealable` | `incarnation.view-secrets` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}/history` | `incarnation.history` | `keeper.incarnation.history` |
+| `GET` | `/v1/incarnations/{id}/runs` | `incarnation.history` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}/runs/{apply_id}` | `incarnation.history` | — (REST only) |
+| `POST` | `/v1/incarnations/{id}/unlock` | `incarnation.unlock` | `keeper.incarnation.unlock` |
+| `POST` | `/v1/incarnations/{id}/upgrade` | `incarnation.upgrade` | `keeper.incarnation.upgrade` |
+| `DELETE` | `/v1/incarnations/{id}` | `incarnation.destroy` | `keeper.incarnation.destroy` |
+| `PUT` | `/v1/incarnations/{id}/traits` | `incarnation.traits-set` | `keeper.incarnation.traits-set` |
+| `PUT` | `/v1/incarnations/{id}/label` | `incarnation.label-set` | `keeper.incarnation.label-set` |
+| `POST` | `/v1/incarnations/{id}/secrets/reveal` | `incarnation.view-secrets` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}/secrets/revealable` | `incarnation.view-secrets` | — (REST only) |
 
-`PATCH /v1/incarnations/{name}/hosts` is **removed** and answers 404, together with the field it edited (`incarnation.spec.hosts[]`), the permissions `incarnation.update-hosts` / `incarnation.update` and the audit event `incarnation.hosts_updated` ([ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role), NIM-330). A declared role is an attribute of a Choir Voice: set it in a scenario with `core.choir.present` (`on: keeper`) or day-2 with `POST /v1/incarnations/{name}/choirs/{choir}/voices`. Detail - [operator-api/incarnations.md → PATCH .../hosts](operator-api/incarnations.md).
+`PATCH /v1/incarnations/{id}/hosts` is **removed** and answers 404, together with the field it edited (`incarnation.spec.hosts[]`), the permissions `incarnation.update-hosts` / `incarnation.update` and the audit event `incarnation.hosts_updated` ([ADR-044 amendment 2026-07-30](../adr/0044-choir.md#amendment-2026-07-30-nim-330-spechosts-is-removed-voice-is-the-only-source-of-a-declared-role), NIM-330). A declared role is an attribute of a Choir Voice: set it in a scenario with `core.choir.present` (`on: keeper`) or day-2 with `POST /v1/incarnations/{id}/choirs/{choir}/voices`. Detail - [operator-api/incarnations.md → PATCH .../hosts](operator-api/incarnations.md).
 
-`PUT /v1/incarnations/{name}/label` replaces the incarnation's display caption ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728) - free text, `null` clears it and consumers fall back to showing `name`. Permission `incarnation.label-set`, the same incarnation scope as every other mutation and **only** that gate: unlike `traits-set` below there is no second, pair-level check, because a caption is in no scope dimension and grants nobody visibility. No status gate either - it is allowed while the incarnation is `applying` or `error_locked`, since no run reads it. The caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root - `incarnation.label` does not resolve). Audit `incarnation.label_changed` (`{name, old_label, new_label}`), written by the handler itself. Detail - [operator-api/incarnations.md → PUT .../label](operator-api/incarnations.md).
+`PUT /v1/incarnations/{id}/label` replaces the incarnation's display caption ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728) - free text, `null` clears it and consumers fall back to showing `name`. Permission `incarnation.label-set`, the same incarnation scope as every other mutation and **only** that gate: unlike `traits-set` below there is no second, pair-level check, because a caption is in no scope dimension and grants nobody visibility. No status gate either - it is allowed while the incarnation is `applying` or `error_locked`, since no run reads it. The caption participates in nothing derived (no Vault path, no RBAC scope, no snapshot directory, no CEL root - `incarnation.label` does not resolve). Audit `incarnation.label_changed` (`{id, old_label, new_label}`), written by the handler itself. Detail - [operator-api/incarnations.md → PUT .../label](operator-api/incarnations.md).
 
-`PUT /v1/incarnations/{name}/traits` holistically replaces the operator-set trait incarnation marks (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a). The write touches that row and nothing else: member hosts neither receive a projection nor inherit the set ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Permission `incarnation.traits-set` (scope incarnation/coven/service on path-`name`, like the other incarnation mutations). Audit `incarnation.traits_changed` is written by the handler itself (payload - only old/new KEYS, not values). MCP mirror - `keeper.incarnation.traits-set`. Per-host counterpart - `POST /v1/souls/traits` (first-class, see Soul). Detail - [operator-api/incarnations.md → PUT .../traits](operator-api/incarnations.md).
+`PUT /v1/incarnations/{id}/traits` holistically replaces the operator-set trait incarnation marks (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a). The write touches that row and nothing else: member hosts neither receive a projection nor inherit the set ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Permission `incarnation.traits-set` (scope incarnation/coven/service on path-`name`, like the other incarnation mutations). Audit `incarnation.traits_changed` is written by the handler itself (payload - only old/new KEYS, not values). MCP mirror - `keeper.incarnation.traits-set`. Per-host counterpart - `POST /v1/souls/traits` (first-class, see Soul). Detail - [operator-api/incarnations.md → PUT .../traits](operator-api/incarnations.md).
 
-`POST /v1/incarnations/{name}/secrets/reveal` + discovery `GET …/secrets/revealable` — disclosure to the operator of the plaintext value of an incarnation secret ([ADR-070](../adr/0070-secret-reveal-path.md), READ-twin of the [ADR-064](../adr/0064-secret-write-path.md) write-path), **as amended by [ADR-0083](../adr/0083-declared-secret-state-fields.md) §2: the author writes no Vault path at all.** The service declares the secret in its `state_schema` — `type: secret` on a scalar field, or on a property inside `items` next to the `key:` naming which sibling property carries the element's identity — and Keeper **derives** the path from `(service, incarnation, state field, key)`: `secret/<service>/<incarnation>/<state-field>/<key>#<property>` for a collection, `secret/<service>/<incarnation>/<state-field>#value` for a scalar. `reveal` `{secret_id, key}` → `{value}`: `secret_id` is the declaration address (`<field>` for a scalar, `<field>.<property>` for a collection), the service version is always `incarnation.ServiceVersion` (anti version-craft), `key` must be a member of the collection in the **current** `state` and must match the [ADR-064](../adr/0064-secret-write-path.md) segment grammar `^[a-zA-Z0-9_-]+$` — the same rule a `core.state.<verb>` capture step writes under, or a legally-written secret would be unrevealable. A non-empty `key` on a scalar (`key_not_expected`) and an empty one on a collection (`key_not_in_state`) are both refused and audited. The derived path is read from Vault **only** if it falls under `secret/<service>/<incarnation>/` (positive prefix-allowlist — **main guard**; the system floor `secret/keeper/` / `secret/internal/` — backstop), otherwise `404` + audit `out_of_service_scope`. `revealable` → `{items:[{secret_id, label, state_path, keys, collection}]}` — discovery for the UI State view (an empty list is valid; `collection` tells the form whether a key is required, and a key that does not match the segment grammar is filtered out so discovery and reveal agree). Permission `incarnation.view-secrets` (scope incarnation/coven/service along path-`name`, **strictly more privileged than `incarnation.get`**; outside scope → **404** fail-closed, parity Get). `reveal` writes its own audit `incarnation.secret_revealed` — success (`result:"ok"`) AND the denied branches (`result:"denied"` + `reason`), payload `{name, secret_id, key, path, result, reason}` **WITHOUT the value** (leak-guard tests); `revealable` is a read, without audit. Authorized disclosure → 200-DTO **past `MaskSecrets`**. There are **no** MCP tools (REST-only, like form-prefill). Full record — [ADR-070](../adr/0070-secret-reveal-path.md) + its 2026-08-19 amendment.
+`POST /v1/incarnations/{id}/secrets/reveal` + discovery `GET …/secrets/revealable` — disclosure to the operator of the plaintext value of an incarnation secret ([ADR-070](../adr/0070-secret-reveal-path.md), READ-twin of the [ADR-064](../adr/0064-secret-write-path.md) write-path), **as amended by [ADR-0083](../adr/0083-declared-secret-state-fields.md) §2: the author writes no Vault path at all.** The service declares the secret in its `state_schema` — `type: secret` on a scalar field, or on a property inside `items` next to the `key:` naming which sibling property carries the element's identity — and Keeper **derives** the path from `(service, incarnation, state field, key)`: `secret/<service>/<incarnation>/<state-field>/<key>#<property>` for a collection, `secret/<service>/<incarnation>/<state-field>#value` for a scalar. `reveal` `{secret_id, key}` → `{value}`: `secret_id` is the declaration address (`<field>` for a scalar, `<field>.<property>` for a collection), the service version is always `incarnation.ServiceVersion` (anti version-craft), `key` must be a member of the collection in the **current** `state` and must match the [ADR-064](../adr/0064-secret-write-path.md) segment grammar `^[a-zA-Z0-9_-]+$` — the same rule a `core.state.<verb>` capture step writes under, or a legally-written secret would be unrevealable. A non-empty `key` on a scalar (`key_not_expected`) and an empty one on a collection (`key_not_in_state`) are both refused and audited. The derived path is read from Vault **only** if it falls under `secret/<service>/<incarnation>/` (positive prefix-allowlist — **main guard**; the system floor `secret/keeper/` / `secret/internal/` — backstop), otherwise `404` + audit `out_of_service_scope`. `revealable` → `{items:[{secret_id, label, state_path, keys, collection}]}` — discovery for the UI State view (an empty list is valid; `collection` tells the form whether a key is required, and a key that does not match the segment grammar is filtered out so discovery and reveal agree). Permission `incarnation.view-secrets` (scope incarnation/coven/service along path-`name`, **strictly more privileged than `incarnation.get`**; outside scope → **404** fail-closed, parity Get). `reveal` writes its own audit `incarnation.secret_revealed` — success (`result:"ok"`) AND the denied branches (`result:"denied"` + `reason`), payload `{name, secret_id, key, path, result, reason}` **WITHOUT the value** (leak-guard tests); `revealable` is a read, without audit. Authorized disclosure → 200-DTO **past `MaskSecrets`**. There are **no** MCP tools (REST-only, like form-prefill). Full record — [ADR-070](../adr/0070-secret-reveal-path.md) + its 2026-08-19 amendment.
 
-`GET /v1/incarnations/{name}/runs` + `GET …/runs/{apply_id}` — read-view of incarnation runs (convolution of `apply_runs` by `apply_id`: aggregate status `applying`/`success`/`failed`/`cancelled` + per-host details with the address of the fallen task), under UI "execution status / current job". Run (apply_run) is NOT Voyage. Permission `incarnation.history` (reuse read-tier: whoever sees the history of the incarnation also sees its runs); gate - existence-`RequireAction`, per-`{name}` scope - in-handler (outside Purview-scope → `404`, parity History). Read-only, no audit, **REST-only** (no MCP tools). Detail - [operator-api/incarnations.md → GET .../runs](operator-api/incarnations.md).
+`GET /v1/incarnations/{id}/runs` + `GET …/runs/{apply_id}` — read-view of incarnation runs (convolution of `apply_runs` by `apply_id`: aggregate status `applying`/`success`/`failed`/`cancelled` + per-host details with the address of the fallen task), under UI "execution status / current job". Run (apply_run) is NOT Voyage. Permission `incarnation.history` (reuse read-tier: whoever sees the history of the incarnation also sees its runs); gate - existence-`RequireAction`, per-`{name}` scope - in-handler (outside Purview-scope → `404`, parity History). Read-only, no audit, **REST-only** (no MCP tools). Detail - [operator-api/incarnations.md → GET .../runs](operator-api/incarnations.md).
 
-`POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill` — day-2 pre-fill UI forms of the scenario from `incarnation.state` (only those declared in the `prefill_from_state`-paths, secret-exception inside; [input.md → prefill_from_state](../input.md)). Permission `incarnation.get` (reuse: whoever reads the incarnation receives a prefill of its form), per-`{name}` scope - in-handler, like Get/History. Read-resolve, without audit, **REST-only**.
+`POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill` — day-2 pre-fill UI forms of the scenario from `incarnation.state` (only those declared in the `prefill_from_state`-paths, secret-exception inside; [input.md → prefill_from_state](../input.md)). Permission `incarnation.get` (reuse: whoever reads the incarnation receives a prefill of its form), per-`{name}` scope - in-handler, like Get/History. Read-resolve, without audit, **REST-only**.
 
 ### Runs (2) - global read-view of runs through all incarnations
 
@@ -405,14 +405,14 @@ CRUD registry Beacons: Vigil (Soul-side check) and Decree (rule reactor: Portent
 |---|---|---|---|
 | `POST` | `/v1/vigils` | `vigil.create` | `keeper.oracle.vigil.create` |
 | `GET` | `/v1/vigils` | `vigil.list` | `keeper.oracle.vigil.list` |
-| `GET` | `/v1/vigils/{name}` | `vigil.list` | `keeper.oracle.vigil.list` |
-| `PUT` | `/v1/vigils/{name}/label` | `vigil.label-set` | `keeper.oracle.vigil.label-set` |
-| `DELETE` | `/v1/vigils/{name}` | `vigil.delete` | `keeper.oracle.vigil.delete` |
+| `GET` | `/v1/vigils/{id}` | `vigil.list` | `keeper.oracle.vigil.list` |
+| `PUT` | `/v1/vigils/{id}/label` | `vigil.label-set` | `keeper.oracle.vigil.label-set` |
+| `DELETE` | `/v1/vigils/{id}` | `vigil.delete` | `keeper.oracle.vigil.delete` |
 | `POST` | `/v1/decrees` | `decree.create` | `keeper.oracle.decree.create` |
 | `GET` | `/v1/decrees` | `decree.list` | `keeper.oracle.decree.list` |
-| `GET` | `/v1/decrees/{name}` | `decree.list` | `keeper.oracle.decree.list` |
-| `PUT` | `/v1/decrees/{name}/label` | `decree.label-set` | `keeper.oracle.decree.label-set` |
-| `DELETE` | `/v1/decrees/{name}` | `decree.delete` | `keeper.oracle.decree.delete` |
+| `GET` | `/v1/decrees/{id}` | `decree.list` | `keeper.oracle.decree.list` |
+| `PUT` | `/v1/decrees/{id}/label` | `decree.label-set` | `keeper.oracle.decree.label-set` |
+| `DELETE` | `/v1/decrees/{id}` | `decree.delete` | `keeper.oracle.decree.delete` |
 
 4-segment MCP-tool `keeper.oracle.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (resource `vigil`/`decree`; one permission covers list+get). Reactor flow (Portent → match Decree → enqueue) by these permissions is **NOT controlled** - this is a machine Soul-initiated path ([rbac.md §Oracle](rbac.md)). Mutating 6 routes (vigil/decree create/label-set/delete) are audited - `*.created` / `*.label_changed` / `*.deleted`; list/get - read-only, no audit.
 
@@ -424,10 +424,10 @@ CRUD registry `push_providers` (per-provider params of the SSH plugin; long-term
 |---|---|---|---|
 | `POST` | `/v1/push-providers` | `push-provider.create` | `keeper.push-provider.create` |
 | `GET` | `/v1/push-providers` | `push-provider.list` | `keeper.push-provider.list` |
-| `GET` | `/v1/push-providers/{name}` | `push-provider.read` | `keeper.push-provider.read` |
-| `PUT` | `/v1/push-providers/{name}` | `push-provider.update` | `keeper.push-provider.update` |
-| `PUT` | `/v1/push-providers/{name}/label` | `push-provider.label-set` | `keeper.push-provider.label-set` |
-| `DELETE` | `/v1/push-providers/{name}` | `push-provider.delete` | `keeper.push-provider.delete` |
+| `GET` | `/v1/push-providers/{id}` | `push-provider.read` | `keeper.push-provider.read` |
+| `PUT` | `/v1/push-providers/{id}` | `push-provider.update` | `keeper.push-provider.update` |
+| `PUT` | `/v1/push-providers/{id}/label` | `push-provider.label-set` | `keeper.push-provider.label-set` |
+| `DELETE` | `/v1/push-providers/{id}` | `push-provider.delete` | `keeper.push-provider.delete` |
 
 6 tools 1:1 `keeper.push-provider.<verb>` ↔ permission `push-provider.<verb>` ↔ REST. `read` (one entry) is separate from `list` - parallel to `operator.read`↔`operator.list`. Mutating 4 routes (`create`/`update`/`label-set`/`delete`) are audited; `list`/`read` - read-only, no audit. After committing the mutation - cluster-wide invalidate via Redis pub/sub `push-providers:changed`.
 
@@ -439,10 +439,10 @@ CRUD registry `heralds` (notification delivery channel; webhook in MVP). SSRF ci
 |---|---|---|---|
 | `POST` | `/v1/heralds` | `herald.create` | `keeper.herald.create` |
 | `GET` | `/v1/heralds` | `herald.list` | `keeper.herald.list` |
-| `GET` | `/v1/heralds/{name}` | `herald.read` | `keeper.herald.read` |
-| `PUT` | `/v1/heralds/{name}` | `herald.update` | `keeper.herald.update` |
-| `PUT` | `/v1/heralds/{name}/label` | `herald.label-set` | `keeper.herald.label-set` |
-| `DELETE` | `/v1/heralds/{name}` | `herald.delete` | `keeper.herald.delete` |
+| `GET` | `/v1/heralds/{id}` | `herald.read` | `keeper.herald.read` |
+| `PUT` | `/v1/heralds/{id}` | `herald.update` | `keeper.herald.update` |
+| `PUT` | `/v1/heralds/{id}/label` | `herald.label-set` | `keeper.herald.label-set` |
+| `DELETE` | `/v1/heralds/{id}` | `herald.delete` | `keeper.herald.delete` |
 
 6 tools 1:1 `keeper.herald.<verb>` ↔ permission `herald.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/heralds*`. `read` is separate from `list` (parallel `operator.read`↔`operator.list`). Mutating 4 routes (`create`/`update`/`label-set`/`delete`) are audited - audit events `herald.created` / `herald.updated` / `herald.label_changed` / `herald.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `list`/`read` - read-only, no audit. `PUT` - replace semantics (complete replacement of mutable fields, not PATCH), like Push-Provider. After committing the mutation - cluster-wide invalidate dispatcher cache via Redis pub/sub `herald:invalidate`. Delivery terminals (`herald.delivered` / `herald.failed`) are written by workers, not CRUD routes.
 
@@ -454,25 +454,25 @@ CRUD registry `tidings` (subscription rule: which `event_types` to respond to �
 |---|---|---|---|
 | `POST` | `/v1/tidings` | `tiding.create` | `keeper.tiding.create` |
 | `GET` | `/v1/tidings` | `tiding.list` | `keeper.tiding.list` |
-| `GET` | `/v1/tidings/{name}` | `tiding.read` | `keeper.tiding.read` |
-| `PUT` | `/v1/tidings/{name}` | `tiding.update` | `keeper.tiding.update` |
-| `PUT` | `/v1/tidings/{name}/label` | `tiding.label-set` | `keeper.tiding.label-set` |
-| `DELETE` | `/v1/tidings/{name}` | `tiding.delete` | `keeper.tiding.delete` |
+| `GET` | `/v1/tidings/{id}` | `tiding.read` | `keeper.tiding.read` |
+| `PUT` | `/v1/tidings/{id}` | `tiding.update` | `keeper.tiding.update` |
+| `PUT` | `/v1/tidings/{id}/label` | `tiding.label-set` | `keeper.tiding.label-set` |
+| `DELETE` | `/v1/tidings/{id}` | `tiding.delete` | `keeper.tiding.delete` |
 
 6 tools 1:1 `keeper.tiding.<verb>` ↔ permission `tiding.<verb>` ↔ REST `POST/GET/PUT/DELETE /v1/tidings*`. `read` is separate from `list`. Mutating 4 routes are audited - audit events `tiding.created` / `tiding.updated` / `tiding.label_changed` / `tiding.deleted`; `list`/`read` - read-only, no audit. `PUT` - replace semantics (like Herald). Link to missing Herald (`herald` FK) on create/update → `404`. Demolition of the Herald channel cascades away its Tiding subscriptions (`tidings.herald ON DELETE CASCADE`). Valid `event_types` subscriptions - from the `GET /v1/event-types` directory (UI fetches, not hardcode); the same scope validates CRUD Tiding (arbitrary wildcard / type outside scope → `422`).
 
 ### Choir (6) - named topology of hosts within an incarnation, [ADR-044](../adr/0044-choir.md)
 
-CRUD topology Choir/Voice inside incarnation (`/v1/incarnations/{name}/choirs*`). Choir belongs to incarnation → the same scope selector `incarnation`/`service`/`coven` (via path-`{name}`) as incarnation mutations. Connect only when the ChoirDB pool is configured. **REST-only - no MCP-tools** ([mcp-tools/choirs.md](mcp-tools/choirs.md)). The source of truth for semantics, bodies is [operator-api/choirs.md](operator-api/choirs.md).
+CRUD topology Choir/Voice inside incarnation (`/v1/incarnations/{id}/choirs*`). Choir belongs to incarnation → the same scope selector `incarnation`/`service`/`coven` (via path-`{name}`) as incarnation mutations. Connect only when the ChoirDB pool is configured. **REST-only - no MCP-tools** ([mcp-tools/choirs.md](mcp-tools/choirs.md)). The source of truth for semantics, bodies is [operator-api/choirs.md](operator-api/choirs.md).
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
-| `POST` | `/v1/incarnations/{name}/choirs` | `choir.create` | — (REST only) |
-| `GET` | `/v1/incarnations/{name}/choirs` | `choir.list` | — (REST only) |
-| `DELETE` | `/v1/incarnations/{name}/choirs/{choir}` | `choir.delete` | — (REST only) |
-| `POST` | `/v1/incarnations/{name}/choirs/{choir}/voices` | `choir.add-voice` | — (REST only) |
-| `GET` | `/v1/incarnations/{name}/choirs/{choir}/voices` | `choir.list` | — (REST only) |
-| `DELETE` | `/v1/incarnations/{name}/choirs/{choir}/voices/{sid}` | `choir.remove-voice` | — (REST only) |
+| `POST` | `/v1/incarnations/{id}/choirs` | `choir.create` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}/choirs` | `choir.list` | — (REST only) |
+| `DELETE` | `/v1/incarnations/{id}/choirs/{choir}` | `choir.delete` | — (REST only) |
+| `POST` | `/v1/incarnations/{id}/choirs/{choir}/voices` | `choir.add-voice` | — (REST only) |
+| `GET` | `/v1/incarnations/{id}/choirs/{choir}/voices` | `choir.list` | — (REST only) |
+| `DELETE` | `/v1/incarnations/{id}/choirs/{choir}/voices/{sid}` | `choir.remove-voice` | — (REST only) |
 
 `choir.*` - incarnation-scope (via `IncarnationScopeSelector` on path-`{name}`); Voice-actions hyphenated (`add-voice`/`remove-voice`) according to the grammar `<resource>.<action>`. `list` covers both the Choir list and the Voice list. Mutating-CRUD is audited (payload is written by the handler itself - choir/voice-snapshot is available only after mutation).
 
@@ -496,14 +496,14 @@ CRUD registries `providers` (cloud accounting) and `profiles` (VM-spec on top of
 |---|---|---|---|
 | `POST` | `/v1/providers` | `provider.create` | `keeper.provider.create` |
 | `GET` | `/v1/providers` | `provider.read` | `keeper.provider.list` |
-| `GET` | `/v1/providers/{name}` | `provider.read` | `keeper.provider.get` |
-| `PUT` | `/v1/providers/{name}/label` | `provider.label-set` | `keeper.provider.label-set` |
-| `DELETE` | `/v1/providers/{name}` | `provider.delete` | `keeper.provider.delete` |
+| `GET` | `/v1/providers/{id}` | `provider.read` | `keeper.provider.get` |
+| `PUT` | `/v1/providers/{id}/label` | `provider.label-set` | `keeper.provider.label-set` |
+| `DELETE` | `/v1/providers/{id}` | `provider.delete` | `keeper.provider.delete` |
 | `POST` | `/v1/profiles` | `profile.create` | `keeper.profile.create` |
 | `GET` | `/v1/profiles` | `profile.read` | `keeper.profile.list` |
-| `GET` | `/v1/profiles/{name}` | `profile.read` | `keeper.profile.get` |
-| `PUT` | `/v1/profiles/{name}/label` | `profile.label-set` | `keeper.profile.label-set` |
-| `DELETE` | `/v1/profiles/{name}` | `profile.delete` | `keeper.profile.delete` |
+| `GET` | `/v1/profiles/{id}` | `profile.read` | `keeper.profile.get` |
+| `PUT` | `/v1/profiles/{id}/label` | `profile.label-set` | `keeper.profile.label-set` |
+| `DELETE` | `/v1/profiles/{id}` | `profile.delete` | `keeper.profile.delete` |
 
 Permission mapping: `POST`→`<resource>.create`, `GET`(list + get-`{name}`)→`<resource>.read`, `DELETE`→`<resource>.delete`. Mutating 6 routes (create/label-set/delete for each entity) are audited - audit events `provider.created` / `provider.label_changed` / `provider.deleted` / `profile.created` / `profile.label_changed` / `profile.deleted` ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); `provider.read`/`profile.read` (list + get) - read-only, without audit (audit Profile-create only writes `params` keys, not values). Boundary cases: `409 provider-already-exists` / `409 profile-already-exists` per double `name`; `409 provider-has-profiles` when deleting a Provider with associated Profiles (FK `ON DELETE RESTRICT`, migration 020 - first delete dependent Profiles); `422 validation-failed` to the Profile link to a non-existent Provider (FK) or broken `name`/`type`/`region`/`credentials_ref`; `404 not-found` on get/delete missing entry. 3-segment MCP-tool `keeper.<resource>.<verb>` ↔ 2-segment permission `<resource>.<verb>` (read-tool named `get`, permission verb - `read`).
 
@@ -515,18 +515,18 @@ Registry `service_registry`: directory `services[]` is moved from static `keeper
 |---|---|---|---|
 | `POST` | `/v1/services` | `service.register` | `keeper.service.register` |
 | `GET` | `/v1/services` | `service.list` | `keeper.service.list` |
-| `GET` | `/v1/services/{name}` | `service.list` | `keeper.service.list` |
-| `PATCH` | `/v1/services/{name}` | `service.update` | `keeper.service.update` |
-| `PUT` | `/v1/services/{name}/label` | `service.label-set` | `keeper.service.label-set` |
-| `DELETE` | `/v1/services/{name}` | `service.deregister` | `keeper.service.deregister` |
-| `GET` | `/v1/services/{name}/refs` | `service.list` | — (REST only) |
-| `GET` | `/v1/services/{name}/scenarios` | `service.list` | — (REST only) |
-| `GET` | `/v1/services/{name}/state-schema` | `service.list` | — (REST only) |
-| `GET` | `/v1/services/{name}/dependencies` | `service.list` | — (REST only) |
+| `GET` | `/v1/services/{id}` | `service.list` | `keeper.service.list` |
+| `PATCH` | `/v1/services/{id}` | `service.update` | `keeper.service.update` |
+| `PUT` | `/v1/services/{id}/label` | `service.label-set` | `keeper.service.label-set` |
+| `DELETE` | `/v1/services/{id}` | `service.deregister` | `keeper.service.deregister` |
+| `GET` | `/v1/services/{id}/refs` | `service.list` | — (REST only) |
+| `GET` | `/v1/services/{id}/scenarios` | `service.list` | — (REST only) |
+| `GET` | `/v1/services/{id}/state-schema` | `service.list` | — (REST only) |
+| `GET` | `/v1/services/{id}/dependencies` | `service.list` | — (REST only) |
 
 Permission mapping: `POST`→`service.register`, `GET`(list + get-`{name}`)→`service.list`, `PATCH`→`service.update`, `PUT {name}/label`→`service.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md): the display caption, narrower than `update` — it re-points nothing and invalidates no artifact cache), `DELETE`→`service.deregister`. Mutating 4 routes (`register`/`update`/`label-set`/`deregister`) are audited ([ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)); readings - read-only, without audit. Four git projections (`/refs` - tags and branches for Upgrade-modal; `/scenarios` - dropdown Run-modal; `/state-schema` - Schema explorer; `/dependencies` - destiny/module dependencies) reuse `service.list` (projections of one Service record, without separate permission and without MCP-tools); if the external git source fails - `502`. Routes are connected only when the Service registry is configured.
 
-**The scenario directory `GET /v1/services/{name}/scenarios`** contains for each scenario the field **`runnable: bool`** - the sign "launched by the operator from the Run-form". Marked by Keeper according to the canon of the scenario package (`IsRunnableScenario`), not from the manifest: `create` = `true`, `destroy` = `false` (special deletion flow via `DELETE /v1/incarnations/{name}`), operational scenarios (including `converge`) = `true`. The UI filters the Run-form by `runnable`, and not by the name hardcode ([ADR-042](../adr/0042-backend-driven-ui.md), [architecture.md → Service](../architecture.md)).
+**The scenario directory `GET /v1/services/{id}/scenarios`** contains for each scenario the field **`runnable: bool`** - the sign "launched by the operator from the Run-form". Marked by Keeper according to the canon of the scenario package (`IsRunnableScenario`), not from the manifest: `create` = `true`, `destroy` = `false` (special deletion flow via `DELETE /v1/incarnations/{id}`), operational scenarios (including `converge`) = `true`. The UI filters the Run-form by `runnable`, and not by the name hardcode ([ADR-042](../adr/0042-backend-driven-ui.md), [architecture.md → Service](../architecture.md)).
 
 ### Setting (3) - SettingsStore, the runtime settings overlay, [ADR-0073](../adr/0073-keeper-runtime-config-pg.md)
 
@@ -581,9 +581,9 @@ All three read-only/resolve routes are without audit (pattern `service.list` / `
 |---|---|---|---|
 | `POST` | `/v1/augur/omens` | `omen.create` | `keeper.augur.omen.create` |
 | `GET` | `/v1/augur/omens` | `omen.list` | `keeper.augur.omen.list` |
-| `GET` | `/v1/augur/omens/{name}` | `omen.list` | `keeper.augur.omen.list` |
-| `PUT` | `/v1/augur/omens/{name}/label` | `omen.label-set` | `keeper.augur.omen.label-set` |
-| `DELETE` | `/v1/augur/omens/{name}` | `omen.delete` | `keeper.augur.omen.delete` |
+| `GET` | `/v1/augur/omens/{id}` | `omen.list` | `keeper.augur.omen.list` |
+| `PUT` | `/v1/augur/omens/{id}/label` | `omen.label-set` | `keeper.augur.omen.label-set` |
+| `DELETE` | `/v1/augur/omens/{id}` | `omen.delete` | `keeper.augur.omen.delete` |
 | `POST` | `/v1/augur/rites` | `rite.create` | `keeper.augur.rite.create` |
 | `GET` | `/v1/augur/rites` | `rite.list` | `keeper.augur.rite.list` |
 | `DELETE` | `/v1/augur/rites/{id}` | `rite.delete` | `keeper.augur.rite.delete` |
@@ -600,11 +600,11 @@ Read-only event feed `audit_log` for UI iteration 2 (placeholder `/audit`). The 
 
 **Total: 4 health/meta on the API facade (`/healthz`, `/readyz`, `/openapi.yaml`, `/openapi.json`) + 142 endpoints under permissions/auth-only** (Operator 5 + Audit 1 + Role 6 + Synod 8 + Incarnation 16 + Runs 2 + Choir 6 + Soul 8 + Errand 4 + Plugin 3 + Sigil-key 4 + Service 10 + Module-catalog 3 + Self-describing 3 + Augur 8 + Oracle 10 + Push 2 + Push-runs 1 + Push-Provider 6 + Cloud 10 + Herald 6 + Tiding 6 + Voyage 6 + Cadence 8) **= 142 route in this table.** `/metrics` is **not included in this facade account** - Prometheus endpoint is placed on a separate metrics-listener (`listen.metrics.addr`, [ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)), not mounted in `router.go` facade. (Voyage "(6)" - five MCP-paired/RBAC-by-kind lines + sixth REST route `GET /v1/voyages/{id}/targets`, read/REST-only. Augur - 8 routes: 5 omen + 3 rite. Cloud - 10 routes: 5 provider (create/list/get/label-set/delete) + 5 profile, implemented and mounted.) **+10 since NIM-728**: one `PUT /v1/<collection>/{name}/label` per registry that carries a display caption ([ADR-0085](../adr/0085-entity-id-and-label.md)) - incarnation, service, provider, profile, push-provider, omen, herald, tiding, vigil, decree.
 
-> **Unmixed routes (TODO - sections have not yet been written).** In [`router.go`](../../keeper/internal/api/router.go) mounted, but not yet summarized in the tables above: `GET /v1/souls/stats` (Souls Overview unit, `soul.list`), `POST /v1/souls/traits` (bulk trait-assign onto HOSTS, `soul.traits-assign`; first-class per [ADR-080](../adr/0080-label-inheritance-union.md), the per-host counterpart of `PUT /v1/incarnations/{name}/traits`), `GET`/`PUT /v1/provisioning-policy` (`provisioning.read`/`provisioning.update`, [ADR-058](../adr/0058-operator-auth-ldap-oidc.md) Part B), `GET /v1/herald-types` (auth-only Herald channel type directory, [ADR-042](../adr/0042-backend-driven-ui.md)-pattern), `GET /v1/cluster` (HA-topology of the Keeper cluster, existence-gate `soul.list`). Login routes `/auth/ldap/login` + `/auth/oidc/{login,callback}` - outside `/v1` (public login before JWT, parity `/healthz`; ADR-058) and are not included in the `/v1` route account. Forms and semantics - in the derivative [`openapi.yaml`](openapi.yaml); These routes are not included in the counter above.
+> **Unmixed routes (TODO - sections have not yet been written).** In [`router.go`](../../keeper/internal/api/router.go) mounted, but not yet summarized in the tables above: `GET /v1/souls/stats` (Souls Overview unit, `soul.list`), `POST /v1/souls/traits` (bulk trait-assign onto HOSTS, `soul.traits-assign`; first-class per [ADR-080](../adr/0080-label-inheritance-union.md), the per-host counterpart of `PUT /v1/incarnations/{id}/traits`), `GET`/`PUT /v1/provisioning-policy` (`provisioning.read`/`provisioning.update`, [ADR-058](../adr/0058-operator-auth-ldap-oidc.md) Part B), `GET /v1/herald-types` (auth-only Herald channel type directory, [ADR-042](../adr/0042-backend-driven-ui.md)-pattern), `GET /v1/cluster` (HA-topology of the Keeper cluster, existence-gate `soul.list`). Login routes `/auth/ldap/login` + `/auth/oidc/{login,callback}` - outside `/v1` (public login before JWT, parity `/healthz`; ADR-058) and are not included in the `/v1` route account. Forms and semantics - in the derivative [`openapi.yaml`](openapi.yaml); These routes are not included in the counter above.
 
 > **Tool-account vs route-account are legitimately different sets.** The section headings in [mcp-tools.md](mcp-tools.md) are considered **MCP-tools**, and here they are **REST-routes**; one domain can carry more REST routes than MCP tools. Reconciliation with code (`router.go` + `keeper/internal/mcp/manifest.go`):
 >
-> - **Incarnation** - REST "(15)" (router) vs MCP "(11)" (`manifest.go`). The difference is NOT an error: four REST-only routes without an MCP tool - `PATCH /v1/incarnations/{name}/hosts` (tool `keeper.incarnation.hosts.update` is missing in `manifest.go`), `POST …/scenarios/{scenario}/form-prefill` (UI-resolve), `GET …/runs` + `GET …/runs/{apply_id}` (read-view runs under UI); the remaining 11 REST routes (including `PUT .../traits` ↔ `keeper.incarnation.traits-set`, ADR-060) have MCP pairing. The mcp-tools.md header "(11)" is considered MCP-tools, parsed in [mcp-tools/incarnations.md](mcp-tools/incarnations.md). Global `GET /v1/runs` + `/v1/runs/stats` (Runs section) - also REST-only.
+> - **Incarnation** - REST "(15)" (router) vs MCP "(11)" (`manifest.go`). The difference is NOT an error: four REST-only routes without an MCP tool - `PATCH /v1/incarnations/{id}/hosts` (tool `keeper.incarnation.hosts.update` is missing in `manifest.go`), `POST …/scenarios/{scenario}/form-prefill` (UI-resolve), `GET …/runs` + `GET …/runs/{apply_id}` (read-view runs under UI); the remaining 11 REST routes (including `PUT .../traits` ↔ `keeper.incarnation.traits-set`, ADR-060) have MCP pairing. The mcp-tools.md header "(11)" is considered MCP-tools, parsed in [mcp-tools/incarnations.md](mcp-tools/incarnations.md). Global `GET /v1/runs` + `/v1/runs/stats` (Runs section) - also REST-only.
 > - **Voyage** - REST "(5)" (without `/targets`) vs MCP "(4)" (`preview` REST-only). The sixth REST route `/targets` and `preview` are read/REST-only and do not have an MCP tool.
 > - **Cadence / Choir / Self-describing** - there are **no MCP tools at all** (`manifest.go` does not contain them): the headers of these sections lead by the number of REST routes; stub files [mcp-tools/cadences.md](mcp-tools/cadences.md) / [mcp-tools/choirs.md](mcp-tools/choirs.md) record "(0)".
 
@@ -630,7 +630,7 @@ Moved to a domain file - [operator-api/souls.md → Endpoint sections](operator-
 
 ### Augur endpoints
 
-Moved to a domain file - [operator-api/augur.md → Endpoint sections](operator-api/augur.md): `POST /v1/augur/omens` (create Omen), `GET /v1/augur/omens` (list), `GET /v1/augur/omens/{name}` (read), `DELETE /v1/augur/omens/{name}` (delete), `POST /v1/augur/rites` (create Rite), `GET /v1/augur/rites` (list of Omen Rites), `DELETE /v1/augur/rites/{id}` (delete). The full broker model is [augur.md](augur.md). MCP side - [mcp-tools/augur.md](mcp-tools/augur.md).
+Moved to a domain file - [operator-api/augur.md → Endpoint sections](operator-api/augur.md): `POST /v1/augur/omens` (create Omen), `GET /v1/augur/omens` (list), `GET /v1/augur/omens/{id}` (read), `DELETE /v1/augur/omens/{id}` (delete), `POST /v1/augur/rites` (create Rite), `GET /v1/augur/rites` (list of Omen Rites), `DELETE /v1/augur/rites/{id}` (delete). The full broker model is [augur.md](augur.md). MCP side - [mcp-tools/augur.md](mcp-tools/augur.md).
 
 ### Push endpoints
 
@@ -666,7 +666,7 @@ Moved to a domain file - [operator-api/tidings.md → Endpoint sections](operato
 
 ### Choir endpoints
 
-Moved to a domain file - [operator-api/choirs.md → Endpoint sections](operator-api/choirs.md): `POST/GET/DELETE /v1/incarnations/{name}/choirs*` + voices (named topology of hosts within the incarnation). **MCP side missing** ([mcp-tools/choirs.md](mcp-tools/choirs.md)).
+Moved to a domain file - [operator-api/choirs.md → Endpoint sections](operator-api/choirs.md): `POST/GET/DELETE /v1/incarnations/{id}/choirs*` + voices (named topology of hosts within the incarnation). **MCP side missing** ([mcp-tools/choirs.md](mcp-tools/choirs.md)).
 
 ## Full OpenAPI YAML
 

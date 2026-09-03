@@ -25,7 +25,7 @@ func TestToolsCall_IncarnationRun_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate","input":{"force":true}}`)
+		`{"id":"redis-prod","scenario":"rotate","input":{"force":true}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -63,7 +63,7 @@ func TestToolsCall_IncarnationRun_ErrorLocked(t *testing.T) {
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -82,7 +82,7 @@ func TestToolsCall_IncarnationRun_NotFound(t *testing.T) {
 	pool := &fakePool{incFn: func(string) (*incarnation.Incarnation, error) { return nil, pgx.ErrNoRows }}
 	h, _ := newTestHandlerFull(t, pool, runnerRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"ghost","scenario":"rotate"}`)
+		`{"id":"ghost","scenario":"rotate"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -92,12 +92,12 @@ func TestToolsCall_IncarnationRun_NotFound(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationRun_RBACForbidden(t *testing.T) {
-	// RBAC empty → deny. SelectByName RESOLVES scope (covens ∪ {name}) for the
+	// RBAC empty → deny. SelectByID RESOLVES scope (covens ∪ {name}) for the
 	// OR-Check (mirrors REST middleware), then the enforcer denies → forbidden.
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	h, rec := newTestHandlerFull(t, pool, nil, &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"rotate"}`)
+		`{"id":"redis-prod","scenario":"rotate"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -112,7 +112,7 @@ func TestToolsCall_IncarnationRun_RBACForbidden(t *testing.T) {
 func TestToolsCall_IncarnationRun_InvalidScenario(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, runnerRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
-		`{"name":"redis-prod","scenario":"Bad-Scenario"}`)
+		`{"id":"redis-prod","scenario":"Bad-Scenario"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}

@@ -126,13 +126,13 @@ const (
 	// validation-failed (bad name/git/ref/refresh) are common codes.
 	mcpCodeServiceExists = "service-already-exists"
 
-	// mcpCodeOmenExists — UNIQUE violation on omens.name (REST TypeOmenExists,
+	// mcpCodeOmenExists — UNIQUE violation on omens.id (REST TypeOmenExists,
 	// 409). Omen/Rite not-found share mcpCodeNotFound; validation shares
 	// mcpCodeValidationFailed. Augur CRUD (ADR-025, augur.md).
 	mcpCodeOmenExists = "omen-already-exists"
 
-	// mcpCodeVigilExists / mcpCodeDecreeExists — UNIQUE violation on vigils.name /
-	// decrees.name (REST TypeVigilExists / TypeDecreeExists, 409). Vigil/Decree
+	// mcpCodeVigilExists / mcpCodeDecreeExists — UNIQUE violation on vigils.id /
+	// decrees.id (REST TypeVigilExists / TypeDecreeExists, 409). Vigil/Decree
 	// not-found share mcpCodeNotFound; validation shares mcpCodeValidationFailed.
 	// Oracle CRUD (ADR-030, beacons S3).
 	mcpCodeVigilExists  = "vigil-already-exists"
@@ -156,7 +156,7 @@ const (
 	mcpCodeProviderHasProfiles = "provider-has-profiles"
 
 	// mcpCodeHeraldExists / mcpCodeTidingExists — UNIQUE violation on
-	// heralds.name / tidings.name (REST TypeHeraldExists / TypeTidingExists,
+	// heralds.id / tidings.id (REST TypeHeraldExists / TypeTidingExists,
 	// 409). Herald/Tiding not-found (incl. FK Tiding→missing Herald) share
 	// mcpCodeNotFound; validation shares mcpCodeValidationFailed. ADR-052, S4.
 	mcpCodeHeraldExists = "herald-already-exists"
@@ -535,7 +535,7 @@ func mapSigilKeyErrorToMCP(err error) (code, detail string) {
 //   - ErrNotFound           → not-found (REST TypeNotFound: no such record).
 //   - ErrOperatorNotFound   → not-found (REST TypeNotFound: CallerAID missing
 //     from the operators registry, FK violation).
-//   - ErrInvalidName / ErrReservedName / ErrInvalidGit / ErrInvalidRef /
+//   - ErrInvalidID / ErrReservedID / ErrInvalidGit / ErrInvalidRef /
 //     ErrInvalidRefresh → validation-failed (REST TypeValidationFailed).
 //
 // Unknown errors → internal-error + generic detail (raw err.Error() isn't
@@ -545,14 +545,14 @@ func mapServiceRegistryErrorToMCP(err error) (code, detail string) {
 	case err == nil:
 		return "", ""
 	case errors.Is(err, serviceregistry.ErrAlreadyExists):
-		return mcpCodeServiceExists, "service with this name already exists"
+		return mcpCodeServiceExists, "service with this id already exists"
 	case errors.Is(err, serviceregistry.ErrNotFound):
 		return mcpCodeNotFound, "service not found"
 	case errors.Is(err, serviceregistry.ErrOperatorNotFound):
 		return mcpCodeNotFound, "caller AID not found in operators registry"
-	case errors.Is(err, serviceregistry.ErrInvalidName):
-		return mcpCodeValidationFailed, "invalid service name"
-	case errors.Is(err, serviceregistry.ErrReservedName):
+	case errors.Is(err, serviceregistry.ErrInvalidID):
+		return mcpCodeValidationFailed, "invalid service id"
+	case errors.Is(err, serviceregistry.ErrReservedID):
 		// The list is safe to spell out: it is closed and documented
 		// (docs/naming-rules.md), not a fact about this deployment, and an agent that
 		// is not told WHICH names are off-limits retries the same one. err.Error() is

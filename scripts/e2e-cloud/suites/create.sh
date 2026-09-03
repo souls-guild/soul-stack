@@ -15,7 +15,7 @@ _create_body() {
 		--arg cs "${CREATE_SCENARIO:-create}" \
 		--argjson covens "$covens_json" \
 		--argjson input "$input_json" '
-		{name: $name, service: $svc}
+		{id: $name, service: $svc}
 		+ (if $cs == "" then {} else {create_scenario: $cs} end)
 		+ (if ($covens | length) > 0 then {covens: $covens} else {} end)
 		+ (if $input == null then {} else {input: $input} end)'

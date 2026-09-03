@@ -24,10 +24,10 @@ import (
 // naming-rules.md), deleting Herald removes its Tiding subscriptions, not
 // blocked (difference from RESTRICT-409).
 var (
-	ErrHeraldExists   = errors.New("herald: name already exists")
-	ErrHeraldNotFound = errors.New("herald: name not found")
-	ErrTidingExists   = errors.New("herald: tiding name already exists")
-	ErrTidingNotFound = errors.New("herald: tiding name not found")
+	ErrHeraldExists   = errors.New("herald: id already exists")
+	ErrHeraldNotFound = errors.New("herald: id not found")
+	ErrTidingExists   = errors.New("herald: tiding id already exists")
+	ErrTidingNotFound = errors.New("herald: tiding id not found")
 
 	// ErrValidation is wrapper over any service validation of CRUD input (broken
 	// name/type/config/secret_ref/event_types/projection). Handler-side
@@ -97,10 +97,10 @@ var (
 
 // --- Herald -----------------------------------------------------------
 
-const heraldColumns = `name, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid, label`
+const heraldColumns = `id, type, config, secret_ref, enabled, created_at, updated_at, created_by_aid, label`
 
 const heraldInsertSQL = `
-INSERT INTO heralds (name, type, config, secret_ref, enabled, created_by_aid, label)
+INSERT INTO heralds (id, type, config, secret_ref, enabled, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7)
 RETURNING created_at, updated_at
 `
@@ -122,14 +122,14 @@ const heraldUpdateLabelSQL = `
 UPDATE heralds AS x
 SET label = $2
 FROM heralds AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const heraldSelectByNameSQL = `
+const heraldSelectByIDSQL = `
 SELECT ` + heraldColumns + `
 FROM heralds
-WHERE name = $1
+WHERE id = $1
 `
 
 const heraldUpdateSQL = `
@@ -139,13 +139,13 @@ SET type = $2,
     secret_ref = $4,
     enabled = $5,
     updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
 
 // InsertHerald inserts new Herald channel.
 //
 // Pre-conditions (service validation):
-//   - h.Name matches [NamePattern];
+//   - h.Name matches [IDPattern];
 //   - h.Type ∈ closed enum ([ValidHeraldType]);
 //   - h.Config is valid for type ([ValidateConfig] — webhook url + SSRF circuit);
 //   - h.SecretRef (if set) is vault-ref ([ValidateSecretRef]).
@@ -170,7 +170,7 @@ func InsertHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 	h.Label = registrylabel.Normalize(h.Label)
 
 	row := db.QueryRow(ctx, heraldInsertSQL,
-		h.Name, string(h.Type), configBytes, secretRefArg(h.SecretRef), h.Enabled, aidArg(h.CreatedByAID),
+		h.ID, string(h.Type), configBytes, secretRefArg(h.SecretRef), h.Enabled, aidArg(h.CreatedByAID),
 		optStrArg(h.Label),
 	)
 	if err := row.Scan(&h.CreatedAt, &h.UpdatedAt); err != nil {
@@ -194,9 +194,9 @@ func mapHeraldInsertError(err error) error {
 	return fmt.Errorf("herald: insert herald: %w", err)
 }
 
-// SelectHeraldByName reads Herald by PK. [ErrHeraldNotFound] on pgx.ErrNoRows.
-func SelectHeraldByName(ctx context.Context, db ExecQueryRower, name string) (*Herald, error) {
-	return scanHerald(db.QueryRow(ctx, heraldSelectByNameSQL, name))
+// SelectHeraldByID reads Herald by PK. [ErrHeraldNotFound] on pgx.ErrNoRows.
+func SelectHeraldByID(ctx context.Context, db ExecQueryRower, id string) (*Herald, error) {
+	return scanHerald(db.QueryRow(ctx, heraldSelectByIDSQL, id))
 }
 
 func scanHerald(row pgx.Row) (*Herald, error) {
@@ -209,7 +209,7 @@ func scanHerald(row pgx.Row) (*Herald, error) {
 		label        *string
 	)
 	err := row.Scan(
-		&h.Name, &typeStr, &configBytes, &secretRef, &h.Enabled,
+		&h.ID, &typeStr, &configBytes, &secretRef, &h.Enabled,
 		&h.CreatedAt, &h.UpdatedAt, &createdByAID, &label,
 	)
 	if err != nil {
@@ -250,7 +250,7 @@ func SelectAllHeralds(ctx context.Context, db ExecQueryRower, offset, limit int)
 
 	const listSQL = `SELECT ` + heraldColumns + `
 FROM heralds
-ORDER BY updated_at DESC, name ASC
+ORDER BY updated_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {
@@ -284,12 +284,12 @@ OFFSET $1 LIMIT $2`
 // derived Vault path `secret/herald/<name>/<field>` is built from. Nothing
 // derived moves as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("herald: invalid name %q (must match %s)", name, NamePattern)
+func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("herald: invalid id %q (must match %s)", id, IDPattern)
 	}
 	var previous *string
-	err := db.QueryRow(ctx, heraldUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
+	err := db.QueryRow(ctx, heraldUpdateLabelSQL, id, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrHeraldNotFound
@@ -302,12 +302,12 @@ func UpdateHeraldLabel(ctx context.Context, db ExecQueryRower, name string, labe
 // UpdateTidingLabel replaces the display caption of one Tiding ([ADR-0085]).
 // [ErrTidingNotFound] when the row is absent. Same semantics as
 // [UpdateHeraldLabel].
-func UpdateTidingLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("herald: invalid tiding name %q (must match %s)", name, NamePattern)
+func UpdateTidingLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("herald: invalid tiding id %q (must match %s)", id, IDPattern)
 	}
 	var previous *string
-	err := db.QueryRow(ctx, tidingUpdateLabelSQL, name, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
+	err := db.QueryRow(ctx, tidingUpdateLabelSQL, id, optStrArg(registrylabel.Normalize(label))).Scan(&previous)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrTidingNotFound
@@ -333,7 +333,7 @@ func UpdateHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 	}
 
 	tag, err := db.Exec(ctx, heraldUpdateSQL,
-		h.Name, string(h.Type), configBytes, secretRefArg(h.SecretRef), h.Enabled,
+		h.ID, string(h.Type), configBytes, secretRefArg(h.SecretRef), h.Enabled,
 	)
 	if err != nil {
 		var pgErr *pgconn.PgError
@@ -350,8 +350,8 @@ func UpdateHerald(ctx context.Context, db ExecQueryRower, h *Herald) error {
 
 // DeleteHerald deletes Herald by PK. All its Tidings cascade (ON DELETE
 // CASCADE, ADR-052(a)). [ErrHeraldNotFound] if row not found.
-func DeleteHerald(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, "DELETE FROM heralds WHERE name = $1", name)
+func DeleteHerald(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, "DELETE FROM heralds WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("herald: delete herald: %w", err)
 	}
@@ -363,10 +363,10 @@ func DeleteHerald(ctx context.Context, db ExecQueryRower, name string) error {
 
 // --- Tiding -----------------------------------------------------------
 
-const tidingColumns = `name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_at, updated_at, created_by_aid, label`
+const tidingColumns = `id, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_at, updated_at, created_by_aid, label`
 
 const tidingInsertSQL = `
-INSERT INTO tidings (name, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_by_aid, label)
+INSERT INTO tidings (id, herald, event_types, only_failures, only_changes, incarnation, cadence, task, ephemeral, voyage_id, created_from_cadence_id, annotations, projection, enabled, created_by_aid, label)
 VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)
 RETURNING created_at, updated_at
 `
@@ -378,14 +378,14 @@ const tidingUpdateLabelSQL = `
 UPDATE tidings AS x
 SET label = $2
 FROM tidings AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 
-const tidingSelectByNameSQL = `
+const tidingSelectByIDSQL = `
 SELECT ` + tidingColumns + `
 FROM tidings
-WHERE name = $1
+WHERE id = $1
 `
 
 const tidingUpdateSQL = `
@@ -404,13 +404,13 @@ SET herald = $2,
     projection = $13,
     enabled = $14,
     updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
 
 // InsertTiding inserts new Tiding rule.
 //
 // Pre-conditions (service validation):
-//   - t.Name matches [NamePattern];
+//   - t.Name matches [IDPattern];
 //   - t.Herald is non-empty (FK to heralds — existence checked by DB);
 //   - t.EventTypes is valid ([ValidateEventTypes] — non-empty + run-scope).
 //
@@ -434,7 +434,7 @@ func InsertTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 	t.Label = registrylabel.Normalize(t.Label)
 
 	row := db.QueryRow(ctx, tidingInsertSQL,
-		t.Name, t.Herald, t.EventTypes, t.OnlyFailures, t.OnlyChanges,
+		t.ID, t.Herald, t.EventTypes, t.OnlyFailures, t.OnlyChanges,
 		optStrArg(t.Incarnation), optStrArg(t.Cadence), optStrArg(t.Task),
 		t.Ephemeral, optStrArg(t.VoyageID), optStrArg(t.CreatedFromCadenceID),
 		annotationsBytes, projectionArg(t.Projection),
@@ -464,9 +464,9 @@ func mapTidingInsertError(err error) error {
 	return fmt.Errorf("herald: insert tiding: %w", err)
 }
 
-// SelectTidingByName reads Tiding by PK. [ErrTidingNotFound] on pgx.ErrNoRows.
-func SelectTidingByName(ctx context.Context, db ExecQueryRower, name string) (*Tiding, error) {
-	return scanTiding(db.QueryRow(ctx, tidingSelectByNameSQL, name))
+// SelectTidingByID reads Tiding by PK. [ErrTidingNotFound] on pgx.ErrNoRows.
+func SelectTidingByID(ctx context.Context, db ExecQueryRower, id string) (*Tiding, error) {
+	return scanTiding(db.QueryRow(ctx, tidingSelectByIDSQL, id))
 }
 
 func scanTiding(row pgx.Row) (*Tiding, error) {
@@ -482,7 +482,7 @@ func scanTiding(row pgx.Row) (*Tiding, error) {
 		label                *string
 	)
 	err := row.Scan(
-		&t.Name, &t.Herald, &t.EventTypes, &t.OnlyFailures, &t.OnlyChanges,
+		&t.ID, &t.Herald, &t.EventTypes, &t.OnlyFailures, &t.OnlyChanges,
 		&incarnation, &cadence, &task, &t.Ephemeral, &voyageID, &createdFromCadenceID,
 		&annotationsBytes, &t.Projection,
 		&t.Enabled, &t.CreatedAt, &t.UpdatedAt, &createdByAID, &label,
@@ -556,7 +556,7 @@ func SelectAllTidings(ctx context.Context, db ExecQueryRower, includeEphemeral b
 
 	listSQL := `SELECT ` + tidingColumns + `
 FROM tidings` + where + `
-ORDER BY updated_at DESC, name ASC
+ORDER BY updated_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {
@@ -575,7 +575,7 @@ func SelectTidingsByHerald(ctx context.Context, db ExecQueryRower, herald string
 	const sql = `SELECT ` + tidingColumns + `
 FROM tidings
 WHERE herald = $1
-ORDER BY updated_at DESC, name ASC`
+ORDER BY updated_at DESC, id ASC`
 	rows, err := db.Query(ctx, sql, herald)
 	if err != nil {
 		return nil, fmt.Errorf("herald: list tidings by herald query: %w", err)
@@ -600,7 +600,7 @@ func UpdateTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 	}
 
 	tag, err := db.Exec(ctx, tidingUpdateSQL,
-		t.Name, t.Herald, t.EventTypes, t.OnlyFailures, t.OnlyChanges,
+		t.ID, t.Herald, t.EventTypes, t.OnlyFailures, t.OnlyChanges,
 		optStrArg(t.Incarnation), optStrArg(t.Cadence), optStrArg(t.Task),
 		t.Ephemeral, optStrArg(t.VoyageID), optStrArg(t.CreatedFromCadenceID),
 		annotationsBytes, projectionArg(t.Projection),
@@ -628,8 +628,8 @@ func UpdateTiding(ctx context.Context, db ExecQueryRower, t *Tiding) error {
 }
 
 // DeleteTiding deletes Tiding by PK. [ErrTidingNotFound] if row not found.
-func DeleteTiding(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, "DELETE FROM tidings WHERE name = $1", name)
+func DeleteTiding(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, "DELETE FROM tidings WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("herald: delete tiding: %w", err)
 	}
@@ -645,8 +645,8 @@ func DeleteTiding(ctx context.Context, db ExecQueryRower, name string) error {
 // wrapped in [ErrValidation] (handler → 422). Each sub-check carries
 // public-message (no internal SQL/stack).
 func validateHerald(h *Herald) error {
-	if !ValidName(h.Name) {
-		return wrapValidation(fmt.Errorf("invalid name %q (must match %s)", h.Name, NamePattern))
+	if !ValidID(h.ID) {
+		return wrapValidation(fmt.Errorf("invalid id %q (must match %s)", h.ID, IDPattern))
 	}
 	if !ValidHeraldType(h.Type) {
 		return wrapValidation(fmt.Errorf("invalid type %q (must be webhook)", h.Type))
@@ -683,8 +683,8 @@ func validateTiding(t *Tiding) error {
 	if t.CreatedFromCadenceID != nil && *t.CreatedFromCadenceID == "" {
 		t.CreatedFromCadenceID = nil
 	}
-	if !ValidName(t.Name) {
-		return wrapValidation(fmt.Errorf("invalid tiding name %q (must match %s)", t.Name, NamePattern))
+	if !ValidID(t.ID) {
+		return wrapValidation(fmt.Errorf("invalid tiding id %q (must match %s)", t.ID, IDPattern))
 	}
 	if t.Herald == "" {
 		return wrapValidation(fmt.Errorf("tiding herald is empty"))

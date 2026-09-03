@@ -48,7 +48,7 @@ func (f *fakeDestroyReader) ReadFile(_ *artifact.ServiceArtifact, file string) (
 }
 
 func destroyInc() *Incarnation {
-	return &Incarnation{Name: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1}
+	return &Incarnation{ID: "redis-prod", Service: "redis", ServiceVersion: "v1", StateSchemaVersion: 1}
 }
 
 func TestPrepareDestroy_ScenarioPresent(t *testing.T) {

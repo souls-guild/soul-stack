@@ -65,7 +65,7 @@ func TestRunsTyped_NilScope_404(t *testing.T) {
 	requireProblemStatus(t, err, 404)
 }
 
-// TestRunsTyped_IncarnationNotFound_404 — the incarnation is absent (SelectByName → ErrNoRows)
+// TestRunsTyped_IncarnationNotFound_404 — the incarnation is absent (SelectByID → ErrNoRows)
 // → 404 already at the existence probe, before touching apply_runs.
 func TestRunsTyped_IncarnationNotFound_404(t *testing.T) {
 	db := &fakeIncDB{selectByNameRow: func(string) pgx.Row { return errRow{err: pgx.ErrNoRows} }}

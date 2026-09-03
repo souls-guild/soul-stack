@@ -14,7 +14,7 @@ import (
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 )
 
-// registerHumaIncarnationBindMembers mounts POST /v1/incarnations/{name}/members
+// registerHumaIncarnationBindMembers mounts POST /v1/incarnations/{id}/members
 // (SELF-AUDIT incarnation.member_bound — written BY the handler itself inside
 // BindMembersTyped). incH nil → no-op.
 func registerHumaIncarnationBindMembers(humaAPI huma.API, incH *handlers.IncarnationHandler) {
@@ -26,7 +26,7 @@ func registerHumaIncarnationBindMembers(humaAPI huma.API, incH *handlers.Incarna
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		view, err := incH.BindMembersTyped(ctx, claims, in.Name, in.Body.SIDs)
+		view, err := incH.BindMembersTyped(ctx, claims, in.ID, in.Body.SIDs)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -34,7 +34,7 @@ func registerHumaIncarnationBindMembers(humaAPI huma.API, incH *handlers.Incarna
 	})
 }
 
-// registerHumaIncarnationListMembers mounts GET /v1/incarnations/{name}/members
+// registerHumaIncarnationListMembers mounts GET /v1/incarnations/{id}/members
 // (READ, no audit). incH nil → no-op.
 func registerHumaIncarnationListMembers(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -45,7 +45,7 @@ func registerHumaIncarnationListMembers(humaAPI huma.API, incH *handlers.Incarna
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		page, err := incH.ListMembersTyped(ctx, claims, in.Name)
+		page, err := incH.ListMembersTyped(ctx, claims, in.ID)
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -53,7 +53,7 @@ func registerHumaIncarnationListMembers(humaAPI huma.API, incH *handlers.Incarna
 	})
 }
 
-// registerHumaIncarnationUnbindMember mounts DELETE /v1/incarnations/{name}/members/{sid}
+// registerHumaIncarnationUnbindMember mounts DELETE /v1/incarnations/{id}/members/{sid}
 // (SELF-AUDIT incarnation.member_unbound — written BY the handler itself). incH nil → no-op.
 func registerHumaIncarnationUnbindMember(humaAPI huma.API, incH *handlers.IncarnationHandler) {
 	if incH == nil {
@@ -64,7 +64,7 @@ func registerHumaIncarnationUnbindMember(humaAPI huma.API, incH *handlers.Incarn
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		if err := incH.UnbindMemberTyped(ctx, claims, in.Name, in.SID); err != nil {
+		if err := incH.UnbindMemberTyped(ctx, claims, in.ID, in.SID); err != nil {
 			return nil, incProblem(err)
 		}
 		return &memberUnbindOutput{Status: http.StatusNoContent}, nil

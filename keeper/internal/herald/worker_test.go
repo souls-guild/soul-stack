@@ -617,7 +617,7 @@ func TestHandle_TransientFailure_RequeuesWithIncrementedAttempt(t *testing.T) {
 	backend := newFakeBackend()
 	secretRef := "vault:secret/keeper/herald-sign"
 	h := &Herald{
-		Name:      "sign-webhook",
+		ID:        "sign-webhook",
 		Type:      HeraldWebhook,
 		Config:    map[string]any{"url": "https://example.test/hook"},
 		SecretRef: &secretRef,
@@ -652,7 +652,7 @@ func TestHandle_RetryExhausted_TerminalFailed(t *testing.T) {
 	rec := &recordingAudit{}
 	secretRef := "vault:secret/keeper/herald-sign"
 	h := &Herald{
-		Name: "sign-webhook", Type: HeraldWebhook,
+		ID: "sign-webhook", Type: HeraldWebhook,
 		Config: map[string]any{"url": "https://example.test/hook"}, SecretRef: &secretRef, Enabled: true,
 	}
 	w := &DeliveryWorker{
@@ -686,7 +686,7 @@ func TestHandle_RetryExhausted_TerminalFailed(t *testing.T) {
 func TestHandle_ChannelDisabled_TerminalNoRetry(t *testing.T) {
 	backend := newFakeBackend()
 	rec := &recordingAudit{}
-	h := &Herald{Name: "off", Type: HeraldWebhook, Config: map[string]any{"url": "https://example.test/h"}, Enabled: false}
+	h := &Herald{ID: "off", Type: HeraldWebhook, Config: map[string]any{"url": "https://example.test/h"}, Enabled: false}
 	w := &DeliveryWorker{Queue: backend, Heralds: recordingHeralds{herald: h}, Audit: rec, Logger: discardLogger()}
 	job := &DeliveryJob{ID: "j0", Attempt: 0, Herald: "off", EventType: audit.EventVoyageReclaimed}
 	payload, _ := marshalJob(job)

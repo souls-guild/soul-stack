@@ -171,7 +171,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 		job := &DeliveryJob{
 			ID:            audit.NewULID(),
 			Herald:        t.Herald,
-			Tiding:        t.Name,
+			Tiding:        t.ID,
 			EventType:     event.EventType,
 			CorrelationID: event.CorrelationID,
 			OccurredAt:    occurredAt,
@@ -185,7 +185,7 @@ func (d *Dispatcher) Dispatch(ctx context.Context, event *audit.Event) {
 		}
 		if err := queue.Enqueue(ctx, job); err != nil {
 			d.logger.Warn("herald: enqueue delivery job failed",
-				slog.String("tiding", t.Name),
+				slog.String("tiding", t.ID),
 				slog.String("herald", t.Herald),
 				slog.Any("error", err))
 			d.metrics.observeError()

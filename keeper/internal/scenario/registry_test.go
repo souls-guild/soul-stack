@@ -16,8 +16,8 @@ func (c fakeCatalog) Resolve(name string) (serviceregistry.ServiceEntry, bool) {
 
 func TestServiceRegistry_Resolve(t *testing.T) {
 	reg := NewServiceRegistry(fakeCatalog{
-		"redis": {Name: "redis", Git: "https://git/redis.git", Ref: "v2.0.0"},
-		"noop":  {Name: "noop", Git: "file:///srv/noop", Ref: "main"},
+		"redis": {ID: "redis", Git: "https://git/redis.git", Ref: "v2.0.0"},
+		"noop":  {ID: "noop", Git: "file:///srv/noop", Ref: "main"},
 	})
 
 	ref, ok := reg.Resolve("redis")

@@ -52,8 +52,8 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 
 	// --- IncarnationUnlockReply: date-time + enum fields ---
 	goldenIncarnationWire(t, "UnlockReply",
-		IncarnationUnlockReply{Name: "redis-prod", PreviousStatus: IncarnationStatusErrorLocked, Status: IncarnationStatusReady, UnlockedAt: ts, UnlockedByAID: aid},
-		`{"name":"redis-prod","previous_status":"error_locked","status":"ready","unlocked_at":"2026-06-14T12:34:56.789012345Z","unlocked_by_aid":"archon-alice"}`)
+		IncarnationUnlockReply{ID: "redis-prod", PreviousStatus: IncarnationStatusErrorLocked, Status: IncarnationStatusReady, UnlockedAt: ts, UnlockedByAID: aid},
+		`{"id":"redis-prod","previous_status":"error_locked","status":"ready","unlocked_at":"2026-06-14T12:34:56.789012345Z","unlocked_by_aid":"archon-alice"}`)
 
 	// --- IncarnationUpgradeReply ---
 	goldenIncarnationWire(t, "UpgradeReply",
@@ -84,20 +84,20 @@ func TestGoldenWire_IncarnationReply(t *testing.T) {
 	goldenIncarnationWire(t, "GetReply/full",
 		IncarnationGetReply{
 			Covens: []string{"prod", "eu"}, CreatedAt: ts, CreatedByAID: &aid,
-			Name: "redis-prod", Service: "redis",
+			ID: "redis-prod", Service: "redis",
 			ServiceVersion: "v2.0.0", State: &stateMap, StateSchemaVersion: 3,
 			Status: IncarnationStatusDrift, StatusDetails: &stateMap, UpdatedAt: ts2,
 		},
-		`{"covens":["prod","eu"],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","name":"redis-prod","service":"redis","service_version":"v2.0.0","state":{"users":{"app":true}},"state_schema_version":3,"status":"drift","status_details":{"users":{"app":true}},"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
+		`{"covens":["prod","eu"],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-alice","id":"redis-prod","service":"redis","service_version":"v2.0.0","state":{"users":{"app":true}},"state_schema_version":3,"status":"drift","status_details":{"users":{"app":true}},"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
 	// nil branch: covens empty array; spec/state/status_details/created_by_aid → null.
 	goldenIncarnationWire(t, "GetReply/nil_optionals",
 		IncarnationGetReply{
 			Covens: []string{}, CreatedAt: ts, CreatedByAID: nil,
-			Name: "redis-prod", Service: "redis",
+			ID: "redis-prod", Service: "redis",
 			ServiceVersion: "v2.0.0", State: nil, StateSchemaVersion: 1,
 			Status: IncarnationStatusReady, StatusDetails: nil, UpdatedAt: ts2,
 		},
-		`{"covens":[],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":null,"name":"redis-prod","service":"redis","service_version":"v2.0.0","state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
+		`{"covens":[],"created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":null,"id":"redis-prod","service":"redis","service_version":"v2.0.0","state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-13T01:02:03.456789012Z"}`)
 }
 
 // TestGoldenWire_IncarnationProjection verifies that the projection of domain handlers.*View →
@@ -110,11 +110,11 @@ func TestGoldenWire_IncarnationProjection(t *testing.T) {
 
 	getV := handlers.IncarnationGetView{
 		Covens: []string{"a"}, CreatedAt: ts, CreatedByAID: &aid,
-		Name: "x", Service: "s", ServiceVersion: "v1", State: m,
+		ID: "x", Service: "s", ServiceVersion: "v1", State: m,
 		StateSchemaVersion: 7, Status: "applying", StatusDetails: m, UpdatedAt: ts,
 	}
 	goldenIncarnationWire(t, "proj/GetReply", newIncarnationGetReply(getV),
-		`{"covens":["a"],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":"archon-bob","name":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"applying","status_details":{"k":"v"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+		`{"covens":["a"],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":"archon-bob","id":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"applying","status_details":{"k":"v"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
 
 	histV := handlers.StateHistoryView{ApplyID: "ap", ChangedByAID: &aid, CreatedAt: ts, HistoryID: "h", Scenario: "create", StateAfter: m, StateBefore: m}
 	goldenIncarnationWire(t, "proj/StateHistoryEntry", newStateHistoryEntry(histV),
@@ -124,9 +124,9 @@ func TestGoldenWire_IncarnationProjection(t *testing.T) {
 	goldenIncarnationWire(t, "proj/CreateReply", newIncarnationCreateReply(createV),
 		`{"incarnation":"x"}`)
 
-	unlockV := handlers.IncarnationUnlockView{Name: "x", PreviousStatus: "error_locked", Status: "ready", UnlockedAt: ts, UnlockedByAID: aid}
+	unlockV := handlers.IncarnationUnlockView{ID: "x", PreviousStatus: "error_locked", Status: "ready", UnlockedAt: ts, UnlockedByAID: aid}
 	goldenIncarnationWire(t, "proj/UnlockReply", newIncarnationUnlockReply(unlockV),
-		`{"name":"x","previous_status":"error_locked","status":"ready","unlocked_at":"2026-06-14T12:00:00.123456789Z","unlocked_by_aid":"archon-bob"}`)
+		`{"id":"x","previous_status":"error_locked","status":"ready","unlocked_at":"2026-06-14T12:00:00.123456789Z","unlocked_by_aid":"archon-bob"}`)
 }
 
 // TestGoldenWire_IncarnationGetReply_TraitsCreatedScenario pins the projection of two
@@ -141,21 +141,21 @@ func TestGoldenWire_IncarnationGetReply_TraitsCreatedScenario(t *testing.T) {
 	// Non-empty traits (scalar + list — Trait is polymorphic) + created_scenario reach the wire.
 	full := handlers.IncarnationGetView{
 		Covens: []string{}, CreatedAt: ts, CreatedScenario: "create_cluster",
-		Name: "x", Service: "s", ServiceVersion: "v1", State: m,
+		ID: "x", Service: "s", ServiceVersion: "v1", State: m,
 		StateSchemaVersion: 7, Status: "ready", StatusDetails: m,
 		Traits: map[string]any{"env": "prod", "az": []any{"a", "b"}}, UpdatedAt: ts,
 	}
 	goldenIncarnationWire(t, "GetReply/traits+created_scenario", newIncarnationGetReply(full),
-		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"created_scenario":"create_cluster","name":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"ready","status_details":{"k":"v"},"traits":{"az":["a","b"],"env":"prod"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"created_scenario":"create_cluster","id":"x","service":"s","service_version":"v1","state":{"k":"v"},"state_schema_version":7,"status":"ready","status_details":{"k":"v"},"traits":{"az":["a","b"],"env":"prod"},"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
 
 	// Empty: created_scenario "" + traits {} → omitempty drops both keys (byte-exact
 	// with the shape before the additive change — backward compatibility for old clients).
 	empty := handlers.IncarnationGetView{
 		Covens: []string{}, CreatedAt: ts, CreatedScenario: "",
-		Name: "x", Service: "s", ServiceVersion: "v1", State: nil,
+		ID: "x", Service: "s", ServiceVersion: "v1", State: nil,
 		StateSchemaVersion: 1, Status: "ready", StatusDetails: nil,
 		Traits: map[string]any{}, UpdatedAt: ts,
 	}
 	goldenIncarnationWire(t, "GetReply/traits+created_scenario empty", newIncarnationGetReply(empty),
-		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"name":"x","service":"s","service_version":"v1","state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"id":"x","service":"s","service_version":"v1","state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
 }

@@ -53,7 +53,7 @@ func resetProvision(t *testing.T) {
 func seedIncarnation(t *testing.T, name string) {
 	t.Helper()
 	_, err := integrationPool.Exec(context.Background(),
-		`INSERT INTO incarnation (name, service, service_version, status)
+		`INSERT INTO incarnation (id, service, service_version, status)
 		 VALUES ($1, 'redis', 'main', 'ready')`, name)
 	if err != nil {
 		t.Fatalf("seed incarnation %q: %v", name, err)

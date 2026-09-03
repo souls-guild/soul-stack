@@ -59,10 +59,13 @@ var (
 // layer S3). Read-only-by-construction of the Vigil is guaranteed by the Soul
 // side (S1), not by this type.
 type Vigil struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `vigils`, and what a Decree's `on_beacon`
+	// names. There is no rename operation.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetVigilLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead. It participates in nothing derived — not the
+	// consumer shows ID instead. It participates in nothing derived — not the
 	// `on_beacon` a Decree reacts through, not the subject selector, not any
 	// Vault path.
 	//
@@ -120,9 +123,16 @@ func (v *Vigil) Subject() subject.Selector {
 // the same thing, and they are opposite ends of the rule — who fires it versus
 // what it acts on.
 type Decree struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `decrees`, and the `decree` key
+	// `oracle_fires` / `oracle_circuit` are keyed on — so cooldown state and the
+	// circuit breaker hang off it. There is no rename operation.
+	//
+	// IncarnationName below is a DIFFERENT registry's identifier (the reaction's
+	// target) and keeps its spelling until the incarnation batch of NIM-729.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
-	// SetDecreeLabel. nil → the consumer shows Name. It participates in nothing
+	// SetDecreeLabel. nil → the consumer shows ID. It participates in nothing
 	// derived — notably not IncarnationName, the reaction's target, and not the
 	// `decree` key `oracle_fires` / `oracle_circuit` are keyed on.
 	Label              *string         `json:"label,omitempty"`

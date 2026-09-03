@@ -1,6 +1,6 @@
 # Choir - endpoints of a named topology of hosts within an incarnation
 
-Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations/{name}/choirs*` - CRUD topology Choir/Voice inside the incarnation (declared-"choir part", [ADR-044](../../adr/0044-choir.md)). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). **There is no MCP side** - Choir does not have MCP tools installed ([mcp-tools/choirs.md](../mcp-tools/choirs.md)).
+Domain section [Operator API](../operator-api.md): endpoints `/v1/incarnations/{id}/choirs*` - CRUD topology Choir/Voice inside the incarnation (declared-"choir part", [ADR-044](../../adr/0044-choir.md)). Conventions, error-format, pagination, mapping table - in the root [operator-api.md](../operator-api.md). **There is no MCP side** - Choir does not have MCP tools installed ([mcp-tools/choirs.md](../mcp-tools/choirs.md)).
 
 ## Endpoint sections
 
@@ -10,12 +10,12 @@ Choir belongs to the incarnation → all six routes carry the scope selector `in
 
 | Method/Path | Permission |
 |---|---|
-| `POST /v1/incarnations/{name}/choirs` | `choir.create` |
-| `GET /v1/incarnations/{name}/choirs` | `choir.list` |
-| `DELETE /v1/incarnations/{name}/choirs/{choir}` | `choir.delete` |
-| `POST /v1/incarnations/{name}/choirs/{choir}/voices` | `choir.add-voice` |
-| `GET /v1/incarnations/{name}/choirs/{choir}/voices` | `choir.list` |
-| `DELETE /v1/incarnations/{name}/choirs/{choir}/voices/{sid}` | `choir.remove-voice` |
+| `POST /v1/incarnations/{id}/choirs` | `choir.create` |
+| `GET /v1/incarnations/{id}/choirs` | `choir.list` |
+| `DELETE /v1/incarnations/{id}/choirs/{choir}` | `choir.delete` |
+| `POST /v1/incarnations/{id}/choirs/{choir}/voices` | `choir.add-voice` |
+| `GET /v1/incarnations/{id}/choirs/{choir}/voices` | `choir.list` |
+| `DELETE /v1/incarnations/{id}/choirs/{choir}/voices/{sid}` | `choir.remove-voice` |
 
 - **`POST …/choirs`** (`choir.create`): Creates a Choir. `choir_name` is validated by `^[a-z][a-z0-9_-]*$`; `min_size`/`max_size` - opt. sane-bounds(`> 0`, `min ≤ max`). Response `201 Choir`; `409` (name taken), `422` (broken format/bounds).
 - **`GET …/choirs`** (`choir.list`): list of incarnation Choirs (sort `choir_name`). Non-existent incarnation → `200 + items=[]`. Response `200 ChoirListReply`.

@@ -130,7 +130,7 @@ Voyage-orphan-lock-release (above) closes the orphaned `applying` for **Voyage r
 - **legacy/pre-082** — applying lines supplied before migration 082 (there were no epoch columns yet) carry NULL `applying_by_kid`;
 - **rerun-last microwindow** — `UnlockForRerun` transit `error_locked → applying` WITHOUT epoch, epoch is appended to the next tx; The crash exactly in the gap between these two tx leaves a NULL-epoch.
 
-Without a presence witness to the death of the owner (no `applying_by_kid`), withdrawal is unsafe - such a lock rule is deliberately NOT touched. Removed manually by the operator: `POST /v1/incarnations/{name}/unlock` ([operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)) after analyzing that the run is really dead. Diagnostics `applying`-stuck - [faq.md](faq.md).
+Without a presence witness to the death of the owner (no `applying_by_kid`), withdrawal is unsafe - such a lock rule is deliberately NOT touched. Removed manually by the operator: `POST /v1/incarnations/{id}/unlock` ([operator-api/incarnations.md → unlock](../keeper/operator-api/incarnations.md)) after analyzing that the run is really dead. Diagnostics `applying`-stuck - [faq.md](faq.md).
 
 **Residual double-apply class is the same as `reclaim_apply_runs`.** With network-partition (a live, but partitioned owner continues to apply while reconcile has removed the lock and incarnation has been restarted) a second run may take the host. The same two barriers protect `incarnation.state` from corruption: gate-1 attempt-fencing `RunResult` + module idempotency (see Voyage-orphan-lock-release above). Rolling out fencing-Soul (gate 1) is a condition for the correctness of this mechanism.
 

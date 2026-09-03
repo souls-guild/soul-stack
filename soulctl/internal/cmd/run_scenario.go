@@ -167,7 +167,7 @@ func autoDetectIncarnation(ctx context.Context, cl *client.Client, service strin
 	}
 	var names []string
 	for _, it := range page.Items {
-		names = append(names, it.Name)
+		names = append(names, it.ID)
 	}
 	sort.Strings(names)
 	switch len(names) {

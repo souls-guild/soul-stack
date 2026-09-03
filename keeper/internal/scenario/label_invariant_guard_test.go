@@ -42,7 +42,7 @@ const (
 type guardCatalog struct{ entry serviceregistry.ServiceEntry }
 
 func (c guardCatalog) Resolve(name string) (serviceregistry.ServiceEntry, bool) {
-	if name != c.entry.Name {
+	if name != c.entry.ID {
 		return serviceregistry.ServiceEntry{}, false
 	}
 	return c.entry, true
@@ -50,7 +50,7 @@ func (c guardCatalog) Resolve(name string) (serviceregistry.ServiceEntry, bool) 
 
 func guardCatalogWith(label *string) guardCatalog {
 	return guardCatalog{entry: serviceregistry.ServiceEntry{
-		Name:  guardServiceID,
+		ID:    guardServiceID,
 		Label: label,
 		Git:   "https://git.example.test/redis.git",
 		Ref:   "v1.2.3",

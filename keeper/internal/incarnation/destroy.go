@@ -89,14 +89,14 @@ func Destroy(
 	ctx context.Context,
 	pool TxBeginner,
 	w audit.Writer,
-	name string,
+	id string,
 	force bool,
 	source audit.Source,
 	archonAID, historyID string,
 	logger *slog.Logger,
 ) (*DestroyResult, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
 	}
 	if historyID == "" {
 		return nil, fmt.Errorf("incarnation: empty history_id")
@@ -111,14 +111,14 @@ func Destroy(
 	const selectForUpdateSQL = `
 SELECT state, status
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	var (
 		stateBytes []byte
 		statusStr  string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, name).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, ErrIncarnationNotFound
 		}
@@ -145,7 +145,7 @@ INSERT INTO state_history (
 ) VALUES ($1, $2, $3, $4, $4, $5, $1)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
-		historyID, name, destroyScenarioLabel, stateBytes, changedByArg,
+		historyID, id, destroyScenarioLabel, stateBytes, changedByArg,
 	); err != nil {
 		return nil, fmt.Errorf("incarnation: insert destroy state_history: %w", err)
 	}
@@ -160,9 +160,9 @@ INSERT INTO state_history (
 	const updateSQL = `
 UPDATE incarnation
 SET status = $2, status_details = $3, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
-	if _, err := tx.Exec(ctx, updateSQL, name, string(StatusDestroying), detailsBytes); err != nil {
+	if _, err := tx.Exec(ctx, updateSQL, id, string(StatusDestroying), detailsBytes); err != nil {
 		return nil, fmt.Errorf("incarnation: destroy update: %w", err)
 	}
 
@@ -178,7 +178,7 @@ WHERE name = $1
 	// calling StartDestroy from the handler after this transaction commits is
 	// S-D4 (force=true → S-D3 deletes the row directly, without teardown).
 
-	writeDestroyAudit(ctx, w, source, archonAID, name, previous, force, logger)
+	writeDestroyAudit(ctx, w, source, archonAID, id, previous, force, logger)
 
 	return &DestroyResult{PreviousStatus: previous, HistoryID: historyID}, nil
 }
@@ -331,13 +331,13 @@ func DeleteAfterTeardown(
 	ctx context.Context,
 	pool TxBeginner,
 	w audit.Writer,
-	name string,
+	id string,
 	force bool,
 	secrets audit.SecretSchema,
 	logger *slog.Logger,
 ) (*DeleteResult, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("incarnation: invalid name %q", name)
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
 	}
 
 	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
@@ -355,7 +355,7 @@ func DeleteAfterTeardown(
 	detailsPatch := []byte(`{}`)
 	if force {
 		archiveStatus = ArchiveStatusForceDestroyed
-		u, cerr := collectUnreleased(ctx, tx, name, secrets)
+		u, cerr := collectUnreleased(ctx, tx, id, secrets)
 		if cerr != nil {
 			return nil, cerr
 		}
@@ -387,19 +387,30 @@ func DeleteAfterTeardown(
 	// The archive KEEPS its own `spec` column rather than dropping it — rows
 	// archived before this release hold real data there, and a compliance archive
 	// is the last place to delete history. New rows get its `{}` default.
+	//
+	// The two sides of this statement spell the identifier DIFFERENTLY, and that
+	// is correct rather than sloppy. `incarnation.id` was renamed by migration
+	// 118 (NIM-729); `incarnation_archive.name` was not — the archive is not one
+	// of the ten registry tables that migration converts, so its column keeps the
+	// name it was created with in 039. Spelling the target `id` fails with
+	// `column "id" of relation "incarnation_archive" does not exist`.
+	//
+	// It joins the `*_name` tail — `state_history.incarnation_name` and the four
+	// others — which converts in NIM-732. Until then the INSERT column list is
+	// archive-side spelling and the SELECT is live-side spelling.
 	const archiveIncarnationSQL = `
 INSERT INTO incarnation_archive (
     name, service, service_version, state_schema_version,
     state, status, status_details, created_by_aid,
     created_at, updated_at
 )
-SELECT name, service, service_version, state_schema_version,
+SELECT id, service, service_version, state_schema_version,
        state, $2, COALESCE(status_details, '{}'::jsonb) || $3::jsonb, created_by_aid,
        created_at, updated_at
 FROM incarnation
-WHERE name = $1 AND status = 'destroying'
+WHERE id = $1 AND status = 'destroying'
 `
-	if _, err := tx.Exec(ctx, archiveIncarnationSQL, name, archiveStatus, detailsPatch); err != nil {
+	if _, err := tx.Exec(ctx, archiveIncarnationSQL, id, archiveStatus, detailsPatch); err != nil {
 		return nil, fmt.Errorf("incarnation: archive incarnation: %w", err)
 	}
 
@@ -417,7 +428,7 @@ SELECT history_id, incarnation_name, scenario, state_before, state_after,
 FROM state_history
 WHERE incarnation_name = $1
 `
-	if _, err := tx.Exec(ctx, archiveHistorySQL, name); err != nil {
+	if _, err := tx.Exec(ctx, archiveHistorySQL, id); err != nil {
 		return nil, fmt.Errorf("incarnation: archive state_history: %w", err)
 	}
 
@@ -425,9 +436,9 @@ WHERE incarnation_name = $1
 	// of the destroying transition performs the removal. RowsAffected==0 → no-op.
 	const deleteSQL = `
 DELETE FROM incarnation
-WHERE name = $1 AND status = 'destroying'
+WHERE id = $1 AND status = 'destroying'
 `
-	tag, err := tx.Exec(ctx, deleteSQL, name)
+	tag, err := tx.Exec(ctx, deleteSQL, id)
 	if err != nil {
 		return nil, fmt.Errorf("incarnation: delete incarnation: %w", err)
 	}
@@ -441,7 +452,7 @@ WHERE name = $1 AND status = 'destroying'
 		return nil, fmt.Errorf("incarnation: commit delete tx: %w", err)
 	}
 
-	writeDestroyCompletedAudit(ctx, w, name, force, archiveStatus, unreleased, logger)
+	writeDestroyCompletedAudit(ctx, w, id, force, archiveStatus, unreleased, logger)
 
 	return &DeleteResult{Deleted: true, ArchiveStatus: archiveStatus, Unreleased: unreleased}, nil
 }
@@ -474,7 +485,7 @@ WHERE name = $1 AND status = 'destroying'
 // top. Until NIM-531 this function had no reader for the artifact and used the
 // vault+regex pair alone, so a key a service declared `secret: true` — and that
 // neither looked like a vault ref nor was named anything the regex knows — was
-// masked by `GET /v1/incarnations/{name}` and printed here. The same value, two
+// masked by `GET /v1/incarnations/{id}` and printed here. The same value, two
 // answers, decided by which endpoint the operator happened to call. A nil secrets
 // still degrades to exactly that older pair: an unreadable artifact costs the
 // declarative layer, never the destroy.
@@ -507,16 +518,16 @@ WHERE name = $1 AND status = 'destroying'
 // touch its row — so no lock taken here would serialize them, and a bind landing
 // between this read and the DELETE is cascaded away without ever appearing in
 // the record. That belongs on those endpoints; tracked as NIM-541.
-func collectUnreleased(ctx context.Context, tx pgx.Tx, name string, secrets audit.SecretSchema) (*UnreleasedResources, error) {
+func collectUnreleased(ctx context.Context, tx pgx.Tx, id string, secrets audit.SecretSchema) (*UnreleasedResources, error) {
 	u := &UnreleasedResources{}
 
 	const selectStateSQL = `
 SELECT state
 FROM incarnation
-WHERE name = $1 AND status = 'destroying'
+WHERE id = $1 AND status = 'destroying'
 `
 	var stateBytes []byte
-	switch err := tx.QueryRow(ctx, selectStateSQL, name).Scan(&stateBytes); {
+	switch err := tx.QueryRow(ctx, selectStateSQL, id).Scan(&stateBytes); {
 	case errors.Is(err, pgx.ErrNoRows):
 		return u, nil
 	case err != nil:
@@ -530,7 +541,7 @@ WHERE name = $1 AND status = 'destroying'
 		u.VMIDs = jsonStringSlice(masked[stateKeyProvisionedVMIDs])
 	}
 
-	sids, err := ListMemberSIDs(ctx, tx, name)
+	sids, err := ListMemberSIDs(ctx, tx, id)
 	if err != nil {
 		return nil, fmt.Errorf("incarnation: read membership for unreleased resources: %w", err)
 	}
@@ -574,7 +585,7 @@ func jsonStringSlice(v any) []string {
 func writeDestroyCompletedAudit(
 	ctx context.Context,
 	w audit.Writer,
-	name string,
+	id string,
 	force bool,
 	archiveStatus string,
 	unreleased *UnreleasedResources,
@@ -584,7 +595,7 @@ func writeDestroyCompletedAudit(
 		return
 	}
 	payload := map[string]any{
-		"name":           name,
+		"id":             id,
 		"force":          force,
 		"archive_status": archiveStatus,
 	}
@@ -605,7 +616,7 @@ func writeDestroyCompletedAudit(
 	}
 	if err := w.Write(ctx, ev); err != nil && logger != nil {
 		logger.Warn("incarnation: writing audit incarnation.destroy_completed failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 	}
 }
 
@@ -617,7 +628,7 @@ func writeDestroyAudit(
 	ctx context.Context,
 	w audit.Writer,
 	source audit.Source,
-	archonAID, name string,
+	archonAID, id string,
 	previous Status,
 	force bool,
 	logger *slog.Logger,
@@ -630,13 +641,13 @@ func writeDestroyAudit(
 		Source:    source,
 		ArchonAID: archonAID,
 		Payload: map[string]any{
-			"name":            name,
+			"id":              id,
 			"previous_status": string(previous),
 			"force":           force,
 		},
 	}
 	if err := w.Write(ctx, ev); err != nil && logger != nil {
 		logger.Warn("incarnation: writing audit incarnation.destroy_started failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 	}
 }

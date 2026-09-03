@@ -38,7 +38,7 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// reOmenName — format of the {name} path segment of an Omen (kebab 1..63, augur.NamePattern).
+// reOmenName — format of the {name} path segment of an Omen (kebab 1..63, augur.IDPattern).
 // A path segment without slashes/`..` is traversal-safe.
 var reOmenName = regexp.MustCompile(`^[a-z0-9-]{1,63}$`)
 
@@ -77,7 +77,7 @@ func AugurSpecStub() *AugurHandler {
 // flat string (package api projects it into the native enum OmenViewSourceType).
 // created_at is UTC + Truncate(Second) (pinned here, as in the operator reference).
 type OmenView struct {
-	Name string
+	ID string
 	// Label — display caption (ADR-0085); nil when the column is NULL, and the
 	// consumer then shows Name.
 	Label        *string
@@ -90,7 +90,7 @@ type OmenView struct {
 
 func toOmenView(o *augur.Omen) OmenView {
 	return OmenView{
-		Name:         o.Name,
+		ID:           o.ID,
 		Label:        o.Label,
 		SourceType:   string(o.SourceType),
 		Endpoint:     o.Endpoint,
@@ -105,9 +105,9 @@ func toOmenView(o *augur.Omen) OmenView {
 // body against these fields, then calls CreateOmenTyped. The service validates the
 // closed source_type set (domain ValidSourceType).
 type OmenCreateInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/augur/omens/{name}/label.
+	// by PUT /v1/augur/omens/{id}/label.
 	Label      *string
 	SourceType string
 	Endpoint   string
@@ -125,7 +125,7 @@ type OmenCreateReply struct {
 // name/source_type/endpoint/auth_ref/created_by_aid; no secrets, augur.md §8).
 func (r OmenCreateReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"name":           r.View.Name,
+		"id":             r.View.ID,
 		"label":          r.View.Label,
 		"source_type":    r.View.SourceType,
 		"endpoint":       r.View.Endpoint,
@@ -141,7 +141,7 @@ func (h *AugurHandler) CreateOmenTyped(ctx context.Context, claims *keeperjwt.Cl
 	var zero OmenCreateReply
 	callerAID := claims.Subject
 	o, err := h.svc.CreateOmen(ctx, augur.CreateOmenInput{
-		Name:       req.Name,
+		ID:         req.ID,
 		Label:      req.Label,
 		SourceType: req.SourceType,
 		Endpoint:   req.Endpoint,
@@ -149,7 +149,7 @@ func (h *AugurHandler) CreateOmenTyped(ctx context.Context, claims *keeperjwt.Cl
 		CallerAID:  &callerAID,
 	})
 	if err != nil {
-		return zero, h.omenError("augur.omen.create", req.Name, callerAID, err)
+		return zero, h.omenError("augur.omen.create", req.ID, callerAID, err)
 	}
 	return OmenCreateReply{View: toOmenView(o), CallerAID: callerAID}, nil
 }
@@ -186,50 +186,50 @@ func (h *AugurHandler) ListOmensTyped(ctx context.Context, offset, limit int) (O
 	return OmenListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
 }
 
-// GetOmenTyped — domain function GET /v1/augur/omens/{name} (handler-native,
+// GetOmenTyped — domain function GET /v1/augur/omens/{id} (handler-native,
 // read with path, no audit): path-name validation + svc.GetOmen + sentinel→problem
 // (404/422/500). Errors are *problemError; success is [OmenView].
-func (h *AugurHandler) GetOmenTyped(ctx context.Context, name string) (OmenView, error) {
+func (h *AugurHandler) GetOmenTyped(ctx context.Context, id string) (OmenView, error) {
 	var zero OmenView
-	if !reOmenName.MatchString(name) {
+	if !reOmenName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOmenName.String())}
+			"path param 'id' must match "+reOmenName.String())}
 	}
-	o, err := h.svc.GetOmen(ctx, name)
+	o, err := h.svc.GetOmen(ctx, id)
 	switch {
 	case err == nil:
 		return toOmenView(o), nil
 	case errors.Is(err, augur.ErrOmenNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+id+" not found")}
 	default:
 		h.logger.Error("augur.omen.get: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get omen failed")}
 	}
 }
 
-// SetOmenLabelTyped — domain function for PUT /v1/augur/omens/{name}/label
+// SetOmenLabelTyped — domain function for PUT /v1/augur/omens/{id}/label
 // (WRITE+AUDIT omen.label_changed). 404 if absent.
 //
 // The label itself is NOT validated: free text with capitals, spaces and
 // punctuation is what the field carries (ADR-0085), so the only 422 this route
 // can raise is on the path identifier, which must still be a well-formed name
 // because it addresses the row and is what Rites grant against.
-func (h *AugurHandler) SetOmenLabelTyped(ctx context.Context, name string, req LabelSetInput) (LabelWriteReply[OmenView], error) {
+func (h *AugurHandler) SetOmenLabelTyped(ctx context.Context, id string, req LabelSetInput) (LabelWriteReply[OmenView], error) {
 	var zero LabelWriteReply[OmenView]
-	if !reOmenName.MatchString(name) {
+	if !reOmenName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOmenName.String())}
+			"path param 'id' must match "+reOmenName.String())}
 	}
-	o, previous, err := h.svc.SetOmenLabel(ctx, name, req.Label)
+	o, previous, err := h.svc.SetOmenLabel(ctx, id, req.Label)
 	switch {
 	case err == nil:
-		return LabelWriteReply[OmenView]{Body: toOmenView(o), Name: name, Label: o.Label, Previous: previous}, nil
+		return LabelWriteReply[OmenView]{Body: toOmenView(o), ID: id, Label: o.Label, Previous: previous}, nil
 	case errors.Is(err, augur.ErrOmenNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+id+" not found")}
 	default:
 		h.logger.Error("augur.omen.label-set: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "augur.omen.label-set failed")}
 	}
 }
@@ -237,32 +237,32 @@ func (h *AugurHandler) SetOmenLabelTyped(ctx context.Context, name string, req L
 // OmenDeleteReply — extracted result of [AugurHandler.DeleteOmenTyped]
 // (handler-native). Carries audit fields (HTTP response is an empty 204 body).
 type OmenDeleteReply struct {
-	Name string
+	ID string
 }
 
 // AuditPayload builds the audit-payload for the omen.delete route (legacy parity: name).
 func (r OmenDeleteReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{"name": r.Name}
+	return middleware.AuditPayload{"id": r.ID}
 }
 
-// DeleteOmenTyped — domain function DELETE /v1/augur/omens/{name} (handler-
+// DeleteOmenTyped — domain function DELETE /v1/augur/omens/{id} (handler-
 // native): path-name validation + svc.DeleteOmen + sentinel→problem. Errors are
 // *problemError; success is [OmenDeleteReply].
-func (h *AugurHandler) DeleteOmenTyped(ctx context.Context, name string) (OmenDeleteReply, error) {
+func (h *AugurHandler) DeleteOmenTyped(ctx context.Context, id string) (OmenDeleteReply, error) {
 	var zero OmenDeleteReply
-	if !reOmenName.MatchString(name) {
+	if !reOmenName.MatchString(id) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path param 'name' must match "+reOmenName.String())}
+			"path param 'id' must match "+reOmenName.String())}
 	}
-	err := h.svc.DeleteOmen(ctx, name)
+	err := h.svc.DeleteOmen(ctx, id)
 	switch {
 	case err == nil:
-		return OmenDeleteReply{Name: name}, nil
+		return OmenDeleteReply{ID: id}, nil
 	case errors.Is(err, augur.ErrOmenNotFound):
-		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+name+" not found")}
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "omen "+id+" not found")}
 	default:
 		h.logger.Error("augur.omen.delete: service failed",
-			slog.String("name", name), slog.Any("error", err))
+			slog.String("id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "delete omen failed")}
 	}
 }
@@ -274,15 +274,15 @@ func (h *AugurHandler) DeleteOmenTyped(ctx context.Context, name string) (OmenDe
 // For unknown errors — internal-error (500) + generic detail (raw err.Error()
 // is not surfaced to the client; diagnostics go to the logs). Delivered by the huma
 // wrapper via AsProblemDetails.
-func (h *AugurHandler) omenError(op, name, callerAID string, err error) error {
+func (h *AugurHandler) omenError(op, id, callerAID string, err error) error {
 	switch {
 	case errors.Is(err, augur.ErrValidation):
 		return &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	case errors.Is(err, augur.ErrOmenAlreadyExists):
-		return &problemError{problem.New(problem.TypeOmenExists, "", "omen "+name+" already exists")}
+		return &problemError{problem.New(problem.TypeOmenExists, "", "omen "+id+" already exists")}
 	default:
 		h.logger.Error(op+": service failed",
-			slog.String("name", name), slog.String("by_aid", callerAID), slog.Any("error", err))
+			slog.String("id", id), slog.String("by_aid", callerAID), slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", op+" failed")}
 	}
 }

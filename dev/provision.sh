@@ -739,12 +739,13 @@ seed_service_registry() {
 
     log "seeding service_registry (hello-world, redis) + keeper_settings[default_destiny_source]"
     # Unquoted heredoc: only ${KEEPER_DEV_DIR} gets substituted; {name} (without $) remains
-    # a keeper placeholder. There are no other $-literals in the SQL.
+    # a keeper placeholder -- the destiny-source template, NOT the renamed registry
+    # column (ADR-0085/NIM-729 moved that to `id`). There are no other $-literals in the SQL.
     psql_stand -f - <<SQL
-INSERT INTO service_registry (name, git, ref) VALUES
+INSERT INTO service_registry (id, git, ref) VALUES
     ('hello-world', 'file://${KEEPER_DEV_DIR}/repos/hello-world', 'main'),
     ('redis',       'file://${KEEPER_DEV_DIR}/repos/redis',       'main')
-ON CONFLICT (name) DO NOTHING;
+ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO keeper_settings (key, value) VALUES
     ('default_destiny_source', 'file://${KEEPER_DEV_DIR}/destiny/{name}')

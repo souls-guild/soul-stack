@@ -1,6 +1,6 @@
 package handlers
 
-// GET /v1/incarnations/{name}/upgrade-paths (ADR-0068 §6) — READ analysis of
+// GET /v1/incarnations/{id}/upgrade-paths (ADR-0068 §6) — READ analysis of
 // incarnation upgrade paths. A separate file (not incarnation_typed.go) to avoid
 // conflicting with the Slice 2 upgrade flow. Read-only reuse of the
 // incarnation.PrepareUpgrade building blocks (resolve+load+analyze) without changing the pin or running.
@@ -74,14 +74,14 @@ type UpgradePathTargetView struct {
 	StateMigrations []artifact.Migration
 }
 
-// UpgradePathsTyped — GET /v1/incarnations/{name}/upgrade-paths (READ, no audit,
+// UpgradePathsTyped — GET /v1/incarnations/{id}/upgrade-paths (READ, no audit,
 // ADR-0068 §6). toRef=="" → cheap tag list; toRef!="" → on-demand target analysis.
 // inScope — operator scope predicate (like GetTyped): out of scope → 404 (do not leak
 // existence). Read-only: the pin is NOT changed, the upgrade is NOT executed.
 func (h *IncarnationHandler) UpgradePathsTyped(ctx context.Context, name, toRef string, inScope func(*incarnation.Incarnation) bool) (IncarnationUpgradePathsView, error) {
 	var zero IncarnationUpgradePathsView
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	// existence-probe + scope: not-found / out of scope → 404 (do not leak existence).
 	inc, err := h.existenceProbeInScope(ctx, name, inScope, "upgrade-paths")
@@ -127,7 +127,7 @@ func (h *IncarnationHandler) upgradePathsCheap(ctx context.Context, inc *incarna
 	refs, err := h.refs.ListRefs(ctx, ref.Name, ref.Git)
 	if err != nil {
 		h.logger.Warn("incarnation.upgrade-paths: ls-remote failed",
-			slog.String("name", inc.Name), slog.String("service", inc.Service), slog.Any("error", err))
+			slog.String("name", inc.ID), slog.String("service", inc.Service), slog.Any("error", err))
 		return nil, incProblem(problem.TypeBadGateway, "ls-remote failed for service "+inc.Service+": "+err.Error())
 	}
 	out := make([]UpgradePathRefView, 0, len(refs))
@@ -157,7 +157,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 	art, err := h.loader.Load(ctx, ref)
 	if err != nil {
 		h.logger.Warn("incarnation.upgrade-paths: load target snapshot failed",
-			slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", err))
+			slog.String("name", inc.ID), slog.String("to", toRef), slog.Any("error", err))
 		return nil, incProblem(problem.TypeBadGateway, "load target snapshot "+toRef+" failed: "+err.Error())
 	}
 	if art == nil || art.Manifest == nil {
@@ -192,7 +192,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 		upgrades, uerr := h.loader.ListUpgrades(art)
 		if uerr != nil {
 			h.logger.Warn("incarnation.upgrade-paths: upgrade scan failed, reporting legacy",
-				slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", uerr))
+				slog.String("name", inc.ID), slog.String("to", toRef), slog.Any("error", uerr))
 		}
 		if slug, found := artifact.ResolveUpgradeScenario(upgrades, inc.ServiceVersion); found {
 			tgt.Mode = upgradeModeFound
@@ -213,7 +213,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 				// found/legacy), the chain cannot be assembled → reachable=false + reason,
 				// state_migrations empty. The operator sees "cannot move here", not a 4xx.
 				h.logger.Warn("incarnation.upgrade-paths: target unreachable — migration chain broken",
-					slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
+					slog.String("name", inc.ID), slog.String("to", toRef), slog.Any("error", cerr))
 				tgt.Reachable = false
 				tgt.UnreachableReason = "migration chain to " + toRef + " is broken: " + cerr.Error()
 				return tgt, nil
@@ -222,7 +222,7 @@ func (h *IncarnationHandler) upgradePathsTarget(ctx context.Context, inc *incarn
 			// materialized snapshot) = keeper-internal defect → 500 (parity UpgradeTyped default). 502
 			// is reserved ONLY for loader.Load — there the culprit is genuinely external git.
 			h.logger.Error("incarnation.upgrade-paths: load migration chain failed",
-				slog.String("name", inc.Name), slog.String("to", toRef), slog.Any("error", cerr))
+				slog.String("name", inc.ID), slog.String("to", toRef), slog.Any("error", cerr))
 			return nil, incProblem(problem.TypeInternalError, "load migration chain to "+toRef+" failed")
 		}
 		tgt.StateMigrations = upgradeMigrationSteps(chain)

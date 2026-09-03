@@ -701,7 +701,7 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO incarnation (name, service, service_version, state, status)
+		INSERT INTO incarnation (id, service, service_version, state, status)
 		VALUES ($1, $2, $3, $4::jsonb, 'ready')
 	`, name, service, serviceVersion, string(stateJSON)); err != nil {
 		t.Fatalf("SeedIncarnationReady(%s): %v", name, err)
@@ -722,7 +722,7 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
 	body := map[string]any{
-		"name":    name,
+		"id":      name,
 		"service": service,
 	}
 	if spec != nil {
@@ -795,7 +795,7 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name, serviceRef string
 	t.Helper()
 	c := s.opClient(t)
 	body := map[string]any{
-		"name":            name,
+		"id":              name,
 		"service":         stripServiceRef(serviceRef),
 		"create_scenario": "create",
 	}
@@ -847,7 +847,7 @@ func (s *Stack) CreateIncarnationRaw(t *testing.T, name, serviceRef string, spec
 	t.Helper()
 	c := s.opClient(t)
 	body := map[string]any{
-		"name":    name,
+		"id":      name,
 		"service": stripServiceRef(serviceRef),
 	}
 	if spec != nil {
@@ -1012,7 +1012,7 @@ func (s *Stack) WaitIncarnationReady(t *testing.T, incarnationName string, timeo
 	for time.Now().Before(deadline) {
 		var status string
 		err := s.db.QueryRow(context.Background(),
-			"SELECT status FROM incarnation WHERE name = $1", incarnationName).Scan(&status)
+			"SELECT status FROM incarnation WHERE id = $1", incarnationName).Scan(&status)
 		if err != nil {
 			t.Fatalf("WaitIncarnationReady %s: query: %v", incarnationName, err)
 		}

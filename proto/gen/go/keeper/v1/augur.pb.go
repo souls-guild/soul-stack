@@ -97,7 +97,10 @@ type AugurRequest struct {
 	// The apply_id of the run this access request belongs to. Used for audit
 	// (the `augur.*` audit event is written with correlation_id = apply_id, ADR-025).
 	ApplyId string `protobuf:"bytes,2,opt,name=apply_id,json=applyId,proto3" json:"apply_id,omitempty"`
-	// Omen name (omens.name) — the external system access is being requested for.
+	// Omen id (omens.id) — the external system access is being requested for.
+	//
+	// The FIELD keeps the name `omen_name`, for the reason above: the registry
+	// column moved ([ADR-0085] / NIM-729), this wire contract did not.
 	OmenName string `protobuf:"bytes,3,opt,name=omen_name,json=omenName,proto3" json:"omen_name,omitempty"`
 	// The query sent to the Omen: a KV path (vault) / promQL (prometheus) /
 	// index query (elk). Keeper checks it against the matching Rite's allow-list

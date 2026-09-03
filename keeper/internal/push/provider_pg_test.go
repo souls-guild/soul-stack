@@ -17,7 +17,7 @@ type fakePushProviderReader struct {
 	err      error
 }
 
-func (r *fakePushProviderReader) SelectByName(_ context.Context, _ string) (*pushprovider.PushProvider, error) {
+func (r *fakePushProviderReader) SelectByID(_ context.Context, _ string) (*pushprovider.PushProvider, error) {
 	return r.provider, r.err
 }
 
@@ -34,7 +34,7 @@ func (f *fakeLegacyFallback) ResolveParams(_ string) (map[string]any, bool) {
 func TestPGFallback_PGFirstReturnsPGParams(t *testing.T) {
 	reader := &fakePushProviderReader{
 		provider: &pushprovider.PushProvider{
-			Name:   "vault-bastion",
+			ID:     "vault-bastion",
 			Params: map[string]any{"vault_addr": "https://vault.example.com"},
 		},
 	}
@@ -58,7 +58,7 @@ func TestPGFallback_PGFirstReturnsPGParams(t *testing.T) {
 
 func TestPGFallback_PGEmptyParamsReturnedAsEmptyMap(t *testing.T) {
 	reader := &fakePushProviderReader{
-		provider: &pushprovider.PushProvider{Name: "vault", Params: nil},
+		provider: &pushprovider.PushProvider{ID: "vault", Params: nil},
 	}
 	r := &PGFallbackProviderResolver{Reader: reader}
 	params, err := r.ResolveParams(context.Background(), "vault")

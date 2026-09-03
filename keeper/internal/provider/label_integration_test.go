@@ -11,7 +11,7 @@
 // its semantics rather than the endpoint:
 //
 //   - the column exists, is nullable, and takes free text;
-//   - it round-trips through Insert → SelectByName → SelectAll;
+//   - it round-trips through Insert → SelectByID → SelectAll;
 //   - UpdateLabel changes it and nothing else on the row;
 //   - blank collapses to SQL NULL, so "absent" has one representation;
 //   - nothing about it is unique — two rows may carry the same caption.
@@ -51,9 +51,9 @@ func TestIntegration_Label_RoundTrip(t *testing.T) {
 		t.Fatalf("Insert with a caption: %v", err)
 	}
 
-	got, err := SelectByName(ctx, integrationPool, "aws-eu")
+	got, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Label == nil || *got.Label != caption {
 		t.Fatalf("Label after round-trip = %v, want %q — the INSERT column list, the SELECT "+
@@ -61,7 +61,7 @@ func TestIntegration_Label_RoundTrip(t *testing.T) {
 			got.Label, caption)
 	}
 	// The identifier and the derivation ingredients are untouched by carrying one.
-	if got.Name != "aws-eu" || got.CredentialsRef != "vault:secret/cloud/aws-eu" {
+	if got.ID != "aws-eu" || got.CredentialsRef != "vault:secret/cloud/aws-eu" {
 		t.Errorf("the row moved while carrying a caption: %+v", got)
 	}
 
@@ -90,9 +90,9 @@ func TestIntegration_Label_AbsentIsNull(t *testing.T) {
 	if err := Insert(ctx, integrationPool, newProvider("aws-eu", "archon-alice")); err != nil {
 		t.Fatalf("Insert without a caption: %v", err)
 	}
-	got, err := SelectByName(ctx, integrationPool, "aws-eu")
+	got, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if got.Label != nil {
 		t.Errorf("Label = %q for a row written without one, want nil (SQL NULL)", *got.Label)
@@ -112,9 +112,9 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 	if err := Insert(ctx, integrationPool, p); err != nil {
 		t.Fatalf("Insert: %v", err)
 	}
-	before, err := SelectByName(ctx, integrationPool, "aws-eu")
+	before, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName(before): %v", err)
+		t.Fatalf("SelectByID(before): %v", err)
 	}
 
 	const renamed = "AWS — Production (Frankfurt)"
@@ -123,9 +123,9 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 		t.Fatalf("UpdateLabel: %v", err)
 	}
 
-	after, err := SelectByName(ctx, integrationPool, "aws-eu")
+	after, err := SelectByID(ctx, integrationPool, "aws-eu")
 	if err != nil {
-		t.Fatalf("SelectByName(after): %v", err)
+		t.Fatalf("SelectByID(after): %v", err)
 	}
 	if after.Label == nil || *after.Label != renamed {
 		t.Errorf("Label = %v, want %q", after.Label, renamed)
@@ -133,9 +133,9 @@ func TestIntegration_UpdateLabel_ChangesOnlyTheCaption(t *testing.T) {
 	// ADR-0085: "I changed the label and nothing moved." Everything the platform
 	// derives from lives in these columns.
 	switch {
-	case after.Name != before.Name:
+	case after.ID != before.ID:
 		t.Errorf("name moved: %q → %q — it is the derived Vault path segment and has no rename operation",
-			before.Name, after.Name)
+			before.ID, after.ID)
 	case after.Type != before.Type || after.Region != before.Region:
 		t.Errorf("type/region moved: %q/%q → %q/%q", before.Type, before.Region, after.Type, after.Region)
 	case after.CredentialsRef != before.CredentialsRef:
@@ -174,9 +174,9 @@ func TestIntegration_UpdateLabel_ClearsToNull(t *testing.T) {
 			if _, err := UpdateLabel(ctx, integrationPool, "aws-eu", tc.label); err != nil {
 				t.Fatalf("UpdateLabel(clear): %v", err)
 			}
-			got, err := SelectByName(ctx, integrationPool, "aws-eu")
+			got, err := SelectByID(ctx, integrationPool, "aws-eu")
 			if err != nil {
-				t.Fatalf("SelectByName: %v", err)
+				t.Fatalf("SelectByID: %v", err)
 			}
 			if got.Label != nil {
 				t.Errorf("Label = %q after clearing, want nil — an empty string would give "+

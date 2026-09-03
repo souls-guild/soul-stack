@@ -497,7 +497,7 @@ func mergeGroup(full *huma.OpenAPI, fullSchemas map[string]*huma.Schema, tagSeen
 			full.Paths[abs] = item
 			continue
 		}
-		// The same full path already exists from another group (e.g. /v1/incarnations/{name}
+		// The same full path already exists from another group (e.g. /v1/incarnations/{id}
 		// from the incarnation- and choir-groups does not collide on different sub-paths, but
 		// a shared abs is possible) — merge operations by method, WITHOUT overwriting item
 		// wholesale; a collision on one method → gate (a) error.

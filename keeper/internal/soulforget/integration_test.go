@@ -380,7 +380,7 @@ func TestIntegration_CascadeCountsReportWhatTheOperatorDidNotName(t *testing.T) 
 		t.Fatalf("bootstraptoken.Insert: %v", err)
 	}
 
-	mustExec(t, `INSERT INTO incarnation (name, service, service_version, status)
+	mustExec(t, `INSERT INTO incarnation (id, service, service_version, status)
 	             VALUES ('inc-one', 'svc', 'v1', 'ready'), ('inc-two', 'svc', 'v1', 'ready')`)
 	mustExec(t, `INSERT INTO incarnation_membership (incarnation_name, sid)
 	             VALUES ('inc-one', $1), ('inc-two', $1)`, testSID)
@@ -437,7 +437,7 @@ func TestIntegration_ForgetTouchesOnlyTheNamedHost(t *testing.T) {
 	seedSoul(t, testSID, soul.StatusConnected)
 	seedSoul(t, bystander, soul.StatusConnected)
 
-	mustExec(t, `INSERT INTO incarnation (name, service, service_version, status)
+	mustExec(t, `INSERT INTO incarnation (id, service, service_version, status)
 	             VALUES ('inc-one', 'svc', 'v1', 'ready')`)
 	mustExec(t, `INSERT INTO incarnation_membership (incarnation_name, sid)
 	             VALUES ('inc-one', $1), ('inc-one', $2)`, testSID, bystander)

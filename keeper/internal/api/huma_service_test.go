@@ -44,9 +44,9 @@ var svcAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 // classification is validated by handlers/service_test.go + serviceregistry-integration.
 type hSvcPool struct {
 	deleteRows int64
-	getMissing bool    // SELECT … WHERE name → ErrNoRows (404)
-	getValues  []any   // the row for SELECT … WHERE name (Get)
-	listValues [][]any // the rows for SELECT … ORDER BY name (List)
+	getMissing bool    // SELECT … WHERE id → ErrNoRows (404)
+	getValues  []any   // the row for SELECT … WHERE id (Get)
+	listValues [][]any // the rows for SELECT … ORDER BY id (List)
 }
 
 func (p *hSvcPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -74,7 +74,7 @@ func (p *hSvcPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 }
 
 func (p *hSvcPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
-	if strings.Contains(sql, "FROM service_registry") && strings.Contains(sql, "ORDER BY name") {
+	if strings.Contains(sql, "FROM service_registry") && strings.Contains(sql, "ORDER BY id") {
 		return &hSvcRows{rows: p.listValues}, nil
 	}
 	return nil, &hSvcErr{"hSvcPool: unexpected Query SQL: " + sql}
@@ -284,7 +284,7 @@ func TestHumaService_Register_GoldenWire(t *testing.T) {
 	r := humaServiceRouter(t, strictAllowAll{}, nil, &hSvcPool{}, nil, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/services",
-		strings.NewReader(`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
+		strings.NewReader(`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -294,7 +294,7 @@ func TestHumaService_Register_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","git":"https://git/web.git","id":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift service.register:\n got  = %s\n want = %s", got, golden)
 	}
@@ -304,7 +304,7 @@ func TestHumaService_Register_UnknownField_400(t *testing.T) {
 	r := humaServiceRouter(t, strictAllowAll{}, nil, &hSvcPool{}, nil, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/services",
-		strings.NewReader(`{"name":"web","git":"g","ref":"v1","bogus":1}`))
+		strings.NewReader(`{"id":"web","git":"g","ref":"v1","bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -328,7 +328,7 @@ func TestHumaService_Register_RBACDeny_403(t *testing.T) {
 	r := humaServiceRouter(t, strictDenyAll{}, nil, &hSvcPool{}, nil, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/services",
-		strings.NewReader(`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
+		strings.NewReader(`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -340,13 +340,13 @@ func TestHumaAudit_ServiceRegister_RecordsOnSuccess(t *testing.T) {
 	r := humaServiceRouter(t, strictAllowAll{}, auditCap, &hSvcPool{}, nil, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/services",
-		strings.NewReader(`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
+		strings.NewReader(`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventServiceRegistered, map[string]any{
-		"name": "web", "git": "https://git/web.git", "ref": "v1.0.0", "created_by_aid": "archon-alice",
+		"id": "web", "git": "https://git/web.git", "ref": "v1.0.0", "created_by_aid": "archon-alice",
 	})
 }
 
@@ -355,7 +355,7 @@ func TestHumaAudit_ServiceRegister_NoAudit_OnRBACDeny(t *testing.T) {
 	r := humaServiceRouter(t, strictDenyAll{}, auditCap, &hSvcPool{}, nil, nil, nil, nil)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/services",
-		strings.NewReader(`{"name":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
+		strings.NewReader(`{"id":"web","git":"https://git/web.git","ref":"v1.0.0"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -381,7 +381,7 @@ func TestHumaService_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}]}`
+	const golden = `{"items":[{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","id":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift service.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -444,7 +444,7 @@ func TestHumaService_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","id":"web","ref":"v1.0.0","updated_at":"2026-06-13T10:00:00Z"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift service.get:\n got  = %s\n want = %s", got, golden)
 	}
@@ -477,7 +477,7 @@ func TestHumaService_Update_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","name":"web","ref":"v2.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
+	const golden = `{"created_at":"2026-06-13T10:00:00Z","git":"https://git/web.git","id":"web","ref":"v2.0.0","updated_at":"2026-06-13T10:00:00Z","updated_by_aid":"archon-alice"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift service.update:\n got  = %s\n want = %s", got, golden)
 	}
@@ -494,7 +494,7 @@ func TestHumaAudit_ServiceUpdate_RecordsOnSuccess(t *testing.T) {
 		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventServiceUpdated, map[string]any{
-		"name": "web", "git": "https://git/web.git", "ref": "v2.0.0",
+		"id": "web", "git": "https://git/web.git", "ref": "v2.0.0",
 	})
 }
 
@@ -537,7 +537,7 @@ func TestHumaAudit_ServiceDeregister_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventServiceDeregistered, map[string]any{"name": "web"})
+	assertAuditWritten(t, auditCap, audit.EventServiceDeregistered, map[string]any{"id": "web"})
 }
 
 func TestHumaAudit_ServiceDeregister_NoAudit_OnNotFound(t *testing.T) {

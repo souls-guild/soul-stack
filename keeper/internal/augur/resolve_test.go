@@ -65,15 +65,15 @@ func (f fakeHosts) HostBySID(_ context.Context, sid string) (subject.Host, error
 }
 
 func vaultOmen(name string) *Omen {
-	return &Omen{Name: name, SourceType: SourceVault, Endpoint: "https://vault:8200", AuthRef: "vault:secret/keeper/augur/" + name}
+	return &Omen{ID: name, SourceType: SourceVault, Endpoint: "https://vault:8200", AuthRef: "vault:secret/keeper/augur/" + name}
 }
 
 func promOmen(name string) *Omen {
-	return &Omen{Name: name, SourceType: SourcePrometheus, Endpoint: "https://prom:9090", AuthRef: "vault:secret/keeper/" + name}
+	return &Omen{ID: name, SourceType: SourcePrometheus, Endpoint: "https://prom:9090", AuthRef: "vault:secret/keeper/" + name}
 }
 
 func elkOmen(name string) *Omen {
-	return &Omen{Name: name, SourceType: SourceELK, Endpoint: "https://elk:9200", AuthRef: "vault:secret/keeper/" + name}
+	return &Omen{ID: name, SourceType: SourceELK, Endpoint: "https://elk:9200", AuthRef: "vault:secret/keeper/" + name}
 }
 
 func allowPaths(paths ...string) json.RawMessage {
@@ -148,7 +148,7 @@ func TestResolve_AllowExactMatch_Pass(t *testing.T) {
 	if dec.Query != "secret/keeper/db" {
 		t.Errorf("normalized query = %q, want secret/keeper/db", dec.Query)
 	}
-	if dec.Omen == nil || dec.Omen.Name != "vault-prod" {
+	if dec.Omen == nil || dec.Omen.ID != "vault-prod" {
 		t.Errorf("decision omen not set: %+v", dec.Omen)
 	}
 }

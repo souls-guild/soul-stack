@@ -3,7 +3,7 @@ package handlers
 // Read-path host-vitals (NIM-86, ADR-006): two endpoints hand back a utilization
 // snapshot of Soul agents from the Redis layer (keeperredis), NOT from PG — telemetry
 // is volatile and lives under a TTL. GET /v1/souls/{sid}/telemetry — latest+window+freshness
-// of one host; GET /v1/incarnations/{name}/telemetry — latest aggregate across the
+// of one host; GET /v1/incarnations/{id}/telemetry — latest aggregate across the
 // incarnation's hosts. RBAC reuses the soul-read-scope (the same Purview soul.list +
 // soulpurview.InScope as soulprint/get).
 
@@ -82,7 +82,7 @@ type UtilizationWindowPoint struct {
 	NetTxBps    int64     `json:"net_tx_bps"`
 }
 
-// IncarnationTelemetryReply — 200-body of GET /v1/incarnations/{name}/telemetry:
+// IncarnationTelemetryReply — 200-body of GET /v1/incarnations/{id}/telemetry:
 // latest+stale per host (no window — the payload is limited).
 type IncarnationTelemetryReply struct {
 	Incarnation string          `json:"incarnation"`
@@ -153,7 +153,7 @@ func (h *TelemetryHandler) GetTelemetry(ctx context.Context, claims *jwt.Claims,
 	return h.readSoulTelemetry(ctx, sid, true), nil
 }
 
-// AggregateByIncarnation — GET /v1/incarnations/{name}/telemetry: latest+stale across
+// AggregateByIncarnation — GET /v1/incarnations/{id}/telemetry: latest+stale across
 // the incarnation's MEMBER hosts (incarnation_membership, NIM-124). Hosts — the
 // soul-read-scoped member listing ([SoulHandler.SIDsInIncarnationInScope]); no
 // members / no permissions → hosts:[] (NOT an error). No window (the payload is limited).

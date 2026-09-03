@@ -147,7 +147,7 @@ func toVoiceView(v *choir.Voice) VoiceView {
 	}
 }
 
-// ChoirCreateInput is the NATIVE request form of POST /v1/incarnations/{name}/choirs
+// ChoirCreateInput is the NATIVE request form of POST /v1/incarnations/{id}/choirs
 // (handler-native). created_by_aid is NOT taken from the body — it comes from the JWT
 // context. Replaces ChoirCreateRequest.
 type ChoirCreateInput struct {
@@ -157,7 +157,7 @@ type ChoirCreateInput struct {
 	MaxSize     *int
 }
 
-// VoiceAddInput is the NATIVE request form of POST /v1/incarnations/{name}/choirs/{choir}/
+// VoiceAddInput is the NATIVE request form of POST /v1/incarnations/{id}/choirs/{choir}/
 // voices (handler-native). added_by_aid is NOT taken from the body. Replaces
 // VoiceAddRequest.
 type VoiceAddInput struct {
@@ -168,15 +168,15 @@ type VoiceAddInput struct {
 
 // --- Create ------------------------------------------------------------
 
-// CreateTyped is the domain function for POST /v1/incarnations/{name}/choirs (handler-native,
+// CreateTyped is the domain function for POST /v1/incarnations/{id}/choirs (handler-native,
 // self-audit): create a Choir. created_by_aid from claims (NOT from the body). The
 // choir.created self-audit is written INSIDE the function (payload is available only after a
 // successful INSERT). Errors are *problemError, success is [ChoirView].
 func (h *ChoirHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, name string, req ChoirCreateInput) (ChoirView, error) {
 	var zero ChoirView
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !choir.ValidChoirName(req.ChoirName) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -233,20 +233,20 @@ func (h *ChoirHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, name
 
 // --- List --------------------------------------------------------------
 
-// ChoirListPage is the domain result of GET /v1/incarnations/{name}/choirs (handler-native,
+// ChoirListPage is the domain result of GET /v1/incarnations/{id}/choirs (handler-native,
 // full list with no server-side pagination). Package api projects it into the native
 // envelope ChoirListReply.
 type ChoirListPage struct {
 	Items []ChoirView
 }
 
-// ListChoirsTyped is the domain function for GET /v1/incarnations/{name}/choirs (handler-native,
+// ListChoirsTyped is the domain function for GET /v1/incarnations/{id}/choirs (handler-native,
 // READ, no audit). A nonexistent incarnation → 200 + items=[] (parity with domain ListChoirs).
 func (h *ChoirHandler) ListChoirsTyped(ctx context.Context, name string) (ChoirListPage, error) {
 	var zero ChoirListPage
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	choirs, err := choir.ListChoirs(ctx, h.db, name)
 	if err != nil {
@@ -262,13 +262,13 @@ func (h *ChoirHandler) ListChoirsTyped(ctx context.Context, name string) (ChoirL
 
 // --- Delete ------------------------------------------------------------
 
-// DeleteTyped is the domain function for DELETE /v1/incarnations/{name}/choirs/{choir}
+// DeleteTyped is the domain function for DELETE /v1/incarnations/{id}/choirs/{choir}
 // (handler-native, self-audit): delete a Choir (cascading its Voices). The choir.deleted
 // self-audit is written INSIDE the function.
 func (h *ChoirHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, name, choirName string) error {
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !choir.ValidChoirName(choirName) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -297,14 +297,14 @@ func (h *ChoirHandler) DeleteTyped(ctx context.Context, claims *jwt.Claims, name
 
 // --- AddVoice ----------------------------------------------------------
 
-// AddVoiceTyped is the domain function for POST /v1/incarnations/{name}/choirs/{choir}/voices
+// AddVoiceTyped is the domain function for POST /v1/incarnations/{id}/choirs/{choir}/voices
 // (handler-native, self-audit): add a Voice (membership of a SID in a Choir). added_by_aid
 // from claims (NOT from the body). The choir.voice_added self-audit is written INSIDE the function.
 func (h *ChoirHandler) AddVoiceTyped(ctx context.Context, claims *jwt.Claims, name, choirName string, req VoiceAddInput) (VoiceView, error) {
 	var zero VoiceView
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !choir.ValidChoirName(choirName) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -376,20 +376,20 @@ func (h *ChoirHandler) AddVoiceTyped(ctx context.Context, claims *jwt.Claims, na
 
 // --- ListVoices --------------------------------------------------------
 
-// VoiceListPage is the domain result of GET /v1/incarnations/{name}/choirs/{choir}/voices
+// VoiceListPage is the domain result of GET /v1/incarnations/{id}/choirs/{choir}/voices
 // (handler-native, full list). Package api projects it into the native envelope VoiceListReply.
 type VoiceListPage struct {
 	Items []VoiceView
 }
 
-// ListVoicesTyped is the domain function for GET /v1/incarnations/{name}/choirs/{choir}/voices
+// ListVoicesTyped is the domain function for GET /v1/incarnations/{id}/choirs/{choir}/voices
 // (handler-native, READ, no audit). A nonexistent Choir → 200 + items=[] (parity with domain
 // ListVoices).
 func (h *ChoirHandler) ListVoicesTyped(ctx context.Context, name, choirName string) (VoiceListPage, error) {
 	var zero VoiceListPage
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !choir.ValidChoirName(choirName) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -410,13 +410,13 @@ func (h *ChoirHandler) ListVoicesTyped(ctx context.Context, name, choirName stri
 
 // --- RemoveVoice -------------------------------------------------------
 
-// RemoveVoiceTyped is the domain function for DELETE /v1/incarnations/{name}/choirs/{choir}/
+// RemoveVoiceTyped is the domain function for DELETE /v1/incarnations/{id}/choirs/{choir}/
 // voices/{sid} (handler-native, self-audit): remove a Voice. The choir.voice_removed
 // self-audit is written INSIDE the function.
 func (h *ChoirHandler) RemoveVoiceTyped(ctx context.Context, claims *jwt.Claims, name, choirName, sid string) error {
-	if !incarnation.ValidName(name) {
+	if !incarnation.ValidID(name) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",
-			"path 'name' must match "+incarnation.NamePattern)}
+			"path 'id' must match "+incarnation.IDPattern)}
 	}
 	if !choir.ValidChoirName(choirName) {
 		return &problemError{problem.New(problem.TypeValidationFailed, "",

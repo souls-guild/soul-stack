@@ -45,7 +45,7 @@ var augurAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 type hAugurPool struct {
 	omenDeleteRows int64
 	riteDeleteRows int64
-	omenGetMissing bool // GET/INSERT-rite resolve of omens WHERE name → ErrNoRows (404)
+	omenGetMissing bool // GET/INSERT-rite resolve of omens WHERE id → ErrNoRows (404)
 	omenListRows   [][]any
 	riteListRows   [][]any
 }
@@ -66,7 +66,7 @@ func (p *hAugurPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		return hAugurRow{values: []any{augurAt}} // RETURNING created_at
 	case strings.Contains(sql, "INSERT INTO rites"):
 		return hAugurRow{values: []any{int64(42), augurAt}} // RETURNING id, created_at
-	case strings.Contains(sql, "FROM omens") && strings.Contains(sql, "WHERE name"):
+	case strings.Contains(sql, "FROM omens") && strings.Contains(sql, "WHERE id"):
 		if p.omenGetMissing {
 			return hAugurRow{err: pgx.ErrNoRows}
 		}
@@ -220,7 +220,7 @@ func TestHumaOmen_Create_GoldenWire(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`))
+		strings.NewReader(`{"id":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
@@ -230,7 +230,7 @@ func TestHumaOmen_Create_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}`
+	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","endpoint":"https://vault:8200","id":"vault-prod","source_type":"vault"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift omen.create:\n got  = %s\n want = %s", got, golden)
 	}
@@ -240,7 +240,7 @@ func TestHumaOmen_Create_UnknownField_400(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p","bogus":1}`))
+		strings.NewReader(`{"id":"x","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p","bogus":1}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusBadRequest {
 		t.Fatalf("status = %d, want 400; body=%s", rec.Code, rec.Body.String())
@@ -264,7 +264,7 @@ func TestHumaOmen_Create_BadSourceType_422(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"x","source_type":"redis","endpoint":"e","auth_ref":"vault:s/p"}`))
+		strings.NewReader(`{"id":"x","source_type":"redis","endpoint":"e","auth_ref":"vault:s/p"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusUnprocessableEntity {
 		t.Fatalf("status = %d, want 422 (bad source_type enum); body=%s", rec.Code, rec.Body.String())
@@ -276,7 +276,7 @@ func TestHumaOmen_Create_RBACDeny_403(t *testing.T) {
 	r := humaAugurRouter(t, strictDenyAll{}, nil, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`))
+		strings.NewReader(`{"id":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -288,13 +288,13 @@ func TestHumaAudit_OmenCreate_RecordsOnSuccess(t *testing.T) {
 	r := humaAugurRouter(t, strictAllowAll{}, auditCap, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`))
+		strings.NewReader(`{"id":"vault-prod","source_type":"vault","endpoint":"https://vault:8200","auth_ref":"vault:secret/keeper/ar"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
 	assertAuditWritten(t, auditCap, audit.EventOmenCreated, map[string]any{
-		"name": "vault-prod", "source_type": "vault",
+		"id": "vault-prod", "source_type": "vault",
 		"endpoint": "https://vault:8200", "auth_ref": "vault:secret/keeper/ar",
 		"created_by_aid": "archon-alice",
 	})
@@ -305,7 +305,7 @@ func TestHumaAudit_OmenCreate_NoAudit_OnRBACDeny(t *testing.T) {
 	r := humaAugurRouter(t, strictDenyAll{}, auditCap, &hAugurPool{})
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodPost, "/v1/augur/omens",
-		strings.NewReader(`{"name":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`))
+		strings.NewReader(`{"id":"vault-prod","source_type":"vault","endpoint":"e","auth_ref":"vault:s/p"}`))
 	r.ServeHTTP(rec, req)
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
@@ -348,7 +348,7 @@ func TestHumaOmen_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"items":[{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}],"limit":50,"offset":0,"total":1}`
+	const golden = `{"items":[{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","id":"vault-prod","source_type":"vault"}],"limit":50,"offset":0,"total":1}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift omen.list:\n got  = %s\n want = %s", got, golden)
 	}
@@ -446,7 +446,7 @@ func TestHumaOmen_Get_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","name":"vault-prod","source_type":"vault"}`
+	const golden = `{"auth_ref":"vault:secret/keeper/ar","created_at":"2026-06-13T10:00:00Z","endpoint":"https://vault:8200","id":"vault-prod","source_type":"vault"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift omen.get:\n got  = %s\n want = %s", got, golden)
 	}
@@ -498,7 +498,7 @@ func TestHumaAudit_OmenDelete_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusNoContent {
 		t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
 	}
-	assertAuditWritten(t, auditCap, audit.EventOmenRevoked, map[string]any{"name": "vault-prod"})
+	assertAuditWritten(t, auditCap, audit.EventOmenRevoked, map[string]any{"id": "vault-prod"})
 }
 
 func TestHumaAudit_OmenDelete_NoAudit_OnNotFound(t *testing.T) {

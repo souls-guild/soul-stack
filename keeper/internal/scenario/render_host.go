@@ -115,7 +115,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	}
 
 	// 4. incarnation (for the _stack.yaml step context + IncarnationMeta).
-	inc, err := incarnation.SelectByName(ctx, deps.DB, incarnationName)
+	inc, err := incarnation.SelectByID(ctx, deps.DB, incarnationName)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: load incarnation %q: %w", incarnationName, err)
 	}
@@ -147,7 +147,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
-			Name:           inc.Name,
+			Name:           inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 		},

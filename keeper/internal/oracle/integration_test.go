@@ -100,10 +100,10 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 
 	// coven-Vigil (web), sid-Vigil (host-a), disabled-Vigil (web), and an
 	// unrelated coven-Vigil (db).
-	mustInsertVigil(t, &Vigil{Name: "web-watch", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertVigil(t, &Vigil{Name: "host-watch", SID: []string{"host-a.example.com"}, IntervalSpec: "1m", CheckAddr: "core.beacon.file_changed", Enabled: true, CreatedByAID: &aid})
-	mustInsertVigil(t, &Vigil{Name: "web-disabled", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: false, CreatedByAID: &aid})
-	mustInsertVigil(t, &Vigil{Name: "db-watch", Coven: []string{"db"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "web-watch", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "host-watch", SID: []string{"host-a.example.com"}, IntervalSpec: "1m", CheckAddr: "core.beacon.file_changed", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "web-disabled", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: false, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "db-watch", Coven: []string{"db"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
 	host := subject.Host{SID: "host-a.example.com", Covens: []string{"web", "prod"}}
 	got, err := SelectActiveVigilsForSubject(ctx, integrationPool, host)
@@ -112,7 +112,7 @@ func TestIntegration_SelectActiveVigilsForSubject(t *testing.T) {
 	}
 	gotNames := map[string]bool{}
 	for _, v := range got {
-		gotNames[v.Name] = true
+		gotNames[v.ID] = true
 	}
 	// host-watch (sid) + web-watch (coven), not db-watch, not web-disabled.
 	if !gotNames["host-watch"] || !gotNames["web-watch"] {
@@ -129,15 +129,15 @@ func TestIntegration_SelectDecreesByBeacon(t *testing.T) {
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
 
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertDecree(t, &Decree{Name: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
-	mustInsertDecree(t, &Decree{Name: "disabled-rule", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: false, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: "disabled-rule", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: false, CreatedByAID: &aid})
 
 	got, err := SelectDecreesByBeacon(ctx, integrationPool, "svc-down")
 	if err != nil {
 		t.Fatalf("SelectDecreesByBeacon: %v", err)
 	}
-	if len(got) != 1 || got[0].Name != "restart-web" {
+	if len(got) != 1 || got[0].ID != "restart-web" {
 		t.Fatalf("expected 1 enabled-Decree restart-web, got %+v", got)
 	}
 	if got[0].IncarnationName != "web-app" {
@@ -158,8 +158,8 @@ func TestIntegration_CooldownUpsert(t *testing.T) {
 	ctx := context.Background()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertDecree(t, &Decree{Name: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 
 	// Before the first fire — the pair doesn't exist.
 	_, has, err := LastFiredAt(ctx, integrationPool, "restart-web", "host-a")
@@ -209,7 +209,7 @@ func TestIntegration_DecreeSubjectOneOf(t *testing.T) {
 	ctx := context.Background()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
 	base := func(d *Decree) *Decree {
 		d.OnBeacon, d.IncarnationName, d.ActionScenario = "svc-down", "web-app", "restart"
@@ -223,18 +223,18 @@ func TestIntegration_DecreeSubjectOneOf(t *testing.T) {
 		name   string
 		decree *Decree
 	}{
-		{"coven+sid", base(&Decree{Name: "bad-coven-sid", SubjectCoven: []string{"web"}, SubjectSID: []string{"host-a"}})},
-		{"coven+incarnation", base(&Decree{Name: "bad-coven-inc", SubjectCoven: []string{"web"}, SubjectService: &svc, SubjectIncarnation: &inc})},
-		{"sid+trait", base(&Decree{Name: "bad-sid-trait", SubjectSID: []string{"host-a"}, SubjectTraitKey: &key, SubjectTraitValue: &value})},
+		{"coven+sid", base(&Decree{ID: "bad-coven-sid", SubjectCoven: []string{"web"}, SubjectSID: []string{"host-a"}})},
+		{"coven+incarnation", base(&Decree{ID: "bad-coven-inc", SubjectCoven: []string{"web"}, SubjectService: &svc, SubjectIncarnation: &inc})},
+		{"sid+trait", base(&Decree{ID: "bad-sid-trait", SubjectSID: []string{"host-a"}, SubjectTraitKey: &key, SubjectTraitValue: &value})},
 		// Half-written pairs: a service with no name cannot address anything, and
 		// the row must not survive as "no dimension set".
-		{"service-without-incarnation", base(&Decree{Name: "bad-half-inc", SubjectService: &svc})},
-		{"trait-key-without-value", base(&Decree{Name: "bad-half-trait", SubjectTraitKey: &key})},
+		{"service-without-incarnation", base(&Decree{ID: "bad-half-inc", SubjectService: &svc})},
+		{"trait-key-without-value", base(&Decree{ID: "bad-half-trait", SubjectTraitKey: &key})},
 		// No dimension at all — the fail-open case.
-		{"empty", base(&Decree{Name: "bad-empty"})},
+		{"empty", base(&Decree{ID: "bad-empty"})},
 		// An empty array is not a dimension: `array_length(…, 1)` is NULL, and the
 		// CHECK counts it as absent rather than as an unrestricted match.
-		{"empty-coven-array", base(&Decree{Name: "bad-empty-coven", SubjectCoven: []string{}})},
+		{"empty-coven-array", base(&Decree{ID: "bad-empty-coven", SubjectCoven: []string{}})},
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
@@ -250,11 +250,11 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 	ctx := context.Background()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
 	// incarnation_name not matching the format (Upper) → CHECK decrees_incarnation_name_format.
 	err := InsertDecree(ctx, integrationPool, &Decree{
-		Name: "bad-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
+		ID: "bad-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
 		IncarnationName: "Web_App", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
 	})
 	if err == nil {
@@ -264,7 +264,7 @@ func TestIntegration_DecreeIncarnationNameFormat(t *testing.T) {
 	// Empty incarnation_name → NOT NULL (a Go string "" is written as ''; the CHECK
 	// format requires ≥1 character) → rejected.
 	err = InsertDecree(ctx, integrationPool, &Decree{
-		Name: "empty-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
+		ID: "empty-inc", OnBeacon: "svc-down", SubjectCoven: []string{"web"},
 		IncarnationName: "", ActionScenario: "restart", Enabled: true, CreatedByAID: &aid,
 	})
 	if err == nil {
@@ -277,14 +277,14 @@ func TestIntegration_OracleFireCascade(t *testing.T) {
 	ctx := context.Background()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertDecree(t, &Decree{Name: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 	if err := RecordFire(ctx, integrationPool, "restart-web", "host-a", time.Now().UTC()); err != nil {
 		t.Fatalf("RecordFire: %v", err)
 	}
 
 	// Deleting a Decree cleans up oracle_fires by cascade.
-	if _, err := integrationPool.Exec(ctx, `DELETE FROM decrees WHERE name='restart-web'`); err != nil {
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM decrees WHERE id='restart-web'`); err != nil {
 		t.Fatalf("delete decree: %v", err)
 	}
 	var count int
@@ -319,7 +319,7 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 	svc := newIntegrationService(t)
 
 	v, err := svc.CreateVigil(ctx, CreateVigilInput{
-		Name: "web-conf", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s",
+		ID: "web-conf", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s",
 		Check: "core.beacon.file_changed", Enabled: true, CallerAID: &aid,
 	})
 	if err != nil {
@@ -353,10 +353,10 @@ func TestIntegration_VigilCRUD(t *testing.T) {
 	}
 
 	// Duplicate → ErrVigilAlreadyExists.
-	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); err != nil {
+	if _, err := svc.CreateVigil(ctx, CreateVigilInput{ID: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); err != nil {
 		t.Fatalf("CreateVigil(dup #1): %v", err)
 	}
-	if _, err := svc.CreateVigil(ctx, CreateVigilInput{Name: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); !errors.Is(err, ErrVigilAlreadyExists) {
+	if _, err := svc.CreateVigil(ctx, CreateVigilInput{ID: "dup", Subject: subject.Selector{Covens: []string{"web"}}, Interval: "30s", Check: "core.beacon.file_changed", CallerAID: &aid}); !errors.Is(err, ErrVigilAlreadyExists) {
 		t.Errorf("CreateVigil(dup #2) = %v, want ErrVigilAlreadyExists", err)
 	}
 }
@@ -369,11 +369,11 @@ func TestIntegration_DecreeCRUD(t *testing.T) {
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
 	svc := newIntegrationService(t)
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"db"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"db"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
 
 	where := `event.data.severity == "critical"`
 	d, err := svc.CreateDecree(ctx, CreateDecreeInput{
-		Name: "restart-on-down", OnBeacon: "svc-down", WhereCEL: &where,
+		ID: "restart-on-down", OnBeacon: "svc-down", WhereCEL: &where,
 		Subject: subject.Selector{Covens: []string{"db"}}, IncarnationName: "prod-db",
 		ActionScenario: "restart_service", Cooldown: "5m", Enabled: true, CallerAID: &aid,
 	})
@@ -414,8 +414,8 @@ func seedCircuitDecree(t *testing.T) string {
 	t.Helper()
 	seedOperator(t, "archon-test")
 	aid := "archon-test"
-	mustInsertVigil(t, &Vigil{Name: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
-	mustInsertDecree(t, &Decree{Name: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
+	mustInsertVigil(t, &Vigil{ID: "svc-down", Coven: []string{"web"}, IntervalSpec: "30s", CheckAddr: "core.beacon.service_down", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: "restart-web", OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 	return "restart-web"
 }
 
@@ -512,9 +512,9 @@ func TestIntegration_TripDecreeSingleWinner(t *testing.T) {
 		t.Fatal("the first TripDecree should win (enabled true->false)")
 	}
 	// Decree is now disabled.
-	d, err := SelectDecreeByName(ctx, integrationPool, decree)
+	d, err := SelectDecreeByID(ctx, integrationPool, decree)
 	if err != nil {
-		t.Fatalf("SelectDecreeByName: %v", err)
+		t.Fatalf("SelectDecreeByID: %v", err)
 	}
 	if d.Enabled {
 		t.Error("after TripDecree the Decree should be disabled")
@@ -600,7 +600,7 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 
 	// Recreate (same name) → the new Decree starts with a clean window.
 	aid := "archon-test"
-	mustInsertDecree(t, &Decree{Name: decree, OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
+	mustInsertDecree(t, &Decree{ID: decree, OnBeacon: "svc-down", SubjectCoven: []string{"web"}, IncarnationName: "web-app", ActionScenario: "restart", Cooldown: "5m", Enabled: true, CreatedByAID: &aid})
 	cnt, err := BumpCircuit(ctx, integrationPool, decree, time.Now().UTC(), 10*time.Minute)
 	if err != nil {
 		t.Fatalf("BumpCircuit after recreate: %v", err)
@@ -613,13 +613,13 @@ func TestIntegration_CircuitRecreateCascade(t *testing.T) {
 func mustInsertVigil(t *testing.T, v *Vigil) {
 	t.Helper()
 	if err := InsertVigil(context.Background(), integrationPool, v); err != nil {
-		t.Fatalf("InsertVigil(%s): %v", v.Name, err)
+		t.Fatalf("InsertVigil(%s): %v", v.ID, err)
 	}
 }
 
 func mustInsertDecree(t *testing.T, d *Decree) {
 	t.Helper()
 	if err := InsertDecree(context.Background(), integrationPool, d); err != nil {
-		t.Fatalf("InsertDecree(%s): %v", d.Name, err)
+		t.Fatalf("InsertDecree(%s): %v", d.ID, err)
 	}
 }

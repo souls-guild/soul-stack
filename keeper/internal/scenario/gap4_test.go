@@ -38,7 +38,7 @@ import (
 func seedIncarnationWithState(t *testing.T, name string, state map[string]any) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "noop", ServiceVersion: "master",
+		ID: name, Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady,
 		State: state,
 	}
@@ -148,9 +148,9 @@ func TestIntegration_RunMergesIntoExistingState(t *testing.T) {
 
 	// Real DB round-trip: read state again directly from the DB to
 	// confirm the capture is committed, not just visible in the in-memory snapshot.
-	fromDB, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	fromDB, err := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName: %v", err)
+		t.Fatalf("SelectByID: %v", err)
 	}
 	if fromDB.State["a"] != float64(1) {
 		t.Errorf("DB state.a = %v, want 1", fromDB.State["a"])
@@ -242,9 +242,9 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	stillLocked, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	stillLocked, err := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName after #2: %v", err)
+		t.Fatalf("SelectByID after #2: %v", err)
 	}
 	if stillLocked.Status != incarnation.StatusErrorLocked {
 		t.Errorf("after rejected #2: status = %q, want error_locked", stillLocked.Status)
@@ -259,9 +259,9 @@ func TestIntegration_Lifecycle_LockUnlockRerun(t *testing.T) {
 	if unlockRes.PreviousStatus != incarnation.StatusErrorLocked {
 		t.Errorf("unlock previous_status = %q, want error_locked", unlockRes.PreviousStatus)
 	}
-	unlocked, err := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	unlocked, err := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if err != nil {
-		t.Fatalf("SelectByName after unlock: %v", err)
+		t.Fatalf("SelectByID after unlock: %v", err)
 	}
 	if unlocked.Status != incarnation.StatusReady {
 		t.Fatalf("after unlock: status = %q, want ready", unlocked.Status)
@@ -398,9 +398,9 @@ func waitStatus(t *testing.T, name string, want incarnation.Status) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		inc, err := incarnation.SelectByName(context.Background(), integrationPool, name)
+		inc, err := incarnation.SelectByID(context.Background(), integrationPool, name)
 		if err != nil {
-			t.Fatalf("waitStatus SelectByName: %v", err)
+			t.Fatalf("waitStatus SelectByID: %v", err)
 		}
 		if inc.Status == want {
 			return

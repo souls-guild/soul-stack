@@ -182,8 +182,8 @@ func TestIncarnationRBACContext(t *testing.T) {
 // verbatim is the one way that happens by accident.
 func TestMapServiceRegistryErrorToMCP_ReservedName(t *testing.T) {
 	for _, err := range []error{
-		serviceregistry.ErrReservedName,
-		fmt.Errorf("%w: %q is reserved", serviceregistry.ErrReservedName, "keeper"),
+		serviceregistry.ErrReservedID,
+		fmt.Errorf("%w: %q is reserved", serviceregistry.ErrReservedID, "keeper"),
 	} {
 		code, detail := mapServiceRegistryErrorToMCP(err)
 		if code != mcpCodeValidationFailed {

@@ -18,7 +18,7 @@ import (
 const (
 	// covens and traits are in the list because `vars/_stack.yaml` reads BOTH
 	// (servicevars.IncarnationContext): every other path to an incarnation goes
-	// through incarnation.SelectByName, which has always selected them, so
+	// through incarnation.SelectByID, which has always selected them, so
 	// leaving either out here would make the RUN resolve a different set of
 	// service vars than the pre-flight gate and the drift check on the same row —
 	// and worse, differently from the mid-run re-render of the same run, which
@@ -29,17 +29,17 @@ const (
 	// the run outright (no such key), while `has(incarnation.traits)` quietly
 	// resolves one layer fewer and returns success.
 	selectIncarnationForUpdateSQL = `
-SELECT name, service, service_version, state_schema_version,
+SELECT id, service, service_version, state_schema_version,
        state, status, status_details, created_by_aid,
        created_at, updated_at, covens, traits
 FROM incarnation
-WHERE name = $1
+WHERE id = $1
 FOR UPDATE
 `
 	updateIncarnationStatusSQL = `
 UPDATE incarnation
 SET status = $2, updated_at = NOW()
-WHERE name = $1
+WHERE id = $1
 `
 	// lockApplyingWithEpochSQL moves incarnation to applying and in the SAME UPDATE
 	// writes the applying-flag epoch (ADR-027 amend (m-S1)): apply_id / attempt /
@@ -55,7 +55,7 @@ SET status            = 'applying',
     applying_by_kid   = $4,
     applying_since    = NOW(),
     updated_at        = NOW()
-WHERE name = $1
+WHERE id = $1
 `
 )
 
@@ -67,7 +67,7 @@ func selectForUpdate(ctx context.Context, tx pgx.Tx, name string) (*incarnation.
 	return scanForUpdate(row)
 }
 
-// scanForUpdate parses an incarnation row (a SUBSET of incarnation.SelectByName's
+// scanForUpdate parses an incarnation row (a SUBSET of incarnation.SelectByID's
 // columns — every field a service-vars resolve reads must be in it, see
 // selectIncarnationForUpdateSQL — via a locking SELECT inside the runner's
 // transaction — incarnation.scanIncarnation isn't exported, so we duplicate the
@@ -82,7 +82,7 @@ func scanForUpdate(row pgx.Row) (*incarnation.Incarnation, error) {
 		createdByAID       *string
 	)
 	err := row.Scan(
-		&inc.Name, &inc.Service, &inc.ServiceVersion, &inc.StateSchemaVersion,
+		&inc.ID, &inc.Service, &inc.ServiceVersion, &inc.StateSchemaVersion,
 		&stateBytes, &statusStr, &statusDetailsBytes, &createdByAID,
 		&inc.CreatedAt, &inc.UpdatedAt, &inc.Covens, &traitsBytes,
 	)
@@ -176,7 +176,12 @@ func incarnationStackVars(inc *incarnation.Incarnation) servicevars.IncarnationC
 		return servicevars.IncarnationContext{}
 	}
 	return servicevars.IncarnationContext{
-		Name:           inc.Name,
+		// The FIELD stays `Name`: [servicevars.IncarnationContext] is the CEL
+		// activation's shape, its field names mirror the CEL keys, and the root
+		// is still spelled `incarnation.name` until NIM-730 opens the
+		// compatibility window for every service repository. The VALUE is the
+		// renamed identifier ([ADR-0085], NIM-729).
+		Name:           inc.ID,
 		Service:        inc.Service,
 		ServiceVersion: inc.ServiceVersion,
 		Covens:         inc.Covens,

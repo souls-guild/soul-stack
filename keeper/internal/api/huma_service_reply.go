@@ -24,13 +24,13 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
-// OUTPUT NAME-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
-// the response body (empirically 200, not 500). ServiceView.name ← serviceregistry.NamePattern.
+// OUTPUT ID-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). ServiceView.id ← serviceregistry.IDPattern.
 // Format for client codegen; the pattern does not affect json.Marshal (golden byte-exact intact).
 // ServiceView is output-only (register/update — separate *Request) → no input-422 risk.
 // service echo fields (ServiceRefsListReply/ServiceStateSchemaReply/ServiceDependenciesReply.
-// service) are NOT tagged: a duplicate of the {name} path parameter, its format is the input domain (outside this
-// batch). git/ref — a git-ref, NOT a name (out of scope).
+// service) are NOT tagged: a duplicate of the {id} path parameter, its format is the input domain (outside this
+// batch). git/ref — a git-ref, NOT an id (out of scope).
 
 // ServiceView — native body of a Service registry record (POST 201 / GET / PATCH 200 /
 // list-element). created_by_aid/refresh/updated_by_aid — `*string` WITH omitempty (nil →
@@ -40,11 +40,11 @@ type ServiceView struct {
 	CreatedAt    time.Time `json:"created_at"`
 	CreatedByAID *string   `json:"created_by_aid,omitempty"`
 	Git          string    `json:"git"`
+	ID           string    `json:"id" pattern:"^[a-z][a-z0-9-]*$"` // ← serviceregistry.IDPattern
 	// Label — the display caption (ADR-0085), free text and mutable via
-	// PUT /v1/services/{name}/label. Absent means the row carries none and the
-	// consumer shows `name`. NOT segment 2 of a derived secret path — `name` is.
+	// PUT /v1/services/{id}/label. Absent means the row carries none and the
+	// consumer shows `id`. NOT segment 2 of a derived secret path — `id` is.
 	Label        *string   `json:"label,omitempty"`
-	Name         string    `json:"name" pattern:"^[a-z][a-z0-9-]*$"` // ← serviceregistry.NamePattern
 	Ref          string    `json:"ref"`
 	Refresh      *string   `json:"refresh,omitempty"`
 	UpdatedAt    time.Time `json:"updated_at"`
@@ -57,14 +57,14 @@ type ServiceListReply struct {
 	Items []ServiceView `json:"items"`
 }
 
-// ServiceRefsListReply — native 200 body of GET /v1/services/{name}/refs (service + refs[]).
+// ServiceRefsListReply — native 200 body of GET /v1/services/{id}/refs (service + refs[]).
 // refs — native GitRef.
 type ServiceRefsListReply struct {
 	Refs    []GitRef `json:"refs"`
 	Service string   `json:"service"`
 }
 
-// ServiceStateSchemaReply — native 200 body of GET /v1/services/{name}/state-schema.
+// ServiceStateSchemaReply — native 200 body of GET /v1/services/{id}/state-schema.
 // schema — `*map` WITH omitempty (nil → key omitted); migrations — native StateSchema-
 // Migration; state_schema_version — int.
 type ServiceStateSchemaReply struct {
@@ -75,7 +75,7 @@ type ServiceStateSchemaReply struct {
 	StateSchemaVersion int                     `json:"state_schema_version"`
 }
 
-// ServiceDependenciesReply — native 200 body of GET /v1/services/{name}/dependencies
+// ServiceDependenciesReply — native 200 body of GET /v1/services/{id}/dependencies
 // (service/ref + destiny[]/modules[]). destiny/modules — native ServiceDependency.
 type ServiceDependenciesReply struct {
 	Destiny []ServiceDependency `json:"destiny"`
@@ -119,8 +119,8 @@ func newServiceView(v handlers.ServiceView) ServiceView {
 		CreatedAt:    v.CreatedAt,
 		CreatedByAID: v.CreatedByAID,
 		Git:          v.Git,
+		ID:           v.ID,
 		Label:        v.Label,
-		Name:         v.Name,
 		Ref:          v.Ref,
 		Refresh:      v.Refresh,
 		UpdatedAt:    v.UpdatedAt,

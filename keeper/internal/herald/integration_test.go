@@ -102,7 +102,7 @@ func seedOperator(t *testing.T, aid string) {
 
 func newWebhookHerald(name, aid string) *Herald {
 	return &Herald{
-		Name:         name,
+		ID:           name,
 		Type:         HeraldWebhook,
 		Config:       map[string]any{"url": "https://hooks.example.com/" + name},
 		SecretRef:    strptr("vault:secret/keeper/herald/" + name),
@@ -126,9 +126,9 @@ func TestIntegration_Herald_InsertSelectUpdateDelete(t *testing.T) {
 		t.Error("CreatedAt/UpdatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectHeraldByName(ctx, integrationPool, "ops-webhook")
+	got, err := SelectHeraldByID(ctx, integrationPool, "ops-webhook")
 	if err != nil {
-		t.Fatalf("SelectHeraldByName: %v", err)
+		t.Fatalf("SelectHeraldByID: %v", err)
 	}
 	if got.Type != HeraldWebhook || got.Config["url"] != "https://hooks.example.com/ops-webhook" {
 		t.Errorf("got = %+v", got)
@@ -144,9 +144,9 @@ func TestIntegration_Herald_InsertSelectUpdateDelete(t *testing.T) {
 	if err := UpdateHerald(ctx, integrationPool, got); err != nil {
 		t.Fatalf("UpdateHerald: %v", err)
 	}
-	after, err := SelectHeraldByName(ctx, integrationPool, "ops-webhook")
+	after, err := SelectHeraldByID(ctx, integrationPool, "ops-webhook")
 	if err != nil {
-		t.Fatalf("SelectHeraldByName after update: %v", err)
+		t.Fatalf("SelectHeraldByID after update: %v", err)
 	}
 	if after.Enabled || after.Config["url"] != "https://new.example.com/x" || after.SecretRef != nil {
 		t.Errorf("update not applied: %+v", after)
@@ -155,7 +155,7 @@ func TestIntegration_Herald_InsertSelectUpdateDelete(t *testing.T) {
 	if err := DeleteHerald(ctx, integrationPool, "ops-webhook"); err != nil {
 		t.Fatalf("DeleteHerald: %v", err)
 	}
-	if _, err := SelectHeraldByName(ctx, integrationPool, "ops-webhook"); !errors.Is(err, ErrHeraldNotFound) {
+	if _, err := SelectHeraldByID(ctx, integrationPool, "ops-webhook"); !errors.Is(err, ErrHeraldNotFound) {
 		t.Fatalf("after delete err = %v, want ErrHeraldNotFound", err)
 	}
 }
@@ -170,9 +170,9 @@ func TestIntegration_Herald_NullableSecretRef(t *testing.T) {
 	if err := InsertHerald(ctx, integrationPool, h); err != nil {
 		t.Fatalf("InsertHerald with nil secret_ref: %v", err)
 	}
-	got, err := SelectHeraldByName(ctx, integrationPool, "no-secret")
+	got, err := SelectHeraldByID(ctx, integrationPool, "no-secret")
 	if err != nil {
-		t.Fatalf("SelectHeraldByName: %v", err)
+		t.Fatalf("SelectHeraldByID: %v", err)
 	}
 	if got.SecretRef != nil {
 		t.Errorf("secret_ref = %v, want nil", got.SecretRef)
@@ -202,7 +202,7 @@ func TestIntegration_Herald_TypeCHECK(t *testing.T) {
 	// Bypass ValidHeraldType service validation to reach the DB CHECK
 	// heralds_type_enum (defence in depth: the DB rejects foreign types).
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO heralds (name, type, config) VALUES ($1, $2, '{}'::jsonb)`,
+		`INSERT INTO heralds (id, type, config) VALUES ($1, $2, '{}'::jsonb)`,
 		"bad-type", "pagerduty")
 	if err == nil {
 		t.Fatal("expected CHECK violation on heralds_type_enum")
@@ -221,9 +221,9 @@ func TestIntegration_Herald_NullCreatedByOnOperatorDelete(t *testing.T) {
 	if _, err := integrationPool.Exec(ctx, `DELETE FROM operators WHERE aid = $1`, "archon-temp"); err != nil {
 		t.Fatalf("delete operator: %v", err)
 	}
-	got, err := SelectHeraldByName(ctx, integrationPool, "owned")
+	got, err := SelectHeraldByID(ctx, integrationPool, "owned")
 	if err != nil {
-		t.Fatalf("SelectHeraldByName: %v", err)
+		t.Fatalf("SelectHeraldByID: %v", err)
 	}
 	if got.CreatedByAID != nil {
 		t.Errorf("created_by_aid = %v, want NULL after operator delete (ON DELETE SET NULL)", got.CreatedByAID)
@@ -244,7 +244,7 @@ func TestIntegration_Tiding_RoundTrip(t *testing.T) {
 	inc := "web-prod"
 	aid := "archon-alice"
 	tg := &Tiding{
-		Name:         "nightly-fail",
+		ID:           "nightly-fail",
 		Herald:       "ch",
 		EventTypes:   []string{"scenario_run.*", "incarnation.run_completed"},
 		OnlyFailures: true,
@@ -259,9 +259,9 @@ func TestIntegration_Tiding_RoundTrip(t *testing.T) {
 		t.Error("CreatedAt zero — RETURNING did not fill")
 	}
 
-	got, err := SelectTidingByName(ctx, integrationPool, "nightly-fail")
+	got, err := SelectTidingByID(ctx, integrationPool, "nightly-fail")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if len(got.EventTypes) != 2 || !got.OnlyFailures || got.Incarnation == nil || *got.Incarnation != "web-prod" {
 		t.Errorf("got = %+v", got)
@@ -284,7 +284,7 @@ func TestIntegration_Tiding_HeraldFKMissing(t *testing.T) {
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
 
-	tg := &Tiding{Name: "orphan", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
+	tg := &Tiding{ID: "orphan", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
 	if err := InsertTiding(ctx, integrationPool, tg); !errors.Is(err, ErrHeraldNotFound) {
 		t.Fatalf("err = %v, want ErrHeraldNotFound", err)
 	}
@@ -298,7 +298,7 @@ func TestIntegration_Tiding_HeraldCascadeDelete(t *testing.T) {
 	if err := InsertHerald(ctx, integrationPool, newWebhookHerald("ch", "archon-alice")); err != nil {
 		t.Fatalf("InsertHerald: %v", err)
 	}
-	tg := &Tiding{Name: "sub", Herald: "ch", EventTypes: []string{"command_run.*"}, Enabled: true}
+	tg := &Tiding{ID: "sub", Herald: "ch", EventTypes: []string{"command_run.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, tg); err != nil {
 		t.Fatalf("InsertTiding: %v", err)
 	}
@@ -307,7 +307,7 @@ func TestIntegration_Tiding_HeraldCascadeDelete(t *testing.T) {
 	if err := DeleteHerald(ctx, integrationPool, "ch"); err != nil {
 		t.Fatalf("DeleteHerald: %v", err)
 	}
-	if _, err := SelectTidingByName(ctx, integrationPool, "sub"); !errors.Is(err, ErrTidingNotFound) {
+	if _, err := SelectTidingByID(ctx, integrationPool, "sub"); !errors.Is(err, ErrTidingNotFound) {
 		t.Fatalf("after cascade err = %v, want ErrTidingNotFound", err)
 	}
 }
@@ -323,7 +323,7 @@ func TestIntegration_Tiding_EmptyEventTypesCHECK(t *testing.T) {
 	// Bypass ValidateEventTypes service validation to reach the DB CHECK
 	// tidings_event_types_nonempty (defence in depth).
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO tidings (name, herald, event_types) VALUES ($1, $2, $3)`,
+		`INSERT INTO tidings (id, herald, event_types) VALUES ($1, $2, $3)`,
 		"empty-et", "ch", []string{})
 	if err == nil {
 		t.Fatal("expected CHECK violation on tidings_event_types_nonempty")
@@ -338,11 +338,11 @@ func TestIntegration_Tiding_DuplicateName(t *testing.T) {
 	if err := InsertHerald(ctx, integrationPool, newWebhookHerald("ch", "archon-alice")); err != nil {
 		t.Fatalf("InsertHerald: %v", err)
 	}
-	tg := &Tiding{Name: "dup", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
+	tg := &Tiding{ID: "dup", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, tg); err != nil {
 		t.Fatalf("first InsertTiding: %v", err)
 	}
-	tg2 := &Tiding{Name: "dup", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
+	tg2 := &Tiding{ID: "dup", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, tg2); !errors.Is(err, ErrTidingExists) {
 		t.Fatalf("duplicate err = %v, want ErrTidingExists", err)
 	}
@@ -364,7 +364,7 @@ func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 
 	voyageID := "vy_run_42"
 	tg := &Tiding{
-		Name:        "ephemeral-run",
+		ID:          "ephemeral-run",
 		Herald:      "ch",
 		EventTypes:  []string{"scenario_run.*"},
 		Ephemeral:   true,
@@ -377,9 +377,9 @@ func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 		t.Fatalf("InsertTiding ephemeral: %v", err)
 	}
 
-	got, err := SelectTidingByName(ctx, integrationPool, "ephemeral-run")
+	got, err := SelectTidingByID(ctx, integrationPool, "ephemeral-run")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if !got.Ephemeral || got.VoyageID == nil || *got.VoyageID != "vy_run_42" {
 		t.Errorf("ephemeral/voyage_id round-trip = %v / %v", got.Ephemeral, got.VoyageID)
@@ -397,9 +397,9 @@ func TestIntegration_Tiding_EphemeralPayloadRoundTrip(t *testing.T) {
 	if err := UpdateTiding(ctx, integrationPool, got); err != nil {
 		t.Fatalf("UpdateTiding: %v", err)
 	}
-	after, err := SelectTidingByName(ctx, integrationPool, "ephemeral-run")
+	after, err := SelectTidingByID(ctx, integrationPool, "ephemeral-run")
 	if err != nil {
-		t.Fatalf("SelectTidingByName after update: %v", err)
+		t.Fatalf("SelectTidingByID after update: %v", err)
 	}
 	if len(after.Projection) != 1 || after.Annotations["runbook"] != "https://wiki/x" {
 		t.Errorf("update not applied: projection=%v annotations=%+v", after.Projection, after.Annotations)
@@ -419,7 +419,7 @@ func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 		t.Fatalf("InsertHerald: %v", err)
 	}
 	tg := &Tiding{
-		Name:        "persistent-payload",
+		ID:          "persistent-payload",
 		Herald:      "ch",
 		EventTypes:  []string{"scenario_run.*"},
 		Annotations: map[string]any{"team": "ops"},
@@ -432,7 +432,7 @@ func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 
 	// PUT replace without annotations/projection (handler passes nil): clear.
 	cleared := &Tiding{
-		Name:       "persistent-payload",
+		ID:         "persistent-payload",
 		Herald:     "ch",
 		EventTypes: []string{"scenario_run.*"},
 		Enabled:    true,
@@ -440,9 +440,9 @@ func TestIntegration_Tiding_UpdateClearsPayload(t *testing.T) {
 	if err := UpdateTiding(ctx, integrationPool, cleared); err != nil {
 		t.Fatalf("UpdateTiding clear: %v", err)
 	}
-	after, err := SelectTidingByName(ctx, integrationPool, "persistent-payload")
+	after, err := SelectTidingByID(ctx, integrationPool, "persistent-payload")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if len(after.Annotations) != 0 {
 		t.Errorf("annotations not cleared by replace-update: %+v", after.Annotations)
@@ -464,7 +464,7 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 		t.Fatalf("InsertHerald: %v", err)
 	}
 	tg := &Tiding{
-		Name:       "task-sub",
+		ID:         "task-sub",
 		Herald:     "ch",
 		EventTypes: []string{"incarnation.run_completed"},
 		Task:       strptr("nginx_pkg"),
@@ -474,9 +474,9 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 		t.Fatalf("InsertTiding: %v", err)
 	}
 
-	got, err := SelectTidingByName(ctx, integrationPool, "task-sub")
+	got, err := SelectTidingByID(ctx, integrationPool, "task-sub")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if got.Task == nil || *got.Task != "nginx_pkg" {
 		t.Errorf("task = %v, want nginx_pkg", got.Task)
@@ -484,7 +484,7 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 
 	// PUT replace without task (handler passes nil): clear (omit==clear).
 	cleared := &Tiding{
-		Name:       "task-sub",
+		ID:         "task-sub",
 		Herald:     "ch",
 		EventTypes: []string{"incarnation.run_completed"},
 		Enabled:    true,
@@ -492,9 +492,9 @@ func TestIntegration_Tiding_TaskSelectorRoundTrip(t *testing.T) {
 	if err := UpdateTiding(ctx, integrationPool, cleared); err != nil {
 		t.Fatalf("UpdateTiding clear: %v", err)
 	}
-	after, err := SelectTidingByName(ctx, integrationPool, "task-sub")
+	after, err := SelectTidingByID(ctx, integrationPool, "task-sub")
 	if err != nil {
-		t.Fatalf("SelectTidingByName after: %v", err)
+		t.Fatalf("SelectTidingByID after: %v", err)
 	}
 	if after.Task != nil {
 		t.Errorf("task not cleared by replace-update: %v", after.Task)
@@ -512,13 +512,13 @@ func TestIntegration_Tiding_PersistentDefaults(t *testing.T) {
 	if err := InsertHerald(ctx, integrationPool, newWebhookHerald("ch", "archon-alice")); err != nil {
 		t.Fatalf("InsertHerald: %v", err)
 	}
-	tg := &Tiding{Name: "persistent", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
+	tg := &Tiding{ID: "persistent", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, tg); err != nil {
 		t.Fatalf("InsertTiding: %v", err)
 	}
-	got, err := SelectTidingByName(ctx, integrationPool, "persistent")
+	got, err := SelectTidingByID(ctx, integrationPool, "persistent")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if got.Ephemeral || got.VoyageID != nil {
 		t.Errorf("persistent rule must have ephemeral=false / voyage_id=nil, got %v / %v", got.Ephemeral, got.VoyageID)
@@ -542,7 +542,7 @@ func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 
 	// ephemeral=true without voyage_id: CHECK violation.
 	_, err := integrationPool.Exec(ctx,
-		`INSERT INTO tidings (name, herald, event_types, ephemeral) VALUES ($1, $2, $3, true)`,
+		`INSERT INTO tidings (id, herald, event_types, ephemeral) VALUES ($1, $2, $3, true)`,
 		"bad-eph", "ch", []string{"scenario_run.*"})
 	if err == nil {
 		t.Fatal("expected CHECK violation: ephemeral=true requires voyage_id")
@@ -550,7 +550,7 @@ func TestIntegration_Tiding_EphemeralVoyageCHECK(t *testing.T) {
 
 	// ephemeral=false with voyage_id: CHECK violation.
 	_, err = integrationPool.Exec(ctx,
-		`INSERT INTO tidings (name, herald, event_types, ephemeral, voyage_id) VALUES ($1, $2, $3, false, $4)`,
+		`INSERT INTO tidings (id, herald, event_types, ephemeral, voyage_id) VALUES ($1, $2, $3, false, $4)`,
 		"bad-persist", "ch", []string{"scenario_run.*"}, "vy_1")
 	if err == nil {
 		t.Fatal("expected CHECK violation: non-ephemeral must not set voyage_id")
@@ -592,15 +592,15 @@ func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 	}
 
 	// Persistent rule.
-	persistent := &Tiding{Name: "persistent", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
+	persistent := &Tiding{ID: "persistent", Herald: "ch", EventTypes: []string{"voyage.*"}, Enabled: true}
 	if err := InsertTiding(ctx, integrationPool, persistent); err != nil {
 		t.Fatalf("InsertTiding persistent: %v", err)
 	}
-	// Two one-shot rules, bound to runs. The Tiding name must match NamePattern
+	// Two one-shot rules, bound to runs. The Tiding name must match IDPattern
 	// (^[a-z0-9-]{1,63}$), so a voyage_id with underscores cannot be used as name.
 	for i, vy := range []string{"vy_1", "vy_2"} {
 		eph := &Tiding{
-			Name:       fmt.Sprintf("eph-%d", i),
+			ID:         fmt.Sprintf("eph-%d", i),
 			Herald:     "ch",
 			EventTypes: []string{"voyage.*"},
 			Ephemeral:  true,
@@ -608,7 +608,7 @@ func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 			Enabled:    true,
 		}
 		if err := InsertTiding(ctx, integrationPool, eph); err != nil {
-			t.Fatalf("InsertTiding %s: %v", eph.Name, err)
+			t.Fatalf("InsertTiding %s: %v", eph.ID, err)
 		}
 	}
 
@@ -620,7 +620,7 @@ func TestIntegration_Tiding_ListHidesEphemeral(t *testing.T) {
 	if total != 1 || len(items) != 1 {
 		t.Fatalf("default listing total = %d, items = %d, want 1/1 (ephemeral hidden)", total, len(items))
 	}
-	if items[0].Name != "persistent" || items[0].Ephemeral {
+	if items[0].ID != "persistent" || items[0].Ephemeral {
 		t.Errorf("default listing leaked ephemeral: %+v", items[0])
 	}
 

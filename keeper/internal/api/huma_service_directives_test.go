@@ -1,6 +1,6 @@
 package api
 
-// Guard tests for GET /v1/services/{name}/directives (NIM-76): delivery of the
+// Guard tests for GET /v1/services/{id}/directives (NIM-76): delivery of the
 // redis.conf directive catalog + ETag/Cache-Control immutable + version narrowing + 304.
 // Full huma wiring (RequirePermission service.list + huma operation),
 // injectClaims replaces RequireJWT.

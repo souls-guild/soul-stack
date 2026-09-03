@@ -13,7 +13,7 @@ import (
 )
 
 // StateSchemaInfo is a projection of state_schema metadata from a single Service
-// repository snapshot for UI Schema explorer (`GET /v1/services/{name}/state-schema`):
+// repository snapshot for UI Schema explorer (`GET /v1/services/{id}/state-schema`):
 // current `state_schema_version`, optional state structure declaration
 // (`state_schema:` mapping from service.yml), and the flat list of discovered
 // migration steps under `migrations/<NNN>_<slug>/`. Migration content is not parsed

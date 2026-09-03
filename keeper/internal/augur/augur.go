@@ -54,18 +54,22 @@ func ValidSourceType(s SourceType) bool {
 	}
 }
 
-// NamePattern — canonical Omen name shape: kebab-case, length 1..63. Same as
-// the CHECK omens_name_format in migration 032 (like providers.NamePattern).
-const NamePattern = `^[a-z0-9-]{1,63}$`
+// IDPattern — canonical Omen id shape: kebab-case, length 1..63. Same as
+// the CHECK omens_id_format in migration 118 (omens_name_format before it),
+// like provider.IDPattern.
+//
+// The form is UNCHANGED by the `name` -> `id` rename ([ADR-0085], NIM-729): the
+// identifier moved spelling, not grammar.
+const IDPattern = `^[a-z0-9-]{1,63}$`
 
 // CovenPattern — shape of a Coven label. Re-exported from [subject] so the
 // three subject-bearing registries state one shape once.
 const CovenPattern = subject.CovenPattern
 
-var nameRe = regexp.MustCompile(NamePattern)
+var idRe = regexp.MustCompile(IDPattern)
 
-// ValidName checks an Omen name against the canonical shape (kebab 1..63).
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks an Omen id against the canonical shape (kebab 1..63).
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // ValidCoven checks a single Coven label.
 func ValidCoven(coven string) bool { return subject.ValidCoven(coven) }
@@ -81,15 +85,20 @@ func ValidAuthRef(ref string) bool {
 
 // Omen — runtime representation of an omens registry row (external system).
 type Omen struct {
-	Name string `json:"name"`
-	// Label is the display caption ([ADR-0085]): free text, mutable via
-	// SetOmenLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead. It participates in nothing derived — not the
-	// Rite grant's `omen` FK, and not any Vault path.
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `omens` and the target of the Rite grant's
+	// `omen` FK. There is no rename operation.
 	//
 	// Not to be confused with [Rite.ID], the int64 surrogate that lives in this
-	// same package: an entity id is a kebab code word, a surrogate is neither
-	// ([ADR-0085] "`id` means code word, not opaque identifier").
+	// same package — the carve-out [ADR-0085] records by name. After NIM-729
+	// both fields are spelled `ID` in one package and they are different kinds
+	// of thing: this one is a kebab code word an operator types into a URL, that
+	// one is a database sequence number.
+	ID string `json:"id"`
+	// Label is the display caption ([ADR-0085]): free text, mutable via
+	// SetOmenLabel, not unique, optional. nil means the column is NULL and a
+	// consumer shows ID instead. It participates in nothing derived — not the
+	// Rite grant's `omen` FK, and not any Vault path.
 	//
 	// [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
 	Label        *string    `json:"label,omitempty"`

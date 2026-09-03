@@ -100,7 +100,7 @@ func driverFor(t HeraldType) (channelDriver, bool) {
 func resolveDelivery(ctx context.Context, h *Herald, job *DeliveryJob, kv KVReader) (*httpDelivery, error) {
 	d, ok := driverFor(h.Type)
 	if !ok {
-		return nil, errTerminalNoRetry{fmt.Errorf("herald: channel %q type %q has no HTTP driver", h.Name, h.Type)}
+		return nil, errTerminalNoRetry{fmt.Errorf("herald: channel %q type %q has no HTTP driver", h.ID, h.Type)}
 	}
 	return d.resolveDelivery(ctx, h, job, kv)
 }

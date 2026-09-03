@@ -79,7 +79,7 @@ func (r *Resolver) lexical(serviceDir string) (map[string]any, error) {
 // honoured, `_stack.yaml` ignored entirely.
 //
 // For readers that want a service-level answer and have no incarnation to give:
-// the directive catalog (`GET /v1/services/{name}/directives`) is one. A stack's
+// the directive catalog (`GET /v1/services/{id}/directives`) is one. A stack's
 // conditionality is per-incarnation by construction — its steps read
 // `incarnation.*` — so running it against an empty context would answer a
 // question nobody asked, and reading one hard-coded file instead answers a

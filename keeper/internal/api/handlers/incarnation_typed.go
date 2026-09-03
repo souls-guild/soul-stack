@@ -61,9 +61,9 @@ type IncarnationCreateView struct {
 // fields and calls CreateTyped with this flat model. Covens/Input — nil = "not set" (parity with
 // the legacy omitempty decode).
 type IncarnationCreateRequestInput struct {
-	Name string
+	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
-	// by PUT /v1/incarnations/{name}/label. nil/blank → NULL, and the consumer
+	// by PUT /v1/incarnations/{id}/label. nil/blank → NULL, and the consumer
 	// shows Name. Unlike Name it is NOT composed by a `name_template`: a template
 	// composes an identifier, and a caption is not one.
 	Label   *string
@@ -107,14 +107,14 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// knows whether there is one. A NON-EMPTY name is still format-checked up front
 	// (garbage never reaches the plan); "name is required" moves below, after the
 	// plan resolves and the composed name is known.
-	if req.Name != "" && !incarnation.ValidName(req.Name) {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'name' must match "+incarnation.NamePattern)
+	if req.ID != "" && !incarnation.ValidID(req.ID) {
+		return zero, incProblem(problem.TypeValidationFailed, "field 'id' must match "+incarnation.IDPattern)
 	}
 	if req.Service == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'service' is required")
 	}
-	if !incarnation.ValidName(req.Service) {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'service' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(req.Service) {
+		return zero, incProblem(problem.TypeValidationFailed, "field 'service' must match "+incarnation.IDPattern)
 	}
 	for _, label := range covens {
 		if !soul.ValidCoven(label) {
@@ -144,7 +144,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// create scenario composed from `name_template` (ADR-0079). Everything past the
 	// plan resolve (insert / traits sync / bootstrap run / audit / reply) uses it,
 	// never req.Name.
-	name := req.Name
+	name := req.ID
 	composedName := ""
 	// plan is read again after the insert (the roster bind, NIM-371), so it outlives
 	// the resolve block. Its zero value carries no roster — the stub-mode path binds
@@ -164,16 +164,16 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		// nil → stub plan (`create`, not bare, auto_create=true). preflighter is h.runner
 		// (type-assertion to scenario.AssertPreflighter inside; a ScenarioStarter fake →
 		// no-op).
-		resolved, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.Name, serviceRef, req.CreateScenario, input, claims.Subject,
+		resolved, perr := scenario.ResolveCreatePlan(ctx, h.loader, h.runner, req.ID, serviceRef, req.CreateScenario, input, claims.Subject,
 			scenario.WithIncarnationLabels(req.Covens, req.Traits))
 		if perr != nil {
-			return zero, h.mapCreatePlanError(req.Name, req.Service, perr)
+			return zero, h.mapCreatePlanError(req.ID, req.Service, perr)
 		}
 		plan = resolved
 		createScenario = plan.CreateScenario
 		bareNoScenario = plan.BareNoScenario
 		autoCreate = plan.AutoCreate
-		name = plan.EffectiveName(req.Name)
+		name = plan.EffectiveName(req.ID)
 		composedName = plan.ComposedName
 	}
 
@@ -181,7 +181,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// operator sent no name and the chosen create scenario composes none — bare
 	// incarnations and stub mode included.
 	if name == "" {
-		return zero, incProblem(problem.TypeValidationFailed, "field 'name' is required")
+		return zero, incProblem(problem.TypeValidationFailed, "field 'id' is required")
 	}
 
 	// Gate (b) — the boundary (NIM-333/NIM-338). Every create, named or composed,
@@ -232,7 +232,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 
 	creator := claims.Subject
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Label:              req.Label,
 		Service:            req.Service,
 		ServiceVersion:     serviceVersion,
@@ -326,7 +326,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	return IncarnationCreateReply{
 		Body: body,
 		AuditPayload: apimiddleware.AuditPayload{
-			"name":     name,
+			"id":       name,
 			"service":  req.Service,
 			"covens":   coalesceCoven(covens),
 			"apply_id": auditApplyID,
@@ -351,15 +351,15 @@ type IncarnationRunReply struct {
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// RunTyped — extracted domain function POST /v1/incarnations/{name}/scenarios/
+// RunTyped — extracted domain function POST /v1/incarnations/{id}/scenarios/
 // {scenario} (MIDDLEWARE-AUDIT). Parity with (w,r)-Run: resolve incarnation → secondary
 // error_locked probe → resolve service-ref + sync input-validation → runner.Start →
 // 202 + apply_id. name/scenarioName arrive as arguments (path-bind on the huma layer).
 func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, name, scenarioName string, input map[string]any) (IncarnationRunReply, error) {
 	var zero IncarnationRunReply
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if !scenario.ValidScenarioName(scenarioName) {
 		return zero, incProblem(problem.TypeValidationFailed, "path 'scenario' must match "+scenario.ScenarioNamePattern)
@@ -369,7 +369,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 		return zero, incProblem(problem.TypeInternalError, "scenario runner is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -453,7 +453,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 	return IncarnationRunReply{
 		Body: IncarnationRunView{ApplyID: applyID, Incarnation: name, Scenario: scenarioName},
 		AuditPayload: apimiddleware.AuditPayload{
-			"name":     name,
+			"id":       name,
 			"scenario": scenarioName,
 			"apply_id": applyID,
 		},
@@ -466,7 +466,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 // Package api projects it into native IncarnationUnlockReply. PreviousStatus/Status are the domain's
 // RAW string (the native type in api holds the enum form). UnlockedAt is a nanosecond time-wire.
 type IncarnationUnlockView struct {
-	Name           string
+	ID             string
 	PreviousStatus string
 	Status         string
 	UnlockedAt     time.Time
@@ -480,14 +480,14 @@ type IncarnationUnlockReply struct {
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// UnlockTyped — extracted domain function POST /v1/incarnations/{name}/unlock
+// UnlockTyped — extracted domain function POST /v1/incarnations/{id}/unlock
 // (MIDDLEWARE-AUDIT). Parity with (w,r)-Unlock: clearing error_locked/migration_failed under
 // FOR UPDATE → 200 {name, previous_status, status, unlocked_by_aid, unlocked_at}.
 func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims, name, reason string) (IncarnationUnlockReply, error) {
 	var zero IncarnationUnlockReply
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if reason == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'reason' is required")
@@ -517,14 +517,14 @@ func (h *IncarnationHandler) UnlockTyped(ctx context.Context, claims *jwt.Claims
 
 	return IncarnationUnlockReply{
 		Body: IncarnationUnlockView{
-			Name:           name,
+			ID:             name,
 			PreviousStatus: string(res.PreviousStatus),
 			Status:         string(incarnation.StatusReady),
 			UnlockedByAID:  claims.Subject,
 			UnlockedAt:     time.Now().UTC(),
 		},
 		AuditPayload: apimiddleware.AuditPayload{
-			"name":            name,
+			"id":              name,
 			"previous_status": string(res.PreviousStatus),
 			"reason":          reason,
 		},
@@ -550,14 +550,14 @@ type IncarnationUpgradeReply struct {
 	AuditPayload apimiddleware.AuditPayload
 }
 
-// UpgradeTyped — extracted domain function POST /v1/incarnations/{name}/upgrade
+// UpgradeTyped — extracted domain function POST /v1/incarnations/{id}/upgrade
 // (MIDDLEWARE-AUDIT). Parity with (w,r)-Upgrade: SelectByName → PrepareUpgrade →
 // UpgradeStateSchema (sync under 202) → 202 + apply_id.
 func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claims, name, toVersion string) (IncarnationUpgradeReply, error) {
 	var zero IncarnationUpgradeReply
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if h.loader == nil || h.services == nil {
 		return zero, incProblem(problem.TypeInternalError, "service loader is not configured")
@@ -566,7 +566,7 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 		return zero, incProblem(problem.TypeValidationFailed, "field 'to_version' is required")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -667,7 +667,7 @@ func (h *IncarnationHandler) UpgradeTyped(ctx context.Context, claims *jwt.Claim
 
 	view := IncarnationUpgradeView{ApplyID: applyID}
 	auditPayload := apimiddleware.AuditPayload{
-		"name":       name,
+		"id":         name,
 		"to_version": toVersion,
 		"apply_id":   applyID,
 	}
@@ -690,7 +690,7 @@ type IncarnationRerunLastView struct {
 	Scenario string
 }
 
-// RerunLastTyped — extracted domain function POST /v1/incarnations/{name}/
+// RerunLastTyped — extracted domain function POST /v1/incarnations/{id}/
 // rerun-last (SELF-AUDIT: the handler writes incarnation.rerun_last ITSELF inside —
 // the previous_status/scenario payload is known only after UnlockForRerun). Parity with
 // (w,r)-RerunLast. source is ScenarioInvocationSource(ctx) (api / mcp). 202 +
@@ -698,8 +698,8 @@ type IncarnationRerunLastView struct {
 func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Claims, name, reason string, fallbackInput map[string]any) (IncarnationRerunLastView, error) {
 	var zero IncarnationRerunLastView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if reason == "" {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'reason' is required")
@@ -714,7 +714,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 		return zero, incProblem(problem.TypeInternalError, "scenario runner is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -791,7 +791,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 			ArchonAID:     claims.Subject,
 			CorrelationID: applyID,
 			Payload: map[string]any{
-				"name":            name,
+				"id":              name,
 				"reason":          reason,
 				"scenario":        res.Scenario,
 				"previous_status": string(res.PreviousStatus),
@@ -805,7 +805,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 
 // --- Destroy (SELF-AUDIT incarnation.destroy_started — written by the service layer) ---
 
-// IncarnationDestroyView — FLAT domain projection of the 202 body of DELETE /v1/incarnations/{name}
+// IncarnationDestroyView — FLAT domain projection of the 202 body of DELETE /v1/incarnations/{id}
 // (handler-native). Package api projects it into native IncarnationDestroyReply.
 //
 // Unreleased is set ONLY on the force path, where the record is removed without
@@ -817,21 +817,21 @@ type IncarnationDestroyView struct {
 	Unreleased *incarnation.UnreleasedResources
 }
 
-// DestroyTyped — extracted domain function DELETE /v1/incarnations/{name}
+// DestroyTyped — extracted domain function DELETE /v1/incarnations/{id}
 // (SELF-AUDIT: destroy_started is written by [incarnation.Destroy] / destroy_completed by
 // [DeleteAfterTeardown]; audit middleware is NOT wired). Parity with (w,r)-Destroy: force is
 // allow_destroy (path-bind on the huma layer). 202 + apply_id.
 func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claims, name string, force bool) (IncarnationDestroyView, error) {
 	var zero IncarnationDestroyView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if h.destroyer == nil || h.services == nil || h.loader == nil {
 		return zero, incProblem(problem.TypeInternalError, "destroy is not configured")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -939,7 +939,7 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 
 // --- SetTraits (SELF-AUDIT incarnation.traits_changed) ----------------
 
-// SetTraitsTyped — extracted domain function PUT /v1/incarnations/{name}/traits
+// SetTraitsTyped — extracted domain function PUT /v1/incarnations/{id}/traits
 // (SELF-AUDIT: the handler writes incarnation.traits_changed ITSELF — old/new keys payload
 // after UpdateTraits). Replaces incarnation.traits entirely → persist (one tx FOR
 // UPDATE) → 200 + a full IncarnationGetView. Member hosts are NOT touched, now or
@@ -950,8 +950,8 @@ func (h *IncarnationHandler) DestroyTyped(ctx context.Context, claims *jwt.Claim
 func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Claims, name string, traits map[string]any) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if err := soul.ValidateTraitDelta(traits); err != nil {
 		return zero, incProblem(problem.TypeValidationFailed, err.Error())
@@ -993,7 +993,7 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 			Source:    apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID: claims.Subject,
 			Payload: map[string]any{
-				"name":     name,
+				"id":       name,
 				"old_keys": res.OldKeys,
 				"new_keys": res.NewKeys,
 			},
@@ -1007,7 +1007,7 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 
 // --- SetLabel (SELF-AUDIT incarnation.label_changed) ------------------
 
-// SetLabelTyped — domain function PUT /v1/incarnations/{name}/label (SELF-AUDIT:
+// SetLabelTyped — domain function PUT /v1/incarnations/{id}/label (SELF-AUDIT:
 // the handler writes incarnation.label_changed ITSELF, like the traits route
 // beside it, because the incarnation routes are mounted under a scope selector
 // rather than the NoSelector audit middleware groups the other registries use).
@@ -1029,8 +1029,8 @@ func (h *IncarnationHandler) SetTraitsTyped(ctx context.Context, claims *jwt.Cla
 func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Claims, name string, req LabelSetInput) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	// req.Label is NOT validated: free text with capitals, spaces and punctuation
 	// is what the field carries (ADR-0085).
@@ -1045,7 +1045,7 @@ func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Clai
 		return zero, incProblem(problem.TypeInternalError, "update incarnation label failed")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		h.logger.Error("incarnation.label-set: re-read failed",
 			slog.String("name", name), slog.Any("error", err))
@@ -1057,13 +1057,13 @@ func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Clai
 			EventType: audit.EventIncarnationLabelChanged,
 			Source:    apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID: claims.Subject,
-			// Parity with handlers.LabelWriteReply.AuditPayload: the identifier
-			// addressed and the caption as it now reads (explicitly null when cleared).
-			Payload: map[string]any{
-				"name":      name,
-				"old_label": previous,
-				"new_label": inc.Label,
-			},
+			// The identifier addressed and the caption as it now reads (explicitly
+			// null when cleared). Built by the SAME function the nine
+			// [LabelWriteReply] routes use, rather than restated: this route
+			// assembles its own event instead of returning that struct, and a
+			// second copy of the payload is where the identifier key drifted when
+			// the shared one was renamed to `id` ([ADR-0085], NIM-729).
+			Payload: LabelAuditPayload(name, previous, inc.Label),
 		})
 	}
 
@@ -1073,17 +1073,17 @@ func (h *IncarnationHandler) SetLabelTyped(ctx context.Context, claims *jwt.Clai
 
 // --- Get / List / History (READ, no audit) ---------------------------
 
-// GetTyped — extracted domain function GET /v1/incarnations/{name} (READ).
+// GetTyped — extracted domain function GET /v1/incarnations/{id} (READ).
 // inScope is the RBAC scope predicate (ADR-047 S3b-3): out of scope → 404. Extracted from
 // (w,r)-Get; the caller (huma layer) performs the scope check via the passed predicate over
 // the loaded incarnation, so *http.Request need not be pulled into the domain function.
 func (h *IncarnationHandler) GetTyped(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool) (IncarnationGetView, error) {
 	var zero IncarnationGetView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -1193,12 +1193,12 @@ func (h *IncarnationHandler) ListTyped(ctx context.Context, q IncarnationListQue
 	return IncarnationListReply{Items: replies, Offset: q.Offset, Limit: q.Limit, Total: total}, nil
 }
 
-// IncarnationHistoryReply — typed envelope of GET /v1/incarnations/{name}/history (handler-native:
+// IncarnationHistoryReply — typed envelope of GET /v1/incarnations/{id}/history (handler-native:
 // element is a domain StateHistoryView). Package api projects it into the native envelope
 // incarnationHistoryReply via RegisterTypeAlias on sharedapi.PagedResponse[handlers.StateHistoryView].
 type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 
-// HistoryTyped — extracted domain function GET /v1/incarnations/{name}/history
+// HistoryTyped — extracted domain function GET /v1/incarnations/{id}/history
 // (READ, typed query). existence-probe (404) + scope gate (out of scope → 404, parity
 // Get) via the passed inScope predicate. CheckPageBounds → 400; bad apply_id → 400.
 // HistoryTyped takes the filter as a struct rather than as a tail of positional
@@ -1209,8 +1209,8 @@ type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name string, filter incarnation.HistoryFilter, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationHistoryReply, error) {
 	var zero IncarnationHistoryReply
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, incProblem(problem.TypeMalformedRequest, err.Error())
@@ -1221,7 +1221,7 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name string, filt
 			"query 'apply_id' must be a Crockford-base32 ULID (26 chars)")
 	}
 
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return zero, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")
@@ -1252,8 +1252,8 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name string, filt
 
 // --- Runs (READ) — incarnation runs, per-task view -------------------
 //
-// GET /v1/incarnations/{name}/runs         — list of runs (rollup of apply_runs).
-// GET /v1/incarnations/{name}/runs/{apply} — details of one run (per-host slice,
+// GET /v1/incarnations/{id}/runs         — list of runs (rollup of apply_runs).
+// GET /v1/incarnations/{id}/runs/{apply} — details of one run (per-host slice,
 //                                            the failed task's address = "current job").
 //
 // scope gate — the same inScope predicate as History/Get (action=history):
@@ -1319,19 +1319,19 @@ type RunDetailView struct {
 	Input        map[string]any
 }
 
-// IncarnationRunsReply — typed envelope of GET /v1/incarnations/{name}/runs (handler-native:
+// IncarnationRunsReply — typed envelope of GET /v1/incarnations/{id}/runs (handler-native:
 // element is a domain RunSummaryView). Package api projects it into the native envelope via
 // RegisterTypeAlias on sharedapi.PagedResponse[handlers.RunSummaryView].
 type IncarnationRunsReply = sharedapi.PagedResponse[RunSummaryView]
 
-// RunsTyped — domain function GET /v1/incarnations/{name}/runs (READ, typed query).
+// RunsTyped — domain function GET /v1/incarnations/{id}/runs (READ, typed query).
 // existence-probe (404) + scope gate (out of scope → 404, parity History) via inScope.
 // CheckPageBounds → 400. Returns a page of runs, newest first.
 func (h *IncarnationHandler) RunsTyped(ctx context.Context, name string, offset, limit int, inScope func(*incarnation.Incarnation) bool) (IncarnationRunsReply, error) {
 	var zero IncarnationRunsReply
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, incProblem(problem.TypeMalformedRequest, err.Error())
@@ -1368,14 +1368,14 @@ func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
 	}
 }
 
-// RunDetailTyped — domain function GET /v1/incarnations/{name}/runs/{apply_id}
+// RunDetailTyped — domain function GET /v1/incarnations/{id}/runs/{apply_id}
 // (READ). existence-probe (404) + scope gate (out of scope → 404) via inScope; bad
 // apply_id → 400; run not found / belongs to a different incarnation → 404.
 func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunDetailView, error) {
 	var zero RunDetailView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if !audit.IsValidULID(applyID) {
 		return zero, incProblem(problem.TypeMalformedRequest, "path 'apply_id' must be a Crockford-base32 ULID (26 chars)")
@@ -1465,7 +1465,7 @@ type RunTasksView struct {
 	Tasks []RunTaskView
 }
 
-// RunTasksTyped — domain function GET /v1/incarnations/{name}/runs/{apply_id}/tasks
+// RunTasksTyped — domain function GET /v1/incarnations/{id}/runs/{apply_id}/tasks
 // (READ, NIM-37): the run task plan (apply_run_plan) + per-host status/output/error
 // from audit_log (`task.executed`) joined by plan_index → sid. existence-probe (404) +
 // scope gate (out of scope → 404) via inScope; bad apply_id → 400; foreign/non-existent
@@ -1478,8 +1478,8 @@ type RunTasksView struct {
 func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID string, inScope func(*incarnation.Incarnation) bool) (RunTasksView, error) {
 	var zero RunTasksView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if !audit.IsValidULID(applyID) {
 		return zero, incProblem(problem.TypeMalformedRequest, "path 'apply_id' must be a Crockford-base32 ULID (26 chars)")
@@ -1573,7 +1573,7 @@ func runPlanParams(raw []byte) map[string]any {
 // SELECT incarnation, out of scope or absent → a single 404 (parity History). action
 // is for the log. Returns the found incarnation (nil → error already returned).
 func (h *IncarnationHandler) existenceProbeInScope(ctx context.Context, name string, inScope func(*incarnation.Incarnation) bool, action string) (*incarnation.Incarnation, error) {
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return nil, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")

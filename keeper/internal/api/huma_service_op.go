@@ -31,16 +31,16 @@ type serviceRegisterInput struct {
 }
 
 // ServiceRegisterRequest — the Go form of the POST /v1/services body (code-first source
-// of the schema AND validation). Mirrors the domain ServiceRegisterRequest: name+git+ref
-// are required, refresh is optional (auto-refresh duration). The name/git/ref/refresh format —
+// of the schema AND validation). Mirrors the domain ServiceRegisterRequest: id+git+ref
+// are required, refresh is optional (auto-refresh duration). The id/git/ref/refresh format —
 // domain validation lives in RegisterTyped (422/409/404). The struct name = the contract
 // schema name in OpenAPI (committed hand-written spec → ServiceRegisterRequest).
 type ServiceRegisterRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name (kebab-case)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z][a-z0-9-]*$" doc:"Service id (kebab-case, immutable)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/services/{name}/label. No pattern — capitals and spaces are the
-	// point. `name`, not this, is segment 2 of every derived secret path.
-	Label   *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
+	// by PUT /v1/services/{id}/label. No pattern — capitals and spaces are the
+	// point. `id`, not this, is segment 2 of every derived secret path.
+	Label   *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the id instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	Git     string  `json:"git" required:"true" doc:"git source of the service repo (URL; not a secret)"`
 	Ref     string  `json:"ref" required:"true" doc:"git ref (tag/branch) - Service version (ADR-007)"`
 	Refresh *string `json:"refresh,omitempty" doc:"opt. auto-refresh duration ('5m'); omitted - no auto-refresh"`
@@ -57,14 +57,14 @@ type serviceRegisterOutput struct {
 // serviceRegisterOperation — metadata for POST /v1/services. Path = "/" relative to
 // the chi group /v1/services. DefaultStatus=201. Permission service.register + audit
 // service.registered. Errors: 400 unknown/malformed, 403 RBAC, 404 caller-not-found
-// (FK), 409 service-exists, 422 name/git/ref/refresh validation, 500.
+// (FK), 409 service-exists, 422 id/git/ref/refresh validation, 500.
 func serviceRegisterOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "registerService",
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Register a Service",
-		Description:   "Registers the Service in the service_registry (ADR-028). Permission service.register. 409 - name taken. 404 - caller AID missing from the operator registry.",
+		Description:   "Registers the Service in the service_registry (ADR-028). Permission service.register. 409 - id taken. 404 - caller AID missing from the operator registry.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -93,53 +93,53 @@ func serviceListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "List of Services",
-		Description:   "Registry of Services (sort name ASC, ADR-028). Permission service.list. Read-only, no audit.",
+		Description:   "Registry of Services (sort id ASC, ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
 	}
 }
 
-// === GET /v1/services/{name} (get) — READ-with-path (WITHOUT audit) ===
+// === GET /v1/services/{id} (get) — READ-with-path (WITHOUT audit) ===
 
-// serviceGetInput — huma-input GET /v1/services/{name}. Name — path parameter.
+// serviceGetInput — huma-input GET /v1/services/{id}. ID — path parameter.
 type serviceGetInput struct {
-	Name string `path:"name" doc:"Service name"`
+	ID string `path:"id" doc:"Service id"`
 }
 
-// serviceGetOutput — huma-output GET /v1/services/{name} (FULL-TYPED). Body —
+// serviceGetOutput — huma-output GET /v1/services/{id} (FULL-TYPED). Body —
 // the native 200 body (ServiceView). The wire shape is pinned by a golden test.
 type serviceGetOutput struct {
 	Body ServiceView
 }
 
-// serviceGetOperation — metadata for GET /v1/services/{name}. DefaultStatus=200.
+// serviceGetOperation — metadata for GET /v1/services/{id}. DefaultStatus=200.
 // READ route: audit is NOT attached. Permission service.list (read is covered by the list permission).
 // Errors: 403 RBAC, 404 not-found, 500.
 func serviceGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getService",
 		Method:        http.MethodGet,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Service card",
-		Description:   "Metadata of a single registry entry by name (ADR-028). Permission service.list. Read-only, no audit.",
+		Description:   "Metadata of a single registry entry by id (ADR-028). Permission service.list. Read-only, no audit.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
 	}
 }
 
-// === PATCH /v1/services/{name} (update) — WRITE+AUDIT service.updated ===
+// === PATCH /v1/services/{id} (update) — WRITE+AUDIT service.updated ===
 
-// serviceUpdateInput — huma-input PATCH /v1/services/{name}. Name — path; Body —
+// serviceUpdateInput — huma-input PATCH /v1/services/{id}. ID — path; Body —
 // the typed body (replace of the mutable fields git/ref/refresh).
 type serviceUpdateInput struct {
-	Name string `path:"name" doc:"Service name (immutable)"`
+	ID   string `path:"id" doc:"Service id (immutable)"`
 	Body ServiceUpdateRequest
 }
 
-// ServiceUpdateRequest — the Go form of the PATCH /v1/services/{name} body (replace semantics
-// for the mutable fields: git/ref required, refresh optional; name is immutable — comes from path). The struct
+// ServiceUpdateRequest — the Go form of the PATCH /v1/services/{id} body (replace semantics
+// for the mutable fields: git/ref required, refresh optional; id is immutable — comes from path). The struct
 // name = the contract schema name in OpenAPI (committed hand-written spec → ServiceUpdateRequest).
 type ServiceUpdateRequest struct {
 	Git     string  `json:"git" required:"true" doc:"new git source"`
@@ -147,7 +147,7 @@ type ServiceUpdateRequest struct {
 	Refresh *string `json:"refresh,omitempty" doc:"opt. auto-refresh duration ('5m')"`
 }
 
-// serviceUpdateOutput — huma-output PATCH /v1/services/{name} (FULL-TYPED).
+// serviceUpdateOutput — huma-output PATCH /v1/services/{id} (FULL-TYPED).
 // Status=200 WITH BODY (native ServiceView — the updated record). The wire shape
 // is pinned by a golden test.
 type serviceUpdateOutput struct {
@@ -155,10 +155,10 @@ type serviceUpdateOutput struct {
 	Body   ServiceView
 }
 
-// === PUT /v1/services/{name}/label (label-set) — WRITE+AUDIT service.label_changed ===
+// === PUT /v1/services/{id}/label (label-set) — WRITE+AUDIT service.label_changed ===
 
 type serviceSetLabelInput struct {
-	Name string `path:"name" pattern:"^[a-z][a-z0-9-]*$" doc:"Service name"`
+	ID   string `path:"id" pattern:"^[a-z][a-z0-9-]*$" doc:"Service id"`
 	Body LabelSetRequest
 }
 
@@ -170,23 +170,23 @@ func serviceSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setServiceLabel",
 		Method:        http.MethodPut,
-		Path:          "/{name}/label",
+		Path:          "/{id}/label",
 		Summary:       "Set the Service display caption",
-		Description:   "Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Narrower than PATCH /v1/services/{name}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.",
+		Description:   "Replaces the display caption of one Service registry entry (ADR-0085). Permission service.label-set, audit service.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `id`. Narrower than PATCH /v1/services/{id}, which re-points git/ref and invalidates every artifact cache. The caption participates in nothing derived - in particular it is NOT segment 2 of the derived secret path <mount>/<service>/<incarnation>/<state-field>, and not the artifact cache directory - so changing it orphans no secret and re-clones nothing.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 
-// serviceUpdateOperation — metadata for PATCH /v1/services/{name}. DefaultStatus=200.
+// serviceUpdateOperation — metadata for PATCH /v1/services/{id}. DefaultStatus=200.
 // Permission service.update + audit service.updated. Errors: 400 unknown/malformed,
 // 403 RBAC, 404 not-found/caller-not-found, 422 git/ref/refresh validation, 500.
 func serviceUpdateOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "updateService",
 		Method:        http.MethodPatch,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Update a Service (replace mutable-fields)",
 		Description:   "Replace semantics for git/ref/refresh, name is immutable (ADR-028). Permission service.update. 404 - entry absent.",
 		Tags:          []string{"service"},
@@ -195,11 +195,11 @@ func serviceUpdateOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/services/{name} (deregister) — WRITE+AUDIT service.deregistered ===
+// === DELETE /v1/services/{id} (deregister) — WRITE+AUDIT service.deregistered ===
 
-// serviceDeregisterInput — huma-input DELETE /v1/services/{name}. Name — path. No Body.
+// serviceDeregisterInput — huma-input DELETE /v1/services/{id}. ID — path. No Body.
 type serviceDeregisterInput struct {
-	Name string `path:"name" doc:"Service name"`
+	ID string `path:"id" doc:"Service id"`
 }
 
 // serviceNoContentOutput — huma-output for the 204-write route deregister. WITHOUT Body
@@ -209,45 +209,45 @@ type serviceNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// serviceDeregisterOperation — metadata for DELETE /v1/services/{name}.
+// serviceDeregisterOperation — metadata for DELETE /v1/services/{id}.
 // DefaultStatus=204. Permission service.deregister + audit service.deregistered.
 // Errors: 403 RBAC, 404 not-found, 500.
 func serviceDeregisterOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deregisterService",
 		Method:        http.MethodDelete,
-		Path:          "/{name}",
+		Path:          "/{id}",
 		Summary:       "Remove a Service from the registry",
-		Description:   "Deletes the registry entry by name + invalidates caches (ADR-028). Permission service.deregister. 404 - entry absent.",
+		Description:   "Deletes the registry entry by id + invalidates caches (ADR-028). Permission service.deregister. 404 - entry absent.",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError},
 	}
 }
 
-// === GET /v1/services/{name}/refs (list-refs) — READ-with-path (WITHOUT audit) ===
+// === GET /v1/services/{id}/refs (list-refs) — READ-with-path (WITHOUT audit) ===
 
-// serviceRefsInput — huma-input GET /v1/services/{name}/refs. Name — path. No
+// serviceRefsInput — huma-input GET /v1/services/{id}/refs. ID — path. No
 // ?ref= (refs lists ALL tags+branches of the remote repo).
 type serviceRefsInput struct {
-	Name string `path:"name" doc:"Service name"`
+	ID string `path:"id" doc:"Service id"`
 }
 
-// serviceRefsOutput — huma-output GET /v1/services/{name}/refs (FULL-TYPED). Body —
+// serviceRefsOutput — huma-output GET /v1/services/{id}/refs (FULL-TYPED). Body —
 // the native 200 body (ServiceRefsListReply: service + refs[]). The wire shape
 // is pinned by a golden test.
 type serviceRefsOutput struct {
 	Body ServiceRefsListReply
 }
 
-// serviceRefsOperation — metadata for GET /v1/services/{name}/refs. DefaultStatus=200.
+// serviceRefsOperation — metadata for GET /v1/services/{id}/refs. DefaultStatus=200.
 // READ route: audit is NOT attached. Permission service.list (refs — a projection of the record).
 // Errors: 403 RBAC, 404 not-found, 500 (no lister/registry failure), 502 ls-remote failed.
 func serviceRefsOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listServiceRefs",
 		Method:        http.MethodGet,
-		Path:          "/{name}/refs",
+		Path:          "/{id}/refs",
 		Summary:       "git tags + branches of a Service",
 		Description:   "List of git refs of the Service remote repository for the UI Upgrade-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - git source unreachable.",
 		Tags:          []string{"service"},
@@ -256,30 +256,30 @@ func serviceRefsOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/scenarios (list-scenarios) — READ-with-path+query (WITHOUT audit) ===
+// === GET /v1/services/{id}/scenarios (list-scenarios) — READ-with-path+query (WITHOUT audit) ===
 
-// serviceScenariosInput — huma-input GET /v1/services/{name}/scenarios. Name — path;
+// serviceScenariosInput — huma-input GET /v1/services/{id}/scenarios. ID — path;
 // Ref — optional query override (omitted → ref from the registry).
 type serviceScenariosInput struct {
-	Name string `path:"name" doc:"Service name"`
-	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
+	ID  string `path:"id" doc:"Service id"`
+	Ref string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
-// serviceScenariosOutput — huma-output GET /v1/services/{name}/scenarios (FULL-TYPED).
+// serviceScenariosOutput — huma-output GET /v1/services/{id}/scenarios (FULL-TYPED).
 // Body — handlers.ServiceScenariosReply (NOT an oapi alias: the element is artifact.Scenario with
 // a plain-string Kind, see handlers/service.go). The wire shape is pinned by a golden test.
 type serviceScenariosOutput struct {
 	Body handlers.ServiceScenariosReply
 }
 
-// serviceScenariosOperation — metadata for GET /v1/services/{name}/scenarios.
+// serviceScenariosOperation — metadata for GET /v1/services/{id}/scenarios.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister/registry failure), 502 loader failed.
 func serviceScenariosOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listServiceScenarios",
 		Method:        http.MethodGet,
-		Path:          "/{name}/scenarios",
+		Path:          "/{id}/scenarios",
 		Summary:       "scenario from a snapshot of the Service repo",
 		Description:   "List of scenarios from a materialized snapshot of the Service git repo for the UI Run-modal (ADR-028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
@@ -288,30 +288,30 @@ func serviceScenariosOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/state-schema (list-state-schema) — READ-with-path+query (WITHOUT audit) ===
+// === GET /v1/services/{id}/state-schema (list-state-schema) — READ-with-path+query (WITHOUT audit) ===
 
-// serviceStateSchemaInput — huma-input GET /v1/services/{name}/state-schema. Name —
+// serviceStateSchemaInput — huma-input GET /v1/services/{id}/state-schema. ID —
 // path; Ref — optional query override.
 type serviceStateSchemaInput struct {
-	Name string `path:"name" doc:"Service name"`
-	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
+	ID  string `path:"id" doc:"Service id"`
+	Ref string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
-// serviceStateSchemaOutput — huma-output GET /v1/services/{name}/state-schema
+// serviceStateSchemaOutput — huma-output GET /v1/services/{id}/state-schema
 // (FULL-TYPED). Body — the native 200 body (ServiceStateSchemaReply). The wire shape
 // is pinned by a golden test.
 type serviceStateSchemaOutput struct {
 	Body ServiceStateSchemaReply
 }
 
-// serviceStateSchemaOperation — metadata for GET /v1/services/{name}/state-schema.
+// serviceStateSchemaOperation — metadata for GET /v1/services/{id}/state-schema.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister/registry failure), 502 loader failed.
 func serviceStateSchemaOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listServiceStateSchema",
 		Method:        http.MethodGet,
-		Path:          "/{name}/state-schema",
+		Path:          "/{id}/state-schema",
 		Summary:       "state_schema metadata of a Service",
 		Description:   "state_schema version + structure declaration + migration chain (metadata-only) for the UI Schema explorer (ADR-019/028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
@@ -320,30 +320,30 @@ func serviceStateSchemaOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/dependencies (list-dependencies) — READ-with-path+query (WITHOUT audit) ===
+// === GET /v1/services/{id}/dependencies (list-dependencies) — READ-with-path+query (WITHOUT audit) ===
 
-// serviceDependenciesInput — huma-input GET /v1/services/{name}/dependencies. Name —
+// serviceDependenciesInput — huma-input GET /v1/services/{id}/dependencies. ID —
 // path; Ref — optional query override.
 type serviceDependenciesInput struct {
-	Name string `path:"name" doc:"Service name"`
-	Ref  string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
+	ID  string `path:"id" doc:"Service id"`
+	Ref string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 }
 
-// serviceDependenciesOutput — huma-output GET /v1/services/{name}/dependencies
+// serviceDependenciesOutput — huma-output GET /v1/services/{id}/dependencies
 // (FULL-TYPED). Body — the native 200 body (ServiceDependenciesReply: service/ref +
 // destiny[]/modules[]). The wire shape is pinned by a golden test.
 type serviceDependenciesOutput struct {
 	Body ServiceDependenciesReply
 }
 
-// serviceDependenciesOperation — metadata for GET /v1/services/{name}/dependencies.
+// serviceDependenciesOperation — metadata for GET /v1/services/{id}/dependencies.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister/registry failure), 502 loader failed.
 func serviceDependenciesOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listServiceDependencies",
 		Method:        http.MethodGet,
-		Path:          "/{name}/dependencies",
+		Path:          "/{id}/dependencies",
 		Summary:       "git dependencies of a Service",
 		Description:   "Destiny building blocks + custom modules declared in service.yml with their own git refs, for the UI Service Detail (ADR-007/028). Permission service.list. Read-only, no audit. 502 - loader failed.",
 		Tags:          []string{"service"},
@@ -352,7 +352,7 @@ func serviceDependenciesOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/directives (list-directives) — READ-with-path+query (WITHOUT audit) ===
+// === GET /v1/services/{id}/directives (list-directives) — READ-with-path+query (WITHOUT audit) ===
 
 // directivesCacheControlImmutable — Cache-Control for an IMMUTABLE ref (pinned 40-hex
 // commit SHA): the content at that ref is cryptographically immutable → safe to cache
@@ -380,17 +380,17 @@ func directivesCacheControlFor(ref string) string {
 	return directivesCacheControlRevalidate
 }
 
-// serviceDirectivesInput — huma-input GET /v1/services/{name}/directives. Name —
+// serviceDirectivesInput — huma-input GET /v1/services/{id}/directives. ID —
 // path; Ref/Version — optional query; If-None-Match — conditional-GET (304 on a match
 // with ETag=snapshot SHA1).
 type serviceDirectivesInput struct {
-	Name        string `path:"name" doc:"Service name"`
+	ID          string `path:"id" doc:"Service id"`
 	Ref         string `query:"ref" doc:"opt. git-ref override (omitted → ref from registry)"`
 	Version     string `query:"version" doc:"opt. version (e.g. 8.2.2) - narrow the catalog to the major.minor series"`
 	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches the ETag (snapshot SHA1)"`
 }
 
-// serviceDirectivesOutput — huma-output GET /v1/services/{name}/directives (FULL-TYPED).
+// serviceDirectivesOutput — huma-output GET /v1/services/{id}/directives (FULL-TYPED).
 // Body — handlers.ServiceDirectivesReply. ETag/Cache-Control — response headers
 // (header tags; json:"-"). Status=304 → huma doesn't write the body (huma.go transformAndWrite
 // skips the body on StatusNotModified) — conditional-GET without the 31KB payload.
@@ -401,14 +401,14 @@ type serviceDirectivesOutput struct {
 	Body         handlers.ServiceDirectivesReply
 }
 
-// serviceDirectivesOperation — metadata for GET /v1/services/{name}/directives.
+// serviceDirectivesOperation — metadata for GET /v1/services/{id}/directives.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister/registry failure), 502 loader failed.
 func serviceDirectivesOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "listServiceDirectives",
 		Method:        http.MethodGet,
-		Path:          "/{name}/directives",
+		Path:          "/{id}/directives",
 		Summary:       "catalog of valid redis.conf directives by version",
 		Description:   "Catalog of valid service directive names (vars.redis_directives, major.minor series map -> names) for the UI redis_settings editor (ADR-042). Permission service.list. Read-only, no audit. ?version=X.Y.Z narrows to the series. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache (branch/tag mutable - revalidation via ETag/304). Service without a catalog -> directives:{} + 200. 502 - loader failed.",
 		Tags:          []string{"service"},
@@ -417,18 +417,18 @@ func serviceDirectivesOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/services/{name}/telemetry (get-telemetry) — READ-with-path+query (no audit) ===
+// === GET /v1/services/{id}/telemetry (get-telemetry) — READ-with-path+query (no audit) ===
 
-// serviceTelemetryInput — huma-input GET /v1/services/{name}/telemetry. Name — path;
+// serviceTelemetryInput — huma-input GET /v1/services/{id}/telemetry. ID — path;
 // Ref — optional query-override; If-None-Match — conditional-GET (304 on match with
 // ETag=snapshot SHA1).
 type serviceTelemetryInput struct {
-	Name        string `path:"name" doc:"Service name"`
+	ID          string `path:"id" doc:"Service id"`
 	Ref         string `query:"ref" doc:"optional git-ref override (omitted -> ref from registry)"`
 	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches ETag (snapshot SHA1)"`
 }
 
-// serviceTelemetryOutput — huma-output GET /v1/services/{name}/telemetry (FULL-TYPED).
+// serviceTelemetryOutput — huma-output GET /v1/services/{id}/telemetry (FULL-TYPED).
 // Body — handlers.ServiceTelemetryReply. ETag/Cache-Control — response headers
 // (header tags; json:"-"). Status=304 -> huma does not write a body (conditional-GET without a payload).
 type serviceTelemetryOutput struct {
@@ -438,34 +438,34 @@ type serviceTelemetryOutput struct {
 	Body         handlers.ServiceTelemetryReply
 }
 
-// serviceTelemetryOperation — metadata for GET /v1/services/{name}/telemetry.
+// serviceTelemetryOperation — metadata for GET /v1/services/{id}/telemetry.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister / registry failure), 502 loader failed.
 func serviceTelemetryOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getServiceTelemetry",
 		Method:        http.MethodGet,
-		Path:          "/{name}/telemetry",
+		Path:          "/{id}/telemetry",
 		Summary:       "default host-vitals telemetry config of a Service + allowed collectors",
-		Description:   "Effective default (per-service, without an incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{name}/telemetry (runtime host-vitals from Redis, NIM-86).",
+		Description:   "Effective default (per-service, without an incarnation) host-vitals config of the service (enabled/interval_sec/collectors) from the manifest `telemetry:` + known_collectors (full allowed set for the UI, ADR-042 backend-driven, ADR-072). Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for pinned commit-SHA ref, otherwise no-cache (mutable branch/tag). A service without a telemetry block -> manifest defaults (enabled=true, interval_sec=30, all collectors) + 200. 502 - loader failed. Not to be confused with /v1/incarnations/{id}/telemetry (runtime host-vitals from Redis, NIM-86).",
 		Tags:          []string{"service"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway},
 	}
 }
 
-// === GET /v1/services/{name}/compat (get-compat) — READ-with-path+query (no audit) ===
+// === GET /v1/services/{id}/compat (get-compat) — READ-with-path+query (no audit) ===
 
-// serviceCompatInput — huma-input GET /v1/services/{name}/compat. Name — path;
+// serviceCompatInput — huma-input GET /v1/services/{id}/compat. ID — path;
 // Ref — optional query-override; If-None-Match — conditional-GET (304 on match with
 // ETag=snapshot SHA1).
 type serviceCompatInput struct {
-	Name        string `path:"name" doc:"Service name"`
+	ID          string `path:"id" doc:"Service id"`
 	Ref         string `query:"ref" doc:"optional git-ref override (omitted -> ref from registry)"`
 	IfNoneMatch string `header:"If-None-Match" doc:"conditional GET: 304 if it matches ETag (snapshot SHA1)"`
 }
 
-// serviceCompatOutput — huma-output GET /v1/services/{name}/compat (FULL-TYPED).
+// serviceCompatOutput — huma-output GET /v1/services/{id}/compat (FULL-TYPED).
 // Body — handlers.ServiceCompatReply. ETag/Cache-Control — response headers
 // (header tags; json:"-"). Status=304 -> huma does not write a body.
 type serviceCompatOutput struct {
@@ -475,14 +475,14 @@ type serviceCompatOutput struct {
 	Body         handlers.ServiceCompatReply
 }
 
-// serviceCompatOperation — metadata for GET /v1/services/{name}/compat.
+// serviceCompatOperation — metadata for GET /v1/services/{id}/compat.
 // DefaultStatus=200. READ route: audit is NOT attached. Permission service.list. Errors:
 // 403 RBAC, 404 not-found, 500 (no lister / registry failure), 502 loader failed.
 func serviceCompatOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getServiceCompat",
 		Method:        http.MethodGet,
-		Path:          "/{name}/compat",
+		Path:          "/{id}/compat",
 		Summary:       "engine-compat window of a Service (declared keeper versions) + this keeper's version",
 		Description:   "Effective keeper-version window of the service (ADR-0076): the intersection of the `compat:` block declared by service.yml and by EVERY destiny the service pulls at its pinned ref - the narrowest wins. `entities[]` carries each contribution so a narrow bound is attributable to the artifact that set it; `effective_window` is null when nothing declares one (unbounded - existing services keep working). `status` is a backend catalog value the UI renders as-is: ok | unsupported (a run on this instance is rejected with keeper_version_unsupported) | not_enforced (this build carries no comparable version, e.g. 0.0.0-dev) | window_empty (the declarations do not overlap - an authoring error). `keeper_version` is the raw build string of the instance serving the request, `keeper_release` the release core actually compared - during a rolling upgrade instances differ, and enforcement belongs to the instance that renders. Permission service.list. Read-only, no audit. ETag=snapshot SHA1; If-None-Match -> 304. Cache-Control: immutable+year for a pinned commit-SHA ref, otherwise no-cache. 502 - loader failed (service or destiny repo unreachable).",
 		Tags:          []string{"service"},

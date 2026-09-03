@@ -16,7 +16,7 @@ import (
 // are optional. apply_id filters the page to one specific run (parity with
 // the REST query param).
 type incarnationHistoryArgs struct {
-	Name    string `json:"name"`
+	ID      string `json:"id"`
 	ApplyID string `json:"apply_id"`
 	Offset  *int   `json:"offset"`
 	Limit   *int   `json:"limit"`
@@ -67,12 +67,12 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 				"invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !incarnation.ValidName(a.Name) {
+	if !incarnation.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+incarnation.NamePattern)
+			"field 'id' must match "+incarnation.IDPattern)
 	}
 
 	offset := 0
@@ -107,17 +107,17 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 	// non-existent name yields an empty history (total=0), indistinguishable
 	// from an existing incarnation with no history (parity with REST
 	// History). inc is needed for the RBAC OR-check (covens ∪ {name}).
-	inc, err := incarnation.SelectByName(ctx, h.deps.IncarnationDB, a.Name)
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
 	if err != nil {
 		// Fail-closed RBAC when incarnation lookup fails or is not found (parity with REST).
-		if scopeErr := h.checkIncarnationScope(claims, "history", a.Name, "", nil); scopeErr != nil {
+		if scopeErr := h.checkIncarnationScope(claims, "history", a.ID, "", nil); scopeErr != nil {
 			return h.toolError(req.ID, toolName, mcpCodeForbidden,
 				"operator lacks required permission incarnation.history")
 		}
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.history existence-probe failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),
 			)
@@ -127,17 +127,17 @@ func (h *Handler) callIncarnationHistory(ctx context.Context, claims *jwt.Claims
 
 	// RBAC OR-check over the incarnation's coven/service scope (covens ∪
 	// {name}) — mirrors REST middleware, scope from inc.Service / inc.Covens.
-	if err := h.checkIncarnationScope(claims, "history", inc.Name, inc.Service, inc.Covens); err != nil {
+	if err := h.checkIncarnationScope(claims, "history", inc.ID, inc.Service, inc.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission incarnation.history")
 	}
 
-	items, total, err := incarnation.HistorySelectByName(ctx, h.deps.IncarnationDB, a.Name, filter, offset, limit)
+	items, total, err := incarnation.HistorySelectByName(ctx, h.deps.IncarnationDB, a.ID, filter, offset, limit)
 	if err != nil {
 		code, detail := mapIncarnationErrorToMCP(err)
 		if code == mcpCodeInternalError {
 			h.deps.Logger.Error("mcp: incarnation.history select failed",
-				slog.String("name", a.Name),
+				slog.String("name", a.ID),
 				slog.String("apply_id", filter.ApplyID),
 				slog.String("by_aid", claims.Subject),
 				slog.Any("error", err),

@@ -28,7 +28,7 @@ Creating an instance - launching the selected starting script (or a bare incarna
 
 #### `keeper.incarnation.rerun-last`
 
-Restarting the **last crashed** script from `error_locked`: REST mirror [`POST /v1/incarnations/{name}/rerun-last`](../operator-api/incarnations.md). Permission: `incarnation.rerun-last`. Async: **yes**.
+Restarting the **last crashed** script from `error_locked`: REST mirror [`POST /v1/incarnations/{id}/rerun-last`](../operator-api/incarnations.md). Permission: `incarnation.rerun-last`. Async: **yes**.
 
 Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-good, snapshot in `state_history`) and with the same action restarts **last fallen script** incarnations - bootstrap (`create`/..., if creation failed) OR day-2 operation (`add_user`/...) — with the saved input of the failed run (`error_locked → applying` bypassing `ready`). Input is restored from `incarnation.spec.input` (create-path) or from the failed run recipe (`apply_runs.recipe.input`, day-2-path), not from defaults. Difference from `keeper.incarnation.unlock`: it only removes the block, rerun removes and restarts the fallen script in one action. Works only from `error_locked`; status is not `error_locked` → `incarnation-locked`, input of the failed run is not available (the run fell to dispatch and the recipe was not written / the recipe was cleared by retention / legacy run, fail-closed) → separate code `rerun-input-unavailable` ([mcp-tools.md → Errors](../mcp-tools.md#errors)). Status poll - `keeper.incarnation.get`. Audit event - `incarnation.rerun_last` (NOT `incarnation.unlocked`).
 
@@ -36,7 +36,7 @@ Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-go
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `reason` | `string` (1..500 characters) | yes | Free text for audit-trail (payload `incarnation.rerun_last`). |
 
 **Output:**
@@ -51,13 +51,13 @@ Errors: `not-found` (incarnation does not exist), `incarnation-locked` (status n
 
 #### `keeper.incarnation.run`
 
-Run a custom script on an existing instance. Permission: `incarnation.run`. Endpoint: [`POST /v1/incarnations/{name}/scenarios/{scenario}`](../operator-api/incarnations.md). Async: **yes**.
+Run a custom script on an existing instance. Permission: `incarnation.run`. Endpoint: [`POST /v1/incarnations/{id}/scenarios/{scenario}`](../operator-api/incarnations.md). Async: **yes**.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `scenario` | `string` | yes | Script name from `scenario/<name>/`. |
 | `input` | `object` | optional | Input script. |
 
@@ -71,13 +71,13 @@ Run a custom script on an existing instance. Permission: `incarnation.run`. Endp
 
 #### `keeper.incarnation.get`
 
-Read spec + state + status. Permission: `incarnation.get`. Endpoint: [`GET /v1/incarnations/{name}`](../operator-api/incarnations.md). Async: no.
+Read spec + state + status. Permission: `incarnation.get`. Endpoint: [`GET /v1/incarnations/{id}`](../operator-api/incarnations.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 
 **Output:** schema `IncarnationGetReply` — fields `name`, `service`, `service_version`, `state_schema_version`, `spec` (object), `state` (object), `status` (enum), `status_details` (object\|null), `created_by_aid`, `created_at`, `updated_at`. Details - [operator-api.md → IncarnationGetReply](../operator-api/incarnations.md).
 
@@ -103,13 +103,13 @@ Enumeration of instances. Permission: `incarnation.list`. Endpoint: [`GET /v1/in
 
 #### `keeper.incarnation.history`
 
-Log `state_history`. Permission: `incarnation.history`. Endpoint: [`GET /v1/incarnations/{name}/history`](../operator-api/incarnations.md). Async: no.
+Log `state_history`. Permission: `incarnation.history`. Endpoint: [`GET /v1/incarnations/{id}/history`](../operator-api/incarnations.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `offset` | `integer` | optional | Default `0`. |
 | `limit` | `integer` | optional | Default `50`. |
 
@@ -122,13 +122,13 @@ Log `state_history`. Permission: `incarnation.history`. Endpoint: [`GET /v1/inca
 
 #### `keeper.incarnation.unlock`
 
-Removing `error_locked`. Permission: `incarnation.unlock`. Endpoint: [`POST /v1/incarnations/{name}/unlock`](../operator-api/incarnations.md). Async: no.
+Removing `error_locked`. Permission: `incarnation.unlock`. Endpoint: [`POST /v1/incarnations/{id}/unlock`](../operator-api/incarnations.md). Async: no.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `reason` | `string` (1..500 characters) | yes | Free text for audit. |
 
 **Output:**
@@ -143,13 +143,13 @@ Removing `error_locked`. Permission: `incarnation.unlock`. Endpoint: [`POST /v1/
 
 #### `keeper.incarnation.upgrade`
 
-Transfer to new `state_schema_version` + change `service_version`. Permission: `incarnation.upgrade`. Endpoint: [`POST /v1/incarnations/{name}/upgrade`](../operator-api/incarnations.md). Async: **yes**.
+Transfer to new `state_schema_version` + change `service_version`. Permission: `incarnation.upgrade`. Endpoint: [`POST /v1/incarnations/{id}/upgrade`](../operator-api/incarnations.md). Async: **yes**.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `to_version` | `string` (git-ref service) | yes | Target version of the service. |
 
 **Output:**
@@ -160,19 +160,19 @@ Transfer to new `state_schema_version` + change `service_version`. Permission: `
 
 #### `keeper.incarnation.label-set`
 
-Replaces the incarnation's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Deliberately narrower than `keeper.incarnation.traits-set`: a trait pair is a live RBAC scope dimension, so stamping one grants visibility and needs a second, pair-level gate; a caption is in no dimension of anything - not the `incarnation=` scope value, not segment 3 of the derived secret path, not the CEL root (`incarnation.label` does not resolve) - so it needs only the ordinary incarnation scope gate. Allowed while the incarnation is `applying` or `error_locked`, because no run reads it. Permission: `incarnation.label-set` (scope `coven=`/`service=`/`incarnation=`). Endpoint: [`PUT /v1/incarnations/{name}/label`](../operator-api/incarnations.md). Async: no.
+Replaces the incarnation's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. Deliberately narrower than `keeper.incarnation.traits-set`: a trait pair is a live RBAC scope dimension, so stamping one grants visibility and needs a second, pair-level gate; a caption is in no dimension of anything - not the `incarnation=` scope value, not segment 3 of the derived secret path, not the CEL root (`incarnation.label` does not resolve) - so it needs only the ordinary incarnation scope gate. Allowed while the incarnation is `applying` or `error_locked`, because no run reads it. Permission: `incarnation.label-set` (scope `coven=`/`service=`/`incarnation=`). Endpoint: [`PUT /v1/incarnations/{id}/label`](../operator-api/incarnations.md). Async: no.
 
-**Input** (`required: name`): `{name (^[a-z0-9][a-z0-9-]{0,62}$), label? (string|null)}`. **Output:** `{incarnation, label}` - which row was addressed and what its caption now reads; the full record stays behind `keeper.incarnation.get`. Errors: `not-found`, `forbidden`.
+**Input** (`required: id`): `{id (^[a-z0-9][a-z0-9-]{0,62}$), label? (string|null)}`. **Output:** `{incarnation, label}` - which row was addressed and what its caption now reads; the full record stays behind `keeper.incarnation.get`. Errors: `not-found`, `forbidden`.
 
 #### `keeper.incarnation.destroy`
 
-Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/incarnations/{name}`](../operator-api/incarnations.md). Async: **yes**. Operator-facing `allow_destroy` is mapped to internal `force` (force↔allow_destroy unification): `false` — destroy via teardown script `destroy`; `true` - demolition without teardown.
+Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/incarnations/{id}`](../operator-api/incarnations.md). Async: **yes**. Operator-facing `allow_destroy` is mapped to internal `force` (force↔allow_destroy unification): `false` — destroy via teardown script `destroy`; `true` - demolition without teardown.
 
 **Input:**
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `allow_destroy` | `boolean` | yes | Mandatory confirmation flag (mapped in internal `force`). `false` - destroy via teardown script `destroy`; there is no script `destroy` in the service snapshot → `validation-failed`. `true` - demolition without teardown (force, DELETE lines directly). |
 
 **Output:**
@@ -180,7 +180,7 @@ Demolition instance. Permission: `incarnation.destroy`. Endpoint: [`DELETE /v1/i
 | Field | Type | Meaning |
 |---|---|---|
 | `_apply_id` | `string` (ULID) | Launch ID. |
-| `unreleased` | `object` | **Force path only**, omitted when the incarnation was holding nothing. What the demolition did NOT release: `provider` (cloud Provider owning the VMs), `vm_ids` (machines still running at the provider), `sids` (member hosts whose soul/seed/token were not revoked). See [`DELETE /v1/incarnations/{name}`](../operator-api/incarnations.md) for the capture rules. |
+| `unreleased` | `object` | **Force path only**, omitted when the incarnation was holding nothing. What the demolition did NOT release: `provider` (cloud Provider owning the VMs), `vm_ids` (machines still running at the provider), `sids` (member hosts whose soul/seed/token were not revoked). See [`DELETE /v1/incarnations/{id}`](../operator-api/incarnations.md) for the capture rules. |
 
 `allow_destroy=true` deletes the record without releasing anything, so a bare
 `_apply_id` must not be read as "cleaned up" — check `unreleased` and reclaim what
@@ -202,7 +202,7 @@ would make a validating client drop the very field the warning lives in.
 
 #### `keeper.incarnation.traits-set`
 
-Complete replacement of operator-set trait incarnation marks. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{name}/traits`](../operator-api/incarnations.md). Async: **no** (sync - one UPDATE on the incarnation row, compact summary response).
+Complete replacement of operator-set trait incarnation marks. Permission: `incarnation.traits-set`. Endpoint: [`PUT /v1/incarnations/{id}/traits`](../operator-api/incarnations.md). Async: **no** (sync - one UPDATE on the incarnation row, compact summary response).
 
 Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060-traits.md) R1 slice a) whole: empty/omitted `traits` = clear labels. One tx `FOR UPDATE`; nothing is written to a host row and no member host inherits the set ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). RBAC - body-scoped OR-Check by coven/service-scope incarnation (a coven-scope matches the declared `covens` only; the incarnation's own name is the `incarnation=` dimension, not a coven - REST mirror). Per-host counterpart - [`keeper.soul.traits-assign`](souls.md) (first-class). Audit event - `incarnation.traits_changed` (trait-**KEYS** only, not values).
 
@@ -210,7 +210,7 @@ Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `traits` | `object` | optional | Full set of trait marks: key → `scalar` (`string`/`number`/`boolean`) OR `list of scalars`. Replace semantics; empty/omitted = clear. Nested object/array → `validation-failed`. |
 
 **Output:**
@@ -224,7 +224,7 @@ Replaces `incarnation.traits` (jsonb - source of truth, [ADR-060](../../adr/0060
 
 #### `keeper.incarnation.bind-member`
 
-Binds already-onboarded, **connected** Souls to the incarnation's roster. Permission: `incarnation.bind-member`. Endpoint: [`POST /v1/incarnations/{name}/members`](../operator-api/incarnations.md). Async: **no**.
+Binds already-onboarded, **connected** Souls to the incarnation's roster. Permission: `incarnation.bind-member`. Endpoint: [`POST /v1/incarnations/{id}/members`](../operator-api/incarnations.md). Async: **no**.
 
 The operator half of membership ([ADR-008 amendment 2026-07-28](../../adr/0008-coven-stable-tags.md), NIM-209): the relation is otherwise written only by `core.soul.registered` inside a scenario run, which makes a create scenario over a ready roster unreachable. Idempotent — a re-bind writes nothing and reports the SIDs under `already_member`.
 
@@ -234,7 +234,7 @@ The operator half of membership ([ADR-008 amendment 2026-07-28](../../adr/0008-c
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `name` | `string` | yes | Name instance. |
+| `id` | `string` | yes | Incarnation id (immutable — [ADR-0085](../../adr/0085-entity-id-and-label.md)). |
 | `sids` | `array<string>` | yes | SIDs (FQDN) to bind, 1..200. Each must exist, be `connected` and lie inside the caller's soul scope. |
 
 **Output:**
@@ -249,7 +249,7 @@ The operator half of membership ([ADR-008 amendment 2026-07-28](../../adr/0008-c
 
 #### `keeper.incarnation.unbind-member`
 
-Removes a host from the roster — it stops being a target of every FUTURE run. Permission: `incarnation.unbind-member`. Endpoint: [`DELETE /v1/incarnations/{name}/members/{sid}`](../operator-api/incarnations.md). Async: **no**.
+Removes a host from the roster — it stops being a target of every FUTURE run. Permission: `incarnation.unbind-member`. Endpoint: [`DELETE /v1/incarnations/{id}/members/{sid}`](../operator-api/incarnations.md). Async: **no**.
 
 Idempotent: unbinding a non-member succeeds with `removed: false`; a SID absent from the registry is likewise a no-op (the FK cascade already removed its memberships). Same two gates as `bind-member`.
 
@@ -267,7 +267,7 @@ Idempotent: unbinding a non-member succeeds with `removed: false`; a SID absent 
 
 #### `keeper.incarnation.members`
 
-Lists the incarnation's roster. Permission: `incarnation.get` (the roster needs no right of its own). Endpoint: [`GET /v1/incarnations/{name}/members`](../operator-api/incarnations.md). Async: **no**.
+Lists the incarnation's roster. Permission: `incarnation.get` (the roster needs no right of its own). Endpoint: [`GET /v1/incarnations/{id}/members`](../operator-api/incarnations.md). Async: **no**.
 
 **Input:** `name` (`string`, yes).
 

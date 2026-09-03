@@ -15,20 +15,26 @@ import (
 	"time"
 )
 
-// NamePattern is the canonical Provider name / valid `Type` form: kebab-case,
-// length 1..63. Same as CHECK providers_name_format / providers_type_format in
-// migration 019.
-const NamePattern = `^[a-z0-9-]{1,63}$`
+// IDPattern is the canonical Provider id / valid `Type` form: kebab-case,
+// length 1..63. Same as CHECK providers_id_format (migration 118, renamed from
+// providers_name_format) and providers_type_format (migration 019, untouched).
+//
+// The form is UNCHANGED by the `name` -> `id` rename ([ADR-0085], NIM-729): the
+// identifier moved spelling, not grammar. `Type` is NOT an identifier — it is
+// the CloudDriver plugin name — and it keeps both its spelling and this shared
+// grammar; only the constant it is checked against was renamed.
+const IDPattern = `^[a-z0-9-]{1,63}$`
 
 // CredentialsRefPrefix is the only vault-ref scheme supported in the MVP
 // (recon-crud.md branch #2). env:/secret-store: is post-MVP ADR.
 const CredentialsRefPrefix = "vault:"
 
-var nameRe = regexp.MustCompile(NamePattern)
+var idRe = regexp.MustCompile(IDPattern)
 
-// ValidName checks that name matches the canonical form (kebab 1..63). Used for
-// both Provider name and the `Type` field (CloudDriver plugin name).
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks that s matches the canonical form (kebab 1..63). Used for both
+// the Provider id and the `Type` field (CloudDriver plugin name), which share a
+// grammar without sharing a role.
+func ValidID(s string) bool { return idRe.MatchString(s) }
 
 // ValidCredentialsRef checks that ref starts with [CredentialsRefPrefix] and
 // carries a non-empty path after it.
@@ -52,16 +58,20 @@ func ValidFQDNSuffix(suffix string) bool { return fqdnSuffixRe.MatchString(suffi
 
 // Provider is the runtime representation of a `providers` registry row.
 type Provider struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): set once at creation, the
+	// PRIMARY KEY of `providers`, and the `<entity>` segment of
+	// `secret/provider/<entity>/credentials`. There is no rename operation, and
+	// that path is one hop from this row with nothing in between to notice.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead. It participates in nothing derived — in
+	// consumer shows ID instead. It participates in nothing derived — in
 	// particular NOT the `<entity>` segment of `secret/provider/<entity>/
-	// credentials`, which is built from Name alone (guarded by
+	// credentials`, which is built from ID alone (guarded by
 	// label_invariant_guard_test.go).
 	//
 	// The self-onboard FQDN prediction `<name>-<index>.<fqdn_suffix>` does not
-	// read this field either, and does not read [Provider.Name] — its `<name>` is
+	// read this field either, and does not read [Provider.ID] — its `<name>` is
 	// the `core.cloud.provisioned` step's own `name` param
 	// (keeper/internal/coremod/cloud/provisioned.go); this row contributes only
 	// [Provider.FQDNSuffix].

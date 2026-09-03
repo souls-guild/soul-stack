@@ -37,7 +37,7 @@ import (
 // ScenarioSpawner spawns one per-incarnation scenario-run. Isolates
 // voyageorch from scenario-runner / ServiceRegistry / incarnation-CRUD (parity
 // tideorch.SurgeSpawner / errandrunorch.ErrandSpawner): production wire-up (S5)
-// provides adapter that resolves ServiceRef (incarnation.SelectByName →
+// provides adapter that resolves ServiceRef (incarnation.SelectByID →
 // ServiceRegistry.Resolve) and calls scenario.Runner.Start; unit-tests use fake
 // without dependencies.
 //

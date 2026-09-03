@@ -34,7 +34,7 @@ func (s *Stack) SeedIncarnationReady(t *testing.T, name, service, serviceVersion
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if _, err := s.db.Exec(ctx, `
-		INSERT INTO incarnation (name, service, service_version, state, status)
+		INSERT INTO incarnation (id, service, service_version, state, status)
 		VALUES ($1, $2, $3, $4::jsonb, 'ready')
 	`, name, service, serviceVersion, string(stateJSON)); err != nil {
 		t.Fatalf("SeedIncarnationReady(%s): %v", name, err)

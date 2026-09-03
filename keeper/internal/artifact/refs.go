@@ -20,7 +20,7 @@ import (
 // IsDefault — true only for the remote's default branch (HEAD symref); always
 // false for tags.
 //
-// Used by the UI layer (`GET /v1/services/{name}/refs`) to render the
+// Used by the UI layer (`GET /v1/services/{id}/refs`) to render the
 // "git-ref" dropdown in the Upgrade modal: picking from real refs instead of
 // free-form input.
 type GitRef struct {

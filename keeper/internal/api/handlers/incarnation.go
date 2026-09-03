@@ -273,7 +273,7 @@ func (h *IncarnationHandler) ContextReader() IncarnationContextReader {
 // (fail-closed), never matching an incarnation.
 var incScopeColumns = rbac.ScopeColumns{
 	Coven:       "covens",
-	Incarnation: "name",
+	Incarnation: "id",
 	Service:     "service",
 	Traits:      "traits",
 }
@@ -351,7 +351,7 @@ func (h *IncarnationHandler) GetInScopeFor(claims *jwt.Claims, action string) fu
 		pv := h.scoper.ResolvePurview(claims.Subject, "incarnation", action)
 		return pv.Match(rbac.ScopeInput{
 			Covens:       inc.Covens,
-			Incarnations: []string{inc.Name},
+			Incarnations: []string{inc.ID},
 			Services:     []string{inc.Service},
 			Traits:       rbac.TraitValues(inc.TraitsRaw),
 		})
@@ -403,7 +403,7 @@ func (h *IncarnationHandler) resolveListScope(ctx context.Context, claims *jwt.C
 
 // IncarnationContextReader — read surface for the RBAC extractors of incarnation
 // routes: "return service + declared covens of the incarnation by name".
-// Implemented by [IncarnationDB] (via [incarnation.SelectByName]); the extractor
+// Implemented by [IncarnationDB] (via [incarnation.SelectByID]); the extractor
 // holds it in a closure to land the incarnation's own scope attributes into the
 // RBAC context (ADR-008 amendment a; architect: the context is one-dimensional —
 // incarnation attributes, not bulk over hosts, so accessing the data in the
@@ -529,7 +529,7 @@ func incarnationScopeContexts(name, service string, covens []string) []map[strin
 // `incarnation.* on coven=…` / `on service=…` silently did NOT match
 // (ADR-008 amendment a).
 //
-// The same [incarnation.SelectByName] these routes already do in the handler (the
+// The same [incarnation.SelectByID] these routes already do in the handler (the
 // double select is the cold RBAC-gate path, not a hot path; the alternative —
 // carrying inc from middleware into the handler via context — is needless coupling
 // for one round-trip on a non-bulk operation).
@@ -542,16 +542,16 @@ func incarnationScopeContexts(name, service string, covens []string) []map[strin
 func IncarnationScopeSelector(reader IncarnationContextReader) middleware.MultiSelectorExtractor {
 	return func(r *http.Request) []map[string]string {
 		name := chi.URLParam(r, "name")
-		if !incarnation.ValidName(name) {
+		if !incarnation.ValidID(name) {
 			return nil
 		}
-		inc, err := incarnation.SelectByName(r.Context(), reader, name)
+		inc, err := incarnation.SelectByID(r.Context(), reader, name)
 		if err != nil {
 			// Not found / DB error → fail-closed for scoped roles. bare/`*` pass the
 			// empty set, the handler returns 404 / 500 as before.
 			return nil
 		}
-		return incarnationCovenContexts(inc.Name, inc.Service, inc.Covens)
+		return incarnationCovenContexts(inc.ID, inc.Service, inc.Covens)
 	}
 }
 
@@ -585,12 +585,12 @@ func IncarnationCreateScopeSelector(r *http.Request) []map[string]string {
 		return nil
 	}
 	var probe struct {
-		Name    string   `json:"name"`
+		ID      string   `json:"id"`
 		Service string   `json:"service"`
 		Covens  []string `json:"covens"`
 	}
 	if err := json.Unmarshal(body, &probe); err != nil {
 		return nil
 	}
-	return incarnationScopeContexts(probe.Name, probe.Service, probe.Covens)
+	return incarnationScopeContexts(probe.ID, probe.Service, probe.Covens)
 }

@@ -3,7 +3,7 @@ package api
 // Aligns the name of the scenarios-list envelope of the SERVICE domain to the committed
 // hand-written spec (ENVELOPE mechanism, rollout batch N1 following huma_incarnation_envelope.go).
 //
-// PROBLEM. GET /v1/services/{name}/scenarios carries the type handlers.ServiceScenariosReply
+// PROBLEM. GET /v1/services/{id}/scenarios carries the type handlers.ServiceScenariosReply
 // in Body (NOT an alias for ServiceScenariosListReply: its element is the domain
 // artifact.Scenario with a plain-string Kind, not a typed enum, see handlers/service.go). huma
 // DefaultSchemaNamer takes reflect.Type.Name() → emits the schema "ServiceScenariosReply".
@@ -28,7 +28,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 )
 
-// serviceScenariosListReply — alias target for the GET /v1/services/{name}/scenarios envelope schema.
+// serviceScenariosListReply — alias target for the GET /v1/services/{id}/scenarios envelope schema.
 // Shape checked against the committed hand-written spec (docs/keeper/openapi.yaml → ServiceScenariosListReply):
 // service/ref (string) + scenarios[] (all three required). items-element — artifact.Scenario
 // (the same domain type handlers.ServiceScenariosReply carries) → items.$ref to the contract

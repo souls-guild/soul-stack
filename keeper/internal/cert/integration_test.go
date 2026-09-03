@@ -120,7 +120,7 @@ func resetAll(t *testing.T) {
 func seedIncarnation(t *testing.T, name string) {
 	t.Helper()
 	if _, err := integrationPool.Exec(context.Background(), `
-		INSERT INTO incarnation (name, service, service_version, status, created_by_aid)
+		INSERT INTO incarnation (id, service, service_version, status, created_by_aid)
 		VALUES ($1, 'redis', 'v1.0.0', 'ready', $2)`, name, testAID); err != nil {
 		t.Fatalf("seed incarnation(%s): %v", name, err)
 	}

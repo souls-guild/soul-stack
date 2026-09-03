@@ -40,7 +40,7 @@ func augurClaims(subject string) *keeperjwt.Claims { return &keeperjwt.Claims{Su
 type augurFakePool struct {
 	// omenInsertErr — error from the RETURNING scan of INSERT omens: pgErr 23505 → 409.
 	omenInsertErr error
-	// omenGetValues — outcome of SELECT … FROM omens WHERE name (resolve for GetOmen and
+	// omenGetValues — outcome of SELECT … FROM omens WHERE id (resolve for GetOmen and
 	// for InsertRite); nil → ErrNoRows (404). Also used by rite-insert.
 	omenGetValues []any
 	omenGetErr    error
@@ -80,7 +80,7 @@ func (p *augurFakePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Ro
 			return errRow{err: p.riteInsertErr}
 		}
 		return augurRow{values: []any{int64(42), time.Now()}} // RETURNING id, created_at
-	case contains(sql, "FROM omens") && contains(sql, "WHERE name"):
+	case contains(sql, "FROM omens") && contains(sql, "WHERE id"):
 		if p.omenGetErr != nil {
 			return errRow{err: p.omenGetErr}
 		}
@@ -227,12 +227,12 @@ func sidSel(s ...string) subject.Selector   { return subject.Selector{SIDs: s} }
 func TestAugurHandler_CreateOmenTyped_201(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{})
 	reply, err := h.CreateOmenTyped(context.Background(), augurClaims("archon-alice"), OmenCreateInput{
-		Name: "vault-prod", SourceType: "vault", Endpoint: "https://vault:8200", AuthRef: "vault:secret/keeper/ar",
+		ID: "vault-prod", SourceType: "vault", Endpoint: "https://vault:8200", AuthRef: "vault:secret/keeper/ar",
 	})
 	if err != nil {
 		t.Fatalf("CreateOmenTyped: %v", err)
 	}
-	if reply.View.Name != "vault-prod" || reply.View.SourceType != "vault" {
+	if reply.View.ID != "vault-prod" || reply.View.SourceType != "vault" {
 		t.Errorf("view = %+v", reply.View)
 	}
 	if reply.CallerAID != "archon-alice" {
@@ -248,7 +248,7 @@ func TestAugurHandler_CreateOmenTyped_201(t *testing.T) {
 func TestAugurHandler_CreateOmenTyped_BadSourceType_422(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{})
 	_, err := h.CreateOmenTyped(context.Background(), augurClaims("archon-alice"), OmenCreateInput{
-		Name: "x", SourceType: "redis", Endpoint: "e", AuthRef: "vault:s/p",
+		ID: "x", SourceType: "redis", Endpoint: "e", AuthRef: "vault:s/p",
 	})
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
@@ -256,7 +256,7 @@ func TestAugurHandler_CreateOmenTyped_BadSourceType_422(t *testing.T) {
 func TestAugurHandler_CreateOmenTyped_BadAuthRef_422(t *testing.T) {
 	h := newAugurHandler(t, &augurFakePool{})
 	_, err := h.CreateOmenTyped(context.Background(), augurClaims("archon-alice"), OmenCreateInput{
-		Name: "x", SourceType: "vault", Endpoint: "e", AuthRef: "plain-secret",
+		ID: "x", SourceType: "vault", Endpoint: "e", AuthRef: "plain-secret",
 	})
 	wantAugurProblem(t, err, problem.TypeValidationFailed)
 }
@@ -266,7 +266,7 @@ func TestAugurHandler_CreateOmenTyped_Duplicate_409(t *testing.T) {
 		omenInsertErr: &pgconn.PgError{Code: "23505", ConstraintName: "omens_pkey"},
 	})
 	_, err := h.CreateOmenTyped(context.Background(), augurClaims("archon-alice"), OmenCreateInput{
-		Name: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p",
+		ID: "vault-prod", SourceType: "vault", Endpoint: "e", AuthRef: "vault:s/p",
 	})
 	wantAugurProblem(t, err, problem.TypeOmenExists)
 }
@@ -285,7 +285,7 @@ func TestAugurHandler_ListOmensTyped_200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListOmensTyped: %v", err)
 	}
-	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].Name != "vault-prod" {
+	if page.Total != 2 || len(page.Items) != 2 || page.Items[0].ID != "vault-prod" {
 		t.Errorf("page = %+v", page)
 	}
 }
@@ -313,7 +313,7 @@ func TestAugurHandler_GetOmenTyped_200(t *testing.T) {
 	if err != nil {
 		t.Fatalf("GetOmenTyped: %v", err)
 	}
-	if view.Name != "vault-prod" {
+	if view.ID != "vault-prod" {
 		t.Errorf("view = %+v", view)
 	}
 }
@@ -336,7 +336,7 @@ func TestAugurHandler_DeleteOmenTyped_204(t *testing.T) {
 	if err != nil {
 		t.Fatalf("DeleteOmenTyped: %v", err)
 	}
-	if reply.AuditPayload()["name"] != "vault-prod" {
+	if reply.AuditPayload()["id"] != "vault-prod" {
 		t.Errorf("audit payload = %v", reply.AuditPayload())
 	}
 }

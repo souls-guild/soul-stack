@@ -44,9 +44,9 @@ func cmdTag(s string) pgconn.CommandTag { return pgconn.NewCommandTag(s) }
 
 func strptr(s string) *string { return &s }
 
-// --- ValidName --------------------------------------------------------
+// --- ValidID --------------------------------------------------------
 
-func TestValidName(t *testing.T) {
+func TestValidID(t *testing.T) {
 	cases := map[string]bool{
 		"ops-webhook": true,
 		"a":           true,
@@ -57,8 +57,8 @@ func TestValidName(t *testing.T) {
 		"trailing-":   true, // Hyphen is allowed anywhere, as with omens.
 	}
 	for name, want := range cases {
-		if got := ValidName(name); got != want {
-			t.Errorf("ValidName(%q) = %v, want %v", name, got, want)
+		if got := ValidID(name); got != want {
+			t.Errorf("ValidID(%q) = %v, want %v", name, got, want)
 		}
 	}
 }
@@ -313,7 +313,7 @@ func TestValidateTiding_EphemeralVoyageInvariant(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			tg := &Tiding{
-				Name:       "t1",
+				ID:         "t1",
 				Herald:     "ops",
 				EventTypes: []string{"scenario_run.*"},
 				Ephemeral:  tc.ephemeral,
@@ -344,7 +344,7 @@ func TestValidateTiding_EphemeralVoyageInvariant(t *testing.T) {
 // instead of an empty string. Otherwise non-ephemeral+&"" would hit CHECK as 500.
 func TestValidateTiding_NormalizesEmptyVoyageToNil(t *testing.T) {
 	tg := &Tiding{
-		Name:       "t1",
+		ID:         "t1",
 		Herald:     "ops",
 		EventTypes: []string{"scenario_run.*"},
 		Ephemeral:  false,
@@ -364,7 +364,7 @@ func TestValidateTiding_NormalizesEmptyVoyageToNil(t *testing.T) {
 // optStrArg would write an empty selector.
 func TestValidateTiding_NormalizesEmptyTaskToNil(t *testing.T) {
 	tg := &Tiding{
-		Name:       "t1",
+		ID:         "t1",
 		Herald:     "ops",
 		EventTypes: []string{"incarnation.run_completed"},
 		Task:       strptr(""),
@@ -382,7 +382,7 @@ func TestValidateTiding_NormalizesEmptyTaskToNil(t *testing.T) {
 func TestInsertTiding_RejectsBadProjection(t *testing.T) {
 	db := &fakeDB{rowErr: errors.New("db must not be hit")}
 	tg := &Tiding{
-		Name:       "t1",
+		ID:         "t1",
 		Herald:     "ops",
 		EventTypes: []string{"scenario_run.*"},
 		Projection: []string{"summary..succeeded"},
@@ -400,10 +400,10 @@ func TestInsertHerald_RejectsBeforeDB(t *testing.T) {
 		h    *Herald
 	}{
 		{"nil", nil},
-		{"bad name", &Herald{Name: "Bad", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}},
-		{"bad type", &Herald{Name: "ok", Type: HeraldType("pagerduty"), Config: map[string]any{"url": "https://x/y"}}},
-		{"bad config", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{}}},
-		{"bad secret_ref", &Herald{Name: "ok", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}, SecretRef: strptr("plain")}},
+		{"bad name", &Herald{ID: "Bad", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}},
+		{"bad type", &Herald{ID: "ok", Type: HeraldType("pagerduty"), Config: map[string]any{"url": "https://x/y"}}},
+		{"bad config", &Herald{ID: "ok", Type: HeraldWebhook, Config: map[string]any{}}},
+		{"bad secret_ref", &Herald{ID: "ok", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}, SecretRef: strptr("plain")}},
 	}
 	db := &fakeDB{rowErr: errors.New("db must not be hit")}
 	for _, tc := range cases {
@@ -417,7 +417,7 @@ func TestInsertHerald_RejectsBeforeDB(t *testing.T) {
 
 func TestInsertHerald_MapsUniqueViolation(t *testing.T) {
 	db := &fakeDB{rowErr: &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "heralds_pkey"}}
-	h := &Herald{Name: "ops", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}
+	h := &Herald{ID: "ops", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}
 	if err := InsertHerald(context.Background(), db, h); !errors.Is(err, ErrHeraldExists) {
 		t.Errorf("err = %v, want ErrHeraldExists", err)
 	}
@@ -429,10 +429,10 @@ func TestInsertTiding_RejectsBeforeDB(t *testing.T) {
 		t    *Tiding
 	}{
 		{"nil", nil},
-		{"bad name", &Tiding{Name: "Bad", Herald: "ops", EventTypes: []string{"scenario_run.*"}}},
-		{"empty herald", &Tiding{Name: "ok", Herald: "", EventTypes: []string{"scenario_run.*"}}},
-		{"bad event_types", &Tiding{Name: "ok", Herald: "ops", EventTypes: []string{"role.*"}}},
-		{"empty event_types", &Tiding{Name: "ok", Herald: "ops", EventTypes: nil}},
+		{"bad name", &Tiding{ID: "Bad", Herald: "ops", EventTypes: []string{"scenario_run.*"}}},
+		{"empty herald", &Tiding{ID: "ok", Herald: "", EventTypes: []string{"scenario_run.*"}}},
+		{"bad event_types", &Tiding{ID: "ok", Herald: "ops", EventTypes: []string{"role.*"}}},
+		{"empty event_types", &Tiding{ID: "ok", Herald: "ops", EventTypes: nil}},
 	}
 	db := &fakeDB{rowErr: errors.New("db must not be hit")}
 	for _, tc := range cases {
@@ -446,7 +446,7 @@ func TestInsertTiding_RejectsBeforeDB(t *testing.T) {
 
 func TestInsertTiding_MapsHeraldFKViolation(t *testing.T) {
 	db := &fakeDB{rowErr: &pgconn.PgError{Code: pgErrCodeForeignKeyViolation, ConstraintName: "tidings_herald_fk"}}
-	tg := &Tiding{Name: "t1", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
+	tg := &Tiding{ID: "t1", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
 	if err := InsertTiding(context.Background(), db, tg); !errors.Is(err, ErrHeraldNotFound) {
 		t.Errorf("err = %v, want ErrHeraldNotFound", err)
 	}
@@ -454,7 +454,7 @@ func TestInsertTiding_MapsHeraldFKViolation(t *testing.T) {
 
 func TestInsertTiding_MapsUniqueViolation(t *testing.T) {
 	db := &fakeDB{rowErr: &pgconn.PgError{Code: pgErrCodeUniqueViolation, ConstraintName: "tidings_pkey"}}
-	tg := &Tiding{Name: "t1", Herald: "ops", EventTypes: []string{"scenario_run.*"}}
+	tg := &Tiding{ID: "t1", Herald: "ops", EventTypes: []string{"scenario_run.*"}}
 	if err := InsertTiding(context.Background(), db, tg); !errors.Is(err, ErrTidingExists) {
 		t.Errorf("err = %v, want ErrTidingExists", err)
 	}
@@ -478,7 +478,7 @@ func TestDeleteTiding_NotFound(t *testing.T) {
 
 func TestUpdateHerald_NotFound(t *testing.T) {
 	db := &fakeDB{execTag: cmdTag("UPDATE 0")}
-	h := &Herald{Name: "ops", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}
+	h := &Herald{ID: "ops", Type: HeraldWebhook, Config: map[string]any{"url": "https://x/y"}}
 	if err := UpdateHerald(context.Background(), db, h); !errors.Is(err, ErrHeraldNotFound) {
 		t.Errorf("err = %v, want ErrHeraldNotFound", err)
 	}
@@ -486,7 +486,7 @@ func TestUpdateHerald_NotFound(t *testing.T) {
 
 func TestUpdateTiding_NotFound(t *testing.T) {
 	db := &fakeDB{execTag: cmdTag("UPDATE 0")}
-	tg := &Tiding{Name: "t1", Herald: "ops", EventTypes: []string{"scenario_run.*"}}
+	tg := &Tiding{ID: "t1", Herald: "ops", EventTypes: []string{"scenario_run.*"}}
 	if err := UpdateTiding(context.Background(), db, tg); !errors.Is(err, ErrTidingNotFound) {
 		t.Errorf("err = %v, want ErrTidingNotFound", err)
 	}
@@ -494,7 +494,7 @@ func TestUpdateTiding_NotFound(t *testing.T) {
 
 func TestUpdateTiding_MapsHeraldFKViolation(t *testing.T) {
 	db := &fakeDB{execErr: &pgconn.PgError{Code: pgErrCodeForeignKeyViolation, ConstraintName: "tidings_herald_fk"}}
-	tg := &Tiding{Name: "t1", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
+	tg := &Tiding{ID: "t1", Herald: "ghost", EventTypes: []string{"scenario_run.*"}}
 	if err := UpdateTiding(context.Background(), db, tg); !errors.Is(err, ErrHeraldNotFound) {
 		t.Errorf("err = %v, want ErrHeraldNotFound", err)
 	}

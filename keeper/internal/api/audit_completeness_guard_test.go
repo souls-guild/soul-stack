@@ -93,16 +93,16 @@ var auditedWriteRoutes = map[route]auditedRoute{
 
 	// incarnations — MIXED audit class (middleware create/run/unlock/upgrade +
 	// self-audit rerun/destroy/traits-set), all must emit.
-	{http.MethodPost, "/v1/incarnations"}:                             {events: []audit.EventType{audit.EventIncarnationCreated}},
-	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
-	{http.MethodPost, "/v1/incarnations/{name}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
-	{http.MethodPost, "/v1/incarnations/{name}/upgrade"}:              {events: []audit.EventType{audit.EventIncarnationUpgradeStarted}},
-	{http.MethodPost, "/v1/incarnations/{name}/rerun-last"}:           {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler writes inside RerunLastTyped"},
-	{http.MethodDelete, "/v1/incarnations/{name}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
-	{http.MethodPut, "/v1/incarnations/{name}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
-	{http.MethodPost, "/v1/incarnations/{name}/members"}:              {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
-	{http.MethodDelete, "/v1/incarnations/{name}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
-	{http.MethodPost, "/v1/incarnations/{name}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
+	{http.MethodPost, "/v1/incarnations"}:                           {events: []audit.EventType{audit.EventIncarnationCreated}},
+	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}"}: {events: []audit.EventType{audit.EventIncarnationScenarioStarted}},
+	{http.MethodPost, "/v1/incarnations/{id}/unlock"}:               {events: []audit.EventType{audit.EventIncarnationUnlocked}},
+	{http.MethodPost, "/v1/incarnations/{id}/upgrade"}:              {events: []audit.EventType{audit.EventIncarnationUpgradeStarted}},
+	{http.MethodPost, "/v1/incarnations/{id}/rerun-last"}:           {events: []audit.EventType{audit.EventIncarnationRerunLast}, note: "self-audit: handler writes inside RerunLastTyped"},
+	{http.MethodDelete, "/v1/incarnations/{id}"}:                    {events: []audit.EventType{audit.EventIncarnationDestroyStarted}, note: "self-audit: destroy_started writes in the service layer incarnation.Destroy"},
+	{http.MethodPut, "/v1/incarnations/{id}/traits"}:                {events: []audit.EventType{audit.EventIncarnationTraitsChanged}, note: "self-audit: handler writes inside SetTraitsTyped"},
+	{http.MethodPost, "/v1/incarnations/{id}/members"}:              {events: []audit.EventType{audit.EventIncarnationMemberBound}, note: "self-audit: handler writes inside BindMembersTyped (NIM-209)"},
+	{http.MethodDelete, "/v1/incarnations/{id}/members/{sid}"}:      {events: []audit.EventType{audit.EventIncarnationMemberUnbound}, note: "self-audit: handler writes inside UnbindMemberTyped (NIM-209)"},
+	{http.MethodPost, "/v1/incarnations/{id}/secrets/reveal"}:       {events: []audit.EventType{audit.EventIncarnationSecretRevealed}, note: "self-audit after ReadKV"},
 
 	// The ten display-caption mutations ([ADR-0085], NIM-728). Audited like every
 	// other write, and for the same reason: the trail says who changed what and
@@ -113,22 +113,22 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	// Class B (self-audit) on the incarnation, because that route is mounted under
 	// a scope selector rather than one of the NoSelector audit-middleware groups;
 	// class A (middleware-audit) on the other nine.
-	{http.MethodPut, "/v1/incarnations/{name}/label"}:   {events: []audit.EventType{audit.EventIncarnationLabelChanged}, note: "self-audit: handler writes inside SetLabelTyped"},
-	{http.MethodPut, "/v1/services/{name}/label"}:       {events: []audit.EventType{audit.EventServiceLabelChanged}},
-	{http.MethodPut, "/v1/providers/{name}/label"}:      {events: []audit.EventType{audit.EventProviderLabelChanged}},
-	{http.MethodPut, "/v1/profiles/{name}/label"}:       {events: []audit.EventType{audit.EventProfileLabelChanged}},
-	{http.MethodPut, "/v1/push-providers/{name}/label"}: {events: []audit.EventType{audit.EventPushProviderLabelChanged}},
-	{http.MethodPut, "/v1/augur/omens/{name}/label"}:    {events: []audit.EventType{audit.EventOmenLabelChanged}},
-	{http.MethodPut, "/v1/heralds/{name}/label"}:        {events: []audit.EventType{audit.EventHeraldLabelChanged}},
-	{http.MethodPut, "/v1/tidings/{name}/label"}:        {events: []audit.EventType{audit.EventTidingLabelChanged}},
-	{http.MethodPut, "/v1/vigils/{name}/label"}:         {events: []audit.EventType{audit.EventVigilLabelChanged}},
-	{http.MethodPut, "/v1/decrees/{name}/label"}:        {events: []audit.EventType{audit.EventDecreeLabelChanged}},
+	{http.MethodPut, "/v1/incarnations/{id}/label"}:   {events: []audit.EventType{audit.EventIncarnationLabelChanged}, note: "self-audit: handler writes inside SetLabelTyped"},
+	{http.MethodPut, "/v1/services/{id}/label"}:       {events: []audit.EventType{audit.EventServiceLabelChanged}},
+	{http.MethodPut, "/v1/providers/{id}/label"}:      {events: []audit.EventType{audit.EventProviderLabelChanged}},
+	{http.MethodPut, "/v1/profiles/{id}/label"}:       {events: []audit.EventType{audit.EventProfileLabelChanged}},
+	{http.MethodPut, "/v1/push-providers/{id}/label"}: {events: []audit.EventType{audit.EventPushProviderLabelChanged}},
+	{http.MethodPut, "/v1/augur/omens/{id}/label"}:    {events: []audit.EventType{audit.EventOmenLabelChanged}},
+	{http.MethodPut, "/v1/heralds/{id}/label"}:        {events: []audit.EventType{audit.EventHeraldLabelChanged}},
+	{http.MethodPut, "/v1/tidings/{id}/label"}:        {events: []audit.EventType{audit.EventTidingLabelChanged}},
+	{http.MethodPut, "/v1/vigils/{id}/label"}:         {events: []audit.EventType{audit.EventVigilLabelChanged}},
+	{http.MethodPut, "/v1/decrees/{id}/label"}:        {events: []audit.EventType{audit.EventDecreeLabelChanged}},
 
 	// choir (self-audit inside *Typed via writeAuditCtx).
-	{http.MethodPost, "/v1/incarnations/{name}/choirs"}:                        {events: []audit.EventType{audit.EventChoirCreated}, note: "self-audit"},
-	{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}"}:              {events: []audit.EventType{audit.EventChoirDeleted}, note: "self-audit"},
-	{http.MethodPost, "/v1/incarnations/{name}/choirs/{choir}/voices"}:         {events: []audit.EventType{audit.EventChoirVoiceAdded}, note: "self-audit"},
-	{http.MethodDelete, "/v1/incarnations/{name}/choirs/{choir}/voices/{sid}"}: {events: []audit.EventType{audit.EventChoirVoiceRemoved}, note: "self-audit"},
+	{http.MethodPost, "/v1/incarnations/{id}/choirs"}:                        {events: []audit.EventType{audit.EventChoirCreated}, note: "self-audit"},
+	{http.MethodDelete, "/v1/incarnations/{id}/choirs/{choir}"}:              {events: []audit.EventType{audit.EventChoirDeleted}, note: "self-audit"},
+	{http.MethodPost, "/v1/incarnations/{id}/choirs/{choir}/voices"}:         {events: []audit.EventType{audit.EventChoirVoiceAdded}, note: "self-audit"},
+	{http.MethodDelete, "/v1/incarnations/{id}/choirs/{choir}/voices/{sid}"}: {events: []audit.EventType{audit.EventChoirVoiceRemoved}, note: "self-audit"},
 
 	// souls (middleware-audit; exec → errand.invoked, middleware + dispatcher).
 	{http.MethodPost, "/v1/souls"}:                   {events: []audit.EventType{audit.EventSoulCreated}},
@@ -152,9 +152,9 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodDelete, "/v1/sigil/keys/{key_id}"}:       {events: []audit.EventType{audit.EventSigilKeyRetired}},
 
 	// services (middleware-audit).
-	{http.MethodPost, "/v1/services"}:          {events: []audit.EventType{audit.EventServiceRegistered}},
-	{http.MethodPatch, "/v1/services/{name}"}:  {events: []audit.EventType{audit.EventServiceUpdated}},
-	{http.MethodDelete, "/v1/services/{name}"}: {events: []audit.EventType{audit.EventServiceDeregistered}},
+	{http.MethodPost, "/v1/services"}:        {events: []audit.EventType{audit.EventServiceRegistered}},
+	{http.MethodPatch, "/v1/services/{id}"}:  {events: []audit.EventType{audit.EventServiceUpdated}},
+	{http.MethodDelete, "/v1/services/{id}"}: {events: []audit.EventType{audit.EventServiceDeregistered}},
 
 	// provisioning-policy (middleware-audit; PUT mutating, GET — read). ADR-058 Part B.
 	{http.MethodPut, "/v1/provisioning-policy"}: {events: []audit.EventType{audit.EventProvisioningPolicyChanged}},
@@ -166,39 +166,39 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodDelete, "/v1/settings/{key}"}: {events: []audit.EventType{audit.EventSettingDeleted}},
 
 	// augur (middleware-audit).
-	{http.MethodPost, "/v1/augur/omens"}:          {events: []audit.EventType{audit.EventOmenCreated}},
-	{http.MethodDelete, "/v1/augur/omens/{name}"}: {events: []audit.EventType{audit.EventOmenRevoked}},
-	{http.MethodPost, "/v1/augur/rites"}:          {events: []audit.EventType{audit.EventRiteCreated}},
-	{http.MethodDelete, "/v1/augur/rites/{id}"}:   {events: []audit.EventType{audit.EventRiteRevoked}},
+	{http.MethodPost, "/v1/augur/omens"}:        {events: []audit.EventType{audit.EventOmenCreated}},
+	{http.MethodDelete, "/v1/augur/omens/{id}"}: {events: []audit.EventType{audit.EventOmenRevoked}},
+	{http.MethodPost, "/v1/augur/rites"}:        {events: []audit.EventType{audit.EventRiteCreated}},
+	{http.MethodDelete, "/v1/augur/rites/{id}"}: {events: []audit.EventType{audit.EventRiteRevoked}},
 
 	// oracle (middleware-audit).
-	{http.MethodPost, "/v1/vigils"}:           {events: []audit.EventType{audit.EventVigilCreated}},
-	{http.MethodDelete, "/v1/vigils/{name}"}:  {events: []audit.EventType{audit.EventVigilDeleted}},
-	{http.MethodPost, "/v1/decrees"}:          {events: []audit.EventType{audit.EventDecreeCreated}},
-	{http.MethodDelete, "/v1/decrees/{name}"}: {events: []audit.EventType{audit.EventDecreeDeleted}},
+	{http.MethodPost, "/v1/vigils"}:         {events: []audit.EventType{audit.EventVigilCreated}},
+	{http.MethodDelete, "/v1/vigils/{id}"}:  {events: []audit.EventType{audit.EventVigilDeleted}},
+	{http.MethodPost, "/v1/decrees"}:        {events: []audit.EventType{audit.EventDecreeCreated}},
+	{http.MethodDelete, "/v1/decrees/{id}"}: {events: []audit.EventType{audit.EventDecreeDeleted}},
 
 	// push (middleware-audit; apply mutating, GET — read).
 	{http.MethodPost, "/v1/push/apply"}: {events: []audit.EventType{audit.EventPushApplied}},
 
 	// push-providers (middleware-audit).
-	{http.MethodPost, "/v1/push-providers"}:          {events: []audit.EventType{audit.EventPushProviderCreated}},
-	{http.MethodPut, "/v1/push-providers/{name}"}:    {events: []audit.EventType{audit.EventPushProviderUpdated}},
-	{http.MethodDelete, "/v1/push-providers/{name}"}: {events: []audit.EventType{audit.EventPushProviderDeleted}},
+	{http.MethodPost, "/v1/push-providers"}:        {events: []audit.EventType{audit.EventPushProviderCreated}},
+	{http.MethodPut, "/v1/push-providers/{id}"}:    {events: []audit.EventType{audit.EventPushProviderUpdated}},
+	{http.MethodDelete, "/v1/push-providers/{id}"}: {events: []audit.EventType{audit.EventPushProviderDeleted}},
 
 	// providers + profiles — Cloud CRUD (middleware-audit, ADR-017). No update
 	// (Provider/Profile are immutable).
-	{http.MethodPost, "/v1/providers"}:          {events: []audit.EventType{audit.EventProviderCreated}},
-	{http.MethodDelete, "/v1/providers/{name}"}: {events: []audit.EventType{audit.EventProviderDeleted}},
-	{http.MethodPost, "/v1/profiles"}:           {events: []audit.EventType{audit.EventProfileCreated}},
-	{http.MethodDelete, "/v1/profiles/{name}"}:  {events: []audit.EventType{audit.EventProfileDeleted}},
+	{http.MethodPost, "/v1/providers"}:        {events: []audit.EventType{audit.EventProviderCreated}},
+	{http.MethodDelete, "/v1/providers/{id}"}: {events: []audit.EventType{audit.EventProviderDeleted}},
+	{http.MethodPost, "/v1/profiles"}:         {events: []audit.EventType{audit.EventProfileCreated}},
+	{http.MethodDelete, "/v1/profiles/{id}"}:  {events: []audit.EventType{audit.EventProfileDeleted}},
 
 	// heralds + tidings (middleware-audit).
-	{http.MethodPost, "/v1/heralds"}:          {events: []audit.EventType{audit.EventHeraldCreated}},
-	{http.MethodPut, "/v1/heralds/{name}"}:    {events: []audit.EventType{audit.EventHeraldUpdated}},
-	{http.MethodDelete, "/v1/heralds/{name}"}: {events: []audit.EventType{audit.EventHeraldDeleted}},
-	{http.MethodPost, "/v1/tidings"}:          {events: []audit.EventType{audit.EventTidingCreated}},
-	{http.MethodPut, "/v1/tidings/{name}"}:    {events: []audit.EventType{audit.EventTidingUpdated}},
-	{http.MethodDelete, "/v1/tidings/{name}"}: {events: []audit.EventType{audit.EventTidingDeleted}},
+	{http.MethodPost, "/v1/heralds"}:        {events: []audit.EventType{audit.EventHeraldCreated}},
+	{http.MethodPut, "/v1/heralds/{id}"}:    {events: []audit.EventType{audit.EventHeraldUpdated}},
+	{http.MethodDelete, "/v1/heralds/{id}"}: {events: []audit.EventType{audit.EventHeraldDeleted}},
+	{http.MethodPost, "/v1/tidings"}:        {events: []audit.EventType{audit.EventTidingCreated}},
+	{http.MethodPut, "/v1/tidings/{id}"}:    {events: []audit.EventType{audit.EventTidingUpdated}},
+	{http.MethodDelete, "/v1/tidings/{id}"}: {events: []audit.EventType{audit.EventTidingDeleted}},
 
 	// errands (cancel — middleware-audit; POST exec lives under /v1/souls/{sid}/exec).
 	{http.MethodDelete, "/v1/errands/{errand_id}"}: {events: []audit.EventType{audit.EventTypeErrandCancelled}},
@@ -237,12 +237,12 @@ var writeRoutesNoAudit = map[route]string{
 	// pattern"). audit deliberately not written.
 	{http.MethodPost, "/v1/modules/{name}/form-prep"}: "ADR-045 S3: read-only resolve of source catalogs for the UI form (live SIDs), without mutating state - audit deliberately not written (pattern soul.list/service.list)",
 
-	// POST /v1/incarnations/{name}/scenarios/{scenario}/form-prefill — day-2
+	// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2
 	// pre-fill of the scenario UI form from incarnation.state (docs/input.md). POST by
 	// HTTP method (carries an optional body-ref), but a read-only resolve by semantics —
 	// reads the state of a single incarnation, mutates nothing. Permission
 	// incarnation.get (read pattern). audit deliberately not written.
-	{http.MethodPost, "/v1/incarnations/{name}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
+	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
 
 	// POST /v1/incarnations/resolve-name — the name a create WOULD compose from the
 	// chosen scenario's name_template, plus whether it is free (NIM-331). POST by HTTP

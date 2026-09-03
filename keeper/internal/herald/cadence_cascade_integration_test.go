@@ -57,7 +57,7 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 	// (1) Form-rule: created from notify[] of Cadence form — cadence selector +
 	// origin-marker created_from_cadence_id == cadID. Must be removed by cascade.
 	formRule := &Tiding{
-		Name:                 "nightly-notify",
+		ID:                   "nightly-notify",
 		Herald:               "ops-webhook",
 		EventTypes:           []string{"scenario_run.failed"},
 		Cadence:              strptr(cadID),
@@ -73,7 +73,7 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 	// origin-marker (created_from_cadence_id == NULL). Must NOT be deleted on
 	// DELETE cadence — operator created it manually, it survives schedule deletion.
 	manualRule := &Tiding{
-		Name:         "manual-watch",
+		ID:           "manual-watch",
 		Herald:       "ops-webhook",
 		EventTypes:   []string{"scenario_run.completed"},
 		Cadence:      strptr(cadID), // Same selector.
@@ -90,12 +90,12 @@ func TestIntegration_Cadence_DeleteCascadesFormRules_NotManual(t *testing.T) {
 	}
 
 	// Form-rule removed by cascade.
-	if _, err := SelectTidingByName(ctx, integrationPool, "nightly-notify"); !errors.Is(err, ErrTidingNotFound) {
+	if _, err := SelectTidingByID(ctx, integrationPool, "nightly-notify"); !errors.Is(err, ErrTidingNotFound) {
 		t.Errorf("form-rule after DELETE cadence: err = %v, want ErrTidingNotFound (cascade)", err)
 	}
 	// Manually created rule (created_from_cadence_id == NULL) SURVIVED, despite
 	// having the same cadence-selector.
-	survived, err := SelectTidingByName(ctx, integrationPool, "manual-watch")
+	survived, err := SelectTidingByID(ctx, integrationPool, "manual-watch")
 	if err != nil {
 		t.Fatalf("manual-rule wrongly deleted after DELETE cadence: %v", err)
 	}
@@ -120,7 +120,7 @@ func TestIntegration_Tiding_CreatedFromCadenceRoundTrip(t *testing.T) {
 	defer cleanCadences(t)
 
 	rule := &Tiding{
-		Name:                 "nightly-notify",
+		ID:                   "nightly-notify",
 		Herald:               "ops-webhook",
 		EventTypes:           []string{"scenario_run.failed"},
 		Cadence:              strptr(cadID),
@@ -131,9 +131,9 @@ func TestIntegration_Tiding_CreatedFromCadenceRoundTrip(t *testing.T) {
 	if err := InsertTiding(ctx, integrationPool, rule); err != nil {
 		t.Fatalf("InsertTiding: %v", err)
 	}
-	got, err := SelectTidingByName(ctx, integrationPool, "nightly-notify")
+	got, err := SelectTidingByID(ctx, integrationPool, "nightly-notify")
 	if err != nil {
-		t.Fatalf("SelectTidingByName: %v", err)
+		t.Fatalf("SelectTidingByID: %v", err)
 	}
 	if got.CreatedFromCadenceID == nil || *got.CreatedFromCadenceID != cadID {
 		t.Errorf("CreatedFromCadenceID round-trip = %v, want %q", got.CreatedFromCadenceID, cadID)

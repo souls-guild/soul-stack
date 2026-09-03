@@ -61,7 +61,7 @@ type MemberView struct {
 	BoundByAID *string
 }
 
-// MemberListPage — domain result of GET /v1/incarnations/{name}/members.
+// MemberListPage — domain result of GET /v1/incarnations/{id}/members.
 type MemberListPage struct {
 	Items []MemberView
 }
@@ -76,7 +76,7 @@ type MemberBindView struct {
 	AlreadyMember []string
 }
 
-// BindMembersTyped — domain function of POST /v1/incarnations/{name}/members
+// BindMembersTyped — domain function of POST /v1/incarnations/{id}/members
 // (SELF-AUDIT `incarnation.member_bound`). Binds already-onboarded hosts to an
 // existing incarnation so a scenario can subsequently roll onto them.
 //
@@ -87,8 +87,8 @@ type MemberBindView struct {
 func (h *IncarnationHandler) BindMembersTyped(ctx context.Context, claims *jwt.Claims, name string, sids []string) (MemberBindView, error) {
 	var zero MemberBindView
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if len(sids) == 0 {
 		return zero, incProblem(problem.TypeValidationFailed, "field 'sids' must contain at least one SID")
@@ -145,7 +145,7 @@ func (h *IncarnationHandler) BindMembersTyped(ctx context.Context, claims *jwt.C
 			Source:    apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID: claims.Subject,
 			Payload: map[string]any{
-				"name":           name,
+				"id":             name,
 				"sids":           sids,
 				"bound":          bound,
 				"already_member": already,
@@ -310,7 +310,7 @@ func (h *IncarnationHandler) bindCreateRoster(ctx context.Context, claims *jwt.C
 			Source:    apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID: claims.Subject,
 			Payload: map[string]any{
-				"name":           name,
+				"id":             name,
 				"sids":           sids,
 				"bound":          emptyIfNil(bound),
 				"already_member": []string{},
@@ -321,7 +321,7 @@ func (h *IncarnationHandler) bindCreateRoster(ctx context.Context, claims *jwt.C
 	return nil
 }
 
-// UnbindMemberTyped — domain function of DELETE /v1/incarnations/{name}/members/{sid}
+// UnbindMemberTyped — domain function of DELETE /v1/incarnations/{id}/members/{sid}
 // (SELF-AUDIT `incarnation.member_unbound`). Idempotent: unbinding a host that is
 // not a member succeeds without changing anything, and the audit records the
 // attempt either way (`removed` says which it was).
@@ -330,8 +330,8 @@ func (h *IncarnationHandler) bindCreateRoster(ctx context.Context, claims *jwt.C
 // FK `sid → souls ON DELETE CASCADE` means a deleted host has already lost its
 // memberships, so an unknown SID is a no-op rather than a 404.
 func (h *IncarnationHandler) UnbindMemberTyped(ctx context.Context, claims *jwt.Claims, name, sid string) error {
-	if !incarnation.ValidName(name) {
-		return incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if !soul.ValidSID(sid) {
 		return incProblem(problem.TypeValidationFailed, "path 'sid' must match "+soul.SIDPattern)
@@ -372,7 +372,7 @@ func (h *IncarnationHandler) UnbindMemberTyped(ctx context.Context, claims *jwt.
 			Source:    apimiddleware.ScenarioInvocationSource(ctx),
 			ArchonAID: claims.Subject,
 			Payload: map[string]any{
-				"name":    name,
+				"id":      name,
 				"sid":     sid,
 				"removed": removed,
 			},
@@ -381,7 +381,7 @@ func (h *IncarnationHandler) UnbindMemberTyped(ctx context.Context, claims *jwt.
 	return nil
 }
 
-// ListMembersTyped — domain function of GET /v1/incarnations/{name}/members
+// ListMembersTyped — domain function of GET /v1/incarnations/{id}/members
 // (READ, no audit). Two-layer authorization, the souls-read pattern (ADR-047 §g):
 // the route gate answers "may this Archon read incarnations at all", and the
 // roster is narrowed HERE to the hosts within the caller's soul visibility. So a
@@ -390,8 +390,8 @@ func (h *IncarnationHandler) UnbindMemberTyped(ctx context.Context, claims *jwt.
 func (h *IncarnationHandler) ListMembersTyped(ctx context.Context, claims *jwt.Claims, name string) (MemberListPage, error) {
 	var zero MemberListPage
 
-	if !incarnation.ValidName(name) {
-		return zero, incProblem(problem.TypeValidationFailed, "path 'name' must match "+incarnation.NamePattern)
+	if !incarnation.ValidID(name) {
+		return zero, incProblem(problem.TypeValidationFailed, "path 'id' must match "+incarnation.IDPattern)
 	}
 	if _, err := h.loadIncarnationForMembership(ctx, name, "list-members"); err != nil {
 		return zero, err
@@ -432,7 +432,7 @@ func (h *IncarnationHandler) ListMembersTyped(ctx context.Context, claims *jwt.C
 // incarnation's status: binding a roster onto an `error_locked` instance is how
 // an operator repairs one, and blocking it would leave no way out.
 func (h *IncarnationHandler) loadIncarnationForMembership(ctx context.Context, name, op string) (*incarnation.Incarnation, error) {
-	inc, err := incarnation.SelectByName(ctx, h.db, name)
+	inc, err := incarnation.SelectByID(ctx, h.db, name)
 	if err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return nil, incProblem(problem.TypeNotFound, "incarnation "+name+" not found")

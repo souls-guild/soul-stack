@@ -200,7 +200,7 @@ Recorded below in Vault KV `secret/keeper/redis` (bootstrap step, rotation table
 | `sigil:anchors-changed` | pub/sub-signal "trust-anchor-set updated" ([ADR-026(h)](../adr/0026-sigil.md)) | no TTL | Ephemeral; the loss is compensated by TTL-fallback-reread (`sigil_anchors_reload_interval`, default 30s). |
 | `rbac:invalidate` | pub/sub-signal "RBAC snapshot updated" ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) | no TTL | TTL-poll fallback on the `Holder` side. |
 | `service:invalidate` | pub/sub-signal "Service registry has been updated" ([ADR-029](../adr/0029-service-registry.md)) | no TTL | TTL-poll fallback. |
-| `cancel:<apply_id>` | cluster-wide cancel-run signal ([cluster-wide cancel](../keeper/storage.md)) | short TTL | at `POST /v1/incarnations/{name}/cancel`. |
+| `cancel:<apply_id>` | cluster-wide cancel-run signal ([cluster-wide cancel](../keeper/storage.md)) | short TTL | at `POST /v1/incarnations/{id}/cancel`. |
 
 All keys have a **fallback mechanism** in the code ([ADR-006](../adr/0006-cache-redis.md), [ADR-027](../adr/0027-apply-work-queue.md), [ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)): loss of a pub/sub signal is covered by TTL-poll, loss of lease is covered by TTL and re-election.
 

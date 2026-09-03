@@ -101,7 +101,7 @@ func seedOperator(t *testing.T, aid string) {
 func seedIncarnation(t *testing.T, name, creator string) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,

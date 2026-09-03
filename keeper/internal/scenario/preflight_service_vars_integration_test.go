@@ -118,7 +118,7 @@ tasks:
 func seedIncarnationWithCovens(t *testing.T, name string, covens []string, sids ...string) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "service-vars-guard", ServiceVersion: "master",
+		ID: name, Service: "service-vars-guard", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusReady, Covens: covens,
 	}
 	if err := incarnation.Create(context.Background(), integrationPool, inc); err != nil {

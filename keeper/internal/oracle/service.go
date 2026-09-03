@@ -81,7 +81,7 @@ func NewService(d ServiceDeps) (*Service, error) {
 // ADR-030). CallerAID is optional (nil → created_by_aid IS NULL; the transport
 // fills it in from claims).
 type CreateVigilInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]): free text, set here at
 	// registration and changed afterwards by [Service.SetVigilLabel]. nil/blank
 	// stores NULL and the consumer shows Name.
@@ -104,8 +104,8 @@ type CreateVigilInput struct {
 //   - [ErrVigilAlreadyExists] — name is taken (409);
 //   - a wrapped fmt.Errorf — FK/CHECK/infra (500).
 func (s *Service) CreateVigil(ctx context.Context, in CreateVigilInput) (*Vigil, error) {
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("%w: invalid vigil name %q (must match %s)", ErrValidation, in.Name, NamePattern)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("%w: invalid vigil id %q (must match %s)", ErrValidation, in.ID, IDPattern)
 	}
 	if err := validateInterval(in.Interval); err != nil {
 		return nil, err
@@ -118,7 +118,7 @@ func (s *Service) CreateVigil(ctx context.Context, in CreateVigilInput) (*Vigil,
 	}
 
 	v := &Vigil{
-		Name:         in.Name,
+		ID:           in.ID,
 		Label:        in.Label,
 		IntervalSpec: in.Interval,
 		CheckAddr:    in.Check,
@@ -140,8 +140,8 @@ func (s *Service) ListVigils(ctx context.Context, offset, limit int) ([]*Vigil, 
 }
 
 // GetVigil reads a Vigil by PK. [ErrVigilNotFound] if it doesn't exist.
-func (s *Service) GetVigil(ctx context.Context, name string) (*Vigil, error) {
-	return SelectVigilByName(ctx, s.pool, name)
+func (s *Service) GetVigil(ctx context.Context, id string) (*Vigil, error) {
+	return SelectVigilByID(ctx, s.pool, id)
 }
 
 // SetVigilLabel replaces the display caption of one Vigil and returns the row as
@@ -154,18 +154,18 @@ func (s *Service) GetVigil(ctx context.Context, name string) (*Vigil, error) {
 // which that argument does not apply, because nothing in the snapshot reads it.
 //
 // [ErrVigilNotFound] if the row doesn't exist.
-func (s *Service) SetVigilLabel(ctx context.Context, name string, label *string) (*Vigil, *string, error) {
-	previous, err := UpdateVigilLabel(ctx, s.pool, name, label)
+func (s *Service) SetVigilLabel(ctx context.Context, id string, label *string) (*Vigil, *string, error) {
+	previous, err := UpdateVigilLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	v, err := SelectVigilByName(ctx, s.pool, name)
+	v, err := SelectVigilByID(ctx, s.pool, id)
 	return v, previous, err
 }
 
 // DeleteVigil removes a Vigil by PK. [ErrVigilNotFound] if the row didn't exist.
-func (s *Service) DeleteVigil(ctx context.Context, name string) error {
-	return DeleteVigil(ctx, s.pool, name)
+func (s *Service) DeleteVigil(ctx context.Context, id string) error {
+	return DeleteVigil(ctx, s.pool, id)
 }
 
 // --- Decree -----------------------------------------------------------
@@ -177,7 +177,7 @@ func (s *Service) DeleteVigil(ctx context.Context, name string) error {
 // (compile-checked on create). ActionInput — the raw JSONB scenario input.
 // CallerAID is optional.
 type CreateDecreeInput struct {
-	Name string
+	ID string
 	// Label is the optional display caption ([ADR-0085]), changed afterwards by
 	// [Service.SetDecreeLabel]. Not OnBeacon and not IncarnationName: neither is
 	// derived from it.
@@ -205,11 +205,11 @@ type CreateDecreeInput struct {
 //   - [ErrDecreeAlreadyExists] — name is taken (409);
 //   - a wrapped fmt.Errorf — FK/CHECK/infra (500).
 func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decree, error) {
-	if !ValidName(in.Name) {
-		return nil, fmt.Errorf("%w: invalid decree name %q (must match %s)", ErrValidation, in.Name, NamePattern)
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("%w: invalid decree id %q (must match %s)", ErrValidation, in.ID, IDPattern)
 	}
-	if !ValidName(in.OnBeacon) {
-		return nil, fmt.Errorf("%w: invalid on_beacon %q (must match Vigil name %s)", ErrValidation, in.OnBeacon, NamePattern)
+	if !ValidID(in.OnBeacon) {
+		return nil, fmt.Errorf("%w: invalid on_beacon %q (must match Vigil id %s)", ErrValidation, in.OnBeacon, IDPattern)
 	}
 	if !ValidIncarnationName(in.IncarnationName) {
 		return nil, fmt.Errorf("%w: invalid incarnation_name %q (must match %s)", ErrValidation, in.IncarnationName, IncarnationPattern)
@@ -230,7 +230,7 @@ func (s *Service) CreateDecree(ctx context.Context, in CreateDecreeInput) (*Decr
 	}
 
 	d := &Decree{
-		Name:            in.Name,
+		ID:              in.ID,
 		OnBeacon:        in.OnBeacon,
 		Label:           in.Label,
 		WhereCEL:        in.WhereCEL,
@@ -255,8 +255,8 @@ func (s *Service) ListDecrees(ctx context.Context, offset, limit int) ([]*Decree
 }
 
 // GetDecree reads a Decree by PK. [ErrDecreeNotFound] if it doesn't exist.
-func (s *Service) GetDecree(ctx context.Context, name string) (*Decree, error) {
-	return SelectDecreeByName(ctx, s.pool, name)
+func (s *Service) GetDecree(ctx context.Context, id string) (*Decree, error) {
+	return SelectDecreeByID(ctx, s.pool, id)
 }
 
 // SetDecreeLabel replaces the display caption of one Decree and returns the row
@@ -268,17 +268,17 @@ func (s *Service) GetDecree(ctx context.Context, name string) (*Decree, error) {
 // breaker.
 //
 // [ErrDecreeNotFound] if the row doesn't exist.
-func (s *Service) SetDecreeLabel(ctx context.Context, name string, label *string) (*Decree, *string, error) {
-	previous, err := UpdateDecreeLabel(ctx, s.pool, name, label)
+func (s *Service) SetDecreeLabel(ctx context.Context, id string, label *string) (*Decree, *string, error) {
+	previous, err := UpdateDecreeLabel(ctx, s.pool, id, label)
 	if err != nil {
 		return nil, nil, err
 	}
-	d, err := SelectDecreeByName(ctx, s.pool, name)
+	d, err := SelectDecreeByID(ctx, s.pool, id)
 	return d, previous, err
 }
 
 // DeleteDecree removes a Decree by PK (cooldown state in oracle_fires cascades
 // away). [ErrDecreeNotFound] if the row didn't exist.
-func (s *Service) DeleteDecree(ctx context.Context, name string) error {
-	return DeleteDecree(ctx, s.pool, name)
+func (s *Service) DeleteDecree(ctx context.Context, id string) error {
+	return DeleteDecree(ctx, s.pool, id)
 }

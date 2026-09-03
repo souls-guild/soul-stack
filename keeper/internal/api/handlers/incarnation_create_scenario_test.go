@@ -115,7 +115,7 @@ func TestIncarnation_Create_BareNoScenario_ReadyNoRun(t *testing.T) {
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-bare","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-bare","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -154,7 +154,7 @@ func TestIncarnation_Create_ChosenScenario_Starts_AndPersisted(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"restore","input":{"backup_id":"b-001"}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"restore","input":{"backup_id":"b-001"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -186,7 +186,7 @@ func TestIncarnation_Create_EmptyChoice_HasScenarios_422(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -219,7 +219,7 @@ func TestIncarnation_Create_ExplicitCreate_Starts(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -246,7 +246,7 @@ func TestIncarnation_Create_NonCreateScenario_422(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"add_user","input":{"user":"bob"}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"add_user","input":{"user":"bob"}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -278,7 +278,7 @@ func TestIncarnation_Create_UnknownScenario_422(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"nonexistent"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"nonexistent"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -299,7 +299,7 @@ func TestIncarnation_Create_TraversalScenario_422(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"../../etc/passwd"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"../../etc/passwd"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -322,7 +322,7 @@ func TestIncarnation_Create_InputValidatedAgainstChosen_Missing_422(t *testing.T
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"restore"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"restore"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -349,7 +349,7 @@ func TestIncarnation_Create_ChosenCreate_EmptyInputOK(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"create"}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 
@@ -367,7 +367,7 @@ func TestIncarnation_Create_ChosenScenario_BadInputType_422(t *testing.T) {
 	h := newCreateScenarioHandler(t, db, starter)
 
 	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations",
-		bytes.NewReader([]byte(`{"name":"redis-prod","service":"redis","create_scenario":"restore","input":{"backup_id":123}}`)))
+		bytes.NewReader([]byte(`{"id":"redis-prod","service":"redis","create_scenario":"restore","input":{"backup_id":123}}`)))
 	req = withClaims(req, "archon-alice")
 	rec := incCreate(h, req)
 

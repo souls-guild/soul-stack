@@ -18,8 +18,8 @@ package api
 // total → wire byte-exact (offset/limit/total — Go-int parity with the former legacy generator).
 
 // OUTPUT-PATTERN of NAMES (documentation-only, NOT runtime validation): huma does NOT validate
-// the response body (empirically 200, not 500). name ← herald.NamePattern (kebab, Herald/Tiding);
-// Tiding.herald — an FK to the Herald name by the same herald.NamePattern. A format for client codegen;
+// the response body (empirically 200, not 500). name ← herald.IDPattern (kebab, Herald/Tiding);
+// Tiding.herald — an FK to the Herald name by the same herald.IDPattern. A format for client codegen;
 // the pattern does not affect json.Marshal (golden byte-exact intact). Output types are not shared with
 // the request Body (create/update — separate *Request) → no input-422 risk.
 
@@ -42,10 +42,10 @@ type Herald struct {
 	CreatedByAID *string                `json:"created_by_aid,omitempty"`
 	Enabled      bool                   `json:"enabled"`
 	// Label — the display caption (ADR-0085), free text and mutable via
-	// PUT /v1/heralds/{name}/label. Absent means the row carries none and the
+	// PUT /v1/heralds/{id}/label. Absent means the row carries none and the
 	// consumer shows `name`. NOT the `<entity>` Vault segment — `name` is.
 	Label     *string    `json:"label,omitempty"`
-	Name      string     `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
+	ID        string     `json:"id" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.IDPattern
 	SecretRef *string    `json:"secret_ref,omitempty"`
 	Type      HeraldType `json:"type"`
 	UpdatedAt time.Time  `json:"updated_at"`
@@ -64,12 +64,12 @@ type Tiding struct {
 	Enabled      bool                    `json:"enabled"`
 	Ephemeral    *bool                   `json:"ephemeral,omitempty"`
 	EventTypes   []string                `json:"event_types"`
-	Herald       string                  `json:"herald" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern (FK to heralds.name)
+	Herald       string                  `json:"herald" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.IDPattern (FK to heralds.id)
 	Incarnation  *string                 `json:"incarnation,omitempty"`
 	// Label — the display caption (ADR-0085), mutable via
-	// PUT /v1/tidings/{name}/label. Absent → the consumer shows `name`.
+	// PUT /v1/tidings/{id}/label. Absent → the consumer shows `name`.
 	Label        *string   `json:"label,omitempty"`
-	Name         string    `json:"name" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.NamePattern
+	ID           string    `json:"id" pattern:"^[a-z0-9-]{1,63}$"` // ← herald.IDPattern
 	OnlyChanges  bool      `json:"only_changes"`
 	OnlyFailures bool      `json:"only_failures"`
 	Projection   *[]string `json:"projection,omitempty"`
@@ -110,7 +110,7 @@ func newHerald(v handlers.HeraldView) Herald {
 		CreatedByAID: v.CreatedByAID,
 		Enabled:      v.Enabled,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		SecretRef:    v.SecretRef,
 		Type:         HeraldType(v.Type),
 		UpdatedAt:    v.UpdatedAt,
@@ -130,7 +130,7 @@ func newTiding(v handlers.TidingView) Tiding {
 		Herald:       v.Herald,
 		Incarnation:  v.Incarnation,
 		Label:        v.Label,
-		Name:         v.Name,
+		ID:           v.ID,
 		OnlyChanges:  v.OnlyChanges,
 		OnlyFailures: v.OnlyFailures,
 		Projection:   v.Projection,

@@ -20,7 +20,7 @@ import (
 
 // pushProviderViewOut — the JSON shape of the output (same as the HTTP handler).
 type pushProviderViewOut struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — display caption (ADR-0085); absent when the row carries none, and
 	// a consumer then shows `name`.
 	Label        *string        `json:"label,omitempty"`
@@ -37,7 +37,7 @@ func toPushProviderViewOut(p *pushprovider.PushProvider) pushProviderViewOut {
 		params = map[string]any{}
 	}
 	return pushProviderViewOut{
-		Name:         p.Name,
+		ID:           p.ID,
 		Label:        p.Label,
 		Params:       params,
 		CreatedAt:    p.CreatedAt.UTC(),
@@ -48,7 +48,7 @@ func toPushProviderViewOut(p *pushprovider.PushProvider) pushProviderViewOut {
 }
 
 type pushProviderCreateArgs struct {
-	Name string `json:"name"`
+	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.push-provider.label-set.
 	Label  *string        `json:"label"`
@@ -56,7 +56,7 @@ type pushProviderCreateArgs struct {
 }
 
 // callPushProviderSetLabel — keeper.push-provider.label-set, the MCP mirror of
-// PUT /v1/push-providers/{name}/label (ADR-0085). Publishes no invalidation:
+// PUT /v1/push-providers/{id}/label (ADR-0085). Publishes no invalidation:
 // the dispatcher snapshot carries params, and a caption is not one of them.
 func (h *Handler) callPushProviderSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[pushProviderViewOut]{
@@ -64,17 +64,17 @@ func (h *Handler) callPushProviderSetLabel(ctx context.Context, claims *jwt.Clai
 		resource:      "push-provider",
 		configured:    h.deps.PushProviderSvc != nil,
 		notConfigured: "push-provider registry is not configured",
-		validName:     pushprovider.ValidName,
-		namePattern:   pushprovider.NamePattern,
-		set: func(ctx context.Context, name string, label *string) (pushProviderViewOut, *string, error) {
-			p, previous, err := h.deps.PushProviderSvc.SetLabel(ctx, name, label)
+		validID:       pushprovider.ValidID,
+		idPattern:     pushprovider.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (pushProviderViewOut, *string, error) {
+			p, previous, err := h.deps.PushProviderSvc.SetLabel(ctx, id, label)
 			if err != nil {
 				return pushProviderViewOut{}, nil, err
 			}
 			return toPushProviderViewOut(p), previous, nil
 		},
 		isNotFound: func(err error) bool { return errors.Is(err, pushprovider.ErrPushProviderNotFound) },
-		notFoundf:  func(name string) string { return "push provider " + name + " not found" },
+		notFoundf:  func(id string) string { return "push provider " + id + " not found" },
 		failMsg:    "set push provider label failed",
 		event:      audit.EventPushProviderLabelChanged,
 	})
@@ -91,12 +91,12 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !pushprovider.ValidName(a.Name) {
+	if !pushprovider.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+pushprovider.NamePattern)
+			"field 'id' must match "+pushprovider.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "push-provider", "create", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -104,7 +104,7 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 	}
 
 	p, err := h.deps.PushProviderSvc.Create(ctx, pushprovider.CreateInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Label:     a.Label,
 		Params:    a.Params,
 		CallerAID: claims.Subject,
@@ -113,17 +113,17 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 		switch {
 		case errors.Is(err, pushprovider.ErrPushProviderAlreadyExists):
 			return h.toolError(req.ID, toolName, mcpCodePushProviderExists,
-				"push provider "+a.Name+" already exists")
+				"push provider "+a.ID+" already exists")
 		case errors.Is(err, pushprovider.ErrSensitiveNotVaultRef):
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 		}
 		h.deps.Logger.Error("mcp: push-provider.create failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create push provider failed")
 	}
 
 	h.writeAudit(audit.EventPushProviderCreated, claims.Subject, map[string]any{
-		"name":        p.Name,
+		"id":          p.ID,
 		"label":       p.Label,
 		"params_keys": paramKeysSortedMCP(p.Params),
 	})
@@ -131,7 +131,7 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 }
 
 type pushProviderUpdateArgs struct {
-	Name   string         `json:"name"`
+	ID     string         `json:"id"`
 	Params map[string]any `json:"params"`
 }
 
@@ -146,12 +146,12 @@ func (h *Handler) callPushProviderUpdate(ctx context.Context, claims *jwt.Claims
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !pushprovider.ValidName(a.Name) {
+	if !pushprovider.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+pushprovider.NamePattern)
+			"field 'id' must match "+pushprovider.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "push-provider", "update", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -159,7 +159,7 @@ func (h *Handler) callPushProviderUpdate(ctx context.Context, claims *jwt.Claims
 	}
 
 	p, err := h.deps.PushProviderSvc.Update(ctx, pushprovider.UpdateInput{
-		Name:      a.Name,
+		ID:        a.ID,
 		Params:    a.Params,
 		CallerAID: claims.Subject,
 	})
@@ -167,24 +167,24 @@ func (h *Handler) callPushProviderUpdate(ctx context.Context, claims *jwt.Claims
 		switch {
 		case errors.Is(err, pushprovider.ErrPushProviderNotFound):
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
-				"push provider "+a.Name+" not found")
+				"push provider "+a.ID+" not found")
 		case errors.Is(err, pushprovider.ErrSensitiveNotVaultRef):
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 		}
 		h.deps.Logger.Error("mcp: push-provider.update failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update push provider failed")
 	}
 
 	h.writeAudit(audit.EventPushProviderUpdated, claims.Subject, map[string]any{
-		"name":        p.Name,
+		"id":          p.ID,
 		"params_keys": paramKeysSortedMCP(p.Params),
 	})
 	return h.toolResult(req.ID, toPushProviderViewOut(p))
 }
 
-type pushProviderByNameArgs struct {
-	Name string `json:"name"`
+type pushProviderByIDArgs struct {
+	ID string `json:"id"`
 }
 
 func (h *Handler) callPushProviderDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
@@ -192,36 +192,36 @@ func (h *Handler) callPushProviderDelete(ctx context.Context, claims *jwt.Claims
 	if h.deps.PushProviderSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "push-provider registry is not configured")
 	}
-	var a pushProviderByNameArgs
+	var a pushProviderByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
-	if !pushprovider.ValidName(a.Name) {
+	if !pushprovider.ValidID(a.ID) {
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
-			"field 'name' must match "+pushprovider.NamePattern)
+			"field 'id' must match "+pushprovider.IDPattern)
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "push-provider", "delete", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission push-provider.delete")
 	}
 
-	err := h.deps.PushProviderSvc.Delete(ctx, a.Name)
+	err := h.deps.PushProviderSvc.Delete(ctx, a.ID)
 	if err != nil {
 		if errors.Is(err, pushprovider.ErrPushProviderNotFound) {
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
-				"push provider "+a.Name+" not found")
+				"push provider "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: push-provider.delete failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "delete push provider failed")
 	}
 
-	h.writeAudit(audit.EventPushProviderDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(audit.EventPushProviderDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 
@@ -230,36 +230,36 @@ func (h *Handler) callPushProviderRead(ctx context.Context, claims *jwt.Claims, 
 	if h.deps.PushProviderSvc == nil {
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "push-provider registry is not configured")
 	}
-	var a pushProviderByNameArgs
+	var a pushProviderByIDArgs
 	if len(args) > 0 {
 		if err := strictUnmarshal(args, &a); err != nil {
 			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
 		}
 	}
-	if a.Name == "" {
-		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'name' is required")
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
 	}
 	if err := h.deps.RBAC.Check(claims.Subject, "push-provider", "read", nil); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission push-provider.read")
 	}
-	p, err := h.deps.PushProviderSvc.Get(ctx, a.Name)
+	p, err := h.deps.PushProviderSvc.Get(ctx, a.ID)
 	if err != nil {
 		if errors.Is(err, pushprovider.ErrPushProviderNotFound) {
 			return h.toolError(req.ID, toolName, mcpCodeNotFound,
-				"push provider "+a.Name+" not found")
+				"push provider "+a.ID+" not found")
 		}
 		h.deps.Logger.Error("mcp: push-provider.read failed",
-			slog.String("name", a.Name), slog.Any("error", err))
+			slog.String("id", a.ID), slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "read push provider failed")
 	}
 	return h.toolResult(req.ID, toPushProviderViewOut(p))
 }
 
 type pushProviderListArgs struct {
-	NamePattern string `json:"name_pattern"`
-	Offset      int    `json:"offset"`
-	Limit       int    `json:"limit"`
+	IDPattern string `json:"id_pattern"`
+	Offset    int    `json:"offset"`
+	Limit     int    `json:"limit"`
 }
 
 type pushProviderListOut struct {
@@ -287,7 +287,7 @@ func (h *Handler) callPushProviderList(ctx context.Context, claims *jwt.Claims, 
 	if a.Limit <= 0 {
 		a.Limit = 100
 	}
-	items, total, err := h.deps.PushProviderSvc.List(ctx, pushprovider.ListFilter{NamePattern: a.NamePattern}, a.Offset, a.Limit)
+	items, total, err := h.deps.PushProviderSvc.List(ctx, pushprovider.ListFilter{IDPattern: a.IDPattern}, a.Offset, a.Limit)
 	if err != nil {
 		h.deps.Logger.Error("mcp: push-provider.list failed", slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "list push providers failed")

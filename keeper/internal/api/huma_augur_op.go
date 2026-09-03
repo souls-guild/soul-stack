@@ -36,9 +36,9 @@ type omenCreateInput struct {
 // schema name in OpenAPI (DefaultSchemaNamer takes reflect.Type.Name()) — aligned
 // with the committed handwritten spec (OmenCreateRequest).
 type OmenCreateRequest struct {
-	Name string `json:"name" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Omen name (kebab-case, 1..63)"`
+	ID string `json:"id" required:"true" pattern:"^[a-z0-9-]{1,63}$" doc:"Omen name (kebab-case, 1..63)"`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/augur/omens/{name}/label.
+	// by PUT /v1/augur/omens/{id}/label.
 	Label      *string `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
 	SourceType string  `json:"source_type" required:"true" enum:"vault,prometheus,elk" doc:"external system type; a value outside the enum -> 422"`
 	Endpoint   string  `json:"endpoint" required:"true" doc:"external system URL (not a secret)"`
@@ -108,28 +108,28 @@ func omenListOperation() huma.Operation {
 	}
 }
 
-// === GET /v1/augur/omens/{name} (get) — READ-with-path (no audit) ===
+// === GET /v1/augur/omens/{id} (get) — READ-with-path (no audit) ===
 
-// omenGetInput — huma-input for GET /v1/augur/omens/{name}. Name is a path
+// omenGetInput — huma-input for GET /v1/augur/omens/{id}. Name is a path
 // parameter. The name format (reOmenName) is domain-validated in GetOmenTyped (422).
 type omenGetInput struct {
-	Name string `path:"name" doc:"Omen name"`
+	ID string `path:"id" doc:"Omen name"`
 }
 
-// omenGetOutput — huma-output for GET /v1/augur/omens/{name} (FULL-TYPED). Body
+// omenGetOutput — huma-output for GET /v1/augur/omens/{id} (FULL-TYPED). Body
 // is the huma-native 200 body (OmenView). The wire shape is pinned by a golden test.
 type omenGetOutput struct {
 	Body OmenView
 }
 
-// omenGetOperation — metadata for GET /v1/augur/omens/{name}. DefaultStatus=200.
+// omenGetOperation — metadata for GET /v1/augur/omens/{id}. DefaultStatus=200.
 // READ route: no audit attached. Permission omen.list (read is covered by the
 // list permission). Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
 func omenGetOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "getOmen",
 		Method:        http.MethodGet,
-		Path:          "/omens/{name}",
+		Path:          "/omens/{id}",
 		Summary:       "Omen card",
 		Description:   "Metadata of a single Omen by name (ADR-025). Permission omen.list (read is covered by the list permission). Read-only, no audit.",
 		Tags:          []string{"augur"},
@@ -138,11 +138,11 @@ func omenGetOperation() huma.Operation {
 	}
 }
 
-// === DELETE /v1/augur/omens/{name} (delete) — WRITE+AUDIT omen.revoked ===
+// === DELETE /v1/augur/omens/{id} (delete) — WRITE+AUDIT omen.revoked ===
 
-// omenDeleteInput — huma-input for DELETE /v1/augur/omens/{name}. Name is a path param. No Body.
+// omenDeleteInput — huma-input for DELETE /v1/augur/omens/{id}. Name is a path param. No Body.
 type omenDeleteInput struct {
-	Name string `path:"name" doc:"Omen name"`
+	ID string `path:"id" doc:"Omen name"`
 }
 
 // augurNoContentOutput — the shared huma-output for augur's 204 write routes
@@ -153,13 +153,13 @@ type augurNoContentOutput struct {
 	Status int `json:"-"`
 }
 
-// omenDeleteOperation — metadata for DELETE /v1/augur/omens/{name}. DefaultStatus=204.
+// omenDeleteOperation — metadata for DELETE /v1/augur/omens/{id}. DefaultStatus=204.
 // Permission omen.delete + audit omen.revoked (the cascade cleans up related Rites).
 // Errors: 403 RBAC, 404 not-found, 422 bad path-name, 500.
-// === PUT /v1/augur/omens/{name}/label (label-set) — WRITE+AUDIT omen.label_changed ===
+// === PUT /v1/augur/omens/{id}/label (label-set) — WRITE+AUDIT omen.label_changed ===
 
 type omenSetLabelInput struct {
-	Name string `path:"name" doc:"Omen name"`
+	ID   string `path:"id" doc:"Omen name"`
 	Body LabelSetRequest
 }
 
@@ -171,7 +171,7 @@ func omenSetLabelOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "setOmenLabel",
 		Method:        http.MethodPut,
-		Path:          "/omens/{name}/label",
+		Path:          "/omens/{id}/label",
 		Summary:       "Set the Omen display caption",
 		Description:   "Replaces the display caption of one Omen (ADR-0085). Permission omen.label-set, audit omen.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. This is the registry's only mutation: endpoint and auth_ref stay immutable, because the Rites granted against an Omen must not silently follow it to a different external system. The caption participates in nothing derived, so changing it moves nothing.",
 		Tags:          []string{"augur"},
@@ -184,7 +184,7 @@ func omenDeleteOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "deleteOmen",
 		Method:        http.MethodDelete,
-		Path:          "/omens/{name}",
+		Path:          "/omens/{id}",
 		Summary:       "Delete Omen",
 		Description:   "Deletes an Omen cascadingly (related Rites, ADR-025). Permission omen.delete. 404 - record absent.",
 		Tags:          []string{"augur"},

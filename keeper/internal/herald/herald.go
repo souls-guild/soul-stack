@@ -19,15 +19,18 @@ import (
 	"github.com/souls-guild/soul-stack/shared/netguard"
 )
 
-// NamePattern is canonical form of Herald/Tiding name: kebab-case, length
-// 1..63. Same as CHECK heralds_name_format / tidings_name_format in migration
-// 071 (like omens.NamePattern).
-const NamePattern = `^[a-z0-9-]{1,63}$`
+// IDPattern is canonical form of a Herald / Tiding id: kebab-case, length
+// 1..63. Same as CHECK heralds_id_format / tidings_id_format in migration 118
+// (heralds_name_format / tidings_name_format before it), like augur.IDPattern.
+//
+// The form is UNCHANGED by the `name` -> `id` rename ([ADR-0085], NIM-729): the
+// identifier moved spelling, not grammar.
+const IDPattern = `^[a-z0-9-]{1,63}$`
 
-var nameRe = regexp.MustCompile(NamePattern)
+var idRe = regexp.MustCompile(IDPattern)
 
-// ValidName checks that name matches the canonical form.
-func ValidName(name string) bool { return nameRe.MatchString(name) }
+// ValidID checks that id matches the canonical form.
+func ValidID(id string) bool { return idRe.MatchString(id) }
 
 // HeraldType is closed-enum of channel type (ADR-052 amendment). Canonical set
 // of known types is driver registry [channelDrivers] (HTTP-class) + email
@@ -66,12 +69,17 @@ func ValidHeraldType(t HeraldType) bool {
 // opt. opt-out flags http_allowed/allow_private). SecretRef is vault-ref of
 // channel secret (signing-token), nullable: not every webhook needs signature.
 type Herald struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `heralds`, the target of the `tidings.herald`
+	// FK, and the `<entity>` segment of `secret/herald/<entity>/<field>`. There
+	// is no rename operation, and that path is ONE hop from this row with
+	// nothing in between to notice a change.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetHeraldLabel, not unique, optional. nil means the column is NULL and a
-	// consumer shows Name instead. It participates in nothing derived — in
+	// consumer shows ID instead. It participates in nothing derived — in
 	// particular NOT the `<entity>` segment of `secret/herald/<entity>/<field>`,
-	// which is built from Name alone (guarded by
+	// which is built from ID alone (guarded by
 	// label_invariant_guard_test.go). That is the sharpest instance in the
 	// platform: it is one hop, with no state schema in between and nothing to
 	// notice, so a caption that reached it would orphan a signing secret in
@@ -131,9 +139,11 @@ type Herald struct {
 // removes ONLY form-rules, not manually created with same cadence
 // selector. Binding by ULID (cadences.id), not name — rename-safe.
 type Tiding struct {
-	Name string `json:"name"`
+	// ID is the immutable identifier ([ADR-0085]): kebab code word, set once at
+	// creation, the PRIMARY KEY of `tidings`. There is no rename operation.
+	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
-	// SetTidingLabel, not unique, optional. nil → the consumer shows Name.
+	// SetTidingLabel, not unique, optional. nil → the consumer shows ID.
 	// It participates in nothing derived and is NOT the `herald` FK below.
 	Label                *string        `json:"label,omitempty"`
 	Herald               string         `json:"herald"`

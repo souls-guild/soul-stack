@@ -23,7 +23,7 @@ func seedMembershipSoul(t *testing.T, sid string) {
 func seedMembershipIncarnation(t *testing.T, name string) {
 	t.Helper()
 	inc := &Incarnation{
-		Name:               name,
+		ID:                 name,
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,
@@ -113,7 +113,7 @@ func TestIntegration_Membership_CascadeOnIncarnationDelete(t *testing.T) {
 		t.Fatalf("AddMembers: %v", err)
 	}
 
-	if _, err := integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE name = $1`, "redis-prod"); err != nil {
+	if _, err := integrationPool.Exec(ctx, `DELETE FROM incarnation WHERE id = $1`, "redis-prod"); err != nil {
 		t.Fatalf("delete incarnation: %v", err)
 	}
 	var n int
@@ -213,7 +213,7 @@ func TestIntegration_Membership_ScreenJudgesOwnCovens(t *testing.T) {
 	ctx := context.Background()
 
 	labelled := &Incarnation{
-		Name:               "redis-prod",
+		ID:                 "redis-prod",
 		Service:            "redis",
 		ServiceVersion:     "v1.0.0",
 		StateSchemaVersion: 1,

@@ -63,7 +63,7 @@ func TestToolsCall_IncarnationCreate_TraitsGoToTheColumn(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)
+		`{"id":"redis-prod","service":"redis","traits":{"team":"dba","owners":["alice","bob"]}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -98,7 +98,7 @@ func TestToolsCall_IncarnationCreate_TraitsProjectedToSouls(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","traits":{"team":"dba"}}`)
+		`{"id":"redis-prod","service":"redis","traits":{"team":"dba"}}`)
 	// Projection is best-effort: even with an incompletely mocked souls-bulk,
 	// create must still succeed (invariant: a sync failure must not fail create).
 	if resp.Error != nil {
@@ -118,7 +118,7 @@ func TestToolsCall_IncarnationCreate_NoTraits_WritesEmptyTraits(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -150,7 +150,7 @@ func TestToolsCall_IncarnationCreate_InvalidTraitValue_422(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)
+		`{"id":"redis-prod","service":"redis","traits":{"bad":{"nested":1}}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation error for nested trait value")
 	}
@@ -180,7 +180,7 @@ func TestToolsCall_IncarnationCreate_ValidateRuleFails_422(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","create_scenario":"create","input":{"replicas":3}}`)
+		`{"id":"redis-prod","service":"redis","create_scenario":"create","input":{"replicas":3}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation_failed for failing validate rule")
 	}
@@ -209,7 +209,7 @@ func TestToolsCall_IncarnationCreate_AssertFails_422(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected assert_failed (422)")
 	}
@@ -239,7 +239,7 @@ func TestToolsCall_IncarnationCreate_AssertPasses_Inserts(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error != nil {
 		t.Fatalf("assert pass should create: %+v", resp.Error)
 	}
@@ -269,7 +269,7 @@ func TestToolsCall_IncarnationCreate_CreateScenarioInvalidName(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","create_scenario":"..bad"}`)
+		`{"id":"redis-prod","service":"redis","create_scenario":"..bad"}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation-failed for invalid create_scenario")
 	}
@@ -299,7 +299,7 @@ func TestToolsCall_IncarnationCreate_CreateScenarioNotEligible(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","create_scenario":"add_user"}`)
+		`{"id":"redis-prod","service":"redis","create_scenario":"add_user"}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation-failed for non-eligible create_scenario")
 	}
@@ -325,7 +325,7 @@ func TestToolsCall_IncarnationCreate_ExplicitCreate(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","create_scenario":"create"}`)
+		`{"id":"redis-prod","service":"redis","create_scenario":"create"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -356,7 +356,7 @@ func TestToolsCall_IncarnationCreate_EmptyChoice_HasScenarios_Required(t *testin
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected create_scenario_required (set non-empty, choice empty)")
 	}
@@ -383,7 +383,7 @@ func TestToolsCall_IncarnationCreate_BareNoScenario(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-bare","service":"redis"}`)
+		`{"id":"redis-bare","service":"redis"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -425,7 +425,7 @@ func TestToolsCall_IncarnationCreate_Success(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","input":{"replicas":3}}`)
+		`{"id":"redis-prod","service":"redis","input":{"replicas":3}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -464,7 +464,7 @@ func TestToolsCall_IncarnationCreate_Success(t *testing.T) {
 	if ev.EventType != audit.EventIncarnationCreated || ev.Source != audit.SourceMCP {
 		t.Errorf("event = %q / source %q", ev.EventType, ev.Source)
 	}
-	if ev.Payload["name"] != "redis-prod" || ev.Payload["service"] != "redis" || ev.Payload["apply_id"] != *out.ApplyID {
+	if ev.Payload["id"] != "redis-prod" || ev.Payload["service"] != "redis" || ev.Payload["apply_id"] != *out.ApplyID {
 		t.Errorf("audit payload = %+v", ev.Payload)
 	}
 }
@@ -474,7 +474,7 @@ func TestToolsCall_IncarnationCreate_AlreadyExists(t *testing.T) {
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -496,7 +496,7 @@ func TestToolsCall_IncarnationCreate_RBACForbidden(t *testing.T) {
 	}}
 	h, rec := newTestHandlerFull(t, pool, nil, &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -512,7 +512,7 @@ func TestToolsCall_IncarnationCreate_RunnerNotConfigured(t *testing.T) {
 	// runner/registry nil → internal-error (REST parity, 500 with no runner).
 	h, _ := newTestHandlerFull(t, &fakePool{}, creatorRBAC(), nil, nil, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -524,7 +524,7 @@ func TestToolsCall_IncarnationCreate_RunnerNotConfigured(t *testing.T) {
 func TestToolsCall_IncarnationCreate_ServiceNotRegistered(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: false}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis"}`)
+		`{"id":"redis-prod","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -536,7 +536,7 @@ func TestToolsCall_IncarnationCreate_ServiceNotRegistered(t *testing.T) {
 func TestToolsCall_IncarnationCreate_InvalidName(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"Bad_Name","service":"redis"}`)
+		`{"id":"Bad_Name","service":"redis"}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -552,7 +552,7 @@ func TestToolsCall_IncarnationCreate_InvalidCoven(t *testing.T) {
 	}}
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-prod","service":"redis","covens":["Bad_Coven"]}`)
+		`{"id":"redis-prod","service":"redis","covens":["Bad_Coven"]}`)
 	if resp.Error == nil {
 		t.Fatal("expected error")
 	}
@@ -575,7 +575,7 @@ func TestToolsCall_IncarnationCreate_ScopeDeniesForeignCoven(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on coven=dev"),
 		starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-svc","service":"redis","covens":["prod"]}`)
+		`{"id":"redis-svc","service":"redis","covens":["prod"]}`)
 	if resp.Error == nil {
 		t.Fatal("expected forbidden")
 	}
@@ -598,7 +598,7 @@ func TestToolsCall_IncarnationCreate_ScopeAllowsMatchingCoven(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, scopedRBAC("incarnation.create on coven=dev"),
 		starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-svc","service":"redis","covens":["dev"]}`)
+		`{"id":"redis-svc","service":"redis","covens":["dev"]}`)
 	if resp.Error != nil {
 		t.Fatalf("matching coven should pass: %+v", resp.Error)
 	}
@@ -615,7 +615,7 @@ func TestToolsCall_IncarnationCreate_WildcardAnyCoven(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, wildcardRBAC(),
 		starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"redis-svc","service":"redis","covens":["prod","staging"]}`)
+		`{"id":"redis-svc","service":"redis","covens":["prod","staging"]}`)
 	if resp.Error != nil {
 		t.Fatalf("wildcard should pass: %+v", resp.Error)
 	}
@@ -651,7 +651,7 @@ func TestToolsCall_IncarnationCreate_RequiredInputMissing(t *testing.T) {
 	h, rec := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"ba","service":"redis","create_scenario":"create","input":{}}`)
+		`{"id":"ba","service":"redis","create_scenario":"create","input":{}}`)
 	if resp.Error == nil {
 		t.Fatal("expected validation error for missing required input")
 	}
@@ -675,7 +675,7 @@ func TestToolsCall_IncarnationCreate_RequiredInputProvided(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, creatorRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
-		`{"name":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)
+		`{"id":"ba","service":"redis","create_scenario":"create","input":{"name":"alice"}}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}

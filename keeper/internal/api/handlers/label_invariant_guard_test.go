@@ -276,10 +276,10 @@ func TestIncarnationLabel_StateSecretPathIgnoresCaptionChanges(t *testing.T) {
 // question an investigation actually asks.
 func TestLabelWriteReply_AuditPayloadRecordsBothSides(t *testing.T) {
 	before, after := "redis-billing", guardScopeLabel
-	p := LabelWriteReply[ProviderView]{Name: guardScopeID, Previous: &before, Label: &after}.AuditPayload()
+	p := LabelWriteReply[ProviderView]{ID: guardScopeID, Previous: &before, Label: &after}.AuditPayload()
 
-	if p["name"] != guardScopeID {
-		t.Errorf("audit `name` = %v, want the identifier %q", p["name"], guardScopeID)
+	if p["id"] != guardScopeID {
+		t.Errorf("audit `id` = %v, want the identifier %q", p["id"], guardScopeID)
 	}
 	if got, _ := p["old_label"].(*string); got == nil || *got != before {
 		t.Errorf("audit `old_label` = %v, want %q", p["old_label"], before)
@@ -289,14 +289,14 @@ func TestLabelWriteReply_AuditPayloadRecordsBothSides(t *testing.T) {
 	}
 	// The identifier is what was addressed, never what changed — there is no
 	// rename operation anywhere.
-	if p["name"] == p["new_label"] {
+	if p["id"] == p["new_label"] {
 		t.Error("the audit payload conflates the identifier with the caption")
 	}
 
 	// Both keys present and explicitly nil at the ends of the range: setting a
 	// caption on a row that had none, and clearing one that did. An omitted key
 	// would make either indistinguishable from "this event predates the field".
-	firstEver := LabelWriteReply[ProviderView]{Name: guardScopeID, Label: &after}.AuditPayload()
+	firstEver := LabelWriteReply[ProviderView]{ID: guardScopeID, Label: &after}.AuditPayload()
 	if _, present := firstEver["old_label"]; !present {
 		t.Error("a first-ever caption omitted `old_label` entirely")
 	}
@@ -304,7 +304,7 @@ func TestLabelWriteReply_AuditPayloadRecordsBothSides(t *testing.T) {
 		t.Errorf("a first-ever caption recorded old_label=%v, want an explicit nil", v)
 	}
 
-	cleared := LabelWriteReply[ProviderView]{Name: guardScopeID, Previous: &before}.AuditPayload()
+	cleared := LabelWriteReply[ProviderView]{ID: guardScopeID, Previous: &before}.AuditPayload()
 	if _, present := cleared["new_label"]; !present {
 		t.Error("a cleared caption omitted `new_label` entirely")
 	}

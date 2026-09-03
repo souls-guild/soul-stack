@@ -26,7 +26,7 @@ var (
 	ErrDecreeNotFound = errors.New("oracle: decree not found")
 )
 
-const vigilColumns = `name, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid, label`
+const vigilColumns = `id, sid, service, incarnation, coven, trait_key, trait_value, interval_spec, check_addr, params, enabled, created_at, updated_at, created_by_aid, label`
 
 // vigilUpdateLabelSQL / decreeUpdateLabelSQL replace the display caption of one
 // row ([ADR-0085]).
@@ -43,14 +43,14 @@ const (
 UPDATE vigils AS x
 SET label = $2
 FROM vigils AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 	decreeUpdateLabelSQL = `
 UPDATE decrees AS x
 SET label = $2
 FROM decrees AS old
-WHERE x.name = $1 AND old.name = x.name
+WHERE x.id = $1 AND old.id = x.id
 RETURNING old.label
 `
 )
@@ -66,29 +66,29 @@ RETURNING old.label
 // The name argument addresses the row; it is never written. Nothing derived
 // moves as a result of this call — see the package doc of
 // keeper/internal/registrylabel.
-func UpdateVigilLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	return updateLabel(ctx, db, vigilUpdateLabelSQL, "vigil", name, label, ErrVigilNotFound)
+func UpdateVigilLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	return updateLabel(ctx, db, vigilUpdateLabelSQL, "vigil", id, label, ErrVigilNotFound)
 }
 
 // UpdateDecreeLabel replaces the display caption of one Decree ([ADR-0085]).
 // [ErrDecreeNotFound] when absent. Same semantics as [UpdateVigilLabel].
-func UpdateDecreeLabel(ctx context.Context, db ExecQueryRower, name string, label *string) (*string, error) {
-	return updateLabel(ctx, db, decreeUpdateLabelSQL, "decree", name, label, ErrDecreeNotFound)
+func UpdateDecreeLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	return updateLabel(ctx, db, decreeUpdateLabelSQL, "decree", id, label, ErrDecreeNotFound)
 }
 
 // updateLabel is the shared body of the two above: Vigil and Decree spell their
 // columns differently everywhere else in this package, but a caption is one
 // column with one meaning, so it gets one implementation.
-func updateLabel(ctx context.Context, db ExecQueryRower, sql, what, name string, label *string, notFound error) (*string, error) {
-	if !ValidName(name) {
-		return nil, fmt.Errorf("oracle: invalid %s name %q (must match %s)", what, name, NamePattern)
+func updateLabel(ctx context.Context, db ExecQueryRower, sql, what, id string, label *string, notFound error) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("oracle: invalid %s id %q (must match %s)", what, id, IDPattern)
 	}
 	var v any
 	if n := registrylabel.Normalize(label); n != nil {
 		v = *n
 	}
 	var previous *string
-	if err := db.QueryRow(ctx, sql, name, v).Scan(&previous); err != nil {
+	if err := db.QueryRow(ctx, sql, id, v).Scan(&previous); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return nil, notFound
 		}
@@ -114,7 +114,7 @@ func SelectActiveVigilsForSubject(ctx context.Context, db ExecQueryRower, host s
 	sql := `SELECT ` + vigilColumns + `
 FROM vigils
 WHERE enabled AND ` + pred + `
-ORDER BY name ASC`
+ORDER BY id ASC`
 	rows, err := db.Query(ctx, sql, b.Args...)
 	if err != nil {
 		return nil, fmt.Errorf("oracle: list vigils by subject query: %w", err)
@@ -141,7 +141,7 @@ func collectVigils(rows pgx.Rows) ([]*Vigil, error) {
 func scanVigil(row pgx.Row) (*Vigil, error) {
 	v := &Vigil{}
 	err := row.Scan(
-		&v.Name, &v.SID, &v.Service, &v.Incarnation, &v.Coven, &v.TraitKey, &v.TraitValue,
+		&v.ID, &v.SID, &v.Service, &v.Incarnation, &v.Coven, &v.TraitKey, &v.TraitValue,
 		&v.IntervalSpec, &v.CheckAddr,
 		&v.Params, &v.Enabled, &v.CreatedAt, &v.UpdatedAt, &v.CreatedByAID, &v.Label,
 	)
@@ -154,12 +154,12 @@ func scanVigil(row pgx.Row) (*Vigil, error) {
 	return v, nil
 }
 
-// SelectVigilByName reads a Vigil by PK. [ErrVigilNotFound] on pgx.ErrNoRows.
-func SelectVigilByName(ctx context.Context, db ExecQueryRower, name string) (*Vigil, error) {
+// SelectVigilByID reads a Vigil by PK. [ErrVigilNotFound] on pgx.ErrNoRows.
+func SelectVigilByID(ctx context.Context, db ExecQueryRower, id string) (*Vigil, error) {
 	const sql = `SELECT ` + vigilColumns + `
 FROM vigils
-WHERE name = $1`
-	return scanVigil(db.QueryRow(ctx, sql, name))
+WHERE id = $1`
+	return scanVigil(db.QueryRow(ctx, sql, id))
 }
 
 // SelectAllVigils returns a page of Vigils and the total count (sort
@@ -180,7 +180,7 @@ func SelectAllVigils(ctx context.Context, db ExecQueryRower, offset, limit int) 
 
 	const listSQL = `SELECT ` + vigilColumns + `
 FROM vigils
-ORDER BY created_at DESC, name ASC
+ORDER BY created_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {
@@ -197,8 +197,8 @@ OFFSET $1 LIMIT $2`
 // Decrees are NOT cascaded: decrees.on_beacon is a text reference without an FK
 // (Decree is a managed registry, it survives Vigil recreation); deleting a Vigil
 // merely stops handing it out in VigilSnapshot.
-func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, "DELETE FROM vigils WHERE name = $1", name)
+func DeleteVigil(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, "DELETE FROM vigils WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("oracle: delete vigil: %w", err)
 	}
@@ -208,7 +208,7 @@ func DeleteVigil(ctx context.Context, db ExecQueryRower, name string) error {
 	return nil
 }
 
-const decreeColumns = `name, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid, label`
+const decreeColumns = `id, on_beacon, where_cel, subject_sid, subject_service, subject_incarnation, subject_coven, subject_trait_key, subject_trait_value, incarnation_name, action_scenario, action_input, cooldown, enabled, created_at, updated_at, created_by_aid, label`
 
 // SelectDecreesByBeacon returns enabled Decrees reacting to the given
 // Vigil (decrees.on_beacon == beacon). Hot path of the match flow: for every
@@ -221,7 +221,7 @@ func SelectDecreesByBeacon(ctx context.Context, db ExecQueryRower, beacon string
 	const sql = `SELECT ` + decreeColumns + `
 FROM decrees
 WHERE enabled AND on_beacon = $1
-ORDER BY name ASC`
+ORDER BY id ASC`
 	rows, err := db.Query(ctx, sql, beacon)
 	if err != nil {
 		return nil, fmt.Errorf("oracle: list decrees by beacon query: %w", err)
@@ -248,7 +248,7 @@ func collectDecrees(rows pgx.Rows) ([]*Decree, error) {
 func scanDecree(row pgx.Row) (*Decree, error) {
 	d := &Decree{}
 	err := row.Scan(
-		&d.Name, &d.OnBeacon, &d.WhereCEL,
+		&d.ID, &d.OnBeacon, &d.WhereCEL,
 		&d.SubjectSID, &d.SubjectService, &d.SubjectIncarnation, &d.SubjectCoven,
 		&d.SubjectTraitKey, &d.SubjectTraitValue,
 		&d.IncarnationName, &d.ActionScenario, &d.ActionInput, &d.Cooldown,
@@ -263,12 +263,12 @@ func scanDecree(row pgx.Row) (*Decree, error) {
 	return d, nil
 }
 
-// SelectDecreeByName reads a Decree by PK. [ErrDecreeNotFound] on pgx.ErrNoRows.
-func SelectDecreeByName(ctx context.Context, db ExecQueryRower, name string) (*Decree, error) {
+// SelectDecreeByID reads a Decree by PK. [ErrDecreeNotFound] on pgx.ErrNoRows.
+func SelectDecreeByID(ctx context.Context, db ExecQueryRower, id string) (*Decree, error) {
 	const sql = `SELECT ` + decreeColumns + `
 FROM decrees
-WHERE name = $1`
-	return scanDecree(db.QueryRow(ctx, sql, name))
+WHERE id = $1`
+	return scanDecree(db.QueryRow(ctx, sql, id))
 }
 
 // SelectAllDecrees returns a page of Decrees and the total count (sort
@@ -289,7 +289,7 @@ func SelectAllDecrees(ctx context.Context, db ExecQueryRower, offset, limit int)
 
 	const listSQL = `SELECT ` + decreeColumns + `
 FROM decrees
-ORDER BY created_at DESC, name ASC
+ORDER BY created_at DESC, id ASC
 OFFSET $1 LIMIT $2`
 	rows, err := db.Query(ctx, listSQL, offset, limit)
 	if err != nil {
@@ -305,8 +305,8 @@ OFFSET $1 LIMIT $2`
 // DeleteDecree deletes a Decree by PK. Its cooldown state in `oracle_fires` is
 // removed by cascade (ON DELETE CASCADE, migration 041). [ErrDecreeNotFound] if
 // the row didn't exist.
-func DeleteDecree(ctx context.Context, db ExecQueryRower, name string) error {
-	tag, err := db.Exec(ctx, "DELETE FROM decrees WHERE name = $1", name)
+func DeleteDecree(ctx context.Context, db ExecQueryRower, id string) error {
+	tag, err := db.Exec(ctx, "DELETE FROM decrees WHERE id = $1", id)
 	if err != nil {
 		return fmt.Errorf("oracle: delete decree: %w", err)
 	}
@@ -399,7 +399,7 @@ RETURNING fire_count`
 // serializes via row lock), the rest get RowsAffected==0 and do NOT duplicate
 // alert/audit/metric. now is written to updated_at (a Decree mutation).
 func TripDecree(ctx context.Context, db ExecQueryRower, decree string, now time.Time) (bool, error) {
-	const sql = `UPDATE decrees SET enabled = false, updated_at = $2 WHERE name = $1 AND enabled = true`
+	const sql = `UPDATE decrees SET enabled = false, updated_at = $2 WHERE id = $1 AND enabled = true`
 	tag, err := db.Exec(ctx, sql, decree, now)
 	if err != nil {
 		return false, fmt.Errorf("oracle: trip decree: %w", err)

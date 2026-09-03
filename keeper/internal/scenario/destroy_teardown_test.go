@@ -38,7 +38,7 @@ import (
 func seedDestroyingIncarnation(t *testing.T, name string, state map[string]any) {
 	t.Helper()
 	inc := &incarnation.Incarnation{
-		Name: name, Service: "noop", ServiceVersion: "master",
+		ID: name, Service: "noop", ServiceVersion: "master",
 		StateSchemaVersion: 1, Status: incarnation.StatusDestroying,
 		State: state,
 	}
@@ -102,9 +102,9 @@ func waitStatusInc(t *testing.T, name string, want incarnation.Status) *incarnat
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		inc, err := incarnation.SelectByName(context.Background(), integrationPool, name)
+		inc, err := incarnation.SelectByID(context.Background(), integrationPool, name)
 		if err != nil {
-			t.Fatalf("SelectByName: %v", err)
+			t.Fatalf("SelectByID: %v", err)
 		}
 		if inc.Status == want {
 			return inc
@@ -162,17 +162,17 @@ func TestIntegration_Destroy_Teardown_Success(t *testing.T) {
 
 // waitIncarnationGone polls until the incarnation row physically disappears
 // (S-D3 success: DeleteAfterTeardown in the run goroutine after the barrier).
-// Before removal SelectByName returns the row; after — ErrIncarnationNotFound.
+// Before removal SelectByID returns the row; after — ErrIncarnationNotFound.
 func waitIncarnationGone(t *testing.T, name string) {
 	t.Helper()
 	deadline := time.Now().Add(10 * time.Second)
 	for time.Now().Before(deadline) {
-		_, err := incarnation.SelectByName(context.Background(), integrationPool, name)
+		_, err := incarnation.SelectByID(context.Background(), integrationPool, name)
 		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
 			return
 		}
 		if err != nil {
-			t.Fatalf("SelectByName: %v", err)
+			t.Fatalf("SelectByID: %v", err)
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
@@ -261,7 +261,7 @@ func TestIntegration_Destroy_Teardown_RejectsNonDestroying(t *testing.T) {
 		}
 		time.Sleep(20 * time.Millisecond)
 	}
-	got, _ := incarnation.SelectByName(context.Background(), integrationPool, "noop-prod")
+	got, _ := incarnation.SelectByID(context.Background(), integrationPool, "noop-prod")
 	if got.Status != incarnation.StatusReady {
 		t.Errorf("status = %q, want ready (teardown from ready is rejected)", got.Status)
 	}

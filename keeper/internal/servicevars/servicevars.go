@@ -74,6 +74,10 @@ type ResolveInput struct {
 // is gone (ADR-0082). The labels are the incarnation's own and select overlays of
 // its own vars — they say nothing about its member hosts (NIM-281). It carries no
 // `host_count` and no `state` snapshot: neither exists yet at this point in a run.
+// As with [render.IncarnationMeta], the FIELD NAMES mirror the CEL keys rather
+// than the registry columns: the column is `id` since [ADR-0085] / NIM-729,
+// while the CEL root stays `incarnation.name` until NIM-730 opens its
+// compatibility window. Callers fill `Name` from the renamed identifier.
 type IncarnationContext struct {
 	Name           string
 	Service        string
