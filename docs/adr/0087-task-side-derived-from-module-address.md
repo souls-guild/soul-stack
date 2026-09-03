@@ -1,15 +1,19 @@
 ## ADR-0087. A task's side is derived from its module address, not declared by `on:`
 
-**Status:** accepted, **not implemented** (epic NIM-747; this ADR is NIM-748)
+**Status:** accepted, **implemented** for the core-address rule (NIM-749) and for the plugin
+executor (NIM-758); **NIM-750** — sweeping the now-redundant `on: keeper` out of the service
+repositories — is outstanding (epic NIM-747; this ADR is NIM-748)
 **Amends:** [ADR-009](0009-scenario-dsl.md) (the orchestration delta: `on:` returns to one meaning — a
 list of covens — and the scalar `keeper` leaves the key **on core addresses**; on a plugin address it
-stays legal until NIM-688, see (f)), [ADR-017](0017-keeper-side-core.md)
+stays legal permanently, see (f)), [ADR-017](0017-keeper-side-core.md)
 (the keeper-side dispatcher is no longer `on: keeper`; the module address is the dispatcher),
 [ADR-020](0020-plugin-infrastructure.md) (the schema document's **per-module** object grows a `side`
 field, default `soul`), [ADR-0084](0084-explicit-state-capture.md) (F-D's rule survives unchanged and
 its trigger moves from the `on:` key to the `module:` key; the `state_capture_not_on_keeper`
 diagnostic it introduced is retired)
-**Implemented by:** nothing yet — NIM-749, NIM-750.
+**Implemented by:** NIM-749 (the `side` field, the core-address diagnostics, the side-derived
+routing and stratifier), NIM-758 (the keeper-side plugin executor that makes `side: keeper` a
+control rather than a declaration). Outstanding: NIM-750.
 
 ---
 
@@ -175,13 +179,25 @@ in — doing so changes every document's bytes and therefore every sha256. Three
 
 ### (f) The plugin boundary — accepted and inert until the executor exists
 
+> **Amended 2026-09-03 (NIM-758): the executor exists, the boundary does not move.** `applyKeeperTask`
+> now falls back from the core Registry to the discovered plugins and runs one declaring
+> `side: keeper` ([keeper/modules.md → keeper-side plugin modules](../keeper/modules.md#keeper-side-plugin-modules)),
+> so the "honoured by nothing" half below is **superseded**. What is NOT superseded is the ruling
+> this clause exists for: `on: keeper` on a plugin address stays legal and stays REQUIRED, now
+> permanently. The reason has changed shape — it is no longer "the keeper cannot execute one", it is
+> that a plugin's `side:` lives in its stamped schema document, which the Keeper reads at dispatch
+> and a **scenario cannot read at all**. So a plugin address, unlike a core one, never announces its
+> own side to the linter or the render pipeline, and the errors of (b) remain core-address errors
+> only. A module declaring `soul` on a keeper-side address is refused by name at dispatch — the
+> silent-skip prohibition below is honoured, not relaxed.
+
 `on: keeper` on a **plugin** address stays **legal** until a separate ticket. The keeper cannot
 execute a keeper-side plugin at all (NIM-688), and a plugin has nowhere to declare its side before
 this ADR ships. The errors of (b) are **core-address errors only**.
 
 The matching half has to be stated as plainly: **`side: keeper` on a plugin will be honoured by
 nothing.** `applyKeeperTask` looks up `r.keeperModules`, a `coremod.Registry` and nothing else
-([`keeper/internal/scenario/keeper_dispatch.go:274`](../../keeper/internal/scenario/keeper_dispatch.go)),
+([`keeper/internal/scenario/keeper_dispatch.go`](../../keeper/internal/scenario/keeper_dispatch.go)),
 so such a step still dies `unknown keeper-side module` — loudly, exactly as today. The field is
 therefore **accepted and inert for plugins until NIM-688 lands the executor, and the failure stays
 loud rather than becoming a silent skip.**
@@ -290,7 +306,7 @@ execute."* **The decision removes a divergence the tree already documents.**
 
 `validateOnField` is the `on:`-**shape** validator, not a side validator: it enforces *"only 'keeper'
 is allowed as scalar; use a sequence of coven-ids otherwise"*. It must survive **exactly as written**,
-because under (f) the scalar stays grammatically legal on a plugin address until NIM-688 — tightening
+because under (f) the scalar stays grammatically legal on a plugin address, permanently — tightening
 it to reject every scalar would break the one form this decision deliberately leaves standing. The
 new codes of (b) refuse the scalar on a *core* address; `validateOnField` keeps refusing every scalar
 that is not `keeper`, on any address. The two do not overlap.

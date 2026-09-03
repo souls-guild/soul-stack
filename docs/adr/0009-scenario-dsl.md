@@ -474,8 +474,10 @@ being disjoint, and `on:` becomes a coven list and nothing else.
 What changes for an author: on a **core** address `on: keeper` becomes an error
 (`on_keeper_redundant`), a coven list on a keeper-side core address becomes an error that is never
 silently dropped (`on_covens_on_keeper_module`), and `on: keeper` on a Soul-side core address gets
-its own separate code (`on_keeper_on_soul_module`). On a **plugin** address `on: keeper` stays legal
-until NIM-688. There is **no transition window** — the break lands in one release.
+its own separate code (`on_keeper_on_soul_module`). On a **plugin** address `on: keeper` stays legal —
+permanently, since a plugin's side is declared in its schema document, which the Keeper reads at
+dispatch (NIM-758) and a scenario cannot read at all. There is **no transition window** — the break
+lands in one release.
 
 Everything else in this ADR is untouched: `where:`, `serial:`, `run_once:`, `apply:` and the
 `core.state.<verb>` capture step all keep their semantics. Until NIM-749 / NIM-750 land, the text

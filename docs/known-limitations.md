@@ -13,11 +13,19 @@ Beta works with **existing hosts**: the operator himself picks up the VM/hardwar
 
 If you want dynamic provisioning, this is post-beta. Now: Create a host outside of Soul Stack, then `POST /v1/souls` + `soul init`.
 
-### Keeper cannot execute a keeper-side plugin
+## Keeper-side plugins: the executor is live, nothing ships as one yet
 
-A plugin may **declare** where it runs — `side: keeper | soul` in its schema document, default `soul` ([ADR-020 amendment 2026-09-01 / NIM-748](adr/0020-plugin-infrastructure.md)) — but the Keeper cannot route by it. `applyKeeperTask` resolves a keeper-side address against the built-in `coremod.Registry` only, so a `side: keeper` plugin step fails with **`unknown keeper-side module`**. Loudly, never as a silent skip: the declaration is accepted and inert, which is stated deliberately so an unenforced key is not mistaken for a control.
+**Closed in NIM-758.** The Keeper routes by the declaration: a keeper-side task address the built-in `coremod.Registry` does not know is looked up among the discovered plugins, and one whose schema document says `side: keeper` runs in the Keeper's own process through the same gRPC-over-stdio infrastructure the Soul host uses. A plugin that did NOT declare the keeper side is refused by name (`declares side=soul and does not execute on the keeper`) rather than being answered "unknown module" or quietly sent to a host; an address nothing declares still fails **`unknown keeper-side module`**, unchanged.
 
-This is the **precondition** for the direction fixed by epic NIM-757 (decided 2026-09-01, not implemented): the separate CloudDriver contract is removed and a cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper`. The gap is tracked as **NIM-758** (epic NIM-757) and, earlier, as **NIM-688** — the same gap under two numbers. It must be closed before anything is deleted — a SoulModule runs on a host, a VM is created when no hosts exist yet, and removal-first would leave the platform unable to create a machine at all ([ADR-017 amendment 2026-09-01](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
+What remains is that nothing in the tree *is* such a plugin yet. This was the **precondition** for epic NIM-757: the separate CloudDriver contract is removed and a cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper`. With the executor in place, the order is **NIM-760** (`soul-cloud-wb` moves and is verified live) → **NIM-761** (removal) — never removal first, since a SoulModule runs on a host and a VM is created when no hosts exist yet ([ADR-017 amendment 2026-09-01](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
+
+⚠ **A plugin on the Keeper is the most privileged execution the platform has** — a foreign binary in the Keeper's process tree rather than on a host — and it stands at the door its neighbours already stood at, plus one bolt: the artifact must be in `keeper.yml::plugins.soul_modules`, its capabilities must pass `allowed_capabilities`, its sha256 must match an active Sigil grant, and its module must declare `side: keeper` — a declaration the Sigil seal signs together with the binary ([ADR-026(c)](adr/0026-sigil.md)), so it cannot be flipped without breaking the signature. Nothing confines the process once it starts; that bound is the same one [ADR-020](adr/0020-plugin-infrastructure.md) states for every kind.
+
+### `side: keeper` is enforced by the Keeper only, not by the Soul
+
+The gate is **one-directional**. The Keeper refuses to execute a module that has not declared `side: keeper`; the Soul host does not read the field at all — its plugin registry indexes every `soul_module` in the slot regardless of side. So an artifact declaring `side: keeper`, once distributed to a host, is executable there: a task written as `module: <alias>.<module>.<state>` **without** `on: keeper` routes Soul-side (a scenario cannot derive a plugin's side — [ADR-0087](adr/0087-task-side-derived-from-module-address.md)(f)) and the keeper-side binary runs on every targeted host.
+
+**Latent, not live:** no artifact in the tree declares `keeper` yet, and the first one to do so arrives with NIM-760. Closing it means the symmetric refusal in `soul/internal/runtime`'s plugin registry, which is a Soul-side behaviour change and its own ticket.
 
 ## MCP does not cover all domains
 

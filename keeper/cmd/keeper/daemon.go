@@ -348,6 +348,12 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	coreModules *coremod.Registry
 
+	// keeperSidePlugins — the discovered plugin modules declaring `side: keeper`
+	// ([ADR-0087], NIM-758), which the scenario runner falls back to for a
+	// keeper-side address the core registry above does not know. Always non-nil
+	// after setup; empty when the cache holds no such module.
+	keeperSidePlugins *pluginhost.KeeperSideModules
+
 	// --- push orchestrator (Variant C, docs/keeper/push.md) ---
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -1054,6 +1060,13 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	}
 
 	var discoveredCloud []pluginhost.Discovered
+	// soul_module entries are kept for a second reason now (NIM-758): besides
+	// being the registry distributed to Souls, the ones declaring `side: keeper`
+	// are executed by this Keeper itself. The side filter is NOT applied here —
+	// KeeperSideModules keeps the Soul-side ones too, so a `side: soul` module
+	// addressed by a keeper-side step can be refused by name instead of coming
+	// back as "unknown module".
+	var discoveredSoulModules []pluginhost.Discovered
 	if found, warns, derr := pluginhost.Discover(cacheRoot); derr != nil {
 		logger.Warn("keeper run: plugin discovery skipped",
 			slog.String("cache_root", cacheRoot),
@@ -1077,8 +1090,17 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 				// Keeper daemon runtime wiring note.
 				// Keeper daemon runtime wiring note.
 				d.pushDiscoveredSsh = append(d.pushDiscoveredSsh, dd)
+			case pluginhost.KindSoulModule:
+				discoveredSoulModules = append(discoveredSoulModules, dd)
 			}
 		}
+	}
+	d.keeperSidePlugins = pluginhost.NewKeeperSideModules(
+		pluginhost.HostSpawner{Host: pluginHost}, discoveredSoulModules, logger)
+	if names := d.keeperSidePlugins.Names(); len(names) > 0 {
+		logger.Info("keeper run: keeper-side plugin modules registered",
+			slog.Int("count", len(names)),
+			slog.Any("modules", names))
 	}
 	cloudAdapter, err := cloud.NewPluginAdapter(pluginHost, discoveredCloud)
 	if err != nil {
@@ -3196,6 +3218,10 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		Outbound:      outbound,
 		Destiny:       d.destinySource,
 		KeeperModules: d.coreModules,
+		// Keeper-side PLUGIN modules (NIM-758): the fallback for an address the
+		// core registry does not know, executed only when the module's own schema
+		// document declares `side: keeper`.
+		KeeperPlugins: d.keeperSidePlugins,
 		// Plugin manifests for the static params check at parse time (NIM-228):
 		// same Sigil grants GET /v1/modules reads, so an author is told about an
 		// undeclared key with a line and column before the run instead of by a

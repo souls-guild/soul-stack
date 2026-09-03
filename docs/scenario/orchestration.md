@@ -530,11 +530,14 @@ has none, and render never reads it, so the labels would vanish in silence. And 
 honours it whatever the address, so it would send a host module to the keeper, which has no such
 module.
 
-**A plugin address is the exception, for now.** `on: keeper` on `<alias>.<module>.<state>` is still
-accepted: nothing the engine reads declares such a plugin keeper-side, and the Keeper cannot execute
-one at all yet (NIM-688 — a live run reports "unknown keeper-side module"). A module's schema
-document carries the declaration that will replace it — `side: keeper | soul`, default `soul`
-([plugins.md → schema document](../keeper/plugins.md#schema-document)) — and the key goes once the Keeper can honour it.
+**A plugin address is the exception, permanently so far.** `on: keeper` on `<alias>.<module>.<state>`
+is still accepted, and still required. The Keeper does execute such a plugin now — NIM-758 routes a
+keeper-side address the core registry does not know to a module whose schema document declares
+`side: keeper` ([keeper/modules.md → keeper-side plugin modules](../keeper/modules.md#keeper-side-plugin-modules)) —
+but the declaration lives in the artifact, in the Keeper's plugin cache, and a scenario cannot read
+it. Nothing a service repo contains says the side of a plugin address, so the key stays the only
+spelling: dropping it here would silently send the step to hosts, which is the failure mode this
+whole section exists to prevent.
 
 ```yaml
 # Entire incarnation (on: omitted)

@@ -123,10 +123,11 @@ type Def struct {
 	// default, [SideKeeper] for one the Keeper runs itself against no host).
 	// Declared once here rather than restated by every task that addresses it.
 	//
-	// A keeper-side plugin is NOT executable yet (NIM-688 — a live run reports
-	// "unknown keeper-side module"), so declaring it is a statement of intent the
-	// engine records and does not yet route by. Until it does, such a scenario
-	// still writes `on: keeper` on the task.
+	// The Keeper executes a module declaring [SideKeeper] (NIM-758), in its own
+	// process rather than on a host — the same SoulModule contract, a different
+	// place. Such a scenario still writes `on: keeper` on the task: the
+	// declaration lives in the stamped schema document, which a scenario cannot
+	// read, so the address alone does not say the side of a plugin.
 	Side Side
 
 	Capabilities []Capability

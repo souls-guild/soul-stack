@@ -588,7 +588,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			abort(reasonSoulCapabilityUnsupported, err)
 			return
 		}
-		if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, 0, tasks, plans); err != nil {
+		if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, 0, tasks, plans, sealed.Paths()); err != nil {
 			abort("keeper_dispatch_failed", err)
 			return
 		}
@@ -745,7 +745,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// Passage with no keeper tasks is a no-op (host-only Passage). N=1 →
 			// one call for passage 0, same behavior as the pre-loop call before
 			// Slice 2 (bit-for-bit).
-			if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, p, passageTasks, passagePlans); err != nil {
+			if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, p, passageTasks, passagePlans, sealed.Paths()); err != nil {
 				abort("keeper_dispatch_failed", err)
 				return
 			}

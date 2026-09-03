@@ -158,7 +158,9 @@ func join(s []string) string {
 // the new ordinary form; a Soul-side core address is untouched however it is
 // written; a keeper-side address that still carries the (now redundant) literal
 // keeps routing where it always did; and a PLUGIN address with the literal stays
-// keeper-side, which is the half NIM-688 has to close before the key can go.
+// keeper-side — where the keeper now really executes it (NIM-758), and where the
+// literal stays the only spelling: a plugin's side is declared in its schema
+// document, which the render pipeline does not read and a scenario cannot.
 func TestIsKeeperTask_SideFollowsTheModuleAddress(t *testing.T) {
 	mod := func(addr string) *config.ModuleTask {
 		return &config.ModuleTask{Module: addr, Params: map[string]any{}}

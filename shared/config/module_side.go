@@ -26,12 +26,14 @@ func KeeperSideModule(addr string) bool {
 // and nothing else on a core address, where the literal is now refused as
 // redundant (`on_keeper_redundant`).
 //
-// The second half is the part that is not yet closed. A PLUGIN address carrying
-// `on: keeper` stays legal: nothing declares such a plugin keeper-side that the
-// engine can read, and the Keeper cannot execute one at all (NIM-688 — a live
-// run says "unknown keeper-side module"). Refusing the literal there would
-// remove the only spelling those scenarios have, so it keeps routing exactly as
-// before until keeper-side plugin execution exists.
+// The second half is not a gap waiting to close — it is the boundary. A PLUGIN
+// address carrying `on: keeper` stays legal because nothing readable FROM HERE
+// declares such a plugin's side: the declaration is `side:` in the artifact's
+// stamped schema document (NIM-749), which lives in the Keeper's plugin cache
+// and not in the service repo this package parses. The Keeper does execute such
+// a plugin (NIM-758, closing NIM-688) — it reads that document at dispatch,
+// where it has it. Refusing the literal here would remove the only spelling
+// those scenarios have and silently route them at hosts.
 //
 // Written as a pure function over the two facts, rather than once over
 // [Task] and again over the YAML AST, because the linter sees a task before it

@@ -141,9 +141,13 @@ type Module struct {
 	// routes the step (docs/scenario/orchestration.md §3).
 	//
 	// Empty means [SideSoul], and that default is what keeps every plugin
-	// written before this field host-side without an edit. A keeper-side
-	// plugin is not executable yet (NIM-688) — the field is the declaration
-	// surface it will be routed by, not a switch that already routes.
+	// written before this field host-side without an edit.
+	//
+	// The Keeper routes by it (NIM-758): a keeper-side task address its core
+	// registry does not know resolves against the discovered plugins, and one
+	// declaring [SideKeeper] executes in the Keeper's own process. So this is a
+	// switch, and the value is load-bearing — a module declaring the Soul side
+	// on such an address is refused by name rather than run.
 	Side Side `json:"side,omitempty"`
 
 	// IntroducedIn — the engine release in which this module first appeared

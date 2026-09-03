@@ -233,11 +233,17 @@ sequence is forced:
      permission to spawn.
 
    NIM-749 already landed `side: keeper | soul` in the schema (`sdk/schema/schema.go:147`, with
-   `Side`/`SideSoul`/`SideKeeper` at `:102-121`), so the **declaring** half exists and the
-   **executing** half does not. ⚠ The hedge in the NIM-748 amendment above ("the code is NIM-749 /
+   `Side`/`SideSoul`/`SideKeeper` at `:102-121`), so the **declaring** half existed and the
+   **executing** half did not. ⚠ The hedge in the NIM-748 amendment above ("the code is NIM-749 /
    NIM-750") is stale on its first number: NIM-749 has landed, NIM-750 — `on: keeper` ceasing to be
-   required — has not. This gap is tracked as **NIM-758** (epic NIM-757) and, earlier, as
-   **NIM-688** — the same gap under two numbers.
+   required — has not. This gap was tracked as **NIM-758** (epic NIM-757) and, earlier, as
+   **NIM-688** — the same gap under two numbers — and **it is closed**: `applyKeeperTask` falls back
+   from the core Registry to the discovered plugins, and `Host.SpawnSoulModule` starts one declaring
+   `side: keeper`, refusing before the fork any module that declares otherwise.
+   ⚠ One thing NIM-758 did **not** move, and step 2 must not assume it did: `on: keeper` stays
+   REQUIRED on a plugin address. A plugin's side lives in its stamped schema document, which the
+   Keeper reads at dispatch and a scenario cannot read at all — so unlike a core address, a plugin
+   address does not announce its own side to the linter or the render pipeline.
 2. **NIM-760 — `soul-cloud-wb` moves to an ordinary plugin with `side: keeper`,** and VM creation
    is verified live against a real provider before anything is deleted.
 3. **NIM-761 — removal.** The contract, the registries, the module, the SDK directory, the proto.

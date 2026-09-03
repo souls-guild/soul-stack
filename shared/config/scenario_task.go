@@ -1389,11 +1389,12 @@ func validateAsyncOnKeeper(present map[string]*ast.MappingValueNode, pathPrefix 
 // meaning "no hosts at all". Refusing it here is what lets the key go back to
 // one meaning.
 //
-// A PLUGIN address is NOT covered, deliberately. Nothing declares such a plugin
-// keeper-side in a way the engine reads, and the Keeper cannot execute one at
-// all yet (NIM-688), so `on: keeper` is the only spelling those scenarios have —
-// see [keeperSide]. `side:` in a module's schema document is the declaration
-// that will replace it.
+// A PLUGIN address is NOT covered, deliberately and permanently. `side:` in the
+// module's schema document is what declares the side (NIM-749) and the Keeper
+// routes by it (NIM-758) — but that document lives in the Keeper's plugin cache,
+// not in the service repo, so nothing available HERE, offline, over a scenario
+// file, can derive a plugin's side. `on: keeper` is the only spelling those
+// scenarios have — see [keeperSide].
 // A coven LIST on the same address is refused too, under
 // `on_covens_on_keeper_module`. Not the same finding and not the same word: the
 // literal restates something true, a list states something false — it selects

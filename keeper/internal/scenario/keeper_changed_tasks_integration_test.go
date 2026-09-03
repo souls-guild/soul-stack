@@ -58,7 +58,7 @@ func TestIntegration_KeeperChangedTask_FoldsIntoChangedTasks(t *testing.T) {
 		{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
 	}
 
-	if err := r.dispatchKeeperTasks(context.Background(), spec, nil, slog.New(slog.DiscardHandler), 0, tasks, plans); err != nil {
+	if err := r.dispatchKeeperTasks(context.Background(), spec, nil, slog.New(slog.DiscardHandler), 0, tasks, plans, nil); err != nil {
 		t.Fatalf("dispatchKeeperTasks: %v", err)
 	}
 
@@ -103,7 +103,7 @@ func TestIntegration_KeeperFailedTask_NotInChangedTasks(t *testing.T) {
 		{TaskIndex: 0, Keeper: true, TargetSIDs: []string{render.KeeperTargetSID}},
 	}
 
-	if err := r.dispatchKeeperTasks(context.Background(), spec, nil, slog.New(slog.DiscardHandler), 0, tasks, plans); err == nil {
+	if err := r.dispatchKeeperTasks(context.Background(), spec, nil, slog.New(slog.DiscardHandler), 0, tasks, plans, nil); err == nil {
 		t.Fatal("dispatchKeeperTasks: nil error, want failed keeper task abort")
 	}
 

@@ -95,9 +95,11 @@ const keeperOnLiteral = "keeper"
 // meaning, "which covens".
 //
 // Delegates to [config.IsKeeperSideTask] so this routing and soul-lint's offline
-// judgement come out of one rule and one catalog. The legacy `on: keeper`
-// literal still routes a PLUGIN address here, which is the half NIM-688 has to
-// close before it can go.
+// judgement come out of one rule and one catalog. The `on: keeper` literal still
+// routes a PLUGIN address here, and stays: the Keeper can execute such a plugin
+// since NIM-758, but the side is declared in the artifact's schema document,
+// which a scenario cannot read — so for a plugin the key is not a restatement of
+// what the engine knows, it is the only thing that says it.
 func IsKeeperTask(task config.Task) bool {
 	return config.IsKeeperSideTask(task)
 }

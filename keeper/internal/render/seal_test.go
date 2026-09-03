@@ -309,3 +309,86 @@ func TestMaskSecretsSealed_ResolvedVaultRefSubtree(t *testing.T) {
 		t.Errorf("regex-fallback alarm fired for %v — the seal should have caught the cell declaratively", alarms)
 	}
 }
+
+// GUARD (NIM-758): the seal's path spelling and the masker's are ONE spelling.
+//
+// [collectSealed] produces the paths, [SealedValues] consumes them, and nothing
+// but this test holds the two together — a divergence in joinKey/joinIdx would
+// leave the masker silently masking nothing, which is the worst shape a masking
+// defect can take. So the paths here come from the real producer, never from a
+// literal: hand-spelling them would assert a human's guess against itself.
+func TestSealedValues_PathSpellingComesFromTheCollector(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+	sources := cel.SealSources{SecretInputs: map[string]bool{"admin_password": true}}
+
+	// RAW params, as the author wrote them — what the seal is collected from.
+	raw := map[string]any{
+		"credentials": map[string]any{
+			"token": "${ input.admin_password }",
+			"user":  "svc",
+		},
+		"keys":   []any{"public", "${ vault('secret/redis/admin#password') }"},
+		"region": "ru-central1",
+	}
+	collectSealed(e, set, raw, sources, "")
+
+	// RENDERED params, as they reach the module — the same cells, values arrived.
+	rendered := map[string]any{
+		"credentials": map[string]any{
+			"token": "resolved-admin-password",
+			"user":  "svc",
+		},
+		"keys":   []any{"public", "s3cr3t"},
+		"region": "ru-central1",
+	}
+	got := SealedValues(rendered, set.Paths())
+
+	want := []string{"resolved-admin-password", "s3cr3t"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SealedValues = %v, want %v (paths from collectSealed: %v)", got, want, set.Paths())
+	}
+}
+
+// GUARD (NIM-758): a sealed cell whose RESOLVED value is a composite is masked
+// WHOLE, every string leaf under it.
+//
+// This is not an edge case, it is the credentials-as-params shape the keeper-side
+// plugin path exists for. `vault:<mount>/<path>` with no `#field` seals ONE path
+// (the raw cell is one string) and resolves to the entire KV map, so recording
+// only a string AT the sealed path would find nothing and mask nothing —
+// silently, on exactly the input the masking was built for.
+func TestSealedValues_SealedSubtreeIsMaskedWhole(t *testing.T) {
+	e := sealTestEngine(t)
+	set := NewSealedSet()
+
+	// One raw cell, one sealed path: the bare vault-ref branch of walkSealed.
+	raw := map[string]any{"creds": "vault:secret/wb/prod/cloud", "region": "ru-central1"}
+	collectSealed(e, set, raw, cel.SealSources{}, "")
+	if paths := set.Paths(); !paths["creds"] || len(paths) != 1 {
+		t.Fatalf("sealed paths = %v, want exactly {creds} (the raw cell is one string)", paths)
+	}
+
+	// readVaultRef with no `#field` hands back the WHOLE KV map.
+	rendered := map[string]any{
+		"creds": map[string]any{
+			"token": "s3cr3t",
+			"user":  "svc",
+			"nested": map[string]any{
+				"refresh": "r3fr3sh",
+			},
+		},
+		"region": "ru-central1",
+	}
+	got := SealedValues(rendered, set.Paths())
+
+	want := []string{"r3fr3sh", "s3cr3t", "svc"}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("SealedValues = %v, want %v — every string leaf of the sealed subtree", got, want)
+	}
+	for _, v := range got {
+		if v == "ru-central1" {
+			t.Error("an unsealed sibling cell was collected — the subtree rule must not leak outward")
+		}
+	}
+}

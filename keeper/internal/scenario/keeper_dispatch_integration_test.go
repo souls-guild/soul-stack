@@ -141,7 +141,7 @@ func TestApplyKeeperTask_RealBootstrap_IssuedResolves(t *testing.T) {
 			"sids": []any{"vm1.example.com", "vm2.example.com"},
 		}),
 	}
-	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt)
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
 	if failed {
 		t.Fatalf("core.bootstrap.issued failed: %q", msg)
 	}
@@ -173,7 +173,7 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 			"count":    float64(1),
 		}),
 	}
-	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt)
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
 	if failed {
 		t.Fatalf("core.cloud.created failed: %q (Lookup(core.cloud) hit + state=created should have passed)", msg)
 	}
@@ -192,7 +192,7 @@ func TestApplyKeeperTask_RealCloud_CreatedResolves(t *testing.T) {
 func TestApplyKeeperTask_RealCloud_BadStateFails(t *testing.T) {
 	r := &Runner{keeperModules: realKeeperRegistry()}
 	rt := &render.RenderedTask{Index: 0, Module: "core.cloud.provisioned", Params: mustStructI(t, map[string]any{"provider": "fake"})}
-	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt)
+	_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
 	if !failed {
 		t.Fatalf("core.cloud.provisioned must fail (unknown state provisioned), got success")
 	}
@@ -212,7 +212,7 @@ func TestApplyKeeperTask_RealChoir_PresentResolves(t *testing.T) {
 			"sid":         "h1.example.com",
 		}),
 	}
-	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt)
+	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
 	if failed {
 		t.Fatalf("core.choir.present failed: %q (Lookup(core.choir) hit + state=present should have passed)", msg)
 	}

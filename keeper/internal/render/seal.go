@@ -1,6 +1,7 @@
 package render
 
 import (
+	"sort"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -126,6 +127,90 @@ func collectSealed(engine *cel.Engine, set *SealedSet, params map[string]any, so
 		return
 	}
 	walkSealed(engine, set, params, sources, base)
+}
+
+// SealedValues returns the RESOLVED values a task's params carry at sealed
+// paths — the secrets that actually travelled, for a caller who has to keep
+// them out of a free-text channel that masking-by-path cannot reach.
+//
+// [audit.MaskSecretsSealed] answers "what does this payload look like with the
+// sealed cells removed" and needs the payload to BE the params tree. A module's
+// failure message is not that tree: it is one string that may quote a value out
+// of it. The only thing that helps there is knowing the values, which is what
+// this returns.
+//
+// It lives beside [collectSealed] deliberately and walks the same way: the path
+// spelling is the whole contract between the two, and a second spelling of it
+// elsewhere is how a masker comes to miss exactly the cell the seal marked.
+// Sealed paths are collected from the RAW params and looked up here against the
+// RENDERED ones — the same cell, before and after the value arrived.
+//
+// ★ A sealed path is sealed WITH EVERYTHING UNDER IT, and that is not a
+// convenience — it is the common case. The seal is collected from the RAW params,
+// where a cell is one string; the value that arrives can be a whole subtree. A
+// bare `vault:<mount>/<path>` with no `#field` resolves to the entire KV map
+// ([readVaultRef]), and a whole-cell `${ … }` yields a native list or map under
+// [ADR-010]'s non-string rule. Recording only the string AT the sealed path would
+// therefore find nothing in exactly the shape this exists for — a credentials map
+// handed to a keeper-side plugin — and mask nothing at all.
+//
+// ⚠ This is NOT parity with [audit.MaskSecretsSealed], and the gap is real rather
+// than a rounding: that masker replaces the cell at a sealed path whatever its
+// TYPE, while this one can only return strings. A numeric secret under a sealed
+// path is therefore `***MASKED***` in a payload and legible in a message.
+// Widening the type switch is not the fix — `87654321` is a plausible substring
+// of a byte count or a timestamp, so masking a number out of free text needs a
+// decision about text masking rather than one more case arm here.
+//
+// Empty strings are dropped: redacting "" would blank every position in the
+// message. The result is sorted and deduplicated — it feeds an observable
+// channel, which must be byte-identical for identical input.
+//
+// ★ The cost of the subtree rule, stated because it is paid on every message.
+// Vault hands back a whole KV map, so a sealed `creds` cell contributes its
+// NON-SECRET siblings as well — `user`, `host`, `port`. Those are then redacted
+// from every keeper task's message in the run, core modules included, because the
+// seal set is RUN-wide and is matched against each task's own params root. An
+// operator reading `await timeout for ***` instead of a hostname is the price of
+// not leaking the password that sat beside it, and a short leaf (`svc`, `6379`)
+// collides with ordinary words. It is the right direction to err in; it is not
+// free.
+func SealedValues(params map[string]any, sealed map[string]bool) []string {
+	if len(params) == 0 || len(sealed) == 0 {
+		return nil
+	}
+	found := map[string]bool{}
+	walkSealedValues(params, sealed, "", false, found)
+	if len(found) == 0 {
+		return nil
+	}
+	out := make([]string, 0, len(found))
+	for v := range found {
+		out = append(out, v)
+	}
+	sort.Strings(out)
+	return out
+}
+
+// walkSealedValues carries inSealed down: once a node's path is sealed, every
+// string leaf beneath it is a secret, whether or not its own deeper path was
+// ever recorded in the set — a sealed subtree has no unsealed interior.
+func walkSealedValues(v any, sealed map[string]bool, path string, inSealed bool, found map[string]bool) {
+	inSealed = inSealed || sealed[path]
+	switch t := v.(type) {
+	case map[string]any:
+		for k, val := range t {
+			walkSealedValues(val, sealed, joinKey(path, k), inSealed, found)
+		}
+	case []any:
+		for i, val := range t {
+			walkSealedValues(val, sealed, joinIdx(path, i), inSealed, found)
+		}
+	case string:
+		if t != "" && inSealed {
+			found[t] = true
+		}
+	}
 }
 
 func walkSealed(engine *cel.Engine, set *SealedSet, v any, sources cel.SealSources, path string) {

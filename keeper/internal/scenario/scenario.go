@@ -44,6 +44,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
+	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -384,6 +385,29 @@ type KeeperModuleRegistry interface {
 	Lookup(name string) (module.SoulModule, bool)
 }
 
+// KeeperPluginRegistry is the second half of keeper-side execution (NIM-758):
+// the PLUGIN modules this Keeper may run itself, for an address that is not one
+// of the built-in core ones. Implemented by
+// [pluginhost.KeeperSideModules]; an interface for the same reason
+// [KeeperModuleRegistry] is one — the scenario package must stay testable
+// without a plugin cache, a Sigil registry or a forked binary.
+//
+// The two methods answer two different questions and the split is load-bearing.
+// LookupKeeperSide only ever returns a module whose document declared
+// `side: keeper`, so nothing reachable through it can be a Soul-side module —
+// the fail-closed property does not rest on the caller. DeclaredSide adds the
+// fact needed to write an honest refusal for everything else: "that module runs
+// on the Soul" and "there is no such module" are opposite mistakes with
+// opposite fixes, and answering the second for the first sends an author
+// hunting a typo that is not there.
+//
+// nil in Deps → a plugin address stays `unknown keeper-side module`, exactly as
+// before this executor existed.
+type KeeperPluginRegistry interface {
+	LookupKeeperSide(base string) (module.SoulModule, bool)
+	DeclaredSide(base string) (schema.Side, bool)
+}
+
 // ChangedTaskReader is the narrow read-access surface to the audit log: sets
 // of (sid, plan_index) run tasks that terminated CHANGED (T3, changed_tasks
 // rollup) or FAILED/TIMED_OUT (ADR-056 R3, cross-passage onfail-rescue
@@ -421,6 +445,13 @@ type Deps struct {
 	// are rejected at dispatch phase ([ErrKeeperModulesNotConfigured]); a
 	// pure Soul-side run works without it.
 	KeeperModules KeeperModuleRegistry
+	// KeeperPlugins — the keeper-side PLUGIN modules (NIM-758): an address the
+	// core Registry above does not know is looked up here, and executes locally
+	// when its schema document declares `side: keeper` ([ADR-0087]). nil → a
+	// plugin address on a keeper-side task fails `unknown keeper-side module`,
+	// which is what it did before this executor existed; a cluster with no
+	// keeper-side plugins is unaffected either way.
+	KeeperPlugins KeeperPluginRegistry
 	// ModuleManifests — source of the plugin manifests this cluster has
 	// allow-listed, so a definition's `params:` are checked against them while
 	// it is parsed (NIM-228), the same four checks `core.*` already gets from
@@ -576,6 +607,11 @@ type Runner struct {
 	// nil → `on: keeper` tasks are rejected ([ErrKeeperModulesNotConfigured]).
 	keeperModules KeeperModuleRegistry
 
+	// keeperPlugins — keeper-side PLUGIN modules (copy of Deps.KeeperPlugins),
+	// consulted by applyKeeperTask when the core Registry misses. nil → a plugin
+	// address stays `unknown keeper-side module`.
+	keeperPlugins KeeperPluginRegistry
+
 	mu           sync.Mutex
 	active       map[string]context.CancelFunc
 	wg           sync.WaitGroup
@@ -613,6 +649,7 @@ func NewRunner(deps Deps) *Runner {
 		soulCap:           deps.SoulCap,
 		soulVersion:       deps.SoulVersion,
 		keeperModules:     deps.KeeperModules,
+		keeperPlugins:     deps.KeeperPlugins,
 		active:            make(map[string]context.CancelFunc),
 	}
 }

@@ -544,10 +544,12 @@ tasks:
 		}
 	})
 
-	// The boundary the epic draws: a PLUGIN address keeps the literal. Nothing
-	// declares such a plugin keeper-side that the engine reads, and the keeper
-	// cannot execute one yet (NIM-688), so refusing the key would leave those
-	// scenarios with no spelling at all.
+	// The boundary the epic draws: a PLUGIN address keeps the literal, and keeps
+	// it permanently. The keeper DOES execute such a plugin now (NIM-758), but by
+	// reading `side:` in the artifact's schema document — which lives in its
+	// plugin cache, not in the service repo this package parses. Nothing
+	// available offline declares a plugin's side, so refusing the key would leave
+	// those scenarios with no spelling at all.
 	t.Run("a plugin address keeps on: keeper", func(t *testing.T) {
 		src := `name: x
 tasks:

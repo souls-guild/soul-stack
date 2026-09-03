@@ -4,6 +4,8 @@ import (
 	"context"
 	"fmt"
 	"log/slog"
+	"sort"
+	"strings"
 
 	"google.golang.org/grpc"
 	"google.golang.org/grpc/metadata"
@@ -15,6 +17,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -49,7 +52,14 @@ import (
 //
 // No keeper tasks for this Passage → no-op (host-only Passage, or a run with no
 // keeper-side tasks at all — ordinary Soul-side path).
-func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
+// sealedPaths is the run's seal ([ADR-010] §7.4, render.SealedSet.Paths) — the
+// params cells whose value came from a secret source. It is threaded down to
+// the task because a keeper-side PLUGIN takes its secrets AS PARAMS (NIM-757,
+// decided 2026-09-01: the plugin has no Vault access of its own), so the values
+// the seal marks are exactly what must not come back out through the module's
+// message. nil (push/trial paths, or a run whose render sealed nothing) → no
+// values to redact, behaviour bit-for-bit as before.
+func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, sealedPaths map[string]bool) error {
 	keeperTasks := keeperTasksOf(tasks, plans, passage)
 	if len(keeperTasks) == 0 {
 		return nil
@@ -79,7 +89,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 	}
 
 	for _, rt := range keeperTasks {
-		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, stateSchema, rt)
+		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, stateSchema, rt, sealedPaths)
 		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),
@@ -250,14 +260,25 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 	}
 }
 
-// applyKeeperTask calls a keeper-side core module in-process and folds its
+// applyKeeperTask calls a keeper-side module in-process and folds its
 // ApplyEvent stream into a final result (changed/failed/output/message),
 // mirroring Soul-side runTask (selfRegisterData). Module address splits into
 // (base, state) via the same config.SplitModuleAddr as Soul-side plantask/
-// applyrunner: Registry indexes modules by base (`core.cloud`), state
+// applyrunner: the registry indexes modules by base (`core.cloud`), state
 // (`created`) goes into ApplyRequest.state. A malformed address or a module
-// not found in the Registry → failed (like Soul on an unknown module). Apply
+// found in neither registry → failed (like Soul on an unknown module). Apply
 // returning a gRPC error (not a failed event) → failed with the error text.
+//
+// TWO registries, asked in this order (NIM-758): the built-in keeper-side core
+// modules first, then the PLUGIN modules that declared `side: keeper`
+// ([ADR-0087], [Runner.lookupKeeperPlugin]). Core first is the same precedence
+// the Soul side uses for its composite registry — a plugin registered under a
+// core address cannot shadow the module that really runs.
+//
+// This wrapper exists for the masking (see [Runner.maskKeeperTaskMessage]),
+// which has to be the LAST thing that happens to the message and must not be
+// something a later return path can slip past. The work is in
+// [Runner.runKeeperTask].
 //
 // The run's incarnation travels on the module context (coremod/util runctx):
 // ApplyRequest carries no run context, and a keeper-side module needs the owner
@@ -266,14 +287,55 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 // module whose Vault path is DERIVED from the run's owner rather than authored
 // ([ADR-0083] §4). stateSchema is the loaded artifact's map, shared not copied —
 // every reader treats it as immutable.
-func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
+func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask, sealedPaths map[string]bool) (changed, failed bool, output map[string]any, message string) {
+	changed, failed, output, message = r.runKeeperTask(ctx, spec, stateSchema, rt)
+	return changed, failed, output, maskKeeperTaskMessage(rt, sealedPaths, message)
+}
+
+// lookupKeeperPlugin resolves a keeper-side task address the core registry does
+// not know against the plugins this Keeper discovered and allow-listed. The
+// error it returns IS the operator-facing failure message, so its three shapes
+// are the whole contract:
+//
+//   - no plugin registry, or an address nothing declares → `unknown keeper-side
+//     module %q`, byte-identical to what this path answered before keeper-side
+//     plugins existed. NIM-688 asks for exactly that: an unknown address must
+//     stay a fast, readable refusal and not become a plugin-spawn timeout;
+//   - a registered module that declares the Soul side → a refusal naming the
+//     side. This is the case the acceptance is about. Such a task must NOT
+//     quietly go to a host — nothing would run it there either, and the author
+//     would be reading "unknown module" about a module that exists;
+//   - a module declaring `side: keeper` → the executable handle.
+//
+// The registry only ever hands back a keeper-side module, so the second case
+// cannot be reached by getting the order of these branches wrong.
+func (r *Runner) lookupKeeperPlugin(base, addr string) (module.SoulModule, error) {
+	if r.keeperPlugins == nil {
+		return nil, fmt.Errorf("unknown keeper-side module %q", addr)
+	}
+	if mod, ok := r.keeperPlugins.LookupKeeperSide(base); ok {
+		return mod, nil
+	}
+	if side, known := r.keeperPlugins.DeclaredSide(base); known {
+		return nil, fmt.Errorf("plugin module %q declares side=%s and does not execute on the keeper: a keeper-side step needs `side: keeper` in the module's schema document", base, side)
+	}
+	return nil, fmt.Errorf("unknown keeper-side module %q", addr)
+}
+
+// runKeeperTask is [Runner.applyKeeperTask] without the masking of its result
+// message — see that function for the contract. Split out so masking has one
+// place to happen rather than one per return.
+func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
 	base, state, ok := config.SplitModuleAddr(rt.Module)
 	if !ok {
 		return false, true, nil, fmt.Sprintf("invalid keeper-side module address %q (want <namespace>.<module>.<state>)", rt.Module)
 	}
 	mod, ok := r.keeperModules.Lookup(base)
 	if !ok {
-		return false, true, nil, fmt.Sprintf("unknown keeper-side module %q", rt.Module)
+		var perr error
+		if mod, perr = r.lookupKeeperPlugin(base, rt.Module); perr != nil {
+			return false, true, nil, perr.Error()
+		}
 	}
 
 	// The §7 fence, post-render half ([ADR-0083]): `core.vault.*` reaches Vault
@@ -330,6 +392,83 @@ func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema 
 		out = o.AsMap()
 	}
 	return last.GetChanged(), false, out, last.GetMessage()
+}
+
+// maskKeeperTaskMessage redacts, from a keeper-side task's result message,
+// every value the task's own params carry at a SEALED path — the run's
+// render-time record of which cells came from a secret source ([ADR-010] §7.4).
+//
+// ★ Why this exists at all. Until keeper-side plugins, every module on this path
+// was ours and reached Vault itself, so a params cell was not where its secrets
+// were. A plugin has no Vault access and is GIVEN its credentials as params
+// (NIM-757, user decision 2026-09-01) — and then writes the message. A module
+// that echoes what it was handed ("connect to host=… token=… failed") turns the
+// one channel it controls into a leak, and that message is observable four ways:
+// the audit task.executed payload, `apply_runs.error_summary`, the run's abort
+// reason, and the operator's view of each. The write-path maskers cannot save
+// it: [audit.MaskSecrets] masks a value whose KEY looks sensitive or which IS a
+// `vault:` ref, and a resolved credential quoted mid-sentence is neither;
+// [audit.MaskSecretsSealed] masks a payload cell AT a sealed path, and a message
+// is one string, not the params tree. Knowing the values is the only thing that
+// works, and the seal is the platform's record of which they are — the same
+// mechanism `RenderedTask.SecretOutput` points at for the params it does not
+// cover.
+//
+// Applied at one point, to every message the task can produce and to core
+// modules as well as plugins: masking that only runs on the failure path is
+// masking that runs on the path where nobody was looking. (In practice only a
+// FAILED task's message reaches a channel — the audit payload carries it inside
+// `error` — but the mask is not what should be deciding that.)
+//
+// Four bounds, stated rather than implied:
+//
+//   - it redacts values the RENDER knew to be secret. A credential a module
+//     invents at runtime, or one written as a plaintext literal in the scenario,
+//     is not distinguishable from any other text — the same bound the console and
+//     errand surfaces state (ADR-0074 amendment 2026-07-27);
+//   - STRING leaves only. A number or a bool at a sealed path is left alone:
+//     masking `true` out of a diagnostic would destroy the diagnostic and protect
+//     nothing that could be recognised in text anyway. Composites ARE covered —
+//     see [render.SealedValues], which masks a sealed subtree whole;
+//   - the secret has to have been SEALED at render, and the seal does not follow
+//     a `vars:` hop. `cel.SealSources.SealedVars` is never populated by anything
+//     in this tree, so `params: {pw: "${ vars.db_pw }"}` is unsealed even when
+//     `vars.db_pw` is itself `${ vault(…) }` — and routing a secret through vars
+//     is the commonest idiom in `examples/`. A predating hole in the seal, not one
+//     this path opened, but it bounds this masking exactly as much;
+//   - it masks the MESSAGE and nothing else. The module's `output` is written to
+//     `apply_task_register` verbatim by [Runner.accumulateKeeperRegister] — on
+//     purpose, since that is the value the next task reads through
+//     `register.<name>.<field>`, and redacting it would break the chain rather
+//     than protect it. `secret: true` on an output field does NOT change that
+//     write: keeper-side, what the declaration buys is that
+//     [render.secretOutputRegisters] seals the register NAME, so a later cell
+//     reading it is masked where IT becomes observable. A plugin that echoes a
+//     credential into `output` still lands it in the register row in plaintext;
+//   - a very short sealed value over-masks — see [render.SealedValues], which
+//     also carries the non-secret siblings of a sealed subtree. Safe direction,
+//     paid in diagnostics.
+func maskKeeperTaskMessage(rt *render.RenderedTask, sealedPaths map[string]bool, message string) string {
+	if message == "" || len(sealedPaths) == 0 || rt.Params == nil {
+		return message
+	}
+	secrets := render.SealedValues(rt.Params.AsMap(), sealedPaths)
+	if len(secrets) == 0 {
+		return message
+	}
+	// Longest first: a short secret that is a substring of a longer one must not
+	// consume the prefix of the longer and leave its tail in the clear.
+	ordered := append([]string(nil), secrets...)
+	sort.Slice(ordered, func(i, j int) bool {
+		if len(ordered[i]) != len(ordered[j]) {
+			return len(ordered[i]) > len(ordered[j])
+		}
+		return ordered[i] < ordered[j]
+	})
+	for _, secret := range ordered {
+		message = strings.ReplaceAll(message, secret, audit.MaskedValue)
+	}
+	return message
 }
 
 // accumulateKeeperRegister writes a keeper task's register result into

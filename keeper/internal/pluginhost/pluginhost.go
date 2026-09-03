@@ -8,8 +8,10 @@
 //     [Plugin] with gRPC-conn;
 //   - kind-specific default SocketDir (`/var/run/soul-stack-keeper/plugins`);
 //   - Discover-result filter: Keeper-host accepts cloud_driver, ssh_provider and
-//     soul_module (the latter is a registry for distribution to Souls, epic core.module.installed;
-//     Spawn rejects it);
+//     soul_module (the last is both a registry for distribution to Souls, epic
+//     core.module.installed, and — for a module declaring `side: keeper` — something
+//     the Keeper executes itself through [Host.SpawnSoulModule] and
+//     [KeeperSideModules], NIM-758; the kind-agnostic [Host.Spawn] still rejects it);
 //   - [FilterByCatalog] for cross-check of discovered plugins against catalog in
 //     `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`.
 package pluginhost
@@ -110,7 +112,9 @@ func WithEnv(env []string) SpawnOption { return sharedhost.WithEnv(env) }
 // explicit rather than implicit.
 //
 // Protection from kind-mismatch: if the artifact's kind is not in {cloud_driver,
-// ssh_provider}, Spawn returns an error before the fork.
+// ssh_provider}, Spawn returns an error before the fork. kind=soul_module has its
+// own entry point, [Host.SpawnSoulModule], which adds the `side: keeper` gate —
+// this one must keep refusing it, or that gate would have a way around it.
 //
 // opts are optional SpawnOptions ([WithEnv] etc.); passed through to
 // [sharedhost.Host.Spawn] unchanged.

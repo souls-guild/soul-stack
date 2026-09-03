@@ -253,12 +253,22 @@ where "where the module runs" has no meaning.
 signed and stored, so requiring the key — or later "normalising" stored documents by stamping the
 default in — would change every artifact's sha256 and invalidate every existing approval at once.
 
-⚠ **On a plugin the field is accepted and inert.** The keeper cannot execute a keeper-side plugin at
-all (NIM-688): `applyKeeperTask` resolves against a `coremod.Registry` only, so a `side: keeper`
-plugin step still fails `unknown keeper-side module` — **loudly, never as a silent skip**. This is
-stated because an unenforced declaration that reads like a control is exactly the defect the
-2026-08-06 amendment above spent three paragraphs undoing for `side_effects` /
-`required_capabilities`, and ADR-0087 must not re-ship it under a new name.
+⚠ **On a plugin the field was accepted and inert; since NIM-758 it is a control.** As written, this
+paragraph said the keeper could not execute a keeper-side plugin at all (NIM-688): `applyKeeperTask`
+resolved against a `coremod.Registry` only, so a `side: keeper` plugin step failed
+`unknown keeper-side module` — loudly, never as a silent skip. **That is no longer the state.**
+`applyKeeperTask` falls back to the discovered plugins and executes one declaring `side: keeper`;
+`Host.SpawnSoulModule` starts it, refusing before the fork anything that declares otherwise (the
+kind-agnostic `Host.Spawn` still refuses the kind outright, so that gate has no way around it); and
+a module declaring `soul` on such an address is refused **by name**, never answered "unknown module"
+and never quietly routed at a host.
+
+The paragraph is kept rather than replaced because its *reason* still binds: an unenforced
+declaration that reads like a control is exactly the defect the 2026-08-06 amendment above spent
+three paragraphs undoing for `side_effects` / `required_capabilities`. `side` has now stopped being
+one — which is the only acceptable way out of that state. It is enforceable for the same reason the
+digest is: the Sigil seal signs the schema document together with the binary's sha256, so the
+declaration cannot be flipped without breaking the signature the host verifies before the exec.
 
 Rollout is **souls first, then keeper, then re-stamp artifacts**: decoding is strict, so a document
 carrying `side:` fails to parse on an older `soul`, which reads the document at install.
@@ -347,10 +357,11 @@ because a cloud driver authors itself as a `module.Def` like any other SoulModul
 profile is an ordinary `Def.Input` schema. `ssh_provider` and `soul_beacon` remain open exactly
 as they were — this decision says nothing about them.
 
-**Until the executing half lands, `side: keeper` on a plugin stays accepted and inert**, exactly as
-the block above states, and `cloud_driver` remains a live kind with a live contract, a live
-`profile_schema` root field and six live drivers. That gap is tracked as **NIM-758** (epic NIM-757)
-and, earlier, as **NIM-688** — the same gap under two numbers; the block above cites the older one.
+**The executing half has landed (NIM-758, closing NIM-688): `side: keeper` on a plugin is now
+routed, not inert** — see the amended block above. What has NOT changed is everything else in this
+paragraph: `cloud_driver` remains a live kind with a live contract, a live `profile_schema` root
+field and six live drivers, and stays so until **NIM-760** moves `soul-cloud-wb` and **NIM-761**
+removes the contract.
 
 ⚠ One hedge above has gone stale and is corrected here rather than rewritten in place: the 2026-08-06
 block says the `side:` work "is NIM-749 / NIM-750". **NIM-749 has since landed** the declaring half —
@@ -409,11 +420,10 @@ NIM-767 do not go looking for work in the grammar that is not there.
   ★ That is not the same as "plugin modules are soul-side": the same file says so at `:56-59` — a
   plugin's own declaration is read **from its manifest, not from here** — and the NIM-757 amendment
   above *decides* that `modules[].side` (`sdk/schema/schema.go:147`) becomes load-bearing for
-  plugins. ⚠ That is the decision and not yet the code: a keeper-side plugin is **not executable**
-  (NIM-688), which the field's own doc states in as many words (`sdk/schema/schema.go:143-146`), so
-  today `side:` is the declaration surface a plugin *will* be routed by, not a switch that already
-  routes — the routing is NIM-758. `SideOf` is the fallback for an address it does not know, not a
-  ruling about plugins.
+  plugins — and **NIM-758 shipped it**: the keeper reads that field at dispatch and executes the
+  module, so `side:` is a switch that routes and no longer only a declaration surface. `SideOf` is
+  the fallback for an address it does not know, not a ruling about plugins — and that distinction is
+  now the difference between two live code paths rather than between a table and an intention.
 - The `soul-lint` diagnostics do not read the words either: `plugin_params_unchecked` keys on
   whether a schema document resolved for `<alias>.<name>` — the resolver contract is
   `ResolveModule(alias, name)` (`shared/config/module_params_plugin.go:30-37`, code at `:47`) — and
