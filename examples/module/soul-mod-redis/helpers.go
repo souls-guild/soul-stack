@@ -164,6 +164,14 @@ func nodeSpec(v *structpb.Value) map[string]*structpb.Value {
 	return sv.StructValue.GetFields()
 }
 
+// boolOrDefault and intOrDefault read a DECLARED top-level param, and their last
+// arm — a value of another type reading as the default — is unreachable through
+// the plugin's own entry points: [object.Apply] and [object.Validate] refuse such a
+// value against the declaration before either is called (params.go, NIM-778). That
+// arm is what made `tls: "true"` a plaintext connection, so it is left here only
+// because a total function still needs one, not because any caller may rely on it.
+// A key these cannot reach — one nested inside a map-typed param — is read with
+// [intField], which refuses instead.
 func boolOrDefault(v *structpb.Value, def bool) bool {
 	if v == nil {
 		return def

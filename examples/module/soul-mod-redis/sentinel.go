@@ -66,12 +66,19 @@ func validateSentinel(f map[string]*structpb.Value) []string {
 		if strings.TrimSpace(stringOrEmpty(mon["ip"])) == "" {
 			errs = append(errs, "params.monitor.ip: must be a non-empty string")
 		}
-		if intOrDefault(mon["port"], 0) <= 0 {
+		// `monitor` is declared a map and nothing declares what is inside it, so
+		// the object's type gate reaches the map and stops (params.go): these two
+		// carry the rule the rest of the way themselves.
+		if port, err := intField(mon, "port", "params.monitor.port", 0); err != nil {
+			errs = append(errs, err.Error())
+		} else if port <= 0 {
 			errs = append(errs, "params.monitor.port: must be a positive integer")
 		}
 		// quorum is optional (default 1 in reconcileMonitor), but IF specified - must
 		// be >=1: SENTINEL MONITOR... 0 is rejected by Redis (symmetrical port>0).
-		if q := mon["quorum"]; q != nil && intOrDefault(q, 1) < 1 {
+		if q, err := intField(mon, "quorum", "params.monitor.quorum", 1); err != nil {
+			errs = append(errs, err.Error())
+		} else if q < 1 {
 			errs = append(errs, "params.monitor.quorum: must be a positive integer (>= 1)")
 		}
 	}
@@ -226,8 +233,15 @@ func computeSetUpdates(desired, current map[string]string) (keys []string, value
 // no). Returns changed (monitor created/recreated).
 func reconcileMonitor(ctx context.Context, conn redisConn, masterName string, monitor map[string]*structpb.Value, authUser, authPass string, actions *[]string) (bool, error) {
 	ip := strings.TrimSpace(stringOrEmpty(monitor["ip"]))
-	port := strconv.Itoa(intOrDefault(monitor["port"], 0))
-	quorum := intOrDefault(monitor["quorum"], 1)
+	portNum, err := intField(monitor, "port", "params.monitor.port", 0)
+	if err != nil {
+		return false, err
+	}
+	port := strconv.Itoa(portNum)
+	quorum, err := intField(monitor, "quorum", "params.monitor.quorum", 1)
+	if err != nil {
+		return false, err
+	}
 
 	current, err := sentinelMaster(ctx, conn, masterName)
 	if err != nil {
@@ -274,8 +288,12 @@ func reconcileMasterParams(ctx context.Context, conn redisConn, masterName strin
 	for k, v := range perMaster {
 		desired[k] = v
 	}
-	if q := monitor["quorum"]; q != nil {
-		desired["quorum"] = strconv.Itoa(intOrDefault(q, 1))
+	if monitor["quorum"] != nil {
+		q, err := intField(monitor, "quorum", "params.monitor.quorum", 1)
+		if err != nil {
+			return false, err
+		}
+		desired["quorum"] = strconv.Itoa(q)
 	}
 	if len(desired) == 0 {
 		return false, nil

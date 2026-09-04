@@ -1086,7 +1086,14 @@ func parseTopology(v *structpb.Value) [][]string {
 // ip+port - for CLUSTER MEET (gossip operates ip:port).
 func resolveNodeEndpoint(spec map[string]*structpb.Value) (ip string, port int, addr string, err error) {
 	ip = strings.TrimSpace(stringOrEmpty(spec["ip"]))
-	port = intOrDefault(spec["port"], 0)
+	// A node spec is nested inside a map-typed param, so the object's type gate
+	// does not reach this key (params.go): refuse a non-integer here rather than
+	// read it as 0 and fall through to the addr branch, which would drop the
+	// ip+port the author actually wrote.
+	port, err = intField(spec, "port", "port", 0)
+	if err != nil {
+		return "", 0, "", err
+	}
 	addr = strings.TrimSpace(stringOrEmpty(spec["addr"]))
 
 	switch {

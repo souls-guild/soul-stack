@@ -60,6 +60,12 @@ type object struct {
 	// actually addresses is the registration alias plus this name.
 	name string
 
+	// decl is what this object's Def declares about each of its actions — the
+	// same map, from the same function, not a copy. Validate and Apply refuse a
+	// param whose value is not of the declared type (params.go, NIM-778), so the
+	// declaration is load-bearing at runtime and not only in the schema document.
+	decl map[string]module.State
+
 	// keyspace says whether `params.db` means anything on this object (NIM-229).
 	// Only `sentinel` says false, and not as a matter of taste: a Sentinel is not
 	// a keyspace server and refuses SELECT, so go-redis — which issues SELECT for
@@ -83,6 +89,11 @@ func (o *object) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if !ok {
 		return &pluginv1.ValidateReply{Ok: false, Errors: []string{o.unknownState(req.GetState())}}, nil
 	}
+	// Types before content: an action's own checks read the values, and a value
+	// of the wrong type makes whatever they report about it noise.
+	if errs := checkParamTypes(o.decl[req.GetState()].Input, req.GetParams().GetFields()); len(errs) > 0 {
+		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
+	}
 	if errs := act.validate(req.GetParams().GetFields()); len(errs) > 0 {
 		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
 	}
@@ -98,6 +109,14 @@ func (o *object) Apply(req *pluginv1.ApplyRequest, stream eventStream) error {
 	act, ok := o.actions[req.GetState()]
 	if !ok {
 		return sendFailure(stream, o.unknownState(req.GetState()))
+	}
+
+	// Before anything opens a socket: a param of the wrong type is refused, not
+	// coerced (params.go, NIM-778). Here rather than only in Validate because a
+	// runner need not call Validate at all — the runtime calls Apply — and the
+	// value this protects decides whether the password goes out over TLS.
+	if errs := checkParamTypes(o.decl[req.GetState()].Input, req.GetParams().GetFields()); len(errs) > 0 {
+		return sendFailure(stream, strings.Join(errs, "; "))
 	}
 
 	// An action that manages MULTIPLE nodes (a connection to each from its

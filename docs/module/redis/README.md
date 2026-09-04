@@ -788,6 +788,54 @@ from `tls_ca`). You can disable the check **only** with an explicit `tls_skip_ve
 `tls_cert`+`tls_key` are specified strictly together (one without the other → validation error
 configuration, without leaking PEM to text).
 
+`tls` is a **boolean**, and `tls: "true"` written as a string is refused rather than
+read as `false` — see ["Parameter types are refused, not coerced"](#parameter-types-are-refused-not-coerced)
+below, which is the rule for every parameter here and not only this one.
+
+## Parameter types are refused, not coerced
+
+A parameter whose value is not of its declared type **fails the step**, addressed by
+name (`params.tls: must be a boolean (true/false), got a string`). Nothing is guessed
+and nothing falls back to a default.
+
+This is not a style preference. `tls: "true"` used to read as `false`, so the
+connection — the password with it — went out in **plaintext**, and the step reported
+`reconciled` with no diagnostic at all: an author's typo became a silent leak instead
+of a refusal, because `false` is the insecure side of that parameter. `db: "7"` read
+as database `0` the same way. Fixed in **NIM-778**.
+
+Two consequences worth knowing before you write a scenario:
+
+- **Quote nothing that is not a string.** `tls: true`, `db: 7`, `persist: false` —
+  bare. A CEL cell that is *entirely* one `${ … }` keeps its native type (ADR-010),
+  so `tls: "${ vars.redis_tls }"` is fine **when the var is a real boolean**; if the
+  var is the string `"true"`, the step now fails instead of connecting in the clear.
+  That is the point — but it means a var file with `redis_tls: "true"` in it needs
+  fixing, and it will announce itself the first time the step runs.
+- **The check is not `soul-lint`'s.** The Keeper's static `checkParamType` returns
+  clean on a `${ … }` cell, and the runtime calls `Apply`, not `Validate` — so this
+  artifact makes the refusal itself, in `Apply`, before it opens a socket. (Teaching
+  the linter to catch it earlier is NIM-779; this does not depend on it.)
+
+The rule is derived from what each state declares in its own `input:`, so a
+parameter added later inherits it without anyone remembering to. Guarded by a table
+test that walks every object, every action and every declared `bool`/`int` parameter
+in [`params_test.go`](../../../examples/module/soul-mod-redis/params_test.go). Keys
+**nested inside** a map-typed parameter are not declared individually and are checked
+by hand where they are read: `monitor.port`, `monitor.quorum`, and the `port` of a
+cluster node spec.
+
+> **★ One node-spec case changed beyond the type check.** A cluster node written as
+> `{addr: "10.0.0.1:6379", port: "6379"}` — a valid `addr` *next to* a wrong-typed
+> `port` — used to succeed: `port` coerced to `0` and the spec fell through to the
+> `addr` branch. It now fails. The spec is contradictory either way, and silently
+> resolving it in favour of the key the author did *not* get wrong is the guess this
+> whole section removes. Write `port: 6379` unquoted, or drop the key.
+
+Beyond parsing: a connection that asks for TLS and cannot get it **fails**. It does
+not retry in the clear — guarded against a listener that speaks no TLS, asserting the
+password never reaches the wire.
+
 PEM comes **entirely** into params: scenario resolves it from Vault via
 `${ vault(...) }` in the render phase and puts PEM in `apply.input` (like `requirepass`) -
 the plugin does not support its Vault access (capability remains `network_outbound`). B

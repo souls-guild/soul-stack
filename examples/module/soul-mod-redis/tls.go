@@ -38,6 +38,11 @@ type tlsParams struct {
 // missing/false -> enabled=false, plaintext connection (back-compat for
 // installations without TLS). PEM strings are kept separate from anything that falls into
 // events (as password - IS invariant ADR-010).
+//
+// ONLY missing or `false` reads as plaintext. A `tls` that is neither — the string
+// "true", a number — never reaches here: [object.Apply] refuses it against the
+// declared type first (params.go, NIM-778). It used to read as plaintext, which
+// sent the password over the wire in the clear and reported the step reconciled.
 func parseTLS(f map[string]*structpb.Value) tlsParams {
 	return tlsParams{
 		enabled:    boolOrDefault(f["tls"], false),
