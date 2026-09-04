@@ -2,6 +2,8 @@ package config
 
 import (
 	"fmt"
+	"strconv"
+	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
@@ -76,7 +78,36 @@ const maxIncludeDepth = 32
 // conjunction. So dropping a parent (e.g. `outer=='no'`) cascades to the child
 // naturally: its conjunctive include-when also evaluates to false.
 func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
-	return expandIncludes(tasks, resolve, false)
+	return expandIncludes(tasks, resolve, false, nil)
+}
+
+// ExpandIncludesWithModules is [ExpandIncludes] for a caller that can resolve
+// plugin manifests, so an included body's `params:` are checked against the same
+// contract the including file's are ([ValidateOptions.ModuleManifests]).
+//
+// Without it the body is loaded with no resolver, which is not silence — every
+// plugin module in it yields [DiagPluginParamsUnchecked] — but it is a gap the
+// caller could have closed. soul-lint is the one that can: the author bound the
+// manifests on the command line, and the whole point of `--modules` is that the
+// four checks then run offline (NIM-779).
+//
+// A separate entry point rather than a parameter on [ExpandIncludes] so the keeper
+// call sites stay as they are. Be precise about what that costs, because the
+// tempting sentence here — "not adopting it is safe, the default is loud" — is
+// false as an operator-facing claim: [ExpandIncludes] RETURNS the hint, and every
+// keeper call site filters the slice to errors before it formats anything, so
+// nothing prints it. The honest statement is narrower. The gap is in the returned
+// diagnostics rather than nowhere, so a caller that decides to surface hints needs
+// no change here to start seeing it; whether one does is that caller's own choice,
+// and today only soul-lint's stage pass makes it.
+//
+// The keeper is deliberately not adopting this in NIM-779. `unknown_param` is an
+// ERROR, and the keeper aborts a run on any error out of expansion, so wiring the
+// resolver there would turn scenarios that render and dispatch today into hard
+// aborts — a policy change about when a cluster refuses work, which wants its own
+// decision rather than riding along with a linter fix. That decision is NIM-785.
+func ExpandIncludesWithModules(tasks []Task, resolve IncludeResolver, modules ModuleManifestResolver) ([]Task, []diag.Diagnostic) {
+	return expandIncludes(tasks, resolve, false, modules)
 }
 
 // ExpandIncludesInDestiny is [ExpandIncludes] for a DESTINY's own `tasks/` tree,
@@ -92,11 +123,16 @@ func ExpandIncludes(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagn
 // clean, folded by L0, and dies at dispatch: the exact false-green this rule
 // exists to close.
 func ExpandIncludesInDestiny(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
-	return expandIncludes(tasks, resolve, true)
+	return expandIncludes(tasks, resolve, true, nil)
 }
 
-func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool) ([]Task, []diag.Diagnostic) {
-	e := &includeExpander{resolve: resolve, destinyTasks: destinyTasks}
+func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool, modules ModuleManifestResolver) ([]Task, []diag.Diagnostic) {
+	e := &includeExpander{
+		resolve:      resolve,
+		destinyTasks: destinyTasks,
+		modules:      modules,
+		seenBodyDiag: map[string]bool{},
+	}
 	out := e.expand(tasks, nil, "", nil)
 	// Uniqueness of the subscription address space (register ∪ id) over the FLAT
 	// run list: per-file validateTaskRefs catches a duplicate within one file, but
@@ -251,12 +287,44 @@ type includeExpander struct {
 	// [ExpandIncludesInDestiny]; a scenario's included body must NOT carry it,
 	// since a keeper-side address there is correct and ordinary.
 	destinyTasks bool
+	// modules — the plugin-manifest resolver handed to each included body, so its
+	// `params:` are checked the way the including file's were. nil is legal and
+	// not silent: the body's own post-pass then reports every plugin module as
+	// [DiagPluginParamsUnchecked]. Set by [ExpandIncludesWithModules].
+	modules ModuleManifestResolver
 	// lastGroupID — id counter for conditional include-groups (carry-through
 	// group-drop). Monotonically grows on EVERY include with a non-empty `when:`;
 	// 0 is reserved for "outside a conditional include" (Task.IncludeGroupID==0).
 	// Nested conditional includes get distinct ids; dropping each is an independent
 	// evaluation of its own include-when.
 	lastGroupID int
+	// seenBodyDiag dedupes a body's OWN diagnostics across include sites. One file
+	// included twice — the dispatcher pattern, two branches pulling one provision
+	// body — is read and validated twice, and reporting the same defect at the same
+	// coordinates twice teaches the reader to skip diagnostics, which is the
+	// argument [pluginParamWalk.reported] already makes within a single document.
+	//
+	// Keyed on the whole diagnostic, not on the body's path: the two sites differ in
+	// [ValidateOptions.OuterRegisters], so the same file legitimately produces a
+	// DIFFERENT unknown_register_reference at one site and not the other. Collapsing
+	// by path would hide that; collapsing byte-identical findings cannot.
+	seenBodyDiag map[string]bool
+}
+
+// recordBodyDiags appends the diagnostics of one included body, dropping any that
+// an earlier include site of the same file already produced verbatim.
+func (e *includeExpander) recordBodyDiags(diags []diag.Diagnostic) {
+	for _, d := range diags {
+		key := strings.Join([]string{
+			d.File, strconv.Itoa(d.Line), strconv.Itoa(d.Column),
+			string(d.Level), d.Code, d.YAMLPath, d.Message,
+		}, "\x00")
+		if e.seenBodyDiag[key] {
+			continue
+		}
+		e.seenBodyDiag[key] = true
+		e.diags = append(e.diags, d)
+	}
 }
 
 // expand recursively expands a task list. stack is the active chain of display
@@ -406,9 +474,19 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 		}
 	}
 
-	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{OuterRegisters: outer, DestinyTasks: e.destinyTasks})
+	parsed, diags, _ := LoadDestinyTasksFromBytes(display, data, ValidateOptions{
+		OuterRegisters:  outer,
+		DestinyTasks:    e.destinyTasks,
+		ModuleManifests: e.modules,
+	})
+	// EVERY diagnostic of the body is kept, not only the errors. The error-only
+	// filter this replaces was a silent pass over the whole non-fatal half of a
+	// body's validation — [DiagPluginParamsUnchecked] and `deprecated_param` are
+	// the two that reach it — and silence is indistinguishable from "checked and
+	// clean", which is the defect the hint exists to prevent (NIM-779; NIM-778
+	// travelled this exact path).
+	e.recordBodyDiags(diags)
 	if diag.HasErrors(diags) {
-		e.diags = append(e.diags, diags...)
 		return nil, false
 	}
 

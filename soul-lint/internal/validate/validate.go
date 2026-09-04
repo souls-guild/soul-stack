@@ -205,7 +205,10 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// validator already raises unknown_register at parse time). Runs even
 		// if parse diagnostics exist (stageDiagnostics decides for itself, via
 		// nil scn, whether the graph is reliable).
-		diags = append(diags, stageDiagnostics(opts.Path, scn)...)
+		// modules travels with it: a plugin step written in an INCLUDED body is
+		// checked by this pass or by nobody (NIM-779) — the per-file post-pass
+		// above only ever sees main.yml's own AST.
+		diags = append(diags, stageDiagnostics(opts.Path, scn, modules)...)
 		// Resolves $type references against the service type catalog
 		// (`../../types.yml`): catches input_type_unknown/cycle/duplicate BEFORE
 		// keeper. Structural $type-ref-conflict is already raised by the config

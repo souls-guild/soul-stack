@@ -354,9 +354,34 @@ is how the drift in NIM-206 survived long enough to be found by hand. A definiti
 author usually cannot produce somebody else's schema, so failing them for its absence
 would punish the wrong person.
 
-The same check runs inside Keeper, resolving from the plugins the cluster has
-allow-listed, so a definition linted here and rendered there is held to the same
-schema. Either way an undeclared key fails the task on the host
+### A step written in an `include:`d body
+
+It is checked like any other, at its own file and line, in `validate-scenario` and
+`validate-service-tree` alike — and until **NIM-779** it was not checked at all.
+`params:` are checked per document, and a body pulled in by `include:` is a document
+of its own, reached only through include expansion. That path carried neither the
+bound manifests into the body nor the body's non-fatal findings back out, so a plugin
+step living there produced **nothing**: no `unknown_param`, and no
+`plugin_params_unchecked` either. This is the exact outcome the hint exists to
+prevent, and the path NIM-778 took — a `tls: "true"` written as a string, in the WB
+redis service's `scenario/provision.yml`, past a lint that said `OK:`.
+
+The second half is what the first rests on: expansion now carries a body's hints out
+instead of discarding them, so an unbound manifest reaches `soul-lint`'s output at the
+included file's own line rather than dying inside the expander.
+
+**Keeper does not do this half.** `include:` expansion in the keeper runs with no
+manifest resolver, and every keeper caller filters the diagnostics to errors before it
+formats them — so a plugin step in an included body is neither checked nor hinted at
+there, and the paragraph below is about a scenario's own `main.yml`. Wiring it is a
+policy question rather than an oversight: `unknown_param` is an error and the keeper
+aborts a run on one, so the check would start refusing runs that dispatch today. That
+fork is NIM-785. Until it is decided, the keeper-side backstop for an included body is
+the runtime gate on the host, not the render.
+
+The same check runs inside Keeper for a definition's own document, resolving from the
+plugins the cluster has allow-listed, so a definition linted here and rendered there is
+held to the same schema. Either way an undeclared key fails the task on the host
 ([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
 where the definition is being written.
 

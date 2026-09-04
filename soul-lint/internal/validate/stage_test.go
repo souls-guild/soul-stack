@@ -90,7 +90,7 @@ func TestStageDiagnostics_SharedDirIncludeResolves(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if diag.HasErrors(diags) {
 		t.Fatalf("service-level include must resolve offline, got %+v", diags)
 	}
@@ -119,7 +119,7 @@ func TestStageDiagnostics_LocalIncludeShadowsServiceLevel(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n")
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if diag.HasErrors(diags) {
 		t.Fatalf("include must resolve, got %+v", diags)
 	}
@@ -138,7 +138,7 @@ func TestStageDiagnostics_UnresolvedIncludeIsError(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/missing.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !hasDiagCode(diags, "include_resolve_failed") {
 		t.Fatalf("want include_resolve_failed, got %+v", diags)
 	}
@@ -169,7 +169,7 @@ func TestStageDiagnostics_DynamicIncludeWhenReportedOnce(t *testing.T) {
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n"+
 		"    when: soulprint.self.os.family == 'debian'\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	n := 0
 	for _, d := range diags {
 		if d.Code == "include_when_dynamic_unsupported" {
@@ -207,7 +207,7 @@ func TestStageDiagnostics_SymlinkEscapeRefused(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/body.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !hasDiagCode(diags, "include_resolve_failed") {
 		t.Fatalf("an include whose target symlinks out of the service tree must not resolve, got: %+v", diags)
 	}
@@ -241,7 +241,7 @@ func TestStageDiagnostics_DynamicIncludeWhenNestedReported(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: _create/provision.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !hasDiagCode(diags, "include_when_dynamic_unsupported") {
 		t.Fatalf("a dynamic include-when nested inside an included file must be reported, got: %+v", diags)
 	}
@@ -259,7 +259,7 @@ func TestStageDiagnostics_LooseFileKeepsHint(t *testing.T) {
 	main := filepath.Join(root, "fixtures", "conditional-include.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: install.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if diag.HasErrors(diags) {
 		t.Fatalf("a loose file must not fail on a service-level include: %+v", diags)
 	}
@@ -290,7 +290,7 @@ func TestStageDiagnostics_LooseFileReportsIncludeBodyErrors(t *testing.T) {
 	main := filepath.Join(root, "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: capture.yml\n")
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !diag.HasErrors(diags) {
 		t.Fatalf("the include body's own errors were downgraded to hints: %+v", diags)
 	}
@@ -322,7 +322,7 @@ func TestStageDiagnostics_LooseFileStillDefersAnUnfoundTarget(t *testing.T) {
 	main := filepath.Join(root, "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: install.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if diag.HasErrors(diags) {
 		t.Fatalf("an unfindable target outside a service tree must stay a hint: %+v", diags)
 	}
@@ -344,7 +344,7 @@ func TestStageDiagnostics_LooseFileKeepsDynamicIncludeWhen(t *testing.T) {
 		"  - include: install.yml\n"+
 		"    when: soulprint.self.os.family == 'debian'\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !hasDiagCode(diags, "include_when_dynamic_unsupported") {
 		t.Fatalf("a dynamic include-when must be reported outside a service tree too: %+v", diags)
 	}
@@ -374,7 +374,7 @@ func TestStageDiagnostics_UpgradeIncludeMirrorsTheKeeper(t *testing.T) {
 	main := filepath.Join(root, "upgrade", "to_v2", "main.yml")
 	stageWrite(t, main, "name: to_v2\nfrom: ['1']\ntasks:\n  - include: install.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if !diag.HasErrors(diags) {
 		t.Fatalf("a body the keeper cannot reach was resolved and blessed: %+v", diags)
 	}
@@ -408,7 +408,7 @@ func TestStageDiagnostics_UpgradeIncludeResolvesWhereTheKeeperLooks(t *testing.T
 			main := filepath.Join(root, "upgrade", "to_v2", "main.yml")
 			stageWrite(t, main, "name: to_v2\nfrom: ['1']\ntasks:\n  - include: install.yml\n"+stageLocalTask)
 
-			diags := stageDiagnostics(main, stageParse(t, main))
+			diags := stageDiagnostics(main, stageParse(t, main), nil)
 			if diag.HasErrors(diags) {
 				t.Fatalf("a body at %s must resolve: %+v", tc.rel, diags)
 			}
@@ -451,7 +451,7 @@ func TestStageDiagnostics_UpgradeVerdictIndependentOfPathForm(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Chdir(tc.cwd)
 
-			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg))
+			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg), nil)
 			if diag.HasErrors(diags) {
 				t.Fatalf("the engine's own level did not resolve from %q (cwd %q): %+v", tc.arg, tc.cwd, diags)
 			}
@@ -474,7 +474,7 @@ func TestStageDiagnostics_UpgradeVerdictIndependentOfPathForm(t *testing.T) {
 		t.Run("decoy/"+tc.name, func(t *testing.T) {
 			t.Chdir(tc.cwd)
 
-			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg))
+			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg), nil)
 			if !hasDiagCode(diags, config.CodeIncludeResolveFailed) {
 				t.Fatalf("a body beside the upgrade scenario resolved from %q: %+v", tc.arg, diags)
 			}
@@ -493,7 +493,7 @@ func TestStageDiagnostics_NoServiceManifestNoServiceLevel(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ntasks:\n  - include: install.yml\n"+stageLocalTask)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if diag.HasErrors(diags) {
 		t.Fatalf("must not fail, got %+v", diags)
 	}
@@ -532,7 +532,7 @@ func TestStageDiagnostics_VerdictIndependentOfPathForm(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Chdir(tc.cwd)
 
-			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg))
+			diags := stageDiagnostics(tc.arg, stageParse(t, tc.arg), nil)
 			if !diag.HasErrors(diags) {
 				t.Fatalf("service tree not detected from %q (cwd %q): the unresolvable include was downgraded to a hint: %+v", tc.arg, tc.cwd, diags)
 			}
@@ -585,7 +585,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		scn := filepath.Join(root, "scenario", "create", "main.yml")
 		stageWrite(t, scn, "name: create\ntasks:\n  - include: deploy.yml\n"+stageLocalTask)
 
-		diags := stageDiagnostics(scn, stageParse(t, scn))
+		diags := stageDiagnostics(scn, stageParse(t, scn), nil)
 		if diag.HasErrors(diags) {
 			t.Fatalf("a symlink pointing elsewhere INSIDE the service root must resolve, as it does for the keeper: %+v", diags)
 		}
@@ -604,7 +604,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		scn := filepath.Join(root, "scenario", "create", "main.yml")
 		stageWrite(t, scn, "name: create\ntasks:\n  - include: link/body.yml\n"+stageLocalTask)
 
-		diags := stageDiagnostics(scn, stageParse(t, scn))
+		diags := stageDiagnostics(scn, stageParse(t, scn), nil)
 		if !hasDiagCode(diags, "include_resolve_failed") {
 			t.Fatalf("the linter read the decoy under the scenario directory instead of the file the keeper resolves (%s/decoy/body.yml): %+v", root, diags)
 		}
@@ -630,7 +630,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		scn := filepath.Join(root, "scenario", "create", "main.yml")
 		stageWrite(t, scn, "name: create\ntasks:\n  - include: link/body.yml\n"+stageLocalTask)
 
-		diags := stageDiagnostics(scn, stageParse(t, scn))
+		diags := stageDiagnostics(scn, stageParse(t, scn), nil)
 		if !hasDiagCode(diags, "include_resolve_failed") {
 			t.Fatalf("the service tier read %s/scenario/decoy/body.yml instead of the file the keeper resolves (%s/decoy/body.yml): %+v", root, root, diags)
 		}
@@ -648,7 +648,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 		scn := filepath.Join(root, "scenario", "create", "main.yml")
 		stageWrite(t, scn, "name: create\ntasks:\n  - include: body.yml\n"+stageLocalTask)
 
-		diags := stageDiagnostics(scn, stageParse(t, scn))
+		diags := stageDiagnostics(scn, stageParse(t, scn), nil)
 		if !hasDiagCode(diags, "include_resolve_failed") {
 			t.Fatalf("a symlink pointing OUT of the service root must be refused: %+v", diags)
 		}
@@ -701,7 +701,7 @@ func TestStageDiagnostics_StoreAfterUseAcrossInclude(t *testing.T) {
 	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+
 		"  - include: _create/configure.yml\n"+storeAfterUseCapture)
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	d := diagWithCode(diags, config.CodeStateStoreAfterUse)
 	if d == nil {
 		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateStoreAfterUse, diags)
@@ -727,7 +727,7 @@ func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
 	stageWrite(t, main, "name: create\ntasks:\n"+storeAfterUseGenerate+storeAfterUseCapture+
 		"  - include: _create/configure.yml\n")
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	if hasDiagCode(diags, config.CodeStateStoreAfterUse) {
 		t.Fatalf("generate -> store -> use must lint clean: %+v", diags)
 	}
@@ -759,7 +759,7 @@ func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
       value: "10.0.0.1"
 `+"  - include: _create/announce.yml\n")
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	d := diagWithCode(diags, config.CodeStateStaleRead)
 	if d == nil {
 		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateStaleRead, diags)
@@ -792,7 +792,7 @@ func TestStageDiagnostics_WideMatchAcrossInclude(t *testing.T) {
 	main := filepath.Join(root, "scenario", "update", "main.yml")
 	stageWrite(t, main, "name: update\ntasks:\n  - include: _update/purge.yml\n")
 
-	diags := stageDiagnostics(main, stageParse(t, main))
+	diags := stageDiagnostics(main, stageParse(t, main), nil)
 	d := diagWithCode(diags, config.CodeStateWideMatch)
 	if d == nil {
 		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateWideMatch, diags)
@@ -838,7 +838,7 @@ func TestStageDiagnostics_WideMatchConstTrueAndNarrow(t *testing.T) {
 			main := filepath.Join(root, "scenario", "update", "main.yml")
 			stageWrite(t, main, "name: update\ntasks:\n"+capture(tc.match))
 
-			diags := stageDiagnostics(main, stageParse(t, main))
+			diags := stageDiagnostics(main, stageParse(t, main), nil)
 			if got := hasDiagCode(diags, config.CodeStateWideMatch); got != tc.wide {
 				t.Fatalf("wide match warn = %v, want %v for match: %q -- %+v", got, tc.wide, tc.match, diags)
 			}

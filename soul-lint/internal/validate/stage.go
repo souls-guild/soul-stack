@@ -55,9 +55,18 @@ import (
 // reported at the body's own coordinates wherever the scenario was linted from
 // (NIM-716).
 //
+// modules is the `--modules` resolver of this run, threaded into every included
+// body so its plugin `params:` are checked against the same manifests the main
+// file's are (NIM-779). nil is the ordinary case (no `--modules` given) and is
+// not silent: each included plugin step then yields `plugin_params_unchecked`.
+//
+// This pass is where the expansion's diagnostics reach the output at all — the
+// other three linter callers of [config.ExpandIncludes] discard them and expand
+// only to walk the flat plan — so it is also the one that has to carry them.
+//
 // m==nil (parse failed with errors) → no point stratifying (the graph is
 // unreliable) → nil.
-func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Diagnostic {
+func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules config.ModuleManifestResolver) []diag.Diagnostic {
 	if m == nil {
 		return nil
 	}
@@ -76,7 +85,7 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest) []diag.Di
 	}
 	var out []diag.Diagnostic
 
-	tasks, expandDiags := config.ExpandIncludes(m.Tasks, scenarioIncludeResolver(root, dir, serviceDir))
+	tasks, expandDiags := config.ExpandIncludesWithModules(m.Tasks, scenarioIncludeResolver(root, dir, serviceDir), modules)
 	// In a service tree include resolution offline is COMPLETE (both levels are on
 	// disk), so expand's diagnostics are passed through at their own level: an
 	// unresolvable include, a cycle or a cross-file duplicate address is a real

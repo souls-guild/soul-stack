@@ -730,3 +730,74 @@ func TestExpandIncludes_CrossFileDuplicateStaysFlatVerdict(t *testing.T) {
 		t.Fatalf("a body redeclaring the includer's register must still be a duplicate, diagnostics: %v", diags)
 	}
 }
+
+// NIM-779. `params:` of a plugin step written in an INCLUDED body.
+//
+// [validatePluginModuleParams] is a post-pass over ONE document, so an included
+// body is only ever reached through its own [LoadDestinyTasksFromBytes] here
+// inside expansion. Two things had to hold for that to be worth anything and
+// neither did: the resolver has to travel with the expansion, and the body's
+// non-error diagnostics have to survive it. Without the second the body produced
+// the hint and the expander dropped it on the floor — a silent pass, which reads
+// as "checked and clean". NIM-778's `tls: "true"` reached a live cluster down
+// exactly this path.
+func TestExpandIncludes_UncheckedPluginParamsInBodyAreReported(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "provision.yml"}}}
+	files := map[string]string{
+		"provision.yml": "- name: instance\n  module: redis.instance.configured\n  params: { addr: \"127.0.0.1:6379\" }\n",
+	}
+
+	_, diags := ExpandIncludes(root, mapResolver(files))
+
+	if diag.HasErrors(diags) {
+		t.Fatalf("a body whose manifest nobody bound is not an error: %v", diags)
+	}
+	d := firstWithCode(diags, DiagPluginParamsUnchecked)
+	if d == nil {
+		t.Fatalf("silence: the body's plugin step was neither checked nor reported unchecked, codes = %v", diagCodesP(diags))
+	}
+	if d.File != "provision.yml" {
+		t.Errorf("the hint names %q; an author cannot act on one that names the includer instead of the body", d.File)
+	}
+	if d.Line == 0 {
+		t.Errorf("the hint carries no line in the body (line=%d)", d.Line)
+	}
+}
+
+// The other half: with the manifests threaded in, the body gets the REAL check —
+// the same four the includer's own tasks get — at the body's own coordinates.
+func TestExpandIncludesWithModules_ChecksBodyParams(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "provision.yml"}}}
+	files := map[string]string{
+		"provision.yml": "- name: instance\n  module: redis.instance.configured\n  params:\n    addr: \"127.0.0.1:6379\"\n    bogus_param: \"x\"\n",
+	}
+
+	_, diags := ExpandIncludesWithModules(root, mapResolver(files), redisManifest())
+
+	d := firstWithCode(diags, "unknown_param")
+	if d == nil {
+		t.Fatalf("an undeclared param in an included body was accepted, codes = %v", diagCodesP(diags))
+	}
+	if d.File != "provision.yml" || d.Line == 0 || d.Column == 0 {
+		t.Errorf("diagnostic at %s:%d:%d, want the body's own file and position", d.File, d.Line, d.Column)
+	}
+	if hasCodeP(diags, DiagPluginParamsUnchecked) {
+		t.Error("reported the body as unchecked while checking it")
+	}
+}
+
+// And it does not cry wolf: a body whose params match the bound manifest is
+// checked and quiet. Without this the previous test passes on an implementation
+// that just always reports something.
+func TestExpandIncludesWithModules_CleanBodyIsQuiet(t *testing.T) {
+	root := []Task{{Include: &IncludeTask{Include: "provision.yml"}}}
+	files := map[string]string{
+		"provision.yml": "- name: instance\n  module: redis.instance.configured\n  params:\n    addr: \"127.0.0.1:6379\"\n    rewrite: true\n",
+	}
+
+	_, diags := ExpandIncludesWithModules(root, mapResolver(files), redisManifest())
+
+	if len(diags) != 0 {
+		t.Fatalf("a body matching its manifest must produce nothing, got %v", diags)
+	}
+}
