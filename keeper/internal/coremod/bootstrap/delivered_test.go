@@ -467,9 +467,90 @@ func TestApply_HostError_FailsStep_B1Strict(t *testing.T) {
 }
 
 // onboardedHostEntry is a host core.cloud.created passed through because it was
-// already up (NIM-189): no bootstrap_token, `onboarded: true` in its place.
+// already up (NIM-189): no bootstrap_token, `onboarded: true` in its place. It
+// carries an IP because that producer always had one, from the VM record —
+// core.bootstrap.issued does not, see issuedConvergedHostEntry.
 func onboardedHostEntry(sid, ip string) map[string]any {
 	return map[string]any{"sid": sid, "primary_ip": ip, "onboarded": true}
+}
+
+// issuedConvergedHostEntry is the OTHER producer's pass-through shape, verbatim
+// what core.bootstrap.issued emits for a host of this run that was already
+// onboarded (NIM-780): a SID, the flag, and nothing else — no token and no IP,
+// because issuance knows no addresses.
+func issuedConvergedHostEntry(sid string) map[string]any {
+	return map[string]any{"sid": sid, "onboarded": true}
+}
+
+// ★ NIM-780, the cross-module contract. The repair chain is
+// `issued → delivered`, and it only works if the entry issuance produces
+// survives this module's parsing. That is asserted here rather than left to the
+// two files agreeing in prose: the shape carries no `primary_ip`, and the
+// direct-transport requirement for one used to be enforced BEFORE the
+// `onboarded` short-circuit — so a converged host would have failed the step
+// over a dial address for a host that is never dialed.
+func TestApply_IssuedConvergedHost_NeedsNoAddress_OnEitherTransport(t *testing.T) {
+	cases := []struct {
+		name     string
+		teleport bool
+	}{
+		{name: "direct transport still requires primary_ip for tokened hosts"},
+		{name: "teleport dials by sid", teleport: true},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			dialer := &dialRecorder{sess: &fakeSession{}}
+			m := newModule(t, &fakeProvider{allow: true}, dialer.dial, &fakeAudit{})
+			if tc.teleport {
+				m.Transport = coremodbootstrap.TransportTeleport
+			}
+
+			stream := internaltest.NewApplyStream()
+			if err := m.Apply(deliverReq(t, map[string]any{
+				"ssh_provider": "ssh-static",
+				"hosts": []any{
+					issuedConvergedHostEntry("live.example.com"),
+					hostEntry("fresh.example.com", "10.0.0.2", "tok"),
+				},
+			}), stream); err != nil {
+				t.Fatalf("Apply: %v", err)
+			}
+			last := stream.Last()
+			if last == nil || last.GetFailed() {
+				t.Fatalf("converged host without primary_ip failed the step: %q — it is never dialed, so it needs no address", last.GetMessage())
+			}
+			if dialer.dialCnt != 1 {
+				t.Errorf("dialed %d host(s), want 1 — only the host that still needs its token", dialer.dialCnt)
+			}
+			if out := last.GetOutput().AsMap(); out["skipped"] != float64(1) {
+				t.Errorf("output[skipped] = %v, want 1", out["skipped"])
+			}
+		})
+	}
+}
+
+// The exemption is the flag, not the absence of an address: a host with neither
+// a token nor `onboarded` still fails on the missing primary_ip under direct
+// transport. Moving the short-circuit earlier must not have widened it.
+func TestApply_TokenlessHostWithoutFlag_StillNeedsPrimaryIP(t *testing.T) {
+	dialer := &dialRecorder{sess: &fakeSession{}}
+	m := newModule(t, &fakeProvider{allow: true}, dialer.dial, &fakeAudit{})
+
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(deliverReq(t, map[string]any{
+		"ssh_provider": "ssh-static",
+		"hosts":        []any{map[string]any{"sid": "vm1.example.com"}},
+	}), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || !last.GetFailed() || !strings.Contains(last.GetMessage(), "primary_ip") {
+		t.Fatalf("unflagged addressless host = failed:%t message:%q, want a primary_ip refusal",
+			last != nil && last.GetFailed(), last.GetMessage())
+	}
+	if dialer.dialCnt != 0 {
+		t.Errorf("dialed %d host(s) despite the refusal", dialer.dialCnt)
+	}
 }
 
 // TestApply_OnboardedHost_SkippedNotDelivered — NIM-189: a host that was already

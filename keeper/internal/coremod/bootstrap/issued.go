@@ -18,19 +18,27 @@ import (
 // IssuedHost is one successfully prepared ready-made VM. The plaintext token
 // stays wrapped until applyIssued deliberately places it in the current run's
 // register output. It must never be formatted into errors, logs or audit data.
+//
+// Onboarded marks the one entry that legitimately carries no token: a host of
+// this run that was already up when issuance ran, passed through untouched
+// instead of refused (NIM-780). Token and ExpiresAt are then zero, and every
+// reader must branch on the flag before reaching for them.
 type IssuedHost struct {
 	SID       string
 	Token     bootstraptoken.PlainToken
 	ExpiresAt time.Time
 	Created   bool
 	Reissued  bool
+	Onboarded bool
 }
 
 // Issuer atomically prepares the entire SID batch. A failure for any SID must
 // roll back every Soul/token mutation in the call, so a failed task cannot
-// leave a silently usable partial group.
+// leave a silently usable partial group. incarnationName is the run's
+// incarnation ("" when unknown); it decides whether an already onboarded SID is
+// this run's own host to converge over or somebody else's identity to refuse.
 type Issuer interface {
-	IssueBatch(ctx context.Context, sids []string) ([]IssuedHost, error)
+	IssueBatch(ctx context.Context, sids []string, incarnationName string) ([]IssuedHost, error)
 }
 
 // SIDIssueError identifies the host that made a batch fail without carrying
@@ -85,7 +93,7 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 		return util.SendFailed(stream, "bootstrap issued: issuer not configured (wire the Keeper Postgres pool)")
 	}
 
-	issued, err := m.Issuer.IssueBatch(ctx, sids)
+	issued, err := m.Issuer.IssueBatch(ctx, sids, util.IncarnationFrom(ctx))
 	if err != nil {
 		return util.SendFailed(stream, "bootstrap issued: "+maskErr(err))
 	}
@@ -95,10 +103,41 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 
 	hosts := make([]any, 0, len(issued))
 	auditSIDs := make([]any, 0, len(issued))
-	created, reissued := 0, 0
+	created, reissued, skipped := 0, 0, 0
 	for idx, h := range issued {
 		if h.SID != sids[idx] {
 			return util.SendFailed(stream, fmt.Sprintf("bootstrap issued: issuer returned sid %q at index %d, want %q", h.SID, idx, sids[idx]))
+		}
+		auditSIDs = append(auditSIDs, h.SID)
+		if h.Onboarded {
+			// Already onboarded host of this run (NIM-780): the SID keeps its slot
+			// so the list still answers for every requested host in order, and the
+			// flag carries WHY it has no `bootstrap_token` — the same entry shape
+			// core.cloud.created produced for a pass-through, which
+			// core.bootstrap.delivered skips instead of failing on the absence.
+			//
+			// The pair is contradictory: a converged host is one nothing was
+			// written for, so issuance data beside the flag means the issuer did
+			// two mutually exclusive things and this output would have to silently
+			// drop one of them.
+			//
+			// Refusing does NOT undo the mint — IssueBatch has already committed by
+			// the time we look, and any token it made is in Postgres either way
+			// (it does expire on its own TTL, and the next issuance for that SID
+			// invalidates it). What refusing buys is that the contradiction is
+			// reported instead of half-applied: the alternative is a host silently
+			// skipped while a capability was minted for it, which reads as a clean
+			// converge in the register and in the audit. IssuerPG cannot produce
+			// this; the check is for the next implementation of the interface.
+			if h.Token.Reveal() != "" || !h.ExpiresAt.IsZero() {
+				return util.SendFailed(stream, fmt.Sprintf("bootstrap issued: issuer returned sid %q as onboarded AND with issuance data", h.SID))
+			}
+			skipped++
+			hosts = append(hosts, map[string]any{
+				"sid":       h.SID,
+				"onboarded": true,
+			})
+			continue
 		}
 		plain := h.Token.Reveal()
 		if plain == "" || h.ExpiresAt.IsZero() {
@@ -112,7 +151,6 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 			"reissued":        h.Reissued,
 		}
 		hosts = append(hosts, entry)
-		auditSIDs = append(auditSIDs, h.SID)
 		if h.Created {
 			created++
 		}
@@ -130,6 +168,7 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 				"count":    float64(len(issued)),
 				"created":  float64(created),
 				"reissued": float64(reissued),
+				"skipped":  float64(skipped),
 				"sids":     auditSIDs,
 			},
 		}
@@ -148,5 +187,6 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 		"count":    float64(len(issued)),
 		"created":  float64(created),
 		"reissued": float64(reissued),
+		"skipped":  float64(skipped),
 	})
 }

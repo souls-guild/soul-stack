@@ -418,6 +418,49 @@ func EnsureProvisionable(ctx context.Context, db ExecQueryRower, s *Soul, incarn
 	return "", fmt.Errorf("%w: %q kept changing hands during provisioning", ErrSoulNotProvisionable, s.SID)
 }
 
+// ownedByRunProbeSQL asks the ownership half of the provision predicate on its
+// own, for a caller that has already located the row and needs only the answer
+// [ownedByRunSQL] carries inside the bigger statements. It is built from the
+// same fragment on purpose: a second, restated copy of a fail-closed predicate
+// is exactly how the two come to disagree about who owns a host.
+const ownedByRunProbeSQL = `
+SELECT TRUE
+FROM souls
+WHERE sid = $1` + ownedByRunSQL
+
+// OwnedByRun reports whether the Soul row for sid is the run's own — a member
+// of incarnationName, or of no incarnation at all — judged by the same
+// predicate [EnsureProvisionable] uses for its reuse and pass-through phases.
+// A row that does not exist is not owned; neither is one bound only to other
+// incarnations. An empty incarnationName means "unknown", never "no owner", so
+// it leaves only unbound rows owned.
+//
+// It exists for the caller that cannot go through EnsureProvisionable because
+// it must not write: `core.bootstrap.issued` decides whether an already
+// onboarded SID is its own host to converge over or somebody else's identity to
+// refuse (NIM-780), and re-arming the row would cost a live host its presence.
+func OwnedByRun(ctx context.Context, db ExecQueryRower, sid, incarnationName string) (bool, error) {
+	var owned bool
+	if err := db.QueryRow(ctx, ownedByRunProbeSQL, sid, incarnationName).Scan(&owned); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return false, nil
+		}
+		return false, fmt.Errorf("soul: ownership of %q: %w", sid, err)
+	}
+	return owned, nil
+}
+
+// DescribeTakenSID reads the status + incarnation memberships of an existing
+// SID, so a refusal can say WHO holds it rather than only that somebody does.
+// [ErrSoulNotFound] when the row is gone.
+//
+// Exported for the other refusal built on [OwnedByRun]: `core.bootstrap.issued`
+// declines a takeover on the same predicate as provisioning and owes the
+// operator the same diagnosis.
+func DescribeTakenSID(ctx context.Context, db ExecQueryRower, sid string) (Status, []string, error) {
+	return describeTakenSID(ctx, db, sid)
+}
+
 // describeTakenSID reads the status + incarnation memberships of an existing
 // SID, to explain a refused provision. [ErrSoulNotFound] when the row is gone.
 func describeTakenSID(ctx context.Context, db ExecQueryRower, sid string) (Status, []string, error) {

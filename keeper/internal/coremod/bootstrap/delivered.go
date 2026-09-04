@@ -14,8 +14,9 @@
 // verify) → write the token to `token_path` (★token over STDIN, not argv) →
 // soul init (see initSoulCmdFmt) → optional daemon-reload + enable + start.
 // A failure on any host aborts the step (B1-strict): state isn't committed, the
-// run goes to error_locked. A host flagged `onboarded: true` by
-// core.cloud.created (already up when provisioning ran, NIM-189) carries no
+// run goes to error_locked. A host flagged `onboarded: true` by the step that
+// produced it — core.cloud.created (already up when provisioning ran, NIM-189)
+// or core.bootstrap.issued (already up when issuance ran, NIM-780) — carries no
 // token and is skipped, not failed.
 //
 // install mode (optional param `install: true`, transport=teleport only, ADR-063
@@ -244,11 +245,13 @@ func (m *Module) retryBackoff() (base, jitter time.Duration) {
 func (m *Module) teleport() bool { return m.Transport == TransportTeleport }
 
 // hostInput is one VM from param `hosts` (= register.<provision>.hosts from
-// core.cloud.created): SID, IP for connection, and plain bootstrap token.
+// core.cloud.created, or register.<issue>.hosts from core.bootstrap.issued):
+// SID, IP for connection, and plain bootstrap token.
 //
-// onboarded marks a host that was already up when provisioning ran (NIM-189):
-// core.cloud.created passed it through instead of creating it and issued no
-// token, so there is nothing to deliver — the host is skipped, not failed.
+// onboarded marks a host that was already up when the preceding step ran and
+// was passed through rather than refused — core.cloud.created (NIM-189) or
+// core.bootstrap.issued (NIM-780). Either way no token was issued for it, so
+// there is nothing to deliver: the host is skipped, not failed.
 type hostInput struct {
 	sid       string
 	primaryIP string
@@ -745,18 +748,27 @@ func hostFromStruct(s *structpb.Struct, idx int, requirePrimaryIP bool) (hostInp
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
 	}
-	if requirePrimaryIP && ip == "" {
-		return hostInput{}, fmt.Errorf("param %q[%d].primary_ip: missing (required for direct transport)", "hosts", idx)
-	}
-	// `onboarded: true` (NIM-189) is the ONLY case where a host legitimately
-	// carries no token: it was already up when provisioning ran. Everywhere else
-	// a missing token is still a hard error — a host we cannot onboard.
+	// `onboarded: true` (NIM-189, NIM-780) is the ONLY case where a host
+	// legitimately carries no token: it was already up when the step that would
+	// have minted one ran. Everywhere else a missing token is still a hard
+	// error — a host we cannot onboard.
+	//
+	// Settled BEFORE the primary_ip requirement, not after: that requirement
+	// exists in order to dial, and this host is never dialed. The old order was
+	// harmless only by accident — core.cloud.created's pass-through entries
+	// carried an IP from the VM record, so direct transport never met one
+	// without. core.bootstrap.issued emits `{sid, onboarded: true}` and nothing
+	// else (NIM-780), and demanding a dial address for it would fail the step
+	// over the one host it was about to skip.
 	onboarded, _, err := util.OptBoolParam(s, "onboarded")
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
 	}
 	if onboarded {
 		return hostInput{sid: sid, primaryIP: ip, onboarded: true}, nil
+	}
+	if requirePrimaryIP && ip == "" {
+		return hostInput{}, fmt.Errorf("param %q[%d].primary_ip: missing (required for direct transport)", "hosts", idx)
 	}
 	tok, err := util.StringParam(s, "bootstrap_token")
 	if err != nil {

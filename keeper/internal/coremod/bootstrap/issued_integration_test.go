@@ -68,11 +68,35 @@ func runIssuedIntegration(m *testing.M) int {
 	return m.Run()
 }
 
+// runIncarnation is the incarnation of the run under test. Ownership is what
+// separates a converged pass-through from an identity takeover (NIM-780), so
+// every issuance below names one instead of relying on the "" default.
+const runIncarnation = "redis-sa"
+
 func resetIssuedIntegration(t *testing.T) {
 	t.Helper()
 	if _, err := issuedIntegrationPool.Exec(context.Background(),
-		`TRUNCATE TABLE soul_seeds, bootstrap_tokens, incarnation_membership, souls, audit_log CASCADE`); err != nil {
+		`TRUNCATE TABLE soul_seeds, bootstrap_tokens, incarnation_membership,
+		 incarnation, souls, audit_log CASCADE`); err != nil {
 		t.Fatalf("truncate: %v", err)
+	}
+}
+
+func seedIssuedIncarnation(t *testing.T, name string) {
+	t.Helper()
+	if _, err := issuedIntegrationPool.Exec(context.Background(),
+		`INSERT INTO incarnation (id, service, service_version, status)
+		 VALUES ($1, 'redis', 'main', 'ready')`, name); err != nil {
+		t.Fatalf("seed incarnation %q: %v", name, err)
+	}
+}
+
+func seedIssuedMembership(t *testing.T, incarnation, sid string) {
+	t.Helper()
+	if _, err := issuedIntegrationPool.Exec(context.Background(),
+		`INSERT INTO incarnation_membership (incarnation_name, sid) VALUES ($1, $2)`,
+		incarnation, sid); err != nil {
+		t.Fatalf("seed membership %s/%s: %v", incarnation, sid, err)
 	}
 }
 
@@ -82,7 +106,7 @@ func TestIntegration_IssuedBatch_CreateReissueAndExpiry(t *testing.T) {
 	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
 	sids := []string{"vm1.example.com", "vm2.example.com"}
 
-	first, err := issuer.IssueBatch(ctx, sids)
+	first, err := issuer.IssueBatch(ctx, sids, runIncarnation)
 	if err != nil {
 		t.Fatalf("first IssueBatch: %v", err)
 	}
@@ -117,7 +141,7 @@ WHERE sid='vm1.example.com' AND used_at IS NULL`); err != nil {
 		t.Fatalf("expire fixture token: %v", err)
 	}
 
-	second, err := issuer.IssueBatch(ctx, sids)
+	second, err := issuer.IssueBatch(ctx, sids, runIncarnation)
 	if err != nil {
 		t.Fatalf("second IssueBatch: %v", err)
 	}
@@ -142,12 +166,16 @@ FROM bootstrap_tokens WHERE sid=$1`, h.SID, bootstraptoken.SystemKIDBootstrapIss
 	}
 }
 
+// A connected host that belongs to ANOTHER incarnation is still an identity
+// takeover, and refusing it still rolls the whole batch back. The pass-through
+// NIM-780 added is scoped by exactly the ownership predicate the cloud path used
+// (NIM-189), so this is the half of the old fail-closed rule that survived it.
 func TestIntegration_IssuedBatch_ConnectedRefusalRollsBackWholeBatch(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
 	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
 	sids := []string{"good.example.com", "onboarded.example.com"}
-	first, err := issuer.IssueBatch(ctx, sids)
+	first, err := issuer.IssueBatch(ctx, sids, runIncarnation)
 	if err != nil {
 		t.Fatalf("seed IssueBatch: %v", err)
 	}
@@ -159,8 +187,10 @@ func TestIntegration_IssuedBatch_ConnectedRefusalRollsBackWholeBatch(t *testing.
 		`UPDATE souls SET status='connected' WHERE sid='onboarded.example.com'`); err != nil {
 		t.Fatalf("mark connected: %v", err)
 	}
+	seedIssuedIncarnation(t, "someone-else")
+	seedIssuedMembership(t, "someone-else", "onboarded.example.com")
 
-	_, err = issuer.IssueBatch(ctx, sids)
+	_, err = issuer.IssueBatch(ctx, sids, runIncarnation)
 	if err == nil || !strings.Contains(err.Error(), "onboarded.example.com") || !strings.Contains(err.Error(), "identity takeover") {
 		t.Fatalf("connected IssueBatch error = %v", err)
 	}
@@ -183,8 +213,12 @@ func TestIntegration_IssuedBatch_StatusAndTransportFailClosed(t *testing.T) {
 		name      string
 		transport keepersoul.Transport
 		status    keepersoul.Status
+		// foreignMember binds the row to another incarnation. Needed only where
+		// the status is one NIM-780 converges over for a host of this run — there
+		// ownership is the whole difference between a pass-through and a refusal.
+		foreignMember bool
 	}{
-		{name: "disconnected is onboarded", transport: keepersoul.TransportAgent, status: keepersoul.StatusDisconnected},
+		{name: "disconnected is onboarded", transport: keepersoul.TransportAgent, status: keepersoul.StatusDisconnected, foreignMember: true},
 		{name: "revoked", transport: keepersoul.TransportAgent, status: keepersoul.StatusRevoked},
 		{name: "destroyed", transport: keepersoul.TransportAgent, status: keepersoul.StatusDestroyed},
 		{name: "ssh transport", transport: keepersoul.TransportSSH, status: keepersoul.StatusPending},
@@ -197,8 +231,12 @@ func TestIntegration_IssuedBatch_StatusAndTransportFailClosed(t *testing.T) {
 			if err := keepersoul.Insert(ctx, issuedIntegrationPool, s); err != nil {
 				t.Fatalf("insert soul: %v", err)
 			}
+			if tc.foreignMember {
+				seedIssuedIncarnation(t, "someone-else")
+				seedIssuedMembership(t, "someone-else", s.SID)
+			}
 			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-				IssueBatch(ctx, []string{s.SID})
+				IssueBatch(ctx, []string{s.SID}, runIncarnation)
 			if err == nil {
 				t.Fatal("IssueBatch succeeded across fail-closed boundary")
 			}
@@ -222,7 +260,7 @@ func TestIntegration_IssuedBatch_ExpiredSoulRearmed(t *testing.T) {
 		t.Fatalf("insert expired Soul: %v", err)
 	}
 	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{s.SID})
+		IssueBatch(ctx, []string{s.SID}, runIncarnation)
 	if err != nil {
 		t.Fatalf("IssueBatch expired Soul: %v", err)
 	}
@@ -247,10 +285,130 @@ func TestIntegration_IssuedBatch_ErrorTypeKeepsSID(t *testing.T) {
 	}); err != nil {
 		t.Fatal(err)
 	}
+	seedIssuedIncarnation(t, "someone-else")
+	seedIssuedMembership(t, "someone-else", "connected.example.com")
 	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{"connected.example.com"})
+		IssueBatch(ctx, []string{"connected.example.com"}, runIncarnation)
 	var sidErr *coremodbootstrap.SIDIssueError
 	if !errors.As(err, &sidErr) || sidErr.SID != "connected.example.com" {
 		t.Fatalf("error = %v, want SIDIssueError", err)
+	}
+}
+
+// ★ NIM-780. The run this reproduces: `create` built the VMs, minted, delivered
+// and onboarded them, then failed LATER (rollout, cluster assembly), and the
+// operator repeats `create`. The cloud plugin idempotently hands back the same
+// machines and therefore the same SIDs, whose Souls are now `connected`. Before
+// this, issuance refused them as an identity takeover and rolled the batch back,
+// so the run could never be finished without deleting Soul rows by hand.
+//
+// The two sub-cases are the two points a run can die past onboarding, and the
+// pass-through has to cover both: after `core.soul.registered` bound the host to
+// the incarnation, and before it — where the host is up but still unbound, which
+// `ownedByRunSQL` counts as this run's own for exactly that reason.
+func TestIntegration_IssuedBatch_OnboardedHostOfThisRunIsConverged(t *testing.T) {
+	cases := []struct {
+		name  string
+		bind  bool
+		state keepersoul.Status
+		// caller is the incarnation the issuance names. "" is a call with no run
+		// context, which may still claim an UNBOUND row — the other half of
+		// `ownedByRunSQL`'s rule from the refusal pinned below.
+		caller string
+	}{
+		{name: "connected and bound to this incarnation", bind: true, state: keepersoul.StatusConnected, caller: runIncarnation},
+		{name: "connected but not bound yet", bind: false, state: keepersoul.StatusConnected, caller: runIncarnation},
+		{name: "disconnected and bound to this incarnation", bind: true, state: keepersoul.StatusDisconnected, caller: runIncarnation},
+		{name: "unbound row, no run context — the unbound branch is what answers", bind: false, state: keepersoul.StatusConnected, caller: ""},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			resetIssuedIntegration(t)
+			ctx := context.Background()
+			seedIssuedIncarnation(t, runIncarnation)
+			issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+
+			const live, fresh = "live.example.com", "fresh.example.com"
+			if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+				SID: live, Transport: keepersoul.TransportAgent, Status: tc.state,
+			}); err != nil {
+				t.Fatalf("insert live Soul: %v", err)
+			}
+			if tc.bind {
+				seedIssuedMembership(t, runIncarnation, live)
+			}
+			var requestedBefore time.Time
+			if err := issuedIntegrationPool.QueryRow(ctx,
+				`SELECT requested_at FROM souls WHERE sid=$1`, live).Scan(&requestedBefore); err != nil {
+				t.Fatalf("read requested_at: %v", err)
+			}
+
+			// The mixed batch is the point: the run must go on for the host that
+			// still needs a token, not merely stop failing on the one that does not.
+			hosts, err := issuer.IssueBatch(ctx, []string{live, fresh}, tc.caller)
+			if err != nil {
+				t.Fatalf("repeat create over an onboarded host failed: %v — a re-run past onboarding must converge, not refuse", err)
+			}
+			if len(hosts) != 2 || hosts[0].SID != live || hosts[1].SID != fresh {
+				t.Fatalf("hosts = %+v, want both requested SIDs in order", hosts)
+			}
+			if !hosts[0].Onboarded {
+				t.Errorf("live host Onboarded = false, want true — delivery has no other way to know it needs no token")
+			}
+			if hosts[0].Token.Reveal() != "" || !hosts[0].ExpiresAt.IsZero() || hosts[0].Created || hosts[0].Reissued {
+				t.Errorf("live host carries issuance data (token=%t expires=%t created=%t reissued=%t), want none",
+					hosts[0].Token.Reveal() != "", !hosts[0].ExpiresAt.IsZero(), hosts[0].Created, hosts[0].Reissued)
+			}
+			if hosts[1].Onboarded || hosts[1].Token.Reveal() == "" || !hosts[1].Created {
+				t.Errorf("fresh host = onboarded:%t token:%t created:%t, want a normal first issuance",
+					hosts[1].Onboarded, hosts[1].Token.Reveal() != "", hosts[1].Created)
+			}
+
+			// Nothing was written for the live host. A token row would be a
+			// capability it cannot redeem, and a `pending` refresh would wipe its
+			// presence and hand it to the Reaper's pending sweep while its stream
+			// is still up.
+			var tokens int
+			if err := issuedIntegrationPool.QueryRow(ctx,
+				`SELECT count(*) FROM bootstrap_tokens WHERE sid=$1`, live).Scan(&tokens); err != nil {
+				t.Fatalf("count tokens: %v", err)
+			}
+			if tokens != 0 {
+				t.Errorf("live host got %d token rows, want 0", tokens)
+			}
+			var status string
+			var requestedAfter time.Time
+			if err := issuedIntegrationPool.QueryRow(ctx,
+				`SELECT status, requested_at FROM souls WHERE sid=$1`, live).Scan(&status, &requestedAfter); err != nil {
+				t.Fatalf("re-read live Soul: %v", err)
+			}
+			if status != string(tc.state) || !requestedAfter.Equal(requestedBefore) {
+				t.Errorf("live Soul was mutated: status %q→%q, requested_at moved: %t",
+					tc.state, status, !requestedAfter.Equal(requestedBefore))
+			}
+		})
+	}
+}
+
+// An unknown incarnation ("" — a direct call, or a keeper task outside a run)
+// means "unknown", never "no owner": a BOUND onboarded host stays a refusal,
+// because nothing here can claim it. This is `ownedByRunSQL`'s own rule, and the
+// case where getting it backwards would let any caller with no run context
+// converge over somebody's live fleet.
+func TestIntegration_IssuedBatch_UnknownIncarnationCannotClaimABoundHost(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	seedIssuedIncarnation(t, runIncarnation)
+	if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+		SID: "bound.example.com", Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected,
+	}); err != nil {
+		t.Fatalf("insert bound Soul: %v", err)
+	}
+	seedIssuedMembership(t, runIncarnation, "bound.example.com")
+
+	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+		IssueBatch(ctx, []string{"bound.example.com"}, "")
+	if err == nil || !strings.Contains(err.Error(), "identity takeover") {
+		t.Fatalf("issuance without an incarnation = %v, want a takeover refusal", err)
 	}
 }

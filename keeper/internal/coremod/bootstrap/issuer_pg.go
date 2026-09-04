@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -62,18 +63,25 @@ WHERE sid = $1
 // IssueBatch creates/checks every pending agent Soul and issues exactly one
 // fresh token per SID in one transaction. The row lock closes the race with a
 // concurrent Bootstrap RPC: after waiting, issuance either observes an
-// onboarded status and refuses, or invalidates the old unused token before a
-// fresh one is committed.
+// onboarded status and decides on it, or invalidates the old unused token
+// before a fresh one is committed.
 //
 // Reissue semantics:
 //   - absent SID: create pending/agent + issue;
 //   - pending/expired agent SID: refresh pending requested_at, invalidate any
 //     unused token (expired or not), then issue a fresh default-TTL token;
-//   - connected/disconnected/revoked/destroyed or transport=ssh: fail closed.
+//   - connected/disconnected agent SID that is this run's own: passed through
+//     untouched and tokenless, [IssuedHost.Onboarded] (NIM-780);
+//   - connected/disconnected held by another incarnation, revoked/destroyed, or
+//     transport=ssh: fail closed.
+//
+// incarnationName is the run's incarnation, from [util.IncarnationFrom]. It is
+// what separates the last two cases, so "" (unknown) leaves only unbound rows
+// eligible for pass-through — see [keepersoul.OwnedByRun].
 //
 // Any failure rolls back the entire batch. Plain tokens are returned only after
 // Commit succeeds and are never stored in Postgres (only SHA-256 hashes are).
-func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string) ([]IssuedHost, error) {
+func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationName string) ([]IssuedHost, error) {
 	if i == nil || i.Pool == nil {
 		return nil, fmt.Errorf("bootstrap issuer: postgres pool is nil")
 	}
@@ -97,7 +105,7 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string) ([]IssuedHost,
 
 	out := make([]IssuedHost, 0, len(sids))
 	for _, sid := range sids {
-		host, err := i.issueOne(ctx, tx, sid)
+		host, err := i.issueOne(ctx, tx, sid, incarnationName)
 		if err != nil {
 			return nil, &SIDIssueError{SID: sid, Err: err}
 		}
@@ -111,7 +119,7 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string) ([]IssuedHost,
 	return out, nil
 }
 
-func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid string) (IssuedHost, error) {
+func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName string) (IssuedHost, error) {
 	if !keepersoul.ValidSID(sid) || keepersoul.IsReservedSID(sid) {
 		return IssuedHost{}, fmt.Errorf("invalid sid")
 	}
@@ -139,7 +147,45 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid string) (IssuedH
 			return IssuedHost{}, fmt.Errorf("refresh pending Soul: %w", err)
 		}
 	case keepersoul.StatusConnected, keepersoul.StatusDisconnected:
-		return IssuedHost{}, fmt.Errorf("Soul is already onboarded (status %q); refusing identity takeover", status)
+		// Converge in place rather than refuse, for a host this run already
+		// onboarded (NIM-780): a `create` that failed AFTER onboarding — on the
+		// rollout, on cluster assembly — is repeated to finish, and the cloud
+		// plugin idempotently hands back the same machines. Refusing here made
+		// that run unfixable, since the scenario has no roster to narrow the
+		// list with and an empty list is refused too.
+		//
+		// This is the exemption core.cloud.created carried as ProvisionExisting
+		// (NIM-189), moved to the side that mints now that the cloud driver is an
+		// ordinary plugin knowing nothing about Souls (epic NIM-757). Ownership is
+		// judged by the same predicate: a row bound only to other incarnations is
+		// still an identity takeover, and is still refused.
+		//
+		// Nothing is written: no token to issue (a bootstrap token is a one-time
+		// capability and this host has a seed to authenticate with), and no
+		// pending refresh — re-arming a live host would wipe its presence and
+		// expose it to the Reaper's pending sweep while its stream is up.
+		owned, oerr := keepersoul.OwnedByRun(ctx, tx, sid, incarnationName)
+		if oerr != nil {
+			return IssuedHost{}, oerr
+		}
+		if !owned {
+			// Name the holder, not just the fact of one. The provision path gives
+			// exactly this for exactly this predicate (keepersoul's
+			// notProvisionableError), and an operator repeating `create` onto a
+			// foreign SID otherwise has nothing to go on but the SID they already
+			// typed. A read failure here must not mask the refusal, so the owner
+			// clause is simply dropped when it cannot be read.
+			owner := "owner unknown"
+			if _, incarnations, derr := keepersoul.DescribeTakenSID(ctx, tx, sid); derr == nil {
+				if len(incarnations) > 0 {
+					owner = "member of incarnation " + strings.Join(incarnations, ", ")
+				} else {
+					owner = "not a member of any incarnation"
+				}
+			}
+			return IssuedHost{}, fmt.Errorf("Soul is already onboarded (status %q) and is not this run's own (%s); refusing identity takeover", status, owner)
+		}
+		return IssuedHost{SID: sid, Onboarded: true}, nil
 	default:
 		return IssuedHost{}, fmt.Errorf("Soul status %q is not eligible for bootstrap issuance", status)
 	}

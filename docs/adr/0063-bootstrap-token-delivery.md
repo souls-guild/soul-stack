@@ -221,3 +221,66 @@ non-empty `primary_ip` and fails before dialing without it.
 The canonical ready-made VM flow is:
 
 `core.bootstrap.issued → core.bootstrap.delivered(install=true, teleport) → core.soul.registered(await_online)`.
+
+## Amendment 2026-09-04 — issuance converges over a host this run already onboarded (NIM-780)
+
+**Problem, found on a live run.** The fail-closed rule above made a `create` that
+died *after* onboarding unrepeatable. The sequence: `create` builds the VMs,
+mints, delivers and onboards them — the Souls are `connected` — and the run then
+fails later, on the rollout or on cluster assembly. The operator repeats
+`create`; the cloud plugin idempotently hands back the same machines (it scans by
+its run label, NIM-16) and therefore the same SIDs; issuance refuses every one of
+them as an identity takeover and rolls the whole batch back. The run could never
+be completed without deleting Soul rows by hand.
+
+It could not be worked around in the service either. A keeper task has no roster
+to narrow the list with — `keeperVars` sets no `Soulprint`, so `soulprint.hosts`
+does not even compile there — and an empty `sids` list is refused too, so
+"mint only for the new ones" has no expressible form.
+
+**Why it became reachable only now.** `core.cloud.created` carried the exemption:
+under the [2026-07-26 amendment](#amendment-2026-07-26--a-host-that-was-already-onboarded-is-skipped-not-failed-nim-189)
+it passed an already-up host through as `onboarded: true`, and delivery skipped
+it. Under [epic NIM-757](0017-keeper-side-core.md) the cloud driver becomes an
+ordinary plugin, which knows nothing about Souls and cannot produce that flag —
+and issuance never had an exemption of its own.
+
+**Decision: the same exemption, on the side that mints.** A `connected` /
+`disconnected` agent Soul that is **this run's own** is passed through instead of
+refused: no token, no write of any kind, `hosts[] = {sid, onboarded: true}`.
+
+- **Ownership is the same predicate, not a new one.** A row is this run's own
+  when it is a member of the run's incarnation or of no incarnation at all —
+  `EnsureProvisionable`'s rule, now shared as `keepersoul.OwnedByRun` rather than
+  restated. Unbound counts as own for the reason it always did, and it is load-
+  bearing here: a run that died between delivery and `core.soul.registered` left
+  its hosts up but not yet bound, and that is precisely a run needing repair.
+- **A host of another incarnation is still an identity takeover** and is still
+  refused, still rolling the whole batch back. An empty incarnation means
+  *unknown*, never *no owner*, so a caller outside a run can claim only unbound
+  rows.
+- **Nothing is written for a converged host.** No token — a bootstrap token is a
+  one-time capability and this host authenticates with a seed. No `pending`
+  refresh — re-arming a live host would wipe its presence and expose it to the
+  Reaper's pending sweep while its stream is up.
+- **The SID keeps its slot in `hosts[]`, in order.** Dropping it would be the
+  same dead end from the other side: delivery refuses an empty `hosts` list, so a
+  fully converged re-run would then fail there instead.
+- **Delivery needs no address for it, on either transport.** The entry is
+  `{sid, onboarded: true}` and nothing more — issuance knows no IPs. The
+  `primary_ip` requirement of `direct` is therefore settled AFTER the `onboarded`
+  flag rather than before it; the old order only ever worked because
+  `core.cloud.created`'s pass-through entries carried an IP from the VM record,
+  so `direct` never met one without. Demanding a dial address for the one host
+  the step is about to skip failed the step over it.
+- **Output and audit gain `skipped`**, symmetric with `core.bootstrap.delivered`.
+  `count` keeps its meaning — every requested SID — and every SID stays in the
+  audit `sids`: a host that needed no token is a fact about the run, not the
+  absence of one.
+
+`revoked`, `destroyed` and `transport=ssh` are untouched: still refused for every
+caller, ownership irrelevant.
+
+A scenario that re-maps `register.<issue>.hosts` into delivery's `hosts` must
+carry `onboarded` through. Dropping it turns a converged entry into a host with
+no `bootstrap_token`, which delivery is right to reject.
