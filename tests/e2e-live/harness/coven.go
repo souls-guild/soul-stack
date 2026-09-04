@@ -15,7 +15,7 @@ import (
 //
 // Why: membership is a first-class M:N relation (ADR-008 amendment
 // 2026-07-17/NIM-124), no longer the derived fact
-// `incarnation.name ∈ souls.coven[]`. The scenario run's roster resolves
+// `incarnation.id ∈ souls.coven[]`. The scenario run's roster resolves
 // members via incarnation_membership
 // (keeper/internal/topology/resolver.go::rosterSQL). Without this the
 // incarnation "has no connected hosts" -> run.go aborts with `no_hosts`

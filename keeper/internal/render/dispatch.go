@@ -199,7 +199,7 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // scenario's state captures, so the two cannot drift.
 func keeperVars(in RenderInput) cel.Vars {
 	inc := map[string]any{
-		"name":            in.Incarnation.Name,
+		"id":              in.Incarnation.ID,
 		"service":         in.Incarnation.Service,
 		"service_version": in.Incarnation.ServiceVersion,
 		"host_count":      0,
@@ -231,9 +231,9 @@ func keeperVars(in RenderInput) cel.Vars {
 // resolveCovenList computes `on: [...]` elements: static kebab labels as-is;
 // CEL wrappers `${ … }` via interpolation (soulprint-free context: `on:`
 // resolves once per run, not per host). A resolved element equal to the
-// incarnation's own name is a validation error (ADR-008 amendment
-// 2026-07-17/NIM-124: `incarnation.name` is not a Coven — the whole-incarnation
-// form is an omitted `on:`). Fail-closed: a stale `on: ["${ incarnation.name }"]`
+// incarnation's own id is a validation error (ADR-008 amendment
+// 2026-07-17/NIM-124: `incarnation.id` is not a Coven — the whole-incarnation
+// form is an omitted `on:`). Fail-closed: a stale `on: ["${ incarnation.id }"]`
 // errors out instead of silently resolving to an empty set.
 func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string, error) {
 	// on: resolves not per-host — soulprint is unavailable in this context, and so
@@ -242,7 +242,7 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		Input:    in.Input,
 		Register: in.Register,
 		Incarnation: map[string]any{
-			"name":            in.Incarnation.Name,
+			"id":              in.Incarnation.ID,
 			"service":         in.Incarnation.Service,
 			"service_version": in.Incarnation.ServiceVersion,
 		},
@@ -264,10 +264,12 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		if !ok {
 			return nil, fmt.Errorf("render: on[%d] %q evaluated to %T, expected a coven string", i, s, val)
 		}
-		// incarnation.name is not a Coven (ADR-008 amendment 2026-07-17/NIM-124):
-		// targeting the whole incarnation is an omitted on:, not on: [name].
-		if coven == in.Incarnation.Name {
-			return nil, fmt.Errorf("render: on[%d] %q resolves to the incarnation name %q, which is not a Coven; omit on: to target the whole incarnation", i, s, in.Incarnation.Name)
+		// incarnation.id is not a Coven (ADR-008 amendment 2026-07-17/NIM-124):
+		// targeting the whole incarnation is an omitted on:, not on: [id]. The
+		// comparison is on the VALUE, so it catches the retired `incarnation.name`
+		// spelling ([ADR-0085] window) without knowing about it.
+		if coven == in.Incarnation.ID {
+			return nil, fmt.Errorf("render: on[%d] %q resolves to the incarnation id %q, which is not a Coven; omit on: to target the whole incarnation", i, s, in.Incarnation.ID)
 		}
 		out = append(out, coven)
 	}

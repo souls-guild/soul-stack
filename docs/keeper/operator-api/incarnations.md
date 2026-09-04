@@ -38,7 +38,7 @@ Runs the selected bootstrap scenario for the specified service; creates an entry
 }
 ```
 
-**RBAC coven-scope (ADR-008 amendment a; [amended 2026-07-17, NIM-124](../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)).** `covens` specifies env tags by which RBAC limits incarnation operations. Effective coven scope = declared `covens` (real stable tags **only** — the incarnation name is **no longer** added: `incarnation.name` is not a Coven). The role `incarnation.* on coven=prod` gets access to incarnations with `prod` in declared `covens`; to scope by the incarnation's own name use the `incarnation=<name>` dimension (**not** `coven=<name>`); role `incarnation.* on service=redis` - to all incarnations of service `redis` regardless of tags. On **create** scope is checked by `service` + declared `covens` from the body: an operator with scope `coven=prod` cannot create an incarnation with `covens=["dev"]` (will receive `403 forbidden`) - this is protection from privilege-escalation through a tag outside its scope. Details - [rbac.md → Selector grammar](../rbac.md).
+**RBAC coven-scope (ADR-008 amendment a; [amended 2026-07-17, NIM-124](../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)).** `covens` specifies env tags by which RBAC limits incarnation operations. Effective coven scope = declared `covens` (real stable tags **only** — the incarnation name is **no longer** added: `incarnation.id` is not a Coven). The role `incarnation.* on coven=prod` gets access to incarnations with `prod` in declared `covens`; to scope by the incarnation's own name use the `incarnation=<name>` dimension (**not** `coven=<name>`); role `incarnation.* on service=redis` - to all incarnations of service `redis` regardless of tags. On **create** scope is checked by `service` + declared `covens` from the body: an operator with scope `coven=prod` cannot create an incarnation with `covens=["dev"]` (will receive `403 forbidden`) - this is protection from privilege-escalation through a tag outside its scope. Details - [rbac.md → Selector grammar](../rbac.md).
 
 **Response `202 Accepted`:**
 
@@ -538,7 +538,7 @@ was the **declared role** — and that has been an attribute of a Choir Voice si
   - name: put the seed node into the primary part
     module: core.choir.present
     params:
-      incarnation: "${ incarnation.name }"
+      incarnation: "${ incarnation.id }"
       choir: redis_primary
       sid: "${ soulprint.hosts[0].sid }"
       role: master
@@ -621,7 +621,7 @@ Binds already-onboarded, **connected** Souls to the incarnation's roster (`incar
 
 **The operator flow it enables:**
 
-1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring `name_template` ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
+1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring `id_template` ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
 2. `POST /v1/incarnations/{id}/members` — the roster is bound.
 3. `POST /v1/incarnations/{id}/scenarios/{scenario}` — the create scenario runs against a roster that now exists.
 

@@ -19,7 +19,7 @@ fixtures:
   default_destiny_source: "file://../../destiny/{name}"
   # A single roster host: the keeper task core.cloud.destroyed targets keeper (not
   # hosts), but the harness builds flow_context for static-when/assert from the first host.
-  # covens must carry the scenario name (= incarnation.name) — otherwise the host is out of target.
+  # covens must carry the scenario name (= incarnation.id) — otherwise the host is out of target.
   hosts:
     - sid: vm-1.example.com
       covens: []

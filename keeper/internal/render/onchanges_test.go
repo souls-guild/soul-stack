@@ -32,7 +32,7 @@ func onChangesScenario(onchanges []string) *config.ScenarioManifest {
 func onChangesRenderInput(m *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    m,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 }

@@ -6,7 +6,7 @@
 #
 # star expect_render_error (mutually exclusive with assert.*): substring of the message from the guard-assert of
 # dragonfly-provision.yml. vault/covens under "9redis": WITHOUT the guard-assert (RED phase)
-# render pushes through the whole plan - deploy reads secret/dragonfly/9redis/*, coven=incarnation.name.
+# render pushes through the whole plan - deploy reads secret/dragonfly/9redis/*, coven=incarnation.id.
 name: dragonfly provision with a bad VM-base incarnation name is rejected before persist
 
 fixtures:

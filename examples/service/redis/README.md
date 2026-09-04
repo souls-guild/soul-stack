@@ -475,7 +475,7 @@ the incarnation** — the corpus carries one of each so both paths stay exercise
 `create_from_souls` declares
 
 ```yaml
-name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+id_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
 ```
 
 so `{name: cache, project: billing, subproject: invoices}` (with `service_type`
@@ -485,7 +485,7 @@ defaulting to `cache`) is created as **`cache-billing-invoices-redis-cache`**. `
 
 Three things worth copying when you write your own template:
 
-- **The 63-character ceiling is real.** `incarnation.name` is a `TEXT PRIMARY KEY`,
+- **The 63-character ceiling is real.** `incarnation.id` is a `TEXT PRIMARY KEY`,
   kebab-case, ≤63 characters, and immutable — there is no rename. The literal text in the
   template costs 9 of those, so the four components carry an explicit `max_length` each.
   Overflow is a 422 quoting the composed string and its length, never a truncation: a
@@ -715,7 +715,7 @@ there is no duplicate.
    time (see the callout above).
 3. **(c) registration + onboarding barrier** - `module: core.soul.registered` ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md)).
    `sid` - the **list** of created VMs' SIDs (`register.provision.hosts.map(h, h.sid)`,
-   list-SID ADR-061); `coven` - the root `incarnation.name`. `await_online: true` blocks,
+   list-SID ADR-061); `coven` - the root `incarnation.id`. `await_online: true` blocks,
    waiting for the created Souls to go online (Redis SID-lease) within `await_timeout`;
    **B1-strict**: falling short of quorum → the step is `failed` → state is not
    committed → `error_locked`. `refresh_soulprint: true` → on success the
@@ -1221,11 +1221,11 @@ Passwords - **from Vault**, not in the scenario's input contract. The scenario r
 them keeper-side with the CEL function `vault(...)` in the render phase
 (templating.md §2.3/§4), by convention:
 
-- requirepass: `secret/redis/<incarnation.name>#password`;
+- requirepass: `secret/redis/<incarnation.id>#password`;
 - per-user (operator-extra **and** system `replica`/`monitoring`/`sentinel`/`haproxy`):
-  `secret/redis/<incarnation.name>/{redis_users,system_acl_users}/<name>#password`;
+  `secret/redis/<incarnation.id>/{redis_users,system_acl_users}/<name>#password`;
 - the sentinel daemon's `default` user (in `sentinel-users.acl`): the primary
-  `secret/redis/<incarnation.name>#password` (shared with redis-server's requirepass).
+  `secret/redis/<incarnation.id>#password` (shared with redis-server's requirepass).
 
 The path is built from a trusted context (the incarnation, not operator input). What
 reaches destiny and the plugin via `apply.input` / `params` is already the

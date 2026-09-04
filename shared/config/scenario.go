@@ -62,14 +62,33 @@ type ScenarioManifest struct {
 	// with artifact.StateSchemaMigration.From). ADR-0068.
 	FromVersions []string `yaml:"from,omitempty"`
 
-	// NameTemplate composes the incarnation name from `input:` components at create
-	// time instead of taking it as free text (`name_template`, ADR-0079). A `${ … }`
-	// template over input only (name_template.go); empty/absent = the operator names
-	// the incarnation (unchanged behavior). Read ONLY on the create path — the
-	// keeper renders it over the resolved input BEFORE inserting the row, so the
-	// components that feed a name are write-once identity: a later run with
-	// different values does NOT rename anything.
-	NameTemplate string `yaml:"name_template,omitempty"`
+	// IDTemplate composes the incarnation id from `input:` components at create
+	// time instead of taking it as free text (`id_template`, ADR-0079 as amended by
+	// [ADR-0085]). A `${ … }` template over input only (id_template.go);
+	// empty/absent = the operator names the incarnation (unchanged behavior). Read
+	// ONLY on the create path — the keeper renders it over the resolved input BEFORE
+	// inserting the row, so the components that feed an id are write-once identity:
+	// a later run with different values does NOT rename anything.
+	//
+	// Filled from [ScenarioManifest.LegacyNameTemplate] when only the old spelling
+	// is present ([ScenarioManifest.normalizeIDTemplate]) — every reader past the
+	// load sees one field and never has to know which spelling the file used.
+	IDTemplate string `yaml:"id_template,omitempty"`
+
+	// LegacyNameTemplate is the pre-[ADR-0085] spelling of [ScenarioManifest.IDTemplate],
+	// kept for the compatibility window that ticket opens: a service repository
+	// still on `name_template:` loads and runs, and soul-lint warns with the line
+	// and the replacement. Both spellings in one file is an error, not a merge
+	// (`id_template_conflict`) — the two would silently disagree. Removing this
+	// field closes the window and is its own ticket.
+	//
+	// Never read as a TEMPLATE past [ScenarioManifest.normalizeIDTemplate]: it
+	// exists so the deprecation can be reported, not so a second template can be
+	// composed. It is still read as EVIDENCE of which spelling the file used —
+	// [KeeperFeaturesOfScenario] cites the key that is actually in the file.
+	//
+	// [ADR-0085]: ../../docs/adr/0085-entity-id-and-label.md
+	LegacyNameTemplate string `yaml:"name_template,omitempty"`
 
 	// Form is the optional presentation layer for the `input:` form (form_layout.go):
 	// how the UI groups/labels input fields into sections. nil = absent (UI renders
@@ -303,6 +322,11 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 
 	topKeys := topLevelKeys(root)
 
+	// 0) `name_template:` → `id_template:` ([ADR-0085] compatibility window). Folded
+	// FIRST, so every later check — here, in the semantic phase, and post-merge in
+	// the covenant resolver — reads one field whichever spelling the file used.
+	out = append(out, m.normalizeIDTemplate(root)...)
+
 	// 1) Deprecated top-level keys → `unknown_key` with a meaningful hint.
 	// Duplicate from the reflect-walker is suppressed via `scenarioManifestType` in walk.go.
 	for _, kv := range root.Values {
@@ -391,13 +415,14 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		out = append(out, validateFormLayout(root, m, "$.form")...)
 	}
 
-	// 5c) `name_template:` — server-side name composition from input components
+	// 5c) `id_template:` — server-side id composition from input components
 	// (ADR-0079). Under the SAME covenant gate as `form:`: the cross-check
 	// "every ${input.X} is declared" is correct only against the EFFECTIVE input,
 	// which for an extends scenario exists only post-merge (checked there by the
-	// same core, config.ResolveScenarioCovenant).
-	if topKeys["name_template"] && m.Extends == "" {
-		out = append(out, validateNameTemplate(root, m, "$.name_template")...)
+	// same core, config.ResolveScenarioCovenant). The path is the spelling the file
+	// actually used, so the diagnostic points at a key that is in the file.
+	if (topKeys[idTemplateKey] || topKeys[nameTemplateKey]) && m.Extends == "" {
+		out = append(out, validateIDTemplate(root, m, m.writtenIDTemplateKey(topKeys))...)
 	}
 
 	// 6) `tasks[]` — polymorphic validation of each task.

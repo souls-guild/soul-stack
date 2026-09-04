@@ -7,9 +7,9 @@ import "testing"
 //
 // A missing row is not a missing warning — it is a `compat:` window that passes
 // the check while promising a keeper that cannot render the definition. A
-// service pinning `min: 0.1.0` beside a `name_template` create-scenario lints
-// clean today, and the keeper it names does not compose the name at all: it
-// expects `name` in the request. That surfaces on somebody else's cluster during
+// service pinning `min: 0.1.0` beside an `id_template` create-scenario lints
+// clean today, and the keeper it names does not compose the id at all: it
+// expects the identifier in the request. That surfaces on somebody else's cluster during
 // an upgrade rather than on the author's lint, which is the exact failure mode
 // ADR-0076 was written for.
 //
@@ -19,17 +19,17 @@ import "testing"
 // stamp, or the stamp freezes them as "these were always here".
 
 // A scenario's own manifest grammar contributed no floor anywhere: soul-lint's
-// scenario path and keeper's run path both walk only the TASK list. name_template
+// scenario path and keeper's run path both walk only the TASK list. id_template
 // is the first scenario-level key that needs one.
-func TestKeeperFeaturesOfScenario_NameTemplate(t *testing.T) {
+func TestKeeperFeaturesOfScenario_IDTemplate(t *testing.T) {
 	if got := KeeperFeaturesOfScenario(&ScenarioManifest{}); len(got) != 0 {
-		t.Fatalf("used = %+v, want nothing for a scenario without name_template", got)
+		t.Fatalf("used = %+v, want nothing for a scenario without id_template", got)
 	}
 
-	got := KeeperFeaturesOfScenario(&ScenarioManifest{NameTemplate: "${ input.cluster }-${ input.shard }"})
+	got := KeeperFeaturesOfScenario(&ScenarioManifest{IDTemplate: "${ input.cluster }-${ input.shard }"})
 	found := false
 	for _, f := range got {
-		if f.ID == FeatureScenarioNameTemplate {
+		if f.ID == FeatureScenarioIDTemplate {
 			found = true
 			if f.Where == "" {
 				t.Error("the feature carries no location, so a diagnostic cannot point at it")
@@ -37,7 +37,7 @@ func TestKeeperFeaturesOfScenario_NameTemplate(t *testing.T) {
 		}
 	}
 	if !found {
-		t.Errorf("used = %+v, want %s", got, FeatureScenarioNameTemplate)
+		t.Errorf("used = %+v, want %s", got, FeatureScenarioIDTemplate)
 	}
 }
 
@@ -91,7 +91,7 @@ func TestKeeperFeaturesOfTasks_IncludeInsideBlockIsTheNewGrammar(t *testing.T) {
 // by dslFeatureUse, so the feature would look implemented and contribute
 // nothing. Pin the rows themselves.
 func TestKeeperDSLFeatures_CarriesTheNewRows(t *testing.T) {
-	for _, id := range []string{FeatureScenarioNameTemplate, FeatureTaskBlockInclude} {
+	for _, id := range []string{FeatureScenarioIDTemplate, FeatureTaskBlockInclude} {
 		if _, ok := keeperDSLFeatures[id]; !ok {
 			t.Errorf("%s has no registry row, so the collector's emission is dropped on the floor", id)
 		}

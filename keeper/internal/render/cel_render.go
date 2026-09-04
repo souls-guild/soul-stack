@@ -149,9 +149,13 @@ func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
 	return in.DestinyVarsResolved[sid]
 }
 
-// incarnationVars builds the incarnation map for the CEL context: name/service/
+// incarnationVars builds the incarnation map for the CEL context: id/service/
 // service_version from IncarnationMeta + host_count (number of targeted hosts,
 // used by scenario predicates — add_user/main.yml).
+//
+// `id` only: the retired `name` alias of the [ADR-0085] window is added once, at
+// the activation ([cel.Vars.incarnationRoot]), so no context can carry one
+// spelling and not the other.
 //
 // state is a read-only snapshot of incarnation.state at the run's row-lock
 // capture ([ADR-009]/[ADR-010]): scenario render context sees pre-run state as
@@ -164,7 +168,7 @@ func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
 // (`incarnation` is DynType).
 func incarnationVars(in RenderInput, hostCount int) map[string]any {
 	m := map[string]any{
-		"name":            in.Incarnation.Name,
+		"id":              in.Incarnation.ID,
 		"service":         in.Incarnation.Service,
 		"service_version": in.Incarnation.ServiceVersion,
 		"host_count":      hostCount,

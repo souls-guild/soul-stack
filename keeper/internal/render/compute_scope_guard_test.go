@@ -182,7 +182,7 @@ func computeScopeInput(manifest *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "svc", Service: "svc", ServiceVersion: "v1.0.0"},
+		Incarnation: IncarnationMeta{ID: "svc", Service: "svc", ServiceVersion: "v1.0.0"},
 		Hosts: []*topology.HostFacts{
 			host("h1.example.com", []string{"web"}, nil),
 			host("h2.example.com", []string{"web"}, nil),

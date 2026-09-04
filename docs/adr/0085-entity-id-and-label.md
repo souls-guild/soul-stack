@@ -272,6 +272,50 @@ is actually written. So the change ships with a **compatibility window**:
 2. `soul-lint` warns on the old root, with a file and a line address;
 3. the old root is dropped.
 
+**Landed 2026-09-04 by NIM-730**, steps 1 and 2 of the three. The window covers the two
+spellings a service repository writes — the CEL root and the scenario key — and nothing else:
+
+- the root's alias is placed once, in `shared/cel.Vars.incarnationRoot`, so every context on
+  either side of the wire carries both keys and none can be forgotten (the Soul rebuilds `Vars`
+  from `flow_context` and goes through the same activation). It is placed only when `id` is
+  present, so an incarnation-free context still answers `incarnation.name` with the ordinary
+  no-such-key rather than an empty string;
+- the key is folded once, in `config.ScenarioManifest.normalizeIDTemplate`, before any rule
+  reads it, so every reader past the load sees one field;
+- `soul-lint` reports `incarnation_name_legacy_root` and `id_template_legacy_spelling`, both
+  WARNINGs with a line and the replacement. An error would close the window it exists to keep
+  open. Declaring **both** spellings of the key in one file is the one ERROR
+  (`id_template_conflict`): two templates composing one id is a mistake whichever value a
+  loader picked.
+
+`incarnation_name_legacy_root` covers all three surfaces that carry the root, because a
+catcher that covered one would report a fraction of the sites while looking green:
+
+- the scenario's own file;
+- every `include:` body the engine would reach — the keeper renders the EXPANDED list, and in
+  a service written as a thin `main.yml` over `_shared/` bodies those bodies hold most of the
+  references there are. Each body is walked as its own file, so a finding cites that file's
+  path and its own line;
+- `vars/_stack.yaml`, the third CEL environment (`cel.NewServiceVars`). A step there is
+  evaluated BEFORE the render, so a stale root fails the whole run rather than one task. Only
+  the four evaluated cells (`when:`, `foreach:`, `file:`, `inline:` values) are walked — a
+  plain layer file under `vars/` is parsed and returned unrendered, so a `${ … }` written
+  there is literal text and flagging it would be a false positive.
+
+It is AST-based through the same `shared/cel` walk the engine uses, so `incarnation.name` in
+prose or in a string CONSTANT is correctly not a reference, `incarnation['name']` correctly is,
+and so is a read inside a `.where(…)` predicate — the one string literal the engine parses
+rather than passes through.
+
+Step 3 — dropping the old spellings — is a separate ticket, after the service repositories have
+moved. The rest of the family renamed without a window, because a caller of
+`/v1/incarnations/resolve-id` or a reader of `composes_id` is a client of this cluster's own
+versioned API rather than a file nobody here can see: `name_template:` → **`id_template:`**,
+`composes_name` → **`composes_id`**, `name_not_composable` → **`id_not_composable`**,
+`composed_name_invalid` → **`composed_id_invalid`**, and the live preview
+`POST /v1/incarnations/resolve-name` → **`/v1/incarnations/resolve-id`** (reply `composed_name`
+→ `composed_id`). See [ADR-0079](0079-incarnation-name-template.md) §Amendment 2026-09-04.
+
 **This window is a different axis from [ADR-0076](0076-engine-compat-window.md)'s**, and the two
 must not be conflated. ADR-0076 declares, per entity, the range of **keeper versions** that can
 execute a definition — a property of the definition, negotiated against the engine. This window is a

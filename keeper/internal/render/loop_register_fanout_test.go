@@ -25,7 +25,7 @@ func fanoutPlan(t *testing.T, consumer config.Task) []*RenderedTask {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{fan, consumer}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -86,7 +86,7 @@ func TestLoopFanout_PlainRegisterStillResolvesToOne(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, consumer}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -113,7 +113,7 @@ func TestLoopFanout_MixedNamesFlattenInOrder(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, fan, consumer}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)

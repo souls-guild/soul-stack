@@ -176,12 +176,12 @@ func incarnationStackVars(inc *incarnation.Incarnation) servicevars.IncarnationC
 		return servicevars.IncarnationContext{}
 	}
 	return servicevars.IncarnationContext{
-		// The FIELD stays `Name`: [servicevars.IncarnationContext] is the CEL
-		// activation's shape, its field names mirror the CEL keys, and the root
-		// is still spelled `incarnation.name` until NIM-730 opens the
-		// compatibility window for every service repository. The VALUE is the
-		// renamed identifier ([ADR-0085], NIM-729).
-		Name:           inc.ID,
+		// [servicevars.IncarnationContext] is the CEL activation's shape and its
+		// field names mirror the CEL keys, which since NIM-730 agree with the
+		// column: both are `id` ([ADR-0085]). The retired `incarnation.name`
+		// spelling is still readable, but as an alias added at the activation
+		// (shared/cel.Vars.incarnationRoot), never as a second field here.
+		ID:             inc.ID,
 		Service:        inc.Service,
 		ServiceVersion: inc.ServiceVersion,
 		Covens:         inc.Covens,

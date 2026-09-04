@@ -185,7 +185,7 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
-			Name:           spec.IncarnationName,
+			ID:             spec.IncarnationName,
 			Service:        spec.ServiceRef.Name,
 			ServiceVersion: spec.ServiceRef.Ref,
 		},

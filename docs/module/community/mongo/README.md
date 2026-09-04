@@ -222,7 +222,7 @@ top of this page); the task shape is unaffected by the rename.
     username: default_admin
     # The password is resolved by keeper-side via vault() in the render phase (ADR-012):
     # it's the value that goes into the plugin, not the link.
-    password: "${ vault('secret/mongo/' + incarnation.name + '/users/default_admin#password') }"
+    password: "${ vault('secret/mongo/' + incarnation.id + '/users/default_admin#password') }"
     name:     default_admin
     database: admin
     state:    present

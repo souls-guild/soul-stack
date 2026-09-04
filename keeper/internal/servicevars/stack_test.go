@@ -346,7 +346,7 @@ func TestStack_ForeachOverANonListRefuses(t *testing.T) {
 		"_stack.yaml":  "stack:\n  - foreach: \"${ incarnation.name }\"\n    as: x\n    file: \"${ x }.yaml\"\n",
 	})
 
-	err := resolveErr(t, dir, IncarnationContext{Name: "redis-prod"})
+	err := resolveErr(t, dir, IncarnationContext{ID: "redis-prod"})
 	if !errors.Is(err, ErrStackStepInvalid) {
 		t.Fatalf("want ErrStackStepInvalid, got %v", err)
 	}

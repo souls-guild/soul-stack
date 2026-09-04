@@ -29,7 +29,7 @@ func applierEnv(t *testing.T, applier config.Task) ([]*RenderedTask, error) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, applier}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     staticResolver{res},
 	}
@@ -101,7 +101,7 @@ func TestApplier_RequisitesUnionWithTheDestinysOwn(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, applier}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     staticResolver{res},
 	}
@@ -216,7 +216,7 @@ func TestApplier_DynamicWhenInheritedFromBlockRejected(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     staticResolver{res},
 	}

@@ -255,7 +255,8 @@ node itself — the splice is keeper's work — so a per-task rule is silent on 
 included file, which is how services are actually written (a thin `main.yml`, the body in
 `_shared/*.yml`). A parse-time validator descends into the resolved include and reports at the
 included file's own line and column. Both halves verified on one probe service: an
-`on: ["${ incarnation.name }"]` inline raises `on_incarnation_name` and the same task moved into
+`on: ["${ incarnation.name }"]` inline raises `on_incarnation_id` (`on_incarnation_name` when
+this was written; renamed by NIM-730) and the same task moved into
 `_shared/capture.yml` raises nothing, while an unrouted `core.state.set` in that same included file
 is flagged at `capture.yml:2:3`. The check itself needs nothing but the task — the module address
 and the task's own `on:` key. `on:` as a *sequence* is a coven list, not the keeper literal, so

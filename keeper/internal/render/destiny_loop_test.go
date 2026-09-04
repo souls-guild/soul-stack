@@ -52,7 +52,7 @@ func TestRender_ApplyDestiny_Loop_Expands(t *testing.T) {
 			"alice": map[string]any{"acl": "~* +@all"},
 			"bob":   map[string]any{"acl": "~foo +get"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -102,7 +102,7 @@ func TestRender_ApplyDestiny_Loop_MixedPlan(t *testing.T) {
 			map[string]any{"acl": "~b"},
 			map[string]any{"acl": "~c"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -140,7 +140,7 @@ func TestRender_ApplyDestiny_Loop_Isolation(t *testing.T) {
 		Input: map[string]any{"changes": []any{
 			map[string]any{"acl": "~a"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -165,7 +165,7 @@ func TestRender_ApplyDestiny_Loop_RegisterIsolation(t *testing.T) {
 		Input: map[string]any{"changes": []any{
 			map[string]any{"acl": "~a"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		// scenario-scope register exists, but must not be visible in the destiny env.
 		Register: map[string]any{"probe": map[string]any{"stdout_lines": []any{"x"}}},
 		Hosts:    []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
@@ -206,7 +206,7 @@ func TestRender_ApplyDestiny_Loop_OnChanges(t *testing.T) {
 			map[string]any{"acl": "~a"},
 			map[string]any{"acl": "~b"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -276,7 +276,7 @@ func TestRender_ApplyDestiny_Loop_StaticWhenSkip(t *testing.T) {
 			map[string]any{"acl": "~a"},
 			map[string]any{"acl": "~b"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}

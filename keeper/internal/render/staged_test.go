@@ -62,7 +62,7 @@ func TestRender_StagedPassageStamp(t *testing.T) {
 	in := RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "redis"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"redis-prod"}, nil),
 			host("b.example.com", []string{"redis-prod"}, nil),
@@ -101,7 +101,7 @@ func TestRender_StagedWhereResolvesPerHostRegister(t *testing.T) {
 	in := RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "redis"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"redis-prod"}, nil),
 			host("b.example.com", []string{"redis-prod"}, nil),
@@ -165,7 +165,7 @@ tasks:
 	in := RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis-prod"}, nil)},
 		// TaskPassage isn't set (nil): non-staged caller.
 	}

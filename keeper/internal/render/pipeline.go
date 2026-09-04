@@ -106,7 +106,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// disabled — Start/End are free.
 	ctx, span := tracer.Start(ctx, "render.pipeline",
 		trace.WithAttributes(
-			attribute.String("incarnation", in.Incarnation.Name),
+			attribute.String("incarnation", in.Incarnation.ID),
 			attribute.String("scenario", in.Scenario.Name),
 			attribute.Int("tasks", len(in.Scenario.Tasks)),
 			attribute.Int("hosts", len(in.Hosts)),

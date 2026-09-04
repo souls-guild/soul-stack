@@ -35,7 +35,7 @@ func TestStaticWhenFalse_SkipsParamRender(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"}, // not apply → maxmemory isn't passed
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -68,7 +68,7 @@ func TestStaticWhenTrue_RendersParams(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "apply", "maxmemory": "256mb"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -107,7 +107,7 @@ func TestStaticSkip_OnChangesIndicesIntact(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -144,7 +144,7 @@ func TestStaticSkip_ConsistentAcrossPassages(t *testing.T) {
 	base := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		TaskPassage: []int{0},
 	}
@@ -183,7 +183,7 @@ func TestStaticSkipEqualsSoulSkip(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -230,7 +230,7 @@ func TestRegisterWhen_StaysSoulSide(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"user": "alice"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -272,7 +272,7 @@ func TestMixedWhen_NotStatic(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"a": true, "user": "bob"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -316,7 +316,7 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls", "user": "alice"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -367,7 +367,7 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "diagnose"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -398,7 +398,7 @@ func TestNonStaticWhen_UnsupportedDSL_StillRejected(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -441,7 +441,7 @@ func TestStaticWhenFalse_UnsupportedDSL_PrecedesGuard_Destiny(t *testing.T) {
 			"user":   "alice",
 		}),
 		Input:       map[string]any{"action": "update_acls", "user": "alice"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -484,7 +484,7 @@ func TestStaticWhenTrue_UnsupportedDSL_StillRejected_Destiny(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("active", map[string]any{"action": "diagnose"}),
 		Input:       map[string]any{"action": "diagnose"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -542,7 +542,7 @@ func keeperWhenInput(m *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{"provision": true},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 }

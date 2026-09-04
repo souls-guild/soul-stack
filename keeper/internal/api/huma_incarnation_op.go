@@ -34,16 +34,16 @@ type incCreateInput struct {
 // Struct name = contract schema name in OpenAPI (huma DefaultSchemaNamer takes
 // reflect.Type.Name() directly) — aligned to the committed hand-written spec (T4b pilot).
 //
-// `name` lost `required:"true"` with ADR-0079: a create scenario declaring
-// `name_template` composes the name server-side from input components, and whether
-// it does is only known once the service snapshot resolves — past the schema layer.
-// The domain still rejects an omitted name when nothing composes one (422
+// `id` lost `required:"true"` with ADR-0079: a create scenario declaring
+// `id_template` composes it server-side from input components, and whether it does
+// is only known once the service snapshot resolves — past the schema layer.
+// The domain still rejects an omitted id when nothing composes one (422
 // "field 'id' is required"), so the contract did not loosen, it moved one layer in.
 type IncarnationCreateRequest struct {
-	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components. The TEMPLATE key keeps its own spelling until NIM-730."`
+	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares id_template (ADR-0079) — then it is composed server-side from input components."`
 	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/incarnations/{id}/label. Unlike `name` it is never composed by
-	// a name_template — a template composes an identifier, and a caption is not one.
+	// by PUT /v1/incarnations/{id}/label. Unlike `id` it is never composed by
+	// an id_template — a template composes an identifier, and a caption is not one.
 	Label   *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags (ADR-008 amendment a)"`

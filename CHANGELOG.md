@@ -61,6 +61,83 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **The identifier rename reaches CEL and the create-scenario key**
+  ([ADR-0085](docs/adr/0085-entity-id-and-label.md) §"CEL reach and the compatibility
+  window", [ADR-0079](docs/adr/0079-incarnation-name-template.md) Amendment 2026-09-04,
+  NIM-730). NIM-729 left a half-rename in the release: the database, REST, MCP and Go
+  said `id` while every scenario still said `incarnation.name` and `name_template:` —
+  one concept, two words, with the seam hidden a floor below the surface an operator
+  reads. This closes it. **Spelling only** — the input-only sandbox, composition
+  before the insert, the refusal to truncate an over-long identifier and write-once
+  identity are untouched.
+  - CEL root `incarnation.name` → **`incarnation.id`**; scenario key
+    `name_template:` → **`id_template:`**; scenario-listing flag `composes_name` →
+    **`composes_id`**; 422 `name_not_composable` → **`id_not_composable`** and
+    `composed_name_invalid` → **`composed_id_invalid`**; the five soul-lint rules
+    `name_template_*` → **`id_template_*`** (same levels, same meanings); the
+    fail-closed `on:` rule `on_incarnation_name` → **`on_incarnation_id`**. Go:
+    `config.RenderNameTemplate` → `RenderIDTemplate`, `NameTemplateInputRefs` →
+    `IDTemplateInputRefs`, `IncarnationNameMaxLen` → `IncarnationIDMaxLen`,
+    `scenario.ComposeName` → `ComposeID`, `ErrNameNotComposable` →
+    `ErrIDNotComposable`, `render.IncarnationMeta.Name` and
+    `servicevars.IncarnationContext.Name` → `.ID` — the two structs whose godoc said
+    the spellings would converge when this landed.
+  - **The live preview moved with it:** `POST /v1/incarnations/resolve-name` →
+    **`POST /v1/incarnations/resolve-id`**, reply field `composed_name` →
+    **`composed_id`**, operation id `resolveIncarnationName` →
+    `resolveIncarnationID`. Consumer breakage of the same class NIM-729 named:
+    `soul-stack-web` routes on this path and reads `composes_name`, so the companion
+    needs `npm run gen:api` and the core a `make sync-webui`; `docs/keeper/openapi.yaml`
+    is derived and regenerated here.
+  - **A compatibility window covers the two spellings a SERVICE REPOSITORY writes,
+    and only those two.** Both the old CEL root and the old key are read. The root's
+    alias is placed in ONE place — `shared/cel.Vars.incarnationRoot`, the activation
+    every evaluation on either side of the wire funnels through, the Soul-side
+    flow-control sandbox included — and only when `id` is present, so a context with
+    no incarnation (push, trial) still answers `incarnation.name` with the ordinary
+    no-such-key rather than an empty string a predicate could match on. The key is
+    folded in one place too (`config.ScenarioManifest.normalizeIDTemplate`), before
+    any rule reads it, so every reader past the load sees one field and never learns
+    which spelling the file used.
+  - **`soul-lint` is the only static catcher this rename has**, and it is a WARNING
+    on purpose — an error would close the window it exists to keep open.
+    `incarnation_name_legacy_root` reports a retired root per CELL, with a **line and
+    column** resolved from the scenario document (falling back to the nearest
+    enclosing path when a cell's own path does not parse) plus the replacement;
+    `id_template_legacy_spelling` does the same for the key. It is AST-based, through
+    the same `shared/cel` walk the engine uses, so `incarnation.name` in prose or in
+    a string CONSTANT is correctly not a reference, `incarnation['name']` correctly
+    is, and so is a read inside a `.where(…)` predicate — the one string literal the
+    engine parses rather than passes through. Declaring BOTH spellings of the key in
+    one file is the single ERROR (`id_template_conflict`): two templates composing
+    one id is an authoring mistake whichever value a loader picked.
+    **All three surfaces carrying the root are walked**, because a catcher that
+    covered one would report a fraction of the sites while looking green: the
+    scenario's own file; every `include:` body the engine would reach — walked as its
+    own file, so the finding cites that file's path and its own line, which matters
+    because a service written as a thin `main.yml` over `_shared/` bodies keeps most
+    of its references in the bodies; and `vars/_stack.yaml`, the third CEL
+    environment, whose steps are evaluated BEFORE the render so a stale root there
+    fails the whole run rather than one task. A plain layer file under `vars/` is
+    deliberately NOT walked — it is parsed and returned unrendered, so a `${ … }`
+    written there is literal text and flagging it would be a false positive.
+    Why the warning is load-bearing rather than a courtesy: `incarnation` is
+    `cel.DynType`, so dropping the old root is a `no such key` at EVALUATION, and one
+    of the three environments is flow-control — evaluated on the HOST, where a stale
+    `when:` fails mid-run after earlier tasks have applied.
+  - **The `on:` guard matches both spellings.** `on: ["${ incarnation.name }"]` is
+    still refused while the window is open, because the retired root still evaluates
+    and a rule that knew only the new spelling would be a way past a fail-closed
+    guard. The runtime resolver never saw a spelling at all — it compares the
+    RESOLVED value against the incarnation's identifier.
+  - **The API rename has no window and needs none**, the same line NIM-729 drew: a
+    caller of `resolve-id` is a client of this cluster's own versioned API, not a
+    file in a repository nobody here can see.
+  - `examples/service/*` and `examples/destiny/*` are migrated in this change — 35
+    occurrences over 23 files, plus the one `name_template:` in
+    `create_from_souls/main.yml`. External service repositories are what the window
+    is for. **Dropping the old spellings is a separate ticket.**
+
 - **A registry entity's identifier is spelled `id`, not `name`**
   ([ADR-0085](docs/adr/0085-entity-id-and-label.md), NIM-729). **Breaking on every
   surface an operator touches.** Landing registry by registry; **done so far:
@@ -72,13 +149,13 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   matching MCP tool arguments, and the audit payload key on each registry's own
   events. The push-provider list filter moves with them: `?name_pattern=` →
   `?id_pattern=`.
-  **The CEL root does NOT move either.** `incarnation.name` stays spelled that
-  way: it is NIM-730's, together with the `name_template` family, because moving
-  it breaks every service repository and needs the compatibility window that
-  ticket owns. So `render.IncarnationMeta` and `servicevars.IncarnationContext`
-  keep FIELD names mirroring the CEL keys and are filled from the renamed
-  identifier — the two spellings converge when NIM-730 lands, and both structs
-  now say so in their godoc.
+  **The CEL root did NOT move here.** `incarnation.name` stayed spelled that way
+  for this entry: it is NIM-730's, together with the `name_template` family,
+  because moving it breaks every service repository and needs the compatibility
+  window that ticket owns. **NIM-730 has since landed** (the entry above), so
+  `render.IncarnationMeta` and `servicevars.IncarnationContext` now spell the
+  field `ID` and the CEL root is `incarnation.id` — the convergence their godoc
+  promised.
   **The `*_name` FK columns do NOT move.** `state_history.incarnation_name` and
   four siblings stay, and convert in NIM-732 beside `rbac_roles` and `synods` —
   the paragraph of ADR-0085 Scope they are listed in. A foreign key is stored

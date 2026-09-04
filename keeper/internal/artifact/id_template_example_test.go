@@ -42,7 +42,7 @@ func loadRedisCreateFromSouls(t *testing.T) *config.ScenarioManifest {
 // schema default, not from the request).
 func TestExampleRedis_NameTemplateComposesReadmeName(t *testing.T) {
 	scn := loadRedisCreateFromSouls(t)
-	if scn.NameTemplate == "" {
+	if scn.IDTemplate == "" {
 		t.Fatal("create_from_souls lost its name_template — the corpus no longer covers composition")
 	}
 
@@ -58,9 +58,9 @@ func TestExampleRedis_NameTemplateComposesReadmeName(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ResolveInputContract: %v", err)
 	}
-	got, err := config.RenderNameTemplate(scn.NameTemplate, merged)
+	got, err := config.RenderIDTemplate(scn.IDTemplate, merged)
 	if err != nil {
-		t.Fatalf("RenderNameTemplate: %v", err)
+		t.Fatalf("RenderIDTemplate: %v", err)
 	}
 	if want := "cache-billing-invoices-redis-cache"; got != want {
 		t.Fatalf("composed %q, want %q (README documents this exact name)", got, want)
@@ -95,13 +95,13 @@ func TestExampleRedis_NameTemplateFitsCeilingAtMaxLength(t *testing.T) {
 	}
 	longest["service_type"] = worst
 
-	got, err := config.RenderNameTemplate(scn.NameTemplate, longest)
+	got, err := config.RenderIDTemplate(scn.IDTemplate, longest)
 	if err != nil {
-		t.Fatalf("RenderNameTemplate: %v", err)
+		t.Fatalf("RenderIDTemplate: %v", err)
 	}
-	if len(got) > config.IncarnationNameMaxLen {
+	if len(got) > config.IncarnationIDMaxLen {
 		t.Fatalf("worst-case composed name is %d characters (ceiling %d): %q — shorten a max_length or the literal text",
-			len(got), config.IncarnationNameMaxLen, got)
+			len(got), config.IncarnationIDMaxLen, got)
 	}
 }
 
@@ -110,9 +110,9 @@ func TestExampleRedis_NameTemplateFitsCeilingAtMaxLength(t *testing.T) {
 // is rejected only at create, with the whole template quoted back at them.
 func TestExampleRedis_NameComponentsAreKebabGuarded(t *testing.T) {
 	scn := loadRedisCreateFromSouls(t)
-	refs, err := config.NameTemplateInputRefs(scn.NameTemplate)
+	refs, err := config.IDTemplateInputRefs(scn.IDTemplate)
 	if err != nil {
-		t.Fatalf("NameTemplateInputRefs: %v", err)
+		t.Fatalf("IDTemplateInputRefs: %v", err)
 	}
 	for _, ref := range refs {
 		s, ok := scn.Input[ref]

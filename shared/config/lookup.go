@@ -5,6 +5,7 @@ import (
 	"strings"
 
 	"github.com/goccy/go-yaml/ast"
+	"github.com/goccy/go-yaml/parser"
 )
 
 // lookupPath resolves a yaml path like `$.foo.bar[2].baz` to the (line, column)
@@ -15,6 +16,35 @@ import (
 // `$.foo.bar[2].baz`) and the value node's position for the final terminal
 // array step (`[2]`). `ok == false` — path not found / syntactically invalid.
 func lookupPath(root *ast.MappingNode, path string) (line, column int, ok bool) {
+	if root == nil {
+		return 0, 0, false
+	}
+	return lookupPathIn(root, path)
+}
+
+// PositionIn resolves `yamlPath` to the (line, column) of that key in `data`, a
+// standalone YAML document this package did not load — an `include:` body, a
+// `vars/_stack.yaml`. Same path subset and same answer as the position on a
+// [Diagnostic] raised in-package; `ok == false` for a path the document does not
+// set, a path outside that subset, or bytes that do not parse.
+//
+// It exists because a linter rule that walks a file OTHER than the one it was
+// given still has to cite a place in that file. Without it the choice is an
+// address in the wrong file or no address at all, and both are worse than the
+// two lines this costs.
+//
+// The root may be a sequence — an included task body is a bare list — so the
+// path there starts `$[0]…` rather than `$.tasks[0]…`.
+func PositionIn(data []byte, yamlPath string) (line, column int, ok bool) {
+	file, err := parser.ParseBytes(stripBOM(data), parser.ParseComments)
+	if err != nil || len(file.Docs) == 0 || file.Docs[0].Body == nil {
+		return 0, 0, false
+	}
+	return lookupPathIn(file.Docs[0].Body, yamlPath)
+}
+
+// lookupPathIn is [lookupPath] over any root node, mapping or sequence.
+func lookupPathIn(root ast.Node, path string) (line, column int, ok bool) {
 	if root == nil || path == "" {
 		return 0, 0, false
 	}
@@ -22,7 +52,7 @@ func lookupPath(root *ast.MappingNode, path string) (line, column int, ok bool) 
 	if err != nil || len(segs) == 0 {
 		return 0, 0, false
 	}
-	var current ast.Node = root
+	current := root
 	var keyTok *struct{ Line, Column int }
 	for _, seg := range segs {
 		if seg.isIndex {

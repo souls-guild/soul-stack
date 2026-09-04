@@ -312,7 +312,7 @@ func TestRender_VarsInParams(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"host": "10.0.0.1"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -347,7 +347,7 @@ func TestRender_VarsReusedAcrossParams(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"svc": "redis-server"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -384,7 +384,7 @@ func TestRender_VarsInWhere(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"host": "b.example.com"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
@@ -416,7 +416,7 @@ func TestRender_NoVars_NotBroken(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"x": "ok"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -451,7 +451,7 @@ func TestRender_VarsPerLoopIteration(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"names": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)

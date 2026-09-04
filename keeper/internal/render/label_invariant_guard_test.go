@@ -1,7 +1,7 @@
 package render
 
 // THE INVARIANT, guarded where the CEL root `incarnation.*` is built
-// ([ADR-0085], NIM-728): an incarnation's `label` is not in it. `incarnation.name`
+// ([ADR-0085], NIM-728): an incarnation's `label` is not in it. `incarnation.id`
 // is the identifier, and `incarnation.label` does not resolve at all.
 //
 // Why the guard is here and not only in a doc comment: `incarnation` is declared
@@ -21,8 +21,8 @@ package render
 // HOW TO BREAK IT ON PURPOSE (the two mutations this file catches):
 //  1. add `Label string` to IncarnationMeta and `m["label"] = in.Incarnation.Label`
 //     to incarnationVars — TestIncarnationLabel_NotACELRoot goes red.
-//  2. substitute the caption for the identifier: `"name": in.Incarnation.Label`
-//     — TestIncarnationLabel_CELNameIsTheIdentifier goes red.
+//  2. substitute the caption for the identifier: `"id": in.Incarnation.Label`
+//     — TestIncarnationLabel_CELIDIsTheIdentifier goes red.
 
 import (
 	"reflect"
@@ -40,7 +40,7 @@ const (
 func guardRenderInput() RenderInput {
 	return RenderInput{
 		Incarnation: IncarnationMeta{
-			Name:           guardIncarnationID,
+			ID:             guardIncarnationID,
 			Service:        "redis",
 			ServiceVersion: "v1.2.3",
 		},
@@ -73,8 +73,8 @@ func TestIncarnationLabel_NotACELRoot(t *testing.T) {
 			"ADR-0085: it must not. A caption is mutable; an expression that reads one makes a "+
 			"label edit change a run.", "label")
 	}
-	if got := vars["name"]; got != guardIncarnationID {
-		t.Errorf("incarnation.name = %v, want the IDENTIFIER %q", got, guardIncarnationID)
+	if got := vars["id"]; got != guardIncarnationID {
+		t.Errorf("incarnation.id = %v, want the IDENTIFIER %q", got, guardIncarnationID)
 	}
 	for k, v := range vars {
 		if s, ok := v.(string); ok && s == guardIncarnationLabel {
@@ -83,24 +83,24 @@ func TestIncarnationLabel_NotACELRoot(t *testing.T) {
 	}
 }
 
-// TestIncarnationLabel_CELNameIsTheIdentifier evaluates through the real engine,
-// not the map: what a scenario author writes is `${ incarnation.name }`, and this
+// TestIncarnationLabel_CELIDIsTheIdentifier evaluates through the real engine,
+// not the map: what a scenario author writes is `${ incarnation.id }`, and this
 // pins what that yields — and that `incarnation.label` is a no-such-key rather
 // than an empty string, so a stale expression fails loudly instead of silently
 // matching everything.
-func TestIncarnationLabel_CELNameIsTheIdentifier(t *testing.T) {
+func TestIncarnationLabel_CELIDIsTheIdentifier(t *testing.T) {
 	eng, err := cel.New()
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
 	vars := cel.Vars{Incarnation: incarnationVars(guardRenderInput(), 1)}
 
-	got, err := eng.EvalExpression("incarnation.name", vars)
+	got, err := eng.EvalExpression("incarnation.id", vars)
 	if err != nil {
-		t.Fatalf("eval incarnation.name: %v", err)
+		t.Fatalf("eval incarnation.id: %v", err)
 	}
 	if s, _ := got.Value().(string); s != guardIncarnationID {
-		t.Errorf("incarnation.name evaluated to %q, want the IDENTIFIER %q.\n"+
+		t.Errorf("incarnation.id evaluated to %q, want the IDENTIFIER %q.\n"+
 			"ADR-0085: the CEL root is the identifier. It is also segment 3 of every derived "+
 			"Vault path and the RBAC incarnation= scope value — one spelling, or the three "+
 			"disagree.", s, guardIncarnationID)
@@ -121,7 +121,7 @@ func TestIncarnationLabel_HostVarsCarryNoCaption(t *testing.T) {
 	if _, ok := vars.Incarnation["label"]; ok {
 		t.Error("hostVars carried an `incarnation.label` key into the per-host CEL context")
 	}
-	if got := vars.Incarnation["name"]; got != guardIncarnationID {
-		t.Errorf("hostVars incarnation.name = %v, want %q", got, guardIncarnationID)
+	if got := vars.Incarnation["id"]; got != guardIncarnationID {
+		t.Errorf("hostVars incarnation.id = %v, want %q", got, guardIncarnationID)
 	}
 }

@@ -15,7 +15,7 @@ import (
 func TestIncarnationVars_StateProjected(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@all"}}}
 	in := RenderInput{
-		Incarnation: IncarnationMeta{Name: "redis", Service: "redis-cluster"},
+		Incarnation: IncarnationMeta{ID: "redis", Service: "redis-cluster"},
 		State:       state,
 	}
 	got := incarnationVars(in, 3)
@@ -31,7 +31,7 @@ func TestIncarnationVars_StateProjected(t *testing.T) {
 // (backward-compat: push/trial without State see incarnation.state.x as
 // no-such-key, not a compile error — incarnation is DynType).
 func TestIncarnationVars_NilStateNoKey(t *testing.T) {
-	in := RenderInput{Incarnation: IncarnationMeta{Name: "x"}}
+	in := RenderInput{Incarnation: IncarnationMeta{ID: "x"}}
 	got := incarnationVars(in, 1)
 	if _, ok := got["state"]; ok {
 		t.Fatalf("nil-State must not set the state key, got: %v", got)
@@ -52,7 +52,7 @@ func TestRenderState_ReadOnly(t *testing.T) {
 		"count":       2,
 	}
 	in := RenderInput{
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		Input:       map[string]any{"new_acl": "+@all"},
 		State:       state,
 	}
@@ -95,7 +95,7 @@ func TestRenderState_PassageDoesNotAlterProjection(t *testing.T) {
 	}
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@read"}}}
 	in := RenderInput{
-		Incarnation:    IncarnationMeta{Name: "redis"},
+		Incarnation:    IncarnationMeta{ID: "redis"},
 		State:          state,
 		TaskPassage:    []int{0, 1},
 		RegisterByHost: map[string]map[string]any{},
@@ -134,7 +134,7 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 	if err != nil {
 		t.Fatalf("cel.New: %v", err)
 	}
-	in := RenderInput{Incarnation: IncarnationMeta{Name: "redis"}} // State == nil
+	in := RenderInput{Incarnation: IncarnationMeta{ID: "redis"}} // State == nil
 	host := &topology.HostFacts{SID: "redis-0.example.com", Coven: []string{"redis"}}
 	vars := hostVars(in, host, 1)
 
@@ -156,7 +156,7 @@ func TestRenderState_BackwardCompatNoState(t *testing.T) {
 func TestRenderState_CaptureSeesState(t *testing.T) {
 	state := map[string]any{"redis_users": map[string]any{"alice": map[string]any{"acl": "+@read"}}}
 	in := RenderInput{
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		State:       state,
 		Hosts:       []*topology.HostFacts{{SID: "redis-0.example.com"}},
 	}

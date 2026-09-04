@@ -87,7 +87,7 @@ func renderScenarioTasks(t *testing.T, tasks []config.Task, input map[string]any
 	return p.Render(context.Background(), RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: tasks},
 		Input:       input,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	})
 }

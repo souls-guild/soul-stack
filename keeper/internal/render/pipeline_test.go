@@ -47,7 +47,7 @@ func TestRender_NoopScenario(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "noop-prod", Service: "noop", ServiceVersion: "v1.0.0"},
+		Incarnation: IncarnationMeta{ID: "noop-prod", Service: "noop", ServiceVersion: "v1.0.0"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"noop-prod"}, nil),
 			host("b.example.com", []string{"noop-prod"}, nil),
@@ -100,7 +100,7 @@ func TestRender_InterpolatesInput(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"user": "alice"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -133,7 +133,7 @@ func TestRender_PropagatesTimeout(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -167,7 +167,7 @@ func TestRender_WhereFiltersHosts(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("deb.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("rhel.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -197,7 +197,7 @@ func TestRender_OnCovenFilter(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a", []string{"svc", "cache"}, nil),
 			host("b", []string{"svc", "db"}, nil),
@@ -230,7 +230,7 @@ func TestRender_OnCovenFilter_MultiLabelAND(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("only-prod", []string{"svc", "prod"}, nil),
 			host("only-eu", []string{"svc", "eu"}, nil),
@@ -265,7 +265,7 @@ func TestRender_OnCovenFilter_MultiLabelAND_NoMatch(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("db", []string{"svc", "db"}, nil),
 			host("cache", []string{"svc", "cache"}, nil),
@@ -297,7 +297,7 @@ func TestRender_OnIncarnationName(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a", []string{"db"}, nil),
 			host("b", []string{"cache"}, nil),
@@ -366,7 +366,7 @@ func TestRender_CELVaultResolvesRealValue(t *testing.T) {
 	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -406,7 +406,7 @@ func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -448,7 +448,7 @@ func TestRender_HostVariantParams_Error(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a", []string{"svc"}, map[string]any{"hostname": "a"}),
 			host("b", []string{"svc"}, map[string]any{"hostname": "b"}),
@@ -491,7 +491,7 @@ func TestRender_FlowControlSoulprintMultiHost_Error(t *testing.T) {
 			p := NewPipeline(nil, newEngine(t), nil, nil)
 			in := RenderInput{
 				Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-				Incarnation: IncarnationMeta{Name: "svc"},
+				Incarnation: IncarnationMeta{ID: "svc"},
 				Hosts:       multiHost,
 			}
 			_, _, err := p.Render(context.Background(), in)
@@ -522,7 +522,7 @@ func TestRender_FlowControlSoulprintSingleHost_OK(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}})},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -551,7 +551,7 @@ func TestRender_FlowControlHostInvariantMultiHost_OK(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
@@ -586,7 +586,7 @@ func TestRender_FlowContextVarsLaundering_Error(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("b.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -623,7 +623,7 @@ func TestRender_FlowContextHostInvariantVars_OK(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"x": true},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("b.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -667,7 +667,7 @@ func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"enabled": true},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Templates: fakeReader{files: map[string][]byte{
 			"templates/app.conf.tmpl": []byte("host {{ .self.hostname }}\n"),
 		}},
@@ -710,7 +710,7 @@ func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("b.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -746,7 +746,7 @@ func TestRender_FlowContextVarsLaunderingSingleHost_OK(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}})},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -777,7 +777,7 @@ func TestRender_FlowContextVarsLaunderingChangedWhen_Error(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("b.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -811,7 +811,7 @@ func TestRender_UnsupportedDSL(t *testing.T) {
 			p := NewPipeline(nil, newEngine(t), nil, nil)
 			in := RenderInput{
 				Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-				Incarnation: IncarnationMeta{Name: "svc"},
+				Incarnation: IncarnationMeta{ID: "svc"},
 				Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 			}
 			_, _, err := p.Render(context.Background(), in)
@@ -830,7 +830,7 @@ func TestRender_UnexpandedInclude(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -855,7 +855,7 @@ func TestRender_OnKeeper_KeeperTarget(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Input:       map[string]any{"sid": "node-1.example.com"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
@@ -895,7 +895,7 @@ func TestRender_OnKeeper_SoulprintUnavailable(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
@@ -930,7 +930,7 @@ func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -962,7 +962,7 @@ func TestRender_OnKeeper_StateReadable(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		State:       map[string]any{"provisioned_vm_id": "vm-42"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
@@ -994,7 +994,7 @@ func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"}, // State == nil
+		Incarnation: IncarnationMeta{ID: "svc"}, // State == nil
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
@@ -1014,7 +1014,7 @@ func TestRender_WhereExcludesAll(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -1041,7 +1041,7 @@ func TestRender_WhereNonBool_Error(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"x": "notbool"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -1061,7 +1061,7 @@ func TestRender_HostCountInCEL(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a", []string{"svc"}, nil),
 			host("b", []string{"svc"}, nil),
@@ -1090,7 +1090,7 @@ func TestRender_RunOnce_PicksFirstBySID(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		// Unsorted roster — resolution must pick the first by SID itself.
 		Hosts: []*topology.HostFacts{
 			host("c.example.com", []string{"svc"}, nil),
@@ -1123,7 +1123,7 @@ func TestRender_RunOnce_ZeroHosts(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil), host("b", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -1171,7 +1171,7 @@ func TestRender_Serial_WidthInPlan(t *testing.T) {
 				},
 			}
 			p := NewPipeline(nil, newEngine(t), nil, nil)
-			in := RenderInput{Scenario: manifest, Incarnation: IncarnationMeta{Name: "svc"}, Hosts: hosts}
+			in := RenderInput{Scenario: manifest, Incarnation: IncarnationMeta{ID: "svc"}, Hosts: hosts}
 			_, plans, err := p.Render(context.Background(), in)
 			if err != nil {
 				t.Fatalf("Render: %v", err)
@@ -1241,7 +1241,7 @@ func TestRender_Serial_PercentAfterWhere(t *testing.T) {
 		},
 	}
 	p := NewPipeline(nil, newEngine(t), nil, nil)
-	in := RenderInput{Scenario: manifest, Incarnation: IncarnationMeta{Name: "svc"}, Hosts: hosts}
+	in := RenderInput{Scenario: manifest, Incarnation: IncarnationMeta{ID: "svc"}, Hosts: hosts}
 	_, plans, err := p.Render(context.Background(), in)
 	if err != nil {
 		t.Fatalf("Render: %v", err)

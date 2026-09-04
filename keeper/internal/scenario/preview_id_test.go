@@ -23,7 +23,7 @@ import (
 // first: a schema default landing in the name, a bool and a number stringified by
 // cel-go rules, and a component the operator typed over the default.
 func TestPreviewName_AgreesWithCreate(t *testing.T) {
-	textual := nameTemplateSnapshot(t, "")
+	textual := idTemplateSnapshot(t, "")
 	scalars := scalarNameTemplateSnapshot(t)
 
 	cases := []struct {
@@ -46,10 +46,10 @@ func TestPreviewName_AgreesWithCreate(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			preview, err := PreviewName(context.Background(), tc.loader,
+			preview, err := PreviewID(context.Background(), tc.loader,
 				artifact.ServiceRef{Name: "redis"}, "create", tc.input)
 			if err != nil {
-				t.Fatalf("PreviewName: %v", err)
+				t.Fatalf("PreviewID: %v", err)
 			}
 			if !preview.Composes {
 				t.Fatalf("scenario declares name_template — preview must report Composes")
@@ -63,9 +63,9 @@ func TestPreviewName_AgreesWithCreate(t *testing.T) {
 			if err != nil {
 				t.Fatalf("ResolveCreatePlan: %v", err)
 			}
-			if preview.Name != plan.ComposedName {
+			if preview.ID != plan.ComposedID {
 				t.Fatalf("preview shows %q, create makes %q — the operator would approve one identity and get another",
-					preview.Name, plan.ComposedName)
+					preview.ID, plan.ComposedID)
 			}
 		})
 	}
@@ -100,15 +100,15 @@ tasks: []
 // rightly returns for the same input: a form that 422s on every keystroke has no
 // preview at all.
 func TestPreviewName_IncompleteInputIsPreviewedNotRejected(t *testing.T) {
-	loader := nameTemplateSnapshot(t, "")
+	loader := idTemplateSnapshot(t, "")
 
-	preview, err := PreviewName(context.Background(), loader,
+	preview, err := PreviewID(context.Background(), loader,
 		artifact.ServiceRef{Name: "redis"}, "create", map[string]any{"name": "cache"})
 	if err != nil {
 		t.Fatalf("an unfinished input is not an infrastructure failure: %v", err)
 	}
 	if preview.Valid {
-		t.Fatalf("preview must not claim a name while components are missing, got %q", preview.Name)
+		t.Fatalf("preview must not claim a name while components are missing, got %q", preview.ID)
 	}
 	if preview.Reason == "" {
 		t.Fatal("a blank preview with no reason is the exact failure this endpoint removes")
@@ -126,16 +126,16 @@ func TestPreviewName_IncompleteInputIsPreviewedNotRejected(t *testing.T) {
 func TestPreviewName_OverCeilingShowsTheOffendingName(t *testing.T) {
 	long := strings.Repeat("x", 30)
 
-	preview, err := PreviewName(context.Background(), nameTemplateSnapshot(t, ""),
+	preview, err := PreviewID(context.Background(), idTemplateSnapshot(t, ""),
 		artifact.ServiceRef{Name: "redis"}, "create", composeInput(long, long, long))
 	if err != nil {
-		t.Fatalf("PreviewName: %v", err)
+		t.Fatalf("PreviewID: %v", err)
 	}
 	if preview.Valid {
 		t.Fatal("a name over the ceiling must not preview as valid")
 	}
-	if len(preview.Name) <= 63 {
-		t.Fatalf("the over-long name must come back whole (not truncated, not blank), got %q", preview.Name)
+	if len(preview.ID) <= 63 {
+		t.Fatalf("the over-long name must come back whole (not truncated, not blank), got %q", preview.ID)
 	}
 	if !strings.Contains(preview.Reason, "63") {
 		t.Errorf("reason must state the ceiling; got %q", preview.Reason)
@@ -155,12 +155,12 @@ input:
 tasks: []
 `)
 
-	preview, err := PreviewName(context.Background(), &fakeCreateLoader{localDir: root},
+	preview, err := PreviewID(context.Background(), &fakeCreateLoader{localDir: root},
 		artifact.ServiceRef{Name: "redis"}, "create", map[string]any{})
 	if err != nil {
-		t.Fatalf("PreviewName: %v", err)
+		t.Fatalf("PreviewID: %v", err)
 	}
-	if preview.Composes || preview.Name != "" {
+	if preview.Composes || preview.ID != "" {
 		t.Fatalf("a scenario without name_template composes nothing, got %+v", preview)
 	}
 }

@@ -23,7 +23,7 @@
 #       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
 #   Also read from the including context: input.version/input.users (opt.),
 #   vars.system_acl_users[_sentinel]/sentinel_master_name/sysctl_settings,
-#   incarnation.name (Vault paths), soulprint.self/soulprint.hosts (master-election).
+#   incarnation.id (Vault paths), soulprint.self/soulprint.hosts (master-election).
 #   Skipping/renaming any compute.<name> in the includer is NOT caught statically
 #   (cross-file drift is invisible to soul-lint) — it will show up as a render failure. Source of truth
 #   for the set and semantics — create/main.yml::compute.

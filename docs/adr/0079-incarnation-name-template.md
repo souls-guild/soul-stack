@@ -1,6 +1,6 @@
-# ADR-079. Composed incarnation name — `name_template` in the create scenario
+# ADR-079. Composed incarnation id — `id_template` in the create scenario
 
-- **Status.** Active, amended 2026-07-30. Backend landed by NIM-177 (schema key,
+- **Status.** Active, amended 2026-07-30 and 2026-09-04. Backend landed by NIM-177 (schema key,
   soul-lint checks, server-side composition shared by REST and MCP). The
   **2026-07-30 amendment** (NIM-333) resolves the RBAC limitation this ADR had
   deliberately deferred: a scoped operator could not create a templated incarnation
@@ -94,7 +94,7 @@
   project and nothing was renamed" is otherwise an operator trap.
 
   **(h) soul-lint catches the class statically.** In the schema phase
-  ([`name_template.go`](../../shared/config/name_template.go)):
+  ([`id_template.go`](../../shared/config/id_template.go)):
   `name_template_input_unknown` (ERROR) for a `${input.X}` with X undeclared in
   `input:` — modelled on the existing `form_field_unknown`, since such a template
   fails for *every* operator; `name_template_invalid` (ERROR) for a block outside the
@@ -218,3 +218,50 @@
   the form knows which mode to open in. A flag, not the template text: the operator
   is shown the resulting name rather than the formula (NIM-340), and a client
   holding the expression is one step from evaluating it — the divergence above.
+
+
+## Amendment 2026-09-04 (NIM-730): the key is `id_template:`, and every name in this ADR is an id
+
+[ADR-0085](0085-entity-id-and-label.md) spells a registry entity's identifier `id`,
+and this whole family followed it. **Everything below the rename is unchanged** —
+the input-only sandbox, composition before the insert on the shared
+`ResolveCreatePlan` path, the refusal to truncate, write-once identity, the
+post-merge gate under `extends:`. What moved is spelling, and only spelling. Read
+this ADR with `name` → `id` throughout; the file keeps its slug because links
+point at it.
+
+| was | is |
+|---|---|
+| `name_template:` (scenario key) | **`id_template:`** |
+| `incarnation.name` (CEL root) | **`incarnation.id`** |
+| `composes_name` (scenario listing) | **`composes_id`** |
+| 422 `name_not_composable` | **`id_not_composable`** |
+| 422 `composed_name_invalid` | **`composed_id_invalid`** |
+| `POST /v1/incarnations/resolve-name` | **`POST /v1/incarnations/resolve-id`**, reply field `composed_name` → `composed_id` |
+| soul-lint `name_template_*` | **`id_template_*`** (same five rules, same levels) |
+| `config.RenderNameTemplate` / `scenario.ComposeName` | **`RenderIDTemplate`** / **`ComposeID`** |
+
+**A compatibility window covers the two spellings a service repository writes**,
+and only those two — the scenario key and the CEL root. Both are read; the old
+one is reported by `soul-lint` with a file, a line and the replacement
+(`id_template_legacy_spelling` for the key, `incarnation_name_legacy_root` for
+the root), and both are WARNINGs, because an error would close the window it
+exists to keep open. Declaring both spellings of the key in one file is an
+ERROR (`id_template_conflict`): two templates composing one id is an authoring
+mistake whichever value a loader picked. Dropping the old spellings is a separate
+ticket, after service repositories have moved.
+
+**The API rename has no window and needs none.** A caller of
+`/v1/incarnations/resolve-name` or a reader of `composes_name` is a client of this
+cluster's own API, versioned and shipped with it — not a file in a repository
+nobody here can see. That is the same line NIM-729 drew across the other ten
+registries.
+
+**Why the root's warning is load-bearing.** `incarnation` is `cel.DynType` in all
+three CEL environments, so dropping the old key at the end of the window is a
+`no such key` at EVALUATION, not a compile error — and one of the three
+environments is flow-control, evaluated on the host, where a stale
+`when: incarnation.name == …` fails mid-run after earlier tasks have applied.
+`soul-lint` is the only static catcher on either side of the wire
+([ADR-0085](0085-entity-id-and-label.md) §"The stale CEL root is a runtime failure,
+not a compile error").

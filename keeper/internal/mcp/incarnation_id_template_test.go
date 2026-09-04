@@ -76,8 +76,8 @@ func TestToolsCall_IncarnationCreate_ComposedNameTooLong(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatalf("expected an error for an over-long composed name, got %+v", resp.Result)
 	}
-	if !strings.Contains(resp.Error.Message, "composed_name_invalid") {
-		t.Errorf("message = %q, want the composed_name_invalid prefix", resp.Error.Message)
+	if !strings.Contains(resp.Error.Message, "composed_id_invalid") {
+		t.Errorf("message = %q, want the composed_id_invalid prefix", resp.Error.Message)
 	}
 	if !strings.Contains(resp.Error.Message, "63") {
 		t.Errorf("message = %q, must state the ceiling", resp.Error.Message)
@@ -102,8 +102,8 @@ func TestToolsCall_IncarnationCreate_ExplicitNameWithTemplate(t *testing.T) {
 	if resp.Error == nil {
 		t.Fatalf("expected an error when both name and name_template are present")
 	}
-	if !strings.Contains(resp.Error.Message, "name_not_composable") {
-		t.Errorf("message = %q, want the name_not_composable prefix", resp.Error.Message)
+	if !strings.Contains(resp.Error.Message, "id_not_composable") {
+		t.Errorf("message = %q, want the id_not_composable prefix", resp.Error.Message)
 	}
 	if len(pool.insertIncArgs) != 0 {
 		t.Errorf("insert happened despite a rejected request: %v", pool.insertIncArgs)

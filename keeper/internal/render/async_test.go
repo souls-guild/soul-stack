@@ -40,7 +40,7 @@ func asyncRenderInput(m *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 }
@@ -145,7 +145,7 @@ func TestRender_AsyncInDestiny(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("warm-caches", map[string]any{}),
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: d},
 	}

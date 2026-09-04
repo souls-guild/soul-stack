@@ -46,7 +46,7 @@ func TestRender_DeclaredSecretOutputSealsItsRegister(t *testing.T) {
 				},
 			},
 		},
-		Incarnation:    IncarnationMeta{Name: "redis-prod", Service: "wb-service-redis"},
+		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
 		Hosts:          []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 		KeeperRegister: map[string]any{"ca": map[string]any{"data": "CA-PEM", "path": "secret/shared-ca/prod"}},
 		RegisterByHost: map[string]map[string]any{

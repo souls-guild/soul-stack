@@ -666,7 +666,7 @@ by the redis service.
     addr: "127.0.0.1:6379"
     # The password is resolved by keeper-side via vault() in the render phase (ADR-012):
     # it's the value that goes into the plugin, not the link.
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    password: "${ vault('secret/redis/' + incarnation.id + '#password') }"
     config: "${ state.redis_config }"
 
 # Raw command (probe): changed=false by default.
@@ -675,7 +675,7 @@ by the redis service.
   register: pong
   params:
     addr: "127.0.0.1:6379"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    password: "${ vault('secret/redis/' + incarnation.id + '#password') }"
     args: ["PING"]
 ```
 
@@ -700,7 +700,7 @@ Migration from external Redis (three steps, health-gate by `caught_up`):
   params:
     addr: "127.0.0.1:6379"
     source_addr: "${ input.source_addr }"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    password: "${ vault('secret/redis/' + incarnation.id + '#password') }"
     source_password: "${ vault('secret/redis/legacy#password') }"
 
 # 3. Untie and promote to a separate master (migration final).
@@ -708,7 +708,7 @@ Migration from external Redis (three steps, health-gate by `caught_up`):
   module: redis.replica.detached
   params:
     addr: "127.0.0.1:6379"
-    password: "${ vault('secret/redis/' + incarnation.name + '#password') }"
+    password: "${ vault('secret/redis/' + incarnation.id + '#password') }"
 ```
 
 ## Tests

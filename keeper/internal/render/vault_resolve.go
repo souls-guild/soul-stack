@@ -172,7 +172,7 @@ func (p *Pipeline) resolveRegisterSecrets(ctx context.Context, in RenderInput) (
 	if len(in.KeeperRegister) == 0 {
 		return in.KeeperRegister, nil, nil
 	}
-	service, incarnation := in.Incarnation.Service, in.Incarnation.Name
+	service, incarnation := in.Incarnation.Service, in.Incarnation.ID
 	if service == "" || incarnation == "" {
 		// No owner to check a namespace against — resolve nothing rather than
 		// resolve everything (push/trial/unit callers).

@@ -41,7 +41,7 @@ const (
 
 func guardIncarnationContext() IncarnationContext {
 	return IncarnationContext{
-		Name:           guardStackID,
+		ID:             guardStackID,
 		Service:        "redis",
 		ServiceVersion: "v1.2.3",
 		Covens:         []string{"prod"},
@@ -68,8 +68,8 @@ func TestIncarnationLabel_NotInServiceVarsCELRoot(t *testing.T) {
 	if _, ok := m["label"]; ok {
 		t.Error("celMap produced a `label` key — `incarnation.label` would resolve in `_stack.yaml`")
 	}
-	if got := m["name"]; got != guardStackID {
-		t.Errorf("incarnation.name = %v, want the IDENTIFIER %q", got, guardStackID)
+	if got := m["id"]; got != guardStackID {
+		t.Errorf("incarnation.id = %v, want the IDENTIFIER %q", got, guardStackID)
 	}
 	for k, v := range m {
 		if s, ok := v.(string); ok && s == guardStackLabel {
@@ -78,23 +78,23 @@ func TestIncarnationLabel_NotInServiceVarsCELRoot(t *testing.T) {
 	}
 }
 
-// TestIncarnationLabel_ServiceVarsCELNameIsTheIdentifier evaluates through the
+// TestIncarnationLabel_ServiceVarsCELIDIsTheIdentifier evaluates through the
 // real service-vars engine — the same one `_stack.yaml` is evaluated by — so the
 // guard pins what an author's expression actually yields, and that
 // `incarnation.label` is a no-such-key rather than an empty string.
-func TestIncarnationLabel_ServiceVarsCELNameIsTheIdentifier(t *testing.T) {
+func TestIncarnationLabel_ServiceVarsCELIDIsTheIdentifier(t *testing.T) {
 	eng, err := cel.NewServiceVars()
 	if err != nil {
 		t.Fatalf("cel.NewServiceVars: %v", err)
 	}
 	vars := cel.Vars{Incarnation: guardIncarnationContext().celMap()}
 
-	got, err := eng.EvalExpression("incarnation.name", vars)
+	got, err := eng.EvalExpression("incarnation.id", vars)
 	if err != nil {
-		t.Fatalf("eval incarnation.name: %v", err)
+		t.Fatalf("eval incarnation.id: %v", err)
 	}
 	if s, _ := got.Value().(string); s != guardStackID {
-		t.Errorf("incarnation.name evaluated to %q, want the IDENTIFIER %q", s, guardStackID)
+		t.Errorf("incarnation.id evaluated to %q, want the IDENTIFIER %q", s, guardStackID)
 	}
 
 	if _, err := eng.EvalExpression("incarnation.label", vars); err == nil {

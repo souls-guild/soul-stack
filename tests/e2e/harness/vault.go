@@ -184,7 +184,7 @@ func InitVaultTestSecrets(t *testing.T, stack *Stack) {
 // SeedVaultKV writes an arbitrary KV v2 secret at logical path
 // `secret/<rel>` with the given fields. Used by services that pull a
 // secret keeper-side via CEL `vault('secret/<rel>#<field>')` in the render
-// phase (e.g. redis-create: `vault('secret/redis/'+incarnation.name+'#password')`,
+// phase (e.g. redis-create: `vault('secret/redis/'+incarnation.id+'#password')`,
 // ADR-010/ADR-012 — the password reaches the host as a value, the Soul
 // vault client does not pull it).
 //

@@ -40,7 +40,7 @@ func TestDestinyFileVars_InParams(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -66,7 +66,7 @@ func TestDestinyFileVars_FromInputAndSelf(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{"user": "bob"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{host("a.example.com", []string{"svc"}, map[string]any{
 			"os": map[string]any{"family": "debian"},
 		})},
@@ -91,7 +91,7 @@ func TestDestinyFileVars_RegisterIsolation(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -112,7 +112,7 @@ func TestDestinyFileVars_HostsIsolation(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -139,7 +139,7 @@ func TestDestinyFileVars_OverrideWithInLayerRef(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -162,7 +162,7 @@ func TestDestinyFileVars_ServiceVarsIsolation(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		// the scenario carries service vars — destiny must NOT see them, even in vars.yml.
 		ServiceVars: map[string]any{"maxmemory": "256mb"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
@@ -189,7 +189,7 @@ func TestDestinyFileVars_VarToVar(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -262,7 +262,7 @@ func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -321,7 +321,7 @@ func TestDestinyFileVars_TaskOverridesFile(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -347,7 +347,7 @@ func TestDestinyFileVars_TaskAndFileCoexist(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -383,7 +383,7 @@ func TestDestinyFileVars_ScenarioVarsDoNotLeak(t *testing.T) {
 	}
 	in := RenderInput{
 		Scenario:    scn,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -415,7 +415,7 @@ func TestDestinyFileVars_OnlyViaApplyInput(t *testing.T) {
 	in := RenderInput{
 		Scenario:    scn,
 		Input:       map[string]any{"who": "carol"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -463,7 +463,7 @@ func TestDestinyFileVars_InRenderedTemplateContext(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-rendered", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -526,7 +526,7 @@ func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-rendered-override", map[string]any{}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -555,7 +555,7 @@ func TestDestinyFileVars_PerHost(t *testing.T) {
 	destinyIn := RenderInput{
 		Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
 		Input:           map[string]any{},
-		Incarnation:     IncarnationMeta{Name: "svc"},
+		Incarnation:     IncarnationMeta{ID: "svc"},
 		destinyIsolated: true,
 	}
 	hosts := []*topology.HostFacts{
@@ -593,7 +593,7 @@ func TestDestinyFileVars_StagedInvariant(t *testing.T) {
 		return RenderInput{
 			Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
 			Input:           map[string]any{"user": "dave"},
-			Incarnation:     IncarnationMeta{Name: "svc"},
+			Incarnation:     IncarnationMeta{ID: "svc"},
 			ActivePassage:   passage,
 			destinyIsolated: true,
 		}

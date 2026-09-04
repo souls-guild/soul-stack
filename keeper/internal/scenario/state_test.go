@@ -544,7 +544,7 @@ func TestStateAddTasks_GrowByN(t *testing.T) {
 	in := render.RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"replicas": []any{"r1", "r2", "r3"}},
-		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Incarnation: render.IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -618,7 +618,7 @@ func TestStateModifyTasks_PerEntryLiteral(t *testing.T) {
 			"alice": map[string]any{"acl": "+@all"},
 			"bob":   map[string]any{"acl": "+@write"},
 		}},
-		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Incarnation: render.IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 	tasks, _, err := p.Render(context.Background(), in)

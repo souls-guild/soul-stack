@@ -45,7 +45,7 @@ func TestRegisterHosts_KeeperCaptureSeesEveryHost(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    captureScenario("${ register.hosts.node_id }"),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("node-a", []string{"svc"}, nil),
 			host("node-b", []string{"svc"}, nil),
@@ -88,7 +88,7 @@ func TestRegisterHosts_ExcludesKeeperBucket(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    captureScenario("${ register.hosts.node_id }"),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("node-a", []string{"svc"}, nil)},
 		RegisterByHost: map[string]map[string]any{
 			"node-a":        {"node_id": map[string]any{"stdout": "aaa"}},
@@ -134,7 +134,7 @@ func TestRegisterHosts_UnavailableOnHostTask(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:       manifest,
-		Incarnation:    IncarnationMeta{Name: "svc"},
+		Incarnation:    IncarnationMeta{ID: "svc"},
 		Hosts:          []*topology.HostFacts{host("node-a", []string{"svc"}, nil)},
 		RegisterByHost: map[string]map[string]any{"node-a": {"node_id": map[string]any{"stdout": "aaa"}}},
 		Ctx:            context.Background(),
@@ -164,7 +164,7 @@ func TestRegisterHosts_UnknownNameNamesTheRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    captureScenario("${ register.hosts.typo }"),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("node-a", []string{"svc"}, nil)},
 		Ctx:         context.Background(),
 	}
@@ -208,7 +208,7 @@ func TestRegisterHosts_UnavailableOnTemplatePath(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:       manifest,
-		Incarnation:    IncarnationMeta{Name: "svc"},
+		Incarnation:    IncarnationMeta{ID: "svc"},
 		Hosts:          []*topology.HostFacts{host("node-a", []string{"svc"}, nil)},
 		RegisterByHost: map[string]map[string]any{"node-a": {"node_id": map[string]any{"stdout": "aaa"}}},
 		Ctx:            context.Background(),

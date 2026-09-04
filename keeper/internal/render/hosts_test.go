@@ -24,7 +24,7 @@ func hostsRunInput(manifest *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("web-1.example.com", "primary", []string{"prod", "web"},
 				map[string]any{"primary_ip": "10.0.0.1"}, map[string]any{"family": "debian"}),
@@ -216,7 +216,7 @@ func TestRender_DestinyIsolation_SelfStillWorks(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("ok", map[string]any{}),
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("web-1.example.com", "primary", []string{"prod"},
 				map[string]any{"primary_ip": "10.0.0.1"}, map[string]any{"family": "debian"}),
@@ -258,7 +258,7 @@ func TestRender_DestinyIsolation_SelfArch(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("arch-aware", map[string]any{}),
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
 				map[string]any{"primary_ip": "10.0.0.1"},
@@ -318,7 +318,7 @@ func TestRender_ScenarioSelfArch(t *testing.T) {
 			"cmd": "install --arch ${ soulprint.self.os.arch }",
 		}),
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
 				map[string]any{"primary_ip": "10.0.0.1"},
@@ -360,7 +360,7 @@ func TestRender_ApplyDestiny_InputArchCompat(t *testing.T) {
 		// scenario computes arch from the target host's self and passes it into the destiny.
 		Scenario:    applyScenario("via-input", map[string]any{"arch": "${ soulprint.self.os.arch }"}),
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("arm-1.example.com", "primary", []string{"prod"},
 				map[string]any{"primary_ip": "10.0.0.1"},

@@ -23,7 +23,7 @@
 #       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
 #   Also read from the includer's context: input.version (opt., package pin)/
 #   input.users (opt.)/input.replicas_per_master (CLUSTER-BUILD replicas_per_shard),
-#   vars.system_acl_users/sysctl_settings, incarnation.name (Vault paths),
+#   vars.system_acl_users/sysctl_settings, incarnation.id (Vault paths),
 #   soulprint.hosts (nodes-MAP). Omitting/renaming any compute.<name> in the
 #   includer is NOT caught statically (cross-file drift is invisible to soul-lint) - it
 #   will surface as a render failure. Source of truth for the set and semantics is create/main.yml::compute.

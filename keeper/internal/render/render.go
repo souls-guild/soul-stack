@@ -110,7 +110,7 @@ var ErrAssertFailed = errors.New("render: assert failed")
 //
 // [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
 type IncarnationMeta struct {
-	Name           string
+	ID             string
 	Service        string
 	ServiceVersion string
 }

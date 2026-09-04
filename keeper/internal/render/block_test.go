@@ -25,7 +25,7 @@ func renderBlock(t *testing.T, task config.Task, hosts []*topology.HostFacts, in
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
 		Input:       in0,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       hosts,
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -167,7 +167,7 @@ func TestRenderBlock_RequisitesInheritance(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -201,7 +201,7 @@ func TestRenderBlock_RequisitesUnion(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probeA, probeB, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -239,7 +239,7 @@ func TestRenderBlock_RequireInheritance(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -276,7 +276,7 @@ func TestRenderBlock_RequireUnion(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probeA, probeB, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -312,7 +312,7 @@ func TestRenderBlock_RequireAllAbsorbsChildList(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -340,7 +340,7 @@ func TestRenderBlock_NoRequireOnBlockLeavesChildAlone(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{probe, grp}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -409,7 +409,7 @@ func TestRenderBlock_StaticSkipPerChild(t *testing.T) {
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, after}},
 		Input:       map[string]any{"action": "diagnose"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -463,7 +463,7 @@ func TestRenderBlock_StaticSkipPreservesRegister(t *testing.T) {
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, restart}},
 		Input:       map[string]any{"action": "diagnose"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -506,7 +506,7 @@ func TestRenderBlock_StaticSkipNested(t *testing.T) {
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, restart}},
 		Input:       map[string]any{"action": "diagnose"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -558,7 +558,7 @@ func TestRenderBlock_StaticFalseBlockDynamicChildOperand(t *testing.T) {
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{grp, consumer}},
 		Input:       map[string]any{"action": "diagnose", "unit": "redis-server"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -603,7 +603,7 @@ func TestRenderBlock_IndexIntegrity(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{before, grp, after}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -666,7 +666,7 @@ func TestRenderBlock_ApplyChild(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
@@ -699,7 +699,7 @@ func TestRenderBlock_LoopChildRejected(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -722,7 +722,7 @@ func TestRenderBlock_IncludeChildRejected(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -744,7 +744,7 @@ func TestRenderBlock_AsyncChildRejected(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -800,7 +800,7 @@ func TestRenderBlock_EmptyBlock(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: []config.Task{task, after}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)

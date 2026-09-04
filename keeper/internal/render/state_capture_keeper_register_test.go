@@ -34,7 +34,7 @@ func TestStateCapture_ReadsKeeperRegister(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:       manifest,
-		Incarnation:    IncarnationMeta{Name: "svc"},
+		Incarnation:    IncarnationMeta{ID: "svc"},
 		Hosts:          []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 		KeeperRegister: map[string]any{"provision": map[string]any{"vm_ids": []any{"vm-1", "vm-2"}}},
 		Ctx:            context.Background(),

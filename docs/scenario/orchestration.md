@@ -468,14 +468,14 @@ tasks: [ ... ]
 >
 > **Where a failing `assert:` surfaces.** Only the two input-only mechanisms answer on the request path in every case. A `assert:` that reads the roster is evaluated at RENDER, so its failure is `error_locked` (unlock, then fix and re-run), not a 422 — the create-path pre-flight gate runs BEFORE the incarnation row exists, and since membership FKs that row ([ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)) there is no roster there to measure ([ADR-009 amendment 2026-07-28 / NIM-235](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)). An `assert:` that reads only `input.`/`vars.`/`incarnation.` still answers 422 `assert-failed` pre-flight on create — but if the check fits input-only, `validate:` is the mechanism designed for it and reports on both the create and the run path.
 
-### 2.6. `name_template:` — composed incarnation name (create only)
+### 2.6. `id_template:` — composed incarnation id (create only)
 
-`name_template:` — **top-level** scenario key (next to `input:`), read **only on the create path** ([ADR-079](../adr/0079-incarnation-name-template.md)): a `${ … }` template that composes the incarnation's name from that scenario's own `input:` components, instead of the operator typing it as free text.
+`id_template:` — **top-level** scenario key (next to `input:`), read **only on the create path** ([ADR-079](../adr/0079-incarnation-name-template.md)): a `${ … }` template that composes the incarnation's name from that scenario's own `input:` components, instead of the operator typing it as free text.
 
 ```yaml
 name: create
 create: true
-name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+id_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
 input:
   name:         { type: string, required: true }
   project:      { type: string, required: true }
@@ -486,19 +486,21 @@ tasks: [ ... ]
 
 `{name: cache, project: billing, subproject: inv}` → incarnation `cache-billing-inv-redis-sentinel` (`service_type` comes from its schema default — the template renders over the **resolved** input, not over the raw request).
 
-**Why.** In a fleet of similar instances the name is never actually free text: it follows a house convention, retyped by hand every time and drifting every time. The name is `incarnation.name` — a `TEXT PRIMARY KEY`, globally unique and **immutable** (no rename; changing it is destroy + recreate), so a typo is not repairable in place.
+**Why.** In a fleet of similar instances the name is never actually free text: it follows a house convention, retyped by hand every time and drifting every time. The name is `incarnation.id` — a `TEXT PRIMARY KEY`, globally unique and **immutable** (no rename; changing it is destroy + recreate), so a typo is not repairable in place.
 
 **Composition is server-side, before the insert.** Rendered by the Keeper in `scenario.ResolveCreatePlan` — the shared path of `POST /v1/incarnations` and `keeper.incarnation.create` — after the input gate and **before** the pre-flight `assert:`, so the assert and the bootstrap run already see the final name. No new run phase, no DB migration. `compute:` (§2.4) is not a candidate: it resolves RUN-LEVEL, i.e. after the row exists.
 
 **Context is INPUT-ONLY.** Each block compiles against the same narrow cel-go sandbox as `required_when` and `validate:` (§2.5): a reference to `vars.*`/`soulprint.*`/`register.*`/`vault()`/`now()` is an undeclared-reference compile error. A name must be a pure function of the request. Unlike ordinary interpolation ([ADR-010 §5(a)](../adr/0010-templating.md)), a single block does **not** yield a native type here — a name is a string, so every block is stringified and concatenated with the literal text; a block evaluating to a list or map is an error.
 
-**`name` in the request becomes optional — and forbidden when a template exists.** Sending both is **422 `name_not_composable`**: not silently ignored (the RBAC `incarnation=<name>` dimension would then be checked against one name while another is inserted) and not an override (that would defeat the convention). With no template in play, nothing changes — `name` is required exactly as before.
+**`name` in the request becomes optional — and forbidden when a template exists.** Sending both is **422 `id_not_composable`**: not silently ignored (the RBAC `incarnation=<name>` dimension would then be checked against one name while another is inserted) and not an override (that would defeat the convention). With no template in play, nothing changes — `name` is required exactly as before.
 
-**Overflow refuses, it never truncates.** The composed string is checked against the incarnation name grammar `^[a-z0-9][a-z0-9-]{0,62}$` before the insert. Four components plus literal text pass 63 characters easily, so this is the failure operators actually hit: **422 `composed_name_invalid`** quoting the composed string and its length, so it is clear which component to shorten. A silently truncated name would be a *different* immutable identity.
+**Overflow refuses, it never truncates.** The composed string is checked against the incarnation name grammar `^[a-z0-9][a-z0-9-]{0,62}$` before the insert. Four components plus literal text pass 63 characters easily, so this is the failure operators actually hit: **422 `composed_id_invalid`** quoting the composed string and its length, so it is clear which component to shorten. A silently truncated name would be a *different* immutable identity.
 
 **Name components are write-once identity.** Composition runs only on create, and `incarnation.spec.input` is written once and never rewritten — a later run passing a different `project` changes what that run does, not what the incarnation is called. Nothing renames an incarnation.
 
-**soul-lint** catches the class offline: `name_template_input_unknown` (ERROR — `${input.X}` with X not declared in `input:`; it would fail for every operator), `name_template_invalid` (ERROR — a block outside the input sandbox, or the index form `input['x']`, which hides the component name from static analysis), `name_template_too_long` (ERROR — the literal skeleton alone exceeds 63 characters), `name_template_constant` (WARNING — no block at all, so every incarnation composes to the same name) and `name_template_ignored` (WARNING — the scenario is not a `create: true` starter, so the key is dead config). Under `extends:` (§6.1) the reference check runs **post-merge**, exactly like `form:` — before the covenant merge a component declared in the fragment would look undeclared.
+**The key was `name_template:` until [ADR-0085](../adr/0085-entity-id-and-label.md) / NIM-730**, and both spellings are read for a compatibility window: a service repository still on the old key loads, composes and runs exactly as before, and `soul-lint` warns (`id_template_legacy_spelling`) with the line and the replacement. Declaring **both** in one file is an error (`id_template_conflict`) — two templates composing one id is an authoring mistake whichever value a loader picked. Removing the old spelling is a separate ticket, after service repositories have moved.
+
+**soul-lint** catches the class offline: `id_template_input_unknown` (ERROR — `${input.X}` with X not declared in `input:`; it would fail for every operator), `id_template_invalid` (ERROR — a block outside the input sandbox, or the index form `input['x']`, which hides the component name from static analysis), `id_template_too_long` (ERROR — the literal skeleton alone exceeds 63 characters), `id_template_constant` (WARNING — no block at all, so every incarnation composes to the same name) and `id_template_ignored` (WARNING — the scenario is not a `create: true` starter, so the key is dead config). Under `extends:` (§6.1) the reference check runs **post-merge**, exactly like `form:` — before the covenant merge a component declared in the fragment would look undeclared.
 
 > **Known limitation (RBAC).** `POST /v1/incarnations` scopes its permission check from the request body before the handler runs, so a request with no `name` yields an empty context set — which admits only bare/`*` roles (MCP behaves the same way). A **scoped** operator therefore cannot create a templated incarnation yet. Fail-closed, so it can only refuse, never over-grant; scoping a create whose name is unknown until the service snapshot resolves needs its own decision.
 
@@ -508,7 +510,7 @@ tasks: [ ... ]
 
 | Form | Semantics |
 |---|---|
-| **omitted** | entire incarnation: all **member** hosts, resolved via the membership relation `incarnation_membership` (NOT via a coven). `incarnation.name` is not a Coven — `on: ["${ incarnation.name }"]` is a **validation error** (steering to the omitted form), see [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) |
+| **omitted** | entire incarnation: all **member** hosts, resolved via the membership relation `incarnation_membership` (NOT via a coven). `incarnation.id` is not a Coven — `on: ["${ incarnation.id }"]` is a **validation error** (steering to the omitted form), see [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation) |
 | `on: [coven-a, coven-b]` | intersection (AND) of the listed **stable** covens; result **always ⊆ members** (the roster is already membership-scoped) |
 
 ### The side is the module's, not the task's
@@ -557,7 +559,7 @@ whole section exists to prevent.
 
 **Resolver contract `on:` (invariant):**
 
-1. **Membership, not a name-coven.** The omitted `on:` = all **member** hosts of the incarnation, resolved via the membership relation `incarnation_membership` (NOT via `= ANY(coven)`). `incarnation.name` is **not** a Coven and is not a valid `on:` value: `on: ["${ incarnation.name }"]` is a **validation error** with a message steering to the omitted form (fail-closed — a stale scenario errors out instead of resolving to an empty set). See [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation).
+1. **Membership, not a name-coven.** The omitted `on:` = all **member** hosts of the incarnation, resolved via the membership relation `incarnation_membership` (NOT via `= ANY(coven)`). `incarnation.id` is **not** a Coven and is not a valid `on:` value: `on: ["${ incarnation.id }"]` is a **validation error** with a message steering to the omitted form (fail-closed — a stale scenario errors out instead of resolving to an empty set). See [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation).
 2. List in `on:` - **AND/intersection** of **stable** covens. Additional stable covens (e.g. `baremetal`, `dc-eu`, `prod`) narrow the set, but **cannot expand it beyond the incarnation members**.
 3. **Cross-incarnation targeting is prohibited by construction.** The `on:` resolver cannot return a host that is not a member of the current incarnation, given any set of covens — the roster is membership-scoped, so a stable coven can only intersect it, never reach outside it. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), now enforced by the membership join rather than by the name-coven.
 4. Role (master / replica) **never Coven** and does not participate in `on:`. The volatile role is expressed only through `where:` (see §4).
@@ -659,7 +661,7 @@ Example of shared but separate use:
     command: "redis-cli replicaof ${ soulprint.hosts[0].network.primary_ip } 6379"   # FUNCTION: host data (all members = soulprint.hosts)
 ```
 
-> `soulprint.where(<predicate>)` accepts a CEL predicate **static string literal** ([templating.md §2.3](../templating.md)); keyword style (`coven=...`) is not used. Inside the predicate, the element fields (`covens`/`os.*`/`sid`) and the external context (`incarnation.*`, etc.) are available. **All members of the run** are simply `soulprint.hosts` (the accessor is already incarnation-scoped) — there is **no** "by incarnation coven" predicate: `incarnation.name` is not a Coven and never appears in `covens`, so `soulprint.where("incarnation.name in covens")` is removed ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). A stable-coven filter "by literal coven X" is `soulprint.where("'<X>' in covens")` — **without** dynamic string concatenation (`"'" + some_var + "' in covens"` - prohibited, the predicate is expanded in the compile phase, see [templating.md §2.3](../templating.md)). Deep nesting of quotes is a well-known footgun, see [templating.md §8](../templating.md): the recommendation is to place such expressions in the `vars:` step.
+> `soulprint.where(<predicate>)` accepts a CEL predicate **static string literal** ([templating.md §2.3](../templating.md)); keyword style (`coven=...`) is not used. Inside the predicate, the element fields (`covens`/`os.*`/`sid`) and the external context (`incarnation.*`, etc.) are available. **All members of the run** are simply `soulprint.hosts` (the accessor is already incarnation-scoped) — there is **no** "by incarnation coven" predicate: `incarnation.id` is not a Coven and never appears in `covens`, so `soulprint.where("incarnation.id in covens")` is removed ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). A stable-coven filter "by literal coven X" is `soulprint.where("'<X>' in covens")` — **without** dynamic string concatenation (`"'" + some_var + "' in covens"` - prohibited, the predicate is expanded in the compile phase, see [templating.md §2.3](../templating.md)). Deep nesting of quotes is a well-known footgun, see [templating.md §8](../templating.md): the recommendation is to place such expressions in the `vars:` step.
 
 > `where:`-key - position "on which hosts". `soulprint.where(<predicate>)` - position "where to get the value from". They are independent; confusing them is a reading error, not an alternative. (Since Soulprint after [ADR-008](../adr/0008-coven-stable-tags.md) stores only stable facts, `soulprint.where(...)` operates with a stable layer; the volatile role is exclusively through probe + `where:`-key.)
 
@@ -670,7 +672,7 @@ Example of shared but separate use:
 
 ### Migration: `filter:` withdrawn
 
-In previous examples, the key `filter:` was used to select hosts. **`filter:` was completely removed** and replaced with `where:`. Any occurrence of `filter:` in scenario is a validation error; when rewriting examples `filter: <predicate>` → `where: <predicate>`. Previous convention of sub-covens `{incarnation.name}-{role}` (for example, `coven: {{ incarnation.name }}-master`) - removed ([ADR-008](../adr/0008-coven-stable-tags.md)); instead probe + `where:`.
+In previous examples, the key `filter:` was used to select hosts. **`filter:` was completely removed** and replaced with `where:`. Any occurrence of `filter:` in scenario is a validation error; when rewriting examples `filter: <predicate>` → `where: <predicate>`. Previous convention of sub-covens `{incarnation.id}-{role}` (for example, `coven: {{ incarnation.id }}-master`) - removed ([ADR-008](../adr/0008-coven-stable-tags.md)); instead probe + `where:`.
 
 ## 4.1. `soulprint.hosts` - list of run hosts (scenario-only accessor)
 
@@ -739,7 +741,7 @@ is resolved by passing `soulprint.hosts` to destiny via `apply: input:` —
 destiny gets the topology (list of roles + master address via
 `soulprint.hosts.where("role == 'primary'")[0].network.primary_ip`) and configure
 each host according to its declared role. This closes the former open Q "cross-host
-master discovery instead of sub-coven `{incarnation.name}-master`" (see §8).
+master discovery instead of sub-coven `{incarnation.id}-master`" (see §8).
 
 ### Stability roster run ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md))
 

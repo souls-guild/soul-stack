@@ -1,14 +1,14 @@
 package scenario
 
-// Live preview of the incarnation name a create scenario COMPOSES from its
-// `name_template` (ADR-0079). The create form calls it as the operator types the
-// `input:` components, so the name is on screen before the request that would make
-// it permanent — the name is the immutable primary key, and a wrong one costs a
+// Live preview of the incarnation id a create scenario COMPOSES from its
+// `id_template` (ADR-0079). The create form calls it as the operator types the
+// `input:` components, so the id is on screen before the request that would make
+// it permanent — the id is the immutable primary key, and a wrong one costs a
 // destroy and a re-create.
 //
-// The composition itself is NOT reimplemented here: [PreviewName] renders through
-// [ComposeName], the same function the create path reaches via
-// composeIncarnationName. Blocks in a template are CEL, and a second evaluator —
+// The composition itself is NOT reimplemented here: [PreviewID] renders through
+// [ComposeID], the same function the create path reaches via
+// composeIncarnationID. Blocks in a template are CEL, and a second evaluator —
 // client-side above all — would coerce numbers and bools by its own rules and
 // compose a DIFFERENT string from the same input. The operator would then be shown
 // one identity and handed another, silently. One evaluator per system is the whole
@@ -32,60 +32,60 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// NamePreview is what [PreviewName] resolved for one (scenario, input) pair.
+// IDPreview is what [PreviewID] resolved for one (scenario, input) pair.
 //
-//   - Composes=false: the scenario declares no `name_template` — the operator
-//     types the name themselves and there is nothing to preview. Every other
-//     field is zero.
-//   - Valid=true: Name is the name a create with this input would produce.
-//   - Valid=false: the name could not be composed, or was composed into something
-//     the grammar rejects. Reason says which, in the operator's terms. Name still
+//   - Composes=false: the scenario declares no `id_template` — the operator
+//     names the incarnation themselves and there is nothing to preview. Every
+//     other field is zero.
+//   - Valid=true: ID is the identifier a create with this input would produce.
+//   - Valid=false: the id could not be composed, or was composed into something
+//     the grammar rejects. Reason says which, in the operator's terms. ID still
 //     carries the offending string when there IS one (over-long, bad character),
 //     so the form can show it and its length instead of a blank box; it is empty
 //     only when the render itself failed and there is no string to show.
 //
 // The template TEXT is deliberately NOT a field: the operator is shown the
-// resulting name, not the formula (NIM-340), and a client holding the expression
+// resulting id, not the formula (NIM-340), and a client holding the expression
 // would be one step from evaluating it — the divergence this whole path exists to
 // avoid.
 //
 // A failed preview is a NORMAL state, not an error: the operator has not finished
 // typing. Callers surface it, they do not reject on it.
-type NamePreview struct {
+type IDPreview struct {
 	Composes bool
-	Name     string
+	ID       string
 	Valid    bool
 	Reason   string
 }
 
-// PreviewName composes the name scenario scenarioName of service ref would give an
+// PreviewID composes the id scenario scenarioName of service ref would give an
 // incarnation created with input `provided`, without creating anything.
 //
 // The returned error is INFRASTRUCTURE only — snapshot load, unreadable or
 // unparseable manifest (caller → 500). A template that does not render, a
-// component the operator has not filled in, a name over the ceiling: all of those
-// come back as a NamePreview with Valid=false and a Reason, because they are what
+// component the operator has not filled in, an id over the ceiling: all of those
+// come back as an IDPreview with Valid=false and a Reason, because they are what
 // a preview normally sees.
 //
 // The caller is responsible for having established that scenarioName is an
 // eligible create scenario of ref ([ValidateCreateScenarioChoice]) — this function
-// answers about the name, not about the choice.
-func PreviewName(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) (NamePreview, error) {
-	scn, err := loadScenarioManifest(ctx, loader, ref, scenarioName, "preview name")
+// answers about the id, not about the choice.
+func PreviewID(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) (IDPreview, error) {
+	scn, err := loadScenarioManifest(ctx, loader, ref, scenarioName, "preview id")
 	if err != nil {
-		return NamePreview{}, err
+		return IDPreview{}, err
 	}
-	if scn.NameTemplate == "" {
-		// No template — a free-text name. Not an error and not an empty preview:
-		// the form needs this answer to keep showing its name field.
-		return NamePreview{}, nil
+	if scn.IDTemplate == "" {
+		// No template — a free-text id. Not an error and not an empty preview:
+		// the form needs this answer to keep showing its id field.
+		return IDPreview{}, nil
 	}
 
-	out := NamePreview{Composes: true}
+	out := IDPreview{Composes: true}
 	merged := config.MergeInputDefaults(scn.Input, provided)
 
-	name, cerr := ComposeName(scn.NameTemplate, merged)
-	out.Name = name
+	composed, cerr := ComposeID(scn.IDTemplate, merged)
+	out.ID = composed
 	if cerr == nil {
 		out.Valid = true
 		return out, nil
@@ -98,7 +98,7 @@ func PreviewName(ctx context.Context, loader InputScenarioLoader, ref artifact.S
 //
 // The sentinel prefixes are stripped: they exist so callers can branch with
 // errors.Is, and this string is read by an operator in a form, where
-// "scenario: name composed from name_template is not a valid incarnation name:"
+// "scenario: id composed from id_template is not a valid incarnation id:"
 // in front of the actual sentence is noise they have to read past.
 //
 // A render failure is the common one, and its cel-go tail ("no such key: project")
@@ -110,10 +110,10 @@ func PreviewName(ctx context.Context, loader InputScenarioLoader, ref artifact.S
 // exact failure this endpoint exists to remove.
 func previewReason(err error) string {
 	switch {
-	case errors.Is(err, config.ErrNameTemplateRender):
-		return fmt.Sprintf("the name cannot be composed yet — %s", trimSentinel(err, config.ErrNameTemplateRender))
-	case errors.Is(err, ErrComposedNameInvalid):
-		return trimSentinel(err, ErrComposedNameInvalid)
+	case errors.Is(err, config.ErrIDTemplateRender):
+		return fmt.Sprintf("the id cannot be composed yet — %s", trimSentinel(err, config.ErrIDTemplateRender))
+	case errors.Is(err, ErrComposedIDInvalid):
+		return trimSentinel(err, ErrComposedIDInvalid)
 	default:
 		return err.Error()
 	}

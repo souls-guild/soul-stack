@@ -216,11 +216,16 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// names. The one cost of merging the two namespaces (ADR-0082): the
 		// shadow is deterministic and sometimes deliberate, so it warns.
 		diags = append(diags, serviceVarShadowDiags(opts.Path, scn)...)
-		// `on: ["${ incarnation.name }"]` is fail-closed (ADR-008 amendment/NIM-124:
-		// incarnation.name is not a Coven). Offline parity with the keeper render
-		// resolver (resolveCovenList) — the literal is visible without CEL eval.
+		// `on: ["${ incarnation.id }"]` is fail-closed (ADR-008 amendment/NIM-124:
+		// the incarnation's own id is not a Coven). Offline parity with the keeper
+		// render resolver (resolveCovenList) — the literal is visible without CEL eval.
 		if scn != nil {
-			diags = append(diags, onIncarnationNameDiagnostics(opts.Path, scn.Tasks)...)
+			diags = append(diags, onIncarnationIDDiagnostics(opts.Path, scn.Tasks)...)
+			// The retired CEL root `incarnation.name` ([ADR-0085], NIM-730): a
+			// WARNING with a line and a replacement, and the only static catcher
+			// there is — the drop at the end of the compatibility window is a
+			// no-such-key at evaluation, on the host, not a compile error.
+			diags = append(diags, legacyRootDiagnostics(opts.Path, scn, scnDoc)...)
 			// `compute.*` that will not resolve (NIM-619): the loop axis and
 			// `on: [covens]` have no such namespace (offline parity with
 			// shared/cel.guardComputeScope, which refuses the same expressions at

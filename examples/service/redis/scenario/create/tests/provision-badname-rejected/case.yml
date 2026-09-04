@@ -9,7 +9,7 @@
 # message in redis-provision.yml. incarnation_name override (NIM-58 harness): scn.Name="create"
 # is valid as a VM base, so the "bad" name is set explicitly here.
 # ★ vault/covens are under "9redis" (not "create"): WITHOUT the guard-assert (RED phase) the render
-# pushes the whole plan through - deploy reads secret/redis/9redis/*, coven=incarnation.name.
+# pushes the whole plan through - deploy reads secret/redis/9redis/*, coven=incarnation.id.
 name: provision with a bad VM-base incarnation name is rejected before persist
 
 fixtures:

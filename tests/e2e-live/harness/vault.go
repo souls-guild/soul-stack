@@ -215,7 +215,7 @@ func SeedSigilSigningKey(t *testing.T, stack *Stack) {
 // SeedVaultKV puts an arbitrary KV v2 secret at logical path `secret/<rel>`
 // with the given fields. Used by services that pull a secret keeper-side via
 // CEL `vault('secret/<rel>#<field>')` in the render phase (redis-create:
-// `vault('secret/redis/'+incarnation.name+'#password')`, ADR-010/ADR-012 - the
+// `vault('secret/redis/'+incarnation.id+'#password')`, ADR-010/ADR-012 - the
 // password arrives on the host as a value, the Soul vault client doesn't pull it).
 //
 // rel - path WITHOUT the mount prefix and WITHOUT `data/` (the KV v2 infixes

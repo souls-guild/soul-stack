@@ -105,14 +105,17 @@ const (
 	// invariant instead of refusing it.
 	FeatureTaskRequire = "task.require"
 
-	// FeatureScenarioNameTemplate — the create-scenario key `name_template`
-	// (ADR-0079, NIM-177): the incarnation name is composed server-side from
-	// `input:` instead of being taken as free text. The first SCENARIO-level
-	// grammar to carry a floor — until it, a scenario's own manifest contributed
-	// none, only its task list did. A keeper that predates it does not compose
-	// anything: it expects `name` in the request, so a definition relying on the
-	// template cannot be created there at all.
-	FeatureScenarioNameTemplate = "scenario.name_template"
+	// FeatureScenarioIDTemplate — the create-scenario key `id_template`
+	// (ADR-0079, NIM-177; `name_template` before [ADR-0085]): the incarnation id is
+	// composed server-side from `input:` instead of being taken as free text. The
+	// first SCENARIO-level grammar to carry a floor — until it, a scenario's own
+	// manifest contributed none, only its task list did. A keeper that predates it
+	// does not compose anything: it expects the identifier in the request, so a
+	// definition relying on the template cannot be created there at all.
+	//
+	// ONE feature id for both spellings: the two are one grammar, and a keeper old
+	// enough to refuse one refuses the other for the same reason.
+	FeatureScenarioIDTemplate = "scenario.id_template"
 
 	// FeatureTaskBlockInclude — an `include:` nested inside `block:` (NIM-169).
 	// Top-level `include:` is baseline grammar; what arrived this cycle is
@@ -140,7 +143,7 @@ var keeperDSLFeatures = map[string]dslFeature{
 	FeatureDestinyInputConstraints:  {id: FeatureDestinyInputConstraints, introducedIn: Unreleased},
 	FeatureTaskAsync:                {id: FeatureTaskAsync, introducedIn: Unreleased},
 	FeatureTaskRequire:              {id: FeatureTaskRequire, introducedIn: Unreleased},
-	FeatureScenarioNameTemplate:     {id: FeatureScenarioNameTemplate, introducedIn: Unreleased},
+	FeatureScenarioIDTemplate:       {id: FeatureScenarioIDTemplate, introducedIn: Unreleased},
 	FeatureTaskBlockInclude:         {id: FeatureTaskBlockInclude, introducedIn: Unreleased},
 }
 
@@ -177,15 +180,25 @@ func KeeperFeaturesOfService(m *ServiceManifest) []KeeperFeature {
 // Added because the scenario manifest contributed NO floor anywhere (NIM-354):
 // both callers — soul-lint's scenario path and keeper's render path — walked
 // only `scn.Tasks`, so a scenario-level key was invisible to the cross-check.
-// `name_template` is the first such key; the collector exists so the next one
-// has somewhere to go.
+// `id_template` is the first such key; the collector exists so the next one
+// has somewhere to go. The reported path is the spelling the file wrote, so a
+// scenario inside the [ADR-0085] compatibility window is cited at a key it has.
 func KeeperFeaturesOfScenario(m *ScenarioManifest) []KeeperFeature {
 	if m == nil {
 		return nil
 	}
 	var out []KeeperFeature
-	if m.NameTemplate != "" {
-		if f, ok := dslFeatureUse(FeatureScenarioNameTemplate, "$.name_template"); ok {
+	if m.IDTemplate != "" {
+		// The address is the key the file wrote. Equality is what says the fold
+		// ran: normalizeIDTemplate copies the legacy value across only when the
+		// canonical key is absent, so two DIFFERENT values mean the file declared
+		// both — already an `id_template_conflict` error, and the canonical key is
+		// the one to cite there, exactly as writtenIDTemplateKey decides it.
+		where := "$." + idTemplateKey
+		if m.LegacyNameTemplate != "" && m.LegacyNameTemplate == m.IDTemplate {
+			where = "$." + nameTemplateKey
+		}
+		if f, ok := dslFeatureUse(FeatureScenarioIDTemplate, where); ok {
 			out = append(out, f)
 		}
 	}

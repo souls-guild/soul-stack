@@ -801,7 +801,7 @@ func (h *Handler) checkIncarnationScope(claims *jwt.Claims, action, name, servic
 }
 
 // checkIncarnationCreateScope is [Handler.checkIncarnationScope] for the create
-// tool, where the incarnation has no name yet under `name_template` (NIM-333).
+// tool, where the incarnation has no name yet under `id_template` (NIM-333).
 // Separate entry point rather than a flag, because for every OTHER tool an absent
 // name means a broken argument and must keep denying scoped roles — the two cases
 // look identical and mean opposite things. Contexts come from the same

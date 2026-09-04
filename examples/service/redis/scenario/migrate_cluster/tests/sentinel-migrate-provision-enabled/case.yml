@@ -26,7 +26,7 @@ name: sentinel migrate provisions VMs first then deploys and seeds from external
 
 fixtures:
   default_destiny_source: "file://../../destiny/{name}"
-  # NIM-58: incarnation.name in L0 defaults to the scenario name ("migrate_cluster"),
+  # NIM-58: incarnation.id in L0 defaults to the scenario name ("migrate_cluster"),
   # but an underscore is an INvalid VM base name; the provision-guard requires a realistic name.
   incarnation_name: "redis-prod"
   # Order deliberately unsorted (2, 1) — the harness and master-election sort by SID.
@@ -145,7 +145,7 @@ assert:
         provider: example-dev
         profile: redis-small
         count: 2
-        # name — the batch run-identity = incarnation.name (here "redis-prod"): the driver
+        # name — the batch run-identity = incarnation.id (here "redis-prod"): the driver
         # names the VMs <name>-<seq> + label soulstack-run=<name> (idempotency, NIM-16).
         name: redis-prod
         generate_userdata: false

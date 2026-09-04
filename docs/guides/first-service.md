@@ -133,7 +133,7 @@ Analysis by blocks.
 
 Two things follow from a capture being a step. It runs **where you put it** — after the file task, so the path is recorded only once the file has been written on every host (the cross-host barrier still holds every host to the same point before the next step begins). And it lands **at that step**, not at an end-of-run commit: a run that dies later keeps what this step already recorded. The verbs, the ordering rules and the soul-lint diagnostics — [docs/scenario/orchestration.md → §7.1](../scenario/orchestration.md#71-the-capture-verbs).
 
-> Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all **member** hosts (via the membership relation; `incarnation.name` is not a Coven). That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
+> Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all **member** hosts (via the membership relation; `incarnation.id` is not a Coven). That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
 
 ### Script test (optional, but useful)
 

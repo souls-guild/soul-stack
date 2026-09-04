@@ -64,7 +64,7 @@ fixtures:
   vars:
     tls_ca_ref: "secret/services/redis/tls#ca"
 
-  # Password (incarnation.name == restart; ★ default_admin REDESIGN — connect under the system
+  # Password (incarnation.id == restart; ★ default_admin REDESIGN — connect under the system
   # default_admin, users/default_admin branch; the old secret/redis/<inc>#password is DROPPED)
   # + TWO DIFFERENT CA-PEMs:
   #   secret/services/redis/tls-v2#ca → NEW-CA (current, per state.tls.ca_ref);

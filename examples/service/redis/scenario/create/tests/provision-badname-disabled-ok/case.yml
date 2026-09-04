@@ -9,7 +9,7 @@
 #
 # * Paired with provision-badname-rejected (there enabled means the guard
 # blocks the render). vault/covens under "9redis": deploy reads
-# secret/redis/9redis/*, coven=incarnation.name.
+# secret/redis/9redis/*, coven=incarnation.id.
 name: bad VM-base incarnation name is accepted when provision is disabled
 
 fixtures:

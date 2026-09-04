@@ -97,7 +97,7 @@ func TestNestedConditionalInclude_DropMatrix(t *testing.T) {
 			in := RenderInput{
 				Scenario:    &config.ScenarioManifest{Name: "nested-cond", Tasks: expanded},
 				Input:       map[string]any{"outer": tc.outer, "inner": tc.inner},
-				Incarnation: IncarnationMeta{Name: "svc"},
+				Incarnation: IncarnationMeta{ID: "svc"},
 				Hosts:       singleHost(),
 			}
 			tasks, plans, err := p.Render(context.Background(), in)

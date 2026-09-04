@@ -47,7 +47,7 @@ import (
 //	POST   /v1/synods/{name}/roles                   — grant role (ADR-049).
 //	DELETE /v1/synods/{name}/roles/{role_name}       — revoke role (ADR-049).
 //	POST   /v1/incarnations                          — create incarnation, stub (M0.6c-1).
-//	POST   /v1/incarnations/resolve-name             — name a create would compose + availability (NIM-331).
+//	POST   /v1/incarnations/resolve-id             — name a create would compose + availability (NIM-331).
 //	GET    /v1/incarnations                          — list incarnations (M0.6c-1).
 //	GET    /v1/incarnations/{id}                   — get incarnation (M0.6c-1).
 //	GET    /v1/incarnations/{id}/history           — state_history (M0.6c-1).
@@ -545,7 +545,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationCreate(newHumaIncarnationAPI(r, auditWriter, audit.EventIncarnationCreated, logger), incH)
 			})
 
-			// POST /v1/incarnations/resolve-name — what name would a create with this
+			// POST /v1/incarnations/resolve-id — what name would a create with this
 			// input compose, and is it free (NIM-331). A RESOLVE: nothing is created or
 			// stored, audit is NOT wired (newHumaCadenceAPI). Its own group because the
 			// permission is incarnation.create — the reply says whether a name is free,
@@ -557,7 +557,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			r.With(
 				apimiddleware.RequirePermissionMulti(enforcer, "incarnation", "create", handlers.IncarnationCreateScopeSelector),
 			).Group(func(r chi.Router) {
-				registerHumaIncarnationResolveName(newHumaCadenceAPI(r), incH)
+				registerHumaIncarnationResolveID(newHumaCadenceAPI(r), incH)
 			})
 
 			r.With(

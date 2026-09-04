@@ -46,8 +46,8 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 	const incName = "redis"
 
 	// Vault seed: requirepass is read keeper-side via
-	// vault('secret/redis/'+incarnation.name+'#password'); per-user password
-	// via vault('secret/redis/'+incarnation.name+'/users/<name>#password').
+	// vault('secret/redis/'+incarnation.id+'#password'); per-user password
+	// via vault('secret/redis/'+incarnation.id+'/users/<name>#password').
 	// rel WITHOUT the mount/`data/` prefix -- SeedVaultKV adds them (KV v2).
 	// Without the secret the render phase fails with "vault-ref: KV path not
 	// found".
@@ -113,7 +113,7 @@ func TestE2EServiceRedis_Create(t *testing.T) {
 		// no cloud provider. Rolling onto a roster that already exists is the
 		// EXPLICIT opt-out, exactly as covenant.yml documents it. The other
 		// documented route, the create_from_souls twin, is not usable from this
-		// harness: it carries a name_template, so it composes the incarnation
+		// harness: it carries a id_template, so it composes the incarnation
 		// name and rejects the fixed one CreateIncarnationOnRoster seeds
 		// (ADR-0079). NIM-223.
 		"provision": map[string]any{"enabled": false},

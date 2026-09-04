@@ -65,7 +65,7 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # Identity components feeding name_template (ADR-0079): the run composes
+    # Identity components feeding id_template (ADR-0079): the run composes
     # sessions-billing-checkout-redis-session (service_type is explicit here,
     # the cluster case leaves it to the `cache` default).
     name: sessions

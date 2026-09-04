@@ -98,7 +98,7 @@ Starting minimum - the exact list is maturing along with pilot implementations. 
 | `register.<name>.<path>` | Results `register:` of previous steps; `register.self.*` is the current host in the scenario context. | `register.probe.exit_code == 0` |
 | `input.<path>` | `input:` script/destiny block values. | `input.replicas` |
 | `vars.<path>` | One flat namespace: the service's own `vars/` at the bottom, then the scenario's `vars:`, a `block:`'s, and the task's ([ADR-0082](adr/0082-service-vars.md)). | `vars.maxmemory` |
-| `incarnation.<path>` | Incarnation fields (`name`, `service_version`, `spec.*`). | `incarnation.name` |
+| `incarnation.<path>` | Incarnation fields (`id`, `service_version`, `spec.*`). `incarnation.name` is the retired spelling of `id` ([ADR-0085](adr/0085-entity-id-and-label.md) / NIM-730) — still read for a compatibility window, warned on by soul-lint. | `incarnation.id` |
 | `vars.<path>` | Local task-level and destiny-level `vars:`. | `vars.master_ip` |
 
 > Valid predicates `soulprint.where(...)` are `covens` / `sid` / `network.*` / `os.*`. The role (`role`) in this accessor is **not available**: declared role - only through `soulprint.hosts.where(...)` (and only for bootstrap-create), volatile role - only through probe + `where:` key. See [scenario/orchestration.md §4](scenario/orchestration.md) and [ADR-008](adr/0008-coven-stable-tags.md).

@@ -36,7 +36,7 @@ func TestAssert_PassEmitsNoTask(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
@@ -73,7 +73,7 @@ func TestAssert_FailAbortsRenderWithMessage(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{ // 2 hosts against the expected 3 → assert false.
 			host("a.example.com", []string{"svc"}, nil),
 			host("b.example.com", []string{"svc"}, nil),
@@ -106,7 +106,7 @@ func TestAssert_DefaultMessageOnEmpty(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -132,7 +132,7 @@ func TestAssert_StaticWhenFalseSkips(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"redis_type": "standalone"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -154,7 +154,7 @@ func TestAssert_StaticWhenTrueEvaluates(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"redis_type": "cluster"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -193,7 +193,7 @@ func TestEvalAsserts_SameSourceAsRender(t *testing.T) {
 			}
 			in := RenderInput{
 				Scenario:    manifest,
-				Incarnation: IncarnationMeta{Name: "svc"},
+				Incarnation: IncarnationMeta{ID: "svc"},
 				Hosts:       hosts,
 			}
 
@@ -229,7 +229,7 @@ func TestEvalAsserts_NoAssertNoOp(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
@@ -248,7 +248,7 @@ func TestEvalAsserts_StaticWhenFalseSkips(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"redis_type": "standalone"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
@@ -293,7 +293,7 @@ func TestEvalAsserts_IncludeGroupDropSkipsAssert(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"redis_type": "sentinel"}, // NO shards/replicas.
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
@@ -317,7 +317,7 @@ func TestEvalAsserts_IncludeGroupKeepEvaluatesAssert(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"redis_type": "cluster", "shards": 3, "replicas": 1},
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)}, // 1 != 6.
 	}
 	err := p.EvalAsserts(context.Background(), in)
@@ -363,7 +363,7 @@ func TestEvalAsserts_ProvisionGateSkipsSizeGuard(t *testing.T) {
 			"replicas_per_master": 1,
 			"provision":           map[string]any{"enabled": true},
 		},
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		Hosts:       nil, // EMPTY roster — VMs not created yet (provision brings them up later).
 	}
 	if err := p.EvalAsserts(context.Background(), in); err != nil {
@@ -390,7 +390,7 @@ func TestEvalAsserts_NoProvisionStillEnforcesSizeGuard(t *testing.T) {
 			"replicas_per_master": 1,
 			// provision NOT set → has(input.provision) false → when=true → assert active.
 		},
-		Incarnation: IncarnationMeta{Name: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)}, // 1 != 6.
 	}
 	err := p.EvalAsserts(context.Background(), in)

@@ -75,7 +75,7 @@ fixtures:
     system_acl_users:
       - { name: default_admin }
 
-  # Password (secret/redis/restart/system_acl_users/default_admin#password, incarnation.name == restart;
+  # Password (secret/redis/restart/system_acl_users/default_admin#password, incarnation.id == restart;
   # ★ default_admin REDESIGN - connects as the system default_admin, the former secret/redis/
   # <inc>#password is DROPPED) + PEM CA (secret/services/redis/tls#ca, via state.tls.ca_ref -
   # a repeat run resolves it through vault(); the CA branch of the TLS material, not the password - doesn't change).

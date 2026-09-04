@@ -295,7 +295,7 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		// ServiceVars/Register/RegisterByHost are empty: push run is not tied to
 		// an incarnation, scenario-scope is unavailable (same logic as destiny phase
 		// of scenario-runner: render-pipeline itself guarantees destiny isolation).
-		Incarnation: render.IncarnationMeta{Name: syntheticScenarioName},
+		Incarnation: render.IncarnationMeta{ID: syntheticScenarioName},
 	}
 
 	tasks, plans, rerr := r.deps.Render.Render(ctx, renderIn)

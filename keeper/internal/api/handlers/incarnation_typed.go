@@ -64,7 +64,7 @@ type IncarnationCreateRequestInput struct {
 	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
 	// by PUT /v1/incarnations/{id}/label. nil/blank → NULL, and the consumer
-	// shows Name. Unlike Name it is NOT composed by a `name_template`: a template
+	// shows Name. Unlike Name it is NOT composed by a `id_template`: a template
 	// composes an identifier, and a caption is not one.
 	Label   *string
 	Service string
@@ -103,7 +103,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	covens := req.Covens
 	input := req.Input
 	// `name` is optional at this point (ADR-0079): a create scenario with a
-	// `name_template` composes it from input components, and only the resolved plan
+	// `id_template` composes it from input components, and only the resolved plan
 	// knows whether there is one. A NON-EMPTY name is still format-checked up front
 	// (garbage never reaches the plan); "name is required" moves below, after the
 	// plan resolves and the composed name is known.
@@ -141,7 +141,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// bareNoScenario).
 	createScenario := scenario.CreateScenarioName
 	// name — the EFFECTIVE incarnation name: the operator's `name`, or the one the
-	// create scenario composed from `name_template` (ADR-0079). Everything past the
+	// create scenario composed from `id_template` (ADR-0079). Everything past the
 	// plan resolve (insert / traits sync / bootstrap run / audit / reply) uses it,
 	// never req.Name.
 	name := req.ID
@@ -174,7 +174,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 		bareNoScenario = plan.BareNoScenario
 		autoCreate = plan.AutoCreate
 		name = plan.EffectiveName(req.ID)
-		composedName = plan.ComposedName
+		composedName = plan.ComposedID
 	}
 
 	// Deferred "name is required" (see the top of the function): reached when the
@@ -247,16 +247,16 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
 			// Name the holder when the caller may see it (NIM-331). Under a
-			// `name_template` the operator did not type this name — they typed the
+			// `id_template` the operator did not type this name — they typed the
 			// components it was composed from — so a bare "already exists" points at
 			// a string they have never seen and leaves them nothing to change. The
 			// lookup is best-effort: a failure here must not turn a correct 409 into
 			// a 500, so the detail simply stays in its previous form.
 			holder := ""
-			if _, svc, lerr := h.nameOccupant(ctx, name, h.GetInScopeFor(claims, "get")); lerr == nil {
+			if _, svc, lerr := h.idOccupant(ctx, name, h.GetInScopeFor(claims, "get")); lerr == nil {
 				holder = svc
 			}
-			return zero, incProblem(problem.TypeIncarnationExists, takenNameDetail(name, holder))
+			return zero, incProblem(problem.TypeIncarnationExists, takenIDDetail(name, holder))
 		}
 		h.logger.Error("incarnation.create: insert failed",
 			slog.String("name", name), slog.String("service", req.Service),
@@ -1609,12 +1609,12 @@ func (h *IncarnationHandler) mapCreatePlanError(name, service string, err error)
 	// Name composition (ADR-0079) — all three are the operator's doing (sent `name`
 	// against a composing scenario / components that render to garbage / a name over
 	// the 63-char ceiling), so 422, not 500.
-	case errors.Is(err, scenario.ErrNameNotComposable):
-		return incProblem(problem.TypeValidationFailed, "name_not_composable: "+err.Error())
-	case errors.Is(err, scenario.ErrComposedNameInvalid):
-		return incProblem(problem.TypeValidationFailed, "composed_name_invalid: "+err.Error())
-	case errors.Is(err, config.ErrNameTemplateRender):
-		return incProblem(problem.TypeValidationFailed, "name_template_failed: "+err.Error())
+	case errors.Is(err, scenario.ErrIDNotComposable):
+		return incProblem(problem.TypeValidationFailed, "id_not_composable: "+err.Error())
+	case errors.Is(err, scenario.ErrComposedIDInvalid):
+		return incProblem(problem.TypeValidationFailed, "composed_id_invalid: "+err.Error())
+	case errors.Is(err, config.ErrIDTemplateRender):
+		return incProblem(problem.TypeValidationFailed, "id_template_failed: "+err.Error())
 	}
 	h.logger.Error("incarnation.create: resolve create plan failed",
 		slog.String("name", name), slog.String("service", service), slog.Any("error", err))

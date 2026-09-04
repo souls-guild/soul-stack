@@ -80,7 +80,7 @@ func TestRender_ApplyDestiny_Expands(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "${ input.path }", "marker_payload": "${ input.content }"}),
 		Input:       map[string]any{"path": "/etc/marker", "content": "ok"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -132,7 +132,7 @@ func TestRender_ApplyDestiny_Isolation(t *testing.T) {
 		Scenario: applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
 		// scenario scope contains secret_from_scenario — destiny must NOT see it.
 		Input:       map[string]any{"secret_from_scenario": "LEAK"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -159,7 +159,7 @@ func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		// scenario scope carries state — destiny must NOT see it.
 		State:   map[string]any{"redis_users": map[string]any{"alice": "x"}},
 		Hosts:   []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
@@ -180,7 +180,7 @@ func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {
 	in := RenderInput{
 		// marker_payload (required, no default) isn't passed.
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -195,7 +195,7 @@ func TestRender_ApplyDestiny_NilResolver(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", nil),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		// Destiny: nil
 	}
@@ -219,7 +219,7 @@ func TestRender_ApplyDestiny_UnexpandedInclude(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -241,7 +241,7 @@ func TestRender_ApplyDestiny_RejectsSerial(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -260,7 +260,7 @@ func TestRender_ApplyDestiny_RejectsRunOnce(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -276,7 +276,7 @@ func TestRender_ApplyDestiny_ResolverError(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("ghost", nil),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -301,7 +301,7 @@ func TestRender_ApplyDestiny_MixedPlan(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    scn,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -341,7 +341,7 @@ func TestRender_ApplyDestiny_RejectsNestedApply(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -395,7 +395,7 @@ func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("grant-acl", nil),
-		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "wb-service-redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"redis"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: dst},
 		Modules:     manifests,

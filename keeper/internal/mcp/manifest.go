@@ -1490,8 +1490,8 @@ var (
 "additionalProperties":false,
 "required":["service"],
 "properties":{
-"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance id (kebab-case). Omit when the chosen create scenario declares name_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
-"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - not the Vault path segment, not the RBAC incarnation= scope value, not the CEL root (incarnation.label does not resolve). Unlike name it is never composed by a name_template."},
+"id":{"type":"string","pattern":"^[a-z][a-z0-9-]*$","description":"Instance id (kebab-case). Omit when the chosen create scenario declares id_template (ADR-0079) - the name is then composed server-side from input components, and sending it is a validation error. Required whenever nothing composes one."},
+"label":{"type":["string","null"],"description":"Display caption (ADR-0085): free text, capitals and spaces allowed. Omitted means consumers show name instead. Never used to derive anything - not the Vault path segment, not the RBAC incarnation= scope value, not the CEL root (incarnation.label does not resolve). Unlike id it is never composed by an id_template."},
 "service":{"type":"string"},
 "covens":{"type":"array","items":{"type":"string","pattern":"^[a-z][a-z0-9]*(-[a-z0-9]+)*$"},"description":"Declared env-Coven labels for the incarnation (ADR-008 amendment a). Affect RBAC create-scope: an operator with scoped-permission incarnation.create on coven=X can only create an incarnation with covens within their scope."},
 "input":{"type":"object"},

@@ -324,7 +324,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
-			Name:           inc.ID,
+			ID:             inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 		},

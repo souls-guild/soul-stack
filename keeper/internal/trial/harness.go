@@ -211,7 +211,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 		ServiceVars: orEmptyMap(c.Fixtures.Vars),
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
-		Incarnation: render.IncarnationMeta{Name: incarnationName(scn.Name, c.Fixtures), Service: svcName}, // NIM-58
+		Incarnation: render.IncarnationMeta{ID: incarnationName(scn.Name, c.Fixtures), Service: svcName}, // NIM-58
 		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,

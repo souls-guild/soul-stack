@@ -78,7 +78,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 		Scenario:    manifest,
 		Input:       map[string]any{"password": "s3cr3t"},
 		ServiceVars: map[string]any{"redis": map[string]any{"maxmemory": "512mb"}},
-		Incarnation: IncarnationMeta{Name: "redis-prod"},
+		Incarnation: IncarnationMeta{ID: "redis-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 	}
@@ -197,7 +197,7 @@ func TestRenderToSoulExecute_CompositeSelfKeys_SnakeCase(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "app-prod"},
+		Incarnation: IncarnationMeta{ID: "app-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 	}

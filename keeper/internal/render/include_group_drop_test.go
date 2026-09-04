@@ -56,7 +56,7 @@ func TestIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"topology": "standalone"}, // != cluster → group is dropped
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -102,7 +102,7 @@ func TestIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"topology": "cluster"}, // == cluster → group stays
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -154,7 +154,7 @@ func TestIncludeGroupDrop_StaticInputWhen(t *testing.T) {
 		in := RenderInput{
 			Scenario:    build(),
 			Input:       map[string]any{"role": tc.role},
-			Incarnation: IncarnationMeta{Name: "svc"},
+			Incarnation: IncarnationMeta{ID: "svc"},
 			Hosts:       singleHost(),
 		}
 		tasks, _, err := p.Render(context.Background(), in)
@@ -194,7 +194,7 @@ func TestIncludeGroupDrop_OnChangesWithinGroupSafe(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"topology": "standalone"}, // group drop
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -232,7 +232,7 @@ func TestIncludeGroupDrop_CoexistsWithBlockPlaceholderSkip(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update", "topology": "standalone"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 	}
 	tasks, _, err := p.Render(context.Background(), in)

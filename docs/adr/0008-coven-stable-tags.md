@@ -51,6 +51,15 @@ Fixed by the user (R4). The original "Decision" made `incarnation.name` the **ro
 
 **Trade-off.** A one-time migration cost (backfill + coven strip) and a behavior change for RBAC roles scoped by `coven=<incarnation-name>` and for scenarios using `on: ["${ incarnation.name }"]` (now the omitted form). We accept it: the coven axis stops meaning two things at once, membership becomes explicit and auditable, and `mode: replace` on coven can no longer accidentally sever a host from its incarnation.
 
+> **Spelling, 2026-09-04 (NIM-730, [ADR-0085](0085-entity-id-and-label.md)).** Read every
+> `incarnation.name` in this amendment as **`incarnation.id`** — the CEL root moved with the
+> rest of the rename, and the invariant is untouched: the incarnation's own identifier is not
+> a Coven, in either spelling. The runtime guard never saw a spelling at all (it compares the
+> RESOLVED value against the incarnation's identifier), and the offline rule — renamed
+> `on_incarnation_name` → **`on_incarnation_id`** — matches BOTH, because the retired root
+> still evaluates for the length of the compatibility window and a rule that knew only the new
+> spelling would be a way past a fail-closed guard.
+
 **Amendment (2026-07-27, NIM-121 — Coven is inherited from the incarnation, [ADR-080](0080-label-inheritance-union.md)). REVOKED 2026-08-05 by
 [NIM-281](#amendment-2026-08-05-nim-281-a-label-is-never-inherited).** It made a host's effective covens its own `souls.coven[]` unioned at read time
 with the `incarnation.covens[]` and names of every incarnation it belongs to. That union no longer exists; see the NIM-281 amendment below for the rule

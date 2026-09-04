@@ -69,7 +69,7 @@ assert:
             choirs: []
             # traits — registry projection (ADR-060), an empty object without labels.
             traits: {}
-            # covens carries the incarnation.name label (scenario name = apply) —
+            # covens carries the incarnation.id label (scenario name = apply) —
             # mirrors the prod roster `WHERE $1 = ANY(coven)` (harness single-host sugar).
             covens: []
             network:

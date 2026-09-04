@@ -56,8 +56,8 @@ func TestL3bRedisLive_CreateStandalone(t *testing.T) {
 	const incName = "redis"
 
 	// Vault seed of the redis password: standalone create reads it keeper-side via
-	// vault('secret/redis/'+incarnation.name+'#password'); per-user password -
-	// vault('secret/redis/'+incarnation.name+'/users/<name>#password'). rel WITHOUT
+	// vault('secret/redis/'+incarnation.id+'#password'); per-user password -
+	// vault('secret/redis/'+incarnation.id+'/users/<name>#password'). rel WITHOUT
 	// mount/`data/` prefix (SeedVaultKV adds them, KV v2).
 	harness.SeedVaultKV(t, stack, "redis/"+incName, map[string]any{
 		"password": "e2e-redis-secret",

@@ -12,9 +12,9 @@ tasks:
     module: core.vault.kv-present
     params:
       policy: { length: 32, charset: alphanumeric }
-      targets: "${ [{ 'path': 'secret/redis/' + incarnation.name, 'field': 'password' }] }"
+      targets: "${ [{ 'path': 'secret/redis/' + incarnation.id, 'field': 'password' }] }"
   - name: Write file consuming the generated secret
     module: core.file.present
     params:
       path: /etc/redis/secret.conf
-      content: "requirepass ${ vault('secret/redis/' + incarnation.name + '#password') }"
+      content: "requirepass ${ vault('secret/redis/' + incarnation.id + '#password') }"

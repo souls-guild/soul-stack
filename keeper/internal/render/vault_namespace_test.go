@@ -35,7 +35,7 @@ func renderOwnNamespace(t *testing.T, scn *config.ScenarioManifest, service stri
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    scn,
-		Incarnation: IncarnationMeta{Name: "prod", Service: service},
+		Incarnation: IncarnationMeta{ID: "prod", Service: service},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"prod"}, nil)},
 	})
 	return err
@@ -133,7 +133,7 @@ func renderDynamicVault(t *testing.T, scn *config.ScenarioManifest, service stri
 	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
 	tasks, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    scn,
-		Incarnation: IncarnationMeta{Name: "prod", Service: service},
+		Incarnation: IncarnationMeta{ID: "prod", Service: service},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"prod"}, nil)},
 	})
 	return tasks, err
@@ -261,7 +261,7 @@ func renderLoopVault(t *testing.T, scn *config.ScenarioManifest, path string) ([
 	tasks, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    scn,
 		ServiceVars: map[string]any{"p": path},
-		Incarnation: IncarnationMeta{Name: "prod", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "prod", Service: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"prod"}, nil)},
 	})
 	return tasks, err

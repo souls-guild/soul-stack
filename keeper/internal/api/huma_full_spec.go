@@ -114,7 +114,7 @@ func fullSpecGroups() []specGroup {
 		{"/v1/incarnations", func(api huma.API) error {
 			stub := handlers.IncarnationSpecStub()
 			registerHumaIncarnationCreate(api, stub)
-			registerHumaIncarnationResolveName(api, stub)
+			registerHumaIncarnationResolveID(api, stub)
 			registerHumaIncarnationList(api, stub)
 			registerHumaIncarnationGet(api, stub)
 			registerHumaIncarnationTelemetry(api, handlers.TelemetrySpecStub())

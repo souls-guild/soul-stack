@@ -233,3 +233,86 @@ tasks:
 		t.Errorf("false vars_shadows_service_var on non-overlapping names: %s", got)
 	}
 }
+
+// TestStackLegacyRoot_IsWalked — `vars/_stack.yaml` is the THIRD CEL environment
+// carrying the `incarnation` root ([ADR-0085], NIM-730) and the one no scenario
+// rule can reach: it is not a scenario. A step written against the retired
+// spelling resolves today through the window's alias and, when the alias goes,
+// fails BEFORE the render — so the whole run refuses to start rather than one
+// task failing, with nothing having warned.
+//
+// All four evaluated cells are covered, each with its own address.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: delete the
+// `stackLegacyRootDiags(...)` call from stackFileDiags. The stack still parses,
+// every other service check stays green, and this test goes red.
+func TestStackLegacyRoot_IsWalked(t *testing.T) {
+	root := writeServiceTree(t, map[string]string{
+		"vars/00-base.yaml": "port: 6379\n",
+		"vars/_stack.yaml": `stack:
+  - file: "00-base.yaml"
+  - file: "tier-${ incarnation.name }.yaml"
+    optional: true
+  - when: "incarnation.name != ''"
+    inline:
+      owner: "${ incarnation.name }"
+  - foreach: "${ [incarnation.name] }"
+    as: n
+    inline:
+      who: "${ n }"
+`,
+	})
+
+	got := lintService(t, root)
+	for _, want := range []string{
+		"incarnation_name_legacy_root",
+		"_stack.yaml:3:5", // file:
+		"_stack.yaml:5:5", // when:
+		"_stack.yaml:7:7", // inline value
+		"_stack.yaml:8:5", // foreach:
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	// WARNING, not error: an error would close the window it exists to keep open.
+	// Checked on the rule's own lines, since the shared fixture manifest carries an
+	// unrelated error of its own.
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "incarnation_name_legacy_root") && !strings.Contains(line, "warning:") {
+			t.Errorf("the retired root in _stack.yaml must WARN, not error: %s", line)
+		}
+	}
+}
+
+// TestStackLegacyRoot_LayerFileIsNotACELSurface — the counter-case, and the
+// reason this rule stops at `_stack.yaml`. A plain layer file is read by
+// [servicevars.Resolver.readLayer], which parses YAML and returns it: a `${ … }`
+// written there is literal text in the vars namespace, never evaluated and never
+// re-evaluated downstream. Flagging it would be a false positive, and a rule that
+// cries wolf on a file nobody evaluates is a rule authors learn to ignore.
+func TestStackLegacyRoot_LayerFileIsNotACELSurface(t *testing.T) {
+	root := writeServiceTree(t, map[string]string{
+		"vars/00-base.yaml": "port: 6379\nlegacy_probe: \"${ incarnation.name }\"\n",
+	})
+	if got := lintService(t, root); strings.Contains(got, "incarnation_name_legacy_root") {
+		t.Errorf("a layer file is not a CEL surface; flagging it is a false positive:\n%s", got)
+	}
+}
+
+// TestStackLegacyRoot_NewSpellingIsSilent — the migrated stack says nothing, so
+// the warning cannot become noise a converted repository reads past.
+func TestStackLegacyRoot_NewSpellingIsSilent(t *testing.T) {
+	root := writeServiceTree(t, map[string]string{
+		"vars/00-base.yaml": "port: 6379\n",
+		"vars/_stack.yaml": `stack:
+  - file: "00-base.yaml"
+  - when: "incarnation.id != ''"
+    inline:
+      owner: "${ incarnation.id }"
+`,
+	})
+	if got := lintService(t, root); strings.Contains(got, "incarnation_name_legacy_root") {
+		t.Errorf("the current spelling was flagged:\n%s", got)
+	}
+}

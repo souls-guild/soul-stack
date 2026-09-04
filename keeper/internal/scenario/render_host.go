@@ -147,7 +147,7 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Incarnation: render.IncarnationMeta{
-			Name:           inc.ID,
+			ID:             inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 		},

@@ -174,7 +174,7 @@ func (v Vars) activation(migration bool) map[string]any {
 		act = map[string]any{
 			"input":       orEmpty(v.Input),
 			"register":    v.registerRoot(),
-			"incarnation": orEmpty(v.Incarnation),
+			"incarnation": v.incarnationRoot(),
 			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
 			"vars":        orEmpty(v.Vars),
 			"compute":     orEmpty(v.Compute),
@@ -184,6 +184,42 @@ func (v Vars) activation(migration bool) map[string]any {
 		act[name] = val
 	}
 	return act
+}
+
+// incarnationRoot builds the `incarnation` activation root, and is the ONE place
+// the [ADR-0085] compatibility window lives at run time: it puts the retired
+// `name` key beside `id` so a service repository still writing
+// `${ incarnation.name }` keeps evaluating while its scenarios are migrated.
+//
+// Here rather than at each of the four callers that fill [Vars.Incarnation]
+// (render's three contexts, the service-vars stack) because every CEL evaluation
+// on either side of the wire funnels through this activation — including the
+// Soul-side flow-control sandbox, which rebuilds Vars from the `flow_context` it
+// received. One statement of the window, and no context can be forgotten.
+//
+// The alias is added ONLY when `id` is actually present, and into a COPY: an
+// incarnation-free context (push, trial) must keep answering `incarnation.name`
+// with the ordinary no-such-key rather than an empty string, and the caller's map
+// is not the activation's to write into. A map that already carries `name` — a
+// caller mid-migration — is left exactly as it is.
+//
+// Removing this function closes the window; that is its own ticket.
+//
+// [ADR-0085]: docs/adr/0085-entity-id-and-label.md
+func (v Vars) incarnationRoot() map[string]any {
+	id, ok := v.Incarnation[incarnationIDKey]
+	if !ok {
+		return orEmpty(v.Incarnation)
+	}
+	if _, taken := v.Incarnation[legacyIncarnationIDKey]; taken {
+		return v.Incarnation
+	}
+	out := make(map[string]any, len(v.Incarnation)+1)
+	for k, val := range v.Incarnation {
+		out[k] = val
+	}
+	out[legacyIncarnationIDKey] = id
+	return out
 }
 
 // registerRoot builds the `register` activation root. Without

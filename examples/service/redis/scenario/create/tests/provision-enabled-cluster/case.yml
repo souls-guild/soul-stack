@@ -115,7 +115,7 @@ assert:
         provider: example-dev
         profile: redis-small
         count: 4
-        # name — the batch run-identity = incarnation.name (here "create"): the driver names
+        # name — the batch run-identity = incarnation.id (here "create"): the driver names
         # VMs <name>-<seq> + label soulstack-run=<name> (run idempotency, NIM-16).
         name: create
         generate_userdata: false

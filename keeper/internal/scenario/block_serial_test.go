@@ -41,7 +41,7 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 	}
 	in := render.RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "restart", Tasks: []config.Task{task}},
-		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Incarnation: render.IncarnationMeta{ID: "svc"},
 		Hosts:       hosts,
 	}
 
@@ -125,7 +125,7 @@ func TestDispatch_NestedBlockSerialMinWidth(t *testing.T) {
 	}
 	in := render.RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "nested", Tasks: []config.Task{task}},
-		Incarnation: render.IncarnationMeta{Name: "svc"},
+		Incarnation: render.IncarnationMeta{ID: "svc"},
 		Hosts:       hosts,
 	}
 

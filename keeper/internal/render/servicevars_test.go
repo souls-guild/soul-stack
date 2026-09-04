@@ -26,7 +26,7 @@ func TestRender_InterpolatesServiceVars(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		ServiceVars: map[string]any{"db": map[string]any{"host": "pg-primary"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -54,7 +54,7 @@ func TestRender_ServiceVarsInWhere(t *testing.T) {
 	enabled := RenderInput{
 		Scenario:    manifest,
 		ServiceVars: map[string]any{"feature": map[string]any{"enabled": true}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	_, plans, err := p.Render(context.Background(), enabled)
@@ -93,7 +93,7 @@ func TestRender_LoopOverServiceVars(t *testing.T) {
 			map[string]any{"name": "alice"},
 			map[string]any{"name": "bob"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -120,7 +120,7 @@ func TestRender_EmptyServiceVarsNoLeak(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -151,7 +151,7 @@ func TestRender_ApplyDestiny_ServiceVarsNotLeaked(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("leaky", nil),
 		ServiceVars: map[string]any{"secret": "topsecret"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: leaky},
 	}
@@ -183,7 +183,7 @@ func TestRender_ApplyDestiny_ServiceVarsViaInput(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("via-input", map[string]any{"db_host": "${ vars.db.host }"}),
 		ServiceVars: map[string]any{"db": map[string]any{"host": "pg-primary"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: dst},
 	}

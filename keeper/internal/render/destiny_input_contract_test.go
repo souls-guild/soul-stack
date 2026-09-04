@@ -44,7 +44,7 @@ func renderContract(t *testing.T, scenarioInput map[string]any, applyInput map[s
 	tasks, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    applyScenario("pilot-contract", applyInput),
 		Input:       scenarioInput,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: contractDestiny()},
 	})
@@ -193,7 +193,7 @@ func TestDestinyInputContract_ValidateRuleIsInputOnly(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    applyScenario("pilot-contract", map[string]any{"redis_type": "standalone", "port": 6379}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: d},
 	})
@@ -213,7 +213,7 @@ func TestDestinyInputContract_NoValidateSectionIsNoOp(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    applyScenario("pilot-contract", map[string]any{"redis_type": "cluster", "cluster_nodes": []any{"a"}}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: d},
 	})
@@ -240,7 +240,7 @@ func TestDestinyInputContract_AssertTaskBoundaryUnchanged(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	_, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    applyScenario("pilot-contract", map[string]any{"redis_type": "standalone", "port": 6379}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: d},
 	})

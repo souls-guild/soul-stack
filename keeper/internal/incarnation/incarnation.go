@@ -87,11 +87,11 @@ type Incarnation struct {
 	// and this is the entity where that matters most -- see Label below for the
 	// three derivations it feeds.
 	//
-	// The CEL root stays spelled `incarnation.name` for now: that key is built
-	// in keeper/internal/render/dispatch.go and belongs to NIM-730, which owns
-	// the compatibility window for every service repository. So this field is
-	// `ID` and the map key it fills is still `"name"` -- deliberately, until
-	// that window opens.
+	// The CEL root agrees since NIM-730: the map built in
+	// keeper/internal/render/dispatch.go is keyed `"id"`, and the retired
+	// `incarnation.name` survives only as an alias added at the activation
+	// (shared/cel.Vars.incarnationRoot) for the length of the [ADR-0085]
+	// compatibility window every service repository needs.
 	ID string `json:"id"`
 	// Label is the display caption ([ADR-0085]): free text, mutable via
 	// SetLabel, not unique, optional. nil means the column is NULL and a
@@ -101,8 +101,8 @@ type Incarnation struct {
 	// matters most. ID is segment 3 of every derived secret path
 	// (`<mount>/<service>/<incarnation>/<state-field>[/<key>]`, [ADR-0083] §1),
 	// substituted verbatim with no case folding; it is the value of the RBAC
-	// `incarnation=` scope dimension; and it is the CEL root `incarnation.name`
-	// (that CEL spelling is NIM-730's to move, not this ticket's).
+	// `incarnation=` scope dimension; and it is the CEL root `incarnation.id`
+	// (NIM-730 moved that spelling; `incarnation.name` is a window alias).
 	// Label reaches none of the three — deliberately, and guarded by
 	// keeper/internal/render/label_invariant_guard_test.go and
 	// keeper/internal/servicevars/label_invariant_guard_test.go (the CEL roots,

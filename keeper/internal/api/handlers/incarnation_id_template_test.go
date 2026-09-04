@@ -54,7 +54,7 @@ tasks: []
 	return root
 }
 
-func newNameTemplateHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter) *IncarnationHandler {
+func newIDTemplateHandler(t *testing.T, db *fakeIncDB, starter *fakeStarter) *IncarnationHandler {
 	t.Helper()
 	loader := &fakeLoader{localDir: nameTemplateSnapshot(t)}
 	h := NewIncarnationHandler(db, starter, nil, &fakeResolver{ok: true}, loader, nil, nil, nil)
@@ -127,7 +127,7 @@ func postCreate(t *testing.T, h *IncarnationHandler, body string) *httptest.Resp
 func TestIncarnation_Create_NameComposed(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
-	h := newNameTemplateHandler(t, db, starter)
+	h := newIDTemplateHandler(t, db, starter)
 
 	rec := postCreate(t, h, `{"service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
 	if rec.Code != http.StatusAccepted {
@@ -157,7 +157,7 @@ func TestIncarnation_Create_NameComposed(t *testing.T) {
 // incarnation.created untraceable.
 func TestIncarnation_Create_ComposedName_InAudit(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 
 	r := withClaims(httptest.NewRequest(http.MethodPost, "/v1/incarnations", nil), "archon-alice")
 	claims, _ := shimClaims(r)
@@ -181,7 +181,7 @@ func TestIncarnation_Create_ComposedName_InAudit(t *testing.T) {
 func TestIncarnation_Create_ComposedNameTooLong_422(t *testing.T) {
 	db := &fakeIncDB{}
 	starter := &fakeStarter{}
-	h := newNameTemplateHandler(t, db, starter)
+	h := newIDTemplateHandler(t, db, starter)
 
 	long := strings.Repeat("x", 30)
 	rec := postCreate(t, h, `{"service":"redis","create_scenario":"create","input":{"name":"`+long+`","project":"`+long+`","subproject":"`+long+`"}}`)
@@ -193,8 +193,8 @@ func TestIncarnation_Create_ComposedNameTooLong_422(t *testing.T) {
 	if p.Type != problem.TypeValidationFailed {
 		t.Errorf("Type = %q, want %q", p.Type, problem.TypeValidationFailed)
 	}
-	if !strings.Contains(p.Detail, "composed_name_invalid") {
-		t.Errorf("Detail = %q, want the composed_name_invalid prefix", p.Detail)
+	if !strings.Contains(p.Detail, "composed_id_invalid") {
+		t.Errorf("Detail = %q, want the composed_id_invalid prefix", p.Detail)
 	}
 	if !strings.Contains(p.Detail, "63") {
 		t.Errorf("Detail = %q, must state the ceiling so the operator knows what to shorten", p.Detail)
@@ -213,7 +213,7 @@ func TestIncarnation_Create_ComposedNameTooLong_422(t *testing.T) {
 // inserted.
 func TestIncarnation_Create_ExplicitNameWithTemplate_422(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 
 	rec := postCreate(t, h, `{"id":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
 	if rec.Code != http.StatusUnprocessableEntity {
@@ -221,8 +221,8 @@ func TestIncarnation_Create_ExplicitNameWithTemplate_422(t *testing.T) {
 	}
 	var p problem.Details
 	_ = json.NewDecoder(rec.Body).Decode(&p)
-	if !strings.Contains(p.Detail, "name_not_composable") {
-		t.Errorf("Detail = %q, want the name_not_composable prefix", p.Detail)
+	if !strings.Contains(p.Detail, "id_not_composable") {
+		t.Errorf("Detail = %q, want the id_not_composable prefix", p.Detail)
 	}
 	if db.insertCalls != 0 {
 		t.Errorf("insertCalls = %d, want 0", db.insertCalls)
@@ -298,7 +298,7 @@ func TestIncarnation_Create_MalformedNameStillRejectedEarly(t *testing.T) {
 // TestToolsCall_IncarnationCreate_Templated_ScopedOperatorAllowed on MCP.
 func TestIncarnation_Create_Templated_ScopedOperatorAllowed(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	// A role scoped `coven=billing`, holding nothing unrestricted.
 	h.SetPermissionChecker(scopedChecker{covens: []string{"billing"}})
 
@@ -314,7 +314,7 @@ func TestIncarnation_Create_Templated_ScopedOperatorAllowed(t *testing.T) {
 // there is no "create it without the coven you may not have" fallback.
 func TestIncarnation_Create_Templated_CovenOutsideCeilingRefused(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{covens: []string{"billing"}})
 
 	rec := postCreate(t, h, `{"service":"redis","covens":["prod"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
@@ -333,7 +333,7 @@ func TestIncarnation_Create_Templated_CovenOutsideCeilingRefused(t *testing.T) {
 // NIM-209/NIM-232 closed on membership, asked here at create time.
 func TestIncarnation_Create_Templated_MixedCovensRefusedWhole(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{covens: []string{"billing"}})
 
 	rec := postCreate(t, h, `{"service":"redis","covens":["billing","prod"],"create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
@@ -349,7 +349,7 @@ func TestIncarnation_Create_Templated_MixedCovensRefusedWhole(t *testing.T) {
 // schema, so it is always available to gate (a).
 func TestIncarnation_Create_Templated_ServiceScopedAllowed(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{services: []string{"redis"}})
 
 	rec := postCreate(t, h, `{"service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
@@ -369,7 +369,7 @@ func TestIncarnation_Create_Templated_ServiceScopedAllowed(t *testing.T) {
 // on the MCP surface, where both gates run against a real enforcer.
 func TestIncarnation_Create_Templated_ComposedNameOutsideScopeRefused(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{
 		services:     []string{"redis"},
 		incarnations: []string{"some-other-name"},
@@ -389,7 +389,7 @@ func TestIncarnation_Create_Templated_ComposedNameOutsideScopeRefused(t *testing
 // a boundary, not a blanket refusal. Gate (a) is again not in the path here.
 func TestIncarnation_Create_Templated_ComposedNameInsideScopeAllowed(t *testing.T) {
 	db := &fakeIncDB{}
-	h := newNameTemplateHandler(t, db, &fakeStarter{})
+	h := newIDTemplateHandler(t, db, &fakeStarter{})
 	h.SetPermissionChecker(scopedChecker{
 		services:     []string{"redis"},
 		incarnations: []string{"cache-billing-inv-redis-sentinel"},

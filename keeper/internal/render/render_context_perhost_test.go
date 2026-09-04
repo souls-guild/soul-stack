@@ -70,7 +70,7 @@ func TestRenderContext_PerHostSelf_Dispatch(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts:       hostFacts,
 		Templates:   reader,
 	}
@@ -169,7 +169,7 @@ func TestRenderContext_PerHostSelf_SingleHostGoldenPath(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "prod"},
+		Incarnation: IncarnationMeta{ID: "prod"},
 		Hosts: []*topology.HostFacts{
 			hostWithRole("solo.example.com", "primary", []string{"prod"},
 				map[string]any{"primary_ip": "10.0.0.7"}, map[string]any{"family": "debian"}),

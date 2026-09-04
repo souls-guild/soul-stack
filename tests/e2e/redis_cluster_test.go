@@ -49,7 +49,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 	const incName = "redis-clstr"
 
 	// requirepass is read keeper-side via
-	// vault('secret/redis/'+incarnation.name+'#password') (cluster.yml apply.input
+	// vault('secret/redis/'+incarnation.id+'#password') (cluster.yml apply.input
 	// + cluster-build password). Without the secret, the render phase fails
 	// with "vault-ref: KV path not found". rel WITHOUT the mount/`data/`
 	// prefix -- SeedVaultKV adds them (KV v2).
@@ -109,7 +109,7 @@ func TestE2EServiceRedis_CreateCluster(t *testing.T) {
 		// `resolve profile "redis-debian-12": profile: name not found` — L3a has
 		// no cloud provider. Deploying onto an existing roster is the EXPLICIT
 		// opt-out that covenant.yml documents; the create_from_souls twin is not
-		// usable here because its name_template composes the incarnation name
+		// usable here because its id_template composes the incarnation name
 		// and rejects the fixed one this harness seeds (ADR-0079). NIM-223.
 		"provision":  map[string]any{"enabled": false},
 		"redis_type": "cluster",

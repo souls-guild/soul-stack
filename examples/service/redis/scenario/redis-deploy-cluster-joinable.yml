@@ -38,7 +38,7 @@
 #       redis_config  conf_dir  data_dir  install  modules_base_url  redis_version
 #       tls_on  tls_only_on  tls_port  tls_cert_ref  tls_key_ref  tls_ca_ref
 #   Also read from the including file's context: input.version (opt., package pin)/
-#   input.users (opt.), vars.system_acl_users/sysctl_settings, incarnation.name
+#   input.users (opt.), vars.system_acl_users/sysctl_settings, incarnation.id
 #   (Vault paths). soulprint.hosts is NOT read HERE (no CLUSTER-BUILD run_once on the
 #   bootstrap node — no topology MAP is built). Omitting/renaming any
 #   compute.<name> in the including file is NOT caught statically (cross-file drift is invisible to soul-lint)

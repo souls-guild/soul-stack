@@ -1465,7 +1465,7 @@ components:
           pattern: ^[a-z][a-z0-9_]*$
           type: string
         id:
-          description: new instance id (kebab-case, immutable); omit when the create scenario declares name_template (ADR-0079) — then it is composed server-side from input components. The TEMPLATE key keeps its own spelling until NIM-730.
+          description: new instance id (kebab-case, immutable); omit when the create scenario declares id_template (ADR-0079) — then it is composed server-side from input components.
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         input:
@@ -1736,44 +1736,44 @@ components:
       required:
         - reason
       type: object
-    IncarnationResolveNameReply:
+    IncarnationResolveIDReply:
       additionalProperties: false
       properties:
         available:
-          description: no incarnation holds this name (meaningful only when valid)
+          description: no incarnation holds this id (meaningful only when valid)
           type: boolean
-        composed_name:
-          description: the name a create with this input would produce; carries the offending value when invalid
+        composed_id:
+          description: the id a create with this input would produce; carries the offending value when invalid
           type: string
         composes:
-          description: the chosen create scenario composes the name from name_template (ADR-0079); false → the operator names the incarnation
+          description: the chosen create scenario composes the id from id_template (ADR-0079); false → the operator names the incarnation
           type: boolean
         invalid_reason:
-          description: why the name could not be composed or was rejected, in operator terms
+          description: why the id could not be composed or was rejected, in operator terms
           type: string
         length:
-          description: character count of composed_name
+          description: character count of composed_id
           format: int64
           type: integer
         max_length:
-          description: the incarnation name ceiling — server-sourced so the form does not restate it
+          description: the incarnation id ceiling — server-sourced so the form does not restate it
           format: int64
           type: integer
         taken_by_service:
-          description: service of the incarnation holding the name — only when the caller may see it
+          description: service of the incarnation holding the id — only when the caller may see it
           type: string
         valid:
-          description: composed_name is a legal incarnation name
+          description: composed_id is a legal incarnation id
           type: boolean
       required:
         - composes
-        - composed_name
+        - composed_id
         - length
         - max_length
         - valid
         - available
       type: object
-    IncarnationResolveNameRequest:
+    IncarnationResolveIDRequest:
       additionalProperties: false
       properties:
         covens:
@@ -1786,7 +1786,7 @@ components:
             - array
             - "null"
         create_scenario:
-          description: chosen create scenario, whose name_template composes the name
+          description: chosen create scenario, whose id_template composes the id
           pattern: ^[a-z][a-z0-9_]*$
           type: string
         input:
@@ -3505,7 +3505,7 @@ components:
     Scenario:
       additionalProperties: false
       properties:
-        composes_name:
+        composes_id:
           type: boolean
         create:
           type: boolean
@@ -8127,22 +8127,22 @@ paths:
       summary: Create incarnation
       tags:
         - incarnation
-  /v1/incarnations/resolve-name:
+  /v1/incarnations/resolve-id:
     post:
-      description: "Live preview for the create form: composes the incarnation name from the chosen create scenario's name_template over the input so far, reports its length against the ceiling, and whether the name is free. Composition runs server-side — the same code the create runs — so the previewed name cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed name is measured against the caller's scope, and the occupying service is named only to a caller who may see it."
-      operationId: resolveIncarnationName
+      description: "Live preview for the create form: composes the incarnation id from the chosen create scenario's id_template over the input so far, reports its length against the ceiling, and whether the id is free. Composition runs server-side — the same code the create runs — so the previewed id cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed id is measured against the caller's scope, and the occupying service is named only to a caller who may see it."
+      operationId: resolveIncarnationID
       requestBody:
         content:
           application/json:
             schema:
-              $ref: "#/components/schemas/IncarnationResolveNameRequest"
+              $ref: "#/components/schemas/IncarnationResolveIDRequest"
         required: true
       responses:
         "200":
           content:
             application/json:
               schema:
-                $ref: "#/components/schemas/IncarnationResolveNameReply"
+                $ref: "#/components/schemas/IncarnationResolveIDReply"
           description: OK
         "403":
           content:
@@ -8162,7 +8162,7 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
-      summary: Resolve the name a create would compose
+      summary: Resolve the id a create would compose
       tags:
         - incarnation
   /v1/incarnations/{id}:

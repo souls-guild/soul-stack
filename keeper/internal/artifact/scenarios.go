@@ -63,12 +63,12 @@ type Scenario struct {
 	// Marked by listing-handler according to scenario-package convention
 	// (scenario.IsRunnableScenario); ListScenarios itself does not populate it.
 	Runnable bool `json:"runnable"`
-	// ComposesName marks "this create scenario composes the incarnation name
-	// itself" — the manifest carries `name_template` (ADR-0079), so the server
-	// builds the name from `input:` and REFUSES a request that also sends one
-	// (scenario.ErrNameNotComposable → 422 name_not_composable).
+	// ComposesID marks "this create scenario composes the incarnation id
+	// itself" — the manifest carries `id_template` (ADR-0079), so the server
+	// builds the id from `input:` and REFUSES a request that also sends one
+	// (scenario.ErrIDNotComposable → 422 id_not_composable).
 	//
-	// The descriptor had no way to say this, so a client asked for a name it must
+	// The descriptor had no way to say this, so a client asked for an id it must
 	// not send: the web form required one and the backend rejected it, which left
 	// no way to create a templated incarnation through the UI at all (NIM-340).
 	//
@@ -77,10 +77,10 @@ type Scenario struct {
 	// the expression would make an internal authoring detail part of the API.
 	// omitempty: a scenario that composes nothing serializes exactly as it did
 	// before this field existed.
-	ComposesName bool           `json:"composes_name,omitempty"`
-	Description  string         `json:"description,omitempty"`
-	InputSchema  map[string]any `json:"input_schema,omitempty"`
-	Tags         []string       `json:"tags,omitempty"`
+	ComposesID  bool           `json:"composes_id,omitempty"`
+	Description string         `json:"description,omitempty"`
+	InputSchema map[string]any `json:"input_schema,omitempty"`
+	Tags        []string       `json:"tags,omitempty"`
 	// Form is an optional presentation layer (top-level `form:` in scenario
 	// manifest): sections with field labels for UI Run modal. omitempty: no form:
 	// in YAML → no field in reply (exactly as before this feature); UI renders
@@ -179,9 +179,15 @@ type scenarioYAML struct {
 	// (see loadScenario). soul-lint (config-validator) does strict type validation;
 	// here is best-effort projection for UI — invalid type remains nil → false.
 	Create *bool `yaml:"create"`
-	// NameTemplate is the top-level `name_template:` (ADR-0079). Read only to
-	// decide [Scenario.ComposesName]; the string itself never leaves this struct.
-	NameTemplate string `yaml:"name_template"`
+	// IDTemplate is the top-level `id_template:` (ADR-0079, renamed by ADR-0085).
+	// Read only to decide [Scenario.ComposesID]; the string itself never leaves
+	// this struct.
+	IDTemplate string `yaml:"id_template"`
+	// LegacyIDTemplate is the pre-ADR-0085 spelling `name_template:`, read for the
+	// same compatibility window config.ScenarioManifest keeps open. This is a
+	// best-effort UI projection, not the validator: a scenario declaring BOTH is a
+	// config error reported there, and here the canonical key simply wins.
+	LegacyIDTemplate string `yaml:"name_template"`
 	// FromVersions is the top-level `from:` of upgrade manifest (ADR-0068).
 	// Projected to Scenario.FromVersions only on upgrade path ([ListUpgrades]);
 	// for scenario/ there is no key → nil. soul-lint (config-validator) does
@@ -191,6 +197,13 @@ type scenarioYAML struct {
 	// sub-keys are ignored (yaml.Unmarshal into struct captures only listed ones);
 	// soul-lint validates form strictly, not listing.
 	Form *scenarioFormYAML `yaml:"form"`
+}
+
+// composesID reports whether the manifest declares an id template under EITHER
+// spelling — `id_template:`, or `name_template:` inside the ADR-0085
+// compatibility window. Presence, not content.
+func (r scenarioYAML) composesID() bool {
+	return strings.TrimSpace(r.IDTemplate) != "" || strings.TrimSpace(r.LegacyIDTemplate) != ""
 }
 
 // scenarioFormYAML, scenarioFormSectionYAML, and scenarioFormFieldYAML are YAML
@@ -368,12 +381,12 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 		Path:   relPath,
 		Create: raw.Create != nil && *raw.Create,
 		// Presence, not content: any non-empty template means the server composes
-		// the name. A malformed one is soul-lint's business, not the listing's.
-		ComposesName: strings.TrimSpace(raw.NameTemplate) != "",
-		Description:  raw.Description,
-		InputSchema:  schema,
-		Tags:         raw.Tags,
-		Form:         scenarioFormProjection(raw.Form),
+		// the id. A malformed one is soul-lint's business, not the listing's.
+		ComposesID:  raw.composesID(),
+		Description: raw.Description,
+		InputSchema: schema,
+		Tags:        raw.Tags,
+		Form:        scenarioFormProjection(raw.Form),
 	}
 	// Channel isolation is PHYSICAL, not just directory-based (ADR-0068 §3): stray
 	// `from:` in scenario/<name>/main.yml must not leak into day-2 reply —

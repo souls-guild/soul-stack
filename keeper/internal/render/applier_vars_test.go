@@ -42,7 +42,7 @@ func renderWithVars(t *testing.T, tasks []config.Task) ([]*RenderedTask, error) 
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	out, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    &config.ScenarioManifest{Name: "s", Tasks: tasks},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     staticResolver{varsDestiny()},
 	})

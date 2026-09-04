@@ -65,7 +65,7 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # Identity components feeding name_template (ADR-0079): the run composes
+    # Identity components feeding id_template (ADR-0079): the run composes
     # cache-billing-invoices-redis-cache. Required, so a case must supply them.
     name: cache
     project: billing

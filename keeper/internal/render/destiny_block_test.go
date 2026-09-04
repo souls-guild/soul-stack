@@ -46,7 +46,7 @@ func renderBlockDestiny(t *testing.T, d *ResolvedDestiny, applyInput map[string]
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario(d.Name, applyInput),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       hosts,
 		Destiny:     res,
 	}

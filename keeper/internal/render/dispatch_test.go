@@ -35,7 +35,7 @@ func TestResolveTargets_IncarnationNameNotACoven(t *testing.T) {
 	// prove it is NOT special-cased on the resolve path (it's an ordinary tag,
 	// and on: [incName] still errors regardless).
 	in := RenderInput{
-		Incarnation: IncarnationMeta{Name: incName},
+		Incarnation: IncarnationMeta{ID: incName},
 		Hosts: []*topology.HostFacts{
 			{SID: "bm-1.example.com", Coven: []string{"baremetal"}},
 			{SID: "bm-2.example.com", Coven: []string{"baremetal"}},
@@ -99,7 +99,7 @@ func TestResolveCovenList_IncarnationNameRejected(t *testing.T) {
 	}
 
 	const incName = "svc-prod"
-	in := RenderInput{Incarnation: IncarnationMeta{Name: incName}}
+	in := RenderInput{Incarnation: IncarnationMeta{ID: incName}}
 
 	// Real stable tags pass through unchanged.
 	got, err := resolveCovenList(engine, in, []any{"baremetal", "eu-west"})
@@ -204,7 +204,7 @@ func TestRender_KeeperSideModuleWithoutOn_RoutesToTheKeeper(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Input:       map[string]any{"owner": "alice"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}

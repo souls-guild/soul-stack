@@ -122,7 +122,8 @@ func stackFileDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
 	if err != nil {
 		return out
 	}
-	if _, err := config.ParseServiceVarsStack(data); err != nil {
+	stack, err := config.ParseServiceVarsStack(data)
+	if err != nil {
 		out = append(out, diag.Diagnostic{
 			Level:   diag.LevelError,
 			Phase:   diag.PhaseSemanticValidate,
@@ -131,8 +132,48 @@ func stackFileDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
 			Message: strings.TrimPrefix(err.Error(), "service vars: "),
 			Hint:    "docs/service/manifest.md → Service vars; the decode is strict, so an unknown key is a typo, not an extension",
 		})
+		return out
 	}
-	return out
+	return append(out, stackLegacyRootDiags(stackPath, data, stack)...)
+}
+
+// stackLegacyRootDiags reports the retired CEL root `incarnation.name` inside
+// `_stack.yaml` ([ADR-0085], NIM-730).
+//
+// This file is the THIRD CEL environment carrying that root, and the one easiest
+// to forget: it is not a scenario, so the scenario walk never sees it, and its
+// env is the resolver's own (`cel.NewServiceVars`, which declares `incarnation`
+// and `vars` and nothing else). A step written against the old spelling resolves
+// today through the window's alias and becomes a `no such key` when the alias
+// goes — before the render, so the whole run fails to start rather than one task
+// failing, and with nothing having warned.
+//
+// Only the four evaluated cells are walked. A layer file under `vars/` is NOT one
+// of them: [servicevars.Resolver.readLayer] parses it and returns it, so a
+// `${ … }` written there is literal text in the vars namespace, never a
+// reference, and flagging it would be a false positive that teaches authors to
+// ignore the rule.
+func stackLegacyRootDiags(stackPath string, data []byte, stack *config.ServiceVarsStack) []diag.Diagnostic {
+	eng := computeScopeEngine()
+	if eng == nil || stack == nil {
+		return nil
+	}
+	c := &legacyRootChecker{
+		eng:  eng,
+		path: stackPath,
+		position: func(yamlPath string) (int, int, bool) {
+			return config.PositionIn(data, yamlPath)
+		},
+	}
+	for i, step := range stack.Stack {
+		where := fmt.Sprintf("$.stack[%d]", i)
+		// `when:` is an expression key — the whole string is CEL, no `${ }`.
+		c.expression(where+".when", step.When)
+		c.interpolation(where+".foreach", step.Foreach)
+		c.interpolation(where+".file", step.File)
+		c.value(step.Inline, where+".inline")
+	}
+	return c.out
 }
 
 // isYAMLName — the extensions the resolver treats as a layer, matched the way it

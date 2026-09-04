@@ -14,7 +14,7 @@ description: >-
 # section_key_conflict).
 #
 # ★ create_from_souls DELTA — NEAR-MINIMAL (create's twin without provision):
-#   - input  — the four identity components feeding name_template, plus `hosts`: the ROSTER
+#   - input  — the four identity components feeding id_template, plus `hosts`: the ROSTER
 #     this run deploys onto (NIM-371). covenant does NOT carry the provision section (that's
 #     create's delta, ADR-061), and create_from_souls has no provision at all → the three
 #     provisioned_* fields are never captured here and stay ABSENT (the capture steps live in
@@ -44,33 +44,33 @@ extends: covenant
 compute:
   sentinel_monitor_now: "${ true }"
 
-# ── Composed incarnation name (name_template, ADR-0079) ──────────────────────────────
-# The operator does NOT type a name: it is assembled Keeper-side from the identity
+# ── Composed incarnation id (id_template, ADR-0079) ──────────────────────────────
+# The operator does NOT type an id: it is assembled Keeper-side from the identity
 # components below, over the RESOLVED input (defaults merged) and BEFORE the row is
-# inserted. `name` in POST /v1/incarnations is then optional — and sending it against
-# this scenario is a 422 (the name is derived, not negotiated).
+# inserted. `id` in POST /v1/incarnations is then optional — and sending it against
+# this scenario is a 422 (the id is derived, not negotiated).
 #
-# ★ 63-CHARACTER CEILING. incarnation.name is a TEXT PRIMARY KEY, kebab-case, at most
+# ★ 63-CHARACTER CEILING. incarnation.id is a TEXT PRIMARY KEY, kebab-case, at most
 # 63 characters, and IMMUTABLE — there is no rename. The literal text here costs 9 of
 # those characters ("-", "-", "-redis-"), so the four components share what is left;
 # that is why each carries an explicit max_length below (12+12+12+7 + 9 = 52, with
 # headroom). Overflow is a 422 naming the composed string and its length, NEVER a
-# truncation — a shortened name would be a DIFFERENT identity.
+# truncation — a shortened id would be a DIFFERENT identity.
 #
 # ★ Components are WRITE-ONCE IDENTITY. The template is read only on the create path;
 # running a day-2 scenario later with a different `project` changes what that run does,
 # not what the incarnation is called. Nothing renames an incarnation.
 #
-# ★ The pattern on each component is what actually keeps the name legal: `${ … }` blocks
+# ★ The pattern on each component is what actually keeps the id legal: `${ … }` blocks
 # are stringified as-is, so an underscore or a capital in a component would compose an
-# invalid name and be rejected at create. Validating the PARTS is the cheap place to
+# invalid id and be rejected at create. Validating the PARTS is the cheap place to
 # catch it (soul-lint cannot — the values are the operator's).
-name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+id_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
 
 # ── Input: create_from_souls DELTA on top of covenant.input ──────────────────────────
 # The shared contract (redis_type/version/memory_mb/persistence/users/…) lives in
 # covenant.yml and is merged add-only. Here — ONLY the four identity components that
-# feed name_template; covenant does not carry them (they are about WHO the instance is,
+# feed id_template; covenant does not carry them (they are about WHO the instance is,
 # not HOW Redis is configured).
 input:
   # ── The ROSTER — the souls this run rolls onto (NIM-371) ───────────────────────────
@@ -175,8 +175,8 @@ form:
           label: "Souls"
           hint: "Free onboarded souls in the declared covens. Pick exactly as many as the topology needs: shards*(1+replicas) for cluster, 1+replicas for sentinel."
 
-    # 1. Identity — the components name_template composes the incarnation name from.
-    # ★ These are NOT settings: they are write-once identity (see name_template above),
+    # 1. Identity — the components id_template composes the incarnation id from.
+    # ★ These are NOT settings: they are write-once identity (see id_template above),
     # so the UI shows them once, at create, with a live preview of the composed name.
     - key: identity
       title: "Identity"

@@ -129,7 +129,7 @@ above): the new Voice is visible to subsequent runs.
 - name: Add the new replica to the replicas choir
   module: core.choir.present
   params:
-    incarnation: "${ incarnation.name }"
+    incarnation: "${ incarnation.id }"
     choir:       replicas
     sid:         "${ vars.new_sid }"
     role:        replica
@@ -140,7 +140,7 @@ above): the new Voice is visible to subsequent runs.
 - name: Remove the host from the replicas choir
   module: core.choir.absent
   params:
-    incarnation: "${ incarnation.name }"
+    incarnation: "${ incarnation.id }"
     choir:       replicas
     sid:         "${ input.target_sid }"
 ```

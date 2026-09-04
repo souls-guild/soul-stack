@@ -1,6 +1,6 @@
 package handlers
 
-// Guard tests for POST /v1/incarnations/resolve-name (NIM-331) at the handler
+// Guard tests for POST /v1/incarnations/resolve-id (NIM-331) at the handler
 // layer. The composition itself and its agreement with the create path are pinned
 // in the scenario package; what is at stake HERE is the disclosure boundary — a
 // preview that answers "is this name free" is one careless branch away from being
@@ -40,10 +40,10 @@ func newResolveHandler(t *testing.T, db *fakeIncDB, scoper PurviewResolver, chec
 	return h
 }
 
-func resolveName(t *testing.T, h *IncarnationHandler, req ResolveNameRequest) (ResolveNameResult, error) {
+func resolveName(t *testing.T, h *IncarnationHandler, req ResolveIDRequest) (ResolveIDResult, error) {
 	t.Helper()
 	claims := &jwt.Claims{Subject: "archon-alice"}
-	return h.ResolveNameTyped(context.Background(), claims, req, h.GetInScopeFor(claims, "get"))
+	return h.ResolveIDTyped(context.Background(), claims, req, h.GetInScopeFor(claims, "get"))
 }
 
 // notFoundDB — nothing holds any name.
@@ -58,17 +58,17 @@ func notFoundDB() *fakeIncDB {
 func TestResolveName_ComposesAndReportsFree(t *testing.T) {
 	h := newResolveHandler(t, notFoundDB(), unrestrictedScoper(), allowAllChecker{})
 
-	res, err := resolveName(t, h, ResolveNameRequest{
+	res, err := resolveName(t, h, ResolveIDRequest{
 		Service: "redis", CreateScenario: "create", Input: resolveInput(),
 	})
 	if err != nil {
-		t.Fatalf("ResolveNameTyped: %v", err)
+		t.Fatalf("ResolveIDTyped: %v", err)
 	}
 	if !res.Composes || !res.Valid {
 		t.Fatalf("expected a valid composed name, got %+v", res)
 	}
-	if res.Name != composedName {
-		t.Errorf("Name = %q, want %q", res.Name, composedName)
+	if res.ID != composedName {
+		t.Errorf("Name = %q, want %q", res.ID, composedName)
 	}
 	if res.Length != len(composedName) {
 		t.Errorf("Length = %d, want %d", res.Length, len(composedName))
@@ -111,11 +111,11 @@ func TestResolveName_TakenNamesHolderOnlyInScope(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			h := newResolveHandler(t, takenDB, tc.scoper, allowAllChecker{})
 
-			res, err := resolveName(t, h, ResolveNameRequest{
+			res, err := resolveName(t, h, ResolveIDRequest{
 				Service: "redis", CreateScenario: "create", Input: resolveInput(),
 			})
 			if err != nil {
-				t.Fatalf("ResolveNameTyped: %v", err)
+				t.Fatalf("ResolveIDTyped: %v", err)
 			}
 			if res.Available {
 				t.Error("the name is held — Available must be false for every caller who may create it")
@@ -142,7 +142,7 @@ func TestResolveName_OutOfScopeNameIsRefusedNotAnswered(t *testing.T) {
 	// composed name and refuses.
 	h := newResolveHandler(t, db, unrestrictedScoper(), scopedChecker{covens: []string{"other"}})
 
-	res, err := resolveName(t, h, ResolveNameRequest{
+	res, err := resolveName(t, h, ResolveIDRequest{
 		Service: "redis", CreateScenario: "create", Input: resolveInput(),
 	})
 	if err == nil {
@@ -155,7 +155,7 @@ func TestResolveName_OutOfScopeNameIsRefusedNotAnswered(t *testing.T) {
 	if perr.Details.Status != http.StatusForbidden {
 		t.Errorf("Status = %d, want 403 — the same answer the create gives", perr.Details.Status)
 	}
-	if res.Available || res.TakenByService != "" || res.Name != "" {
+	if res.Available || res.TakenByService != "" || res.ID != "" {
 		t.Errorf("a refusal must disclose nothing about the name, got %+v", res)
 	}
 }
@@ -167,7 +167,7 @@ func TestResolveName_OutOfScopeNameIsRefusedNotAnswered(t *testing.T) {
 func TestResolveName_UnfinishedInputIsAnAnswerNot422(t *testing.T) {
 	h := newResolveHandler(t, notFoundDB(), unrestrictedScoper(), allowAllChecker{})
 
-	res, err := resolveName(t, h, ResolveNameRequest{
+	res, err := resolveName(t, h, ResolveIDRequest{
 		Service: "redis", CreateScenario: "create", Input: map[string]any{"name": "cache"},
 	})
 	if err != nil {
@@ -177,7 +177,7 @@ func TestResolveName_UnfinishedInputIsAnAnswerNot422(t *testing.T) {
 		t.Fatal("the scenario composes — Composes must stay true while the input is incomplete")
 	}
 	if res.Valid {
-		t.Fatalf("must not claim a name while components are missing, got %q", res.Name)
+		t.Fatalf("must not claim a name while components are missing, got %q", res.ID)
 	}
 	if res.InvalidReason == "" {
 		t.Fatal("a blank preview with no reason is exactly what this endpoint removes")
@@ -194,7 +194,7 @@ func TestResolveName_UnregisteredService_422(t *testing.T) {
 	h := NewIncarnationHandler(notFoundDB(), nil, nil, &fakeResolver{ok: false}, loader, nil, unrestrictedScoper(), nil)
 	h.SetPermissionChecker(allowAllChecker{})
 
-	_, err := resolveName(t, h, ResolveNameRequest{
+	_, err := resolveName(t, h, ResolveIDRequest{
 		Service: "redis", CreateScenario: "create", Input: resolveInput(),
 	})
 	var perr *problemError

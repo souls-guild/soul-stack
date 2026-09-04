@@ -1,0 +1,11 @@
+# The SAME mistake written in the retired spelling (ADR-0085 compatibility
+# window): `incarnation.name` still evaluates, so the fail-closed `on:` guard has
+# to recognise it too, or the window is a way past the guard. The legacy-root
+# warning fires here as well, at the same line.
+name: on-incarnation-legacy-root
+tasks:
+  - name: Target the whole incarnation the wrong way, in the old spelling
+    on: ["${ incarnation.name }"]
+    module: core.exec.run
+    params:
+      command: "true"

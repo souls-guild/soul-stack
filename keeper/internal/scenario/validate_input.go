@@ -43,12 +43,12 @@ var ErrValidateFailed = errors.New("scenario: validate rule failed")
 
 // InputGate is what the pre-flight input pass of [ValidateInput] produced beyond
 // "it is valid": the EFFECTIVE input (defaults merged, vault-refs still unresolved
-// strings) and the scenario's `name_template` (empty when the scenario does not
-// compose names, ADR-0079). Both are read by [ResolveCreatePlan] to compose the
-// incarnation name from input components without a second snapshot load/parse.
+// strings) and the scenario's `id_template` (empty when the scenario does not
+// compose ids, ADR-0079). Both are read by [ResolveCreatePlan] to compose the
+// incarnation id from input components without a second snapshot load/parse.
 type InputGate struct {
-	Merged       map[string]any
-	NameTemplate string
+	Merged     map[string]any
+	IDTemplate string
 	// RosterField is the `input:` field the scenario declares as its roster
 	// (`source: { roster: true }`, NIM-371), empty when it declares none. Read by
 	// [ResolveCreatePlan] to hand the create path the SIDs it must bind into
@@ -123,9 +123,9 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 		}
 	}
 	return InputGate{
-		Merged:       merged,
-		NameTemplate: scn.NameTemplate,
-		RosterField:  config.RosterInputField(scn.Input),
+		Merged:      merged,
+		IDTemplate:  scn.IDTemplate,
+		RosterField: config.RosterInputField(scn.Input),
 	}, nil
 }
 
@@ -134,8 +134,8 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 // references resolved). op names the calling phase so the wrapped error reads the
 // same as before the extraction ("validate input" / "preview name").
 //
-// Extracted from [ValidateInput] for [PreviewName]: the live name preview must
-// read the SAME effective `input:` schema and the SAME `name_template` the create
+// Extracted from [ValidateInput] for [PreviewID]: the live name preview must
+// read the SAME effective `input:` schema and the SAME `id_template` the create
 // path validates against. A second load path here is exactly how the preview would
 // start composing over a different contract than the create — the divergence class
 // this whole feature exists to avoid.

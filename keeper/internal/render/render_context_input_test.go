@@ -54,7 +54,7 @@ func TestRenderContext_InputRootPresent(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"listen": "0.0.0.0:9100", "log_level": "info"},
-		Incarnation: IncarnationMeta{Name: "app-prod"},
+		Incarnation: IncarnationMeta{ID: "app-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 	}
@@ -215,7 +215,7 @@ func TestRenderContext_VarsOnlyTemplate_NoInput(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"listen": "0.0.0.0:9100"},
-		Incarnation: IncarnationMeta{Name: "app-prod"},
+		Incarnation: IncarnationMeta{ID: "app-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 	}
@@ -275,7 +275,7 @@ func TestSealS1_SecretInputSealedAndMasked(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"admin_password": secretVal, "listen": "0.0.0.0:9100"},
-		Incarnation: IncarnationMeta{Name: "app-prod"},
+		Incarnation: IncarnationMeta{ID: "app-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 		Sealed:      sealed,
@@ -368,7 +368,7 @@ func TestSealS1_VarsOnlyTemplate_NoSeal(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"admin_password": "s3cr3t"},
-		Incarnation: IncarnationMeta{Name: "app-prod"},
+		Incarnation: IncarnationMeta{ID: "app-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,
 		Sealed:      sealed,

@@ -55,7 +55,7 @@ func TestDestinyIncludeGroupDrop_WhenFalse_TasksAbsent(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyDestinyScenario("cond-destiny", map[string]any{"topology": "standalone"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 		Destiny:     res,
 	}
@@ -100,7 +100,7 @@ func TestDestinyIncludeGroupDrop_WhenTrue_TasksPresent(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyDestinyScenario("cond-destiny", map[string]any{"topology": "sentinel"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 		Destiny:     res,
 	}
@@ -159,7 +159,7 @@ func TestDestinyIncludeGroupDrop_Nested(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyDestinyScenario("nested-destiny", map[string]any{"tls": "on", "ha": "off"}),
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 		Destiny:     res,
 	}
@@ -212,7 +212,7 @@ func TestDestinyIncludeGroupDrop_IsolatedEnv(t *testing.T) {
 		Scenario: applyDestinyScenario("iso-destiny", map[string]any{"topology": "standalone"}),
 		// scenario-scope carries topology=sentinel — destiny must NOT see it.
 		Input:       map[string]any{"topology": "sentinel"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       singleHost(),
 		Destiny:     res,
 	}

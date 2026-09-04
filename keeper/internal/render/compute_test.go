@@ -111,7 +111,7 @@ func TestCompute_SameValueInTasksAndCapture(t *testing.T) {
 		Scenario:    manifest,
 		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
 		Input:       map[string]any{"mb": int64(512)},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h1", []string{"create"}, nil)},
 		Ctx:         context.Background(),
 	}
@@ -181,7 +181,7 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 	in := RenderInput{
 		Scenario:    scenario,
 		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}

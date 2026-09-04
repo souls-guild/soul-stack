@@ -42,7 +42,7 @@ func TestRenderLoop_OverInputArray(t *testing.T) {
 			map[string]any{"name": "alice"},
 			map[string]any{"name": "bob"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -81,7 +81,7 @@ func TestRenderLoop_ContinuousIndex(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -117,7 +117,7 @@ func TestRenderLoop_OverObject(t *testing.T) {
 		Scenario: manifest,
 		// Intentionally not alphabetical: bob, alice.
 		Input:       map[string]any{"acl": map[string]any{"bob": "ro", "alice": "rw"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -149,7 +149,7 @@ func TestRenderLoop_IndexAsArray(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b", "c"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -184,7 +184,7 @@ func TestRenderLoop_WhenFilters(t *testing.T) {
 			map[string]any{"name": "bob", "active": false},
 			map[string]any{"name": "carol", "active": true},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -216,7 +216,7 @@ func TestRenderLoop_WhenBySoulprintRejected(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("deb", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("rh", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -248,7 +248,7 @@ func TestRenderLoop_WhenFiltersAll(t *testing.T) {
 			map[string]any{"name": "alice", "active": false},
 			map[string]any{"name": "bob", "active": false},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -276,7 +276,7 @@ func TestRenderLoop_WhenNonBool(t *testing.T) {
 		Input: map[string]any{"users": []any{
 			map[string]any{"name": "alice"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)
@@ -301,7 +301,7 @@ func TestRenderLoop_WithRunOnce(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b", "c"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("h2", []string{"svc"}, nil),
 			host("h1", []string{"svc"}, nil),
@@ -343,7 +343,7 @@ func TestRenderLoop_InDestinyExpands(t *testing.T) {
 	in := RenderInput{
 		Scenario:    applyScenario("pilot-flat", map[string]any{"marker_file": "/m", "marker_payload": "p", "xs": "${ input.xs }"}),
 		Input:       map[string]any{"xs": []any{"a", "b", "c"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -378,7 +378,7 @@ func TestRenderLoop_DefaultAs(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -401,7 +401,7 @@ func TestRenderLoop_WithWhere(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("deb1", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("deb2", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
@@ -434,7 +434,7 @@ func TestRenderLoop_WithSerial(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b", "c"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("h1", []string{"svc"}, nil),
 			host("h2", []string{"svc"}, nil),
@@ -472,7 +472,7 @@ func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("deb", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 			host("rh", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
@@ -495,7 +495,7 @@ func TestRenderLoop_PerIterationDifferentParamsOK(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a", "b"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts: []*topology.HostFacts{
 			host("h1", []string{"svc"}, nil),
 			host("h2", []string{"svc"}, nil),
@@ -523,7 +523,7 @@ func TestRenderLoop_EmptyItems(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -549,7 +549,7 @@ func TestRenderLoop_NonCollectionItems(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"scalar": "not-a-list"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	if _, _, err := p.Render(context.Background(), in); err == nil {
@@ -585,7 +585,7 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"}, // users not passed
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, plans, err := p.Render(context.Background(), in)
@@ -631,7 +631,7 @@ func TestRenderLoop_StaticWhenSkip_UnresolvableItems_ContinuousIndex(t *testing.
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -674,7 +674,7 @@ func TestRenderLoop_StaticTrueWhen_FansOut(t *testing.T) {
 			map[string]any{"name": "alice"},
 			map[string]any{"name": "bob"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -713,7 +713,7 @@ func TestRenderLoop_MixedWhen_NotStaticSkipped(t *testing.T) {
 		Input: map[string]any{"action": "create", "users": []any{
 			map[string]any{"name": "alice"},
 		}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -748,7 +748,7 @@ func TestRenderLoop_StaticWhenSkip_ConsistentAcrossPassages(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	first, _, err := p.Render(context.Background(), in)
@@ -799,7 +799,7 @@ func TestRenderLoop_StaticWhenSkip_PreservesOnChanges(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"action": "update_acls"}, // users NOT passed → static-skip BEFORE resolveLoopItems
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	tasks, _, err := p.Render(context.Background(), in)
@@ -834,7 +834,7 @@ func TestRenderLoop_OnApplyRejected(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"xs": []any{"a"}},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h", []string{"svc"}, nil)},
 	}
 	_, _, err := p.Render(context.Background(), in)

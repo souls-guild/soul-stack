@@ -133,7 +133,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	serviceVars, err := s.vars.Resolve(servicevars.ResolveInput{
 		ServiceDir: art.LocalDir,
 		Incarnation: servicevars.IncarnationContext{
-			Name:           inc.ID,
+			ID:             inc.ID,
 			Service:        inc.Service,
 			ServiceVersion: inc.ServiceVersion,
 			Covens:         inc.Covens,

@@ -28,7 +28,7 @@ func regKV() *countingKV {
 
 func regInput(keeper map[string]any) RenderInput {
 	return RenderInput{
-		Incarnation:    IncarnationMeta{Name: "redis-prod", Service: "wb-service-redis"},
+		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
 		KeeperRegister: keeper,
 	}
 }
@@ -235,7 +235,7 @@ func TestRender_KeeperRegisterSecretReachesHostTask(t *testing.T) {
 				},
 			}},
 		},
-		Incarnation:    IncarnationMeta{Name: "redis-prod", Service: "wb-service-redis"},
+		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
 		Hosts:          []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 		KeeperRegister: map[string]any{"admin": map[string]any{"effective": "vault:secret/wb-service-redis/redis-prod/admin_password#value"}},
 		RegisterByHost: map[string]map[string]any{

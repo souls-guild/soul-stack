@@ -74,7 +74,7 @@ func TestAcceptance_RestartBlockFanOut(t *testing.T) {
 	in := RenderInput{
 		Scenario:    m,
 		Input:       map[string]any{},
-		Incarnation: IncarnationMeta{Name: "redis-prod", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "redis"},
 		Hosts: []*topology.HostFacts{
 			host("a.example.com", []string{"redis-prod"}, nil),
 			host("b.example.com", []string{"redis-prod"}, nil),
@@ -312,7 +312,7 @@ func TestAcceptance_SentinelReplicaExcludesMaster(t *testing.T) {
 		Scenario:    m,
 		Input:       effectiveInput,
 		ServiceVars: redisSentinelVars(),
-		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     redisSentinelResolver{},
 		// The register of the keeper-side core.state.set task that mints the
@@ -497,7 +497,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	p := NewPipeline(stubKV{}, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyDestinyScenario("redis", applyInput),
-		Incarnation: IncarnationMeta{Name: "redis", Service: "redis"},
+		Incarnation: IncarnationMeta{ID: "redis", Service: "redis"},
 		Hosts:       hosts,
 		Destiny:     realRedisDestinyResolver{dir: filepath.FromSlash("../../../examples/destiny/redis")},
 	}

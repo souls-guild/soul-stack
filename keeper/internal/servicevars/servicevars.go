@@ -75,11 +75,10 @@ type ResolveInput struct {
 // its own vars — they say nothing about its member hosts (NIM-281). It carries no
 // `host_count` and no `state` snapshot: neither exists yet at this point in a run.
 // As with [render.IncarnationMeta], the FIELD NAMES mirror the CEL keys rather
-// than the registry columns: the column is `id` since [ADR-0085] / NIM-729,
-// while the CEL root stays `incarnation.name` until NIM-730 opens its
-// compatibility window. Callers fill `Name` from the renamed identifier.
+// than the registry columns — and since NIM-730 the two agree: the column is
+// `id` ([ADR-0085] / NIM-729) and so is the CEL root.
 type IncarnationContext struct {
-	Name           string
+	ID             string
 	Service        string
 	ServiceVersion string
 	Covens         []string
@@ -91,8 +90,8 @@ type IncarnationContext struct {
 // compare against "" and look like it matched something.
 func (c IncarnationContext) celMap() map[string]any {
 	m := map[string]any{}
-	if c.Name != "" {
-		m["name"] = c.Name
+	if c.ID != "" {
+		m["id"] = c.ID
 	}
 	if c.Service != "" {
 		m["service"] = c.Service

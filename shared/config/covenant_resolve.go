@@ -10,7 +10,7 @@ package config
 // effective `input`) is correct only over the MERGED input, and the effective input
 // exists only post-merge (needs the FS). So the covenant scenario's form is checked
 // HERE, after MergeCovenant, with the same core [validateFormAgainstInputKeys] the
-// non-extends path runs in the semantic phase. `name_template` (ADR-0079) is gated
+// non-extends path runs in the semantic phase. `id_template` (ADR-0079) is gated
 // identically — its `${input.X}` references resolve against the same effective input.
 
 import (
@@ -64,7 +64,7 @@ const covenantFileExt = ".yml"
 //     (add-only merge forbids override);
 //   - covenant_merge_failed             — other (unexpected) merge errors;
 //   - form_field_unknown/duplicate/…    — the post-merge form check (see the core);
-//   - name_template_input_unknown/…     — the post-merge `name_template` check
+//   - id_template_input_unknown/…       — the post-merge `id_template` check
 //     (ADR-0079), gated for the same reason as form.
 func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot string) []diag.Diagnostic {
 	if m == nil || m.Extends == "" {
@@ -136,25 +136,32 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 	// phase (scenario.go) and checked here. Same core as the non-extends path, on the
 	// same AST (the form: node from doc).
 	fdiags = append(fdiags, resolveCovenantFormDiags(m, doc, scenarioPath)...)
-	fdiags = append(fdiags, resolveCovenantNameTemplateDiags(m, doc, scenarioPath)...)
+	fdiags = append(fdiags, resolveCovenantIDTemplateDiags(m, doc, scenarioPath)...)
 	return fdiags
 }
 
-// resolveCovenantNameTemplateDiags runs the covenant scenario's post-merge
-// `name_template` check (ADR-0079) — same motive and same core as
+// resolveCovenantIDTemplateDiags runs the covenant scenario's post-merge
+// `id_template` check (ADR-0079) — same motive and same core as
 // [resolveCovenantFormDiags]: `${input.X}` must resolve against the MERGED input,
 // otherwise a component declared in the covenant would yield a false
-// name_template_input_unknown.
-func resolveCovenantNameTemplateDiags(m *ScenarioManifest, doc *Document, scenarioPath string) []diag.Diagnostic {
+// id_template_input_unknown.
+//
+// Reads whichever spelling the file wrote ([ADR-0085] compatibility window); the
+// fold into IDTemplate has already run in the schema phase.
+func resolveCovenantIDTemplateDiags(m *ScenarioManifest, doc *Document, scenarioPath string) []diag.Diagnostic {
 	root := rootMapping(doc)
-	if root == nil || !topLevelKeys(root)["name_template"] {
+	if root == nil {
+		return nil
+	}
+	topKeys := topLevelKeys(root)
+	if !topKeys[idTemplateKey] && !topKeys[nameTemplateKey] {
 		return nil
 	}
 	inputKeys := make(map[string]bool, len(m.Input))
 	for k := range m.Input {
 		inputKeys[k] = true
 	}
-	out := validateNameTemplateAgainstInputKeys(root, m.NameTemplate, m.Create, inputKeys, "$.name_template")
+	out := validateIDTemplateAgainstInputKeys(root, m.IDTemplate, m.Create, inputKeys, m.writtenIDTemplateKey(topKeys))
 	for i := range out {
 		if out[i].File == "" {
 			out[i].File = scenarioPath

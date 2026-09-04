@@ -27,7 +27,7 @@
 #   that the body reads, WITH THE SAME SEMANTICS:
 #       input.provision.{enabled, provider, profile, await_timeout, ssh_provider}
 #       input.replicas_per_master
-#       incarnation.name
+#       incarnation.id
 #       vars.provision_{provider, profile, await_timeout, ssh_provider}
 #   provider/profile/await_timeout/ssh_provider are read as default(input.provision.X,
 #   vars.provision_X) — the operator can usually omit them (the provision form is hidden,
@@ -51,7 +51,7 @@
 - name: Guard incarnation name is a valid VM-name base for cloud provisioning
   assert:
     that:
-      - "incarnation.name.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
+      - "incarnation.id.matches('^[a-z][a-z0-9-]{0,48}[a-z0-9]$')"
     message: "incarnation name is not valid as a VM-name base for provisioning (needs ^[a-z][a-z0-9-]{0,48}[a-z0-9]$): a leading digit / trailing dash / length 51-63 pass create but fail in the CloudDriver — rename the incarnation or create with provision.enabled=false"
 
 # (a) Create VMs via CloudDriver (keeper-side, ADR-017). count = 1+replicas_per_master
@@ -82,11 +82,11 @@
     # VMs <name>-<seq> and stamps label soulstack-run=<name> (nameBase→runLabel,
     # provisioned.go→soul-cloud-*) → a restart of the same incarnation reuses the same VM batch
     # (findByRunLabel, no orphans spawned). Without name, create fails with `no run identity`.
-    # Modeled on redis-provision.yml. incarnation.name is the root Coven label (ADR-008), stable
+    # Modeled on redis-provision.yml. incarnation.id is the root Coven label (ADR-008), stable
     # across runs; USUALLY matches vmNameBasePattern, but incarnation.NamePattern
     # ^[a-z0-9][a-z0-9-]{0,62}$ is a superset (leading digit / trailing dash / length 51-63
     # will fail the driver) → cross-domain guard (domain mismatch) is a separate ticket.
-    name: "${ incarnation.name }"
+    name: "${ incarnation.id }"
     generate_userdata: false
 
 

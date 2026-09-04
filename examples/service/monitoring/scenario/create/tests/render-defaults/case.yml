@@ -164,7 +164,7 @@ assert:
           self:
             sid: trial-host
             # single-host sugar (fixtures.soulprint) carries the root
-            # incarnation.name label in covens (scenario name = create) —
+            # incarnation.id label in covens (scenario name = create) —
             # mirrors the production roster `WHERE $1 = ANY(coven)`. This is harness
             # behavior from the start (see fixtureHosts), not an artifact of the
             # multi-host enabler.
@@ -255,7 +255,7 @@ assert:
             extra_args: []
           self:
             sid: trial-host
-            # see node_exporter unit above: covens carries the incarnation.name label.
+            # see node_exporter unit above: covens carries the incarnation.id label.
             covens: []
             choirs: []
             # traits — registry projection (ADR-060), empty object without labels.

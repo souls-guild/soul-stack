@@ -125,7 +125,7 @@ func TestIntegration_VaultResolveInParams(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"user": "alice"},
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 
@@ -166,7 +166,7 @@ func TestIntegration_VaultRefNotFound(t *testing.T) {
 	}
 	in := RenderInput{
 		Scenario:    manifest,
-		Incarnation: IncarnationMeta{Name: "svc"},
+		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{{SID: "a", Coven: []string{"svc"}}},
 	}
 	if _, _, err := p.Render(ctx, in); err == nil {
