@@ -76,7 +76,7 @@ func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
 	// only place the second is checked, because everything that writes
 	// `redis.<object>.<action>` is YAML.
 	//
-	// Since NIM-766 there are SIX of them, one per object, so the set is checked
+	// Since NIM-767 there are SEVEN of them, one per object, so the set is checked
 	// in both directions: an object the artifact stopped serving would leave the
 	// scenarios addressing nothing, and one it started serving without a row here
 	// would go unexercised by the live suite.

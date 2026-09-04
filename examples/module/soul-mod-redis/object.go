@@ -1,7 +1,7 @@
 // The objects this artifact serves — address level 2 of `redis.<object>.<action>`
 // (ADR-020 amendment 2026-09-02, NIM-765/NIM-766).
 //
-// One artifact, six objects, one body of Redis code. Every object is the same
+// One artifact, seven objects, one body of Redis code. Every object is the same
 // [object] value with a different action table; the tables ARE the boundary, so
 // `instance` cannot reach a cluster action by accident — that state is simply
 // unknown to it. The driver was not split: an action delegates to the very same
@@ -53,7 +53,7 @@ type action struct {
 type object struct {
 	module.BaseModule
 
-	// impl is the shared Redis implementation. Six objects, one driver.
+	// impl is the shared Redis implementation. Seven objects, one driver.
 	impl *RedisModule
 
 	// name is address level 2 — used in diagnostics only; what an operator
@@ -122,7 +122,7 @@ func (o *object) Apply(req *pluginv1.ApplyRequest, stream eventStream) error {
 	return act.apply(o.impl, ctx, stream, conn, req.GetParams())
 }
 
-// unknownState names the object as well as the state: with six objects in one
+// unknownState names the object as well as the state: with seven objects in one
 // artifact, "unknown state" alone would leave an author guessing whether the word
 // is wrong or the object is.
 func (o *object) unknownState(state string) string {

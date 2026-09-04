@@ -8,16 +8,19 @@
 > still registers the artifact as `community` must change the alias in
 > `keeper.yml::plugins.*[].name`, which is a config edit and nothing more.
 >
-> The `redis.user.*` object — ACL users through `ACL SETUSER` — is **NIM-767** and is not here yet.
+> The `redis.user.*` object — ACL users through `ACL SETUSER`/`ACL DELUSER` — landed
+> with **NIM-767**. It is not a replacement for `acl.reloaded`: there the subject is
+> the aclfile a destiny rendered, here it is one user. Wiring it into a service that
+> still renders that file is NIM-768.
 
 MAIN interface to **live Redis** in redis consolidation (role-based concept): the service scenario orchestrates the order/targeting/rolling, and the plugin
 performs **one** operation on one Redis instance. Custom plugin
-`kind: soul_module` serving **six objects** — `acl`, `cluster`, `command`, `instance`,
-`replica`, `sentinel` — from one binary, `soul-mod-redis`; the artifact carries no name of
-its own (NIM-377), so level 1 is whatever alias the operator registers it under.
+`kind: soul_module` serving **seven objects** — `acl`, `cluster`, `command`, `instance`,
+`replica`, `sentinel`, `user` — from one binary, `soul-mod-redis`; the artifact carries no
+name of its own (NIM-377), so level 1 is whatever alias the operator registers it under.
 Implementation -
 [`examples/module/soul-mod-redis/`](../../../examples/module/soul-mod-redis/)
-(`object.go` - the object tables and the dispatch, `bundle.go` - the six `module.Def`s the
+(`object.go` - the object tables and the dispatch, `bundle.go` - the seven `module.Def`s the
 schema document is generated from, `obj_*.go` - one file per object's declaration,
 `impl.go` - the shared driver + command.run/instance.configured/acl.reloaded, `probe.go` -
 the read probes instance.pinged/instance.role-probed/replica.synced/replica.offset-synced,
@@ -25,7 +28,8 @@ the read probes instance.pinged/instance.role-probed/replica.synced/replica.offs
 (created/node-added/node-removed/resharded + external-joined/failed-over/external-forgotten),
 `replica.go` - replica.present (REPLICAOF, external source `source_external`),
 `detach.go` — replica.detached (REPLICAOF NO ONE, promotion),
-`sentinel.go` — sentinel.monitored (MONITOR/SET reconcile), `helpers.go` —
+`sentinel.go` — sentinel.monitored (MONITOR/SET reconcile), `user.go` —
+user.present/user.absent (ACL SETUSER/DELUSER on one user), `helpers.go` —
 structpb/secret-helpers).
 
 Backend — [`github.com/redis/go-redis/v9`](https://github.com/redis/go-redis):
@@ -46,7 +50,7 @@ quiet clean from no-op Plan.
 
 ## Objects and actions
 
-Six objects (`schema.json::modules[]`), **seventeen** actions between them. The object is
+Seven objects (`schema.json::modules[]`), **nineteen** actions between them. The object is
 address level 2 — what is being managed — and the action is level 3: the state it is left
 in, or, on the one non-stateful object, the single verb naming the operation.
 
@@ -54,7 +58,8 @@ in, or, on the one non-stateful object, the single verb naming the operation.
 |---|---|---|
 | `command` | `run` | An arbitrary Redis command, run as given. Non-stateful, so level 3 is the verb form (`core.exec.run`'s shape). It takes exactly one verb — a second operation would be a second object. |
 | `instance` | `pinged`, `role-probed`, `configured` | A live Redis server: is it answering, what role does it hold, and its running configuration. |
-| `acl` | `reloaded` | The access-control list of a live instance, reconciled from its aclfile. Individual ACL users through `ACL SETUSER` are the `user` object — NIM-767, not here yet. |
+| `acl` | `reloaded` | The access-control list of a live instance, reconciled from its aclfile. The subject is the FILE: a destiny renders it, this makes the instance re-read it. |
+| `user` | `present`, `absent` | ONE ACL user, reconciled directly through `ACL SETUSER`/`ACL DELUSER`. The subject is the USER, so nothing here renders or re-reads a file and the rest of the ACL is untouched. |
 | `replica` | `present`, `detached`, `synced`, `offset-synced` | The replication link of one instance: bound to a master, torn down, or caught up (locally, or against an external source). |
 | `cluster` | `created`, `node-added`, `node-removed`, `resharded`, `external-joined`, `failed-over`, `external-forgotten` | A Redis Cluster. Every action here manages SEVERAL nodes, so none takes a single `addr`. |
 | `sentinel` | `monitored` | A live Redis Sentinel: the masters it monitors and the options it holds. The one object WITHOUT a keyspace — Sentinel refuses `SELECT`, so `db > 0` breaks the connection outright (NIM-229). |
@@ -84,6 +89,8 @@ in, or, on the one non-stateful object, the single verb naming the operation.
 | `replica.present` | Link the instance to the master via `REPLICAOF` (+ `CONFIG SET masterauth`). Opt. `source_external: true` - binding to the **external** master (migration) with separate details `master_*`. | `true` when configuring; `false` (no-op), if there is already a replica of the desired master or `addr == master_addr` (the master itself, guard is disabled with `source_external`). |
 | `replica.detached` | Detach the instance from the master via `REPLICAOF NO ONE`, promoting it to an independent master. The final step of migration from an external source (after `offset-synced` confirmed catch-up). Idempotent: already master → no-op. | `true` during promotion; `false` (no-op), if the instance is already master. |
 | `sentinel.monitored` | Reconcile Redis Sentinel (`SENTINEL MONITOR`/`REMOVE`/`SET`/`CONFIG SET`). Reconcile algorithm: classify config → monitor/set diff. | `true` when changing monitor/parameters; `false` (no-op), if everything matches. |
+| `user.present` | Reconcile ONE ACL user via `ACL SETUSER` — perms and state as declared, the credential as `#<sha256hex>`. Declarative: the vector opens with `reset`, so a permission dropped from the declaration is dropped on the instance. `ACL SAVE` after a change (`persist`, default `true`). | `true`/`false` by diff of this user's `ACL LIST` line before/after `SETUSER` (matched → `false`, no-op). |
+| `user.absent` | Remove ONE ACL user via `ACL DELUSER`. The rest of the ACL is untouched. `ACL SAVE` after a removal that happened. | `true` on removal; `false` (no-op) on a user the instance does not have — and no *mutating* command is sent, nor is the aclfile touched. |
 
 ## command.run — params
 
@@ -265,6 +272,162 @@ no acl-specific fields (the file is the source of truth, it is rendered by desti
 carry password-hash (`>hash` / `#sha256`). `ACL LOAD` fails when `aclfile` /
 unconfigured `aclfile` - this is the Redis response (not an operator secret), goes to
 `Message` as `failed`. Without dry-run preview (the plugin does not implement `PlanReadSafe`).
+
+## user — the object
+
+`acl.reloaded` and `user.*` are not two ways to do one thing. In `acl` the subject is
+the **file**: a destiny renders the whole `users.acl` and the plugin makes Redis re-read
+it, so every edit runs through both halves and forgetting to merge the service accounts
+back into that render wipes replication (the ★★ note in
+[`scenario/add_user/main.yml`](../../../examples/service/redis/scenario/add_user/main.yml)
+exists for exactly that reason). In `user` the subject is the **user**: `ACL SETUSER`
+reaches it directly and the rest of the ACL is nobody's business.
+
+**★ The credential never reaches the wire in the clear.** `ACL SETUSER` takes either
+`>plaintext` or `#<sha256hex>`, and this object only ever sends the hash — the same
+digest `users.acl.tmpl` has always written (sprig `sha256sum`), so a user written here
+and the same user written by the render are indistinguishable to Redis. `user_password`
+is `secret: true` with `pattern: "^vault:.*"` like every other secret here; the
+plaintext's absence from the argument vector **and** the hash's presence in it are both
+guard tests (`user_test.go`) — asserting only the absence would pass just as well on a
+build that dropped the credential, which is a silent lockout.
+
+**★ `perms` carries permissions, not credentials.** Redis takes both in one rule vector,
+and `perms` is a plain declared string — not `secret: true` — so its value is unmasked in
+the rendered task, in keeper's logs, traces and UI, and in git. A token carrying a
+credential **value** (`>pass`, `<pass`, `#hash`, `!hash`) is therefore **refused**, and
+the refusal names the token's prefix and position rather than quoting it, because the
+error text lands on the same surfaces.
+
+A **leading `(` is stripped before that test**. Redis merges a selector across
+arguments, so `(>secret +get)` splits on whitespace into `(>secret` and `+get)` and the
+credential sits at byte 1 — while Redis reads the same rule as one modifier and quotes
+the *whole* thing back in its syntax error, which becomes `ApplyEvent.Message`. Missing
+it did not merely let a credential through: it put the plaintext on precisely the
+surface the refusal protects, somewhere `redactError` cannot reach (the value is in
+`perms`, not in a secret param). The mirrored `(+get >secret)` was caught all along, so
+one rule got two verdicts depending on how it was written.
+
+**Where the guard stops, stated exactly.** It covers the positions Redis actually
+parses a credential in — the start of a token, and the start of a token opening a
+selector. It does **not** cover a credential-looking substring buried anywhere else
+(`+get(>hunter2`): Redis rejects the modifier and quotes the whole thing back, so the
+text lands in `ApplyEvent.Message`. That class is unbounded and cannot be closed by a
+token test. It is also not a *new* leak: `perms` is not a secret param, so anything
+written there is already in the clear in the rendered task, the logs and git. The
+guard's job is to stop a credential from being **set** through a param that cannot
+mask it — and no such token ever reaches Redis in a form it would honour.
+
+Three keywords are refused as well, and **in any case** — Redis's ACL parser matches
+with `strcasecmp`, so an exact comparison is a one-keystroke bypass, and the first
+version of this guard had one: `RESET` walked through it and discarded the declared
+perms, state and password on a live instance while the step reported success.
+
+Matching `strcasecmp` means its **other** half too. It stops at the first NUL byte and
+Go's `EqualFold` does not, so `reset\0x` reads as `reset` to Redis and as an unknown
+token to a comparison that folds case alone — which restored every one of these harms.
+The YAML parser this tree uses decodes an embedded NUL into a Go string, so it is
+reachable from a scenario. A token carrying a NUL is therefore refused outright rather
+than truncated: truncating would leave this object silently reinterpreting what the
+author wrote, and only refusing keeps its reading of a token and Redis's the same one.
+
+| Refused in `perms` | Why |
+|---|---|
+| `reset` | The vector already opens with one; a second discards the state and credentials this step just set. |
+| `on` / `off` | That is `state`'s job. A token here lands *after* it and overrides it, and `Output.state` would then report the declaration rather than the instance. |
+| `nopass` / `resetpass` **when `user_password` is also declared** | Redis takes the last directive and the perms token is last, so the two contradict silently — the account ends up authenticating with any string, or with none. |
+
+`nopass`/`resetpass` **alone** stay legal: they carry nothing secret and are how you
+declare a user that holds no password. They override the carry-over below, which is the
+author saying so explicitly instead of an omitted `user_password` doing it by accident.
+
+**★ Every one of these rules is enforced in `Apply`, not only in `Validate`.** `Validate`
+is a separate RPC and nothing in this tree calls it before applying — `soul`'s
+applyrunner calls `Apply`, and keeper's static check is presence-only and returns early
+on a `${…}`-rendered cell. So `perms: "${ vars.acl }"` with the var unset lints clean and
+arrives empty; since the vector opens with `reset`, an `Apply` that did not re-check
+would strip every permission the live user holds and then `ACL SAVE` it — an account that
+still authenticates and answers `NOPERM` to everything. Guard tests drive the real
+`Apply` for each rule.
+
+**★ Declarative, hence `reset`.** `ACL SETUSER` MERGES into a user's existing rules, so a
+permission dropped from the declaration would stay live and `present` would only ever
+converge upward. The rule vector therefore opens with `reset`. That clears the user's
+passwords too, which is why an **omitted** `user_password` re-applies the credentials
+carried over from the live `ACL LIST` line rather than revoking the one clients already
+hold — the `add_user` scenario's "re-running keeps their password", kept mechanically.
+
+**★ NIM-624 has no analogue here — precisely, and no wider.** What that ticket recorded
+was a half-written `users.acl` left on disk by a failed `ACL LOAD`, after which Redis
+would not start. This path writes no file of its own: `ACL SETUSER` is atomic (Redis
+validates the whole rule vector and applies none of it on error), and `ACL SAVE` runs
+**only** after a command that both succeeded and changed something. A failed apply
+leaves behind no file Redis will refuse to load, and that is a guard test rather than a
+claim.
+
+It does **not** say a failed apply changed nothing. `SETUSER` and `SAVE` are two
+commands, so a `SAVE` that fails leaves the instance mutated behind a step reporting
+failure — and `ApplyEvent` cannot report both: soul's applyrunner tests `GetFailed()`
+before `GetChanged()` ([`applyrunner.go`](../../../soul/internal/runtime/applyrunner.go)),
+so `changed` on a failed event is unreachable and every handler keyed on it stays
+silent. Worse, a re-run then reports a clean **no-op**, because the instance really does
+match now — the drift is in the file, where nothing is looking. So the common cause is
+refused **before** anything is mutated: with `persist` on, the apply asks
+`CONFIG GET aclfile` first and fails without touching the ACL if there is none. What
+that pre-flight cannot cover (a full disk, a read-only mount) is named in the `ACL SAVE`
+failure text, which says in so many words that the change is live and unrecorded.
+
+The pre-flight is **evidence, never a requirement**. `CONFIG` is `@admin`/`@dangerous`
+and `ACL SETUSER`/`ACL SAVE` are not, so `+acl +ping +select` without `+config|get` is
+a connection that can do the entire job — and the first version of this refused all of
+it with `NOPERM`, work that very connection was able to perform. Only a `CONFIG GET`
+that *succeeds* and answers empty is evidence; an error means "cannot tell" and the
+apply proceeds as it did before the pre-flight existed. On `user.absent` the check also
+runs **after** the probe, because with no user to remove there is nothing to persist
+and checking first turned an idempotent cleanup into a hard red.
+
+**★ `persist` and the seam with the render.** `ACL SETUSER` changes memory only; the
+`aclfile` on disk still holds what the destiny rendered, so without `ACL SAVE` the user
+is silently dropped by the next restart or the next `acl.reloaded`. Hence `persist`,
+default `true`. It deliberately does **not** run on a no-op: `ACL SAVE` rewrites the file
+in Redis's own rendering of the rules, which a destiny that also renders it reads as a
+change and answers with a restart — on every run. A change does leave the file in
+Redis's form rather than the template's, and reconciling the two paths inside a service
+belongs to NIM-768. On an instance with no `aclfile` directive `ACL SAVE` cannot succeed
+at all: declare `persist: false`.
+
+## user.present — params
+
+| Param | Type | Required/default | Meaning |
+|---|---|---|---|
+| `addr` | string | required | Redis address: `host:port` (TCP) or `unix:/path`. |
+| `name` | string | required | The ACL username **being managed**. Carries no whitespace. Not the same as `username`, which is who the step authenticates as. |
+| `perms` | string | required | The FULL ACL rule string, Redis directives verbatim (`~app:* +@read +@write`). **Total, not additive** — whatever is not here is not granted, because the apply resets the user first. A credential-bearing token (`>pass`, `<pass`, `#hash`, `!hash`) is refused, as are `reset`, `on`/`off`, and `nopass`/`resetpass` beside a declared `user_password` — all case-insensitively. `nopass`/`resetpass` alone are allowed. |
+| `state` | string | optional (default `on`) | `on` or `off`. **Quote it in YAML**: unquoted `on`/`off` parse as booleans (YAML 1.1), and a boolean is *refused* rather than coerced — coercing `off` would silently land as the default `on`. |
+| `user_password` | string (secret) | optional | Password OF THE MANAGED USER. vault-ref; sent as `#<sha256hex>`, never plaintext. Omit to keep the credential the user already holds; on a user that does not exist yet, omitting it creates one that cannot authenticate until you declare a password or put `nopass` in `perms`. |
+| `persist` | bool | optional (default `true`) | Run `ACL SAVE` after a CHANGING `SETUSER`. Not run on a no-op. `false` on an instance with no `aclfile`. A non-boolean is *refused*, not coerced: the fallback would be "write it to disk". With it on, the apply first asks `CONFIG GET aclfile` and refuses without mutating anything if there is none. That pre-flight never fails the apply on its own account: `CONFIG` is `@admin` while the ACL commands are not, so a connection that cannot read the config (NOPERM, `rename-command`) proceeds exactly as it did before the pre-flight existed. |
+| `password` | string (secret) | optional | Redis password for the **connection**. vault-ref, keeper resolves to Apply (see "Password"). Masked; **not** passed into the arguments of ACL commands. |
+| `username` | string | optional | ACL-username for `AUTH` — who the step authenticates **as** (if not default-user). |
+| `db` | int | optional (default `0`) | Database number (`SELECT`) before `ACL SETUSER`. Inert — the ACL is server-wide — but declared because it is part of the shared connect path. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS connection parameters (see "TLS connection"). |
+
+**Output**: `name` and the declared `state`. The `ACL LIST` lines the change was diffed
+against carry password hashes and go nowhere near Output — the same rule `acl.reloaded`
+follows. Without dry-run preview.
+
+## user.absent — params
+
+| Param | Type | Required/default | Meaning |
+|---|---|---|---|
+| `addr` | string | required | Redis address: `host:port` (TCP) or `unix:/path`. |
+| `name` | string | required | The ACL username to remove. Carries no whitespace and no NUL, and is not `default` — refused by this module in `Apply` as well as `Validate`. Redis refuses `default` too, but a safety borrowed from the server is one the next release can change. To disable `default` instead, use `user.present` with `state: "off"` — **only once another account can authenticate**: on an instance whose only user is `default`, that succeeds, is saved, and leaves every new connection on `NOAUTH`, recoverable only by editing the aclfile out of band. |
+| `persist` | bool | optional (default `true`) | Run `ACL SAVE` after a removal that actually happened. Not run on the no-op — including the case where `DELUSER` answers `0` because another actor removed the user between the probe and the command. A non-boolean is *refused*, not coerced. |
+| `password` | string (secret) | optional | Redis password for the **connection**. Masked; not passed into ACL command arguments. |
+| `username` | string | optional | ACL-username for `AUTH` (if not default-user). |
+| `db` | int | optional (default `0`) | Database number (`SELECT`) before `ACL DELUSER`. |
+| `tls` / `tls_ca` / `tls_cert` / `tls_key` / `tls_skip_verify` | — | optional | General TLS connection parameters (see "TLS connection"). |
+
+**Output**: `name`. Without dry-run preview.
 
 ## cluster — the object
 
@@ -575,8 +738,15 @@ plaintext value (ADR-012 - Soul/Vault client plugin does not work). In the manif
 `password` is marked `secret: true` + `pattern: "^vault:.*"` - this forces
 vault-ref at the input and masking in logs/trace/UI.
 
+`user.present` is the one state whose secret is not only a connect credential:
+`user_password` is the password OF THE MANAGED USER, and `ACL SETUSER` takes a password
+as an argument by design. It is sent as `#<sha256hex>` and never as plaintext, so the
+invariant below holds for it in the same form as for every other secret here — the
+plaintext appears in no argument, event, output or error. See "user — the object".
+
 Code invariant (checked by L0): `params["password"]` (and `auth_pass` in `sentinel.monitored`,
-`master_password` to `replica.present source_external`, `source_password` to `replica.offset-synced`)
+`master_password` to `replica.present source_external`, `source_password` to `replica.offset-synced`,
+`user_password` to `user.present`)
 **never** get into `ApplyEvent.Message`/`.Output`, error text and
 stderr. Connection errors are sanitized (`redactError` cuts out the substring
 password - during the second connection, `replica.offset-synced` edits **both** passwords); conclusion
@@ -798,6 +968,56 @@ external`: `FORGET` all old ids on **each** new node; doesn't foreget himself
 (`Cant forget self` swallowed); **without** slot migration; `Unknown node` → no-op;
 seed-failover and "all seeds are gone" → `failed`. In all - **IS-invariant** (password
 does not leak).
+- **L0 user (present/absent)**
+  ([`user_test.go`](../../../examples/module/soul-mod-redis/user_test.go)):
+fake `redisConn` with a scripted `ACL LIST` (before/after) and a per-verb failure, so
+"`SETUSER` failed" and "`ACL SAVE` failed" are distinguishable — the difference IS the
+persistence invariant. Covers `Validate` (empty `addr`/`name`/`perms`, a name carrying
+whitespace, a state that is neither `on` nor `off`, and `absent` on `default`);
+create + `ACL SAVE`; idempotent no-op that does **not** save; Redis's normalization of
+the rules not reading as a change; `persist: false`; `absent` on a user the instance
+does not have sending no command; a name that is merely a substring of a live user not
+matching. Guards rather than coverage: **`reset`** opens the vector and a rule outside
+the declaration does not survive it; the credential is **hashed and present** (a
+dropped password is not a fix); the live `#hash`/`nopass` is **carried past the reset**;
+a **failed `SETUSER` persists nothing** (the NIM-624 shape, mirrored); a **boolean
+`state` is refused** by both `Validate` and `Apply` (the YAML 1.1 `on`/`off` trap);
+**IS-invariant** (neither the connection password nor the managed user's password
+reaches arguments, events or a sanitized connect error). Ten mutations of the real code
+were run against these guards and all ten turned them red.
+  A second set answers an independent review of this object, and each one drives the
+real `Apply` because that is the only entry point a runner uses: an **empty `perms`**
+is refused and reaches neither `SETUSER` nor `ACL SAVE` (unchecked, `reset` would strip
+every permission the live user holds and persist it); an **empty `name`** is refused
+(real Redis accepts one and writes a nameless entry no operator can then address); a
+**credential-bearing token in `perms`** is refused *and the refusal does not echo it*
+(the message goes to the same logs the rule protects); **`nopass` stays legal** and
+reaches the instance last; a **non-boolean `persist`** is refused rather than coerced
+toward writing to disk, on **both** states; **`absent` on `default`** never reaches
+`DELUSER`; and a **`DELUSER` answering `0`** — another actor got there first — is a
+no-op that does not rewrite the aclfile.
+  A third set came from a second review, which broke the first two guards on a live
+Redis: the perms keywords are refused in **any case** (`RESET` bypassed an exact
+comparison and cost a live user its declared perms, state and password while the step
+reported success); **`on`/`off` in `perms`** is refused because it overrides `state` and
+makes `Output.state` lie; and **`nopass`/`resetpass` beside a declared
+`user_password`** is refused because Redis takes the last directive, which left an
+account authenticating with any string at all.
+  A fourth came from a third review, which broke the second round's fix the same way:
+a **NUL byte** restores every one of those harms, because `strcasecmp` stops there and
+`EqualFold` does not — so a NUL in `perms` or in `name` is refused, on both. That review
+also produced the **`CONFIG GET aclfile` pre-flight**: a persisting apply against an
+instance with no aclfile used to land the `SETUSER`, fail on `ACL SAVE`, and report
+failure — after which a re-run reported a no-op, so no run ever reported the change.
+Both no-aclfile refusals assert that nothing was mutated, and `persist: false` against
+the same instance still applies.
+  A fifth came from a fourth review, and two of the three were regressions the
+pre-flight itself introduced: a connection that may run `ACL SETUSER` but **not**
+`CONFIG GET` still applies (`configErr` on the fake — the shape no earlier fake could
+express); an `absent` **no-op on an instance with no aclfile** is green, not a hard
+failure; and a **credential inside a selector** (`(>secret +get)`) is refused, where a
+prefix test on byte 0 let it reach Redis, which quoted the plaintext straight back into
+the failure message.
 - **L0 sentinel**
   ([`sentinel_test.go`](../../../examples/module/soul-mod-redis/sentinel_test.go)):
 fake `redisConn` with scripted `SENTINEL MASTER`/`CONFIG GET`. Covers

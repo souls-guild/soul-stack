@@ -118,7 +118,7 @@ in an address:
 | Directory | Index | What is this |
 |---|---|---|
 | `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
-| `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, six objects / seventeen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. |
+| `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, seven objects / nineteen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. The `user` object (`ACL SETUSER`/`DELUSER` on one user) was added by NIM-767. |
 | `community/` | [community/README.md](community/README.md) | Third-party plugins still on the old grouping. Implemented [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** - interface to live MongoDB (3 states, PILOT standalone). |
 
 ## Catalog status

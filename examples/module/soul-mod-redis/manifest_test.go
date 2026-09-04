@@ -11,9 +11,10 @@
 // written beside it: `soul-mod stamp` runs the artifact's `schema` subcommand and
 // writes those bytes both into the binary and to `schema.json`, and
 // TestPublishedSchemaMatchesTheBundle below is the local half of that guard.
-// The document carries no `namespace:`/`name:` of its own: this artifact serves six
-// objects, and address level 1 (`redis` in `redis.instance.pinged`) comes from the
-// alias an operator registers it under, which appears nowhere in these bytes.
+// The document carries no `namespace:`/`name:` of its own: this artifact serves
+// seven objects, and address level 1 (`redis` in `redis.instance.pinged`) comes
+// from the alias an operator registers it under, which appears nowhere in these
+// bytes.
 //
 // The three halves are checked together on purpose. TestConnectParams* proves the
 // key lists below are the ones the Go parse path actually reads (a rename in
@@ -60,12 +61,13 @@ var sourceConnectParams = []string{
 // `secret: true` would leave it unmasked in logs/traces/UI (ADR-010).
 var secretParams = map[string]bool{
 	"password": true, "source_password": true, "master_password": true, "auth_pass": true,
-	"tls_ca": true, "tls_cert": true, "tls_key": true,
+	"user_password": true,
+	"tls_ca":        true, "tls_cert": true, "tls_key": true,
 	"source_tls_ca": true, "source_tls_cert": true, "source_tls_key": true,
 	"master_tls_ca": true, "master_tls_cert": true, "master_tls_key": true,
 }
 
-// objects — the six objects this artifact serves, paired with their dispatch
+// objects — the seven objects this artifact serves, paired with their dispatch
 // tables. Address level 2 in `redis.<object>.<action>`.
 func objects(m *RedisModule) map[string]*object {
 	return map[string]*object{
@@ -75,6 +77,7 @@ func objects(m *RedisModule) map[string]*object {
 		"instance": m.instance(),
 		"replica":  m.replica(),
 		"sentinel": m.sentinel(),
+		"user":     m.user(),
 	}
 }
 
@@ -150,7 +153,7 @@ func TestBundleIsValid(t *testing.T) {
 
 // TestDeclaredStatesAreDispatched — the object that DECLARES a state is the one
 // that SERVES it, in both directions. This is the guard the object split needs
-// (NIM-766): six objects share one driver, so a state declared on `instance` and
+// (NIM-766): seven objects share one driver, so a state declared on `instance` and
 // dispatched only by `cluster` would lint clean, pass every param check, and fail
 // at apply time with "unknown state" on a live host.
 func TestDeclaredStatesAreDispatched(t *testing.T) {
@@ -214,6 +217,15 @@ func TestManifestStatesDeclareWhatTheyAccept(t *testing.T) {
 			// aclfile with the ACL LOAD command — no params except the connection
 			// (addr + optional auth/TLS).
 			"reloaded": with(connectParams),
+		},
+		"user": {
+			// user.present is the object acl.reloaded is not: the subject is ONE
+			// user, so it declares the user-shaped params `acl` deliberately
+			// refuses (NIM-767). `name` is who is managed, `username` (in
+			// connectParams) is who the step authenticates as — two different
+			// people, which is exactly why both are declared here.
+			"present": with(connectParams, "name", "perms", "state", "user_password", "persist"),
+			"absent":  with(connectParams, "name", "persist"),
 		},
 		"replica": {
 			// master_tls_ca/cert/key are declared but NOT read by the plugin: Redis

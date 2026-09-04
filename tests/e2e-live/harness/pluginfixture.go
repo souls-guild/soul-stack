@@ -44,7 +44,7 @@ const RedisAlias = "redis"
 // (its `modules:` entries and its scenarios) and the asserts in
 // module_delivery_live_test.go. None of those is Go, so nothing but the guard
 // makes them agree with the artifact.
-var redisObjects = []string{"acl", "cluster", "command", "instance", "replica", "sentinel"}
+var redisObjects = []string{"acl", "cluster", "command", "instance", "replica", "sentinel", "user"}
 
 // redisBinaryName - the filename `dist/` gives the artifact in the
 // published repo. Since NIM-377 it means NOTHING to any reader: `Manifest.BinaryName()`

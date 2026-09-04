@@ -43,8 +43,10 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Destiny[3].Name != "vector" || cfg.Destiny[3].Ref != "v1.0.0" {
 		t.Errorf("destiny[3]: %#v", cfg.Destiny[3])
 	}
-	// The artifact serves six objects (NIM-766), so the manifest carries six
-	// entries under ONE alias — they collapse to a single core.module.installed.
+	// The manifest carries one entry per object the SERVICE uses, all under ONE
+	// alias — they collapse to a single core.module.installed. The artifact serves
+	// a seventh, `user` (NIM-767), which this service does not use: wiring it in is
+	// NIM-768, so a seventh row here would be the change, not the count drifting.
 	wantModules := []string{"redis.acl", "redis.cluster", "redis.command", "redis.instance", "redis.replica", "redis.sentinel"}
 	if len(cfg.Modules) != len(wantModules) {
 		t.Errorf("modules: %#v", cfg.Modules)

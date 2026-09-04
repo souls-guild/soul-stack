@@ -1,9 +1,10 @@
 // The `acl` object — the access-control list of a live Redis instance.
 //
-// One action today: `reloaded` makes the server re-read its aclfile in full (ACL
-// LOAD), which the render has already written. Creating and removing individual
-// ACL users through ACL SETUSER is a separate object, `user`, and a separate
-// ticket (NIM-767) — this one deliberately declares no user-shaped params.
+// One action: `reloaded` makes the server re-read its aclfile in full (ACL LOAD),
+// which the render has already written. Creating and removing individual ACL users
+// through ACL SETUSER is the separate `user` object (obj_user.go, NIM-767) — this
+// one deliberately declares no user-shaped params, and the two are not
+// alternatives: the subject here is the file, there it is the user.
 package main
 
 import "github.com/souls-guild/soul-stack/sdk/module"

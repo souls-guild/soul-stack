@@ -408,8 +408,11 @@ destiny:
 # the operator gives the artifact — the scenarios here address redis.*, so a cluster
 # running this service registers soul-mod-redis as `redis`. That artifact is the MAIN
 # interface to a live Redis (examples/module/soul-mod-redis/), and level 2 is the
-# OBJECT it manages: one artifact, six objects, ONE install (they collapse to a single
-# core.module.installed on the shared alias).
+# OBJECT it manages: one artifact, ONE install, one row per object this service uses
+# (they collapse to a single core.module.installed on the shared alias). The artifact
+# also serves `redis.user` (ACL SETUSER/DELUSER on one user, NIM-767), which is NOT
+# listed: this service manages its ACL as a rendered users.acl plus redis.acl.reloaded,
+# and moving it onto the user-shaped object is NIM-768.
 modules:
   - { name: redis.acl, ref: v1.0.0 }
   - { name: redis.cluster, ref: v1.0.0 }

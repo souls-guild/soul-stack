@@ -376,16 +376,21 @@ Written under NIM-765 as the **rule** alone; the artifacts shipped in the old fo
 and everything above still described them.
 
 ★ **Status 2026-09-03 (NIM-766): the redis artifact serves it.** `soul-mod-community-redis` is
-`soul-mod-redis`, registered under the alias **`redis`**, serving **six objects** — `acl`,
-`cluster`, `command`, `instance`, `replica`, `sentinel` — with `side: soul` declared per object
-and the whole schema document generated from `module.Def` values (which closed **NIM-525** in the
-same change: the artifact had no `schema` subcommand, so `soul-mod stamp`/`verify` were
+`soul-mod-redis`, registered under the alias **`redis`**, serving **seven objects** — `acl`,
+`cluster`, `command`, `instance`, `replica`, `sentinel`, `user` — with `side: soul` declared per
+object and the whole schema document generated from `module.Def` values (which closed **NIM-525**
+in the same change: the artifact had no `schema` subcommand, so `soul-mod stamp`/`verify` were
 inapplicable to the one public example a plugin author copies). The seven cluster operations that
 used to travel in `params.action` are seven actions at level 3, which is what lets each declare
 only the params it reads — the old single state promised all fifteen to all seven. The engine was
-not touched, exactly as the paragraph below said it would not be. `redis.user.present` is still
-**NIM-767**, the WB redis service moving off `redis-cli` is **NIM-768**, and mongo is **NIM-769**;
-all three remain open.
+not touched, exactly as the paragraph below said it would not be.
+
+★ **`redis.user.present` / `.absent` shipped 2026-09-03 (NIM-767)** — `ACL SETUSER` / `ACL DELUSER`
+on ONE user, so the subject is the user rather than the aclfile a destiny renders. It is the
+address this amendment used as its own worked example, and it now resolves. It does **not** retire
+`acl.reloaded`: the two have different subjects and a service still holding its ACL in a rendered
+file keeps the file-shaped one. Moving the WB redis service off `redis-cli` is **NIM-768** and
+mongo is **NIM-769**; both remain open.
 
 **The decision** — the user's, of 2026-09-02. A plugin step's address is
 **`<plugin-name>.<object>.<action>`**, for example `redis.user.present`. Level 1 is the plugin's

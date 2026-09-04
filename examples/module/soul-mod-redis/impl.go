@@ -2,7 +2,7 @@
 // to live Redis in redis consolidation. A service scenario orchestrates
 // order/targeting, the plugin executes ONE operation on one instance.
 //
-// The artifact serves SIX objects — address level 2 of `redis.<object>.<action>`,
+// The artifact serves SEVEN objects — address level 2 of `redis.<object>.<action>`,
 // where level 1 is the alias an operator registers it under (ADR-020 amendment
 // 2026-09-02):
 //
@@ -11,14 +11,14 @@
 //	           probe.go), configured (CONFIG SET from a map)
 //	acl      — reloaded (ACL LOAD — hot reload of the aclfile, changed by a diff
 //	           of ACL LIST before/after)
+//	user     — present / absent (ACL SETUSER / DELUSER on ONE user, see user.go)
 //	replica  — present (REPLICAOF, see replica.go), detached (REPLICAOF NO ONE,
 //	           see detach.go), synced / offset-synced (read probe, see probe.go)
 //	cluster  — created / node-added / node-removed / resharded (cluster.go),
 //	           external-joined / failed-over / external-forgotten (migrate.go)
 //	sentinel — monitored (SENTINEL MONITOR/SET reconcile, see sentinel.go)
 //
-// The object tables and the dispatch live in object.go; the `redis.user.*` object
-// is NOT here — that is NIM-767. failover — next batch.
+// The object tables and the dispatch live in object.go. failover — next batch.
 //
 // Intentionally without dry-run preview: plugin on BaseModule does NOT implement PlanReadSafe
 // → host applies default-deny (on dry_run task gets honest "drift not
@@ -47,7 +47,7 @@ import (
 )
 
 // RedisModule is the Redis driver every object of this artifact delegates to — one
-// body of code behind six serving surfaces (see object.go). It is not itself a
+// body of code behind seven serving surfaces (see object.go). It is not itself a
 // SoulModule: what the host dispatches to is an [object], which owns the actions it
 // serves and calls the applyXxx methods below.
 //
@@ -83,7 +83,8 @@ type redisConn interface {
 	GetKeysInSlot(ctx context.Context, slot, count int) ([]string, error)
 	// AclList reads ACL LIST through the driver's TYPED path ([]string — one
 	// line per user). Used for diff before/after ACL LOAD (changed detection
-	// for acl-state). NOT through Do+strings.Fields: each ACL line is a whole
+	// for acl-state) and, per user, before/after ACL SETUSER (user.go).
+	// NOT through Do+strings.Fields: each ACL line is a whole
 	// rule ("user alice on >hash ~* +@all") with spaces; space-join + Fields
 	// would split it into tokens → false diff. Native path preserves whole lines
 	// (symmetry with ConfigGet/GetKeysInSlot).
