@@ -84,8 +84,41 @@ type slotRange struct {
 	to   int
 }
 
-// validateClusterCreate - create checks: non-empty nodes-map, correct
-// replicas_per_shard and divisibility of the composition by the size of the shard.
+// validateNodeSpec reports what [resolveNodeEndpoint] would refuse about ONE node
+// spec, addressed exactly as [resolveSingleNode] addresses it in Apply. Validate
+// exists to refuse before anything happens, so an endpoint it cannot resolve is an
+// error here and not a surprise mid-run (NIM-786).
+//
+// A spec that is absent entirely is left to the caller: its message names what the
+// parameter is for, which this one cannot.
+func validateNodeSpec(addr string, spec map[string]*structpb.Value) []string {
+	if len(spec) == 0 {
+		return nil
+	}
+	if _, _, _, err := resolveNodeEndpoint(spec); err != nil {
+		return []string{fmt.Sprintf("%s: %v", addr, err)}
+	}
+	return nil
+}
+
+// validateNodeSpecs is the same over a nodes-map, addressed as [parseClusterNodes]
+// addresses it. Unlike the single-spec form it does NOT skip an empty entry: a key
+// whose value is not a map reaches Apply as a node carrying no endpoint, and Apply
+// refuses it, so skipping it here would re-open the gap this closes. Keys are
+// sorted for a stable report.
+func validateNodeSpecs(nodes map[string]map[string]*structpb.Value) []string {
+	var errs []string
+	for _, key := range sortedNodeKeys(nodes) {
+		if _, _, _, err := resolveNodeEndpoint(nodes[key]); err != nil {
+			errs = append(errs, fmt.Sprintf("params.nodes[%s]: %v", key, err))
+		}
+	}
+	return errs
+}
+
+// validateClusterCreate - create checks: non-empty nodes-map, resolvable endpoint
+// on each node, correct replicas_per_shard and divisibility of the composition by
+// the size of the shard.
 func validateClusterCreate(f map[string]*structpb.Value) []string {
 	var errs []string
 
@@ -93,6 +126,7 @@ func validateClusterCreate(f map[string]*structpb.Value) []string {
 	if len(nodes) == 0 {
 		errs = append(errs, "params.nodes: must be a non-empty map (key -> {addr|ip+port})")
 	}
+	errs = append(errs, validateNodeSpecs(nodes)...)
 
 	replicas := intOrDefault(f["replicas_per_shard"], 0)
 	if replicas < 0 {
@@ -211,44 +245,64 @@ func sortedNodeKeys(m map[string]map[string]*structpb.Value) []string {
 	return keys
 }
 
-// validateClusterAddNode - checks add-node: non-empty new_node and seed,
-// valid role and (for replica) correct connection with master.
+// validateClusterAddNode - checks add-node: non-empty new_node and seed with
+// resolvable endpoints, valid role and (for replica) correct connection with master.
 func validateClusterAddNode(f map[string]*structpb.Value) []string {
 	var errs []string
 
-	if len(nodeSpec(f["new_node"])) == 0 {
+	newNode := nodeSpec(f["new_node"])
+	if len(newNode) == 0 {
 		errs = append(errs, "params.new_node: must be a map {addr|ip+port} of the node to add")
 	}
-	if len(nodeSpec(f["seed"])) == 0 {
+	errs = append(errs, validateNodeSpec("params.new_node", newNode)...)
+
+	seed := nodeSpec(f["seed"])
+	if len(seed) == 0 {
 		errs = append(errs, "params.seed: must be a map {addr|ip+port} of an existing cluster node")
 	}
+	errs = append(errs, validateNodeSpec("params.seed", seed)...)
 
-	switch role := roleOrDefault(f["role"]); role {
+	role := roleOrDefault(f["role"])
+	switch role {
 	case "replica", "master":
 	default:
 		errs = append(errs, fmt.Sprintf("params.role: %q not supported (only \"replica\", \"master\")", role))
+	}
+
+	// Apply reads params.master only for a replica, and only when the spec carries
+	// an endpoint at all - an empty one means auto-selection ([pickReplicationMaster]).
+	// Both conditions are repeated here so Validate refuses where Apply refuses and
+	// nowhere else: outside them the value is never read.
+	if master := nodeSpec(f["master"]); role == "replica" && masterSpecGiven(master) {
+		errs = append(errs, validateNodeSpec("params.master", master)...)
 	}
 
 	return errs
 }
 
 // validateClusterRemoveNode - remove-node checks: non-empty node (removable) and
-// seed (pin for CLUSTER NODES + topology source for FORGET/slot migration).
+// seed (pin for CLUSTER NODES + topology source for FORGET/slot migration), each
+// with a resolvable endpoint.
 func validateClusterRemoveNode(f map[string]*structpb.Value) []string {
 	var errs []string
 
-	if len(nodeSpec(f["node"])) == 0 {
+	node := nodeSpec(f["node"])
+	if len(node) == 0 {
 		errs = append(errs, "params.node: must be a map {addr|ip+port} of the node to remove")
 	}
-	if len(nodeSpec(f["seed"])) == 0 {
+	errs = append(errs, validateNodeSpec("params.node", node)...)
+
+	seed := nodeSpec(f["seed"])
+	if len(seed) == 0 {
 		errs = append(errs, "params.seed: must be a map {addr|ip+port} of an existing cluster node")
 	}
+	errs = append(errs, validateNodeSpec("params.seed", seed)...)
 
 	return errs
 }
 
 // validateClusterReshard - static reshard checks: non-empty from/to
-// (endpoints of masters), their difference and slots >= 1. "from/to - existing
+// (resolvable endpoints of masters), their difference and slots >= 1. "from/to - existing
 // masters" and "slots <= number of slots in source" are checked in Apply live
 // topology (CLUSTER NODES), they are not statically visible (texts without a password).
 func validateClusterReshard(f map[string]*structpb.Value) []string {
@@ -262,16 +316,18 @@ func validateClusterReshard(f map[string]*structpb.Value) []string {
 	if len(to) == 0 {
 		errs = append(errs, "params.to: must be a map {addr|ip+port} of the target master")
 	}
+	errs = append(errs, validateNodeSpec("params.from", from)...)
+	errs = append(errs, validateNodeSpec("params.to", to)...)
+
 	// from != to: compare by resolved endpoint (ip:port) so that {addr} and
-	// {ip,port} forms of the same node were also recognized as a match.
-	if len(from) > 0 && len(to) > 0 {
-		if fi, fp, _, ferr := resolveNodeEndpoint(from); ferr == nil {
-			if ti, tp, _, terr := resolveNodeEndpoint(to); terr == nil {
-				if net.JoinHostPort(fi, strconv.Itoa(fp)) == net.JoinHostPort(ti, strconv.Itoa(tp)) {
-					errs = append(errs, "params.from and params.to must be different masters")
-				}
-			}
-		}
+	// {ip,port} forms of the same node were also recognized as a match. An endpoint
+	// that does not resolve is already reported above - the comparison then has
+	// nothing to say about it, which is NOT the same as having nothing to say.
+	fi, fp, _, ferr := resolveNodeEndpoint(from)
+	ti, tp, _, terr := resolveNodeEndpoint(to)
+	if ferr == nil && terr == nil &&
+		net.JoinHostPort(fi, strconv.Itoa(fp)) == net.JoinHostPort(ti, strconv.Itoa(tp)) {
+		errs = append(errs, "params.from and params.to must be different masters")
 	}
 
 	if intOrDefault(f["slots"], 0) < 1 {

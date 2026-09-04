@@ -41,16 +41,19 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// validateClusterJoinExternal - static checks join-external: non-empty
-// nodes-map, non-empty source_nodes, shards_dest >= 1. Match shards_dest
+// validateClusterJoinExternal - static checks join-external: non-empty nodes-map
+// with a resolvable endpoint on each node, non-empty source_nodes,
+// shards_dest >= 1. Match shards_dest
 // the number of new nodes AND the number of old masters is checked in Apply (the number of old
 // masters are visible only in live topology). Texts without password.
 func validateClusterJoinExternal(f map[string]*structpb.Value) []string {
 	var errs []string
 
-	if len(nodeSpecs(f["nodes"])) == 0 {
+	nodes := nodeSpecs(f["nodes"])
+	if len(nodes) == 0 {
 		errs = append(errs, "params.nodes: must be a non-empty map (key -> {addr|ip+port}) of the NEW cluster nodes")
 	}
+	errs = append(errs, validateNodeSpecs(nodes)...)
 	if len(stringList(f["source_nodes"])) == 0 {
 		errs = append(errs, "params.source_nodes: must be a non-empty list of seed nodes (host:port) of the SOURCE cluster")
 	}
@@ -357,13 +360,15 @@ func mappingSummary(results []joinResult) string {
 
 // ============================ failover-takeover ==============================
 
-// validateClusterFailoverTakeover - static failover-takeover checks:
-// non-empty nodes-map (new nodes are replicas of old masters). Texts without password.
+// validateClusterFailoverTakeover - static failover-takeover checks: non-empty
+// nodes-map (new nodes are replicas of old masters) with a resolvable endpoint on
+// each node. Texts without password.
 func validateClusterFailoverTakeover(f map[string]*structpb.Value) []string {
-	if len(nodeSpecs(f["nodes"])) == 0 {
+	nodes := nodeSpecs(f["nodes"])
+	if len(nodes) == 0 {
 		return []string{"params.nodes: must be a non-empty map (key -> {addr|ip+port}) of the NEW cluster nodes (replicas to promote)"}
 	}
-	return nil
+	return validateNodeSpecs(nodes)
 }
 
 // applyClusterFailoverTakeover will promote new nodes (replicas of old masters after
@@ -529,13 +534,16 @@ func waitNodePromoted(ctx context.Context, conn redisConn, node clusterNode) err
 // ============================== forget-external ==============================
 
 // validateClusterForgetExternal - static checks forget-external: non-empty
-// nodes-map (new nodes executing FORGET) and non-empty source_nodes (old seeds,
+// nodes-map (new nodes executing FORGET) with a resolvable endpoint on each node,
+// and non-empty source_nodes (old seeds,
 // where do node-ids come from for forgetting). Texts without password.
 func validateClusterForgetExternal(f map[string]*structpb.Value) []string {
 	var errs []string
-	if len(nodeSpecs(f["nodes"])) == 0 {
+	nodes := nodeSpecs(f["nodes"])
+	if len(nodes) == 0 {
 		errs = append(errs, "params.nodes: must be a non-empty map (key -> {addr|ip+port}) of the NEW cluster nodes")
 	}
+	errs = append(errs, validateNodeSpecs(nodes)...)
 	if len(stringList(f["source_nodes"])) == 0 {
 		errs = append(errs, "params.source_nodes: must be a non-empty list of seed nodes (host:port) of the OLD cluster to forget")
 	}
