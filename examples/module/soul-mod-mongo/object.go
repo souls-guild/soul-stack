@@ -1,12 +1,17 @@
 // The objects this artifact serves — address level 2 of `mongo.<object>.<action>`
 // (ADR-020 amendment 2026-09-02, NIM-765/NIM-769).
 //
-// One artifact, three objects, one body of MongoDB code. Every object is the same
+// One artifact, eight objects, one body of MongoDB code. Every object is the same
 // [object] value with a different action table; the tables ARE the boundary, so
 // `instance` cannot reach a user action by accident — that state is simply unknown
 // to it. The driver was not split: an action delegates to the very same method on
 // [MongoModule] it was dispatched to before, which is why the MongoDB behaviour and
 // its tests are untouched by the re-layout.
+//
+// `command`, `instance` and `user` are the PILOT three. `replicaset`, `role`,
+// `collection`, `index` and `database` (NIM-805) are what makes a mongod managed
+// rather than merely reachable; they were added beside the first three, which are
+// untouched apart from the `decl` wiring below.
 //
 // The one thing that DID move is the dispatch key. `user` used to be a single state
 // carrying `params.state: present|absent`; those two are now two actions at level 3.
@@ -53,25 +58,21 @@ type action struct {
 // BaseModule supplies the no-op Plan, which keeps the deliberate default-deny on
 // dry_run (no PlanReadSafe) and on Errand (no ErrandReadSafe) this plugin has had
 // since the PILOT slice.
-//
-// ⚠ It carries NO `decl`, and so runs no param-type check — the one thing that does
-// not match the redis object this layout was copied from. That artifact got the check
-// in NIM-778, after its own re-layout: a value of the wrong type is refused there
-// rather than coerced, because `tls: "true"` written as a string fell back to `false`
-// and sent the password out in plaintext. The same fallback is live here
-// (`boolOrDefault` in helpers.go). Carrying it across is a TIGHTENING — input that is
-// accepted today would start being refused — so it is NIM-800 and not this ticket,
-// which moved names and layout and no behaviour. The declarations the check needs are
-// already in place: each action's own `module.Input` in obj_*.go.
 type object struct {
 	module.BaseModule
 
-	// impl is the shared MongoDB implementation. Three objects, one driver.
+	// impl is the shared MongoDB implementation. Eight objects, one driver.
 	impl *MongoModule
 
 	// name is address level 2 — used in diagnostics only; what an operator
 	// actually addresses is the registration alias plus this name.
 	name string
+
+	// decl is what this object's Def declares about each of its actions — the
+	// same map, from the same function, not a copy. Validate and Apply refuse a
+	// param whose value is not of the declared type (params.go, NIM-800), so the
+	// declaration is load-bearing at runtime and not only in the schema document.
+	decl map[string]module.State
 
 	actions map[string]action
 }
@@ -83,6 +84,11 @@ func (o *object) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	act, ok := o.actions[req.GetState()]
 	if !ok {
 		return &pluginv1.ValidateReply{Ok: false, Errors: []string{o.unknownState(req.GetState())}}, nil
+	}
+	// Types before content: an action's own checks read the values, and a value
+	// of the wrong type makes whatever they report about it noise.
+	if errs := checkParamTypes(o.decl[req.GetState()].Input, req.GetParams().GetFields()); len(errs) > 0 {
+		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
 	}
 	if errs := act.validate(req.GetParams().GetFields()); len(errs) > 0 {
 		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
@@ -105,9 +111,31 @@ func (o *object) Apply(req *pluginv1.ApplyRequest, stream eventStream) error {
 		return sendFailure(stream, o.unknownState(req.GetState()))
 	}
 
+	// Before anything opens a socket: a param of the wrong type is refused, not
+	// coerced (params.go, NIM-800). Here rather than only in Validate because a
+	// runner need not call Validate at all — the runtime calls Apply — and the
+	// value this protects decides whether the password goes out over TLS.
+	if errs := checkParamTypes(o.decl[req.GetState()].Input, req.GetParams().GetFields()); len(errs) > 0 {
+		return sendFailure(stream, strings.Join(errs, "; "))
+	}
+
+	// Then the action's own static checks — the SAME function Validate runs, on the
+	// path a runner is guaranteed to take.
+	//
+	// NIM-786 is usually read in one direction, "Validate must refuse what Apply
+	// will", and the reverse gap is the quieter one: `member-removed` with an empty
+	// `host` matches no live member and reports "not in the set (no-op)" — success,
+	// changed=false, for a step that did nothing anyone asked for. Every validate
+	// here is a pure function of the params and opens no socket, so running it twice
+	// costs nothing and closes the class rather than three instances of it.
+	if errs := act.validate(req.GetParams().GetFields()); len(errs) > 0 {
+		return sendFailure(stream, strings.Join(errs, "; "))
+	}
+
 	// An action that decides its own auth path (the user object: with auth, then
-	// the no-auth localhost-exception fallback for the first admin) has no
-	// connection to be handed and opens one itself.
+	// the no-auth localhost-exception fallback for the first admin; the replicaset
+	// object, which must also hop to the primary) has no connection to be handed
+	// and opens one itself.
 	if act.applyOwn != nil {
 		return act.applyOwn(o.impl, ctx, stream, req.GetParams())
 	}

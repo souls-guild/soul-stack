@@ -22,6 +22,7 @@ func (m *MongoModule) user() *object {
 	return &object{
 		impl: m,
 		name: "user",
+		decl: userStates(),
 		actions: map[string]action{
 			"present": {validate: validateUserPresent, applyOwn: (*MongoModule).applyUserPresent},
 			"absent":  {validate: validateUserAbsent, applyOwn: (*MongoModule).applyUserAbsent},

@@ -14,6 +14,7 @@ func (m *MongoModule) instance() *object {
 	return &object{
 		impl: m,
 		name: "instance",
+		decl: instanceStates(),
 		actions: map[string]action{
 			"pinged": {validate: validatePinged, apply: (*MongoModule).applyPinged},
 		},

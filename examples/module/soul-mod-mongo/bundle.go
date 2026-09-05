@@ -1,4 +1,4 @@
-// The artifact's bundle — the three objects `soul-mod-mongo` serves, and the schema
+// The artifact's bundle — the eight objects `soul-mod-mongo` serves, and the schema
 // document generated from them.
 //
 // The Go value is the source of truth (NIM-377): `soul-mod stamp` runs the
@@ -15,7 +15,7 @@ package main
 
 import "github.com/souls-guild/soul-stack/sdk/module"
 
-// mongoBundle is the artifact: three objects over one MongoDB driver.
+// mongoBundle is the artifact: eight objects over one MongoDB driver.
 //
 // The order is alphabetical and that is load-bearing — `modules` is a JSON array,
 // so the canonical bytes keep whatever order this slice has, and they are hashed
@@ -23,8 +23,13 @@ import "github.com/souls-guild/soul-stack/sdk/module"
 func mongoBundle(m *MongoModule) module.Bundle {
 	return module.Bundle{
 		Modules: []module.Def{
+			collectionDef(m),
 			commandDef(m),
+			databaseDef(m),
+			indexDef(m),
 			instanceDef(m),
+			replicasetDef(m),
+			roleDef(m),
 			userDef(m),
 		},
 	}

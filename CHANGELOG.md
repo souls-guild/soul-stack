@@ -7,6 +7,55 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **`soul-mod-mongo` serves eight objects instead of three** — `replicaset`, `role`,
+  `collection`, `index` and `database` beside `command` / `instance` / `user`, which are
+  unchanged ([docs/module/mongo/README.md](docs/module/mongo/README.md), NIM-805). The
+  artifact could reach a `mongod` and not manage one: no replica set, no roles, no
+  collections, no indexes.
+  **`replicaset`** is the one with a cost of error, and it is built the way
+  `redis.cluster.created` is built — it ASKS the instance (`replSetGetConfig`) and branches
+  on the answer instead of being told by an external probe and a `when:` over it, so
+  `replSetInitiate` is reachable on exactly one branch and is never sent at a set that
+  already has a config. **No reconfig is assembled from params**: every one of them is the
+  LIVE document mutated minimally with `version+1`, so `settings`, `protocolVersion` and
+  everything unmodelled ride through, and an existing member's `_id` is never reassigned
+  (a new member takes `max(_id)+1`, not an array index — a member removed from the MIDDLE
+  leaves a hole, and `len(members)` would fill it with an id a live member still holds).
+  A member spec REFUSES a key it does not know, which is the NIM-800 rule one level below
+  where the engine's `unknown_param` reaches: three attributes are spelled differently here
+  from the `mongod` config an author is reading, and a dropped `arbiterOnly: true` joins a
+  full data-bearing secondary where an arbiter was declared. `initiated` is **additive
+  only**: an undeclared live member is refused rather than dropped, and a drifted existing
+  member is refused rather than rewritten, both naming the action that does it
+  deliberately — a silent drop is how a set loses its majority, and a silent priority
+  rewrite is an election in a step that reads as assembly. Two distinctions an external
+  probe cannot make: `NoReplicationEnabled` (76, a `mongod` without
+  `replication.replSetName` — unfixable from here) is reported by name rather than as "not
+  initiated", and the reconfig is sent to the PRIMARY, dialled through the member's own
+  `addr` or `primary_addr`, since `replSetGetStatus` names it by a config host that need
+  not be routable from this one.
+  **`role`** converges on a real structural diff (`rolesInfo` + `showPrivileges`), compared
+  on a canonical form because `mongod` returns privileges in an order of its own.
+  **`collection`** and **`index`** are built around the mutable/immutable split: an
+  immutable option that drifted is a failure naming the field, not a silent no-op and not a
+  drop-and-rebuild. An index key is an ORDERED LIST of `{field, order}` rather than a map,
+  because a YAML map reaches a plugin unordered and a map would build a different compound
+  index from one run to the next. Both objects compare a declared value against the form
+  `mongod` STORES — a capped `size` is rounded up to a multiple of 256, `collation` and
+  `timeseries` come back with the server's defaults filled in — because otherwise the
+  second apply of a step fails on the object the first one created. A `"text"` key is REFUSED rather than
+  half-served, since `mongod` stores a text index under a rewritten key (`{_fts, _ftsx}`,
+  the fields moved to `weights`) and it could never be recognised as converged;
+  `wildcard_projection` is not a parameter at all, for the same reason (the server
+  normalizes the projection it stores). Both are served by `mongo.command.run` meanwhile. Adding a TTL to an index that has none is refused for the same
+  reason `collMod` refuses it.
+  **`database` serves `absent` alone**, and that is an answer rather than a gap: MongoDB
+  has no command that creates a database, so a `present` could only report success having
+  done nothing observable. `collection.present` is what brings one into being — MongoDB's
+  own semantics — and now reports `database_created`. Sharding is deferred with its reasons
+  in NIM-820; day-2 on a user's password is NIM-821, where the SCRAM-verifier answer to
+  NIM-383 §2 is written down.
+
 - `soul-lint validate-service-tree <dir>` — one invocation checks a WHOLE service
   repository and reports every part of it: the manifest, `types.yml`, every
   scenario in `scenario/` and `upgrade/` (and through each, the covenant it
@@ -447,6 +496,22 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **`soul-mod-mongo` REFUSES a parameter of the wrong type instead of coercing it**
+  (NIM-800, the mongo half of the redis artifact's NIM-778). `tls: "true"` written as a
+  **string** fell through `boolOrDefault` to `false`, so the connection to `mongod` went
+  out in **plaintext carrying the admin password**, and the step reported success. The
+  direction of the fallback is what made it a leak: `false` is the insecure side of that
+  parameter. Symmetrically `password: 123` read as `""` — an anonymous connection where an
+  authenticated one was declared. Nothing upstream catches either: the runtime calls
+  `Apply` and not `Validate`, and the Keeper's static `checkParamType` returns nil on a
+  `${…}` cell, so `tls: "${ vars.mongo_tls }"` over a string var lints clean — the plugin
+  is the last place that can say no. The check now runs on BOTH paths against the object's
+  own declaration, and the nested member/privilege/index specs carry the same rule (a
+  coerced `priority: "0"` would fall back to `1` and make a member the operator pinned out
+  of elections able to win one). **This is a tightening**: a definition that relied on the
+  coercion starts failing, which is the point. Wiring it onto only the objects NIM-805
+  added would have recreated, in the same file, exactly the asymmetry that caused NIM-778
+  — so all eight objects carry it, and a test fails an object that does not.
 - **`make check-vuln` scans every Go module in the tree, not the eight of
   `$(MODULES)`** (NIM-774). The supply-chain gate ended in "govulncheck is clean
   across all modules" over a corpus of eight of the twenty `go.mod` files here.

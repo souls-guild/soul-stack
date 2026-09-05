@@ -36,6 +36,12 @@ type fakeConn struct {
 	cmdErrByName map[string]error
 	// rawByName is the raw response for a command with this first key.
 	rawByName map[string]bson.Raw
+
+	// respond, when set, answers EVERY RunCommand and takes precedence over the
+	// two maps above. It is what a test needs when the answer must CHANGE across
+	// calls on one connection — replSetGetConfig before and after a reconfig, or
+	// replSetGetStatus reporting no primary and then one.
+	respond func(db string, cmd bson.D) (bson.Raw, error)
 }
 
 func (f *fakeConn) Ping(_ context.Context) error {
@@ -48,6 +54,9 @@ func (f *fakeConn) RunCommand(_ context.Context, db string, cmd bson.D) (bson.Ra
 	name := ""
 	if len(cmd) > 0 {
 		name = cmd[0].Key
+	}
+	if f.respond != nil {
+		return f.respond(db, cmd)
 	}
 	if f.cmdErrByName != nil {
 		if err, ok := f.cmdErrByName[name]; ok {

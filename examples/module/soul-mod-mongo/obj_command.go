@@ -18,6 +18,7 @@ func (m *MongoModule) command() *object {
 	return &object{
 		impl: m,
 		name: "command",
+		decl: commandStates(),
 		actions: map[string]action{
 			"run": {validate: validateCommand, apply: (*MongoModule).applyCommand},
 		},

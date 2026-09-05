@@ -11,7 +11,7 @@
 // bytes both into the binary and to `schema.json`, and
 // TestPublishedSchemaMatchesTheBundle below is the local half of that guard.
 // The document carries no `namespace:`/`name:` of its own: this artifact serves
-// three objects, and address level 1 (`mongo` in `mongo.instance.pinged`) comes
+// eight objects, and address level 1 (`mongo` in `mongo.instance.pinged`) comes
 // from the alias an operator registers it under, which appears nowhere in these
 // bytes.
 //
@@ -48,13 +48,18 @@ var secretParams = map[string]bool{
 	"tls_ca": true, "tls_cert": true, "tls_key": true,
 }
 
-// objects — the three objects this artifact serves, paired with their dispatch
+// objects — the eight objects this artifact serves, paired with their dispatch
 // tables. Address level 2 in `mongo.<object>.<action>`.
 func objects(m *MongoModule) map[string]*object {
 	return map[string]*object{
-		"command":  m.command(),
-		"instance": m.instance(),
-		"user":     m.user(),
+		"collection": m.collection(),
+		"command":    m.command(),
+		"database":   m.database(),
+		"index":      m.index(),
+		"instance":   m.instance(),
+		"replicaset": m.replicaset(),
+		"role":       m.role(),
+		"user":       m.user(),
 	}
 }
 
@@ -194,6 +199,38 @@ func TestManifestStatesDeclareWhatTheyAccept(t *testing.T) {
 			// declared. `database` is the login/roles context of the user itself.
 			"present": with(connectParams, "name", "database", "roles", "user_password"),
 			"absent":  with(connectParams, "name", "database"),
+		},
+		// The NIM-805 five. Each action declares the addressing keys it reads plus
+		// the options it may send, and nothing else: an action that declared an
+		// option it does not read would promise an operator a knob attached to
+		// nothing, and one that read a key it does not declare would fail the call
+		// with module.unknown_param before Apply ever ran.
+		"replicaset": {
+			"initiated":      with(connectParams, "name", "members", "wait_primary_seconds", "primary_addr"),
+			"member-added":   with(connectParams, "member", "wait_primary_seconds", "primary_addr"),
+			"member-removed": with(connectParams, "host", "wait_primary_seconds", "primary_addr"),
+			"reconfigured":   with(connectParams, "members", "wait_primary_seconds", "primary_addr"),
+		},
+		"role": {
+			"present": with(connectParams, "name", "database", "privileges", "roles"),
+			"absent":  with(connectParams, "name", "database"),
+		},
+		"collection": {
+			"present": with(connectParams, "database", "name",
+				"capped", "size", "max", "collation", "timeseries", "clustered_index",
+				"validator", "validation_level", "validation_action"),
+			"absent": with(connectParams, "database", "name"),
+		},
+		"index": {
+			"present": with(connectParams, "database", "collection", "name", "keys",
+				"unique", "sparse", "partial_filter_expression", "collation",
+				"expire_after_seconds", "hidden"),
+			"absent": with(connectParams, "database", "collection", "name"),
+		},
+		"database": {
+			// One action, and the missing `present` is the design: MongoDB has no
+			// command that creates a database (database.go).
+			"absent": with(connectParams, "name"),
 		},
 	}
 

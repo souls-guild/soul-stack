@@ -21,6 +21,24 @@ func redactError(err error, secrets ...string) string {
 	return msg
 }
 
+// paramSecrets is every value in params that must not appear in an error text: the
+// connection password, the created user's password, and the three PEMs.
+//
+// It reads the fields rather than a parsed [connConfig] so it works on the shared
+// apply path too, where an action is handed a connection and never sees one. The
+// list is over-broad on purpose — an action that does not declare `user_password`
+// simply gets an empty string, and [redactError] skips those — because the cost of
+// naming one secret too many is nothing and the cost of missing one is ADR-010.
+func paramSecrets(f map[string]*structpb.Value) []string {
+	return []string{
+		stringOrEmpty(f["password"]),
+		stringOrEmpty(f["user_password"]),
+		stringOrEmpty(f["tls_key"]),
+		stringOrEmpty(f["tls_cert"]),
+		stringOrEmpty(f["tls_ca"]),
+	}
+}
+
 // --- structpb helpers ---
 
 func stringValue(v *structpb.Value) (string, bool) {

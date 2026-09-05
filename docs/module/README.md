@@ -117,7 +117,7 @@ in an address:
 |---|---|---|
 | `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
 | `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, seven objects / nineteen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. The `user` object (`ACL SETUSER`/`DELUSER` on one user) was added by NIM-767. |
-| `mongo/` | [mongo/README.md](mongo/README.md) | The `mongo` plugin — interface to live MongoDB (PILOT standalone), three objects / four actions (`soul-mod-mongo`). Moved out from under `community/` by NIM-769, which also split `user` into the `present` / `absent` actions the address rule asks for. |
+| `mongo/` | [mongo/README.md](mongo/README.md) | The `mongo` plugin — interface to live MongoDB, standalone AND replica-set, eight objects / fifteen actions (`soul-mod-mongo`). Moved out from under `community/` by NIM-769, which also split `user` into the `present` / `absent` actions the address rule asks for; NIM-805 added `replicaset`, `role`, `collection`, `index` and `database` beside the first three and made a wrong-typed param a refusal rather than a coercion (NIM-800). Sharding is deferred with a reason in NIM-820. |
 
 ## Catalog status
 
