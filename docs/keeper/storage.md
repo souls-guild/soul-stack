@@ -62,12 +62,12 @@ The Sigil registry — the Keeper-signed allow-list of admitted plugin binaries 
 ```sql
 CREATE TABLE plugin_sigils (
   id              BIGINT      GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
-  alias           TEXT        NOT NULL,                          -- registration alias: address level 1, operator-chosen. NOT signed (migration 113)
+  alias           TEXT        NOT NULL,                          -- registration alias: address level 1, operator-chosen. NOT signed (migration 115)
   source          TEXT        NOT NULL,                          -- artifact source: the git remote the module repo was fetched from. SIGNED
   ref             TEXT        NOT NULL,                          -- git-ref of the version (ADR-007). SIGNED
   sha256          TEXT        NOT NULL,                          -- digest of the admitted binary (hex, lowercase, 64)
   signature       BYTEA       NOT NULL,                          -- Keeper's signature (ed25519) over the signed block; raw bytes, no base64
-  schema          BYTEA       NOT NULL,                          -- the canonical-JSON schema document, byte-exact as signed (migration 113)
+  schema          BYTEA       NOT NULL,                          -- the canonical-JSON schema document, byte-exact as signed (migration 115)
   allowed_by_aid  TEXT        NOT NULL REFERENCES operators(aid),               -- who admitted it; default NO ACTION (effectively RESTRICT) — the author of an active allowance cannot be deleted
   allowed_at      TIMESTAMPTZ NOT NULL DEFAULT NOW(),
   revoked_at      TIMESTAMPTZ,                                   -- NULL = active; NOT NULL = allowance revoked (soft, for audit)
@@ -89,7 +89,7 @@ CREATE UNIQUE INDEX plugin_sigils_active_idx       ON plugin_sigils (source, ref
 CREATE UNIQUE INDEX plugin_sigils_active_alias_idx ON plugin_sigils (alias)         WHERE revoked_at IS NULL;
 ```
 
-> **Re-keyed by migration 113 (NIM-377 / NIM-438).** It was `(namespace, name, ref)` with a `manifest JSONB` column. The artifact now declares **no name at all**, so the old key is unusable rather than merely absent — and an alias is operator-chosen text, so keying an approval on it would mean renaming an alias walks around an approved hash instead of requiring a fresh approval. The only identity an operator *asserts about the bytes* is where they came from. The `manifest` jsonb projection was dropped and `manifest_raw` renamed to `schema` (`NOT NULL`): one signed value, stored once, with no second copy free to drift. **The migration empties the table** — every prior grant was signed under DST `soul-stack/sigil/v1` over a block keyed on `(namespace, name)`, so none of them verifies against the v2 block; approvals are re-issued with `keeper.plugin.allow`. See [ADR-026](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations).
+> **Re-keyed by migration 115 (NIM-377 / NIM-438).** ⚠ **Correction, rider on NIM-794:** this line said migration 113 — the re-key is `keeper/migrations/115_plugin_sigils_source_identity.up.sql`, and `113_subject_four_dimensions` is an unrelated migration. It was `(namespace, name, ref)` with a `manifest JSONB` column. The artifact now declares **no name at all**, so the old key is unusable rather than merely absent — and an alias is operator-chosen text, so keying an approval on it would mean renaming an alias walks around an approved hash instead of requiring a fresh approval. The only identity an operator *asserts about the bytes* is where they came from. The `manifest` jsonb projection was dropped and `manifest_raw` renamed to `schema` (`NOT NULL`): one signed value, stored once, with no second copy free to drift. **The migration empties the table** — every prior grant was signed under DST `soul-stack/sigil/v1` over a block keyed on `(namespace, name)`, so none of them verifies against the v2 block; approvals are re-issued with `keeper.plugin.allow`. See [ADR-026](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations).
 
 **The `signature BYTEA` choice.** An ed25519/ECDSA signature is raw binary bytes of fixed (ed25519 — 64 bytes) length. `BYTEA` stores them directly, without the overhead of base64 encoding (`text`) and without the risk of an encoding mismatch between the write path (S2a/S3) and the verify path (S6). The exact format of the signed block — slice S3.
 

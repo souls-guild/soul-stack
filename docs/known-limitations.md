@@ -24,11 +24,30 @@ What remains is that nothing in the tree *is* such a plugin yet. This was the **
 
 ⚠ **A plugin on the Keeper is the most privileged execution the platform has** — a foreign binary in the Keeper's process tree rather than on a host — and it stands at the door its neighbours already stood at, plus one bolt: the artifact must be in `keeper.yml::plugins.soul_modules`, its capabilities must pass `allowed_capabilities`, its sha256 must match an active Sigil grant, and its module must declare `side: keeper` — a declaration the Sigil seal signs together with the binary ([ADR-026(c)](adr/0026-sigil.md)), so it cannot be flipped without breaking the signature. Nothing confines the process once it starts; that bound is the same one [ADR-020](adr/0020-plugin-infrastructure.md) states for every kind.
 
+⚠ **Where those bytes come from gains a second answer — and for a `side: keeper` plugin the answer is OPEN.** The [2026-09-04 amendment](adr/0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path) (NIM-794; the **Soul half is implemented** as NIM-796, the keeper half is not — NIM-795) decides that a plugin arrives on a **Soul host** from its artifact source (`source_kind: artifact`), with `FetchModule` retained for hosts without egress. Every bolt listed above is unchanged by it: the catalog entry, `allowed_capabilities`, the sha256 against an active grant, and `side: keeper` signed into the Sigil seal are all read the same way regardless of who served the bytes — which is the point, since the gate is the digest and never rested on the network path.
+
+**The open question, stated rather than answered: does the *Keeper* also pull from the source for a `side: keeper` plugin, or is source-pull the Soul path only?** The amendment settles the Soul side and does not address this one, and the two readings are not equivalent here. Today the Keeper resolves the artifact into its own cache and executes from it; source-pull for a keeper-side plugin would mean the **Keeper process** making the egress call for bytes it is about to run in its own process tree — the most privileged execution the platform has, so the answer is not a detail to pick while implementing. Recorded as open for **NIM-795**; do not read either answer out of the amendment.
+
 ### `side: keeper` is enforced by the Keeper only, not by the Soul
 
 The gate is **one-directional**. The Keeper refuses to execute a module that has not declared `side: keeper`; the Soul host does not read the field at all — its plugin registry indexes every `soul_module` in the slot regardless of side. So an artifact declaring `side: keeper`, once distributed to a host, is executable there: a task written as `module: <alias>.<module>.<state>` **without** `on: keeper` routes Soul-side (a scenario cannot derive a plugin's side — [ADR-0087](adr/0087-task-side-derived-from-module-address.md)(f)) and the keeper-side binary runs on every targeted host.
 
 **Latent, not live:** no artifact in the tree declares `keeper` yet, and the first one to do so arrives with NIM-760. Closing it means the symmetric refusal in `soul/internal/runtime`'s plugin registry, which is a Soul-side behaviour change and its own ticket.
+
+## Source-pull is half-wired: a multi-platform grant installs on exactly ONE platform
+
+The Soul half of source-pull ships (**NIM-796**): a `core.module.installed` step whose grant names an artifact source pulls the bytes from it, selects the row for its own platform, and reports `fetch_via` / `fetch_url` on the final event. The **grant's wire form does not** — that is **NIM-795** ([ADR-026](adr/0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper)), and neither does the catalog entry that would fill it ([ADR-020](adr/0020-plugin-infrastructure.md#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list)).
+
+**What that means in practice.** `SigilRecord` carries `BaseURL` and `Artifacts`, and **nothing populates them from the proto**; the signed block still covers one scalar digest. So a grant carrying several platform rows would install **only on the platform whose row digest equals `BinarySHA256hex`**. On every other platform the host fetches the right-looking bytes and then **fails closed at verify**, with a digest mismatch.
+
+**It fails in the safe direction, and the diagnostic is misleading.** Nothing unverified is installed — verify runs before materialization, which is why the fetch comes last. But the operator sees a **verification failure on a correct artifact**, which reads as tampering rather than as a missing feature. Until NIM-795 lands, a grant is effectively single-platform.
+
+**Not affected:** a grant with no artifact rows, which is every grant that exists today. It takes `FetchModule` exactly as before, and `FetchModule` is not deprecated — it is the path for hosts with no egress ([ADR-065](adr/0065-core-module-installed.md#fetchmodule-remains-a-second-legitimate-mode)).
+
+**Two smaller boundaries of the same change**, both deliberate and both recorded in [ADR-065's amendment](adr/0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path):
+
+- **The artifact size ceiling on the source path is a constant, not configurable.** It reuses Keeper's *default* (`plugins.max_artifact_size_mb`'s default), so a cluster that **raised** its own ceiling has artifacts the source path refuses and `FetchModule` would serve. `soul.yml` has no knob; adding one is the fix if it ever bites.
+- **Source authentication does not exist.** v1 reads an **anonymously readable** repository, and a `base_url` carrying credentials is refused rather than used — deferred with its reason in [ADR-026](adr/0026-sigil.md#authentication-to-the-source-is-deliberately-deferred).
 
 ## MCP does not cover all domains
 

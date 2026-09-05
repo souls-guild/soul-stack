@@ -169,13 +169,14 @@
     A generic mechanism (a handshake `PluginParams` field in the JSON handshake) is **deferred post-MVP** — the pilots did not show a need for it (parameter shapes diverge between providers, a typical JSON blob in an env var is simpler than building out a shared schema validator). Once a fourth provider with overlapping parameters appears — revisit through propose-and-wait.
   - **(m) Open item (S3 dispatcher `proxy_jump` support).** The Teleport pilot returns the bastion address to route the SSH session through in `SignReply.proxy_jump`, but the dispatcher (`keeper/internal/push`) **IGNORES** the field — `net.Dial(host:port)` goes **directly**. A full Teleport-via-bastion flow requires dispatcher proxy_jump support (a separate slice worked on in parallel with this canon fixation). Until then the pilot only applies to **hosts with direct SSH reachability**; Teleport-via-bastion will become functional after the dispatcher slice. This is **not an SshProvider problem** — the plugin correctly returns the field, the only-add contract is finalized; the open question is in `keeper.push`'s host-side flow.
 
-> **⚠ Three claims in the ADR-065 amendment below are SUPERSEDED by the [2026-08-06 amendment](#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name) (NIM-377).** The catalog entry, the resolver reuse, the Sigil flow, `FetchModule` and `core.module.installed` are all unchanged — only these three:
+> **⚠ Four claims in the ADR-065 amendment below no longer read as written, and they do not come from one ticket.** The first three are SUPERSEDED by the [2026-08-06 amendment](#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name) (NIM-377). The fourth is **NIM-794's, not NIM-377's**: the [2026-09-04 amendment](#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list) (**not implemented**) narrows `FetchModule` from *the* delivery path to one of two, and the same amendment gives the catalog entry a `source_kind` and an explicit `artifacts[]` — so neither `FetchModule` nor the catalog entry belongs on an "unchanged" list any more. Nor is the remainder simply "unchanged", which is what the earlier wording of this marker claimed: **the resolver reuse** holds for `source_kind: git` — every entry that ships — while an `artifact` entry is resolved by a second resolver behind an interface laid down for it; **the Sigil flow** keeps its shape (`plugin.allow` → a row in `plugin_sigils`) but the block it signs goes to `soul-stack/sigil/v3` and every existing grant is deleted ([ADR-026 amendment](0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper)); **`core.module.installed`** keeps its shape and its step order, with exactly one of its six steps — the fetch — changing endpoint ([ADR-065 amendment](0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path)). The four rows below are the claims that are outright false as written:
 >
 > | Claim below | What is true now |
 > |---|---|
 > | "the manifest on the Soul side is materialized from `PluginSigil.manifest_raw`" | The field is **`PluginSigil.schema`** (number 9), carrying canonical schema-document bytes. Field 6 `manifest` is **reserved, never reused** ([ADR-012](0012-keeper-soul-grpc.md) forbids reuse), as are 1 `namespace` and 2 `name`. |
 > | "the Soul-side cache layout is `<paths.modules>/<ns>-<name>/{manifest.yaml, soul-mod-<name>}`" | The slot is **`<paths.modules>/<alias>/`** — named by the registration alias — holding **one executable whose filename means nothing** and the schema document. There is no `<ns>-<name>` and no sibling `manifest.yaml` ([ADR-065 amendment](0065-core-module-installed.md#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact)). |
 > | "the manifest format (e) is NOT changed" | It **is** changed — that is this ticket. (e) is superseded: generated canonical JSON, no `namespace:`/`name:`, no binary-name convention. |
+> | "Delivery of the bytes to the Soul host is a new server-streaming RPC `FetchModule`" | It is **one of two** paths as of the [2026-09-04 amendment](#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list) (NIM-794, **not implemented**). A host that can reach the artifact source fetches from it directly; `FetchModule` remains the path for hosts without egress and is **not deprecated** ([ADR-065 amendment](0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path)). |
 >
 > The line "the manifest ... not from a git checkout" also reads differently now: the schema is stamped **into the artifact**, so it arrives with the bytes as well as in the snapshot.
 
@@ -235,7 +236,7 @@ Turning either field into a control is a **separate ADR** with its own cost: enf
 - **`shared/pluginhost`**: `Manifest.BinaryName()` and its discovery use are deleted; a slot holds one executable, named by the alias.
 - **No backcompat with the authored-manifest form.** There is no release yet — the old path is deleted, not branched on ([CLAUDE.md](../../CLAUDE.md)).
 - **Guard tests, e2e > integration > unit:** a stamped artifact whose schema disagrees with its code must fail `verify`; a slot whose trailer is missing or corrupt must fail closed, not fall back.
-- **Not settled by this amendment:** the authoring form for `cloud_driver` / `ssh_provider` / `soul_beacon`. The mechanism above — source-keyed registry, alias-named slot, one executable in `dist/`, no self-name — is forced on every kind, because discovery and the slot layout are shared code. The Go-side generator, however, is specified only for SoulModule bundles (`sdk/module`); what replaces the authored `spec.profile_schema` / `spec.provider_kind` / `spec.params_schema` for the other three kinds is open, and is not decided here.
+- **Not settled by this amendment:** the authoring form for `cloud_driver` / `ssh_provider` / `soul_beacon`. ⚠ **"one executable in `dist/` ... forced on every kind" becomes KIND-SCOPED with the [2026-09-04 amendment](#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list) (NIM-794, not implemented):** it still holds on the **Soul** side — the host slot takes one executable and discovery refuses a slot holding several — but an **artifact-kind** catalog entry names N platform binaries, so the Keeper-side cache holds N per slot. The rest of the sentence (source-keyed registry, alias-named slot, no self-name) is unchanged and still forced on every kind. Original text follows. The mechanism above — source-keyed registry, alias-named slot, one executable in `dist/`, no self-name — is forced on every kind, because discovery and the slot layout are shared code. The Go-side generator, however, is specified only for SoulModule bundles (`sdk/module`); what replaces the authored `spec.profile_schema` / `spec.provider_kind` / `spec.params_schema` for the other three kinds is open, and is not decided here.
 
 ## Amendment 2026-09-01 (NIM-748, [ADR-0087](0087-task-side-derived-from-module-address.md)): the per-module shape grows a `side` field
 
@@ -495,3 +496,61 @@ no admission either** — naming it that grants nothing and restricts nothing.
 
 The normative statement of the rule lives in
 [naming-rules.md → The discipline binding the three levels](../naming-rules.md#the-discipline-binding-the-three-levels).
+
+## Amendment 2026-09-04 (NIM-794): the catalog entry gains a source kind and an explicit artifact list
+
+**Not implemented — this amendment is still design-only, and deliberately so.** Its subject is the **catalog entry**: what an Archon writes in `keeper.yml` and the Keeper resolves. That is **NIM-795** (keeper), under epic NIM-793. No `source_kind`, `base_url` or `artifacts[]` key is parsed by any config today, and everything above still describes the catalog that ships. Decisions settled with the user 2026-09-04.
+
+⚠ **The Soul half of the same epic HAS shipped (NIM-796, `2daf8545`).** The host-side consumer of this entry exists and is guarded — it pulls the artifact from `base_url`, picks its platform row, and refuses a path that could steer the address — but it is fed from a **read-side DTO that nothing populates from the wire**, because the entry that would fill it is this ticket's. See [ADR-065's amendment](0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path), which is now largely a record of shipped behaviour, and [its half-wired section](0065-core-module-installed.md#what-is-half-wired-and-what-nim-795-inherits) for the live limitation that leaves.
+
+The counterparts of the same date are [ADR-026's](0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper) (the grant carries an artifact list, the DST goes to v3 — **also still design-only**, same reason: it describes the signed block) and [ADR-065's](0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path) (which of the install step's six steps changes — **shipped**).
+
+### The catalog entry
+
+```yaml
+plugins:
+  soul_modules:
+    - name: redis
+      source_kind: artifact       # git | artifact
+      base_url: https://nexus.internal/plugins/redis
+      ref: v1.4.0
+      artifacts:
+        - { os: linux, arch: amd64, path: redis_linux_amd64, sha256: … }
+        - { os: linux, arch: arm64, path: redis_linux_arm64, sha256: … }
+```
+
+`source_kind: git` is what every entry means today and stays the default shape; `artifact` is the new arm.
+
+### Why the key is `source_kind` and not `kind`
+
+The epic first proposed `kind`, so a reader will ask. Three reasons, and the first is decisive:
+
+- **`kind` is already taken, by the plugin-type discriminator.** It is the closed enum `soul_module | ssh_provider | soul_beacon` (`sdk/schema/schema.go:40-44`, [naming-rules.md](../naming-rules.md) row `kind`), and an entry sitting **inside** `soul_modules:` that carried `kind: artifact` would contradict its own container — the container already says what kind of plugin it is. (`cloud_driver` **left** that enum under [the 2026-09-01 amendment](#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it), landed as **NIM-761 on 2026-09-04**: three values are what the code declares today, with `proto/plugin/v1/common.proto:13-16` carrying `reserved 2; reserved "KIND_CLOUD_DRIVER";` beside them. The argument here never turned on the arity: `kind` is taken either way.)
+- **The two would meet in code.** `keeper/internal/pluginhost/pluginhost.go:220-224` maps the schema `kind` onto the catalog list name (`KindSoulModule → "soul_modules"`), so the schema-document `kind` and the catalog list are already two ends of one correspondence. Putting a second, unrelated `kind` in the entry puts a homograph in the middle of it.
+- **The `<x>_kind` form is already ruled non-colliding in this repository.** `provider_kind` is defined in [naming-rules.md](../naming-rules.md) as "a closed enum per-`kind`; different spaces, no collisions" — the precedent for a second closed enum living beside `kind` without contending with it. `source_kind` is the same construction: a closed enum over how the bytes are obtained, not over what the plugin is.
+
+### There is deliberately no path template
+
+Same reasoning as [ADR-026's amendment of this date](0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper), which is where it is argued: an expressive template in a URL that yields executable bytes turns an address into a program, and the explicit list closes that structurally. The reasoning lives there rather than in two places, so that the two copies cannot drift.
+
+The catalog-side consequence is the one worth stating here: **each artifact row names its own `path` in full.** No substitution, no interpolation, no `{os}`.
+
+The **host-side** consequence has shipped (NIM-796) and is worth knowing while writing an entry: the Soul **joins** `base_url` and `path` and refuses a path that is absolute, is a URL of its own, carries a `.` or `..` segment, a backslash, a query or a fragment — checked as written and percent-decoded — and refuses a `base_url` with no host, with credentials, or with a query. So a row an author writes in one of those shapes fails at apply with a fetch refusal, not at config-parse time; the mechanism and its reasons are in [ADR-065's amendment](0065-core-module-installed.md#the-three-security-decisions-the-source-pull-is-built-on) (c).
+
+### Providers
+
+The **interface** is laid down now, with exactly one implementation: `artifact` over https.
+
+Today there is one resolver, `keeper/internal/plugingit` ([ADR-026(g)](0026-sigil.md#adr-026-sigil--plugin-integrity-keeper-signed-digest-index)), and it is not behind an interface because there has never been anything to be behind one *of*. The arrival of a second resolver is the moment to define the boundary — a single implementation is what makes the shape cheap to get right, and retrofitting an interface around two concrete resolvers that already exist is how the wrong seam gets chosen.
+
+### (o) — an OPEN fork, deliberately not closed here
+
+**N artifacts carry N stamped schema trailers, but the signed block holds ONE `schema_sha256`.**
+
+(o) above stamps the generated schema document into the artifact as a trailer, and [ADR-026](0026-sigil.md) signs a block covering `schema_sha256` beside the binary digest. With one artifact per grant those are trivially the same document. With N platform binaries there are N stamped trailers, and **cross-compiled builds are not guaranteed to produce byte-identical ones** — which is the whole question, because the document is hashed and signed as bytes and (o)'s own determinism argument is about the *generator*, not about N invocations of N toolchains.
+
+The user was asked and did **not** rule on it. It is recorded as open rather than resolved in passing, and **NIM-795 must come back for a decision rather than pick one silently** — picking silently here means either an arbitrary "trailer of the first row wins" or a de-facto requirement that every platform build be byte-identical in that region, and both are architecture.
+
+It also interacts with a pending decision on the **signature mechanism itself**, so the two should be looked at together rather than one being settled under the other's assumptions.
+
+**There is a second open fork of this date, and it is not here.** What fills the grant's `source` for an artifact-kind entry is also unresolved — `base_url` is the presumptive answer, but `source` is `NOT NULL`, is signed, and is half the trust key, so a silent pick is architecture. It is recorded in [ADR-026's amendment of this date](0026-sigil.md#an-open-fork-what-fills-source-for-an-artifact-kind-entry), where grant identity lives. Both forks are NIM-795's, and both wait on the signature-mechanism decision.
