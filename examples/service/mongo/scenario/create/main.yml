@@ -15,7 +15,7 @@ description: >-
   bootstrap): mongod comes up with security.authorization: enabled. The first admin
   (default_admin) can't yet be created with auth (no user exists) — mongo allows a NO-auth
   connection over loopback while the admin DB is empty (localhost-exception). The
-  community.mongo.user plugin detects auth-fail and falls back to a no-auth localhost
+  mongo.user.present plugin action detects auth-fail and falls back to a no-auth localhost
   connection for the first createUser (the mechanics are INSIDE the plugin — render passes
   addr+username+password, the plugin decides the auth path BY THE FACT of live state,
   parallel to the redis plugin that decides via INFO/CONFIG GET). After default_admin is
@@ -294,12 +294,12 @@ tasks:
       name: mongod
 
   # ── 7. Health-gate: mongod answers ping BEFORE bootstrap admin ───────────────────
-  # community.mongo.pinged against the local mongod. * WITHOUT auth: admin DB is still empty
+  # mongo.instance.pinged against the local mongod. * WITHOUT auth: admin DB is still empty
   # (default_admin not created) — ping without auth passes via localhost-exception (ping
   # itself does not require authorization). retry/until — wait for mongod to come up (start
   # may take a few seconds). addr — loopback (plugin runs on the mongo host).
   - name: Wait for mongod to answer ping
-    module: community.mongo.pinged
+    module: mongo.instance.pinged
     retry:
       count: 15
       delay: 3s
@@ -309,7 +309,7 @@ tasks:
       addr: "${ '127.0.0.1:' + string(compute.net_port) }"
 
   # ── 8. BOOTSTRAP default_admin via localhost-exception ─────────────────────────
-  # ** FIRST admin: community.mongo.user creates default_admin. The plugin tries a connection
+  # ** FIRST admin: mongo.user.present creates default_admin. The plugin tries a connection
   # with auth (username=default_admin + password), but the admin DB is empty → the auth
   # attempt fails Unauthorized → the plugin FALLS BACK to a no-auth localhost connection
   # (localhost-exception) and creates the first admin over it. default_admin's roles — from
@@ -321,46 +321,76 @@ tasks:
   # run_once is NOT needed (standalone — a single host); on a multi-host replica-set this
   # would be run_once on the primary (NEXT slice).
   - name: Bootstrap the default_admin user (localhost-exception)
-    module: community.mongo.user
+    module: mongo.user.present
     params:
       addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
       username: "${ compute.admin_user }"
       password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       name:     "${ compute.admin_user }"
       database: admin
-      state:    present
       roles:    "${ vars.system_users[compute.admin_user] }"
 
   # ── 9. Operator users (after bootstrap default_admin) ────────────────────────────
-  # community.mongo.user for EACH input.users. The connection is ALREADY under default_admin
-  # (auth works — admin was created by step 8, localhost-exception is closed). loop over the
-  # MongoUser array: name/database/roles/state from the element. Each password —
-  # secret/mongo/<inc>/{mongo_users,system_users}/<name>#password. * Gate has(input.users) — the section is
-  # optional: without operator users the task doesn't target anything (loop over []).
+  # mongo.user.present / mongo.user.absent for EACH input.users. The connection is ALREADY
+  # under default_admin (auth works — admin was created by step 8, localhost-exception is
+  # closed). loop over the MongoUser array: name/database/roles from the element. Each
+  # password — secret/mongo/<inc>/{mongo_users,system_users}/<name>#password. * Gate
+  # has(input.users) — the section is optional: without operator users neither task targets
+  # anything (loop over []).
   # Idempotent (plugin usersInfo: present+exists → no-op, absent+doesn't exist → no-op).
+  #
+  # ★ TWO tasks, where this used to be one carrying `state: ${ item.state }`. Since
+  # NIM-769 the verb is address level 3 (`mongo.user.present` / `.absent`), and an
+  # address is static — so the per-item choice moves from a plugin param into the
+  # loop's own filter. `input.users[].state` is UNCHANGED: it is still the operator's
+  # declaration, and the scenario is what translates it into an address.
+  #
+  # ⚠ One consequence, named rather than discovered: two tasks run in TASK order, so
+  # every create now precedes every drop, where one loop ran in DECLARATION order. That
+  # is identical for distinct names, and `input.users` is a list of distinct users —
+  # MongoUser.name is documented unique (types.yml) though the grammar does not enforce
+  # it. Only a list declaring the SAME name twice with different `state` reads
+  # differently: it used to end at whichever declaration came last, and now ends absent.
+  # A duplicate name is already malformed input here — the mint step above maps over the
+  # list and would carry the name twice into incarnation.state — so the fix is uniqueness
+  # on the input, not ordering on the tasks.
   - name: Create operator MongoDB users
-    module: community.mongo.user
+    module: mongo.user.present
     when: "has(input.users)"
     loop:
-      items: "${ default(input.users, []) }"
+      items: "${ default(input.users, []).filter(u, default(u.state, 'present') == 'present') }"
       as: item
     params:
       addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
       username: "${ compute.admin_user }"
       password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
       name:     "${ item.name }"
-      # * default() applied manually: $type-defaults (types.yml MongoUser database/state)
-      # are only filled for top-level input fields (mergeInputDefaults), NOT for nested
-      # fields of array elements — so we take database/state via default() (pattern from
+      # * default() applied manually: the $type-default (types.yml MongoUser database)
+      # is only filled for top-level input fields (mergeInputDefaults), NOT for nested
+      # fields of array elements — so we take database via default() (pattern from
       # dragonfly add_user default(input.user.state, ...)). roles is required (MongoUser
       # required) → bare item.roles.
       database: "${ default(item.database, 'admin') }"
-      state:    "${ default(item.state, 'present') }"
       roles:    "${ item.roles }"
       # The password of the user being created — from its Vault branch (vault()-in-cell,
-      # seal-masking). On state=absent the password isn't used (dropUser), but vault()
-      # resolves safely (the secret was generated by the gen step for EVERY operator user).
+      # seal-masking).
       user_password: "${ merge(register.mongo_users.effective.map(r, { r.name: r.password }))[item.name] }"
+
+  # The removal half of the same declaration. No user_password and no roles: dropUser
+  # reads neither, and since NIM-769 `mongo.user.absent` does not DECLARE them either —
+  # passing one is refused rather than ignored.
+  - name: Remove operator MongoDB users declared absent
+    module: mongo.user.absent
+    when: "has(input.users)"
+    loop:
+      items: "${ default(input.users, []).filter(u, default(u.state, 'present') == 'absent') }"
+      as: item
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+      name:     "${ item.name }"
+      database: "${ default(item.database, 'admin') }"
 
   # ── incarnation.state capture ───────────────────────────────────────────────────
   # What was deployed, recorded field by field by keeper-side steps ([ADR-0084]). The

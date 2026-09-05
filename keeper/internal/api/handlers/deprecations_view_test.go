@@ -70,7 +70,7 @@ func TestToDeprecationUsageViews_CarriesEveryField(t *testing.T) {
 func TestToDeprecationGapViews_CarriesEveryField(t *testing.T) {
 	in := []scenario.DeprecationGap{{
 		Scope:        "module",
-		Subject:      "community.mongo",
+		Subject:      "mongo.user",
 		Reason:       "plugin_namespace",
 		Detail:       "no manifest for this module is available here",
 		Incarnations: []string{"mongo-a", "mongo-b"},
@@ -83,7 +83,7 @@ func TestToDeprecationGapViews_CarriesEveryField(t *testing.T) {
 	g := got[0]
 	for _, c := range []struct{ field, got, want string }{
 		{"Scope", g.Scope, "module"},
-		{"Subject", g.Subject, "community.mongo"},
+		{"Subject", g.Subject, "mongo.user"},
 		{"Reason", g.Reason, "plugin_namespace"},
 		{"Detail", g.Detail, "no manifest for this module is available here"},
 	} {

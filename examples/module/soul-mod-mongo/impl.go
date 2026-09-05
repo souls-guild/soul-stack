@@ -1,23 +1,24 @@
-// soul-mod-community-mongo is a real SoulModule plugin for Soul Stack
-// (community.mongo): main interface to live MongoDB (PILOT slice). The service's
-// Scenario orchestrates order/targeting; plugin executes ONE operation on ONE
-// mongod instance via go-mongo-driver (NOT core.exec+mongosh: password in argv is
-// a security risk with fragile parsing; parallel to community.redis).
+// soul-mod-mongo is a real SoulModule plugin for Soul Stack: main interface to
+// live MongoDB (PILOT slice). The service's Scenario orchestrates order/targeting;
+// plugin executes ONE operation on ONE mongod instance via go-mongo-driver (NOT
+// core.exec+mongosh: password in argv is a security risk with fragile parsing;
+// parallel to the redis plugin).
 //
-// States (PILOT):
-//   - pinged  — health-probe via driver Ping (read-only, changed=false by design,
-//     precedent: core.http.probe / community.redis.pinged);
-//   - user    — createUser/dropUser (upsert, imperative — NOT aclfile: in mongo
-//     users live in admin.system.users, not in config file). state
-//     present/absent. Idempotent by usersInfo. ★ localhost-exception:
-//     first admin is created WITHOUT auth via localhost while admin DB
-//     is empty (mongo-mechanism, analog to redis default_admin bootstrap);
-//   - command — raw db.runCommand (imperative verb-state, changed from params —
-//     precedent: community.redis.command).
+// Three objects, address `mongo.<object>.<action>` (object.go, ADR-020 amendment
+// 2026-09-02):
+//   - mongo.instance.pinged — health-probe via driver Ping (read-only,
+//     changed=false by design, precedent: core.http.probe / redis.instance.pinged);
+//   - mongo.user.present / .absent — createUser/dropUser (imperative — NOT aclfile:
+//     in mongo users live in admin.system.users, not in a config file). Idempotent
+//     by usersInfo. ★ localhost-exception: first admin is created WITHOUT auth via
+//     localhost while admin DB is empty (mongo-mechanism, analog to redis
+//     default_admin bootstrap);
+//   - mongo.command.run — raw db.runCommand (imperative verb-action, changed from
+//     params — precedent: redis.command.run).
 //
 // Intentionally without dry-run preview: plugin on BaseModule does NOT implement
 // PlanReadSafe → host applies default-deny (on dry_run — honest "drift unsupported",
-// user's choice, parallel to community.redis).
+// user's choice, parallel to the redis plugin).
 //
 // Backend — go.mongodb.org/mongo-driver. Address + password come from Keeper:
 // password is already resolved by render phase from vault-ref (ADR-012), plugin does
@@ -33,18 +34,18 @@ import (
 	"fmt"
 	"strings"
 
-	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
 	"go.mongodb.org/mongo-driver/bson"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// MongoModule is the implementation of SoulModule community.mongo.
+// MongoModule is the shared MongoDB implementation behind every object of this
+// artifact. Three objects, one driver: an [object]'s action table delegates to the
+// applyXxx methods here, and the object is what a task addresses.
 //
 // BaseModule provides a no-op Plan (without PlanReadSafe → default-deny on dry_run) and
-// intentionally does NOT implement ErrandReadSafe (default-deny on Errand). We override
-// Validate and Apply.
+// intentionally does NOT implement ErrandReadSafe (default-deny on Errand). The
+// SoulModule surface — Validate and Apply — is implemented by [object].
 type MongoModule struct {
 	module.BaseModule
 
@@ -70,64 +71,6 @@ type connConfig struct {
 	password string
 	authDB   string // authenticationDatabase (usually admin)
 	tls      tlsParams
-}
-
-// Validate performs runtime checks on top of static checks from soul-lint. Returns
-// ValidateReply with errors (not error) — this is the Validate contract. Error text
-// does NOT contain the password.
-func (m *MongoModule) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	var errs []string
-	f := req.GetParams().GetFields()
-
-	switch req.GetState() {
-	case "pinged":
-		errs = append(errs, validateAddr(f)...)
-	case "user":
-		errs = append(errs, validateUser(f)...)
-	case "command":
-		errs = append(errs, validateCommand(f)...)
-	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (expected pinged|user|command)", req.GetState()))
-	}
-
-	if len(errs) > 0 {
-		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
-	}
-	return &pluginv1.ValidateReply{Ok: true}, nil
-}
-
-// Apply dispatches by state. The final event carries changed/failed +
-// output (ADR-012). Connection/command errors are sanitized (redactError) — address
-// is preserved for diagnostics, password is stripped.
-//
-// ★ user-state opens connection ITSELF (localhost-exception fallback: first admin
-// is created without auth) — therefore its connection lifecycle is extracted to applyUser,
-// not to the common openConn here. pinged/command go through the common path (connection with auth).
-func (m *MongoModule) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	ctx := stream.Context()
-
-	if req.GetState() == "user" {
-		return m.applyUser(ctx, stream, req.GetParams())
-	}
-
-	cfg, err := parseConnConfig(req.GetParams())
-	if err != nil {
-		return sendFailure(stream, err.Error())
-	}
-	conn, err := m.openConn(ctx, cfg)
-	if err != nil {
-		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
-	}
-	defer func() { _ = conn.Close(ctx) }()
-
-	switch req.GetState() {
-	case "pinged":
-		return m.applyPinged(ctx, stream, conn, cfg.password)
-	case "command":
-		return m.applyCommand(ctx, stream, conn, req.GetParams(), cfg.password)
-	default:
-		return sendFailure(stream, fmt.Sprintf("unknown state %q (expected pinged|user|command)", req.GetState()))
-	}
 }
 
 // parseConnConfig extracts connection parameters from params. password is kept
@@ -162,7 +105,8 @@ func (m *MongoModule) openConn(ctx context.Context, cfg connConfig) (mongoConn, 
 // applyPinged is health-probe via driver Ping. changed=false by design
 // (probe, not change): interpretation of "healthy/not" is at the scenario level via
 // retry/until/failed_when by register.self.ok.
-func (m *MongoModule) applyPinged(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn mongoConn, password string) error {
+func (m *MongoModule) applyPinged(ctx context.Context, stream eventStream, conn mongoConn, params *structpb.Struct) error {
+	password := stringOrEmpty(params.GetFields()["password"])
 	if err := conn.Ping(ctx); err != nil {
 		return sendFailure(stream, "PING: "+redactError(err, password))
 	}
@@ -175,8 +119,9 @@ func (m *MongoModule) applyPinged(ctx context.Context, stream grpc.ServerStreami
 // taken from params.changed (default false, probe-semantics). db is the target
 // database (default admin). command is the bson document of the command (first key = command name).
 // Output carries the ok flag from the response; password does not go into events.
-func (m *MongoModule) applyCommand(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], conn mongoConn, params *structpb.Struct, password string) error {
+func (m *MongoModule) applyCommand(ctx context.Context, stream eventStream, conn mongoConn, params *structpb.Struct) error {
 	f := params.GetFields()
+	password := stringOrEmpty(f["password"])
 	db := stringOrEmpty(f["db"])
 	if db == "" {
 		db = "admin"
@@ -236,7 +181,13 @@ func commandOK(raw bson.Raw) bool {
 	}
 }
 
-// validateCommand performs static checks for command-state: addr + command
+// validatePinged performs static checks for instance.pinged: a probe needs nothing
+// but somewhere to connect to.
+func validatePinged(f map[string]*structpb.Value) []string {
+	return validateAddr(f)
+}
+
+// validateCommand performs static checks for command.run: addr + command
 // are required.
 func validateCommand(f map[string]*structpb.Value) []string {
 	var errs []string

@@ -171,8 +171,14 @@ levels meaning what the table says they mean — the user's decision of 2026-09-
 ★ **Served by `redis`** (NIM-766, NIM-767): the artifact registers under the alias `redis` and
 serves seven objects — `acl`, `cluster`, `command`, `instance`, `replica`, `sentinel`, `user` — so
 `redis.instance.pinged`, `redis.cluster.created` and `redis.user.present` are what the catalog
-answers to today ([`docs/module/redis/`](module/redis/README.md)). ⚠ `community.mongo` is still in
-the old form and its conversion is **NIM-769**.
+answers to today ([`docs/module/redis/`](module/redis/README.md)).
+
+★ **Served by `mongo`** (NIM-769): the artifact registers under the alias `mongo` and serves three
+objects — `command`, `instance`, `user` — so `mongo.instance.pinged`, `mongo.user.present` and
+`mongo.user.absent` are what the catalog answers to
+([`docs/module/mongo/`](module/mongo/README.md)). `params.state` went with the grouping level: the
+verb belongs at level 3, so a service choosing per item filters its loop instead of passing a
+verb as a parameter.
 
 A plugin step's address is **`<plugin-name>.<object>.<action>`** — `redis.instance.pinged`. That is
 the grammar core has spoken all along (`core.user.present`, `core.file.rendered`,
@@ -621,7 +627,7 @@ Standard regex for the kebab-case identifiers of module addressing `<alias>.<mod
 | **`<state-name>`** | `^[a-z][a-z0-9-]{0,30}$` | Address level 3 (`installed` / `running` / `restarted` / …). |
 | ~~binary-name~~ | — | **REMOVED (NIM-377).** `soul-mod-<namespace>-<name>` / `soul-cloud-<provider_kind>` / `soul-ssh-<short>` / `soul-beacon-<name>` is no longer a convention or a contract: `dist/` holds exactly one executable and the host takes it, whatever it is called. The [ADR-016 amendment 2026-05-27](adr/0016-parity-license.md) that put the namespace into the SoulModule binary name is moot, and so is NIM-423. |
 
-Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but under `docs/module/`: implemented [`redis`](module/redis/README.md) (interface to live Redis, `soul-mod-redis`, seven objects — re-laid-out and moved out of the origin-grouping directory by NIM-766, `user` added by NIM-767) and [`community.mongo`](module/community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** (interface to live MongoDB, `soul-mod-community-mongo`, PILOT standalone), whose directory keeps its present path until that artifact is re-laid-out.
+Cross-link: where these fields live in the plugin - [`docs/keeper/plugins.md → Schema document`](keeper/plugins.md#schema-document); addressing modules - section ["Destiny Modules"](#destiny-modules). The per-plugin directory (states, params, behavior) is maintained not here, but under `docs/module/`: implemented [`redis`](module/redis/README.md) (interface to live Redis, `soul-mod-redis`, seven objects — re-laid-out and moved out of the origin-grouping directory by NIM-766, `user` added by NIM-767) and [`mongo`](module/mongo/README.md) (interface to live MongoDB, `soul-mod-mongo`, three objects — the same re-layout by NIM-769, PILOT standalone). With mongo moved, no plugin document sits under an origin-grouping directory any more.
 
 ### Reserved namespace names
 

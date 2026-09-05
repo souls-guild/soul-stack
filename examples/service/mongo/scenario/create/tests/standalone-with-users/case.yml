@@ -1,5 +1,5 @@
 # L0 test for create MongoDB standalone WITH operator users. Covers: loop over input.users
-# (community.mongo.user for each), password split (connect as default_admin, createUser
+# (mongo.user.present for each present one), password split (connect as default_admin, createUser
 # with the new user's password - user_password), MongoUser $type ($type-resolve roles array {role, db}
 # + default database/state), state_after.mongo_users.
 name: mongo create standalone with operator users (loop + user_password split)
@@ -64,19 +64,17 @@ assert:
         field: mongo_users
 
     # bootstrap default_admin (localhost-exception).
-    - module: community.mongo.user
+    - module: mongo.user.present
       params_subset:
         name: default_admin
         username: default_admin
-        state: present
 
     # * operator user appuser (loop): connect as default_admin (username/password =
     # admin creds), createUser with appuser's password (user_password), roles from MongoUser.
-    - module: community.mongo.user
+    - module: mongo.user.present
       params_subset:
         name: appuser
         database: appdb
-        state: present
         username: default_admin
         password: mongoadmin-create-pass
         user_password: appuser-secret-pass

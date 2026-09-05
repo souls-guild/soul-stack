@@ -227,6 +227,34 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   the real `soul-mod`, verifies it and diffs the result against the committed
   `schema.json`. The e2e-live harness stamps with `soul-mod stamp` too, instead of
   reproducing the trailer format itself.
+- **The mongo plugin is laid out by OBJECT too, and `community` leaves the last
+  artifact that carried it** ([ADR-020 amendment 2026-09-02](docs/adr/0020-plugin-infrastructure.md),
+  NIM-769). `soul-mod-community-mongo` is **`soul-mod-mongo`**, registered under the
+  alias **`mongo`**, and serves **three modules** — one per object it manages:
+  `command`, `instance`, `user`. Every address moves from `community.mongo.<state>`
+  to `mongo.<object>.<action>` (`community.mongo.pinged` → `mongo.instance.pinged`,
+  `community.mongo.command` → `mongo.command.run`, `community.mongo.user` →
+  `mongo.user.present` / `mongo.user.absent`). **This is a breaking change for any
+  definition addressing the plugin**, and the alias is a config edit:
+  `keeper.yml::plugins.*[].name` goes from `community` to `mongo`. With the redis
+  conversion of NIM-766, no plugin in this repository is on the origin-grouping level
+  any more, and `docs/module/community/` is gone — the mongo document sits at
+  `docs/module/mongo/`.
+  ★ **`params.state` is gone from the user object.** `present` and `absent` are two
+  actions at address level 3, which is what lets each declare only the params it
+  reads: `roles` and `user_password` belong to `present` and are now REFUSED on
+  `absent`, where they used to be declared and silently ignored. An address is
+  static, so a service that chose between the two per item — the bundled mongo
+  service loops over `input.users` — filters the loop instead of passing the verb as
+  a parameter. `input.users[].state` itself is **unchanged**: it is still the
+  operator's declaration and still lands in `incarnation.state`; only the plugin
+  param went, and the scenario is what turns the declaration into an address.
+  The MongoDB behaviour is untouched — the dispatch key moved, the driver did not.
+  Each module now declares **`side: soul`** explicitly (NIM-749), the artifact is
+  served through `module.ServeBundle` (so `soul-mod stamp`/`verify` apply to it at
+  last and its `schema.json` is generated from the three `module.Def` values), and
+  `make check-plugin-schema` now holds BOTH bundled artifacts to what the tool
+  derives instead of only redis.
 - **`certificate_rotation:` is now `certificate:` with the rotation policy nested
   under `rotate:`, and `pki_role` sits a level above it**
   ([ADR-017 amendment 2026-09-03](docs/adr/0017-keeper-side-core.md), NIM-745). The

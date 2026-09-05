@@ -154,7 +154,7 @@ func TestFilterByCatalog(t *testing.T) {
 		},
 		SoulModules: []config.PluginCatalogEntry{
 			{Name: "redis", Source: "git@example.com:community-redis.git", Ref: "v1.0.0"},
-			{Name: "mongo", Source: "git@example.com:community-mongo.git", Ref: "v0.1.0"}, // not in cache
+			{Name: "mongo", Source: "git@example.com:soul-mod-mongo.git", Ref: "v0.1.0"}, // not in cache
 		},
 	}
 

@@ -52,15 +52,14 @@ func TestApplyUser_LocalhostExceptionBootstrap_FirstAdmin(t *testing.T) {
 	m := dualModule(authConn, noAuthConn)
 	stream := &applyStream{}
 
-	err := m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	err := m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "default_admin",
 			"database": "admin",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "root", "db": "admin"}},
 		}),
 	}, stream)
@@ -111,15 +110,14 @@ func TestApplyUser_AuthWorks_NoBootstrap(t *testing.T) {
 	m := dualModule(authConn, noAuthConn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "readWrite", "db": "appdb"}},
 		}),
 	}, stream)
@@ -149,15 +147,14 @@ func TestApplyUser_PresentIdempotent_NoOp(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "readWrite", "db": "appdb"}},
 		}),
 	}, stream)
@@ -174,7 +171,7 @@ func TestApplyUser_PresentIdempotent_NoOp(t *testing.T) {
 	}
 }
 
-// TestApplyUser_AbsentDropsExisting - state=absent, user exists -> dropUser, changed=true.
+// TestApplyUser_AbsentDropsExisting - user.absent, user exists -> dropUser, changed=true.
 func TestApplyUser_AbsentDropsExisting(t *testing.T) {
 	authConn := &fakeConn{rawByName: map[string]bson.Raw{
 		"usersInfo": usersRaw(1),
@@ -182,15 +179,14 @@ func TestApplyUser_AbsentDropsExisting(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "absent",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "absent",
 		}),
 	}, stream)
 
@@ -206,7 +202,7 @@ func TestApplyUser_AbsentDropsExisting(t *testing.T) {
 	}
 }
 
-// TestApplyUser_AbsentIdempotent_NoOp - state=absent, user absent -> no-op.
+// TestApplyUser_AbsentIdempotent_NoOp - user.absent, user absent -> no-op.
 func TestApplyUser_AbsentIdempotent_NoOp(t *testing.T) {
 	authConn := &fakeConn{rawByName: map[string]bson.Raw{
 		"usersInfo": usersRaw(0),
@@ -214,15 +210,14 @@ func TestApplyUser_AbsentIdempotent_NoOp(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "absent",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "ghost",
 			"database": "appdb",
-			"state":    "absent",
 		}),
 	}, stream)
 
@@ -238,7 +233,7 @@ func TestApplyUser_AbsentIdempotent_NoOp(t *testing.T) {
 	}
 }
 
-// TestApplyUser_AbsentDoesNotBootstrap - state=absent + auth fails Unauthorized ->
+// TestApplyUser_AbsentDoesNotBootstrap - user.absent + auth fails Unauthorized ->
 // do NOT perform no-auth fallback (user removal is not a bootstrap case). Return error.
 func TestApplyUser_AbsentDoesNotBootstrap(t *testing.T) {
 	authConn := &fakeConn{cmdErrByName: map[string]error{"usersInfo": authError()}}
@@ -246,15 +241,14 @@ func TestApplyUser_AbsentDoesNotBootstrap(t *testing.T) {
 	m := dualModule(authConn, noAuthConn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "absent",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "absent",
 		}),
 	}, stream)
 
@@ -275,13 +269,12 @@ func TestApplyUser_NoCredentials_DirectLocalhost(t *testing.T) {
 	m := dualModule(authConn, noAuthConn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"name":     "default_admin",
 			"database": "admin",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "root", "db": "admin"}},
 		}),
 	}, stream)
@@ -299,21 +292,21 @@ func TestApplyUser_NoCredentials_DirectLocalhost(t *testing.T) {
 }
 
 // TestApplyUser_PresentRejectsEmptyRoles - present + empty roles -> failed (user
-// without roles is meaningless; validation is in Apply and depends on state present).
+// without roles is meaningless; the check is in Apply, where an EXISTING user is a
+// no-op that needs none).
 func TestApplyUser_PresentRejectsEmptyRoles(t *testing.T) {
 	authConn := &fakeConn{rawByName: map[string]bson.Raw{"usersInfo": usersRaw(0)}}
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "norolls",
 			"database": "appdb",
-			"state":    "present",
 		}),
 	}, stream)
 
@@ -334,15 +327,14 @@ func TestApplyUser_CreateUserErrorDoesNotLeakPassword(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "readWrite", "db": "appdb"}},
 		}),
 	}, stream)
@@ -362,15 +354,14 @@ func TestApplyUser_PasswordDoesNotLeakOutsideCreateUser(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"username": "default_admin",
 			"password": secretPass,
 			"name":     "appuser",
 			"database": "appdb",
-			"state":    "present",
 			"roles":    []any{map[string]any{"role": "readWrite", "db": "appdb"}},
 		}),
 	}, stream)
@@ -392,8 +383,8 @@ func TestApplyUser_UserPasswordSeparateFromAdminPassword(t *testing.T) {
 	m := dualModule(authConn, &fakeConn{})
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "user",
+	_ = m.user().Apply(&pluginv1.ApplyRequest{
+		State: "present",
 		Params: mustStruct(t, map[string]any{
 			"addr":          "127.0.0.1:27017",
 			"username":      "default_admin",
@@ -401,7 +392,6 @@ func TestApplyUser_UserPasswordSeparateFromAdminPassword(t *testing.T) {
 			"user_password": userPass,
 			"name":          "appuser",
 			"database":      "appdb",
-			"state":         "present",
 			"roles":         []any{map[string]any{"role": "readWrite", "db": "appdb"}},
 		}),
 	}, stream)

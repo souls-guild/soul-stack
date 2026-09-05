@@ -1,7 +1,12 @@
-// user-state of the community.mongo plugin: createUser/dropUser (upsert) against
-// live mongod ENTIRELY through go-mongo-driver. MongoDB users live in
-// admin.system.users (imperative), NOT in a config file (unlike redis users.acl),
-// so this is verb-state, not file rendering.
+// The `user` object of the mongo plugin: createUser/dropUser against live mongod
+// ENTIRELY through go-mongo-driver. MongoDB users live in admin.system.users
+// (imperative), NOT in a config file (unlike redis users.acl), so this is a verb
+// pair, not file rendering.
+//
+// `present` and `absent` are two ACTIONS (address level 3, obj_user.go), where they
+// used to be one state reading `params.state`. The two paths were never symmetric —
+// only `present` may fall back to the localhost-exception below — so the split
+// costs nothing and makes the asymmetry visible in the address.
 //
 // LOCALHOST-EXCEPTION BOOTSTRAP (mongo mechanics, analogous to redis default_admin):
 // mongod with security.authorization: enabled allows connection WITHOUT auth ONLY
@@ -37,10 +42,8 @@ import (
 	"fmt"
 	"strings"
 
-	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"go.mongodb.org/mongo-driver/bson"
 	"go.mongodb.org/mongo-driver/mongo"
-	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
@@ -51,20 +54,23 @@ type mongoRole struct {
 	db   string
 }
 
-// applyUser is createUser/dropUser with localhost-exception bootstrap. It opens
-// connection ITSELF (with auth -> fallback no-auth for first admin), so it does
-// not go through shared Apply openConn.
-func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], params *structpb.Struct) error {
+// userDatabase is the DB the user lives in — the login/roles context of
+// createUser/dropUser. admin is mongo's home for system accounts and the default
+// both actions share.
+func userDatabase(f map[string]*structpb.Value) string {
+	if db := stringOrEmpty(f["database"]); db != "" {
+		return db
+	}
+	return "admin"
+}
+
+// applyUserPresent is createUser with localhost-exception bootstrap. It opens the
+// connection ITSELF (with auth -> fallback no-auth for the first admin), so it does
+// not go through the shared connect path in [object.Apply].
+func (m *MongoModule) applyUserPresent(ctx context.Context, stream eventStream, params *structpb.Struct) error {
 	f := params.GetFields()
 	name := stringOrEmpty(f["name"])
-	database := stringOrEmpty(f["database"])
-	if database == "" {
-		database = "admin"
-	}
-	state := stringOrEmpty(f["state"])
-	if state == "" {
-		state = "present"
-	}
+	database := userDatabase(f)
 	// pwd of the CREATED user is separate from connection password (admin). If
 	// user_password is set, use it; otherwise fallback to password (bootstrap case
 	// where admin creates ITSELF with the same password as connection). Separation
@@ -80,10 +86,9 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 		return sendFailure(stream, err.Error())
 	}
 
-	// Connection with localhost-exception fallback: present path allows no-auth
-	// bootstrap of first admin. absent path does NOT fallback (removing a user
-	// requires privileges; if auth fails, this is not a bootstrap case).
-	conn, usedLocalhost, err := m.openUserConn(ctx, cfg, state == "present")
+	// Connection with localhost-exception fallback: this path allows the no-auth
+	// bootstrap of the first admin.
+	conn, usedLocalhost, err := m.openUserConn(ctx, cfg, true)
 	if err != nil {
 		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
 	}
@@ -93,48 +98,73 @@ func (m *MongoModule) applyUser(ctx context.Context, stream grpc.ServerStreaming
 	if err != nil {
 		return sendFailure(stream, "usersInfo: "+redactError(err, newUserPwd, cfg.password))
 	}
-
-	switch state {
-	case "present":
-		if exists {
-			// User already exists - no-op (password/roles change is day-2 update, outside PILOT).
-			return sendOutcome(stream, false, fmt.Sprintf("user %q already present", name), map[string]any{
-				"present":         true,
-				"changed":         false,
-				"used_localhost":  usedLocalhost,
-				"bootstrap_admin": usedLocalhost,
-			})
-		}
-		roles, err := parseRoles(f["roles"], database)
-		if err != nil {
-			return sendFailure(stream, err.Error())
-		}
-		if err := createUser(ctx, conn, database, name, newUserPwd, roles); err != nil {
-			return sendFailure(stream, "createUser: "+redactError(err, newUserPwd, cfg.password))
-		}
-		return sendOutcome(stream, true, fmt.Sprintf("user %q created", name), map[string]any{
+	if exists {
+		// User already exists - no-op (password/roles change is day-2 update, outside PILOT).
+		return sendOutcome(stream, false, fmt.Sprintf("user %q already present", name), map[string]any{
 			"present":         true,
-			"changed":         true,
+			"changed":         false,
 			"used_localhost":  usedLocalhost,
 			"bootstrap_admin": usedLocalhost,
 		})
-	case "absent":
-		if !exists {
-			return sendOutcome(stream, false, fmt.Sprintf("user %q already absent", name), map[string]any{
-				"present": false,
-				"changed": false,
-			})
-		}
-		if err := dropUser(ctx, conn, database, name); err != nil {
-			return sendFailure(stream, "dropUser: "+redactError(err, newUserPwd, cfg.password))
-		}
-		return sendOutcome(stream, true, fmt.Sprintf("user %q dropped", name), map[string]any{
-			"present": false,
-			"changed": true,
-		})
-	default:
-		return sendFailure(stream, fmt.Sprintf("params.state: unknown %q (expected present|absent)", state))
 	}
+
+	roles, err := parseRoles(f["roles"], database)
+	if err != nil {
+		return sendFailure(stream, err.Error())
+	}
+	if err := createUser(ctx, conn, database, name, newUserPwd, roles); err != nil {
+		return sendFailure(stream, "createUser: "+redactError(err, newUserPwd, cfg.password))
+	}
+	return sendOutcome(stream, true, fmt.Sprintf("user %q created", name), map[string]any{
+		"present":         true,
+		"changed":         true,
+		"used_localhost":  usedLocalhost,
+		"bootstrap_admin": usedLocalhost,
+	})
+}
+
+// applyUserAbsent is dropUser. It opens the connection itself for the same reason
+// present does, but with the bootstrap fallback DISABLED: removing a user requires
+// privileges, so an auth failure here is a failure and not a first-admin case.
+//
+// It redacts ONE secret where the present half redacts two, and that is the split
+// rather than an omission: `user_password` is the password of the user being CREATED,
+// this action does not read it, and since it is not declared on `absent` (obj_user.go)
+// a task carrying it is refused as module.unknown_param before Apply is reached. There
+// is no second value here to keep out of an error string.
+func (m *MongoModule) applyUserAbsent(ctx context.Context, stream eventStream, params *structpb.Struct) error {
+	f := params.GetFields()
+	name := stringOrEmpty(f["name"])
+	database := userDatabase(f)
+
+	cfg, err := parseConnConfig(params)
+	if err != nil {
+		return sendFailure(stream, err.Error())
+	}
+
+	conn, _, err := m.openUserConn(ctx, cfg, false)
+	if err != nil {
+		return sendFailure(stream, "connect: "+redactError(err, cfg.password, cfg.tls.keyPEM))
+	}
+	defer func() { _ = conn.Close(ctx) }()
+
+	exists, err := userExists(ctx, conn, database, name)
+	if err != nil {
+		return sendFailure(stream, "usersInfo: "+redactError(err, cfg.password))
+	}
+	if !exists {
+		return sendOutcome(stream, false, fmt.Sprintf("user %q already absent", name), map[string]any{
+			"present": false,
+			"changed": false,
+		})
+	}
+	if err := dropUser(ctx, conn, database, name); err != nil {
+		return sendFailure(stream, "dropUser: "+redactError(err, cfg.password))
+	}
+	return sendOutcome(stream, true, fmt.Sprintf("user %q dropped", name), map[string]any{
+		"present": false,
+		"changed": true,
+	})
 }
 
 // openUserConn opens connection for user-state with localhost-exception fallback.
@@ -285,15 +315,23 @@ func parseRoles(v *structpb.Value, userDB string) ([]mongoRole, error) {
 	return out, nil
 }
 
-// validateUser performs static checks for user-state: addr + name are required,
-// state (if set) is in {present, absent}. roles/password are checked in Apply
-// (depend on state present).
-func validateUser(f map[string]*structpb.Value) []string {
+// validateUserPresent performs static checks for user.present: addr + name are
+// required. roles is checked in Apply, where the live user is known — an existing
+// user is a no-op and needs none.
+func validateUserPresent(f map[string]*structpb.Value) []string {
+	return validateUserSubject(f)
+}
+
+// validateUserAbsent performs static checks for user.absent: addr + name.
+func validateUserAbsent(f map[string]*structpb.Value) []string {
+	return validateUserSubject(f)
+}
+
+// validateUserSubject is what both actions require: somewhere to connect to, and
+// the user this step is about.
+func validateUserSubject(f map[string]*structpb.Value) []string {
 	var errs []string
 	errs = append(errs, validateAddr(f)...)
 	errs = append(errs, requireString(f, "name")...)
-	if s := stringOrEmpty(f["state"]); s != "" && s != "present" && s != "absent" {
-		errs = append(errs, fmt.Sprintf("params.state: unknown %q (expected present|absent)", s))
-	}
 	return errs
 }

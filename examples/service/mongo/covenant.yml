@@ -64,7 +64,9 @@ input:
       $type: MongoUser
     description: >-
       MongoDB users (array of MongoUser: {name, database, roles, state}). roles — an array
-      of {role, db} (exact mongo model). Created via the community.mongo.user plugin
+      of {role, db} (exact mongo model). Reconciled by the mongo.user.present /
+      mongo.user.absent plugin actions, which the create scenario picks between per
+      element by its `state`
       (createUser); each password is resolved keeper-side from Vault by convention
       secret/mongo/<incarnation>/{mongo_users,system_users}/<name>#password.
 
@@ -116,7 +118,7 @@ compute:
   # ★ default_admin REDESIGN (symmetry with redis/dragonfly 2026-06-30): SINGLE source of
   # the admin user's name, under which the ENTIRE admin connection runs (createUser of
   # the rest, health-runCommand, bootstrap of the first admin via localhost-exception).
-  # The body reads compute.admin_user in the plugin calls community.mongo.user/pinged
+  # The body reads compute.admin_user in the plugin calls mongo.user.* / mongo.instance.pinged
   # (username/name) and in the Vault path of its password. A literal (not from
   # input/service vars): the system user's name is a service invariant. default_admin's
   # password — secret/mongo/<inc>/system_users/default_admin#password.

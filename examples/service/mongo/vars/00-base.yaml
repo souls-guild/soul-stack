@@ -57,7 +57,7 @@ memory_reserve_percent: 50
 # redis: NOT a perms string, but an ARRAY of roles {role, db} (mongo model). default_admin is the
 # full-access admin (role root in admin), under which all admin connections run (createUser
 # for the other users, health-runCommand). It's created FIRST via the localhost exception (the
-# community.mongo.user plugin, no-auth loopback connect while the admin DB is still empty - mongo mechanics, analogous to
+# mongo.user.present plugin action, no-auth loopback connect while the admin DB is still empty - mongo mechanics, analogous to
 # redis default_admin bootstrap).
 #
 # The default_admin password lives in Vault under the convention secret/mongo/<incarnation>/users/default_admin

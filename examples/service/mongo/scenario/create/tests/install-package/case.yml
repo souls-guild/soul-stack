@@ -52,10 +52,9 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/mongodb/mongod.conf
-    - module: community.mongo.user
+    - module: mongo.user.present
       params_subset:
         name: default_admin
-        state: present
 
   task_absent:
     # BINARY branch group-drop on the package incarnation: binary/tarball/binary unit are NOT touched.

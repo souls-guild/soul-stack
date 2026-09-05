@@ -1,4 +1,4 @@
-// Real connection for the community.mongo plugin via go-mongo-driver. Split from
+// Real connection for the mongo plugin via go-mongo-driver. Split from
 // impl.go so L0 tests can use a fake mongoConn (without a live mongod).
 //
 // URI is built PROGRAMMATICALLY through options (NOT string interpolation of

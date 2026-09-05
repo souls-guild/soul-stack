@@ -13,18 +13,17 @@ core), [ADR-017](../adr/0017-keeper-side-core.md)
 (render `core.file.rendered`).
 
 The directory covers **core modules** (`core.*`, built into the binary). Plugins live in their
-own directories beside it: [`redis`](redis/README.md) — re-laid-out onto
-`redis.<object>.<action>` by NIM-766, so it no longer sits under an origin-grouping directory —
-plus [official/README.md](official/README.md) and [community/README.md](community/README.md)
-(incl. [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not
-implemented — ships today)**).
+own directories beside it: [`redis`](redis/README.md) and [`mongo`](mongo/README.md) — both
+re-laid-out onto `<plugin>.<object>.<action>` (NIM-766, NIM-769), so neither sits under an
+origin-grouping directory any more — plus [official/README.md](official/README.md).
 
 > ⚠ **`official` and `community` are no longer namespaces.** The origin-grouping level of a plugin
 > address is **removed** ([ADR-020 amendment 2026-09-02](../adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed),
 > NIM-765): a plugin step is addressed `<plugin-name>.<object>.<action>`, and origin is answered by
 > the catalog entry's `source` plus the Sigil allow-list instead. `core.*` is untouched — it is
-> [reserved](../naming-rules.md#reserved-namespace-names) and real. The two directories keep their
-> present paths and names; they group *documents*, not addresses.
+> [reserved](../naming-rules.md#reserved-namespace-names) and real. `community/` was the last
+> directory named after an origin and is **gone** (NIM-769 moved its only member out);
+> `official/` keeps its path and name because it groups *documents*, not addresses.
 
 Related documents (intentionally not duplicated here):
 
@@ -118,7 +117,7 @@ in an address:
 |---|---|---|
 | `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
 | `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, seven objects / nineteen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. The `user` object (`ACL SETUSER`/`DELUSER` on one user) was added by NIM-767. |
-| `community/` | [community/README.md](community/README.md) | Third-party plugins still on the old grouping. Implemented [`community.mongo`](community/mongo/README.md) ⚠ **LEAVING THE DICTIONARY (NIM-769, not implemented — ships today)** - interface to live MongoDB (3 states, PILOT standalone). |
+| `mongo/` | [mongo/README.md](mongo/README.md) | The `mongo` plugin — interface to live MongoDB (PILOT standalone), three objects / four actions (`soul-mod-mongo`). Moved out from under `community/` by NIM-769, which also split `user` into the `present` / `absent` actions the address rule asks for. |
 
 ## Catalog status
 

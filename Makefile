@@ -1566,8 +1566,8 @@ check-ci-status:
 check-modules-run:
 	@scripts/modules-run-test.sh
 
-# check-plugin-schema — the redis artifact's `schema.json` is GENERATED, and this is
-# what makes that checkable (NIM-525).
+# check-plugin-schema — the bundled artifacts' `schema.json` is GENERATED, and this is
+# what makes that checkable (NIM-525, extended to mongo by NIM-769).
 #
 # The document is the module contract: soul-lint validates the whole corpus against
 # the committed copy, keeper reads the trailer at `plugin.allow`, and the module form
@@ -1584,22 +1584,29 @@ check-modules-run:
 #
 # GOWORK=off for the artifact (examples/module/* are outside the workspace, ADR-016);
 # GOWORK= for soul-mod (it lives in the sdk module and resolves through the workspace).
-PLUGIN_SCHEMA_DIR ?= examples/module/soul-mod-redis
+#
+# The list is every artifact served through `module.ServeBundle`, which is what gives
+# it a `schema` subcommand for stamp to run. An artifact still on the single-module
+# `module.Serve` has no document to derive and belongs nowhere near this list.
+PLUGIN_SCHEMA_DIRS ?= examples/module/soul-mod-redis examples/module/soul-mod-mongo
 check-plugin-schema:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
-	( cd $(PLUGIN_SCHEMA_DIR) && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
-	"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
-	"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
-	if ! cmp -s "$$tmp/schema.json" "$(PLUGIN_SCHEMA_DIR)/schema.json"; then \
-		echo "check-plugin-schema: $(PLUGIN_SCHEMA_DIR)/schema.json is NOT what the artifact publishes." >&2; \
-		echo "  It is generated from the module.Def values, not written by hand. Rebuild and re-stamp:" >&2; \
-		echo "    (cd $(PLUGIN_SCHEMA_DIR) && GOWORK=off go build -o dist/soul-mod-redis . )" >&2; \
-		echo "    go run ./sdk/cmd/soul-mod stamp $(PLUGIN_SCHEMA_DIR)/dist/soul-mod-redis" >&2; \
-		echo "    cp $(PLUGIN_SCHEMA_DIR)/dist/schema.json $(PLUGIN_SCHEMA_DIR)/schema.json" >&2; \
-		exit 1; \
-	fi
-	@echo "check-plugin-schema: $(PLUGIN_SCHEMA_DIR)/schema.json is what \`soul-mod stamp\` derives, and verify is green"
+	for dir in $(PLUGIN_SCHEMA_DIRS); do \
+		bin=$$(basename "$$dir"); \
+		( cd "$$dir" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+		"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
+		if ! cmp -s "$$tmp/schema.json" "$$dir/schema.json"; then \
+			echo "check-plugin-schema: $$dir/schema.json is NOT what the artifact publishes." >&2; \
+			echo "  It is generated from the module.Def values, not written by hand. Rebuild and re-stamp:" >&2; \
+			echo "    (cd $$dir && GOWORK=off go build -o dist/$$bin . )" >&2; \
+			echo "    go run ./sdk/cmd/soul-mod stamp $$dir/dist/$$bin" >&2; \
+			echo "    cp $$dir/dist/schema.json $$dir/schema.json" >&2; \
+			exit 1; \
+		fi; \
+		echo "check-plugin-schema: $$dir/schema.json is what \`soul-mod stamp\` derives, and verify is green"; \
+	done
 
 check-all:
 	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
@@ -1786,12 +1793,12 @@ check-vuln:
 # serves two, and `--modules X=A --modules X=B` is refused outright. One binding per
 # lint run is exact, because no scenario in the corpus addresses both artifacts.
 #
-# The redis artifact registers as `redis` since NIM-766 — one alias, six modules, one
-# per OBJECT it manages. mongo is still on the pre-NIM-765 grouping level `community`;
-# converting it is NIM-769, and until then the two aliases differ, which is the state
-# that made the collision above moot rather than the rule that avoided it.
+# The redis artifact registers as `redis` since NIM-766 and mongo as `mongo` since
+# NIM-769 — one alias each, one module per OBJECT it manages. The origin-grouping level
+# `community` is gone from both, so the two aliases differ by SUBJECT now, which is
+# what makes the collision above moot rather than the rule that avoided it.
 LINT_MODULES_REDIS ?= examples/module/soul-mod-redis
-LINT_MODULES_MONGO ?= examples/module/soul-mod-community-mongo
+LINT_MODULES_MONGO ?= examples/module/soul-mod-mongo
 
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
@@ -1835,7 +1842,7 @@ lint: build
 		esac; \
 		svc=$$(echo "$$f" | cut -d/ -f3); \
 		case "$$svc" in \
-			mongo) mods="--modules=community=$(LINT_MODULES_MONGO)";; \
+			mongo) mods="--modules=mongo=$(LINT_MODULES_MONGO)";; \
 			*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
 		esac; \
 		echo "validate-scenario $$f $$mods --service-name=$$svc"; \
@@ -2071,7 +2078,7 @@ help:
 	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
 	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
-	@echo "  check-plugin-schema  the redis artifact's schema.json is what \`soul-mod stamp\` derives (NIM-525)"
+	@echo "  check-plugin-schema  each bundled artifact's schema.json is what \`soul-mod stamp\` derives (NIM-525)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
 	@echo "  stamp-examples    re-write migrations/schema.lock in every bundled tree that has a ladder"
 	@echo ""

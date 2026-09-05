@@ -1,4 +1,4 @@
-module github.com/souls-guild/soul-stack/examples/module/soul-mod-community-mongo
+module github.com/souls-guild/soul-stack/examples/module/soul-mod-mongo
 
 go 1.26.4
 

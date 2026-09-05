@@ -121,7 +121,7 @@ func TestPluginParams_NoResolverSaysSoInsteadOfPassing(t *testing.T) {
 // A resolver that simply does not carry this module is the same case as no
 // resolver at all — the module is unchecked, and that is not the author's fault.
 func TestPluginParams_ResolverMissIsAlsoReported(t *testing.T) {
-	src := "- name: t\n  module: community.mongo.config\n  params:\n    whatever: 1\n"
+	src := "- name: t\n  module: mongo.instance.configured\n  params:\n    whatever: 1\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
 		ValidateOptions{ModuleManifests: redisManifest()})
 	if !hasCodeP(diags, "plugin_params_unchecked") {
@@ -138,7 +138,7 @@ func TestPluginParams_ResolverMissIsAlsoReported(t *testing.T) {
 func TestPluginParams_UncheckedNoticeIsPerModuleNotPerTask(t *testing.T) {
 	src := "- name: a\n  module: redis.instance.configured\n  params: {}\n" +
 		"- name: b\n  module: redis.instance.configured\n  params: {}\n" +
-		"- name: c\n  module: community.mongo.config\n  params: {}\n"
+		"- name: c\n  module: mongo.instance.configured\n  params: {}\n"
 	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
 	if got := countCode(diags, "plugin_params_unchecked"); got != 2 {
 		t.Errorf("plugin_params_unchecked ×%d, want 2 (one per module address): %v", got, diagCodesP(diags))

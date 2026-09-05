@@ -1,6 +1,6 @@
 # Official plugins catalog
 
-Plugins supplied and maintained by the Soul Stack team, as opposed to core modules (`core.*`, statically built into the `soul` binary) and third-party plugins ([community/README.md](../community/README.md)).
+Plugins supplied and maintained by the Soul Stack team, as opposed to core modules (`core.*`, statically built into the `soul` binary) and third-party plugins, which since NIM-769 are documented under their own names ([redis](../redis/README.md), [mongo](../mongo/README.md)) rather than under an origin-grouping directory.
 
 > ⚠ **`official` is not a namespace.** It named these plugins' **origin**, not what they manage, and the origin-grouping level of a plugin address is **removed** ([ADR-020 amendment 2026-09-02](../../adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed), NIM-765): a plugin step is addressed `<plugin-name>.<object>.<action>`, and origin is answered by the catalog entry's `source` plus the Sigil allow-list. Every `official.*` address on this page is therefore the **old form**. There is no follow-up ticket for these artifacts — they live in the companion repo `soul-stack-plugins`, which this repository cannot edit; this directory keeps its name and groups documents, not addresses.
 

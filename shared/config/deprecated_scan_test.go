@@ -147,13 +147,13 @@ func TestScanDeprecated_UnresolvedIsDeduplicated(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
 		moduleTask("redis.instance.pinged", map[string]any{"a": "1"}),
 		moduleTask("redis.instance.pinged", map[string]any{"b": "2"}),
-		moduleTask("community.mongo.present", map[string]any{"c": "3"}),
+		moduleTask("mongo.user.present", map[string]any{"c": "3"}),
 	}, deprecatingRegistry(), nil)
 
 	if len(scan.Unresolved) != 2 {
 		t.Fatalf("unresolved = %d, want 2 distinct modules: %+v", len(scan.Unresolved), scan.Unresolved)
 	}
-	if scan.Unresolved[0].Module != "community.mongo.present" {
+	if scan.Unresolved[0].Module != "mongo.user.present" {
 		t.Errorf("unresolved is not ordered by module: %+v", scan.Unresolved)
 	}
 }
@@ -241,7 +241,7 @@ func TestScanDeprecated_ResolvesPluginModules(t *testing.T) {
 // the gap list exists to prevent.
 func TestScanDeprecated_UnresolvablePluginIsStillAGap(t *testing.T) {
 	scan := scanTasksForDeprecated([]Task{
-		moduleTask("community.mongo.present", map[string]any{"address": "10.0.0.1"}),
+		moduleTask("mongo.user.present", map[string]any{"address": "10.0.0.1"}),
 	}, deprecatingRegistry(), redisCatalog())
 
 	if len(scan.Uses) != 0 {

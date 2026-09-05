@@ -17,7 +17,7 @@
     - storage.dbPath/engine - the WiredTiger data working directory (data_dir);
     - storage.wiredTiger...cacheSizeGB - cache size (from memory_mb/wiredtiger_cache_gb);
     - security.authorization: enabled - authentication ENABLED (access under
-      default_admin; first admin via localhost-exception, community.mongo.user plugin);
+      default_admin; first admin via localhost-exception, mongo.user.present plugin action);
     - systemLog.destination/path/logAppend - log into log_dir/mongod.log.
   We do NOT set processManagement.fork: mongod runs under systemd (Type=forking with
   --config without fork - the systemd unit carries fork/pidfile if needed; for PILOT,

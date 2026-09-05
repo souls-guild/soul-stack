@@ -10,7 +10,7 @@ import (
 )
 
 // newModule builds MongoModule that returns the same fakeConn for any connection
-// (for pinged/command single-connect states). Last connection cfg is recorded in
+// (for instance/command single-connect actions). Last connection cfg is recorded in
 // conn.cfg (checks that password reached the connection).
 func newModule(conn *fakeConn) *MongoModule {
 	return &MongoModule{
@@ -25,18 +25,18 @@ func newModule(conn *fakeConn) *MongoModule {
 
 func TestValidate_PingedRejectsEmptyAddr(t *testing.T) {
 	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+	reply, _ := m.instance().Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "pinged",
 		Params: mustStruct(t, map[string]any{"addr": ""}),
 	})
 	if reply.Ok {
-		t.Fatal("expected Ok=false for empty addr (pinged)")
+		t.Fatal("expected Ok=false for empty addr (instance.pinged)")
 	}
 }
 
 func TestValidate_PingedHappyPath(t *testing.T) {
 	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
+	reply, _ := m.instance().Validate(context.Background(), &pluginv1.ValidateRequest{
 		State:  "pinged",
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017"}),
 	})
@@ -46,32 +46,25 @@ func TestValidate_PingedHappyPath(t *testing.T) {
 }
 
 func TestValidate_UserRejectsEmptyName(t *testing.T) {
-	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "user",
-		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": ""}),
-	})
-	if reply.Ok {
-		t.Fatal("expected Ok=false for empty name (user)")
-	}
-}
-
-func TestValidate_UserRejectsUnknownState(t *testing.T) {
-	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "user",
-		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice", "state": "weird"}),
-	})
-	if reply.Ok {
-		t.Fatal("expected Ok=false for unknown user state")
+	for _, state := range []string{"present", "absent"} {
+		t.Run(state, func(t *testing.T) {
+			m := &MongoModule{}
+			reply, _ := m.user().Validate(context.Background(), &pluginv1.ValidateRequest{
+				State:  state,
+				Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": ""}),
+			})
+			if reply.Ok {
+				t.Fatalf("expected Ok=false for empty name (user.%s)", state)
+			}
+		})
 	}
 }
 
 func TestValidate_UserHappyPath(t *testing.T) {
 	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "user",
-		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice", "state": "present"}),
+	reply, _ := m.user().Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "present",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice"}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
 		t.Fatalf("expected Ok=true without errors, got %+v", reply)
@@ -80,8 +73,8 @@ func TestValidate_UserHappyPath(t *testing.T) {
 
 func TestValidate_CommandRejectsEmptyCommand(t *testing.T) {
 	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "command",
+	reply, _ := m.command().Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "run",
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "command": map[string]any{}}),
 	})
 	if reply.Ok {
@@ -91,8 +84,8 @@ func TestValidate_CommandRejectsEmptyCommand(t *testing.T) {
 
 func TestValidate_CommandHappyPath(t *testing.T) {
 	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "command",
+	reply, _ := m.command().Validate(context.Background(), &pluginv1.ValidateRequest{
+		State:  "run",
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "command": map[string]any{"ping": 1}}),
 	})
 	if !reply.Ok || len(reply.Errors) != 0 {
@@ -100,18 +93,57 @@ func TestValidate_CommandHappyPath(t *testing.T) {
 	}
 }
 
+// TestValidate_RejectsUnknownState - a state no object serves is refused, and so is
+// one ANOTHER object serves. The second half is the object boundary itself
+// (NIM-769): three objects share one driver, and if the boundary were only a naming
+// convention, `mongo.instance.present` would create a user.
 func TestValidate_RejectsUnknownState(t *testing.T) {
-	m := &MongoModule{}
-	reply, _ := m.Validate(context.Background(), &pluginv1.ValidateRequest{
-		State:  "replicaset",
-		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017"}),
-	})
-	if reply.Ok {
-		t.Fatal("expected Ok=false for unimplemented state")
+	cases := []struct {
+		name  string
+		obj   func(*MongoModule) *object
+		state string
+	}{
+		{"nobody serves it", (*MongoModule).instance, "replicaset"},
+		{"another object serves it", (*MongoModule).instance, "present"},
+		{"another object serves it (reverse)", (*MongoModule).user, "pinged"},
+		{"the old pre-NIM-769 state name", (*MongoModule).user, "user"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := &MongoModule{}
+			reply, _ := tc.obj(m).Validate(context.Background(), &pluginv1.ValidateRequest{
+				State:  tc.state,
+				Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice"}),
+			})
+			if reply.Ok {
+				t.Fatalf("expected Ok=false for state %q", tc.state)
+			}
+		})
 	}
 }
 
-// --- Apply: pinged ---
+// TestApply_RejectsForeignState - the same boundary on the Apply path, which is the
+// one that would actually change a host. Validate is a separate RPC a runner need
+// not call, so the refusal cannot live there alone.
+func TestApply_RejectsForeignState(t *testing.T) {
+	conn := &fakeConn{}
+	m := newModule(conn)
+	stream := &applyStream{}
+	_ = m.instance().Apply(&pluginv1.ApplyRequest{
+		State:  "present",
+		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017", "name": "alice"}),
+	}, stream)
+
+	fin := stream.final()
+	if fin == nil || !fin.Failed {
+		t.Fatalf("expected failed=true for a user action on instance, got %+v", fin)
+	}
+	if len(conn.calls) != 0 || conn.pinged {
+		t.Fatalf("a refused state still reached mongod: %v", conn.calls)
+	}
+}
+
+// --- Apply: instance.pinged ---
 
 // TestApplyPinged_HappyPath_ChangedFalse — Ping ok → Output.ok=true, changed=false
 // CONSTRUCTIVELY (probe semantics).
@@ -120,7 +152,7 @@ func TestApplyPinged_HappyPath_ChangedFalse(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	err := m.Apply(&pluginv1.ApplyRequest{
+	err := m.instance().Apply(&pluginv1.ApplyRequest{
 		State: "pinged",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
@@ -162,7 +194,7 @@ func TestApplyPinged_PingErrorIsFailure(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
+	_ = m.instance().Apply(&pluginv1.ApplyRequest{
 		State:  "pinged",
 		Params: mustStruct(t, map[string]any{"addr": "127.0.0.1:27017"}),
 	}, stream)
@@ -181,7 +213,7 @@ func TestApplyPinged_ConnectFailure_DoesNotLeakPassword(t *testing.T) {
 		},
 	}
 	stream := &applyStream{}
-	_ = m.Apply(&pluginv1.ApplyRequest{
+	_ = m.instance().Apply(&pluginv1.ApplyRequest{
 		State: "pinged",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
@@ -203,7 +235,7 @@ func TestApplyPinged_PingErrorRedactsPassword(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
+	_ = m.instance().Apply(&pluginv1.ApplyRequest{
 		State: "pinged",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
@@ -220,7 +252,7 @@ func TestApplyPinged_PingErrorRedactsPassword(t *testing.T) {
 	}
 }
 
-// --- Apply: command ---
+// --- Apply: command.run ---
 
 // TestApplyCommand_HappyPath_ChangedFalseByDefault - raw command -> Output.ok=true,
 // changed=false by default (probe semantics). Default db is admin.
@@ -229,8 +261,8 @@ func TestApplyCommand_HappyPath_ChangedFalseByDefault(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	err := m.Apply(&pluginv1.ApplyRequest{
-		State: "command",
+	err := m.command().Apply(&pluginv1.ApplyRequest{
+		State: "run",
 		Params: mustStruct(t, map[string]any{
 			"addr":     "127.0.0.1:27017",
 			"password": secretPass,
@@ -263,8 +295,8 @@ func TestApplyCommand_ChangedTrueWhenRequested(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "command",
+	_ = m.command().Apply(&pluginv1.ApplyRequest{
+		State: "run",
 		Params: mustStruct(t, map[string]any{
 			"addr":    "127.0.0.1:27017",
 			"command": map[string]any{"fsync": 1},
@@ -284,8 +316,8 @@ func TestApplyCommand_TargetsRequestedDB(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "command",
+	_ = m.command().Apply(&pluginv1.ApplyRequest{
+		State: "run",
 		Params: mustStruct(t, map[string]any{
 			"addr":    "127.0.0.1:27017",
 			"db":      "appdb",
@@ -304,8 +336,8 @@ func TestApplyCommand_ErrorIsFailure(t *testing.T) {
 	m := newModule(conn)
 	stream := &applyStream{}
 
-	_ = m.Apply(&pluginv1.ApplyRequest{
-		State: "command",
+	_ = m.command().Apply(&pluginv1.ApplyRequest{
+		State: "run",
 		Params: mustStruct(t, map[string]any{
 			"addr":    "127.0.0.1:27017",
 			"command": map[string]any{"serverStatus": 1},

@@ -392,7 +392,22 @@ on ONE user, so the subject is the user rather than the aclfile a destiny render
 address this amendment used as its own worked example, and it now resolves. It does **not** retire
 `acl.reloaded`: the two have different subjects and a service still holding its ACL in a rendered
 file keeps the file-shaped one. Moving the WB redis service off `redis-cli` is **NIM-768** and
-mongo is **NIM-769**; both remain open.
+remains open.
+
+★ **Status 2026-09-05 (NIM-769): the mongo artifact serves it, and no artifact here carries the
+grouping level any more.** `soul-mod-community-mongo` is `soul-mod-mongo`, registered under the
+alias **`mongo`**, serving **three objects** — `command`, `instance`, `user` — with `side: soul`
+declared per object and the schema document generated from `module.Def` values through
+`module.ServeBundle`, as redis's is. `params.state` went the way `params.action` went one ticket
+earlier: `mongo.user.present` and `mongo.user.absent` are two actions at level 3, which is what
+lets `roles` and `user_password` be declared on the half that reads them and refused on the half
+that does not. That is the one consequence worth naming for a service author, because an address
+is **static** where a param was not: a definition that chose between the two per item — the
+bundled mongo service loops over `input.users` — filters the loop instead of passing a verb as a
+parameter. The service's own declaration is untouched; `input.users[].state` still exists and
+still reaches `incarnation.state`, and the scenario is what turns it into an address. With this,
+`community.*` appears in no effective address in this repository and `docs/module/community/` is
+gone.
 
 **The decision** — the user's, of 2026-09-02. A plugin step's address is
 **`<plugin-name>.<object>.<action>`**, for example `redis.user.present`. Level 1 is the plugin's

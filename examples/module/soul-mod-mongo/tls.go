@@ -1,4 +1,4 @@
-// TLS connection for the community.mongo plugin. Security model (default secure):
+// TLS connection for the mongo plugin. Security model (default secure):
 // when tls=true, the plugin VERIFIES server certificate by default (RootCAs from
 // provided PEM CA). Client certificate (mTLS) is optional. Verification can be
 // disabled ONLY with explicit tls_skip_verify=true (default false).
@@ -9,7 +9,7 @@
 // by output layer by key name, so they do not reach events/logs/errors.
 //
 // PILOT: MongoDB service starts in plain mode (net.tls.mode disabled). Connection
-// params are declared here for symmetry with community.redis and forward-compat
+// params are declared here for symmetry with the redis plugin and forward-compat
 // (mongo TLS on port 27017 via net.tls.mode is a separate slice); pilot scenario
 // does not set them (tls=false -> plaintext).
 package main

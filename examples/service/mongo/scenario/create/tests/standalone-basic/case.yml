@@ -1,8 +1,8 @@
 # L0 test for create MongoDB standalone (base case, WITHOUT operator users). Render-only,
 # hermetic. Covers: binary-install (Nexus tarball + mongod + its own systemd unit),
 # rendering mongod.conf (toYaml — security.authorization enabled + dbPath/port), sysctl drop-in,
-# health-gate (community.mongo.pinged without auth), bootstrap default_admin via the localhost
-# exception (community.mongo.user for default_admin from vars.system_users).
+# health-gate (mongo.instance.pinged without auth), bootstrap default_admin via the localhost
+# exception (mongo.user.present for default_admin from vars.system_users).
 name: mongo create standalone (binary install + mongod.conf + bootstrap default_admin)
 
 fixtures:
@@ -96,19 +96,18 @@ assert:
     - module: core.service.running
       params_subset:
         name: mongod
-    - module: community.mongo.pinged
+    - module: mongo.instance.pinged
       params_subset:
         addr: "127.0.0.1:27017"
     # ★★ BOOTSTRAP default_admin: localhost-exception. username/name = default_admin,
     # password from the Vault branch, roles root@admin from vars.system_users.
-    - module: community.mongo.user
+    - module: mongo.user.present
       params_subset:
         addr: "127.0.0.1:27017"
         username: default_admin
         password: mongoadmin-create-pass
         name: default_admin
         database: admin
-        state: present
 
   task_absent:
     # package branch group-drop on a binary incarnation.
