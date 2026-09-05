@@ -81,8 +81,8 @@ type ProbeResult struct {
 	Err error
 	// State is the provider state observed by this poll ("creating",
 	// "pending", …), optional but recommended: the poller tracks whether it
-	// changes and reports "still booting" separately from "stuck" when the
-	// budget runs out (see [WaitDeadlineError]).
+	// changes and says so in the diagnosis when the budget runs out (see
+	// [WaitDeadlineError]).
 	State string
 }
 
@@ -163,8 +163,8 @@ func WaitUntilReady(ctx context.Context, cfg BackoffConfig, vmIDs []string, prob
 	return results, nil
 }
 
-// stateTrack remembers the provider state a VM reported, to tell a VM that is
-// merely booting slowly from one that never moved at all.
+// stateTrack remembers the provider state a VM reported, to record whether it
+// moved during the wait — the only progress signal the poller has.
 type stateTrack struct {
 	last       string
 	progressed bool
@@ -199,16 +199,17 @@ type PendingVM struct {
 	// driver's probe doesn't fill [ProbeResult.State]).
 	LastState string
 	// Progressed means the state changed at least once during the wait: the
-	// VM was coming up, just not fast enough for the budget. A VM that never
-	// changed state is stuck — a larger budget will not save it.
+	// VM was demonstrably coming up, just not fast enough for the budget.
+	// False is NOT the opposite claim — a provider state like "creating"
+	// spans the whole boot, so a VM that never left it is either slow or
+	// stuck and nothing the poller observes tells the two apart.
 	Progressed bool
 }
 
 // WaitDeadlineError is the [WaitUntilReady] outcome when the poll budget runs
 // out: it names the VMs still pending, their last observed state and whether
-// they were progressing, so an operator can tell "the boot budget is too
-// small" from "this VM is never coming up". Matches errors.Is(err,
-// [ErrWaitDeadline]).
+// that state was still advancing, so an operator can see how far each VM got
+// before the budget ran out. Matches errors.Is(err, [ErrWaitDeadline]).
 type WaitDeadlineError struct {
 	// Attempts is how many poll rounds ran, Elapsed how long they took.
 	Attempts int
@@ -234,9 +235,10 @@ func (e *WaitDeadlineError) Error() string {
 	b.WriteString(e.Elapsed.Round(time.Second).String())
 	b.WriteString(" (" + strconv.Itoa(e.Attempts) + " attempts): ")
 	b.WriteString(strconv.Itoa(e.Ready) + "/" + strconv.Itoa(e.Total) + " ready; not ready: ")
-	progressing := false
+	progressing, anyState := false, false
 	for _, p := range e.Pending {
 		progressing = progressing || p.Progressed
+		anyState = anyState || p.LastState != ""
 	}
 	// A mass provision can leave dozens pending; name the first few and count
 	// the rest rather than printing a wall of ids into the failed event.
@@ -253,10 +255,29 @@ func (e *WaitDeadlineError) Error() string {
 			b.WriteString("(state=" + p.LastState + ")")
 		}
 	}
-	if progressing {
+	// An unchanged state is not evidence of a stuck VM: a provider state like
+	// "creating" spans the whole boot, so a VM slower than the budget never
+	// leaves it and looks identical to one that is wedged. Which states are
+	// transitional is the driver's vocabulary, not the SDK's, so the message
+	// says what was observed and names the one experiment that separates the
+	// two — rather than ruling out the remedy that actually works.
+	//
+	// Each branch is picked by an OR over the whole pending set, so its
+	// sentence should hold for every VM in it: "no state change was observed"
+	// covers a VM whose state sat still and one whose driver reported nothing
+	// alike, which is why it is not phrased as "state never changed". The
+	// progressing branch is the known exception — one advancing VM makes it
+	// speak for a set that may hold a still one — and is left that way because
+	// the remedy it names is the right one for every VM in the set (NIM-788).
+	switch {
+	case progressing:
 		b.WriteString("; state was still advancing — the boot budget is likely too small, raise " + WaitBudgetEnv)
-	} else {
-		b.WriteString("; state never changed — the VM looks stuck, a larger budget will not help")
+	case anyState:
+		b.WriteString("; no state change was observed — a boot slower than the budget looks exactly like this, " +
+			"so raise " + WaitBudgetEnv + " before treating the VM as stuck")
+	default:
+		b.WriteString("; the driver reported no state — nothing observed here separates a slow boot " +
+			"from a stuck VM, raise " + WaitBudgetEnv + " to tell them apart")
 	}
 	return b.String()
 }

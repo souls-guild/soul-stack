@@ -176,7 +176,9 @@ Step 3 ends with the driver polling the new VMs until each one reports running +
 
 The operator overrides the wait budget with the env variable **`SOUL_CLOUD_WAIT_BUDGET`** (Go duration, e.g. `20m`) on the Keeper unit - Keeper passes its environment to the plugin process, so it applies to every `soul-cloud-<provider>` at once. An invalid, zero or negative value falls back to the default; anything above 2h is clamped. A driver that knows its own boot time better (from the profile) sizes the phase itself via `clouddriver.WaitBackoffFor(d)`.
 
-When the budget really does run out, the failed event tells the two cases apart: VMs whose provider state was still advancing report that the boot budget is likely too small (with the knob to raise), VMs whose state never changed once report as stuck - a larger budget will not help. Either way the event carries `vm_id` and the last observed state, so anti-orphan destroy still works.
+When the budget really does run out, the failed event reports what was observed, not a verdict, in one of three forms: the state was still advancing, no state change was observed, or the driver reported no state at all. All three name `SOUL_CLOUD_WAIT_BUDGET`, because none of them rules a slow boot out - a state like `CREATING` spans the whole boot, so a VM slower than the budget never leaves it and looks exactly like a wedged one, and which states are transitional is the driver's vocabulary, not the SDK's. Raising the budget is the experiment that separates "slow" from "stuck". Either way the event carries `vm_id` and the last observed state, so anti-orphan destroy still works.
+
+> The destroy path below is the one place a "larger budget will not help" verdict is earned, and only for the VMs the provider **explicitly rejected the deletion of** - a positive signal, not the absence of one. Note that its message states that verdict over the whole pending set, so a VM merely mid-teardown alongside a rejected one is currently swept into it (NIM-788).
 
 ### Confirmed teardown
 
@@ -187,7 +189,7 @@ So the destroy path does not trust the accepted call: `clouddriver.ConfirmDestro
 Two consequences worth knowing:
 
 - **An unconfirmed teardown is a failure, not a success.** The driver emits `failed=true` with the `vm_id`, and Keeper does **not** count that VM as destroyed - so the ADR-017 cascade (`souls→destroyed` + seeds orphaned + tokens burned) does not run over VMs that are still alive. The `core.cloud.destroyed` step fails instead and leaves the registry untouched; re-running it is safe, since delete is idempotent.
-- **The diagnosis distinguishes the two failure modes.** VMs the provider kept refusing to delete are reported as still alive and billed (a bigger budget will not help); VMs whose teardown was merely still in flight point at the budget knob.
+- **The diagnosis names the failure mode.** Either the provider kept refusing the deletion - those VMs are still alive and billed, and a bigger budget will not help - or the teardown was merely still in flight, and the message points at the budget knob. One rejected VM currently puts the *whole* pending set in the first form (NIM-788).
 
 This is exactly the case anti-orphan cleanup exists for - the VMs it removes are the ones caught mid-create - so a silently-ignored `DELETE_FAILED` used to defeat it.
 

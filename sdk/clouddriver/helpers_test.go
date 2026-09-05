@@ -326,9 +326,12 @@ func TestWaitUntilReady_ReadyOnFinalAttempt(t *testing.T) {
 	}
 }
 
-// TestWaitUntilReady_DeadlineDiagnostics_Stuck: a VM whose observed state never
-// moves is diagnosed as stuck — a bigger budget would not have helped.
-func TestWaitUntilReady_DeadlineDiagnostics_Stuck(t *testing.T) {
+// TestWaitUntilReady_DeadlineDiagnostics_StateNeverChanged: a VM whose observed
+// state never moves must NOT be diagnosed as stuck. "creating" spans the whole
+// boot, so a VM slower than the budget never leaves it — the message that ruled
+// out a larger budget sent an operator hunting a broken VM that was booting
+// normally (NIM-787, found live on soul-cloud-wb where a boot takes 60-90s).
+func TestWaitUntilReady_DeadlineDiagnostics_StateNeverChanged(t *testing.T) {
 	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
 	probe := func(_ context.Context, vmID string) ProbeResult {
 		if vmID == "i-ok" {
@@ -336,7 +339,7 @@ func TestWaitUntilReady_DeadlineDiagnostics_Stuck(t *testing.T) {
 		}
 		return ProbeResult{State: "creating"}
 	}
-	_, err := WaitUntilReady(context.Background(), cfg, []string{"i-ok", "i-stuck"}, probe, nil)
+	_, err := WaitUntilReady(context.Background(), cfg, []string{"i-ok", "i-creating"}, probe, nil)
 	if !errors.Is(err, ErrWaitDeadline) {
 		t.Fatalf("err=%v, want ErrWaitDeadline", err)
 	}
@@ -350,17 +353,115 @@ func TestWaitUntilReady_DeadlineDiagnostics_Stuck(t *testing.T) {
 	if de.Elapsed <= 0 {
 		t.Error("Elapsed must report how long the wait actually ran")
 	}
-	if len(de.Pending) != 1 || de.Pending[0].VMID != "i-stuck" {
-		t.Fatalf("pending=%+v, want only i-stuck", de.Pending)
+	if len(de.Pending) != 1 || de.Pending[0].VMID != "i-creating" {
+		t.Fatalf("pending=%+v, want only i-creating", de.Pending)
 	}
 	if de.Pending[0].LastState != "creating" || de.Pending[0].Progressed {
 		t.Errorf("pending=%+v, want last state creating and no progress", de.Pending[0])
 	}
-	if msg := err.Error(); !strings.Contains(msg, "i-stuck") || !strings.Contains(msg, "stuck") {
-		t.Errorf("message=%q, want it to name the stuck VM and say it is stuck", msg)
+	msg := err.Error()
+	if !strings.Contains(msg, "i-creating") || !strings.Contains(msg, "state=creating") {
+		t.Errorf("message=%q, want it to name the pending VM and its last state", msg)
 	}
-	if msg := err.Error(); strings.Contains(msg, WaitBudgetEnv) {
-		t.Errorf("message=%q, must not suggest raising the budget for a stuck VM", msg)
+	wantDiagnosis(t, msg, "no state change was observed — a boot slower than the budget looks exactly like this, "+
+		"so raise "+WaitBudgetEnv+" before treating the VM as stuck")
+}
+
+// TestWaitUntilReady_DeadlineDiagnostics_NoStateReported: a driver whose probe
+// leaves [ProbeResult.State] empty gives the poller no progress signal at all.
+// The diagnosis must say that, not report "state never changed" about a state
+// nobody ever observed.
+func TestWaitUntilReady_DeadlineDiagnostics_NoStateReported(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
+	probe := func(_ context.Context, _ string) ProbeResult { return ProbeResult{} }
+	_, err := WaitUntilReady(context.Background(), cfg, []string{"i-mute"}, probe, nil)
+	var de *WaitDeadlineError
+	if !errors.As(err, &de) {
+		t.Fatalf("err=%v (%T), want *WaitDeadlineError", err, err)
+	}
+	if len(de.Pending) != 1 || de.Pending[0].LastState != "" || de.Pending[0].Progressed {
+		t.Fatalf("pending=%+v, want i-mute with no state and no progress", de.Pending)
+	}
+	wantDiagnosis(t, err.Error(), "the driver reported no state — nothing observed here separates a slow boot "+
+		"from a stuck VM, raise "+WaitBudgetEnv+" to tell them apart")
+}
+
+// TestWaitDeadlineError_VerdictHoldsForTheWholeSet: the branch is chosen by an
+// OR over every pending VM, so a set whose FIRST VM is unrepresentative must
+// still get a verdict true of all of them. This guards the selection itself —
+// every single-VM case above passes just as well when only Pending[0] is read.
+func TestWaitDeadlineError_VerdictHoldsForTheWholeSet(t *testing.T) {
+	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
+	advancing := []string{"queued", "creating", "booting"}
+
+	for _, tc := range []struct {
+		name  string
+		vmIDs []string
+		want  string
+	}{
+		{
+			// "the driver reported no state" would be false of i-creating.
+			name:  "mute VM ahead of one whose state sat still",
+			vmIDs: []string{"i-mute", "i-creating"},
+			want: "no state change was observed — a boot slower than the budget looks exactly like this, " +
+				"so raise " + WaitBudgetEnv + " before treating the VM as stuck",
+		},
+		{
+			// The advancing VM behind the still one still sets the verdict.
+			name:  "still VM ahead of an advancing one",
+			vmIDs: []string{"i-creating", "i-advancing"},
+			want:  "state was still advancing — the boot budget is likely too small, raise " + WaitBudgetEnv,
+		},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			polls := 0
+			probe := func(_ context.Context, vmID string) ProbeResult {
+				switch vmID {
+				case "i-mute":
+					return ProbeResult{}
+				case "i-advancing":
+					s := advancing[min(polls, len(advancing)-1)]
+					polls++
+					return ProbeResult{State: s}
+				default:
+					return ProbeResult{State: "creating"}
+				}
+			}
+			_, err := WaitUntilReady(context.Background(), cfg, tc.vmIDs, probe, nil)
+			var de *WaitDeadlineError
+			if !errors.As(err, &de) {
+				t.Fatalf("err=%v (%T), want *WaitDeadlineError", err, err)
+			}
+			if len(de.Pending) != len(tc.vmIDs) || de.Pending[0].VMID != tc.vmIDs[0] {
+				t.Fatalf("pending=%+v, want %v in order", de.Pending, tc.vmIDs)
+			}
+			wantDiagnosis(t, err.Error(), tc.want)
+		})
+	}
+}
+
+// diagnosisTail returns the verdict a deadline message ends with — the sentence
+// an operator acts on, as opposed to the counters and vm-id list before it.
+func diagnosisTail(msg string) string {
+	i := strings.LastIndex(msg, "; ")
+	if i < 0 {
+		return msg
+	}
+	return msg[i+2:]
+}
+
+// wantDiagnosis pins that verdict exactly. Golden on purpose: the sentence is
+// itself the deliverable of NIM-787, and a checklist of forbidden phrases is not
+// a guard — "raising SOUL_CLOUD_WAIT_BUDGET is pointless" says the same wrong
+// thing in words no blacklist anticipates. Rewording is meant to fail here, so
+// that changing an operator-facing verdict is a decision someone makes rather
+// than a side effect. When updating a want, check the new sentence claims
+// nothing the poller cannot observe: what a state string means is the driver's
+// vocabulary, so from an unchanged state the SDK cannot rule out a slow boot.
+func wantDiagnosis(t *testing.T, msg, want string) {
+	t.Helper()
+	if got := diagnosisTail(msg); got != want {
+		t.Errorf("diagnosis:\n got %q\nwant %q", got, want)
 	}
 }
 
@@ -384,9 +485,7 @@ func TestWaitUntilReady_DeadlineDiagnostics_Progressing(t *testing.T) {
 	if len(de.Pending) != 1 || !de.Pending[0].Progressed || de.Pending[0].LastState != "booting" {
 		t.Fatalf("pending=%+v, want i-slow progressed with last state booting", de.Pending)
 	}
-	if msg := err.Error(); !strings.Contains(msg, WaitBudgetEnv) {
-		t.Errorf("message=%q, want a hint at %s for a VM that was still progressing", msg, WaitBudgetEnv)
-	}
+	wantDiagnosis(t, err.Error(), "state was still advancing — the boot budget is likely too small, raise "+WaitBudgetEnv)
 }
 
 // TestWaitDeadlineError_CapsPendingList: a mass provision must not print a wall
