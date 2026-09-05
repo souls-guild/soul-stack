@@ -318,6 +318,12 @@ func TestBroken_Fixtures(t *testing.T) {
 // TestBroken_DestinyFixtures — symmetric with TestBroken_Fixtures for
 // destiny-broken/. Every .yml is accompanied by an .expected.json with the
 // full set of codes.
+//
+// Every one of them expects `destiny_tasks_unchecked` on top of its own defect, and
+// that is a property of the LAYOUT rather than of the fixture: these are bare
+// manifests in a flat directory, so the `tasks/main.yml` beside a real destiny is
+// absent and NIM-783's pass says so. A new fixture here inherits the code; the set
+// comparison will name it if it is left out.
 func TestBroken_DestinyFixtures(t *testing.T) {
 	matches, err := filepath.Glob("../../testdata/destiny-broken/*.yml")
 	if err != nil {

@@ -126,6 +126,25 @@ func ExpandIncludesInDestiny(tasks []Task, resolve IncludeResolver) ([]Task, []d
 	return expandIncludes(tasks, resolve, true, nil)
 }
 
+// ExpandIncludesInDestinyWithModules is [ExpandIncludesInDestiny] for a caller that
+// can resolve plugin manifests — [ExpandIncludesWithModules] on the destiny side of
+// the same split, and for the same reason (NIM-783).
+//
+// The pair exists because the two properties are independent: `destinyTasks` says
+// what the body IS (Soul-side by construction, so a keeper-side address in it can
+// never execute), `modules` says what the CALLER can see. Only soul-lint has both,
+// and only when the author bound `--modules`.
+//
+// soul-trial is the caller that COULD and does not: it is offline authoring like the
+// linter, the L0 corpus addresses plugin module states, and the manifests sit in the
+// same checkout — but the binary takes no `--modules` and its loaders filter to
+// errors, so an L0 case goes green over params nobody checked. The NIM-785 argument
+// for leaving the keeper alone (a check that turns running scenarios into aborts) does
+// not cover it, since there is no cluster to refuse anything. That one is NIM-790.
+func ExpandIncludesInDestinyWithModules(tasks []Task, resolve IncludeResolver, modules ModuleManifestResolver) ([]Task, []diag.Diagnostic) {
+	return expandIncludes(tasks, resolve, true, modules)
+}
+
 func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool, modules ModuleManifestResolver) ([]Task, []diag.Diagnostic) {
 	e := &includeExpander{
 		resolve:      resolve,

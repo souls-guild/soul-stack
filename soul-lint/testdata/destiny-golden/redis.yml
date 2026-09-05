@@ -7,7 +7,11 @@ description: >-
 # Regression-фикстура валидного typed-destiny: выровнена по примеру
 # examples/destiny/redis (актуальная typed-форма version/config/users). НЕ
 # байт-копия источника — самостоятельный минимальный манифест, который soul-lint
-# validate-destiny принимает с 0 diagnostics. Контракт регрессии: и эта фикстура,
+# validate-destiny accepts with exit 0. NOT with zero diagnostics, which this line
+# used to claim: since NIM-783 the command also judges the `tasks/main.yml` beside
+# the manifest, and a bare fixture in a flat directory has none — so it carries one
+# `destiny_tasks_unchecked` hint, which is a property of where this file lives and
+# not of what it says. Контракт регрессии: и эта фикстура,
 # и сам пример валидны (см. validate_test.go TestGolden_DestinyExample[_FromRepo]).
 # Любое содержательное расхождение со схемой destiny — баг, который тест ловит.
 

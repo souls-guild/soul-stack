@@ -379,6 +379,42 @@ aborts a run on one, so the check would start refusing runs that dispatch today.
 fork is NIM-785. Until it is decided, the keeper-side backstop for an included body is
 the runtime gate on the host, not the render.
 
+### A step in a destiny's `tasks/main.yml`
+
+`validate-destiny` checks it, and everything the task file includes, since
+**NIM-783** — the third file of this shape and the one that was worst, because
+`destiny.yml` carries no tasks at all. The manifest holds the contract
+(`input:`/`validate:`/`compat:`); the definition lives in the sibling
+`tasks/main.yml`, which the command read **twice** for cross-file facts (the compat
+floor, the vars collision) and judged zero times. So `--modules`, which the command
+has always accepted, reached nothing, and a step with an undeclared param printed
+`OK:`.
+
+What is reported now is the file's whole verdict, not the plugin half of it. That is
+not a wider bar for a destiny: the keeper's own loader refuses the artifact on any
+error out of the same two calls, so this is the keeper's answer said offline. The one
+finding the linter adds is the one the cluster cannot produce — the `--modules`
+bindings stand in for the Sigil grants it resolves from.
+
+`include:` inside a destiny resolves **one tier**, strictly inside its own `tasks/`
+directory: a destiny is its own git artifact with no service level to fall back on.
+So an unresolvable target is a plain error here, never the
+`stage_include_unresolved` hint a loose scenario gets — there is no later resolution
+for it to defer to.
+
+A `destiny.yml` with no readable `tasks/main.yml` beside it gets
+**`destiny_tasks_unchecked`**, a hint:
+
+```
+d/destiny.yml: hint: [destiny_tasks_unchecked] tasks of this destiny were not
+checked: there is no d/tasks/main.yml beside this manifest
+```
+
+A hint rather than an error because a manifest is routinely linted where it is being
+written rather than at the root of its artifact; but not silence, because the keeper
+**requires** that file and fails the load without it, and an `OK:` on its own would
+say the definition had been checked when nothing in it was read.
+
 The same check runs inside Keeper for a definition's own document, resolving from the
 plugins the cluster has allow-listed, so a definition linted here and rendered there is
 held to the same schema. Either way an undeclared key fails the task on the host

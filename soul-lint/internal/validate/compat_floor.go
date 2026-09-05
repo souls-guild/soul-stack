@@ -22,9 +22,17 @@ import (
 
 // destinyCompatFloorDiags weighs a destiny's declared window against the floor of
 // its manifest grammar plus its sibling `tasks/main.yml`. A missing or
-// unparseable task file is skipped — its own errors are reported by
-// validate-scenario / the runtime, and a floor derived from half a definition
-// would be worse than none.
+// unparseable task file is skipped — a floor derived from half a definition would
+// be worse than none, and the file's own verdict is [destinyTasksDiagnostics]'s to
+// report. It used to say here that validate-scenario or the runtime reported it,
+// which was false about the linter for as long as it stood: nothing in soul-lint
+// opened a destiny's task file for judgement, which is how NIM-783 stayed open.
+//
+// ⚠ The list read below is UNEXPANDED, so a feature used in an `include:`d body is
+// not counted — and a real destiny's `tasks/main.yml` is often nothing but includes.
+// [destinyTasksDiagnostics] now computes the expanded, resolver-aware plan a few
+// lines away and discards it; feeding it here is NIM-791, kept separate because it
+// can newly raise `compat_floor_too_low` on a definition that passes today.
 func destinyCompatFloorDiags(manifestPath string, m *config.DestinyManifest) []diag.Diagnostic {
 	if m == nil {
 		return nil

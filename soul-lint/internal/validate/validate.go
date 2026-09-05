@@ -146,6 +146,12 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 	case KindDestiny:
 		var dm *config.DestinyManifest
 		dm, _, diags, _ = config.LoadDestinyManifestFromBytes(opts.Path, src, cfgOpts)
+		// The sibling `tasks/main.yml` and everything it includes. The manifest
+		// carries no tasks at all, so without this pass `validate-destiny` printed a
+		// verdict on the contract and none on the definition — and `--modules`, which
+		// the command accepts, reached nothing (NIM-783). modules travels with it for
+		// the same reason it travels into stageDiagnostics below.
+		diags = append(diags, destinyTasksDiagnostics(opts.Path, modules)...)
 		// Cross-check of the declared window against the floor this destiny
 		// actually needs (ADR-0076(k)): the manifest grammar plus its task file.
 		diags = append(diags, destinyCompatFloorDiags(opts.Path, dm)...)
@@ -305,10 +311,12 @@ func scenarioServiceRoot(scenarioPath string) string {
 // common source of confusion.
 //
 // manifestPath is the path to destiny.yml; neighbors are read from its
-// directory. Any I/O or parse error on a neighbor skips the check (vars.yml
-// is optional; errors in the tasks themselves are caught by
-// validate-scenario/runtime — this only checks for the collision). Doesn't
-// fail when neighbors are absent.
+// directory. Any I/O or parse error on a neighbor skips the check (vars.yml is
+// optional, and this pass only looks for the collision). The task file's own
+// diagnostics are dropped here because [destinyTasksDiagnostics] reports them,
+// which is new as of NIM-783 — before it, "caught elsewhere" was what this comment
+// claimed and nowhere is where they were caught. Doesn't fail when neighbors are
+// absent.
 func destinyVarsCollisionDiags(manifestPath string) []diag.Diagnostic {
 	dir := filepath.Dir(manifestPath)
 

@@ -1796,8 +1796,22 @@ LINT_MODULES_MONGO ?= examples/module/soul-mod-community-mongo
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
 		[ -e "$$f" ] || continue; \
-		echo "validate-destiny $$f"; \
-		$(LINT_BIN) validate-destiny "$$f" || exit 1; \
+		echo "validate-destiny $$f --modules=redis=$(LINT_MODULES_REDIS)"; \
+		out=$$($(LINT_BIN) validate-destiny "$$f" "--modules=redis=$(LINT_MODULES_REDIS)" 2>&1); rc=$$?; \
+		echo "$$out"; \
+		[ $$rc -eq 0 ] || exit 1; \
+		if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+			echo "lint: FALSE-GREEN in $$f — a plugin module in its tasks/ has no --modules binding," >&2; \
+			echo "      so its params were NOT checked (NIM-294, reached destinies in NIM-783)." >&2; \
+			echo "      Bind it above and re-run." >&2; \
+			exit 1; \
+		fi; \
+		if echo "$$out" | grep -qF destiny_tasks_unchecked; then \
+			echo "lint: FALSE-GREEN in $$f — its tasks/main.yml was never opened (NIM-783), so the" >&2; \
+			echo "      corpus destiny is only half linted. A destiny in examples/ has its task" >&2; \
+			echo "      tree beside it; fix the layout rather than the check." >&2; \
+			exit 1; \
+		fi; \
 	done
 	@for f in examples/service/*/service.yml; do \
 		[ -e "$$f" ] || continue; \
