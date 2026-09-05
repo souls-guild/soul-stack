@@ -1642,7 +1642,7 @@ check-vuln-corpus:
 # The list is every artifact served through `module.ServeBundle`, which is what gives
 # it a `schema` subcommand for stamp to run. An artifact still on the single-module
 # `module.Serve` has no document to derive and belongs nowhere near this list.
-PLUGIN_SCHEMA_DIRS ?= examples/module/soul-mod-redis examples/module/soul-mod-mongo
+PLUGIN_SCHEMA_DIRS ?= examples/module/soul-mod-redis examples/module/soul-mod-mongo examples/module/soul-mod-cassandra
 check-plugin-schema:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
