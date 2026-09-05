@@ -75,7 +75,7 @@
   - **(y) Security — the generated value does not leak outward (the invariant of [ADR-010](0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files), the reference `sigil.KeyService.Introduce`).** The register-output carries ONLY `generated` = a map `<path>` → a sorted list of the **names** of the generated fields (without values). The audit event **`vault.kv-present`** (`source: keeper_internal`, written only when `changed=true`) — the payload `{paths}` = the same map path → fields, without values. The new value itself does not get into output / audit / log / OTel; errors of `WriteKV`/`ReadKV` carry only the path (the vault.Client invariant). A guard-test (`kvpresent_test.go::TestPresent_SecurityNoLeak`) recursively checks for the absence of the value (including as a substring) throughout the entire output and payload tree.
   - **(z) Boundaries.** The module does NOT rotate and does NOT delete secrets (it only creates missing ones); the cloud `destroyed`-cascade (amendment (a)) does NOT clean Vault KV — secrets survive the destroy of the incarnation (forensic > GC, like `souls.status='destroyed'`). CEL `${ vault(...) }` (read-only) and the render `vault_resolve` are not affected. A per-secret policy "if the value exists but does not conform to the policy" (re-generate on non-conformance) — is NOT implemented (present == a non-empty field, without a format check).
 
-- **Amendment (2026-06-29, profile semantics — Variant A, Keeper resolves name→params).** The `profile` param of the `core.cloud.created` step = the **NAME** of a row in the `profiles` registry (`/v1/profiles`, migration 020), and **NOT an inline object**. Keeper resolves the name into VM-spec params via `Resolver.ResolveProfile` (`keeper/internal/coremod/cloud/credentials.go`), symmetric to `provider`→credentials (Variant A above). An inline-object profile in `params:` is **NOT supported** — a vestige of the early design before the Profile registry appeared; no service used it (both — `example-cloud-bootstrap` and redis — sent a name). The profile must be pre-registered via `POST /v1/profiles` before running the provision. Closes the drift: the code + [cloud.md §31](../keeper/cloud.md) declared an object, both services sent a name — there was no resolution, the provision never ran live. The synchronization of [cloud.md §31](../keeper/cloud.md) object→string is done by the docs-writer separately.
+- **Amendment (2026-06-29, profile semantics — Variant A, Keeper resolves name→params).** The `profile` param of the `core.cloud.created` step = the **NAME** of a row in the `profiles` registry (`/v1/profiles`, migration 020), and **NOT an inline object**. Keeper resolves the name into VM-spec params via `Resolver.ResolveProfile` (`keeper/internal/coremod/cloud/credentials.go`), symmetric to `provider`→credentials (Variant A above). An inline-object profile in `params:` is **NOT supported** — a vestige of the early design before the Profile registry appeared; no service used it (both — `example-cloud-bootstrap` and redis — sent a name). The profile must be pre-registered via `POST /v1/profiles` before running the provision. Closes the drift: the code + `docs/keeper/cloud.md` §31 (removed in NIM-761) declared an object, both services sent a name — there was no resolution, the provision never ran live. The synchronization of `docs/keeper/cloud.md` §31 (removed in NIM-761) object→string is done by the docs-writer separately.
 
 - **Amendment (2026-07-01, self-onboard "Variant T" — per-VM tokens baked into userdata; fixed retrospectively 2026-07-03).** Extends (h)/(m)/(n): a third bootstrap-delivery mode — the VM onboards **itself in a single cloud-init cycle**, without a subsequent push step (`core.bootstrap.delivered`, [ADR-063](0063-bootstrap-token-delivery.md)) and without a claim-callback. Implemented and committed 2026-07-01 (SESSION-A); the retro-fixing — paying off the debt of NIM-18.
   - **The chicken-egg (h) is removed by predicting the FQDN.** The previous blocker "the SID is assigned AFTER create — a per-VM token in userdata is impossible" is circumvented: the keeper **itself sets** the base name of the VM batch (a new opt parameter `name` of the `core.cloud.created` step, `CreateRequest.name`; the driver names the VM `<name>-<index>`) and knows the **provider's FQDN suffix** (a new Provider-registry field `fqdn_suffix`, migration 094; a function of namespace+cluster, e.g. `<namespace>.vm.<cluster>`) → the full FQDN of each VM (`<name>-<index>.<fqdn_suffix>`) is predictable BEFORE create. A provider without a predictable FQDN does not support self-onboard (an explicit error).
@@ -172,9 +172,10 @@ engine that ships.
 
 ## Amendment 2026-09-01 (NIM-757): the CloudDriver contract is removed — a cloud driver is an ordinary plugin
 
-**Not implemented.** Recorded here because the decision is accepted; the code is NIM-758 /
-NIM-760 / NIM-761 / NIM-762. The tree still ships CloudDriver in full — the contract, the
-registries, the module, the six drivers. Written under NIM-759.
+★ **Implemented (NIM-761, 2026-09-04).** The contract, the Provider and Profile registries with
+their REST and MCP surfaces, the `core.cloud` module, the six `soul-cloud-*` examples, the
+`kind: cloud_driver` discriminator and `sdk/clouddriver` are all gone from the tree. Only NIM-762
+(web UI, `soul-stack-web`) is outstanding. Written under NIM-759, flipped under NIM-761.
 
 ### Why the contract was redundant
 
@@ -386,18 +387,24 @@ the additive first step of the 2026-08-09 decision "cloud stops being an entity 
 the second source has nothing to be a second source *of*.
 
 Named by number so a reader does not chase it as live. Its live traces, which go with it:
-`shared/coremanifest/mod_cloud.go:5-36`, [`docs/keeper/cloud.md`](../keeper/cloud.md) §"Two
+`shared/coremanifest/mod_cloud.go:5-36`, `docs/keeper/cloud.md` §"Two
 sources for the driver: registry or inline", and the ADR-017 index row in
 [`docs/adr/README.md`](README.md).
 
-### What still ships until then
+### What no longer ships
 
-Until NIM-758 / NIM-760 / NIM-761 land, **everything above this amendment describes the engine
-that runs**: the `CloudDriver` service contract, the Provider and Profile registries with their
-REST and MCP surfaces, the eight permissions, the seven audit events, `core.cloud.created` /
+**Everything above this amendment is now history, not description.** Gone as of NIM-761: the
+`CloudDriver` service contract, the Provider and Profile registries with their REST and MCP
+surfaces, the eight permissions, the seven audit events, `core.cloud.created` /
 `core.cloud.destroyed` / `core.cloud.resized`, the NIM-668 two-source seam and the six official
-`soul-cloud-*` drivers. A keeper-side plugin cannot be executed at all
-(`unknown keeper-side module`), so there is no second path to migrate to yet.
+`soul-cloud-*` drivers. Migration 119 drops the two tables; `pluginv1.Kind` value `2` and
+`PluginManifest.spec` field `8` are `reserved`, so neither number can be reused.
+
+What survives, and deliberately: the retry / wait / confirm-destroy / error-classification
+plumbing of `sdk/clouddriver`, which was never about the contract. It moved verbatim to
+**`sdk/cloudutil`**, including `SOUL_CLOUD_WAIT_BUDGET` — the env-var name is unchanged because
+it is set on deployed Keeper units. Only `ReportDestroy`, which wrote `DestroyEvent`s, died with
+the contract.
 
 
 ## Amendment (2026-09-03, `certificate_rotation:` becomes `certificate:` with a nested `rotate:`; NIM-745)

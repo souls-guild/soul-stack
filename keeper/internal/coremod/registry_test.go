@@ -10,7 +10,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod"
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
-	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
@@ -43,27 +42,6 @@ func (noopSoulStore) UpdateCoven(_ context.Context, _ string, c []string) ([]str
 func (noopSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[string]struct{}, error) {
 	return map[string]struct{}{}, nil
 }
-
-type noopCloudSouls struct{}
-
-func (noopCloudSouls) EnsureProvisionable(_ context.Context, _ *keepersoul.Soul, _ string) (keepersoul.ProvisionOutcome, error) {
-	return keepersoul.ProvisionInserted, nil
-}
-func (noopCloudSouls) UpdateStatus(_ context.Context, _ string, _ keepersoul.Status, _ *string) error {
-	return nil
-}
-func (noopCloudSouls) DeleteBySID(_ context.Context, _ string) error { return nil }
-
-type noopCloudTokens struct{}
-
-func (noopCloudTokens) Generate() (bootstraptoken.PlainToken, error) {
-	return bootstraptoken.Generate()
-}
-func (noopCloudTokens) Insert(_ context.Context, sid, _ string, _ *string) (*bootstraptoken.Record, error) {
-	return &bootstraptoken.Record{SID: sid}, nil
-}
-func (noopCloudTokens) DeleteByTokenID(_ context.Context, _ string) error    { return nil }
-func (noopCloudTokens) ExpireActiveForSID(_ context.Context, _ string) error { return nil }
 
 type noopBootstrapIssuer struct{}
 
@@ -111,19 +89,16 @@ func (noopStateStore) ReadState(_ context.Context, _ string) (map[string]any, er
 	return map[string]any{}, nil
 }
 
-func TestDefault_RegistersAllFour(t *testing.T) {
+func TestDefault_RegistersAllThree(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
-		SoulStore:   noopSoulStore{},
-		PluginHost:  cloud.StubHost{},
-		CloudSouls:  noopCloudSouls{},
-		CloudTokens: noopCloudTokens{},
-		Vault:       noopVault{},
-		Audit:       noopAudit{},
-		StateStore:  noopStateStore{},
+		SoulStore:  noopSoulStore{},
+		Vault:      noopVault{},
+		Audit:      noopAudit{},
+		StateStore: noopStateStore{},
 	})
 	got := r.Names()
 	sort.Strings(got)
-	want := []string{cloud.Name, soul.Name, vault.Name, coremodstate.Name}
+	want := []string{soul.Name, vault.Name, coremodstate.Name}
 	sort.Strings(want)
 	if len(got) != len(want) {
 		t.Fatalf("Names = %v, want %v", got, want)
@@ -137,18 +112,12 @@ func TestDefault_RegistersAllFour(t *testing.T) {
 
 func TestLookup_KnownAndUnknown(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
-		SoulStore:   noopSoulStore{},
-		PluginHost:  cloud.StubHost{},
-		CloudSouls:  noopCloudSouls{},
-		CloudTokens: noopCloudTokens{},
-		Vault:       noopVault{},
-		Audit:       noopAudit{},
+		SoulStore: noopSoulStore{},
+		Vault:     noopVault{},
+		Audit:     noopAudit{},
 	})
 	if _, ok := r.Lookup(soul.Name); !ok {
 		t.Errorf("Lookup(%q): not found", soul.Name)
-	}
-	if _, ok := r.Lookup(cloud.Name); !ok {
-		t.Errorf("Lookup(%q): not found", cloud.Name)
 	}
 	if _, ok := r.Lookup(vault.Name); !ok {
 		t.Errorf("Lookup(%q): not found", vault.Name)
@@ -160,13 +129,10 @@ func TestLookup_KnownAndUnknown(t *testing.T) {
 
 func TestDefault_ChoirMember_RegisteredWhenStorePresent(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
-		SoulStore:   noopSoulStore{},
-		PluginHost:  cloud.StubHost{},
-		CloudSouls:  noopCloudSouls{},
-		CloudTokens: noopCloudTokens{},
-		Vault:       noopVault{},
-		Audit:       noopAudit{},
-		ChoirStore:  noopChoirStore{},
+		SoulStore:  noopSoulStore{},
+		Vault:      noopVault{},
+		Audit:      noopAudit{},
+		ChoirStore: noopChoirStore{},
 	})
 	if _, ok := r.Lookup(coremodchoir.Name); !ok {
 		t.Fatalf("Lookup(%q): not registered with ChoirStore present", coremodchoir.Name)
@@ -175,12 +141,9 @@ func TestDefault_ChoirMember_RegisteredWhenStorePresent(t *testing.T) {
 
 func TestDefault_ChoirMember_AbsentWhenStoreNil(t *testing.T) {
 	r := coremod.Default(coremod.Deps{
-		SoulStore:   noopSoulStore{},
-		PluginHost:  cloud.StubHost{},
-		CloudSouls:  noopCloudSouls{},
-		CloudTokens: noopCloudTokens{},
-		Vault:       noopVault{},
-		Audit:       noopAudit{},
+		SoulStore: noopSoulStore{},
+		Vault:     noopVault{},
+		Audit:     noopAudit{},
 	})
 	if _, ok := r.Lookup(coremodchoir.Name); ok {
 		t.Errorf("Lookup(%q): unexpected hit with nil ChoirStore", coremodchoir.Name)
@@ -191,12 +154,9 @@ func TestDefault_ChoirMember_AbsentWhenStoreNil(t *testing.T) {
 // for unconditional core-modules).
 func baseDeps() coremod.Deps {
 	return coremod.Deps{
-		SoulStore:   noopSoulStore{},
-		PluginHost:  cloud.StubHost{},
-		CloudSouls:  noopCloudSouls{},
-		CloudTokens: noopCloudTokens{},
-		Vault:       noopVault{},
-		Audit:       noopAudit{},
+		SoulStore: noopSoulStore{},
+		Vault:     noopVault{},
+		Audit:     noopAudit{},
 	}
 }
 

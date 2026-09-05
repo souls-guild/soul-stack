@@ -358,15 +358,15 @@ func TestApplyLookupIsByAlias(t *testing.T) {
 // because at allow-check time the artifact has not been fetched, let alone verified.
 func TestApplyRefusesGrantOfAnotherKind(t *testing.T) {
 	f := newFixture(t)
-	cloudDoc, err := schema.Marshal(schema.Document{
-		Kind:            schema.KindCloudDriver,
+	sshDoc, err := schema.Marshal(schema.Document{
+		Kind:            schema.KindSSHProvider,
 		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
+		ProviderKind:    "vault_ssh_ca",
 	})
 	if err != nil {
 		t.Fatal(err)
 	}
-	f.rec.Schema = cloudDoc
+	f.rec.Schema = sshDoc
 
 	ev := f.apply(t, map[string]any{"name": "redis"})
 	wantFailedReason(t, ev, "module_not_allowed")

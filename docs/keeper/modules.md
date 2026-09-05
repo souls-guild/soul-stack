@@ -9,19 +9,19 @@ Addressing (`<namespace>.<module>.<state>`) and SoulModule contract are the same
 | `on:` | Where is it performed | Suitable for modules |
 |---|---|---|
 | omitted / `[coven, …]` | on incarnation hosts | Soul-side core (`core.pkg.installed`, `core.file.present`, ...) |
-| **omitted** (keeper-side module address) | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.cloud.created` - cloud-create via CloudDriver, `core.bootstrap.issued` - tokens for ready-made VMs, `core.bootstrap.delivered` - token delivery via SSH, ...) |
+| **omitted** (keeper-side module address) | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.bootstrap.issued` - tokens for ready-made VMs, `core.bootstrap.delivered` - token delivery via SSH, ...) |
 
-**The side is the module's, and a task does not restate it** (NIM-747). The seven keeper-side core base addresses - `core.bootstrap` / `core.cert` / `core.choir` / `core.cloud` / `core.soul` / `core.state` / `core.vault` - are disjoint from the twenty-one Soul-side ones, so the address alone routes the step. `on: keeper` on one of them is a validation error (`on_keeper_redundant`), and a Soul-side address is a host task however it is written. The catalog is one list, `shared/coremanifest`, read by both `soul-lint` and the render pipeline; a plugin declares its own side in its schema document (`side: keeper | soul`, default `soul`), and since NIM-758 the Keeper **routes by it** - see [Keeper-side plugin modules](#keeper-side-plugin-modules) below. `on: keeper` on a PLUGIN address stays legal regardless: a scenario cannot read the artifact's document, so unlike a core address it has nothing to derive the side from.
+**The side is the module's, and a task does not restate it** (NIM-747). The six keeper-side core base addresses - `core.bootstrap` / `core.cert` / `core.choir` / `core.soul` / `core.state` / `core.vault` - are disjoint from the twenty-one Soul-side ones, so the address alone routes the step. `on: keeper` on one of them is a validation error (`on_keeper_redundant`), and a Soul-side address is a host task however it is written. The catalog is one list, `shared/coremanifest`, read by both `soul-lint` and the render pipeline; a plugin declares its own side in its schema document (`side: keeper | soul`, default `soul`), and since NIM-758 the Keeper **routes by it** - see [Keeper-side plugin modules](#keeper-side-plugin-modules) below. `on: keeper` on a PLUGIN address stays legal regardless: a scenario cannot read the artifact's document, so unlike a core address it has nothing to derive the side from.
 
-⚠ **`core.cloud` is leaving this list, and `side: keeper` is what replaces it** (epic NIM-757, decided 2026-09-01; the executor is **implemented**, the move is not). Every CloudDriver already *is* a plugin, so the separate contract is removed and a cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper` - which is exactly the field above. The precondition was that the Keeper could execute such a plugin at all, tracked as **NIM-758** (epic NIM-757) and, earlier, as **NIM-688** — the same gap under two numbers; **it is closed**, and both halves of it: `applyKeeperTask` now falls back from the `coremod.Registry` to the discovered plugins, and `Host.SpawnSoulModule` may start a `soul_module` artifact that declares the keeper side (the kind-agnostic `Host.Spawn` still refuses the kind, so that gate has no way around it). Order is forced (a SoulModule runs on a host; a VM is created when no hosts exist yet, which is why `core.cloud` was made keeper-side at all): **NIM-760** (`soul-cloud-wb` moves, verified live) → **NIM-761** (removal). Full decision - [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin). Until NIM-761 the keeper-side bases below still number seven, `core.cloud` included.
+★ **`core.cloud` has left this list, and `side: keeper` is what replaced it** (epic NIM-757, decided 2026-09-01; removed in **NIM-761**). Every CloudDriver already *was* a plugin, so the separate contract is gone and a cloud driver is an ordinary SoulModule plugin declaring `side: keeper` - which is exactly the field above. The precondition, that the Keeper could execute such a plugin at all (**NIM-758**, earlier **NIM-688**), is closed in both halves: `applyKeeperTask` falls back from the `coremod.Registry` to the discovered plugins, and `Host.SpawnSoulModule` may start a `soul_module` artifact that declares the keeper side (the kind-agnostic `Host.Spawn` refuses every kind but `ssh_provider`, so that gate has no way around it). Full decision - [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
 
 ## Registration and dispatch at (`base` + `state`)
 
-Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.cloud`, `core.bootstrap`, `core.choir`, `core.vault`, `core.state`, `core.cert`. State comes from the last segment of the task address.
+Keeper-side core modules are registered in the keeper-side Registry (`keeper/internal/coremod/registry.go`) by **base name** - `<namespace>.<module>` without state suffix: `core.soul`, `core.bootstrap`, `core.choir`, `core.vault`, `core.state`, `core.cert`. State comes from the last segment of the task address.
 
 When executing a keeper-side task (`keeper/internal/scenario/keeper_dispatch.go`), the address `module: <namespace>.<module>.<state>` is divided by the function `config.SplitModuleAddr` (a single parser for both sides, the same as the Soul-side runtime) into a pair `(base, state)`:
 
-- `base` (`core.cloud`) goes to `Registry.Lookup` - finds the implementation of `SoulModule`;
+- `base` (`core.vault`) goes to `Registry.Lookup` - finds the implementation of `SoulModule`;
 - `state` (`created`) is placed in `ApplyRequest.state` and dispatched **inside** the module implementation.
 
 Author-form examples → parsing:
@@ -29,7 +29,6 @@ Author-form examples → parsing:
 | Task address (`module:`) | Registry-key (`base`) | `ApplyRequest.state` |
 |---|---|---|
 | `core.soul.registered` | `core.soul` | `registered` |
-| `core.cloud.created` / `core.cloud.destroyed` | `core.cloud` | `created` / `destroyed` |
 | `core.bootstrap.issued` / `core.bootstrap.delivered` | `core.bootstrap` | `issued` / `delivered` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
@@ -46,7 +45,7 @@ Each keeper-side task writes audit-event `task.executed` (symmetrically to Soul-
 
 Keeper-side task is executed on the keeper itself - it has no hosts. Therefore, `params:` are rendered in a **run-level** context (once per run, not per-host): `input.*` / `vars.*` / `incarnation.*` / `register.*` are available (from previous keeper tasks), but **not** `soulprint.self` / `soulprint.hosts` - access to them in `params` keeper task fails the render (there are no host facts, and this is correct: the keeper step operates with registries, not facts of a specific VM). The two fail differently: `soulprint.self.<path>` gives the standard CEL `no such key`, while `soulprint.hosts` is refused by name - `construct soulprint.hosts (scenario-only; not available in destiny pass) not yet implemented (pilot)`.
 
-In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-only **pre-run snapshot** `incarnation.state` (the same `stateBefore` for row-lock runs, symmetrically for Soul-side tasks). The snapshot is invariant within the run (fixed once, does not accumulate between passages). This allows the keeper-side task to read facts written by the previous run: for example, `core.cloud.destroyed` in the teardown scenario `destroy` takes `provider`/`vm_ids`/`sids` from `incarnation.state.provisioned_*` written by the create run through `core.cloud.created` ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). If the incarnation does not yet have a state (push/trial without it) - `incarnation.state.<x>` gives `no such key`; defend reading `default(incarnation.state.<path>, …)` where fact may be missing.
+In `incarnation.*` the key **`incarnation.state.<path>`** is available - read-only **pre-run snapshot** `incarnation.state` (the same `stateBefore` for row-lock runs, symmetrically for Soul-side tasks). The snapshot is invariant within the run (fixed once, does not accumulate between passages). This allows the keeper-side task to read facts written by the previous run: for example, a teardown step in the `destroy` scenario takes the resource identifiers from `incarnation.state.*` written by the create run. If the incarnation does not yet have a state (push/trial without it) - `incarnation.state.<x>` gives `no such key`; defend reading `default(incarnation.state.<path>, …)` where fact may be missing.
 
 ### Flow control on a keeper-side task
 
@@ -140,7 +139,7 @@ Nothing confines the process once it starts; that bound is the same one [ADR-020
 
 `registered` - declarative form: "Soul with the specified `sid` is in the registry, is a **member** of the run's incarnation, and carries the specified set of stable Coven tags (if any)." The module is idempotent by design (re-calling with the same set is no-op).
 
-If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica` or after cloud-create via `core.cloud.provisioned`). Side-effects: the `souls` entry (if new), the **membership row** in `incarnation_membership` for the run's incarnation, and the optional stable-coven update. The module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
+If there is no entry in `souls` for this `sid` yet, the module creates it under `status: pending` (a new host added by the scenario - for example, host branch `add_replica`, or after a `side: keeper` plugin created the VM). Side-effects: the `souls` entry (if new), the **membership row** in `incarnation_membership` for the run's incarnation, and the optional stable-coven update. The module does not issue bootstrap tokens and does not launch a CSR cycle (this is the responsibility of onboarding, [soul/onboarding.md](../soul/onboarding.md)).
 
 In list form `sid` (see list-SID), membership and the passed set `coven` are applied to **each** list SID; The `await_online` barrier (if specified) aggregates presence over the **entire** set.
 
@@ -148,7 +147,7 @@ In list form `sid` (see list-SID), membership and the passed set `coven` are app
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `sid` | string **or** array of string, `format: fqdn` | required | — | `SID` Soul (FQDN) to which the binding is applied. Accepts **single string OR list** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), see list-SID). The list in practice comes with the CEL expression `${ register.<provision>.hosts }` (SID list from `core.cloud.provisioned`); literal list `sid: [a, b]` statically `soul-lint` **doesn't** pass (manifest declares `sid` as `string`) - this is a deliberate trade-off, see list-SID. |
+| `sid` | string **or** array of string, `format: fqdn` | required | — | `SID` Soul (FQDN) to which the binding is applied. Accepts **single string OR list** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md), see list-SID). The list in practice comes with the CEL expression `${ register.<provision>.hosts }` (SID list from the step that created the VMs); literal list `sid: [a, b]` statically `soul-lint` **doesn't** pass (manifest declares `sid` as `string`) - this is a deliberate trade-off, see list-SID. |
 | `coven` | array of string, `pattern: "^[a-z][a-z0-9-]*$"`, `unique: true` | optional | `[]` | A set of **real stable** Coven tags (cluster / project / environment / datacenter). **May be empty** — membership no longer lives in `coven[]`, so a bind needs no coven tag. When listed, `sid` applies to each SID. |
 | `mode` | string, `enum: [append, replace, remove]` | optional | `append` | Strategy for applying the `coven` set to existing labels (see below). |
 | `refresh_soulprint` | boolean | optional | `false` | **Implemented (S2/S3 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)).** `true` - the step becomes a passage-defining boundary (Stratify), after its success, the scenario-runner will re-resolve the roster before the next Passage (live snapshot); output `refreshed` echoes the value of the flag. **Together with `await_online: true`** further tightens the barrier: SID is only counted when online **and** typed soulprint is written to PG (see facts-wait, amendment 2026-07-02). |
@@ -169,7 +168,7 @@ Since membership now lives in `incarnation_membership` and **not** in `souls.cov
 
 ### list-SID — registration+waiting for N hosts in one step
 
-The `sid` parameter accepts a **string OR a list of strings** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). The target scenario is one create-scenario, which through `core.cloud.provisioned` creates N VMs (their `sid` come as a list in `register.<provision>.hosts`), then with one barrier step `core.soul.registered` registers them and waits for onboarding. The list is more natural than `loop:`: the `await_online` barrier aggregates presence on top of the **total** set of SIDs (general `await_min_count`), rather than launching independent per-iteration barriers.
+The `sid` parameter accepts a **string OR a list of strings** ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). The target scenario is one create-scenario, which through a `side: keeper` plugin creates N VMs (their `sid` come as a list in `register.<provision>.hosts`), then with one barrier step `core.soul.registered` registers them and waits for onboarding. The list is more natural than `loop:`: the `await_online` barrier aggregates presence on top of the **total** set of SIDs (general `await_min_count`), rather than launching independent per-iteration barriers.
 
 - The `coven` passed applies to **all** list SIDs (the common set of step Coven labels).
 - Single string `sid` remains valid (backwards compatible) - internally normalized to a list of one element.
@@ -233,7 +232,7 @@ After this step, the registry entry `souls` is created/updated, and scenario-run
 
 ### Example: registration+barrier for N created VMs
 
-Registering a list of SIDs from `core.cloud.provisioned` and blocking wait for onboarding - one step ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
+Registering a list of SIDs produced by an earlier keeper step and blocking wait for onboarding - one step ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)):
 
 ```yaml
 - name: Register provisioned shards and await onboarding
@@ -308,44 +307,9 @@ Before mutation, the module validates the existence of incarnation (`Incarnation
 
 Complete per-module reference - [docs/module/core/choir/README.md](../module/core/choir/README.md).
 
-## `core.cloud.created` / `core.cloud.destroyed`
-
-> ⚠ **This module is being removed — epic NIM-757, decided 2026-09-01, NOT implemented.** All three states go
-> (`created` / `destroyed` / **`resized`**), together with the Provider and Profile registries the parameter
-> tables below reference. A cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper`, and its
-> credentials become ordinary step params - **no cloud-specific credentials channel remains in keeper**. The
-> **NIM-668 two-source seam described below is annulled** with it: there is no `core.cloud` step left for a
-> second source to parametrise. Order: **NIM-758** → **NIM-760** → **NIM-761**. See
-> [ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin).
-> **Everything in this section describes the module that ships today.**
-
-Creating/deleting VMs via CloudDriver plugin ([ADR-017](../adr/0017-keeper-side-core.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.cloud`; state (`created` / `destroyed`, also `resized`) comes from the address suffix. Implementation - [`keeper/internal/coremod/cloud/provisioned.go`](../../keeper/internal/coremod/cloud/provisioned.go). Full flow (Provider/Profile-resolve, credentials Option A, userdata-render, guard-rails destroy) - [cloud.md](cloud.md); per-module reference - [docs/module/core/cloud/README.md](../module/core/cloud/README.md).
-
-**Two sources for the driver tuple** ([ADR-017 amendment 2026-08-17](../adr/0017-keeper-side-core.md), NIM-668), for all three states: the **registry** (`provider:` = a row name, keeper resolves driver + credentials + region + fqdn_suffix out of it) or **inline** (`driver` + `credentials` + `region` / `fqdn_suffix` written in the step, `profile` as the VM spec object). One or the other - naming both is a `Validate` error, not a silent preference. The registries stay supported and simply stop being mandatory; a service can now provision with zero rows in Postgres. Comparison table and rules - [cloud.md → Two sources for the driver](cloud.md#two-sources-for-the-driver-registry-or-inline).
-
-### Parameters `created` (`params:`)
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `provider` | string | **registry mode**: required | — | Registry line NAME `providers`: keeper resolves it to driver-name (`soul-cloud-<type>`) + plain-credentials from Vault (Option A, [cloud.md → Credentials-flow](cloud.md#credentials-flow)) + `region` + `fqdn_suffix`. Mutually exclusive with the inline set below. |
-| `driver` | string | **inline mode**: required | — | CloudDriver plugin ALIAS (`plugins.cloud_drivers[].name`), taking the place of the `providers.type` resolution. |
-| `credentials` | object (a `vault:` ref) | **inline mode**: required | — | The driver's credential map. Written as a **literal** `vault:<mount>/<path>` ref: the render's vault phase resolves it into the map BEFORE the module runs (A-flow - keeper reads it, the driver never touches Vault). ★ A ref produced by `${ … }` is never resolved (vault-resolve precedes CEL, [ADR-010](../adr/0010-templating.md)) - the step refuses the leftover string. Masked on every output. |
-| `region` | string | optional (inline mode only) | — | Merged into the credentials map under the same key the registry path uses. Refused alongside `provider:` - there it comes from the row. |
-| `fqdn_suffix` | string | optional (inline mode only); **required at `self_onboard: true`** | — | Replaces the `providers.fqdn_suffix` column when predicting `<name>-<index>.<suffix>`. Refused alongside `provider:`. |
-| `profile` | string **or** object | optional | — | **String** - a registry row NAME in `profiles`, keeper resolves it into VM-spec params ([ADR-017 amendment 2026-06-29](../adr/0017-keeper-side-core.md)). **Object** - the VM spec ITSELF, passed to `CreateRequest.profile` as-is, keeper does not look inside ([amendment 2026-08-17](../adr/0017-keeper-side-core.md), NIM-668). Orthogonal to the driver source: a registry profile with an inline driver is allowed. ★ The manifest can declare only ONE type (the schema DSL has no union), so it declares `map`: a **literal** `profile: some-row` is rejected statically as `param_type_mismatch`. Write the registry form through an expression - `profile: "${ vars.profile }"` - as every service in the tree does, and as it worked before NIM-668 too. |
-| `count` | int (≥ 1) | optional | `1` | How many VMs to create. |
-| `userdata` | string | optional | — | Ready cloud-init blob (legacy / gold-image flow). Mutually exclusive with both `generate_userdata: true` and `self_onboard: true`. |
-| `generate_userdata` | bool | optional | `false` | Render userdata from `keeper.yml::cloud_init` - setup **without tokens**, B-flat mode ([cloud.md → Cloud-init bootstrap](cloud.md#cloud-init-bootstrap-mvp)). |
-| `name` | string | optional; **required at `self_onboard: true`** | — | Base name of the VM batch → `CreateRequest.name`; The driver names the VM `<name>-<index>`. In conjunction with the FQDN suffix - the Provider registry field `fqdn_suffix` (migration 094) in registry mode, the `fqdn_suffix` param in inline mode - gives the predictable FQDN `<name>-<index>.<fqdn_suffix>` BEFORE create. **The value must match the base name of the VM** - pattern `^[a-z][a-z0-9-]{0,48}[a-z0-9]$` (stricter than `incarnation.NamePattern` `^[a-z0-9][a-z0-9-]{0,62}$`: without start digit and tail hyphen, length ≤ 50). Create-scenarios redis/dragonfly substitute `incarnation.id` here and pre-flight-`assert`-it is the first step of the provision body: the name of the incarnation, which is not suitable as a VM-base (start-digit / tail-hyphen / length 51–63), with `input.provision.enabled=true` is rejected **422 even BEFORE the creation of the incarnation** (not reaching clouddriver); Without provision, the restriction does not apply. |
-| `self_onboard` | bool | optional | `false` | Self-onboard "Option T" ([ADR-017(h) amendment 2026-07-01](../adr/0017-keeper-side-core.md)): keeper BEFORE create issues per-VM tokens to the predicted SIDs and bakes them in userdata (`/etc/soul/self-onboard-tokens`, `0600`) - VM onboards itself in one cloud-init cycle, step `core.bootstrap.delivered` not needed. Requires `name` and a non-empty FQDN suffix - `providers.fqdn_suffix` in registry mode, the `fqdn_suffix` param in inline mode (otherwise an obvious error, naming the one the step's own source needs); **mutually exclusive with explicit `userdata:`**; `generate_userdata` is implied (the `keeper.yml::cloud_init` block is required). **Plain token is NOT placed in register-output** (there is no `bootstrap_token` key). Failure of create/FQDN reconciliation rolls back inserted souls/tokens (orphan-cleanup). A conscious departure from the security-floor B-flat (single-use tokens, opt-in per-step) - [cloud.md → Self-onboard "Option T"](cloud.md). |
-
-Output `created` (`register.<name>.*`): `hosts[]` (`sid` / `vm_id` / `primary_ip` / `attributes`; in B-flat additionally `bootstrap_token` - plain, the only point of visibility, masked by `audit.MaskSecrets`; plus `onboarded: true` on a host that was already up), `count`, `vm_ids`, `action`, `reused`, `existing`. With `self_onboard: true` - plus the sign `self_onboard: true` and **without** `bootstrap_token`.
-
-**Re-run (idempotency, [ADR-017 amendments 2026-07-24 and 2026-07-26](../adr/0017-keeper-side-core.md)).** A repeated `create` over the same incarnation converges instead of colliding. A row left by an earlier attempt (`pending` / `destroyed`, belonging to this incarnation or to none yet) is re-armed for onboarding instead of colliding with the PK, and its still-active bootstrap token is replaced - `reused` counts those. A host of this incarnation that is already up (`connected` / `disconnected`) is passed through **untouched and without a new token**, flagged `onboarded: true` in `hosts[]` so the delivery step skips it - `existing` counts those. Refused: `revoked` / `expired`, and any row that belongs only to other incarnations - the step fails with the status and the owning incarnations rather than taking the host over. Whatever the mix, `vm_ids` and `hosts[].sid` cover the WHOLE roster - `covenant.yml` writes them into `incarnation.state` for day-2 destroy. Full table - [cloud.md → Re-running create](cloud.md#re-running-create-provision-idempotency-nim-170--nim-189). Params `destroyed` (`provider` / `vm_ids` / `sids` + cascade semantics) - [per-module README](../module/core/cloud/README.md) and [cloud.md](cloud.md).
-
 ## `core.bootstrap.issued`
 
-Keeper-side issuance of bootstrap tokens for **ready-made VM FQDN/SIDs**, before delivery and without `core.cloud.created`. Registry key is `core.bootstrap`; state `issued` comes from the public address. Implementation: [`keeper/internal/coremod/bootstrap/issued.go`](../../keeper/internal/coremod/bootstrap/issued.go) and transactional PG backend [`issuer_pg.go`](../../keeper/internal/coremod/bootstrap/issuer_pg.go). Complete per-module reference: [docs/module/core/bootstrap](../module/core/bootstrap/README.md).
+Keeper-side issuance of bootstrap tokens for **ready-made VM FQDN/SIDs**, before delivery. Registry key is `core.bootstrap`; state `issued` comes from the public address. Implementation: [`keeper/internal/coremod/bootstrap/issued.go`](../../keeper/internal/coremod/bootstrap/issued.go) and transactional PG backend [`issuer_pg.go`](../../keeper/internal/coremod/bootstrap/issuer_pg.go). Complete per-module reference: [docs/module/core/bootstrap](../module/core/bootstrap/README.md).
 
 Input `sids` is a required, non-empty, unique list of canonical SID/FQDN values. The whole batch is a single Postgres transaction. A free SID becomes a `pending`, `transport=agent` Soul; an existing `pending`/`expired` agent Soul is re-armed and gets a fresh token. Any prior unused token is invalidated, including an expired one. `revoked`, `destroyed`, and `transport=ssh` are refused fail-closed. A failure identifies the SID and rolls back the complete batch.
 
@@ -388,7 +352,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already i
 
 | Parameter | Type | Required | Default | Description |
 |---|---|---|---|---|
-| `hosts` | array of object `{sid, bootstrap_token, primary_ip?}` | required | — | List from `${ register.<issue>.hosts }` (`core.bootstrap.issued`) or `${ register.<provision>.hosts }` (`core.cloud.created`). `primary_ip` is required in direct transport and optional in Teleport, which dials by `sid`. Empty list → `failed`. An entry marked `onboarded: true` — by `core.cloud.created` (NIM-189) or by `core.bootstrap.issued` (NIM-780) — carries no token and is skipped; that flag is the only exemption for a missing token. A skipped host needs **no `primary_ip` on either transport**, since it is never dialed: the requirement is settled after the flag, so the issuance shape `{sid, onboarded: true}` passes on `direct` too. |
+| `hosts` | array of object `{sid, bootstrap_token, primary_ip?}` | required | — | List from `${ register.<issue>.hosts }` (`core.bootstrap.issued`) or the register of a `side: keeper` plugin that created the hosts. `primary_ip` is required in direct transport and optional in Teleport, which dials by `sid`. Empty list → `failed`. An entry marked `onboarded: true` — by `core.bootstrap.issued` (NIM-780) or by whatever produced the list — carries no token and is skipped; that flag is the only exemption for a missing token. A skipped host needs **no `primary_ip` on either transport**, since it is never dialed: the requirement is settled after the flag, so the issuance shape `{sid, onboarded: true}` passes on `direct` too. |
 | `ssh_provider` | string | required | — | SshProvider plugin name (`keeper.yml::plugins.ssh_providers[].name`). **★ In `transport: teleport` DOES NOT define a transport** (Authorize/Sign are not called) - the name goes ONLY to audit-payload. |
 | `token_path` | string | optional | `/etc/soul/token` | Path to the token file on the VM. |
 | `ssh_user` | string | optional | `root` | SSH user. |
@@ -399,7 +363,7 @@ cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already i
 
 ### Output contract (`output:` module)
 
-`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count` + `skipped`. A host that was already onboarded is reported as `{sid, delivered: false, started: false, onboarded: true}` and counted in `skipped` (`0` on a clean run); `count` stays the total number of hosts. Plus standard `.changed` (always `true` on success) / `.failed` DSL cores. **★ WITHOUT token in output** - the plain token is visible only in the register of the previous step (`core.cloud.created`, key `bootstrap_token`, masked by `audit.MaskSecrets`); it is not here.
+`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count` + `skipped`. A host that was already onboarded is reported as `{sid, delivered: false, started: false, onboarded: true}` and counted in `skipped` (`0` on a clean run); `count` stays the total number of hosts. Plus standard `.changed` (always `true` on success) / `.failed` DSL cores. **★ WITHOUT token in output** - the plain token is visible only in the register of the issuing step (key `bootstrap_token`, masked by `audit.MaskSecrets`); it is not here.
 
 ### Security
 
@@ -471,7 +435,7 @@ The practical edge is a schema change that re-points a derived path: it does **n
 
 An enum param is checked at the module, not passed through: `on_conflict: replce` would otherwise fall to the engine's default (`skip`) and silently keep the old element.
 
-The **service** and **incarnation** of the run are not parameters — they travel on the module context, like `core.cloud`'s incarnation, because they are two segments of a derived path and an author must not be able to name them. Both missing is a **failure, not a default**: the owner is what makes the path unforgeable, so the module fails closed rather than derive a path with an empty segment. The same applies to an unavailable `state_schema`.
+The **service** and **incarnation** of the run are not parameters — they travel on the module context, because they are two segments of a derived path and an author must not be able to name them (the same rule the removed `core.cloud` followed for its incarnation). Both missing is a **failure, not a default**: the owner is what makes the path unforgeable, so the module fails closed rather than derive a path with an empty segment. The same applies to an unavailable `state_schema`.
 
 A `SecretRequest` sitting in a position no declared property claims is an **error**, checked before anything is written. A request nobody resolves would travel on into `incarnation.state` as ordinary data and look like a password was asked for when nothing minted one.
 
@@ -564,6 +528,5 @@ The step itself `core.module.installed` - **Soul-side** (delivery of the SoulMod
 - [architecture.md → Module addressing](../architecture.md) - format `<namespace>.<module>.<state>`.
 - [scenario/orchestration.md §3](../scenario/orchestration.md) - `on:`, step manager between the Soul side and the Keeper side.
 - [storage.md](storage.md) - `souls` tables, coven binding.
-- [cloud.md](cloud.md) - `core.cloud.provisioned` and a border with coven binding (`core.soul.registered` is a separate step). ⚠ That document specifies a thing slated for removal (epic NIM-757, not implemented).
 - [soul/modules.md](../soul/modules.md) — host side of `core.module.installed`: delivery, verify, cache of custom modules.
 - [naming-rules.md → Destiny Modules](../naming-rules.md) - a dictionary of names.

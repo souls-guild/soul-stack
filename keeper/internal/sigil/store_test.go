@@ -19,7 +19,7 @@ func validRecord() *Sigil {
 		Ref:          "v1.0.0",
 		SHA256:       hex.EncodeToString(digest[:]),
 		Signature:    make([]byte, ed25519.SignatureSize),
-		Schema:       []byte(`{"kind":"cloud_driver","protocol_version":1}`),
+		Schema:       []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 		AllowedByAID: "archon-a",
 	}
 }

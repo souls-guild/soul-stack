@@ -15,16 +15,6 @@ import (
 // with and points `current` at (these tests exercise reading a slot, not git-resolve).
 const commitFixtureSHA = "0123456789abcdef0123456789abcdef01234567"
 
-// cloudDriverDoc is a minimally valid kind=cloud_driver document. It declares NO name
-// and no namespace — there is nowhere in the format left to put one (NIM-377).
-func cloudDriverDoc() schema.Document {
-	return schema.Document{
-		Kind:            schema.KindCloudDriver,
-		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
-	}
-}
-
 // stampedArtifact writes an executable at path holding body, with doc stamped into its
 // trailer. Every fixture goes through the real serializer and the real trailer writer:
 // a hand-assembled trailer would be testing a format nothing else produces.
@@ -70,7 +60,7 @@ func writeSlot(t *testing.T, root, alias string, doc *schema.Document, artifacts
 
 func TestReadSlot_Success(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	dir := writeSlot(t, root, "hetzner", &doc, "hetzner")
 
 	got, err := ReadSlot(root, "hetzner")
@@ -97,8 +87,8 @@ func TestReadSlot_Success(t *testing.T) {
 	if string(got.SchemaBytes) != string(wantSchema) {
 		t.Errorf("SchemaBytes are not the canonical trailer payload")
 	}
-	if got.Doc == nil || got.Doc.Kind != schema.KindCloudDriver {
-		t.Errorf("Doc = %+v, want a parsed cloud_driver document", got.Doc)
+	if got.Doc == nil || got.Doc.Kind != schema.KindSSHProvider {
+		t.Errorf("Doc = %+v, want a parsed ssh_provider document", got.Doc)
 	}
 	if filepath.Base(got.BinaryPath) != "hetzner" {
 		t.Errorf("BinaryPath = %q, want the slot's single artifact", got.BinaryPath)
@@ -110,7 +100,7 @@ func TestReadSlot_Success(t *testing.T) {
 // it is called.
 func TestReadSlot_ArtifactNameIsIrrelevant(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	writeSlot(t, root, "hetzner", &doc, "some-completely-unrelated-filename")
 
 	got, err := ReadSlot(root, "hetzner")
@@ -146,7 +136,7 @@ func TestReadSlot_EmptySlot(t *testing.T) {
 // which bytes get signed and later executed. Two executables must stop the read.
 func TestReadSlot_TwoExecutables(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	writeSlot(t, root, "hetzner", &doc, "artifact-a", "artifact-b")
 
 	_, err := ReadSlot(root, "hetzner")
@@ -177,7 +167,7 @@ func TestReadSlot_NoTrailer(t *testing.T) {
 func TestReadSlot_NoTrailerIgnoresSiblingSchemaFile(t *testing.T) {
 	root := t.TempDir()
 	dir := writeSlot(t, root, "hetzner", nil, "hetzner")
-	payload, err := schema.Marshal(cloudDriverDoc())
+	payload, err := schema.Marshal(sshProviderDoc())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -194,7 +184,7 @@ func TestReadSlot_NoTrailerIgnoresSiblingSchemaFile(t *testing.T) {
 // same reason a missing one does.
 func TestReadSlot_CorruptTrailer(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	dir := writeSlot(t, root, "hetzner", &doc, "hetzner")
 
 	path := filepath.Join(dir, "hetzner")
@@ -233,7 +223,7 @@ func TestReadSlot_InvalidDocument(t *testing.T) {
 // slot yields the same artifact regardless of the ref a grant labels it with.
 func TestReadSlot_RefIgnored(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	writeSlot(t, root, "hetzner", &doc, "hetzner")
 
 	a, err := ReadSlot(root, "hetzner")
@@ -254,7 +244,7 @@ func TestReadSlot_RefIgnored(t *testing.T) {
 // allow).
 func TestSlotCommitSHA_Success(t *testing.T) {
 	root := t.TempDir()
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	writeSlot(t, root, "hetzner", &doc, "hetzner")
 
 	got, err := SlotCommitSHA(root, "hetzner")

@@ -90,10 +90,6 @@ plugins:
   # (pluginhost.DefaultCacheRoot).
   cache_root: /var/lib/soul-stack-keeper/plugins
   # Plugin version — a git ref (tag or branch), no semver-range. See ADR-007.
-  cloud_drivers:
-    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
-    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
-
   ssh_providers:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: v0.1.0 }

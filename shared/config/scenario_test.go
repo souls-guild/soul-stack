@@ -45,12 +45,25 @@ func TestLoadScenarioManifest_Golden(t *testing.T) {
 	if len(cfg.Tasks) == 0 {
 		t.Errorf("tasks must be parsed")
 	}
-	// Discriminator round-trip smoke: the first task is module:.
-	if cfg.Tasks[0].Module == nil {
-		t.Errorf("tasks[0].Module must be set (provision uses core.cloud.created)")
+	// Discriminator round-trip smoke: BOTH branches of the task union survive the
+	// decode. The fixture used to open with a `module:` task and this checked index 0;
+	// that task was the `core.cloud.created` provision step, removed with the module
+	// (NIM-761). Scanning for one of each is what the check was actually about, and it
+	// no longer depends on which branch happens to sort first.
+	var sawInclude, sawModule bool
+	for i := range cfg.Tasks {
+		if cfg.Tasks[i].Include != nil {
+			sawInclude = true
+		}
+		if cfg.Tasks[i].Module != nil && cfg.Tasks[i].Module.Module == "core.state.set" {
+			sawModule = true
+		}
 	}
-	if cfg.Tasks[0].Module != nil && cfg.Tasks[0].Module.Module != "core.cloud.created" {
-		t.Errorf("tasks[0].Module.Module: got %q", cfg.Tasks[0].Module.Module)
+	if !sawInclude {
+		t.Errorf("no `include:` task decoded — the include branch of the task discriminator is untested")
+	}
+	if !sawModule {
+		t.Errorf("no `module: core.state.set` task decoded — the module branch of the task discriminator is untested")
 	}
 }
 

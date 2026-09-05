@@ -33,23 +33,17 @@
 # ★ WHY assert and not validate: the size-guard needs soulprint.hosts (roster), while the validate
 # context is INPUT-ONLY (a structural CEL barrier). replicas_per_master has default:0 →
 # int(input.replicas_per_master) without has() wrapping (see main.yml).
-# ★ PROVISION GATE (ADR-061 amendment 2026-06-29): during cloud-provision (input.provision
-# .enabled) the roster does not exist yet when the guard is authored to run - souls are created
-# later by the redis-provision.yml steps (core.cloud.created→VM→await_online→refresh_soulprint).
-# The `when: !provision.enabled` gate removes the size check for the provision path -
-# the roster invariant is guaranteed THERE by redis-provision.yml's count formula (the number of VMs =
-# 1+replicas) + a blocking await_online barrier (symmetric to the no_hosts-bypass amendment
-# 2026-06-28). The predicate is STATIC (pure input, without register.*/soulprint.self →
-# isStaticWhen), so the placeholder-skip drops the assert at BOTH eval points. On an existing
-# roster (provision omitted/false) has(input.provision) gives false → when=true → the size-guard
-# is active (NOT relaxed). The form - is the inverse of redis-provision.yml's include-when
-# (has(input.provision) && input.provision.enabled).
-# ★ The gate is NOT what keeps create reachable. Since ADR-009 amendment 2026-07-28 (NIM-235) the
-# create-path pre-flight defers ANY roster-reading assert to render - before the incarnation row
-# exists there is no membership and hence no roster to measure (NIM-124). This gate remains for
-# its own reason (the provision path has no roster invariant to check at all, at either point).
+# ★ The former PROVISION GATE is gone with the provisioning path (NIM-761). It read
+# `when: !(has(input.provision) && input.provision.enabled)` and relaxed the size check on
+# a run that was about to CREATE its roster — there were no souls yet to count, and the
+# invariant was held instead by the provision body's own VM-count formula plus the
+# await_online barrier. `input.provision` no longer exists, so the predicate was a constant
+# true and the gate was dead text naming a removed input. The guard now runs unconditionally,
+# which is what that predicate already evaluated to.
+# ★ What kept create reachable was never this gate: since ADR-009 amendment 2026-07-28
+# (NIM-235) the create-path pre-flight defers ANY roster-reading assert to render — before
+# the incarnation row exists there is no membership and hence no roster to measure (NIM-124).
 - name: Guard sentinel roster size matches replicas
-  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "size(soulprint.hosts) == 1 + int(input.replicas_per_master)"

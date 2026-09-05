@@ -91,29 +91,6 @@ binary_version:  ""
 # RFC1918 sets true in the service vars.
 binary_allow_private: false
 
-# ── Cloud-provision defaults: provider/profile/timeout/ssh for create default-on ──
-# create brings up a VM by default (input.provision default-on, decision 2026-06-30).
-# The operator does NOT choose provider/profile in the Run form (it's hidden) — they come FROM HERE:
-# redis-provision.yml reads default(input.provision.X, vars.provision_X), and its
-# provisioned_provider capture — the same. Author-context: a fleet with a different
-# provider/profile/timeout forks this repo and edits it here; the default is the prod environment.
-#
-# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR. For now
-# ONE static provider/profile pair (prod). Switching prod/dev by Keeper environment
-# or by the incarnation's Coven-overlay is NOT implemented — this is a stub for a future fork.
-provision_provider: example-prod
-provision_profile:  redis-debian-12
-# Upper bound for waiting on onboarding of created VMs (the await_online barrier, core.soul.registered
-# refresh_soulprint; form <N>{s|m|h}). Fallback for input.provision.await_timeout.
-provision_await_timeout: "8m"
-# Name of the SshProvider plugin for delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered).
-provision_ssh_provider: teleport
-# Ceiling on waiting for a freshly created VM to appear in Teleport before delivering the token
-# (core.bootstrap.delivered, transport=teleport, retry-until-join; form <N>{s|m|h}).
-# fail-fast: a VM is usually online in ~5m (2x margin), a large timeout would mask an enroll failure.
-# Fallback for input.provision.join_wait_timeout.
-provision_join_wait_timeout: "10m"
-
 # ── Mandatory data-plane monitoring: metric exporters (Slice I) ───────────
 # create UNCONDITIONALLY installs node_exporter (host metrics) + redis_exporter (Redis metrics)
 # on EVERY incarnation host (AFTER the deploy branch). Versions/ports/checksum — author-context

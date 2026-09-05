@@ -48,10 +48,6 @@ fixtures:
       sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
   input:
-    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto
-    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: cluster
     version: "7.4.1"
     shards: 2

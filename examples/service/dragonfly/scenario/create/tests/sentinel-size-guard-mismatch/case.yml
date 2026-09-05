@@ -45,10 +45,6 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision disabled (default-on: omitted section = ENABLED; the case deploys onto
-    # a READY roster, cloud-create not needed) → include dragonfly-provision.yml group-drop.
-    provision:
-      enabled: false
     version: "1.39.0"
     # replicas_per_master=2 → expects 1+2=3 hosts, but the roster above = 2 → 2 != 1+2.
     replicas_per_master: 2

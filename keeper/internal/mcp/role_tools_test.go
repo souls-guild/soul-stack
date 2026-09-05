@@ -492,8 +492,8 @@ func TestRoleTools_InManifest(t *testing.T) {
 // profile / push-provider / augur.omen / herald / tiding / oracle.vigil /
 // oracle.decree.
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 107 {
-		t.Errorf("catalog size = %d, want 107", n)
+	if n := len(listAllTools()); n != 97 {
+		t.Errorf("catalog size = %d, want 97", n)
 	}
 }
 

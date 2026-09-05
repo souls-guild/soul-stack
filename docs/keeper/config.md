@@ -435,7 +435,7 @@ See also [architecture.md → Service](../architecture.md), [storage.md → serv
 
 ## `plugins`
 
-Plugin directory with host = `keeper` ([plugins.md](plugins.md)). Five scalars (`cache_root` / `work_root` / `fetch_timeout` / `max_artifact_size_mb` / `max_clone_size_mb`) + two directory subblocks (`cloud_drivers` / `ssh_providers`).
+Plugin directory with host = `keeper` ([plugins.md](plugins.md)). Five scalars (`cache_root` / `work_root` / `fetch_timeout` / `max_artifact_size_mb` / `max_clone_size_mb`) + two directory subblocks (`ssh_providers` / `soul_modules`).
 
 ### `plugins.cache_root`
 
@@ -444,7 +444,7 @@ plugins:
   cache_root: /var/lib/soul-stack-keeper/plugins
 ```
 
-The root of the plugin artifact cache on the keeper-host (the path where the git resolver `plugins.{cloud_drivers,ssh_providers}` lays out the collected binaries/manifests). Discovery host ([`keeper/internal/pluginhost`](../../keeper/internal/pluginhost/pluginhost.go)) scans this directory when the keeper starts.
+The root of the plugin artifact cache on the keeper-host (the path where the git resolver `plugins.{ssh_providers,soul_modules}` lays out the collected binaries/manifests). Discovery host ([`keeper/internal/pluginhost`](../../keeper/internal/pluginhost/pluginhost.go)) scans this directory when the keeper starts.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -457,7 +457,7 @@ plugins:
   work_root: /var/lib/soul-stack-keeper/plugin-src
 ```
 
-Root of working git clones of plugin resolver ([ADR-026](../adr/0026-sigil.md) F-fetch). At startup, Keeper git resolves `plugins.{cloud_drivers,ssh_providers}` into this directory (clone/fetch + checkout via **go-git**, without depending on the system binary `git`), then extracts the collected artifact `dist/<binary-name>` into the commit_sha cache slot.
+Root of working git clones of plugin resolver ([ADR-026](../adr/0026-sigil.md) F-fetch). At startup, Keeper git resolves `plugins.{ssh_providers,soul_modules}` into this directory (clone/fetch + checkout via **go-git**, without depending on the system binary `git`), then extracts the collected artifact `dist/<binary-name>` into the commit_sha cache slot.
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -490,23 +490,6 @@ Size limits git-egress hardening ([ADR-026(g)](../adr/0026-sigil.md)). `source` 
 |---|---|---|---|
 | `plugins.max_artifact_size_mb` | `int` (MiB, ≥1) | `256` (`config.DefaultPluginMaxArtifactSizeMB`) | Optional. The size ceiling for one extracted binary is `dist/<binary-name>`. `0`/omitted → default; `<1` → diag `value_out_of_range` (the submegabyte ceiling would reject any real Go plugin binary). Excess on resolve → `ErrArtifactTooLarge`, slot is not created. |
 | `plugins.max_clone_size_mb` | `int` (MiB, ≥1) | `1024` (`config.DefaultPluginMaxCloneSizeMB`) | Optional. Ceiling of the total size of the clone working tree (checkout + `.git`), measured before the artifact is extracted. `0`/omitted → default; `<1` → diag `value_out_of_range`. Excess → `ErrCloneTooLarge` + cleanup `work_root/<name>`. Obviously more than the artifact limit (the tree carries the artifact itself plus other files and shallow-`.git`). |
-
-### `plugins.cloud_drivers`
-
-```yaml
-plugins:
-  cloud_drivers:
-    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
-    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
-```
-
-CloudDriver plugins (`soul-cloud-<provider>`), used by [`keeper.cloud`](cloud.md).
-
-| Field | Type | Default | Meaning |
-|---|---|---|---|
-| `plugins.cloud_drivers[].name` | `string` (kebab-case) | — | Provider name to link from Provider to Postgres (`type=<name>`, [cloud.md](cloud.md)). |
-| `plugins.cloud_drivers[].source` | `git-url` | — | git-URL of the plugin repository. |
-| `plugins.cloud_drivers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md)). |
 
 ### `plugins.ssh_providers`
 
@@ -1064,7 +1047,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `otel.*` | — | yes | Re-init exporter/connection; `SetupOTel` is called once per process ([ADR-024](../adr/0024-observability.md#adr-024-observability-prometheus-primary--otel-bridge)). |
 | `logging.level` | yes | — | In-memory variable. |
 | `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init log writer / file handles. |
-| `plugins.*` | — | yes | Read once by the startup phases: the git resolver is built with `cache_root` / `work_root` / `fetch_timeout` and both size ceilings baked in, and the `cloud_drivers[]` / `ssh_providers[]` catalog is resolved into slots there. Nothing re-runs those phases, so a driver added to the catalog appears only after a restart. |
+| `plugins.*` | — | yes | Read once by the startup phases: the git resolver is built with `cache_root` / `work_root` / `fetch_timeout` and both size ceilings baked in, and the `ssh_providers[]` / `soul_modules[]` catalog is resolved into slots there. Nothing re-runs those phases, so a plugin added to the catalog appears only after a restart. |
 | `reaper.enabled` / `dry_run` / `batch_size` / `rules.*` | yes | — | In-memory loop, next iteration sees new things. |
 | `reaper.interval` | yes | — | Next iteration with a new interval. |
 | `reaper.lock_ttl` | — | yes | Redis-lease TTL is set upon acquire. |
@@ -1229,9 +1212,6 @@ logging:
 
 plugins:
   cache_root: /var/lib/soul-stack-keeper/plugins
-  cloud_drivers:
-    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
-    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
   ssh_providers:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
@@ -1293,7 +1273,6 @@ The reference example in the file is [`examples/keeper/keeper.yml`](../../exampl
 - [concept.md](concept.md) - what tasks Keeper solves, which config blocks relate to which tasks.
 - [storage.md](storage.md) - what lies behind `postgres:` and `redis:`, the registry `operators` for `auth:` and the RBAC table (ADR-028).
 - [push.md](push.md) - consumer `plugins.ssh_providers`.
-- [cloud.md](cloud.md) - consumer `plugins.cloud_drivers`.
 - [reaper.md](reaper.md) - complete description of the `reaper:` block and cleaning rules.
 - [rbac.md](rbac.md) - full description of the `rbac:` block, parsing permissions, Bootstrap of the first Archon.
 - [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md) — bootstrap of the first Archon.

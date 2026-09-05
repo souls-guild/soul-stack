@@ -20,15 +20,7 @@ func TestDiscoverAllKinds(t *testing.T) {
 		modDef("config", nil, nil),
 	), exitScript)
 
-	// cloud_driver — a single endpoint, no modules.
-	d2 := slot(t, root, "aws")
-	writeArtifact(t, d2, "soul-cloud-aws", schema.Document{
-		Kind:            schema.KindCloudDriver,
-		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
-	}, exitScript)
-
-	// ssh_provider — likewise.
+	// ssh_provider — a single endpoint, no modules.
 	d3 := slot(t, root, "vault-ssh")
 	writeArtifact(t, d3, "soul-ssh-vault", schema.Document{
 		Kind:            schema.KindSSHProvider,
@@ -43,16 +35,16 @@ func TestDiscoverAllKinds(t *testing.T) {
 	if len(warns) != 0 {
 		t.Errorf("unexpected warnings: %v", warns)
 	}
-	// Two modules from the bundle plus one entry each for the single-endpoint kinds.
-	if len(found) != 4 {
-		t.Fatalf("found = %d, want 4: %+v", len(found), addressesOf(found))
+	// Two modules from the bundle plus one entry for the single-endpoint kind.
+	if len(found) != 3 {
+		t.Fatalf("found = %d, want 3: %+v", len(found), addressesOf(found))
 	}
 
 	byAddr := make(map[string]Discovered, len(found))
 	for _, d := range found {
 		byAddr[d.Address()] = d
 	}
-	for _, want := range []string{"redis.acl", "redis.config", "aws", "vault-ssh"} {
+	for _, want := range []string{"redis.acl", "redis.config", "vault-ssh"} {
 		if _, ok := byAddr[want]; !ok {
 			t.Errorf("address %q missing from %v", want, addressesOf(found))
 		}
@@ -60,11 +52,11 @@ func TestDiscoverAllKinds(t *testing.T) {
 	if got := byAddr["redis.acl"].Kind(); got != sharedplugin.KindSoulModule {
 		t.Errorf("redis.acl kind = %q", got)
 	}
-	if got := byAddr["aws"].Kind(); got != sharedplugin.KindCloudDriver {
-		t.Errorf("aws kind = %q", got)
+	if got := byAddr["vault-ssh"].Kind(); got != sharedplugin.KindSSHProvider {
+		t.Errorf("vault-ssh kind = %q", got)
 	}
-	if byAddr["aws"].Module != "" {
-		t.Errorf("cloud_driver entry has module %q, want empty", byAddr["aws"].Module)
+	if byAddr["vault-ssh"].Module != "" {
+		t.Errorf("ssh_provider entry has module %q, want empty", byAddr["vault-ssh"].Module)
 	}
 	// Both entries of the bundle point at the same file with the same digest.
 	acl, cfg := byAddr["redis.acl"], byAddr["redis.config"]
@@ -293,9 +285,9 @@ func TestDiscoveredDisclosureIsPerModule(t *testing.T) {
 // A single-endpoint kind has no module, so it has no per-module declaration to read.
 func TestDiscoveredNoModuleDeclarationForSingleEndpointKind(t *testing.T) {
 	found := discoveredFor(t, "aws", schema.Document{
-		Kind:            schema.KindCloudDriver,
+		Kind:            schema.KindSSHProvider,
 		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
+		ProviderKind:    "static_key",
 	}, exitScript)
 
 	if len(found) != 1 {
@@ -320,9 +312,12 @@ func TestDiscoverMissingRootIsFatal(t *testing.T) {
 }
 
 func TestFilterByKindsEmptyAllowedReturnsAll(t *testing.T) {
+	// TWO DIFFERENT kinds on purpose: "an empty allow-list keeps everything" is only
+	// tested by a set the filter could have split. With both entries the same kind, a
+	// regression that hard-coded one kind as always-allowed would still pass.
 	input := []Discovered{
-		{Doc: &sharedplugin.Document{Kind: sharedplugin.KindCloudDriver}, Alias: "aws"},
-		{Doc: &sharedplugin.Document{Kind: sharedplugin.KindSSHProvider}, Alias: "ssh"},
+		{Doc: &sharedplugin.Document{Kind: sharedplugin.KindSSHProvider}, Alias: "vault-ssh"},
+		{Doc: &sharedplugin.Document{Kind: sharedplugin.KindSoulModule}, Alias: "redis"},
 	}
 	out, warns := FilterByKinds(input, nil)
 	if len(out) != 2 || len(warns) != 0 {
@@ -332,13 +327,13 @@ func TestFilterByKindsEmptyAllowedReturnsAll(t *testing.T) {
 
 func TestFilterByKindsWarningMentionsKind(t *testing.T) {
 	input := []Discovered{
-		{Dir: "/some/dir", Doc: &sharedplugin.Document{Kind: sharedplugin.KindCloudDriver}, Alias: "aws"},
+		{Dir: "/some/dir", Doc: &sharedplugin.Document{Kind: sharedplugin.KindSSHProvider}, Alias: "vault-ssh"},
 	}
 	out, warns := FilterByKinds(input, []sharedplugin.Kind{sharedplugin.KindSoulModule})
 	if len(out) != 0 {
 		t.Fatalf("out = %d, want 0", len(out))
 	}
-	if len(warns) != 1 || !strings.Contains(warns[0], string(sharedplugin.KindCloudDriver)) {
+	if len(warns) != 1 || !strings.Contains(warns[0], string(sharedplugin.KindSSHProvider)) {
 		t.Fatalf("warns = %v", warns)
 	}
 }

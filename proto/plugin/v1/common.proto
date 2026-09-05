@@ -10,9 +10,13 @@ option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pl
 // `proto/plugin/vN/manifest.proto`, non-breaking (docs/keeper/plugins.md →
 // Extending the manifest).
 enum Kind {
+  // 2 was KIND_CLOUD_DRIVER, removed with the CloudDriver contract (NIM-761):
+  // a cloud plugin is an ordinary soul_module executing `side: keeper`.
+  reserved 2;
+  reserved "KIND_CLOUD_DRIVER";
+
   KIND_UNSPECIFIED = 0;
   KIND_SOUL_MODULE = 1;   // Soul-side: soul-mod-<name> binary, implements Destiny steps.
-  KIND_CLOUD_DRIVER = 2;  // Keeper-side: soul-cloud-<provider> binary, creates/deletes VMs.
   KIND_SSH_PROVIDER = 3;  // Keeper-side: soul-ssh-<provider> binary, SSH credentials for push.
   KIND_SOUL_BEACON = 4;   // Soul-side: soul-beacon-<name> binary, observes host state (ADR-030 V5-2).
 }

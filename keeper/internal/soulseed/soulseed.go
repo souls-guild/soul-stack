@@ -25,7 +25,8 @@ import (
 //   - `superseded` was replaced by rotation, new seed is already active.
 //   - `expired` was moved by Reaper / Vault PKI after not_after.
 //   - `revoked` was revoked by operator (compromise), new connections are denied.
-//   - `orphaned` means host was cascade-deleted from `core.cloud.provisioned destroyed`
+//   - `orphaned` means host was cascade-deleted by a teardown (the cascade the removed
+//     `core.cloud.provisioned destroyed` ran; the status and its precedence are unchanged)
 //     (ADR-017). It does not overwrite `revoked` (revoked > orphaned priority).
 type Status string
 

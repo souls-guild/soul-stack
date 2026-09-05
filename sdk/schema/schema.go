@@ -31,15 +31,14 @@
 package schema
 
 // Kind is the plugin kind an artifact implements. All modules in one artifact share
-// it: a bundle serves one contract (SoulModule / CloudDriver / SshProvider /
-// SoulBeacon), never a mix.
+// it: a bundle serves one contract (SoulModule / SshProvider / SoulBeacon), never a
+// mix.
 type Kind string
 
 // Kind values. Lowercase snake_case, matching the `pluginv1.Kind` proto enum values
 // without depending on proto serialization.
 const (
 	KindSoulModule  Kind = "soul_module"
-	KindCloudDriver Kind = "cloud_driver"
 	KindSSHProvider Kind = "ssh_provider"
 	KindSoulBeacon  Kind = "soul_beacon"
 )
@@ -67,9 +66,9 @@ const SchemaSubcommand = "schema"
 // Document is the whole schema of one artifact: the contract it implements, the
 // engine window it declares, and the modules it serves.
 //
-// Modules is filled for [KindSoulModule]. ProviderKind / ProfileSchema / ParamsSchema
-// carry the other three kinds, which describe a single endpoint rather than a set of
-// named modules (see [Validate] for which field belongs to which kind).
+// Modules is filled for [KindSoulModule]. ProviderKind / ParamsSchema carry the other
+// two kinds, which describe a single endpoint rather than a set of named modules (see
+// [Validate] for which field belongs to which kind).
 type Document struct {
 	Kind            Kind   `json:"kind"`
 	ProtocolVersion int32  `json:"protocol_version"`
@@ -83,12 +82,10 @@ type Document struct {
 	// `static_key` / `teleport`) or the author's own.
 	ProviderKind string `json:"provider_kind,omitempty"`
 
-	// ProfileSchema — kind=cloud_driver: JSON Schema of the VM profile parameters.
 	// ParamsSchema — kind=ssh_provider and kind=soul_beacon: JSON Schema of the
-	// endpoint parameters. Both are arbitrary objects; semantic JSON Schema
-	// validation is out of scope here.
-	ProfileSchema map[string]any `json:"profile_schema,omitempty"`
-	ParamsSchema  map[string]any `json:"params_schema,omitempty"`
+	// endpoint parameters. An arbitrary object; semantic JSON Schema validation is
+	// out of scope here.
+	ParamsSchema map[string]any `json:"params_schema,omitempty"`
 }
 
 // Compat is the engine window the artifact declares (ADR-0076(c)): the range of

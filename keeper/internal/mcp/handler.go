@@ -17,8 +17,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
-	"github.com/souls-guild/soul-stack/keeper/internal/profile"
-	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -186,14 +184,6 @@ type HandlerDeps struct {
 	// internal-error "herald registry is not configured" (PushProviderSvc
 	// pattern).
 	HeraldSvc *herald.Service
-
-	// ProviderSvc / ProfileSvc — Cloud CRUD facades (keeper.provider.* /
-	// keeper.profile.*, ADR-017). Same instances REST passes into
-	// api.Deps.ProviderSvc/ProfileSvc (single source of truth). nil →
-	// corresponding tools dispatch but return internal-error
-	// "provider/profile registry is not configured" (PushProviderSvc pattern).
-	ProviderSvc *provider.Service
-	ProfileSvc  *profile.Service
 
 	// ErrandDispatcher / ErrandStore — pull ad-hoc Errand contour (ADR-033)
 	// for keeper.soul.errand.run / keeper.errand.list / keeper.errand.get.
@@ -670,35 +660,6 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callPushProviderRead(ctx, claims, req, p.Arguments), false
 	case "keeper.push-provider.label-set":
 		return h.callPushProviderSetLabel(ctx, claims, req, p.Arguments), false
-
-	// Cloud Provider / Profile-tools (CRUD providers/profiles registries,
-	// ADR-017). 1:1 with REST POST/GET/DELETE /v1/providers* and /v1/profiles*
-	// and permission (keeper.provider.<verb> ↔ provider.<verb>,
-	// keeper.profile.<verb> ↔ profile.<verb>). Dispatch only when
-	// ProviderSvc/ProfileSvc is non-nil (optional HandlerDeps fields);
-	// otherwise the call method returns "... registry is not configured".
-	// No update (Provider/Profile are immutable) — except the display caption,
-	// which is the one field nothing derives from ([ADR-0085], NIM-728).
-	case "keeper.provider.create":
-		return h.callProviderCreate(ctx, claims, req, p.Arguments), false
-	case "keeper.provider.read":
-		return h.callProviderRead(ctx, claims, req, p.Arguments), false
-	case "keeper.provider.label-set":
-		return h.callProviderSetLabel(ctx, claims, req, p.Arguments), false
-	case "keeper.provider.delete":
-		return h.callProviderDelete(ctx, claims, req, p.Arguments), false
-	case "keeper.provider.list":
-		return h.callProviderList(ctx, claims, req, p.Arguments), false
-	case "keeper.profile.create":
-		return h.callProfileCreate(ctx, claims, req, p.Arguments), false
-	case "keeper.profile.read":
-		return h.callProfileRead(ctx, claims, req, p.Arguments), false
-	case "keeper.profile.label-set":
-		return h.callProfileSetLabel(ctx, claims, req, p.Arguments), false
-	case "keeper.profile.delete":
-		return h.callProfileDelete(ctx, claims, req, p.Arguments), false
-	case "keeper.profile.list":
-		return h.callProfileList(ctx, claims, req, p.Arguments), false
 
 	// Herald/Tiding-tools (CRUD notification registries, ADR-052, S4). 1:1 with
 	// REST POST/GET/PUT/DELETE /v1/heralds* and /v1/tidings* and permission

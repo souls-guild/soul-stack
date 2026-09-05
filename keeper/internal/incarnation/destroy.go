@@ -193,8 +193,8 @@ WHERE id = $1
 //   - ArchiveStatusDestroyed — teardown RAN and passed on every host: the service
 //     had a `destroy` scenario and its run reached a successful terminal. That is
 //     the whole guarantee. Which resources the scenario actually released is up
-//     to the service author — the keeper does not require a
-//     `core.cloud.destroyed` step and does not verify one ran. A `destroy`
+//     to the service author — the keeper never required a teardown step of any
+//     particular address and does not verify one ran. A `destroy`
 //     scenario that tears down nothing archives as `destroyed` all the same.
 //   - ArchiveStatusForceDestroyed — teardown was SKIPPED (force): the record was
 //     removed without running anything. Whatever the incarnation held is still
@@ -204,9 +204,9 @@ const (
 	ArchiveStatusForceDestroyed = "force_destroyed"
 )
 
-// State keys the keeper-side cloud teardown reads (`core.cloud.destroyed` gets
-// them through the `destroy` scenario's `params:`). They are a SERVICE-AUTHOR
-// convention, not a keeper contract — a service may name its state differently —
+// State keys a cloud teardown records. They are a SERVICE-AUTHOR convention, not
+// a keeper contract — a service may name its state differently, and since NIM-761
+// removed `core.cloud` nothing in the engine writes or reads them at all —
 // so they are read best-effort: absent/mistyped keys yield empty fields rather
 // than an error. The authoritative part of [UnreleasedResources] is SIDs, read
 // from `incarnation_membership`; the full state is archived in any case.

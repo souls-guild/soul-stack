@@ -56,8 +56,6 @@ fixtures:
   input:
     version: "1.39.0"
     replicas_per_master: 0
-    provision:
-      enabled: false
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side

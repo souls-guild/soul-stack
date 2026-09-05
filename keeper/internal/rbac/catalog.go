@@ -38,8 +38,13 @@ import "sort"
 //     line was missing while the total said 117, which is why the sum did not check out);
 //   - provisioning (2): read / update (ADR-058 Part B — operator-creation-method policy);
 //   - audit (1): read;
-//   - provider (4): create / read / delete (ADR-017, Cloud CRUD) / label-set ([ADR-0085]);
-//   - profile (4): create / read / delete (ADR-017, Cloud CRUD) / label-set ([ADR-0085]).
+//   - provider (4): create / read / delete / label-set — RETIRED (NIM-761, see below);
+//   - profile (4): create / read / delete / label-set — RETIRED (NIM-761, see below).
+//
+// RETIRED means the name is still in the catalog and still grantable, but gates nothing:
+// the Cloud-Provider and Cloud-Profile registries went with the CloudDriver contract and
+// there is no route left to reach. They are counted above, and kept, because of the
+// never-remove rule below — a role that still holds `provider.create` must keep parsing.
 //
 // A wildcard `*` in `<action>` (`incarnation.*`) expands at resolve time
 // and matches any known `<action>` for that `<resource>`. Wildcard in
@@ -422,12 +427,13 @@ var AllowedPermissions = map[string]struct{}{
 	// create / read / delete (push-provider.* pattern, no update:
 	// Provider/Profile are immutable — changing params means delete+create,
 	// protecting against partial mutation of a live VM spec). Selector —
-	// NoSelector in the MVP: CRUD operates on the registry itself (like
-	// push-provider.* / service.*); per-name scope is a separate future
-	// slice once multi-tenant RBAC lands. Mutating CRUD is audited
-	// (provider.created/deleted + profile.created/deleted). `read` gates
-	// both list and get (like operator.list↔read: one right for both read
-	// routes).
+	// RETIRED (NIM-761): the `providers` / `profiles` registries and their REST
+	// and MCP surfaces are gone, so granting one of these six now gates nothing —
+	// there is no route to reach. They are kept, not deleted, because of the
+	// never-remove rule in this file's doc comment: an operator role that still
+	// names `provider.create` must keep parsing after the upgrade, and a role
+	// that fails to parse is a lockout, not a cleanup. Purging the stale grant
+	// rows is an operator decision, deliberately not a migration.
 	"provider.create": {},
 	"provider.read":   {},
 	"provider.delete": {},
@@ -455,8 +461,10 @@ var AllowedPermissions = map[string]struct{}{
 	// Audit: `<resource>.label_changed`. Selector: NoSelector for the registry
 	// families that are already NoSelector; `incarnation.label-set` carries the
 	// same scope as the other incarnation mutations.
-	"incarnation.label-set":   {},
-	"service.label-set":       {},
+	"incarnation.label-set": {},
+	"service.label-set":     {},
+	// provider/profile — retired with their registries (NIM-761), kept per the
+	// never-remove rule. See the retired block above.
 	"provider.label-set":      {},
 	"profile.label-set":       {},
 	"push-provider.label-set": {},

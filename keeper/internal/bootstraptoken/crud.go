@@ -239,7 +239,7 @@ func Burn(ctx context.Context, db ExecQueryRower, tokenHash, claimedSID, usedByK
 }
 
 // SystemKIDCloudDestroy is the special `used_by_kid` value for records
-// "burned" by the `core.cloud.provisioned destroyed` cascade handler
+// "burned" by the teardown cascade handler (the removed `core.cloud.provisioned destroyed`)
 // (ADR-017): the host was deleted along with the VM, no real token
 // presentation happened, and no Archon operator was involved either, so
 // we record a system marker instead. The format differs from a valid
@@ -263,7 +263,7 @@ WHERE sid     = $1
 `
 
 // BurnAllForSID cascade-burns every not-yet-used bootstrap token for a
-// given SID. Used by the keeper-side `core.cloud.provisioned destroyed`
+// given SID. Used by the teardown cascade (the removed `core.cloud.provisioned destroyed`)
 // core module (ADR-017 cascade) within the same PG transaction as
 // `soul.UpdateStatus(destroyed)` and the `soulseed` cascade update.
 //

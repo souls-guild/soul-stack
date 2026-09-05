@@ -29,13 +29,13 @@ func TestMain(m *testing.M) {
 	os.Exit(m.Run())
 }
 
-// cloudDoc / moduleDoc are the two documents the fixtures stamp. Neither carries a
+// sshDoc / moduleDoc are the two documents the fixtures stamp. Neither carries a
 // name, a namespace or a publisher — there is nowhere in the format left to put one.
-func cloudDoc() schema.Document {
+func sshDoc() schema.Document {
 	return schema.Document{
-		Kind:            schema.KindCloudDriver,
+		Kind:            schema.KindSSHProvider,
 		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
+		ProviderKind:    "static_key",
 	}
 }
 
@@ -151,11 +151,11 @@ func (fr *fixtureRepo) tag(name string) {
 	}
 }
 
-// taggedPlugin — the common setup: a commit holding one stamped cloud_driver artifact
+// taggedPlugin — the common setup: a commit holding one stamped ssh_provider artifact
 // in `dist/`, tagged v1.0.0. Returns the sha1 under the tag.
 func taggedPlugin(t *testing.T, fr *fixtureRepo, binName string, body []byte) string {
 	t.Helper()
-	fr.writeArtifact(binName, cloudDoc(), body)
+	fr.writeArtifact(binName, sshDoc(), body)
 	sha := fr.commit("plugin")
 	fr.tag("v1.0.0")
 	return sha
@@ -206,12 +206,12 @@ func TestResolveEntry_HappyPath(t *testing.T) {
 	if got.Ref != "v1.0.0" {
 		t.Errorf("Ref = %q, want v1.0.0", got.Ref)
 	}
-	if got.Doc == nil || got.Doc.Kind != schema.KindCloudDriver {
-		t.Errorf("Doc = %+v, want a parsed cloud_driver document", got.Doc)
+	if got.Doc == nil || got.Doc.Kind != schema.KindSSHProvider {
+		t.Errorf("Doc = %+v, want a parsed ssh_provider document", got.Doc)
 	}
 	// SchemaBytes must be the trailer payload byte for byte: they are what gets hashed
 	// and signed at allow.
-	wantSchema, err := schema.Marshal(cloudDoc())
+	wantSchema, err := schema.Marshal(sshDoc())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestResolveEntry_HappyPath(t *testing.T) {
 // convention: whatever `dist/` calls its single executable, it is the artifact.
 func TestResolveEntry_ArtifactNameIsIrrelevant(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("anything-at-all", cloudDoc(), []byte("bin"))
+	fr.writeArtifact("anything-at-all", sshDoc(), []byte("bin"))
 	fr.commit("plugin")
 	fr.tag("v1.0.0")
 	r, _ := newTestResolver(t)
@@ -287,8 +287,8 @@ func TestResolveEntry_ArtifactNameIsIrrelevant(t *testing.T) {
 // executable.
 func TestResolveEntry_DistWithSchemaFileIsNotAmbiguous(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
-	payload, err := schema.Marshal(cloudDoc())
+	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
+	payload, err := schema.Marshal(sshDoc())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -305,7 +305,7 @@ func TestResolveEntry_DistWithSchemaFileIsNotAmbiguous(t *testing.T) {
 // TestResolveEntry_BranchRef checks resolving a branch ref (`main`), not just a tag.
 func TestResolveEntry_BranchRef(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
+	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
 	wantSHA := fr.commit("plugin on main")
 	r, _ := newTestResolver(t)
 
@@ -350,8 +350,8 @@ func TestResolveEntry_ErrArtifactNotFound_Empty(t *testing.T) {
 // up approving. Two executables must stop the entry.
 func TestResolveEntry_ErrArtifactNotFound_TwoExecutables(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin-a"))
-	fr.writeArtifact("soul-cloud-hetzner-debug", cloudDoc(), []byte("bin-b"))
+	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin-a"))
+	fr.writeArtifact("soul-cloud-hetzner-debug", sshDoc(), []byte("bin-b"))
 	fr.commit("two artifacts")
 	fr.tag("v1.0.0")
 	r, cacheRoot := newTestResolver(t)
@@ -391,7 +391,7 @@ func TestResolveEntry_ErrSchemaUnreadable_NoTrailer(t *testing.T) {
 // closed for the same reason a missing one does.
 func TestResolveEntry_ErrSchemaUnreadable_CorruptTrailer(t *testing.T) {
 	fr := newFixtureRepo(t)
-	full := stamped(t, cloudDoc(), []byte("bin"))
+	full := stamped(t, sshDoc(), []byte("bin"))
 	fr.writeUnstampedArtifact("soul-cloud-hetzner", full[:len(full)-1])
 	fr.commit("corrupt trailer")
 	fr.tag("v1.0.0")
@@ -539,7 +539,7 @@ func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
 		t.Fatalf("resolve A (tag): %v", err)
 	}
 
-	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin-b"))
+	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin-b"))
 	shaB := fr.commit("advance main")
 	if shaB == shaA {
 		t.Fatal("commit B matched A — setup broken")
@@ -580,10 +580,8 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 	brokenRepo.tag("v9.9.9")
 
 	plugins := &config.KeeperPlugins{
-		CloudDrivers: []config.PluginCatalogEntry{
-			{Name: "hetzner", Source: okRepo.fileURL(), Ref: "v1.0.0"},
-		},
 		SSHProviders: []config.PluginCatalogEntry{
+			{Name: "hetzner", Source: okRepo.fileURL(), Ref: "v1.0.0"},
 			{Name: "broken", Source: brokenRepo.fileURL(), Ref: "v9.9.9"},
 		},
 		SoulModules: []config.PluginCatalogEntry{
@@ -646,7 +644,7 @@ func TestResolveEntry_ErrArtifactTooLarge(t *testing.T) {
 func TestResolveEntry_ErrCloneTooLarge(t *testing.T) {
 	fr := newFixtureRepo(t)
 	// A tree bloated with a junk file beside a valid plugin.
-	fr.writeArtifact("soul-cloud-hetzner", cloudDoc(), []byte("bin"))
+	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
 	fr.writeFile("bloat.dat", make([]byte, 8192))
 	fr.commit("bloated plugin")
 	fr.tag("v1.0.0")

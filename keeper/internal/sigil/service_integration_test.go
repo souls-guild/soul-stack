@@ -45,11 +45,11 @@ func writeCacheSlot(t *testing.T, root, alias string, doc schema.Document, body 
 	}
 }
 
-func integrationCloudDoc() schema.Document {
+func integrationSSHDoc() schema.Document {
 	return schema.Document{
-		Kind:            schema.KindCloudDriver,
+		Kind:            schema.KindSSHProvider,
 		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
+		ProviderKind:    "static_key",
 	}
 }
 
@@ -79,7 +79,7 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 	ctx := context.Background()
 
 	cacheRoot := t.TempDir()
-	writeCacheSlot(t, cacheRoot, "hetzner", integrationCloudDoc(), []byte("integration-cloud-binary"))
+	writeCacheSlot(t, cacheRoot, "hetzner", integrationSSHDoc(), []byte("integration-cloud-binary"))
 
 	svc := newIntegrationService(t, cacheRoot)
 
@@ -118,7 +118,7 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 	}
 	// The stored schema must survive the PG round-trip byte for byte: it is what the
 	// signature covers and what a Soul re-hashes at verify.
-	wantSchema, err := schema.Marshal(integrationCloudDoc())
+	wantSchema, err := schema.Marshal(integrationSSHDoc())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
 	}
@@ -164,8 +164,8 @@ func TestIntegration_Service_Allow_SecondAliasSameSourceRefConflicts(t *testing.
 	ctx := context.Background()
 
 	cacheRoot := t.TempDir()
-	writeCacheSlot(t, cacheRoot, "redis", integrationCloudDoc(), []byte("same-bytes"))
-	writeCacheSlot(t, cacheRoot, "redis-community", integrationCloudDoc(), []byte("same-bytes"))
+	writeCacheSlot(t, cacheRoot, "redis", integrationSSHDoc(), []byte("same-bytes"))
+	writeCacheSlot(t, cacheRoot, "redis-community", integrationSSHDoc(), []byte("same-bytes"))
 
 	svc := newIntegrationService(t, cacheRoot)
 
@@ -186,7 +186,7 @@ func TestIntegration_Service_Allow_AliasTakenByOtherSource(t *testing.T) {
 	ctx := context.Background()
 
 	cacheRoot := t.TempDir()
-	writeCacheSlot(t, cacheRoot, "redis", integrationCloudDoc(), []byte("bytes"))
+	writeCacheSlot(t, cacheRoot, "redis", integrationSSHDoc(), []byte("bytes"))
 
 	svc := newIntegrationService(t, cacheRoot)
 
@@ -208,7 +208,7 @@ func TestIntegration_Service_Allow_ReservedAliasRejected(t *testing.T) {
 	ctx := context.Background()
 
 	cacheRoot := t.TempDir()
-	writeCacheSlot(t, cacheRoot, "core", integrationCloudDoc(), []byte("bytes"))
+	writeCacheSlot(t, cacheRoot, "core", integrationSSHDoc(), []byte("bytes"))
 
 	svc := newIntegrationService(t, cacheRoot)
 

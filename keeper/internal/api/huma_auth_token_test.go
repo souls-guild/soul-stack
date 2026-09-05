@@ -70,7 +70,7 @@ func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider
 		nil, // settingsH — /v1/settings is wired only when non-nil (ADR-0073)
 		stubAugurHandler(t),
 		stubOracleHandler(t),
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil, // pushH..heraldH (opt-in, nil)
+		nil, nil, nil, nil, nil, nil, nil, nil, // pushH..heraldH (opt-in, nil)
 		handlers.NewModuleCatalogHandler(nil, nil),
 		handlers.NewModuleFormPrepHandler(nil, nil),
 		handlers.NewPermissionCatalogHandler(nil),

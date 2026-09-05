@@ -39,10 +39,6 @@ fixtures:
       timeout:          300
 
   input:
-    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
-    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: cluster
     # version is REQUIRED (user directive 2026-06-23) and is now the ENUM of builds
     # released to Nexus — 7.4.1 ∈ enum (major < 8 → module version-gate not active).

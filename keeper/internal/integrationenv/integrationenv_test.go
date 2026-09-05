@@ -105,9 +105,11 @@ func isPolicyEnv(name string) bool {
 // is genuinely out of reach. Each entry is a hole in the rule, so each states why
 // it had to be cut, and an entry that stops firing fails the guard: a stale
 // exemption covers whatever moves into it next.
-var exemptFiles = map[string]string{
-	filepath.Join("examples", "module", "soul-cloud-aws", "localstack_l2_test.go"): "standalone go.mod outside go.work (ADR-016); keeper/internal/ is unreachable from it by Go's internal rule",
-}
+//
+// Empty since NIM-761 removed examples/module/soul-cloud-*, which held the only
+// one. That is the strongest state for this guard, not a gap in it: every file
+// under the checkout now goes through the helper.
+var exemptFiles = map[string]string{}
 
 // skipDirs — not our source: generated stubs, build output, fixtures.
 var skipDirs = map[string]bool{
@@ -131,7 +133,8 @@ type envRead struct {
 // and examples/ were outside its world entirely, and a second copy of the trap
 // was living in examples/module/soul-cloud-aws the whole time. Anchoring on a
 // marker instead of a hop count also means the guard fails loudly if the layout
-// moves, rather than silently narrowing its coverage.
+// moves, rather than silently narrowing its coverage. (That second copy went with
+// the CloudDriver examples in NIM-761; the anchoring is what still matters.)
 func checkoutRoot(t *testing.T) string {
 	t.Helper()
 	start, err := filepath.Abs(".")

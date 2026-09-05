@@ -1,5 +1,5 @@
 // Package util provides common helpers for keeper-side core-modules
-// (`core.soul.registered`, `core.cloud.provisioned`, `core.vault.kv-read`).
+// (`core.soul.registered`, `core.vault.kv-read`, `core.choir.present`).
 //
 // Contents are typed accessors over `*structpb.Struct` (ApplyRequest
 // params) and helpers to send final ApplyEvent-s on gRPC-stream.

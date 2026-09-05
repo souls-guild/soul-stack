@@ -63,7 +63,6 @@ type (
 // Plugin kinds, re-exported.
 const (
 	KindSoulModule  = schema.KindSoulModule
-	KindCloudDriver = schema.KindCloudDriver
 	KindSSHProvider = schema.KindSSHProvider
 	KindSoulBeacon  = schema.KindSoulBeacon
 )
@@ -238,8 +237,6 @@ func ProtoKind(k Kind) pluginv1.Kind {
 	switch k {
 	case KindSoulModule:
 		return pluginv1.Kind_KIND_SOUL_MODULE
-	case KindCloudDriver:
-		return pluginv1.Kind_KIND_CLOUD_DRIVER
 	case KindSSHProvider:
 		return pluginv1.Kind_KIND_SSH_PROVIDER
 	case KindSoulBeacon:

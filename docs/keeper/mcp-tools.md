@@ -353,82 +353,6 @@ Moved to a domain file - [mcp-tools/voyages.md](mcp-tools/voyages.md): `keeper.v
 
 Moved to a domain file - [mcp-tools/push.md](mcp-tools/push.md): `keeper.push.apply`, `keeper.push.cleanup`. The source of truth for semantics is [operator-api/push.md](operator-api/push.md).
 
-### Cloud (10)
-
-CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017, [cloud.md → Provider and Profile](cloud.md)). **Implemented** (REST + MCP, one source of truth `provider.Service` / `profile.Service`): five tools per entity - `create` / `list` / `get` / `label-set` / `delete`. **No `update`-tool** - Provider/Profile are immutable (change parameters = `delete` + `create`, protection against partial mutation spec of living VMs); therefore read-visibility gates one permission `provider.read` / `profile.read` (pattern `operator.list`↔`read`). The one mutation is `keeper.provider.label-set` / `keeper.profile.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md), NIM-728), which replaces the row's free-text display caption: the immutability argument is about a live cloud spec, and a caption is the one field nothing reads. Selector - NoSelector. Tools are only available when the registry is connected; when disabled, the call returns `internal-error`. Async: no. The source of truth for semantics is [cloud.md](cloud.md), permission directory is [rbac.md → Cloud](rbac.md#cloud-8--cloudmd).
-
-`credentials_ref` (Provider only) is stored and returned as **path** `vault:<mount>/<path>` - the credentials themselves are NOT resolved or returned by the API; The path is also written in audit (not a secret).
-
-#### `keeper.provider.create`
-
-Creating a Provider. Permission: `provider.create`. Endpoint: `POST /v1/providers`. Audit: `provider.created`.
-
-**Input:**
-
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `id` | `string` (kebab-case) | yes | Provider id (immutable — [ADR-0085](../adr/0085-entity-id-and-label.md)). |
-| `type` | `string` (kebab-case) | yes | CloudDriver plugin name (`soul-cloud-<type>`). |
-| `region` | `string` | yes | Region/zone. |
-| `credentials_ref` | `string` (`vault:<path>`) | yes | Vault-ref to credentials (path, no secret). |
-
-**Output:** `{name, type, region, credentials_ref, created_at (RFC 3339), created_by_aid?}` - mirror input + server-side labels.
-
-Errors: `provider-already-exists` (`409`, double `name`); `validation-failed` (broken `name`/`type`/`region`/`credentials_ref`).
-
-#### `keeper.provider.list`
-
-Enumeration of Providers (paged). Permission: `provider.read`. Endpoint: `GET /v1/providers`.
-
-**Input:** `{offset?, limit?}` (`limit` default `100`). **Output:** `{items: [...], offset, limit, total}`.
-
-#### `keeper.provider.get`
-
-Reading one Provider by name. Permission: `provider.read`. Endpoint: `GET /v1/providers/{id}`.
-
-**Input:** `{name}`. **Output:** `providerViewOut`. Errors: `not-found`.
-
-#### `keeper.provider.delete`
-
-Removing Provider. Permission: `provider.delete`. Endpoint: `DELETE /v1/providers/{id}`. Audit: `provider.deleted`.
-
-**Input:** `{name}`. **Output:** empty object. Errors: `not-found`; `provider-has-profiles` (`409` - Provider is referenced by Profiles, FK `ON DELETE RESTRICT`; first delete dependent Profiles).
-
-#### `keeper.profile.create`
-
-Creating a Profile. Permission: `profile.create`. Endpoint: `POST /v1/profiles`. Audit: `profile.created`.
-
-**Input:**
-
-| Field | Type | Required | Meaning |
-|---|---|---|---|
-| `id` | `string` (kebab-case) | yes | Profile id (immutable — [ADR-0085](../adr/0085-entity-id-and-label.md)). |
-| `provider` | `string` | yes | Name of the registered Provider (FK). |
-| `params` | `object` | optional | VM parameters (freeform jsonb; validated against the `profile_schema` CloudDriver plugin on the scenario layer, not in CRUD). |
-| `cloud_init` | `string` | optional | Raw cloud-init userdata. |
-
-**Output:** `{name, provider, params, cloud_init?, created_at, created_by_aid?}`.
-
-Errors: `profile-already-exists` (`409`, double `name`); `validation-failed` (`422` - link to a non-existent Provider (FK) or broken `name`/`provider`).
-
-#### `keeper.profile.list`
-
-Enumeration of Profiles (paged; optional filter by Provider). Permission: `profile.read`. Endpoint: `GET /v1/profiles`.
-
-**Input:** `{provider?, offset?, limit?}`. **Output:** `{items: [...], offset, limit, total}`.
-
-#### `keeper.profile.get`
-
-Reading one Profile by name. Permission: `profile.read`. Endpoint: `GET /v1/profiles/{id}`.
-
-**Input:** `{name}`. **Output:** `profileViewOut`. Errors: `not-found`.
-
-#### `keeper.profile.delete`
-
-Deleting Profile. Permission: `profile.delete`. Endpoint: `DELETE /v1/profiles/{id}`. Audit: `profile.deleted`.
-
-**Input:** `{name}`. **Output:** empty object. Errors: `not-found`.
-
 ### Push-Provider (6)
 
 Moved to a domain file - [mcp-tools/push-providers.md](mcp-tools/push-providers.md): `keeper.push-provider.create`, `keeper.push-provider.update`, `keeper.push-provider.label-set` ([ADR-0085](../adr/0085-entity-id-and-label.md)), `keeper.push-provider.delete`, `keeper.push-provider.list`, `keeper.push-provider.read`. The source of truth for semantics is [operator-api/push-providers.md](operator-api/push-providers.md). Sensitive params (`secret_id`/`token`/`password`/`private_key`) MUST be vault-refs.
@@ -457,7 +381,7 @@ Domains **Cadence** (`/v1/cadences*`, [ADR-046](../adr/0046-cadence.md)) and **C
 
 ### Future reads and deletes
 
-Directory 89 tool - 1:1 with MVP directory permissions from [rbac.md → Directory permissions](rbac.md). Reads/deletions that are deferred until the corresponding permissions (`operator.get`, `soul.get`, etc.) are available are added to this directory in one PR with the extension `rbac.md` + `operator-api.md` + of this document. Cloud-CRUD (`provider.*` / `profile.*`) - no longer deferred: fully implemented (create/list/get/delete per entity, see [§ Cloud](#cloud-8)).
+Directory 89 tool - 1:1 with MVP directory permissions from [rbac.md → Directory permissions](rbac.md). Reads/deletions that are deferred until the corresponding permissions (`operator.get`, `soul.get`, etc.) are available are added to this directory in one PR with the extension `rbac.md` + `operator-api.md` + of this document. Cloud-CRUD (`provider.*` / `profile.*`) - removed with the Cloud-Provider and Cloud-Profile registries (NIM-761).
 
 ## SSE event payloads
 

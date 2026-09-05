@@ -178,10 +178,6 @@ func TestGolden_ManifestSoulModule(t *testing.T) {
 	runExpect(t, "../../testdata/manifest-golden/soul-module.schema.json", KindManifest, false, ExitOK, nil)
 }
 
-func TestGolden_ManifestCloudDriver(t *testing.T) {
-	runExpect(t, "../../testdata/manifest-golden/cloud-driver.schema.json", KindManifest, false, ExitOK, nil)
-}
-
 func TestGolden_ManifestSSHProvider(t *testing.T) {
 	runExpect(t, "../../testdata/manifest-golden/ssh-provider.schema.json", KindManifest, false, ExitOK, nil)
 }

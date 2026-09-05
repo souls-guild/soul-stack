@@ -28,8 +28,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
-	"github.com/souls-guild/soul-stack/keeper/internal/profile"
-	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
@@ -335,15 +333,6 @@ type Deps struct {
 	// in `keeper run` passes *herald.Service over pgxpool.Pool + the dispatcher
 	// invalidator + a Redis publisher (herald:invalidate).
 	HeraldSvc *herald.Service
-
-	// ProviderSvc / ProfileSvc — operator-facing CRUD of the Cloud-Provider
-	// (`providers`) and Cloud-Profile (`profiles`, ADR-017, docs/keeper/cloud.md) registries.
-	// When nil the corresponding provider.*/profile.* routes aren't wired (the
-	// PushProviderSvc/AugurSvc pattern). credentials_ref is served as a vault path, the secret
-	// is not resolved. WITHOUT a Redis publisher: Cloud-Provider/Profile are read on-demand
-	// at the scenario layer (`core.cloud.provisioned`), not hot-reloaded.
-	ProviderSvc *provider.Service
-	ProfileSvc  *profile.Service
 
 	// ErrandDispatcher / ErrandStore — the pull-ad-hoc Errand contour (ADR-033).
 	// When both are nil the errand.* routes aren't wired (the PushRun pattern). Wire-up
@@ -835,17 +824,6 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		heraldH = handlers.NewHeraldHandler(deps.HeraldSvc, logger)
 	}
 
-	// providerH / profileH are optional: when the corresponding Svc is nil the provider.*/
-	// profile.* routes aren't wired (the pushProviderH pattern). Cloud-CRUD (ADR-017).
-	var providerH *handlers.ProviderHandler
-	if deps.ProviderSvc != nil {
-		providerH = handlers.NewProviderHandler(deps.ProviderSvc, logger)
-	}
-	var profileH *handlers.ProfileHandler
-	if deps.ProfileSvc != nil {
-		profileH = handlers.NewProfileHandler(deps.ProfileSvc, logger)
-	}
-
 	// moduleCatalogH is mounted ALWAYS: the core catalog (`GET /v1/modules`) needs
 	// no external dependencies (a static doc table). ModuleCatalogPlugins
 	// is optional — when nil the plugin section of the catalog is empty.
@@ -977,7 +955,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, providerH, profileH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger)
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

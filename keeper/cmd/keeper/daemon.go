@@ -50,7 +50,6 @@ import (
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	coremodcert "github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
-	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	coremodsoul "github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
@@ -65,8 +64,6 @@ import (
 	keeperpg "github.com/souls-guild/soul-stack/keeper/internal/pg"
 	"github.com/souls-guild/soul-stack/keeper/internal/plugingit"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
-	"github.com/souls-guild/soul-stack/keeper/internal/profile"
-	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
@@ -305,8 +302,6 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	providerSvc *provider.Service
-	profileSvc  *profile.Service
 
 	// shellGate — the console gate over the Errand path (ADR-0074 amendment,
 	// NIM-197), shared by the REST, MCP and Cadence-spawn choke-points so all of
@@ -1059,7 +1054,6 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		logger.Info("keeper run: plugins resolved into cache", slog.Int("count", len(slots)))
 	}
 
-	var discoveredCloud []pluginhost.Discovered
 	// soul_module entries are kept for a second reason now (NIM-758): besides
 	// being the registry distributed to Souls, the ones declaring `side: keeper`
 	// are executed by this Keeper itself. The side filter is NOT applied here —
@@ -1084,8 +1078,6 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 				continue
 			}
 			switch dd.Kind() {
-			case pluginhost.KindCloudDriver:
-				discoveredCloud = append(discoveredCloud, dd)
 			case pluginhost.KindSSHProvider:
 				// Keeper daemon runtime wiring note.
 				// Keeper daemon runtime wiring note.
@@ -1101,11 +1093,6 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		logger.Info("keeper run: keeper-side plugin modules registered",
 			slog.Int("count", len(names)),
 			slog.Any("modules", names))
-	}
-	cloudAdapter, err := cloud.NewPluginAdapter(pluginHost, discoveredCloud)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keeper run: build cloud plugin adapter: %v\n", err)
-		return errSetupFailed
 	}
 	// Keeper daemon runtime wiring note.
 	// `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
@@ -1150,17 +1137,8 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			}
 			return "" // Keeper daemon runtime wiring note.
 		},
-		PluginHost: cloudAdapter,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		CloudResolver: cloud.NewCredentialsResolverPG(cloud.NewProviderReaderPG(d.pool), cloud.NewProfileReaderPG(d.pool), d.vc),
-		CloudSouls:    cloud.NewSoulPG(d.pool),
-		CloudTokens:   cloud.NewTokenPG(d.pool, cloud.DefaultBootstrapTokenTTL),
-		CloudCascade:  cloud.NewCascadePG(d.pool),
-		CloudUserdata: userdataProvider,
-		Vault:         d.vc,
-		Audit:         d.auditWriter,
+		Vault: d.vc,
+		Audit: d.auditWriter,
 		// `core.state.*` derives its Vault path from the same KV mount the
 		// ADR-064 write path uses (newSecretWriter below).
 		VaultMount: cfg.Vault.KVMount,
@@ -1211,8 +1189,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 		BootstrapInstall: userdataProvider,
 	})
 	logger.Info("keeper run: core modules registered",
-		slog.Int("count", len(coreReg.Names())),
-		slog.Any("cloud_providers", cloudAdapter.Providers()))
+		slog.Int("count", len(coreReg.Names())))
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -2249,38 +2226,6 @@ func (d *daemon) setupHeraldSvc(ctx context.Context) error {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-//
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-func (d *daemon) setupCloudCRUD(_ context.Context) error {
-	secretWriter, err := d.buildSecretWriter()
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keeper run: build provider secret writer: %v\n", err)
-		return errSetupFailed
-	}
-	provSvc, err := provider.NewService(provider.ServiceDeps{
-		Pool:            d.pool,
-		SecretWriter:    secretWriter,
-		AcceptPlaintext: d.acceptPlaintextSecrets(),
-	})
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keeper run: build provider service: %v\n", err)
-		return errSetupFailed
-	}
-	d.providerSvc = provSvc
-
-	profSvc, err := profile.NewService(d.pool)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keeper run: build profile service: %v\n", err)
-		return errSetupFailed
-	}
-	d.profileSvc = profSvc
-
-	d.logger.Info("keeper run: cloud CRUD services ready (ADR-017)")
-	return nil
-}
-
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
@@ -4643,8 +4588,6 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
-		ProviderSvc:      d.providerSvc,
-		ProfileSvc:       d.profileSvc,
 		ErrandDispatcher: d.errandDispatcher,
 		ErrandStore:      d.errandStore,
 		// Keeper daemon runtime wiring note.
@@ -5058,8 +5001,6 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
-			ProviderSvc: d.providerSvc,
-			ProfileSvc:  d.profileSvc,
 
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.

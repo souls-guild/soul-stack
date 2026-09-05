@@ -19,8 +19,8 @@ description: >-
 # would trigger section_key_conflict).
 #
 # ★ migrate_cluster DELTA (add-only on top of covenant) — migrate-SPECIFIC:
-#   - input  — provision (cloud-create, like create — covenant does NOT carry it) + source
-#     (external source: WHERE we migrate from) + verify (offset-lag gate). ★ install_method
+#   - input  — source (external source: WHERE we migrate from) + verify (offset-lag
+#     gate). ★ install_method
 #     was REMOVED from migrate-input: the install method caught up with the create redesign
 #     (2026-06-28) — it is now the author-context vars.install_method
 #     (covenant.compute.install reads default(vars.install_method,'binary')), NOT
@@ -37,74 +37,17 @@ description: >-
 #     it, both sides declare their own value in their delta.
 #   - state capture — the covenant carries no tasks, so the create capture set is written
 #     here too ([ADR-0084] F-B); the migrate-SPECIFIC one is seeded_from (the fact "loaded
-#     from an external cluster"). provisioned_* is captured inside the shared provision body
-#     and is therefore absent on a non-provision run.
+#     from an external cluster").
 #   - validate — ONLY the source.hosts invariant (migrate-specific). The create invariant
 #     (operator-extra ACL name is not a reserved one) — from covenant.
-#   - tasks — dispatcher by redis_type + provision-include (the same shared provision body
-#     service-level scenario/redis-provision.yml that create/main.yml also includes).
+#   - tasks — dispatcher by redis_type.
 extends: covenant
 
 # ── Input contract: migrate_cluster DELTA on top of covenant.input ──────────────────
 # The shared input contract (redis_type/version/memory_mb/persistence/connection_mode/
 # users/redis_settings/sentinel_*/topology + the absence of install_method/modules*
-# fields) — in covenant.yml. Here — provision (like create) + source/verify
-# (migrate-specific).
+# fields) — in covenant.yml. Here — source/verify (migrate-specific).
 input:
-  # ── cloud-provision: stand up VMs for the topology BEFORE migration (ADR-061, like create) ─
-  # ★ The schema is the SAME as create/main.yml::input.provision (covenant does NOT carry
-  # it — it's a delta on both create scenarios). When set and enabled=true —
-  # migrate_cluster in ONE run (a) creates VMs via core.cloud.created, (b) delivers the
-  # per-VM bootstrap token, (c) registers the created SIDs + BLOCKS waiting for onboarding
-  # (await_online + refresh_soulprint, ADR-061), after which the roster is re-resolved and
-  # the deploy+migration (redis-deploy-sentinel.yml + seed steps) rolls out onto the
-  # already-online hosts. Not set / enabled=false → migration against the EXISTING roster
-  # (bit-for-bit the S1-pilot behavior). The shared provision body is the service-level
-  # scenario/redis-provision.yml.
-  #
-  # ★ node_count is deliberately NOT here: the VM count is derived from the TOPOLOGY (like
-  # create) — the single source of truth for cluster size. ★ teardown (destroy) — NOT here.
-  provision:
-    type: object
-    required: false
-    description: >-
-      Stand up VMs for the topology BEFORE migration in the same run (ADR-061, like
-      create). enabled=true → first cloud-create + onboarding (the await_online barrier),
-      then deploy the new cluster + load from the external source. Not set /
-      enabled=false → migration against the existing roster.
-    additional_properties: false
-    properties:
-      enabled:
-        type: boolean
-        default: false
-        description: Main provision gate. false (or the section omitted) — the provision body is a placeholder-skip.
-      provider:
-        type: string
-        description: Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
-      profile:
-        type: string
-        description: Name of the VM profile in the profiles registry (VM resources/image/network).
-      await_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Upper bound on waiting for onboarding of the created VMs (the await_online
-          barrier, ADR-061; form <N>{s|m|h}). Not set → vars.provision_await_timeout
-          (default 10m). Capped from above by keeper.yml::max_await_timeout.
-      join_wait_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Ceiling on waiting for a freshly created VM to show up in Teleport before
-          delivering the token (core.bootstrap.delivered, retry-until-join; form
-          <N>{s|m|h}). Not set → vars.provision_join_wait_timeout (default 15m).
-      ssh_provider:
-        type: string
-        description: >-
-          Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
-          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered,
-          ADR-063).
-
   # ── source: external (old) cluster — WHERE we migrate from ────────────────────────
   # Coordinates and credentials of the EXTERNAL source. password_ref/tls_ca_ref are Vault
   # PATHS (NOT values): the scenario reads them via the author channel
@@ -305,29 +248,14 @@ tasks:
              'password': generate_secret({'length': 32})
            }) }
 
-  # ── provision (ADR-061, like create): cloud-create + onboarding BEFORE deploy+migration ──
-  # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE the cluster/sentinel branch:
-  # when enabled=true its steps (a) create VMs, (b) register+wait for onboarding with
-  # refresh_soulprint → the roster is re-resolved, and ONLY THEN does the sentinel branch
-  # (deploy of the new cluster + load from the external source) see the created hosts in
-  # soulprint.hosts. ★ THE SAME SHARED PROVISION BODY service-level
-  # (scenario/redis-provision.yml) that create/main.yml also includes — no duplicate
-  # (scenario-include falls back to the service-level file name, orchestration.md §6). when
-  # on input.provision is NOT static (object-input, not an enum) → the placeholder-skip
-  # form of include-when (not group-drop): at enabled=false/an omitted section the body's
-  # steps target no one. has()-guard — the section is optional (no-such-key without it). ★
-  # teardown is NOT here.
-  - include: redis-provision.yml
-    when: "has(input.provision) && input.provision.enabled"
-
   - include: cluster.yml
     when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
     when: "input.redis_type == 'sentinel'"
   # ── incarnation.state capture: the migrate_cluster DELTA ────────────────────────
   # The create state set (redis_type/redis_version/redis_config/tls/install/persistence/…)
-  # + provisioned_* is captured by the steps inherited from the covenant body (we stand up
-  # a cluster of the same shape). Here — ONLY seeded_from (migrate-specific): the FACT
+  # is captured by the steps inherited from the covenant body (we stand up a cluster of
+  # the same shape). Here — ONLY seeded_from (migrate-specific): the FACT
   # "loaded by migration from an external cluster". Without a timestamp (L0 determinism;
   # the migration time lives in state_history, a per-change snapshot, not in the state
   # itself). Shape from state_schema v10: {source_endpoints[], detached bool,

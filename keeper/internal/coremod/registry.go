@@ -2,8 +2,7 @@
 // docs/keeper/modules.md) into a single Registry.
 //
 // Modules (Registry key = base name, author form = base + state in address):
-// `core.soul` (`core.soul.registered`, docs/keeper/modules.md), `core.cloud`
-// (`core.cloud.created`/`core.cloud.destroyed`, ADR-017(a), Plugin.d-pending),
+// `core.soul` (`core.soul.registered`, docs/keeper/modules.md),
 // `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)), `core.state`
 // (`core.state.*`, [ADR-0083] §4 — the write of a service state field
 // carrying declared secrets, registered when Deps.Vault is present) and `core.choir`
@@ -21,7 +20,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
-	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cloud"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
@@ -33,7 +31,7 @@ import (
 //
 // Symmetric to soul/internal/coremod.Registry: key is module base-name WITHOUT
 // state suffix (`core.soul`, not `core.soul.registered`). Author form of task
-// address is base + state (`core.soul.registered`, `core.cloud.created`);
+// address is base + state (`core.soul.registered`, `core.vault.kv-read`);
 // config.SplitModuleAddr splits address into (base, state) in keeper_dispatch,
 // base goes to Lookup, state goes to pluginv1.ApplyRequest.state and is handled
 // inside implementation.
@@ -59,35 +57,6 @@ type Deps struct {
 	// (ADR-061), hot-reload-aware (read on each Apply). nil → defaults to
 	// config.DefaultMaxAwaitTimeout. Prod wraps config.Store.Get().
 	MaxAwaitTimeout func() string
-
-	// PluginHost is keeper/internal/coremod/cloud.PluginHost. Before Plugin.d
-	// completes, caller provides cloud.StubHost{}; interface is fixed early so
-	// Registry can build without Plugin.d dependency.
-	PluginHost cloud.PluginHost
-
-	// CloudResolver resolves param `provider` to driver name + plain credentials
-	// (A-flow): Provider registry + Vault. Prod is cloud.CredentialsResolverPG.
-	CloudResolver cloud.ProviderResolver
-
-	// CloudSouls / CloudTokens are narrow PG-adapters for cloud module.
-	// Separated from SoulStore: module `core.cloud` calls different methods
-	// (Insert + UpdateStatus), non-overlapping with `core.soul`
-	// (SelectBySID + Insert + UpdateCoven).
-	CloudSouls  cloud.SoulStore
-	CloudTokens cloud.TokenStore
-
-	// CloudCascade is cascade handler for `destroyed` state (ADR-017).
-	// Implemented via [cloud.CascadePG] on pgxpool.Pool. Allowed to be nil in
-	// test builds without destroyed scenarios.
-	CloudCascade cloud.Cascader
-
-	// CloudUserdata is cloud-init userdata resolver for scenario param
-	// `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
-	// Prod implementation wraps cloudinit.Resolver+GenerateUserdata in
-	// daemon (reads current KeeperConfig.CloudInit snapshot + Vault.ReadKV).
-	// nil is allowed: `generate_userdata: true` returns error,
-	// explicit `userdata:` continues to work unchanged.
-	CloudUserdata cloud.UserdataProvider
 
 	// Vault is vault-client for `core.vault` (kv-read reads; kv-present
 	// generate-if-absent reads+writes). *vault.Client satisfies both;
@@ -145,7 +114,7 @@ type Deps struct {
 
 	// BootstrapIssuer is the transactional ready-made-VM onboarding backend for
 	// `core.bootstrap.issued`. It needs only Keeper Postgres and is independent
-	// of CloudDriver and delivery transport. nil disables the issued state.
+	// of the delivery transport. nil disables the issued state.
 	BootstrapIssuer bootstrap.Issuer
 
 	// BootstrapProviders / BootstrapHostCAs / BootstrapDial are dependencies
@@ -176,39 +145,32 @@ type Deps struct {
 	// delivery unaffected.
 	BootstrapInstall bootstrap.InstallResolver
 
-	// Audit is single audit-writer for keeper-side modules (cloud/vault write
-	// audit events; soul/choir do not). nil allowed (modules skip write and
+	// Audit is single audit-writer for keeper-side modules (vault/bootstrap/cert
+	// write audit events; soul/choir do not). nil allowed (modules skip write and
 	// continue), but prod wire-up from main should provide real
 	// keeper/internal/auditpg or auditmulti.
 	Audit AuditWriter
 }
 
-// AuditWriter is common type for audit-writing modules (cloud/vault/bootstrap/cert);
+// AuditWriter is common type for audit-writing modules (vault/bootstrap/cert);
 // matches shared/audit.Writer.
 type AuditWriter interface {
-	cloud.AuditWriter
 	vault.AuditWriter
 	bootstrap.AuditWriter
 	cert.AuditWriter
 }
 
 // Default builds Registry with keeper-side core modules: unconditionally
-// core.soul / core.cloud / core.vault, plus core.choir if
-// Deps.ChoirStore present. Caller provides real deps (PG-pool via
-// cloud.NewSoulPG / cloud.NewTokenPG / soul.NewPGStore, vault-client from
+// core.soul / core.vault, plus core.choir if Deps.ChoirStore present. Caller
+// provides real deps (PG-pool via soul.NewPGStore, vault-client from
 // keeper/internal/vault, choir.NewPGStore).
 func Default(d Deps) *Registry {
-	cloudMod := cloud.New(d.PluginHost, d.CloudResolver, d.CloudSouls, d.CloudTokens, d.CloudCascade, d.Audit)
-	if d.CloudUserdata != nil {
-		cloudMod = cloudMod.WithUserdata(d.CloudUserdata)
-	}
 	// core.soul.registered with onboarding barrier (ADR-061): presence-checker +
 	// await_timeout ceiling provider optional. nil presence →
 	// step with await_online: true fails (test/dev builds without Redis).
 	soulMod := soul.New(d.SoulStore).WithPresence(d.SoulPresence, d.MaxAwaitTimeout)
 	mods := map[string]module.SoulModule{
 		soul.Name:  soulMod,
-		cloud.Name: cloudMod,
 		vault.Name: vault.New(d.Vault, d.Audit),
 	}
 	// `core.state.*` ([ADR-0083] §4) needs BOTH: the Vault client, because

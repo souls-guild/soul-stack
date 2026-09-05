@@ -60,10 +60,6 @@ fixtures:
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
-    # ★ provision disabled (default-on: an omitted section = ENABLED; the case deploys onto
-    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: sentinel
     # version is the fixed enum of builds released to Nexus (major < 8 → module
     # version-gate not active). install_method=package EXPLICITLY (redesign default is

@@ -88,7 +88,6 @@ func (h *Host) SpawnBeacon(ctx context.Context, d Discovered) (*BeaconPlugin, er
 // and validation logic.
 const (
 	KindSoulModule  = sharedplugin.KindSoulModule
-	KindCloudDriver = sharedplugin.KindCloudDriver
 	KindSSHProvider = sharedplugin.KindSSHProvider
 	KindSoulBeacon  = sharedplugin.KindSoulBeacon
 )

@@ -64,11 +64,11 @@ The SID in the request is **not transmitted** as identity-claim - identity autho
 
 ## 4. Data model (Postgres)
 
-The Augur registry lives in Postgres, managed via OpenAPI / MCP - similar to [Provider / Profile](cloud.md) ([architecture.md → Artifacts](../architecture.md): runtime-state → Postgres, not git). Two tables.
+The Augur registry lives in Postgres, managed via OpenAPI / MCP ([architecture.md → Artifacts](../architecture.md): runtime-state → Postgres, not git). Two tables.
 
 ### 4.1 Table `omens` - registry of external systems
 
-**Omen** is an external system to which Augur mediates access (one Vault-mount, one Prometheus, one ELK cluster). Analogous to [Provider](cloud.md) for clouds.
+**Omen** is an external system to which Augur mediates access (one Vault-mount, one Prometheus, one ELK cluster).
 
 | Column | Type | Meaning |
 |---|---|---|
@@ -77,7 +77,7 @@ The Augur registry lives in Postgres, managed via OpenAPI / MCP - similar to [Pr
 | `endpoint` | `TEXT` | External system URL (`https://vault.internal:8200`). |
 | `auth_ref` | `TEXT` (vault-ref) | **Always** `vault:<mount>/<path>`-link to the master-credential Keeper (Vault AppRole-secret / pre-scoped read-key). **Master-credential is not stored in the database** - only a vault-ref for it. The vault-ref format is [config.md](config.md) (diagnostics `vault_ref_invalid_format`). |
 
-**Invariant:** `auth_ref` is always vault-ref. Plaintext-credential in `omens` is prohibited - symmetrically `metrics.auth.basic.password_ref` ([config.md → metrics](config.md#metrics)) and `provider.credentials_ref` ([cloud.md](cloud.md)).
+**Invariant:** `auth_ref` is always vault-ref. Plaintext-credential in `omens` is prohibited - symmetrically `metrics.auth.basic.password_ref` ([config.md → metrics](config.md#metrics)).
 
 ### 4.2 Table `rites` - grant / policy-mapping
 
@@ -263,7 +263,6 @@ Solutions passed through user + architect (logged as accepted, not open Q):
 - [architecture.md → ADR-025](../adr/0025-augur.md) - design fixation, 2-phase, exception from ADR-012(d).
 - [naming-rules.md → Augur / Omen / Rite](../naming-rules.md) - name dictionary, source_type enum, proto-names, RBAC-perms, audit-events, PG tables.
 - [storage.md](storage.md) — Keeper Postgres registries (where `omens` / `rites` will go).
-- [cloud.md](cloud.md) - sample Provider / Profile registry in Postgres, managed via API/MCP.
 - [modules.md](modules.md) - `core.vault.kv-read` (render phase, generalized by Augur for live access).
 - [rbac.md](rbac.md) — RBAC-perms (`omen.*` / `rite.*`).
 - [operator-api.md](operator-api.md) - OpenAPI side of CRUD Omen / Rite (start as stub directory).

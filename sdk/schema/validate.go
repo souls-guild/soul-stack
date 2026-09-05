@@ -109,14 +109,14 @@ func Validate(doc Document) []Issue {
 			Level: LevelError, Phase: PhaseSchema, Path: "$.kind",
 			Code:    "missing_required_field",
 			Message: "kind is required at top-level",
-			Hint:    "set kind: soul_module | cloud_driver | ssh_provider | soul_beacon",
+			Hint:    "set kind: soul_module | ssh_provider | soul_beacon",
 		})
-	case KindSoulModule, KindCloudDriver, KindSSHProvider, KindSoulBeacon:
+	case KindSoulModule, KindSSHProvider, KindSoulBeacon:
 	default:
 		out = append(out, Issue{
 			Level: LevelError, Phase: PhaseSchema, Path: "$.kind",
 			Code:    "kind_invalid",
-			Message: fmt.Sprintf("kind=%q is not in {soul_module,cloud_driver,ssh_provider,soul_beacon}", doc.Kind),
+			Message: fmt.Sprintf("kind=%q is not in {soul_module,ssh_provider,soul_beacon}", doc.Kind),
 		})
 	}
 
@@ -140,16 +140,6 @@ func Validate(doc Document) []Issue {
 	case KindSoulModule:
 		out = append(out, validateModules(doc)...)
 		out = append(out, rejectForeignKindFields(doc, KindSoulModule)...)
-	case KindCloudDriver:
-		if doc.ProfileSchema == nil {
-			out = append(out, Issue{
-				Level: LevelError, Phase: PhaseSchema, Path: "$.profile_schema",
-				Code:    "profile_schema_missing",
-				Message: "profile_schema is required for kind=cloud_driver",
-				Hint:    "embed the JSON Schema (draft 2020-12) describing the VM profile parameters",
-			})
-		}
-		out = append(out, rejectForeignKindFields(doc, KindCloudDriver)...)
 	case KindSSHProvider:
 		if doc.ProviderKind == "" {
 			out = append(out, Issue{
@@ -170,7 +160,7 @@ func Validate(doc Document) []Issue {
 }
 
 // rejectForeignKindFields catches a document carrying a block that belongs to another
-// kind — `states` on a cloud_driver, `profile_schema` on a beacon. Each kind gets
+// kind — `modules` on an ssh_provider, `provider_kind` on a beacon. Each kind gets
 // exactly the fields it can act on, so a misplaced block is a mistake rather than
 // ignorable noise.
 func rejectForeignKindFields(doc Document, kind Kind) []Issue {
@@ -187,13 +177,6 @@ func rejectForeignKindFields(doc Document, kind Kind) []Issue {
 			Level: LevelError, Phase: PhaseSchema, Path: "$.provider_kind",
 			Code:    "provider_kind_not_allowed",
 			Message: "provider_kind is only valid for kind=ssh_provider",
-		})
-	}
-	if doc.ProfileSchema != nil && kind != KindCloudDriver {
-		out = append(out, Issue{
-			Level: LevelError, Phase: PhaseSchema, Path: "$.profile_schema",
-			Code:    "profile_schema_not_allowed",
-			Message: "profile_schema is only valid for kind=cloud_driver",
 		})
 	}
 	if doc.ParamsSchema != nil && kind != KindSSHProvider && kind != KindSoulBeacon {

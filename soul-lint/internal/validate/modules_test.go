@@ -19,7 +19,7 @@ const aclSchemaJSON = `{"kind":"soul_module","protocol_version":1,` +
 	`"description":"the user exists","input":{` +
 	`"host":{"type":"string","required":true},"port":{"type":"int"}}}}}]}`
 
-const cloudSchemaJSON = `{"kind":"cloud_driver","protocol_version":1,"profile_schema":{"type":"object"}}`
+const sshSchemaJSON = `{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`
 
 // A document that parses but does not validate: a secret with no vault pattern.
 const invalidSchemaJSON = `{"kind":"soul_module","protocol_version":1,` +
@@ -134,7 +134,7 @@ func TestLoadModuleSchemas_UnreadableBindingsAreFatal(t *testing.T) {
 	}
 	truncated := writeSchemaFile(t, dir, "truncated", `{"kind":"soul_module","protocol`)
 	invalid := writeSchemaFile(t, dir, "invalid", invalidSchemaJSON)
-	cloud := writeSchemaFile(t, dir, "cloud", cloudSchemaJSON)
+	ssh := writeSchemaFile(t, dir, "ssh", sshSchemaJSON)
 
 	for _, tc := range []struct{ name, binding string }{
 		{"missing path", "redis=" + filepath.Join(dir, "nope", "schema.json")},
@@ -142,7 +142,7 @@ func TestLoadModuleSchemas_UnreadableBindingsAreFatal(t *testing.T) {
 		{"artifact with no trailer", "redis=" + noTrailer},
 		{"truncated document", "redis=" + truncated},
 		{"document that fails validation", "redis=" + invalid},
-		{"wrong kind", "redis=" + cloud},
+		{"wrong kind", "redis=" + ssh},
 	} {
 		if _, err := LoadModuleSchemas([]string{tc.binding}); err == nil {
 			t.Errorf("%s was accepted; an unreadable schema must not look like a clean pass", tc.name)

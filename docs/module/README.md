@@ -91,7 +91,6 @@ Dispatcher `on: keeper` - executed on the Keeper side, not on the host. Specka -
 | Module | States | Destination |
 |---|---|---|
 | [`core.soul.registered`](core/soul/README.md) | `registered` | Linking SID to coven tags of the souls registry. |
-| [`core.cloud.provisioned`](core/cloud/README.md) | `created` / `destroyed` | Cloud instance via CloudDriver plugin. |
 | [`core.choir`](core/choir/README.md) | `present` / `absent` | Voice membership (SID) in the Choir incarnation (ADR-044). |
 | [`core.vault`](core/vault/README.md) (author-addresses `core.vault.kv-read` / `core.vault.kv-present`) | `kv-read` (verb) / `kv-present` | `kv-read` — reading the secret from Vault KV (v1/v2, auto-detect) on the keeper side; `kv-present` — generate-if-absent (generate the missing secret using password-policy, [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). |
 

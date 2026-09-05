@@ -72,7 +72,7 @@ func consolePlaneRouter(t *testing.T, enforcer RBACProvider, planeEnabled func()
 		handlers.TelemetrySpecStub(),
 		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
 		stubServiceHandler(t), nil, nil, stubAugurHandler(t), stubOracleHandler(t),
-		nil, nil, nil, nil, nil, nil, nil, nil, nil, nil,
+		nil, nil, nil, nil, nil, nil, nil, nil,
 		handlers.NewModuleCatalogHandler(nil, nil),
 		handlers.NewModuleFormPrepHandler(nil, nil),
 		handlers.NewPermissionCatalogHandler(nil),

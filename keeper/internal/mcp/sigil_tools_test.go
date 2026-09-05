@@ -90,7 +90,7 @@ func sigilSlotFixture() *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
 		BinaryPath:   "/cache/hetzner/current/hetzner",
 		BinarySHA256: fixtureSHA256,
-		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
+		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 	}
 }
 
@@ -424,7 +424,7 @@ func TestPluginList_Success(t *testing.T) {
 		{Alias: "hetzner", Source: mcpSigilSource, Ref: "v1.0.0", SHA256: "abc",
 			AllowedByAID: "archon-alice", AllowedAt: now,
 			// signature/schema are on the record, but List does not return them.
-			Signature: []byte("sig"), Schema: []byte(`{"kind":"cloud_driver"}`)},
+			Signature: []byte("sig"), Schema: []byte(`{"kind":"ssh_provider"}`)},
 	}}
 	h, _ := newSigilHandler(t, sigilAdminCfg(), store, fakeSigilSlots{})
 	resp := callTool(t, h, "archon-alice", "keeper.plugin.list", `{}`)

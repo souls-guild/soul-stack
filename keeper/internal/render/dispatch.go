@@ -88,7 +88,7 @@ const keeperOnLiteral = "keeper"
 // executes locally on the keeper instance via the scenario-runner.
 //
 // The side follows from the MODULE, not from the task (NIM-747): the core module
-// sets are disjoint — `core.state`/`core.cloud`/`core.soul`/`core.vault`/
+// sets are disjoint — `core.state`/`core.soul`/`core.vault`/
 // `core.choir`/`core.bootstrap`/`core.cert` on this side, the other twenty-one on
 // the Soul side — so the address alone decides, and an author restating it in
 // `on:` was telling the engine what it already knew. `on:` is back to its one
@@ -160,7 +160,7 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 //
 // incarnation.state — read-only pre-run snapshot (RenderInput.State, the same
 // stateBefore under FOR UPDATE, see [incarnationVars]): a keeper task
-// (core.cloud.destroyed etc.) reads `incarnation.state.<path>` in params just
+// (a teardown step etc.) reads `incarnation.state.<path>` in params just
 // like Soul-side. The snapshot is invariant (fixed once, not accumulated
 // across passages). nil State → the `state` key isn't set:
 // `incarnation.state.<x>` gives a normal no-such-key (push/trial without

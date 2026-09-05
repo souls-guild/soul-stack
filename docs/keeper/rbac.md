@@ -609,7 +609,7 @@ Managing **Synod groups** (groups of archons, banding roles - the intermediate l
 | `incarnation.unlock` | Removal of `error_locked` status after manual disassembly of the consequences of a partial failure. |
 | `incarnation.label-set` | Replace the display caption of an incarnation (`PUT /v1/incarnations/{id}/label`; MCP `keeper.incarnation.label-set`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest WRITE in the catalog: nothing an operator or a run acts on moves as a result. Note what it is not narrow about: the `200` body is the full record (the same view the corresponding read returns, masked the same way), so holding `<resource>.label-set` also confers a read of the rows it can caption. That follows `incarnation.traits-set`, which returns the same view, and it is why the right is scoped like the other mutations of its registry rather than being handed out freely. Scope: the same incarnation gate (`coven=`/`service=`/`incarnation=` by path-`name`) as every other incarnation mutation, and **only** that gate - unlike `incarnation.traits-set` there is no second, pair-level check, because a caption is in no scope dimension and so grants no visibility to anyone. No status gate either: it is allowed while the incarnation is `applying` or `error_locked`, since no run reads it. Audit event `incarnation.label_changed` (`{id, old_label, new_label}`). |
 | `incarnation.upgrade` | Transferring instance to new `state_schema_version` (running migrations, [migrations.md](../migrations.md)). |
-| `incarnation.destroy` | Delete instance (with tombstone period for cloud VMs, [cloud.md](cloud.md)). |
+| `incarnation.destroy` | Delete instance (runs the service's `destroy` scenario, when it ships one). |
 | `incarnation.traits-set` | Holistic replacement of operator-set key-value trait tags of incarnation (`incarnation.traits` jsonb - source of truth, [ADR-060](../adr/0060-traits.md) R1 slice a) via `PUT /v1/incarnations/{id}/traits`. It labels the incarnation and only the incarnation - member hosts get no projection and inherit nothing ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)); the per-host counterpart is the first-class `soul.traits-assign`. Action - kebab (`traits-set`), grammar `<resource>.<action>` (pattern `soul.traits-assign`). Authorization by **two** gates, the same pair as the per-host write (NIM-587): gate (a) the incarnation-scope-gate (`coven=`/`service=`/`incarnation=` by path-`name`, the same selector as the other incarnation mutations), **plus gate (b)** - every pair being stamped must lie inside the operator's own trait-scope, refused `422` otherwise. Gate (b) is not optional here: `trait.<key>` is a live read-side scope dimension for incarnations as well (`incScopeColumns.Traits`), so stamping a pair hands every role scoped on it sight of this incarnation - and, since [NIM-280](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only), of its members through a `trait` Rite. Audit event `incarnation.traits_changed` (KEYS only, not values). MCP mirror - `keeper.incarnation.traits-set`. |
 | `incarnation.view-secrets` | Reveal the plaintext value of an incarnation secret the service declared in its `state_schema` as a field with `type: secret` ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §2 — the author writes no Vault path, Keeper derives it from `(service, incarnation, field, key)`; the `revealable_secrets` registry this replaced is deleted). POST `.../secrets/reveal` + discovery GET `.../secrets/revealable`. Strictly privileged `incarnation.get` (removal of mask). Selectors - `coven=`/`service=`/`incarnation=`. Audit `incarnation.secret_revealed` (no value). |
 | `incarnation.bind-member` | Bind already-onboarded, **connected** Souls to the incarnation's roster (`POST /v1/incarnations/{id}/members`, MCP `keeper.incarnation.bind-member`; [ADR-008 amendment 2026-07-28](../adr/0008-coven-stable-tags.md), NIM-209). Selectors - `coven=`/`service=`/`incarnation=` by path-`name`, as other incarnation mutations. **The route gate is only HALF the authorization** - see § Incarnation membership below. Idempotent (re-bind → `already_member`). Audit `incarnation.member_bound`. |
@@ -890,45 +890,6 @@ Read-only access to the audit event feed (`audit_log`) via `GET /v1/audit` (UI i
 |---|---|
 | `audit.read` | Reading `audit_log` with filters (`type` multi-value, `source` multi-value, `archon_aid`, `correlation_id`, `started_after`/`started_before`). Selector - NoSelector in MVP; per-AID/coven-scope on audit-trail - a separate slice if necessary. |
 
-### Cloud (8) — [cloud.md](cloud.md)
-
-> ⚠ **All eight permissions in this section are slated for removal — epic NIM-757, decided 2026-09-01, NOT
-> implemented.** The Provider and Profile registries go with the CloudDriver contract; a cloud driver becomes an
-> ordinary SoulModule plugin declaring `side: keeper`
-> ([ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
->
-> ★ **Removing a permission is a breaking change whose shape is worse than "a lost grant".** The catalog is a
-> closed enum: `ParsePermission` rejects an unknown name, `NewEnforcerFromSnapshot` returns on the **first**
-> unparseable string in the whole snapshot, and the daemon turns that into a start-up refusal. So ONE surviving
-> `provider.create` row on one obscure role does not degrade one grant — it prevents the enforcer from being
-> built, keeper does not start, and the `role.*` API that could delete the row is not serving: a cluster-wide
-> authorization lockout with no in-band remedy. A running cluster hides it, because a failed TTL-refresh logs
-> and keeps serving on the previous enforcer, so the fault surfaces at the next restart. Grants live in Postgres
-> (`rbac_role_permissions`), **not** in `keeper.yml` — the `rbac:` key was hard-cut by ADR-028(g).
->
-> The procedure is settled by precedent: `keeper/migrations/109_drop_permission_update_hosts.up.sql` (NIM-330).
-> Catalog entries and the data migration ship in the **same change**; the DELETE matches **both** the bare and
-> the scoped form (` on ` is the pinned separator — migration 095 matched only the bare form and would have
-> missed every scoped grant); a role emptied to zero permissions is **kept, not dropped** (it may carry
-> memberships or be a derived role's parent); `provider.*` / `profile.*` **wildcard** grants need no fix, since
-> a wildcard expands over whatever the catalog holds at load time.
->
-> **The rows below are live and mirror the catalog** — `catalog.go` still counts them and so does
-> `catalog_total_test.go`.
-
-CRUD registries of Cloud-Providers (`providers`) and Cloud-Profiles (`profiles`, ADR-017). Full surface **implemented** (REST `/v1/providers*` + `/v1/profiles*` and MCP `keeper.provider.*` / `keeper.profile.*`). The selector is **NoSelector** (CRUD operates on the registry itself, pattern `push-provider.*` / `service.*`). **`update`-permission NO** - Provider/Profile are immutable (change parameters = `delete` + `create`); read-visibility (list + get) gates one permission `*.read` (pattern `operator.list`↔`read`). Those who mutate write audit, read-only - no.
-
-| Permission | Semantics | Audit-event |
-|---|---|---|
-| `provider.create` | Creating a Provider record in Postgres (`POST /v1/providers`) - a configured cloud account. `409 provider-already-exists` per take `name`; `credentials_ref` must be `vault:<path>` (creds are not resolved in the API). | `provider.created` |
-| `provider.read` | Enumerating Providers (`GET /v1/providers`) and reading one (`GET /v1/providers/{id}`) is the one-permission-on-read pattern. | — (read-only) |
-| `provider.delete` | Deleting Provider record (`DELETE /v1/providers/{id}`). `409 provider-has-profiles`, if the Provider is referenced by Profiles (FK `ON DELETE RESTRICT`, migration 020) - first delete dependent Profiles. | `provider.deleted` |
-| `profile.create` | Creating a Profile record (`POST /v1/profiles`) - a reusable VM-spec on top of the Provider. `409 profile-already-exists` per take `name`; `422 validation-failed` to a reference to a non-existent Provider (FK). | `profile.created` |
-| `profile.read` | Enumerating Profiles (`GET /v1/profiles`, optional filter `provider=`) and reading one (`GET /v1/profiles/{id}`). | — (read-only) |
-| `profile.delete` | Deleting Profile record (`DELETE /v1/profiles/{id}`). | `profile.deleted` |
-| `provider.label-set` | Replace the display caption (`PUT /v1/providers/{id}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. This is the registry's ONLY mutation: everything else about a Provider stays immutable, and a caption is the one field for which the "partial mutation of a live cloud spec" argument does not apply, because nothing reads it. It is not the `<entity>` segment of `secret/provider/<entity>/credentials`. (The self-onboard FQDN prediction is not at risk either, but for a different reason worth stating precisely: `<name>-<index>.<fqdn_suffix>` takes its `<name>` from the `core.cloud.provisioned` step's own `name` param, not from the registry row — the Provider contributes only `fqdn_suffix`.) | `provider.label_changed` |
-| `profile.label-set` | Replace the display caption (`PUT /v1/profiles/{id}/label`). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` clears it and consumers fall back to showing the identifier. It participates in **nothing derived** - no Vault path, no RBAC scope, no snapshot directory, no CEL root ([ADR-0085](../adr/0085-entity-id-and-label.md)) - so this is the narrowest write in the catalog: it can move a screen and nothing else. Same standing as `provider.label-set`: the registry's only mutation. | `profile.label_changed` |
-
 ### Augur (7) - [ADR-025](../adr/0025-augur.md) / [augur.md](augur.md)
 
 CRUD registries of the external access broker Augur (Omen - external system, Rite - grant). OpenAPI / MCP surface starts as **stub directory** ([augur.md](augur.md)); permissions are normalized here.
@@ -1076,16 +1037,20 @@ role: soul-reader
   permissions: ["soul.list", "incarnation.list", "incarnation.get"]
   operators:   ["archon-monitor-01"]
 
-role: cloud-admin
+role: service-curator
   permissions:
-    - "provider.create"
-    - "provider.read"
-    - "provider.delete"
-    - "profile.create"
-    - "profile.read"
-    - "profile.delete"
-  operators:   ["archon-cloud-01"]
+    - "service.create"
+    - "service.read"
+    - "service.delete"
+  operators:   ["archon-catalog-01"]
 ```
+
+> The `cloud-admin` example that stood here granted the six `provider.*` /
+> `profile.*` rights. Those registries were removed with the CloudDriver contract
+> (NIM-761), so the role gated nothing. The permission NAMES survive in the
+> catalogue — `keeper/internal/rbac/catalog.go` never removes a name, or an
+> operator role that still holds one would stop parsing — but granting one buys
+> no access, because there is no route left to reach.
 
 **Complicated role - with selectors:**
 
@@ -1139,7 +1104,6 @@ role: redis-fleet
 - [operator-api.md](operator-api.md) - OpenAPI side: HTTP endpoints, 1:1 mapping endpoint ↔ permission ↔ MCP-tool.
 - [mcp-tools.md](mcp-tools.md) - MCP side: tools directory, declaration format, async-convention, error mapping.
 - [push.md](push.md) - push under a single RBAC.
-- [cloud.md](cloud.md) - RBAC for cloud operations.
 - [storage.md](storage.md) - registry `operators` and tables `rbac_roles` / `rbac_role_permissions` / `rbac_role_operators` in Postgres.
 - [architecture.md → End-to-end requirements](../architecture.md).
 - [architecture.md → ADR-013](../adr/0013-bootstrap-archon.md) and [ADR-014](../adr/0014-operator-identity.md) - bootstrap of the first Archon, credential form, registry `operators`.

@@ -27,8 +27,8 @@ type mapFieldAddr struct {
 }
 
 // TestS7Amend_MapValueItemsDeclared — flat string maps carry items.type=string
-// (KEY→VALUE editor in the UI), and an arbitrary cloud-profile has NO items (JSON
-// editor). The source of truth is the built-in coremanifest.
+// (KEY→VALUE editor in the UI), and a map whose value shape is not uniform has NO
+// items (JSON editor). The source of truth is the built-in coremanifest.
 func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 	reg := coremanifest.Default()
 
@@ -67,16 +67,18 @@ func TestS7Amend_MapValueItemsDeclared(t *testing.T) {
 		}
 	}
 
-	// cloud profile — deliberately without items (arbitrary structure → JSON in the UI).
-	profile, ok := lookup(mapFieldAddr{"core.cloud", "created", "profile"})
+	// The kv-present policy — deliberately without items: its values are a mix of
+	// int and string (length, charset, allowed_chars), so there is no single
+	// items.type to declare and the UI has to fall back to a JSON editor.
+	policy, ok := lookup(mapFieldAddr{"core.vault", "kv-present", "policy"})
 	if !ok {
-		t.Fatal("core.cloud.created.profile not found in coremanifest")
+		t.Fatal("core.vault.kv-present.policy not found in coremanifest")
 	}
-	if profile.Type != "map" {
-		t.Errorf("core.cloud.created.profile: expected type=map, got %q", profile.Type)
+	if policy.Type != "map" {
+		t.Errorf("core.vault.kv-present.policy: expected type=map, got %q", policy.Type)
 	}
-	if profile.Items != nil {
-		t.Errorf("core.cloud.created.profile: expected NO items (freeform structure), got %+v", profile.Items)
+	if policy.Items != nil {
+		t.Errorf("core.vault.kv-present.policy: expected NO items (non-uniform values), got %+v", policy.Items)
 	}
 }
 

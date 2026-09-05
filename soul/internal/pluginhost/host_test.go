@@ -122,17 +122,17 @@ func TestSpawnRejectsKindMismatch(t *testing.T) {
 		t.Fatalf("NewHost: %v", err)
 	}
 	d := Discovered{
-		Alias:      "aws",
-		Doc:        &Document{Kind: KindCloudDriver, ProtocolVersion: 1},
-		BinaryPath: "/nonexistent/soul-cloud-aws",
+		Alias:      "vault-ssh",
+		Doc:        &Document{Kind: KindSSHProvider, ProtocolVersion: 1},
+		BinaryPath: "/nonexistent/soul-ssh-vault",
 		Dir:        "/nonexistent",
 	}
 	_, err = h.Spawn(context.Background(), d)
 	if err == nil {
-		t.Fatal("expected kind-mismatch denial for cloud_driver under soul-host")
+		t.Fatal("expected kind-mismatch denial for ssh_provider under soul-host")
 	}
-	if !contains(err.Error(), "soul_module") || !contains(err.Error(), string(KindCloudDriver)) {
-		t.Errorf("error %q should mention expected kind soul_module and actual %q", err.Error(), KindCloudDriver)
+	if !contains(err.Error(), "soul_module") || !contains(err.Error(), string(KindSSHProvider)) {
+		t.Errorf("error %q should mention expected kind soul_module and actual %q", err.Error(), KindSSHProvider)
 	}
 }
 
@@ -145,8 +145,8 @@ func TestDiscoverMissingRoot(t *testing.T) {
 	}
 }
 
-// TestDiscoverFiltersNonSoulKind — Discover over a root holding one cloud_driver and
-// one soul_module returns only the soul_module's modules; the cloud plugin goes into
+// TestDiscoverFiltersNonSoulKind — Discover over a root holding one ssh_provider and
+// one soul_module returns only the soul_module's modules; the ssh plugin goes into
 // warnings (the Soul host's FilterByKinds branch).
 func TestDiscoverFiltersNonSoulKind(t *testing.T) {
 	if runtime.GOOS == "windows" {
@@ -161,24 +161,24 @@ func TestDiscoverFiltersNonSoulKind(t *testing.T) {
 	}
 	stampArtifact(t, buildEchoPlugin(t, soulDir))
 
-	// cloud_driver — should be filtered into warnings. The artifact is a copy of the
-	// echo binary stamped with a cloud_driver document, so the slot is well-formed
+	// ssh_provider — should be filtered into warnings. The artifact is a copy of the
+	// echo binary stamped with an ssh_provider document, so the slot is well-formed
 	// and only the kind disqualifies it.
-	cloudDir := filepath.Join(root, "acme-aws")
-	if err := os.Mkdir(cloudDir, 0o755); err != nil {
-		t.Fatalf("mkdir cloud: %v", err)
+	sshDir := filepath.Join(root, "acme-vault")
+	if err := os.Mkdir(sshDir, 0o755); err != nil {
+		t.Fatalf("mkdir ssh: %v", err)
 	}
-	cloudBin := buildEchoPlugin(t, cloudDir)
-	cloudDoc, err := schema.Marshal(schema.Document{
-		Kind:            schema.KindCloudDriver,
+	sshBin := buildEchoPlugin(t, sshDir)
+	sshDoc, err := schema.Marshal(schema.Document{
+		Kind:            schema.KindSSHProvider,
 		ProtocolVersion: 1,
-		ProfileSchema:   map[string]any{"type": "object"},
+		ProviderKind:    "vault_ssh_ca",
 	})
 	if err != nil {
-		t.Fatalf("marshal cloud schema: %v", err)
+		t.Fatalf("marshal ssh schema: %v", err)
 	}
-	if err := schema.WriteTrailerFile(cloudBin, cloudDoc); err != nil {
-		t.Fatalf("stamp cloud artifact: %v", err)
+	if err := schema.WriteTrailerFile(sshBin, sshDoc); err != nil {
+		t.Fatalf("stamp ssh artifact: %v", err)
 	}
 
 	found, warns, err := Discover(root)
@@ -193,14 +193,14 @@ func TestDiscoverFiltersNonSoulKind(t *testing.T) {
 			t.Errorf("discovered kind = %q, want soul_module", d.Kind())
 		}
 	}
-	var sawCloudWarn bool
+	var sawSSHWarn bool
 	for _, w := range warns {
-		if contains(w, "acme-aws") {
-			sawCloudWarn = true
+		if contains(w, "acme-vault") {
+			sawSSHWarn = true
 		}
 	}
-	if !sawCloudWarn {
-		t.Errorf("expected a warning about the filtered cloud_driver, warns=%v", warns)
+	if !sawSSHWarn {
+		t.Errorf("expected a warning about the filtered ssh_provider, warns=%v", warns)
 	}
 }
 

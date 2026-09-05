@@ -147,77 +147,6 @@ input:
       port 6379 (DragonFly has no separate tls port). Vault paths for cert/key/ca are taken from
       service vars (tls_cert_ref/tls_key_ref/tls_ca_ref).
 
-  # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Variant A) ─
-  # ★ provision (redis pattern, user decision 2026-07-01: DragonFly cloud-provision
-  # FOLLOWS the redis pattern; provision is required in the base create): an object input "create machines".
-  # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
-  # via core.cloud.created (keeper-side), (b) delivers a per-VM bootstrap token over SSH,
-  # (c) registers the created SIDs + BLOCKINGLY waits for onboarding (core.soul.registered
-  # await_online + refresh_soulprint, ADR-061), after which the roster is re-resolved and
-  # the sentinel body rolls the DragonFly role onto now-online hosts.
-  # enabled=false — dragonfly-provision.yml targets no one, the run works against the
-  # EXISTING roster (deploy onto existing souls — the previous service profile).
-  #
-  # ★ provider/profile/await_timeout/ssh_provider the operator MAY leave unset — they
-  # fall back to vars.provision_* (dragonfly-provision.yml: default(input.provision.X,
-  # vars.provision_X)). By default the operator does NOT pick them manually (form hidden).
-  #
-  # ★ There is deliberately NO node_count here: the VM count is derived from the sentinel
-  # TOPOLOGY (1+replicas_per_master) — the single source of truth for cluster size. A separate
-  # node_count would drift out of sync with size-guard (assert size(soulprint.hosts) == the same formula).
-  # ★ teardown (destroy) — NOT here (separate scenario, cascade core.cloud.destroyed).
-  provision:
-    type: object
-    required: false
-    # ★ DEFAULT-ON (redis pattern): provision is ENABLED by default. object top-level default
-    # = {enabled: true} → an operator who does NOT pass the provision section gets cloud-create
-    # (the standard create path — bring up VMs for the topology). To roll onto a READY roster without
-    # provision, the operator sets provision: {enabled: false} EXPLICITLY. The default is duplicated on
-    # the nested enabled (flat mergeInputDefaults does not descend into properties of a partially
-    # specified object — the duplicate keeps the "on by default" semantics uniformly readable).
-    default:
-      enabled: true
-    description: >-
-      Bring up VMs for the topology in the same create run (ADR-061). enabled=true →
-      first cloud-create + onboarding (await_online barrier), then the DragonFly role onto the
-      created hosts. enabled=false → run against the existing roster.
-    additional_properties: false
-    properties:
-      enabled:
-        type: boolean
-        default: true
-        description: Main provision gate. DEFAULT true (default-on). false — dragonfly-provision.yml targets no one.
-      provider:
-        type: string
-        description: >-
-          cloud-Provider name in the providers registry (NOT the plugin name → soul-cloud-<provider>).
-          Not set → vars.provision_provider.
-      profile:
-        type: string
-        description: >-
-          VM profile name in the profiles registry (VM resources/image/network). Not set →
-          vars.provision_profile.
-      await_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Upper bound for waiting on the onboarding of created VMs (await_online barrier,
-          ADR-061; form <N>{s|m|h}). Not set → vars.provision_await_timeout (default
-          10m). Capped above by keeper.yml::max_await_timeout.
-      join_wait_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Ceiling for waiting for a freshly created VM to appear in Teleport before delivering
-          the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Not set →
-          vars.provision_join_wait_timeout (default 15m).
-      ssh_provider:
-        type: string
-        description: >-
-          SshProvider plugin name (keeper.yml::plugins.ssh_providers[].name) for
-          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
-          Not set → vars.provision_ssh_provider.
-
 # ── Form presentation layer (form:) ────────────────────────────────────────
 form:
   sections:
@@ -440,24 +369,6 @@ tasks:
              'password': generate_secret({'length': 32})
            }) }
 
-  # ── provision (ADR-061, Variant A): cloud-create + onboarding BEFORE deploy ─────
-  # CONDITIONAL-INCLUDE dragonfly-provision.yml STRICTLY BEFORE size-guard and deploy: with
-  # enabled=true its steps (a) create VMs, (b) register + wait for onboarding with
-  # refresh_soulprint → the roster is re-resolved, and ONLY THEN do size-guard/deploy see
-  # the created hosts in soulprint.hosts. ★ the SHARED PROVISION BODY is service-level
-  # (scenario/dragonfly-provision.yml): scenario-include falls back the file name to
-  # service-level (orchestration.md §6). when on input.provision is static (only
-  # input.*, without register/soulprint) → group-drop include-when: with enabled=false/an omitted
-  # section the whole provision body (incl. NIM-58 name-guard) is dropped from the plan. has()-guard — the section
-  # is optional (no-such-key without it).
-  #
-  # ★★ ORDER provision→size-guard: size-guard reads soulprint.hosts (a roster consumer),
-  # the provision body carries core.soul.registered with refresh_soulprint:true (a refresh emitter) →
-  # Stratify moves size-guard/deploy to a passage STRICTLY AFTER onboarding (the roster-refresh edge).
-  # With enabled=false there's no provision — size-guard checks the ORIGINAL declared-roster. ★ teardown is NOT here.
-  - include: dragonfly-provision.yml
-    when: "has(input.provision) && input.provision.enabled"
-
   # ── 0. SIZE-GUARD (topology) — keeper-side render-time assert ────────────────
   # The roster size MUST be exactly 1+replicas_per_master (one master + replicas; sentinel
   # daemon on EVERY host). Otherwise master-election (run_once by sorting soulprint.hosts) and
@@ -465,9 +376,8 @@ tasks:
   # KEEPER-SIDE at RENDER (soulprint.hosts is available). false ABORTS render with a message BEFORE
   # installation. ★ assert (not validate): needs soulprint.hosts (roster), validate is INPUT-ONLY.
   # ★ NO `when:` GATE, deliberately (unlike the redis size-guards) — and it costs nothing here. The
-  # guard reads the roster, so the create-path pre-flight defers it to render and evaluates it there:
-  # after the provision include's refresh boundary with enabled=true, on the original roster with
-  # enabled=false (ADR-009 amendment 2026-07-28 / NIM-235).
+  # guard reads the roster, so the create-path pre-flight defers it to render and evaluates it
+  # there, against the declared roster (ADR-009 amendment 2026-07-28 / NIM-235).
   # ★ This scenario does NOT declare `create: true`, so the service's create set is empty and
   # POST /v1/incarnations makes a BARE incarnation without a bootstrap run — the create-path gate
   # never sees this guard at all. It is reached as an EXPLICIT run over an already-bound roster,

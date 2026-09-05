@@ -27,7 +27,7 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 		Ref:             "v2.0.0",
 		BinarySHA256hex: "abc123",
 		Signature:       []byte{1, 2, 3, 4},
-		Schema:          []byte(`{"kind":"cloud_driver","protocol_version":1}`),
+		Schema:          []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 	}
 	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{want}}, nil)
 

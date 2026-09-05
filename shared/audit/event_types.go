@@ -384,11 +384,12 @@ const (
 	// `soul.coven-changed`, a separate label axis.
 	EventSoulTraitsChanged EventType = "soul.traits-changed"
 
-	// EventCloudProvisioned — the keeper-side core module
-	// `core.cloud.provisioned` (ADR-017) created or destroyed a VM via a
-	// CloudDriver plugin. `source: keeper_internal`, `archon_aid: NULL`.
-	// Payload: `{action, provider, profile, count, vm_ids}` — `action` ∈
-	// `created`/`destroyed`. Cloud credentials are not included.
+	// EventCloudProvisioned — RETIRED (NIM-761): nothing emits this any more,
+	// because `core.cloud` and the CloudDriver contract are gone. The constant
+	// stays so the catalog can still describe the audit rows already written:
+	// `source: keeper_internal`, `archon_aid: NULL`, payload
+	// `{action, provider, profile, count, vm_ids}` with `action` ∈
+	// `created`/`destroyed`. Cloud credentials were never included.
 	EventCloudProvisioned EventType = "cloud.provisioned"
 
 	// EventBootstrapDelivered — the keeper-side core module
@@ -396,8 +397,8 @@ const (
 	// over SSH to freshly created cloud-init VMs. `source: keeper_internal`,
 	// `archon_aid: NULL`. Payload: `{action: "delivered", ssh_provider, count,
 	// sids}` — WITHOUT tokens (the plain token itself is visible only in the
-	// register of the previous step `core.cloud.created` and is masked on all
-	// of its outputs; it does not reach here).
+	// register of the issuing step and is masked on all of its outputs; it does
+	// not reach here).
 	EventBootstrapDelivered EventType = "bootstrap.delivered"
 
 	// EventBootstrapIssued — the keeper-side core module
@@ -1167,7 +1168,10 @@ const (
 	// secret; the password / bind-creds are NOT put in the payload.
 	EventOperatorProvisioned EventType = "operator.provisioned"
 
-	// EventProviderCreated — an Archon created a Cloud Provider (the `providers`
+	// EventProviderCreated — RETIRED (NIM-761): the `providers` registry and its
+	// routes are gone, so nothing emits this. Kept so the catalog can still
+	// describe the rows already written. It recorded that an Archon created a
+	// Cloud Provider (the `providers`
 	// registry, ADR-017, docs/keeper/cloud.md) via the Operator API
 	// (`POST /v1/providers`) or the MCP tool `keeper.provider.create`. `source:
 	// api`/`mcp`, `archon_aid` is the initiator. Payload: `{name, type, region,
@@ -1177,12 +1181,14 @@ const (
 	// resolved and NOT written into audit.
 	EventProviderCreated EventType = "provider.created"
 
-	// EventProviderDeleted — an Archon deleted a Cloud Provider via
+	// EventProviderDeleted — RETIRED (NIM-761), see [EventProviderCreated].
+	// It recorded that an Archon deleted a Cloud Provider via
 	// `DELETE /v1/providers/{id}` or the MCP tool `keeper.provider.delete`.
 	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProviderDeleted EventType = "provider.deleted"
 
-	// EventProfileCreated — an Archon created a Cloud Profile (a VM-spec on top
+	// EventProfileCreated — RETIRED (NIM-761), see [EventProviderCreated].
+	// It recorded that an Archon created a Cloud Profile (a VM-spec on top
 	// of a Provider, the `profiles` registry, ADR-017) via `POST /v1/profiles`
 	// or the MCP tool `keeper.profile.create`. `source: api`/`mcp`, `archon_aid`
 	// is the initiator. Payload: `{name, provider, params_keys}` — the VALUE
@@ -1190,7 +1196,8 @@ const (
 	// freeform VM-spec may carry sensitive values.
 	EventProfileCreated EventType = "profile.created"
 
-	// EventProfileDeleted — an Archon deleted a Cloud Profile via
+	// EventProfileDeleted — RETIRED (NIM-761), see [EventProviderCreated].
+	// It recorded that an Archon deleted a Cloud Profile via
 	// `DELETE /v1/profiles/{id}` or the MCP tool `keeper.profile.delete`.
 	// `source: api`/`mcp`, `archon_aid` is the initiator. Payload: `{name}`.
 	EventProfileDeleted EventType = "profile.deleted"

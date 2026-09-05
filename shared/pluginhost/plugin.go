@@ -17,7 +17,7 @@ import (
 // ADR-020(d)). The caller must call [BasePlugin.Close] when done — otherwise a
 // zombie process and socket file are left behind.
 //
-// Kind-specific wrappers (SoulModulePlugin / CloudDriverPlugin / SshProviderPlugin)
+// Kind-specific wrappers (SoulModulePlugin / SshProviderPlugin)
 // embed *BasePlugin and add a kind-specific gRPC client over [BasePlugin.Conn].
 type BasePlugin struct {
 	discovered Discovered
@@ -36,7 +36,7 @@ func (p *BasePlugin) Discovered() Discovered { return p.discovered }
 
 // NewBasePluginForTest — a "declaration-only" BasePlugin constructor for use cases
 // that need a kind cross-check without a real fork: e.g. tests of kind-specific
-// wrappers ([keeper/internal/pluginhost.NewCloudDriverPlugin] rejecting a foreign
+// wrappers ([keeper/internal/pluginhost.NewSshProviderPlugin] rejecting a foreign
 // kind).
 //
 // Use outside tests is a bug: the returned BasePlugin has neither Conn nor Cmd, any
@@ -46,7 +46,7 @@ func NewBasePluginForTest(d Discovered) *BasePlugin {
 }
 
 // Conn — the gRPC conn to the plugin. Used by kind-specific wrappers to create a
-// client (NewSoulModuleClient / NewCloudDriverClient / NewSshProviderClient).
+// client (NewSoulModuleClient / NewSshProviderClient).
 func (p *BasePlugin) Conn() *grpc.ClientConn { return p.conn }
 
 // StderrTail — the last ~4KB of the plugin's stderr at call time. Used when

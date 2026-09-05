@@ -45,9 +45,13 @@ message Manifest {
   // Kind-specific block; shape depends on `kind:`.
   // The manifest parser validates that kind matches the populated oneof
   // variant.
+  // 8 was CloudDriverSpec cloud_driver, removed with the CloudDriver contract
+  // (NIM-761): a cloud plugin is an ordinary soul_module executing `side: keeper`.
+  reserved 8;
+  reserved "cloud_driver";
+
   oneof spec {
     SoulModuleSpec soul_module = 7;
-    CloudDriverSpec cloud_driver = 8;
     SshProviderSpec ssh_provider = 9;
     SoulBeaconSpec soul_beacon = 11;
   }
@@ -80,19 +84,6 @@ message StateDef {
 
   // Human-readable description for documentation / UI.
   string description = 2;
-}
-
-// CloudDriverSpec — kind-specific spec for `kind: cloud_driver`
-// (docs/keeper/plugins.md → spec for kind: cloud_driver).
-message CloudDriverSpec {
-  // Cloud provider family (`aws` / `gcp` / `yandex-cloud` / `openstack`).
-  // Informational field. Optional.
-  string provider_kind = 1;
-
-  // VM profile JSON Schema (draft 2020-12).
-  // Used when creating a Profile via OpenAPI/MCP for validation
-  // (docs/keeper/cloud.md). `Struct` because JSON Schema is free-form.
-  google.protobuf.Struct profile_schema = 2;
 }
 
 // SshProviderSpec — kind-specific spec for `kind: ssh_provider`

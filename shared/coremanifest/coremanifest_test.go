@@ -10,7 +10,7 @@ import (
 // the top-level name (Namespace+"."+Name), value is the expected states. Guards
 // against "forgot to add the module to coreModules" and against state-set regressions.
 //
-// Keeper-side core (`core.soul`/`core.cloud`/`core.vault`/`core.choir`) are declared
+// Keeper-side core (`core.soul`/`core.vault`/`core.choir`) are declared
 // via the same mechanism; state names are aligned with the actual dispatch of the
 // keeper-side coremods (StateCreated/StateDestroyed, StateRead, present/absent).
 var expectedModules = map[string][]string{
@@ -32,13 +32,12 @@ var expectedModules = map[string][]string{
 	"core.repo":      {"present", "absent"},
 	"core.firewall":  {"present", "absent"},
 	"core.http":      {"probe", "request"},
-	"core.noop":      {"run"},                             // no-op/barrier anchor (ADR-015)
-	"core.module":    {"installed"},                       // SoulModule plugin delivery (ADR-065)
-	"core.soul":      {"registered"},                      // keeper-side (on: keeper)
-	"core.cloud":     {"created", "destroyed", "resized"}, // keeper-side (ADR-017; resized — VM auto-expansion)
-	"core.bootstrap": {"issued", "delivered"},             // keeper-side ready-made VM onboarding + delivery
-	"core.vault":     {"kv-read", "kv-present"},           // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
-	"core.choir":     {"present", "absent"},               // keeper-side (ADR-044)
+	"core.noop":      {"run"},                   // no-op/barrier anchor (ADR-015)
+	"core.module":    {"installed"},             // SoulModule plugin delivery (ADR-065)
+	"core.soul":      {"registered"},            // keeper-side (on: keeper)
+	"core.bootstrap": {"issued", "delivered"},   // keeper-side ready-made VM onboarding + delivery
+	"core.vault":     {"kv-read", "kv-present"}, // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
+	"core.choir":     {"present", "absent"},     // keeper-side (ADR-044)
 	// keeper-side: the write point of a state field ([ADR-0084]); the state suffix
 	// IS the ADR-057 verb, one address per verb.
 	"core.state": {"set", "present", "add", "append", "modify", "remove", "unset"},

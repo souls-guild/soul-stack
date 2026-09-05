@@ -13,7 +13,7 @@ import (
 
 // testSource is the git remote the fixtures pretend their artifact came from — with no
 // self-name in the artifact, this and the ref are the whole signed identity.
-const testSource = "https://example.com/soul-cloud-hetzner.git"
+const testSource = "https://example.com/soul-ssh-hetzner.git"
 
 func newTestSigner(t *testing.T) (*Signer, ed25519.PublicKey) {
 	t.Helper()
@@ -46,7 +46,7 @@ func TestSign_RejectsBadDigestFormat(t *testing.T) {
 		"AB" + "00000000000000000000000000000000000000000000000000000000000000", // uppercase
 	}
 	for _, h := range bad {
-		if _, err := s.Sign(testSource, "v1", h, []byte(`{"kind":"cloud_driver"}`)); err == nil {
+		if _, err := s.Sign(testSource, "v1", h, []byte(`{"kind":"ssh_provider"}`)); err == nil {
 			t.Errorf("Sign accepted bad digest %q", h)
 		}
 	}
@@ -59,7 +59,7 @@ func TestSign_RejectsBadDigestFormat(t *testing.T) {
 func TestSign_RejectsEmptyIdentityOrSchema(t *testing.T) {
 	s, _ := newTestSigner(t)
 	binHex := hex.EncodeToString(sha256Of("bin"))
-	doc := []byte(`{"kind":"cloud_driver"}`)
+	doc := []byte(`{"kind":"ssh_provider"}`)
 
 	if _, err := s.Sign("", "v1", binHex, doc); err == nil {
 		t.Error("Sign accepted an empty source")
@@ -80,7 +80,7 @@ func TestSign_VerifyRoundtrip(t *testing.T) {
 	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("the-plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+	doc := []byte(`{"kind":"ssh_provider","protocol_version":1}`)
 
 	sig, err := s.Sign(testSource, ref, binHex, doc)
 	if err != nil {
@@ -142,7 +142,7 @@ func TestSign_V1DomainSeparatorDoesNotVerify(t *testing.T) {
 	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("the-plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+	doc := []byte(`{"kind":"ssh_provider","protocol_version":1}`)
 	schemaDigest := pluginhost.SchemaDigest(doc)
 
 	sig, err := s.Sign(testSource, ref, binHex, doc)
@@ -154,7 +154,7 @@ func TestSign_V1DomainSeparatorDoesNotVerify(t *testing.T) {
 	// LP(binary) LP(manifest). This is what a pre-NIM-377 verifier computes.
 	v1 := []byte("soul-stack/sigil/v1")
 	for _, field := range [][]byte{
-		[]byte("cloud"), []byte("hetzner"), []byte(ref), binDigest[:], schemaDigest[:],
+		[]byte("ssh"), []byte("hetzner"), []byte(ref), binDigest[:], schemaDigest[:],
 	} {
 		n := uint32(len(field))
 		v1 = append(v1, byte(n>>24), byte(n>>16), byte(n>>8), byte(n))
@@ -172,7 +172,7 @@ func TestSign_VerifyFailsOnTamper(t *testing.T) {
 	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("orig-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+	doc := []byte(`{"kind":"ssh_provider","protocol_version":1}`)
 
 	sig, err := s.Sign(testSource, ref, binHex, doc)
 	if err != nil {

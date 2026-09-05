@@ -22,7 +22,7 @@ type SigilRecordLister interface {
 
 // SigilLookupAdapter bridges keeper-side plugin_sigils registry (read from
 // Postgres) to verify-contract of shared/pluginhost.SigilLookup. keeper-host itself
-// verifies its OWN plugins (CloudDriver / SshProvider) against trust seals
+// verifies its OWN plugins (SshProvider / keeper-side SoulModule) against trust seals
 // that it signed itself (ADR-026(f)): trust-anchor is public key of
 // keeper-Signer, source of permissions is same plugin_sigils registry that
 // is distributed to Souls.

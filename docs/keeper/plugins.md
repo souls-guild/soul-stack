@@ -10,7 +10,7 @@ Normative specification of the **schema document**, handshake strings, plugin li
 
 The document covers **all kinds of plugins** (the schema-document format is the same, [ADR-020(e)](../adr/0020-plugin-infrastructure.md)):
 
-> ⚠ **`cloud_driver` is being removed from this table — epic NIM-757, decided 2026-09-01, NOT implemented.**
+> ★ **`cloud_driver` has left this table — epic NIM-757, decided 2026-09-01, removed in NIM-761 (2026-09-04).**
 > Every CloudDriver already *is* a plugin, so the separate contract was a duplicated abstraction: a cloud driver
 > becomes an ordinary **`soul_module`** artifact declaring **`side: keeper`**, and the kind leaves the closed enum
 > in `sdk/schema/` (the proto contribution is `reserved 2`, which is the never-reuse rule, not backward
@@ -19,12 +19,12 @@ The document covers **all kinds of plugins** (the schema-document format is the 
 > (keeper learns to execute a keeper-side plugin — **shipped**, see [Per-module fields](#per-module-fields))
 > → **NIM-760** → **NIM-761** (removal). See
 > [ADR-020 amendment 2026-09-01](../adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it).
-> **The kind, its `profile_schema` root field and the `CloudDriver` contract below all ship today.**
+> ★ **All three shipped.** The kind, its `profile_schema` root field and the `CloudDriver` contract
+> are gone as of NIM-761 (2026-09-04).
 
 | Kind | Host | Destination |
 |---|---|---|
 | `soul_module` | `soul` (agent or push) | Implements Destiny steps: [`SoulModule`](#service-contract-soulmodule). Also see [`../soul/modules.md`](../soul/modules.md). |
-| `cloud_driver` ⚠ | `keeper` (module `keeper.cloud`) | Creating/deleting a VM in the cloud: [`CloudDriver`](#service-contract-clouddriver). **Slated for removal — see the note above.** |
 | `ssh_provider` | `keeper` (module `keeper.push`) | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
 | `soul_beacon` | `soul` | Read-only host observation for Vigil: [ADR-030 V5-2](../adr/0030-vigil-oracle.md). |
 
@@ -155,12 +155,11 @@ Aliases from the [reserved list](../naming-rules.md#reserved-namespace-names) ar
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Plugin type discriminator. Closed enum; extension — via PR in `proto/plugin/vN/manifest.proto`, without breaking ([ADR-020(e)](../adr/0020-plugin-infrastructure.md)). `soul_beacon` — Soul-side event-driven monitoring plugin (ADR-030 V5-2). **`kind` is a type, not a name:** it survived the removal of `namespace:`/`name:` because each host discovers plugins by filtering on it — the soul-host keeps `soul_module` / `soul_beacon` ([`soul/internal/pluginhost`](../../soul/internal/pluginhost/pluginhost.go)) and the keeper-host keeps `cloud_driver` / `ssh_provider` / `soul_module` ([`keeper/internal/pluginhost`](../../keeper/internal/pluginhost/pluginhost.go)) — and nothing about it identifies the subject. A `soul_module` artifact passes **both** filters, which is the other half of why `side` sits per module rather than at the root. |
+| `kind` | `enum{soul_module,ssh_provider,soul_beacon}` | — | Plugin type discriminator. Closed enum (`cloud_driver` left it in NIM-761; the proto number stays `reserved`); extension — via PR in `proto/plugin/vN/manifest.proto`, without breaking ([ADR-020(e)](../adr/0020-plugin-infrastructure.md)). `soul_beacon` — Soul-side event-driven monitoring plugin (ADR-030 V5-2). **`kind` is a type, not a name:** it survived the removal of `namespace:`/`name:` because each host discovers plugins by filtering on it — the soul-host keeps `soul_module` / `soul_beacon` ([`soul/internal/pluginhost`](../../soul/internal/pluginhost/pluginhost.go)) and the keeper-host keeps `cloud_driver` / `ssh_provider` / `soul_module` ([`keeper/internal/pluginhost`](../../keeper/internal/pluginhost/pluginhost.go)) — and nothing about it identifies the subject. A `soul_module` artifact passes **both** filters, which is the other half of why `side` sits per module rather than at the root. |
 | `protocol_version` | `int32` | — | Version `proto/plugin/vN/`. Duplicated in the handshake line; cross-check inside the plugin and vs `SupportedProtocolVersions` host ([ADR-020(c)](../adr/0020-plugin-infrastructure.md)). **Not artifact version** is an API compat flag, an exception to [ADR-007](../adr/0007-versioning-git-ref.md). `int32` (and not `int`) is a deliberate exception from the type dictionary: the protocol version will not grow beyond 2³¹, at the wire level the type is fixed in `proto/plugin/v1/manifest.proto`. |
 | `compat` | `{keeper: <range>}` | `{}` | The engine window the artifact declares ([ADR-0076(c)](../adr/0076-engine-compat-window.md)), e.g. `{"keeper": ">=0.9 <2.0"}`. Empty = no declared bound, which an operator reads as "the author made no promise". Declared once per artifact — a bundle's modules ship together and share a version line. |
 | `modules` | `list<module>` | — | **`kind: soul_module` only.** The modules this artifact serves; see [Per-module fields](#per-module-fields). Names must be unique. |
 | `provider_kind` | `string` | — | **`kind: ssh_provider`.** `vault_ssh_ca` / `static_key` / `teleport` by convention, or the author's own. Affects UI/docs, **not** the `Sign`/`Authorize` contract. |
-| `profile_schema` | `JSON Schema` | — | **`kind: cloud_driver`.** Schema of the VM-profile parameters, used when creating a Profile via OpenAPI/MCP (see [`cloud.md`](cloud.md)). |
 | `params_schema` | `JSON Schema` | `{}` | **`kind: ssh_provider` and `kind: soul_beacon`.** Schema of the endpoint parameters — the provider params passed via env for `ssh_provider`, the Vigil `params` for `soul_beacon`. |
 | ~~`namespace`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no publisher and no collection. Level 1 is the registration alias (above). |
 | ~~`name`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no subject name. Level 2 is the **module** name, declared per entry of `modules[]`. |
@@ -259,13 +258,12 @@ The engine-version axis genuinely does not reach a plugin's module: a plugin's `
 | Kind | Carries | Must not carry |
 |---|---|---|
 | `soul_module` | `modules[]` | `provider_kind`, `profile_schema`, `params_schema` |
-| `cloud_driver` | `profile_schema`, opt. `provider_kind` (the provider family — `aws` / `gcp` / `yandex-cloud` / `openstack`; informational) | `modules[]`, `params_schema` |
 | `ssh_provider` | `provider_kind`, opt. `params_schema` (the provider params delivered via env, e.g. `vault_mount` for `vault_ssh_ca`) | `modules[]`, `profile_schema` |
 | `soul_beacon` | opt. `params_schema` (the Vigil `params` an operator sets via OpenAPI/MCP; runtime checks beyond JSON Schema go through `SoulBeacon.Validate`) | `modules[]`, `provider_kind`, `profile_schema` |
 
 `soul_beacon` is read-only by design ([ADR-030 V5-2](../adr/0030-vigil-oracle.md) + [amendment 2026-05-26](../adr/0030-vigil-oracle.md#amendment-2026-05-26-s5-closure)): `Check` observes the host and does not mutate it, which is why it has no states.
 
-> **Open, not decided by NIM-377.** The Go-side generator (`sdk/module`) is specified for **SoulModule bundles**. What authors the schema document for `cloud_driver` / `ssh_provider` / `soul_beacon` — whose `profile_schema` / `params_schema` are JSON Schema objects rather than a Go declaration — is not settled. The document format, the source-keyed registry, the alias-named slot and the single-executable convention apply to every kind regardless, because discovery and the slot layout are shared code.
+> **Open, not decided by NIM-377.** The Go-side generator (`sdk/module`) is specified for **SoulModule bundles**. What authors the schema document for `ssh_provider` / `soul_beacon` — whose `params_schema` is a JSON Schema object rather than a Go declaration — is not settled. The document format, the source-keyed registry, the alias-named slot and the single-executable convention apply to every kind regardless, because discovery and the slot layout are shared code.
 
 ### Schema extension
 
@@ -297,7 +295,7 @@ When launched, the plugin writes **exactly one line** with JSON-payload to stdou
 |---|---|---|---|
 | `soul_stack` | `string` (constant `"plugin-v1"`) | — | Magic sanity field. Host ignores all stdout lines up to the first with this field. The value is independent of `protocol_version` - this is the "handshake-string format v1" marker; changes only when breaking changes the handshake format itself (separate ADR). |
 | `protocol_version` | `int32` | — | Plugin protocol version (see [Versioning](#versioning)). Must match the schema document's `protocol_version`. The type `int32` (not `int`) is the same intentional exception as in the root fields. |
-| `kind` | `enum{soul_module,cloud_driver,ssh_provider,soul_beacon}` | — | Must match the schema document's `kind`. |
+| `kind` | `enum{soul_module,ssh_provider,soul_beacon}` | — | Must match the schema document's `kind`. |
 | `network` | `string` (MVP convention: `"unix"`; future `"named_pipe"` / `"tcp"`) | — | Socket type. MVP - only `unix`. Extension `named_pipe` (Windows) / `tcp` (loopback) - post-MVP, without editing `proto/plugin/vN/` (at the proto level - an open line for forward-compat). |
 | `address` | `path` | — | Path to the Unix-socket on which the plugin listens to gRPC. Must match the `SOUL_PLUGIN_SOCKET` passed to env-var (see [Lifecycle](#lifecycle)). |
 | `server_cert` | `base64-pem` (optional) | `""` | Reserved for optional mTLS post-MVP. In MVP there is always `""` ([ADR-020(h)](../adr/0020-plugin-infrastructure.md)). |
@@ -492,7 +490,7 @@ The previous TOFU model protected against binary substitution **after** the firs
 
 | `protocol_version` | proto package | Status | Composition |
 |---|---|---|---|
-| `1` | `proto/plugin/v1/` | MVP | `handshake.proto`, `manifest.proto`, `soulmodule.proto`, `clouddriver.proto`, `sshprovider.proto` (closing is a separate task after ADR-020). |
+| `1` | `proto/plugin/v1/` | MVP | `handshake.proto`, `manifest.proto`, `soulmodule.proto`, `sshprovider.proto` (`clouddriver.proto` was deleted in NIM-761) (closing is a separate task after ADR-020). |
 
 ### `SupportedProtocolVersions`
 
@@ -608,31 +606,25 @@ There is **no `Manifest()` RPC**, and now there is a second reason for it. The o
 
 Destiny step addressing is `<namespace>.<name>.<state>` (see [`../soul/modules.md`](../soul/modules.md), [naming-rules.md → Destiny Modules](../naming-rules.md)).
 
-## Service contract `CloudDriver`
+## Service contract `CloudDriver` — removed (NIM-761)
 
-> ⚠ **This contract is being deleted — epic NIM-757, decided 2026-09-01, NOT implemented.**
-> `proto/plugin/v1/clouddriver.proto`, its committed generated Go and the `sdk/clouddriver/` module directory go
-> (Option A — no backward-compatibility branch, no `proto/plugin/v2`: nothing is changing shape, it is going
-> away). An already-built third-party driver binary is not broken — the wire is untouched — it simply stops
-> being called once `keeper/internal/pluginhost/clouddriver.go` goes; what breaks is a **rebuild** against a
-> newer tag. A cloud driver's replacement is an ordinary SoulModule plugin declaring `side: keeper`
-> ([ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)).
-> **The contract below is live and the six official drivers implement it.** (⚠ The method table is also short one
-> row: `service CloudDriver` carries **seven** RPCs — `Resize` is missing here. Left as-is deliberately; the
-> contract is going away and a correction would be churn.)
+The contract is gone: `proto/plugin/v1/clouddriver.proto`, the generated stubs, `sdk/clouddriver`
+and the `kind: cloud_driver` discriminator were deleted, and enum value `2` of `pluginv1.Kind` plus
+field `8` of `PluginManifest.spec` are `reserved` so neither number can be reused. A cloud driver is
+an ordinary SoulModule plugin declaring `side: keeper`
+([ADR-017 amendment 2026-09-01](../adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin),
+[ADR-020 amendment 2026-09-01](../adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it)).
 
-Host - `keeper` (module `keeper.cloud`, see [`cloud.md`](cloud.md)). The artifact is the single executable in `dist/`; repositories conventionally name it `soul-cloud-<provider>`, and nothing reads that name.
+An already-built third-party driver binary still speaks a well-formed handshake — the wire was never
+changed — but nothing calls it: the keeper host refuses `kind: cloud_driver` at slot load, because the
+kind is no longer in the schema at all. Rebuilding it against a current tag fails at compile time.
 
-| Method | Destination |
-|---|---|
-| `Schema(SchemaRequest) → SchemaReply` | Publishes `profile_schema` (JSON Schema of the VM profile; must match the schema document's root `profile_schema`). Used when creating a Profile via OpenAPI/MCP for validation. `SchemaRequest` is an empty message (instead of `google.protobuf.Empty`) for forward-compat to add fields without breaking change. |
-| `Validate(ValidateProfileRequest) → ValidateProfileReply` | Runtime checks of profile parameters (quotas, image availability, subnet validity - things that are not expressed by JSON Schema). The request/reply name is different from SoulModule `ValidateRequest/Reply` - a single proto-package `soulstack.plugin.v1`, message names must be unique. |
-| `Create(CreateRequest) → stream CreateEvent` | Creates a VM (one or N), streams progress. The closing wait-until-ready phase runs on its own budget (`clouddriver.DefaultWaitBackoff`, `SOUL_CLOUD_WAIT_BUDGET`), not on the API-retry backoff - see [cloud.md → Wait-until-ready budget](cloud.md#wait-until-ready-budget). |
-| `Destroy(DestroyRequest) → stream DestroyEvent` | Deletes a VM and CONFIRMS it is gone (`clouddriver.ConfirmDestroy`): an accepted delete call is not a deletion, so a teardown the driver could not confirm is reported `failed=true` with the `vm_id`, never as a success - see [cloud.md → Confirmed teardown](cloud.md#confirmed-teardown). Under guard-rails - see [cloud.md → Security destroy](cloud.md). |
-| `Status(StatusRequest) → StatusReply` | Poll the status of a specific VM. `StatusRequest.credentials` carries the plain-secret of the provider (A-flow, symmetrically `CreateRequest`/`DestroyRequest`) - without credentials the driver will not be able to access the provider API. |
-| `List(ListRequest) → stream VmInfo` | Enumeration of VMs known to the provider. `ListRequest.credentials` - A-flow (symmetrical `Create`/`Destroy`/`Status`); `ListRequest.filter` - provider-specific filter (tags/region), credentials CANNOT be placed in filter. |
+The retry / wait / confirm-destroy / error-classification plumbing those drivers used did NOT go away.
+It was the general half of `sdk/clouddriver` and it moved, verbatim, to **`sdk/cloudutil`**: `Retry`,
+`BackoffConfig`, `WaitUntilReady`, `ProbeResult`, `ConfirmDestroy`, `GoneResult`, `Classify`,
+`FailClass` and the `SOUL_CLOUD_WAIT_BUDGET` env-var (`cloudutil.WaitBudgetEnv`, unchanged — it is set
+on deployed Keeper units). Only `ReportDestroy`, which wrote `DestroyEvent`s, died with the contract.
 
-Usage - in [`cloud.md`](cloud.md). Cloud-create is built into scenarios as a step addressing `core.cloud.provisioned` ([ADR-017](../adr/0017-keeper-side-core.md)). The step is routed to the Keeper by that address alone — `core.cloud` is one of the seven keeper-side core addresses — and writing `on: keeper` beside it is refused as `on_keeper_redundant` ([ADR-0087](../adr/0087-task-side-derived-from-module-address.md)).
 
 ## Service contract `SshProvider`
 
@@ -760,32 +752,6 @@ One artifact, three modules — the shape NIM-377 exists for:
 ```
 
 Registered as `redis`, it serves `redis.acl.present`, `redis.config.present` and `redis.info.read`. The host forks `<artifact> acl` for the first of those.
-
-### `kind: cloud_driver` (AWS)
-
-```json
-{
-  "kind": "cloud_driver",
-  "protocol_version": 1,
-  "provider_kind": "aws",
-  "profile_schema": {
-    "type": "object",
-    "required": ["image_id", "instance_type", "subnet_id"],
-    "properties": {
-      "image_id":      { "type": "string", "pattern": "^ami-[0-9a-f]+$" },
-      "instance_type": { "type": "string" },
-      "subnet_id":     { "type": "string", "pattern": "^subnet-[0-9a-f]+$" },
-      "security_group_ids": {
-        "type": "array",
-        "items": { "type": "string", "pattern": "^sg-[0-9a-f]+$" }
-      },
-      "tags": { "type": "object", "additionalProperties": { "type": "string" } }
-    }
-  }
-}
-```
-
-A `cloud_driver` has no `modules[]` and no `side_effects`: it touches nothing on the local host. Its `capabilities` (`network_outbound`, `vault_access`) are declared per module and a driver has none — the endpoint-shaped kinds carry no capability block, which is one of the loose ends listed under [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind).
 
 ### `kind: ssh_provider` (Vault SSH CA)
 
@@ -988,10 +954,6 @@ Declared in the `plugins:` block ([config.md](config.md)):
 
 ```yaml
 plugins:
-  cloud_drivers:
-    - { name: aws, source: "git@github.com:soul-stack-ecosystem/soul-cloud-aws.git", ref: v2.0.0 }
-    - { name: yc,  source: "git@github.com:our-company/soul-cloud-yc.git",          ref: v0.3.1 }
-
   ssh_providers:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
@@ -1053,7 +1015,6 @@ Directory of `SoulModule` plugins - **`plugins.soul_modules[]`** in the same for
 - [architecture.md → ADR-020](../adr/0020-plugin-infrastructure.md) - regulatory decision for this entire document.
 - [architecture.md → Plugin infrastructure](../architecture.md) - high-level overview.
 - [`../soul/modules.md`](../soul/modules.md) - `SoulModule`-specifics, layout on the Soul host, cache.
-- [cloud.md](cloud.md) - use of `CloudDriver`.
 - [push.md](push.md) - use of `SshProvider`.
 - [config.md](config.md) → `plugins:` - directory format.
 - [architecture.md → ADR-007](../adr/0007-versioning-git-ref.md) - `ref:` as a plugin version, exception for `protocol_version`.

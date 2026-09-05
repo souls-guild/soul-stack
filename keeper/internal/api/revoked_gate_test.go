@@ -135,8 +135,6 @@ func revokedGateRouterWith(t *testing.T, enforcer RBACProvider, soulH *handlers.
 		// exactly where a gate is most likely to be missed.
 		handlers.PushSpecStub(),
 		handlers.PushProviderSpecStub(),
-		handlers.ProviderSpecStub(),
-		handlers.ProfileSpecStub(),
 		handlers.ErrandSpecStub(),
 		handlers.VoyageSpecStub(),
 		handlers.CadenceSpecStub(),

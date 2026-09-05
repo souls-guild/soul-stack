@@ -35,7 +35,7 @@ type coreModuleDoc struct {
 }
 
 // coreModuleDocs — the table of 18 soul-side core modules of the MVP (ADR-015) +
-// keeper-side core (core.cloud/core.soul/core.vault per ADR-017, core.choir per
+// keeper-side core (core.soul/core.vault per ADR-017, core.choir per
 // ADR-044). Matches soul/internal/coremod.Default (18) and
 // keeper/internal/coremod.Default (core.choir is registered conditionally — when
 // Deps.ChoirStore is present, but is always published in the catalog). Order is
@@ -138,7 +138,7 @@ var coreModuleDocs = []coreModuleDoc{
 
 	// --- keeper-side (ADR-017/ADR-044; routed by the module address, NIM-749) ---
 	// Name — base name without the state suffix (like Soul-side core); the full
-	// author address = `<Name>.<state>` (core.cloud.created, core.vault.kv-read).
+	// author address = `<Name>.<state>` (core.soul.registered, core.vault.kv-read).
 	{
 		Name:        "core.bootstrap",
 		Description: "Issue one-time tokens for ready-made VM SIDs and deliver/redeem them over SSH or Teleport (keeper-side).",
@@ -148,11 +148,6 @@ var coreModuleDocs = []coreModuleDoc{
 		Name:        "core.choir",
 		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side).",
 		States:      []string{"present", "absent"},
-	},
-	{
-		Name:        "core.cloud",
-		Description: "Provision/destroy a cloud VM via a CloudDriver plugin (keeper-side).",
-		States:      []string{"created", "destroyed"},
 	},
 	{
 		Name:        "core.soul",

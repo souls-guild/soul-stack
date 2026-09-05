@@ -70,8 +70,6 @@ sigil:
 
 plugins:
   cache_root: /tmp/keeper-dev/plugins
-  cloud_drivers:
-    - { name: example, source: "file:///dev/null/soul-cloud-example-manual-slot", ref: "manual-0001" }
   soul_modules:
     - { name: redis, source: "file:///dev/null/redis-manual-slot", ref: "manual-0001" }
 

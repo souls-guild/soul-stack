@@ -84,7 +84,7 @@
 
   Common root-level fields: `kind`, `protocol_version`, `namespace`, `name`, `required_capabilities`, `side_effects`. Kind-specific — in `spec:`:
   - `spec.states` (map<state-name, {input}>) — for `kind: soul_module`.
-  - `spec.profile_schema` (JSON Schema) — for `kind: cloud_driver` (the VM-profile schema, see [`docs/keeper/cloud.md`](../keeper/cloud.md)).
+  - `spec.profile_schema` (JSON Schema) — for `kind: cloud_driver` (the VM-profile schema).
   - `spec.provider_kind` (enum / string) — for `kind: ssh_provider` (Vault SSH CA / static / Teleport / ...).
 
   In `sdk/handshake/` — a single Go type `Manifest` with `oneof` sub-messages `SoulModuleSpec` / `CloudDriverSpec` / `SshProviderSpec` (proto-style). Evolving new kinds (`secrets_provider` etc.) — adding a variant to the enum without breaking changes.
@@ -275,8 +275,10 @@ carrying `side:` fails to parse on an older `soul`, which reads the document at 
 
 ## Amendment 2026-09-01 (NIM-757): `cloud_driver` is removed, and `side: keeper` is what replaces it
 
-**Not implemented.** Recorded here because the decision is accepted; the code is NIM-758 /
-NIM-760 / NIM-761. Everything above still describes the artifacts that ship. Written under NIM-759.
+★ **Implemented (NIM-761, 2026-09-04).** `cloud_driver` is out of the closed enum in
+`sdk/schema/`, and `pluginv1.Kind` value `2` plus `PluginManifest.spec` field `8` are `reserved`.
+Everything above this amendment describes artifacts that no longer exist. Written under NIM-759,
+flipped under NIM-761.
 
 The heading deliberately carries **no count of kinds**. The arithmetic in this ADR has been wrong
 since 2026-05-26 (see (t)), and a heading that states a number is a heading that can be wrong about
@@ -357,11 +359,10 @@ because a cloud driver authors itself as a `module.Def` like any other SoulModul
 profile is an ordinary `Def.Input` schema. `ssh_provider` and `soul_beacon` remain open exactly
 as they were — this decision says nothing about them.
 
-**The executing half has landed (NIM-758, closing NIM-688): `side: keeper` on a plugin is now
-routed, not inert** — see the amended block above. What has NOT changed is everything else in this
-paragraph: `cloud_driver` remains a live kind with a live contract, a live `profile_schema` root
-field and six live drivers, and stays so until **NIM-760** moves `soul-cloud-wb` and **NIM-761**
-removes the contract.
+**The executing half landed first (NIM-758, closing NIM-688): `side: keeper` on a plugin is
+routed, not inert** — see the amended block above. The rest followed: **NIM-760** moved
+`soul-cloud-wb` onto it and proved VM creation live, and **NIM-761** removed the kind, its
+`profile_schema` root field, the contract and the six drivers.
 
 ⚠ One hedge above has gone stale and is corrected here rather than rewritten in place: the 2026-08-06
 block says the `side:` work "is NIM-749 / NIM-750". **NIM-749 has since landed** the declaring half —

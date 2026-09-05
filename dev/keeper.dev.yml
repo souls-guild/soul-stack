@@ -100,8 +100,6 @@ plugins:
   # The entry is needed ONLY for FilterByCatalog.
   # TEMPORARY, to be removed: once there's a real git repo, replace with
   # { name: example, source: "ssh://git.example.com/cloud-plugins", ref: "<tag>" }.
-  cloud_drivers:
-    - { name: example, source: "file:///dev/null/soul-cloud-example-manual-slot", ref: "manual-0001" }
   # SoulModule catalog (epic core.module.installed, S1). source is a git repo holding an
   # ALREADY-BUILT artifact: `dist/` with exactly one executable, and no manifest.yaml -
   # NIM-377 removed both the manifest file and the filename convention, so the schema

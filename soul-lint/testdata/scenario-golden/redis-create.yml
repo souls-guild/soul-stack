@@ -1,5 +1,5 @@
 name: create
-description: Initial bootstrap of Redis HA cluster (with optional cloud-spawn)
+description: Initial bootstrap of Redis HA cluster onto an existing roster
 
 # Типизированный вход сценария. Формат блока — docs/input.md.
 input:
@@ -34,30 +34,15 @@ input:
     secret: true
     pattern: "^vault:.*"
 
-  spawn:
-    type: object
-    properties:
-      provider: { type: string }
-      profile:  { type: string }
-      count:    { type: integer, min: 3, max: 6 }
-      role_distribution:
-        type: array
-        items:
-          type: object
-          properties:
-            index: { type: string }
-            role:  { type: string, enum: [primary, replica] }
+  role_distribution:
+    type: array
+    items:
+      type: object
+      properties:
+        index: { type: string }
+        role:  { type: string, enum: [primary, replica] }
 
 tasks:
-  # Если нужно — создаём VM через CloudDriver (ADR-017: keeper-side core).
-  - name: provision
-    when: input.spawn != null
-    module: core.cloud.created
-    params:
-      provider: "${ input.spawn.provider }"
-      profile:  "${ input.spawn.profile }"
-      count:    "${ input.spawn.count }"
-
   # Ставим Redis на все хосты этого кластера
   - include: install.yml
 

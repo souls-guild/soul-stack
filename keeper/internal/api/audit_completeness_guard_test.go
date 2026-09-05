@@ -115,8 +115,6 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	// class A (middleware-audit) on the other nine.
 	{http.MethodPut, "/v1/incarnations/{id}/label"}:   {events: []audit.EventType{audit.EventIncarnationLabelChanged}, note: "self-audit: handler writes inside SetLabelTyped"},
 	{http.MethodPut, "/v1/services/{id}/label"}:       {events: []audit.EventType{audit.EventServiceLabelChanged}},
-	{http.MethodPut, "/v1/providers/{id}/label"}:      {events: []audit.EventType{audit.EventProviderLabelChanged}},
-	{http.MethodPut, "/v1/profiles/{id}/label"}:       {events: []audit.EventType{audit.EventProfileLabelChanged}},
 	{http.MethodPut, "/v1/push-providers/{id}/label"}: {events: []audit.EventType{audit.EventPushProviderLabelChanged}},
 	{http.MethodPut, "/v1/augur/omens/{id}/label"}:    {events: []audit.EventType{audit.EventOmenLabelChanged}},
 	{http.MethodPut, "/v1/heralds/{id}/label"}:        {events: []audit.EventType{audit.EventHeraldLabelChanged}},
@@ -187,10 +185,6 @@ var auditedWriteRoutes = map[route]auditedRoute{
 
 	// providers + profiles — Cloud CRUD (middleware-audit, ADR-017). No update
 	// (Provider/Profile are immutable).
-	{http.MethodPost, "/v1/providers"}:        {events: []audit.EventType{audit.EventProviderCreated}},
-	{http.MethodDelete, "/v1/providers/{id}"}: {events: []audit.EventType{audit.EventProviderDeleted}},
-	{http.MethodPost, "/v1/profiles"}:         {events: []audit.EventType{audit.EventProfileCreated}},
-	{http.MethodDelete, "/v1/profiles/{id}"}:  {events: []audit.EventType{audit.EventProfileDeleted}},
 
 	// heralds + tidings (middleware-audit).
 	{http.MethodPost, "/v1/heralds"}:        {events: []audit.EventType{audit.EventHeraldCreated}},

@@ -61,10 +61,10 @@ func TestSpawnSoulModule_RefusesOtherKind(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
-	doc := schema.Document{Kind: schema.KindCloudDriver, ProtocolVersion: 1}
+	doc := schema.Document{Kind: schema.KindSSHProvider, ProtocolVersion: 1}
 	_, err = h.SpawnSoulModule(context.Background(), Discovered{Alias: "aws", Doc: &doc})
 	if err == nil || !strings.Contains(err.Error(), "kind=soul_module") {
-		t.Fatalf("SpawnSoulModule(cloud_driver) = %v, want a kind refusal", err)
+		t.Fatalf("SpawnSoulModule(ssh_provider) = %v, want a kind refusal", err)
 	}
 }
 
@@ -76,7 +76,7 @@ func TestSpawn_StillRefusesSoulModule(t *testing.T) {
 		t.Fatalf("NewHost: %v", err)
 	}
 	_, err = h.Spawn(context.Background(), keeperSideEntry("wb-cloud", "vm", schema.SideKeeper))
-	if err == nil || !strings.Contains(err.Error(), "cloud_driver|ssh_provider") {
+	if err == nil || !strings.Contains(err.Error(), "ssh_provider") {
 		t.Fatalf("Spawn(soul_module) = %v, want the kind refusal", err)
 	}
 }

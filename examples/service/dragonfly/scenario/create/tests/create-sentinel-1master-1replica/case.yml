@@ -64,10 +64,6 @@ fixtures:
   input:
     version: "1.39.0"
     replicas_per_master: 1
-    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys
-    # onto a READY roster of 2 hosts) → include dragonfly-provision.yml targets no one.
-    provision:
-      enabled: false
 
 mocks:
   # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
@@ -161,8 +157,6 @@ assert:
     - module: core.file.rendered
       params_subset:
         path: /etc/dragonfly/sentinel.conf
-    # provision disabled → cloud-create and the onboarding barrier are ABSENT (group-drop).
-    - module: core.cloud.created
     - module: core.soul.registered
 
   state_after:
@@ -186,8 +180,9 @@ assert:
       ca_ref:   ""
     memory_mb: 0
 
-  # The three cloud-provision fields are ABSENT, not empty: the provision include is
-  # dropped whole on a non-provision run, so no step ever writes them (ADR-0084 F-B).
+  # The three cloud-provision fields are ABSENT, not empty. They are a leftover of the
+  # removed provisioning path (NIM-761) that the migration ladder still carries, so an
+  # incarnation created today never has them written (ADR-0084 F-B).
   state_absent:
     - provisioned_vm_ids
     - provisioned_sids

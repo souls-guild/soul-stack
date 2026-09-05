@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// sshProviderDoc / soulModuleDoc build minimally valid documents of the two other kinds
-// keeper discovers. Like [cloudDriverDoc] they declare no name of their own.
+// sshProviderDoc / soulModuleDoc build minimally valid documents of the two kinds
+// keeper discovers. Neither declares a name of its own (NIM-377).
 func sshProviderDoc() schema.Document {
 	return schema.Document{
 		Kind:            schema.KindSSHProvider,
@@ -37,7 +37,7 @@ func TestDiscoverFiltersKeeperKinds(t *testing.T) {
 	// distribution to Souls).
 	root := t.TempDir()
 
-	cloud := cloudDriverDoc()
+	cloud := sshProviderDoc()
 	writeSlot(t, root, "aws", &cloud, "aws")
 
 	ssh := sshProviderDoc()
@@ -104,7 +104,7 @@ func TestDiscoverYieldsOneEntryPerModule(t *testing.T) {
 // warning rather than resolved by listing order.
 func TestDiscoverSkipsAmbiguousSlot(t *testing.T) {
 	root := t.TempDir()
-	cloud := cloudDriverDoc()
+	cloud := sshProviderDoc()
 	writeSlot(t, root, "aws", &cloud, "artifact-a", "artifact-b")
 
 	found, warns, err := Discover(root)
@@ -127,13 +127,9 @@ func TestDiscoverRootMissing(t *testing.T) {
 }
 
 func TestFilterByCatalog(t *testing.T) {
-	// Discovered entries of three kinds; the keeper.yml catalog declares only aws
-	// (cloud), vault-ssh (ssh) and redis (soul_module). The comparison is on the
+	// Discovered entries of both kinds; the keeper.yml catalog declares only aws and
+	// vault-ssh (ssh_provider) and redis (soul_module). The comparison is on the
 	// ALIAS — the artifact has no name of its own to compare instead.
-	mkCloud := func(alias string) Discovered {
-		doc := cloudDriverDoc()
-		return Discovered{Alias: alias, Doc: &doc}
-	}
 	mkSSH := func(alias string) Discovered {
 		doc := sshProviderDoc()
 		return Discovered{Alias: alias, Doc: &doc}
@@ -143,19 +139,17 @@ func TestFilterByCatalog(t *testing.T) {
 		return Discovered{Alias: alias, Module: module, Doc: &doc}
 	}
 	found := []Discovered{
-		mkCloud("aws"),
-		mkCloud("gcp"),
+		mkSSH("aws"),
+		mkSSH("gcp"),
 		mkSSH("vault-ssh"),
 		mkSSH("teleport"),
 		mkMod("redis", "acl"),
 		mkMod("postgres", "role"),
 	}
 	plugins := &config.KeeperPlugins{
-		CloudDrivers: []config.PluginCatalogEntry{
-			{Name: "aws", Source: "git@example.com:soul-cloud-aws.git", Ref: "v1.0.0"},
-			{Name: "yc", Source: "git@example.com:soul-cloud-yc.git", Ref: "v0.1.0"}, // not in cache
-		},
 		SSHProviders: []config.PluginCatalogEntry{
+			{Name: "aws", Source: "git@example.com:soul-ssh-aws.git", Ref: "v1.0.0"},
+			{Name: "yc", Source: "git@example.com:soul-ssh-yc.git", Ref: "v0.1.0"}, // not in cache
 			{Name: "vault-ssh", Source: "git@example.com:soul-ssh-vault.git", Ref: "v1.0.0"},
 		},
 		SoulModules: []config.PluginCatalogEntry{
@@ -214,7 +208,7 @@ func TestFilterByCatalogWarnsOncePerAlias(t *testing.T) {
 }
 
 func TestFilterByCatalogNil(t *testing.T) {
-	doc := cloudDriverDoc()
+	doc := sshProviderDoc()
 	found := []Discovered{{Alias: "aws", Doc: &doc}}
 	out, warns := FilterByCatalog(found, nil)
 	if len(out) != 0 {

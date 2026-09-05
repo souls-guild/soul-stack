@@ -30,7 +30,7 @@ type Discovered struct {
 	Alias string
 	// Module is address level 2 — the module this entry addresses, and the argv the
 	// host passes the artifact at spawn. Empty for the kinds that serve a single
-	// endpoint (cloud_driver / ssh_provider / soul_beacon), which declare no modules.
+	// endpoint (ssh_provider / soul_beacon), which declare no modules.
 	Module string
 	// Doc is the schema document read from the artifact's trailer — the whole
 	// artifact's, shared by every entry that came out of the same slot. Read THIS
@@ -113,7 +113,7 @@ func (d Discovered) SideEffects() []sharedplugin.SideEffect {
 // executable and reads what it offers from the trailer.
 //
 // Discover **does not filter by kind** — that is the caller's job (the Soul host
-// accepts soul_module and soul_beacon, the Keeper host cloud_driver and ssh_provider).
+// accepts soul_module and soul_beacon, the Keeper host ssh_provider and soul_module).
 // See [FilterByKinds].
 //
 // A slot that cannot be read — no executable, several executables, no trailer, a

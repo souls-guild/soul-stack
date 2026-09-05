@@ -55,8 +55,10 @@
 
 ## Amendment 2026-09-01 (NIM-757): `proto/plugin/` loses a service contract and `sdk/` loses a subpackage
 
-**Not implemented.** Recorded here because the decision is accepted; the code is NIM-761. The tree
-still ships both trees exactly as the layout above describes them. Written under NIM-759.
+★ **Implemented (NIM-761, 2026-09-04).** `proto/plugin/v1/clouddriver.proto` and its generated
+stubs are deleted, and `sdk/clouddriver` is gone — its contract half with it, its retry / wait /
+confirm-destroy / error-classification half moved to **`sdk/cloudutil`**. The layout above lists
+one subpackage that no longer exists. Written under NIM-759, flipped under NIM-761.
 
 The user's decision of 2026-09-01 removes the separate **CloudDriver** contract — a cloud driver
 becomes an ordinary SoulModule plugin declaring `side: keeper`

@@ -23,7 +23,7 @@ type SshProviderPlugin struct {
 
 // NewSshProviderPlugin wraps [Plugin] (from [Host.Spawn]) in kind-specific
 // handle. Returns error if the artifact's kind != ssh_provider: protection
-// from accidental call on a soul_module / cloud_driver artifact.
+// from accidental call on a soul_module artifact.
 func NewSshProviderPlugin(p *Plugin) (*SshProviderPlugin, error) {
 	if p == nil {
 		return nil, fmt.Errorf("pluginhost: nil Plugin")

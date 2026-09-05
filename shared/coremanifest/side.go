@@ -44,7 +44,6 @@ var keeperSideCore = map[string]struct{}{
 	Namespace + ".bootstrap": {}, // ADR-063 — token issue/delivery
 	Namespace + ".cert":      {}, // NIM-99 — warrant issue/registration
 	Namespace + ".choir":     {}, // ADR-044 — choir voice membership
-	Namespace + ".cloud":     {}, // ADR-017 — CloudDriver provisioning
 	Namespace + ".soul":      {}, // ADR-009 — soul registration
 	StateModuleAddr:          {}, // ADR-0084 — incarnation state capture
 	Namespace + ".vault":     {}, // ADR-017 — Vault KV read/write

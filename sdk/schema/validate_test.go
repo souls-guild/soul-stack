@@ -39,10 +39,6 @@ func hasCode(issues []Issue, code string) bool {
 func TestValidate_HappyPaths(t *testing.T) {
 	docs := map[string]Document{
 		"soul_module": sampleDocument(),
-		"cloud_driver": {
-			Kind: KindCloudDriver, ProtocolVersion: 1,
-			ProfileSchema: map[string]any{"type": "object"},
-		},
 		"ssh_provider": {
 			Kind: KindSSHProvider, ProtocolVersion: 1,
 			ProviderKind: "vault_ssh_ca",
@@ -256,27 +252,16 @@ func TestValidate_Failures(t *testing.T) {
 			want: "introduced_in_invalid",
 		},
 		{
-			name: "cloud_driver_without_profile_schema",
-			doc:  Document{Kind: KindCloudDriver, ProtocolVersion: 1},
-			want: "profile_schema_missing",
-		},
-		{
 			name: "ssh_provider_without_provider_kind",
 			doc:  Document{Kind: KindSSHProvider, ProtocolVersion: 1},
 			want: "provider_kind_missing",
 		},
 		{
-			name: "cloud_driver_with_modules",
-			doc: Document{Kind: KindCloudDriver, ProtocolVersion: 1,
-				ProfileSchema: map[string]any{"type": "object"},
-				Modules:       minimalSoulModule().Modules},
+			name: "ssh_provider_with_modules",
+			doc: Document{Kind: KindSSHProvider, ProtocolVersion: 1,
+				ProviderKind: "vault_ssh_ca",
+				Modules:      minimalSoulModule().Modules},
 			want: "modules_not_allowed",
-		},
-		{
-			name: "beacon_with_profile_schema",
-			doc: Document{Kind: KindSoulBeacon, ProtocolVersion: 1,
-				ProfileSchema: map[string]any{"type": "object"}},
-			want: "profile_schema_not_allowed",
 		},
 		{
 			name: "soul_module_with_provider_kind",

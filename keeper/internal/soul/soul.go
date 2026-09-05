@@ -32,7 +32,8 @@ const (
 //   - `disconnected` - stream closed, lease expired (Soul may return).
 //   - `revoked` - operator revoked, new connections rejected at mTLS level.
 //   - `expired` - Reaper moved `pending` after bootstrap token TTL.
-//   - `destroyed` - host physically deleted via `core.cloud.provisioned destroyed`
+//   - `destroyed` - host physically deleted by a teardown cascade (the one the removed
+//     `core.cloud.provisioned destroyed` ran)
 //     (ADR-017 cascade). Terminal state: no outgoing transitions; intentionally NOT
 //     included in default set `purge_souls.statuses` (forensic > GC).
 //

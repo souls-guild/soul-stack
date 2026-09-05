@@ -6,27 +6,12 @@ description: >-
   treats the name `destroy` as a lifecycle phase (scenario.LifecycleScenarioNames),
   runs in TerminalDestroy mode.
 
-  ★ DragonFly TWO-MODE teardown (user decision 2026-07-01: DragonFly cloud-provision
-  MODELED ON redis; provision is required in the base create — default-on): destroy carries BOTH branches.
-    (1) CLOUD-CASCADE (symmetric with redis/destroy): when create PROVISIONED a VM (provisioned_vm_ids/
-        sids in state — the default-on path), destroy tears down the cloud VMs (core.cloud.destroyed,
-        keeper-side) + cascades keeper registries (souls→destroyed/seeds→orphaned/tokens→burned).
-        Gate `when: size(provisioned_vm_ids) > 0` (static → group-drop) keeps this task ONLY
-        on provisioned incarnations. Assert sids↔vm_ids pairing BEFORE destroy (like redis).
-    (2) SOUL-SIDE teardown (the older DragonFly profile): when create ran against EXISTING
-        hosts (provision: {enabled: false} — not provisioned) — the VM isn't ours, there's nothing
-        to tear down in the cloud, so we clean up Soul-side: stop services + remove our /etc
-        artifacts. These steps are idempotent and UNCONDITIONAL (no when gate), but the ORDER
-        relative to cloud-destroy differs per branch. On a PROVISIONED incarnation, cloud.destroyed
-        (a keeper task), by the keeper invariant "keeper tasks run FIRST in their Passage,"
-        removes these hosts via cascade (souls→destroyed) BEFORE host-fan-out — host-teardown
-        steps then dispatch to an already-removed host, and keeper treats those as a benign
-        terminal no_match (NIM-56 reconcile: the host was removed by its OWN destroy cascade), NOT
-        dispatch_failed/failure (a real disconnect/revocation remains a failure, fail-closed). On a
-        NOT-provisioned incarnation, cloud.destroyed group-drops → host-teardown is the only branch and
-        runs normally on the live hosts.
-  Both branches in one scenario: cloud-cascade group-drops on non-provisioned incarnations, Soul-side
-  is always active. REUSE of the redis/destroy lifecycle skeleton (input: {}, terminal, no state capture).
+  ★ SOUL-SIDE teardown only. The VM is not ours to delete: NIM-761 removed the CloudDriver
+  contract, so there is no engine-side cloud step, and a VM created by a cloud plugin is
+  torn down through that plugin's own module address rather than from here. What is left is
+  the half that always applied to an incarnation rolled onto EXISTING hosts: stop the
+  services and remove our /etc artifacts. Every step is idempotent and UNCONDITIONAL (no
+  when gate) and runs on the live hosts.
 
   ★ TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
   packages):
@@ -58,45 +43,13 @@ description: >-
   incarnation (Soul-side, not keeper — host operations over systemd/files).
 
 # ── Operator input contract ────────────────────────────────────────────────
-# Empty: destroy takes no operator input. What to remove is a FACT from incarnation.state
-# (provisioned_provider/vm_ids/sids for cloud-cascade) + the install method and conf_dir from service vars
-# (install_method/conf_dir for Soul-side teardown), not an operator choice at teardown time.
-# The operator only initiates the deletion (DELETE /v1/incarnations/{name}).
+# Empty: destroy takes no operator input. What to remove is the install method and conf_dir
+# from service vars (install_method/conf_dir for Soul-side teardown), not an operator choice
+# at teardown time. The operator only initiates the deletion
+# (DELETE /v1/incarnations/{name}).
 input: {}
 
 tasks:
-  # ── CLOUD-CASCADE branch (provisioned VMs, symmetric with redis/destroy, ADR-061) ────
-  # ★ sids↔vm_ids pairing invariant BEFORE destroy (architect): provisioned_sids and
-  # provisioned_vm_ids are read as a PAIR — a cascade without sids would leave orphaned
-  # souls/seeds/tokens (vm_ids tear down VMs at the provider, sids clean up registries;
-  # a length mismatch = orphan). create writes both with ONE guard from
-  # register.provision.hosts (a single source of truth for size), so normally the lengths
-  # match; the assert catches state corruption (manual edit / partial migration / bug) BEFORE
-  # an irreversible destroy. RUN-LEVEL precondition (computed keeper-side during the render phase,
-  # ONCE, BEFORE dispatching destroyed). On a non-provisioned incarnation, both sides default
-  # to [] → 0 == 0 → vacuously true (the assert doesn't block Soul-side teardown without provisioning).
-  # default(...) — the fields are back-compat-optional (incarnations before v3/v4 lack them).
-  - name: Assert provisioned sids and vm_ids were captured as a pair before teardown
-    assert:
-      that:
-        - "size(default(incarnation.state.provisioned_sids, [])) == size(default(incarnation.state.provisioned_vm_ids, []))"
-      message: "provisioned_sids and provisioned_vm_ids in incarnation.state are mismatched: a cascade-destroy without the full SID set would leave orphaned souls/seeds/bootstrap_tokens records (anti-replay violation) — the lengths must match (both sets are written by create with a single guard from register.provision.hosts)"
-
-  # Removing VMs + cascading keeper registries (core.cloud.destroyed, keeper-side). ★ The address
-  # is EXACTLY core.cloud.destroyed (base core.cloud + state destroyed): applyDestroyed →
-  # PluginHost.Destroy(vm_ids) THEN cascade(sids). params come from incarnation.state (the keeper
-  # task sees a pre-run snapshot). GROUP-DROP on non-provisioned: when is static
-  # (incarnation.* only, isStaticWhen) → an empty provisioned_vm_ids excludes the task from
-  # the plan (render-phase, not placeholder-skip). Incarnations without provisioning go through teardown
-  # without a cloud call (only Soul-side below).
-  - name: Destroy provisioned VMs and cascade their keeper registry records
-    module: core.cloud.destroyed
-    when: "size(default(incarnation.state.provisioned_vm_ids, [])) > 0"
-    params:
-      provider: "${ incarnation.state.provisioned_provider }"
-      vm_ids:   "${ incarnation.state.provisioned_vm_ids }"
-      sids:     "${ incarnation.state.provisioned_sids }"
-
   # ── SOUL-SIDE teardown (the older DragonFly profile, always active) ────────────
   # ── 1. Stop the DragonFly services (idempotent) ───────────────────────────
   # core.service.stopped brings the unit to "not running": no service (already removed

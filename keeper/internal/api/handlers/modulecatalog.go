@@ -301,7 +301,7 @@ func pluginCatalogItems(e PluginCatalogEntry) []moduleCatalogItem {
 
 	doc, diags := plugin.ParseDocument(plugin.SchemaFileName, e.Schema)
 	if doc == nil || diag.HasErrors(diags) || doc.Kind != plugin.KindSoulModule {
-		// soul_module catalog: cloud_driver/ssh_provider/soul_beacon are not applied
+		// soul_module catalog: ssh_provider/soul_beacon are not applied
 		// as a Destiny step in Run→Command, and an unreadable schema leaves nothing to
 		// describe — either way the grant's coordinates remain.
 		return []moduleCatalogItem{bare}

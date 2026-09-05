@@ -426,7 +426,7 @@ Two mutually exclusive blocks (`paths` without `?to=` / `target` with `?to=`) + 
 
 Permission: `incarnation.destroy`. MCP-tool: `keeper.incarnation.destroy`. Path-param: `name`.
 
-Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal `force` (unification force↔allow_destroy): `false` - regular destroy via teardown scenario `destroy` service (with tombstone period for cloud VMs, [cloud.md → Security destroy](../cloud.md)); `true` - demolition without teardown (DELETE lines directly, escape-hatch for instance without external resources, warning in audit). Asynchronous operation.
+Demolishes instance. Operator-facing flag `allow_destroy` is mapped to internal `force` (unification force↔allow_destroy): `false` - regular destroy via the service's teardown scenario `destroy`, when it ships one; `true` - demolition without teardown (DELETE lines directly, escape-hatch for instance without external resources, warning in audit). Asynchronous operation.
 
 **Query:**
 

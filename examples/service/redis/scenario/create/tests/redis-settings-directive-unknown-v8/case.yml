@@ -63,10 +63,6 @@ fixtures:
         - bgsave-cpulist
 
   input:
-    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto
-    # a READY roster, cloud-create is not needed) → include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: sentinel
     version: "8.6.1"
     replicas_per_master: 0

@@ -990,8 +990,6 @@ func TestHumaSoul_Exec_ChiCoexistence(t *testing.T) {
 		stubServiceHandler(t), nil, nil, stubAugurHandler(t), stubOracleHandler(t),
 		nil, // pushH
 		nil, // pushProviderH
-		nil, // providerH
-		nil, // profileH
 		handlers.NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil), // errandH non-nil → exec is mounted on huma
 		nil, // voyageH
 		nil, // cadenceH

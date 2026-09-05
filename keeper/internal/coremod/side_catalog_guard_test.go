@@ -55,7 +55,7 @@ func everyKeeperModuleDeps() coremod.Deps {
 func TestSideCatalogMatchesTheKeeperRegistry(t *testing.T) {
 	dispatched := coremod.Default(everyKeeperModuleDeps()).Names()
 	sort.Strings(dispatched)
-	if len(dispatched) < 7 {
+	if len(dispatched) < 6 {
 		t.Fatalf("only %d modules registered (%v) — a dep gate closed and the comparison below would pass by being empty", len(dispatched), dispatched)
 	}
 

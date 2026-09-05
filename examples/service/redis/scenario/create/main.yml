@@ -7,101 +7,20 @@ name: create
 # qualifies as bootstrap not because of its name, but because it carries this flag.
 create: true
 description: >-
-  Deploy Redis from scratch in sentinel or cluster mode: VMs are provisioned for the
-  required topology via cloud-provision in the same run. The operator sets simple concepts
-  (mode, memory, persistence, eviction, ACL users, shards), and the scenario expands them
-  into a full redis.conf.
+  Deploy Redis from scratch in sentinel or cluster mode onto an EXISTING roster. The
+  operator sets simple concepts (mode, memory, persistence, eviction, ACL users,
+  shards), and the scenario expands them into a full redis.conf.
 
 # ── extends: covenant — shared section contract (S4 pilot) ───────────────────────────
-# Sections input (EXCEPT the provision-delta below) / compute / validate are factored out
-# into covenant.yml (service-repo root) and inherited add-only: the keeper-side resolver
-# merges covenant FIRST, the create delta ADDS on top (without overriding covenant keys —
-# otherwise section_key_conflict). create carries ONLY its own delta: input.provision
-# (cloud-create in the same run, ADR-061), form (presentation — NOT merged, purely local),
-# and tasks (run body — dispatcher by redis_type, then the state capture steps: a covenant
-# carries no tasks, so capture is local to each inheritor, [ADR-0084] F-B).
+# Sections input / compute / validate are factored out into covenant.yml (service-repo
+# root) and inherited add-only: the keeper-side resolver merges covenant FIRST, the create
+# delta ADDS on top (without overriding covenant keys — otherwise section_key_conflict).
+# Since NIM-761 removed the cloud-provision body, create's input delta is EMPTY — the
+# whole input contract is the covenant's; what is left local here is form (presentation —
+# NOT merged, purely local) and tasks (run body — dispatcher by redis_type, then the state
+# capture steps: a covenant carries no tasks, so capture is local to each inheritor,
+# [ADR-0084] F-B).
 extends: covenant
-
-# ── Input contract: create's DELTA on top of covenant.input ──────────────────────────
-# The shared input contract (redis_type/version/memory_mb/persistence/connection_mode/
-# users/… + absence of modules*-fields) lives in covenant.yml. Here — ONLY provision,
-# which covenant does NOT carry (add-only: covenant.input + this field = effective input).
-input:
-  # ── cloud-provision: bring up VMs for the topology in the same run (ADR-061, Option A) ─
-  # ★ provision (FLAG section name, propose-and-wait): object-input "create machines".
-  # When enabled=true (DEFAULT, see default-on below) — create in ONE run (a) creates VMs
-  # via core.cloud.created (keeper-side), (b) delivers a per-VM bootstrap token
-  # (illustrative), (c) registers the created SIDs + BLOCKINGLY awaits onboarding
-  # (core.soul.registered await_online + refresh_soulprint, ADR-061), after which the roster
-  # is re-resolved and the cluster/sentinel branch rolls the redis role onto the now-online hosts.
-  # enabled=false — provision.yml group-drop, the run works against the EXISTING roster.
-  #
-  # ★ provider/profile/await_timeout/ssh_provider — the operator may leave these UNSET; they
-  # fall back to vars.provision_* (redis-provision.yml: default(input.provision.X,
-  # vars.provision_X)). By default the operator does NOT pick them manually (the form is hidden).
-  #
-  # ★ FORM: provision is DELIBERATELY NOT in form.sections (decision 2026-06-30) — the section is
-  # hidden from the Run form. soul-lint emits a form_field_uncovered WARNING for this field (the UI
-  # draws it into the default section) — this is EXPECTED, not an error.
-  #
-  # ★ node_count is DELIBERATELY absent here: the VM count is derived from the TOPOLOGY (cluster:
-  # shards*(1+replicas_per_master); sentinel: 1+replicas_per_master) — the single source of truth
-  # for cluster size. A separate node_count would drift out of sync with the size-guard branches.
-  # ★ teardown (destroy) — NOT here (a separate scenario).
-  provision:
-    type: object
-    required: false
-    # ★ DEFAULT-ON (user decision 2026-06-30): provision is ENABLED by default.
-    # top-level default of the object = {enabled: true} → an operator who does NOT pass the
-    # provision section gets cloud-create (the standard create path — bring up VMs for the
-    # topology). To roll onto a READY roster without provision, the operator sets
-    # provision: {enabled: false} EXPLICITLY, or uses the create_from_souls scenario (a twin
-    # without the provision section). default-on is ONLY on create; create_from_souls does not
-    # carry a provision section. The default is duplicated on the nested enabled (a flat
-    # mergeInputDefaults does not descend into properties of a partially-set object — the
-    # duplicate keeps the "default on" semantics uniformly readable).
-    default:
-      enabled: true
-    description: >-
-      Bring up VMs for the topology in the same create run (ADR-061). enabled=true →
-      first cloud-create + onboarding (the await_online barrier), then the redis role on
-      the created hosts. Unset / enabled=false → the run works against the existing roster.
-    additional_properties: false
-    properties:
-      enabled:
-        type: boolean
-        default: true
-        description: Main gate for provision. DEFAULT true (default-on). false — provision.yml group-drop.
-      provider:
-        type: string
-        description: >-
-          Name of the cloud Provider in the providers registry (NOT the plugin name → soul-cloud-<provider>).
-          Unset → vars.provision_provider.
-      profile:
-        type: string
-        description: >-
-          Name of the VM profile in the profiles registry (VM resources/image/network). Unset →
-          vars.provision_profile.
-      await_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Upper bound on waiting for the created VMs to onboard (the await_online barrier,
-          ADR-061; form <N>{s|m|h}). Unset → vars.provision_await_timeout (default
-          10m). Capped from above by keeper.yml::max_await_timeout.
-      join_wait_timeout:
-        type: string
-        pattern: "^[0-9]+[smh]$"
-        description: >-
-          Ceiling on waiting for a freshly created VM to appear in Teleport before delivering
-          the token (core.bootstrap.delivered, retry-until-join; form <N>{s|m|h}). Unset →
-          vars.provision_join_wait_timeout (default 15m).
-      ssh_provider:
-        type: string
-        description: >-
-          Name of the SshProvider plugin (keeper.yml::plugins.ssh_providers[].name) for
-          delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered, ADR-063).
-          Unset → vars.provision_ssh_provider.
 
 # ── Computed scenario-vars: create's DELTA on top of covenant.compute ────────────────
 # The shared compute contract (redis_config/install/conf_dir/data_dir/tls_*/sentinel_directives/
@@ -203,13 +122,6 @@ form:
           show_when: "input.redis_type == 'sentinel'"
           hint: "Per-master options (down-after-milliseconds, failover-timeout, parallel-syncs, …). Defaults: down-after 5000, failover-timeout 60000."
 
-    # ★ The provision section is DELIBERATELY REMOVED from the form (user decision 2026-06-30):
-    # provision default-on (input.provision.default {enabled: true}), provider/profile come from
-    # service vars — the operator does NOT pick them in the Run form. The input.provision field is not
-    # covered by the form → soul-lint form_field_uncovered WARNING (the UI draws it into the
-    # default section) — EXPECTED, not an error. If it's ever needed again (per-Coven/ENV-override
-    # provider) — bring the section back here. ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — a separate ADR.
-
 # Run body — dispatcher branches, one per mode (CONDITIONAL-INCLUDE, orchestration.md §6,
 # Option B group-drop). include order — cluster, sentinel; indices don't matter (the branches
 # are mutually exclusive by enum). There's no separate mode-guard: an unknown redis_type
@@ -309,19 +221,6 @@ tasks:
         - "!has(vars.redis_directives) || default(input.redis_settings, {}).all(k, vars.redis_directives.all(s, compute.redis_version.matches('^([0-9]+:)?' + s + '[.]') ? (k in vars.redis_directives[s]) : true))"
       message: "redis_settings contains an unknown redis.conf directive for the selected Redis version (input.version): check the name against the catalog of valid directives for this version (vars.redis_directives[<major.minor>]) — typo or a directive from a different Redis version. The catalog is generated by scripts/gen-redis-catalog.sh from src/config.c."
 
-  # ── provision (ADR-061, Option A): cloud-create + onboarding BEFORE the role branch ──────
-  # CONDITIONAL-INCLUDE redis-provision.yml STRICTLY BEFORE cluster/sentinel: when enabled=true
-  # its steps (a) create VMs, (c) register+await onboarding with refresh_soulprint → the roster
-  # is re-resolved, and ONLY THEN does the cluster/sentinel branch see the created hosts in
-  # soulprint.hosts. ★ SHARED PROVISION BODY at service-level (scenario/redis-provision.yml, the
-  # same one migrate_cluster/main.yml includes — no duplicate; scenario-include falls back to
-  # the file name at service-level, orchestration.md §6). when on input.provision is static
-  # (only input.*, no register/soulprint) → group-drop include-when: on enabled=false / an
-  # omitted section, the whole provision body (incl. the NIM-58 name-guard) is dropped from the
-  # plan. has()-guard — the section is optional (no-such-key without it). ★ teardown is NOT here.
-  - include: redis-provision.yml
-    when: "has(input.provision) && input.provision.enabled"
-
   - include: cluster.yml
     when: "input.redis_type == 'cluster'"
   - include: sentinel.yml
@@ -338,8 +237,7 @@ tasks:
   # (arch/password resolve per-host, apply.input carries soulprint.self) → they are
   # roster-CONSUMERS and land in a passage STRICTLY AFTER deploy (redis-server is up, the
   # monitoring ACL user is seeded, the unix socket is listening). No separate register edge is
-  # needed — the roster axis (provision's refresh-emitter + deploy's roster-read) pushes them
-  # into a later passage, same as deploy's vault()-read.
+  # needed — the roster axis pushes them into a later passage, same as deploy's vault()-read.
   - name: Apply node-exporter destiny (host metrics)
     apply:
       destiny: node-exporter

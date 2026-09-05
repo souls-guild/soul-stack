@@ -1,5 +1,5 @@
 // Package internaltest holds shared test helpers for keeper-side unit tests of
-// core modules (`core.soul.registered`, `core.cloud.provisioned`,
+// core modules (`core.soul.registered`, `core.choir.present`,
 // `core.vault.kv-read`). The package itself has no _test suffix because test files
 // of different module packages can't import each other's xxx_test.
 //

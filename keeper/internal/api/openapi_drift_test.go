@@ -105,16 +105,6 @@ var pathAllowlist = map[route]string{
 	// provider.* / profile.* — Cloud CRUD (ADR-017): routes are wired ONLY when
 	// providerH/profileH is non-nil; the drift-test builds the router with nil →
 	// declared in the spec, absent from the router (documented opt-in, push-provider pattern).
-	{method: http.MethodPost, path: "/v1/providers"}:           "ADR-017 provider create: route wired ONLY when non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers"}:            "ADR-017 provider list: route wired ONLY when non-nil providerH",
-	{method: http.MethodGet, path: "/v1/providers/{id}"}:       "ADR-017 provider get: route wired ONLY when non-nil providerH",
-	{method: http.MethodDelete, path: "/v1/providers/{id}"}:    "ADR-017 provider delete: route wired ONLY when non-nil providerH",
-	{method: http.MethodPut, path: "/v1/providers/{id}/label"}: "[ADR-0085] provider caption: route wired ONLY when non-nil providerH",
-	{method: http.MethodPost, path: "/v1/profiles"}:            "ADR-017 profile create: route wired ONLY when non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles"}:             "ADR-017 profile list: route wired ONLY when non-nil profileH",
-	{method: http.MethodGet, path: "/v1/profiles/{id}"}:        "ADR-017 profile get: route wired ONLY when non-nil profileH",
-	{method: http.MethodDelete, path: "/v1/profiles/{id}"}:     "ADR-017 profile delete: route wired ONLY when non-nil profileH",
-	{method: http.MethodPut, path: "/v1/profiles/{id}/label"}:  "[ADR-0085] profile caption: route wired ONLY when non-nil profileH",
 
 	// push-runs list: route wired ONLY when pushH is non-nil (UI-4); the
 	// drift-test builds the router with pushH=nil. The paired per-id detail
@@ -219,8 +209,6 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		stubOracleHandler(t),
 		nil, // pushH — push.*-routes are wired only when pushH is non-nil (router.go); currently in the allowlist
 		nil, // pushProviderH — push-provider.*-routes are wired only when non-nil; in the allowlist
-		nil, // providerH — provider.*-routes are wired only when non-nil; in the allowlist
-		nil, // profileH — profile.*-routes are wired only when non-nil; in the allowlist
 		nil, // errandH — errand.*-routes are wired only when errandH is non-nil; in the allowlist
 		nil, // voyageH — voyage.*-routes are wired only when voyageH is non-nil (ADR-043 S5); in the allowlist
 		nil, // cadenceH — cadence.*-routes are wired only when cadenceH is non-nil (ADR-046 S4); in the allowlist

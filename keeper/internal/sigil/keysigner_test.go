@@ -125,7 +125,7 @@ func TestLoadSigner_SignUsesPrimary(t *testing.T) {
 	const ref = "v1.0.0"
 	binDigest := sha256.Sum256([]byte("plugin-binary"))
 	binHex := hex.EncodeToString(binDigest[:])
-	doc := []byte(`{"kind":"cloud_driver","protocol_version":1}`)
+	doc := []byte(`{"kind":"ssh_provider","protocol_version":1}`)
 
 	sig, err := signer.Sign(testSource, ref, binHex, doc)
 	if err != nil {

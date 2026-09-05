@@ -13,34 +13,6 @@
 # differently forks this repo and edits it here. Default `master`.
 sentinel_master_name: master
 
-# ── cloud-provision defaults (ADR-061, Option A) ───────────────────────────────
-# Fallbacks for input.provision.* — the provision body (dragonfly-provision.yml) reads them as
-# default(input.provision.X, vars.provision_X). provision is ENABLED by default (default-on,
-# user decision 2026-07-01: DragonFly cloud-provision modeled on redis) — operator
-# usually does NOT set provider/profile in the Run form (provision section hidden), these defaults are used.
-# ★ TODO: prod/dev provider switch (ENV keeper / Coven-overlay) — separate ADR. For now ONE
-# static provider/profile pair (prod), environment switching is NOT implemented (a stub for a
-# future fork, symmetric to redis service vars).
-#
-# ★ profile = redis-debian-12 (REUSED from redis, NOT a separate dragonfly profile):
-# a VM profile is the resources/image/network of a VM in the profiles registry (managed in Postgres), NOT
-# service-specific config. DragonFly is the same class of in-memory-store on the same Debian 12
-# as redis → the generic debian-12 profile fits without adaptation. Creating a separate
-# dragonfly-debian-12 entry in the registry is not justified (a profile duplicate with no differences). Operator
-# overrides profile by forking this repo if DragonFly needs a different sizing/image.
-provision_provider: example-prod
-provision_profile:  redis-debian-12
-# Upper bound on waiting for onboarding of created VMs (await_online barrier, core.soul.registered
-# refresh_soulprint; form <N>{s|m|h}). Fallback for input.provision.await_timeout.
-provision_await_timeout: "8m"
-# Name of the SshProvider plugin for delivering the per-VM bootstrap token over SSH (core.bootstrap.delivered).
-provision_ssh_provider: teleport
-# Ceiling for waiting for a freshly created VM to appear in Teleport before delivering the token
-# (core.bootstrap.delivered, transport=teleport, retry-until-join; form <N>{s|m|h}).
-# fail-fast: a VM is usually online in ~5m (x2 margin), a large timeout masks an enroll failure.
-# Fallback for input.provision.join_wait_timeout.
-provision_join_wait_timeout: "10m"
-
 # ── Mandatory data-plane monitoring: node_exporter (Slice II, ADR-024) ────
 # create UNCONDITIONALLY installs node_exporter (host metrics) on EVERY incarnation host
 # (AFTER the deploy branch). ★ node-exporter-ONLY: DragonFly exposes ITS OWN metrics natively

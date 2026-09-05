@@ -1,6 +1,6 @@
 // Package vault implements keeper-side core module `core.vault`
 // (ADR-017, docs/architecture.md → ADR-017) — single module with state-based dispatch
-// (pattern `core.cloud` / `core.choir`).
+// (pattern `core.soul` / `core.choir`).
 //
 // States:
 //   - kv-read ([StateRead], applyReadKV): read secret from Vault KV (v1/v2)

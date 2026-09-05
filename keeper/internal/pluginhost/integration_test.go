@@ -6,7 +6,6 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
-	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -18,7 +17,6 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
-	"google.golang.org/protobuf/types/known/structpb"
 )
 
 // sigilFor signs a valid SigilRecord over the artifact behind Discovered, through the
@@ -136,47 +134,6 @@ func shortHostDir(t *testing.T, prefix string) string {
 	return dir
 }
 
-func setupCloudDriverPlugin(t *testing.T) (*Host, Discovered) {
-	t.Helper()
-	if runtime.GOOS == "windows" {
-		t.Skip("plugin host requires Unix sockets")
-	}
-	cacheRoot := shortHostDir(t, "ss-kpr-mods-")
-	socketDir := shortHostDir(t, "ss-kpr-sock-")
-	moduleDir := makeNestedSlot(t, cacheRoot, "fake")
-	binPath := buildTestPlugin(t, "cloud-plugin", moduleDir, "fake")
-	stampBuilt(t, binPath, schema.Document{
-		Kind:            schema.KindCloudDriver,
-		ProtocolVersion: 1,
-		ProfileSchema: map[string]any{
-			"type":       "object",
-			"properties": map[string]any{"region": map[string]any{"type": "string"}},
-		},
-	})
-
-	found, warns, err := Discover(cacheRoot)
-	if err != nil {
-		t.Fatalf("Discover: %v", err)
-	}
-	// Discovery skips a slot it cannot read (unstamped artifact, invalid schema
-	// document, several executables) and says why in warns. When the count is
-	// wrong those warnings ARE the diagnosis, so they belong in the failure rather
-	// than in a Logf the reader has to go looking for.
-	if len(found) != 1 {
-		t.Fatalf("expected 1 discovered plugin, got %d; discovery warnings: %v", len(found), warns)
-	}
-
-	pub, lookup := sigilFor(t, found[0])
-	h := &Host{Host: &sharedhost.Host{
-		SocketDir:      socketDir,
-		StartupTimeout: 10 * time.Second,
-		ShutdownGrace:  3 * time.Second,
-		SigilAnchors:   sharedhost.NewAnchorSet([]ed25519.PublicKey{pub}),
-		Sigils:         lookup,
-	}}
-	return h, found[0]
-}
-
 func setupSshProviderPlugin(t *testing.T) (*Host, Discovered) {
 	t.Helper()
 	if runtime.GOOS == "windows" {
@@ -213,154 +170,6 @@ func setupSshProviderPlugin(t *testing.T) (*Host, Discovered) {
 		Sigils:         lookup,
 	}}
 	return h, found[0]
-}
-
-func TestSpawnCloudDriverHappyPath(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	p, err := h.Spawn(ctx, d)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	cd, err := NewCloudDriverPlugin(p)
-	if err != nil {
-		t.Fatalf("NewCloudDriverPlugin: %v", err)
-	}
-	defer func() {
-		if err := cd.Close(); err != nil {
-			t.Logf("Close: %v", err)
-		}
-	}()
-
-	// A cloud_driver serves a single endpoint and declares no modules, so its address
-	// is the bare registration alias.
-	if cd.Discovered().Address() != "fake" {
-		t.Errorf("Address = %q, want the registration alias", cd.Discovered().Address())
-	}
-
-	// Schema.
-	sr, err := cd.Schema(ctx, &pluginv1.SchemaRequest{})
-	if err != nil {
-		t.Fatalf("Schema: %v", err)
-	}
-	if sr.GetProfileSchema() == nil {
-		t.Errorf("Schema reply has nil ProfileSchema")
-	}
-
-	// Validate.
-	profile, _ := structpb.NewStruct(map[string]any{"region": "us-east-1"})
-	vr, err := cd.Validate(ctx, &pluginv1.ValidateProfileRequest{Profile: profile})
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if !vr.GetOk() {
-		t.Errorf("Validate.Ok = false: %v", vr.GetErrors())
-	}
-
-	// Create stream — three events (two diagnostics + final with vms[]).
-	createStream, err := cd.Create(ctx, &pluginv1.CreateRequest{Profile: profile})
-	if err != nil {
-		t.Fatalf("Create: %v", err)
-	}
-	var (
-		events   int
-		finalVms int
-	)
-	for {
-		ev, err := createStream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("create recv: %v", err)
-		}
-		events++
-		if len(ev.GetVms()) > 0 {
-			finalVms += len(ev.GetVms())
-		}
-	}
-	if events != 3 {
-		t.Errorf("create events = %d, want 3", events)
-	}
-	if finalVms != 1 {
-		t.Errorf("final vms = %d, want 1", finalVms)
-	}
-
-	// Status — point query.
-	st, err := cd.Status(ctx, &pluginv1.StatusRequest{VmId: "vm-1"})
-	if err != nil {
-		t.Fatalf("Status: %v", err)
-	}
-	if st.GetState() != "running" {
-		t.Errorf("Status.State = %q, want running", st.GetState())
-	}
-
-	// List stream — two VmInfo.
-	listStream, err := cd.List(ctx, &pluginv1.ListRequest{})
-	if err != nil {
-		t.Fatalf("List: %v", err)
-	}
-	var listVms []string
-	for {
-		vm, err := listStream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("list recv: %v", err)
-		}
-		listVms = append(listVms, vm.GetVmId())
-	}
-	if len(listVms) != 2 {
-		t.Errorf("list vms = %v, want 2", listVms)
-	}
-
-	// Destroy.
-	destroyStream, err := cd.Destroy(ctx, &pluginv1.DestroyRequest{VmIds: []string{"vm-x"}})
-	if err != nil {
-		t.Fatalf("Destroy: %v", err)
-	}
-	var destroyMsgs int
-	for {
-		_, err := destroyStream.Recv()
-		if errors.Is(err, io.EOF) {
-			break
-		}
-		if err != nil {
-			t.Fatalf("destroy recv: %v", err)
-		}
-		destroyMsgs++
-	}
-	if destroyMsgs != 1 {
-		t.Errorf("destroy events = %d, want 1", destroyMsgs)
-	}
-}
-
-func TestSpawnCloudDriverValidationFailure(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	defer cancel()
-
-	p, err := h.Spawn(ctx, d)
-	if err != nil {
-		t.Fatalf("Spawn: %v", err)
-	}
-	cd, err := NewCloudDriverPlugin(p)
-	if err != nil {
-		t.Fatalf("NewCloudDriverPlugin: %v", err)
-	}
-	defer cd.Close()
-
-	// No profile — Validate should return Ok=false.
-	vr, err := cd.Validate(ctx, &pluginv1.ValidateProfileRequest{})
-	if err != nil {
-		t.Fatalf("Validate: %v", err)
-	}
-	if vr.GetOk() {
-		t.Errorf("expected Ok=false for empty profile")
-	}
 }
 
 func TestSpawnSshProviderHappyPath(t *testing.T) {
@@ -418,7 +227,7 @@ func TestSpawnSshProviderHappyPath(t *testing.T) {
 }
 
 func TestSpawnCloseIdempotent(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
+	h, d := setupSshProviderPlugin(t)
 	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
@@ -435,7 +244,7 @@ func TestSpawnCloseIdempotent(t *testing.T) {
 }
 
 func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
+	h, d := setupSshProviderPlugin(t)
 	// Capabilities are declared PER MODULE now, so the check needs a module entry to
 	// read them from — a single-endpoint kind declares none.
 	doc := schema.Document{
@@ -463,7 +272,7 @@ func TestSpawnRejectsCapabilityNotAllowed(t *testing.T) {
 // TestSpawnFailsClosedNoSigil verifies a keeper-host with no grant for the alias →
 // Spawn fails closed (VerifyReasonNoSigil), the artifact is not started.
 func TestSpawnFailsClosedNoSigil(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
+	h, d := setupSshProviderPlugin(t)
 	// Replace lookup with empty one (trust-anchor stays valid): no permission.
 	h.Sigils = testLookup{}
 
@@ -486,7 +295,7 @@ func TestSpawnFailsClosedNoSigil(t *testing.T) {
 // → Spawn fail-closed (VerifyReasonNoTrustAnchor). Intentional:
 // operator with cloud/ssh must configure Sigil (G-sigil-5).
 func TestSpawnFailsClosedNoTrustAnchor(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
+	h, d := setupSshProviderPlugin(t)
 	// Permission exists (lookup from setup), but trust-anchor set empty.
 	h.SigilAnchors = sharedhost.NewAnchorSet(nil)
 
@@ -505,31 +314,27 @@ func TestSpawnFailsClosedNoTrustAnchor(t *testing.T) {
 	}
 }
 
-func TestNewCloudDriverPluginRejectsWrongKind(t *testing.T) {
-	// Feed a Plugin whose artifact is an ssh_provider into the Cloud wrapper.
-	doc := schema.Document{Kind: schema.KindSSHProvider, ProtocolVersion: 1, ProviderKind: "static_key"}
-	p := &Plugin{BasePlugin: sharedhost.NewBasePluginForTest(
-		Discovered{Alias: "x", Doc: &doc},
-	)}
-	if _, err := NewCloudDriverPlugin(p); err == nil {
-		t.Fatal("expected error when wrapping ssh_provider Plugin as CloudDriverPlugin")
-	}
-}
-
 func TestNewSshProviderPluginRejectsWrongKind(t *testing.T) {
-	doc := schema.Document{Kind: schema.KindCloudDriver, ProtocolVersion: 1, ProfileSchema: map[string]any{"type": "object"}}
+	// A soul_module artifact fed into the ssh wrapper. Since the CloudDriver
+	// contract was removed (NIM-761) soul_module is the only other kind the keeper
+	// host handles, so it is what the wrapper must still refuse.
+	doc := schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1,
+		Modules: []schema.Module{{
+			Name:   "acl",
+			States: map[string]schema.State{"present": {Description: "the resource exists"}},
+		}}}
 	p := &Plugin{BasePlugin: sharedhost.NewBasePluginForTest(
 		Discovered{Alias: "x", Doc: &doc},
 	)}
 	if _, err := NewSshProviderPlugin(p); err == nil {
-		t.Fatal("expected error when wrapping cloud_driver Plugin as SshProviderPlugin")
+		t.Fatal("expected error when wrapping soul_module Plugin as SshProviderPlugin")
 	}
 }
 
 // TestSpawnParallel verifies multiple Spawns work correctly in parallel
 // (different sockets, no name collisions).
 func TestSpawnParallel(t *testing.T) {
-	h, d := setupCloudDriverPlugin(t)
+	h, d := setupSshProviderPlugin(t)
 
 	const n = 4
 	var wg sync.WaitGroup
@@ -546,12 +351,14 @@ func TestSpawnParallel(t *testing.T) {
 				return
 			}
 			defer p.Close()
-			cd, err := NewCloudDriverPlugin(p)
+			sp, err := NewSshProviderPlugin(p)
 			if err != nil {
 				errs[i] = err
 				return
 			}
-			if _, err := cd.Schema(ctx, &pluginv1.SchemaRequest{}); err != nil {
+			if _, err := sp.Authorize(ctx, &pluginv1.AuthorizeRequest{
+				Host: "soul-1.example.com", User: "deploy",
+			}); err != nil {
 				errs[i] = err
 			}
 		}(i)

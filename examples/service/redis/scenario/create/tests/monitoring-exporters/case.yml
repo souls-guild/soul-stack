@@ -65,8 +65,6 @@ fixtures:
       monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
 
   input:
-    provision:
-      enabled: false
     redis_type: sentinel
     version: "7.4.1"
     replicas_per_master: 0

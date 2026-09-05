@@ -56,7 +56,6 @@ bases:**
 | `core.bootstrap` | [`keeper/internal/coremod/bootstrap/delivered.go:77`](../../keeper/internal/coremod/bootstrap/delivered.go) |
 | `core.cert` | [`keeper/internal/coremod/cert/registered.go:53`](../../keeper/internal/coremod/cert/registered.go) |
 | `core.choir` | [`keeper/internal/coremod/choir/member.go:43`](../../keeper/internal/coremod/choir/member.go) |
-| `core.cloud` | [`keeper/internal/coremod/cloud/provisioned.go:61`](../../keeper/internal/coremod/cloud/provisioned.go) |
 | `core.soul` | [`keeper/internal/coremod/soul/registered.go:55`](../../keeper/internal/coremod/soul/registered.go) |
 | `core.state` | [`keeper/internal/stateop/verb.go:21`](../../keeper/internal/stateop/verb.go) |
 | `core.vault` | [`keeper/internal/coremod/vault/kvread.go:52`](../../keeper/internal/coremod/vault/kvread.go) |

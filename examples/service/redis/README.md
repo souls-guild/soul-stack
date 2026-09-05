@@ -33,17 +33,10 @@ operator passthrough directives, SHALLOW last-wins ([templating.md §2.3](../../
 > [`update_config`](scenario/update_config/main.yml) /
 > [`add_user`](scenario/add_user/main.yml) /
 > [`update_users`](scenario/update_users/main.yml) /
-> [`rotate_tls`](scenario/rotate_tls/main.yml). Optionally, `create` can, in the
-> **same run**, provision VMs for the topology via cloud-provision (`input.provision`,
-> state_schema bumped 4→7, shared body [`redis-provision.yml`](scenario/redis-provision.yml))
-> - see [Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1).
-> **★ Cloud-provision - keeper-side implemented, live provisioning awaits C1 + live-e2e.**
-> Bootstrap-token delivery is implemented keeper-side (module `core.bootstrap.delivered`,
-> [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md), SSH delivery). The
-> flow is valid at render time (L0 Trial) and passes unit tests, but live "VM→redis in
-> one run" provisioning still **will not pass live-e2e** without slice **C1** (cloud-init
-> generates a CA-signed host key so Keeper can verify the fresh VM's host cert without
-> TOFU) - details in the section. An unknown `redis_type` (outside the enum) is
+> [`rotate_tls`](scenario/rotate_tls/main.yml). `create` rolls onto an **existing**
+> roster: the cloud-provision path it used to offer went with the CloudDriver contract
+> in NIM-761 — see [Cloud-provision — removed](#cloud-provision--removed-nim-761).
+> An unknown `redis_type` (outside the enum) is
 > rejected by **Keeper input validation BEFORE rendering** (a clear failure, the run
 > never starts) - the former shell-mode-guard has been removed. The rest of the
 > backlog (sentinel failover/day-2, plugin `failover`, sentinel daemon TLS) - see
@@ -99,10 +92,11 @@ migration chain (ADR-019):
   the service); two flat `set`s with a `has()` guard (back-compat + idempotency on rerun);
 - [`008_provisioned_sids`](migrations/008_provisioned_sids/main.yml) - **cascade-destroy read-model**
   (addition to v7): state gets `provisioned_sids` (array string) - Keeper-side SID/FQDN
-  of VMs raised by our run. Day-2 teardown reads them to cascade-clean the
+  of VMs raised by our run. Day-2 teardown used to read them to cascade-clean the
   `souls`/`soul_seeds`/`bootstrap_tokens` registries (the Reaper does not remove
-  pending-VM-souls itself). Pairs with `provisioned_vm_ids`: `vm_ids` - provider id (for
-  `core.cloud.destroyed`), `sids` - Keeper Soul id (for cascade) - different subsystems.
+  pending-VM-souls itself). Pairs with `provisioned_vm_ids`: `vm_ids` was the provider id,
+  `sids` the Keeper Soul id - different subsystems. Both readers are gone (NIM-761); the
+  ladder steps stay because it is forward-only.
   One flat `set`, default `[]` for existing incarnations (`has()` guard);
 - [`009_seeded_from`](migrations/009_seeded_from/main.yml) - **seed-source read-model** (pilot
   `migrate_cluster`): state gets a nested object `seeded_from` - **where** the data was
@@ -158,9 +152,9 @@ installation, and so a repeated apply stays idempotent:
 | `redis_users` | array `AclUser` (`[{name, perms, state}]`) | **operator-extra** Redis ACL users (operator-created only). Element is a typed `AclUser` (`name` + `perms` required, `state` defaults to `on`) from [`types.yml`](types.yml), reusable via `$type: AclUser` in scenario `input:` (ADR-062). Prior to state_schema v6 this was a map `username → {perms, state}` - migration [`006_acl_users_map_to_array`](migrations/006_acl_users_map_to_array/main.yml) folded map→array (name key → `name` field). `perms` is the full ACL string (passwords are NOT in state - keeper-side Vault). **System** service users (`replica`/`monitoring`/`sentinel`/`haproxy`, etc.) are **NOT** written here - they're merged into `users.acl` from `vars.system_acl_users` on every render (see [System ACL users](#system-acl-users)) |
 | `redis_hosts` | array `{sid, role}` | topology hosts (written as `[]`; the exact `primary`/`replica`/`sentinel` roles for cluster/sentinel are laid out on the apply side - not recorded in state) |
 | `redis_sentinel` | object `{master_name, quorum, master_settings, settings}` | sentinel-mode facts: monitored master name (from `vars.sentinel_master_name`, default `master`) + quorum + `master_settings` (effective per-master sentinel directive dict = `vars.sentinel_master_defaults` overridden by `input.sentinel_master_settings`, `map<string,string>`; defaults `down-after-milliseconds`=`5000`/`failover-timeout`=`60000`) + `settings` (global passthrough `sentinel.conf` directives from `input.sentinel_settings`). `quorum` is always `0` (the auto `size/2+1` is computed in apply, not materialized in state). **(v11 restruct)**: the former named `down_after_ms`/`failover_timeout_ms` (v5) are folded into `master_settings`. Outside `sentinel` mode - an empty object |
-| `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md))** provider vm-ids of VMs raised **by this** create run via `core.cloud.created` (from `register.provision.vm_ids`). Day-2 teardown reads them for `core.cloud.destroyed`. Without provision (`input.provision` omitted/`enabled:false`) - `[]` (hosts are a declared roster, not provisioned by the service). See [Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1) |
-| `provisioned_provider` | string | **(v7)** cloud Provider name in the registry (used by the same `destroy` call; from `input.provision.provider`). Without provision - `''` |
-| `provisioned_sids` | array string | **(v8)** Keeper-side SID/FQDN of VMs raised **by this** run. `destroy` reads them to cascade-clean the `souls`/`soul_seeds`/`bootstrap_tokens` registries (read **paired** with `provisioned_vm_ids` - lengths must match, otherwise orphan; `destroy` carries an `assert` guard on the pairing). Without provision - `[]` |
+| `provisioned_vm_ids` | array string | **(v7, cloud-provision read-model)** provider vm-ids of the VMs a create run raised. **Nothing writes or reads this any more** — the writer (`core.cloud.created`) and the reader (`destroy`) both went with the CloudDriver contract in NIM-761. It survives because the migration ladder is forward-only and an incarnation created before the change still carries it; on a new one it is **absent**. See [Cloud-provision — removed](#cloud-provision--removed-nim-761) |
+| `provisioned_provider` | string | **(v7)** the cloud Provider row name. Dead for the same reason, and absent on a new incarnation |
+| `provisioned_sids` | array string | **(v8)** Keeper-side SID/FQDN of the VMs a create run raised. Dead for the same reason: the `destroy` scenario that read it (paired with `provisioned_vm_ids`, under an `assert` on the pairing) went with the CloudDriver contract in NIM-761. Absent on a new incarnation |
 | `seeded_from` | object `{source_endpoints, detached, source_password_ref, source_tls_ca_ref}` | **(v8/v10)** **where** the data was seeded from during `migrate_cluster`: `source_endpoints` (array string - external source), `detached` (bool - `true` after `detach_source`), `source_password_ref`/`source_tls_ca_ref` (Vault **paths** to the source's credentials, **not** secrets - v10). For plain `create` (not a migration) - `{source_endpoints: [], detached: false}` + empty refs |
 
 Besides the fields listed, `state_schema` carries **named intent fields** (read-model,
@@ -197,7 +191,6 @@ text:
 | `connection_mode` | enum `tls`/`tls_plain`/`plain`, default `plain` | **(network channel)** Redis channel mode (replaced the boolean `tls_enabled`/`tls_keep_plain` - redesign). `plain` (default) - plain port 6379 only (TLS off); `tls_plain` - TLS and plain simultaneously; `tls` - TLS only (plain port closed, `port 0`). The enum **structurally** excludes "no listener at all". Technical TLS parameters (port, Vault paths `cert`/`key`/`ca`) are NOT operator input: they live in `service vars` (`tls_port`/`tls_cert_ref`/`tls_key_ref`/`tls_ca_ref`, author context). destiny reads the PEM via `vault(ref)` in the `content` cell (seal masking) |
 | `sentinel_settings` | object (passthrough, key→value strings), optional | **(sentinel)** global (not per-master) passthrough `sentinel.conf` directives (`resolve-hostnames`, `announce-port`, …), not covered by `sentinel_master_settings`. Merged into `sentinel.conf` alongside the per-master directives. No version validation (there is no sentinel catalog). New field (redesign) |
 | `sentinel_master_settings` | object (passthrough, key→value strings), optional | **(sentinel)** per-master Sentinel directives: key is the `SENTINEL SET` option name without the prefix and master name (`down-after-milliseconds`, `failover-timeout`, `parallel-syncs`, …); value is a string. Overrides the `vars.sentinel_master_defaults` defaults (`down-after-milliseconds`=`5000`, `failover-timeout`=`60000`). **Absorbed** the former named fields `sentinel_down_after_ms`/`sentinel_failover_timeout_ms` (redesign) |
-| `provision` | object `{enabled, provider, profile, ssh_provider, await_timeout}`, optional | **★ keeper-side implemented, live awaits C1** ([Cloud-provision](#cloud-provision-create-provisions-vms-live-awaits-c1)): provision VMs for the topology in the **same** create run ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md), Option A). `enabled: true` → cloud-create + token delivery + onboarding barrier, then the redis role on the newly created hosts; omitted / `enabled: false` → run against the existing roster (behavior bit-for-bit identical to without the feature). `provider`/`profile` - names in the `providers`/`profiles` registries; `ssh_provider` - the SshProvider plugin name for token delivery (`core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)); `await_timeout` (`<N>{s\|m\|h}`) - ceiling for onboarding wait (unset → `vars.provision_await_timeout`, default `10m`). **There is no VM count field in `provision`** - it's derived from the topology (`shards`/`replicas_per_master`). **Live provisioning awaits slice C1** (cloud-init CA-signed host key) + live-e2e - see the section |
 **What's missing from the input contract (service vars parameters or auto-computed):**
 
 - `sentinel_quorum` - **auto** `size(hosts)/2+1` (majority), computed in apply.
@@ -469,8 +462,12 @@ the incarnation** — the corpus carries one of each so both paths stay exercise
 
 | Scenario | VMs | Name |
 |---|---|---|
-| [`create`](scenario/create/main.yml) | provisions them (ADR-061) | operator types `name` (free text, as before) |
+| [`create`](scenario/create/main.yml) | rolls onto a ready roster | operator types `name` (free text, as before) |
 | [`create_from_souls`](scenario/create_from_souls/main.yml) | rolls onto a ready roster | **composed** from input components ([ADR-079](../../../docs/adr/0079-incarnation-name-template.md)) |
+
+Since NIM-761 removed `create`'s provisioning path, the two differ **only** in how the
+incarnation is named. Folding them into one is not this ticket's business, but there is
+no longer a behavioural reason to keep both.
 
 `create_from_souls` declares
 
@@ -660,87 +657,27 @@ per-module doc [`docs/module/redis/README.md`](../../../docs/module/redis/README
 > `sentinel_enabled: true` flags) - for reuse by other services (e.g. DragonFly), but
 > it is no longer invoked through the redis service.
 
-### Cloud-provision (`create` provisions VMs, live awaits C1)
+### Cloud-provision — removed (NIM-761)
 
-> **★★ Keeper-side implemented, live provisioning awaits C1 + live-e2e.** Per-VM
-> bootstrap-token delivery is implemented keeper-side - module `core.bootstrap.delivered`
-> ([ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md), SSH token delivery;
-> replaced the `keeper.push.applied` stub). The flow is valid at render time (L0 Trial)
-> and passes unit tests. But a live "VM→redis in one pass" run still **will not pass
-> live-e2e** without slice **C1**: `push.Dial` only trusts a host-cert signed by the
-> host-CA (rejecting TOFU), while a fresh VM's host key after cloud-init is still
-> **bare** (not CA-signed) - the handshake during token delivery is rejected at
-> connect time, the token is never delivered → the created VMs won't pass CSR
-> onboarding → the `await_online` barrier (c) never reaches quorum presence →
-> `error_locked`. C1 = cloud-init (B-flat userdata) generates a CA-signed host key
-> with the same host-CA so Keeper can verify the host-cert. Until C1 + live
-> validation, cloud `input.provision.enabled: true` against a live Keeper does not
-> carry a run through to completion. A sample of the same flow -
-> [`examples/service/example-cloud-bootstrap/`](../example-cloud-bootstrap/).
+`create` used to be able to raise the VMs for the topology in the same run, through a
+shared service-level body `scenario/redis-provision.yml` gated on `input.provision`.
+That body is gone, and so are `input.provision` and the `vars.provision_*` defaults:
+its first step was `core.cloud.created`, and NIM-761 removed the `core.cloud` module
+along with the whole CloudDriver contract. A cloud plugin is now an ordinary
+`side: keeper` SoulModule with its own module address, so provisioning is no longer
+something the engine offers a service — a fleet that wants it addresses its own cloud
+plugin from its own fork of this scenario.
 
-An optional `create` capability (state_schema v7, [ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md),
-Option A): **one** create run provisions VMs for the topology **and** deploys Redis on
-them. Gated by `input.provision` ([Operator input contract](#operator-input-contract))
-- set with `enabled: true` turns on the **shared, service-level provision body**
-[`scenario/redis-provision.yml`](scenario/redis-provision.yml) (conditional-include
-**strictly before** the cluster/sentinel branch); omitted / `enabled: false` - a run
-against the existing roster, behavior bit-for-bit identical to without the feature.
-The body lives **at service level** (`scenario/<file>`, not inside a single scenario)
-and is included by filename by **both** consumers - `create` and `migrate_cluster`:
-scenario-include resolves `scenario/<name>/<file>`, then falls back to
-`scenario/<file>` ([orchestration.md §6](../../../docs/scenario/orchestration.md)), so
-there is no duplicate.
+What `create` does now is what `enabled: false` always did: it rolls the redis role
+onto the **existing** roster. That path is unchanged, bit for bit, and it is the one
+every L0 case in `scenario/create/tests/` exercises.
 
-**Flow** (`redis-provision.yml`, all three steps at keeper-side addresses):
+The three read-model fields survive in `state_schema` (see [state_schema](#state_schema)):
+the migration ladder is forward-only, so `007_cloud_provision_read_model` and
+`008_provisioned_sids` stay where they are and an incarnation created before this
+change keeps whatever it recorded. Nothing writes them any more, so on a new
+incarnation all three are simply **absent**, and every reader already defaults them.
 
-1. **(a) cloud-create** - `module: core.cloud.created` ([keeper-side core](../../../docs/keeper/cloud.md),
-   ADR-017). Creates VMs via the `soul-cloud-<provider>` CloudDriver plugin. **The VM
-   count is derived from the topology** (`cluster`: `shards * (1 + replicas_per_master)`;
-   `sentinel`: `1 + replicas_per_master`) - there is no separate `node_count` in
-   `input.provision` (it would desync from the size formula). `generate_userdata: true`
-   (ADR-017(h) B-flat): Keeper renders cloud-init from `keeper.yml::cloud_init` (CA +
-   soul-binary URL); the userdata does **NOT** carry tokens. The per-VM bootstrap token
-   → `register.provision.hosts[].bootstrap_token` (plain one-time, masked by
-   `audit.MaskSecrets`).
-2. **(b) token delivery** - `module: core.bootstrap.delivered` ([keeper-side core](../../../docs/keeper/modules.md#corebootstrapdelivered),
-   [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)). Takes
-   `register.provision.hosts` (sid + primary_ip + the plain bootstrap token from step
-   (a)) and delivers **just the token** over SSH to each VM (the binary/CA/unit were
-   already installed by cloud-init): the token goes over STDIN (not argv) →
-   `/etc/soul/token` (`mode 0400`), then `systemctl start soul` (`start_soul` default
-   `true`). `ssh_provider` - `input.provision.ssh_provider` (the SshProvider plugin
-   name). **B1-strict**: a failure on any host → the step is `failed` → state is not
-   committed → `error_locked`. **★ Implemented keeper-side, but requires C1**
-   (CA-signed VM host key) - without it `push.Dial` rejects the host-cert at connect
-   time (see the callout above).
-3. **(c) registration + onboarding barrier** - `module: core.soul.registered` ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md)).
-   `sid` - the **list** of created VMs' SIDs (`register.provision.hosts.map(h, h.sid)`,
-   list-SID ADR-061); `coven` - the root `incarnation.id`. `await_online: true` blocks,
-   waiting for the created Souls to go online (Redis SID-lease) within `await_timeout`;
-   **B1-strict**: falling short of quorum → the step is `failed` → state is not
-   committed → `error_locked`. `refresh_soulprint: true` → on success the
-   scenario-runner re-resolves the roster **before** the cluster/sentinel branch
-   (otherwise the branch would see an empty/stale `soulprint.hosts` - the created VMs
-   wouldn't yet be in the roster).
-
-On success, the cluster/sentinel branch rolls out the redis role onto the now-online
-hosts. Three `core.state.set` steps inside the provision body itself - between the
-`core.cloud.created` step that fills `register.provision` and the steps that consume it -
-write `provisioned_vm_ids` (from `register.provision.vm_ids`), `provisioned_sids` (SID of
-each created VM) and `provisioned_provider`. They live there rather than at the end of the
-run because a capture must precede every consumer of its register
-([ADR-0084](../../../docs/adr/0084-explicit-state-capture.md)). On a non-provision run the
-include is dropped whole, so no step writes them and the three fields stay **absent**;
-every reader (`destroy`, the migrations) defaults them.
-
-**Teardown - scenario [`destroy`](#destroy-teardown-cloud-provisioned-vm).** Tearing
-down provisioned VMs is implemented as a separate **lifecycle** scenario
-(`scenario/destroy/`, not runnable from the Run form - a terminal flow triggered by
-`DELETE /v1/incarnations/{name}`): it reads `provisioned_vm_ids` / `provisioned_sids` /
-`provisioned_provider` from `incarnation.state` and calls `core.cloud.destroyed` +
-cascade-cleans the registries. On a non-provisioned incarnation (deployed onto
-pre-existing VMs), the `destroyed` task is group-dropped (nothing to tear down).
-Details - [`destroy`](#destroy-teardown-cloud-provisioned-vm).
 
 ### `redis_settings` directive-name validator
 
@@ -1128,8 +1065,6 @@ the `detach_source` offset snapshot will be lost if the operator hasn't stopped 
 L0 cases - [`migrate_cluster/tests/`](scenario/migrate_cluster/tests/):
 [`sentinel-migrate-1master-1replica`](scenario/migrate_cluster/tests/sentinel-migrate-1master-1replica/case.yml),
 [`cluster-migrate-2shards`](scenario/migrate_cluster/tests/cluster-migrate-2shards/case.yml),
-[`sentinel-migrate-provision-enabled`](scenario/migrate_cluster/tests/sentinel-migrate-provision-enabled/case.yml)
-(provision + migration in a single run),
 [`cluster-migrate-replicas-rejected`](scenario/migrate_cluster/tests/cluster-migrate-replicas-rejected/case.yml).
 Plugin state (`replica` `source_external`, `offset-synced`) - in the
 [per-module doc](../../../docs/module/redis/README.md).
@@ -1177,43 +1112,21 @@ L0 cases - [`detach_source/tests/`](scenario/detach_source/tests/):
 [`empty-seeded-source`](scenario/detach_source/tests/empty-seeded-source/case.yml)
 (guard against a non-migrated incarnation).
 
-### `destroy` (teardown cloud-provisioned VM)
+### `destroy` — removed (NIM-761)
 
-[`scenario/destroy/main.yml`](scenario/destroy/main.yml) - **tear down the VMs** raised
-by a create/migrate run via cloud-provision ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md)),
-and cascade-clean the keeper registries for those hosts. A **lifecycle** scenario, **not**
-runnable from the Run form - a terminal flow triggered by `DELETE /v1/incarnations/{name}`
-(keeper treats the name `destroy` as a lifecycle phase, `TerminalDestroy` mode; symmetric
-with `create` as bootstrap).
+`scenario/destroy/` existed to tear down cloud-provisioned VMs: an `assert` on the
+`sids ↔ vm_ids` pairing followed by one `core.cloud.destroyed` step. With that module
+gone the scenario had no tasks left, so it went with it — unlike DragonFly, whose
+`destroy` also carried a Soul-side teardown branch and therefore survives without its
+cloud half.
 
-- **What to tear down is a fact from state, not input** (`input: {}`): `destroy` reads
-  back `provisioned_vm_ids` (provider id for `core.cloud.destroyed`), `provisioned_sids`
-  (Keeper id for cascade) and `provisioned_provider`, all recorded by the provision run.
-- **Cascade in one PG transaction:** `PluginHost.Destroy(vm_ids)` + `souls → destroyed`,
-  active `soul_seeds → orphaned`, active `bootstrap_tokens → burned`. The cascade is
-  needed because the Reaper does **not** clean up pending-VM-souls itself - without
-  `sids` the records would be left orphaned (a break of bootstrap-token anti-replay).
-- **★ `sids ↔ vm_ids` pairing (assert):** both are read as a **pair** (a length mismatch
-  means an orphan). `provision` writes both under one guard (a single source of size),
-  so their lengths are equal in the normal case; a render-time `assert` catches state
-  corruption (a manual edit / a bug) **BEFORE** an irreversible destroy. On a
-  non-provisioned incarnation both sides default to `[]` → `0 == 0` → vacuously true.
-- **★ Group-drop on non-provisioned incarnations:** on an incarnation deployed
-  **without** provision (deployed onto pre-existing VMs), there's nothing to tear down.
-  The gate `when: size(provisioned_vm_ids) > 0` on the `destroyed` task is static
-  (depends only on `incarnation.*`) → a render-phase **group-drop**: with an empty
-  `provisioned_vm_ids` the task never physically enters the plan. Teardown without a
-  cloud call goes through cleanly.
-- **★ state capture is intentionally absent:** `destroy` is terminal - the
-  incarnation is deleted (`auto_destroy`), so clearing `provisioned_*` in state would be
-  pointless (state goes away together with the incarnation).
+The consequence is visible to an operator: `DELETE /v1/incarnations/{name}` on a redis
+incarnation no longer runs a teardown scenario, so the archive records it as
+`force_destroyed` with the unreleased SIDs listed rather than as `destroyed`. The
+keeper never required a `destroy` scenario, and it never verified that one released
+anything — so nothing here regressed except the label, and the label is now the honest
+one: this service releases nothing at teardown.
 
-L0 cases - [`destroy/tests/`](scenario/destroy/tests/):
-[`destroy-provisioned`](scenario/destroy/tests/destroy-provisioned/case.yml),
-[`destroy-not-provisioned`](scenario/destroy/tests/destroy-not-provisioned/case.yml)
-(group-drop of the `destroyed` task),
-[`destroy-sids-vmids-mismatch`](scenario/destroy/tests/destroy-sids-vmids-mismatch/case.yml)
-(the pairing assert-guard).
 
 ## Security
 
@@ -1383,8 +1296,8 @@ external cluster** -
 [`migrate_cluster`](#migrate_cluster-day-2-migrate-from-an-external-cluster) (sentinel +
 cluster) + day-2 [`detach_source`](#detach_source-day-2-detach-the-external-source)
 (sentinel; a cluster-detach isn't needed - the migration is atomic) - and **teardown**
-[`destroy`](#destroy-teardown-cloud-provisioned-vm) (lifecycle, tears down
-cloud-provisioned VMs + cascade-cleans the registries). The next batches of the
+[`destroy`](#destroy--removed-nim-761) (removed with the provisioning path it tore
+down). The next batches of the
 redis-consolidation epic (**not yet implemented** in this service):
 
 - day-2 sentinel: failover (switchover) and other day-2 operations for the sentinel
@@ -1394,15 +1307,6 @@ redis-consolidation epic (**not yet implemented** in this service):
 - TLS for the sentinel daemon (`:26379`): the redis-server TLS data plane is already
   implemented (operator enum `connection_mode` ∈ `tls`/`tls_plain`/`plain`; technical
   parameters live in service vars), TLS for the sentinel daemon is a follow-up;
-- **cloud-provision (`input.provision`) - keeper-side implemented, live awaits C1**:
-  bootstrap-token delivery is implemented keeper-side (module
-  `core.bootstrap.delivered`, [ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md),
-  SSH delivery). The render/L0 flow is valid and passes unit tests, but a live
-  "VM→redis in one pass" provisioning run awaits slice **C1** (a cloud-init CA-signed
-  host key to verify the host-cert without TOFU) + live-e2e - see
-  ["Cloud-provision"](#cloud-provision-create-provisions-vms-live-awaits-c1).
-  Teardown of provisioned VMs - the [`destroy`](#destroy-teardown-cloud-provisioned-vm)
-  scenario (implemented);
 - **a version-aware `redis_settings` validator in day-2 `update_config`** - so far only
   present in `create` (see ["Directive-name validator"](#redis_settings-directive-name-validator)).
 

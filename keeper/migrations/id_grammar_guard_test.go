@@ -11,8 +11,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
-	"github.com/souls-guild/soul-stack/keeper/internal/profile"
-	"github.com/souls-guild/soul-stack/keeper/internal/provider"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
 	"github.com/souls-guild/soul-stack/keeper/internal/serviceregistry"
 )
@@ -83,20 +81,6 @@ var idGrammarCases = []idGrammarCase{
 		newCheck:   "service_registry_id_format",
 		goPattern:  serviceregistry.IDPattern,
 		goConstant: "serviceregistry.IDPattern",
-	},
-	{
-		table:      "providers",
-		oldCheck:   "providers_name_format",
-		newCheck:   "providers_id_format",
-		goPattern:  provider.IDPattern,
-		goConstant: "provider.IDPattern",
-	},
-	{
-		table:      "profiles",
-		oldCheck:   "profiles_name_format",
-		newCheck:   "profiles_id_format",
-		goPattern:  profile.IDPattern,
-		goConstant: "profile.IDPattern",
 	},
 	{
 		table:      "push_providers",
@@ -287,6 +271,27 @@ func renamedTables(upSQL string) []string {
 	return out
 }
 
+// droppedStmtRe / droppedTables read the OTHER half of the question. A table the
+// rename migration converted and a LATER migration dropped has no Go constant
+// left to compare a CHECK against, and demanding a case for it would be asking
+// for a guard over a table that does not exist. Read out of the corpus rather
+// than listed here, so dropping a registry needs no edit in this file — the same
+// reason renamedTables reads the migration instead of a literal.
+var droppedStmtRe = regexp.MustCompile(`DROP TABLE (?:IF EXISTS )?(\w+);`)
+
+func droppedTables(corpus map[string]string) map[string]string {
+	out := map[string]string{}
+	for name, sql := range corpus {
+		if name <= renameMigration {
+			continue
+		}
+		for _, m := range droppedStmtRe.FindAllStringSubmatch(sql, -1) {
+			out[m[1]] = name
+		}
+	}
+	return out
+}
+
 // TestIDGrammar_GoConstantMatchesTheCHECK — the guard itself, over the real
 // migrations and the real constants.
 func TestIDGrammar_GoConstantMatchesTheCHECK(t *testing.T) {
@@ -319,12 +324,21 @@ func TestIDGrammar_EveryRenamedTableIsGuarded(t *testing.T) {
 		guarded[c.table] = true
 	}
 
+	dropped := droppedTables(migrationCorpus(t))
 	renamed := renamedTables(upSQL)
 	if len(renamed) == 0 {
 		t.Fatalf("%s renames no column — either the migration was gutted or the statement shape moved, "+
 			"and either way every case below would pass vacuously", renameMigration)
 	}
 	for _, table := range renamed {
+		if by, gone := dropped[table]; gone {
+			if guarded[table] {
+				t.Errorf("idGrammarCases still has a row for %s, which %s dropped — the case is "+
+					"checking a table that no longer exists", table, by)
+				delete(guarded, table)
+			}
+			continue
+		}
 		if !guarded[table] {
 			t.Errorf("%s renames %s.name -> .id, but idGrammarCases has no row for it: its Go constant "+
 				"and its SQL CHECK are free to drift apart unnoticed. Add the row in the same change "+

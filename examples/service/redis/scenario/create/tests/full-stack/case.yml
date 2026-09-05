@@ -89,10 +89,6 @@ fixtures:
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
-    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto an
-    # EXISTING roster, cloud-create not needed) → include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: sentinel
     version: "7.4.1"
     # single-host sentinel roster (1 host) → no replicas (size-guard 1+0).

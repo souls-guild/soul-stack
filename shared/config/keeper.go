@@ -249,7 +249,8 @@ type KeeperConfig struct {
 	WebUIEnabled *bool `yaml:"web_ui_enabled,omitempty"`
 
 	// CloudInit holds the cloud-init userdata render parameters for VMs created
-	// by `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat
+	// by `core.bootstrap.delivered` with `install: true` (ADR-063; written for the
+	// removed `core.cloud.provisioned`, ADR-017(h) amendment 2026-05-27, B-flat
 	// locked). With nil, userdata generation is unavailable: a scenario with
 	// `generate_userdata: true` fails with an explicit error; an explicit
 	// `userdata` in params keeps working unchanged.
@@ -1463,7 +1464,6 @@ type KeeperPlugins struct {
 	FetchTimeout      string               `yaml:"fetch_timeout,omitempty"`
 	MaxArtifactSizeMB int                  `yaml:"max_artifact_size_mb,omitempty"`
 	MaxCloneSizeMB    int                  `yaml:"max_clone_size_mb,omitempty"`
-	CloudDrivers      []PluginCatalogEntry `yaml:"cloud_drivers,omitempty"`
 	SSHProviders      []PluginCatalogEntry `yaml:"ssh_providers,omitempty"`
 	SoulModules       []PluginCatalogEntry `yaml:"soul_modules,omitempty"`
 }

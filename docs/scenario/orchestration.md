@@ -1297,15 +1297,12 @@ host probe is **not** visible to it. The channel is one-way by design — a host
 of its own bucket and the keeper bucket (its own wins,
 [ADR-0083](../adr/0083-declared-secret-state-fields.md) §5), a keeper task never sees host register.
 
-The canonical consumer is the cloud-provision read-model
-([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)): a capture reads
-`register.provision.vm_ids` / `.hosts` from the keeper step `core.cloud.created` of an earlier
-Passage — see the `provisioned_*` captures in
-[`examples/service/redis/scenario/redis-provision.yml`](../../examples/service/redis/scenario/redis-provision.yml).
+The shape is a capture reading the register of a keeper step from an earlier Passage — a
+`side: keeper` plugin that creates something, then a capture recording what it created:
 
 ```yaml
-- name: provision the VMs
-  module: core.cloud.created
+- name: create the VMs
+  module: wb-cloud.vm.created
   register: provision
   params: { … }
 

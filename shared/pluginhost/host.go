@@ -3,7 +3,7 @@
 //
 // It implements the kind-agnostic part of a plugin subprocess lifecycle:
 // fork → handshake → dial gRPC → graceful shutdown. Kind-specific wrappers
-// (SoulModule / CloudDriver / SshProvider) live in host-side packages
+// (SoulModule / SshProvider) live in host-side packages
 // (`soul/internal/pluginhost`, `keeper/internal/pluginhost`) and build on top
 // of [BasePlugin].
 //
@@ -192,14 +192,14 @@ func WithEnv(env []string) SpawnOption {
 // The module travels as argv: `soul-mod-redis acl`. d.Module says which one, and it is
 // the only one this spawn discloses, checks or serves; an artifact asked for a module
 // it does not have exits non-zero rather than falling through to another (sdk/module
-// → ServeBundle). A single-endpoint kind (cloud_driver / ssh_provider / soul_beacon)
+// → ServeBundle). A single-endpoint kind (ssh_provider / soul_beacon)
 // has no module and is spawned with no arguments.
 //
 // One-shot per Spawn contract (ADR-020(d)): the caller invokes Spawn before each
 // RPC series and [BasePlugin.Close] after. Connection pooling is not provided —
 // this simplifies task isolation and removes proxied state between RPCs.
 //
-// Kind-specific gRPC client stubs (SoulModuleClient / CloudDriverClient /
+// Kind-specific gRPC client stubs (SoulModuleClient /
 // SshProviderClient) are built by the caller from [BasePlugin.Conn] — this
 // package is kind-agnostic.
 //

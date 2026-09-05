@@ -1,7 +1,7 @@
 // Package handshake is a shared Soul Stack SDK helper for plugin authors.
 //
 // It implements the gRPC-stdio handshake protocol shared by all three
-// plugin kinds (soul_module / cloud_driver / ssh_provider) per the
+// plugin kinds (soul_module / ssh_provider / soul_beacon) per the
 // docs/keeper/plugins.md → Handshake / Lifecycle spec and ADR-020.
 //
 // SDK-to-host contract:

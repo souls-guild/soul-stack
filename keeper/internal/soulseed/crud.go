@@ -271,7 +271,7 @@ WHERE sid = $1 AND status = 'active'
 `
 
 // OrphanActiveBySID moves the active seed for this SID to `orphaned`.
-// It is used by keeper-side core module `core.cloud.provisioned destroyed`
+// It was used by the removed keeper-side core module `core.cloud.provisioned destroyed`
 // (ADR-017 cascade) inside a shared PG transaction together with
 // `soul.UpdateStatus(destroyed)` and `bootstraptoken.BurnAllForSID`.
 //

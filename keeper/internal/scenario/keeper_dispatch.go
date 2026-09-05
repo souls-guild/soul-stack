@@ -264,7 +264,7 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 // ApplyEvent stream into a final result (changed/failed/output/message),
 // mirroring Soul-side runTask (selfRegisterData). Module address splits into
 // (base, state) via the same config.SplitModuleAddr as Soul-side plantask/
-// applyrunner: the registry indexes modules by base (`core.cloud`), state
+// applyrunner: the registry indexes modules by base (`core.vault`), state
 // (`created`) goes into ApplyRequest.state. A malformed address or a module
 // found in neither registry → failed (like Soul on an unknown module). Apply
 // returning a gRPC error (not a failed event) → failed with the error text.
@@ -631,7 +631,7 @@ func keeperRegisterBucket(registerByHost map[string]map[string]any) map[string]a
 //
 // Passage filter (staged render, ADR-056, Slice 2): keeper tasks are
 // stratified by register dependency like host tasks (core.bootstrap.delivered
-// reads register.provision.* → Passage strictly AFTER core.cloud.created).
+// reads register.provision.* → Passage strictly AFTER the step that filled it).
 // dispatchKeeperTasks is called per-Passage on tasks re-rendered for
 // ActivePassage=p; only this Passage's keeper tasks are selected here. A
 // future Passage's (>p) keeper task on this render is a placeholder without

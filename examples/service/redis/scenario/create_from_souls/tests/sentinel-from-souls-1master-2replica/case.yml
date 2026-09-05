@@ -1,19 +1,10 @@
-# L0 test of create_from_souls in sentinel mode — deploy onto an EXISTING roster (without
-# provisioning). Multi-host roster (fixtures.hosts) of 3 hosts: replicas_per_master=2 →
-# topology 1+2=3 (size-guard passes). Master election: the host first by SID (node-1) =
-# master; node-2/node-3 = replicas.
+# Sentinel onto an EXISTING roster, taken from fixtures.hosts.
 #
-# ★ ACCEPTANCE CRITERION (difference from create): the run rolls over an existing roster WITHOUT
-# provisioning steps. task_absent asserts that core.cloud.created (VM creation) and
-# core.soul.registered (onboarding barrier) are ABSENT from the plan — create_from_souls
-# has neither an include of redis-provision.yml nor a provision section. The state-read-model
-# provisioned_vm_ids/sids/provider are never captured (their steps live in that include) and
-# stay ABSENT — asserted by state_absent.
-#
-# Render-only, hermetic. The dispatcher includes cluster.yml + sentinel.yml via
-# CONDITIONAL-INCLUDE (when: on include, orchestration.md §6 Option B): on a sentinel
-# run the cluster branch is DROPPED (group-drop), the sentinel branch is expanded. The deploy body
-# (redis-deploy-sentinel.yml) — service-level, same as for create.
+# Since NIM-761 removed the provisioning path, `create` rolls onto an existing roster
+# too, so this case no longer contrasts with it on THAT axis. What it still pins is the
+# `create_from_souls` contract itself: the roster is GIVEN (input.souls, NIM-371), the
+# incarnation id is COMPOSED from input components (ADR-079) rather than typed, and no
+# onboarding barrier is emitted because the hosts are already there.
 name: sentinel deploy on existing roster without provision
 
 fixtures:
@@ -186,11 +177,9 @@ assert:
           quorum: 2
 
   task_absent:
-    # ★ create_from_souls CRITERION: provisioning steps are ABSENT from the plan. create_from_souls
-    # doesn't include redis-provision.yml and doesn't carry a provision section → neither VM creation
-    # (core.cloud.created) nor the onboarding barrier (core.soul.registered) are emitted.
-    # The run rolls over an existing roster. That's exactly the difference from create.
-    - module: core.cloud.created
+    # The onboarding barrier is ABSENT: create_from_souls is GIVEN its hosts, so it
+    # never registers or awaits one. (`core.cloud.created` used to be asserted absent
+    # here too; the module no longer exists, so the assertion proved nothing — NIM-761.)
     - module: core.soul.registered
 
   state_after:
@@ -228,9 +217,9 @@ assert:
     modules: [bloom, json, search, timeseries]
     sysctl_settings: {}
 
-  # ★ The three cloud-provision fields are ABSENT, not empty: their capture steps live in
-  # redis-provision.yml, which create_from_souls does not include at all (unlike create).
-  # Nothing writes them, so they never enter state ([ADR-0084] F-B).
+  # ★ The three cloud-provision fields are ABSENT, not empty. They are a leftover of the
+  # removed provisioning path (NIM-761) that the migration ladder still carries, so an
+  # incarnation created today never has them written ([ADR-0084] F-B).
   state_absent:
     - provisioned_vm_ids
     - provisioned_sids

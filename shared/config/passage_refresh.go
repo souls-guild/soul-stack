@@ -5,7 +5,7 @@ import "github.com/souls-guild/soul-stack/shared/coremanifest"
 // roster-refresh passage boundary (ADR-0061 §S2, amends ADR-056).
 //
 // Why. The target ADR-0061 scenario is a single create run provision→onboarding→role:
-// step `core.cloud.provisioned` (keeper) creates N VMs, step `core.soul.registered`
+// a `side: keeper` plugin step creates N VMs, step `core.soul.registered`
 // (keeper) with `refresh_soulprint: true` registers and waits for their onboarding,
 // and subsequent tasks apply the role to the ALREADY-onboarded hosts via the roster
 // (`soulprint.hosts`, an omitted `on:`, `soulprint.self.*`). The run roster is

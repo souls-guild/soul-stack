@@ -8,8 +8,11 @@ Each item is with a link to the canon (ADR / runbook), which describes "how it w
 
 Beta works with **existing hosts**: the operator himself picks up the VM/hardware and onboards Soul ([getting-started.md → Step 6](getting-started.md#step-6-onboard-one-soul)). Dynamic creation of VMs from Soul Stack is not included in the beta.
 
-- **Provider and Profile** (cloud account + VM template) - the concept is there, stored in Postgres, but **REST routes `POST /v1/providers` / `POST /v1/profiles` are postponed** - cloud-CRUD is not implemented ([keeper/cloud.md → Provider and Profile](keeper/cloud.md), [operator-api.md → Cloud](keeper/operator-api.md)). Provider/Profile management via REST / MCP / UI in beta **no**.
-- Script step `core.cloud.provisioned` (`on: keeper`, calling the CloudDriver plugin) was designed ([ADR-017](adr/0017-keeper-side-core.md)), but without a configured Provider/Profile it cannot be used in beta.
+Since NIM-761 there is no engine-side cloud step at all: the `CloudDriver` contract, the
+`core.cloud` module and the Provider / Profile registries were removed. A VM is created by a
+`side: keeper` SoulModule plugin carrying its own credentials and parameters — the mechanism
+works (proved end to end against a real cloud on 2026-09-04), but no such plugin ships in this
+repository, so out of the box Soul Stack still creates nothing.
 
 If you want dynamic provisioning, this is post-beta. Now: Create a host outside of Soul Stack, then `POST /v1/souls` + `soul init`.
 

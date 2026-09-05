@@ -3,7 +3,7 @@
 //
 //   - cloud-init userdata (B-flat, [ADR-017(h)](../../../docs/adr/0017-keeper-side-core.md)):
 //     [RenderCloudInitYAML] prints cloud-config YAML, provider puts it into VM
-//     metadata during Create. Used by `core.cloud.created`.
+//     metadata during Create. Was used by the removed `core.cloud.created`.
 //   - full install over SSH (Teleport, [ADR-063 amendment](../../../docs/adr/0063-bootstrap-token-delivery.md)):
 //     [RenderInstallScript] returns sequence of SSH commands for platforms
 //     without cloud-init userdata (e.g. a namespace with `ci_user_data` disabled).

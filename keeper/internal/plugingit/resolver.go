@@ -1,7 +1,7 @@
 // Package plugingit — git resolver for Keeper-side plugin sources
 // (ADR-026 Sigil, F-fetch approach, slice A1-S1).
 //
-// Before A1-S1 catalog `keeper.yml::plugins.{cloud_drivers,ssh_providers}` carried
+// Before A1-S1 catalog `keeper.yml::plugins.{ssh_providers,soul_modules}` carried
 // `source`/`ref`, but they were NOT used — binary reached cache slot outside
 // Soul Stack. Resolver closes this: for each catalog entry Keeper itself
 // git-resolves `source`+`ref` to a commit_sha slot, extracting the ALREADY-BUILT
@@ -187,7 +187,7 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 // import workaround.
 const bytesPerMiB = 1024 * 1024
 
-// ResolveCatalog resolves entire catalog cloud_drivers + ssh_providers +
+// ResolveCatalog resolves entire catalog ssh_providers +
 // soul_modules. Per-entry errors converted to warnings (fail-closed):
 // broken entry skipped, Keeper does not crash. Returns (successfully
 // resolved slots, warnings, fatal error). fatal — only what breaks
@@ -202,8 +202,7 @@ func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlu
 		warnings []string
 	)
 	entries := make([]config.PluginCatalogEntry, 0,
-		len(plugins.CloudDrivers)+len(plugins.SSHProviders)+len(plugins.SoulModules))
-	entries = append(entries, plugins.CloudDrivers...)
+		len(plugins.SSHProviders)+len(plugins.SoulModules))
 	entries = append(entries, plugins.SSHProviders...)
 	entries = append(entries, plugins.SoulModules...)
 

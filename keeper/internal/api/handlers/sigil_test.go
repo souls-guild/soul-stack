@@ -69,7 +69,7 @@ func sigilSlotFixture() *pluginhost.SlotContents {
 	digest := sha256.Sum256([]byte("cloud-binary"))
 	return &pluginhost.SlotContents{
 		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
+		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 		BinarySHA256: hex.EncodeToString(digest[:]),
 	}
 }
@@ -184,7 +184,7 @@ func TestSigilHandler_List_200_NoSignatureNoSchema(t *testing.T) {
 			Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0",
 			SHA256:       "deadbeef",
 			Signature:    []byte("secret-bytes"),
-			Schema:       []byte(`{"kind":"cloud_driver","protocol_version":1}`),
+			Schema:       []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 			AllowedByAID: "archon-alice",
 			AllowedAt:    time.Now(),
 		},

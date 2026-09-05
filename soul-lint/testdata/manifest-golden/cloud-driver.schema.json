@@ -1,1 +1,0 @@
-{"kind":"cloud_driver","protocol_version":1,"profile_schema":{"type":"object","required":["region"],"properties":{"region":{"type":"string"},"instance_type":{"type":"string"}}}}

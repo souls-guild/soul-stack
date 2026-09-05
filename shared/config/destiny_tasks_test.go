@@ -93,7 +93,7 @@ func TestLoadDestinyTasks_KeeperModuleInDestiny(t *testing.T) {
 	// Generalised while being split out: the old rule named `core.state`, this
 	// asks the catalog, so every keeper-side address is covered.
 	t.Run("every keeper-side address is covered", func(t *testing.T) {
-		for _, addr := range []string{"core.cloud.created", "core.soul.registered", "core.vault.kv-read", "core.choir.present"} {
+		for _, addr := range []string{"core.soul.registered", "core.vault.kv-read", "core.choir.present"} {
 			src := "- name: t\n  module: " + addr + "\n  params: {}\n"
 			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 			if !hasCodeP(diags, "keeper_module_in_destiny") {

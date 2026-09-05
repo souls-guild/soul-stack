@@ -53,23 +53,17 @@
 # already in validate: main.yml (inherited by the cluster run, no need to duplicate).
 # Only topology here.
 # ★ PROVISION-GATE (ADR-061 amendment 2026-06-29): migrate_cluster includes the SAME
-# service-level provision body (redis-provision.yml, gated on has(input.provision) &&
-# input.provision.enabled) as create - on cloud-provision the new cluster's roster is
-# STILL empty at pre-flight EvalAsserts time (VMs are created later: core.cloud.created→
-# await_online→refresh_soulprint), so size(soulprint.hosts)==N would fail BEFORE the
-# nodes exist. The `when: !provision.enabled` gate drops the size check for the
-# provision path - there the roster invariant is guaranteed by the count formula in
-# redis-provision.yml (shards*(1+replicas)) plus the await_online barrier, NOT by
-# pre-flight (symmetric with the no_hosts-bypass amendment 2026-06-28 and
-# create/cluster.yml). The predicate is STATIC (pure input → isStaticWhen): pre-flight
-# placeholder-skip means no assert runs under provision (NOT an ErrAssertFailed). On an
-# existing roster (provision omitted/false, the regular S1 pilot) when=true → size-guard
-# is active (NOT weakened). ★ The replica-guard below (replicas==0) carries no gate: it
-# is a pilot input invariant that does not depend on the roster - it correctly rejects
-# replicas>0 during provision too (otherwise extra nodes would come up for unsupported
-# replicas).
+# ★ The former PROVISION GATE is gone with the provisioning path (NIM-761). It read
+# `when: !(has(input.provision) && input.provision.enabled)` and relaxed the size check on
+# a run that was about to CREATE its roster — there were no souls yet to count, and the
+# invariant was held instead by the provision body's own VM-count formula plus the
+# await_online barrier. `input.provision` no longer exists, so the predicate was a constant
+# true and the gate was dead text naming a removed input. The guard now runs unconditionally,
+# which is what that predicate already evaluated to.
+# ★ What kept create reachable was never this gate: since ADR-009 amendment 2026-07-28
+# (NIM-235) the create-path pre-flight defers ANY roster-reading assert to render — before
+# the incarnation row exists there is no membership and hence no roster to measure (NIM-124).
 - name: Guard cluster roster size matches shards and replicas
-  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))"

@@ -31,7 +31,6 @@ type Kind int32
 const (
 	Kind_KIND_UNSPECIFIED  Kind = 0
 	Kind_KIND_SOUL_MODULE  Kind = 1 // Soul-side: soul-mod-<name> binary, implements Destiny steps.
-	Kind_KIND_CLOUD_DRIVER Kind = 2 // Keeper-side: soul-cloud-<provider> binary, creates/deletes VMs.
 	Kind_KIND_SSH_PROVIDER Kind = 3 // Keeper-side: soul-ssh-<provider> binary, SSH credentials for push.
 	Kind_KIND_SOUL_BEACON  Kind = 4 // Soul-side: soul-beacon-<name> binary, observes host state (ADR-030 V5-2).
 )
@@ -41,14 +40,12 @@ var (
 	Kind_name = map[int32]string{
 		0: "KIND_UNSPECIFIED",
 		1: "KIND_SOUL_MODULE",
-		2: "KIND_CLOUD_DRIVER",
 		3: "KIND_SSH_PROVIDER",
 		4: "KIND_SOUL_BEACON",
 	}
 	Kind_value = map[string]int32{
 		"KIND_UNSPECIFIED":  0,
 		"KIND_SOUL_MODULE":  1,
-		"KIND_CLOUD_DRIVER": 2,
 		"KIND_SSH_PROVIDER": 3,
 		"KIND_SOUL_BEACON":  4,
 	}
@@ -290,13 +287,12 @@ const file_v1_common_proto_rawDesc = "" +
 	"\n" +
 	"SideEffect\x125\n" +
 	"\x04type\x18\x01 \x01(\x0e2!.soulstack.plugin.v1.ResourceTypeR\x04type\x12\x14\n" +
-	"\x05value\x18\x02 \x01(\tR\x05value*v\n" +
+	"\x05value\x18\x02 \x01(\tR\x05value*x\n" +
 	"\x04Kind\x12\x14\n" +
 	"\x10KIND_UNSPECIFIED\x10\x00\x12\x14\n" +
 	"\x10KIND_SOUL_MODULE\x10\x01\x12\x15\n" +
-	"\x11KIND_CLOUD_DRIVER\x10\x02\x12\x15\n" +
 	"\x11KIND_SSH_PROVIDER\x10\x03\x12\x14\n" +
-	"\x10KIND_SOUL_BEACON\x10\x04*\xe0\x01\n" +
+	"\x10KIND_SOUL_BEACON\x10\x04\"\x04\b\x02\x10\x02*\x11KIND_CLOUD_DRIVER*\xe0\x01\n" +
 	"\n" +
 	"Capability\x12\x1a\n" +
 	"\x16CAPABILITY_UNSPECIFIED\x10\x00\x12\x1a\n" +

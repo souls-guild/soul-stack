@@ -9,9 +9,6 @@
 # Resolved) merges covenant FIRST: the effective manifest = covenant ++ delta,
 # so the order of compute declarations is preserved as it is here.
 #
-# * The provision section of input is DELIBERATELY ABSENT: it's a `create` delta (cloud-create
-# in the same run, ADR-061), not part of the shared contract.
-#
 # * There is no state capture here either: state is written by `core.state.<verb>` STEPS, and a
 # covenant carries no tasks ([ADR-0084] F-B, decision B2). The steps live in each inheriting
 # scenario; the compute vars they read stay declared once, here.

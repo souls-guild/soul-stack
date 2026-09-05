@@ -1,19 +1,19 @@
 // Package pluginhost provides Keeper-side wrapper over `shared/pluginhost` for running
-// plugins of kind=cloud_driver and kind=ssh_provider (ADR-020, docs/keeper/plugins.md).
+// plugins of kind=ssh_provider (ADR-020, docs/keeper/plugins.md).
 //
 // The generic kind-agnostic part (Spawn / handshake / Close / discovery / tailBuffer)
 // lives in [sharedhost]. This package adds:
 //
-//   - kind-specific wrappers [CloudDriverPlugin], [SshProviderPlugin], common private
+//   - the kind-specific wrapper [SshProviderPlugin], common private
 //     [Plugin] with gRPC-conn;
 //   - kind-specific default SocketDir (`/var/run/soul-stack-keeper/plugins`);
-//   - Discover-result filter: Keeper-host accepts cloud_driver, ssh_provider and
+//   - Discover-result filter: Keeper-host accepts ssh_provider and
 //     soul_module (the last is both a registry for distribution to Souls, epic
 //     core.module.installed, and — for a module declaring `side: keeper` — something
 //     the Keeper executes itself through [Host.SpawnSoulModule] and
 //     [KeeperSideModules], NIM-758; the kind-agnostic [Host.Spawn] still rejects it);
 //   - [FilterByCatalog] for cross-check of discovered plugins against catalog in
-//     `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`.
+//     `keeper.yml::plugins.{ssh_providers,soul_modules}`.
 package pluginhost
 
 import (
@@ -36,7 +36,7 @@ const DefaultSocketDir = "/var/run/soul-stack-keeper/plugins"
 // DefaultCacheRoot is the convention for Keeper-side plugin cache directory
 // (ADR-020(a), symmetric with [DefaultSocketDir]). Used by main's wire-up when
 // `keeper.yml` doesn't specify explicit path (cache field in config schema
-// not yet introduced — git-resolve for `plugins.{cloud_drivers,ssh_providers}` is separate task).
+// not yet introduced — git-resolve for `plugins.{ssh_providers}` is separate task).
 const DefaultCacheRoot = "/var/lib/soul-stack-keeper/plugins"
 
 // Defaults re-exported from shared for call-sites convenience.
@@ -60,7 +60,6 @@ type (
 // Kind-constants for Keeper-host.
 const (
 	KindSoulModule  = sharedplugin.KindSoulModule
-	KindCloudDriver = sharedplugin.KindCloudDriver
 	KindSSHProvider = sharedplugin.KindSSHProvider
 )
 
@@ -68,7 +67,7 @@ const (
 // Delegated to shared/plugin as single source of truth.
 var SupportedProtocolVersions = sharedplugin.SupportedProtocolVersions
 
-// Host is Keeper-side runtime for plugins where kind ∈ {cloud_driver, ssh_provider}.
+// Host is Keeper-side runtime for plugins where kind = ssh_provider.
 // Thin wrapper over [sharedhost.Host] with kind-specific Spawn methods.
 type Host struct {
 	*sharedhost.Host
@@ -105,24 +104,20 @@ type SpawnOption = sharedhost.SpawnOption
 // (ADR-020 amendment l).
 func WithEnv(env []string) SpawnOption { return sharedhost.WithEnv(env) }
 
-// Spawn forks plugin and returns generic [sharedhost.BasePlugin]. Caller
-// wraps result in kind-specific [CloudDriverPlugin] / [SshProviderPlugin]
-// via [NewCloudDriverPlugin] / [NewSshProviderPlugin] — Keeper-host
-// distinguishes two kinds, so intermediate generic Plugin makes choice
-// explicit rather than implicit.
+// Spawn forks plugin and returns generic [sharedhost.BasePlugin]. Caller wraps
+// the result in the kind-specific [SshProviderPlugin] via [NewSshProviderPlugin];
+// the intermediate generic Plugin keeps that choice explicit.
 //
-// Protection from kind-mismatch: if the artifact's kind is not in {cloud_driver,
-// ssh_provider}, Spawn returns an error before the fork. kind=soul_module has its
-// own entry point, [Host.SpawnSoulModule], which adds the `side: keeper` gate —
-// this one must keep refusing it, or that gate would have a way around it.
+// Protection from kind-mismatch: an artifact whose kind is not ssh_provider is
+// refused before the fork. kind=soul_module has its own entry point,
+// [Host.SpawnSoulModule], which adds the `side: keeper` gate — this one must
+// keep refusing it, or that gate would have a way around it.
 //
 // opts are optional SpawnOptions ([WithEnv] etc.); passed through to
 // [sharedhost.Host.Spawn] unchanged.
 func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*Plugin, error) {
-	if d.Doc != nil &&
-		d.Kind() != KindCloudDriver &&
-		d.Kind() != KindSSHProvider {
-		return nil, fmt.Errorf("pluginhost: expected kind=cloud_driver|ssh_provider, got %q", d.Kind())
+	if d.Doc != nil && d.Kind() != KindSSHProvider {
+		return nil, fmt.Errorf("pluginhost: expected kind=ssh_provider, got %q", d.Kind())
 	}
 	base, err := h.Host.Spawn(ctx, d, opts...)
 	if err != nil {
@@ -133,17 +128,16 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*P
 
 // Plugin is Keeper-side generic handle. Doesn't contain kind-specific gRPC client
 // (unlike Soul-host where kind is singular): caller wraps Plugin in
-// [CloudDriverPlugin] / [SshProviderPlugin] via NewCloudDriverPlugin /
-// NewSshProviderPlugin.
+// [SshProviderPlugin] via NewSshProviderPlugin.
 type Plugin struct {
 	*sharedhost.BasePlugin
 }
 
-// Discover performs Keeper-host discovery: searches for plugins in cacheRoot and keeps
-// only kind ∈ {cloud_driver, ssh_provider, soul_module}. soul_module Keeper does
-// not spawn ([Host.Spawn] rejects it) — keeps in registry for distribution
-// to Souls (epic core.module.installed). Other kinds and invalid entries
-// go to warnings.
+// Discover performs Keeper-host discovery: searches for plugins in cacheRoot and
+// keeps only kind ∈ {ssh_provider, soul_module}. A soul_module is not spawned here
+// ([Host.Spawn] rejects it) — it stays in the registry for distribution to Souls,
+// and a `side: keeper` one is spawned through [Host.SpawnSoulModule]. Other kinds
+// and invalid entries go to warnings.
 //
 // Cache layout (R-nested layout, A1-S1 — git-resolver populates slots):
 //
@@ -165,7 +159,7 @@ type Plugin struct {
 // sha and says nothing about the registration). Directories without a valid `current`
 // (the resolver has not populated the slot yet) go to warnings.
 //
-// Cache population by the git-resolver (`plugins.{cloud_drivers,ssh_providers,
+// Cache population by the git-resolver (`plugins.{ssh_providers,
 // soul_modules}` → commit_sha-slot) happens in [plugingit.Resolver] before Discover on
 // Keeper startup; [FilterByCatalog] then filters the result against the catalog.
 func Discover(cacheRoot string) ([]Discovered, []string, error) {
@@ -192,12 +186,12 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 		all = append(all, found...)
 		warnings = append(warnings, warns...)
 	}
-	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []Kind{KindCloudDriver, KindSSHProvider, KindSoulModule})
+	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []Kind{KindSSHProvider, KindSoulModule})
 	return keeperOnly, append(warnings, filterWarns...), nil
 }
 
 // FilterByCatalog keeps in `found` only entries whose registration ALIAS is declared in
-// `keeper.yml::plugins.{cloud_drivers,ssh_providers,soul_modules}`. The comparison is
+// `keeper.yml::plugins.{ssh_providers,soul_modules}`. The comparison is
 // against `PluginCatalogEntry.Name`, which IS the alias (the field kept its name until
 // the real registry lands in NIM-437).
 //
@@ -220,18 +214,15 @@ func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Disco
 	}
 	// Index declared aliases by kind to validate both lists in one pass over found.
 	// Sets are empty for a nil block.
-	wantCloud := indexEntries(plugins.CloudDrivers)
 	wantSSH := indexEntries(plugins.SSHProviders)
 	wantModules := indexEntries(plugins.SoulModules)
 
 	// Catalog key per kind — the single point of correspondence kind → yaml-list.
 	catalogKey := map[Kind]string{
-		KindCloudDriver: "cloud_drivers",
 		KindSSHProvider: "ssh_providers",
 		KindSoulModule:  "soul_modules",
 	}
 	want := map[Kind]map[string]struct{}{
-		KindCloudDriver: wantCloud,
 		KindSSHProvider: wantSSH,
 		KindSoulModule:  wantModules,
 	}
@@ -241,7 +232,6 @@ func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Disco
 		warnings []string
 	)
 	seen := map[Kind]map[string]bool{
-		KindCloudDriver: make(map[string]bool, len(wantCloud)),
 		KindSSHProvider: make(map[string]bool, len(wantSSH)),
 		KindSoulModule:  make(map[string]bool, len(wantModules)),
 	}
@@ -267,7 +257,7 @@ func FilterByCatalog(found []Discovered, plugins *config.KeeperPlugins) ([]Disco
 				d.Alias, kind, catalogKey[kind]))
 		}
 	}
-	for _, kind := range []Kind{KindCloudDriver, KindSSHProvider, KindSoulModule} {
+	for _, kind := range []Kind{KindSSHProvider, KindSoulModule} {
 		for alias := range want[kind] {
 			if !seen[kind][alias] {
 				warnings = append(warnings, fmt.Sprintf(

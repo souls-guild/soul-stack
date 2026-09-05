@@ -1,40 +1,12 @@
-# Default service parameters. Two cloud sources are shown, one per scenario
-# (see docs/keeper/cloud.md -> "Two sources for the driver"):
+# Default service parameters.
 #
-#   scenario/create        - REGISTRY source: Provider/Profile are rows in the
-#                            `providers`/`profiles` registries, created ahead of
-#                            time via OpenAPI/MCP. The keys below are row names.
-#   scenario/create-inline - INLINE source: the driver and the VM spec live HERE,
-#                            in git, and the service provisions with ZERO rows in
-#                            either registry (NIM-668).
+# The `existing-vm` scenario takes the SIDs and the transport label as input, so
+# there is nothing here it needs pre-seeded. The file stays as the anchor of the
+# vars layer (ADR-0082): a fleet that needs different defaults forks this repo
+# and edits this file.
 #
-# A fleet that needs different values forks this repo and edits this file.
+# The provider/profile row names and the inline cloud tuple that used to live
+# here belonged to the `create` / `create-inline` scenarios, which went with the
+# CloudDriver contract in NIM-761.
 
-# --- registry source (scenario/create) ---
-provider: aws-prod         # row name in the providers registry (NOT plugin name)
-profile:  example-tiny     # row name in the profiles registry
-count:    1
-
-# --- inline source (scenario/create-inline) ---
-cloud:
-  driver:      wb                 # plugin alias -> soul-cloud-wb
-  region:      ru-central1        # merged into the credentials map by keeper
-  fqdn_suffix: ns.vm.example      # SID = <name>-<i>.<fqdn_suffix> (self-onboard)
-
-  # The VM spec itself, handed to the CloudDriver as-is. One entry per topology:
-  # this is exactly what the profiles registry could not express - a topology x
-  # size matrix needs a hand-made row per combination, and a service repo cannot
-  # ship rows. Here it is ordinary service data.
-  profiles:
-    standalone:
-      image:         ubuntu-24-04
-      instance_type: c2-m4
-      disk:          { size_gb: 40, type: ssd }
-    sentinel:
-      image:         ubuntu-24-04
-      instance_type: c2-m2
-      disk:          { size_gb: 20, type: ssd }
-    cluster:
-      image:         ubuntu-24-04
-      instance_type: c4-m8
-      disk:          { size_gb: 100, type: ssd }
+join_wait_timeout: 15m

@@ -57,10 +57,6 @@ fixtures:
       sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
       haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
   input:
-    # ★ provision disabled (default-on: an omitted section = ENABLED; this case deploys onto a
-    # READY roster, no cloud-create needed) → include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: sentinel
     # version from the enum (bump from 7.2.4) — so input validation passes and render REACHES
     # the size-guard assert (the case's EXPECTED error), instead of failing earlier on version-enum.

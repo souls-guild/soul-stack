@@ -7,7 +7,7 @@ var modBootstrap = schema.Module{
 	Name: "bootstrap",
 	States: map[string]schema.State{
 		"issued": {
-			Description: "Keeper-side (on:keeper). Atomically issue per-host bootstrap tokens for ready-made VM SIDs, independent of core.cloud.created.",
+			Description: "Keeper-side (on:keeper). Atomically issue per-host bootstrap tokens for ready-made VM SIDs.",
 			Input: schema.Input{
 				"sids": {Type: schema.List, Required: true, Items: &schema.Param{Type: schema.String}, Description: "Non-empty unique list of ready-made VM FQDN/SIDs."},
 			},

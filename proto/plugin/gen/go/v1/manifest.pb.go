@@ -51,14 +51,9 @@ type Manifest struct {
 	RequiredCapabilities []Capability `protobuf:"varint,5,rep,packed,name=required_capabilities,json=requiredCapabilities,proto3,enum=soulstack.plugin.v1.Capability" json:"required_capabilities,omitempty"`
 	// Strict contract of touched resources (ADR-020(g), see common.proto).
 	SideEffects []*SideEffect `protobuf:"bytes,6,rep,name=side_effects,json=sideEffects,proto3" json:"side_effects,omitempty"`
-	// Kind-specific block; shape depends on `kind:`.
-	// The manifest parser validates that kind matches the populated oneof
-	// variant.
-	//
 	// Types that are valid to be assigned to Spec:
 	//
 	//	*Manifest_SoulModule
-	//	*Manifest_CloudDriver
 	//	*Manifest_SshProvider
 	//	*Manifest_SoulBeacon
 	Spec isManifest_Spec `protobuf_oneof:"spec"`
@@ -161,15 +156,6 @@ func (x *Manifest) GetSoulModule() *SoulModuleSpec {
 	return nil
 }
 
-func (x *Manifest) GetCloudDriver() *CloudDriverSpec {
-	if x != nil {
-		if x, ok := x.Spec.(*Manifest_CloudDriver); ok {
-			return x.CloudDriver
-		}
-	}
-	return nil
-}
-
 func (x *Manifest) GetSshProvider() *SshProviderSpec {
 	if x != nil {
 		if x, ok := x.Spec.(*Manifest_SshProvider); ok {
@@ -203,10 +189,6 @@ type Manifest_SoulModule struct {
 	SoulModule *SoulModuleSpec `protobuf:"bytes,7,opt,name=soul_module,json=soulModule,proto3,oneof"`
 }
 
-type Manifest_CloudDriver struct {
-	CloudDriver *CloudDriverSpec `protobuf:"bytes,8,opt,name=cloud_driver,json=cloudDriver,proto3,oneof"`
-}
-
 type Manifest_SshProvider struct {
 	SshProvider *SshProviderSpec `protobuf:"bytes,9,opt,name=ssh_provider,json=sshProvider,proto3,oneof"`
 }
@@ -216,8 +198,6 @@ type Manifest_SoulBeacon struct {
 }
 
 func (*Manifest_SoulModule) isManifest_Spec() {}
-
-func (*Manifest_CloudDriver) isManifest_Spec() {}
 
 func (*Manifest_SshProvider) isManifest_Spec() {}
 
@@ -330,65 +310,6 @@ func (x *StateDef) GetDescription() string {
 	return ""
 }
 
-// CloudDriverSpec — kind-specific spec for `kind: cloud_driver`
-// (docs/keeper/plugins.md → spec for kind: cloud_driver).
-type CloudDriverSpec struct {
-	state protoimpl.MessageState `protogen:"open.v1"`
-	// Cloud provider family (`aws` / `gcp` / `yandex-cloud` / `openstack`).
-	// Informational field. Optional.
-	ProviderKind string `protobuf:"bytes,1,opt,name=provider_kind,json=providerKind,proto3" json:"provider_kind,omitempty"`
-	// VM profile JSON Schema (draft 2020-12).
-	// Used when creating a Profile via OpenAPI/MCP for validation
-	// (docs/keeper/cloud.md). `Struct` because JSON Schema is free-form.
-	ProfileSchema *structpb.Struct `protobuf:"bytes,2,opt,name=profile_schema,json=profileSchema,proto3" json:"profile_schema,omitempty"`
-	unknownFields protoimpl.UnknownFields
-	sizeCache     protoimpl.SizeCache
-}
-
-func (x *CloudDriverSpec) Reset() {
-	*x = CloudDriverSpec{}
-	mi := &file_v1_manifest_proto_msgTypes[3]
-	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-	ms.StoreMessageInfo(mi)
-}
-
-func (x *CloudDriverSpec) String() string {
-	return protoimpl.X.MessageStringOf(x)
-}
-
-func (*CloudDriverSpec) ProtoMessage() {}
-
-func (x *CloudDriverSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_manifest_proto_msgTypes[3]
-	if x != nil {
-		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
-		if ms.LoadMessageInfo() == nil {
-			ms.StoreMessageInfo(mi)
-		}
-		return ms
-	}
-	return mi.MessageOf(x)
-}
-
-// Deprecated: Use CloudDriverSpec.ProtoReflect.Descriptor instead.
-func (*CloudDriverSpec) Descriptor() ([]byte, []int) {
-	return file_v1_manifest_proto_rawDescGZIP(), []int{3}
-}
-
-func (x *CloudDriverSpec) GetProviderKind() string {
-	if x != nil {
-		return x.ProviderKind
-	}
-	return ""
-}
-
-func (x *CloudDriverSpec) GetProfileSchema() *structpb.Struct {
-	if x != nil {
-		return x.ProfileSchema
-	}
-	return nil
-}
-
 // SshProviderSpec — kind-specific spec for `kind: ssh_provider`
 // (docs/keeper/plugins.md → spec for kind: ssh_provider).
 type SshProviderSpec struct {
@@ -406,7 +327,7 @@ type SshProviderSpec struct {
 
 func (x *SshProviderSpec) Reset() {
 	*x = SshProviderSpec{}
-	mi := &file_v1_manifest_proto_msgTypes[4]
+	mi := &file_v1_manifest_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -418,7 +339,7 @@ func (x *SshProviderSpec) String() string {
 func (*SshProviderSpec) ProtoMessage() {}
 
 func (x *SshProviderSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_manifest_proto_msgTypes[4]
+	mi := &file_v1_manifest_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -431,7 +352,7 @@ func (x *SshProviderSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SshProviderSpec.ProtoReflect.Descriptor instead.
 func (*SshProviderSpec) Descriptor() ([]byte, []int) {
-	return file_v1_manifest_proto_rawDescGZIP(), []int{4}
+	return file_v1_manifest_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *SshProviderSpec) GetProviderKind() string {
@@ -468,7 +389,7 @@ type SoulBeaconSpec struct {
 
 func (x *SoulBeaconSpec) Reset() {
 	*x = SoulBeaconSpec{}
-	mi := &file_v1_manifest_proto_msgTypes[5]
+	mi := &file_v1_manifest_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -480,7 +401,7 @@ func (x *SoulBeaconSpec) String() string {
 func (*SoulBeaconSpec) ProtoMessage() {}
 
 func (x *SoulBeaconSpec) ProtoReflect() protoreflect.Message {
-	mi := &file_v1_manifest_proto_msgTypes[5]
+	mi := &file_v1_manifest_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -493,7 +414,7 @@ func (x *SoulBeaconSpec) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SoulBeaconSpec.ProtoReflect.Descriptor instead.
 func (*SoulBeaconSpec) Descriptor() ([]byte, []int) {
-	return file_v1_manifest_proto_rawDescGZIP(), []int{5}
+	return file_v1_manifest_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *SoulBeaconSpec) GetParamsSchema() *structpb.Struct {
@@ -507,7 +428,7 @@ var File_v1_manifest_proto protoreflect.FileDescriptor
 
 const file_v1_manifest_proto_rawDesc = "" +
 	"\n" +
-	"\x11v1/manifest.proto\x12\x13soulstack.plugin.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x0fv1/common.proto\"\x83\x05\n" +
+	"\x11v1/manifest.proto\x12\x13soulstack.plugin.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x0fv1/common.proto\"\xcc\x04\n" +
 	"\bManifest\x12-\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x19.soulstack.plugin.v1.KindR\x04kind\x12)\n" +
 	"\x10protocol_version\x18\x02 \x01(\x05R\x0fprotocolVersion\x12\x1c\n" +
@@ -517,13 +438,12 @@ const file_v1_manifest_proto_rawDesc = "" +
 	"\fside_effects\x18\x06 \x03(\v2\x1f.soulstack.plugin.v1.SideEffectR\vsideEffects\x12F\n" +
 	"\vsoul_module\x18\a \x01(\v2#.soulstack.plugin.v1.SoulModuleSpecH\x00R\n" +
 	"soulModule\x12I\n" +
-	"\fcloud_driver\x18\b \x01(\v2$.soulstack.plugin.v1.CloudDriverSpecH\x00R\vcloudDriver\x12I\n" +
 	"\fssh_provider\x18\t \x01(\v2$.soulstack.plugin.v1.SshProviderSpecH\x00R\vsshProvider\x12F\n" +
 	"\vsoul_beacon\x18\v \x01(\v2#.soulstack.plugin.v1.SoulBeaconSpecH\x00R\n" +
 	"soulBeacon\x12#\n" +
 	"\rbinary_sha256\x18\n" +
 	" \x01(\tR\fbinarySha256B\x06\n" +
-	"\x04spec\"\xb3\x01\n" +
+	"\x04specJ\x04\b\b\x10\tR\fcloud_driver\"\xb3\x01\n" +
 	"\x0eSoulModuleSpec\x12G\n" +
 	"\x06states\x18\x01 \x03(\v2/.soulstack.plugin.v1.SoulModuleSpec.StatesEntryR\x06states\x1aX\n" +
 	"\vStatesEntry\x12\x10\n" +
@@ -531,10 +451,7 @@ const file_v1_manifest_proto_rawDesc = "" +
 	"\x05value\x18\x02 \x01(\v2\x1d.soulstack.plugin.v1.StateDefR\x05value:\x028\x01\"[\n" +
 	"\bStateDef\x12-\n" +
 	"\x05input\x18\x01 \x01(\v2\x17.google.protobuf.StructR\x05input\x12 \n" +
-	"\vdescription\x18\x02 \x01(\tR\vdescription\"v\n" +
-	"\x0fCloudDriverSpec\x12#\n" +
-	"\rprovider_kind\x18\x01 \x01(\tR\fproviderKind\x12>\n" +
-	"\x0eprofile_schema\x18\x02 \x01(\v2\x17.google.protobuf.StructR\rprofileSchema\"t\n" +
+	"\vdescription\x18\x02 \x01(\tR\vdescription\"t\n" +
 	"\x0fSshProviderSpec\x12#\n" +
 	"\rprovider_kind\x18\x01 \x01(\tR\fproviderKind\x12<\n" +
 	"\rparams_schema\x18\x02 \x01(\v2\x17.google.protobuf.StructR\fparamsSchema\"N\n" +
@@ -553,39 +470,36 @@ func file_v1_manifest_proto_rawDescGZIP() []byte {
 	return file_v1_manifest_proto_rawDescData
 }
 
-var file_v1_manifest_proto_msgTypes = make([]protoimpl.MessageInfo, 7)
+var file_v1_manifest_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_v1_manifest_proto_goTypes = []any{
 	(*Manifest)(nil),        // 0: soulstack.plugin.v1.Manifest
 	(*SoulModuleSpec)(nil),  // 1: soulstack.plugin.v1.SoulModuleSpec
 	(*StateDef)(nil),        // 2: soulstack.plugin.v1.StateDef
-	(*CloudDriverSpec)(nil), // 3: soulstack.plugin.v1.CloudDriverSpec
-	(*SshProviderSpec)(nil), // 4: soulstack.plugin.v1.SshProviderSpec
-	(*SoulBeaconSpec)(nil),  // 5: soulstack.plugin.v1.SoulBeaconSpec
-	nil,                     // 6: soulstack.plugin.v1.SoulModuleSpec.StatesEntry
-	(Kind)(0),               // 7: soulstack.plugin.v1.Kind
-	(Capability)(0),         // 8: soulstack.plugin.v1.Capability
-	(*SideEffect)(nil),      // 9: soulstack.plugin.v1.SideEffect
-	(*structpb.Struct)(nil), // 10: google.protobuf.Struct
+	(*SshProviderSpec)(nil), // 3: soulstack.plugin.v1.SshProviderSpec
+	(*SoulBeaconSpec)(nil),  // 4: soulstack.plugin.v1.SoulBeaconSpec
+	nil,                     // 5: soulstack.plugin.v1.SoulModuleSpec.StatesEntry
+	(Kind)(0),               // 6: soulstack.plugin.v1.Kind
+	(Capability)(0),         // 7: soulstack.plugin.v1.Capability
+	(*SideEffect)(nil),      // 8: soulstack.plugin.v1.SideEffect
+	(*structpb.Struct)(nil), // 9: google.protobuf.Struct
 }
 var file_v1_manifest_proto_depIdxs = []int32{
-	7,  // 0: soulstack.plugin.v1.Manifest.kind:type_name -> soulstack.plugin.v1.Kind
-	8,  // 1: soulstack.plugin.v1.Manifest.required_capabilities:type_name -> soulstack.plugin.v1.Capability
-	9,  // 2: soulstack.plugin.v1.Manifest.side_effects:type_name -> soulstack.plugin.v1.SideEffect
+	6,  // 0: soulstack.plugin.v1.Manifest.kind:type_name -> soulstack.plugin.v1.Kind
+	7,  // 1: soulstack.plugin.v1.Manifest.required_capabilities:type_name -> soulstack.plugin.v1.Capability
+	8,  // 2: soulstack.plugin.v1.Manifest.side_effects:type_name -> soulstack.plugin.v1.SideEffect
 	1,  // 3: soulstack.plugin.v1.Manifest.soul_module:type_name -> soulstack.plugin.v1.SoulModuleSpec
-	3,  // 4: soulstack.plugin.v1.Manifest.cloud_driver:type_name -> soulstack.plugin.v1.CloudDriverSpec
-	4,  // 5: soulstack.plugin.v1.Manifest.ssh_provider:type_name -> soulstack.plugin.v1.SshProviderSpec
-	5,  // 6: soulstack.plugin.v1.Manifest.soul_beacon:type_name -> soulstack.plugin.v1.SoulBeaconSpec
-	6,  // 7: soulstack.plugin.v1.SoulModuleSpec.states:type_name -> soulstack.plugin.v1.SoulModuleSpec.StatesEntry
-	10, // 8: soulstack.plugin.v1.StateDef.input:type_name -> google.protobuf.Struct
-	10, // 9: soulstack.plugin.v1.CloudDriverSpec.profile_schema:type_name -> google.protobuf.Struct
-	10, // 10: soulstack.plugin.v1.SshProviderSpec.params_schema:type_name -> google.protobuf.Struct
-	10, // 11: soulstack.plugin.v1.SoulBeaconSpec.params_schema:type_name -> google.protobuf.Struct
-	2,  // 12: soulstack.plugin.v1.SoulModuleSpec.StatesEntry.value:type_name -> soulstack.plugin.v1.StateDef
-	13, // [13:13] is the sub-list for method output_type
-	13, // [13:13] is the sub-list for method input_type
-	13, // [13:13] is the sub-list for extension type_name
-	13, // [13:13] is the sub-list for extension extendee
-	0,  // [0:13] is the sub-list for field type_name
+	3,  // 4: soulstack.plugin.v1.Manifest.ssh_provider:type_name -> soulstack.plugin.v1.SshProviderSpec
+	4,  // 5: soulstack.plugin.v1.Manifest.soul_beacon:type_name -> soulstack.plugin.v1.SoulBeaconSpec
+	5,  // 6: soulstack.plugin.v1.SoulModuleSpec.states:type_name -> soulstack.plugin.v1.SoulModuleSpec.StatesEntry
+	9,  // 7: soulstack.plugin.v1.StateDef.input:type_name -> google.protobuf.Struct
+	9,  // 8: soulstack.plugin.v1.SshProviderSpec.params_schema:type_name -> google.protobuf.Struct
+	9,  // 9: soulstack.plugin.v1.SoulBeaconSpec.params_schema:type_name -> google.protobuf.Struct
+	2,  // 10: soulstack.plugin.v1.SoulModuleSpec.StatesEntry.value:type_name -> soulstack.plugin.v1.StateDef
+	11, // [11:11] is the sub-list for method output_type
+	11, // [11:11] is the sub-list for method input_type
+	11, // [11:11] is the sub-list for extension type_name
+	11, // [11:11] is the sub-list for extension extendee
+	0,  // [0:11] is the sub-list for field type_name
 }
 
 func init() { file_v1_manifest_proto_init() }
@@ -596,7 +510,6 @@ func file_v1_manifest_proto_init() {
 	file_v1_common_proto_init()
 	file_v1_manifest_proto_msgTypes[0].OneofWrappers = []any{
 		(*Manifest_SoulModule)(nil),
-		(*Manifest_CloudDriver)(nil),
 		(*Manifest_SshProvider)(nil),
 		(*Manifest_SoulBeacon)(nil),
 	}
@@ -606,7 +519,7 @@ func file_v1_manifest_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_v1_manifest_proto_rawDesc), len(file_v1_manifest_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   7,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

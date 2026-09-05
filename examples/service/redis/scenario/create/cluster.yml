@@ -40,24 +40,17 @@
 # (templating §2.3 SHALLOW), size = number of unique SIDs = the sum of shard sizes (no duplicates
 # exist — the plugin rejects them fail-fast; on a duplicate the sum would only undercount → the guard would
 # only fire sooner, the protection is not weakened).
-# ★ PROVISION GATE (ADR-061 amendment 2026-06-29): during cloud provisioning (input.provision
-# .enabled) the roster does not exist yet when the guard is authored to run — souls are created
-# later by the redis-provision.yml steps (core.cloud.created→VM→await_online→refresh_soulprint).
-# The gate `when: !provision.enabled` drops the size check for the provision path — the roster
-# invariant is guaranteed THERE by the count formula in redis-provision.yml (VM count = the same
-# shards*(1+replicas)) + a blocking await_online barrier (symmetric to the no_hosts-bypass
-# amendment 2026-06-28). The predicate is STATIC (pure input, no register.*/soulprint.self →
-# isStaticWhen), so the placeholder-skip drops the assert at BOTH eval points. On an existing
-# roster (provision omitted/false) has(input.provision) gives false → when=true → the size guard
-# is active (NOT weakened). The form — an inversion of the redis-provision.yml include-when
-# (has(input.provision) && input.provision.enabled).
-# ★ The gate is NOT what keeps create reachable. Since ADR-009 amendment 2026-07-28 (NIM-235) the
-# create-path pre-flight defers ANY roster-reading assert to render — before the incarnation row
-# exists there is no membership and hence no roster to measure (NIM-124). So an ungated guard
-# would also be fine here; this gate remains for its own reason (the provision path has no roster
-# invariant to check at all, at either point).
+# ★ The former PROVISION GATE is gone with the provisioning path (NIM-761). It read
+# `when: !(has(input.provision) && input.provision.enabled)` and relaxed the size check on
+# a run that was about to CREATE its roster — there were no souls yet to count, and the
+# invariant was held instead by the provision body's own VM-count formula plus the
+# await_online barrier. `input.provision` no longer exists, so the predicate was a constant
+# true and the gate was dead text naming a removed input. The guard now runs unconditionally,
+# which is what that predicate already evaluated to.
+# ★ What kept create reachable was never this gate: since ADR-009 amendment 2026-07-28
+# (NIM-235) the create-path pre-flight defers ANY roster-reading assert to render — before
+# the incarnation row exists there is no membership and hence no roster to measure (NIM-124).
 - name: Guard cluster roster size matches shards and replicas
-  when: "!(has(input.provision) && input.provision.enabled)"
   assert:
     that:
       - "has(input.cluster_topology) ? (size(soulprint.hosts) == size(merge(input.cluster_topology.map(s, merge(s.map(x, {x: 0})))))) : (size(soulprint.hosts) == int(input.shards) * (1 + int(input.replicas_per_master)))"

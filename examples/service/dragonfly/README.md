@@ -65,7 +65,7 @@ chain (ADR-019):
 | `df_users` | array `AclUser` | operator-extra ACL users (`[{name, perms, state}]`, [`types.yml`](types.yml), ADR-062). Passwords are **not** in state (Vault). System service accounts are **not** written here |
 | `df_hosts` | array `{sid, role}` | topology hosts (written as `[]`; exact roles are a follow-up) |
 | `df_sentinel` | object `{master_name, master_ip, quorum, down_after_ms, failover_timeout_ms}` | sentinel-mode facts. `master_ip` is not written by create (host-variant), `quorum` is `0` (auto) |
-| `provisioned_vm_ids` / `provisioned_provider` / `provisioned_sids` | array / string / array | **(v3/v4)** cloud-provision read-model (see ["Cloud-provision"](#cloud-provision)) |
+| `provisioned_vm_ids` / `provisioned_provider` / `provisioned_sids` | array / string / array | **(v3/v4)** cloud-provision read-model. Dead since NIM-761 — nothing writes or reads them, and on a new incarnation all three are absent; the ladder is forward-only, so the steps stay (see ["Cloud-provision — removed"](#cloud-provision--removed-nim-761)) |
 
 ## Operator input contract
 
@@ -83,7 +83,6 @@ structural input (Named Dict):
 | `users` | array `AclUser` | operator-extra ACL users (`[{name, perms, state}]`, [`types.yml`](types.yml), ADR-062). `perms` is a full Redis ACL string (DragonFly accepts it), validated with a re2 pattern. The name **cannot** collide with a system account (see ["System ACL users"](#system-acl-users)) |
 | `df_settings` | object (passthrough, key→value strings) | arbitrary DF flags for `dragonfly.conf` (underscore form) layered on top of defaults/computed values (last-wins). ★ PILOT: names are **not** validated against a catalog - a typo shows up when DF starts, not at render time |
 | `tls_enabled` | boolean, optional, default `false` | enable TLS for DragonFly. ★ TLS is placed on the **main** port 6379 (flag `--tls`; DF has no separate TLS port -> no `tls_keep_plain`/"TLS-only"). Vault paths for the PEM come from `vars.tls_*_ref` |
-| `provision` | object, optional, **default-on** `{enabled: true}` | bring up VMs for the topology within the same create run (see ["Cloud-provision"](#cloud-provision)) |
 
 **What is not in the input contract** (service vars parameters or auto-computed):
 
@@ -156,39 +155,38 @@ body is inline. Steps:
    missing passwords cryptographically at random (32 characters from the default alphabet)
    for all system + operator-extra accounts. Ordering invariant: the write to Vault happens
    **before** the render phase of tasks that read the same secrets via `${ vault(...) }` (ADR-056);
-2. **cloud-provision** (conditional, when `provision.enabled` - see below);
-3. **size-guard** - render-time `assert: size(soulprint.hosts) == 1 + replicas_per_master`
+2. **size-guard** - render-time `assert: size(soulprint.hosts) == 1 + replicas_per_master`
    (keeper-side, aborts the render before install; `validate` won't work - it needs `soulprint.hosts`);
-4. **`apply: destiny: dragonfly`** - install + render `dragonfly.conf`/`users.acl` + systemd.
+3. **`apply: destiny: dragonfly`** - install + render `dragonfly.conf`/`users.acl` + systemd.
    `masteruser`/`masterauth` are added to the flagfile as regular flags (replica→master AUTH must
    persist across a restart - `CONFIG SET` isn't persisted);
-5. **health-gate PING** (`redis.command.run`) - over the **UNIX socket** `compute.local_addr`
+4. **health-gate PING** (`redis.command.run`) - over the **UNIX socket** `compute.local_addr`
    (`unix:${run_dir}/dragonfly.sock`): DF with `--bind=primary_ip` does **not** listen on loopback,
    so local calls go over the socket;
-6. **`apply: destiny: redis` (sentinel_only)** - sentinel daemon (`deploy_redis: false`) over the
+5. **`apply: destiny: redis` (sentinel_only)** - sentinel daemon (`deploy_redis: false`) over the
    DragonFly master; `version` is the distro pin of the `redis-server` package
    (`vars.sentinel_redis_package_version`);
-7. **REPLICAOF** (`redis.replica.present`, `where:` excludes the master by SID) - replicas
+6. **REPLICAOF** (`redis.replica.present`, `where:` excludes the master by SID) - replicas
    follow the elected master (`soulprint.hosts[0]`);
-8. **SENTINEL MONITOR** (`redis.sentinel.monitored`, on every host);
-9. **health-gate PONG** on `:26379` (same-task `register.self`, ADR-056);
-10. **node-exporter** and **vector** - mandatory monitoring/log-shipping (see
+7. **SENTINEL MONITOR** (`redis.sentinel.monitored`, on every host);
+8. **health-gate PONG** on `:26379` (same-task `register.self`, ADR-056);
+9. **node-exporter** and **vector** - mandatory monitoring/log-shipping (see
     ["Observability"](#observability)).
 
-### Cloud-provision
+### Cloud-provision — removed (NIM-761)
 
-**Default-on** ([ADR-061](../../../docs/adr/0061-onboarding-await-and-midrun-reresolve.md),
-Option A): `input.provision` defaults to `{enabled: true}` - a single create run brings up VMs
-for the topology **and** deploys DragonFly. The shared body is
-[`scenario/dragonfly-provision.yml`](scenario/dragonfly-provision.yml): (a) cloud-create
-(`core.cloud.created`, keeper-side; the VM count is derived from the topology
-`1 + replicas_per_master`, there's no separate `node_count`), (b) delivering a per-VM bootstrap
-token over SSH (`core.bootstrap.delivered`,
-[ADR-063](../../../docs/adr/0063-bootstrap-token-delivery.md)), (c) a blocking wait for onboarding
-(`core.soul.registered` `await_online` + `refresh_soulprint`) -> the roster is re-resolved, so
-size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fall back to
-`vars.provision_*`; the section is hidden from the Run form. To roll out onto an
-**already-provisioned** roster - set `provision: {enabled: false}` explicitly.
+`create` used to raise the VMs for the topology in the same run, through a shared
+service-level body `scenario/dragonfly-provision.yml` gated on `input.provision`. That body
+is gone, and so are `input.provision` and the `vars.provision_*` defaults: its first step was
+`core.cloud.created`, and NIM-761 removed the `core.cloud` module together with the whole
+CloudDriver contract. A cloud plugin is now an ordinary `side: keeper` SoulModule with its own
+module address, so provisioning is no longer something the engine offers a service.
+
+`create` now does what `provision: {enabled: false}` always did: it deploys onto the
+**existing** roster. The three `provisioned_*` state fields survive in `state_schema` because
+the migration ladder is forward-only, but nothing writes them any more, so on a new
+incarnation all three are **absent**.
+
 
 ### Day-2 scenarios
 
@@ -208,9 +206,9 @@ size-guard/deploy see the newly created hosts. `provider`/`profile`/timeouts fal
   specificity, not the hyphenated form redis uses) under `onchanges`. Precondition: TLS must
   already be enabled (`assert` `state.tls.enable`);
 - **[`destroy`](scenario/destroy/main.yml)** - teardown (a terminal `DELETE` flow, not runnable).
-  Two branches: **cloud-cascade** (when `provisioned_vm_ids > 0` - `core.cloud.destroyed` + cascade
-  of the souls/seeds/tokens registries) and **Soul-side** (stop services + remove `/etc` artifacts
-  per `install_method`).
+  **Soul-side only** since NIM-761: stop the services and remove the `/etc` artifacts per
+  `install_method`. The cloud-cascade branch went with `core.cloud.destroyed`; the VM is torn
+  down through the cloud plugin's own module address, not from here.
 
 ## Observability
 
@@ -287,9 +285,6 @@ go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/create-sentinel-tls/case.yml
 # mandatory monitoring (node-exporter + vector in the plan)
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/monitoring-observability/case.yml
-# cloud-provision on/off
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/provision-enabled-sentinel/case.yml
-go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/provision-disabled/case.yml
 # day-2
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/add_user/tests/add-user-plaintext/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/update_users/tests/bulk-replace-removes-user/case.yml

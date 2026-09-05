@@ -396,7 +396,6 @@ func mustState(t *testing.T, doc *Document, module, state string) StateDef {
 func TestProtoKind(t *testing.T) {
 	want := map[Kind]pluginv1.Kind{
 		KindSoulModule:  pluginv1.Kind_KIND_SOUL_MODULE,
-		KindCloudDriver: pluginv1.Kind_KIND_CLOUD_DRIVER,
 		KindSSHProvider: pluginv1.Kind_KIND_SSH_PROVIDER,
 		KindSoulBeacon:  pluginv1.Kind_KIND_SOUL_BEACON,
 		"wizardry":      pluginv1.Kind_KIND_UNSPECIFIED,

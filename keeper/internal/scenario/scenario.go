@@ -440,7 +440,7 @@ type Deps struct {
 	// scenario is rejected at render phase (ErrUnsupportedDSL).
 	Destiny *DestinySource
 	// KeeperModules — keeper-side core Registry (ADR-017): `on: keeper` tasks
-	// (`core.soul.registered`, `core.cloud.provisioned`, `core.vault.kv-read`)
+	// (`core.soul.registered`, `core.vault.kv-read`, `core.choir.present`)
 	// execute locally on the instance through it. nil → `on: keeper` tasks
 	// are rejected at dispatch phase ([ErrKeeperModulesNotConfigured]); a
 	// pure Soul-side run works without it.

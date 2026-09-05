@@ -62,7 +62,7 @@ type hsigilSlots struct{}
 func (hsigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return &pluginhost.SlotContents{
 		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`),
+		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 		BinarySHA256: sigilFixtureSHA,
 	}, nil
 }

@@ -94,10 +94,6 @@ fixtures:
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
-    # * provision is disabled (default-on: an omitted section = ENABLED; the case deploys onto
-    # a READY roster, cloud-create isn't needed) -> include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: sentinel
     # version is MANDATORY: enum of builds shipped to Nexus (major < 8 -> version-gate
     # of modules is not active). 7.4.1 - the 7.x series, like the previous distro pin 7.2.4.

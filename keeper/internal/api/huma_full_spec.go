@@ -248,24 +248,6 @@ func fullSpecGroups() []specGroup {
 			registerHumaPushProviderDelete(api, stub)
 			return nil
 		}},
-		{"/v1/providers", func(api huma.API) error {
-			stub := handlers.ProviderSpecStub()
-			registerHumaProviderCreate(api, stub)
-			registerHumaProviderList(api, stub)
-			registerHumaProviderGet(api, stub)
-			registerHumaProviderSetLabel(api, stub)
-			registerHumaProviderDelete(api, stub)
-			return nil
-		}},
-		{"/v1/profiles", func(api huma.API) error {
-			stub := handlers.ProfileSpecStub()
-			registerHumaProfileCreate(api, stub)
-			registerHumaProfileList(api, stub)
-			registerHumaProfileGet(api, stub)
-			registerHumaProfileSetLabel(api, stub)
-			registerHumaProfileDelete(api, stub)
-			return nil
-		}},
 		{"/v1/voyages", func(api huma.API) error {
 			stub := handlers.VoyageSpecStub()
 			registerHumaVoyageCreate(api, stub)

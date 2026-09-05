@@ -85,15 +85,15 @@ func TestKeeperSideModules_DeclaredSideDistinguishesUnknown(t *testing.T) {
 	}
 }
 
-// A cloud_driver entry carries no modules[] at all; it must not become
+// An ssh_provider entry carries no modules[] at all; it must not become
 // addressable as a keeper-side module through some other door.
 func TestKeeperSideModules_SkipsOtherKinds(t *testing.T) {
-	doc := schema.Document{Kind: schema.KindCloudDriver, ProtocolVersion: 1}
+	doc := schema.Document{Kind: schema.KindSSHProvider, ProtocolVersion: 1}
 	r := NewKeeperSideModules(&fakeSoulModuleSpawner{}, []Discovered{
 		{Alias: "aws", Doc: &doc, BinaryPath: "/bogus/aws", Dir: "/bogus"},
 	}, nil)
 	if len(r.Names()) != 0 {
-		t.Errorf("Names() = %v, want empty (cloud_driver is not a keeper-side module)", r.Names())
+		t.Errorf("Names() = %v, want empty (ssh_provider is not a keeper-side module)", r.Names())
 	}
 	if _, known := r.DeclaredSide("aws"); known {
 		t.Error("DeclaredSide(aws): known=true — a non-soul_module kind must not be indexed")

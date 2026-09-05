@@ -32,7 +32,7 @@ import (
 )
 
 // protocolVersion is the MVP plugin-protocol version (docs/keeper/plugins.md
-// → Versioning). Mirrors sdk/module / sdk/clouddriver / sdk/sshprovider.
+// → Versioning). Mirrors sdk/module / sdk/sshprovider.
 const protocolVersion = 1
 
 // Beacon is the interface a plugin author implements. Its signatures mirror

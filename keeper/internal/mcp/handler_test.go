@@ -1099,10 +1099,11 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	if err := json.Unmarshal(resp.Result, &res); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// 107 = 97 + the ten `keeper.<resource>.label-set` tools ([ADR-0085], NIM-728),
-	// one per registry that carries a display caption.
-	if len(res.Tools) != 107 {
-		t.Errorf("tool count = %d, want 107", len(res.Tools))
+	// 97 = 89 + the eight `keeper.<resource>.label-set` tools ([ADR-0085], NIM-728),
+	// one per registry that carries a display caption. Eight CRUD tools and two
+	// captions left with the Cloud Provider/Profile registries (NIM-761).
+	if len(res.Tools) != 97 {
+		t.Errorf("tool count = %d, want 97", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}
@@ -1126,8 +1127,6 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 		"keeper.push.apply", "keeper.push.cleanup",
 		"keeper.push-provider.create", "keeper.push-provider.update", "keeper.push-provider.delete",
 		"keeper.push-provider.list", "keeper.push-provider.read",
-		"keeper.provider.create", "keeper.provider.read", "keeper.provider.list", "keeper.provider.delete",
-		"keeper.profile.create", "keeper.profile.read", "keeper.profile.list", "keeper.profile.delete",
 	}
 	for _, m := range must {
 		if !names[m] {

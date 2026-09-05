@@ -30,7 +30,7 @@ import (
 )
 
 // protocolVersion is the MVP plugin protocol version (docs/keeper/plugins.md →
-// Versioning). Symmetric with sdk/module and sdk/clouddriver.
+// Versioning). Symmetric with sdk/module.
 const protocolVersion = 1
 
 // SshProvider is the interface implemented by the plugin author. Signatures

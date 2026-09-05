@@ -87,12 +87,12 @@ func TestService_LookupModuleBinary_NotAllowed(t *testing.T) {
 }
 
 func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
-	// An active grant on the same sha but kind=cloud_driver — NOT a module, reject.
+	// An active grant on the same sha but kind=ssh_provider — NOT a module, reject.
 	// The kind is read from the grant's SIGNED schema, not from the cache: the grant is
 	// what was approved, the cache is what a resolver last wrote there.
 	rec := moduleSigil(moduleSHA)
 	rec.Alias = "hetzner"
-	rec.Schema = []byte(cloudSchemaJSON)
+	rec.Schema = []byte(sshSchemaJSON)
 	slot := slotFixture()
 	slot.BinarySHA256 = moduleSHA
 	svc := lookupService(t,
@@ -101,7 +101,7 @@ func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
 	)
 	_, err := svc.LookupModuleBinary(context.Background(), moduleSHA)
 	if !errors.Is(err, ErrModuleNotAllowed) {
-		t.Fatalf("err = %v, want ErrModuleNotAllowed (kind=cloud_driver)", err)
+		t.Fatalf("err = %v, want ErrModuleNotAllowed (kind=ssh_provider)", err)
 	}
 }
 

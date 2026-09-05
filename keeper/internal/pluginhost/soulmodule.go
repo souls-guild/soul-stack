@@ -14,7 +14,7 @@ import (
 // module — the SAME contract the Soul host runs (ADR-009 / ADR-017: one
 // SoulModule interface for both sides), started inside the Keeper's own process
 // tree instead of on a host. Embeds the generic [Plugin] and adds the SoulModule
-// gRPC client, exactly as [CloudDriverPlugin] / [SshProviderPlugin] do for their
+// gRPC client, exactly as [SshProviderPlugin] does for its
 // own contracts.
 //
 // Lifecycle is one-shot per spawn (ADR-020(d)), like every other kind here:
@@ -25,7 +25,7 @@ type SoulModulePlugin struct {
 }
 
 // SpawnSoulModule forks the artifact for one kind=soul_module module and wraps
-// it in a SoulModule client. Separate from [Host.Spawn] (cloud_driver /
+// it in a SoulModule client. Separate from [Host.Spawn] (
 // ssh_provider) because each kind gets its own wrap function on this host, and
 // because this one carries a gate the other two have no analogue of.
 //

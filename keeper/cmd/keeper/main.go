@@ -453,7 +453,6 @@ func runDaemon(args []string) int {
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
-		d.setupCloudCRUD,
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.

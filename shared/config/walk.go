@@ -38,6 +38,31 @@ var (
 // top-level unknowns for covenant (suppressAll), leaving the analysis to the validator.
 var covenantFragmentType = reflect.TypeOf(ScenarioFragment{})
 
+// keeperPluginsType — `keeper.yml::plugins`. Its removed keys are handled here
+// rather than in a second validator pass, because keeper.yml has none: the walker
+// IS the schema phase for it, and an unhandled removed key is a boot-stopping
+// `unknown_key` error (keeper/cmd/keeper/main.go exits on the first error).
+var keeperPluginsType = reflect.TypeOf(KeeperPlugins{})
+
+// removedKeys — keys a struct no longer has, but which a config written against
+// an older release still carries. Unlike deprecatedDestinyKeys and friends, which
+// are suppressed here so a SECOND pass can raise them, these have no second pass:
+// the entry carries the hint and the walker raises it directly, as a WARNING.
+//
+// A warning, not an error, on purpose. `plugins.cloud_drivers` named a plugin kind
+// this release deleted (NIM-761); a keeper that refused to start on it would turn
+// an upgrade into an outage for every deployment that has the block, to enforce
+// the removal of a list that is now simply ignored. The operator is told to delete
+// it and the run continues.
+var removedKeys = map[reflect.Type]map[string]string{
+	keeperPluginsType: {
+		"cloud_drivers": "cloud_drivers: removed (NIM-761) together with the CloudDriver plugin contract and " +
+			"the `kind: cloud_driver` discriminator. A cloud driver is now an ordinary SoulModule plugin " +
+			"declaring `side: keeper`, so it is registered under `plugins.soul_modules` instead. The block is " +
+			"IGNORED — delete it, and move any entry you still need to `soul_modules`",
+	},
+}
+
 // taskType is a reflect-walker stop point. Task has its own discriminated
 // UnmarshalYAML and its own validation (validateTaskNode); a generic reflect walk
 // would catch `module:`/`include:` as unknown_key (they are tagged `yaml:"-"` in
@@ -103,6 +128,7 @@ func walkMappingAgainstStruct(m *ast.MappingNode, t reflect.Type, path string) [
 	// the duplicate, but in the JSON output it shows up as a twin line.
 	var suppress map[string]bool
 	var suppressAllUnknown bool
+	removed := removedKeys[t]
 	switch t {
 	case destinyManifestType:
 		suppress = make(map[string]bool, len(deprecatedDestinyKeys))
@@ -132,6 +158,19 @@ func walkMappingAgainstStruct(m *ast.MappingNode, t reflect.Type, path string) [
 		fieldType, ok := known[keyName]
 		if !ok {
 			if suppressAllUnknown || suppress[keyName] {
+				continue
+			}
+			if hint, gone := removed[keyName]; gone {
+				out = append(out, diag.Diagnostic{
+					Level:    diag.LevelWarning,
+					Phase:    diag.PhaseSchemaValidate,
+					Line:     key.Position.Line,
+					Column:   key.Position.Column,
+					Code:     "removed_key",
+					Message:  `removed field "` + keyName + `"`,
+					Hint:     hint,
+					YAMLPath: path + "." + keyName,
+				})
 				continue
 			}
 			out = append(out, diag.Diagnostic{

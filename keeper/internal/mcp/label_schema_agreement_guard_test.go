@@ -47,8 +47,6 @@ var labelSetDecoders = map[string]func() any{
 	"keeper.oracle.decree.label-set": func() any {
 		return &labelSetArgs{}
 	},
-	"keeper.provider.label-set":      func() any { return &labelSetArgs{} },
-	"keeper.profile.label-set":       func() any { return &labelSetArgs{} },
 	"keeper.push-provider.label-set": func() any { return &labelSetArgs{} },
 	"keeper.herald.label-set":        func() any { return &labelSetArgs{} },
 	"keeper.tiding.label-set":        func() any { return &labelSetArgs{} },
@@ -213,12 +211,6 @@ func TestLabelSetDecoderTableIsComplete(t *testing.T) {
 // A registry whose rename has not landed yet is deliberately absent: its tools
 // still take `name` and asserting `id` on them would be asserting the future.
 var idRenamedTools = map[string]func() any{
-	"keeper.provider.create":           func() any { return &providerCreateArgs{} },
-	"keeper.provider.read":             func() any { return &providerByIDArgs{} },
-	"keeper.provider.delete":           func() any { return &providerByIDArgs{} },
-	"keeper.profile.create":            func() any { return &profileCreateArgs{} },
-	"keeper.profile.read":              func() any { return &profileByIDArgs{} },
-	"keeper.profile.delete":            func() any { return &profileByIDArgs{} },
 	"keeper.push-provider.create":      func() any { return &pushProviderCreateArgs{} },
 	"keeper.push-provider.update":      func() any { return &pushProviderUpdateArgs{} },
 	"keeper.push-provider.read":        func() any { return &pushProviderByIDArgs{} },
@@ -326,8 +318,6 @@ func propertyNames(s schemaShape) []string {
 // [ADR-0085] / NIM-729 converted. A tool under one of these addresses, returns
 // or filters a row whose identifier is now `id`.
 var convertedRegistryToolPrefixes = []string{
-	"keeper.provider.",
-	"keeper.profile.",
 	"keeper.push-provider.",
 	"keeper.augur.omen.",
 	"keeper.herald.",
@@ -343,8 +333,6 @@ var convertedRegistryToolPrefixes = []string{
 // claim about the tool, so it is written here where the completeness test can
 // see it rather than by silently leaving a row out of the table.
 var idRenamedToolsExcused = map[string]string{
-	"keeper.provider.list":      "a list takes paging and filters, not one row's identifier",
-	"keeper.profile.list":       "same",
 	"keeper.push-provider.list": "same; its filter is `id_pattern`, checked by the REST/MCP parity assertion",
 	"keeper.herald.list":        "same",
 	"keeper.tiding.list":        "same",

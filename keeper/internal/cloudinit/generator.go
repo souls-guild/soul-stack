@@ -1,5 +1,6 @@
 // Package cloudinit renders cloud-init userdata for VMs created by
-// `core.cloud.provisioned` (ADR-017(h) amendment 2026-05-27, B-flat).
+// `core.bootstrap.delivered` with `install: true` (ADR-063; the render was written for
+// the removed `core.cloud.provisioned`, ADR-017(h) amendment 2026-05-27, B-flat).
 //
 // Userdata carries ONLY soul bootstrap: installing the `soul` binary via
 // pinned-CA HTTPS curl, the `soul.yml` config with `keeper.endpoints`

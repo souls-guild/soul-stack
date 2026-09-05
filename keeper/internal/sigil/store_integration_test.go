@@ -99,7 +99,7 @@ func reset(t *testing.T) string {
 // stored as BYTEA rather than JSONB precisely so this round-trips byte for byte: a
 // JSONB column would re-serialize it, and the bytes a Soul re-hashes at verify would no
 // longer be the bytes Keeper signed.
-var rawSchemaDoc = []byte(`{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`)
+var rawSchemaDoc = []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`)
 
 func newRecord(aid string) *Sigil {
 	digest := sha256.Sum256([]byte("binary-bytes"))
@@ -370,7 +370,7 @@ func TestIntegration_ListActive(t *testing.T) {
 		r.Alias = alias
 		// Distinct sources too: the trust key is (source, ref), so three grants under
 		// one source would collide on it rather than on the alias.
-		r.Source = "https://example.com/soul-cloud-" + alias + ".git"
+		r.Source = "https://example.com/soul-ssh-" + alias + ".git"
 		return r
 	}
 	for _, r := range []*Sigil{mk("aws"), mk("gcp"), mk("azure")} {

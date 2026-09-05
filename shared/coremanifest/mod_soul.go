@@ -19,7 +19,7 @@ var modSoul = schema.Module{
 				// sid — a string OR a list of strings (ADR-061). Declared as string for backward
 				// compatibility (a single literal string remains a valid author form). In practice
 				// a list of SIDs arrives via a CEL expression `${ register.<step>.hosts }` (e.g.
-				// hosts from core.cloud.provisioned): ${…} values are skipped by soul-lint's
+				// hosts produced by an earlier keeper step): ${…} values are skipped by soul-lint's
 				// type-check regardless of type. The stripped-down schema DSL does not express the
 				// union string|list; the runtime (StringOrSliceParam) accepts both forms, and the
 				// await barrier aggregates over the whole set. A literal list `sid: [a,b]`

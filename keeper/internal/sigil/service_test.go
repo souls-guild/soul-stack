@@ -13,9 +13,9 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 )
 
-// cloudSchemaJSON is a canonical cloud_driver document as the serializer produces it —
+// sshSchemaJSON is a canonical ssh_provider document as the serializer produces it —
 // no namespace, no name, no publisher, because the format has nowhere to put one.
-const cloudSchemaJSON = `{"kind":"cloud_driver","profile_schema":{"type":"object"},"protocol_version":1}`
+const sshSchemaJSON = `{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`
 
 // fakeSlotReader returns a preset slot (or error) and the active slot's commit_sha (or
 // commitErr). commit / commitErr are independent of slot / err: the A1-S4 tests cover
@@ -76,10 +76,10 @@ func testSigner(t *testing.T) *Signer {
 }
 
 func slotFixture() *pluginhost.SlotContents {
-	digest := sha256.Sum256([]byte("cloud-binary"))
+	digest := sha256.Sum256([]byte("ssh-binary"))
 	return &pluginhost.SlotContents{
 		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(cloudSchemaJSON),
+		SchemaBytes:  []byte(sshSchemaJSON),
 		BinarySHA256: hex.EncodeToString(digest[:]),
 	}
 }
@@ -314,7 +314,7 @@ func TestService_List_NoSignatureNoSchema(t *testing.T) {
 			Alias: "hetzner", Source: testSource, Ref: "v1.0.0",
 			SHA256:       "deadbeef",
 			Signature:    []byte("secret-sig-bytes"),
-			Schema:       []byte(cloudSchemaJSON),
+			Schema:       []byte(sshSchemaJSON),
 			AllowedByAID: "archon-a",
 			AllowedAt:    now,
 		},

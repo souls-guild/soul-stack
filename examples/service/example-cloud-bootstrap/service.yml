@@ -1,29 +1,19 @@
 description: >-
-  Minimal demo service for ADR-017(h) amendment 2026-05-27 (B-flat):
-  cloud-init bootstrap of a new VM via generate_userdata + delivery of a per-VM
-  bootstrap token as a separate scenario step.
+  Minimal demo service for onboarding ready-made VMs (ADR-063): the keeper
+  issues one bootstrap token per SID, installs and redeems it over the
+  configured transport, then blocks until every Soul is online.
 
-  What the example shows:
-    1. Step core.cloud.created with generate_userdata: true — Keeper renders
-       cloud-config userdata from keeper.yml::cloud_init (CA + soul-binary URL),
-       creates `count` VMs via the CloudDriver plugin, issues per-VM tokens
-       and puts them into register.<step>.hosts[].bootstrap_token.
-    2. Step keeper.push — takes per-VM tokens from the register of the previous step and
-       delivers them to each VM over SSH (via the configured soul-ssh-* provider).
-       Without this, Soul on the VM doesn't know which token to present to the Bootstrap RPC.
+  What the example shows — the `existing-vm` scenario:
+    1. core.bootstrap.issued    — one token per FQDN/SID, atomically.
+    2. core.bootstrap.delivered — install Soul and hand it its token
+                                  (install: true, over Teleport).
+    3. core.soul.registered     — await_online, the blocking onboarding barrier.
 
-  Cloud-init userdata carries NO tokens: the cloud-provider API stores userdata as
-  plaintext metadata (security floor). See ADR-017(h) amendment and
-  docs/keeper/cloud.md → "Cloud-init bootstrap (MVP)".
-
-  The sibling `existing-vm` scenario demonstrates the CloudDriver-independent
-  chain for ready-made hosts: core.bootstrap.issued →
-  core.bootstrap.delivered(install=true, Teleport) →
-  core.soul.registered(await_online).
+  The service does NOT create the VMs. Creating one is the job of a cloud
+  plugin, which since NIM-761 is an ordinary `side: keeper` SoulModule with its
+  own module address and its own params — there is no `core.cloud` step and no
+  CloudDriver contract to demonstrate here. The sibling `create` /
+  `create-inline` scenarios, which drove that contract, went with it.
 
 state_schema:
-  provider: { type: string, required: true }
-  profile:     { type: string }
-  count: { type: integer, min: 1, required: true }
-  vm_ids:      { type: array,   items: { type: string } }
-  sids:        { type: array,   items: { type: string, format: fqdn } }
+  sids: { type: array, items: { type: string, format: fqdn } }

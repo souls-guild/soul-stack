@@ -71,11 +71,6 @@ fixtures:
     redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
     vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
   input:
-    # * provision is disabled (default-on: an omitted section means ENABLED;
-    # the case deploys onto a READY roster, cloud-create isn't needed) ->
-    # include redis-provision.yml group-drop.
-    provision:
-      enabled: false
     redis_type: cluster
     # version is REQUIRED (user directive 2026-06-23): fixed distro-native pin
     # (major < 8 -> module version-gate not active).
