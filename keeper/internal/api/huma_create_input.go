@@ -16,10 +16,15 @@ package api
 // huma_label_test.go now drives all eight that way. What an inline literal cannot
 // do is be reflected over: there was nothing to point a guard at that would fail
 // for a field nobody thought to send. As named functions they are driven by
-// huma_create_input_guard_test.go, which fills the request twice — every field at
-// once with a value unique to it, then one field at a time — and fails on any
+// huma_wire_projection_guard_test.go, which fills the request twice — every field
+// at once with a value unique to it, then one field at a time — and fails on any
 // native field that does not arrive holding it. So the NEXT field added to a create
 // body cannot be dropped, or sourced from the wrong one, without a red test.
+//
+// That guard is no longer about these eight: [NIM-824] extended it to every
+// hand-written wire→native projection in the package, and it derives the list from
+// the package's own source, so a projection written anywhere here is covered
+// whether or not it lives in this file.
 //
 // Both guards are needed and neither subsumes the other: this file's functions can
 // be correct while a route stops calling one, which is why huma_label_test.go

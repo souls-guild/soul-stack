@@ -170,7 +170,7 @@ type createCaptionCase struct {
 //
 // Every route, not a sample, and over HTTP rather than through the projection
 // function — because those are two different claims. The projection guard
-// (huma_create_input_guard_test.go) proves each function carries the field; only
+// (huma_wire_projection_guard_test.go) proves each function carries the field; only
 // driving the route proves the route CALLS that function. A registration closure
 // that quietly stopped using its projection would leave the other guard green and
 // ship exactly the defect this ticket is about.
