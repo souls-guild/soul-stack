@@ -27,6 +27,12 @@ const MaxRedirects = 10
 // guard) doesn't change timeout behavior.
 const dialTimeout = 30 * time.Second
 
+// DefaultFetchTimeout is the whole-request budget a core module gives a download it
+// was not told a timeout for. Shared rather than per-module: two core modules
+// downloading the same artifact over the same link must not disagree about when it
+// is late, and the number has to fit the largest body any of them will accept.
+const DefaultFetchTimeout = 300 * time.Second
+
 // HTTPDoer is the minimal HTTP client interface core modules need. Exposed as
 // a module field for testability (fakes in unit tests); production uses
 // *http.Client via NewHTTPClient.

@@ -44,6 +44,17 @@ const (
 type HostFacts struct {
 	PkgMgr     PkgMgr
 	InitSystem InitSystem
+	// OSFamily / Arch are SoulprintFacts.os.family and .arch verbatim (ADR-018):
+	// debian / rhel / alpine / arch on Linux, otherwise GOOS (darwin / windows);
+	// amd64 / arm64. core.module picks the artifact row for its own platform from
+	// them.
+	//
+	// Plain strings, not [OSFamily]: that closed set is core.pkg's mapping
+	// vocabulary and spells the Red Hat family "redhat", where the collected fact
+	// spells it "rhel". Comparing the two would be wrong on exactly one family and
+	// right everywhere else.
+	OSFamily string
+	Arch     string
 }
 
 // SoulprintAware — optional interface for a core module that wants the

@@ -89,16 +89,13 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 
 	// (2) idempotency: the installed artifact already matches the active grant.
 	if diskSHA, exists := sha256OfFile(binPath); exists && strings.EqualFold(diskSHA, rec.BinarySHA256hex) {
-		return sendInstalled(stream, false, alias, rec, binPath)
+		return sendInstalled(stream, false, alias, rec, binPath, nil)
 	}
 
-	// (3) fetch by content address via FetchModule of the current EventStream session.
-	fetcher, ok := fetcherFrom(stream.Context())
-	if !ok {
-		return util.SendFailed(stream, fmt.Sprintf(
-			"%s: FetchModule is unavailable in this run (no EventStream session; push mode is not supported)", reasonFetchFailed))
-	}
-	data, err := fetchAll(stream.Context(), fetcher, alias, rec.BinarySHA256hex)
+	// (3) fetch by content address — from the source the grant names, or from Keeper
+	// over the current EventStream session. Both are legitimate transports and which
+	// one this run used rides in the final event (see [Module.fetch] for the rule).
+	fetched, err := m.fetch(stream.Context(), alias, rec)
 	if err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonFetchFailed, alias, err))
 	}
@@ -106,13 +103,13 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	// (4) full Sigil verify BEFORE materialization: sha256 of the bytes ==
 	// grant + signature over the source-keyed block + schema hash
 	// (shared/pluginhost, ADR-065(f)).
-	if err := sharedhost.VerifyArtifactBytes(data, rec, m.deps.Anchors); err != nil {
+	if err := sharedhost.VerifyArtifactBytes(fetched.data, rec, m.deps.Anchors); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonVerifyFailed, alias, err))
 	}
 
 	// (5) atomic install into the slot: clear the previous artifact and its digest
 	// sidecar → atomic rename.
-	if err := installSlot(slotDir, binPath, data); err != nil {
+	if err := installSlot(slotDir, binPath, fetched.data); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("install %s: %v", alias, err))
 	}
 
@@ -121,7 +118,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		m.deps.Rescan()
 	}
 
-	return sendInstalled(stream, true, alias, rec, binPath)
+	return sendInstalled(stream, true, alias, rec, binPath, fetched)
 }
 
 // fetchAll assembles the artifact bytes from the server-streaming PluginChunk response.
@@ -209,8 +206,11 @@ func sha256OfFile(path string) (string, bool) {
 	return hex.EncodeToString(h.Sum(nil)), true
 }
 
-func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, alias string, rec *sharedhost.SigilRecord, binPath string) error {
-	return util.SendFinal(stream, changed, map[string]any{
+// sendInstalled reports the slot. fetched is nil when nothing was fetched (the
+// idempotent no-op): the transport keys are then absent rather than carrying a
+// transport that was not used this run.
+func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, alias string, rec *sharedhost.SigilRecord, binPath string, fetched *fetchResult) error {
+	out := map[string]any{
 		"name":      alias,
 		"source":    rec.Source,
 		"ref":       rec.Ref,
@@ -218,5 +218,15 @@ func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], chang
 		"path":      binPath,
 		"installed": true,
 		"changed":   changed,
-	})
+	}
+	if fetched != nil {
+		out["fetch_via"] = fetched.via
+		if fetched.url != "" {
+			out["fetch_url"] = fetched.url
+		}
+		if len(fetched.warnings) > 0 {
+			out["warnings"] = util.StringsToAny(fetched.warnings)
+		}
+	}
+	return util.SendFinal(stream, changed, out)
 }

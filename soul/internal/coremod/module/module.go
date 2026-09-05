@@ -2,14 +2,23 @@
 // delivering a SoulModule plugin to a Soul host.
 //
 // States:
-//   - installed: an artifact covered by an active Sigil grant is pulled from
-//     Keeper (FetchModule), verified, and atomically installed into the
-//     catalog slot `<paths.modules>/<alias>/`. Idempotency is by artifact
-//     sha256 against the active grant.
+//   - installed: an artifact covered by an active Sigil grant is fetched,
+//     verified, and atomically installed into the catalog slot
+//     `<paths.modules>/<alias>/`. Idempotency is by artifact sha256 against the
+//     active grant.
 //
-// The apply-flow order is normative ([ADR-065](f)): allow-check BEFORE fetch
-// → idempotency → fetch → verify BEFORE materialization → atomic rename →
-// hot-register the custom-module registry ([Deps.Rescan], ADR-065(d)).
+// Two transports carry the bytes, and both are legitimate (NIM-793). A grant
+// carrying artifact rows is pulled from the SOURCE by the host itself: Keeper
+// still resolves the ref and signs the release, but the bytes never pass through
+// the Keeper cluster at all. A grant carrying none is fetched from Keeper
+// (FetchModule) — the mode for a host with no egress, and where the source path
+// lands when the source is down.
+//
+// The apply-flow order is normative ([ADR-065](f)) and transport-independent:
+// allow-check BEFORE fetch → idempotency → fetch → verify BEFORE
+// materialization → atomic rename → hot-register the custom-module registry
+// ([Deps.Rescan], ADR-065(d)). Rights before the network, signature before the
+// disk — which is what lets an untrusted source be safe to pull from.
 //
 // [ADR-065]: docs/adr/0065-core-module-installed.md
 package module
@@ -50,7 +59,8 @@ var reAlias = regexp.MustCompile(sharedplugin.AliasPattern)
 // Fetcher — the FetchModule transport ([ADR-012] third RPC, ADR-065(a)).
 // Implemented by soulgrpc.StreamSession; reaches the run via context
 // ([WithFetcher]) — fetch is bound to a live EventStream session, the module
-// itself is stateless.
+// itself is stateless. Absent in push mode, which is why a run with no session
+// can only install a grant it can pull from the source.
 //
 // [ADR-012]: docs/adr/0012-keeper-soul-grpc.md
 type Fetcher interface {
@@ -95,10 +105,30 @@ type Deps struct {
 
 // Module — the sdk/module.SoulModule implementation for core.module.
 type Module struct {
-	deps Deps
+	deps  Deps
+	facts util.HostFacts
+
+	// NewClient builds the HTTP client for a source pull. Production uses
+	// util.NewHTTPClient (New()'s default), the same constructor core.url and
+	// core.http build theirs from — one redirect policy, one dial guard, one TLS
+	// posture for every core module that fetches. Tests swap it for a fake.
+	NewClient func(util.HTTPClientOpts) util.HTTPDoer
 }
 
-func New(deps Deps) *Module { return &Module{deps: deps} }
+func New(deps Deps) *Module {
+	return &Module{
+		deps: deps,
+		NewClient: func(opts util.HTTPClientOpts) util.HTTPDoer {
+			return util.NewHTTPClient(opts)
+		},
+	}
+}
+
+// SetHostFacts implements util.SoulprintAware: the ApplyRunner injects the
+// collected Soulprint before Apply (ADR-018(b)). core.module reads os.family and
+// os.arch from it to pick its own artifact row; a factless host falls back to the
+// running binary's platform (see hostPlatform).
+func (m *Module) SetHostFacts(f util.HostFacts) { m.facts = f }
 
 // Validate: known-state + required come from the embedded core declaration; beyond
 // that, semantics the input DSL can't express — the alias format of name.

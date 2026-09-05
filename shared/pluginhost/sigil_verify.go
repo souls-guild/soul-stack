@@ -44,6 +44,38 @@ type SigilRecord struct {
 	BinarySHA256hex string
 	Signature       []byte
 	Schema          []byte
+
+	// BaseURL and Artifacts carry an ARTIFACT-kind grant: one grant per (source,
+	// ref) whose block covers the whole release, and the host pulls the bytes from
+	// the source itself instead of over Keeper's EventStream (NIM-793). Empty
+	// Artifacts = the grant names no artifacts, and the bytes come from Keeper.
+	//
+	// Neither is read by verify here, and until that changes a grant only installs on
+	// the platform whose row digest equals BinarySHA256hex. The signed block is still
+	// [BuildSigilBlock](source, ref, binary_sha256, schema_sha256): making it cover
+	// the list means changing what Keeper SIGNS, and sign and verify are one helper on
+	// purpose, so both ends move together or neither does (NIM-795). Until they do,
+	// every OTHER row fetches, then fails closed at verify with digest_mismatch — the
+	// safe direction, and the reason fetching comes last.
+	BaseURL   string
+	Artifacts []SigilArtifact
+}
+
+// SigilArtifact is one platform's row of an artifact-kind grant.
+//
+// A release covers several platforms under ONE signature: different platforms mean
+// different binaries and therefore different digests, so the grant carries a LIST
+// rather than a path template plus one digest — under a template, verification could
+// only ever succeed on one platform.
+//
+// Path is relative to [SigilRecord.BaseURL], and is a plain path with no
+// substitutions: a URL is where executable bytes come from, and an address that can
+// be computed is an address that can be steered.
+type SigilArtifact struct {
+	OS        string
+	Arch      string
+	Path      string
+	SHA256hex string
 }
 
 // SigilLookup is the read surface for the active grant by registration alias.

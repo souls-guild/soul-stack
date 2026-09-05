@@ -50,7 +50,7 @@ import (
 const Name = "core.url"
 
 // defaultTimeout is the default request timeout when the timeout param is unset.
-const defaultTimeout = 300 * time.Second
+const defaultTimeout = util.DefaultFetchTimeout
 
 // Module implements sdk/module.SoulModule for core.url.
 //

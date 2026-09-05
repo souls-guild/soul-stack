@@ -1598,6 +1598,8 @@ func hostFactsFromSoulprint(rep *keeperv1.SoulprintReport) coremodutil.HostFacts
 	return coremodutil.HostFacts{
 		PkgMgr:     coremodutil.PkgMgr(os.GetPkgMgr()),
 		InitSystem: coremodutil.InitSystem(os.GetInitSystem()),
+		OSFamily:   os.GetFamily(),
+		Arch:       os.GetArch(),
 	}
 }
 
