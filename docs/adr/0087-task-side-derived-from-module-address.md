@@ -374,9 +374,10 @@ The rest of the blast radius, compactly, and all of it additive except the older
   `soul-stack-web`. ⚠ **That catalog item already carries a `kind: "core"|"plugin"` field**
   (`modulecatalog.go:157`) meaning something else entirely; the two must not be confused, in the
   code or in the UI.
-- [`soul-lint/internal/validate/modules.go:94`](../../soul-lint/internal/validate/modules.go) — the
+- [`shared/definition/schemas.go`](../../shared/definition/schemas.go) — the
   `for _, m := range doc.Modules` fold that keys each module object by `alias + "." + m.Name`, which
-  is where a new per-module field arrives.
+  is where a new per-module field arrives. It moved out of `soul-lint` in NIM-790, when
+  `soul-trial` grew the same `--modules` flag: one loader now serves both offline tools.
 - The companion `soul-stack-plugins`, every artifact of which needs re-stamp + re-sign + re-allow.
 
 ### (l) Naming friction — `side` and `side_effects` sit in the same object

@@ -349,7 +349,7 @@ func renderPlan(t *testing.T, caseFile string) []*render.RenderedTask {
 	if err != nil {
 		t.Fatalf("LoadCase(%s): %v", caseFile, err)
 	}
-	rc, err := renderCase(context.Background(), c, file)
+	rc, err := renderCase(context.Background(), c, file, Options{})
 	if err != nil {
 		t.Fatalf("render %s: %v", caseFile, err)
 	}

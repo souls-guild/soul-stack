@@ -29,7 +29,7 @@ func TestRedisExporterMultiInstanceIsolation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCase: %v", err)
 	}
-	rendered, err := renderCase(context.Background(), c, file)
+	rendered, err := renderCase(context.Background(), c, file, Options{})
 	if err != nil {
 		t.Fatalf("renderCase: %v", err)
 	}
@@ -165,7 +165,7 @@ func TestRedisExporterRedissWebTLS(t *testing.T) {
 	if err != nil {
 		t.Fatalf("LoadCase: %v", err)
 	}
-	rendered, err := renderCase(context.Background(), c, file)
+	rendered, err := renderCase(context.Background(), c, file, Options{})
 	if err != nil {
 		t.Fatalf("renderCase: %v", err)
 	}

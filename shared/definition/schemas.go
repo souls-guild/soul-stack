@@ -1,19 +1,20 @@
-package validate
+package definition
 
-// `soul-lint --modules <alias>=<path>` — the offline half of the plugin-params check.
+// `--modules <alias>=<path>` — the offline half of the plugin-params check, shared by
+// every offline tool that has one (`soul-lint`, `soul-trial`).
 //
-// Offline is the whole point: keeper resolves a plugin's contract from its Sigil
+// Offline is the whole point: the keeper resolves a plugin's contract from its Sigil
 // grants, which an author writing a definition on their laptop does not have. Handed
-// the schema documents instead, the author gets the same four checks keeper would run,
-// before the run rather than as a `module.unknown_param` on the host.
+// the schema documents instead, the author gets the same four checks the keeper would
+// run, before the run rather than as a `module.unknown_param` on the host.
 //
 // # Why the alias is on the flag
 //
 // The artifact carries no self-name (NIM-377). There is no `namespace:`, no `name:`,
 // nothing in the bytes that says what a task should call it — address level 1 is the
 // registration alias an operator picks, and the same artifact registered as `redis` and
-// as `redis-community` serves two address spaces without changing a byte. So the
-// linter cannot learn an address from a file; somebody has to state it.
+// as `redis-community` serves two address spaces without changing a byte. So a tool
+// cannot learn an address from a file; somebody has to state it.
 //
 // The alias goes on the flag rather than being taken from the directory. Directory
 // naming was already rejected once for the manifest form, and every reason still holds:
@@ -27,11 +28,12 @@ package validate
 //
 // # Fail closed
 //
-// Every failure here is fatal (exit 2), not a downgrade to "unchecked". The author
-// named this binding explicitly: an alias whose document cannot be read is a check they
-// asked for and did not get, and running on to print `OK:` would be the exact failure
-// the flag exists to remove. [config.DiagPluginParamsUnchecked] stays for the case it
-// actually describes — a module nobody bound at all.
+// Every failure here is fatal for the caller (soul-lint and soul-trial both exit 2),
+// not a downgrade to "unchecked". The author named this binding explicitly: an alias
+// whose document cannot be read is a check they asked for and did not get, and running
+// on to print `OK:` or `PASS` would be the exact failure the flag exists to remove.
+// [config.DiagPluginParamsUnchecked] stays for the case it actually describes — a
+// module nobody bound at all.
 
 import (
 	"bytes"
@@ -54,31 +56,35 @@ func (a aliasSchemas) ResolveModule(alias, module string) (plugin.ModuleDef, boo
 	return m, ok
 }
 
-// LoadModuleSchemas builds the resolver from `<alias>=<path>` bindings.
+// LoadSchemas builds the resolver from `<alias>=<path>` bindings.
 //
 // path is a published `schema.json`, a stamped artifact, or a directory holding the
 // former — `dist/` after a build, which is what an author has in front of them.
 //
 // Nothing is skipped and nothing is best-effort: an unreadable, unparseable, invalid or
 // wrong-kind document is an error for the whole run. That is the one real difference
-// from the tree walk this replaced, and it follows from the flag's new shape — a tree
-// could contain files that were none of the linter's business, whereas every binding
-// here is one the author wrote down.
-func LoadModuleSchemas(bindings []string) (config.ModuleManifestResolver, error) {
+// from the tree walk this replaced, and it follows from the flag's shape — a tree could
+// contain files that were none of the tool's business, whereas every binding here is
+// one the author wrote down.
+//
+// No bindings means no resolver, and the nil is returned as a literal nil rather than
+// an empty map: the callers that check `modules == nil` to decide whether a catalog
+// exists at all must not be handed a typed non-nil interface holding nothing.
+func LoadSchemas(bindings []string) (config.ModuleManifestResolver, error) {
 	if len(bindings) == 0 {
 		return nil, nil
 	}
 	out := aliasSchemas{}
 	boundTo := make(map[string]string, len(bindings))
 	for _, b := range bindings {
-		alias, path, err := parseModuleBinding(b)
+		alias, path, err := parseBinding(b)
 		if err != nil {
 			return nil, err
 		}
 		if prev, dup := boundTo[alias]; dup {
 			// Two documents under one alias is not a merge — it is one address
 			// space with two answers, and picking either silently would make the
-			// lint depend on flag order.
+			// verdict depend on flag order.
 			return nil, fmt.Errorf("--modules %s: alias %q is already bound to %s", b, alias, prev)
 		}
 		boundTo[alias] = path
@@ -98,7 +104,7 @@ func LoadModuleSchemas(bindings []string) (config.ModuleManifestResolver, error)
 	return out, nil
 }
 
-// parseModuleBinding splits `<alias>=<path>` and vets the alias.
+// parseBinding splits `<alias>=<path>` and vets the alias.
 //
 // The alias is checked against the same grammar and the same reserved list a
 // registration is checked against ([plugin.ValidAlias], [plugin.IsReserved]). Binding
@@ -106,7 +112,7 @@ func LoadModuleSchemas(bindings []string) (config.ModuleManifestResolver, error)
 // accepts, which is precisely what the reserved list exists to stop — and refusing it
 // at the flag also tells an author early that the alias they had in mind will not
 // survive `plugin.allow` either.
-func parseModuleBinding(s string) (alias, path string, err error) {
+func parseBinding(s string) (alias, path string, err error) {
 	const form = "expected --modules <alias>=<path>, where <alias> is the name the task writes " +
 		"(the `redis` in redis.acl.present) and <path> is a schema.json, a stamped artifact, or the dist/ dir holding one"
 

@@ -89,7 +89,7 @@ assert:
     content: "${ input.greeting }"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -128,7 +128,7 @@ assert:
     content: "${ input.greeting }"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -165,7 +165,7 @@ assert:
     content: "${ input.greeting }"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -195,7 +195,7 @@ assert:
 	writeScenarioSibling(t, caseDir, "a.yml", "- include: b.yml\n")
 	writeScenarioSibling(t, caseDir, "b.yml", "- include: a.yml\n")
 
-	_, err := Run(context.Background(), caseDir)
+	_, err := Run(context.Background(), caseDir, Options{})
 	if err == nil {
 		t.Fatal("expected include-cycle error a->b->a, got nil")
 	}
@@ -231,7 +231,7 @@ assert:
         content: hi
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -261,7 +261,7 @@ assert:
         content: WRONG
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -284,7 +284,7 @@ assert:
     - index: 0
       module: core.file.absent
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -328,7 +328,7 @@ assert:
         content: hi
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -379,7 +379,7 @@ assert:
     - index: 0
       module: core.file.present
 `)
-	_, err := Run(context.Background(), caseDir)
+	_, err := Run(context.Background(), caseDir, Options{})
 	if err == nil {
 		t.Fatal("expected a render error (no such key on unguarded optional input), got nil")
 	}
@@ -423,7 +423,7 @@ assert:
   state_after:
     redis_version: ""
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -447,7 +447,7 @@ assert:
   state_after:
     redis_version: "WRONG"
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -500,7 +500,7 @@ assert:
       - alice
     last_user: bob
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -529,7 +529,7 @@ assert:
       - alice
     last_user: WRONG
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -566,7 +566,7 @@ assert:
   state_after:
     last_user: bob
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -594,7 +594,7 @@ assert:
   state_after:
     last_operator: bob
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -639,7 +639,7 @@ fixtures:
     - { sid: b.example.com, covens: [create] }
 expect_render_error: "topology mismatch"
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -660,7 +660,7 @@ fixtures:
     - { sid: b.example.com, covens: [create] }
 expect_render_error: "topology mismatch"
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -680,7 +680,7 @@ fixtures:
     - { sid: a.example.com, covens: [create] }
 expect_render_error: "completely different text"
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -766,7 +766,7 @@ verify:
 		t.Fatalf("write l2 case: %v", err)
 	}
 
-	results, err := Run(context.Background(), root)
+	results, err := Run(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatalf("Run on mixed tree must not fail on L2 case: %v", err)
 	}
@@ -810,7 +810,7 @@ verify:
 `), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	results, err := Run(context.Background(), file)
+	results, err := Run(context.Background(), file, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -848,7 +848,7 @@ assertt:
 		t.Fatalf("write case: %v", err)
 	}
 
-	results, err := Run(context.Background(), root)
+	results, err := Run(context.Background(), root, Options{})
 	if err == nil {
 		t.Fatal("expected strict-decode error on unknown-field L0 case (without stand/verify), got nil")
 	}
@@ -868,7 +868,7 @@ func TestRun_NonMapTopLevel_Errors(t *testing.T) {
 	if err := os.WriteFile(file, []byte("- just a list, not a case map\n"), 0o644); err != nil {
 		t.Fatalf("write: %v", err)
 	}
-	results, err := Run(context.Background(), file)
+	results, err := Run(context.Background(), file, Options{})
 	if err == nil {
 		t.Fatal("expected pre-parse error on non-map top-level, got nil")
 	}
@@ -941,7 +941,7 @@ assert:
         content: abc123
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -982,7 +982,7 @@ assert:
         content: abc123
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1088,7 +1088,7 @@ assert:
 `,
 	)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1170,7 +1170,7 @@ assert:
   task_absent:
     - module: core.pkg.installed
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1192,7 +1192,7 @@ assert:
       params_subset:
         path: /tmp/does-not-exist
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1221,7 +1221,7 @@ assert:
       params_subset:
         path: /tmp/alpha
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1247,7 +1247,7 @@ assert:
       params_subset:
         content: hi
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1274,7 +1274,7 @@ assert:
       params_subset:
         content: hi
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1322,7 +1322,7 @@ assert:
   task_absent:
     - module: core.pkg.installed
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1343,7 +1343,7 @@ assert:
   task_present:
     - module: core.pkg.installed
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1370,7 +1370,7 @@ assert:
       params_subset:
         name: nginx
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1394,7 +1394,7 @@ assert:
       params_subset:
         name: nginx
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1433,7 +1433,7 @@ assert:
   task_absent:
     - module: core.pkg.installed
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1498,7 +1498,7 @@ assert:
     last_user: bob
     owner: alice
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1545,7 +1545,7 @@ assert:
   task_absent:
     - module: core.state.set
 `)
-		results, err := Run(context.Background(), caseDir)
+		results, err := Run(context.Background(), caseDir, Options{})
 		if err != nil {
 			t.Fatalf("Run: %v -- a skipped capture must not be folded as an op", err)
 		}
@@ -1565,7 +1565,7 @@ assert:
   state_after:
     owner: alice
 `)
-		results, err := Run(context.Background(), caseDir)
+		results, err := Run(context.Background(), caseDir, Options{})
 		if err != nil {
 			t.Fatalf("Run: %v", err)
 		}
@@ -1591,7 +1591,7 @@ assert:
   state_absent:
     - migrating
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1616,7 +1616,7 @@ assert:
   state_absent:
     - owner
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -1648,7 +1648,7 @@ assert:
   state_absent:
     - blanked
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

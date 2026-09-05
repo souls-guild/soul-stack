@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/definition"
 	"github.com/souls-guild/soul-stack/shared/diag"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
@@ -70,11 +71,15 @@ type Options struct {
 // moduleSchemas builds the resolver for this run, or nil when the caller supplied no
 // `--modules`. Any binding that does not resolve is a fatal error rather than a
 // downgrade to "unchecked": the author asked for these checks by naming the alias.
+//
+// The loader is [definition.LoadSchemas], shared with `soul-trial` since NIM-790:
+// the two offline tools spell the flag the same way because they parse it with the
+// same code, and an author who learned `--modules` on one has learned it on both.
 func (o Options) moduleSchemas(errOut io.Writer) (config.ModuleManifestResolver, bool) {
 	if len(o.Modules) == 0 {
 		return nil, true
 	}
-	r, err := LoadModuleSchemas(o.Modules)
+	r, err := definition.LoadSchemas(o.Modules)
 	if err != nil {
 		fmt.Fprintf(errOut, "soul-lint: %v\n", err)
 		return nil, false

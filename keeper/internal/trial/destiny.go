@@ -11,6 +11,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/definition"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -49,13 +50,30 @@ type fixtureDestinyResolver struct {
 	template string
 	// deps maps destiny[] dependencies from case's service.yml, keyed by name.
 	deps map[string]config.DependencyRef
+	// modules resolves plugin manifests for the destiny's own task file and every
+	// body it includes (`--modules`, NIM-790). nil means no catalog was bound,
+	// which is reported rather than passed over.
+	modules config.ModuleManifestResolver
+	// notes collects the non-error verdict of every destiny this resolver loads.
+	//
+	// A field rather than a return value because [render.DestinyResolver] returns a
+	// destiny or an error and has no third channel — and widening that interface
+	// for L0's benefit would change a contract the keeper implements too. The
+	// caller reads it after render; a destiny resolved twice by two
+	// `apply:destiny` steps is deduplicated by [notices].
+	//
+	// The constraint that buys: this resolver is no longer safe to share across
+	// goroutines. Render is single-goroutine today ([render.Pipeline] resolves
+	// destinies inline), so it holds; a resolver handed to a concurrent render
+	// would need a mutex here or a sink per call.
+	notes notices
 }
 
 // newFixtureDestinyResolver constructs a resolver from case's service-root,
 // default_destiny_source template, and parsed service.yml::destiny[]. serviceRoot
 // is converted to absolute path: securejoin on a relative base (`../...`)
 // normalizes `..` and loses leading upward traversal, breaking os.ReadFile.
-func newFixtureDestinyResolver(serviceRoot, template string, deps []config.DependencyRef) *fixtureDestinyResolver {
+func newFixtureDestinyResolver(serviceRoot, template string, deps []config.DependencyRef, modules config.ModuleManifestResolver) *fixtureDestinyResolver {
 	if abs, err := filepath.Abs(serviceRoot); err == nil {
 		serviceRoot = abs
 	}
@@ -63,8 +81,11 @@ func newFixtureDestinyResolver(serviceRoot, template string, deps []config.Depen
 	for _, dep := range deps {
 		byName[dep.Name] = dep
 	}
-	return &fixtureDestinyResolver{serviceRoot: serviceRoot, template: template, deps: byName}
+	return &fixtureDestinyResolver{serviceRoot: serviceRoot, template: template, deps: byName, modules: modules}
 }
+
+// notices is the non-error verdict of every destiny loaded so far.
+func (r *fixtureDestinyResolver) notices() []diag.Diagnostic { return r.notes.list() }
 
 // Resolve loads destiny by name, mirroring prod resolve logic: name → destiny[] entry,
 // URL via hybrid rule, read from local filesystem, parse
@@ -75,14 +96,20 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 		return nil, err
 	}
 
-	manData, err := os.ReadFile(filepath.Join(dir, "destiny.yml"))
+	manPath := filepath.Join(dir, "destiny.yml")
+	manData, err := os.ReadFile(manPath)
 	if err != nil {
 		return nil, fmt.Errorf("trial: read destiny.yml fixture %q: %w", name, err)
 	}
-	manifest, _, mDiags, err := config.LoadDestinyManifestFromBytes("destiny.yml", manData, config.ValidateOptions{})
+	// The full path, not the bare file name. Its diagnostics are reported now
+	// (NIM-790), so the name has to be one a reader can open — and it is also the
+	// dedupe key: two destinies both called `destiny.yml` would collapse each
+	// other's findings into one.
+	manifest, _, mDiags, err := config.LoadDestinyManifestFromBytes(manPath, manData, config.ValidateOptions{ModuleManifests: r.modules})
 	if err != nil {
 		return nil, fmt.Errorf("trial: parse destiny.yml fixture %q: %w", name, err)
 	}
+	r.notes.keep(mDiags)
 	if diag.HasErrors(mDiags) {
 		return nil, fmt.Errorf("trial: destiny.yml fixture %q invalid: %s", name, formatDiags(mDiags))
 	}
@@ -95,23 +122,20 @@ func (r *fixtureDestinyResolver) Resolve(_ context.Context, name string) (*rende
 	if err != nil {
 		return nil, fmt.Errorf("trial: read tasks/main.yml fixture %q: %w", name, err)
 	}
-	// DestinyTasks (NIM-749) matters most HERE: the L0 fold keys on the module
-	// address, so a keeper-side step written into a destiny predicts its result
-	// exactly as a routed one does and the case goes green on a plan the run
-	// cannot execute.
-	tasks, tDiags, err := config.LoadDestinyTasksFromBytes("tasks/main.yml", tasksData, config.ValidateOptions{DestinyTasks: true})
-	if err != nil {
-		return nil, fmt.Errorf("trial: parse tasks/main.yml fixture %q: %w", name, err)
-	}
+	// The parse and the within-destiny include expansion (tasks/<sub>.yml, same as
+	// prod DestinyLoader.parseTasks, destiny/tasks.md §4) are one call through
+	// [definition.LoadDestinyTasks] since NIM-790 — the same call `soul-lint
+	// validate-destiny` makes, so the two tools cannot judge one task file
+	// differently.
+	//
+	// DestinyTasks (NIM-749) is set inside it and matters most HERE: the L0 fold
+	// keys on the module address, so a keeper-side step written into a destiny
+	// predicts its result exactly as a routed one does and the case goes green on a
+	// plan the run cannot execute.
+	expanded, tDiags := definition.LoadDestinyTasks(tasksPath, tasksData, fixtureDestinyIncludeResolver(dir), r.modules)
+	r.notes.keep(tDiags)
 	if diag.HasErrors(tDiags) {
 		return nil, fmt.Errorf("trial: tasks/main.yml fixture %q invalid: %s", name, formatDiags(tDiags))
-	}
-
-	// within-destiny include (tasks/<sub>.yml) is expanded before render — same as
-	// in prod DestinyLoader.parseTasks (destiny/tasks.md §4).
-	expanded, iDiags := config.ExpandIncludesInDestiny(tasks, fixtureDestinyIncludeResolver(dir))
-	if diag.HasErrors(iDiags) {
-		return nil, fmt.Errorf("trial: expand include in destiny %q: %s", name, formatDiags(iDiags))
 	}
 
 	// destiny-local vars.yml (docs/destiny/vars.md) mirrors prod implementation

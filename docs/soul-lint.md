@@ -377,7 +377,16 @@ there, and the paragraph below is about a scenario's own `main.yml`. Wiring it i
 policy question rather than an oversight: `unknown_param` is an error and the keeper
 aborts a run on one, so the check would start refusing runs that dispatch today. That
 fork is NIM-785. Until it is decided, the keeper-side backstop for an included body is
-the runtime gate on the host, not the render.
+the runtime gate on the host, not the render. What is no longer in the way is the
+wiring: since NIM-790 it lives in `shared/definition`. On the scenario side that makes
+adoption four one-line swaps — `run.go`, `preflight.go`, `render_host.go` and
+`deprecations.go` each already hold a resolver, and each calls
+`config.ExpandIncludes` where it would call `definition.ExpandScenario`. The destiny
+side costs more: `artifact.DestinyLoader` has no manifest source and `parseTasks`
+returns no diagnostics, so it needs a field and a signature. And **neither** makes the
+hint visible on its own — every one of those callers keeps only `diag.HasErrors`, so
+surfacing it needs the report channel NIM-785 has to decide on. The check is one line;
+the answer to "what does a cluster do with it" is the ticket.
 
 ### A step in a destiny's `tasks/main.yml`
 
@@ -420,6 +429,50 @@ plugins the cluster has allow-listed, so a definition linted here and rendered t
 held to the same schema. Either way an undeclared key fails the task on the host
 ([ADR-0076(t)](adr/0076-engine-compat-window.md)) — the flag only moves the answer to
 where the definition is being written.
+
+### `soul-trial` takes the same flag
+
+The L0 runner spells it the same way and parses it with the same loader
+(**NIM-790**), because it had the same gap and had it in all three places at once:
+
+```sh
+soul-trial run examples/service/redis --modules redis=examples/module/soul-mod-redis
+```
+
+L0 loaded every scenario and every destiny task file with empty validate options,
+expanded every `include:` with no resolver, and filtered both sets of diagnostics to
+errors before printing. So a case rendering `redis.acl.present` printed `PASS` over
+`params:` nobody had checked — 328 such steps in `examples/service/redis` alone — and
+`plugin_params_unchecked` was produced on every one of them, discarded, and never
+seen.
+
+The runner reports a case's non-error findings under its result, at their own level
+and file, whether the case passed or failed:
+
+```
+PASS  examples/service/redis/scenario/add_node/tests/happy/case.yml
+    hint [plugin_params_unchecked] scenario/add_node/main.yml:195: params of
+    redis.command were not checked: no module manifests were supplied
+```
+
+They do not fail a case — an unbound manifest is not the case author's defect, the
+same reason it is a hint in the linter. What fails is the corpus gate: `make trial`
+binds the bindings above and refuses a leftover `plugin_params_unchecked`, mirroring
+the guard `make lint` has carried since NIM-294.
+
+Four tools grew this wiring one at a time and three of them shipped missing a piece,
+so it is no longer per-tool: `shared/definition` holds the loader for the flag and the
+two entry points that parse a definition, expand its includes with the same manifests,
+and carry **every** diagnostic out. `validate-scenario`, `validate-destiny` and
+`soul-trial` all go through it.
+
+They are held to the same answer by a shared **fixture**, not by a single test — the
+three tools live in three Go modules and no test process runs all of them.
+`shared/definition/deftest` carries one definition with a plugin step on both wiring
+paths (inline, and behind an `include:`), and each tool's test asserts its verdict
+over those exact bytes in counts that tell the two paths apart. A tool that quietly
+stops threading the manifests loses one of the two findings and fails its own count,
+rather than reporting a smaller set nobody compares against anything.
 
 ## Service identity: `--service-name <name>` (`validate-scenario`)
 

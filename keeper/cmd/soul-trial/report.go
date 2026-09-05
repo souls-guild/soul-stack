@@ -5,6 +5,7 @@ import (
 	"io"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/trial"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // printResults prints a text table of results + trial coverage. Returns true
@@ -41,6 +42,7 @@ func printResults(w io.Writer, results []trial.Result) bool {
 			for _, f := range r.Failures {
 				fmt.Fprintf(w, "    - %s\n", f)
 			}
+			printNotices(w, r.Notices)
 			continue
 		}
 
@@ -64,11 +66,36 @@ func printResults(w io.Writer, results []trial.Result) bool {
 			fmt.Fprintf(w, "    - %s\n", f)
 		}
 
+		printNotices(w, r.Notices)
 		printUncovered(w, r.Coverage)
 	}
 
 	fmt.Fprintf(w, "\n%d L0 passed, %d L1 passed, %d L2 skipped\n", passL0, passL1, skippedL2)
 	return allPass
+}
+
+// printNotices prints the non-error findings of loading the case's definition.
+//
+// Under a PASS as well as under a FAIL, and that is the whole point: the finding
+// this channel exists for is `plugin_params_unchecked`, which says a part of the
+// definition was never judged. A PASS with nothing beside it is what "checked and
+// clean" looks like, so a run that produced the hint and printed only the PASS has
+// told the operator the opposite of what it found (NIM-790).
+//
+// The file is printed because a notice is about a place: an author sent to "the
+// case" for a param written in an included body two files away has been told the
+// wrong place to look.
+func printNotices(w io.Writer, notices []diag.Diagnostic) {
+	for _, d := range notices {
+		where := d.File
+		if where != "" && d.Line > 0 {
+			where = fmt.Sprintf("%s:%d", where, d.Line)
+		}
+		if where == "" {
+			where = "?"
+		}
+		fmt.Fprintf(w, "    %s [%s] %s: %s\n", d.Level, d.Code, where, d.Message)
+	}
 }
 
 // printUncovered prints bool expressions for which only one branch is covered.

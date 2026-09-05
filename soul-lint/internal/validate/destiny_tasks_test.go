@@ -20,6 +20,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/definition/deftest"
 )
 
 // A Soul-side module with one required param — a destiny is Soul-side by
@@ -73,7 +75,7 @@ func runDestiny(t *testing.T, manifest string, modules []string) (int, string) {
 // bindInstance writes the module document and returns the `--modules` binding.
 func bindInstance(t *testing.T) []string {
 	t.Helper()
-	return []string{"redis=" + writeSchemaFile(t, t.TempDir(), "soul-mod-redis", instanceSchemaJSON)}
+	return []string{"redis=" + deftest.WriteSchemaFile(t, t.TempDir(), "soul-mod-redis", instanceSchemaJSON)}
 }
 
 // THE guard. No manifest bound, so the params genuinely cannot be checked — and

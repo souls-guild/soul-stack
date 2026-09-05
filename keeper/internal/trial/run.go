@@ -16,12 +16,17 @@ import (
 // are searched recursively. Returns results for each case in deterministic
 // order.
 //
+// opts carries what the RUNNER was given, as opposed to what a case states —
+// today the plugin manifests of `--modules`. A zero Options is legal and is not
+// silence: every plugin step then comes back as a notice on its Result saying its
+// `params:` were checked by nobody ([Result.Notices]).
+//
 // Level routing by file form (soft pre-parse BEFORE strict decode):
 //
 //	stand:/verify:               → L2, skip (ADR-023 post-MVP, not executed)
 //	state_before:/state_after:   → L1, RunMigrationCase (migration test)
 //	otherwise                    → L0, RunCase (render-only strict, unknown-field — error)
-func Run(ctx context.Context, target string) ([]Result, error) {
+func Run(ctx context.Context, target string, opts Options) ([]Result, error) {
 	files, err := discoverCases(target)
 	if err != nil {
 		return nil, err
@@ -74,7 +79,7 @@ func Run(ctx context.Context, target string) ([]Result, error) {
 		if err != nil {
 			return results, err
 		}
-		res, err := RunCase(ctx, c, file)
+		res, err := RunCase(ctx, c, file, opts)
 		if err != nil {
 			return results, err
 		}

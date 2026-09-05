@@ -41,7 +41,7 @@ func TestFixtureDestinyResolver_MirrorsProd(t *testing.T) {
 	writeDestinyFixture(t, filepath.Join(root, "dst"), "pilot")
 
 	r := newFixtureDestinyResolver(serviceRoot, "file://../dst/destiny-{name}",
-		[]config.DependencyRef{{Name: "pilot", Ref: "v1.0.0"}})
+		[]config.DependencyRef{{Name: "pilot", Ref: "v1.0.0"}}, nil)
 
 	got, err := r.Resolve(context.Background(), "pilot")
 	if err != nil {
@@ -58,7 +58,7 @@ func TestFixtureDestinyResolver_MirrorsProd(t *testing.T) {
 // TestFixtureDestinyResolver_RejectsUndeclared rejects undeclared dependency
 // in destiny[] (mirror of prod-error, ADR-007).
 func TestFixtureDestinyResolver_RejectsUndeclared(t *testing.T) {
-	r := newFixtureDestinyResolver(t.TempDir(), "file://destiny-{name}", nil)
+	r := newFixtureDestinyResolver(t.TempDir(), "file://destiny-{name}", nil, nil)
 	_, err := r.Resolve(context.Background(), "ghost")
 	if err == nil {
 		t.Fatal("want error on undeclared destiny")
@@ -72,7 +72,7 @@ func TestFixtureDestinyResolver_RejectsUndeclared(t *testing.T) {
 // (hermeticity: no git, no network).
 func TestFixtureDestinyResolver_RejectsNonFileScheme(t *testing.T) {
 	r := newFixtureDestinyResolver(t.TempDir(), "",
-		[]config.DependencyRef{{Name: "x", Ref: "v1", Git: "git@github.com:acme/destiny-x.git"}})
+		[]config.DependencyRef{{Name: "x", Ref: "v1", Git: "git@github.com:acme/destiny-x.git"}}, nil)
 	_, err := r.Resolve(context.Background(), "x")
 	if err == nil {
 		t.Fatal("want error on non-file:// scheme")
@@ -98,7 +98,7 @@ func TestFixtureDestinyResolver_NameCannotEscapeRoot(t *testing.T) {
 
 	// destiny-root = serviceRoot (template without `../`); name with escape.
 	r := newFixtureDestinyResolver(serviceRoot, "file://destiny-{name}",
-		[]config.DependencyRef{{Name: "../destiny-secret", Ref: "v1"}})
+		[]config.DependencyRef{{Name: "../destiny-secret", Ref: "v1"}}, nil)
 	_, err := r.Resolve(context.Background(), "../destiny-secret")
 	if err == nil {
 		t.Fatal("want error: {name} with ../ must not escape destiny-root")
@@ -114,7 +114,7 @@ func TestFixtureDestinyResolver_NameCannotEscapeRoot(t *testing.T) {
 // the last path segment (otherwise no safe clamp-boundary for name).
 func TestFixtureDestinyResolver_RejectsPlaceholderNotInLeaf(t *testing.T) {
 	r := newFixtureDestinyResolver(t.TempDir(), "file://{name}/destiny",
-		[]config.DependencyRef{{Name: "x", Ref: "v1"}})
+		[]config.DependencyRef{{Name: "x", Ref: "v1"}}, nil)
 	_, err := r.Resolve(context.Background(), "x")
 	if err == nil {
 		t.Fatal("want error: {name} not in last segment")
@@ -136,7 +136,7 @@ func TestFixtureDestinyResolver_LoadsVarsYml(t *testing.T) {
 	}
 
 	r := newFixtureDestinyResolver(root, "file://destiny-{name}",
-		[]config.DependencyRef{{Name: "withvars", Ref: "v1.0.0"}})
+		[]config.DependencyRef{{Name: "withvars", Ref: "v1.0.0"}}, nil)
 	got, err := r.Resolve(context.Background(), "withvars")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)
@@ -154,7 +154,7 @@ func TestFixtureDestinyResolver_NoVarsYml(t *testing.T) {
 	root := t.TempDir()
 	writeDestinyFixture(t, root, "novars")
 	r := newFixtureDestinyResolver(root, "file://destiny-{name}",
-		[]config.DependencyRef{{Name: "novars", Ref: "v1.0.0"}})
+		[]config.DependencyRef{{Name: "novars", Ref: "v1.0.0"}}, nil)
 	got, err := r.Resolve(context.Background(), "novars")
 	if err != nil {
 		t.Fatalf("Resolve: %v", err)

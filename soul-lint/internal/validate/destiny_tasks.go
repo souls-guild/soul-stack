@@ -32,6 +32,7 @@ import (
 	"path/filepath"
 
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/definition"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -88,38 +89,12 @@ func destinyTasksDiagnostics(manifestPath string, modules config.ModuleManifestR
 		return []diag.Diagnostic{tasksUncheckedDiag(manifestPath, tasksPath, rerr)}
 	}
 
-	// DestinyTasks: a destiny is Soul-side by construction, so a keeper-side module
-	// address in one can never execute (`keeper_module_in_destiny`, NIM-749). The
-	// keeper's loader sets the same flag on the same call — the two must agree about
-	// what this file is.
-	tasks, diags, _ := config.LoadDestinyTasksFromBytes(tasksPath, data, config.ValidateOptions{
-		DestinyTasks:    true,
-		ModuleManifests: modules,
-	})
-	// nil tasks is the load's own signal for parse-fatal (its return contract): there
-	// is no list to expand, and an include tree derived from one would be a plan that
-	// never existed.
-	//
-	// The condition is deliberately NOT `diag.HasErrors`. A schema error leaves the
-	// list intact, so bailing on severity would make the STRICTEST invocation report
-	// the LEAST: bind `--modules`, get `unknown_param`, and the unresolvable
-	// `include:` two lines below it disappears from the report it was in before the
-	// binding. [stageDiagnostics] takes the same position for a scenario — it runs
-	// whatever the parse said, and decides for itself what the graph is worth.
-	if tasks == nil {
-		return diags
-	}
-
-	_, expandDiags := config.ExpandIncludesInDestinyWithModules(tasks, destinyIncludeResolver(root, dir), modules)
-	for _, d := range expandDiags {
-		// Cross-file findings (a duplicate address over the flattened plan) carry no
-		// file: expansion has erased AST positions by then. They belong to the entry
-		// point — the file whose include list assembled the plan.
-		if d.File == "" {
-			d.File = tasksPath
-		}
-		diags = append(diags, d)
-	}
+	// The parse (under `DestinyTasks`), the expansion with the same resolver, and
+	// the rule that every diagnostic comes out rather than the errors alone — all
+	// three live in [definition.LoadDestinyTasks] since NIM-790. They used to live
+	// here, in a second implementation beside [stageDiagnostics]'s: two tools, two
+	// copies, and a third (`soul-trial`) that had neither.
+	_, diags := definition.LoadDestinyTasks(tasksPath, data, destinyIncludeResolver(root, dir), modules)
 	return diags
 }
 

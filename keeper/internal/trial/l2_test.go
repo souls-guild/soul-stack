@@ -73,7 +73,7 @@ func TestL2_NodeExporterPilot(t *testing.T) {
 	ctx, cancel := context.WithTimeout(context.Background(), 6*time.Minute)
 	defer cancel()
 
-	res, err := RunL2Case(ctx, c, file)
+	res, err := RunL2Case(ctx, c, file, Options{})
 	if err != nil {
 		// docker truly unavailable (StartL2Stand failed on stand start):
 		// without REQUIRE_DOCKER — skip, otherwise fail.
@@ -120,7 +120,7 @@ func TestL2_ServiceDaemonReload(t *testing.T) {
 			ctx, cancel := context.WithTimeout(context.Background(), 8*time.Minute)
 			defer cancel()
 
-			res, err := RunL2Case(ctx, c, file)
+			res, err := RunL2Case(ctx, c, file, Options{})
 			if err != nil {
 				if isDockerSetupErr(err) && !requireDocker() {
 					t.Skipf("L2: systemd stand failed to start (docker/privileged?): %v", err)

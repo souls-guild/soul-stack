@@ -206,7 +206,7 @@ func parseCommonFlags(sub, usageLine string, args []string) (f commonFlags, code
 			wantModule = true
 		case strings.HasPrefix(a, "--modules=") || strings.HasPrefix(a, "-modules="):
 			// Repeatable: one binding per occurrence, appended in order. An empty
-			// value is kept rather than dropped so LoadModuleSchemas rejects it by
+			// value is kept rather than dropped so definition.LoadSchemas rejects it by
 			// the same rule as every other malformed binding — silently ignoring
 			// `--modules=` would mean "check nothing", which is the failure mode
 			// this flag exists to remove.

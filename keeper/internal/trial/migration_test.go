@@ -213,7 +213,7 @@ verify:
   - condition: "true"
 `)
 
-	results, err := Run(context.Background(), root)
+	results, err := Run(context.Background(), root, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

@@ -18,6 +18,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/definition"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
 // trialHostSID — synthetic SID of single-host sugar host (fixtures.soulprint).
@@ -64,6 +66,23 @@ type Result struct {
 	// applies with `own_namespace_fence_unchecked`: a check whose input was guessed says so.
 	Service       string
 	ServiceStated bool
+
+	// Notices are the non-error diagnostics of loading this case's definition —
+	// the scenario, the bodies it includes, and the destinies it applies.
+	//
+	// A separate channel from Failures because they are a separate statement.
+	// Failures say the definition is wrong; a notice says a part of it was never
+	// judged, and the reader has to know which. The one that matters is
+	// [config.DiagPluginParamsUnchecked]: L0 dropped it for the whole life of the
+	// harness, so a case with a plugin step printed PASS over `params:` nobody had
+	// checked (NIM-790), and a PASS with nothing beside it is what "checked and
+	// clean" looks like.
+	//
+	// They do NOT fail the case. Nobody bound a manifest is not the case author's
+	// defect — see [config.DiagPluginParamsUnchecked] for why that severity is
+	// deliberate. A CI run that wants the corpus fully checked binds `--modules`
+	// and fails on the notice itself; the Makefile's `trial` target does.
+	Notices []diag.Diagnostic
 }
 
 // renderedCase — result of hermetic render pass of case: flat plan
@@ -81,10 +100,44 @@ type renderedCase struct {
 	// report. See Result.Service.
 	service       string
 	serviceStated bool
+
+	// notices — the non-error verdict of loading this case's definition: the
+	// scenario, every body it includes, and every destiny it applies. Carried
+	// rather than filtered away, because `plugin_params_unchecked` is the finding
+	// that says a check did not run, and dropping it is indistinguishable from
+	// running it and finding nothing (NIM-790).
+	notices notices
+}
+
+// carryTo moves onto a Result everything a render attempt produces regardless of
+// its OUTCOME. Both runners call it immediately after [renderCase], before they
+// look at the error — a case that aborted is precisely the one whose definition
+// was least checked, and a case that aborts on `expect_render_error` PASSES.
+//
+// One method rather than two copies of two assignments because the copies are how
+// this goes wrong: [RunL2Case] renders through the same path, produces the same
+// findings, and was the runner the NIM-790 sweep missed. A third runner has one
+// call to make, and its absence is a line that is not there rather than a field
+// that is quietly zero.
+func (rc renderedCase) carryTo(res *Result) {
+	// The identity the own-namespace Vault fence ran against: a case that aborted
+	// still fenced on a name, and the report is what tells the operator which one.
+	res.Service, res.ServiceStated = rc.service, rc.serviceStated
+	res.Notices = rc.notices.list()
 }
 
 // loadResolvedScenario loads scenario/<name>/main.yml from case.yml path and
 // performs covenant resolution mirroring prod (keeper LoadScenarioManifestResolved):
+//
+// opts.Modules reaches the PARSE, and that is one of the two wiring paths a plugin
+// step can arrive on — a step written in main.yml itself is checked by the
+// per-document post-pass, which only runs when the resolver is on the options
+// (NIM-790). The other path, an included body, is [definition.ExpandScenario] in
+// renderCase. Both were empty here until NIM-790, and the difference is invisible
+// in a report that prints errors only.
+//
+// The non-error half of the verdict goes to the caller's sink rather than being
+// dropped: an error aborts the case with a message, a hint has nowhere else to go.
 // merges covenant.yml (by scn.Extends, sibling service.yml in test tree root,
 // serviceRootFor) and validates form post-merge. Without this covenant-scenario
 // would fail with false form_field_unknown in semantic phase (form gated before merge,
@@ -98,13 +151,14 @@ type renderedCase struct {
 // «no such key: compute.install». Guard tests at plan level (loadCreatePlan/
 // loadScenarioPlan) DO NOT resolve covenant intentionally — they compare []Task before render,
 // covenant fields are not computed there.
-func loadResolvedScenario(caseFile string) (*config.ScenarioManifest, *config.Document, error) {
+func loadResolvedScenario(caseFile string, opts Options, notes *notices) (*config.ScenarioManifest, *config.Document, error) {
 	scnPath := scenarioPathFor(caseFile)
-	scn, doc, diags, err := config.LoadScenarioManifest(scnPath, config.ValidateOptions{})
+	scn, doc, diags, err := config.LoadScenarioManifest(scnPath, config.ValidateOptions{ModuleManifests: opts.Modules})
 	if err != nil {
 		return nil, nil, fmt.Errorf("trial: loading scenario %s: %w", scnPath, err)
 	}
 	diags = append(diags, config.ResolveScenarioCovenant(scn, doc, serviceRootFor(caseFile))...)
+	notes.keep(diags)
 	if hasErrors(diags) {
 		return nil, nil, fmt.Errorf("trial: scenario %s invalid: %s", scnPath, formatDiags(diags))
 	}
@@ -118,7 +172,7 @@ func loadResolvedScenario(caseFile string) (*config.ScenarioManifest, *config.Do
 //
 // caseFile — path to case.yml itself (from LoadCase). scenario/<name>/main.yml
 // resolves as `<dir(case.yml)>/../../main.yml` (tests/<case>/case.yml).
-func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, error) {
+func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (renderedCase, error) {
 	var rc renderedCase
 
 	// FIRST, before anything that can return early. Every `return rc, err` below hands
@@ -129,7 +183,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	svcName, svcStated := trialServiceIdentity(caseFile, c.Fixtures)
 	rc.service, rc.serviceStated = svcName, svcStated
 
-	scn, _, err := loadResolvedScenario(caseFile)
+	scn, _, err := loadResolvedScenario(caseFile, opts, &rc.notices)
 	if err != nil {
 		return rc, err
 	}
@@ -138,7 +192,13 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	// Expand scenario-include to flat list before render (orchestration.md §6),
 	// same as in prod scenario.run. Two-level resolution scenario-locally →
 	// service-level from fixture tree.
-	expanded, iDiags := config.ExpandIncludes(scn.Tasks, fixtureScenarioIncludeResolver(scnPath))
+	//
+	// Through [definition.ExpandScenario] since NIM-790: the manifests of this run
+	// reach every included body, so a plugin step one file deep is checked against
+	// the same contract as one written here — and the body's non-error findings
+	// come out instead of being dropped with the rest of the slice.
+	expanded, iDiags := definition.ExpandScenario(scnPath, scn.Tasks, fixtureScenarioIncludeResolver(scnPath), opts.Modules)
+	rc.notices.keep(iDiags)
 	if hasErrors(iDiags) {
 		return rc, fmt.Errorf("trial: expanding include in scenario %s: %s", scnPath, formatDiags(iDiags))
 	}
@@ -174,7 +234,7 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	if svcManifest != nil {
 		deps = svcManifest.Destiny
 	}
-	destiny := newFixtureDestinyResolver(serviceRootFor(caseFile), c.Fixtures.DefaultDestinySource, deps)
+	destiny := newFixtureDestinyResolver(serviceRootFor(caseFile), c.Fixtures.DefaultDestinySource, deps, opts.Modules)
 
 	// Effective input mirroring prod (scenario.run §4.5) through the SHARED gate
 	// config.ResolveInputContract: merge defaults + required/required_when + value
@@ -239,6 +299,10 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 	}
 
 	tasks, _, err := pipeline.Render(ctx, in)
+	// Collected before the error is returned, not after: a destiny resolves DURING
+	// render, so a render that aborted may still have loaded one and produced the
+	// finding that explains why nobody checked its steps.
+	rc.notices.keep(destiny.notices())
 	if err != nil {
 		return rc, fmt.Errorf("trial: render: %w", err)
 	}
@@ -257,13 +321,11 @@ func renderCase(ctx context.Context, c *Case, caseFile string) (renderedCase, er
 //
 // caseFile — path to case.yml itself (from LoadCase). scenario/<name>/main.yml
 // resolves as `<dir(case.yml)>/../../main.yml` (tests/<case>/case.yml).
-func RunCase(ctx context.Context, c *Case, caseFile string) (Result, error) {
+func RunCase(ctx context.Context, c *Case, caseFile string, opts Options) (Result, error) {
 	res := Result{Case: c.Name}
 
-	rc, err := renderCase(ctx, c, caseFile)
-	// Recorded even when render failed: a case that aborted still fenced on a name, and
-	// the report is what tells the operator which one.
-	res.Service, res.ServiceStated = rc.service, rc.serviceStated
+	rc, err := renderCase(ctx, c, caseFile, opts)
+	rc.carryTo(&res)
 
 	// expect_render_error (ADR-023 amendment): case EXPECTS render abort
 	// (assert failure / required_when). Render success → FAIL; error without substring
@@ -429,6 +491,12 @@ func loadTrialServiceManifest(caseFile string) (*config.ServiceManifest, error) 
 	if _, err := os.Stat(svcPath); errors.Is(err, fs.ErrNotExist) {
 		return nil, nil
 	}
+	// The one definition in this package loaded WITHOUT the run's manifest resolver,
+	// and deliberately so rather than by oversight (NIM-790 swept the others):
+	// `service.yml` declares dependencies, not tasks — it carries no `module:` and
+	// no `params:` — so the plugin-params post-pass has nothing to walk here and a
+	// resolver would change no answer. Threading one in would only make the reader
+	// of the next site believe the field is what decides.
 	manifest, _, diags, err := config.LoadServiceManifest(svcPath, config.ValidateOptions{})
 	if err != nil {
 		return nil, fmt.Errorf("trial: loading service.yml %s: %w", svcPath, err)

@@ -36,6 +36,7 @@ import (
 	securejoin "github.com/cyphar/filepath-securejoin"
 
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/definition"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -59,6 +60,11 @@ import (
 // body so its plugin `params:` are checked against the same manifests the main
 // file's are (NIM-779). nil is the ordinary case (no `--modules` given) and is
 // not silent: each included plugin step then yields `plugin_params_unchecked`.
+//
+// Both of those go through [definition.ExpandScenario], which is the shared
+// wiring every tool loads a definition with since NIM-790 — soul-trial reaches
+// the same three outcomes through the same call, and the keeper attaches to it
+// when NIM-785 is decided.
 //
 // This pass is where the expansion's diagnostics reach the output at all — the
 // other three linter callers of [config.ExpandIncludes] discard them and expand
@@ -85,7 +91,7 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 	}
 	var out []diag.Diagnostic
 
-	tasks, expandDiags := config.ExpandIncludesWithModules(m.Tasks, scenarioIncludeResolver(root, dir, serviceDir), modules)
+	tasks, expandDiags := definition.ExpandScenario(scenarioPath, m.Tasks, scenarioIncludeResolver(root, dir, serviceDir), modules)
 	// In a service tree include resolution offline is COMPLETE (both levels are on
 	// disk), so expand's diagnostics are passed through at their own level: an
 	// unresolvable include, a cycle or a cross-file duplicate address is a real
@@ -122,9 +128,6 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 				Hint:    "lint the scenario inside its service tree (<service>/scenario/<name>/main.yml) to resolve service-level includes, or rely on full validation at the keeper",
 			})
 			continue
-		}
-		if d.File == "" {
-			d.File = scenarioPath
 		}
 		// An upgrade scenario's author needs one sentence the producer cannot write:
 		// the message names the two levels tried, and for them BOTH are directories

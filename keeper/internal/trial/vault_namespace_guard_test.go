@@ -81,7 +81,7 @@ fixtures:
 
 func assertFencedAtL0(t *testing.T, caseDir string) {
 	t.Helper()
-	_, err := Run(context.Background(), caseDir)
+	_, err := Run(context.Background(), caseDir, Options{})
 	if err == nil {
 		t.Fatal("expected the render to be refused: vault() reached secret/fenced/, the namespace the platform derives")
 	}
@@ -180,7 +180,7 @@ expect_render_error: "who"
 	if err != nil {
 		t.Fatalf("LoadCase: %v", err)
 	}
-	res, err := RunCase(context.Background(), c, caseFile)
+	res, err := RunCase(context.Background(), c, caseFile, Options{})
 	if err != nil {
 		t.Fatalf("RunCase: %v", err)
 	}

@@ -32,7 +32,7 @@ fixtures:
   incarnation_name: 9redis
 expect_render_error: "incarnation name does not fit as base VM name"
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -53,7 +53,7 @@ assert:
       params_subset:
         path: /tmp/soul-stack-marker
 `)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}

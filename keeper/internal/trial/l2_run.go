@@ -261,14 +261,15 @@ func (s *L2Stand) readFile(ctx context.Context, path string) string {
 // ApplyRequest → stand → soul apply → verify → expect_idempotent. caseFile —
 // path to L2 case.yml (alongside scenario/<name>/main.yml). Returns Result
 // (LevelL2, Pass + Failures). Stand is started and destroyed inside.
-func RunL2Case(ctx context.Context, c *L2Case, caseFile string) (Result, error) {
+func RunL2Case(ctx context.Context, c *L2Case, caseFile string, opts Options) (Result, error) {
 	res := Result{Case: c.Name, Level: LevelL2}
 
 	// 1. Render in-process using same Keeper-side path as L0. L2-case carries input:
 	//    (not fixtures:), so map it to hermetic Fixtures.Input; rest of L2 pilot
 	//    context is empty (one host, no service vars/vault).
 	l0 := &Case{Name: c.Name, Fixtures: Fixtures{Input: c.Input}}
-	rc, err := renderCase(ctx, l0, caseFile)
+	rc, err := renderCase(ctx, l0, caseFile, opts)
+	rc.carryTo(&res)
 	if err != nil {
 		return res, err
 	}

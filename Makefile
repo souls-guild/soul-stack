@@ -1990,6 +1990,19 @@ stamp-examples: build
 #
 # The skip list ($(TRIAL_SKIP)) is printed LOUDLY per directory: the exclusion is visible in the
 # log, doesn't mask a regression. A directory without case.yml is silently skipped (nothing to run).
+#
+# `--modules` binds the corpus's own plugin schema documents, the same bindings and the
+# same variables `lint` uses (soul-trial grew the flag in NIM-790, spelled and parsed
+# exactly as soul-lint's). It is what makes an L0 PASS mean something over a plugin
+# step: before it, a case rendered `redis.acl.present` with params NOBODY had checked
+# and printed PASS, which is indistinguishable from checked-and-clean. The corpus is
+# the one place both halves are present — 328 such steps in examples/service/redis
+# alone — so leaving the flag off would run L0 without the check it demonstrates.
+#
+# And the run is failed on a leftover `plugin_params_unchecked`, mirroring the guard
+# `lint` has carried since NIM-294: a green trial over a module nobody bound is the
+# false green this ticket removed, and it would grow back the day a corpus service
+# starts addressing an alias that is not bound above.
 trial: build
 	@for root in examples/service examples/destiny; do \
 		for svc in "$$root"/*/; do \
@@ -2004,8 +2017,20 @@ trial: build
 			if ! find "$$svc" -name case.yml | grep -q .; then \
 				continue; \
 			fi; \
-			echo "soul-trial run $$svc"; \
-			$(TRIAL_BIN) run "$$svc" || exit 1; \
+			case "$$name" in \
+				mongo) mods="--modules=mongo=$(LINT_MODULES_MONGO)";; \
+				*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
+			esac; \
+			echo "soul-trial run $$svc $$mods"; \
+			out=$$($(TRIAL_BIN) run "$$svc" "$$mods" 2>&1); rc=$$?; \
+			echo "$$out"; \
+			[ $$rc -eq 0 ] || exit 1; \
+			if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+				echo "trial: FALSE-GREEN in $$svc — a plugin module in this corpus has no --modules" >&2; \
+				echo "      binding, so its params were NOT checked and the PASS above covers less" >&2; \
+				echo "      than it looks (NIM-790). Bind it above and re-run." >&2; \
+				exit 1; \
+			fi; \
 		done; \
 	done
 	@echo "trial: L0 trials of the examples/service/ + examples/destiny/ corpus passed"

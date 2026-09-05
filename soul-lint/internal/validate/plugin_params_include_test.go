@@ -21,6 +21,8 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/definition/deftest"
 )
 
 // A keeper-side cloud module with one required param, shaped like the live
@@ -72,7 +74,7 @@ func runScenario(t *testing.T, root string, modules []string) (int, string) {
 // bindVM writes the module document and returns the `--modules` binding for it.
 func bindVM(t *testing.T) []string {
 	t.Helper()
-	return []string{"wb-cloud=" + writeSchemaFile(t, t.TempDir(), "soul-cloud-wb", vmSchemaJSON)}
+	return []string{"wb-cloud=" + deftest.WriteSchemaFile(t, t.TempDir(), "soul-cloud-wb", vmSchemaJSON)}
 }
 
 // THE guard. No manifest bound, so the params genuinely cannot be checked — and

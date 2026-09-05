@@ -53,7 +53,7 @@ assert:
         cmd: "echo 3"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -86,7 +86,7 @@ assert:
         cmd: "replicaof 10.0.0.1 6379"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -126,7 +126,7 @@ assert:
         cmd: "first=a.example.com"
 `
 	caseDir := writeScenarioTree(t, main, caseYML)
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -151,7 +151,7 @@ assert:
         cmd: "echo 1"
 `)
 
-	results, err := Run(context.Background(), caseDir)
+	results, err := Run(context.Background(), caseDir, Options{})
 	if err != nil {
 		t.Fatalf("Run: %v", err)
 	}
@@ -278,7 +278,7 @@ tasks:
       params:
         cmd: "size=3"
 `)
-	passRes, err := Run(context.Background(), passDir)
+	passRes, err := Run(context.Background(), passDir, Options{})
 	if err != nil {
 		t.Fatalf("Run pass: %v", err)
 	}
@@ -294,7 +294,7 @@ tasks:
       params:
         cmd: "size=4"
 `)
-	failRes, err := Run(context.Background(), failDir)
+	failRes, err := Run(context.Background(), failDir, Options{})
 	if err != nil {
 		t.Fatalf("Run fail: %v", err)
 	}
