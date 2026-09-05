@@ -11,6 +11,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"testing"
 
@@ -294,8 +295,14 @@ func goBuildPlugin(t *testing.T, out string, env ...string) error {
 // 400 before it reaches any of this.
 //
 // The slot must be materialized BEFORE this call - normally `keeper run` does
-// this at startup (plugingit.ResolveCatalog over `plugins.soul_modules[]`), so
-// it's enough to pass the entry in Config.SoulModules.
+// this at startup (pluginsource.Catalog over `plugins.soul_modules[]`), so it's
+// enough to pass the entry in Config.SoulModules.
+//
+// Returns the digest of the artifact approved for THIS platform. The 201 body
+// describes a release (NIM-793), so the reply carries every approved file; a
+// live test asserting "the bytes the Soul will install" wants the row that
+// applies to the host it runs on, and a release with no such row is a failure
+// here rather than a nil later.
 func (s *Stack) AllowSoulModule(t *testing.T, alias, source, ref string) string {
 	t.Helper()
 	c := s.opClient(t)
@@ -311,15 +318,42 @@ func (s *Stack) AllowSoulModule(t *testing.T, alias, source, ref string) string 
 		t.Fatalf("AllowSoulModule %s (%s@%s): status %d, body=%s", alias, source, ref, status, string(resp))
 	}
 	var out struct {
-		SHA256 string `json:"sha256"`
+		Artifacts []PluginSigilArtifact `json:"artifacts"`
 	}
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("AllowSoulModule %s (%s@%s): decode: %v (body=%s)", alias, source, ref, err, string(resp))
 	}
-	if out.SHA256 == "" {
-		t.Fatalf("AllowSoulModule %s (%s@%s): empty sha256 in 201 body=%s", alias, source, ref, string(resp))
+	sha := SelectArtifactSHA(out.Artifacts)
+	if sha == "" {
+		t.Fatalf("AllowSoulModule %s (%s@%s): the approved release covers no artifact for %s/%s; body=%s",
+			alias, source, ref, runtime.GOOS, runtime.GOARCH, string(resp))
 	}
-	return out.SHA256
+	return sha
+}
+
+// PluginSigilArtifact - one approved file of a release on the wire.
+type PluginSigilArtifact struct {
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256"`
+}
+
+// SelectArtifactSHA picks this host's digest out of a release, mirroring
+// shared/pluginhost.SelectArtifact: the exact platform, or the single
+// unplatformed row a kind=git grant carries. "" = the release does not cover
+// this platform.
+func SelectArtifactSHA(artifacts []PluginSigilArtifact) string {
+	var fallback string
+	for _, a := range artifacts {
+		if a.OS == runtime.GOOS && a.Arch == runtime.GOARCH {
+			return a.SHA256
+		}
+		if a.OS == "" && a.Arch == "" {
+			fallback = a.SHA256
+		}
+	}
+	return fallback
 }
 
 // PluginSigilItem - an items[] element of GET /v1/plugins/sigils (subset of
@@ -328,11 +362,16 @@ func (s *Stack) AllowSoulModule(t *testing.T, alias, source, ref string) string 
 // {namespace, name} pair is not on the wire at all, and a struct still naming
 // it would decode to two empty strings and match nothing.
 type PluginSigilItem struct {
-	Alias  string `json:"alias"`
-	Source string `json:"source"`
-	Ref    string `json:"ref"`
-	SHA256 string `json:"sha256"`
+	Alias     string                `json:"alias"`
+	Source    string                `json:"source"`
+	Ref       string                `json:"ref"`
+	Kind      string                `json:"kind"`
+	Artifacts []PluginSigilArtifact `json:"artifacts"`
 }
+
+// SHA256 is this host's approved digest in the item, or "" when the release
+// covers no artifact for it.
+func (i PluginSigilItem) SHA256() string { return SelectArtifactSHA(i.Artifacts) }
 
 // ListPluginSigils returns active Sigil allows via Operator API
 // GET /v1/plugins/sigils.

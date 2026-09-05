@@ -212,14 +212,16 @@ func TestOutbound_SendSigilSnapshot_HappyPath(t *testing.T) {
 
 	set := []*keeperv1.PluginSigil{
 		{
-			Alias:        "template",
-			Source:       "https://example.com/soul-mod-template.git",
-			Ref:          "v1.0.0",
-			BinarySha256: "abc123",
-			Signature:    []byte("sig"),
-			Schema:       []byte(`{"kind":"soul_module","protocol_version":1}`),
+			Alias:     "template",
+			Source:    "https://example.com/soul-mod-template.git",
+			Ref:       "v1.0.0",
+			Kind:      "git",
+			Artifacts: []*keeperv1.SigilArtifact{{Sha256: "abc123"}},
+			Signature: []byte("sig"),
+			Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 		},
-		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2", BinarySha256: "def456"},
+		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2",
+			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "def456"}}},
 	}
 	if err := ob.SendSigilSnapshot(context.Background(), "sid", set); err != nil {
 		t.Fatalf("SendSigilSnapshot: %v", err)

@@ -8,6 +8,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // sigilNotConfigured — public detail for the plugin-tools nil-guard. SigilSvc
@@ -29,13 +30,46 @@ type pluginAllowArgs struct {
 	Ref    string `json:"ref"`
 }
 
-// pluginAllowOutput — output of keeper.plugin.allow: echoes the request + the sha256 of
-// the approved artifact (parity with the REST POST /v1/plugins/sigils 201 response).
-type pluginAllowOutput struct {
-	Alias  string `json:"alias"`
-	Source string `json:"source"`
-	Ref    string `json:"ref"`
+// pluginArtifactOutput — one approved file of a release (NIM-793). os/arch/path are
+// empty on a kind=git grant, whose single binary declares no platform.
+type pluginArtifactOutput struct {
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	Path   string `json:"path"`
 	SHA256 string `json:"sha256"`
+}
+
+// pluginAllowOutput — output of keeper.plugin.allow: echoes the request + the kind and
+// the artifacts the Keeper approved (parity with the REST POST /v1/plugins/sigils 201
+// response). A release, not a hash: the tool confirms a release, and the caller is told
+// which files that turned out to be.
+type pluginAllowOutput struct {
+	Alias     string                 `json:"alias"`
+	Source    string                 `json:"source"`
+	Ref       string                 `json:"ref"`
+	Kind      string                 `json:"kind"`
+	Artifacts []pluginArtifactOutput `json:"artifacts"`
+}
+
+// artifactOutputsOf projects the service's artifact rows into the tool's shape. Always
+// non-nil: an approved release has files, and `null` there would read as "unknown".
+func artifactOutputsOf(artifacts []sharedhost.SigilArtifact) []pluginArtifactOutput {
+	out := make([]pluginArtifactOutput, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, pluginArtifactOutput{OS: a.OS, Arch: a.Arch, Path: a.Path, SHA256: a.SHA256})
+	}
+	return out
+}
+
+// artifactDigests lists a release's digests for the audit row, in canonical order.
+// Every one of them: recording a single digest would make the audit row a true
+// statement about part of the approval and a silent omission about the rest.
+func artifactDigests(artifacts []sharedhost.SigilArtifact) []string {
+	out := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, a.SHA256)
+	}
+	return out
 }
 
 // callPluginAllow — mutating tool keeper.plugin.allow. A transport over
@@ -72,7 +106,7 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, msg)
 	}
 
-	sha256, err := h.deps.SigilSvc.Allow(ctx, sigil.AllowInput{
+	approved, err := h.deps.SigilSvc.Allow(ctx, sigil.AllowInput{
 		Alias:     a.Alias,
 		Source:    a.Source,
 		Ref:       a.Ref,
@@ -93,20 +127,24 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 	}
 
 	// Audit — mirrors the REST handler (supply-chain control, ADR-022): payload
-	// {alias, source, ref, sha256, allowed_by_aid}. The signature and the schema
-	// (crypto material / a large document) are NOT written — same as REST.
+	// {alias, source, ref, kind, artifact_sha256, allowed_by_aid}. The scalar `sha256`
+	// key is gone rather than reused for the list — see the REST AuditPayload for why.
+	// The signature and the schema (crypto material / a large document) are NOT
+	// written — same as REST.
 	h.writeAudit(audit.EventPluginAllowed, claims.Subject, map[string]any{
-		"alias":          a.Alias,
-		"source":         a.Source,
-		"ref":            a.Ref,
-		"sha256":         sha256,
-		"allowed_by_aid": claims.Subject,
+		"alias":           a.Alias,
+		"source":          a.Source,
+		"ref":             a.Ref,
+		"kind":            approved.Kind,
+		"artifact_sha256": artifactDigests(approved.Artifacts),
+		"allowed_by_aid":  claims.Subject,
 	})
 
 	return h.toolResult(req.ID, pluginAllowOutput{
-		Alias:  a.Alias,
-		Source: a.Source,
-		Ref:    a.Ref,
-		SHA256: sha256,
+		Alias:     a.Alias,
+		Source:    a.Source,
+		Ref:       a.Ref,
+		Kind:      approved.Kind,
+		Artifacts: artifactOutputsOf(approved.Artifacts),
 	})
 }

@@ -14,18 +14,19 @@ Allowing an artifact in the allow-list `plugin_sigils`: the body is `{alias, sou
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `namespace` | `string` | yes | Namespace of the plugin (kebab-case + dots/underscore; no slashes and `..`). |
-| `name` | `string` | yes | Plugin name. |
-| `ref` | `string` | yes | Operator-asserted tolerance label (tag-ref of the form `v1.0.0`). Branch-ref with a slash is not supported in MVP. |
+| `alias` | `string` | yes | Registration alias — address level 1, the operator's choice and the cache slot to read (`^[a-z][a-z0-9-]{0,62}$`, not on the [reserved list](../../naming-rules.md#reserved-namespace-names)). NOT signed. |
+| `source` | `string` | yes | The artifact source the approval is ON: the git remote for a `kind: git` entry, the publication `base_url` for `kind: artifact`. SIGNED. For the artifact kind it must equal the address the Keeper actually fetched the release from, or the call is refused. |
+| `ref` | `string` | yes | Operator-asserted version label (tag-ref of the form `v1.0.0`). Branch-ref with a slash is not supported in MVP. SIGNED. |
 
 **Output:**
 
 | Field | Type | Meaning |
 |---|---|---|
-| `namespace`, `name`, `ref` | `string` | Echo input. |
-| `sha256` | `string` | SHA-256 (hex) of the accepted binary. |
+| `alias`, `source`, `ref` | `string` | Echo input. |
+| `kind` | `string` | Source kind the slot was resolved by: `git` or `artifact`. |
+| `artifacts` | `array<object>` | The approved release: `{os, arch, path, sha256}` per platform, canonically ordered. **A release, not a hash** — one `plugin.allow` confirms every platform variant under one signature (NIM-793). A `kind: git` grant carries exactly one row with empty `os`/`arch`/`path`: that source declares no platform, so its single binary answers for every one. |
 
-Errors: `plugin-not-in-cache` (the plugin is not in the host's cache), `sigil-already-active` (there is already active permission for `(namespace, name, ref)`), `validation-failed` (broken three). Audit: `plugin.allowed`.
+Errors: `plugin-not-in-cache` (the plugin is not in the host's cache), `sigil-already-active` (there is already an active permission for `(source, ref)`, or the alias is taken), `validation-failed` (malformed alias/source/ref, or a `source` that is not where the release was fetched from). Audit: `plugin.allowed`, payload `{alias, source, ref, kind, artifact_sha256[], allowed_by_aid}`.
 
 #### `keeper.plugin.revoke`
 
@@ -35,13 +36,11 @@ Revocation of an active clearance from `plugin_sigils` by its registration alias
 
 | Field | Type | Required | Meaning |
 |---|---|---|---|
-| `namespace` | `string` | yes | Namespace of the plugin. |
-| `name` | `string` | yes | Plugin name. |
-| `ref` | `string` | yes | Revoked clearance label. |
+| `alias` | `string` | yes | The registration to un-register. It identifies exactly one live grant. |
 
 **Output:** empty object (REST equivalent - 204 No Content).
 
-Errors: `sigil-not-found` (no active record), `validation-failed` (broken three). Audit: `plugin.revoked`.
+Errors: `sigil-not-found` (no active record), `validation-failed` (malformed alias). Audit: `plugin.revoked`.
 
 #### `keeper.plugin.list`
 
@@ -53,4 +52,4 @@ Listing the active (not revoked) entries of the allow-list `plugin_sigils`, new 
 
 | Field | Type | Meaning |
 |---|---|---|
-| `sigils` | `array<SigilView>` | Items - `{namespace, name, ref, sha256, allowed_by_aid, allowed_at, revoked_at}`. |
+| `sigils` | `array<SigilView>` | Items - `{alias, source, ref, kind, artifacts[], allowed_by_aid, allowed_at, revoked_at}`. `artifacts` is the WHOLE approved release, not this Keeper's platform: an operator auditing the allow-list has to see every digest the approval covers. |

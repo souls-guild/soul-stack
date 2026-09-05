@@ -26,6 +26,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // reSigilRef — the closed charset for a `ref` label. kebab-case + dots (tags like
@@ -86,14 +87,31 @@ type SigilAllowInput struct {
 	Ref    string
 }
 
+// SigilArtifactView — a FLAT domain projection of one approved artifact of a release
+// (NIM-793): the platform it serves, where it is published under the grant's source,
+// and its digest.
+type SigilArtifactView struct {
+	OS     string
+	Arch   string
+	Path   string
+	SHA256 string
+}
+
 // SigilAllowView — a FLAT domain projection of the 201 body for POST /v1/plugins/sigils
 // (handler-native T5d). Package api projects it into the native PluginSigilAllowReply
-// schema (register-func). alias/source/ref (echoed) + sha256 (computed by the Keeper).
+// schema (register-func). alias/source/ref (echoed) + kind and the artifact list the
+// Keeper resolved and signed.
+//
+// The reply is a release and not a hash. `plugin.allow` confirms a release: an operator
+// who approved linux/amd64 and linux/arm64 in one gesture is told which two files that
+// was, because the alternative — one digest — would be the reply for a request nobody
+// made.
 type SigilAllowView struct {
-	Alias  string
-	Source string
-	Ref    string
-	SHA256 string
+	Alias     string
+	Source    string
+	Ref       string
+	Kind      string
+	Artifacts []SigilArtifactView
 }
 
 // SigilView — a FLAT domain projection of a single allow-list entry (element of
@@ -104,7 +122,8 @@ type SigilView struct {
 	Alias        string
 	Source       string
 	Ref          string
-	SHA256       string
+	Kind         string
+	Artifacts    []SigilArtifactView
 	AllowedByAID string
 	AllowedAt    time.Time
 	RevokedAt    *time.Time
@@ -124,20 +143,52 @@ type SigilAllowReply struct {
 }
 
 // AuditPayload assembles the audit payload for the allow route: alias/source/ref/
-// sha256/allowed_by_aid, without the signature or the schema (crypto material and a
-// large document; neither belongs in an audit row).
+// kind/sha256/allowed_by_aid, without the signature or the schema (crypto material and
+// a large document; neither belongs in an audit row).
 //
 // Source is in the payload deliberately: it is what the approval was ON, so an audit
 // trail that recorded only the alias would record only the name the operator chose for
 // what they approved, not what they approved.
+//
+// The digests ride under `artifact_sha256` as a LIST, and the old scalar `sha256` key
+// is GONE rather than reused. What was approved is a release, so the key would have had
+// to change meaning from "the digest" to "one of the digests" or "all of them joined" —
+// and a key that keeps its name while changing what it holds is the failure mode an
+// audit trail cannot afford: every existing reader of `payload->>'sha256'` would keep
+// parsing and start being wrong. A key that disappeared is a reader that breaks
+// loudly.
 func (r SigilAllowReply) AuditPayload() middleware.AuditPayload {
 	return middleware.AuditPayload{
-		"alias":          r.View.Alias,
-		"source":         r.View.Source,
-		"ref":            r.View.Ref,
-		"sha256":         r.View.SHA256,
-		"allowed_by_aid": r.CallerAID,
+		"alias":           r.View.Alias,
+		"source":          r.View.Source,
+		"ref":             r.View.Ref,
+		"kind":            r.View.Kind,
+		"artifact_sha256": auditDigests(r.View.Artifacts),
+		"allowed_by_aid":  r.CallerAID,
 	}
+}
+
+// auditDigests lists a release's digests for the audit row, in the order the view
+// carries them — the SLOT's order, which is canonical whenever the descriptor on disk
+// is (MarshalRelease guarantees that), but is not the same statement as the order the
+// signature was computed over. Every one of them: recording
+// a single digest would make the row a true statement about part of the approval and a
+// silent omission about the rest.
+func auditDigests(artifacts []SigilArtifactView) []string {
+	out := make([]string, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, a.SHA256)
+	}
+	return out
+}
+
+// artifactViewsOf projects the service's artifact rows into the flat wire shape.
+func artifactViewsOf(artifacts []sharedhost.SigilArtifact) []SigilArtifactView {
+	out := make([]SigilArtifactView, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, SigilArtifactView{OS: a.OS, Arch: a.Arch, Path: a.Path, SHA256: a.SHA256})
+	}
+	return out
 }
 
 // AllowTyped — the domain function for POST /v1/plugins/sigils (handler-native): validates
@@ -149,7 +200,7 @@ func (h *SigilHandler) AllowTyped(ctx context.Context, claims *jwt.Claims, in Si
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", msg)}
 	}
 
-	sha256, err := h.svc.Allow(ctx, sigil.AllowInput{
+	approved, err := h.svc.Allow(ctx, sigil.AllowInput{
 		Alias:     in.Alias,
 		Source:    in.Source,
 		Ref:       in.Ref,
@@ -158,7 +209,7 @@ func (h *SigilHandler) AllowTyped(ctx context.Context, claims *jwt.Claims, in Si
 	switch {
 	case err == nil:
 		// fall through to reply.
-	case errors.Is(err, sigil.ErrAliasReserved):
+	case errors.Is(err, sigil.ErrAliasReserved), errors.Is(err, sigil.ErrSourceMismatch):
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 	case errors.Is(err, sigil.ErrPluginNotInCache):
 		return zero, &problemError{problem.New(problem.TypePluginNotInCache, "",
@@ -189,10 +240,11 @@ func (h *SigilHandler) AllowTyped(ctx context.Context, claims *jwt.Claims, in Si
 
 	return SigilAllowReply{
 		View: SigilAllowView{
-			Alias:  in.Alias,
-			Source: in.Source,
-			Ref:    in.Ref,
-			SHA256: sha256,
+			Alias:     in.Alias,
+			Source:    in.Source,
+			Ref:       in.Ref,
+			Kind:      approved.Kind,
+			Artifacts: artifactViewsOf(approved.Artifacts),
 		},
 		CallerAID: claims.Subject,
 	}, nil
@@ -215,7 +267,8 @@ func (h *SigilHandler) ListTyped(ctx context.Context) (SigilListPage, error) {
 			Alias:        v.Alias,
 			Source:       v.Source,
 			Ref:          v.Ref,
-			SHA256:       v.SHA256,
+			Kind:         v.Kind,
+			Artifacts:    artifactViewsOf(v.Artifacts),
 			AllowedByAID: v.AllowedByAID,
 			AllowedAt:    v.AllowedAt.UTC().Truncate(time.Second),
 		}

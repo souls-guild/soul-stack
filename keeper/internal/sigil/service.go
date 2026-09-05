@@ -11,6 +11,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // ErrPluginNotInCache signals an allow request for an alias with no readable slot in
@@ -27,6 +28,13 @@ var ErrPluginNotInCache = errors.New("sigil: plugin not found in host cache")
 // now an operator picks the word, and `core.file.present` in a diff must keep meaning
 // the engine.
 var ErrAliasReserved = errors.New("sigil: alias is reserved or malformed")
+
+// ErrSourceMismatch signals an allow request whose asserted `source` is not the address
+// the release in the slot was fetched from. Transport maps it to 422.
+//
+// Not a 404 and not a conflict: the slot is there and readable, and the operator asked
+// the Keeper to sign a statement about it that the Keeper knows to be false.
+var ErrSourceMismatch = errors.New("sigil: asserted source is not where the release was fetched from")
 
 // SlotReader is the surface for reading plugin slots from the cache by REGISTRATION
 // ALIAS. Implemented by [cacheSlotReader] over [pluginhost.ReadSlot] /
@@ -221,6 +229,18 @@ type AllowInput struct {
 	CallerAID string
 }
 
+// AllowResult is what an approval turned out to cover: the source kind the slot was
+// resolved by, and the release's artifacts in canonical order.
+//
+// The kind is returned rather than inferred from the artifact shape. An unplatformed
+// single row happens to mean "git" today, and reading it that way would make the
+// transports depend on a coincidence of the git kind's shape instead of on what the
+// grant records.
+type AllowResult struct {
+	Kind      string
+	Artifacts []sharedhost.SigilArtifact
+}
+
 // Allow approves the artifact in the slot registered under Alias, on the identity
 // (Source, Ref), and records the grant in plugin_sigils.
 //
@@ -232,51 +252,56 @@ type AllowInput struct {
 //     `<cacheRoot>/<alias>/` — WITHOUT executing it, since at this moment the binary is
 //     precisely what is not yet approved. No slot, no artifact, no readable trailer →
 //     [ErrPluginNotInCache];
-//  3. reads the commit_sha of the ACTIVE slot (the current-symlink target) as the audit
-//     provenance mark (ADR-026(g)); a missing or corrupted `current` →
-//     [ErrPluginNotInCache] (fail-closed: an approval's provenance must be pinned);
-//  4. signs the Sigil block over (source, ref, binary_sha256, schema_sha256) —
+//  3. for a GIT slot, reads the commit_sha of the ACTIVE slot (the current-symlink
+//     target) as the audit provenance mark (ADR-026(g)); a missing or corrupted
+//     `current` → [ErrPluginNotInCache] (fail-closed: that kind's approval must have
+//     its provenance pinned). An ARTIFACT slot has no commit to pin — its provenance
+//     is the signed (source, ref) plus a digest per file, which is why the column stays
+//     NULL rather than being filled with the slot's directory name;
+//  4. signs the Sigil block over (source, kind, ref, schema_sha256, artifacts[]) —
 //     commit_sha stays outside the block, the alias too;
 //  5. inserts the row (commit_sha as a separate audit column). An existing active grant
 //     on (source, ref) → [ErrSigilAlreadyActive]; on the alias →
 //     [ErrAliasAlreadyRegistered].
 //
-// Returns the sha256 of the approved artifact (hex) — the handler puts it in the 201.
-func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
+// Returns what was approved — the handler puts it in the 201. A release, not a hash:
+// what an Archon confirms is a release, and the reply says which files that turned out
+// to be.
+func (s *Service) Allow(ctx context.Context, in AllowInput) (AllowResult, error) {
+	var zero AllowResult
 	if err := ValidateAlias(in.Alias); err != nil {
-		return "", err
+		return zero, err
 	}
 
 	slot, err := s.slots.ReadSlot(in.Alias)
 	if err != nil {
 		if errors.Is(err, pluginhost.ErrSlotNotFound) {
-			return "", fmt.Errorf("%w: %s", ErrPluginNotInCache, in.Alias)
+			return zero, fmt.Errorf("%w: %s", ErrPluginNotInCache, in.Alias)
 		}
-		return "", fmt.Errorf("sigil: read plugin slot: %w", err)
+		return zero, fmt.Errorf("sigil: read plugin slot: %w", err)
 	}
 
-	// commit_sha of the ACTIVE slot (current-symlink target). It is the same `current`
-	// that ReadSlot followed to read the artifact, so the commit lines up exactly with
-	// the bytes being signed. Fail-closed: a slot without `current` yields
-	// ErrSlotNotFound → refuse rather than approve with unpinned provenance.
-	commitSHA, err := s.slots.SlotCommitSHA(in.Alias)
-	if err != nil {
-		if errors.Is(err, pluginhost.ErrSlotNotFound) {
-			return "", fmt.Errorf("%w: %s (no resolved commit_sha)", ErrPluginNotInCache, in.Alias)
-		}
-		return "", fmt.Errorf("sigil: read plugin slot commit_sha: %w", err)
+	if err := checkAssertedSource(in.Source, slot); err != nil {
+		return zero, err
 	}
 
-	signature, err := s.signer.Load().Sign(in.Source, in.Ref, slot.BinarySHA256, slot.SchemaBytes)
+	commitSHA, err := s.originOf(in.Alias, slot.Kind)
 	if err != nil {
-		return "", fmt.Errorf("sigil: sign: %w", err)
+		return zero, err
+	}
+
+	artifacts := slot.SigilArtifacts()
+	signature, err := s.signer.Load().Sign(in.Source, slot.Kind, in.Ref, artifacts, slot.SchemaBytes)
+	if err != nil {
+		return zero, fmt.Errorf("sigil: sign: %w", err)
 	}
 
 	rec := &Sigil{
 		Alias:     in.Alias,
 		Source:    in.Source,
 		Ref:       in.Ref,
-		SHA256:    slot.BinarySHA256,
+		Kind:      slot.Kind,
+		Artifacts: artifacts,
 		CommitSHA: commitSHA,
 		Signature: signature,
 		// Schema — the SAME bytes that went into Sign above (one ReadSlot), the
@@ -287,12 +312,63 @@ func (s *Service) Allow(ctx context.Context, in AllowInput) (string, error) {
 		AllowedByAID: in.CallerAID,
 	}
 	if err := s.store.Insert(ctx, rec); err != nil {
-		return "", err
+		return zero, err
 	}
 	// Cluster-wide re-broadcast of active set to all connected Souls (S6c):
 	// new allow must arrive near-instant, not waiting for reconnect.
 	s.invalidate(ctx)
-	return slot.BinarySHA256, nil
+	return AllowResult{Kind: rec.Kind, Artifacts: rec.Artifacts}, nil
+}
+
+// checkAssertedSource refuses an approval whose `source` is not the address the Keeper
+// actually fetched the release from.
+//
+// `source` is operator-asserted: it reaches the service as free text from `plugin.allow`
+// and goes straight into the signed block. For a release the Keeper downloaded, that
+// assertion is checkable and therefore must be checked — otherwise the Keeper would put
+// its signature on "these bytes are published at X" while having verified their digests
+// at Y, and X is exactly what a Soul will later fetch from. Signing `kind` to stop a
+// rewritten catalog redirecting a fetch buys nothing if the other half of the address
+// is unverified.
+//
+// A slot that records no source ([pluginhost.SlotContents.Source] empty) is a GIT slot,
+// and there the assertion stays unchecked — the git layout carries no descriptor and
+// nothing in it records the remote. Unchanged behaviour for that kind, deliberately:
+// making the git path stricter is not this change's business, and pretending the check
+// covers it would be worse than saying it does not.
+func checkAssertedSource(asserted string, slot *pluginhost.SlotContents) error {
+	// A trailing slash is not a different address, and the resolver right-trims one off
+	// `base_url` before it fetches. Refusing `…/redis/` against `…/redis` would be a 422
+	// on a value the operator copied verbatim from their own keeper.yml.
+	if slot.Source == "" || strings.TrimRight(asserted, "/") == strings.TrimRight(slot.Source, "/") {
+		return nil
+	}
+	return fmt.Errorf("%w: the release in this slot was fetched from %q, not %q",
+		ErrSourceMismatch, slot.Source, asserted)
+}
+
+// originOf reads the audit provenance marker for the slot's kind.
+//
+// For git it is the resolved commit and it is REQUIRED: that kind's `current` symlink
+// is what says which commit produced the bytes being signed, so a slot whose symlink is
+// missing or corrupted is refused rather than approved with unpinned provenance.
+//
+// For an artifact release there is none, deliberately. The slot directory is named by a
+// digest of the release descriptor, and writing that into a column called commit_sha
+// would put a value in an audit field that no operator can resolve back to anything —
+// a marker that looks like provenance and is not.
+func (s *Service) originOf(alias, kind string) (string, error) {
+	if kind != sharedplugin.SourceKindGit {
+		return "", nil
+	}
+	commitSHA, err := s.slots.SlotCommitSHA(alias)
+	if err != nil {
+		if errors.Is(err, pluginhost.ErrSlotNotFound) {
+			return "", fmt.Errorf("%w: %s (no resolved commit_sha)", ErrPluginNotInCache, alias)
+		}
+		return "", fmt.Errorf("sigil: read plugin slot commit_sha: %w", err)
+	}
+	return commitSHA, nil
 }
 
 // Revoke revokes the active grant registered under alias. No active grant →
@@ -328,11 +404,16 @@ func ValidateAlias(alias string) error {
 // and the schema: the signature is raw crypto material that has no business on an API,
 // and the schema is a large document served by the module catalog rather than by the
 // allow-list feed. Symmetric to rbac.RoleView.
+//
+// Artifacts IS on the feed, all of it. An operator auditing an allow-list needs to see
+// what a release actually approved — a count, or this host's row, would leave the other
+// platforms' digests visible nowhere.
 type SigilView struct {
 	Alias        string
 	Source       string
 	Ref          string
-	SHA256       string
+	Kind         string
+	Artifacts    []sharedhost.SigilArtifact
 	AllowedByAID string
 	AllowedAt    time.Time
 	RevokedAt    *time.Time
@@ -350,7 +431,8 @@ func (s *Service) List(ctx context.Context) ([]SigilView, error) {
 			Alias:        r.Alias,
 			Source:       r.Source,
 			Ref:          r.Ref,
-			SHA256:       r.SHA256,
+			Kind:         r.Kind,
+			Artifacts:    r.Artifacts,
 			AllowedByAID: r.AllowedByAID,
 			AllowedAt:    r.AllowedAt,
 			RevokedAt:    r.RevokedAt,

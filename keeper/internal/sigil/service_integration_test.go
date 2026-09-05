@@ -15,6 +15,8 @@ import (
 	"path/filepath"
 	"testing"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 )
@@ -83,11 +85,15 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 
 	svc := newIntegrationService(t, cacheRoot)
 
-	// Allow: reads the slot, signs, inserts; returns sha256.
-	sha, err := svc.Allow(ctx, AllowInput{Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: aid})
+	// Allow: reads the slot, signs, inserts; returns the approved release.
+	approved, err := svc.Allow(ctx, AllowInput{Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: aid})
 	if err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
+	if approved.Kind != sharedplugin.SourceKindGit || len(approved.Artifacts) != 1 {
+		t.Fatalf("Allow returned %+v, want one git artifact", approved)
+	}
+	sha := approved.Artifacts[0].SHA256
 	if !reSHA256Hex.MatchString(sha) {
 		t.Errorf("Allow returned invalid sha256 %q", sha)
 	}
@@ -100,7 +106,9 @@ func TestIntegration_Service_Allow_List_Revoke(t *testing.T) {
 	if len(views) != 1 {
 		t.Fatalf("List len = %d, want 1", len(views))
 	}
-	if views[0].SHA256 != sha || views[0].Alias != "hetzner" || views[0].Source != testSource || views[0].Ref != "v1.0.0" {
+	if len(views[0].Artifacts) != 1 || views[0].Artifacts[0].SHA256 != sha ||
+		views[0].Kind != sharedplugin.SourceKindGit ||
+		views[0].Alias != "hetzner" || views[0].Source != testSource || views[0].Ref != "v1.0.0" {
 		t.Errorf("view = %+v", views[0])
 	}
 	if views[0].AllowedByAID != aid {

@@ -464,6 +464,7 @@ func mapSoulErrorToMCP(err error) (code, detail string) {
 // sentinel ↔ MCP-code (REST problem-type → MCP-code):
 //   - ErrPluginNotInCache       → plugin-not-in-cache (REST TypePluginNotInCache).
 //   - ErrAliasReserved          → validation-failed (REST TypeValidationFailed).
+//   - ErrSourceMismatch         → validation-failed (REST TypeValidationFailed).
 //   - ErrAliasAlreadyRegistered → sigil-already-active (REST TypeSigilActive).
 //   - ErrSigilAlreadyActive     → sigil-already-active (REST TypeSigilActive).
 //   - ErrSigilNotFound          → sigil-not-found (REST TypeSigilNotFound).
@@ -483,6 +484,11 @@ func mapSigilErrorToMCP(err error) (code, detail string) {
 	case errors.Is(err, sigil.ErrPluginNotInCache):
 		return mcpCodePluginNotInCache, "no plugin artifact is registered under this alias in the host cache"
 	case errors.Is(err, sigil.ErrAliasReserved):
+		return mcpCodeValidationFailed, err.Error()
+	case errors.Is(err, sigil.ErrSourceMismatch):
+		// The detail names both addresses on purpose: the operator mistyped one of
+		// them, and which one is the whole content of the answer. Neither is a
+		// secret — both are in their own keeper.yml.
 		return mcpCodeValidationFailed, err.Error()
 	case errors.Is(err, sigil.ErrAliasAlreadyRegistered):
 		return mcpCodeSigilActive,

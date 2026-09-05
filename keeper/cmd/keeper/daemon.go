@@ -62,8 +62,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
 	keeperpg "github.com/souls-guild/soul-stack/keeper/internal/pg"
+	"github.com/souls-guild/soul-stack/keeper/internal/pluginartifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/plugingit"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	"github.com/souls-guild/soul-stack/keeper/internal/pluginsource"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushprovider"
@@ -1042,14 +1044,25 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	resolver := plugingit.NewResolver(cacheRoot, pluginWorkRoot(cfg.Plugins),
+	// One dispatcher over both source kinds (NIM-793): the catalog entry's `kind:`
+	// picks the provider, and everything downstream of resolve sees one shape whichever
+	// one produced the slot.
+	gitResolver := plugingit.NewResolver(cacheRoot, pluginWorkRoot(cfg.Plugins),
 		cfg.Plugins.ResolvedFetchTimeout(),
 		cfg.Plugins.ResolvedMaxArtifactSize(), cfg.Plugins.ResolvedMaxCloneSize(), logger)
-	if slots, rwarns, rerr := resolver.ResolveCatalog(ctx, cfg.Plugins); rerr != nil {
-		logger.Warn("keeper run: plugin git resolve skipped", slog.Any("error", rerr))
+	artifactResolver := pluginartifact.NewResolver(cacheRoot,
+		cfg.Plugins.ResolvedFetchTimeout(), cfg.Plugins.ResolvedMaxArtifactSize(), nil, logger)
+	sourceCatalog, err := pluginsource.NewCatalog(logger,
+		plugingit.NewProvider(gitResolver), artifactResolver)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build plugin source catalog: %v\n", err)
+		return errSetupFailed
+	}
+	if slots, rwarns, rerr := sourceCatalog.ResolveCatalog(ctx, cfg.Plugins); rerr != nil {
+		logger.Warn("keeper run: plugin resolve skipped", slog.Any("error", rerr))
 	} else {
 		for _, w := range rwarns {
-			logger.Warn("keeper run: plugin git resolve warning", slog.String("detail", w))
+			logger.Warn("keeper run: plugin resolve warning", slog.String("detail", w))
 		}
 		logger.Info("keeper run: plugins resolved into cache", slog.Int("count", len(slots)))
 	}
@@ -1288,12 +1301,13 @@ func (l sigilRecordLister) ListActive(ctx context.Context) ([]*sharedhost.SigilR
 	out := make([]*sharedhost.SigilRecord, 0, len(recs))
 	for _, s := range recs {
 		out = append(out, &sharedhost.SigilRecord{
-			Alias:           s.Alias,
-			Source:          s.Source,
-			Ref:             s.Ref,
-			BinarySHA256hex: s.SHA256,
-			Signature:       s.Signature,
-			Schema:          s.Schema,
+			Alias:     s.Alias,
+			Source:    s.Source,
+			Ref:       s.Ref,
+			Kind:      s.Kind,
+			Artifacts: s.Artifacts,
+			Signature: s.Signature,
+			Schema:    s.Schema,
 		})
 	}
 	return out, nil

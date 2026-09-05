@@ -5,6 +5,7 @@ import (
 	"errors"
 	"testing"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
@@ -22,12 +23,13 @@ func (f fakeLister) ListActive(context.Context) ([]*sharedhost.SigilRecord, erro
 // the key a host slot is named by and the only key the verify path holds.
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	want := &sharedhost.SigilRecord{
-		Alias:           "hetzner",
-		Source:          "https://example.com/soul-cloud-hetzner.git",
-		Ref:             "v2.0.0",
-		BinarySHA256hex: "abc123",
-		Signature:       []byte{1, 2, 3, 4},
-		Schema:          []byte(`{"kind":"ssh_provider","protocol_version":1}`),
+		Alias:     "hetzner",
+		Source:    "https://example.com/soul-cloud-hetzner.git",
+		Ref:       "v2.0.0",
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: []sharedhost.SigilArtifact{{SHA256: "abc123"}},
+		Signature: []byte{1, 2, 3, 4},
+		Schema:    []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 	}
 	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{want}}, nil)
 
@@ -84,7 +86,7 @@ func TestSigilLookupAdapter_ListErrorIsNil(t *testing.T) {
 // the property the whole re-keying rests on, checked independently of the Soul side.
 //
 // The alias selects WHICH grant to check. It contributes nothing to whether that
-// grant is valid — the signature covers (source, ref, binary_sha256, schema_sha256)
+// grant is valid — the signature covers (source, kind, ref, schema_sha256, artifacts)
 // and never the alias, which is why the same artifact under a second alias needs no
 // second signature. Two things follow, and both are asserted here:
 //
@@ -101,9 +103,10 @@ func TestSigilLookupAdapter_AliasIsALookupKeyNotATrustClaim(t *testing.T) {
 	schema := []byte(`{"kind":"soul_module","protocol_version":1}`)
 	// The same artifact registered twice. The rows differ ONLY in the alias — which
 	// is exactly what the signed block does not cover.
+	arts := []sharedhost.SigilArtifact{{SHA256: "aa"}}
 	recs := []*sharedhost.SigilRecord{
-		{Alias: "redis", Source: source, Ref: "v1", BinarySHA256hex: "aa", Signature: sig, Schema: schema},
-		{Alias: "redis-community", Source: source, Ref: "v1", BinarySHA256hex: "aa", Signature: sig, Schema: schema},
+		{Alias: "redis", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
+		{Alias: "redis-community", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
 	}
 	a := NewSigilLookupAdapter(fakeLister{recs: recs}, nil)
 

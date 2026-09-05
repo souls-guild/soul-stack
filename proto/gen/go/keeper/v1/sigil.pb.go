@@ -32,36 +32,48 @@ const (
 //     Deliberately NOT part of the signed block;
 //   - source + ref: what was actually signed. The artifact carries no self-name
 //     (NIM-377), so where it came from is the only identity a signature can be over;
-//   - binary_sha256: hash of the artifact, which Soul checks against the local file.
-//     This is the one real control on the spawn path;
-//   - signature: ed25519 signature of the block (source, ref, binary_sha256,
-//     schema_sha256);
+//   - kind: how the bytes are reached (`git` / `artifact`). Signed — this decides
+//     WHERE a Soul goes for the artifact, and an unsigned answer to that would let a
+//     rewritten catalog redirect the fetch;
+//   - artifacts: the release's approved files, one per platform. The Soul picks its
+//     own row and checks the bytes against that row's sha256. This is the one real
+//     control on the spawn path;
+//   - signature: ed25519 signature of the block (source, kind, ref, schema_sha256,
+//     artifacts[]) — over the WHOLE list, so substituting one platform's digest
+//     breaks verification for all of them;
 //   - schema: canonical schema-document bytes (M1), which Soul hashes with
 //     shared/pluginhost.SchemaDigest (the S3<->S6 invariant).
 //
-// Fields 1, 2 and 6 held the pre-NIM-377 shape (namespace / name / manifest) and are
-// reserved rather than reused: ADR-012 forbids reusing a field number, so an old
-// sender talking to a new receiver fails to populate anything instead of landing a
-// namespace where an alias is expected.
+// Fields 1, 2 and 6 held the pre-NIM-377 shape (namespace / name / manifest) and
+// field 4 the pre-NIM-793 single binary_sha256. All are reserved rather than reused:
+// ADR-012 forbids reusing a field number, so an old sender talking to a new receiver
+// fails to populate anything instead of landing a namespace where an alias is
+// expected, or one platform's digest where a release is.
 type PluginSigil struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// ref: an operator-asserted version label for the grant (ADR-026 Variant C);
 	// NOT part of artifact integrity, but is included in the signed block.
 	Ref string `protobuf:"bytes,3,opt,name=ref,proto3" json:"ref,omitempty"`
-	// SHA-256 of the artifact, hex lowercase (64 characters).
-	BinarySha256 string `protobuf:"bytes,4,opt,name=binary_sha256,json=binarySha256,proto3" json:"binary_sha256,omitempty"`
 	// Raw ed25519 signature of the block (64 bytes, no base64/PEM).
 	Signature []byte `protobuf:"bytes,5,opt,name=signature,proto3" json:"signature,omitempty"`
 	// Registration alias — address level 1, chosen by the operator, and the key Soul
 	// resolves a slot by. Not signed: an alias is a local naming choice, so registering
 	// the same bytes twice must not need a second signature.
 	Alias string `protobuf:"bytes,7,opt,name=alias,proto3" json:"alias,omitempty"`
-	// Artifact source the grant is on (the module repository's remote). Signed.
+	// Artifact source the grant is on: the module repository's remote for kind=git, the
+	// publication base URL for kind=artifact. Signed.
 	Source string `protobuf:"bytes,8,opt,name=source,proto3" json:"source,omitempty"`
 	// Canonical schema-document bytes (M1). The canonical form for verify is these
 	// bytes as-is — the document is byte-deterministic by construction, so there is
 	// nothing to normalize before hashing.
-	Schema        []byte `protobuf:"bytes,9,opt,name=schema,proto3" json:"schema,omitempty"`
+	Schema []byte `protobuf:"bytes,9,opt,name=schema,proto3" json:"schema,omitempty"`
+	// Source kind: "git" or "artifact". Signed.
+	Kind string `protobuf:"bytes,10,opt,name=kind,proto3" json:"kind,omitempty"`
+	// The release's approved artifacts (NIM-793). Never empty: a grant approving no
+	// bytes cannot let anything run. A kind=git grant carries exactly one entry with an
+	// empty os/arch — that source declares no platform, so its single binary answers for
+	// every one, exactly as it did before this field existed.
+	Artifacts     []*SigilArtifact `protobuf:"bytes,11,rep,name=artifacts,proto3" json:"artifacts,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -103,13 +115,6 @@ func (x *PluginSigil) GetRef() string {
 	return ""
 }
 
-func (x *PluginSigil) GetBinarySha256() string {
-	if x != nil {
-		return x.BinarySha256
-	}
-	return ""
-}
-
 func (x *PluginSigil) GetSignature() []byte {
 	if x != nil {
 		return x.Signature
@@ -138,6 +143,100 @@ func (x *PluginSigil) GetSchema() []byte {
 	return nil
 }
 
+func (x *PluginSigil) GetKind() string {
+	if x != nil {
+		return x.Kind
+	}
+	return ""
+}
+
+func (x *PluginSigil) GetArtifacts() []*SigilArtifact {
+	if x != nil {
+		return x.Artifacts
+	}
+	return nil
+}
+
+// SigilArtifact is one platform's approved file inside a PluginSigil (NIM-793).
+//
+// Order on the wire carries no meaning: both sides canonicalize the list (sorted by
+// os, arch, path) before hashing, so a receiver never has to trust the order a sender
+// chose.
+type SigilArtifact struct {
+	state protoimpl.MessageState `protogen:"open.v1"`
+	// GOOS / GOARCH spelling (`linux`, `amd64`). Both empty = the unplatformed entry of
+	// a kind=git grant, which matches every platform.
+	Os   string `protobuf:"bytes,1,opt,name=os,proto3" json:"os,omitempty"`
+	Arch string `protobuf:"bytes,2,opt,name=arch,proto3" json:"arch,omitempty"`
+	// Path of the file RELATIVE to PluginSigil.source. Signed, which is what lets a Soul
+	// fetch without the operator's catalog: the catalog never reaches a Soul, the grant
+	// does. Empty for the unplatformed entry of a kind=git grant, whose bytes do not come
+	// from a URL.
+	Path string `protobuf:"bytes,3,opt,name=path,proto3" json:"path,omitempty"`
+	// SHA-256 of that file, hex lowercase (64 characters).
+	Sha256        string `protobuf:"bytes,4,opt,name=sha256,proto3" json:"sha256,omitempty"`
+	unknownFields protoimpl.UnknownFields
+	sizeCache     protoimpl.SizeCache
+}
+
+func (x *SigilArtifact) Reset() {
+	*x = SigilArtifact{}
+	mi := &file_keeper_v1_sigil_proto_msgTypes[1]
+	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+	ms.StoreMessageInfo(mi)
+}
+
+func (x *SigilArtifact) String() string {
+	return protoimpl.X.MessageStringOf(x)
+}
+
+func (*SigilArtifact) ProtoMessage() {}
+
+func (x *SigilArtifact) ProtoReflect() protoreflect.Message {
+	mi := &file_keeper_v1_sigil_proto_msgTypes[1]
+	if x != nil {
+		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
+		if ms.LoadMessageInfo() == nil {
+			ms.StoreMessageInfo(mi)
+		}
+		return ms
+	}
+	return mi.MessageOf(x)
+}
+
+// Deprecated: Use SigilArtifact.ProtoReflect.Descriptor instead.
+func (*SigilArtifact) Descriptor() ([]byte, []int) {
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{1}
+}
+
+func (x *SigilArtifact) GetOs() string {
+	if x != nil {
+		return x.Os
+	}
+	return ""
+}
+
+func (x *SigilArtifact) GetArch() string {
+	if x != nil {
+		return x.Arch
+	}
+	return ""
+}
+
+func (x *SigilArtifact) GetPath() string {
+	if x != nil {
+		return x.Path
+	}
+	return ""
+}
+
+func (x *SigilArtifact) GetSha256() string {
+	if x != nil {
+		return x.Sha256
+	}
+	return ""
+}
+
 // SigilSnapshot is the FULL active set of plugin grants (replace semantics,
 // ADR-026). Rides only-add in the existing EventStream's FromKeeper.oneof.
 //
@@ -155,7 +254,7 @@ type SigilSnapshot struct {
 
 func (x *SigilSnapshot) Reset() {
 	*x = SigilSnapshot{}
-	mi := &file_keeper_v1_sigil_proto_msgTypes[1]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -167,7 +266,7 @@ func (x *SigilSnapshot) String() string {
 func (*SigilSnapshot) ProtoMessage() {}
 
 func (x *SigilSnapshot) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_sigil_proto_msgTypes[1]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -180,7 +279,7 @@ func (x *SigilSnapshot) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SigilSnapshot.ProtoReflect.Descriptor instead.
 func (*SigilSnapshot) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{1}
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{2}
 }
 
 func (x *SigilSnapshot) GetSigils() []*PluginSigil {
@@ -207,7 +306,7 @@ type PluginFetchRequest struct {
 
 func (x *PluginFetchRequest) Reset() {
 	*x = PluginFetchRequest{}
-	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -219,7 +318,7 @@ func (x *PluginFetchRequest) String() string {
 func (*PluginFetchRequest) ProtoMessage() {}
 
 func (x *PluginFetchRequest) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_sigil_proto_msgTypes[2]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -232,7 +331,7 @@ func (x *PluginFetchRequest) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginFetchRequest.ProtoReflect.Descriptor instead.
 func (*PluginFetchRequest) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{2}
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{3}
 }
 
 func (x *PluginFetchRequest) GetBinarySha256() string {
@@ -262,7 +361,7 @@ type PluginChunk struct {
 
 func (x *PluginChunk) Reset() {
 	*x = PluginChunk{}
-	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -274,7 +373,7 @@ func (x *PluginChunk) String() string {
 func (*PluginChunk) ProtoMessage() {}
 
 func (x *PluginChunk) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_sigil_proto_msgTypes[3]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -287,7 +386,7 @@ func (x *PluginChunk) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use PluginChunk.ProtoReflect.Descriptor instead.
 func (*PluginChunk) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{3}
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{4}
 }
 
 func (x *PluginChunk) GetData() []byte {
@@ -315,7 +414,7 @@ type SigilTrustAnchors struct {
 
 func (x *SigilTrustAnchors) Reset() {
 	*x = SigilTrustAnchors{}
-	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[5]
 	ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 	ms.StoreMessageInfo(mi)
 }
@@ -327,7 +426,7 @@ func (x *SigilTrustAnchors) String() string {
 func (*SigilTrustAnchors) ProtoMessage() {}
 
 func (x *SigilTrustAnchors) ProtoReflect() protoreflect.Message {
-	mi := &file_keeper_v1_sigil_proto_msgTypes[4]
+	mi := &file_keeper_v1_sigil_proto_msgTypes[5]
 	if x != nil {
 		ms := protoimpl.X.MessageStateOf(protoimpl.Pointer(x))
 		if ms.LoadMessageInfo() == nil {
@@ -340,7 +439,7 @@ func (x *SigilTrustAnchors) ProtoReflect() protoreflect.Message {
 
 // Deprecated: Use SigilTrustAnchors.ProtoReflect.Descriptor instead.
 func (*SigilTrustAnchors) Descriptor() ([]byte, []int) {
-	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{4}
+	return file_keeper_v1_sigil_proto_rawDescGZIP(), []int{5}
 }
 
 func (x *SigilTrustAnchors) GetPubkeyPem() []string {
@@ -354,14 +453,21 @@ var File_keeper_v1_sigil_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_sigil_proto_rawDesc = "" +
 	"\n" +
-	"\x15keeper/v1/sigil.proto\x12\x13soulstack.keeper.v1\"\xd5\x01\n" +
+	"\x15keeper/v1/sigil.proto\x12\x13soulstack.keeper.v1\"\x9b\x02\n" +
 	"\vPluginSigil\x12\x10\n" +
-	"\x03ref\x18\x03 \x01(\tR\x03ref\x12#\n" +
-	"\rbinary_sha256\x18\x04 \x01(\tR\fbinarySha256\x12\x1c\n" +
+	"\x03ref\x18\x03 \x01(\tR\x03ref\x12\x1c\n" +
 	"\tsignature\x18\x05 \x01(\fR\tsignature\x12\x14\n" +
 	"\x05alias\x18\a \x01(\tR\x05alias\x12\x16\n" +
 	"\x06source\x18\b \x01(\tR\x06source\x12\x16\n" +
-	"\x06schema\x18\t \x01(\fR\x06schemaJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x06\x10\aR\tnamespaceR\x04nameR\bmanifest\"I\n" +
+	"\x06schema\x18\t \x01(\fR\x06schema\x12\x12\n" +
+	"\x04kind\x18\n" +
+	" \x01(\tR\x04kind\x12@\n" +
+	"\tartifacts\x18\v \x03(\v2\".soulstack.keeper.v1.SigilArtifactR\tartifactsJ\x04\b\x01\x10\x02J\x04\b\x02\x10\x03J\x04\b\x04\x10\x05J\x04\b\x06\x10\aR\tnamespaceR\x04nameR\rbinary_sha256R\bmanifest\"_\n" +
+	"\rSigilArtifact\x12\x0e\n" +
+	"\x02os\x18\x01 \x01(\tR\x02os\x12\x12\n" +
+	"\x04arch\x18\x02 \x01(\tR\x04arch\x12\x12\n" +
+	"\x04path\x18\x03 \x01(\tR\x04path\x12\x16\n" +
+	"\x06sha256\x18\x04 \x01(\tR\x06sha256\"I\n" +
 	"\rSigilSnapshot\x128\n" +
 	"\x06sigils\x18\x01 \x03(\v2 .soulstack.keeper.v1.PluginSigilR\x06sigils\"l\n" +
 	"\x12PluginFetchRequest\x12#\n" +
@@ -385,21 +491,23 @@ func file_keeper_v1_sigil_proto_rawDescGZIP() []byte {
 	return file_keeper_v1_sigil_proto_rawDescData
 }
 
-var file_keeper_v1_sigil_proto_msgTypes = make([]protoimpl.MessageInfo, 5)
+var file_keeper_v1_sigil_proto_msgTypes = make([]protoimpl.MessageInfo, 6)
 var file_keeper_v1_sigil_proto_goTypes = []any{
 	(*PluginSigil)(nil),        // 0: soulstack.keeper.v1.PluginSigil
-	(*SigilSnapshot)(nil),      // 1: soulstack.keeper.v1.SigilSnapshot
-	(*PluginFetchRequest)(nil), // 2: soulstack.keeper.v1.PluginFetchRequest
-	(*PluginChunk)(nil),        // 3: soulstack.keeper.v1.PluginChunk
-	(*SigilTrustAnchors)(nil),  // 4: soulstack.keeper.v1.SigilTrustAnchors
+	(*SigilArtifact)(nil),      // 1: soulstack.keeper.v1.SigilArtifact
+	(*SigilSnapshot)(nil),      // 2: soulstack.keeper.v1.SigilSnapshot
+	(*PluginFetchRequest)(nil), // 3: soulstack.keeper.v1.PluginFetchRequest
+	(*PluginChunk)(nil),        // 4: soulstack.keeper.v1.PluginChunk
+	(*SigilTrustAnchors)(nil),  // 5: soulstack.keeper.v1.SigilTrustAnchors
 }
 var file_keeper_v1_sigil_proto_depIdxs = []int32{
-	0, // 0: soulstack.keeper.v1.SigilSnapshot.sigils:type_name -> soulstack.keeper.v1.PluginSigil
-	1, // [1:1] is the sub-list for method output_type
-	1, // [1:1] is the sub-list for method input_type
-	1, // [1:1] is the sub-list for extension type_name
-	1, // [1:1] is the sub-list for extension extendee
-	0, // [0:1] is the sub-list for field type_name
+	1, // 0: soulstack.keeper.v1.PluginSigil.artifacts:type_name -> soulstack.keeper.v1.SigilArtifact
+	0, // 1: soulstack.keeper.v1.SigilSnapshot.sigils:type_name -> soulstack.keeper.v1.PluginSigil
+	2, // [2:2] is the sub-list for method output_type
+	2, // [2:2] is the sub-list for method input_type
+	2, // [2:2] is the sub-list for extension type_name
+	2, // [2:2] is the sub-list for extension extendee
+	0, // [0:2] is the sub-list for field type_name
 }
 
 func init() { file_keeper_v1_sigil_proto_init() }
@@ -413,7 +521,7 @@ func file_keeper_v1_sigil_proto_init() {
 			GoPackagePath: reflect.TypeOf(x{}).PkgPath(),
 			RawDescriptor: unsafe.Slice(unsafe.StringData(file_keeper_v1_sigil_proto_rawDesc), len(file_keeper_v1_sigil_proto_rawDesc)),
 			NumEnums:      0,
-			NumMessages:   5,
+			NumMessages:   6,
 			NumExtensions: 0,
 			NumServices:   0,
 		},

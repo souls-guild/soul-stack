@@ -82,20 +82,36 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 			reasonNotAllowed, alias))
 	}
 
+	// (2a) this host's row in the grant (NIM-793). A grant approves a RELEASE, and a
+	// release is one binary per platform; the row for this platform is what says which
+	// bytes are approved here. No row → fail-closed, and NOT as a digest mismatch:
+	// nothing was approved to compare against, so the fix is to publish and re-approve
+	// a release covering the platform.
+	//
+	// The row is selected ONCE, here, from the host's OWN Soulprint facts — and the
+	// same row is what step (3) fetches and step (4) verifies against. Two independent
+	// derivations of "this host's platform", one for the fetch and one inside verify,
+	// would agree today and diverge the first time either changed; the symptom would be
+	// digest_mismatch, which reads as tampering.
+	approved, err := m.selectApproved(rec)
+	if err != nil {
+		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonNotAllowed, alias, err))
+	}
+
 	// The slot is named by the alias and holds exactly one executable; the artifact
 	// has no name of its own, so the alias names the file too.
 	slotDir := filepath.Join(m.deps.ModulesRoot, alias)
 	binPath := filepath.Join(slotDir, alias)
 
-	// (2) idempotency: the installed artifact already matches the active grant.
-	if diskSHA, exists := sha256OfFile(binPath); exists && strings.EqualFold(diskSHA, rec.BinarySHA256hex) {
-		return sendInstalled(stream, false, alias, rec, binPath, nil)
+	// (2b) idempotency: the installed artifact already matches the active grant.
+	if diskSHA, exists := sha256OfFile(binPath); exists && strings.EqualFold(diskSHA, approved.SHA256) {
+		return sendInstalled(stream, false, alias, rec, approved, binPath, nil)
 	}
 
 	// (3) fetch by content address — from the source the grant names, or from Keeper
 	// over the current EventStream session. Both are legitimate transports and which
 	// one this run used rides in the final event (see [Module.fetch] for the rule).
-	fetched, err := m.fetch(stream.Context(), alias, rec)
+	fetched, err := m.fetch(stream.Context(), alias, rec, approved)
 	if err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonFetchFailed, alias, err))
 	}
@@ -103,7 +119,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	// (4) full Sigil verify BEFORE materialization: sha256 of the bytes ==
 	// grant + signature over the source-keyed block + schema hash
 	// (shared/pluginhost, ADR-065(f)).
-	if err := sharedhost.VerifyArtifactBytes(fetched.data, rec, m.deps.Anchors); err != nil {
+	if err := sharedhost.VerifyArtifactBytes(fetched.data, rec, approved, m.deps.Anchors); err != nil {
 		return util.SendFailed(stream, fmt.Sprintf("%s: %s: %v", reasonVerifyFailed, alias, err))
 	}
 
@@ -118,7 +134,7 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 		m.deps.Rescan()
 	}
 
-	return sendInstalled(stream, true, alias, rec, binPath, fetched)
+	return sendInstalled(stream, true, alias, rec, approved, binPath, fetched)
 }
 
 // fetchAll assembles the artifact bytes from the server-streaming PluginChunk response.
@@ -209,12 +225,14 @@ func sha256OfFile(path string) (string, bool) {
 // sendInstalled reports the slot. fetched is nil when nothing was fetched (the
 // idempotent no-op): the transport keys are then absent rather than carrying a
 // transport that was not used this run.
-func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, alias string, rec *sharedhost.SigilRecord, binPath string, fetched *fetchResult) error {
+func sendInstalled(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], changed bool, alias string, rec *sharedhost.SigilRecord, approved *sharedhost.SigilArtifact, binPath string, fetched *fetchResult) error {
 	out := map[string]any{
-		"name":      alias,
-		"source":    rec.Source,
-		"ref":       rec.Ref,
-		"sha256":    rec.BinarySHA256hex,
+		"name":   alias,
+		"source": rec.Source,
+		"ref":    rec.Ref,
+		// The digest of the artifact installed HERE, not of the release: a register
+		// consumer comparing it against the local file needs this host's row.
+		"sha256":    approved.SHA256,
 		"path":      binPath,
 		"installed": true,
 		"changed":   changed,

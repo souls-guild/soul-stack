@@ -16,6 +16,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
@@ -40,7 +41,6 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	}
 	binSum := sha256.Sum256(binBytes)
 	binHex := hex.EncodeToString(binSum[:])
-	binRaw, _ := hex.DecodeString(binHex)
 
 	pub, priv, err := ed25519.GenerateKey(nil)
 	if err != nil {
@@ -51,14 +51,23 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 		source = "https://example.com/soul-fake.git"
 		ref    = "v1.0.0"
 	)
-	block := sharedhost.BuildSigilBlock(source, ref, binRaw, schemaDigest[:])
+	// A git-resolved slot: one artifact, no platform stated, so it answers for every
+	// platform this test may run on.
+	artifacts := []sharedhost.SigilArtifact{{
+		OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform, SHA256: binHex,
+	}}
+	block, err := sharedhost.BuildSigilBlock(source, sharedplugin.SourceKindGit, ref, schemaDigest[:], artifacts)
+	if err != nil {
+		t.Fatalf("build sigil block: %v", err)
+	}
 	rec := &sharedhost.SigilRecord{
-		Alias:           d.Alias,
-		Source:          source,
-		Ref:             ref,
-		BinarySHA256hex: binHex,
-		Signature:       ed25519.Sign(priv, block),
-		Schema:          schemaBytes,
+		Alias:     d.Alias,
+		Source:    source,
+		Ref:       ref,
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: artifacts,
+		Signature: ed25519.Sign(priv, block),
+		Schema:    schemaBytes,
 	}
 	return pub, testLookup{d.Alias: rec}
 }

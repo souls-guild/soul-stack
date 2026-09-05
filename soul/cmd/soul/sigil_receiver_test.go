@@ -52,10 +52,11 @@ func snapshotMsg(sigs ...*keeperv1.PluginSigil) *keeperv1.FromKeeper {
 
 func pluginSigil(alias, ref, sha string) *keeperv1.PluginSigil {
 	return &keeperv1.PluginSigil{
-		Alias:        alias,
-		Source:       "https://example.com/" + alias,
-		Ref:          ref,
-		BinarySha256: sha,
+		Alias:     alias,
+		Source:    "https://example.com/" + alias,
+		Ref:       ref,
+		Kind:      "git",
+		Artifacts: []*keeperv1.SigilArtifact{{Sha256: sha}},
 	}
 }
 
@@ -72,8 +73,9 @@ func TestReceiverAppliesSnapshot(t *testing.T) {
 	if got == nil {
 		t.Fatal("receiver did not put the snapshot Sigil into the cache")
 	}
-	if got.GetRef() != "v1.2.3" || got.GetBinarySha256() != "deadbeef" {
-		t.Fatalf("wrong Sigil in cache: ref=%q sha=%q", got.GetRef(), got.GetBinarySha256())
+	if got.GetRef() != "v1.2.3" || len(got.GetArtifacts()) != 1 ||
+		got.GetArtifacts()[0].GetSha256() != "deadbeef" {
+		t.Fatalf("wrong Sigil in cache: ref=%q artifacts=%+v", got.GetRef(), got.GetArtifacts())
 	}
 	if sigils.Get("cloud-hetzner") == nil {
 		t.Fatal("receiver lost the second Sigil from the snapshot")
@@ -138,7 +140,8 @@ func TestReceiverSinglePluginSigilDoesNotMutate(t *testing.T) {
 	}}, sigils, nil)
 
 	got := sigils.Get("core-pkg")
-	if got == nil || got.GetRef() != "v1" || got.GetBinarySha256() != "aa" {
+	if got == nil || got.GetRef() != "v1" || len(got.GetArtifacts()) != 1 ||
+		got.GetArtifacts()[0].GetSha256() != "aa" {
 		t.Fatalf("a lone PluginSigil must not change the authoritative set, got %v", got)
 	}
 	if sigils.Get("community-new") != nil {

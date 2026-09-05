@@ -17,6 +17,7 @@ import (
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -41,20 +42,28 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	if err != nil {
 		t.Fatalf("genkey: %v", err)
 	}
-	binRaw, _ := hex.DecodeString(binDigest)
 	schemaDigest := sharedhost.SchemaDigest(schemaDoc)
 	const (
 		ref    = "v1.0.0"
 		source = "https://github.com/souls-guild/soul-mod-echo"
 	)
-	block := sharedhost.BuildSigilBlock(source, ref, binRaw, schemaDigest[:])
+	// A git-resolved grant: one artifact, no platform stated, so it answers on
+	// whatever platform this test runs on.
+	artifacts := []sharedhost.SigilArtifact{{
+		OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform, SHA256: binDigest,
+	}}
+	block, err := sharedhost.BuildSigilBlock(source, sharedplugin.SourceKindGit, ref, schemaDigest[:], artifacts)
+	if err != nil {
+		t.Fatalf("build sigil block: %v", err)
+	}
 	rec := &sharedhost.SigilRecord{
-		Alias:           d.Alias,
-		Source:          source,
-		Ref:             ref,
-		BinarySHA256hex: binDigest,
-		Signature:       ed25519.Sign(priv, block),
-		Schema:          schemaDoc,
+		Alias:     d.Alias,
+		Source:    source,
+		Ref:       ref,
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: artifacts,
+		Signature: ed25519.Sign(priv, block),
+		Schema:    schemaDoc,
 	}
 	return pub, testLookup{d.Alias: rec}
 }

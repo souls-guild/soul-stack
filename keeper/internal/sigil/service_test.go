@@ -11,6 +11,8 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // sshSchemaJSON is a canonical ssh_provider document as the serializer produces it —
@@ -77,14 +79,27 @@ func testSigner(t *testing.T) *Signer {
 
 func slotFixture() *pluginhost.SlotContents {
 	digest := sha256.Sum256([]byte("ssh-binary"))
+	return gitSlot("/cache/hetzner/current/hetzner", sshSchemaJSON, hex.EncodeToString(digest[:]))
+}
+
+// gitSlot is a slot as the git resolver leaves it: one artifact, no platform stated.
+func gitSlot(binPath, schemaJSON, digest string) *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
-		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(sshSchemaJSON),
-		BinarySHA256: hex.EncodeToString(digest[:]),
+		Kind: sharedplugin.SourceKindGit,
+		Artifacts: []pluginhost.SlotArtifact{{
+			OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform,
+			SHA256: digest, BinaryPath: binPath,
+		}},
+		SchemaBytes: []byte(schemaJSON),
 	}
 }
 
 const testCommitSHA = "0123456789abcdef0123456789abcdef01234567"
+
+// listFixtureSHA is a well-formed digest for the list-feed fixture. It has to be
+// well-formed: the store projects rows through CanonicalArtifacts, which refuses a
+// list no signature could have been placed over.
+const listFixtureSHA = "de4dbeef00000000000000000000000000000000000000000000000000000000"
 
 func TestService_Allow_Success(t *testing.T) {
 	slot := slotFixture()
@@ -99,14 +114,17 @@ func TestService_Allow_Success(t *testing.T) {
 		t.Fatalf("NewService: %v", err)
 	}
 
-	sha, err := svc.Allow(context.Background(), AllowInput{
+	approved, err := svc.Allow(context.Background(), AllowInput{
 		Alias: "hetzner", Source: testSource, Ref: "v1.0.0", CallerAID: "archon-a",
 	})
 	if err != nil {
 		t.Fatalf("Allow: %v", err)
 	}
-	if sha != slot.BinarySHA256 {
-		t.Errorf("returned sha256 = %q, want %q", sha, slot.BinarySHA256)
+	if approved.Kind != sharedplugin.SourceKindGit {
+		t.Errorf("returned kind = %q, want %q", approved.Kind, sharedplugin.SourceKindGit)
+	}
+	if len(approved.Artifacts) != 1 || approved.Artifacts[0].SHA256 != slot.Artifacts[0].SHA256 {
+		t.Errorf("returned artifacts = %+v, want the slot's one row", approved.Artifacts)
 	}
 	if store.inserted == nil {
 		t.Fatal("Insert was not called")
@@ -115,8 +133,11 @@ func TestService_Allow_Success(t *testing.T) {
 	if got.Alias != "hetzner" || got.Source != testSource || got.Ref != "v1.0.0" {
 		t.Errorf("inserted identity = (%q,%q,%q)", got.Alias, got.Source, got.Ref)
 	}
-	if got.SHA256 != slot.BinarySHA256 {
-		t.Errorf("inserted sha256 = %q, want %q", got.SHA256, slot.BinarySHA256)
+	if len(got.Artifacts) != 1 || got.Artifacts[0].SHA256 != slot.Artifacts[0].SHA256 {
+		t.Errorf("inserted artifacts = %+v, want the slot's one row", got.Artifacts)
+	}
+	if got.Kind != sharedplugin.SourceKindGit {
+		t.Errorf("inserted kind = %q, want %q", got.Kind, sharedplugin.SourceKindGit)
 	}
 	if got.AllowedByAID != "archon-a" {
 		t.Errorf("inserted allowed_by_aid = %q, want archon-a", got.AllowedByAID)
@@ -128,8 +149,9 @@ func TestService_Allow_Success(t *testing.T) {
 		t.Errorf("signature len = %d, want %d", len(got.Signature), ed25519.SignatureSize)
 	}
 	// commit_sha stays OUTSIDE the signed block, so the Allow signature must equal a
-	// direct Sign over (source, ref, binary_sha256, schema) byte for byte.
-	wantSig, err := signer.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
+	// direct Sign over (source, kind, ref, artifacts, schema) byte for byte.
+	wantSig, err := signer.Sign(testSource, sharedplugin.SourceKindGit, "v1.0.0",
+		slot.SigilArtifacts(), slot.SchemaBytes)
 	if err != nil {
 		t.Fatalf("Sign (control): %v", err)
 	}
@@ -312,7 +334,8 @@ func TestService_List_NoSignatureNoSchema(t *testing.T) {
 	store := &fakeStore{listResult: []*Sigil{
 		{
 			Alias: "hetzner", Source: testSource, Ref: "v1.0.0",
-			SHA256:       "deadbeef",
+			Kind:         sharedplugin.SourceKindGit,
+			Artifacts:    []sharedhost.SigilArtifact{{SHA256: listFixtureSHA}},
 			Signature:    []byte("secret-sig-bytes"),
 			Schema:       []byte(sshSchemaJSON),
 			AllowedByAID: "archon-a",
@@ -333,8 +356,14 @@ func TestService_List_NoSignatureNoSchema(t *testing.T) {
 		t.Fatalf("len(views) = %d, want 1", len(views))
 	}
 	v := views[0]
-	if v.Alias != "hetzner" || v.Source != testSource || v.Ref != "v1.0.0" || v.SHA256 != "deadbeef" {
+	if v.Alias != "hetzner" || v.Source != testSource || v.Ref != "v1.0.0" {
 		t.Errorf("view = %+v", v)
+	}
+	// The feed carries the whole release, not a digest: an operator auditing the
+	// allow-list has to see every artifact the approval covers.
+	if v.Kind != sharedplugin.SourceKindGit ||
+		len(v.Artifacts) != 1 || v.Artifacts[0].SHA256 != listFixtureSHA {
+		t.Errorf("view artifacts = %q %+v", v.Kind, v.Artifacts)
 	}
 	if v.AllowedByAID != "archon-a" || !v.AllowedAt.Equal(now) {
 		t.Errorf("view audit-fields = %+v", v)
@@ -384,14 +413,16 @@ func TestService_SetSigner_AllowUsesNewPrimary(t *testing.T) {
 	}
 	got := store.inserted.Signature
 
-	wantNew, err := newSigner.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
+	wantNew, err := newSigner.Sign(testSource, sharedplugin.SourceKindGit, "v1.0.0",
+		slot.SigilArtifacts(), slot.SchemaBytes)
 	if err != nil {
 		t.Fatalf("Sign (new): %v", err)
 	}
 	if !bytes.Equal(got, wantNew) {
 		t.Error("Allow signed with NOT new primary after SetSigner")
 	}
-	wantOld, _ := oldSigner.Sign(testSource, "v1.0.0", slot.BinarySHA256, slot.SchemaBytes)
+	wantOld, _ := oldSigner.Sign(testSource, sharedplugin.SourceKindGit, "v1.0.0",
+		slot.SigilArtifacts(), slot.SchemaBytes)
 	if bytes.Equal(got, wantOld) {
 		t.Error("Allow still signs with old primary — SetSigner was not applied")
 	}

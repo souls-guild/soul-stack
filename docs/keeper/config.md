@@ -435,7 +435,7 @@ See also [architecture.md → Service](../architecture.md), [storage.md → serv
 
 ## `plugins`
 
-Plugin directory with host = `keeper` ([plugins.md](plugins.md)). Five scalars (`cache_root` / `work_root` / `fetch_timeout` / `max_artifact_size_mb` / `max_clone_size_mb`) + two directory subblocks (`ssh_providers` / `soul_modules`).
+Plugin directory with host = `keeper` ([plugins.md](plugins.md)). Five scalars (`cache_root` / `work_root` / `fetch_timeout` / `max_artifact_size_mb` / `max_clone_size_mb`) + two directory subblocks (`ssh_providers` / `soul_modules`), each a list of [`PluginCatalogEntry`](#pluginsssh_providers).
 
 ### `plugins.cache_root`
 
@@ -503,9 +503,14 @@ SshProvider plugins (`soul-ssh-<provider>`), used by [`keeper.push`](push.md).
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `plugins.ssh_providers[].name` | `string` (kebab-case) | — | The name of the provider that the push operation refers to when selecting SSH authentication ([push.md](push.md)). |
-| `plugins.ssh_providers[].source` | `git-url` | — | git-URL of the plugin repository. |
-| `plugins.ssh_providers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md)). |
+| `plugins.ssh_providers[].name` | `string` (kebab-case) | — | The name of the provider that the push operation refers to when selecting SSH authentication ([push.md](push.md)). It is also the REGISTRATION ALIAS — address level 1, and the cache slot's name. |
+| `plugins.ssh_providers[].kind` | `enum` (`git` \| `artifact`) | `git` | Optional. How the bytes are reached (NIM-793). Omitted → `git`, so every catalog written before NIM-793 keeps its meaning. An unknown value → diag `enum_invalid`. |
+| `plugins.ssh_providers[].source` | `git-url` | — | git-URL of the plugin repository. Required for `kind: git`; **refused** for `kind: artifact` (diag `field_not_allowed`). |
+| `plugins.ssh_providers[].base_url` | `https-url` | — | The publication root the release's files hang off. Required for `kind: artifact`; **refused** for `kind: git`. `https://` in production; `http://` only under `SOUL_STACK_ALLOW_FILE_REPOS=1` (dev/test). No credentials, and no query or fragment — including a bare trailing `?` or `#`, which would put the row's filename in the query string. |
+| `plugins.ssh_providers[].ref` | `git-ref` | — | git tag or branch ([ADR-007](../adr/0007-versioning-git-ref.md)); for `kind: artifact`, the release label the grant is signed on. |
+| `plugins.ssh_providers[].artifacts[]` | `list` | — | The release's file list, one row per platform. Required (≥1 row) for `kind: artifact`; **refused** for `kind: git`. Each row is `{os, arch, path, sha256}`: `os`/`arch` are GOOS/GOARCH tokens (lower-alphanumeric), `path` is relative to `base_url` and may not be empty, absolute, carry a `.` or `..` segment, embed a scheme, or contain `?`, `#`, `%` or `\` — the path is signed verbatim AND concatenated onto `base_url`, so anything a URL parser reads differently from a path reader would sign one address and fetch another; `sha256` is 64 lower-hex. A duplicate `(os, arch)` → diag `duplicate_entry`. There is deliberately **no path template**: the address executable bytes arrive from is enumerated, not computed. |
+
+`plugins.soul_modules[]` takes the identical [`PluginCatalogEntry`](#pluginsssh_providers) shape.
 
 ## `plugin_runtime`
 

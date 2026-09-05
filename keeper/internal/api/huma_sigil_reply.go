@@ -25,8 +25,26 @@ import (
 
 // === top-level reply-DTO (form 1:1 with previous legacy generated) ===
 
+// PluginSigilArtifactView — native element artifacts[]: one approved file of a
+// release (NIM-793).
+//
+// os/arch are GOOS/GOARCH spellings and are BOTH EMPTY on a kind=git grant, whose
+// single binary declares no platform and therefore answers for every one. path is
+// relative to source and is empty for that same entry.
+type PluginSigilArtifactView struct {
+	OS     string `json:"os"`
+	Arch   string `json:"arch"`
+	Path   string `json:"path"`
+	SHA256 string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
+}
+
 // PluginSigilAllowReply — native 201-body POST /v1/plugins/sigils: the echoed
-// alias/source/ref + the sha256 the Keeper computed and signed.
+// alias/source/ref + the kind and the artifacts the Keeper resolved and signed.
+//
+// The reply describes a RELEASE (NIM-793). `plugin.allow` confirms a release, so the
+// body says which files that covered — the single `sha256` this reply carried until
+// then could name only one platform's bytes, which on a multi-platform release is a
+// true answer to a question the operator did not ask.
 //
 // OUTPUT-PATTERN (documentation, NOT runtime-validation): huma does NOT validate
 // response-body (empirically 200, not 500). sha256 — machine hex(sha256) binary
@@ -34,10 +52,11 @@ import (
 // NOT tagged: this is a git-ref (tag/branch per ADR-007), an arbitrary string, NOT a
 // hash.
 type PluginSigilAllowReply struct {
-	Alias  string `json:"alias"`
-	Ref    string `json:"ref"`
-	SHA256 string `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
-	Source string `json:"source"`
+	Alias     string                    `json:"alias"`
+	Ref       string                    `json:"ref"`
+	Kind      string                    `json:"kind" enum:"git,artifact"`
+	Artifacts []PluginSigilArtifactView `json:"artifacts"`
+	Source    string                    `json:"source"`
 }
 
 // PluginSigilListReply — native 200-body GET /v1/plugins/sigils (form 1:1 with previous
@@ -58,7 +77,11 @@ type PluginSigilView struct {
 	Ref          string     `json:"ref"`
 	Source       string     `json:"source"`
 	RevokedAt    *time.Time `json:"revoked_at,omitempty"`
-	SHA256       string     `json:"sha256" pattern:"^[0-9a-f]{64}$"` // hex(sha256) binary
+	Kind         string     `json:"kind" enum:"git,artifact"`
+	// Artifacts is the whole approved release, not this Keeper's platform: an
+	// operator auditing the allow-list has to be able to see every digest that
+	// approval covers.
+	Artifacts []PluginSigilArtifactView `json:"artifacts"`
 }
 
 // === projection of domain handlers.Sigil*-result-s → native wire-DTO ===
@@ -66,11 +89,23 @@ type PluginSigilView struct {
 // newPluginSigilAllowReply projects flat domain handlers.SigilAllowView to native.
 func newPluginSigilAllowReply(v handlers.SigilAllowView) PluginSigilAllowReply {
 	return PluginSigilAllowReply{
-		Alias:  v.Alias,
-		Ref:    v.Ref,
-		SHA256: v.SHA256,
-		Source: v.Source,
+		Alias:     v.Alias,
+		Ref:       v.Ref,
+		Kind:      v.Kind,
+		Artifacts: newPluginSigilArtifactViews(v.Artifacts),
+		Source:    v.Source,
 	}
+}
+
+// newPluginSigilArtifactViews projects the flat domain artifact rows to native. Always
+// non-nil, so an approved release serializes as `[]` and never as `null` — the list is
+// never legitimately absent.
+func newPluginSigilArtifactViews(artifacts []handlers.SigilArtifactView) []PluginSigilArtifactView {
+	out := make([]PluginSigilArtifactView, 0, len(artifacts))
+	for _, a := range artifacts {
+		out = append(out, PluginSigilArtifactView{OS: a.OS, Arch: a.Arch, Path: a.Path, SHA256: a.SHA256})
+	}
+	return out
 }
 
 // newPluginSigilView projects flat domain handlers.SigilView to native. RevokedAt
@@ -82,7 +117,8 @@ func newPluginSigilView(v handlers.SigilView) PluginSigilView {
 		AllowedByAID: v.AllowedByAID,
 		Ref:          v.Ref,
 		RevokedAt:    v.RevokedAt,
-		SHA256:       v.SHA256,
+		Kind:         v.Kind,
+		Artifacts:    newPluginSigilArtifactViews(v.Artifacts),
 		Source:       v.Source,
 	}
 }

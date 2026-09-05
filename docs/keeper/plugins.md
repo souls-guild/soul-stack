@@ -164,7 +164,7 @@ Aliases from the [reserved list](../naming-rules.md#reserved-namespace-names) ar
 | ~~`namespace`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no publisher and no collection. Level 1 is the registration alias (above). |
 | ~~`name`~~ | — | — | **REMOVED (NIM-377).** The artifact carries no subject name. Level 2 is the **module** name, declared per entry of `modules[]`. |
 | ~~`spec`~~ | — | — | **REMOVED (NIM-377).** The wrapper is gone: `modules[]` replaces `spec.states` and the three kind-specific schemas sit at the root. There is only one document shape left to wrap. |
-| `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional — empty until the **Sigil** signature ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` — consistent with `plugin_sigils.sha256` (TEXT CHECK hex64). |
+| `binary_sha256` | `string` (hex64) | `""` (optional) | SHA-256 fingerprint of the plugin binary (hex lowercase, exactly 64 characters). Optional — empty until the **Sigil** signature ([ADR-026](../adr/0026-sigil.md)); used to verify-against-Sigil before `exec` (see [Integrity-model](#integrity-model)). Type `string` (hex), not `bytes` — the same form as the digests in `plugin_sigils.artifacts[]`. |
 
 ### Per-module fields
 
@@ -397,32 +397,43 @@ The plugin binary in the host cache is forked with service-user rights (`keeper`
 
 | What | Where |
 |---|---|
-| **Allow-list** `(artifact source, ref) → sha256` | PG table `plugin_sigils` (Keeper-state). The entry is added **only when the Archon explicitly allows** the plugin via OpenAPI (`POST /v1/plugins/sigils`, S4a) / MCP (S4b) — permission `plugin.allow`, [rbac.md → Plugin Sigil](rbac.md#plugin-sigil-3). `ref` — **git-verified** (Keeper resolves `source`+`ref` into a `commit_sha` cache slot via go-git, [ADR-026(g)](../adr/0026-sigil.md)); chain of trust `source` → `ref` → `commit_sha` → `binary_sha256` → Keeper signature. ⚠ **The key was `(namespace, name, ref)`** and moved onto the source in NIM-377, because the artifact no longer carries a name to key on ([ADR-026(a)](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations)); the migration and route shapes are **NIM-438**. The **registration alias is a different axis** — it names the address and the slot, not the trust record. Two partial unique indexes do two different jobs: `(source, ref)` is the **trust** key (re-approving one artifact is a conflict an operator resolves by revoking first, never a silent second grant); `(alias)` is a **registration** invariant, so `<alias>.<module>.<state>` names one set of bytes and the runtime lookup has exactly one answer. |
+| **Allow-list** `(artifact source, ref) → the release's artifacts[]` | PG table `plugin_sigils` (Keeper-state). The entry is added **only when the Archon explicitly allows** the plugin via OpenAPI (`POST /v1/plugins/sigils`, S4a) / MCP (S4b) — permission `plugin.allow`, [rbac.md → Plugin Sigil](rbac.md#plugin-sigil-3). `ref` is resolved by the Keeper — into a `commit_sha` cache slot for `kind: git` (go-git, [ADR-026(g)](../adr/0026-sigil.md)), or into a fetched-and-digest-checked release for `kind: artifact` (NIM-793). Chain of trust `source` → `ref` → (`commit_sha` \| the release descriptor) → `artifacts[].sha256` → Keeper signature. ⚠ **The grant carries a LIST of artifacts since NIM-793**, one per platform: a published release is several binaries with several digests, so a single `binary_sha256` could only ever have been right on one platform. ⚠ **The key was `(namespace, name, ref)`** and moved onto the source in NIM-377, because the artifact no longer carries a name to key on ([ADR-026(a)](../adr/0026-sigil.md#amendment-2026-08-06-nim-377-the-registry-keys-on-the-artifact-source-the-signature-is-not-a-control-on-declarations)); the migration and route shapes are **NIM-438**. The **registration alias is a different axis** — it names the address and the slot, not the trust record. Two partial unique indexes do two different jobs: `(source, ref)` is the **trust** key (re-approving one artifact is a conflict an operator resolves by revoking first, never a silent second grant); `(alias)` is a **registration** invariant, so `<alias>.<module>.<state>` names one set of bytes and the runtime lookup has exactly one answer. |
 | **Keeper signing key** (private) | Vault KV - according to the pattern `secret/keeper/jwt-signing-key` ([ADR-014](../adr/0014-operator-identity.md)). |
 | **Keeper public key** (trust-anchor host) | Soul arrives in **bootstrap** along with a CA-chain (the same channel `BootstrapReply` as mTLS CA, [ADR-012(f)](../adr/0012-keeper-soul-grpc.md#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add)): single `sigil_pubkey_pem` or multi-anchor `sigil_pubkey_pem_set` (priority set > single). The runtime set of anchors is delivered to `SigilTrustAnchors` and **completely replaces** bootstrap-anchors (replace, not merge; R3 rotation) - see [Active set and replace semantics](#active-set-and-replace-semantics). |
 
-**Sigil** = `sign_keeper(block)`, where the signed block carries the artifact identity, the `ref`, `binary_sha256` and the schema-document hash. The signature **covers the schema document** with the attached `binary_sha256` ([ADR-026(c)](../adr/0026-sigil.md)): the declared `side_effects` / `capabilities` / `protocol_version` cannot be substituted without breaking the signature.
+**Sigil** = `sign_keeper(block)`, where the signed block carries the artifact identity, the source `kind`, the `ref`, the schema-document hash and the release's whole `artifacts[]` list. The signature **covers the schema document** together with every artifact digest ([ADR-026(c)](../adr/0026-sigil.md)): the declared `side_effects` / `capabilities` / `protocol_version` cannot be substituted without breaking the signature, and neither can one platform's bytes.
+
+> **One release, one approval (NIM-793).** `plugin.allow` confirms a release, not a hash. The alternative — one grant per platform — is N Archon confirmations for one decision and buys no guarantee the single approval does not already give, since the signature covers every row and no row can be edited without breaking all of them. A host picks its own row by `(GOOS, GOARCH)`; **no row for the platform is fail-closed** (`plugin.verify_failed` with reason `no_artifact_for_platform`), and it is deliberately not a digest mismatch: nothing was approved to compare against, so the fix is to publish and re-approve, not to investigate tampering.
+>
+> **The source kind is signed.** It decides WHERE a host goes for the bytes, and an unsigned answer to that would let a rewritten catalog redirect a fetch to an address the Archon never approved.
 
 > **What that buys, precisely.** The operator's **disclosure** becomes trustworthy — what they read at `plugin.allow` is what the artifact actually claimed, so an attacker cannot pair a hostile binary with a reassuring declaration. It does **not** make those declarations enforceable; nothing enforces them ([Capabilities and side_effects are disclosure](#capabilities-and-side_effects-are-disclosure)). `protocol_version` is the one signed field with a consumer that acts on it. **The control is the digest**, and it consults no declaration.
 
-> **`ref` - git-verified** ([ADR-026(g)](../adr/0026-sigil.md), **Option A, F-fetch**). Keeper itself resolves `source`+`ref` from the `keeper.yml` directory via **go-git**: shallow `clone`→`fetch`→`ResolveRevision(<ref>^{commit})` (resolved in 40-hex `commit_sha`)→detached-HEAD `checkout`, then extracts the **ALREADY compiled** binary — **the single executable in `dist/`** — and reads the schema document from its trailer (F-fetch: no compilation on Keeper, and no execution of the artifact either). Boundary "verified" = "Keeper checked this particular `ref` and recorded the result (`commit_sha` + `binary_sha256`)", **NOT** bit-reproducibility of the assembly. Cache - **R-nested**: `<cacheRoot>/<alias>/<commit_sha>/` (immutable slot) + symlink `current → <commit_sha>` (atomically permutable pointer to the active slot). **Single-active-per-slot**: `current` points to exactly one `commit_sha`, but multiple `commit_sha` slots under one alias coexist. `plugin.allow` reads the binary + schema of the ACTIVE slot via `current` ([`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go)), reads `sha256`, signs and inserts the record; `ref` is not involved in the slot lookup. **Integrity Authority = `sha256` + signature** (invariant (b) ADR-026 not weakened); `ref`/`commit_sha` carry provenance and audit-readability, not trust. `commit_sha` — audit mark OUTSIDE the signature; will be added as a column to `plugin_sigils` at S3.
+> **`ref` - git-verified** ([ADR-026(g)](../adr/0026-sigil.md), **Option A, F-fetch**). Keeper itself resolves `source`+`ref` from the `keeper.yml` directory via **go-git**: shallow `clone`→`fetch`→`ResolveRevision(<ref>^{commit})` (resolved in 40-hex `commit_sha`)→detached-HEAD `checkout`, then extracts the **ALREADY compiled** binary — **the single executable in `dist/`** — and reads the schema document from its trailer (F-fetch: no compilation on Keeper, and no execution of the artifact either). Boundary "verified" = "Keeper checked this particular `ref` and recorded the result (`commit_sha` + the artifact digest)", **NOT** bit-reproducibility of the assembly. Cache - **R-nested**: `<cacheRoot>/<alias>/<commit_sha>/` (immutable slot) + symlink `current → <commit_sha>` (atomically permutable pointer to the active slot). **Single-active-per-slot**: `current` points to exactly one `commit_sha`, but multiple `commit_sha` slots under one alias coexist. `plugin.allow` reads the binary + schema of the ACTIVE slot via `current` ([`pluginhost.ReadSlot`](../../keeper/internal/pluginhost/slot.go)), reads `sha256`, signs and inserts the record; `ref` is not involved in the slot lookup. **Integrity Authority = `sha256` + signature** (invariant (b) ADR-026 not weakened); `ref`/`commit_sha` carry provenance and audit-readability, not trust. `commit_sha` — audit mark OUTSIDE the signature, a column of `plugin_sigils`; NULL for `kind: artifact`, which has no commit to pin.
 
 ### Signed block format (normative, S3)
 
 The block is assembled with a pure deterministic function (`shared/pluginhost.BuildSigilBlock`) - common code for signature on Keeper (S3) and verification on Soul (S6), **without** proto-marshal (proto-serialization is non-deterministic - it was deliberately excluded):
 
 ```
-block = DST || LP(source) || LP(ref) || LP(binary_sha256) || LP(schema_sha256)
+block = DST || LP(source) || LP(kind) || LP(ref) || LP(schema_sha256) || U32(n)
+      || for each artifact, in canonical (os, arch, path) order:
+             LP(os) || LP(arch) || LP(path) || LP(sha256)
 ```
 
-> **Re-keyed onto the artifact source (NIM-377 / NIM-438, landed).** The block used to carry `namespace` and `name`; the artifact declares neither, so the identity it is bound to is now the git **source** the operator asserted, at a `ref`. **The DST moved to `soul-stack/sigil/v2`** — so every v1 signature stops verifying against this code by construction, not by accident. Migration **115** (`keeper/migrations/115_plugin_sigils_source_identity.up.sql`) empties `plugin_sigils` for exactly that reason: those grants were already cryptographically dead, and keeping them would have shown live approvals in the UI that nothing could verify. Approvals are re-issued with `keeper.plugin.allow`. (⚠ **Correction, rider on NIM-794:** this line said migration 113 — `113_subject_four_dimensions` is an unrelated migration. [ADR-026](../adr/0026-sigil.md#a-factual-correction-made-while-in-this-file) and [`storage.md`](storage.md) carried the same error and are corrected too.)
+> **Re-keyed onto the artifact source (NIM-377 / NIM-438, landed).** The block used to carry `namespace` and `name`; the artifact declares neither, so the identity it is bound to is now the **source** the operator asserted, at a `ref`. **The DST moved to `soul-stack/sigil/v2`** — so every v1 signature stops verifying against this code by construction, not by accident. Migration **115** (`keeper/migrations/115_plugin_sigils_source_identity.up.sql`) empties `plugin_sigils` for exactly that reason: those grants were already cryptographically dead, and keeping them would have shown live approvals in the UI that nothing could verify. (⚠ **Correction, rider on NIM-794:** this line said migration 113 — `113_subject_four_dimensions` is an unrelated migration. [ADR-026](../adr/0026-sigil.md#a-factual-correction-made-while-in-this-file) and [`storage.md`](storage.md) carried the same error and are corrected too.)
+>
+> **List-valued (NIM-793 / NIM-795, landed).** The single `binary_sha256` became `artifacts[]` and the source `kind` joined the block, so **the DST moved to `soul-stack/sigil/v3`** and no v2 signature verifies either. Migration **120** empties the table again, for the identical reason and by the identical precedent. Approvals are re-issued with `keeper.plugin.allow`.
 >
 > **The alias is deliberately NOT in the block.** An alias is operator-chosen text; binding a signature to it would mean the identity an approval covers is a value the same operator can rename — renaming would walk around an approved hash instead of requiring a fresh approval. The source is the one identity an operator *asserts about the bytes* rather than *picks for them*.
 
-- **`DST`** — domain-separation tag, ASCII constant **`soul-stack/sigil/v2`** (without length-prefix, fixed known prefix). ⚠ **Correction, rider on NIM-794:** this bullet said `…/v1`, contradicting the banner directly above it — the tag moved to v2 with the re-key onto the artifact source (NIM-377 / NIM-438, landed). The version suffix is what makes the compatibility break explicit: a change to **which fields the block covers** takes the next tag, and every signature over the old block then stops verifying against the new code by construction rather than by accident. The [2026-09-04 amendment](../adr/0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper) decides exactly such a change — the scalar `binary_sha256` becomes a list of artifacts, taking the tag to `soul-stack/sigil/v3` and deleting every existing grant (NIM-794 / NIM-795, **not implemented**; v2 is what ships). DST first → the signature over the Sigil cannot be reused in another protocol.
+- **`DST`** — domain-separation tag, ASCII constant **`soul-stack/sigil/v3`** (without length-prefix, fixed known prefix). The version suffix is what makes a compatibility break explicit: a change to **which fields the block covers** takes the next tag, and every signature over the old block then stops verifying against the new code by construction rather than by accident. It has moved twice — to v2 with the re-key onto the artifact source (NIM-377 / NIM-438), and to v3 with the scalar `binary_sha256` becoming a list of artifacts ([2026-09-04 amendment](../adr/0026-sigil.md#amendment-2026-09-04-nim-794-the-grant-carries-a-list-of-artifacts-and-the-bytes-stop-travelling-through-the-keeper), NIM-795). DST first → the signature over the Sigil cannot be reused in another protocol.
 - **`LP(x)`** = 4 bytes of big-endian uint32 length `x`, then the bytes themselves `x`. Applies to **every** variable field - field boundary protection: without length-prefix, the concatenation of `("ab","c")` and `("a","bc")` would result in one block, and the signature over one set would fit into the other.
-- Hashes (`binary_sha256`, `manifest_sha256`) are put in **raw bytes** (for SHA-256 - 32 bytes), **not** a hex string.
-- The field order is fixed exactly — `source`, `ref`, `binary_sha256`, `schema_sha256` — and cannot change without bumping the DST to `/v3`.
+- **`U32(n)`** = the artifact count, 4 bytes big-endian and NOT length-prefixed (a fixed-width field needs no boundary marker). It is written even though the per-field `LP`s already fix every boundary: the count states how many rows the signer meant, so a truncated list is a different block rather than a shorter read of the same one.
+- Hashes (`artifacts[].sha256`, `schema_sha256`) are put in **raw bytes** (for SHA-256 - 32 bytes), **not** a hex string.
+- The artifact list is **canonicalized inside the builder** — sorted by `(os, arch, path)`, with an empty list, a duplicate `(os, arch)`, a half-stated platform and a malformed digest all refused before a block exists. Sign and verify therefore cannot disagree about order, and no signature can exist over an ambiguous list.
+- A `kind: git` grant carries exactly **one** row with an empty `os`/`arch`/`path`: that source publishes one binary in `dist/` and states no platform for it, so its single artifact answers for every platform — exactly what it did before grants carried a list. Such an unplatformed row may not share a grant with platform-specific ones.
+- The field order is fixed exactly — `source`, `kind`, `ref`, `schema_sha256`, then the artifact rows — and cannot change without bumping the DST to `/v4`.
 
 **Signing key - ed25519** (asymmetry is required, unlike the HS256-symmetric JWT signing-key): the private person lives in Vault KV at `sigil.signing_key_ref` ([config.md → sigil](config.md#sigil)), signature - raw 64 bytes; the public part goes to Soul in bootstrap as a trust-anchor.
 
@@ -439,7 +450,7 @@ block = DST || LP(source) || LP(ref) || LP(binary_sha256) || LP(schema_sha256)
 |---|---|
 | Discover | Counts SHA-256 binaries streamwise; puts in `Discovered.Digest` for logs / OTel attributes. Error reading binary for digest → plugin skipped with warning. |
 | Obtaining a Sigil | **Push** (Keeper transfers plugins FROM Keeper via mTLS - Keeper is already a trust-anchor): Sigil travels with the binary. **Pull** (Soul daemon): Sigil comes only-add proto-message in `EventStream` ([ADR-026(e)](../adr/0026-sigil.md)). |
-| Verify (before seal/exec) | (1) SHA-256 of actual binary == `binary_sha256` in Sigil; (2) Sigil's signature is valid with Keeper's public key (from bootstrap). Both checks passed → seal + exec. Any discrepancy → failure, **binary does not start**, event `plugin.verify_failed`. |
+| Verify (before seal/exec) | (1) select this host's row from the grant's `artifacts[]` by `(GOOS, GOARCH)` — no row → `no_artifact_for_platform`; (2) SHA-256 of the actual binary == that row's `sha256`; (3) the Sigil signature over the WHOLE list is valid with Keeper's public key (from bootstrap). All three passed → seal + exec. Any discrepancy → failure, **binary does not start**, event `plugin.verify_failed`. |
 | Re-exec from cache | SHA-256 verification before each subsequent `exec` (defense-in-depth for shared cache). Discrepancy → failure, the binary does not start. |
 
 Integrity-gate is triggered **before** `mkdir socket-dir` and `exec` - the invalid binary does not receive control.
@@ -958,19 +969,58 @@ plugins:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
 
-  soul_modules:                     # SoulModule plugins (ADR-065): resolved by the same resolver, allowed by the same Sigil flow
+  soul_modules:                     # SoulModule plugins (ADR-065): resolved by the same catalog, allowed by the same Sigil flow
     - { name: redis, source: "git@github.com:souls-guild/soul-mod-redis.git", ref: v1.2.0 }
+
+    # kind: artifact — an already-built release published under a base URL (NIM-793).
+    - name: pkg
+      kind: artifact
+      base_url: https://nexus.internal/plugins/pkg
+      ref: v1.4.0
+      artifacts:
+        - { os: linux, arch: amd64, path: pkg_linux_amd64, sha256: "…" }
+        - { os: linux, arch: arm64, path: pkg_linux_arm64, sha256: "…" }
 ```
 
 Plugin version is **git ref** (tag or branch) according to [ADR-007](../adr/0007-versioning-git-ref.md). No semver-range.
 
-> ⚠ **The entry shape above gains a second arm with the [2026-09-04 amendment](../adr/0020-plugin-infrastructure.md#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list) (NIM-794 / NIM-795, not implemented).** `{name, source, ref}` is what ships and is exactly what an entry keeps meaning — the amendment names it `source_kind: git` and makes it the default. The new arm, `source_kind: artifact`, replaces `source` with a `base_url` and adds an explicit per-platform `artifacts[]` of `{os, arch, path, sha256}`; nothing is cloned for it, so `ref` is a label the operator asserts rather than a checkout the Keeper verified. `ref` stays a git ref for the `git` arm, so [ADR-007](../adr/0007-versioning-git-ref.md) is untouched.
+### Two source kinds (NIM-793)
+
+> ⚠ **The ADR spells this key `source_kind`; the shipped key is `kind`.** The epic
+> (NIM-793) and the implementation ticket (NIM-795) both specify `kind`, and that is
+> what `keeper.yml` takes and what the signed block carries. [ADR-020's 2026-09-04
+> amendment](../adr/0020-plugin-infrastructure.md#amendment-2026-09-04-nim-794-the-catalog-entry-gains-a-source-kind-and-an-explicit-artifact-list)
+> was written in parallel and named it `source_kind`. Raised on NIM-794 rather than
+> resolved here: renaming either side is an ADR decision, not an implementation one.
+
+`kind:` chooses between two shapes, and the fields of the other one are **refused** rather than ignored — a `base_url` sitting unread under a git entry is an operator believing something the Keeper is not doing, and for a URL that belief is about where executable code comes from:
+
+| `kind` | Required | Refused | What Keeper does |
+|---|---|---|---|
+| `git` (default; an entry with no `kind:` is this) | `source`, `ref` | `base_url`, `artifacts` | resolves `ref` to a commit, takes the single executable in `dist/` |
+| `artifact` | `base_url`, `ref`, `artifacts[]` (≥1 row) | `source` | fetches every listed file over https and checks each against its declared `sha256` |
+
+★ **There is deliberately NO path template with substitutions.** A URL is where executable bytes come from, and an expressive template there turns an address into a program. The explicit list closes that structurally rather than by trusting the proxy in front of it — and it is also what makes the approval reviewable: an Archon confirming a release can read exactly which files it covers.
+
+A row's `path` is refused if it is empty, absolute, carries a `.` or `..` segment, embeds a scheme, or contains `?`, `#`, `%` or `\`. A `base_url` is refused if it carries credentials, a query or a fragment — including a BARE trailing `?` or `#`, which parse to empty fields and would put the row's filename in the query string, making every row of the release fetch the same address. The last four are not traversal: the path is **signed verbatim into the grant** and separately **concatenated** onto `base_url` to fetch with, so anything a URL parser reads differently from a path reader would sign one address and fetch another (`pkg#v2` fetches `…/pkg`). Percent-encoding is refused outright rather than decoded — decoding would put a second URL parser in the trust path.
+
+★ **Keeper still resolves and still signs.** Keeper fetches the release itself at resolve time, because it must check the declared digests against what the source actually serves and read the disclosure out of the artifact before an Archon can approve it. A grant asserting a digest nobody re-computed would be an approval of a claim rather than of bytes. Moving the resolve to the Soul would mean two Souls asking one registry for one tag and legitimately receiving different bytes, at which point an allow-list keyed on a hash stops meaning anything.
+
+**The Soul pulls from the source, and `FetchModule` stays.** The grant carries a per-platform `path` and `sha256`, which is what a Soul needs to fetch on its own; `core.module.installed` does that (NIM-796, [`soul/internal/coremod/module`](../../soul/internal/coremod/module)). Keeper remains the second legitimate transport rather than a leftover: it is what a host with no egress uses, and where a source that is DOWN lands. It does not stand in for a source serving the wrong bytes — that is a refusal, because a fallback there would turn the one signal that a source was tampered with into a warning under a green run.
+
+On the INSTALL path the host's row is chosen ONCE, from its own Soulprint facts ([ADR-018](../adr/0018-soulprint-typed.md)), and the same row is fetched and verified — `VerifyArtifactBytes` is handed the row rather than re-deriving it. Two derivations would agree until either changed, and the disagreement would surface as `digest_mismatch`, the diagnostic for tampering, on a host that merely spells its architecture differently.
+
+The SPAWN path is the exception, and deliberately: `Host.Spawn` re-derives from `runtime.GOOS`/`GOARCH`, because that process is about to `exec` the artifact — "this host" is literally that binary, not a fact collected about it. So a release installed for a platform this binary cannot run refuses at spawn with `no_artifact_for_platform` rather than being executed.
+
+★ **`source` is verified for this kind, not merely asserted.** The slot descriptor records the base URL the resolver actually fetched from, and `plugin.allow` refuses (422) an approval whose `source` is a different address. Without that, the Keeper would sign "these bytes are published at X" while having verified their digests at Y — and X is where a Soul will go. Signing `kind` to stop a rewritten catalog redirecting a fetch buys nothing if the other half of the address is unchecked. For `kind: git` the assertion stays operator-asserted as it always was: that layout carries no descriptor and records no remote.
+
+A release must disclose **one** schema document: every platform build is read and they must be byte-identical, or the slot is refused. There is no honest way to approve two disclosures with one signature.
 
 **`name:` in a catalog entry is the registration alias** — the operator's choice, and address level 1 for everything the artifact serves ([Registration alias](#registration-alias)). It is not read from the artifact, and the artifact has no opinion about it: registering the same `source`+`ref` twice under two aliases gives two slots and two addresses. Aliases from the [reserved list](../naming-rules.md#reserved-namespace-names) are refused.
 
-### What Keeper does as a resolver (git-verified, F-fetch)
+### What Keeper does as a resolver (`kind: git` — git-verified, F-fetch)
 
-Keeper resolves the directory itself at startup - via [`keeper/internal/plugingit`](../../keeper/internal/plugingit) ([ADR-026(g)](../adr/0026-sigil.md), A1-S1). For each entry:
+Keeper resolves the directory itself at startup. The catalog dispatches each entry to the provider for its `kind` ([`keeper/internal/pluginsource`](../../keeper/internal/pluginsource)); the git provider is [`keeper/internal/plugingit`](../../keeper/internal/plugingit) ([ADR-026(g)](../adr/0026-sigil.md), A1-S1) and its behaviour is unchanged by NIM-793. For each entry:
 
 1. `validateGitScheme(source)` — scheme-allowlist: prod `https://` / `ssh://` / scp-form `user@host:path`; `file://` - only under the env flag `SOUL_STACK_ALLOW_FILE_REPOS=1` (dev/test). Different scheme → `ErrSourceUnavailable`.
 2. shallow `clone` (`Depth=1`) working clone in `<work_root>/<name>/` (STRICTLY outside `cache_root`), or `fetch` if there is already a clone. Transport - **go-git** (pure-Go, without system fork `git`); auth - SSH agent for ssh/scp forms.
@@ -979,7 +1029,7 @@ Keeper resolves the directory itself at startup - via [`keeper/internal/plugingi
 5. take **the single executable in `dist/`** (the binary is already built, **F-fetch — Keeper does not compile**) and read the schema document from its trailer **without executing it**. Zero executables, several of them, a non-regular file, or a missing / malformed trailer → fail-closed for this entry (the exact sentinel set is fixed by the resolver slice; today's `ErrArtifactNotFound` covers the not-found case).
 6. atomic-extract schema+binary into the immutable slot `<cache_root>/<alias>/<commit_sha>/` (staging on the same fs → fsync → `rename`); the `commit_sha` slot is immutable (re-resolving the same commit — skip).
 7. atomic switching symlink `<cache_root>/<alias>/current → <commit_sha>`.
-8. `binary_sha256 := sha256(<the executable in the slot>)`.
+8. `artifacts[] := [ {os: "", arch: "", path: "", sha256: sha256(<the executable in the slot>)} ]` — one unplatformed row, because the repository states no platform for its single binary.
 
 Per-entry resolve **fail-closed**: broken entry (any sentinel above / unreachable remote / timeout) → per-entry warning, Keeper does not crash. During apply operations, the plugin is launched from the active slot (`current`).
 
@@ -992,6 +1042,40 @@ git stack - go-git by-design: hooks are not executed, submodules are not recursi
 
 Both sentinels are per-entry fail-closed (warning, like `ErrArtifactNotFound`/`ErrSourceUnavailable`): the broken entry is skipped, the slot is not created → the plugin has **nothing to allow** through Sigil.
 
+### What Keeper does as a resolver (`kind: artifact` — published release)
+
+The artifact provider is [`keeper/internal/pluginartifact`](../../keeper/internal/pluginartifact). For each entry:
+
+1. the entry is checked against the artifact shape — a base URL on an allowed scheme, a `ref`, and a file list that can be signed over (`shared/pluginhost.CanonicalArtifacts`). A duplicate `(os, arch)`, an empty list, a half-stated platform, a malformed digest and a `path` that leaves the base URL are all refused **before any egress**;
+2. `release_id := sha256(<canonical release descriptor>)` — one release, one immutable slot directory. Derived rather than taken from the `ref`, because a tag can be moved and a slot named by a movable label is not immutable;
+3. if `<cache_root>/<alias>/<release_id>/` already reads back as this release, the download is skipped entirely;
+4. otherwise every file is fetched into a staging directory on the same filesystem, each **verified against its declared digest while streaming**, then the descriptor is written and the staging directory is atomically renamed into the slot;
+5. atomic switching symlink `<cache_root>/<alias>/current → <release_id>`;
+6. the slot is read back with the same code `plugin.allow` reads it with, which re-derives every digest from disk and enforces one disclosure per release.
+
+Cache layout:
+
+```
+<cache_root>/
+  <alias>/
+    current -> <release_id>            # symlink to the active slot (atomic)
+    <release_id>/                      # immutable slot
+      .release.json                    # kind + the file list (os, arch, path, sha256)
+      <os>-<arch>/
+        <alias>                        # that platform's artifact
+```
+
+A git slot keeps its shape exactly and is told apart from an artifact slot by the **presence of the descriptor**, not by a flag stored elsewhere — so a slot written before NIM-793 reads as a git slot, which is what it is. The descriptor records what the resolver fetched and is not a second copy of anything signed: its digests are re-derived from the files at read time and a disagreement is fail-closed.
+
+egress hardening is the same class as the git resolver's, bounded four ways:
+
+- by **scheme** — `https://` in production; `http://` only under the same `SOUL_STACK_ALLOW_FILE_REPOS=1` dev/test flag the git resolver uses for `file://`;
+- by **address** — the [`shared/netguard`](../../shared/netguard) guards this Keeper already uses for untrusted outbound HTTP (herald, augur). `NewCheckRedirect` refuses a hop to anything but https and caps the chain, so the scheme rule covers **every** hop and not only the first; `GuardedDialContext` resolves and checks each address before connecting, so a redirect or a DNS answer pointing at loopback / RFC1918 / the cloud metadata endpoint is refused at dial. That is what keeps the Keeper from being usable as an SSRF proxy into its own network by whoever writes the catalog. The dial guard is off under the same dev/test flag (a local stand publishes on `127.0.0.1`); the redirect guard is never off;
+- by **time** — `plugins.fetch_timeout` per entry;
+- by **volume** — `plugins.max_artifact_size_mb` per file, enforced with a `LimitReader` and **not** with `Content-Length`, which the source controls.
+
+The source is untrusted by construction: a publication host serving other bytes gets a refused resolve and leaves nothing behind. Promotion is the last step — the slot is read back before `current` is swapped, so a release that fails its read-back never replaces a working one.
+
 Resolver Config fields in [`config.md → plugins`](config.md):
 
 | Field | Default | Meaning |
@@ -1002,7 +1086,7 @@ Resolver Config fields in [`config.md → plugins`](config.md):
 | `plugins.max_artifact_size_mb` | `256` | Size ceiling of the executable in `dist/` (size-limit hardening). Excess → `ErrArtifactTooLarge`, fail-closed. |
 | `plugins.max_clone_size_mb` | `1024` | Clone working tree size ceiling (checkout + `.git`). Excess → `ErrCloneTooLarge` + cleanup, fail-closed. |
 
-Directory of `SoulModule` plugins - **`plugins.soul_modules[]`** in the same format (`{name, source, ref}`; [ADR-065](../adr/0065-core-module-installed.md), amendment [ADR-020](../adr/0020-plugin-infrastructure.md)): resolved by the same resolver in `cache_root`, allowed by the same Sigil flow. Distribution to Soul hosts - server-streaming RPC `FetchModule` (content-addressed: Keeper distributes only bytes whose sha256 is in the active permission `kind: soul_module`) + core module `core.module.installed` (see [`../soul/modules.md`](../soul/modules.md)). Install steps `core.module.installed` Keeper usually synthesizes itself from `service.yml::modules[]` ([keeper/modules.md → Auto-synthesis](modules.md)).
+Directory of `SoulModule` plugins - **`plugins.soul_modules[]`** in the same format (`{name, kind, source|base_url, ref, artifacts}`; [ADR-065](../adr/0065-core-module-installed.md), amendment [ADR-020](../adr/0020-plugin-infrastructure.md)): resolved by the same resolver in `cache_root`, allowed by the same Sigil flow. Distribution to Soul hosts - server-streaming RPC `FetchModule` (content-addressed: Keeper distributes only bytes whose sha256 is in the active permission `kind: soul_module`) + core module `core.module.installed` (see [`../soul/modules.md`](../soul/modules.md)). Install steps `core.module.installed` Keeper usually synthesizes itself from `service.yml::modules[]` ([keeper/modules.md → Auto-synthesis](modules.md)).
 
 > ⚠ **Distribution gains a second path with the [2026-09-04 amendment](../adr/0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path) (NIM-794 / NIM-795 — the keeper half is not implemented; the Soul half shipped as NIM-796, and the paragraph above still describes what the Keeper does).** A host that can reach the artifact source pulls the bytes **from the source**, and `FetchModule` **remains** the path for hosts without egress. Content-addressing is unchanged and so is the step: only the endpoint the bytes come from moves. ⚠ For `FetchModule` to keep serving a grant that covers N platforms, the Keeper cache has to hold **N artifacts per slot**, which it does not today — the condition is stated in the amendment, and without it the fetches for every platform but one fail as `module is not allowed`, pointing at the grant rather than at the cache.
 

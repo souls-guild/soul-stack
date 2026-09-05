@@ -47,10 +47,10 @@ import (
 	"log/slog"
 	"os"
 	"path/filepath"
-	"strings"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	"github.com/souls-guild/soul-stack/keeper/internal/pluginsource"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
@@ -59,8 +59,8 @@ import (
 // currentLink — name of symlink to active commit_sha slot inside <alias>/.
 const currentLink = "current"
 
-// Sentinel errors for resolve of one catalog entry. ResolveCatalog maps them to
-// per-entry warnings (fail-closed: broken entry skipped, Keeper does not crash).
+// Sentinel errors for resolve of one catalog entry. [pluginsource.Catalog] maps them
+// to per-entry warnings (fail-closed: broken entry skipped, Keeper does not crash).
 var (
 	// ErrRefNotResolved — ResolveRevision(<ref>^{commit}) found no commit (ref
 	// does not exist as tag, branch, or full hash).
@@ -75,11 +75,11 @@ var (
 	// convention left (NIM-377) "exactly one" is the whole rule — several is
 	// ambiguous and taking the first would let listing order pick the bytes.
 	ErrArtifactNotFound = errors.New("plugingit: dist/ does not hold exactly one built artifact")
-	// ErrAliasInvalid — the catalog's `name` is not a usable registration alias:
-	// malformed ([sharedplugin.AliasPattern]) or on the closed reserved list
-	// ([sharedplugin.IsReserved]). Fail-closed per entry — a reserved alias would
-	// shadow an engine address such as `core.file.present`.
-	ErrAliasInvalid = errors.New("plugingit: invalid registration alias")
+	// ErrAliasInvalid — the catalog's `name` is not a usable registration alias.
+	// The alias rule is kind-independent, so it lives with the provider boundary
+	// (NIM-793) and this is the same sentinel, not a second one: an alias refused
+	// here and an alias refused for a published release are one fact.
+	ErrAliasInvalid = pluginsource.ErrAliasInvalid
 	// ErrSourceUnavailable — git clone/fetch/checkout of source failed
 	// (remote unavailable, auth, timeout).
 	ErrSourceUnavailable = errors.New("plugingit: git source unavailable")
@@ -187,37 +187,6 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 // import workaround.
 const bytesPerMiB = 1024 * 1024
 
-// ResolveCatalog resolves entire catalog ssh_providers +
-// soul_modules. Per-entry errors converted to warnings (fail-closed):
-// broken entry skipped, Keeper does not crash. Returns (successfully
-// resolved slots, warnings, fatal error). fatal — only what breaks
-// resolve IN PRINCIPLE (e.g., unable to create workRoot); nil plugins →
-// empty result.
-func (r *Resolver) ResolveCatalog(ctx context.Context, plugins *config.KeeperPlugins) ([]ResolvedSlot, []string, error) {
-	if plugins == nil {
-		return nil, nil, nil
-	}
-	var (
-		slots    []ResolvedSlot
-		warnings []string
-	)
-	entries := make([]config.PluginCatalogEntry, 0,
-		len(plugins.SSHProviders)+len(plugins.SoulModules))
-	entries = append(entries, plugins.SSHProviders...)
-	entries = append(entries, plugins.SoulModules...)
-
-	for _, e := range entries {
-		slot, err := r.ResolveEntry(ctx, e)
-		if err != nil {
-			warnings = append(warnings, fmt.Sprintf(
-				"plugin %q (source=%q ref=%q): %v", e.Name, e.Source, e.Ref, err))
-			continue
-		}
-		slots = append(slots, slot)
-	}
-	return slots, warnings, nil
-}
-
 // ResolveEntry resolves one catalog entry to an immutable commit_sha slot.
 // Flow (F-fetch — no compilation):
 //
@@ -253,6 +222,12 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 	alias := e.Name
 	if err := ValidateAlias(alias); err != nil {
 		return ResolvedSlot{}, err
+	}
+	// An entry of another kind must not be git-resolved just because it also carries
+	// a name and a ref: `base_url` and `source` are different assertions, and reading
+	// one as the other would clone an address the operator never wrote.
+	if k := e.ResolvedKind(); k != sharedplugin.SourceKindGit {
+		return ResolvedSlot{}, fmt.Errorf("%w: %q is not a git source", pluginsource.ErrKindUnsupported, k)
 	}
 	if e.Source == "" {
 		return ResolvedSlot{}, fmt.Errorf("%w: empty source", ErrSourceUnavailable)
@@ -337,26 +312,10 @@ func (r *Resolver) ResolveEntry(ctx context.Context, e config.PluginCatalogEntry
 	}, nil
 }
 
-// ValidateAlias checks a catalog entry's `name` as a REGISTRATION ALIAS: well-formed
-// ([sharedplugin.AliasPattern]) and not on the closed reserved list.
-//
-// Both halves matter for a different reason. The shape keeps an alias usable as a
-// directory name and as address level 1 (no dots, no slashes, no uppercase). The
-// reserved list keeps an operator from naming a plugin `core`, which would let
-// `core.file.present` in a diff mean somebody's plugin instead of the engine — the
-// reason the list exists at all now that an operator, not the artifact, picks the word.
-func ValidateAlias(alias string) error {
-	switch {
-	case alias == "":
-		return fmt.Errorf("%w: empty alias", ErrAliasInvalid)
-	case !sharedplugin.ValidAlias(alias):
-		return fmt.Errorf("%w: %q must match %s", ErrAliasInvalid, alias, sharedplugin.AliasPattern)
-	case sharedplugin.IsReserved(alias):
-		return fmt.Errorf("%w: %q is reserved (%s)", ErrAliasInvalid, alias,
-			strings.Join(sharedplugin.ReservedNames(), ", "))
-	}
-	return nil
-}
+// ValidateAlias checks a catalog entry's `name` as a REGISTRATION ALIAS. Kept as this
+// package's spelling of [pluginsource.ValidateAlias], which is the one definition —
+// one list, one shape, no second opinion.
+func ValidateAlias(alias string) error { return pluginsource.ValidateAlias(alias) }
 
 // readArtifactSchema reads and validates the canonical schema document stamped into an
 // artifact, returning the byte-exact payload alongside the parsed form.

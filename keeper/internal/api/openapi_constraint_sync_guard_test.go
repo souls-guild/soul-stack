@@ -735,20 +735,16 @@ var constraintSyncCases = []constraintSyncCase{
 
 	// --- sha256 hex on hash-derived IDs ---
 	{
-		name:      "PluginSigilAllowReply sha256 hex",
-		structPtr: &PluginSigilAllowReply{},
+		// One case, not two: since NIM-793 both the allow reply and the list view
+		// carry their digests inside PluginSigilArtifactView, so this is the single
+		// place the pattern can be stated — and stating it twice would only mean two
+		// places to forget.
+		name:      "PluginSigilArtifactView sha256 hex",
+		structPtr: &PluginSigilArtifactView{},
 		fieldPath: []string{"SHA256"},
 		tag:       tagPattern,
 		runtime:   sha256RuntimePattern,
-		source:    "hex(sha256) binary (pluginhost/slot.go:173)",
-	},
-	{
-		name:      "PluginSigilView sha256 hex",
-		structPtr: &PluginSigilView{},
-		fieldPath: []string{"SHA256"},
-		tag:       tagPattern,
-		runtime:   sha256RuntimePattern,
-		source:    "hex(sha256) binary (pluginhost/slot.go:173)",
+		source:    "hex(sha256) binary (pluginhost/slot.go, SlotArtifact.SHA256)",
 	},
 	{
 		name:      "SigilKeyIntroduceReply key_id hex",

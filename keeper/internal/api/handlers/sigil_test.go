@@ -11,6 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // fakeSigilStore — narrow mock of [sigil.Store] for SigilHandler unit tests.
@@ -65,12 +67,19 @@ func (f fakeSigilSlots) SlotCommitSHA(string) (string, error) {
 // self-name in the artifact, this and the ref are the whole signed identity.
 const sigilTestSource = "https://example.com/soul-cloud-hetzner.git"
 
+// listFixtureSHA is a well-formed digest for the list-feed fixture: the store projects
+// rows through CanonicalArtifacts, which refuses anything no signature could cover.
+const listFixtureSHA = "de4dbeef00000000000000000000000000000000000000000000000000000000"
+
 func sigilSlotFixture() *pluginhost.SlotContents {
 	digest := sha256.Sum256([]byte("cloud-binary"))
 	return &pluginhost.SlotContents{
-		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
-		BinarySHA256: hex.EncodeToString(digest[:]),
+		Kind: sharedplugin.SourceKindGit,
+		Artifacts: []pluginhost.SlotArtifact{{
+			OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform,
+			SHA256: hex.EncodeToString(digest[:]), BinaryPath: "/cache/hetzner/current/hetzner",
+		}},
+		SchemaBytes: []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 	}
 }
 
@@ -103,8 +112,12 @@ func TestSigilHandler_Allow_201(t *testing.T) {
 	if err != nil {
 		t.Fatalf("AllowTyped: %v", err)
 	}
-	if reply.View.SHA256 != slot.BinarySHA256 {
-		t.Errorf("reply.sha256 = %q, want %q", reply.View.SHA256, slot.BinarySHA256)
+	// The 201 describes a release: kind plus every approved file, not one digest.
+	if reply.View.Kind != sharedplugin.SourceKindGit {
+		t.Errorf("reply.kind = %q, want %q", reply.View.Kind, sharedplugin.SourceKindGit)
+	}
+	if len(reply.View.Artifacts) != 1 || reply.View.Artifacts[0].SHA256 != slot.Artifacts[0].SHA256 {
+		t.Errorf("reply.artifacts = %+v, want the slot's one row", reply.View.Artifacts)
 	}
 	if reply.View.Alias != "hetzner" || reply.View.Source != sigilTestSource || reply.View.Ref != "v1.0.0" {
 		t.Errorf("reply view = %+v", reply.View)
@@ -182,7 +195,8 @@ func TestSigilHandler_List_200_NoSignatureNoSchema(t *testing.T) {
 	store := &fakeSigilStore{listResult: []*sigil.Sigil{
 		{
 			Alias: "hetzner", Source: sigilTestSource, Ref: "v1.0.0",
-			SHA256:       "deadbeef",
+			Kind:         sharedplugin.SourceKindGit,
+			Artifacts:    []sharedhost.SigilArtifact{{SHA256: listFixtureSHA}},
 			Signature:    []byte("secret-bytes"),
 			Schema:       []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 			AllowedByAID: "archon-alice",
@@ -195,7 +209,8 @@ func TestSigilHandler_List_200_NoSignatureNoSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
-	if len(page.Items) != 1 || page.Items[0].SHA256 != "deadbeef" {
+	if len(page.Items) != 1 || len(page.Items[0].Artifacts) != 1 ||
+		page.Items[0].Artifacts[0].SHA256 != listFixtureSHA {
 		t.Fatalf("items = %+v", page.Items)
 	}
 	// The domain projection (SigilView) carries neither the signature nor the schema —

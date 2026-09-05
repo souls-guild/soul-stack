@@ -1,6 +1,10 @@
 package config
 
-import "time"
+import (
+	"time"
+
+	"github.com/souls-guild/soul-stack/shared/plugin"
+)
 
 // ApplyRequest size limits (Keeper↔Soul EventStream contract, ADR-012).
 //
@@ -1504,10 +1508,80 @@ func (p *KeeperPlugins) ResolvedMaxCloneSize() int64 {
 	return int64(mb) * bytesPerMiB
 }
 
+// PluginCatalogEntry is one registration in `keeper.yml::plugins.*`: the alias an
+// operator gives an artifact, and where its bytes come from.
+//
+// `kind` chooses between two shapes, and the fields of the other one are refused
+// rather than ignored (schema phase) — a `base_url` sitting unread under a git entry
+// is an operator believing something the Keeper is not doing:
+//
+//	# kind: git (the default; an entry with no `kind:` is this)
+//	- name: redis
+//	  source: https://github.com/example/soul-mod-redis.git
+//	  ref: v1.4.0
+//
+//	# kind: artifact
+//	- name: redis
+//	  kind: artifact
+//	  base_url: https://nexus.internal/plugins/redis
+//	  ref: v1.4.0
+//	  artifacts:
+//	    - { os: linux, arch: amd64, path: redis_linux_amd64, sha256: … }
+//	    - { os: linux, arch: arm64, path: redis_linux_arm64, sha256: … }
+//
+// ★ There is deliberately NO path template with substitutions (NIM-793). A URL is
+// where executable bytes come from, and an expressive template there turns an address
+// into a program. The explicit list closes that structurally rather than by trusting
+// the proxy in front of it — and it is also what makes the approval reviewable: an
+// Archon confirming a release can read exactly which files it covers.
+//
+// Name is the registration alias (address level 1) for both kinds. Source is the git
+// remote of the git kind; BaseURL is the artifact kind's publication root. They are the
+// same axis — "where these bytes came from" — and the grant carries whichever applies
+// in its one `source` field, which is why they are separate keys here but never both.
 type PluginCatalogEntry struct {
-	Name   string `yaml:"name"`
-	Source string `yaml:"source"`
-	Ref    string `yaml:"ref"`
+	Name    string `yaml:"name"`
+	Kind    string `yaml:"kind,omitempty"`
+	Source  string `yaml:"source,omitempty"`
+	BaseURL string `yaml:"base_url,omitempty"`
+	Ref     string `yaml:"ref"`
+	// Artifacts is the release's file list, one row per platform. Only for
+	// `kind: artifact`, where it is required and must hold at least one row: a
+	// release with no file for a platform is simply not approved there, and there is
+	// nothing safe to substitute.
+	Artifacts []PluginArtifactEntry `yaml:"artifacts,omitempty"`
+}
+
+// PluginArtifactEntry is one published file of an artifact-kind release.
+//
+// OS/Arch are Go's GOOS/GOARCH spellings (`linux`, `amd64`) — what a host can state
+// about itself with no mapping table in between. Path is relative to the entry's
+// `base_url` and must stay under it: an absolute path, a `..` segment or an embedded
+// scheme would let the catalog reach outside the source the operator approved.
+//
+// SHA256 is the operator's assertion about the published file, 64 lowercase hex. It is
+// what Keeper checks the download against at resolve time, so a source that serves
+// other bytes is refused at the Keeper rather than discovered on a host.
+type PluginArtifactEntry struct {
+	OS     string `yaml:"os"`
+	Arch   string `yaml:"arch"`
+	Path   string `yaml:"path"`
+	SHA256 string `yaml:"sha256"`
+}
+
+// ResolvedKind returns the entry's effective source kind: an omitted `kind:` is
+// [plugin.SourceKindGit], so every catalog written before NIM-793 keeps its meaning.
+func (e PluginCatalogEntry) ResolvedKind() string { return plugin.ResolveSourceKind(e.Kind) }
+
+// SourceURL returns the single "where the bytes come from" value for the entry,
+// whichever key spells it: `source` for the git kind, `base_url` for the artifact
+// kind. This is the value that becomes the grant's signed `source`, so the two keys
+// never reach further than the catalog.
+func (e PluginCatalogEntry) SourceURL() string {
+	if e.ResolvedKind() == plugin.SourceKindArtifact {
+		return e.BaseURL
+	}
+	return e.Source
 }
 
 // PluginRuntime is shared by Keeper and Soul (ADR-020).

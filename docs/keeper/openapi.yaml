@@ -2517,17 +2517,26 @@ components:
       properties:
         alias:
           type: string
-        ref:
+        artifacts:
+          items:
+            $ref: "#/components/schemas/PluginSigilArtifactView"
+          type:
+            - array
+            - "null"
+        kind:
+          enum:
+            - git
+            - artifact
           type: string
-        sha256:
-          pattern: ^[0-9a-f]{64}$
+        ref:
           type: string
         source:
           type: string
       required:
         - alias
         - ref
-        - sha256
+        - kind
+        - artifacts
         - source
       type: object
     PluginSigilAllowRequest:
@@ -2548,6 +2557,24 @@ components:
         - alias
         - source
         - ref
+      type: object
+    PluginSigilArtifactView:
+      additionalProperties: false
+      properties:
+        arch:
+          type: string
+        os:
+          type: string
+        path:
+          type: string
+        sha256:
+          pattern: ^[0-9a-f]{64}$
+          type: string
+      required:
+        - os
+        - arch
+        - path
+        - sha256
       type: object
     PluginSigilListReply:
       additionalProperties: false
@@ -2572,13 +2599,21 @@ components:
         allowed_by_aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        artifacts:
+          items:
+            $ref: "#/components/schemas/PluginSigilArtifactView"
+          type:
+            - array
+            - "null"
+        kind:
+          enum:
+            - git
+            - artifact
+          type: string
         ref:
           type: string
         revoked_at:
           format: date-time
-          type: string
-        sha256:
-          pattern: ^[0-9a-f]{64}$
           type: string
         source:
           type: string
@@ -2588,7 +2623,8 @@ components:
         - allowed_by_aid
         - ref
         - source
-        - sha256
+        - kind
+        - artifacts
       type: object
     ProvisioningPolicyReply:
       additionalProperties: false

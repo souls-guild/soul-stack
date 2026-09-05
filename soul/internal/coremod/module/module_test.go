@@ -19,6 +19,7 @@ import (
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/internaltest"
 	installmod "github.com/souls-guild/soul-stack/soul/internal/coremod/module"
@@ -103,6 +104,24 @@ type fixture struct {
 	root    string
 	binData []byte
 	binSHA  string
+	// priv signs the fixture grant. Held so a test that changes the artifact rows can
+	// RE-SIGN: the block covers the whole list since NIM-795, so rows swapped without a
+	// fresh signature would fail as bad_signature and every such test would pass for
+	// the wrong reason.
+	priv      ed25519.PrivateKey
+	schemaDoc []byte
+}
+
+// resign recomputes the grant's signature over its current contents. Called by any
+// helper that edits Source or Artifacts.
+func (f *fixture) resign(t *testing.T) {
+	t.Helper()
+	digest := sharedhost.SchemaDigest(f.schemaDoc)
+	block, err := sharedhost.BuildSigilBlock(f.rec.Source, f.rec.Kind, f.rec.Ref, digest[:], f.rec.Artifacts)
+	if err != nil {
+		t.Fatalf("re-sign fixture grant: %v", err)
+	}
+	f.rec.Signature = ed25519.Sign(f.priv, block)
 }
 
 func newFixture(t *testing.T) *fixture {
@@ -117,14 +136,23 @@ func newFixture(t *testing.T) *fixture {
 	}
 	schemaDoc := testSchemaDoc(t)
 	schemaDigest := sharedhost.SchemaDigest(schemaDoc)
-	block := sharedhost.BuildSigilBlock(testSource, testRef, sum[:], schemaDigest[:])
+	// A git-resolved grant: one artifact, no platform stated, so the install flow
+	// selects it on whatever platform this test runs on.
+	artifacts := []sharedhost.SigilArtifact{{
+		OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform, SHA256: binSHA,
+	}}
+	block, err := sharedhost.BuildSigilBlock(testSource, sharedplugin.SourceKindGit, testRef, schemaDigest[:], artifacts)
+	if err != nil {
+		t.Fatalf("build sigil block: %v", err)
+	}
 	rec := &sharedhost.SigilRecord{
-		Alias:           testAlias,
-		Source:          testSource,
-		Ref:             testRef,
-		BinarySHA256hex: binSHA,
-		Signature:       ed25519.Sign(priv, block),
-		Schema:          schemaDoc,
+		Alias:     testAlias,
+		Source:    testSource,
+		Ref:       testRef,
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: artifacts,
+		Signature: ed25519.Sign(priv, block),
+		Schema:    schemaDoc,
 	}
 
 	root := t.TempDir()
@@ -134,7 +162,10 @@ func newFixture(t *testing.T) *fixture {
 		Anchors:     sharedhost.NewAnchorSet([]ed25519.PublicKey{pub}),
 		ModulesRoot: root,
 	}
-	return &fixture{mod: installmod.New(deps), deps: deps, rec: rec, fetcher: fetcher, root: root, binData: binData, binSHA: binSHA}
+	return &fixture{
+		mod: installmod.New(deps), deps: deps, rec: rec, fetcher: fetcher,
+		root: root, binData: binData, binSHA: binSHA, priv: priv, schemaDoc: schemaDoc,
+	}
 }
 
 func chunked(data []byte, size int) [][]byte {

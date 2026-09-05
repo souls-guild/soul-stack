@@ -1071,14 +1071,26 @@ func (h *eventStreamHandler) broadcastVigils(
 // re-hashes exactly these via SchemaDigest (S3↔S6 invariant). commit_sha stays behind
 // as Keeper-side audit — it is outside the signed block and would only be an
 // unverifiable claim on the wire.
+//
+// The WHOLE artifact list rides, not the row for the Soul on the far end (NIM-793).
+// Two reasons, and the second is the load-bearing one: the signature is over the whole
+// list, so a filtered list would not verify; and the Keeper does not get to decide
+// which platform a Soul is — the Soul selects its own row from what was approved.
 func sigilRecordToProto(rec *sigil.Sigil) *keeperv1.PluginSigil {
+	artifacts := make([]*keeperv1.SigilArtifact, 0, len(rec.Artifacts))
+	for _, a := range rec.Artifacts {
+		artifacts = append(artifacts, &keeperv1.SigilArtifact{
+			Os: a.OS, Arch: a.Arch, Path: a.Path, Sha256: a.SHA256,
+		})
+	}
 	return &keeperv1.PluginSigil{
-		Alias:        rec.Alias,
-		Source:       rec.Source,
-		Ref:          rec.Ref,
-		BinarySha256: rec.SHA256,
-		Signature:    rec.Signature,
-		Schema:       rec.Schema,
+		Alias:     rec.Alias,
+		Source:    rec.Source,
+		Ref:       rec.Ref,
+		Kind:      rec.Kind,
+		Artifacts: artifacts,
+		Signature: rec.Signature,
+		Schema:    rec.Schema,
 	}
 }
 

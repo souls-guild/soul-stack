@@ -32,6 +32,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // sigilFixtureSHA — the deterministic sha256 of the fixture binary (golden allow).
@@ -61,9 +63,12 @@ type hsigilSlots struct{}
 
 func (hsigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return &pluginhost.SlotContents{
-		BinaryPath:   "/cache/hetzner/current/hetzner",
-		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
-		BinarySHA256: sigilFixtureSHA,
+		Kind: sharedplugin.SourceKindGit,
+		Artifacts: []pluginhost.SlotArtifact{{
+			OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform,
+			SHA256: sigilFixtureSHA, BinaryPath: "/cache/hetzner/current/hetzner",
+		}},
+		SchemaBytes: []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 	}, nil
 }
 func (hsigilSlots) SlotCommitSHA(string) (string, error) {
@@ -129,7 +134,8 @@ func TestHumaSigil_Allow_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	golden := `{"alias":"hetzner","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `","source":"` + hsigilSource + `"}`
+	golden := `{"alias":"hetzner","artifacts":[{"arch":"","os":"","path":"","sha256":"` + sigilFixtureSHA + `"}],` +
+		`"kind":"git","ref":"v1.0.0","source":"` + hsigilSource + `"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift sigil.allow:\n got  = %s\n want = %s", got, golden)
 	}
@@ -176,10 +182,22 @@ func TestHumaAudit_SigilAllow_RecordsOnSuccess(t *testing.T) {
 	if rec.Code != http.StatusCreated {
 		t.Fatalf("status = %d, want 201; body=%s", rec.Code, rec.Body.String())
 	}
+	// The scalar keys go through the shared helper; the digest LIST cannot, because
+	// that helper compares with != and a slice behind an `any` is not comparable.
 	assertAuditWritten(t, auditCap, audit.EventPluginAllowed, map[string]any{
-		"alias": "hetzner", "source": hsigilSource, "ref": "v1.0.0",
-		"sha256": sigilFixtureSHA, "allowed_by_aid": "archon-alice",
+		"alias": "hetzner", "source": hsigilSource, "ref": "v1.0.0", "kind": "git",
+		"allowed_by_aid": "archon-alice",
 	})
+	ev := auditCap.Events()[0]
+	if got, ok := ev.Payload["artifact_sha256"].([]string); !ok || len(got) != 1 || got[0] != sigilFixtureSHA {
+		t.Errorf("audit artifact_sha256 = %v", ev.Payload["artifact_sha256"])
+	}
+	// The scalar `sha256` key is GONE, not repurposed: a reader of
+	// payload->>'sha256' must break loudly rather than keep parsing a value that
+	// silently became "one of several".
+	if _, ok := ev.Payload["sha256"]; ok {
+		t.Errorf("audit payload still carries the scalar sha256 key: %+v", ev.Payload)
+	}
 }
 
 func TestHumaAudit_SigilAllow_NoAudit_OnRBACDeny(t *testing.T) {
@@ -204,7 +222,8 @@ func TestHumaSigil_List_GoldenWire(t *testing.T) {
 		Alias:        "hetzner",
 		Source:       hsigilSource,
 		Ref:          "v1.0.0",
-		SHA256:       sigilFixtureSHA,
+		Kind:         sharedplugin.SourceKindGit,
+		Artifacts:    []sharedhost.SigilArtifact{{SHA256: sigilFixtureSHA}},
 		AllowedByAID: "archon-alice",
 		AllowedAt:    allowedAt,
 	}}}
@@ -220,7 +239,8 @@ func TestHumaSigil_List_GoldenWire(t *testing.T) {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
 	out, _ := json.Marshal(m)
-	golden := `{"items":[{"alias":"hetzner","allowed_at":"2026-06-13T10:00:00Z","allowed_by_aid":"archon-alice","ref":"v1.0.0","sha256":"` + sigilFixtureSHA + `","source":"` + hsigilSource + `"}]}`
+	golden := `{"items":[{"alias":"hetzner","allowed_at":"2026-06-13T10:00:00Z","allowed_by_aid":"archon-alice",` +
+		`"artifacts":[{"arch":"","os":"","path":"","sha256":"` + sigilFixtureSHA + `"}],"kind":"git","ref":"v1.0.0","source":"` + hsigilSource + `"}]}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire drift sigil.list:\n got  = %s\n want = %s", got, golden)
 	}

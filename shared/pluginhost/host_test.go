@@ -13,6 +13,7 @@ import (
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 func TestNewHostDefaults(t *testing.T) {
@@ -217,7 +218,7 @@ func TestSpawnPassesTheModuleAsArgv(t *testing.T) {
 func TestSpawnDigestMismatchDoesNotExec(t *testing.T) {
 	e := setupSigilEnvForBundle(t, argvScript)
 	h := e.host(t, true)
-	e.rec.BinarySHA256hex = strings.Repeat("ab", 32)
+	e.rec.Artifacts = gitArtifacts(strings.Repeat("ab", 32))
 
 	argvFile := filepath.Join(t.TempDir(), "argv")
 	_, err := h.Spawn(context.Background(), e.byAddr["redis.acl"],
@@ -268,12 +269,14 @@ func setupSigilEnvForBundle(t *testing.T, script string) bundleEnv {
 			binPath:    binPath,
 			discovered: found[0],
 			rec: &SigilRecord{
-				Alias:           testAlias,
-				Source:          testSource,
-				Ref:             testRef,
-				BinarySHA256hex: found[0].Digest,
-				Signature:       signFixture(t, priv, testSource, testRef, found[0].Digest, schemaDoc),
-				Schema:          schemaDoc,
+				Alias:     testAlias,
+				Source:    testSource,
+				Ref:       testRef,
+				Kind:      sharedplugin.SourceKindGit,
+				Artifacts: gitArtifacts(found[0].Digest),
+				Signature: signFixture(t, priv, testSource, sharedplugin.SourceKindGit, testRef,
+					gitArtifacts(found[0].Digest), schemaDoc),
+				Schema: schemaDoc,
 			},
 			pub: pub,
 		},

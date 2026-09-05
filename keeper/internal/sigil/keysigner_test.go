@@ -11,6 +11,7 @@ import (
 	"errors"
 	"testing"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	"github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
@@ -127,13 +128,17 @@ func TestLoadSigner_SignUsesPrimary(t *testing.T) {
 	binHex := hex.EncodeToString(binDigest[:])
 	doc := []byte(`{"kind":"ssh_provider","protocol_version":1}`)
 
-	sig, err := signer.Sign(testSource, ref, binHex, doc)
+	arts := gitArtifacts(binHex)
+	sig, err := signer.Sign(testSource, sharedplugin.SourceKindGit, ref, arts, doc)
 	if err != nil {
 		t.Fatalf("Sign: %v", err)
 	}
 
 	schemaDigest := pluginhost.SchemaDigest(doc)
-	block := pluginhost.BuildSigilBlock(testSource, ref, binDigest[:], schemaDigest[:])
+	block, err := pluginhost.BuildSigilBlock(testSource, sharedplugin.SourceKindGit, ref, schemaDigest[:], arts)
+	if err != nil {
+		t.Fatalf("BuildSigilBlock: %v", err)
+	}
 
 	if !ed25519.Verify(pubP, block, sig) {
 		t.Error("primary pubkey failed to verify signature")

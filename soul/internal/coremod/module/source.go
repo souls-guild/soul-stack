@@ -78,22 +78,23 @@ type fetchResult struct {
 //     stand in for a source that is down; it cannot stand in for one that is serving
 //     the wrong bytes, and a fallback there would turn the one signal that a source
 //     was tampered with into a warning line under a green run.
-func (m *Module) fetch(ctx context.Context, alias string, rec *sharedhost.SigilRecord) (*fetchResult, error) {
-	if len(rec.Artifacts) == 0 {
-		data, err := fetchViaStream(ctx, alias, rec.BinarySHA256hex)
+func (m *Module) fetch(ctx context.Context, alias string, rec *sharedhost.SigilRecord, art *sharedhost.SigilArtifact) (*fetchResult, error) {
+	// An UNPLATFORMED row is the git kind's single `dist/` binary: that source states
+	// no platform and publishes no URL, so there is nothing to fetch FROM and Keeper is
+	// the only transport. Read off the grant rather than off `kind`, because it is the
+	// row that decides whether an address exists.
+	if !art.Platformed() {
+		data, err := fetchViaStream(ctx, alias, art.SHA256)
 		if err != nil {
 			return nil, err
 		}
 		return &fetchResult{data: data, via: fetchViaKeeper}, nil
 	}
 
-	osName, arch := m.hostPlatform()
-	art, err := selectArtifact(rec.Artifacts, osName, arch)
-	if err != nil {
-		return nil, err
-	}
-
-	data, rawURL, serr := m.fetchFromSource(ctx, rec.BaseURL, art)
+	// Source is the grant's SIGNED address — the publication root for this kind. The
+	// row's path hangs off it, and both are covered by the signature, so a rewritten
+	// catalog cannot move the fetch without breaking verification.
+	data, rawURL, serr := m.fetchFromSource(ctx, rec.Source, *art)
 	if serr == nil {
 		return &fetchResult{data: data, via: fetchViaSource, url: rawURL}, nil
 	}
@@ -103,7 +104,7 @@ func (m *Module) fetch(ctx context.Context, alias string, rec *sharedhost.SigilR
 	if _, ok := fetcherFrom(ctx); !ok {
 		return nil, fmt.Errorf("%w (no EventStream session to fall back to)", serr)
 	}
-	data, kerr := fetchViaStream(ctx, alias, art.SHA256hex)
+	data, kerr := fetchViaStream(ctx, alias, art.SHA256)
 	if kerr != nil {
 		return nil, fmt.Errorf("source: %w; keeper: %w", serr, kerr)
 	}
@@ -174,9 +175,9 @@ func (m *Module) fetchFromSource(ctx context.Context, base string, art sharedhos
 
 	sum := sha256.Sum256(data)
 	got := hex.EncodeToString(sum[:])
-	if !strings.EqualFold(got, art.SHA256hex) {
+	if !strings.EqualFold(got, art.SHA256) {
 		return nil, rawURL, fmt.Errorf("%w: sha256 mismatch for %s: grant row %s/%s wants %s, source served %s",
-			errSourceUnusable, rawURL, art.OS, art.Arch, art.SHA256hex, got)
+			errSourceUnusable, rawURL, art.OS, art.Arch, art.SHA256, got)
 	}
 	return data, rawURL, nil
 }
@@ -200,17 +201,42 @@ func statusError(rawURL string, code int) error {
 	return fmt.Errorf("fetch %s: unexpected status %d", rawURL, code)
 }
 
+// selectApproved picks the grant row that says which bytes are approved on THIS host.
+//
+// It is the single point where the host's platform is decided, and the row it returns
+// is what step (3) fetches and step (4) verifies against. Deriving the platform twice —
+// once for the fetch and once inside verify — would agree today and diverge the first
+// time either side changed its mind about, say, how an architecture is spelled; and the
+// symptom would be a digest mismatch, which reads as tampering.
+func (m *Module) selectApproved(rec *sharedhost.SigilRecord) (*sharedhost.SigilArtifact, error) {
+	osName, arch := m.hostPlatform()
+	return selectArtifact(rec.Artifacts, osName, arch)
+}
+
 // selectArtifact picks the row for this host's platform. The refusal names what the
 // release does carry: the operator's next move is either a host of a platform the
 // release covers or a release that covers this one, and neither is decidable from
 // "no artifact for linux/arm64" alone.
-func selectArtifact(arts []sharedhost.SigilArtifact, osName, arch string) (sharedhost.SigilArtifact, error) {
-	for _, a := range arts {
+//
+// An UNPLATFORMED row (the git kind's single binary, which states no platform) matches
+// every host — exactly what that kind's one artifact did before grants carried a list.
+// It is the fallback and never beats an exact match, so a release that covers this
+// platform is never served by a wildcard.
+func selectArtifact(arts []sharedhost.SigilArtifact, osName, arch string) (*sharedhost.SigilArtifact, error) {
+	var fallback *sharedhost.SigilArtifact
+	for i := range arts {
+		a := &arts[i]
 		if strings.EqualFold(a.OS, osName) && strings.EqualFold(a.Arch, arch) {
 			return a, nil
 		}
+		if !a.Platformed() {
+			fallback = a
+		}
 	}
-	return sharedhost.SigilArtifact{}, fmt.Errorf(
+	if fallback != nil {
+		return fallback, nil
+	}
+	return nil, fmt.Errorf(
 		"grant carries no artifact for %s/%s; the release covers %s", osName, arch, platformList(arts))
 }
 

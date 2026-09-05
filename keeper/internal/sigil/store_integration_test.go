@@ -15,6 +15,9 @@ import (
 	"log"
 	"os"
 	"testing"
+
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -107,7 +110,8 @@ func newRecord(aid string) *Sigil {
 		Alias:        "hetzner",
 		Source:       testSource,
 		Ref:          "v1.0.0",
-		SHA256:       hex.EncodeToString(digest[:]),
+		Kind:         sharedplugin.SourceKindGit,
+		Artifacts:    []sharedhost.SigilArtifact{{SHA256: hex.EncodeToString(digest[:])}},
 		Signature:    ed25519.Sign(genIntegrationKey(), []byte("block")),
 		Schema:       rawSchemaDoc,
 		AllowedByAID: aid,
@@ -141,8 +145,16 @@ func TestIntegration_Insert_GetActive(t *testing.T) {
 	if got.Alias != "hetzner" || got.Source != testSource || got.Ref != "v1.0.0" {
 		t.Errorf("identity roundtrip = (%q,%q,%q)", got.Alias, got.Source, got.Ref)
 	}
-	if got.SHA256 != rec.SHA256 {
-		t.Errorf("SHA256 = %q, want %q", got.SHA256, rec.SHA256)
+	if len(got.Artifacts) != len(rec.Artifacts) {
+		t.Fatalf("Artifacts = %d, want %d", len(got.Artifacts), len(rec.Artifacts))
+	}
+	for i, want := range rec.Artifacts {
+		if got.Artifacts[i] != want {
+			t.Errorf("Artifacts[%d] = %+v, want %+v", i, got.Artifacts[i], want)
+		}
+	}
+	if got.Kind != rec.Kind {
+		t.Errorf("Kind = %q, want %q", got.Kind, rec.Kind)
 	}
 	if !bytes.Equal(got.Signature, rec.Signature) {
 		t.Error("signature roundtrip mismatch")

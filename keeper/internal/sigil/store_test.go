@@ -7,6 +7,9 @@ import (
 	"encoding/hex"
 	"strings"
 	"testing"
+
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // validRecord — a template of a valid row for testing Insert's guards. No db is
@@ -17,7 +20,8 @@ func validRecord() *Sigil {
 		Alias:        "hetzner",
 		Source:       testSource,
 		Ref:          "v1.0.0",
-		SHA256:       hex.EncodeToString(digest[:]),
+		Kind:         sharedplugin.SourceKindGit,
+		Artifacts:    []sharedhost.SigilArtifact{{SHA256: hex.EncodeToString(digest[:])}},
 		Signature:    make([]byte, ed25519.SignatureSize),
 		Schema:       []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 		AllowedByAID: "archon-a",

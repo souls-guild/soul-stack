@@ -11,6 +11,7 @@ import (
 	"github.com/goccy/go-yaml/ast"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
+	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 // Closed enums, normalized per docs/keeper/config.md and docs/soul/config.md.
@@ -245,6 +246,8 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 			"$.plugins.max_artifact_size_mb", c.Plugins.MaxArtifactSizeMB)...)
 		out = append(out, validatePluginSizeMB(root,
 			"$.plugins.max_clone_size_mb", c.Plugins.MaxCloneSizeMB)...)
+		out = append(out, validatePluginCatalog(root, "$.plugins.ssh_providers", c.Plugins.SSHProviders)...)
+		out = append(out, validatePluginCatalog(root, "$.plugins.soul_modules", c.Plugins.SoulModules)...)
 	}
 
 	if c.Audit != nil && c.Audit.RetentionDays != 0 && c.Audit.RetentionDays < 1 {
@@ -561,6 +564,214 @@ func validatePluginSizeMB(root *ast.MappingNode, yamlPath string, mb int) []diag
 		})}
 	}
 	return nil
+}
+
+// reCatalogArtifactSHA256 is the digest form a catalog artifact row carries: the same
+// 64 lowercase hex the grant, the DB CHECK and the signed block all use.
+var reCatalogArtifactSHA256 = regexp.MustCompile(`^[0-9a-f]{64}$`)
+
+// rePlatformToken mirrors the shape [pluginhost.CanonicalArtifacts] enforces before a
+// signature can exist over a row. Repeated here so the operator is told at the yaml
+// path rather than by a resolve-time refusal with no line number.
+var rePlatformToken = regexp.MustCompile(`^[a-z0-9]{1,32}$`)
+
+// validatePluginCatalog checks one `plugins.<list>` against the shape its `kind:`
+// picks (NIM-793). Every finding is an ERROR: this catalog decides which executable
+// bytes a Keeper will fetch and sign for, so a malformed entry must stop the config
+// rather than be resolved into a warning and skipped at runtime.
+//
+// The fields of the OTHER kind are refused rather than ignored. A `base_url` under a
+// git entry, or a `source` under an artifact entry, is an operator believing the
+// Keeper reads something it does not — and for a URL that belief is about where
+// executable code comes from.
+//
+// Duplicate `(os, arch)` rows are refused here and again in
+// [pluginhost.CanonicalArtifacts] before signing. Not redundant: this one gives the
+// operator the yaml path, and that one makes it impossible for a signature to exist
+// over an ambiguous list however the rows got there.
+func validatePluginCatalog(root *ast.MappingNode, prefix string, entries []PluginCatalogEntry) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for i, e := range entries {
+		at := fmt.Sprintf("%s[%d]", prefix, i)
+
+		if e.Kind != "" && !plugin.ValidSourceKind(e.Kind) {
+			out = append(out, atPath(root, at+".kind", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "enum_invalid",
+				Message: fmt.Sprintf("%q is not in allowed set %v", e.Kind, plugin.SourceKinds()),
+				Hint:    "omit `kind:` for the git default",
+			}))
+			continue
+		}
+
+		switch e.ResolvedKind() {
+		case plugin.SourceKindGit:
+			out = append(out, validateGitCatalogEntry(root, at, e)...)
+		case plugin.SourceKindArtifact:
+			out = append(out, validateArtifactCatalogEntry(root, at, e)...)
+		}
+	}
+	return out
+}
+
+// validateGitCatalogEntry checks the historical shape: `source` + `ref`, and nothing
+// belonging to the artifact kind.
+func validateGitCatalogEntry(root *ast.MappingNode, at string, e PluginCatalogEntry) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	if e.Source == "" {
+		out = append(out, atPath(root, at+".source", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_required",
+			Message: "a git plugin entry requires `source` (the module repository remote)",
+		}))
+	}
+	if e.BaseURL != "" {
+		out = append(out, atPath(root, at+".base_url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_not_allowed",
+			Message: "`base_url` belongs to `kind: artifact`; a git entry is resolved from `source`",
+		}))
+	}
+	if len(e.Artifacts) > 0 {
+		out = append(out, atPath(root, at+".artifacts", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_not_allowed",
+			Message: "`artifacts` belongs to `kind: artifact`; a git entry takes the single executable in dist/",
+		}))
+	}
+	return out
+}
+
+// validateArtifactCatalogEntry checks the published-release shape: `base_url` + a
+// non-empty `artifacts` list, each row a complete (os, arch, path, sha256).
+func validateArtifactCatalogEntry(root *ast.MappingNode, at string, e PluginCatalogEntry) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	if e.BaseURL == "" {
+		out = append(out, atPath(root, at+".base_url", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_required",
+			Message: "an artifact plugin entry requires `base_url` (the publication root the files hang off)",
+		}))
+	}
+	if e.Source != "" {
+		out = append(out, atPath(root, at+".source", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_not_allowed",
+			Message: "`source` belongs to `kind: git`; an artifact entry publishes under `base_url`",
+		}))
+	}
+	if len(e.Artifacts) == 0 {
+		out = append(out, atPath(root, at+".artifacts", diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:    "field_required",
+			Message: "an artifact plugin entry requires at least one `artifacts` row",
+			Hint:    "there is no path template: every published file is listed with its own sha256",
+		}))
+		return out
+	}
+
+	seen := make(map[string]int, len(e.Artifacts))
+	for j, a := range e.Artifacts {
+		aat := fmt.Sprintf("%s.artifacts[%d]", at, j)
+		// Fixed order, not a map: diagnostics are compared byte for byte by the
+		// config tests and read in order by an operator.
+		for _, f := range []struct{ name, val string }{
+			{"os", a.OS}, {"arch", a.Arch}, {"path", a.Path}, {"sha256", a.SHA256},
+		} {
+			field, val := f.name, f.val
+			if val == "" {
+				out = append(out, atPath(root, aat+"."+field, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "field_required",
+					Message: fmt.Sprintf("artifact row requires `%s`", field),
+				}))
+			}
+		}
+		if a.SHA256 != "" && !reCatalogArtifactSHA256.MatchString(a.SHA256) {
+			out = append(out, atPath(root, aat+".sha256", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "value_invalid",
+				Message: fmt.Sprintf("sha256 %q must be 64 lower-hex chars", a.SHA256),
+			}))
+		}
+		if a.Path != "" && !ValidPluginArtifactPath(a.Path) {
+			out = append(out, atPath(root, aat+".path", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "value_invalid",
+				Message: fmt.Sprintf("path %q must name a file under base_url: no leading '/', no '.' or '..' segment, no scheme, no '?', '#', '%%' or '\\'", a.Path),
+				Hint:    "the path is signed AND concatenated onto base_url — anything a URL parser reads differently would sign one address and fetch another",
+			}))
+		}
+		for _, f := range []struct{ name, val string }{{"os", a.OS}, {"arch", a.Arch}} {
+			if f.val != "" && !rePlatformToken.MatchString(f.val) {
+				out = append(out, atPath(root, aat+"."+f.name, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "value_invalid",
+					Message: fmt.Sprintf("%s %q must be a lower-alphanumeric GOOS/GOARCH token", f.name, f.val),
+					Hint:    "spell the platform the way Go does: os: linux, arch: amd64",
+				}))
+			}
+		}
+		if a.OS != "" && a.Arch != "" {
+			key := a.OS + "/" + a.Arch
+			if first, dup := seen[key]; dup {
+				out = append(out, atPath(root, aat, diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "duplicate_entry",
+					Message: fmt.Sprintf("platform %s is already declared by artifacts[%d]", key, first),
+					Hint:    "one platform has one file; two rows would make the approved bytes depend on list order",
+				}))
+				continue
+			}
+			seen[key] = j
+		}
+	}
+	return out
+}
+
+// ValidPluginArtifactPath reports whether a catalog `path` names a file UNDER the
+// entry's base_url.
+//
+// The rule is stricter than "no traversal", and the extra strictness is the point: the
+// path is SIGNED into the grant and separately CONCATENATED onto the base URL to fetch
+// with, so anything a URL parser reads differently from a path reader would make the
+// signed "where these bytes came from" a different address than the one fetched.
+// `pkg#v2` fetches `…/pkg` and records `pkg#v2`; `a%2e%2e%2fb` records one path and
+// resolves to another.
+//
+// Rejected, therefore:
+//   - an empty path, an absolute one (`/x`), any `.` or `..` segment, and anything
+//     carrying a scheme or network-path prefix (`https://x`, `//host/x`). `..` reaches
+//     an address the operator did not approve; a bare `.` reaches the same file by a
+//     different spelling, which is worse than useless here — the Soul-side check
+//     refuses it, so a grant Keeper happily signed would be uninstallable on every host
+//     while showing as active;
+//   - `?` and `#` — a query or fragment is not part of a file name, and both are cut
+//     off by the fetcher while staying in the signature;
+//   - `%` — percent-encoding means the byte sequence signed and the byte sequence
+//     requested can differ. Refusing it outright is honest; decoding it here would put
+//     a second URL parser in the trust path.
+//
+// A backslash is refused for the same reason: some servers normalize it to `/`, which
+// would smuggle a segment past the `..` check.
+//
+// Exported because the rule has two enforcement points and must not have two
+// definitions: the schema phase, which can name the yaml path in the message, and the
+// resolver, which must refuse the same thing when it is handed a catalog that never
+// went through the schema phase.
+func ValidPluginArtifactPath(p string) bool {
+	if p == "" || strings.HasPrefix(p, "/") || strings.Contains(p, "://") {
+		return false
+	}
+	if strings.ContainsAny(p, "?#%\\") {
+		return false
+	}
+	for _, seg := range strings.Split(p, "/") {
+		if seg == "." || seg == ".." {
+			return false
+		}
+	}
+	return true
 }
 
 func validateLogging(root *ast.MappingNode, prefix, level, format, file string, rotation *LoggingRotation) []diag.Diagnostic {

@@ -15,6 +15,7 @@ import (
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/object"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/pluginsource"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
@@ -589,15 +590,19 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 		},
 	}
 	r, _ := newTestResolver(t)
+	catalog, err := pluginsource.NewCatalog(nil, NewProvider(r))
+	if err != nil {
+		t.Fatalf("NewCatalog: %v", err)
+	}
 
-	slots, warns, err := r.ResolveCatalog(context.Background(), plugins)
+	slots, warns, err := catalog.ResolveCatalog(context.Background(), plugins)
 	if err != nil {
 		t.Fatalf("ResolveCatalog returned fatal: %v", err)
 	}
 	if len(slots) != 2 {
 		t.Fatalf("slots = %d, want 2 (hetzner + redis): %v", len(slots), slots)
 	}
-	byAlias := map[string]ResolvedSlot{}
+	byAlias := map[string]pluginsource.Resolved{}
 	for _, s := range slots {
 		byAlias[s.Alias] = s
 	}
@@ -610,8 +615,8 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 	}
 	// The alias came from the catalog and the modules from the artifact; neither side
 	// could have produced the pair alone.
-	if mod.Doc == nil || len(mod.Doc.Modules) != 2 {
-		t.Errorf("redis slot should carry the artifact's two modules: %+v", mod.Doc)
+	if mod.Contents == nil || mod.Contents.Doc == nil || len(mod.Contents.Doc.Modules) != 2 {
+		t.Errorf("redis slot should carry the artifact's two modules: %+v", mod.Contents)
 	}
 	if len(warns) != 1 {
 		t.Fatalf("warns = %d, want 1 (broken entry): %v", len(warns), warns)
@@ -686,7 +691,11 @@ func TestResolveEntry_WithinSizeLimits(t *testing.T) {
 
 func TestResolveCatalog_NilPlugins(t *testing.T) {
 	r, _ := newTestResolver(t)
-	slots, warns, err := r.ResolveCatalog(context.Background(), nil)
+	catalog, err := pluginsource.NewCatalog(nil, NewProvider(r))
+	if err != nil {
+		t.Fatalf("NewCatalog: %v", err)
+	}
+	slots, warns, err := catalog.ResolveCatalog(context.Background(), nil)
 	if err != nil || slots != nil || warns != nil {
 		t.Errorf("nil plugins: expected empty result, got slots=%v warns=%v err=%v", slots, warns, err)
 	}

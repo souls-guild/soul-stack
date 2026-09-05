@@ -2,6 +2,7 @@ package module_test
 
 import (
 	"context"
+	"crypto/ed25519"
 	"crypto/sha256"
 	"encoding/hex"
 	"net/http"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 	"github.com/souls-guild/soul-stack/soul/internal/coremod/util"
 )
@@ -34,6 +36,8 @@ const (
 // serving the release, and a grant carrying the rows that name it.
 type sourceFixture struct {
 	*fixture
+	// t is held so setRows can re-sign without every call site threading it.
+	t    *testing.T
 	srv  *httptest.Server
 	hits []string
 	// body / status are what the source answers with; the zero value serves the
@@ -47,7 +51,7 @@ type sourceFixture struct {
 func newSourceFixture(t *testing.T) *sourceFixture {
 	t.Helper()
 	f := newFixture(t)
-	sf := &sourceFixture{fixture: f}
+	sf := &sourceFixture{fixture: f, t: t}
 
 	sf.srv = httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		sf.hits = append(sf.hits, r.URL.Path)
@@ -63,10 +67,11 @@ func newSourceFixture(t *testing.T) *sourceFixture {
 	}))
 	t.Cleanup(sf.srv.Close)
 
-	f.rec.BaseURL = sf.srv.URL + basePath
+	f.rec.Source = sf.srv.URL + basePath
+	f.rec.Kind = sharedplugin.SourceKindArtifact
 	sf.setRows(
-		sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256hex: f.binSHA},
-		sharedhost.SigilArtifact{OS: "darwin", Arch: "arm64", Path: darwinARM64, SHA256hex: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256: f.binSHA},
+		sharedhost.SigilArtifact{OS: "darwin", Arch: "arm64", Path: darwinARM64, SHA256: sha256Hex(otherArtifact)},
 	)
 
 	// The client seam points at the test server: its certificate is self-signed, so
@@ -80,8 +85,35 @@ func newSourceFixture(t *testing.T) *sourceFixture {
 	return sf
 }
 
+// setRows replaces the grant's artifact rows AND re-signs it. The signed block covers
+// the whole list since NIM-795, so rows set without a fresh signature would fail as
+// bad_signature — and every test built on them would then pass for a reason that has
+// nothing to do with what it names.
 func (sf *sourceFixture) setRows(rows ...sharedhost.SigilArtifact) {
 	sf.rec.Artifacts = rows
+	sf.resign(sf.t)
+}
+
+// setSource replaces the grant's publication root AND re-signs it. Under NIM-795 the
+// address is the grant's `source`, which the block covers — an edit without a fresh
+// signature would fail as bad_signature and the test would stop testing what it names.
+func (sf *sourceFixture) setSource(base string) {
+	sf.rec.Source = base
+	sf.resign(sf.t)
+}
+
+// signWithAnotherKey re-signs the grant with a key that is NOT a trust anchor, so
+// verify fails while every earlier step still succeeds. It is how a test reaches the
+// verify step deliberately now that the row digest IS the approved digest: bytes that
+// satisfy the fetch necessarily satisfy the digest check.
+func (sf *sourceFixture) signWithAnotherKey(t *testing.T) {
+	t.Helper()
+	_, foreign, err := ed25519.GenerateKey(nil)
+	if err != nil {
+		t.Fatalf("generate foreign key: %v", err)
+	}
+	sf.priv = foreign
+	sf.resign(t)
 }
 
 func (sf *sourceFixture) setHost(family, arch string) {
@@ -152,8 +184,8 @@ func TestApplyArtifactGrantInstallsFromSource(t *testing.T) {
 func TestApplyArtifactGrantPicksRowByHostFacts(t *testing.T) {
 	sf := newSourceFixture(t)
 	sf.setRows(
-		sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256hex: sha256Hex(otherArtifact)},
-		sharedhost.SigilArtifact{OS: "linux", Arch: "arm64", Path: linuxARM64, SHA256hex: sf.binSHA},
+		sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: "linux", Arch: "arm64", Path: linuxARM64, SHA256: sf.binSHA},
 	)
 	// alpine is a different family from the fixture default and still Linux; the arch
 	// is what separates the two rows.
@@ -176,8 +208,8 @@ func TestApplyArtifactGrantWithoutFactsUsesTheRunningPlatform(t *testing.T) {
 	sf := newSourceFixture(t)
 	sf.setHost("", "")
 	sf.setRows(
-		sharedhost.SigilArtifact{OS: "plan9", Arch: "sparc", Path: "decoy", SHA256hex: sha256Hex(otherArtifact)},
-		sharedhost.SigilArtifact{OS: runtime.GOOS, Arch: runtime.GOARCH, Path: linuxAMD64, SHA256hex: sf.binSHA},
+		sharedhost.SigilArtifact{OS: "plan9", Arch: "sparc", Path: "decoy", SHA256: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: runtime.GOOS, Arch: runtime.GOARCH, Path: linuxAMD64, SHA256: sf.binSHA},
 	)
 
 	ev := sf.apply(t, map[string]any{"name": "redis"})
@@ -238,16 +270,22 @@ func TestApplyArtifactGrantIdempotentSkipsBothTransports(t *testing.T) {
 
 // --- no row for this host: a closed refusal, and no fallback ---
 
+// The reason is `module_not_allowed`, not `module_fetch_failed`: nothing was ever
+// approved for this platform, so it is an approval gap and not a transport problem.
+// NIM-795 moved the row selection ahead of the fetch for exactly that reason — the
+// refusal now happens where the grant is read, and it reads the same as the
+// shared-verify reason `no_artifact_for_platform`. The operator's fix is to publish and
+// re-approve a release that covers the platform; nothing about the network would help.
 func TestApplyArtifactGrantRefusesUncoveredPlatform(t *testing.T) {
 	sf := newSourceFixture(t)
 	sf.setRows(
-		sharedhost.SigilArtifact{OS: "linux", Arch: "arm64", Path: linuxARM64, SHA256hex: sha256Hex(otherArtifact)},
-		sharedhost.SigilArtifact{OS: "darwin", Arch: "arm64", Path: darwinARM64, SHA256hex: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: "linux", Arch: "arm64", Path: linuxARM64, SHA256: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: "darwin", Arch: "arm64", Path: darwinARM64, SHA256: sha256Hex(otherArtifact)},
 	)
 	sf.setHost("debian", "amd64")
 
 	ev := sf.apply(t, map[string]any{"name": "redis"})
-	wantFailedReason(t, ev, "module_fetch_failed")
+	wantFailedReason(t, ev, "module_not_allowed")
 
 	// The operator has to see what is missing without opening the catalog.
 	msg := ev.GetMessage()
@@ -276,11 +314,15 @@ func TestApplyArtifactGrantRefusesUncoveredPlatform(t *testing.T) {
 func TestApplyArtifactGrantFallsBackToKeeper(t *testing.T) {
 	sf := newSourceFixture(t)
 	sf.status = http.StatusServiceUnavailable
-	// The row's digest is deliberately NOT the grant's binary_sha256, so the request
-	// Keeper gets says which of the two the fallback asks by. The source never
-	// answers here, so the row digest is never checked against served bytes.
-	rowSHA := sha256Hex(otherArtifact)
-	sf.setRows(sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256hex: rowSHA})
+	// The row's digest is what the fallback must ask Keeper by. Since NIM-795 there is
+	// no second digest to confuse it with — the grant carries one row per platform and
+	// nothing else — so the assertion is that the request names THIS host's row rather
+	// than, say, the first row of the release.
+	rowSHA := sf.binSHA
+	sf.setRows(
+		sharedhost.SigilArtifact{OS: "darwin", Arch: "arm64", Path: darwinARM64, SHA256: sha256Hex(otherArtifact)},
+		sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256: rowSHA},
+	)
 
 	ev := sf.apply(t, map[string]any{"name": "redis"})
 	if ev.GetFailed() {
@@ -375,7 +417,7 @@ func TestArtifactPathIsJoinedNotSteered(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sf := newSourceFixture(t)
-			sf.setRows(sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: tc.path, SHA256hex: sf.binSHA})
+			sf.setRows(sharedhost.SigilArtifact{OS: "linux", Arch: "amd64", Path: tc.path, SHA256: sf.binSHA})
 
 			ev := sf.apply(t, map[string]any{"name": "redis"})
 			wantFailedReason(t, ev, "module_fetch_failed")
@@ -393,7 +435,7 @@ func TestArtifactPathIsJoinedNotSteered(t *testing.T) {
 
 func TestApplyArtifactGrantWithoutBaseURL(t *testing.T) {
 	sf := newSourceFixture(t)
-	sf.rec.BaseURL = ""
+	sf.setSource("")
 
 	ev := sf.apply(t, map[string]any{"name": "redis"})
 	wantFailedReason(t, ev, "module_fetch_failed")
@@ -410,7 +452,7 @@ func TestApplyArtifactGrantWithoutBaseURL(t *testing.T) {
 // make the guard against credentials a guard against a legal address.
 func TestApplyArtifactGrantAcceptsAtSignInBaseURLPath(t *testing.T) {
 	sf := newSourceFixture(t)
-	sf.rec.BaseURL = sf.srv.URL + "/@souls/plugins"
+	sf.setSource(sf.srv.URL + "/@souls/plugins")
 
 	ev := sf.apply(t, map[string]any{"name": "redis"})
 	if ev.GetFailed() {
@@ -446,7 +488,7 @@ func TestApplyArtifactGrantRefusesUnusableBaseURL(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			sf := newSourceFixture(t)
-			sf.rec.BaseURL = tc.base
+			sf.setSource(tc.base)
 
 			ev := sf.apply(t, map[string]any{"name": "redis"})
 			wantFailedReason(t, ev, "module_fetch_failed")
@@ -513,11 +555,14 @@ func TestApplyArtifactGrantStatusDecidesTheFallback(t *testing.T) {
 
 // GUARD: Sigil verify runs BEFORE materialization on the source path too.
 //
-// The source here serves bytes that match its own catalog row — so the fetch step is
-// satisfied — but not the digest the grant's signed block covers. The install must
-// stop at verify with the slot exactly as it was: the previous artifact and its digest
-// sidecar both intact, since installSlot removes the sidecar first and would otherwise
-// leave a freshly installed binary sealed against a stale digest.
+// The source here serves exactly what its catalog row promises — so the fetch step is
+// satisfied — and the grant is signed by a key that is NOT a trust anchor, so verify
+// refuses. Reaching verify this way is forced by NIM-795: the row digest IS the
+// approved digest, so bytes that pass the fetch cannot fail the digest comparison, and
+// the signature is what is left to fail. The install must stop with the slot exactly
+// as it was: the previous artifact and its digest sidecar both intact, since
+// installSlot removes the sidecar first and would otherwise leave a freshly installed
+// binary sealed against a stale digest.
 //
 // Move the VerifyArtifactBytes call after installSlot and this test goes red on both
 // of its slot assertions (the refusal itself still arrives, which is exactly why
@@ -530,8 +575,9 @@ func TestApplyArtifactSourceVerifyRunsBeforeInstall(t *testing.T) {
 	served := []byte("bytes the source vouches for but the grant does not\n")
 	sf.body = served
 	sf.setRows(sharedhost.SigilArtifact{
-		OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256hex: sha256Hex(string(served)),
+		OS: "linux", Arch: "amd64", Path: linuxAMD64, SHA256: sha256Hex(string(served)),
 	})
+	sf.signWithAnotherKey(t)
 
 	// A slot that already holds a working install: this is what a failed verify must
 	// not disturb.

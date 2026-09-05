@@ -8,6 +8,8 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // TestSigilRecordsToProto_MapsBothIdentitiesAndSchema — converting the set to the wire
@@ -16,10 +18,17 @@ import (
 // actually covers.
 func TestSigilRecordsToProto_MapsBothIdentitiesAndSchema(t *testing.T) {
 	recs := []*sigil.Sigil{{
-		Alias:     "pkg",
-		Source:    "https://example.com/soul-mod-pkg.git",
-		Ref:       "v1",
-		SHA256:    "aa",
+		Alias:  "pkg",
+		Source: "https://example.com/soul-mod-pkg.git",
+		Ref:    "v1",
+		Kind:   sharedplugin.SourceKindArtifact,
+		// A two-platform release: the projection must carry BOTH rows, because the
+		// signature is over the whole list and the Keeper does not get to decide
+		// which platform the Soul on the far end is.
+		Artifacts: []sharedhost.SigilArtifact{
+			{OS: "linux", Arch: "amd64", Path: "pkg_linux_amd64", SHA256: "aa"},
+			{OS: "linux", Arch: "arm64", Path: "pkg_linux_arm64", SHA256: "bb"},
+		},
 		Signature: []byte("sig"),
 		Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 	}}
@@ -29,8 +38,18 @@ func TestSigilRecordsToProto_MapsBothIdentitiesAndSchema(t *testing.T) {
 	}
 	p := got[0]
 	if p.GetAlias() != "pkg" || p.GetSource() != recs[0].Source || p.GetRef() != "v1" ||
-		p.GetBinarySha256() != "aa" {
+		p.GetKind() != sharedplugin.SourceKindArtifact {
 		t.Errorf("identity = %+v", p)
+	}
+	if len(p.GetArtifacts()) != 2 {
+		t.Fatalf("artifacts = %d, want both rows of the release", len(p.GetArtifacts()))
+	}
+	for i, want := range recs[0].Artifacts {
+		got := p.GetArtifacts()[i]
+		if got.GetOs() != want.OS || got.GetArch() != want.Arch ||
+			got.GetPath() != want.Path || got.GetSha256() != want.SHA256 {
+			t.Errorf("artifacts[%d] = %+v, want %+v", i, got, want)
+		}
 	}
 	if !bytes.Equal(p.GetSchema(), recs[0].Schema) {
 		t.Errorf("schema = %q, want byte-equal %q", p.GetSchema(), recs[0].Schema)
@@ -69,8 +88,10 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 	ob := newOutboundForTest(t, m, nopAudit{})
 
 	set := []*keeperv1.PluginSigil{
-		{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v1", BinarySha256: "aa"},
-		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2", BinarySha256: "bb"},
+		{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v1",
+			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "aa"}}},
+		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2",
+			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "bb"}}},
 	}
 
 	delivered := ob.RebroadcastSigils(context.Background(), set)

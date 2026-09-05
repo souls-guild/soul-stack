@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 // bytesTestEnv — in-memory artifact bytes + a consistent valid SigilRecord
@@ -27,19 +28,31 @@ func setupBytesEnv(t *testing.T) ([]byte, *SigilRecord, *AnchorSet) {
 		t.Fatalf("generate key: %v", err)
 	}
 	rec := &SigilRecord{
-		Alias:           testAlias,
-		Source:          testSource,
-		Ref:             testRef,
-		BinarySHA256hex: digestHex,
-		Signature:       signFixture(t, priv, testSource, testRef, digestHex, schemaDoc),
-		Schema:          schemaDoc,
+		Alias:     testAlias,
+		Source:    testSource,
+		Ref:       testRef,
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: gitArtifacts(digestHex),
+		Signature: signFixture(t, priv, testSource, sharedplugin.SourceKindGit, testRef,
+			gitArtifacts(digestHex), schemaDoc),
+		Schema: schemaDoc,
 	}
 	return data, rec, NewAnchorSet([]ed25519.PublicKey{pub})
 }
 
+// approvedOf is what the install flow passes: the row it selected and fetched. The
+// caller selects, verify checks — one decision, so a platform spelled two ways cannot
+// surface as a digest mismatch.
+func approvedOf(rec *SigilRecord) *SigilArtifact {
+	if rec == nil || len(rec.Artifacts) == 0 {
+		return nil
+	}
+	return &rec.Artifacts[0]
+}
+
 func TestVerifyArtifactBytesSuccess(t *testing.T) {
 	data, rec, anchors := setupBytesEnv(t)
-	if err := VerifyArtifactBytes(data, rec, anchors); err != nil {
+	if err := VerifyArtifactBytes(data, rec, approvedOf(rec), anchors); err != nil {
 		t.Fatalf("VerifyArtifactBytes: %v", err)
 	}
 }
@@ -82,6 +95,17 @@ func TestVerifyArtifactBytesFailures(t *testing.T) {
 			reason: VerifyReasonBadSignature,
 		},
 		{
+			// The caller found no row for this host: fail-closed, and NOT as a digest
+			// mismatch — nothing was approved to compare against, so the operator's
+			// fix is a release that covers the platform, not an investigation.
+			name: "no artifact for this platform",
+			mutate: func(data []byte, rec *SigilRecord, anchors *AnchorSet) ([]byte, *SigilRecord, *AnchorSet) {
+				rec.Artifacts = nil
+				return data, rec, anchors
+			},
+			reason: VerifyReasonNoArtifactForPlatform,
+		},
+		{
 			name: "no trust anchors",
 			mutate: func(data []byte, rec *SigilRecord, _ *AnchorSet) ([]byte, *SigilRecord, *AnchorSet) {
 				return data, rec, NewAnchorSet(nil)
@@ -101,7 +125,7 @@ func TestVerifyArtifactBytesFailures(t *testing.T) {
 			data, rec, anchors := setupBytesEnv(t)
 			data, rec, anchors = tc.mutate(data, rec, anchors)
 
-			err := VerifyArtifactBytes(data, rec, anchors)
+			err := VerifyArtifactBytes(data, rec, approvedOf(rec), anchors)
 			if !errors.Is(err, ErrSigilVerify) {
 				t.Fatalf("err = %v; expected ErrSigilVerify", err)
 			}

@@ -9,6 +9,8 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // commitFixtureSHA is the synthetic 40-hex commit [writeSlot] names the immutable slot
@@ -73,8 +75,20 @@ func TestReadSlot_Success(t *testing.T) {
 		t.Fatalf("read artifact: %v", err)
 	}
 	wantDigest := sha256.Sum256(raw)
-	if got.BinarySHA256 != hex.EncodeToString(wantDigest[:]) {
-		t.Errorf("BinarySHA256 = %q, want %q", got.BinarySHA256, hex.EncodeToString(wantDigest[:]))
+	// A git slot reads back as a one-row unplatformed release: the repository states
+	// no platform, so the grant records that absence rather than inventing one.
+	if got.Kind != sharedplugin.SourceKindGit {
+		t.Errorf("Kind = %q, want %q", got.Kind, sharedplugin.SourceKindGit)
+	}
+	if len(got.Artifacts) != 1 {
+		t.Fatalf("Artifacts = %d, want exactly one for a git slot", len(got.Artifacts))
+	}
+	if got.Artifacts[0].OS != sharedhost.AnyPlatform || got.Artifacts[0].Arch != sharedhost.AnyPlatform {
+		t.Errorf("git artifact declares a platform (%q/%q), want none",
+			got.Artifacts[0].OS, got.Artifacts[0].Arch)
+	}
+	if got.Artifacts[0].SHA256 != hex.EncodeToString(wantDigest[:]) {
+		t.Errorf("SHA256 = %q, want %q", got.Artifacts[0].SHA256, hex.EncodeToString(wantDigest[:]))
 	}
 
 	// The schema bytes must be the trailer's payload byte for byte: they are what the
@@ -90,8 +104,8 @@ func TestReadSlot_Success(t *testing.T) {
 	if got.Doc == nil || got.Doc.Kind != schema.KindSSHProvider {
 		t.Errorf("Doc = %+v, want a parsed ssh_provider document", got.Doc)
 	}
-	if filepath.Base(got.BinaryPath) != "hetzner" {
-		t.Errorf("BinaryPath = %q, want the slot's single artifact", got.BinaryPath)
+	if filepath.Base(got.Artifacts[0].BinaryPath) != "hetzner" {
+		t.Errorf("BinaryPath = %q, want the slot's single artifact", got.Artifacts[0].BinaryPath)
 	}
 }
 
@@ -107,8 +121,9 @@ func TestReadSlot_ArtifactNameIsIrrelevant(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadSlot: %v", err)
 	}
-	if filepath.Base(got.BinaryPath) != "some-completely-unrelated-filename" {
-		t.Errorf("BinaryPath = %q, want the slot's single artifact regardless of its name", got.BinaryPath)
+	if filepath.Base(got.Artifacts[0].BinaryPath) != "some-completely-unrelated-filename" {
+		t.Errorf("BinaryPath = %q, want the slot's single artifact regardless of its name",
+			got.Artifacts[0].BinaryPath)
 	}
 }
 
@@ -234,8 +249,9 @@ func TestReadSlot_RefIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ReadSlot #2: %v", err)
 	}
-	if a.BinarySHA256 != b.BinarySHA256 {
-		t.Errorf("single-slot must give a stable digest: %q != %q", a.BinarySHA256, b.BinarySHA256)
+	if a.Artifacts[0].SHA256 != b.Artifacts[0].SHA256 {
+		t.Errorf("single-slot must give a stable digest: %q != %q",
+			a.Artifacts[0].SHA256, b.Artifacts[0].SHA256)
 	}
 }
 

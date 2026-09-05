@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"bytes"
 	"crypto/sha256"
 	"encoding/hex"
 	"errors"
@@ -13,6 +14,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // ErrSlotNotFound indicates the cache has no slot `<cacheRoot>/<alias>/`, or the slot
@@ -25,12 +27,32 @@ var ErrSlotNotFound = errors.New("pluginhost: plugin slot not found in cache")
 // The resolver ([plugingit.Resolver]) updates it atomically when it populates the cache.
 const CurrentLink = "current"
 
-// SlotContents is what one slot holds, read by REGISTRATION ALIAS: the artifact's
-// path, the canonical schema document stamped into it, and the artifact's SHA-256.
+// SlotArtifact is one artifact inside a slot: which platform it serves, where it was
+// published, its digest, and where it now sits on this host.
 //
-// This is the input to the Sigil signature (ADR-026): Keeper reads the ACTIVE artifact
+// OS/Arch/Path/SHA256 are the fields that will be signed into the grant; BinaryPath is
+// local and is not. A git slot yields exactly one of these with an empty platform and
+// an empty path ([sharedhost.AnyPlatform]) — that source declares neither, and the
+// grant says so rather than inventing values.
+type SlotArtifact struct {
+	OS         string
+	Arch       string
+	Path       string
+	SHA256     string
+	BinaryPath string
+}
+
+// Sigil projects the row into the grant's artifact type, dropping the local path.
+func (a SlotArtifact) Sigil() sharedhost.SigilArtifact {
+	return sharedhost.SigilArtifact{OS: a.OS, Arch: a.Arch, Path: a.Path, SHA256: a.SHA256}
+}
+
+// SlotContents is what one slot holds, read by REGISTRATION ALIAS: the release's
+// artifacts and the canonical schema document stamped into them.
+//
+// This is the input to the Sigil signature (ADR-026): Keeper reads the ACTIVE release
 // of `<cacheRoot>/<alias>/current/` (R-nested layout, A1-S1: `current` is a symlink to
-// the immutable commit_sha-slot the git resolver populated).
+// the immutable slot a provider populated).
 //
 // The alias is the ONLY lookup key. The artifact carries no self-name since NIM-377 —
 // no namespace, no name, no filename convention — so there is nothing else a slot
@@ -38,31 +60,62 @@ const CurrentLink = "current"
 // derived from it agree on. `ref` is an operator-asserted label on the grant and takes
 // no part in the lookup.
 type SlotContents struct {
-	// BinaryPath is the absolute path of the artifact.
-	BinaryPath string
+	// Kind is the source kind that produced this slot ([sharedplugin.SourceKindGit] /
+	// …Artifact). It rides into the grant, where it tells a Soul how to reach the
+	// bytes.
+	Kind string
+	// Source is the address the resolver actually fetched this release from, when the
+	// slot records one. `plugin.allow` checks the operator's asserted `source` against
+	// it before signing, so a grant cannot claim an origin the Keeper never reached.
+	//
+	// EMPTY for a git slot, and that is a statement rather than a gap: a git slot is
+	// the pre-NIM-793 layout, carries no descriptor, and there is nowhere in it that
+	// records the remote. The git kind therefore keeps the operator-asserted `source`
+	// it always had — unchanged behaviour, as it must be — and only the artifact kind
+	// gains the check.
+	Source string
+	// Artifacts are the release's files, in canonical order. Never empty when
+	// ReadSlot returns no error.
+	Artifacts []SlotArtifact
 	// SchemaBytes are the canonical schema-document bytes read from the artifact's
 	// TRAILER — byte-exact, as [sharedhost.SchemaDigest] will hash them. Reading them
 	// from a sibling `schema.json` instead would let the signed disclosure differ from
 	// the one inside the bytes being approved.
+	//
+	// One document for the whole release. A release whose platform builds disclose
+	// DIFFERENT documents is refused rather than resolved to one of them: the
+	// disclosure is what the Archon approves, and there is no honest way to approve
+	// two of them with one signature.
 	SchemaBytes []byte
 	// Doc is SchemaBytes parsed and validated, for callers that need the kind or the
 	// module set without re-parsing. Never nil when ReadSlot returns no error.
 	Doc *sharedplugin.Document
-	// BinarySHA256 is the artifact's SHA-256 (hex, lowercase, 64 chars). Passed to
-	// Signer.Sign and stored in plugin_sigils.sha256.
-	BinarySHA256 string
 }
 
-// ReadSlot reads the ACTIVE artifact of the slot registered under alias, through the
+// SigilArtifacts projects the slot's rows into the grant's artifact list.
+func (s *SlotContents) SigilArtifacts() []sharedhost.SigilArtifact {
+	out := make([]sharedhost.SigilArtifact, 0, len(s.Artifacts))
+	for _, a := range s.Artifacts {
+		out = append(out, a.Sigil())
+	}
+	return out
+}
+
+// ReadSlot reads the ACTIVE release of the slot registered under alias, through the
 // current-symlink `<cacheRoot>/<alias>/current/` (R-nested layout, A1-S1).
 //
 // Steps:
-//  1. active slot `<cacheRoot>/<alias>/current/` (a symlink to a commit_sha
+//  1. active slot `<cacheRoot>/<alias>/current/` (a symlink to an immutable slot
 //     directory); missing / broken symlink → [ErrSlotNotFound];
-//  2. the slot's SINGLE executable — there is no filename to look up, so "exactly
+//  2. the release descriptor ([ReadRelease]). Absent → this is a git slot and step 3
+//     reads it the way it always did; present → an artifact release and step 4 reads
+//     its platform directories;
+//  3. git: the slot's SINGLE executable — there is no filename to look up, so "exactly
 //     one" is the rule and zero or several is an error, never a first-match guess;
-//  3. the canonical schema document from the artifact's trailer;
-//  4. streaming SHA-256 of the artifact.
+//  4. artifact: one file per declared platform, each re-digested and checked against
+//     the digest the descriptor recorded (a disagreement → [ErrReleaseUnreadable]);
+//  5. the canonical schema document from the artifact trailers — identical across the
+//     release or fail-closed;
 //
 // # Fail closed
 //
@@ -88,34 +141,136 @@ func ReadSlot(cacheRoot, alias string) (*SlotContents, error) {
 		return nil, fmt.Errorf("%w: %s is not a directory", ErrSlotNotFound, dir)
 	}
 
+	return ReadSlotDir(dir)
+}
+
+// ReadSlotDir reads one slot directory directly, without going through the alias and
+// the `current` symlink — steps 2 to 5 of [ReadSlot].
+//
+// Exported for the resolver, which has just materialized a specific immutable slot and
+// wants to read back exactly THAT one. Going through `current` would work today and
+// answer about a different slot the moment two resolves interleave; and reading back
+// through the same code the allow path uses is what keeps "what was cached" and "what
+// can be approved" from being two different notions of a valid slot.
+func ReadSlotDir(dir string) (*SlotContents, error) {
+	release, err := ReadRelease(dir)
+	if err != nil {
+		return nil, err
+	}
+	if release == nil {
+		return readGitSlot(dir)
+	}
+	return readReleaseSlot(dir, release)
+}
+
+// readGitSlot reads the historical single-artifact slot. Unchanged behaviour: one
+// executable, its trailer, its digest — expressed as a one-row unplatformed release so
+// everything downstream sees one shape.
+func readGitSlot(dir string) (*SlotContents, error) {
 	binPath, err := SingleArtifactIn(dir)
 	if err != nil {
 		return nil, fmt.Errorf("%w: %s: %v", ErrSlotNotFound, dir, err)
 	}
 
-	schemaBytes, err := schema.ReadTrailerFile(binPath)
+	schemaBytes, doc, err := readSlotSchema(binPath)
 	if err != nil {
-		return nil, fmt.Errorf("pluginhost: read schema of %q: %w", binPath, err)
+		return nil, err
 	}
-	doc, diags := sharedplugin.ParseDocument(binPath, schemaBytes)
-	if derr := sharedplugin.FirstError(diags); derr != nil {
-		return nil, fmt.Errorf("pluginhost: invalid schema document in %q: %w", binPath, derr)
-	}
-	if doc == nil {
-		return nil, fmt.Errorf("pluginhost: artifact %q carries no readable schema document", binPath)
-	}
-
 	digest, err := fileDigest(binPath)
 	if err != nil {
 		return nil, err
 	}
 
 	return &SlotContents{
-		BinaryPath:   binPath,
-		SchemaBytes:  schemaBytes,
-		Doc:          doc,
-		BinarySHA256: digest,
+		Kind: sharedplugin.SourceKindGit,
+		Artifacts: []SlotArtifact{{
+			OS:         sharedhost.AnyPlatform,
+			Arch:       sharedhost.AnyPlatform,
+			SHA256:     digest,
+			BinaryPath: binPath,
+		}},
+		SchemaBytes: schemaBytes,
+		Doc:         doc,
 	}, nil
+}
+
+// readReleaseSlot reads a multi-platform slot against its descriptor.
+//
+// Every file is re-digested rather than trusted from the descriptor. That is what
+// keeps the descriptor from being a claim: it records what the resolver fetched, and
+// if the bytes on disk have since changed, the slot is refused instead of approving a
+// digest nobody re-checked.
+//
+// The schema is read from EVERY artifact and all of them must be byte-identical. A
+// release whose platform builds disclose different things has no single disclosure to
+// approve, and picking one — the first, or this host's — would sign a document the
+// other platforms do not carry.
+func readReleaseSlot(dir string, release *Release) (*SlotContents, error) {
+	var (
+		artifacts   []SlotArtifact
+		schemaBytes []byte
+		doc         *sharedplugin.Document
+		schemaFrom  string
+	)
+	for _, want := range release.Artifacts {
+		platformDir := filepath.Join(dir, want.Dir())
+		binPath, aerr := SingleArtifactIn(platformDir)
+		if aerr != nil {
+			return nil, fmt.Errorf("%w: %s: %v", ErrReleaseUnreadable, platformDir, aerr)
+		}
+		digest, derr := fileDigest(binPath)
+		if derr != nil {
+			return nil, derr
+		}
+		if digest != want.SHA256 {
+			return nil, fmt.Errorf("%w: %s is %s, the release records %s",
+				ErrReleaseUnreadable, binPath, digest, want.SHA256)
+		}
+
+		gotSchema, gotDoc, serr := readSlotSchema(binPath)
+		if serr != nil {
+			return nil, serr
+		}
+		if schemaBytes == nil {
+			schemaBytes, doc, schemaFrom = gotSchema, gotDoc, binPath
+		} else if !bytes.Equal(schemaBytes, gotSchema) {
+			return nil, fmt.Errorf("%w: %s discloses a different schema document than %s — one release cannot have two disclosures",
+				ErrReleaseUnreadable, binPath, schemaFrom)
+		}
+
+		artifacts = append(artifacts, SlotArtifact{
+			OS: want.OS, Arch: want.Arch, Path: want.Path, SHA256: digest, BinaryPath: binPath,
+		})
+	}
+	if len(artifacts) == 0 {
+		// ReadRelease already refuses an empty list — defensive.
+		return nil, fmt.Errorf("%w: %s holds no artifacts", ErrReleaseUnreadable, dir)
+	}
+	return &SlotContents{
+		Kind:        release.Kind,
+		Source:      release.Source,
+		Artifacts:   artifacts,
+		SchemaBytes: schemaBytes,
+		Doc:         doc,
+	}, nil
+}
+
+// readSlotSchema reads and validates the canonical schema document out of an
+// artifact's trailer, WITHOUT executing it: at this point the binary is precisely what
+// is not yet approved.
+func readSlotSchema(binPath string) ([]byte, *sharedplugin.Document, error) {
+	schemaBytes, err := schema.ReadTrailerFile(binPath)
+	if err != nil {
+		return nil, nil, fmt.Errorf("pluginhost: read schema of %q: %w", binPath, err)
+	}
+	doc, diags := sharedplugin.ParseDocument(binPath, schemaBytes)
+	if derr := sharedplugin.FirstError(diags); derr != nil {
+		return nil, nil, fmt.Errorf("pluginhost: invalid schema document in %q: %w", binPath, derr)
+	}
+	if doc == nil {
+		return nil, nil, fmt.Errorf("pluginhost: artifact %q carries no readable schema document", binPath)
+	}
+	return schemaBytes, doc, nil
 }
 
 // SlotCommitSHA reads the commit_sha of the ACTIVE slot registered under alias — the

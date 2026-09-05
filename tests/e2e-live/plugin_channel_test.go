@@ -55,8 +55,8 @@ func TestL3bPluginChannel_CatalogAndAllow(t *testing.T) {
 	for _, it := range items {
 		if it.Alias == harness.RedisAlias && it.Source == repoURL && it.Ref == harness.RedisPluginRef {
 			found = true
-			if it.SHA256 != sha {
-				t.Errorf("list sha256 = %q, allow returned %q", it.SHA256, sha)
+			if it.SHA256() != sha {
+				t.Errorf("list sha256 = %q, allow returned %q", it.SHA256(), sha)
 			}
 		}
 	}

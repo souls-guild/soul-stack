@@ -22,6 +22,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 
 	"github.com/souls-guild/soul-stack/shared/config"
 	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
@@ -182,12 +183,46 @@ func Discover(cacheRoot string) ([]Discovered, []string, error) {
 				filepath.Join(cacheRoot, alias), statErr))
 			continue
 		}
-		found, warns := sharedhost.DiscoverSlot(alias, current)
+		dir, derr := hostArtifactDir(current)
+		if derr != nil {
+			warnings = append(warnings, fmt.Sprintf("skip %s: %v", current, derr))
+			continue
+		}
+		found, warns := sharedhost.DiscoverSlot(alias, dir)
 		all = append(all, found...)
 		warnings = append(warnings, warns...)
 	}
 	keeperOnly, filterWarns := sharedhost.FilterByKinds(all, []Kind{KindSSHProvider, KindSoulModule})
 	return keeperOnly, append(warnings, filterWarns...), nil
+}
+
+// hostArtifactDir returns the directory inside an active slot that holds the artifact
+// THIS Keeper can run.
+//
+// For a git slot that is the slot itself: one executable, no platform stated. For an
+// artifact release it is the `<os>-<arch>` subdirectory for the Keeper's own platform,
+// because a release holds one binary per platform and the Keeper spawns the plugins it
+// discovers — running another platform's build is not a thing to fall back to.
+//
+// A release that covers no platform this Keeper runs on is an ERROR here, which the
+// caller turns into a discovery warning and a skip. Deliberately not silent: the
+// operator declared a plugin that this Keeper cannot execute, and "not discovered"
+// with no line in the log would read exactly like "not declared".
+func hostArtifactDir(current string) (string, error) {
+	release, err := ReadRelease(current)
+	if err != nil {
+		return "", err
+	}
+	if release == nil {
+		return current, nil
+	}
+	for _, a := range release.Artifacts {
+		if a.OS == runtime.GOOS && a.Arch == runtime.GOARCH {
+			return filepath.Join(current, a.Dir()), nil
+		}
+	}
+	return "", fmt.Errorf("%w: the release approves no artifact for %s/%s",
+		ErrReleaseUnreadable, runtime.GOOS, runtime.GOARCH)
 }
 
 // FilterByCatalog keeps in `found` only entries whose registration ALIAS is declared in

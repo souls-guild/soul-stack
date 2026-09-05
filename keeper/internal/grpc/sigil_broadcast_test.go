@@ -11,6 +11,8 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // fakeSigilStore — a configurable [SigilStore] implementation for
@@ -74,7 +76,8 @@ func TestBroadcastSigils_SendsSnapshotWithSignedSchema(t *testing.T) {
 		Alias:     "template",
 		Source:    "https://example.com/soul-mod-template.git",
 		Ref:       "v1.0.0",
-		SHA256:    "deadbeef",
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: []sharedhost.SigilArtifact{{SHA256: "deadbeef"}},
 		Signature: []byte("ed25519-sig"),
 		Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 		CommitSHA: "0123456789abcdef0123456789abcdef01234567",
@@ -98,8 +101,11 @@ func TestBroadcastSigils_SendsSnapshotWithSignedSchema(t *testing.T) {
 	if got.GetAlias() != "template" || got.GetSource() != rec.Source || got.GetRef() != "v1.0.0" {
 		t.Errorf("identity = %+v", got)
 	}
-	if got.GetBinarySha256() != "deadbeef" {
-		t.Errorf("binary_sha256 = %q, want deadbeef", got.GetBinarySha256())
+	if got.GetKind() != sharedplugin.SourceKindGit {
+		t.Errorf("kind = %q, want %q", got.GetKind(), sharedplugin.SourceKindGit)
+	}
+	if len(got.GetArtifacts()) != 1 || got.GetArtifacts()[0].GetSha256() != "deadbeef" {
+		t.Errorf("artifacts = %+v, want the one row deadbeef", got.GetArtifacts())
 	}
 	// CRITICAL (M1): the schema on the wire is the byte-exact signed document — a Soul
 	// re-hashes exactly these bytes, so anything re-derived here would verify against
@@ -160,8 +166,10 @@ func TestBroadcastSigils_ListErrorDoesNotPanicAndSkips(t *testing.T) {
 
 func TestBroadcastSigils_SendFailDoesNotPanic(t *testing.T) {
 	recs := []*sigil.Sigil{
-		{Alias: "a", Source: "https://example.com/a.git", Ref: "v1", SHA256: "aa", Signature: []byte("s1"), Schema: []byte("m1")},
-		{Alias: "b", Source: "https://example.com/b.git", Ref: "v1", SHA256: "bb", Signature: []byte("s2"), Schema: []byte("m2")},
+		{Alias: "a", Source: "https://example.com/a.git", Ref: "v1",
+			Artifacts: []sharedhost.SigilArtifact{{SHA256: "aa"}}, Signature: []byte("s1"), Schema: []byte("m1")},
+		{Alias: "b", Source: "https://example.com/b.git", Ref: "v1",
+			Artifacts: []sharedhost.SigilArtifact{{SHA256: "bb"}}, Signature: []byte("s2"), Schema: []byte("m2")},
 	}
 	h := newBroadcastHandler(t, &fakeSigilStore{recs: recs})
 	stream := &fakeBidiStream{failAt: 1}

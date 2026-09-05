@@ -18,12 +18,16 @@ func (c fakeCache) Get(alias string) *keeperv1.PluginSigil { return c[alias] }
 // verify hash something other than what Keeper signed.
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	sig := &keeperv1.PluginSigil{
-		Alias:        "redis",
-		Source:       "https://github.com/souls-guild/soul-mod-redis",
-		Ref:          "v2.0.0",
-		BinarySha256: "abc123",
-		Signature:    []byte{1, 2, 3, 4},
-		Schema:       []byte(`{"kind":"soul_module","protocol_version":1}`),
+		Alias:  "redis",
+		Source: "https://github.com/souls-guild/soul-mod-redis",
+		Ref:    "v2.0.0",
+		Kind:   "artifact",
+		Artifacts: []*keeperv1.SigilArtifact{
+			{Os: "linux", Arch: "amd64", Path: "redis_linux_amd64", Sha256: "abc123"},
+			{Os: "linux", Arch: "arm64", Path: "redis_linux_arm64", Sha256: "def456"},
+		},
+		Signature: []byte{1, 2, 3, 4},
+		Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 	}
 	a := NewSigilLookupAdapter(fakeCache{"redis": sig})
 
@@ -34,8 +38,21 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 	if rec.Alias != "redis" || rec.Source != sig.GetSource() || rec.Ref != "v2.0.0" {
 		t.Errorf("identity mismatch: %+v", rec)
 	}
-	if rec.BinarySHA256hex != "abc123" {
-		t.Errorf("BinarySHA256hex = %q", rec.BinarySHA256hex)
+	if rec.Kind != "artifact" {
+		t.Errorf("Kind = %q, want artifact", rec.Kind)
+	}
+	// The WHOLE list crosses, unfiltered: the signature is over every row, so an
+	// adapter that dropped the other platforms' rows would leave a record that cannot
+	// verify at all.
+	if len(rec.Artifacts) != 2 {
+		t.Fatalf("Artifacts = %d, want both rows of the release", len(rec.Artifacts))
+	}
+	for i, want := range sig.GetArtifacts() {
+		got := rec.Artifacts[i]
+		if got.OS != want.GetOs() || got.Arch != want.GetArch() ||
+			got.Path != want.GetPath() || got.SHA256 != want.GetSha256() {
+			t.Errorf("Artifacts[%d] = %+v, want %+v", i, got, want)
+		}
 	}
 	if !bytes.Equal(rec.Signature, []byte{1, 2, 3, 4}) {
 		t.Errorf("Signature = %v", rec.Signature)

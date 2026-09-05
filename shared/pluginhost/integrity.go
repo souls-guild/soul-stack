@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"runtime"
 )
 
 // ErrPluginDigestMismatch — the plugin binary did not match the SHA-256 pinned
@@ -59,13 +60,17 @@ func computeFileDigest(path string) (string, error) {
 //  2. lookup by registration alias; rec == nil → fail-closed no_sigil (a Sigil that
 //     didn't arrive = "not allowed", NOT "error → allow");
 //  3. empty anchor set → fail-closed no_trust_anchor (Sigil not configured on Keeper);
-//  4. compare the artifact digest with the approved hash (binary_sha256) →
-//     digest_mismatch. This is the one real control: the operator approved a sha256,
+//  4. select this host's artifact row from the grant ([SelectArtifact], NIM-793); no
+//     row for the platform → no_artifact_for_platform, fail-closed. Then compare the
+//     artifact digest with that row's approved hash → digest_mismatch.
+//     This is the one real control: the operator approved a sha256 FOR THIS PLATFORM,
 //     and no other bytes get to exec;
 //  5. schema_sha256 = SchemaDigest(rec.Schema) — bytes FROM TRANSPORT (M1), NOT the
 //     trailer on disk;
-//  6. block = BuildSigilBlock(source, ref, …) — the same helper Keeper uses at Sign
-//     (sign↔verify symmetry guaranteed by the compiler, not a second implementation);
+//  6. block = BuildSigilBlock(source, kind, ref, …) over the WHOLE artifact list — the
+//     same helper Keeper uses at Sign (sign↔verify symmetry guaranteed by the compiler,
+//     not a second implementation). The signature covers every row, so substituting one
+//     platform's digest breaks the check for all of them;
 //  7. OR loop over the anchor set (ADR-026(h), multi-anchor): the signature is valid
 //     if ANY anchor in the set verifies it via ed25519.Verify → pass; none of a
 //     non-empty set → bad_signature. OR semantics give seamless signing-key rotation
@@ -91,7 +96,11 @@ func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicK
 	if sigils != nil {
 		rec = sigils.Get(alias)
 	}
-	if err := verifyRecordAgainstDigest(binDigestHex, alias, rec, anchors); err != nil {
+	// The spawn path selects by the RUNNING binary's platform, and that is exact
+	// rather than a guess: this process is about to exec the artifact, so the platform
+	// is literally this one. The install path decides differently (see
+	// [VerifyArtifactBytes]) because it is choosing what to download, not what to run.
+	if err := verifyRecordAgainstDigest(binDigestHex, alias, rec, rec.Artifact(runtime.GOOS, runtime.GOARCH), anchors); err != nil {
 		return err
 	}
 
@@ -114,20 +123,30 @@ func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicK
 // Same normative chain as [verifySigilAndSeal] (digest → signature over the block),
 // but the input is in-memory bytes; no sidecar-seal is done — the file doesn't exist
 // yet, the first Spawn after install seals it.
-func VerifyArtifactBytes(data []byte, rec *SigilRecord, anchors *AnchorSet) error {
+//
+// approved is the grant row the CALLER selected and fetched — passed in rather than
+// re-derived here, and that is the point. The install flow picks the row from the
+// host's own Soulprint facts (ADR-018); this package can only see runtime.GOOS/GOARCH.
+// Two derivations of one platform agree until either changes, and the disagreement
+// would surface as digest_mismatch — the diagnostic for tampering, on a host that
+// merely spells its architecture differently. One selection, checked here.
+//
+// nil approved is fail-closed as no_artifact_for_platform: the caller found no row,
+// and there is nothing safe to substitute.
+func VerifyArtifactBytes(data []byte, rec *SigilRecord, approved *SigilArtifact, anchors *AnchorSet) error {
 	sum := sha256.Sum256(data)
 	var alias string
 	if rec != nil {
 		alias = rec.Alias
 	}
-	return verifyRecordAgainstDigest(hex.EncodeToString(sum[:]), alias, rec, anchors.snapshot())
+	return verifyRecordAgainstDigest(hex.EncodeToString(sum[:]), alias, rec, approved, anchors.snapshot())
 }
 
 // verifyRecordAgainstDigest — the shared middle of verify (steps 2–7 of the
 // normative order in [verifySigilAndSeal]): lookup result → anchors → digest compare
 // → block signature. binDigestHex is the actual digest of the artifact under check
 // (file or in-memory bytes).
-func verifyRecordAgainstDigest(binDigestHex, alias string, rec *SigilRecord, anchors []ed25519.PublicKey) error {
+func verifyRecordAgainstDigest(binDigestHex, alias string, rec *SigilRecord, approved *SigilArtifact, anchors []ed25519.PublicKey) error {
 	if rec == nil {
 		return verifyErrorFor(VerifyReasonNoSigil, alias, "", "")
 	}
@@ -144,7 +163,14 @@ func verifyRecordAgainstDigest(binDigestHex, alias string, rec *SigilRecord, anc
 		return verifyErrorFor(VerifyReasonNoTrustAnchor, alias, rec.Source, rec.Ref)
 	}
 
-	binRaw, err := hex.DecodeString(rec.BinarySHA256hex)
+	// The grant approves a release, so exactly one of its rows says which bytes are
+	// approved here — and the caller has already decided which, because the caller is
+	// the one that knows this host's platform.
+	if approved == nil {
+		return verifyErrorFor(VerifyReasonNoArtifactForPlatform, alias, rec.Source, rec.Ref)
+	}
+
+	binRaw, err := hex.DecodeString(approved.SHA256)
 	if err != nil {
 		// Approved hash isn't hex — the record is broken, fail-closed as mismatch
 		// (the artifact can't match an invalid reference).
@@ -160,7 +186,13 @@ func verifyRecordAgainstDigest(binDigestHex, alias string, rec *SigilRecord, anc
 	}
 
 	schemaDigest := SchemaDigest(rec.Schema)
-	block := BuildSigilBlock(rec.Source, rec.Ref, binRaw, schemaDigest[:])
+	block, err := BuildSigilBlock(rec.Source, rec.Kind, rec.Ref, schemaDigest[:], rec.Artifacts)
+	if err != nil {
+		// The list the grant carries is not one a signature can exist over (empty,
+		// duplicate platform, malformed digest). Nothing signed it, so treat it the
+		// way an unsigned grant is treated rather than reporting a broken digest.
+		return verifyErrorFor(VerifyReasonBadSignature, alias, rec.Source, rec.Ref)
+	}
 	if !verifyAnyAnchor(anchors, block, rec.Signature) {
 		return verifyErrorFor(VerifyReasonBadSignature, alias, rec.Source, rec.Ref)
 	}

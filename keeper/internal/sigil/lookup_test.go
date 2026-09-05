@@ -7,6 +7,8 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // soulModuleSchemaJSON is a canonical soul_module document. The modules are named;
@@ -36,20 +38,17 @@ const moduleSHA = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 
 func moduleSigil(sha string) *Sigil {
 	return &Sigil{
-		Alias:  "redis",
-		Source: moduleSourceURL,
-		Ref:    "v1.0.0",
-		SHA256: sha,
-		Schema: []byte(soulModuleSchemaJSON),
+		Alias:     "redis",
+		Source:    moduleSourceURL,
+		Ref:       "v1.0.0",
+		Kind:      sharedplugin.SourceKindGit,
+		Artifacts: []sharedhost.SigilArtifact{{SHA256: sha}},
+		Schema:    []byte(soulModuleSchemaJSON),
 	}
 }
 
 func moduleSlot(sha string) *pluginhost.SlotContents {
-	return &pluginhost.SlotContents{
-		BinaryPath:   "/cache/redis/current/redis",
-		SchemaBytes:  []byte(soulModuleSchemaJSON),
-		BinarySHA256: sha,
-	}
+	return gitSlot("/cache/redis/current/redis", soulModuleSchemaJSON, sha)
 }
 
 func lookupService(t *testing.T, store Store, slots SlotReader) *Service {
@@ -94,7 +93,7 @@ func TestService_LookupModuleBinary_WrongKindRejected(t *testing.T) {
 	rec.Alias = "hetzner"
 	rec.Schema = []byte(sshSchemaJSON)
 	slot := slotFixture()
-	slot.BinarySHA256 = moduleSHA
+	slot.Artifacts[0].SHA256 = moduleSHA
 	svc := lookupService(t,
 		&fakeStore{listResult: []*Sigil{rec}},
 		mapSlotReader{slots: map[string]*pluginhost.SlotContents{"hetzner": slot}},
@@ -133,14 +132,14 @@ func TestService_LookupModuleBinary_StoreError(t *testing.T) {
 func TestService_Allow_SoulModuleKindAgnostic(t *testing.T) {
 	store := &fakeStore{}
 	svc := lookupService(t, store, fakeSlotReader{slot: moduleSlot(moduleSHA), commit: testCommitSHA})
-	sha, err := svc.Allow(context.Background(), AllowInput{
+	approved, err := svc.Allow(context.Background(), AllowInput{
 		Alias: "redis", Source: moduleSourceURL, Ref: "v1.0.0", CallerAID: "archon-ops",
 	})
 	if err != nil {
 		t.Fatalf("Allow(kind=soul_module): %v", err)
 	}
-	if sha != moduleSHA {
-		t.Fatalf("sha = %q, want %q", sha, moduleSHA)
+	if len(approved.Artifacts) != 1 || approved.Artifacts[0].SHA256 != moduleSHA {
+		t.Fatalf("approved = %+v, want the one row %q", approved.Artifacts, moduleSHA)
 	}
 	if store.inserted == nil || store.inserted.Alias != "redis" || store.inserted.Source != moduleSourceURL {
 		t.Fatalf("inserted = %+v", store.inserted)

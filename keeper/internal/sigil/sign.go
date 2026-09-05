@@ -3,11 +3,11 @@ package sigil
 import (
 	"crypto/ed25519"
 	"crypto/x509"
-	"encoding/hex"
 	"encoding/pem"
 	"fmt"
 	"regexp"
 
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 	"github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
@@ -150,8 +150,8 @@ func publicKeyToPEM(pub ed25519.PublicKey) ([]byte, error) {
 	return pem.EncodeToMemory(&pem.Block{Type: "PUBLIC KEY", Bytes: der}), nil
 }
 
-// Sign signs a Sigil grant for the artifact that came from source at ref, with digest
-// binarySHA256hex and canonical schema document schemaDoc.
+// Sign signs a Sigil grant for the release that came from source at ref, with the
+// artifact list `artifacts` and canonical schema document schemaDoc.
 //
 // # What is signed, and what is not
 //
@@ -162,40 +162,42 @@ func publicKeyToPEM(pub ed25519.PublicKey) ([]byte, error) {
 // registering the same bytes a second time under a second alias must not require a
 // second signature, and forging an alias must not be able to reach a signature at all.
 //
+// The block covers the WHOLE list (NIM-793), not this host's row. One release is one
+// approval, and a signature over one row would let the other rows be edited without
+// breaking anything — which is the same as not approving them.
+//
 // Steps (normative order, symmetric to verify on Soul, S6):
-//  1. binarySHA256Raw = hex-decode(binarySHA256hex) — the raw 32 bytes of the digest;
-//  2. schemaSHA256Raw = SchemaDigest(schemaDoc) — a plain SHA-256. There is no
+//  1. schemaSHA256Raw = SchemaDigest(schemaDoc) — a plain SHA-256. There is no
 //     normalization step because there is nothing left to normalize: the document is
 //     canonical JSON from one serializer and travels with the artifact, so both sides
 //     of the seal hash the same function over the same bytes;
-//  3. block = BuildSigilBlock(source, ref, …) — the deterministic DST-v2 block with
-//     length-prefixed fields;
-//  4. signature = ed25519.Sign(priv, block) — raw 64 bytes.
+//  2. block = BuildSigilBlock(source, kind, ref, …, artifacts) — the deterministic
+//     DST-v3 block with length-prefixed fields, over the canonically ordered list. An
+//     unsignable list (empty, a duplicate platform, a malformed digest) comes back as
+//     an error here and never becomes a grant;
+//  3. signature = ed25519.Sign(priv, block) — raw 64 bytes.
 //
-// binarySHA256hex must be 64 lowercase hex chars. schemaDoc must be non-empty: an
-// empty document has no disclosure to approve, and signing one would produce a valid
-// seal over "this artifact says nothing".
-func (s *Signer) Sign(source, ref, binarySHA256hex string, schemaDoc []byte) ([]byte, error) {
+// schemaDoc must be non-empty: an empty document has no disclosure to approve, and
+// signing one would produce a valid seal over "this artifact says nothing".
+func (s *Signer) Sign(source, kind, ref string, artifacts []pluginhost.SigilArtifact, schemaDoc []byte) ([]byte, error) {
 	if source == "" {
 		return nil, fmt.Errorf("sigil: source is empty (the artifact's only signed identity)")
+	}
+	if !sharedplugin.ValidSourceKind(kind) {
+		return nil, fmt.Errorf("sigil: source kind %q is not one of %v", kind, sharedplugin.SourceKinds())
 	}
 	if ref == "" {
 		return nil, fmt.Errorf("sigil: ref is empty")
 	}
-	if !reSHA256Hex.MatchString(binarySHA256hex) {
-		return nil, fmt.Errorf("sigil: binary sha256 %q must be 64 lower-hex chars", binarySHA256hex)
-	}
 	if len(schemaDoc) == 0 {
 		return nil, fmt.Errorf("sigil: schema document is empty (nothing to disclose, nothing to approve)")
 	}
-	binarySHA256Raw, err := hex.DecodeString(binarySHA256hex)
-	if err != nil {
-		// reSHA256Hex already guarantees valid hex — defensive, should not happen.
-		return nil, fmt.Errorf("sigil: decode binary sha256: %w", err)
-	}
 
 	schemaDigest := pluginhost.SchemaDigest(schemaDoc)
-	block := pluginhost.BuildSigilBlock(source, ref, binarySHA256Raw, schemaDigest[:])
+	block, err := pluginhost.BuildSigilBlock(source, kind, ref, schemaDigest[:], artifacts)
+	if err != nil {
+		return nil, fmt.Errorf("sigil: assemble block: %w", err)
+	}
 
 	return ed25519.Sign(s.priv, block), nil
 }

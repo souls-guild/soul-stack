@@ -14,13 +14,17 @@ import (
 // [sigil.SigilView]: catalog fields WITHOUT the signature or the schema (crypto
 // material / a large document; neither is part of the allow-list feed).
 type sigilView struct {
-	Alias        string     `json:"alias"`
-	Source       string     `json:"source"`
-	Ref          string     `json:"ref"`
-	SHA256       string     `json:"sha256"`
-	AllowedByAID string     `json:"allowed_by_aid"`
-	AllowedAt    time.Time  `json:"allowed_at"`
-	RevokedAt    *time.Time `json:"revoked_at"`
+	Alias  string `json:"alias"`
+	Source string `json:"source"`
+	Ref    string `json:"ref"`
+	Kind   string `json:"kind"`
+	// Artifacts is the whole approved release, not this Keeper's platform: an
+	// operator auditing the allow-list has to be able to see every digest that
+	// approval covers.
+	Artifacts    []pluginArtifactOutput `json:"artifacts"`
+	AllowedByAID string                 `json:"allowed_by_aid"`
+	AllowedAt    time.Time              `json:"allowed_at"`
+	RevokedAt    *time.Time             `json:"revoked_at"`
 }
 
 // pluginListOutput — output of keeper.plugin.list: the feed of active
@@ -70,7 +74,8 @@ func (h *Handler) callPluginList(ctx context.Context, claims *jwt.Claims, req js
 			Alias:        v.Alias,
 			Source:       v.Source,
 			Ref:          v.Ref,
-			SHA256:       v.SHA256,
+			Kind:         v.Kind,
+			Artifacts:    artifactOutputsOf(v.Artifacts),
 			AllowedByAID: v.AllowedByAID,
 			AllowedAt:    v.AllowedAt,
 			RevokedAt:    v.RevokedAt,

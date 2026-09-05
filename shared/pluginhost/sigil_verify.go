@@ -31,51 +31,34 @@ import (
 //     operator-asserted and not checked against disk.
 //
 // The remaining fields are the seal itself:
-//   - BinarySHA256hex — the approved artifact hash (64 lowercase hex chars), checked
-//     against the actual digest. This is the one real control on the spawn path;
+//   - Kind — the source kind ([plugin.SourceKindGit] / …Artifact): how the bytes are
+//     reached. Signed, so a rewritten catalog cannot redirect a fetch;
+//   - Artifacts — the approved artifacts of the release, one row per platform
+//     (NIM-793). The host picks its row with [SelectArtifact] and checks the actual
+//     digest against that row's SHA256; no row for the platform is fail-closed. This
+//     is the one real control on the spawn path;
 //   - Signature — raw bytes of the block's ed25519 signature (64 bytes);
 //   - Schema — the canonical schema-document bytes from transport (M1), hashed via
 //     [SchemaDigest]: NOT the trailer read from disk, otherwise the hash could diverge
 //     from what Keeper signed while still looking self-consistent.
 type SigilRecord struct {
-	Alias           string
-	Source          string
-	Ref             string
-	BinarySHA256hex string
-	Signature       []byte
-	Schema          []byte
-
-	// BaseURL and Artifacts carry an ARTIFACT-kind grant: one grant per (source,
-	// ref) whose block covers the whole release, and the host pulls the bytes from
-	// the source itself instead of over Keeper's EventStream (NIM-793). Empty
-	// Artifacts = the grant names no artifacts, and the bytes come from Keeper.
-	//
-	// Neither is read by verify here, and until that changes a grant only installs on
-	// the platform whose row digest equals BinarySHA256hex. The signed block is still
-	// [BuildSigilBlock](source, ref, binary_sha256, schema_sha256): making it cover
-	// the list means changing what Keeper SIGNS, and sign and verify are one helper on
-	// purpose, so both ends move together or neither does (NIM-795). Until they do,
-	// every OTHER row fetches, then fails closed at verify with digest_mismatch — the
-	// safe direction, and the reason fetching comes last.
-	BaseURL   string
+	Alias     string
+	Source    string
+	Ref       string
+	Kind      string
 	Artifacts []SigilArtifact
+	Signature []byte
+	Schema    []byte
 }
 
-// SigilArtifact is one platform's row of an artifact-kind grant.
-//
-// A release covers several platforms under ONE signature: different platforms mean
-// different binaries and therefore different digests, so the grant carries a LIST
-// rather than a path template plus one digest — under a template, verification could
-// only ever succeed on one platform.
-//
-// Path is relative to [SigilRecord.BaseURL], and is a plain path with no
-// substitutions: a URL is where executable bytes come from, and an address that can
-// be computed is an address that can be steered.
-type SigilArtifact struct {
-	OS        string
-	Arch      string
-	Path      string
-	SHA256hex string
+// Artifact picks this grant's row for a host on (goos, goarch); nil = this release is
+// not approved for that platform. Thin wrapper over [SelectArtifact] so the callers
+// that hold a record do not each reach into its slice.
+func (r *SigilRecord) Artifact(goos, goarch string) *SigilArtifact {
+	if r == nil {
+		return nil
+	}
+	return SelectArtifact(r.Artifacts, goos, goarch)
 }
 
 // SigilLookup is the read surface for the active grant by registration alias.
@@ -106,8 +89,14 @@ const (
 	// Sigil is not configured on the Keeper, nothing to verify the signature with.
 	VerifyReasonNoTrustAnchor VerifyReason = "no_trust_anchor"
 	// VerifyReasonDigestMismatch — the actual digest of the artifact on disk did not
-	// match the approved hash (binary_sha256 in the Sigil).
+	// match the approved hash of this host's row in the grant.
 	VerifyReasonDigestMismatch VerifyReason = "digest_mismatch"
+	// VerifyReasonNoArtifactForPlatform — the grant is live, but it approves no
+	// artifact for the platform this host runs on (NIM-793). Fail-closed and NOT a
+	// digest mismatch: nothing was approved to compare against, so the operator's fix
+	// is to publish and re-approve a release that covers the platform, not to
+	// investigate tampering.
+	VerifyReasonNoArtifactForPlatform VerifyReason = "no_artifact_for_platform"
 	// VerifyReasonBadSignature — the Sigil signature failed verification by the trust
 	// anchor (schema/artifact/source/ref tampered with, or key rotation without
 	// recreating the grant).
@@ -154,6 +143,9 @@ func verifyErrorFor(reason VerifyReason, alias, source, ref string) *VerifyError
 		hint = "Sigil is not configured on Keeper (no trust-anchor to verify plugin signatures)"
 	case VerifyReasonDigestMismatch:
 		hint = "artifact does not match the approved hash (binary substitution or a stale allow)"
+	case VerifyReasonNoArtifactForPlatform:
+		hint = fmt.Sprintf("the active grant on %s@%s approves no artifact for this platform; publish one and re-approve the release (`keeper.plugin.allow alias=%s source=%s ref=%s`)",
+			source, ref, alias, source, ref)
 	case VerifyReasonBadSignature:
 		hint = fmt.Sprintf("allow signature is invalid (signing key rotated? recreate the allow: `keeper.plugin.allow alias=%s source=%s ref=%s`)",
 			alias, source, ref)

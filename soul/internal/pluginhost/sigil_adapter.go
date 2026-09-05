@@ -36,6 +36,11 @@ func NewSigilLookupAdapter(cache sigilCache) *SigilLookupAdapter {
 // Schema comes from PluginSigil.Schema — the canonical schema-document bytes from the
 // transport (M1), which verify hashes with SchemaDigest (S3↔S6 invariant: not the
 // parsed form, not the trailer read from disk).
+//
+// The WHOLE artifact list is carried across, unfiltered (NIM-793). The signature is
+// over the whole list, so dropping the rows for other platforms here would leave a
+// record that cannot verify; selecting this host's row is a separate step, done where
+// the bytes are checked.
 func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 	if a.cache == nil {
 		return nil
@@ -44,12 +49,19 @@ func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 	if sig == nil {
 		return nil
 	}
+	artifacts := make([]sharedhost.SigilArtifact, 0, len(sig.GetArtifacts()))
+	for _, a := range sig.GetArtifacts() {
+		artifacts = append(artifacts, sharedhost.SigilArtifact{
+			OS: a.GetOs(), Arch: a.GetArch(), Path: a.GetPath(), SHA256: a.GetSha256(),
+		})
+	}
 	return &sharedhost.SigilRecord{
-		Alias:           sig.GetAlias(),
-		Source:          sig.GetSource(),
-		Ref:             sig.GetRef(),
-		BinarySHA256hex: sig.GetBinarySha256(),
-		Signature:       sig.GetSignature(),
-		Schema:          sig.GetSchema(),
+		Alias:     sig.GetAlias(),
+		Source:    sig.GetSource(),
+		Ref:       sig.GetRef(),
+		Kind:      sig.GetKind(),
+		Artifacts: artifacts,
+		Signature: sig.GetSignature(),
+		Schema:    sig.GetSchema(),
 	}
 }

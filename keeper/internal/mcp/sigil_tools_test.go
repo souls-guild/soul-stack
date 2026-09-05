@@ -17,6 +17,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac/rbactest"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
+	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
 // --- sigil fakes ---
@@ -88,9 +90,12 @@ const mcpSigilSource = "https://example.com/soul-cloud-hetzner.git"
 // sigilSlotFixture — a valid cache slot (artifact + stamped schema) for the Allow flow.
 func sigilSlotFixture() *pluginhost.SlotContents {
 	return &pluginhost.SlotContents{
-		BinaryPath:   "/cache/hetzner/current/hetzner",
-		BinarySHA256: fixtureSHA256,
-		SchemaBytes:  []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
+		Kind: sharedplugin.SourceKindGit,
+		Artifacts: []pluginhost.SlotArtifact{{
+			OS: sharedhost.AnyPlatform, Arch: sharedhost.AnyPlatform,
+			SHA256: fixtureSHA256, BinaryPath: "/cache/hetzner/current/hetzner",
+		}},
+		SchemaBytes: []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 	}
 }
 
@@ -268,8 +273,11 @@ func TestPluginAllow_Success(t *testing.T) {
 	if out.Alias != "hetzner" || out.Source != mcpSigilSource || out.Ref != "v1.0.0" {
 		t.Errorf("output identity = %+v", out)
 	}
-	if out.SHA256 != fixtureSHA256 {
-		t.Errorf("sha256 = %q, want %q", out.SHA256, fixtureSHA256)
+	if out.Kind != sharedplugin.SourceKindGit {
+		t.Errorf("kind = %q, want %q", out.Kind, sharedplugin.SourceKindGit)
+	}
+	if len(out.Artifacts) != 1 || out.Artifacts[0].SHA256 != fixtureSHA256 {
+		t.Errorf("artifacts = %+v, want the one row %q", out.Artifacts, fixtureSHA256)
 	}
 	if store.inserted == nil {
 		t.Fatal("store.Insert was not called")
@@ -279,8 +287,15 @@ func TestPluginAllow_Success(t *testing.T) {
 	if ev.Payload["alias"] != "hetzner" || ev.Payload["source"] != mcpSigilSource || ev.Payload["ref"] != "v1.0.0" {
 		t.Errorf("audit identity = %+v", ev.Payload)
 	}
-	if ev.Payload["sha256"] != fixtureSHA256 {
-		t.Errorf("audit sha256 = %v", ev.Payload["sha256"])
+	if got, ok := ev.Payload["artifact_sha256"].([]string); !ok || len(got) != 1 || got[0] != fixtureSHA256 {
+		t.Errorf("audit artifact_sha256 = %v", ev.Payload["artifact_sha256"])
+	}
+	if ev.Payload["kind"] != sharedplugin.SourceKindGit {
+		t.Errorf("audit kind = %v", ev.Payload["kind"])
+	}
+	// The scalar `sha256` key is GONE, not repurposed — parity with REST.
+	if _, ok := ev.Payload["sha256"]; ok {
+		t.Errorf("audit payload still carries the scalar sha256 key: %+v", ev.Payload)
 	}
 	if ev.Payload["allowed_by_aid"] != "archon-alice" {
 		t.Errorf("audit allowed_by_aid = %v", ev.Payload["allowed_by_aid"])
@@ -421,7 +436,10 @@ func TestPluginRevoke_NotFound(t *testing.T) {
 func TestPluginList_Success(t *testing.T) {
 	now := time.Now()
 	store := &fakeSigilStore{listResult: []*sigil.Sigil{
-		{Alias: "hetzner", Source: mcpSigilSource, Ref: "v1.0.0", SHA256: "abc",
+		{Alias: "hetzner", Source: mcpSigilSource, Ref: "v1.0.0",
+			Kind:      sharedplugin.SourceKindGit,
+			Artifacts: []sharedhost.SigilArtifact{{SHA256: fixtureSHA256}},
+
 			AllowedByAID: "archon-alice", AllowedAt: now,
 			// signature/schema are on the record, but List does not return them.
 			Signature: []byte("sig"), Schema: []byte(`{"kind":"ssh_provider"}`)},
@@ -443,8 +461,14 @@ func TestPluginList_Success(t *testing.T) {
 		t.Fatalf("sigils = %d, want 1", len(out.Sigils))
 	}
 	s := out.Sigils[0]
-	if s.Alias != "hetzner" || s.Source != mcpSigilSource || s.Ref != "v1.0.0" || s.SHA256 != "abc" {
+	if s.Alias != "hetzner" || s.Source != mcpSigilSource || s.Ref != "v1.0.0" ||
+		s.Kind != sharedplugin.SourceKindGit {
 		t.Errorf("sigil = %+v", s)
+	}
+	// The feed carries the whole release, so an operator auditing the allow-list sees
+	// every digest the approval covers.
+	if len(s.Artifacts) != 1 || s.Artifacts[0].SHA256 != fixtureSHA256 {
+		t.Errorf("sigil artifacts = %+v", s.Artifacts)
 	}
 	// The signature and the schema must NOT appear in the JSON output (checked against
 	// raw JSON).

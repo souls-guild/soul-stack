@@ -10,6 +10,7 @@ import (
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
+	sharedplugin "github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 // lookupStub — a minimal SigilLookup for tests. A nil result on a missing key models
@@ -22,14 +23,20 @@ func (l lookupStub) Get(alias string) *SigilRecord { return l[alias] }
 // over the same block with the same helpers (BuildSigilBlock + SchemaDigest). If
 // verify and this function diverge, the compiler/test catches it: the helpers are
 // shared, there's no second hashing implementation (S3↔S6 symmetry).
-func signFixture(t *testing.T, priv ed25519.PrivateKey, source, ref, binDigestHex string, schemaDoc []byte) []byte {
+func signFixture(t *testing.T, priv ed25519.PrivateKey, source, kind, ref string, artifacts []SigilArtifact, schemaDoc []byte) []byte {
 	t.Helper()
-	binRaw, err := hex.DecodeString(binDigestHex)
-	if err != nil {
-		t.Fatalf("decode bin digest: %v", err)
-	}
 	schemaDigest := SchemaDigest(schemaDoc)
-	return ed25519.Sign(priv, BuildSigilBlock(source, ref, binRaw, schemaDigest[:]))
+	block, err := BuildSigilBlock(source, kind, ref, schemaDigest[:], artifacts)
+	if err != nil {
+		t.Fatalf("BuildSigilBlock: %v", err)
+	}
+	return ed25519.Sign(priv, block)
+}
+
+// gitArtifacts is the one-row unplatformed list a kind=git grant carries: the
+// repository publishes one binary in dist/ and states no platform for it.
+func gitArtifacts(digestHex string) []SigilArtifact {
+	return []SigilArtifact{{OS: AnyPlatform, Arch: AnyPlatform, SHA256: digestHex}}
 }
 
 // sigilTestEnv — a stamped artifact on disk + a matching valid SigilRecord.
@@ -39,6 +46,10 @@ type sigilTestEnv struct {
 	discovered Discovered
 	rec        *SigilRecord
 	pub        ed25519.PublicKey
+	// priv is held so a test can re-sign after editing the grant — the block covers
+	// the artifact list, so an edited record without a fresh signature would fail as
+	// bad_signature and stop testing what it names.
+	priv ed25519.PrivateKey
 }
 
 const (
@@ -70,14 +81,17 @@ func setupSigilEnv(t *testing.T) sigilTestEnv {
 		binPath:    binPath,
 		discovered: found[0],
 		rec: &SigilRecord{
-			Alias:           testAlias,
-			Source:          testSource,
-			Ref:             testRef,
-			BinarySHA256hex: found[0].Digest,
-			Signature:       signFixture(t, priv, testSource, testRef, found[0].Digest, schemaDoc),
-			Schema:          schemaDoc,
+			Alias:     testAlias,
+			Source:    testSource,
+			Ref:       testRef,
+			Kind:      sharedplugin.SourceKindGit,
+			Artifacts: gitArtifacts(found[0].Digest),
+			Signature: signFixture(t, priv, testSource, sharedplugin.SourceKindGit, testRef,
+				gitArtifacts(found[0].Digest), schemaDoc),
+			Schema: schemaDoc,
 		},
-		pub: pub,
+		pub:  pub,
+		priv: priv,
 	}
 }
 
@@ -312,15 +326,21 @@ func TestSigilSymmetryBlockMatchesSign(t *testing.T) {
 	}
 	binRaw := SchemaDigest([]byte("artifact-bytes"))
 	binHex := hex.EncodeToString(binRaw[:])
+	arts := gitArtifacts(binHex)
 
 	// Verify side.
 	verifyDigest := SchemaDigest(schemaDoc)
-	verifyBlock := BuildSigilBlock(source, ref, binRaw[:], verifyDigest[:])
+	verifyBlock, err := BuildSigilBlock(source, sharedplugin.SourceKindGit, ref, verifyDigest[:], arts)
+	if err != nil {
+		t.Fatalf("verify block: %v", err)
+	}
 
 	// Sign side reproduces exactly the same steps (like keeper Sign).
-	signBinRaw, _ := hex.DecodeString(binHex)
 	signDigest := SchemaDigest(schemaDoc)
-	signBlock := BuildSigilBlock(source, ref, signBinRaw, signDigest[:])
+	signBlock, err := BuildSigilBlock(source, sharedplugin.SourceKindGit, ref, signDigest[:], arts)
+	if err != nil {
+		t.Fatalf("sign block: %v", err)
+	}
 
 	if string(verifyBlock) != string(signBlock) {
 		t.Fatalf("verify block != sign block:\n verify=%x\n sign  =%x", verifyBlock, signBlock)
