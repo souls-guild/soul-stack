@@ -85,6 +85,8 @@ otel:
 
 File paths on the host. If the host follows the convention layout `/var/lib/soul-stack/`, these fields may be omitted, relying on the binary defaults.
 
+**Both must be ABSOLUTE** when set — a relative value is refused at the schema phase with `path_not_absolute`, the same rule and the same diagnostic code as `plugins.cache_root` in `keeper.yml` (NIM-819). A relative path resolves against the process's working directory, which nothing in this file pins: the same `soul.yml` under a systemd unit with no `WorkingDirectory=` and the same file run by hand from an operator's shell name two different directories. That matters most for `paths.seed`, which holds the mTLS private key, the Keeper CA and the Sigil trust anchor — the directory is created `0700`, but a directory that already exists keeps whatever mode it has.
+
 | Field | Type | Default | Meaning |
 |---|---|---|---|
 | `paths.modules` | `path` | `/var/lib/soul-stack/modules` | The cache directory of custom modules. Inside — slots named by the **registration alias**, `<alias>/` holding one executable and the schema document ([ADR-065](../adr/0065-core-module-installed.md#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact), see [modules.md](modules.md)). |

@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"context"
 	"crypto/ed25519"
 	"crypto/sha256"
 	"crypto/subtle"
@@ -57,8 +58,10 @@ func computeFileDigest(path string) (string, error) {
 //
 // Steps (normative order, symmetric to the Keeper-side Sign in keeper/internal/sigil):
 //  1. artifact digest from disk (binDigestHex);
-//  2. lookup by registration alias; rec == nil → fail-closed no_sigil (a Sigil that
-//     didn't arrive = "not allowed", NOT "error → allow");
+//  2. lookup by registration alias, on the CALLER's context; rec == nil → fail-closed
+//     no_sigil (a Sigil that didn't arrive = "not allowed", NOT "error → allow"), a
+//     lookup that failed → fail-closed lookup_unavailable, which is a different fact
+//     and a different fix (NIM-814);
 //  3. empty anchor set → fail-closed no_trust_anchor (Sigil not configured on Keeper);
 //  4. select this host's artifact row from the grant ([SelectArtifact], NIM-793); no
 //     row for the platform → no_artifact_for_platform, fail-closed. Then compare the
@@ -86,7 +89,7 @@ func computeFileDigest(path string) (string, error) {
 // registration; source/ref come from rec (operator-asserted, not checked against disk,
 // single-slot). anchors — a snapshot of the trust-anchor set (ADR-026(h)); empty set →
 // no_trust_anchor.
-func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicKey, sigils SigilLookup) error {
+func verifySigilAndSeal(ctx context.Context, dir, binaryPath, alias string, anchors []ed25519.PublicKey, sigils SigilLookup) error {
 	binDigestHex, err := computeFileDigest(binaryPath)
 	if err != nil {
 		return err
@@ -94,7 +97,14 @@ func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicK
 
 	var rec *SigilRecord
 	if sigils != nil {
-		rec = sigils.Get(alias)
+		// A lookup that could not answer is NOT an absent grant. Both refuse the
+		// spawn, but only one of them is fixed by issuing an approval, and the
+		// no_sigil hint says to issue one (NIM-814).
+		var lerr error
+		rec, lerr = sigils.Get(ctx, alias)
+		if lerr != nil {
+			return verifyLookupErrorFor(alias, lerr)
+		}
 	}
 	// The spawn path selects by the RUNNING binary's platform, and that is exact
 	// rather than a guess: this process is about to exec the artifact, so the platform
@@ -106,13 +116,22 @@ func verifySigilAndSeal(dir, binaryPath, alias string, anchors []ed25519.PublicK
 
 	// Verify passed → seal sidecar for re-exec defense-in-depth. If the sidecar
 	// already exists (repeat Spawn from cache), compare the digest instead of writing.
+	//
+	// Both branches reuse binDigestHex rather than re-reading the artifact. It is the
+	// digest of the same bytes the check above accepted — one pass over the file, one
+	// value, used by every consumer in this call. A second pass would not be a second
+	// check: step 4 has already compared the artifact against the operator-approved
+	// hash, and that comparison, not the sidecar, is what decides whether this exec
+	// happens. Nor would it narrow any window — [Host.Spawn] execs the path after all
+	// of this, so the only bytes a re-read could catch are ones the exec would run
+	// anyway.
 	sidecarPath := filepath.Join(dir, DigestSidecarName)
 	want, rerr := os.ReadFile(sidecarPath)
 	switch {
 	case rerr == nil:
-		return verifyDigest(binaryPath, string(want))
+		return verifyDigest(binaryPath, binDigestHex, string(want))
 	case errors.Is(rerr, os.ErrNotExist):
-		return sealDigest(binaryPath, sidecarPath)
+		return sealDigest(binDigestHex, sidecarPath)
 	default:
 		return fmt.Errorf("pluginhost: read digest sidecar %q: %w", sidecarPath, rerr)
 	}
@@ -219,30 +238,30 @@ func verifyAnyAnchor(anchors []ed25519.PublicKey, block, signature []byte) bool 
 	return false
 }
 
-// verifyDigest compares the binary's actual digest with the expected one (from the
+// verifyDigest compares the artifact's actual digest with the expected one (from the
 // sidecar). Surrounding whitespace/newlines in the sidecar are ignored.
-func verifyDigest(binaryPath, wantRaw string) error {
+//
+// got is the digest the caller already computed from binaryPath; the path is carried
+// only so the mismatch names the file. Taking the value rather than the path is what
+// makes "the bytes that were checked" and "the bytes that were sealed" the same bytes
+// by construction instead of by a second read that could see a different file.
+func verifyDigest(binaryPath, got, wantRaw string) error {
 	want := trimDigest(wantRaw)
-	got, err := computeFileDigest(binaryPath)
-	if err != nil {
-		return err
-	}
 	if got != want {
 		return fmt.Errorf("%w: %s (want %s, got %s)", ErrPluginDigestMismatch, binaryPath, want, got)
 	}
 	return nil
 }
 
-// sealDigest records the binary digest into the sidecar on first load. The write is
+// sealDigest records the artifact digest into the sidecar on first load. The write is
 // atomic via temp-file + rename so concurrent Spawns don't see a half-written sidecar.
 // If the sidecar appeared between check and write (a race of two first-load Spawns),
 // switch to verify.
-func sealDigest(binaryPath, sidecarPath string) error {
-	digest, err := computeFileDigest(binaryPath)
-	if err != nil {
-		return err
-	}
-
+//
+// digest is the value the caller computed and verified against the grant — the sidecar
+// must record what was approved, and re-deriving it here would record whatever the
+// path holds now.
+func sealDigest(digest, sidecarPath string) error {
 	dir := filepath.Dir(sidecarPath)
 	tmp, err := os.CreateTemp(dir, ".sha256-*.tmp")
 	if err != nil {

@@ -227,7 +227,7 @@ func (h *Host) Spawn(ctx context.Context, d Discovered, opts ...SpawnOption) (*B
 	//
 	// Verify is per ARTIFACT, not per module: a grant approves bytes, and all of an
 	// artifact's modules are the same bytes.
-	if err := verifySigilAndSeal(d.Dir, d.BinaryPath, d.Alias, h.SigilAnchors.snapshot(), h.Sigils); err != nil {
+	if err := verifySigilAndSeal(ctx, d.Dir, d.BinaryPath, d.Alias, h.SigilAnchors.snapshot(), h.Sigils); err != nil {
 		return nil, fmt.Errorf("pluginhost: %s: %w", d.Address(), err)
 	}
 	if err := os.MkdirAll(h.SocketDir, 0o700); err != nil {

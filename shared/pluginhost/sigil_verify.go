@@ -1,6 +1,7 @@
 package pluginhost
 
 import (
+	"context"
 	"errors"
 	"fmt"
 )
@@ -64,15 +65,30 @@ func (r *SigilRecord) Artifact(goos, goarch string) *SigilArtifact {
 // SigilLookup is the read surface for the active grant by registration alias.
 // Single-slot: exactly one active Sigil is allowed per alias (ADR-026(g)), so the key
 // has no ref. Implemented by the Soul-side adapter over the runtime Sigil cache
-// (soul/internal/sigilcache); a nil result = no grant → verify fail-closed (reason
-// no_sigil).
+// (soul/internal/sigilcache) and by the Keeper-side adapter over the plugin_sigils
+// table.
 //
 // An implementation MUST return either nil or a record whose [SigilRecord.Alias]
 // equals the requested alias. Verify enforces this rather than trusting it: a lookup
 // answering with another registration's grant would hand an approval to the wrong
 // alias, and every later check would pass against bytes nobody approved for THIS one.
+//
+// The two failures are separate answers and both fail closed, but they are not the
+// same fact (NIM-814):
+//
+//   - (nil, nil) — asked and answered: there is no grant for this alias →
+//     [VerifyReasonNoSigil]. The operator's fix is to issue one;
+//   - (nil, err) — could not ask: the registry is unreachable →
+//     [VerifyReasonLookupUnavailable]. Nothing is known about this alias, and telling
+//     the operator to issue a grant would send them to fix a supply-chain gate over a
+//     database outage.
+//
+// ctx is the caller's — the spawn's, carrying its deadline and its cancellation. An
+// implementation that reaches the network MUST pass it through rather than starting
+// from context.Background(): a lookup that outlives the run it belongs to turns a
+// degraded database into a hung Spawn instead of a refused one.
 type SigilLookup interface {
-	Get(alias string) *SigilRecord
+	Get(ctx context.Context, alias string) (*SigilRecord, error)
 }
 
 // VerifyReason is a machine-distinguishable reason for a Sigil-verify failure
@@ -101,6 +117,14 @@ const (
 	// anchor (schema/artifact/source/ref tampered with, or key rotation without
 	// recreating the grant).
 	VerifyReasonBadSignature VerifyReason = "bad_signature"
+	// VerifyReasonLookupUnavailable — the grant registry could not be READ (the
+	// Keeper's Postgres is down, the query was cancelled with the run). Fail-closed
+	// like every other reason, and deliberately not folded into no_sigil: "there is no
+	// grant" and "we could not find out" have opposite fixes, and the no_sigil hint
+	// tells the operator to issue an approval — a supply-chain gate widened to work
+	// around an outage. The underlying error rides in [VerifyError.Cause], so a
+	// cancelled run is still recognisable as one via errors.Is.
+	VerifyReasonLookupUnavailable VerifyReason = "lookup_unavailable"
 )
 
 // ErrSigilVerify is a sentinel wrapping any fail-closed Sigil-verify failure. Callers
@@ -122,13 +146,31 @@ type VerifyError struct {
 	Source string
 	// Hint — a human-readable actionable hint for the operator.
 	Hint string
+	// Cause — the underlying failure, when the reason is one that HAS an underlying
+	// failure ([VerifyReasonLookupUnavailable]). nil everywhere else: a digest that
+	// does not match is a verdict, not an error someone else returned.
+	//
+	// It is unwrapped alongside [ErrSigilVerify] rather than printed by Error(): the
+	// message reaches an operator through task output, and a database error carries
+	// addresses and query text that a plugin-refusal line has no business publishing.
+	// Callers that need the detail ask for it — errors.Is(err, context.Canceled)
+	// separates "the run was cancelled" from "the registry is down" without either of
+	// them being spelled out to everyone.
+	Cause error
 }
 
 func (e *VerifyError) Error() string {
 	return fmt.Sprintf("%s: %s [%s]: %s", ErrSigilVerify.Error(), e.Alias, e.Reason, e.Hint)
 }
 
-func (e *VerifyError) Unwrap() error { return ErrSigilVerify }
+// Unwrap returns both the sentinel and the cause, so errors.Is keeps matching
+// [ErrSigilVerify] while a lookup failure stays inspectable through the same error.
+func (e *VerifyError) Unwrap() []error {
+	if e.Cause == nil {
+		return []error{ErrSigilVerify}
+	}
+	return []error{ErrSigilVerify, e.Cause}
+}
 
 // verifyErrorFor builds a [VerifyError] with an actionable hint for each reason.
 // alias/source/ref are printed in the hint so the operator can copy the grant command
@@ -149,8 +191,20 @@ func verifyErrorFor(reason VerifyReason, alias, source, ref string) *VerifyError
 	case VerifyReasonBadSignature:
 		hint = fmt.Sprintf("allow signature is invalid (signing key rotated? recreate the allow: `keeper.plugin.allow alias=%s source=%s ref=%s`)",
 			alias, source, ref)
+	case VerifyReasonLookupUnavailable:
+		hint = fmt.Sprintf("the plugin grant registry could not be read, so whether %q is allowed is UNKNOWN — this is not a missing approval; check the Keeper's database and retry, do not issue a new allow",
+			alias)
 	default:
 		hint = "Sigil-verify failed"
 	}
 	return &VerifyError{Reason: reason, Alias: alias, Source: source, Hint: hint}
+}
+
+// verifyLookupErrorFor builds the [VerifyReasonLookupUnavailable] error, carrying the
+// cause the lookup returned. source/ref are unknown by construction: they live in the
+// grant, and the grant is what could not be read.
+func verifyLookupErrorFor(alias string, cause error) *VerifyError {
+	e := verifyErrorFor(VerifyReasonLookupUnavailable, alias, "", "")
+	e.Cause = cause
+	return e
 }

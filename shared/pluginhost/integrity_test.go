@@ -56,7 +56,8 @@ func TestSealDigestWritesReadOnlySidecar(t *testing.T) {
 	bin := writePluginBin(t, dir, "payload")
 
 	sidecar := filepath.Join(dir, DigestSidecarName)
-	if err := sealDigest(bin, sidecar); err != nil {
+	want, _ := computeFileDigest(bin)
+	if err := sealDigest(want, sidecar); err != nil {
 		t.Fatalf("sealDigest: %v", err)
 	}
 
@@ -64,7 +65,6 @@ func TestSealDigestWritesReadOnlySidecar(t *testing.T) {
 	if err != nil {
 		t.Fatalf("sidecar not written: %v", err)
 	}
-	want, _ := computeFileDigest(bin)
 	if string(content) != want {
 		t.Errorf("sidecar = %q, want %q", content, want)
 	}
@@ -83,7 +83,7 @@ func TestVerifyDigestValidBinaryPasses(t *testing.T) {
 	bin := writePluginBin(t, dir, "payload")
 	want, _ := computeFileDigest(bin)
 
-	if err := verifyDigest(bin, want); err != nil {
+	if err := verifyDigest(bin, want, want); err != nil {
 		t.Fatalf("verifyDigest valid: %v", err)
 	}
 }
@@ -93,12 +93,14 @@ func TestVerifyDigestTamperedBinaryMismatch(t *testing.T) {
 	bin := writePluginBin(t, dir, "original")
 	sealed, _ := computeFileDigest(bin)
 
-	// Tamper with the binary after seal.
+	// Tamper with the binary after seal. The caller re-derives the digest of what is
+	// on disk NOW — that is the value verify compares against the sidecar.
 	if err := os.WriteFile(bin, []byte("malicious"), 0o755); err != nil {
 		t.Fatalf("tamper: %v", err)
 	}
+	got, _ := computeFileDigest(bin)
 
-	err := verifyDigest(bin, sealed)
+	err := verifyDigest(bin, got, sealed)
 	if !errors.Is(err, ErrPluginDigestMismatch) {
 		t.Fatalf("expected ErrPluginDigestMismatch, got %v", err)
 	}
@@ -111,7 +113,7 @@ func TestVerifyDigestWhitespaceTolerant(t *testing.T) {
 
 	// A sidecar with surrounding whitespace/trailing newline (as an operator
 	// might write by hand) — verify must ignore it.
-	if err := verifyDigest(bin, "  "+digest+"\n"); err != nil {
+	if err := verifyDigest(bin, digest, "  "+digest+"\n"); err != nil {
 		t.Errorf("verify with whitespace sidecar: %v", err)
 	}
 }

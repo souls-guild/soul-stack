@@ -129,19 +129,113 @@ func (s *SlotContents) SigilArtifacts() []sharedhost.SigilArtifact {
 // os.Stat follows the current symlink, so the IsDir check covers the active slot too
 // (a dangling `current` gives ENOENT → [ErrSlotNotFound]).
 func ReadSlot(cacheRoot, alias string) (*SlotContents, error) {
+	dir, err := activeSlotDir(cacheRoot, alias)
+	if err != nil {
+		return nil, err
+	}
+	return ReadSlotDir(dir)
+}
+
+// SlotArtifactByDigest resolves ONE file of the slot's active release — the one whose
+// digest is sha — and returns its path, re-deriving that digest from disk.
+//
+// The narrow read beside [ReadSlot] (NIM-816). Both answer "does this slot still hold
+// these bytes"; they differ in how many files they have to hash to say so. ReadSlot's
+// subject is the whole release, because the APPROVAL path signs the whole release: the
+// operator approves one document over one list of platforms, so every row is re-derived
+// and a disagreement anywhere is fail-closed. The DELIVERY path (FetchModule) is
+// content-addressed — the caller names a sha256 and exactly one file can answer to it —
+// and re-hashing an entire release, every platform of it, to hand back one file cost
+// linearly in (hosts × platforms × artifact size) on a rollout where every host arrives
+// at once.
+//
+// The guarantee on the file that IS served is unchanged, and is the whole guarantee
+// there was: its bytes are hashed here, now, and must equal the digest asked for. What
+// is no longer checked is the other platforms' files, which no caller of this is about
+// to serve, and whose corruption used to refuse this host's legitimate fetch as
+// collateral. Nothing about trust rests on them either — the requester verifies the
+// bytes it receives against the grant's SIGNED artifact list ([sharedhost.VerifyArtifactBytes]),
+// and the kind is read from the grant's signed schema, never from the slot's trailer.
+//
+// The descriptor names which platform's directory to look in; it is not believed. A row
+// claiming sha only says where to look, and the file found there must hash to sha or
+// this returns [ErrReleaseUnreadable]. A git slot has no descriptor and holds one
+// executable, which is checked the same way.
+//
+// No row for the digest, no slot, no `current` → [ErrSlotNotFound]: fail-closed, and
+// the caller (sigil.Service.LookupModuleBinary) turns it into "not allowed".
+func SlotArtifactByDigest(cacheRoot, alias, sha string) (string, error) {
+	dir, err := activeSlotDir(cacheRoot, alias)
+	if err != nil {
+		return "", err
+	}
+	release, err := ReadRelease(dir)
+	if err != nil {
+		return "", err
+	}
+
+	var binPath string
+	if release == nil {
+		// A git slot: one executable and no platform rows, so "the file with this
+		// digest" can only be that one.
+		binPath, err = SingleArtifactIn(dir)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s: %v", ErrSlotNotFound, dir, err)
+		}
+	} else {
+		want, ok := releaseRowByDigest(release, sha)
+		if !ok {
+			return "", fmt.Errorf("%w: %s declares no artifact with sha256 %s", ErrSlotNotFound, dir, sha)
+		}
+		platformDir := filepath.Join(dir, want.Dir())
+		binPath, err = SingleArtifactIn(platformDir)
+		if err != nil {
+			return "", fmt.Errorf("%w: %s: %v", ErrReleaseUnreadable, platformDir, err)
+		}
+	}
+
+	digest, err := fileDigest(binPath)
+	if err != nil {
+		return "", err
+	}
+	if digest != sha {
+		return "", fmt.Errorf("%w: %s is %s, the requested artifact is %s",
+			ErrReleaseUnreadable, binPath, digest, sha)
+	}
+	return binPath, nil
+}
+
+// releaseRowByDigest finds the descriptor row that claims this digest. The descriptor
+// is a local record of what the resolver fetched, so this only decides WHERE to look;
+// the file it points at is hashed before its path is returned.
+func releaseRowByDigest(release *Release, sha string) (ReleaseArtifact, bool) {
+	for _, a := range release.Artifacts {
+		if a.SHA256 == sha {
+			return a, true
+		}
+	}
+	return ReleaseArtifact{}, false
+}
+
+// activeSlotDir resolves `<cacheRoot>/<alias>/current` and checks it is a directory —
+// step 1 of [ReadSlot], shared with [SlotArtifactByDigest] so the two reads cannot
+// disagree about which slot is active.
+//
+// os.Stat follows the current symlink, so the IsDir check covers the active slot too
+// (a dangling `current` gives ENOENT → [ErrSlotNotFound]).
+func activeSlotDir(cacheRoot, alias string) (string, error) {
 	dir := filepath.Join(cacheRoot, alias, CurrentLink)
 	st, err := os.Stat(dir)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
-			return nil, fmt.Errorf("%w: %s", ErrSlotNotFound, dir)
+			return "", fmt.Errorf("%w: %s", ErrSlotNotFound, dir)
 		}
-		return nil, fmt.Errorf("pluginhost: stat plugin slot %q: %w", dir, err)
+		return "", fmt.Errorf("pluginhost: stat plugin slot %q: %w", dir, err)
 	}
 	if !st.IsDir() {
-		return nil, fmt.Errorf("%w: %s is not a directory", ErrSlotNotFound, dir)
+		return "", fmt.Errorf("%w: %s is not a directory", ErrSlotNotFound, dir)
 	}
-
-	return ReadSlotDir(dir)
+	return dir, nil
 }
 
 // ReadSlotDir reads one slot directory directly, without going through the alias and

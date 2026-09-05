@@ -49,6 +49,18 @@ func (s *fakeSigilStore) Revoke(_ context.Context, _, _ string) error {
 	return s.revokeErr
 }
 
+func (s *fakeSigilStore) GetActive(_ context.Context, alias string) (*sigil.Sigil, error) {
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	for _, rec := range s.listResult {
+		if rec.Alias == alias {
+			return rec, nil
+		}
+	}
+	return nil, sigil.ErrSigilNotFound
+}
+
 func (s *fakeSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) {
 	return s.listResult, s.listErr
 }
@@ -58,6 +70,10 @@ type fakeSigilSlots struct {
 	err       error
 	commit    string
 	commitErr error
+}
+
+func (s fakeSigilSlots) ArtifactByDigest(string, string) (string, error) {
+	return "", pluginhost.ErrSlotNotFound
 }
 
 func (s fakeSigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {

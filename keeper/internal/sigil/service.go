@@ -49,8 +49,16 @@ var ErrSourceMismatch = errors.New("sigil: asserted source is not where the rele
 // A1-S1) — the audit provenance marker written to plugin_sigils on allow (ADR-026(g),
 // outside the signature). Missing/corrupted current → [ErrSlotNotFound] (fail-closed,
 // symmetric to ReadSlot).
+// ArtifactByDigest resolves the ONE file of the slot's active release that carries this
+// digest, re-derived from disk. The delivery-path counterpart of ReadSlot: FetchModule
+// is content-addressed and hands back exactly one file, so hashing the whole release —
+// every platform of it — to answer about one of them was work proportional to the size
+// of the release rather than of the answer (NIM-816). What is guaranteed about the file
+// served is the same either way: its bytes are hashed and must equal the digest asked
+// for. See [pluginhost.SlotArtifactByDigest].
 type SlotReader interface {
 	ReadSlot(alias string) (*pluginhost.SlotContents, error)
+	ArtifactByDigest(alias, sha string) (string, error)
 	SlotCommitSHA(alias string) (string, error)
 }
 
@@ -65,6 +73,10 @@ func (r cacheSlotReader) ReadSlot(alias string) (*pluginhost.SlotContents, error
 	return pluginhost.ReadSlot(r.cacheRoot, alias)
 }
 
+func (r cacheSlotReader) ArtifactByDigest(alias, sha string) (string, error) {
+	return pluginhost.SlotArtifactByDigest(r.cacheRoot, alias, sha)
+}
+
 func (r cacheSlotReader) SlotCommitSHA(alias string) (string, error) {
 	return pluginhost.SlotCommitSHA(r.cacheRoot, alias)
 }
@@ -76,12 +88,20 @@ func NewCacheSlotReader(cacheRoot string) SlotReader {
 }
 
 // Store is the surface for the plugin_sigils registry needed by [Service].
-// Implemented by package-level CRUD (Insert / Revoke / ListActive) over pgx-pool
-// via [NewPGStore]; narrowing to interface isolates Service from direct pgx-pool
-// in unit tests.
+// Implemented by package-level CRUD (Insert / Revoke / GetActive / ListActive) over
+// pgx-pool via [NewPGStore]; narrowing to interface isolates Service from direct
+// pgx-pool in unit tests.
+//
+// GetActive and ListActive answer the same question at two scales, and which one a
+// caller wants is not a matter of taste. A caller holding an alias — the verify path,
+// once per Spawn — takes GetActive: one indexed row instead of the whole active set
+// with every grant's schema document in it (NIM-814). ListActive is for the callers
+// whose subject really is the set: the broadcast snapshot, the UI feed, the audit
+// triage.
 type Store interface {
 	Insert(ctx context.Context, s *Sigil) error
 	Revoke(ctx context.Context, alias, revokedByAID string) error
+	GetActive(ctx context.Context, alias string) (*Sigil, error)
 	ListActive(ctx context.Context) ([]*Sigil, error)
 }
 
@@ -102,6 +122,10 @@ func (s *pgStore) Insert(ctx context.Context, rec *Sigil) error {
 
 func (s *pgStore) Revoke(ctx context.Context, alias, revokedByAID string) error {
 	return Revoke(ctx, s.db, alias, revokedByAID)
+}
+
+func (s *pgStore) GetActive(ctx context.Context, alias string) (*Sigil, error) {
+	return GetActive(ctx, s.db, alias)
 }
 
 func (s *pgStore) ListActive(ctx context.Context) ([]*Sigil, error) {

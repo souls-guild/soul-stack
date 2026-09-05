@@ -9,14 +9,39 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// fakeLister is minimal SigilRecordLister for unit test of adapter.
-type fakeLister struct {
-	recs []*sharedhost.SigilRecord
-	err  error
+// fakeSource is a minimal SigilRecordSource for the adapter's unit tests. It records
+// every question asked, which is what makes the cost claims in NIM-814 checkable
+// instead of asserted: `asked` is one entry per registry read, and each entry carries
+// the alias the read was keyed on and the context it ran under.
+type fakeSource struct {
+	recs  map[string]*sharedhost.SigilRecord
+	err   error
+	asked []askedFor
 }
 
-func (f fakeLister) ListActive(context.Context) ([]*sharedhost.SigilRecord, error) {
-	return f.recs, f.err
+type askedFor struct {
+	alias string
+	ctx   context.Context
+}
+
+func (f *fakeSource) GetActive(ctx context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	f.asked = append(f.asked, askedFor{alias: alias, ctx: ctx})
+	if f.err != nil {
+		return nil, f.err
+	}
+	rec, ok := f.recs[alias]
+	if !ok {
+		return nil, nil
+	}
+	return rec, nil
+}
+
+func sourceWith(recs ...*sharedhost.SigilRecord) *fakeSource {
+	m := make(map[string]*sharedhost.SigilRecord, len(recs))
+	for _, r := range recs {
+		m[r.Alias] = r
+	}
+	return &fakeSource{recs: m}
 }
 
 // TestSigilLookupAdapter_Maps verifies Get resolves a record by REGISTRATION ALIAS —
@@ -31,20 +56,26 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 		Signature: []byte{1, 2, 3, 4},
 		Schema:    []byte(`{"kind":"ssh_provider","protocol_version":1}`),
 	}
-	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{want}}, nil)
+	a := NewSigilLookupAdapter(sourceWith(want), nil)
 
-	rec := a.Get("hetzner")
+	rec, err := a.Get(context.Background(), "hetzner")
+	if err != nil {
+		t.Fatalf("Get: %v", err)
+	}
 	if rec != want {
 		t.Fatalf("Get returned %+v, want %+v", rec, want)
 	}
 }
 
-// TestSigilLookupAdapter_AbsentIsNil verifies no record for the alias → nil (no_sigil).
+// TestSigilLookupAdapter_AbsentIsNil verifies no record for the alias → (nil, nil)
+// (no_sigil): an answered question whose answer is "there is no grant".
 func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
-	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{
-		{Alias: "other"},
-	}}, nil)
-	if rec := a.Get("hetzner"); rec != nil {
+	a := NewSigilLookupAdapter(sourceWith(&sharedhost.SigilRecord{Alias: "other"}), nil)
+	rec, err := a.Get(context.Background(), "hetzner")
+	if err != nil {
+		t.Fatalf("an absent grant is not an error: %v", err)
+	}
+	if rec != nil {
 		t.Fatalf("absent sigil must map to nil, got %+v", rec)
 	}
 }
@@ -53,32 +84,116 @@ func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 // NOT on what the grant was signed over: a host holding a slot named `hetzner` has no
 // idea which source it came from, so a lookup by source could never be made.
 func TestSigilLookupAdapter_AliasIsNotSource(t *testing.T) {
-	a := NewSigilLookupAdapter(fakeLister{recs: []*sharedhost.SigilRecord{
-		{Alias: "hetzner", Source: "https://example.com/a.git", Ref: "v2"},
-	}}, nil)
-	if rec := a.Get("https://example.com/a.git"); rec != nil {
+	a := NewSigilLookupAdapter(sourceWith(&sharedhost.SigilRecord{
+		Alias: "hetzner", Source: "https://example.com/a.git", Ref: "v2",
+	}), nil)
+	if rec, _ := a.Get(context.Background(), "https://example.com/a.git"); rec != nil {
 		t.Fatalf("Get must key on the alias, not the source: got %+v", rec)
 	}
-	if rec := a.Get("hetzner"); rec == nil || rec.Ref != "v2" {
+	if rec, _ := a.Get(context.Background(), "hetzner"); rec == nil || rec.Ref != "v2" {
 		t.Fatalf("Get by alias failed: %+v", rec)
 	}
 }
 
-// TestSigilLookupAdapter_NilLister verifies nil-lister doesn't panic, always nil
-// (no_sigil fail-closed on incomplete wire-up / Sigil off).
-func TestSigilLookupAdapter_NilLister(t *testing.T) {
+// TestSigilLookupAdapter_NilSource verifies a nil source doesn't panic and always
+// answers "no grant" (no_sigil fail-closed on incomplete wire-up / Sigil off). Not an
+// error: nothing failed, the Keeper is configured without Sigil.
+func TestSigilLookupAdapter_NilSource(t *testing.T) {
 	a := NewSigilLookupAdapter(nil, nil)
-	if rec := a.Get("hetzner"); rec != nil {
-		t.Fatalf("nil lister must yield nil record, got %+v", rec)
+	rec, err := a.Get(context.Background(), "hetzner")
+	if err != nil {
+		t.Fatalf("a nil source is a configuration, not a failure: %v", err)
+	}
+	if rec != nil {
+		t.Fatalf("nil source must yield nil record, got %+v", rec)
 	}
 }
 
-// TestSigilLookupAdapter_ListErrorIsNil verifies registry read error → nil
-// (verify fail-closed: error ≠ "allow").
-func TestSigilLookupAdapter_ListErrorIsNil(t *testing.T) {
-	a := NewSigilLookupAdapter(fakeLister{err: errors.New("db down")}, nil)
-	if rec := a.Get("hetzner"); rec != nil {
-		t.Fatalf("list error must yield nil record, got %+v", rec)
+// A registry read that FAILED must surface as an error and not as "no grant"
+// (NIM-814). Both refuse the spawn — the gate is unchanged — but the two are fixed by
+// opposite actions, and only one of them is an approval the operator should go and
+// issue. This is the guard: flatten the error back into (nil, nil) and this test is the
+// one that notices.
+func TestSigilLookupAdapter_ReadErrorIsAnError(t *testing.T) {
+	dbDown := errors.New("db down")
+	a := NewSigilLookupAdapter(&fakeSource{err: dbDown}, nil)
+
+	rec, err := a.Get(context.Background(), "hetzner")
+	if rec != nil {
+		t.Fatalf("a failed read must not produce a record, got %+v", rec)
+	}
+	if !errors.Is(err, dbDown) {
+		t.Fatalf("err = %v, want the underlying read error — reported as no_sigil, a database outage tells the operator to issue an allow", err)
+	}
+}
+
+// The cost claim of NIM-814, made checkable: one spawn's lookup is ONE registry read,
+// keyed by the alias asked about. The defect was `Get` ignoring its key and issuing
+// `SELECT … WHERE revoked_at IS NULL` — every active grant with its schema document,
+// tens of KiB apiece — to then scan the slice for one alias, once per fork.
+//
+// Counting the reads is the whole test: the interface no longer offers a list, so a
+// regression cannot reintroduce the full scan without changing this count or this key.
+func TestSigilLookupAdapter_OneReadPerLookupKeyedByAlias(t *testing.T) {
+	src := sourceWith(
+		&sharedhost.SigilRecord{Alias: "redis"},
+		&sharedhost.SigilRecord{Alias: "hetzner"},
+		&sharedhost.SigilRecord{Alias: "teleport"},
+	)
+	a := NewSigilLookupAdapter(src, nil)
+
+	if _, err := a.Get(context.Background(), "hetzner"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(src.asked) != 1 {
+		t.Fatalf("registry reads = %d, want 1 per lookup", len(src.asked))
+	}
+	if src.asked[0].alias != "hetzner" {
+		t.Errorf("read was keyed on %q, want the alias asked about (%q)", src.asked[0].alias, "hetzner")
+	}
+
+	// Three spawns, three reads — and each one still asks only about its own alias.
+	for _, alias := range []string{"redis", "teleport", "redis"} {
+		if _, err := a.Get(context.Background(), alias); err != nil {
+			t.Fatalf("Get(%q): %v", alias, err)
+		}
+	}
+	if len(src.asked) != 4 {
+		t.Fatalf("registry reads after 4 lookups = %d, want 4", len(src.asked))
+	}
+	for i, want := range []string{"hetzner", "redis", "teleport", "redis"} {
+		if src.asked[i].alias != want {
+			t.Errorf("read %d keyed on %q, want %q", i, src.asked[i].alias, want)
+		}
+	}
+}
+
+// The CALLER's context reaches the registry, unreplaced. The other half of NIM-814:
+// the adapter used to start from context.Background(), so the query carried neither the
+// run's deadline nor its cancellation — a degraded Postgres hung the Spawn instead of
+// refusing it, and cancelling the run did not reach the query.
+func TestSigilLookupAdapter_CarriesTheCallersContext(t *testing.T) {
+	type ctxKey struct{}
+	src := sourceWith(&sharedhost.SigilRecord{Alias: "hetzner"})
+	a := NewSigilLookupAdapter(src, nil)
+
+	ctx, cancel := context.WithCancel(context.WithValue(context.Background(), ctxKey{}, "spawn"))
+	defer cancel()
+	if _, err := a.Get(ctx, "hetzner"); err != nil {
+		t.Fatalf("Get: %v", err)
+	}
+	if len(src.asked) != 1 {
+		t.Fatalf("registry reads = %d, want 1", len(src.asked))
+	}
+	got := src.asked[0].ctx
+	if got.Value(ctxKey{}) != "spawn" {
+		t.Error("the registry was read on some other context — a context.Background() here outlives the run it belongs to")
+	}
+	// Cancellation must reach the query, which is what context.Background() cost:
+	// with the run gone, the read is still running.
+	cancel()
+	if got.Err() == nil {
+		t.Error("cancelling the caller did not cancel the context the registry was read on")
 	}
 }
 
@@ -104,14 +219,16 @@ func TestSigilLookupAdapter_AliasIsALookupKeyNotATrustClaim(t *testing.T) {
 	// The same artifact registered twice. The rows differ ONLY in the alias — which
 	// is exactly what the signed block does not cover.
 	arts := []sharedhost.SigilArtifact{{SHA256: "aa"}}
-	recs := []*sharedhost.SigilRecord{
-		{Alias: "redis", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
-		{Alias: "redis-community", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
-	}
-	a := NewSigilLookupAdapter(fakeLister{recs: recs}, nil)
+	a := NewSigilLookupAdapter(sourceWith(
+		&sharedhost.SigilRecord{Alias: "redis", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
+		&sharedhost.SigilRecord{Alias: "redis-community", Source: source, Ref: "v1", Artifacts: arts, Signature: sig, Schema: schema},
+	), nil)
 
 	for _, alias := range []string{"redis", "redis-community"} {
-		got := a.Get(alias)
+		got, err := a.Get(context.Background(), alias)
+		if err != nil {
+			t.Fatalf("Get(%q): %v", alias, err)
+		}
 		if got == nil {
 			t.Fatalf("Get(%q) returned nil", alias)
 		}
@@ -127,7 +244,7 @@ func TestSigilLookupAdapter_AliasIsALookupKeyNotATrustClaim(t *testing.T) {
 
 	// An alias nobody registered resolves to nothing rather than to "the closest
 	// match" — fail-closed is the only safe answer to an unknown selector.
-	if got := a.Get("redis-typo"); got != nil {
+	if got, _ := a.Get(context.Background(), "redis-typo"); got != nil {
 		t.Errorf("an unregistered alias resolved to %+v", got)
 	}
 }

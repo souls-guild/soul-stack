@@ -52,6 +52,14 @@ func (s *hsigilStore) Insert(context.Context, *sigil.Sigil) error { return nil }
 func (s *hsigilStore) Revoke(context.Context, string, string) error {
 	return s.revokeErr
 }
+func (s *hsigilStore) GetActive(_ context.Context, alias string) (*sigil.Sigil, error) {
+	for _, rec := range s.listResult {
+		if rec.Alias == alias {
+			return rec, nil
+		}
+	}
+	return nil, sigil.ErrSigilNotFound
+}
 func (s *hsigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return s.listResult, nil }
 
 // hsigilSource — the git remote the fixture grants are issued on (the signed identity).
@@ -70,6 +78,12 @@ func (hsigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 		}},
 		SchemaBytes: []byte(`{"kind":"ssh_provider","protocol_version":1,"provider_kind":"static_key"}`),
 	}, nil
+}
+func (hsigilSlots) ArtifactByDigest(_, sha string) (string, error) {
+	if sha != sigilFixtureSHA {
+		return "", pluginhost.ErrSlotNotFound
+	}
+	return "/cache/hetzner/current/hetzner", nil
 }
 func (hsigilSlots) SlotCommitSHA(string) (string, error) {
 	return "0123456789abcdef0123456789abcdef01234567", nil

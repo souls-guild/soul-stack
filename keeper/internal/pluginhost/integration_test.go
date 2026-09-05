@@ -75,7 +75,9 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 // testLookup is minimal sharedhost.SigilLookup over map, keyed by alias.
 type testLookup map[string]*sharedhost.SigilRecord
 
-func (l testLookup) Get(alias string) *sharedhost.SigilRecord { return l[alias] }
+func (l testLookup) Get(_ context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	return l[alias], nil
+}
 
 // stampBuilt appends a schema trailer to an already-built test artifact — what
 // `soul-mod stamp` does in a real build. Without it the slot has no readable

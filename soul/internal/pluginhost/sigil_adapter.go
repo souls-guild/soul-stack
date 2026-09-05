@@ -1,6 +1,8 @@
 package pluginhost
 
 import (
+	"context"
+
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
@@ -33,6 +35,13 @@ func NewSigilLookupAdapter(cache sigilCache) *SigilLookupAdapter {
 // keeperv1.PluginSigil into shared.SigilRecord. nil (grant didn't arrive) →
 // nil (verify treats it as no_sigil).
 //
+// The error is always nil here and ctx is unused, and both are part of the contract
+// rather than an oversight: the Soul answers from the in-memory broadcast cache, which
+// cannot fail and cannot block. [sharedhost.SigilLookup] carries them for the Keeper
+// side, where the same question is a query against Postgres (NIM-814) — one interface,
+// so verify has one shape to reason about, and the side that has nothing to report
+// reports nothing.
+//
 // Schema comes from PluginSigil.Schema — the canonical schema-document bytes from the
 // transport (M1), which verify hashes with SchemaDigest (S3↔S6 invariant: not the
 // parsed form, not the trailer read from disk).
@@ -41,13 +50,13 @@ func NewSigilLookupAdapter(cache sigilCache) *SigilLookupAdapter {
 // over the whole list, so dropping the rows for other platforms here would leave a
 // record that cannot verify; selecting this host's row is a separate step, done where
 // the bytes are checked.
-func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
+func (a *SigilLookupAdapter) Get(_ context.Context, alias string) (*sharedhost.SigilRecord, error) {
 	if a.cache == nil {
-		return nil
+		return nil, nil
 	}
 	sig := a.cache.Get(alias)
 	if sig == nil {
-		return nil
+		return nil, nil
 	}
 	artifacts := make([]sharedhost.SigilArtifact, 0, len(sig.GetArtifacts()))
 	for _, a := range sig.GetArtifacts() {
@@ -63,5 +72,5 @@ func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 		Artifacts: artifacts,
 		Signature: sig.GetSignature(),
 		Schema:    sig.GetSchema(),
-	}
+	}, nil
 }

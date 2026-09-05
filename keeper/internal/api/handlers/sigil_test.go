@@ -35,6 +35,15 @@ func (s *fakeSigilStore) Revoke(context.Context, string, string) error {
 	return s.revokeErr
 }
 
+func (s *fakeSigilStore) GetActive(_ context.Context, alias string) (*sigil.Sigil, error) {
+	for _, rec := range s.listResult {
+		if rec.Alias == alias {
+			return rec, nil
+		}
+	}
+	return nil, sigil.ErrSigilNotFound
+}
+
 func (s *fakeSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) {
 	return s.listResult, nil
 }
@@ -49,6 +58,10 @@ type fakeSigilSlots struct {
 
 func (f fakeSigilSlots) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return f.slot, f.err
+}
+
+func (f fakeSigilSlots) ArtifactByDigest(string, string) (string, error) {
+	return "", pluginhost.ErrSlotNotFound
 }
 
 func (f fakeSigilSlots) SlotCommitSHA(string) (string, error) {

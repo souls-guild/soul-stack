@@ -7,6 +7,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
@@ -17,13 +18,19 @@ import (
 // "the sigil didn't arrive".
 type lookupStub map[string]*SigilRecord
 
-func (l lookupStub) Get(alias string) *SigilRecord { return l[alias] }
+func (l lookupStub) Get(_ context.Context, alias string) (*SigilRecord, error) { return l[alias], nil }
+
+// lookupErrStub is a lookup that cannot answer — the Keeper's registry read failing,
+// not a grant that is absent (NIM-814).
+type lookupErrStub struct{ err error }
+
+func (l lookupErrStub) Get(context.Context, string) (*SigilRecord, error) { return nil, l.err }
 
 // signFixture, symmetric with keeper/internal/sigil.Signer.Sign, builds the signature
 // over the same block with the same helpers (BuildSigilBlock + SchemaDigest). If
 // verify and this function diverge, the compiler/test catches it: the helpers are
 // shared, there's no second hashing implementation (S3↔S6 symmetry).
-func signFixture(t *testing.T, priv ed25519.PrivateKey, source, kind, ref string, artifacts []SigilArtifact, schemaDoc []byte) []byte {
+func signFixture(t testing.TB, priv ed25519.PrivateKey, source, kind, ref string, artifacts []SigilArtifact, schemaDoc []byte) []byte {
 	t.Helper()
 	schemaDigest := SchemaDigest(schemaDoc)
 	block, err := BuildSigilBlock(source, kind, ref, schemaDigest[:], artifacts)
@@ -60,9 +67,21 @@ const (
 
 func setupSigilEnv(t *testing.T) sigilTestEnv {
 	t.Helper()
+	return setupSigilEnvPadded(t, 0)
+}
+
+// setupSigilEnvPadded is [setupSigilEnv] with an artifact of a chosen size. The pad is
+// a shell comment, so the fixture stays an executable script; it exists so a test can
+// make the cost of hashing the artifact large enough to measure (NIM-818).
+func setupSigilEnvPadded(t testing.TB, pad int) sigilTestEnv {
+	t.Helper()
 	dir := t.TempDir()
 	doc := soulModuleDoc(modDef("acl", nil, nil))
-	binPath := writeArtifact(t, dir, testAlias, doc, exitScript)
+	script := exitScript
+	if pad > 0 {
+		script += "# " + strings.Repeat("x", pad) + "\n"
+	}
+	binPath := writeArtifact(t, dir, testAlias, doc, script)
 
 	found, warns := DiscoverSlot(testAlias, dir)
 	if len(warns) != 0 || len(found) != 1 {

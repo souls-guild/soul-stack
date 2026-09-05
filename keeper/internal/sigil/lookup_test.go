@@ -30,6 +30,21 @@ func (m mapSlotReader) ReadSlot(alias string) (*pluginhost.SlotContents, error) 
 	return nil, pluginhost.ErrSlotNotFound
 }
 
+// ArtifactByDigest answers from the same fixture slots, so a test that changes what a
+// slot holds changes both reads at once.
+func (m mapSlotReader) ArtifactByDigest(alias, sha string) (string, error) {
+	s, ok := m.slots[alias]
+	if !ok {
+		return "", pluginhost.ErrSlotNotFound
+	}
+	for _, a := range s.Artifacts {
+		if a.SHA256 == sha {
+			return a.BinaryPath, nil
+		}
+	}
+	return "", pluginhost.ErrSlotNotFound
+}
+
 func (m mapSlotReader) SlotCommitSHA(string) (string, error) {
 	return testCommitSHA, nil
 }
@@ -143,5 +158,64 @@ func TestService_Allow_SoulModuleKindAgnostic(t *testing.T) {
 	}
 	if store.inserted == nil || store.inserted.Alias != "redis" || store.inserted.Source != moduleSourceURL {
 		t.Fatalf("inserted = %+v", store.inserted)
+	}
+}
+
+// narrowOnlySlotReader answers by digest and fails the test if anyone reaches for the
+// whole-release read. The delivery path names a sha256 and streams one file
+// (NIM-816); [pluginhost.ReadSlot] there re-derived every platform's digest, read
+// every trailer and validated every schema document to answer about one of them.
+type narrowOnlySlotReader struct {
+	t     *testing.T
+	slots map[string]*pluginhost.SlotContents
+	asked []string
+}
+
+func (r *narrowOnlySlotReader) ReadSlot(alias string) (*pluginhost.SlotContents, error) {
+	r.t.Helper()
+	r.t.Errorf("the delivery path re-read the WHOLE release of %q to serve one file", alias)
+	return nil, pluginhost.ErrSlotNotFound
+}
+
+func (r *narrowOnlySlotReader) ArtifactByDigest(alias, sha string) (string, error) {
+	r.asked = append(r.asked, alias+"@"+sha)
+	s, ok := r.slots[alias]
+	if !ok {
+		return "", pluginhost.ErrSlotNotFound
+	}
+	for _, a := range s.Artifacts {
+		if a.SHA256 == sha {
+			return a.BinaryPath, nil
+		}
+	}
+	return "", pluginhost.ErrSlotNotFound
+}
+
+func (r *narrowOnlySlotReader) SlotCommitSHA(string) (string, error) {
+	return testCommitSHA, nil
+}
+
+// The wiring guard for NIM-816: LookupModuleBinary reaches the cache by digest, once,
+// for the alias whose grant approves that digest — and never through the whole-release
+// read. Restore the ReadSlot call and this test says so by name.
+func TestService_LookupModuleBinary_ReadsTheCacheByDigest(t *testing.T) {
+	slots := &narrowOnlySlotReader{
+		t:     t,
+		slots: map[string]*pluginhost.SlotContents{"redis": moduleSlot(moduleSHA)},
+	}
+	svc := lookupService(t, &fakeStore{listResult: []*Sigil{moduleSigil(moduleSHA)}}, slots)
+
+	path, err := svc.LookupModuleBinary(context.Background(), moduleSHA)
+	if err != nil {
+		t.Fatalf("LookupModuleBinary: %v", err)
+	}
+	if path != "/cache/redis/current/redis" {
+		t.Fatalf("path = %q", path)
+	}
+	if len(slots.asked) != 1 {
+		t.Fatalf("cache reads = %d, want 1 — one file is served, so one file is checked", len(slots.asked))
+	}
+	if slots.asked[0] != "redis@"+moduleSHA {
+		t.Errorf("cache read = %q, want the digest asked for under the granting alias", slots.asked[0])
 	}
 }

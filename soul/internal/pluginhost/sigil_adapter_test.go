@@ -2,6 +2,7 @@ package pluginhost
 
 import (
 	"bytes"
+	"context"
 	"testing"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -31,7 +32,10 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 	}
 	a := NewSigilLookupAdapter(fakeCache{"redis": sig})
 
-	rec := a.Get("redis")
+	rec, err := a.Get(context.Background(), "redis")
+	if err != nil {
+		t.Fatalf("the in-memory cache cannot fail: %v", err)
+	}
 	if rec == nil {
 		t.Fatal("Get returned nil for present sigil")
 	}
@@ -72,10 +76,10 @@ func TestSigilLookupAdapter_KeyIsTheAlias(t *testing.T) {
 	}
 	a := NewSigilLookupAdapter(fakeCache{"redis-community": sig})
 
-	if rec := a.Get("redis"); rec != nil {
+	if rec, _ := a.Get(context.Background(), "redis"); rec != nil {
 		t.Fatalf("a grant under another alias resolved for `redis`: %+v", rec)
 	}
-	if rec := a.Get("redis-community"); rec == nil {
+	if rec, _ := a.Get(context.Background(), "redis-community"); rec == nil {
 		t.Fatal("the grant did not resolve under its own alias")
 	}
 }
@@ -84,7 +88,11 @@ func TestSigilLookupAdapter_KeyIsTheAlias(t *testing.T) {
 // (verify treats it as no_sigil, fail-closed).
 func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 	a := NewSigilLookupAdapter(fakeCache{})
-	if rec := a.Get("missing"); rec != nil {
+	rec, err := a.Get(context.Background(), "missing")
+	if err != nil {
+		t.Fatalf("an absent grant is an answer, not a failure: %v", err)
+	}
+	if rec != nil {
 		t.Fatalf("absent sigil must map to nil, got %+v", rec)
 	}
 }
@@ -92,7 +100,11 @@ func TestSigilLookupAdapter_AbsentIsNil(t *testing.T) {
 // TestSigilLookupAdapter_NilCache — a nil cache doesn't panic, always returns nil.
 func TestSigilLookupAdapter_NilCache(t *testing.T) {
 	a := NewSigilLookupAdapter(nil)
-	if rec := a.Get("redis"); rec != nil {
+	rec, err := a.Get(context.Background(), "redis")
+	if err != nil {
+		t.Fatalf("a nil cache is a configuration, not a failure: %v", err)
+	}
+	if rec != nil {
 		t.Fatalf("nil cache must yield nil record, got %+v", rec)
 	}
 }

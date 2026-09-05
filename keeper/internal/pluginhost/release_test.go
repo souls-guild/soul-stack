@@ -27,6 +27,15 @@ const testReleaseSource = "https://nexus.internal/plugins/redis"
 // fixture where they were identical would hide a selection bug.
 func writeReleaseSlot(t *testing.T, root, alias string, doc schema.Document, rows []ReleaseArtifact) string {
 	t.Helper()
+	return writeReleaseSlotPadded(t, root, alias, doc, rows, 0)
+}
+
+// writeReleaseSlotPadded is [writeReleaseSlot] with artifacts of a chosen size. The pad
+// is a shell comment, so each file stays an executable script; it exists so a test can
+// make the cost of hashing one platform large enough to measure against the cost of
+// hashing the whole release (NIM-816).
+func writeReleaseSlotPadded(t *testing.T, root, alias string, doc schema.Document, rows []ReleaseArtifact, pad int) string {
+	t.Helper()
 	pluginDir := filepath.Join(root, alias)
 
 	filled := make([]ReleaseArtifact, len(rows))
@@ -38,7 +47,11 @@ func writeReleaseSlot(t *testing.T, root, alias string, doc schema.Document, row
 			t.Fatalf("mkdir platform dir: %v", err)
 		}
 		path := filepath.Join(dir, alias)
-		stampedArtifact(t, path, doc, "#!/bin/sh\nexit 0\n# "+row.Dir()+"\n")
+		body := "#!/bin/sh\nexit 0\n# " + row.Dir() + "\n"
+		if pad > 0 {
+			body += "# " + strings.Repeat("x", pad) + "\n"
+		}
+		stampedArtifact(t, path, doc, body)
 		raw, err := os.ReadFile(path)
 		if err != nil {
 			t.Fatalf("read artifact: %v", err)

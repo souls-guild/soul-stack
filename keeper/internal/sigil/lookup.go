@@ -28,9 +28,15 @@ var ErrModuleNotAllowed = errors.New("sigil: module sha256 has no active soul_mo
 //     there. Since NIM-793 a grant approves a release, so the search is over its rows:
 //     an amd64 Soul and an arm64 Soul ask for different digests under one grant, and
 //     both are answered from the same approval;
-//  2. the slot `<cacheRoot>/<alias>/current/` is re-read and must still hold an
-//     artifact with exactly that digest — otherwise `current` has moved and the
-//     approved bytes are gone (row skipped, fail-closed).
+//  2. the slot `<cacheRoot>/<alias>/current/` must still hold an artifact with exactly
+//     that digest, re-derived from the bytes on disk — otherwise `current` has moved
+//     and the approved bytes are gone (row skipped, fail-closed). ONE file is hashed,
+//     the one about to be served: this call answers about a sha256, and re-deriving
+//     every platform's digest to answer about one of them cost linearly in the size of
+//     the release on a rollout where every host arrives at once (NIM-816). The bytes
+//     that go out are checked exactly as before; the other platforms' files are not
+//     this request's subject, and their corruption used to refuse this one as
+//     collateral.
 //
 // The requested sha stays the whole key. Nothing here consults the CALLER's platform:
 // the request is content-addressed, and matching it against what the Keeper thinks the
@@ -53,18 +59,12 @@ func (s *Service) LookupModuleBinary(ctx context.Context, sha256Hex string) (str
 		if doc == nil || diag.HasErrors(diags) || doc.Kind != pluginhost.KindSoulModule {
 			continue
 		}
-		slot, err := s.slots.ReadSlot(rec.Alias)
+		path, err := s.slots.ArtifactByDigest(rec.Alias, sha)
 		if err != nil {
-			s.logger.Warn("sigil: allowed soul_module has no readable slot — skip",
+			s.logger.Warn("sigil: slot no longer holds the allowed sha256 — skip",
 				slog.String("alias", rec.Alias),
+				slog.String("allowed_sha256", sha),
 				slog.Any("error", err))
-			continue
-		}
-		path, ok := slotArtifactPath(slot, sha)
-		if !ok {
-			s.logger.Warn("sigil: slot no longer holds the allowed sha256 (current moved) — skip",
-				slog.String("alias", rec.Alias),
-				slog.String("allowed_sha256", sha))
 			continue
 		}
 		return path, nil
@@ -80,16 +80,4 @@ func grantApproves(rec *Sigil, sha string) bool {
 		}
 	}
 	return false
-}
-
-// slotArtifactPath finds the file in the slot whose digest is sha. ReadSlot has already
-// re-derived every digest from disk, so a hit here is a file that currently hashes to
-// the approved value and not one that used to.
-func slotArtifactPath(slot *pluginhost.SlotContents, sha string) (string, bool) {
-	for _, a := range slot.Artifacts {
-		if a.SHA256 == sha {
-			return a.BinaryPath, true
-		}
-	}
-	return "", false
 }

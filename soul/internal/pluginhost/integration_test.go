@@ -71,7 +71,9 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 // testLookup is a minimal sharedhost.SigilLookup backed by a map keyed by alias.
 type testLookup map[string]*sharedhost.SigilRecord
 
-func (l testLookup) Get(alias string) *sharedhost.SigilRecord { return l[alias] }
+func (l testLookup) Get(_ context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	return l[alias], nil
+}
 
 func fileSHA256Hex(t *testing.T, path string) string {
 	t.Helper()

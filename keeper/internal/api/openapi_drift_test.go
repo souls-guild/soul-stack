@@ -438,12 +438,19 @@ func (stubSigilStore) Insert(context.Context, *sigil.Sigil) error { return nil }
 func (stubSigilStore) Revoke(context.Context, string, string) error {
 	return nil
 }
+func (stubSigilStore) GetActive(context.Context, string) (*sigil.Sigil, error) {
+	return nil, sigil.ErrSigilNotFound
+}
 func (stubSigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return nil, nil }
 
 type stubSlotReader struct{}
 
 func (stubSlotReader) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return nil, sigil.ErrPluginNotInCache
+}
+
+func (stubSlotReader) ArtifactByDigest(string, string) (string, error) {
+	return "", pluginhost.ErrSlotNotFound
 }
 
 func (stubSlotReader) SlotCommitSHA(string) (string, error) {

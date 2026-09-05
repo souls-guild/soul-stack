@@ -203,15 +203,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		out = append(out, validatePluginRuntime(root, "$.plugin_runtime", c.PluginRuntime)...)
 	}
 
-	if c.Plugins != nil && c.Plugins.CacheRoot != "" {
-		if !filepath.IsAbs(c.Plugins.CacheRoot) {
-			out = append(out, atPath(root, "$.plugins.cache_root", diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:    "path_not_absolute",
-				Message: fmt.Sprintf("plugins.cache_root must be an absolute path, got %q", c.Plugins.CacheRoot),
-				Hint:    "use e.g. /var/lib/soul-stack-keeper/plugins",
-			}))
-		}
+	if c.Plugins != nil {
+		out = append(out, checkAbsolutePath(root, "$.plugins.cache_root", c.Plugins.CacheRoot,
+			"use e.g. /var/lib/soul-stack-keeper/plugins")...)
 	}
 
 	// plugins.work_root — root of the resolver's working git clones (ADR-026
@@ -220,13 +214,9 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 	// checkout would land in the cache read by Discover/ReadSlot (breaks the
 	// layout invariant).
 	if c.Plugins != nil && c.Plugins.WorkRoot != "" {
-		if !filepath.IsAbs(c.Plugins.WorkRoot) {
-			out = append(out, atPath(root, "$.plugins.work_root", diag.Diagnostic{
-				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
-				Code:    "path_not_absolute",
-				Message: fmt.Sprintf("plugins.work_root must be an absolute path, got %q", c.Plugins.WorkRoot),
-				Hint:    "use e.g. /var/lib/soul-stack-keeper/plugin-src",
-			}))
+		if abs := checkAbsolutePath(root, "$.plugins.work_root", c.Plugins.WorkRoot,
+			"use e.g. /var/lib/soul-stack-keeper/plugin-src"); len(abs) > 0 {
+			out = append(out, abs...)
 		} else if c.Plugins.CacheRoot != "" && filepath.IsAbs(c.Plugins.CacheRoot) && pathWithin(c.Plugins.WorkRoot, c.Plugins.CacheRoot) {
 			out = append(out, atPath(root, "$.plugins.work_root", diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
@@ -420,6 +410,22 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 
 func schemaValidateSoul(path string, root *ast.MappingNode, c *SoulConfig) []diag.Diagnostic {
 	var out []diag.Diagnostic
+
+	// paths.modules / paths.seed — absolute, same rule and the same diagnostic code as
+	// keeper's plugins.cache_root. A relative value resolves against the process's
+	// working directory, which nothing in a soul.yml pins: the same config started by
+	// systemd without WorkingDirectory= and started by hand from a shell names two
+	// different directories. For paths.seed that directory holds the mTLS private key,
+	// the Keeper CA and the Sigil trust anchor — [seed.Write] creates it 0o700 but
+	// os.MkdirAll leaves the mode of a directory that already exists alone, so landing
+	// on somebody else's world-writable /tmp/seed is silent.
+	//
+	// Empty stays valid here: an unset paths.modules already refuses at the module
+	// install step and an unset paths.seed at load, both by name.
+	out = append(out, checkAbsolutePath(root, "$.paths.modules", c.Paths.Modules,
+		"use e.g. /var/lib/soul-stack/modules")...)
+	out = append(out, checkAbsolutePath(root, "$.paths.seed", c.Paths.Seed,
+		"use e.g. /var/lib/soul-stack/seed")...)
 
 	// Top-level required: a `keeper:` block with a non-empty `endpoints[]`.
 	// docs/soul/config.md → keeper.endpoints is mandatory.
@@ -1507,6 +1513,28 @@ func checkPort(root *ast.MappingNode, yamlPath string, port int) []diag.Diagnost
 		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 		Code:    "port_out_of_range",
 		Message: fmt.Sprintf("port %d out of range 1..65535", port),
+	})}
+}
+
+// checkAbsolutePath rejects a relative filesystem path with `path_not_absolute`. An
+// empty value is "unset" and passes: whether the field may be omitted at all is the
+// caller's rule, and every current caller either has a default or refuses by name at
+// the point of use.
+//
+// One implementation for every such field on purpose. The keeper side has had this
+// rule since ADR-026 and the soul side did not, which is how `paths.seed` came to
+// accept a value that resolves against a working directory nothing pins (NIM-819); a
+// second copy is how the two drift again. The field name in the message is derived
+// from yamlPath so the diagnostic reads in the config's own vocabulary.
+func checkAbsolutePath(root *ast.MappingNode, yamlPath, value, hint string) []diag.Diagnostic {
+	if value == "" || filepath.IsAbs(value) {
+		return nil
+	}
+	return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:    "path_not_absolute",
+		Message: fmt.Sprintf("%s must be an absolute path, got %q", strings.TrimPrefix(yamlPath, "$."), value),
+		Hint:    hint,
 	})}
 }
 

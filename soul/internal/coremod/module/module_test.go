@@ -29,7 +29,9 @@ import (
 
 type fakeLookup map[string]*sharedhost.SigilRecord
 
-func (f fakeLookup) Get(alias string) *sharedhost.SigilRecord { return f[alias] }
+func (f fakeLookup) Get(_ context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	return f[alias], nil
+}
 
 type fakeChunkStream struct {
 	grpc.ServerStreamingClient[keeperv1.PluginChunk]

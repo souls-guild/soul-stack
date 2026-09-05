@@ -1025,7 +1025,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	sigilLookup := pluginhost.NewSigilLookupAdapter(sigilRecordLister{store: sigil.NewPGStore(d.pool)}, logger)
+	sigilLookup := pluginhost.NewSigilLookupAdapter(sigilRecordSource{store: sigil.NewPGStore(d.pool)}, logger)
 	pluginHost, err := pluginhost.NewHost(cfg.PluginRuntime, d.sigilAnchors, sigilLookup)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build plugin host: %v\n", err)
@@ -1289,28 +1289,35 @@ func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
-type sigilRecordLister struct {
+// sigilRecordSource is the single sigil.Sigil → sharedhost.SigilRecord projection
+// point, living here so keeper/internal/pluginhost never imports keeper/internal/sigil
+// (sigil imports pluginhost — the reverse edge would be a cycle).
+type sigilRecordSource struct {
 	store sigil.Store
 }
 
-func (l sigilRecordLister) ListActive(ctx context.Context) ([]*sharedhost.SigilRecord, error) {
-	recs, err := l.store.ListActive(ctx)
+// GetActive answers the verify path's one question — the active grant for this alias —
+// with one indexed row on the caller's context. [sigil.ErrSigilNotFound] is "there is
+// no grant", which is a fact and not a failure, so it maps to (nil, nil); anything else
+// is "we could not find out" and stays an error, because those two get told to the
+// operator differently (NIM-814).
+func (l sigilRecordSource) GetActive(ctx context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	s, err := l.store.GetActive(ctx, alias)
 	if err != nil {
+		if errors.Is(err, sigil.ErrSigilNotFound) {
+			return nil, nil
+		}
 		return nil, err
 	}
-	out := make([]*sharedhost.SigilRecord, 0, len(recs))
-	for _, s := range recs {
-		out = append(out, &sharedhost.SigilRecord{
-			Alias:     s.Alias,
-			Source:    s.Source,
-			Ref:       s.Ref,
-			Kind:      s.Kind,
-			Artifacts: s.Artifacts,
-			Signature: s.Signature,
-			Schema:    s.Schema,
-		})
-	}
-	return out, nil
+	return &sharedhost.SigilRecord{
+		Alias:     s.Alias,
+		Source:    s.Source,
+		Ref:       s.Ref,
+		Kind:      s.Kind,
+		Artifacts: s.Artifacts,
+		Signature: s.Signature,
+		Schema:    s.Schema,
+	}, nil
 }
 
 // Keeper daemon runtime wiring note.

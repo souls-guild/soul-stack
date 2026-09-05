@@ -48,7 +48,7 @@ func soulModuleDoc(mods ...schema.Module) schema.Document {
 
 // writeArtifact writes an executable at dir/name holding script, with doc stamped into
 // its trailer, and returns the path.
-func writeArtifact(t *testing.T, dir, name string, doc schema.Document, script string) string {
+func writeArtifact(t testing.TB, dir, name string, doc schema.Document, script string) string {
 	t.Helper()
 	path := filepath.Join(dir, name)
 	if err := os.WriteFile(path, []byte(script), 0o755); err != nil {

@@ -30,6 +30,10 @@ const (
 	reasonNotAllowed   = "module_not_allowed"
 	reasonFetchFailed  = "module_fetch_failed"
 	reasonVerifyFailed = "module_verify_failed"
+	// reasonLookupFailed — the grant set could not be READ, so whether the alias is
+	// allowed is unknown. Separate from module_not_allowed on purpose (NIM-814): the
+	// two refuse identically and are fixed by opposite actions.
+	reasonLookupFailed = "module_sigil_lookup_failed"
 )
 
 // applyInstalled implements state `installed` (ADR-065(c,f,g)).
@@ -60,7 +64,17 @@ func (m *Module) applyInstalled(stream grpc.ServerStreamingServer[pluginv1.Apply
 	// (1) allow-check BEFORE a single network byte.
 	var rec *sharedhost.SigilRecord
 	if m.deps.Sigils != nil {
-		rec = m.deps.Sigils.Get(alias)
+		var lerr error
+		rec, lerr = m.deps.Sigils.Get(stream.Context(), alias)
+		if lerr != nil {
+			// Unreachable on the Soul side — the lookup is the in-memory broadcast
+			// cache. Reported as its own reason anyway rather than folded into
+			// "not allowed": if this ever fires, the grant set is UNKNOWN, and
+			// answering with the allow-instruction would send an operator to widen a
+			// gate over a failure that is not about approvals at all (NIM-814).
+			return util.SendFailed(stream, fmt.Sprintf(
+				"%s: could not read the Sigil grant for %q: %v", reasonLookupFailed, alias, lerr))
+		}
 	}
 	if rec == nil {
 		return util.SendFailed(stream, fmt.Sprintf(

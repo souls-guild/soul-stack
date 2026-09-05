@@ -33,6 +33,21 @@ func (f fakeSlotReader) ReadSlot(string) (*pluginhost.SlotContents, error) {
 	return f.slot, f.err
 }
 
+func (f fakeSlotReader) ArtifactByDigest(_, sha string) (string, error) {
+	if f.err != nil {
+		return "", f.err
+	}
+	if f.slot == nil {
+		return "", pluginhost.ErrSlotNotFound
+	}
+	for _, a := range f.slot.Artifacts {
+		if a.SHA256 == sha {
+			return a.BinaryPath, nil
+		}
+	}
+	return "", pluginhost.ErrSlotNotFound
+}
+
 func (f fakeSlotReader) SlotCommitSHA(string) (string, error) {
 	return f.commit, f.commitErr
 }
@@ -45,6 +60,7 @@ type fakeStore struct {
 	revokeErr  error
 	listResult []*Sigil
 	listErr    error
+	getErr     error
 }
 
 func (s *fakeStore) Insert(_ context.Context, rec *Sigil) error {
@@ -58,6 +74,21 @@ func (s *fakeStore) Insert(_ context.Context, rec *Sigil) error {
 func (s *fakeStore) Revoke(_ context.Context, alias, by string) error {
 	s.revokedKey = [2]string{alias, by}
 	return s.revokeErr
+}
+
+func (s *fakeStore) GetActive(_ context.Context, alias string) (*Sigil, error) {
+	if s.getErr != nil {
+		return nil, s.getErr
+	}
+	if s.listErr != nil {
+		return nil, s.listErr
+	}
+	for _, rec := range s.listResult {
+		if rec.Alias == alias {
+			return rec, nil
+		}
+	}
+	return nil, ErrSigilNotFound
 }
 
 func (s *fakeStore) ListActive(context.Context) ([]*Sigil, error) {

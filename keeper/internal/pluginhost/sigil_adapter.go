@@ -7,42 +7,50 @@ import (
 	sharedhost "github.com/souls-guild/soul-stack/shared/pluginhost"
 )
 
-// SigilRecordLister is the surface for reading active permissions in verify-form,
-// needed by adapter. Returns already-projected [sharedhost.SigilRecord]
-// (single source of sigil.Sigil → SigilRecord mapping held by call-site —
-// `keeper run`), so keeper/internal/pluginhost doesn't import
-// keeper/internal/sigil: sigil already imports pluginhost (ReadSlot/SlotContents),
-// direct import back would create import cycle.
+// SigilRecordSource is the surface for reading ONE active grant in verify-form, by the
+// registration alias the verify path holds. Returns an already-projected
+// [sharedhost.SigilRecord] (the single sigil.Sigil → SigilRecord mapping lives at the
+// call-site — `keeper run`), so keeper/internal/pluginhost does not import
+// keeper/internal/sigil: sigil already imports pluginhost (ReadSlot/SlotContents), and
+// importing back would be a cycle.
 //
-// keeper reads plugin_sigils DIRECTLY from its DB (pool), unlike Soul
-// which receives permissions broadcast via EventStream and keeps in-memory cache.
-type SigilRecordLister interface {
-	ListActive(ctx context.Context) ([]*sharedhost.SigilRecord, error)
+// keeper reads plugin_sigils DIRECTLY from its DB (pool), unlike Soul, which receives
+// grants broadcast over EventStream and keeps them in memory.
+//
+// By alias and not as a list (NIM-814). The verify path asks about exactly one
+// registration, on the hot path of every Spawn; answering it with the whole active set
+// meant a `SELECT … WHERE revoked_at IS NULL` per fork, carrying every grant's schema
+// document — tens of KiB apiece — to then scan the slice for one alias. There is a
+// unique index over the active rows of an alias (plugin_sigils_active_alias_idx), so
+// the single-row read is exact, not "the first of possibly several".
+//
+// Absent is (nil, nil) and unreachable is (nil, err), and the difference is the point:
+// see [sharedhost.SigilLookup].
+type SigilRecordSource interface {
+	GetActive(ctx context.Context, alias string) (*sharedhost.SigilRecord, error)
 }
 
-// SigilLookupAdapter bridges keeper-side plugin_sigils registry (read from
-// Postgres) to verify-contract of shared/pluginhost.SigilLookup. keeper-host itself
+// SigilLookupAdapter bridges the keeper-side plugin_sigils registry (read from
+// Postgres) to the verify contract of shared/pluginhost.SigilLookup. The keeper host
 // verifies its OWN plugins (SshProvider / keeper-side SoulModule) against trust seals
-// that it signed itself (ADR-026(f)): trust-anchor is public key of
-// keeper-Signer, source of permissions is same plugin_sigils registry that
-// is distributed to Souls.
+// it signed itself (ADR-026(f)): the trust anchor is the keeper-Signer's public key,
+// and the grants come from the same plugin_sigils registry distributed to Souls.
 type SigilLookupAdapter struct {
-	lister SigilRecordLister
+	source SigilRecordSource
 	logger *slog.Logger
 }
 
-// NewSigilLookupAdapter wraps plugin_sigils registry lister into
-// shared-compatible SigilLookup. nil-lister → adapter always returns
-// nil-record (verify fail-closed on no_sigil): protection from nil-dereference at
-// incomplete wire-up (Sigil disabled). logger can be nil — then read
-// errors silently swallowed (fail-closed verify protects anyway).
-func NewSigilLookupAdapter(lister SigilRecordLister, logger *slog.Logger) *SigilLookupAdapter {
-	return &SigilLookupAdapter{lister: lister, logger: logger}
+// NewSigilLookupAdapter wraps a plugin_sigils reader into a shared-compatible
+// SigilLookup. A nil source → the adapter always answers "no grant" (verify fails
+// closed on no_sigil): protection against a nil dereference on incomplete wire-up
+// (Sigil disabled). logger can be nil — then a read error is not logged, only
+// returned.
+func NewSigilLookupAdapter(source SigilRecordSource, logger *slog.Logger) *SigilLookupAdapter {
+	return &SigilLookupAdapter{source: source, logger: logger}
 }
 
 // Get resolves the active grant for a registration ALIAS from the plugin_sigils
-// registry. nil (no grant / read error) → nil (verify reads it as no_sigil,
-// fail-closed).
+// registry, on the caller's context.
 //
 // The alias is the lookup key and is deliberately NOT in the signed block: it is the
 // operator's local naming choice, so re-registering the same bytes under a second alias
@@ -51,17 +59,22 @@ func NewSigilLookupAdapter(lister SigilRecordLister, logger *slog.Logger) *Sigil
 // only says which grant to check that signature against.
 //
 // At most one active grant may carry an alias (plugin_sigils_active_alias_idx,
-// migration 113), so the first match is the only match — the answer does not depend on
-// row order.
+// migration 113), so the row read here is the only one there could be.
 //
 // Schema is the byte-exact canonical schema document the signature covers (the
 // call-site projects it from sigil.Sigil.Schema); verify hashes exactly those bytes via
 // SchemaDigest (S3↔S6 invariant).
-func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
-	if a.lister == nil {
-		return nil
+//
+// A read failure is RETURNED rather than flattened into "no grant". Both refuse the
+// spawn, so the gate is unchanged; what changes is what the operator is told. Reported
+// as no_sigil, a Postgres outage reaches them as "plugin is not allowed; run
+// keeper.plugin.allow …" — an instruction to widen a supply-chain gate in order to work
+// around a database being down (NIM-814).
+func (a *SigilLookupAdapter) Get(ctx context.Context, alias string) (*sharedhost.SigilRecord, error) {
+	if a.source == nil {
+		return nil, nil
 	}
-	recs, err := a.lister.ListActive(context.Background())
+	rec, err := a.source.GetActive(ctx, alias)
 	if err != nil {
 		if a.logger != nil {
 			a.logger.Warn("pluginhost: sigil lookup failed — verify fail-closed",
@@ -69,12 +82,7 @@ func (a *SigilLookupAdapter) Get(alias string) *sharedhost.SigilRecord {
 				slog.Any("error", err),
 			)
 		}
-		return nil
+		return nil, err
 	}
-	for _, rec := range recs {
-		if rec.Alias == alias {
-			return rec
-		}
-	}
-	return nil
+	return rec, nil
 }
