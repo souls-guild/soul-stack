@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"fmt"
 	"reflect"
 	"regexp"
@@ -134,6 +135,12 @@ func MaskRefsInBytes(b []byte) []byte {
 // recognizable without running the regexp against every suffix.
 const vaultRefMarker = "vault:"
 
+// vaultRefMarkerBytes is [vaultRefMarker] for the byte-slice searches in
+// [SafeMaskSplit], which runs under the recording lock on every chunk of a live
+// pty stream: `string(buf)` there copies the whole buffer to answer a question
+// about six bytes of it (NIM-815).
+var vaultRefMarkerBytes = []byte(vaultRefMarker)
+
 // MaxMaskCarryBytes bounds how much of a stream [SafeMaskSplit] will hold back.
 // A reference longer than this is not masked across a chunk boundary — a mount
 // plus path of 4 KiB is not a reference anybody writes, while an unbounded
@@ -159,7 +166,7 @@ func SafeMaskSplit(buf []byte) int {
 	if len(buf) == 0 {
 		return 0
 	}
-	if i := strings.LastIndex(string(buf), vaultRefMarker); i >= 0 && refTailGrowable(buf[i+len(vaultRefMarker):]) {
+	if i := bytes.LastIndex(buf, vaultRefMarkerBytes); i >= 0 && refTailGrowable(buf[i+len(vaultRefMarker):]) {
 		if len(buf)-i > MaxMaskCarryBytes {
 			return len(buf)
 		}
@@ -171,7 +178,7 @@ func SafeMaskSplit(buf []byte) int {
 		n = len(buf)
 	}
 	for ; n > 0; n-- {
-		if strings.HasSuffix(string(buf), vaultRefMarker[:n]) {
+		if bytes.HasSuffix(buf, vaultRefMarkerBytes[:n]) {
 			return len(buf) - n
 		}
 	}

@@ -117,7 +117,7 @@ func MaskSecretsSealed(payload map[string]any, opts SealOpts) map[string]any {
 // If a key was caught by regex ALONE (schema/seal silent for the path), the value
 // is a string and NOT a vault ref (layer 2 would also be silent) — this is a pure
 // regex fallback: alarm (metric+warn-log), a declarative-gap signal. Layer 2
-// (vault) works by the string value's content inside maskValueLayered.
+// (vault) works by the string value's content inside maskUnsealedValue.
 func maskMapLayered(m map[string]any, path string, opts SealOpts) map[string]any {
 	out := make(map[string]any, len(m))
 	for k, v := range m {
@@ -137,7 +137,7 @@ func maskMapLayered(m map[string]any, path string, opts SealOpts) map[string]any
 			continue
 		}
 
-		out[k] = maskValueLayered(v, cell, opts)
+		out[k] = maskUnsealedValue(v, cell, opts)
 	}
 	return out
 }
@@ -164,15 +164,44 @@ func alarmRegexFallback(cell string, v any, opts SealOpts) {
 	}
 }
 
-// maskValueLayered is the layered walk of a value at cell path cell. string →
-// layer 2 (vault) and regex-last-resort (4, with alarm); containers → recursive
-// layered walk.
+// maskValueLayered is the layered walk of a value at cell path cell, checking
+// that path against layers 1 (schema) and 3 (seal) FIRST.
+//
+// A cell whose own path is declared or sealed is masked WHOLE, whatever its
+// type, and the walk does not descend into it: a sealed subtree has no unsealed
+// interior. That is the rule the render side states and carries down the same
+// walk (keeper/internal/render, walkSealedValues) — the seal is recorded by
+// walkSealed against the path of the cell that read the secret source
+// (`args[1]`), and no deeper path is ever added, so a consumer that only ever
+// tested MAP KEYS left every sealed slice element in the clear (NIM-810).
+//
+// The map arm does not come through here: [maskMapLayered] tests the key's own
+// path itself — it must, to decide whether the regex-last-resort was the sole
+// hit — and calls [maskUnsealedValue] directly rather than paying a second
+// [pathIsSecret] on every value.
 func maskValueLayered(v any, cell string, opts SealOpts) any {
+	if pathIsSecret(cell, opts) {
+		return maskedValue
+	}
+	return maskUnsealedValue(v, cell, opts)
+}
+
+// maskUnsealedValue walks a value whose own cell path is already known to be
+// neither declared (1) nor sealed (3). string → layer 2 (vault); containers →
+// recursive layered walk, each child re-entering through [maskValueLayered] so
+// its own path is checked.
+//
+// There is no value-level regex fallback: sensitiveKeyRe reads a key NAME, so
+// the key match is decided wherever a key exists — in [maskMapLayered] one level
+// up, and in the map[string]string arm below — always after the declarative
+// layers, which take priority. A slice element has no key at all, which is
+// exactly why the path check above is the only layer that can speak for it.
+func maskUnsealedValue(v any, cell string, opts SealOpts) any {
 	switch x := v.(type) {
 	case nil:
 		return nil
 	case string:
-		return maskStringLayered(x, cell, opts)
+		return maskString(x)
 	case map[string]any:
 		return maskMapLayered(x, cell, opts)
 	case []any:
@@ -194,13 +223,13 @@ func maskValueLayered(v any, cell string, opts SealOpts) any {
 				out[k] = maskedValue
 				continue
 			}
-			out[k] = maskStringLayered(el, sub, opts)
+			out[k] = maskString(el)
 		}
 		return out
 	case []string:
 		out := make([]any, len(x))
 		for i, el := range x {
-			out[i] = maskStringLayered(el, joinIdx(cell, i), opts)
+			out[i] = maskValueLayered(el, joinIdx(cell, i), opts)
 		}
 		return out
 	default:
@@ -210,20 +239,6 @@ func maskValueLayered(v any, cell string, opts SealOpts) any {
 		// MaskSecrets. Cold path (payload here is map[string]any).
 		return maskReflect(reflect.ValueOf(v))
 	}
-}
-
-// maskStringLayered masks a string by layers 2 (vault) and 4 (regex-last-resort).
-// schema/seal were already checked by path above (pathIsSecret). The vault layer
-// works by content. A pure regex fallback by string CONTENT does not apply
-// (sensitiveKeyRe is by key NAME, not value); the value-level regex fallback is
-// decided at the key level in the key match (no separate maskKeyLayered branch is
-// needed — the key match runs in maskMapLayered, where schema/seal take priority).
-// Only vault-by-content here.
-func maskStringLayered(s, _ string, _ SealOpts) any {
-	if vaultRefRe.MatchString(s) {
-		return maskedValue
-	}
-	return s
 }
 
 // pathIsSecret reports whether layer 1 (schema) OR layer 3 (seal) marked the path secret.

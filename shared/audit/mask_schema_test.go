@@ -206,6 +206,114 @@ func TestMaskSecretsSealed_NilInput(t *testing.T) {
 	}
 }
 
+// NIM-810 guard. The seal is recorded against the path of the cell that read the
+// secret source, and for the canonical `core.exec.run` shape that path is a SLICE
+// ELEMENT — `args[1]`, never a map key. A masker that only tested map keys wrote
+// the resolved password into apply_run_plan in the clear, and silently: the
+// regex-last-resort reads a key NAME, and a list element has no key, so not even
+// the fallback alarm fired.
+//
+// The four sub-cases are the four shapes a sealed element arrives in. Each must
+// be masked by the seal layer ALONE — no vault ref in the value, no sensitive key
+// name anywhere, no schema.
+func TestMaskSecretsSealed_SealedSliceElement(t *testing.T) {
+	t.Run("string element", func(t *testing.T) {
+		var fired []string
+		opts := SealOpts{
+			Sealed:        map[string]bool{"args[1]": true},
+			RegexFallback: func(p string) { fired = append(fired, p) },
+		}
+		in := map[string]any{
+			"cmd":  "/usr/bin/mysql",
+			"args": []any{"--user=root", "--password=hunter2"},
+		}
+		out := MaskSecretsSealed(in, opts)
+
+		args := out["args"].([]any)
+		if args[1] != maskedValue {
+			t.Errorf("sealed args[1] = %v, want masked", args[1])
+		}
+		if args[0] != "--user=root" {
+			t.Errorf("args[0] = %v, want passthrough (over-masking)", args[0])
+		}
+		if out["cmd"] != "/usr/bin/mysql" {
+			t.Errorf("cmd = %v, want passthrough (over-masking)", out["cmd"])
+		}
+		// The declarative layer caught it, so the regex fallback is not the sole
+		// hit and the declarative-gap alarm must stay quiet.
+		if len(fired) != 0 {
+			t.Errorf("alarm fired on a seal-catch: %v", fired)
+		}
+	})
+
+	t.Run("map element", func(t *testing.T) {
+		// A sealed path over an element that resolves to a MAP: the walk must not
+		// descend past it. Neither child key is sensitive by name, so descending
+		// would emit both in the clear.
+		opts := SealOpts{Sealed: map[string]bool{"peers[0]": true}}
+		in := map[string]any{
+			"peers": []any{
+				map[string]any{"user": "alice", "auth": "s3cr3t"},
+				map[string]any{"user": "bob", "auth": "public"},
+			},
+		}
+		out := MaskSecretsSealed(in, opts)
+
+		peers := out["peers"].([]any)
+		if peers[0] != maskedValue {
+			t.Errorf("sealed peers[0] = %#v, want masked whole (no unsealed interior)", peers[0])
+		}
+		if m, ok := peers[1].(map[string]any); !ok || m["auth"] != "public" {
+			t.Errorf("peers[1] = %#v, want passthrough (over-masking)", peers[1])
+		}
+	})
+
+	t.Run("typed []string element", func(t *testing.T) {
+		opts := SealOpts{Sealed: map[string]bool{"args[1]": true}}
+		in := map[string]any{"args": []string{"--user=root", "--password=hunter2"}}
+		out := MaskSecretsSealed(in, opts)
+
+		args := out["args"].([]any)
+		if args[1] != maskedValue {
+			t.Errorf("sealed args[1] in []string = %v, want masked", args[1])
+		}
+		if args[0] != "--user=root" {
+			t.Errorf("args[0] = %v, want passthrough (over-masking)", args[0])
+		}
+	})
+
+	t.Run("generalized idx form", func(t *testing.T) {
+		// The seal/schema set may hold the generalized `args[]` form; normalizeIdx
+		// must be applied to a slice element's path too, not only to a map key's.
+		opts := SealOpts{Sealed: map[string]bool{"args[]": true}}
+		in := map[string]any{"args": []any{"a", "b"}}
+		out := MaskSecretsSealed(in, opts)
+
+		args := out["args"].([]any)
+		for i, el := range args {
+			if el != maskedValue {
+				t.Errorf("args[%d] = %v, want masked via the generalized form", i, el)
+			}
+		}
+	})
+}
+
+// NIM-810 guard, schema layer. TestNormalizeIdx asserts the string rewrite;
+// this asserts that an indexed path in the SCHEMA actually masks the cell —
+// the schema layer reaches a slice element through the same walk as the seal.
+func TestMaskSecretsWithSchema_SecretSliceElement(t *testing.T) {
+	in := map[string]any{"acl": []any{"alice:s3cr3t", "bob:public"}}
+	out := MaskSecretsWithSchema(in, SecretPathSet{"acl[0]": true})
+
+	acl := out["acl"].([]any)
+	if acl[0] != maskedValue {
+		t.Errorf("schema-secret acl[0] = %v, want masked", acl[0])
+	}
+	if acl[1] != "bob:public" {
+		t.Errorf("acl[1] = %v, want passthrough (over-masking)", acl[1])
+	}
+}
+
 func TestNormalizeIdx(t *testing.T) {
 	cases := map[string]string{
 		"acl[0].password": "acl[].password",
