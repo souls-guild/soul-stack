@@ -13,23 +13,30 @@ const moduleInstalledAddr = "core.module.installed"
 // synthesized installs (for the log).
 //
 // What the synthesized step CARRIES is the alias, not the manifest entry's name.
-// `modules[].name` is a two-level address prefix `<alias>.<module>`; the step's
-// `params.name` is address level 1 alone, because that is the only identity
-// core.module.installed has to work with — since NIM-377 the artifact carries no
-// self-name, and the slot, the Sigil grant and every address derived from them
-// agree on the registration alias. Passing the whole two-level name is what made
-// every service declaring `modules:` unappliable on every host: the Soul side
-// rejects a dot outright (NIM-524).
+// `modules[].name` is the alias itself, or the deprecated `<alias>.<module>`
+// (NIM-829); the step's `params.name` is address level 1 either way, because that is
+// the only identity core.module.installed has to work with — since NIM-377 the
+// artifact carries no self-name, and the slot, the Sigil grant and every address
+// derived from them agree on the registration alias. Passing the whole two-level name
+// is what made every service declaring `modules:` unappliable on every host: the Soul
+// side rejects a dot outright (NIM-524).
 //
-// Two entries of the same artifact (one alias serving `redis` and `sentinel`)
-// therefore collapse to ONE install, placed before the earliest of their
-// consumers — a second step would install the same bytes into the same slot.
+// EVERYTHING here is keyed on the alias, on both sides of the match: the manifest
+// entry is reduced to it, and so is each consumer's address. One entry `redis` and
+// six entries `redis.<object>` therefore synthesize the same single install, before
+// the earliest consumer of ANY redis object — which is what lets the two declaration
+// forms mean the same thing for the length of the transition window. Matching a
+// consumer against the whole two-level entry, as this did before NIM-829, additionally
+// made a plan's correctness depend on the manifest ENUMERATING every object it
+// touches: a scenario calling `redis.sentinel.present` under a manifest that listed
+// only `redis.instance` got no install, or got one placed after the consumer that
+// needed it.
 func SynthesizeModuleInstalls(tasks []Task, modules []DependencyRef) ([]Task, []string) {
 	if len(modules) == 0 {
 		return tasks, nil
 	}
 
-	firstConsumer := map[string]int{} // "<alias>.<module>" → top-level index of the first consumer's task
+	firstConsumer := map[string]int{} // alias → top-level index of the first consumer's task
 	takeover := map[string]bool{}     // address level 1 of the literal params.name of explicit install steps
 	for i := range tasks {
 		collectModuleUsage(&tasks[i], i, firstConsumer, takeover)
@@ -42,18 +49,19 @@ func SynthesizeModuleInstalls(tasks []Task, modules []DependencyRef) ([]Task, []
 		if reservedModuleAddr(dep.Name) { // defense-in-depth: service.yml validation already forbids every reserved name
 			continue
 		}
-		idx, used := firstConsumer[dep.Name]
-		if !used {
-			continue
-		}
 		alias, ok := ModuleAlias(dep.Name)
 		if !ok || takeover[alias] {
 			continue
 		}
-		if prev, planned := at[alias]; planned {
-			if idx < prev {
-				at[alias] = idx
-			}
+		idx, used := firstConsumer[alias]
+		if !used {
+			continue
+		}
+		if _, planned := at[alias]; planned {
+			// Sibling two-level entries of one artifact. No position to reconcile:
+			// firstConsumer is already the earliest consumer of the whole alias, so
+			// every one of them names the same index. The first entry's ref wins, and
+			// a disagreement is `conflicting_module_ref` at validation.
 			continue
 		}
 		at[alias], ref[alias] = idx, dep.Ref
@@ -83,13 +91,18 @@ func SynthesizeModuleInstalls(tasks []Task, modules []DependencyRef) ([]Task, []
 	return out, aliases
 }
 
-// ModuleAlias — address level 1 of a `<alias>.<module>` dependency name, i.e. the
-// registration alias naming the slot the artifact installs into. ok is false for a
-// name with no level 2; `reDependencyModuleName` already rejects those in
-// service.yml, so this is the defensive half of the same rule.
+// ModuleAlias — the registration alias naming the slot a dependency's artifact
+// installs into: the name itself, or address level 1 of the deprecated
+// `<alias>.<module>` form (NIM-829). ok is false only for an empty alias, which is
+// the one string that names no slot.
+//
+// A bare name is its OWN alias and not a refusal. It used to be one, on the ground
+// that `reDependencyModuleName` "already rejects those in service.yml" — a defensive
+// half that outlived the rule it was defending, and would now reject the canonical
+// spelling.
 func ModuleAlias(name string) (string, bool) {
 	alias := addrLevel1(name)
-	if alias == name || alias == "" {
+	if alias == "" {
 		return "", false
 	}
 	return alias, true
@@ -118,8 +131,13 @@ func collectModuleUsage(t *Task, top int, firstConsumer map[string]int, takeover
 				}
 			}
 		} else if name, _, ok := SplitModuleAddr(t.Module.Module); ok {
-			if _, seen := firstConsumer[name]; !seen {
-				firstConsumer[name] = top
+			// Keyed on the ALIAS, the same reduction the manifest side goes through:
+			// what a task consumes is the artifact in the slot, and which of its
+			// objects the address names decides nothing about installing it.
+			if alias := addrLevel1(name); alias != "" {
+				if _, seen := firstConsumer[alias]; !seen {
+					firstConsumer[alias] = top
+				}
 			}
 		}
 	}

@@ -1,11 +1,13 @@
 package config
 
 import (
+	"fmt"
 	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
+	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
 func TestLoadServiceManifest_Golden(t *testing.T) {
@@ -43,11 +45,11 @@ func TestLoadServiceManifest_Golden(t *testing.T) {
 	if cfg.Destiny[3].Name != "vector" || cfg.Destiny[3].Ref != "v1.0.0" {
 		t.Errorf("destiny[3]: %#v", cfg.Destiny[3])
 	}
-	// The manifest carries one entry per object the SERVICE uses, all under ONE
-	// alias — they collapse to a single core.module.installed. The artifact serves
-	// a seventh, `user` (NIM-767), which this service does not use: wiring it in is
-	// NIM-768, so a seventh row here would be the change, not the count drifting.
-	wantModules := []string{"redis.acl", "redis.cluster", "redis.command", "redis.instance", "redis.replica", "redis.sentinel"}
+	// ONE row per artifact (NIM-829). The six rows this used to expect were the same
+	// binary declared once per object it manages, and they always collapsed to a single
+	// core.module.installed; the row is now what installs. `user` — the object NIM-767
+	// added and NIM-768 wires in — needs no row of its own and never did.
+	wantModules := []string{"redis"}
 	if len(cfg.Modules) != len(wantModules) {
 		t.Errorf("modules: %#v", cfg.Modules)
 	} else {
@@ -413,8 +415,10 @@ modules:
 	}
 }
 
+// The two-level form is still ACCEPTED — an error here would break every live
+// manifest at once — but it is warned about, with the alias it collapses to named in
+// the diagnostic (NIM-829, transition window to 2026-12-01).
 func TestLoadServiceManifest_ModuleNamespacedName(t *testing.T) {
-	// The two-level form is the only valid one for modules[] (strict).
 	src := `state_schema: {}
 modules:
   - { name: acme.haproxy, ref: v1.2.0 }
@@ -424,25 +428,118 @@ modules:
 		dump(t, diags)
 		t.Fatalf("expected 0 errors on namespaced module name acme.haproxy")
 	}
+	d := codeAt(diags, ModuleNameTwoLevelCode, "$.modules[0].name")
+	if d == nil {
+		dump(t, diags)
+		t.Fatalf("the deprecated two-level form passed without a %s warning", ModuleNameTwoLevelCode)
+	}
+	if d.Level != diag.LevelWarning {
+		t.Errorf("%s level = %q, want warning — an error would break every live manifest at once", d.Code, d.Level)
+	}
+	if !strings.Contains(d.Hint, "name: acme") {
+		t.Errorf("hint does not name the alias to write instead: %q", d.Hint)
+	}
 }
 
+// TestLoadServiceManifest_ModuleSingleLevelName — the canonical form (NIM-829).
+//
+// `modules[]` declares an ARTIFACT: one entry, one ref, one slot. The bare alias was
+// refused outright until NIM-829, which is why the WB redis manifest had to spell out
+// six entries for one binary — and why `conflicting_module_ref` had to exist to catch
+// the two-ref state that spelling makes writable.
 func TestLoadServiceManifest_ModuleSingleLevelName(t *testing.T) {
-	// The one-level form is no longer accepted (strict <ns>.<module>).
 	src := `state_schema: {}
 modules:
   - { name: redis-failover, ref: v1 }
 `
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
-	found := false
-	for _, d := range diags {
-		if d.Code == "name_invalid_format" && d.YAMLPath == "$.modules[0].name" {
-			found = true
-			break
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("the single-segment form was refused; it is the canonical one (NIM-829)")
+	}
+	if codeAt(diags, ModuleNameTwoLevelCode, "$.modules[0].name") != nil {
+		dump(t, diags)
+		t.Fatalf("the canonical form was warned about as deprecated")
+	}
+}
+
+// TestLoadServiceManifest_ModuleSingleLevelReservedName — `core` alone claims the
+// reserved name as squarely as `core.file` does, and gets the same diagnostic.
+//
+// The check used to read the second return of ModuleAlias as "is two-level", so a bare
+// reserved name reached only the format regex. Widening that regex without moving the
+// reserved check would have opened the shorter spelling of the exact claim the longer
+// one is refused for.
+func TestLoadServiceManifest_ModuleSingleLevelReservedName(t *testing.T) {
+	for _, name := range plugin.ReservedNames() {
+		src := "state_schema: {}\nmodules:\n  - { name: " + name + ", ref: v1 }\n"
+		_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+		want := "reserved_module_namespace"
+		if name == "core" {
+			want = "core_module_in_modules_list"
+		}
+		if codeAt(diags, want, "$.modules[0].name") == nil {
+			dump(t, diags)
+			t.Errorf("modules[0].name = %s (bare) → want %s", name, want)
 		}
 	}
-	if !found {
+}
+
+// TestLoadServiceManifest_ModuleSixObjectsCollapseToOne — the ticket's own manifest,
+// before and after, asserted as the pair of facts that makes the migration safe:
+// the old spelling still validates (with six warnings, one per entry), and the new one
+// validates clean.
+func TestLoadServiceManifest_ModuleSixObjectsCollapseToOne(t *testing.T) {
+	const head = "state_schema: {}\nmodules:\n"
+	objects := []string{"cluster", "command", "instance", "replica", "sentinel", "user"}
+
+	var old strings.Builder
+	old.WriteString(head)
+	for _, o := range objects {
+		fmt.Fprintf(&old, "  - { name: redis.%s, ref: v1.0.0 }\n", o)
+	}
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(old.String()), ValidateOptions{})
+	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("expected name_invalid_format on one-level module name (strict two-level form required)")
+		t.Fatalf("the pre-NIM-829 WB redis manifest stopped validating; the window has not opened yet")
+	}
+	warned := 0
+	for _, d := range diags {
+		if d.Code == ModuleNameTwoLevelCode {
+			warned++
+		}
+	}
+	if warned != len(objects) {
+		dump(t, diags)
+		t.Fatalf("%s warnings = %d, want %d (one per entry — the author must see every line to delete)",
+			ModuleNameTwoLevelCode, warned, len(objects))
+	}
+
+	_, _, diags, _ = LoadServiceManifestFromBytes("service.yml",
+		[]byte(head+"  - { name: redis, ref: v1.0.0 }\n"), ValidateOptions{})
+	if len(diags) != 0 {
+		dump(t, diags)
+		t.Fatalf("the migrated form is not clean: %v", diagCodesP(diags))
+	}
+}
+
+// TestLoadServiceManifest_ConflictingRefStillCaught — `conflicting_module_ref` is NOT
+// removed while both forms are accepted.
+//
+// One binary in two versions is the state the two-level form makes writable, and the
+// single-segment form makes unwritable. Between those two facts sits a half-migrated
+// manifest, which is exactly this input — so the guard comes off with the form, not
+// with the fix that deprecates it (NIM-836).
+func TestLoadServiceManifest_ConflictingRefStillCaught(t *testing.T) {
+	src := `state_schema: {}
+modules:
+  - { name: redis.cluster, ref: v1.0.0 }
+  - { name: redis, ref: v2.0.0 }
+`
+	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(src), ValidateOptions{})
+	if codeAt(diags, "conflicting_module_ref", "$.modules[1].ref") == nil {
+		dump(t, diags)
+		t.Fatalf("two refs for one alias passed validation: %v", diagCodesP(diags))
 	}
 }
 

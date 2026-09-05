@@ -124,6 +124,16 @@ const (
 	// definition and quietly renders less of it, the same shape as async: and
 	// require:.
 	FeatureTaskBlockInclude = "task.block.include"
+
+	// FeatureServiceModuleAliasName — a `modules[]` entry naming the artifact by its
+	// registration alias alone, without the level-2 object (NIM-829). The sharpest
+	// shape on this table, the same one `compat:` itself has: a keeper that predates
+	// the change requires two levels and answers `name_invalid_format`, and an
+	// error-level diagnostic on `service.yml` is not a degraded render but an
+	// unloadable service — `artifact.parseManifest` and `ListDependencies` both abort
+	// on it. So a window declared below this release promises compatibility with
+	// keepers that refuse the manifest outright.
+	FeatureServiceModuleAliasName = "service.modules.alias_name"
 )
 
 // keeperDSLFeatures — the registry of keeper-side grammar features that arrived
@@ -145,6 +155,7 @@ var keeperDSLFeatures = map[string]dslFeature{
 	FeatureTaskRequire:              {id: FeatureTaskRequire, introducedIn: Unreleased},
 	FeatureScenarioIDTemplate:       {id: FeatureScenarioIDTemplate, introducedIn: Unreleased},
 	FeatureTaskBlockInclude:         {id: FeatureTaskBlockInclude, introducedIn: Unreleased},
+	FeatureServiceModuleAliasName:   {id: FeatureServiceModuleAliasName, introducedIn: Unreleased},
 }
 
 // dslFeatureUse builds a used-feature record from the registry. An id absent from
@@ -170,6 +181,18 @@ func KeeperFeaturesOfService(m *ServiceManifest) []KeeperFeature {
 		if f, ok := dslFeatureUse(FeatureServiceCompat, "$.compat"); ok {
 			out = append(out, f)
 		}
+	}
+	// The FIRST entry in the canonical form carries the floor, not every one of them:
+	// the feature is the grammar, and repeating it per row would report one manifest
+	// fact once per line the author wrote it on.
+	for i, dep := range m.Modules {
+		if alias, ok := ModuleAlias(dep.Name); !ok || alias != dep.Name {
+			continue
+		}
+		if f, ok := dslFeatureUse(FeatureServiceModuleAliasName, fmt.Sprintf("$.modules[%d].name", i)); ok {
+			out = append(out, f)
+		}
+		break
 	}
 	return out
 }

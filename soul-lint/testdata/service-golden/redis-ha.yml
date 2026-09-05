@@ -32,6 +32,7 @@ destiny:
   # cloud-provision удалён: после ADR-017 это core-модуль core.cloud.provisioned,
   # не custom destiny. Core-модули в required_modules не перечисляются (ADR-009).
 
-# Custom-модули, нужные сервису (двухуровневая форма <namespace>.<module>)
+# Custom-модули, нужные сервису: одна строка на АРТЕФАКТ, имя — алиас регистрации
+# (NIM-829). Двухуровневая форма — в service-golden/module-two-level-deprecated.yml.
 modules:
-  - { name: acme.redis-failover, ref: v1.2.0 }
+  - { name: acme, ref: v1.2.0 }

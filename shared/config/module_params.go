@@ -138,7 +138,10 @@ func checkInstallAliasParam(paramsNode *ast.MappingNode, pathPrefix string) []di
 		// `name:  redis`, and an author copying the hint earns a second error.
 		// A hint that teaches a value the runtime refuses is this ticket's own defect
 		// in prose form.
-		if alias, dotted := ModuleAlias(v); dotted && plugin.ValidAlias(alias) {
+		// `alias != v` is the dotted test, spelled out since NIM-829 made ModuleAlias
+		// answer for a bare name too: on a bare value the alias IS the value, and a
+		// hint saying "write `name: <the thing you already wrote>`" is no hint.
+		if alias, ok := ModuleAlias(v); ok && alias != v && plugin.ValidAlias(alias) {
 			// The documented trap: `modules[].name` is `<alias>.<module>` and the
 			// pre-NIM-377 spelling was `<namespace>.<name>`, so the two-level form is
 			// what an author reaches for. Name the alias they meant.

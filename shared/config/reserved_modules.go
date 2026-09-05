@@ -28,14 +28,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
 
-// reservedModuleAddr reports whether a two-level `<alias>.<module>` address claims a
-// reserved name at level 1.
+// reservedModuleAddr reports whether a module dependency claims a reserved name at
+// address level 1 — `core` as much as `core.file`, since NIM-829 made the bare alias
+// the canonical way to write the entry and a rule that only saw the dotted form would
+// wave the shorter spelling of the same claim through.
 //
-// A single-level name (a destiny, `redis`) is never a module address and is left alone —
-// the same helper is on the path that validates both lists.
+// It is only ever asked about the two lists that NAME a module (`modules[]`,
+// `required_modules[]`); a destiny dependency is a single-level name that means
+// something else entirely, and its caller does not route it here.
 func reservedModuleAddr(addr string) bool {
-	alias, twoLevel := ModuleAlias(addr)
-	return twoLevel && plugin.IsReserved(alias)
+	alias, ok := ModuleAlias(addr)
+	return ok && plugin.IsReserved(alias)
 }
 
 // reservedModuleDiag renders the finding for an address [reservedModuleAddr] rejected.

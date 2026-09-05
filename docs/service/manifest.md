@@ -74,7 +74,7 @@ The root file contains only the service metadata and the contract for the runtim
 | `description` | recommended | string | One or two phrases: what kind of service is this? Visible in UI Keeper, MCP directory, output `soul-lint`. |
 | `state_schema` | yes | map `<field name>` → schema | Structure of `incarnation.state` JSONB fields in Postgres. Written in the **input DSL** ([`docs/input.md`](../input.md)) as a map of field name → schema, exactly like `input:` — no `type: object` and no `properties:` wrapper at the root ([ADR-0086](../adr/0086-one-schema-dialect.md)). See "`state_schema` Format" below. |
 | `destiny` | yes (if there are dependencies) | array<{name, ref, git?}> | List of destiny dependencies. Each entry: `{ name: <kebab-case>, ref: <git-tag-or-branch> }` + opt. `git: <full-URL>` (override source, see below). Core modules **are not listed** - they are always available ([ADR-009](../adr/0009-scenario-dsl.md)). |
-| `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom modules `{ name: <alias>.<module>, ref: <git-tag-or-branch> }`, where the alias is the registration name the artifact was allowed under (see below). Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
+| `modules` | yes (if there are dependencies) | array<{name, ref}> | List of custom-module **artifacts**, one row each: `{ name: <alias>, ref: <git-tag-or-branch> }`, where the alias is the registration name the artifact was allowed under (see below). The objects it serves arrive with it and are not listed; the two-level `<alias>.<module>` form is deprecated until 2026-12-01 ([NIM-829](#one-row-per-artifact-transition-window-to-2026-12-01)). Core modules **not listed** ([ADR-015](../adr/0015-core-modules-mvp.md)). From the Keeper entries **auto-synthesizes** install steps `core.module.installed` into the run plan - see below. |
 | `compat` | no | object | Declared **engine-compatibility window**: which keeper versions this definition was authored and tested against ([ADR-0076](../adr/0076-engine-compat-window.md)). One key today — `keeper: {min, max}`. No section → unbounded (existing services keep working). Semantics and example — ["`compat` Section"](#compat-section). |
 | `certificate` | no | object | TLS-certificate policy for the service ([ADR-017](../adr/0017-keeper-side-core.md)): `pki_role` — the Vault PKI role its certs are **issued** with — plus an optional `rotate: {enable, scenario, threshold}` block that enables **auto-rotation** by the background Reaper. No section, no `rotate:` block, or `rotate.enable: false` → rotation off. Semantics and example — ["`certificate` Section"](#certificate-section). |
 
@@ -222,17 +222,30 @@ Each record is an object:
 
 | Field | Obligation | Type | Meaning |
 |---|---|---|---|
-| `name` | yes | string | Name destiny (for `destiny:`) or `<alias>.<module>` (for `modules:`). |
+| `name` | yes | string | Name destiny (for `destiny:`) or the artifact's registration alias (for `modules:`). |
 | `ref` | yes | string | Git ref - tag (`v2.0.0`) or branch (`main`). No semver-range - exact ref ([ADR-007](../adr/0007-versioning-git-ref.md)). |
 | `git` | no | string (full git-URL) | **`destiny[]` only.** Per-entry override source. When `git:` is specified, Keeper loads destiny directly from this URL, ignoring `default_destiny_source` (keeper.yml). In `modules[]` the field is prohibited - the parser rejects with `unknown_key`. |
 
 `name` format:
 - `destiny[].name` - kebab-case single-level name destiny, regex `^[a-z][a-z0-9-]*$`.
-- `modules[].name` — strict two-level form `<alias>.<module>`, regex `^[a-z][a-z0-9-]*\.[a-z][a-z0-9-]*$`. Symmetrical to `destiny.yml → required_modules[]` (see [`docs/destiny/manifest.md`](../destiny/manifest.md)). Core modules are not listed in `modules:`.
+- `modules[].name` — the artifact's registration alias, kebab-case, regex `^[a-z][a-z0-9-]*$`. The two-level `<alias>.<module>` form is **deprecated** and accepted until **2026-12-01** — see [the transition window](#one-row-per-artifact-transition-window-to-2026-12-01) below. Same grammar as `destiny.yml → required_modules[]` (see [`docs/destiny/manifest.md`](../destiny/manifest.md)), where neither depth is deprecated. Core modules are not listed in `modules:`.
 
-**Level 1 is a registration alias, not a namespace.** Since [NIM-377](../adr/0065-core-module-installed.md) an artifact carries no name of its own: the operator picks the alias when they register it (`keeper.plugin.allow alias=…`), and that alias names the host-cache slot and address level 1. A service declaring `modules:` is therefore asserting *which alias its scenarios address*, and a cluster that registered the same artifact under a different one will not resolve those tasks. Reserved names (`core`, `keeper`, `soul`, the Soul Stack dictionary — see [`shared/plugin/reserved.go`](../../shared/plugin/reserved.go)) are rejected here as well as at registration.
+**The name is a registration alias, not a namespace.** Since [NIM-377](../adr/0065-core-module-installed.md) an artifact carries no name of its own: the operator picks the alias when they register it (`keeper.plugin.allow alias=…`), and that alias names the host-cache slot and address level 1. A service declaring `modules:` is therefore asserting *which alias its scenarios address*, and a cluster that registered the same artifact under a different one will not resolve those tasks. Reserved names (`core`, `keeper`, `soul`, the Soul Stack dictionary — see [`shared/plugin/reserved.go`](../../shared/plugin/reserved.go)) are rejected here as well as at registration — the bare `core` as squarely as `core.file`.
 
-Several entries **may** share an alias — that is one artifact serving several modules (`redis.instance` + `redis.sentinel`; under the [address rule](../naming-rules.md#the-discipline-binding-the-three-levels) the shared alias is the plugin's name and each entry names an **object** it manages). They must then agree on `ref`: one alias is one slot holding one artifact, and two refs for it is `conflicting_module_ref`.
+#### One row per artifact (transition window to 2026-12-01)
+
+**One entry declares one ARTIFACT at one ref.** An artifact is what a `ref` pins, what `core.module.installed` fetches, and what a slot holds; the objects it serves arrive with it and are not separately installable. So a service using `redis.cluster.*`, `redis.command.*`, `redis.instance.*`, `redis.replica.*`, `redis.sentinel.*` and `redis.user.*` writes **one row**:
+
+```yaml
+modules:
+  - { name: redis, ref: v1.0.0 }
+```
+
+The old spelling — one row per object, all sharing an alias — dates from the address model [NIM-765](../adr/0065-core-module-installed.md) replaced, where level 2 named "one of the modules the artifact serves". Since NIM-765 the address is `<plugin>.<object>.<action>` and level 2 is an **object** inside the one binary, so a row per object declares the same artifact six times over. It still validates, with a `module_name_two_level_deprecated` **warning** per row naming the alias to collapse to, and it means exactly what its level 1 alone means: the two forms synthesize the same single install, in the same place. On **2026-12-01** it becomes an error ([NIM-836](../adr/0065-core-module-installed.md)).
+
+**What comes off with it.** Several rows under one alias must agree on `ref` — one alias is one slot holding one artifact, and two refs for it is `conflicting_module_ref`. That check exists *because* the deprecated form can express one binary in two versions; one row per artifact cannot, so the check is removed together with the form and not before. While both forms are accepted a manifest can still be written half-migrated, which is the shape the guard is still catching.
+
+Migrating is a deletion, not a rewrite: keep one row, name it by the alias, drop the siblings. Nothing downstream reads level 2 — the install carries the alias, and the plugin params check ([NIM-790](../keeper/modules.md)) takes its object list from the **plugin's own** schema document, never from `service.yml`.
 
 **Hybrid of destiny source** (how Keeper outputs git-URL for dependency):
 - entry **without** `git:` → standard path: git-URL = `default_destiny_source` (keeper.yml) with `{name}` substitution;
@@ -246,10 +259,10 @@ Other field extensions (`enabled`, `optional`, etc.) are a separate propose-and-
 
 `modules[]` is not just a dependency declaration for validation and UI. Keeper from each record **synthesizes** Soul-side step `core.module.installed` with `params: {name, ref}` and inserts it into the run plan immediately before the first consumer task of the module (task `module: <alias>.<module>.<state>`; consumer inside `block:` → insertion before the entire block). The dependency is declared once per service - install-boilerplate is not needed in each scenario ([ADR-065 amendment 2026-07-03](../adr/0065-core-module-installed.md)).
 
-`params.name` of the synthesized step is the **alias alone** — address level 1, not the whole `modules[].name`. `core.module.installed` installs an artifact into the slot the alias names, and it rejects a dotted value outright; passing the entry through verbatim is what made every service declaring `modules:` fail at apply on every host between NIM-377 and NIM-524.
+`params.name` of the synthesized step is the **alias alone** — address level 1. With the canonical one-row form that is the entry's name; with the deprecated two-level one it is its level 1, never the whole string. `core.module.installed` installs an artifact into the slot the alias names, and it rejects a dotted value outright; passing the entry through verbatim is what made every service declaring `modules:` fail at apply on every host between NIM-377 and NIM-524.
 
-- **A module without consumer tasks is not synthesized in the script.**
-- **One install per alias.** Two entries of one artifact (`redis.instance`, `redis.sentinel`) produce a single step, before the earlier of their consumers.
+- **An artifact with no consumer tasks is not synthesized into the plan.** A consumer is any task addressing that alias — `redis.sentinel.present` counts for the row `redis` exactly as `redis.instance.configured` does, since both need the same binary in the same slot. Before [NIM-829](#one-row-per-artifact-transition-window-to-2026-12-01) the match was against the whole two-level entry, so a plan's correctness depended on the manifest enumerating every object it touched.
+- **One install per alias.** Several deprecated entries of one artifact (`redis.instance`, `redis.sentinel`) produce a single step, before the earliest consumer of that alias — the same step the one-row form produces.
 - **Takeover:** an explicit step `core.module.installed` naming that slot disables synthesis for it - the operator itself controls the position, `ref` and `when:`. The comparison is on address level 1 at both ends, so a step written `name: redis.instance` still takes over the `redis` slot (NIM-543) - though the dotted spelling itself is an error, reported as `module_install_name_not_an_alias`.
 - `ref` records go into the params of the synthesis step as **pin-verification**: the active Sigil tolerance must be on this ref.
 - **MVP limitation:** consumers are defined by `module:` script tasks; a module used only inside destiny (via `apply:`) is not considered a consumer - it requires an explicit install step.
@@ -378,13 +391,10 @@ destiny:
 # params.name of that step is level 1 alone - `redis`, the slot the alias names -
 # because a slot holds an artifact, and level 2 addresses a module inside it (NIM-524).
 modules:
-  # One artifact, one alias, one entry per OBJECT it manages (NIM-766). They collapse
-  # to a SINGLE core.module.installed on the shared alias.
-  - { name: redis.acl, ref: v1.0.0 }       # ACL LOAD (hot reload of the aclfile)
-  - { name: redis.cluster, ref: v1.0.0 }   # cluster build and day-2 evolution
-  - { name: redis.instance, ref: v1.0.0 }  # health/role probes, CONFIG SET
-  - { name: redis.replica, ref: v1.0.0 }   # REPLICAOF and the sync probes
-  - { name: redis.sentinel, ref: v1.0.0 }  # SENTINEL MONITOR/SET reconcile
+  # One artifact, one row. soul-mod-redis serves acl, cluster, instance, replica,
+  # sentinel and user as OBJECTS inside the one binary — they arrive with the install
+  # and are not separately installable, so they are not listed (NIM-829).
+  - { name: redis, ref: v1.0.0 }
 ```
 
 Working example with full folder layout - [`examples/service/redis/`](../../examples/service/redis/).
@@ -466,7 +476,7 @@ Migration is triggered by an explicit operator operation (`keeper.incarnation.up
   - `name` regex `^[a-z][a-z0-9-]*$`, non-empty.
   - `description` — string (if any).
   - `state_schema` — a map `<field name>` → schema, each entry a valid input schema ([`docs/input.md`](../input.md)). A root `type: object` / `properties:` envelope is refused by name (`state_schema_legacy_json_schema_form`) and the object-level list `required: [names]` by `input_required_list_removed`, at every level. ⚠ **Not implemented** — today the linter enforces the opposite (root `type: object` required, `state_schema_root_not_object` without it); see ["Format `state_schema`"](#format-state_schema) and NIM-742.
-  - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - two-level form `<alias>.<module>`, level 1 not a reserved name, and entries sharing an alias agree on `ref` (`conflicting_module_ref`). Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
+  - `destiny[]` / `modules[]` - each entry has `name` + `ref`, both non-empty. `name` matches kebab-case; for `modules:` - the registration alias, not a reserved name. The deprecated `<alias>.<module>` form warns with `module_name_two_level_deprecated` and, while it is still accepted, entries sharing an alias must agree on `ref` (`conflicting_module_ref`). Opt. `destiny[].git` — source override; in `modules[]` the `git:` field is rejected (`unknown_key`).
   - Unknown top-level keys → `unknown_key` with hint about deprecated (`version` → ADR-007; `tasks`/`steps`/`scenarios` → auto-discover/destiny-level; `input` → scenario-level).
   - `state_schema_version` → `unknown_key` with a hint about NIM-735 / ADR-019, the version being derived from the ladder.
 

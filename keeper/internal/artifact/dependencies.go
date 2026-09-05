@@ -29,10 +29,15 @@ type ServiceDependencies struct {
 }
 
 // Dependency — one entry of the manifest's `destiny[]` / `modules[]` (metadata-only):
-// `name` (kebab-case destiny / two-level `<namespace>.<module>`), `ref`
-// (git tag or branch, ADR-007), and optional `git` (per-entry full-URL
-// override, supported only for destiny[] — always empty for modules[] per
-// the config.validateDependencyRef contract).
+// `name` (a kebab-case destiny name, or in `modules[]` the artifact's registration
+// alias — the deprecated `<alias>.<module>` form still reaches here unchanged until
+// 2026-12-01, NIM-829), `ref` (git tag or branch, ADR-007), and optional `git`
+// (per-entry full-URL override, supported only for destiny[] — always empty for
+// modules[] per the config.validateDependencyRef contract).
+//
+// The name is passed through VERBATIM, in whichever form the manifest wrote it: this
+// projection answers "what does this service declare", and normalising it here would
+// show the operator a file they do not have.
 type Dependency struct {
 	Name string `json:"name"`
 	Ref  string `json:"ref"`

@@ -403,23 +403,17 @@ destiny:
   - { name: redis-exporter, ref: v1.0.0 }
   - { name: vector, ref: v1.0.0 }
 
-# Custom modules for the service. The two-level form <alias>.<module> (kebab-case) is
-# mandatory (docs/service/manifest.md → modules[]). Level 1 is the REGISTRATION ALIAS
-# the operator gives the artifact — the scenarios here address redis.*, so a cluster
-# running this service registers soul-mod-redis as `redis`. That artifact is the MAIN
-# interface to a live Redis (examples/module/soul-mod-redis/), and level 2 is the
-# OBJECT it manages: one artifact, ONE install, one row per object this service uses
-# (they collapse to a single core.module.installed on the shared alias). The artifact
-# also serves `redis.user` (ACL SETUSER/DELUSER on one user, NIM-767), which is NOT
-# listed: this service manages its ACL as a rendered users.acl plus redis.acl.reloaded,
-# and moving it onto the user-shaped object is NIM-768.
+# Custom modules for the service: ONE ROW PER ARTIFACT, named by the REGISTRATION
+# ALIAS the operator gives it (docs/service/manifest.md → modules[]). The scenarios
+# here address redis.*, so a cluster running this service registers soul-mod-redis as
+# `redis` — that one artifact is the MAIN interface to a live Redis
+# (examples/module/soul-mod-redis/) and it serves every object the scenarios touch:
+# acl, cluster, command, instance, replica, sentinel, user. They are objects inside the
+# one binary, not separately installable modules, so they are not listed and never were
+# installable apart — six rows always collapsed to a single core.module.installed on the
+# shared alias (NIM-829 retired the spelling; the row is what installs).
 modules:
-  - { name: redis.acl, ref: v1.0.0 }
-  - { name: redis.cluster, ref: v1.0.0 }
-  - { name: redis.command, ref: v1.0.0 }
-  - { name: redis.instance, ref: v1.0.0 }
-  - { name: redis.replica, ref: v1.0.0 }
-  - { name: redis.sentinel, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }
 
 # Server TLS (NIM-99). pki_role is what these certs are ISSUED with, at first issue
 # as much as at rotation, so it sits on the section; rotate: is the auto-rotation

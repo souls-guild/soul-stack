@@ -65,11 +65,29 @@ func TestRequiredModules_ReservedBeatsFormatDiagnostic(t *testing.T) {
 }
 
 // An ordinary third-party address is untouched — the check must not have widened into
-// "two-level names are suspicious".
+// "two-level names are suspicious". Neither depth is deprecated in `required_modules:`
+// (NIM-829), so a bare alias belongs in the same accepted list.
 func TestRequiredModules_OrdinaryAddressIsAccepted(t *testing.T) {
-	diags := destinyDiags(t, "name: x\nrequired_modules: [acme.haproxy, redis.instance]\n")
+	diags := destinyDiags(t, "name: x\nrequired_modules: [acme.haproxy, redis.instance, redis]\n")
 	if diag.HasErrors(diags) {
 		t.Errorf("a plain plugin address was rejected: %v", diags)
+	}
+	if hasCode(diags, ModuleNameTwoLevelCode) {
+		t.Errorf("required_modules[] was warned about the two-level form; only modules[] deprecates it: %v", diagCodesP(diags))
+	}
+}
+
+// A bare reserved name is the same claim as the dotted one, on this surface too.
+func TestRequiredModules_BareReservedNameIsRejected(t *testing.T) {
+	for _, name := range plugin.ReservedNames() {
+		diags := destinyDiags(t, "name: x\nrequired_modules: ["+name+"]\n")
+		want := "reserved_module_namespace"
+		if name == "core" {
+			want = "core_module_in_modules_list"
+		}
+		if codeAt(diags, want, "$.required_modules[0]") == nil {
+			t.Errorf("required_modules: [%s] → %v, want %s", name, diagCodesP(diags), want)
+		}
 	}
 }
 

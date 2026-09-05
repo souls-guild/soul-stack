@@ -309,6 +309,34 @@ func TestKeeperFeaturesOfService_CompatBlock(t *testing.T) {
 	}
 }
 
+// TestKeeperFeaturesOfService_ModuleAliasName — the single-segment `modules[].name`
+// carries a floor (NIM-829).
+//
+// A keeper that predates the change answers `name_invalid_format` on the manifest,
+// and an error there is an UNLOADABLE service, not a degraded render — so a window
+// declared below this release promises compatibility with keepers that refuse the
+// file outright. The deprecated two-level form is what every such keeper understands
+// and carries no floor.
+func TestKeeperFeaturesOfService_ModuleAliasName(t *testing.T) {
+	old := KeeperFeaturesOfService(&ServiceManifest{Modules: []DependencyRef{{Name: "redis.instance", Ref: "v1"}}})
+	if len(old) != 0 {
+		t.Fatalf("used = %+v, want nothing — the two-level form is what the baseline understands", old)
+	}
+
+	got := KeeperFeaturesOfService(&ServiceManifest{Modules: []DependencyRef{
+		{Name: "acme.probe", Ref: "v1"},
+		{Name: "redis", Ref: "v1"},
+		{Name: "mongo", Ref: "v1"},
+	}})
+	if len(got) != 1 || got[0].ID != FeatureServiceModuleAliasName {
+		t.Fatalf("used = %+v, want exactly one %s — the feature is the grammar, not the row count",
+			got, FeatureServiceModuleAliasName)
+	}
+	if got[0].Where != "$.modules[1].name" {
+		t.Errorf("Where = %q, want $.modules[1].name (the first entry in the new form)", got[0].Where)
+	}
+}
+
 // Every registry row must be either a released MAJOR.MINOR.PATCH or explicitly
 // Unreleased. A typo here would silently disable the row (an unparseable version
 // is skipped by InferKeeperFloor).

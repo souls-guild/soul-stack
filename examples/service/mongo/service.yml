@@ -121,15 +121,12 @@ state_schema:
 # monitoring/scenario/create (redis-exporter renders from scenario-local templates without destiny).
 destiny: []
 
-# Custom service modules. The two-level form <alias>.<module> is mandatory
-# (docs/service/manifest.md → modules[]). Level 1 is the REGISTRATION ALIAS the operator
-# gives the artifact — the scenarios here address mongo.*, so a cluster running this
-# service registers soul-mod-mongo as `mongo`. That artifact is the MAIN interface to a
-# live MongoDB (examples/module/soul-mod-mongo/), and level 2 is the OBJECT it manages:
-# one artifact, ONE install, one row per object this service uses (they collapse to a
-# single core.module.installed on the shared alias). The artifact also serves
-# `mongo.command` (a raw db.runCommand), which is NOT listed: no scenario in this service
-# addresses it, and a row here would install nothing extra but would promise it does.
+# Custom service modules: ONE ROW PER ARTIFACT, named by the REGISTRATION ALIAS the
+# operator gives it (docs/service/manifest.md → modules[]). The scenarios here address
+# mongo.*, so a cluster running this service registers soul-mod-mongo as `mongo`. That
+# one artifact is the MAIN interface to a live MongoDB
+# (examples/module/soul-mod-mongo/); `instance`, `user` and the raw `command` are
+# objects inside it, and listing them was never a choice about what gets installed
+# (NIM-829) — the row installs the binary, and the binary brings all three.
 modules:
-  - { name: mongo.instance, ref: v1.0.0 }
-  - { name: mongo.user, ref: v1.0.0 }
+  - { name: mongo, ref: v1.0.0 }

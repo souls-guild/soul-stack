@@ -46,10 +46,26 @@ type DestinyManifest struct {
 // `destiny-<name>/` folder name without the prefix.
 var reDestinyName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
 
-// reRequiredModule — two-level `<alias>.<module>` form for custom modules in
-// `required_modules:`. Core modules are not listed. Kebab-case, no underscore
-// (naming-rules.md §57/§186). Single source of truth with
-// `reDependencyModuleName` (service.go) — a duplicate regex was a drift source.
+// reRequiredModule — the form of a custom-module entry in `required_modules:`: the
+// registration alias, or `<alias>.<module>` naming one object inside it. Core modules
+// are not listed. Kebab-case, no underscore (naming-rules.md §57/§186). Still the same
+// object as `reDependencyModuleName` (service.go) — a duplicate regex was a drift
+// source, and splitting it to widen only one field would be that duplicate back.
+//
+// NIM-829 widened it to admit the single-segment form, so `required_modules:` admits
+// it too, whether or not that field asked. That is the right answer here and not a
+// side effect worth fencing off: the GRAMMAR is one grammar — an address, given to
+// whatever depth the author can state — and both depths are true statements about a
+// dependency.
+//
+// The POLICY is where the two fields part, and only one of them has a deprecation.
+// `modules[]` INSTALLS: an entry carries a `ref`, one alias is one slot holding one
+// artifact, and an entry per object is the same artifact declared six times with six
+// chances to disagree with itself (`conflicting_module_ref`). `required_modules:`
+// carries no ref and synthesizes nothing — it is a declaration soul-lint reads — so
+// naming the object is a strictly more precise statement with no contradictory state
+// behind it, and it is not deprecated. Widening a form is not the same act as
+// deprecating one, which is why one regex can serve both.
 var reRequiredModule = reDependencyModuleName
 
 // deprecatedDestinyKeys — obsolete top-level keys for which we emit an explicit
@@ -117,13 +133,15 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 		}))
 	}
 
-	// 3) required_modules — two-level `<alias>.<module>` form, and level 1 must
-	// not be a reserved name. Unlike `service.yml::modules[]` this list synthesizes
-	// nothing: it is a declaration soul-lint reads, so it carries no install step
-	// and no producer/consumer pair to disagree (NIM-524 is the twin field's bug).
+	// 3) required_modules — `<alias>` or `<alias>.<module>`, and level 1 must not be a
+	// reserved name. Unlike `service.yml::modules[]` this list synthesizes nothing: it
+	// is a declaration soul-lint reads, so it carries no install step and no
+	// producer/consumer pair to disagree (NIM-524 is the twin field's bug), and neither
+	// depth is deprecated here (see reRequiredModule).
 	// The reserved check runs FIRST because `core.haproxy` is regex-valid: reporting
 	// it as a format error would send the author looking for a typo in a string that
-	// is spelled exactly as they meant it.
+	// is spelled exactly as they meant it. Since NIM-829 it also catches a bare `core`,
+	// which the format check used to refuse for the wrong reason.
 	for i, mod := range m.RequiredModules {
 		yamlPath := fmt.Sprintf("$.required_modules[%d]", i)
 		switch {
@@ -133,8 +151,8 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 			out = append(out, atPath(root, yamlPath, diag.Diagnostic{
 				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 				Code:    "required_module_invalid_format",
-				Message: fmt.Sprintf("required_modules[%d] = %q does not match <alias>.<module>", i, mod),
-				Hint:    "two-level address per architecture.md -> \"Module addressing\"; core-modules are not listed here",
+				Message: fmt.Sprintf("required_modules[%d] = %q does not match <alias> or <alias>.<module>", i, mod),
+				Hint:    "a registration alias, optionally with the object it addresses, per architecture.md -> \"Module addressing\"; core-modules are not listed here",
 			}))
 		}
 	}

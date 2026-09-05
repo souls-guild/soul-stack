@@ -201,9 +201,10 @@ func (t *TelemetryConfig) CollectorsOrDefault() []string {
 
 // DependencyRef — an entry in `destiny[]` / `modules[]`: `{name, ref}` + optional `git`.
 //
-// `name` — a destiny name (kebab-case, single-level) or a module address (two-level
-// `<alias>.<module>`, level 1 being the registration alias); a different regex
-// applies per context (see schemaValidateService → pass over the slices).
+// `name` — a destiny name (kebab-case) or, in `modules[]`, the registration alias the
+// artifact installs under (the deprecated two-level `<alias>.<module>` is accepted
+// until 2026-12-01 and means its level 1, NIM-829); a different regex applies per
+// context (see schemaValidateService → pass over the slices).
 // `ref` — a git tag or branch (ADR-007). MVP accepts any non-empty string;
 // detailed ref-form checks (semver-tag / branch-naming) are backlog.
 // `git` — optional per-entry override of the dependency's full git URL. Supported
@@ -231,14 +232,31 @@ var (
 	// separate regex copy was a source of drift.
 	reDependencyDestinyName = reDestinyName
 
-	// reDependencyModuleName — strict two-level form `<alias>.<module>` for custom
-	// modules in `service.yml → modules[]`. Level 1 is the registration alias the
-	// artifact is expected to be installed under (it stopped being an artifact-declared
-	// namespace in NIM-377); level 2 is one of the modules that artifact serves.
-	// Symmetric with `reRequiredModule` (destiny.go); canonical kebab-case in each half
-	// (no trailing/leading/double dash), no underscore, naming-rules.md §57/§186.
-	reDependencyModuleName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*\.[a-z][a-z0-9]*(-[a-z0-9]+)*$`)
+	// reDependencyModuleName — the name of a custom-module dependency: the bare
+	// registration alias `<alias>`, or the deprecated two-level `<alias>.<module>`
+	// (NIM-829). Level 1 is the alias the artifact is expected to be installed under
+	// (it stopped being an artifact-declared namespace in NIM-377).
+	//
+	// The alias alone is the WHOLE name, because an entry declares one ARTIFACT at one
+	// ref and the artifact is what `ref` pins and what `core.module.installed` fetches
+	// into the slot. Level 2 meant "one of the modules that artifact serves" under the
+	// address model NIM-765 replaced; since then the address is
+	// `<plugin>.<object>.<action>` and level 2 is an OBJECT inside the one binary, so an
+	// entry per object declares one artifact six times over — which is what makes
+	// `redis.cluster ref v1.0.0` writable beside `redis.user ref v2.0.0` at all, and
+	// `conflicting_module_ref` below is the guard that state needs.
+	//
+	// Canonical kebab-case in each segment (no trailing/leading/double dash), no
+	// underscore, naming-rules.md §57/§186. Shared with `reRequiredModule` (destiny.go)
+	// — one grammar; the POLICY differs and that field's comment says why.
+	reDependencyModuleName = regexp.MustCompile(`^[a-z][a-z0-9]*(-[a-z0-9]+)*(\.[a-z][a-z0-9]*(-[a-z0-9]+)*)?$`)
 )
+
+// ModuleNameTwoLevelCode — a `modules[]` entry still written as `<alias>.<module>`
+// (NIM-829). A WARNING, not an error: the form is accepted until 2026-12-01, and
+// means exactly what its level 1 alone means. See docs/service/manifest.md →
+// "Format `destiny[]` and `modules[]`".
+const ModuleNameTwoLevelCode = "module_name_two_level_deprecated"
 
 // deprecatedServiceKeys — deprecated top-level keys in `service.yml`. Each gets
 // a specific hint explaining "where it actually lives" (see
@@ -325,17 +343,40 @@ func schemaValidateService(path string, root *ast.MappingNode, m *ServiceManifes
 	for i, dep := range m.Destiny {
 		out = append(out, validateDependencyRef(root, "destiny", i, dep, reDependencyDestinyName)...)
 	}
-	// Entries sharing an alias are the normal way to declare one artifact serving
-	// several modules, and they all land in the SAME slot — so they must name the
-	// same ref. Left unchecked, the synthesized install (NIM-524) silently picks
+	// Entries sharing an alias are the two-level form's way of declaring one artifact
+	// serving several modules, and they all land in the SAME slot — so they must name
+	// the same ref. Left unchecked, the synthesized install (NIM-524) silently picks
 	// the first entry's ref and the pin check fails later, naming a ref the reader
 	// never wrote next to the module that failed.
+	//
+	// The check is scheduled to go with the form it guards (NIM-829, NIM-836): one
+	// entry per artifact cannot express two refs for one alias, so there is nothing
+	// left to catch. It stays for exactly as long as BOTH forms are accepted — a
+	// manifest can still be written half-migrated, and that is the shape that would
+	// slip through if the guard came off with the first half of the change.
 	aliasRef := make(map[string]string, len(m.Modules))
 	aliasAt := make(map[string]int, len(m.Modules))
 	for i, dep := range m.Modules {
 		out = append(out, validateDependencyRef(root, "modules", i, dep, reDependencyModuleName)...)
 		alias, ok := ModuleAlias(dep.Name)
-		if !ok || dep.Ref == "" {
+		if !ok {
+			continue
+		}
+		// Warn only on an entry that is otherwise well-formed. A reserved or malformed
+		// name already has its own diagnostic, and a second one about its SHAPE would
+		// send the author to rewrite a string they must instead delete.
+		if alias != dep.Name && reDependencyModuleName.MatchString(dep.Name) && !reservedModuleAddr(dep.Name) {
+			out = append(out, atPath(root, fmt.Sprintf("$.modules[%d].name", i), diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSchemaValidate,
+				Code: ModuleNameTwoLevelCode,
+				Message: fmt.Sprintf("modules[%d].name %q is the deprecated two-level form; an entry declares an ARTIFACT, and %q is the whole name",
+					i, dep.Name, alias),
+				Hint: fmt.Sprintf("write `- { name: %s, ref: %s }` once, and drop the sibling entries under the same alias — "+
+					"level 2 is an object inside the one binary (NIM-765), not a separately installable module. "+
+					"The two-level form stops being accepted on 2026-12-01 (NIM-829)", alias, refOrPlaceholder(dep.Ref)),
+			}))
+		}
+		if dep.Ref == "" {
 			continue
 		}
 		if prev, seen := aliasRef[alias]; seen && prev != dep.Ref {
@@ -501,9 +542,21 @@ func validateDependencyRef(root *ast.MappingNode, listKey string, idx int, dep D
 
 func nameHint(listKey string) string {
 	if listKey == "modules" {
-		return "two-level address <alias>.<module> per architecture.md -> \"Module addressing\"; level 1 is the registration alias, core-modules are not listed here"
+		return "the registration alias the artifact installs under (kebab-case), e.g. `name: redis`; " +
+			"the two-level <alias>.<module> form is accepted until 2026-12-01 and core-modules are not listed here"
 	}
 	return "kebab-case: lowercase letters, digits, dashes; must start with letter"
+}
+
+// refOrPlaceholder — the entry's ref for a hint that shows the line rewritten, or a
+// stand-in when there is none. An empty ref already has its own
+// `missing_required_field`; echoing it back as `ref: ` inside the rewrite hint would
+// teach a second broken line while answering about the first.
+func refOrPlaceholder(ref string) string {
+	if ref == "" {
+		return "<git-ref>"
+	}
+	return ref
 }
 
 // StateSchemaLegacyFormCode — a `state_schema:` root still written in the JSON-Schema

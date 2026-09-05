@@ -554,6 +554,134 @@ func TestSynthesizeModuleInstalls_TakeoverKeyedOnTheBaseAddress(t *testing.T) {
 	}
 }
 
+// TestSynthesizeModuleInstalls_SingleSegmentEntryLandsInItsOwnSlot — NIM-829, the
+// property the canonical form rests on.
+//
+// A bare `redis` names the artifact and is its own alias, so it must synthesize the
+// same one install the six-entry spelling did, in the same place, with the same
+// params. ModuleAlias refused a bare name until NIM-829 and the entry would have been
+// skipped outright: a manifest that validated and installed nothing.
+func TestSynthesizeModuleInstalls_SingleSegmentEntryLandsInItsOwnSlot(t *testing.T) {
+	tasks := synthTasks(t, `
+name: create
+tasks:
+  - name: Warmup
+    module: core.exec.run
+    changed_when: false
+    params:
+      cmd: "true"
+  - name: Configure redis
+    module: redis.instance.configured
+    params:
+      settings: {}
+`)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "redis", Ref: "v1.2.3"}})
+	if !reflect.DeepEqual(aliases, []string{"redis"}) {
+		t.Fatalf("aliases = %v, want [redis] — a bare entry is its own alias", aliases)
+	}
+	if len(out) != 3 {
+		t.Fatalf("len(out) = %d, want 3", len(out))
+	}
+	assertSynthTask(t, out[1], "redis", "v1.2.3")
+	if out[0].Name != "Warmup" || out[2].Name != "Configure redis" {
+		t.Errorf("task order shifted: %q %q", out[0].Name, out[2].Name)
+	}
+}
+
+// TestSynthesizeModuleInstalls_BothFormsAgree — the transition window's whole promise,
+// stated as an equality rather than as two separate expectations.
+//
+// While both spellings are accepted a reader has to know that they mean the same
+// thing; if they can produce different plans, the window is not a window but a fork.
+// The plan is compared over the same task list for the one-entry form, the six-entry
+// form, and the six-entry form listing objects the plan never touches.
+func TestSynthesizeModuleInstalls_BothFormsAgree(t *testing.T) {
+	src := `
+name: create
+tasks:
+  - name: Warmup
+    module: core.exec.run
+    changed_when: false
+    params:
+      cmd: "true"
+  - name: Set up sentinel
+    module: redis.sentinel.present
+    params: {}
+  - name: Configure redis
+    module: redis.instance.configured
+    params:
+      settings: {}
+`
+	two := []DependencyRef{
+		{Name: "redis.cluster", Ref: "v1.0.0"},
+		{Name: "redis.command", Ref: "v1.0.0"},
+		{Name: "redis.instance", Ref: "v1.0.0"},
+		{Name: "redis.replica", Ref: "v1.0.0"},
+		{Name: "redis.sentinel", Ref: "v1.0.0"},
+		{Name: "redis.user", Ref: "v1.0.0"},
+	}
+	one := []DependencyRef{{Name: "redis", Ref: "v1.0.0"}}
+
+	plan := func(modules []DependencyRef) ([]Task, []string) {
+		return SynthesizeModuleInstalls(synthTasks(t, src), modules)
+	}
+	wantOut, wantAliases := plan(one)
+	if !reflect.DeepEqual(wantAliases, []string{"redis"}) || len(wantOut) != 4 {
+		t.Fatalf("single-segment baseline is wrong: aliases=%v len=%d", wantAliases, len(wantOut))
+	}
+	assertSynthTask(t, wantOut[1], "redis", "v1.0.0")
+
+	gotOut, gotAliases := plan(two)
+	if !reflect.DeepEqual(gotAliases, wantAliases) {
+		t.Errorf("aliases: two-level = %v, single-segment = %v — the forms disagree", gotAliases, wantAliases)
+	}
+	if !reflect.DeepEqual(gotOut, wantOut) {
+		t.Errorf("the two declaration forms produced different plans:\n two-level: %+v\n bare:      %+v", gotOut, wantOut)
+	}
+}
+
+// TestSynthesizeModuleInstalls_ConsumerMatchesOnTheAlias — the install follows the
+// ARTIFACT, not the enumeration.
+//
+// A manifest declaring `redis.instance` while the plan calls `redis.sentinel.present`
+// used to synthesize nothing: the consumer map was keyed on the whole two-level entry,
+// so a plan was only correct if the manifest happened to list every object it touched.
+// Both are one binary in one slot, and the install has to be there before the first of
+// them either way.
+func TestSynthesizeModuleInstalls_ConsumerMatchesOnTheAlias(t *testing.T) {
+	tasks := synthTasks(t, `
+name: create
+tasks:
+  - name: Set up sentinel
+    module: redis.sentinel.present
+    params: {}
+`)
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "redis.instance", Ref: "v1.0.0"}})
+	if !reflect.DeepEqual(aliases, []string{"redis"}) {
+		t.Fatalf("aliases = %v, want [redis] — an undeclared OBJECT of a declared artifact is still that artifact", aliases)
+	}
+	if len(out) != 2 {
+		t.Fatalf("len(out) = %d, want 2", len(out))
+	}
+	assertSynthTask(t, out[0], "redis", "v1.0.0")
+}
+
+// TestSynthesizeModuleInstalls_SingleSegmentTakeoverStillWorks — the operator's escape
+// hatch survives the new form on both halves of the comparison.
+func TestSynthesizeModuleInstalls_SingleSegmentTakeoverStillWorks(t *testing.T) {
+	tasks := []Task{
+		{Name: "Operator installs plugin explicitly", Module: &ModuleTask{
+			Module: moduleInstalledAddr, Params: map[string]any{"name": "redis"}}},
+		{Name: "Configure redis", Module: &ModuleTask{
+			Module: "redis.instance.configured", Params: map[string]any{}}},
+	}
+	out, aliases := SynthesizeModuleInstalls(tasks, []DependencyRef{{Name: "redis", Ref: "v1.0.0"}})
+	if len(aliases) != 0 || len(out) != 2 {
+		t.Errorf("aliases=%v len(out)=%d, want empty/2 — a second install was inserted beside the operator's step",
+			aliases, len(out))
+	}
+}
+
 // TestSynthesizeModuleInstalls_EveryReservedNameIsSkipped — the second-line defence
 // covers the whole reserved list, not just `core.`.
 //

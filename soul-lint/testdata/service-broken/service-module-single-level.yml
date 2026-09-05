@@ -1,4 +1,0 @@
-state_schema:
-  foo: { type: string }
-modules:
-  - { name: redis-failover, ref: v1 }

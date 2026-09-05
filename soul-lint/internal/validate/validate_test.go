@@ -46,6 +46,19 @@ func TestGolden_ServiceExample(t *testing.T) {
 	runExpect(t, "../../testdata/service-golden/redis-ha.yml", KindService, false, ExitOK, nil)
 }
 
+// TestGolden_ServiceModuleTwoLevelIsAWarning — the transition window, at the exit
+// code (NIM-829).
+//
+// The deprecated `<alias>.<module>` entry must WARN and still exit 0: every live
+// manifest is written that way, and a linter that fails them turns a deprecation into
+// an outage. The negative fixture that used to assert the single-segment form was
+// refused (`service-broken/service-module-single-level.yml`) is retired with it — that
+// form is now the canonical one, carried by `service-golden/redis-ha.yml`.
+func TestGolden_ServiceModuleTwoLevelIsAWarning(t *testing.T) {
+	runExpect(t, "../../testdata/service-golden/module-two-level-deprecated.yml",
+		KindService, true, ExitOK, []string{"module_name_two_level_deprecated"})
+}
+
 func TestGolden_ServiceExample_FromRepo(t *testing.T) {
 	// The full example from examples/service/redis/service.yml (the consolidated
 	// redis) must validate directly with 0 diagnostics — a regression contract.

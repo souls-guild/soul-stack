@@ -132,9 +132,13 @@ func TestLoadDestinyManifest_DeprecatedKeys(t *testing.T) {
 	}
 }
 
+// A bare alias is a legal `required_modules:` entry since NIM-829 — the grammar is
+// one grammar with `service.yml::modules[]`, and an address stated to the artifact is
+// as true a statement as one stated to the object. `UPPER` and the underscore are
+// still refused: widening the depth is not loosening the segment.
 func TestLoadDestinyManifest_RequiredModuleFormat(t *testing.T) {
 	src := `name: redis
-required_modules: [acme.haproxy, acme.myapp, "bad-no-dot", "ns.UPPER"]
+required_modules: [acme.haproxy, acme.myapp, "no-dot-is-fine", "ns.UPPER", "bad_name"]
 `
 	_, _, diags, _ := LoadDestinyManifestFromBytes("destiny.yml", []byte(src), ValidateOptions{})
 	count := 0
@@ -146,6 +150,10 @@ required_modules: [acme.haproxy, acme.myapp, "bad-no-dot", "ns.UPPER"]
 	if count != 2 {
 		dump(t, diags)
 		t.Fatalf("expected 2 required_module_invalid_format diagnostics, got %d", count)
+	}
+	if codeAt(diags, "required_module_invalid_format", "$.required_modules[2]") != nil {
+		dump(t, diags)
+		t.Fatalf("required_modules[2] = no-dot-is-fine was refused; a bare alias is a legal entry (NIM-829)")
 	}
 }
 

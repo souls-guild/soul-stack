@@ -12,9 +12,9 @@ description: >-
 state_schema: {}
 # modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
 # keeper synthesizes core.module.installed {name: redis, ref} before the first
-# consumer of redis.* in the plan — params.name is address level 1, the
-# registration alias naming the slot, not this whole entry (NIM-524). There is NO
-# consumer in create → no synthesis in the create plan; the consumer is only in the
+# consumer of redis.* in the plan. The entry names the ARTIFACT by its registration
+# alias, which is what params.name carries (NIM-524, NIM-829). There is NO consumer in
+# create → no synthesis in the create plan; the consumer is only in the
 # operational-scenario verify_live.
 modules:
-  - { name: redis.command, ref: v1.0.0 }
+  - { name: redis, ref: v1.0.0 }
