@@ -2,20 +2,26 @@ package client
 
 import (
 	"context"
-	"encoding/json"
 	"fmt"
 	"net/url"
 	"strconv"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // IncarnationsAPI holds typed methods for /v1/incarnations/*. Exposed as the
 // Client.Incarnations field.
+//
+// Every body here is a wire.* type — the same declaration keeper's handler
+// returns. The copies this file used to carry had drifted: they still had a
+// `spec` field the server stopped sending, and none of `label`, `traits` or
+// `applying_apply_id` that it started sending (NIM-776).
 type IncarnationsAPI struct {
 	c *Client
 }
 
-// IncarnationListOptions holds list filters. service/status/coven are
-// query params, limit/offset is pagination (operator-api.md → Pagination).
+// IncarnationListOptions holds list filters. Not a wire type: service/status
+// are query parameters and coven is filtered client-side (see List).
 type IncarnationListOptions struct {
 	Service string
 	Status  string
@@ -24,39 +30,13 @@ type IncarnationListOptions struct {
 	Offset  int
 }
 
-// IncarnationListItem mirrors the IncarnationGetReply shape (openapi.yaml).
-// snake_case names come from UseProtoNames in Keeper's HTTP facade
-// (operator-api.md → JSON field naming).
-type IncarnationListItem struct {
-	ID                 string          `json:"id"`
-	Service            string          `json:"service"`
-	ServiceVersion     string          `json:"service_version"`
-	StateSchemaVersion int32           `json:"state_schema_version"`
-	Covens             []string        `json:"covens"`
-	Spec               json.RawMessage `json:"spec,omitempty"`
-	State              json.RawMessage `json:"state,omitempty"`
-	Status             string          `json:"status"`
-	StatusDetails      json.RawMessage `json:"status_details,omitempty"`
-	CreatedByAID       string          `json:"created_by_aid"`
-	CreatedAt          string          `json:"created_at"`
-	UpdatedAt          string          `json:"updated_at"`
-}
-
-// IncarnationListReply is a list page.
-type IncarnationListReply struct {
-	Items  []IncarnationListItem `json:"items"`
-	Offset int32                 `json:"offset"`
-	Limit  int32                 `json:"limit"`
-	Total  int32                 `json:"total"`
-}
-
 // List is GET /v1/incarnations. `coven` isn't defined as a filter on this
 // endpoint by the openapi schema (the coven filter only exists on
 // /v1/souls), so the filter is applied client-side after fetching the page.
 // The server returns offset/limit/total for service/status; for coven the
 // values won't be consistent with total — this is a known limitation,
 // documented in the README.
-func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions) (*IncarnationListReply, error) {
+func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions) (*wire.IncarnationListReply, error) {
 	q := url.Values{}
 	if opts.Service != "" {
 		q.Set("service", opts.Service)
@@ -74,7 +54,7 @@ func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions)
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	var reply IncarnationListReply
+	var reply wire.IncarnationListReply
 	if err := a.c.Do(ctx, "GET", path, nil, &reply); err != nil {
 		return nil, err
 	}
@@ -93,31 +73,19 @@ func (a *IncarnationsAPI) List(ctx context.Context, opts IncarnationListOptions)
 	return &reply, nil
 }
 
-// Get is GET /v1/incarnations/{name}.
-func (a *IncarnationsAPI) Get(ctx context.Context, name string) (*IncarnationListItem, error) {
-	if name == "" {
-		return nil, fmt.Errorf("incarnation name is empty")
+// Get is GET /v1/incarnations/{id}.
+func (a *IncarnationsAPI) Get(ctx context.Context, id string) (*wire.IncarnationGetReply, error) {
+	if id == "" {
+		return nil, fmt.Errorf("incarnation id is empty")
 	}
-	var item IncarnationListItem
-	if err := a.c.Do(ctx, "GET", "/v1/incarnations/"+url.PathEscape(name), nil, &item); err != nil {
+	var item wire.IncarnationGetReply
+	if err := a.c.Do(ctx, "GET", "/v1/incarnations/"+url.PathEscape(id), nil, &item); err != nil {
 		return nil, err
 	}
 	return &item, nil
 }
 
-// IncarnationRunRequest is the body for POST /v1/incarnations/{name}/scenarios/{scenario}.
-type IncarnationRunRequest struct {
-	Input map[string]any `json:"input,omitempty"`
-}
-
-// IncarnationRunReply is the 202 response with apply_id (ULID).
-type IncarnationRunReply struct {
-	ApplyID     string `json:"apply_id"`
-	Incarnation string `json:"incarnation"`
-	Scenario    string `json:"scenario"`
-}
-
-// Run is POST /v1/incarnations/{name}/scenarios/{scenario}.
+// Run is POST /v1/incarnations/{id}/scenarios/{scenario}.
 //
 // It used to append ?dry_run=true for a --dry-run flag, on the reasoning that
 // "the server will either honor it or ignore it, which is safe either way".
@@ -125,42 +93,23 @@ type IncarnationRunReply struct {
 // has never declared the parameter, so the server ignored it and applied for
 // real while the operator was told it was a rehearsal. Flag and parameter both
 // removed in NIM-446 — a read-only check is an Errand dry-run, which is wired.
-func (a *IncarnationsAPI) Run(ctx context.Context, name, scenario string, input map[string]any) (*IncarnationRunReply, error) {
-	if name == "" || scenario == "" {
+func (a *IncarnationsAPI) Run(ctx context.Context, id, scenario string, input map[string]any) (*wire.IncarnationRunReply, error) {
+	if id == "" || scenario == "" {
 		return nil, fmt.Errorf("incarnation/scenario are empty")
 	}
-	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", url.PathEscape(name), url.PathEscape(scenario))
-	body := IncarnationRunRequest{Input: input}
-	var reply IncarnationRunReply
+	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", url.PathEscape(id), url.PathEscape(scenario))
+	body := wire.IncarnationRunRequest{Input: input}
+	var reply wire.IncarnationRunReply
 	if err := a.c.Do(ctx, "POST", path, body, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// StateHistoryEntry is a record from /v1/incarnations/{name}/history.
-type StateHistoryEntry struct {
-	HistoryID    string          `json:"history_id"`
-	Scenario     string          `json:"scenario"`
-	StateBefore  json.RawMessage `json:"state_before,omitempty"`
-	StateAfter   json.RawMessage `json:"state_after,omitempty"`
-	ChangedByAID string          `json:"changed_by_aid"`
-	ApplyID      string          `json:"apply_id"`
-	CreatedAt    string          `json:"created_at"`
-}
-
-// IncarnationHistoryReply is a state_history page.
-type IncarnationHistoryReply struct {
-	Items  []StateHistoryEntry `json:"items"`
-	Offset int32               `json:"offset"`
-	Limit  int32               `json:"limit"`
-	Total  int32               `json:"total"`
-}
-
-// History is GET /v1/incarnations/{name}/history.
-func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offset int) (*IncarnationHistoryReply, error) {
-	if name == "" {
-		return nil, fmt.Errorf("incarnation name is empty")
+// History is GET /v1/incarnations/{id}/history.
+func (a *IncarnationsAPI) History(ctx context.Context, id string, limit, offset int) (*wire.IncarnationHistoryReply, error) {
+	if id == "" {
+		return nil, fmt.Errorf("incarnation id is empty")
 	}
 	q := url.Values{}
 	if limit > 0 {
@@ -169,79 +118,21 @@ func (a *IncarnationsAPI) History(ctx context.Context, name string, limit, offse
 	if offset > 0 {
 		q.Set("offset", strconv.Itoa(offset))
 	}
-	path := "/v1/incarnations/" + url.PathEscape(name) + "/history"
+	path := "/v1/incarnations/" + url.PathEscape(id) + "/history"
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	var reply IncarnationHistoryReply
+	var reply wire.IncarnationHistoryReply
 	if err := a.c.Do(ctx, "GET", path, nil, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// RunSummary is one row of the runs list (GET /v1/incarnations/{name}/runs).
-// Shape in openapi.yaml → RunSummaryEntry.
-type RunSummary struct {
-	ApplyID      string  `json:"apply_id"`
-	Scenario     string  `json:"scenario"`
-	Status       string  `json:"status"`
-	StartedAt    string  `json:"started_at"`
-	FinishedAt   *string `json:"finished_at,omitempty"`
-	StartedByAID *string `json:"started_by_aid,omitempty"`
-}
-
-// IncarnationRunsReply is a page of runs.
-type IncarnationRunsReply struct {
-	Items  []RunSummary `json:"items"`
-	Offset int32        `json:"offset"`
-	Limit  int32        `json:"limit"`
-	Total  int32        `json:"total"`
-}
-
-// RunNotice is one advisory finding a host reported during a run (ADR-0076(u)).
-// Independent of the host's status: the task RAN, and something about how it was
-// asked is on its way out. Today `code` is only `deprecated_param`; `message`
-// carries the deadline and the replacement.
-type RunNotice struct {
-	Code    string `json:"code"`
-	Module  string `json:"module"`
-	Param   string `json:"param,omitempty"`
-	Message string `json:"message"`
-}
-
-// RunHostStatus is one host's line in the run detail. FailedTaskIdx /
-// FailedPlanIndex / ErrorSummary are populated only on a failed host; Notices is
-// populated whenever that host had something to report, failure or not.
-type RunHostStatus struct {
-	SID             string      `json:"sid"`
-	Status          string      `json:"status"`
-	Passage         int         `json:"passage"`
-	FailedTaskIdx   *int        `json:"failed_task_idx,omitempty"`
-	FailedPlanIndex *int        `json:"failed_plan_index,omitempty"`
-	ErrorSummary    *string     `json:"error_summary,omitempty"`
-	Attempt         int32       `json:"attempt"`
-	CancelRequested bool        `json:"cancel_requested"`
-	Notices         []RunNotice `json:"notices,omitempty"`
-}
-
-// RunDetail is the response for GET /v1/incarnations/{name}/runs/{apply_id}:
-// header + per-host slice. Shape in openapi.yaml → RunDetailReply.
-type RunDetail struct {
-	ApplyID      string          `json:"apply_id"`
-	Scenario     string          `json:"scenario"`
-	Status       string          `json:"status"`
-	StartedAt    string          `json:"started_at"`
-	FinishedAt   *string         `json:"finished_at,omitempty"`
-	StartedByAID *string         `json:"started_by_aid,omitempty"`
-	Hosts        []RunHostStatus `json:"hosts"`
-	Input        map[string]any  `json:"input,omitempty"`
-}
-
-// Runs is GET /v1/incarnations/{name}/runs.
-func (a *IncarnationsAPI) Runs(ctx context.Context, name string, limit, offset int) (*IncarnationRunsReply, error) {
-	if name == "" {
-		return nil, fmt.Errorf("incarnation name is empty")
+// Runs is GET /v1/incarnations/{id}/runs.
+func (a *IncarnationsAPI) Runs(ctx context.Context, id string, limit, offset int) (*wire.IncarnationRunsReply, error) {
+	if id == "" {
+		return nil, fmt.Errorf("incarnation id is empty")
 	}
 	q := url.Values{}
 	if limit > 0 {
@@ -250,27 +141,27 @@ func (a *IncarnationsAPI) Runs(ctx context.Context, name string, limit, offset i
 	if offset > 0 {
 		q.Set("offset", strconv.Itoa(offset))
 	}
-	path := "/v1/incarnations/" + url.PathEscape(name) + "/runs"
+	path := "/v1/incarnations/" + url.PathEscape(id) + "/runs"
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	var reply IncarnationRunsReply
+	var reply wire.IncarnationRunsReply
 	if err := a.c.Do(ctx, "GET", path, nil, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// RunDetail is GET /v1/incarnations/{name}/runs/{apply_id}.
-func (a *IncarnationsAPI) RunDetail(ctx context.Context, name, applyID string) (*RunDetail, error) {
-	if name == "" {
-		return nil, fmt.Errorf("incarnation name is empty")
+// RunDetail is GET /v1/incarnations/{id}/runs/{apply_id}.
+func (a *IncarnationsAPI) RunDetail(ctx context.Context, id, applyID string) (*wire.RunDetailReply, error) {
+	if id == "" {
+		return nil, fmt.Errorf("incarnation id is empty")
 	}
 	if applyID == "" {
 		return nil, fmt.Errorf("apply_id is empty")
 	}
-	var detail RunDetail
-	path := "/v1/incarnations/" + url.PathEscape(name) + "/runs/" + url.PathEscape(applyID)
+	var detail wire.RunDetailReply
+	path := "/v1/incarnations/" + url.PathEscape(id) + "/runs/" + url.PathEscape(applyID)
 	if err := a.c.Do(ctx, "GET", path, nil, &detail); err != nil {
 		return nil, err
 	}

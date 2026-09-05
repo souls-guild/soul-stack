@@ -12,6 +12,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // scenario.go — Operator API HTTP client for L3c-5: create an incarnation,
@@ -31,12 +33,9 @@ func (s *Stack) CreateIncarnation(t *testing.T, name, serviceRef string, spec ma
 		t.Fatal("CreateIncarnation: Stack.JWT is empty; call Stack.BootstrapArchon(t) first")
 	}
 	service := stripServiceRef(serviceRef)
-	body := map[string]any{
-		"id":      name,
-		"service": service,
-	}
+	body := wire.IncarnationCreateRequest{ID: name, Service: service}
 	if spec != nil {
-		body["input"] = spec
+		body.Input = spec
 	}
 	resp, status, err := s.opPostJSON(t, "/v1/incarnations", body)
 	if err != nil {
@@ -45,9 +44,7 @@ func (s *Stack) CreateIncarnation(t *testing.T, name, serviceRef string, spec ma
 	if status != http.StatusAccepted {
 		t.Fatalf("CreateIncarnation %s: status %d, body=%s", name, status, string(resp))
 	}
-	var out struct {
-		Incarnation string `json:"incarnation"`
-	}
+	var out wire.IncarnationCreateReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateIncarnation %s: decode: %v (body=%s)", name, err, string(resp))
 	}
@@ -64,10 +61,7 @@ func (s *Stack) RunScenario(t *testing.T, incName, scenarioName string, input ma
 	if s.JWT == "" {
 		t.Fatal("RunScenario: Stack.JWT is empty")
 	}
-	body := map[string]any{}
-	if input != nil {
-		body["input"] = input
-	}
+	body := wire.IncarnationRunRequest{Input: input}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incName, scenarioName)
 	resp, status, err := s.opPostJSON(t, path, body)
 	if err != nil {
@@ -76,9 +70,7 @@ func (s *Stack) RunScenario(t *testing.T, incName, scenarioName string, input ma
 	if status != http.StatusAccepted {
 		t.Fatalf("RunScenario %s/%s: status %d, body=%s", incName, scenarioName, status, string(resp))
 	}
-	var out struct {
-		ApplyID string `json:"apply_id"`
-	}
+	var out wire.IncarnationRunReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("RunScenario %s/%s: decode: %v (body=%s)", incName, scenarioName, err, string(resp))
 	}

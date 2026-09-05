@@ -14,10 +14,10 @@ package api
 //
 // MECHANISM (a structural analog of the enum-alias in huma_incarnation_status.go):
 //
-//   - A NAMED STRUCT (NOT an alias, NOT generic) in the huma layer: incarnationListReply /
-//     incarnationHistoryReply. The Go type name = the contract schema name: huma DefaultSchemaNamer
+//   - A NAMED STRUCT (NOT an alias, NOT generic) in the huma layer: IncarnationListReply /
+//     IncarnationHistoryReply. The Go type name = the contract schema name: huma DefaultSchemaNamer
 //     takes reflect.Type.Name() and capitalizes the first letter → unexported
-//     incarnationListReply yields exactly "IncarnationListReply" (like the enum incarnationStatus →
+//     IncarnationListReply yields exactly "IncarnationListReply" (like the enum incarnationStatus →
 //     "IncarnationStatus"). The shape is EXACTLY the spec's contract fields: 4 int32 fields
 //     (items/offset/limit/total) with no cursor fields. This is deliberately NARROWER than generic
 //     PagedResponse[T] (which also carries next_cursor/total_approximate omitempty — needed by
@@ -44,40 +44,6 @@ import (
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
-// incarnationListReply — the alias target schema for the GET /v1/incarnations envelope. The shape is checked against
-// the committed hand-written spec (docs/keeper/openapi.yaml → IncarnationListReply): EXACTLY 4
-// int32 fields (items/offset/limit/total), all required, with no cursor fields (cursor belongs to the keyset
-// domain soul, not incarnation). items.$ref to the contract native element IncarnationGetReply
-// (T5a). The type name = the contract schema name (huma DefaultSchemaNamer capitalizes → "IncarnationListReply").
-type incarnationListReply struct {
-	Items  []IncarnationGetReply `json:"items" doc:"page of incarnations"`
-	Offset int32                 `json:"offset" doc:"offset from start of set"`
-	Limit  int32                 `json:"limit" doc:"page size"`
-	Total  int32                 `json:"total" doc:"total number of entries in set"`
-}
-
-// incarnationHistoryReply — the alias target schema for the GET /v1/incarnations/{id}/history envelope.
-// The shape is checked against the committed hand-written spec (docs/keeper/openapi.yaml → IncarnationHistoryReply):
-// EXACTLY 4 int32 fields (items/offset/limit/total), all required, with no cursor fields. items.$ref
-// to the contract native element StateHistoryEntry (T5a). The type name = the contract schema name.
-type incarnationHistoryReply struct {
-	Items  []StateHistoryEntry `json:"items" doc:"page of state_history entries"`
-	Offset int32               `json:"offset" doc:"offset from start of set"`
-	Limit  int32               `json:"limit" doc:"page size"`
-	Total  int32               `json:"total" doc:"total number of entries in set"`
-}
-
-// incarnationRunsReply — the alias target schema for the GET /v1/incarnations/{id}/runs envelope.
-// The same contract shape (4 int32 fields items/offset/limit/total, all required, with no
-// cursor fields), items.$ref to the native element RunSummaryEntry. The type name = the contract
-// schema name (huma DefaultSchemaNamer capitalizes → "IncarnationRunsReply").
-type incarnationRunsReply struct {
-	Items  []RunSummaryEntry `json:"items" doc:"page of incarnation runs (apply_runs fold)"`
-	Offset int32             `json:"offset" doc:"offset from start of set"`
-	Limit  int32             `json:"limit" doc:"page size"`
-	Total  int32             `json:"total" doc:"total number of incarnation runs"`
-}
-
 // registerIncarnationEnvelopes registers on the registry a huma alias from the instantiated generic
 // sharedapi.PagedResponse[<element>] → named-struct envelope, so huma builds the
 // list/history/runs Body schema under the contract name and contract shape (4 int32 fields,
@@ -91,14 +57,14 @@ func registerIncarnationEnvelopes(api huma.API) {
 	// native get-Body emits) → dedup is safe, the name/4-field shape is stable.
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.IncarnationGetView]](),
-		reflect.TypeFor[incarnationListReply](),
+		reflect.TypeFor[IncarnationListReply](),
 	)
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.StateHistoryView]](),
-		reflect.TypeFor[incarnationHistoryReply](),
+		reflect.TypeFor[IncarnationHistoryReply](),
 	)
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.RunSummaryView]](),
-		reflect.TypeFor[incarnationRunsReply](),
+		reflect.TypeFor[IncarnationRunsReply](),
 	)
 }

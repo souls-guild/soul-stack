@@ -8,6 +8,8 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // AddMember binds the i-th soul container to incarnation `incName` in
@@ -75,7 +77,7 @@ func (s *Stack) AddMemberRaw(t *testing.T, soulIndex int, incName string) ([]byt
 	sid := s.SoulContainers[soulIndex].SID
 	c := s.opClient(t)
 	path := fmt.Sprintf("/v1/incarnations/%s/members", incName)
-	resp, status, err := c.post(context.Background(), path, map[string]any{"sids": []string{sid}})
+	resp, status, err := c.post(context.Background(), path, wire.IncarnationMemberBindRequest{SIDs: []string{sid}})
 	if err != nil {
 		t.Fatalf("AddMemberRaw(%s, %s): http: %v", incName, sid, err)
 	}

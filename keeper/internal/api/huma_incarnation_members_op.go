@@ -11,7 +11,6 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -22,23 +21,6 @@ import (
 type memberBindInput struct {
 	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationMemberBindRequest
-}
-
-// IncarnationMemberBindRequest — Go form of the POST .../members body. bound_by_aid is
-// NOT taken from the body (it comes from the JWT). SID format, the caller's soul scope and
-// host status are domain validation. Struct name = contract schema name in OpenAPI.
-type IncarnationMemberBindRequest struct {
-	SIDs []string `json:"sids" required:"true" minItems:"1" maxItems:"200" pattern:"^[a-z0-9][a-z0-9.-]{0,253}$" doc:"SIDs (FQDN) of already-onboarded, connected hosts to bind to this incarnation"`
-}
-
-// IncarnationMemberBindReply — the native 200 envelope of POST .../members. The bind is
-// idempotent, so the reply splits the outcome: `bound` are the SIDs written by this call,
-// `already_member` the ones that were members before it. Both sorted, both always
-// present (`[]`, never null).
-type IncarnationMemberBindReply struct {
-	Incarnation   string   `json:"incarnation"`
-	Bound         []string `json:"bound"`
-	AlreadyMember []string `json:"already_member"`
 }
 
 // memberBindOutput — huma output POST .../members (FULL-TYPED). Status=200.
@@ -67,26 +49,6 @@ func memberBindOperation() huma.Operation {
 // memberListInput — huma input GET .../members. Name — path.
 type memberListInput struct {
 	ID string `path:"id" doc:"incarnation id"`
-}
-
-// IncarnationMember — the native wire form of one roster entry. `status` is the HOST's
-// lifecycle status at read time (membership itself carries no status); bound_at/
-// bound_by_aid are the membership audit columns (migration 099).
-type IncarnationMember struct {
-	SID        string    `json:"sid"`
-	Status     string    `json:"status"`
-	BoundAt    time.Time `json:"bound_at"`
-	BoundByAID *string   `json:"bound_by_aid,omitempty"`
-}
-
-// IncarnationMemberListReply — the native 200 envelope of GET .../members. Narrowed to
-// the hosts within the caller's soul scope, so `total` is what THIS operator may see, not
-// the size of the whole roster.
-type IncarnationMemberListReply struct {
-	Items  []IncarnationMember `json:"items"`
-	Limit  int                 `json:"limit"`
-	Offset int                 `json:"offset"`
-	Total  int                 `json:"total"`
 }
 
 // memberListOutput — huma output GET .../members (FULL-TYPED).

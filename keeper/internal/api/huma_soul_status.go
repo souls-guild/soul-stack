@@ -10,12 +10,16 @@ package api
 // via $ref (SoulListEntry.status/.transport, SoulCreateReply.status/.transport,
 // SoulCovenAssignSelector.status) — the UI expects exactly named schemas.
 //
-// MECHANISM (huma-only, no edits to the generated oapi package): for each enum — a string type in
-// the api package with huma.SchemaProvider that registers the named schema and returns a $ref to
-// it, + a RegisterTypeAlias of the domain oapi type to our SchemaProvider. The wire type (string)
-// does NOT change, only the OpenAPI schema: status/transport become $ref instead of inline
-// `type: string`. Registration is idempotent. Both aliases are called in newHumaCadenceAPI (the
-// shared factory for all huma.API).
+// MECHANISM: the enum TYPES are wire.SoulStatus / wire.SoulTransport (shared/api/wire/enums.go,
+// NIM-776) and carry no method — huma.SchemaProvider is a METHOD, and Go allows one only in the
+// declaring package, so putting it there would drag huma into shared/ and, through it, into soul.
+// The SchemaProvider lives instead on the keeper-local shims soulStatusSchema /
+// soulTransportSchema (huma_enums.go), which read the schemaName/Ref/Enum/Description constants
+// below and return a $ref; registerContractEnums points the registry at them with
+// RegisterTypeAlias, and huma resolves a registry alias BEFORE it looks for a SchemaProvider
+// (mapRegistry.Schema). The wire type (string) does NOT change, only the OpenAPI schema:
+// status/transport become $ref instead of inline `type: string`. Registration is idempotent and
+// happens in newHumaCadenceAPI, the shared factory for every huma.API.
 //
 // ENUM SET. The values come from the DOMAIN truth (internal/soul: Status*/Transport*,
 // validStatus/validTransport) — the same 6 statuses / 2 transports the code already emits inline
@@ -63,14 +67,3 @@ const soulStatusDescription = "Soul status in the registry."
 
 const soulTransportDescription = "Configuration delivery method. agent — soul daemon on top of " +
 	"mTLS gRPC stream; ssh — agentless push."
-
-	// SchemaProvider targets — the NATIVE enum types SoulStatus / SoulTransport (huma_enums.go,
-	// T5d-2c-full Phase 1). The native enum types implement huma.SchemaProvider themselves (emitting
-	// the named schemas "SoulStatus"/"SoulTransport" with the domain enum set and $ref). The
-	// schemaName/Ref/Enum/Description constants above are the shared truth read by the native types'
-	// Schema() methods.
-	//
-	// handler-native T5d: reply/get/list Body carry native SoulStatus/SoulTransport DIRECTLY (fields
-	// are projected from the domain Soul*View flat strings), so a separate RegisterTypeAlias
-	// SoulStatus → native is no longer needed (there is not a single SoulStatus field in the
-	// reflected Body).

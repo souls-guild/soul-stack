@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -82,7 +83,7 @@ func newErrandListCmd() *cobra.Command {
 			rows := make([][]string, 0, len(reply.Items))
 			for _, it := range reply.Items {
 				rows = append(rows, []string{
-					it.ErrandID, it.SID, it.Module, it.Status,
+					it.ErrandID, it.SID, it.Module, string(it.Status),
 					exitCodeShort(it.ExitCode), durationShort(it.DurationMs),
 					formatTimeShort(it.StartedAt),
 				})
@@ -137,21 +138,21 @@ func newErrandGetCmd() *cobra.Command {
 // until a terminal state. Backoff is linear 1s..5s (small window: an Errand
 // typically terminates within <1m). Errors are propagated as-is; ctx-Done
 // exits immediately.
-func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID string, stderrW io.Writer) (client.ErrandResult, error) {
+func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID string, stderrW io.Writer) (wire.ErrandResult, error) {
 	delay := time.Second
 	const maxDelay = 5 * time.Second
 	fmt.Fprintf(stderrW, "polling errand %s ...\n", errandID)
 	for {
 		select {
 		case <-ctx.Done():
-			return client.ErrandResult{}, ctx.Err()
+			return wire.ErrandResult{}, ctx.Err()
 		case <-time.After(delay):
 		}
 		res, async, err := cl.Errand.Get(ctx, errandID)
 		if err != nil {
 			// A 404 right after our own Exec is impossible (we just inserted
 			// the row); 5xx is propagated so the operator sees the real error.
-			return client.ErrandResult{}, renderAPIError(err)
+			return wire.ErrandResult{}, renderAPIError(err)
 		}
 		if !async {
 			return res, nil
@@ -165,7 +166,7 @@ func pollErrandToTerminal(ctx context.Context, cl *client.Client, errandID strin
 // renderErrandResult prints a table-style view of a single Errand: status,
 // exit, duration, stdout/stderr with a truncation marker. For JSON mode the
 // caller uses output.JSON directly (renderErrandResult isn't called).
-func renderErrandResult(w io.Writer, res client.ErrandResult) error {
+func renderErrandResult(w io.Writer, res wire.ErrandResult) error {
 	if _, err := fmt.Fprintf(w, "Errand:   %s\n", res.ErrandID); err != nil {
 		return err
 	}
@@ -178,42 +179,48 @@ func renderErrandResult(w io.Writer, res client.ErrandResult) error {
 	if res.DurationMs != nil {
 		fmt.Fprintf(w, "Duration: %dms\n", *res.DurationMs)
 	}
-	if res.StartedAt != "" {
-		fmt.Fprintf(w, "Started:  %s\n", res.StartedAt)
+	if !res.StartedAt.IsZero() {
+		fmt.Fprintf(w, "Started:  %s\n", formatTimeFull(res.StartedAt))
 	}
-	if res.FinishedAt != "" {
-		fmt.Fprintf(w, "Finished: %s\n", res.FinishedAt)
+	if res.FinishedAt != nil {
+		fmt.Fprintf(w, "Finished: %s\n", formatTimeFullPtr(res.FinishedAt))
 	}
-	if res.ErrorMessage != "" {
-		fmt.Fprintf(w, "Error:    %s\n", res.ErrorMessage)
+	if msg := deref(res.ErrorMessage); msg != "" {
+		fmt.Fprintf(w, "Error:    %s\n", msg)
 	}
-	if res.Stdout != "" {
+	if stdout := deref(res.Stdout); stdout != "" {
 		fmt.Fprintln(w, "\n--- stdout ---")
-		fmt.Fprint(w, res.Stdout)
-		if !endsWithNewline(res.Stdout) {
+		fmt.Fprint(w, stdout)
+		if !endsWithNewline(stdout) {
 			fmt.Fprintln(w)
 		}
-		if res.StdoutTruncated {
+		if derefBool(res.StdoutTruncated) {
 			fmt.Fprintln(w, "[truncated]")
 		}
 	}
-	if res.Stderr != "" {
+	if stderr := deref(res.Stderr); stderr != "" {
 		fmt.Fprintln(w, "\n--- stderr ---")
-		fmt.Fprint(w, res.Stderr)
-		if !endsWithNewline(res.Stderr) {
+		fmt.Fprint(w, stderr)
+		if !endsWithNewline(stderr) {
 			fmt.Fprintln(w)
 		}
-		if res.StderrTruncated {
+		if derefBool(res.StderrTruncated) {
 			fmt.Fprintln(w, "[truncated]")
 		}
 	}
-	if len(res.Output) > 0 {
+	if res.Output != nil && len(*res.Output) > 0 {
 		fmt.Fprintln(w, "\n--- output (structured) ---")
-		if err := output.JSON(w, res.Output); err != nil {
+		if err := output.JSON(w, *res.Output); err != nil {
 			return errors.New("render output: " + err.Error())
 		}
 	}
 	return nil
+}
+
+// derefBool renders an optional wire boolean: an absent key means false, which
+// is what the flag meant before it became optional.
+func derefBool(b *bool) bool {
+	return b != nil && *b
 }
 
 func endsWithNewline(s string) bool {

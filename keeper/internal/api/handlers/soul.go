@@ -745,7 +745,7 @@ type SoulListInput struct {
 
 // SoulListReply — the wire type of the GET /v1/souls response (paged-envelope SoulListView). An alias of
 // sharedapi.PagedResponse[SoulListView] — the single shape of offset and keyset modes (CURSOR,
-// 6 fields). Package api projects it into the native envelope soulListReply via RegisterTypeAlias
+// 6 fields). Package api projects it into the native envelope SoulListReply via RegisterTypeAlias
 // (handler-native T5d: the element schema SoulListView collapses onto the contractual SoulListEntry).
 type SoulListReply = sharedapi.PagedResponse[SoulListView]
 

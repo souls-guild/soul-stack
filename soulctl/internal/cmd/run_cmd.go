@@ -9,6 +9,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -58,20 +59,20 @@ func newRunCmdCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			req := client.VoyageCreateRequest{
+			req := wire.VoyageCreateRequest{
 				Kind:   "command",
 				Module: module,
 				Input:  map[string]any{"cmd": shellCmd},
-				Target: client.VoyageTarget{
+				Target: wire.VoyageTarget{
 					SIDs:  target.SIDs,
 					Coven: target.Coven,
 					Where: target.Where,
 				},
 				OnFailure:   onFailure,
-				Concurrency: concurrency,
-				BatchSize:   batchSize,
-				Batch:       batch,
-				MaxFailures: maxFailures,
+				Concurrency: optInt(concurrency),
+				BatchSize:   optInt(batchSize),
+				Batch:       optString(batch),
+				MaxFailures: optString(maxFailures),
 			}
 			reply, err := cl.Voyages.Create(ctx, req)
 			if err != nil {
@@ -123,7 +124,7 @@ func newRunCmdCmd() *cobra.Command {
 
 // waitForVoyage — polls every 3s until terminal (succeeded/failed/
 // partial_failed/cancelled). Used only when --wait is set.
-func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, timeout time.Duration) (*client.Voyage, error) {
+func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, timeout time.Duration) (*wire.Voyage, error) {
 	if timeout <= 0 {
 		timeout = 10 * time.Minute
 	}
@@ -154,22 +155,26 @@ func waitForVoyage(parent context.Context, cl *client.Client, voyageID string, t
 	}
 }
 
-func isVoyageTerminal(s string) bool {
+func isVoyageTerminal(s wire.VoyageStatus) bool {
 	switch s {
-	case "succeeded", "failed", "partial_failed", "cancelled":
+	case wire.VoyageStatusSucceeded, wire.VoyageStatusFailed,
+		wire.VoyageStatusPartialFailed, wire.VoyageStatusCancelled:
 		return true
 	}
 	return false
 }
 
-func renderVoyageSnapshot(w io.Writer, r *client.Voyage) {
+func renderVoyageSnapshot(w io.Writer, r *wire.Voyage) {
 	fmt.Fprintf(w, "voyage_id:    %s\n", r.VoyageID)
 	fmt.Fprintf(w, "kind:         %s\n", r.Kind)
 	fmt.Fprintf(w, "status:       %s\n", r.Status)
 	fmt.Fprintf(w, "scope_size:   %d\n", r.ScopeSize)
-	fmt.Fprintf(w, "current_done: %d\n", r.CurrentDone)
-	if r.FinishedAt != "" {
-		fmt.Fprintf(w, "finished_at:  %s\n", r.FinishedAt)
+	// Progress is reported in batches, not units: `current_done` was a field of
+	// this CLI's own copy of the body that the server has never sent, so the
+	// line printed 0 for the whole run (NIM-776).
+	fmt.Fprintf(w, "batch:        %d/%d\n", r.CurrentBatchIndex, r.TotalBatches)
+	if r.FinishedAt != nil {
+		fmt.Fprintf(w, "finished_at:  %s\n", formatTimeFullPtr(r.FinishedAt))
 	}
 	if r.Summary != nil {
 		fmt.Fprintf(w, "summary:      total=%d succeeded=%d failed=%d cancelled=%d\n",

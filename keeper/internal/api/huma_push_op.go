@@ -22,22 +22,6 @@ type pushApplyInput struct {
 	Body PushApplyRequest
 }
 
-// PushApplyRequest — the Go form of the POST /v1/push/apply body (code-first source of the schema AND
-// validation). inventory (SID[] target hosts) + destiny (<name>@<ref>) + optional
-// input/ssh_provider/cleanup_stale_versions. Empty inventory / empty destiny is
-// domain validation (422 in ApplyTyped). additionalProperties:false (huma default) →
-// unknown body field → 400. The struct name = the contract schema name in OpenAPI (huma
-// DefaultSchemaNamer takes reflect.Type.Name() directly) — aligned with the committed
-// hand-written spec (rollout N3). The register func projects into native handlers.PushApplyInput
-// (toPushApplyInput).
-type PushApplyRequest struct {
-	Inventory            []string       `json:"inventory" required:"true" doc:"list of target SID (FQDN) hosts (transport: ssh)"`
-	Destiny              string         `json:"destiny" required:"true" doc:"reference to Destiny in the form <name>@<ref>"`
-	Input                map[string]any `json:"input,omitempty" doc:"input for destiny"`
-	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"SshProvider name; defaults to the first registered one"`
-	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"remove stale soul-binary/module versions in the same SSH session"`
-}
-
 // pushApplyOutput — huma output POST /v1/push/apply (FULL-TYPED). Status=202 (async
 // Accepted); Body — native PushApplyReply (apply_id). The client polls
 // GET /v1/push/{apply_id}.

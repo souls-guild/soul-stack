@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -63,7 +64,7 @@ func newSoulsSshTargetSetCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			reply, err := cl.Souls.SetSshTarget(ctx, sid, client.SoulSshTargetBody{
+			reply, err := cl.Souls.SetSshTarget(ctx, sid, wire.SoulSshTarget{
 				SSHPort:     port,
 				SSHUser:     user,
 				SoulPath:    soulPath,
@@ -131,7 +132,7 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 			if err != nil {
 				return renderAPIError(err)
 			}
-			body := client.SoulSshTargetBody{
+			body := wire.SoulSshTarget{
 				SSHPort:     port,
 				SSHUser:     user,
 				SoulPath:    soulPath,
@@ -230,13 +231,17 @@ Examples:
 			ctx, cancel := context.WithTimeout(cmd.Context(), ctxTimeout)
 			defer cancel()
 
-			res, async, err := cl.Errand.Exec(ctx, client.ErrandExecRequest{
-				SID:            sid,
-				Module:         module,
-				Input:          inputObj,
-				TimeoutSeconds: timeout,
-				DryRun:         dryRun,
-			})
+			body := wire.ErrandRunRequest{Module: module, TimeoutSeconds: optInt(timeout)}
+			if inputObj != nil {
+				body.Input = &inputObj
+			}
+			// dry_run is optional on the wire: the key is sent only when asked
+			// for, because a module that has no read-safe Plan answers 400 to an
+			// explicit `false` just as it would to a `true`.
+			if dryRun {
+				body.DryRun = &dryRun
+			}
+			res, async, err := cl.Errand.Exec(ctx, client.ErrandExecRequest{SID: sid, Body: body})
 			if err != nil {
 				return renderAPIError(err)
 			}
@@ -301,8 +306,8 @@ func newSoulsListCmd() *cobra.Command {
 			rows := make([][]string, 0, len(reply.Items))
 			for _, it := range reply.Items {
 				rows = append(rows, []string{
-					it.SID, it.Status, it.Transport,
-					output.JoinList(it.Covens), formatTimeShort(it.LastSeenAt),
+					it.SID, string(it.Status), string(it.Transport),
+					output.JoinList(it.Covens), formatTimeShortPtr(it.LastSeenAt),
 				})
 			}
 			return output.Table(cmd.OutOrStdout(),

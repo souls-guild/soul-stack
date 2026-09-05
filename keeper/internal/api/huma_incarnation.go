@@ -279,7 +279,7 @@ func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHan
 		for i := range reply.Items {
 			items[i] = newIncarnationGetReply(reply.Items[i])
 		}
-		return &incListOutput{Body: incarnationListReply{
+		return &incListOutput{Body: IncarnationListReply{
 			Items:  items,
 			Offset: int32(reply.Offset),
 			Limit:  int32(reply.Limit),
@@ -309,7 +309,7 @@ func registerHumaIncarnationHistory(humaAPI huma.API, incH *handlers.Incarnation
 		for i := range reply.Items {
 			items[i] = newStateHistoryEntry(reply.Items[i])
 		}
-		return &incHistoryOutput{Body: incarnationHistoryReply{
+		return &incHistoryOutput{Body: IncarnationHistoryReply{
 			Items:  items,
 			Offset: int32(reply.Offset),
 			Limit:  int32(reply.Limit),
@@ -335,7 +335,7 @@ func registerHumaIncarnationRuns(humaAPI huma.API, incH *handlers.IncarnationHan
 		for i := range reply.Items {
 			items[i] = newRunSummaryEntry(reply.Items[i])
 		}
-		return &incRunsOutput{Body: incarnationRunsReply{
+		return &incRunsOutput{Body: IncarnationRunsReply{
 			Items:  items,
 			Offset: int32(reply.Offset),
 			Limit:  int32(reply.Limit),

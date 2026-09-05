@@ -35,129 +35,14 @@ package api
 // is NOT tagged: the type is shared input↔output, and a pattern on INPUT would become a runtime 422.
 
 import (
-	"time"
-
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 )
 
 // === nested leaves (1:1 shape with legacy-generated) ===
 
-// VoyageSummary — native run aggregates (1:1 shape with VoyageSummary, types.gen.go :3973):
-// total/succeeded/failed/cancelled — int WITHOUT omitempty (required, hand-written spec :7710); no_match —
-// *int WITH omitempty (0/nil → key omitted, like the handler noMatchPtr). The struct name = the contract
-// schema name.
-type VoyageSummary struct {
-	Cancelled int  `json:"cancelled"`
-	Failed    int  `json:"failed"`
-	NoMatch   *int `json:"no_match,omitempty"`
-	Succeeded int  `json:"succeeded"`
-	Total     int  `json:"total"`
-}
-
-// VoyageTargetEntry — a native voyage_targets row (All-runs drill; 1:1 shape with
-// VoyageTargetEntry, types.gen.go :4001): apply_id/errand_id/finished_at — pointer WITH omitempty
-// (mutually exclusive kind=scenario/command back-links → key omitted); status/target_kind —
-// inline oapi enum (huma inlines `type: string`); batch_index — int; target_id — string.
-type VoyageTargetEntry struct {
-	ApplyID    *string                     `json:"apply_id,omitempty"`
-	BatchIndex int                         `json:"batch_index"`
-	ErrandID   *string                     `json:"errand_id,omitempty"`
-	FinishedAt *time.Time                  `json:"finished_at,omitempty"`
-	Status     VoyageTargetEntryStatus     `json:"status"`
-	TargetID   string                      `json:"target_id"`
-	TargetKind VoyageTargetEntryTargetKind `json:"target_kind"`
-}
-
 // === Voyage (detailed snapshot) — 1:1 shape with Voyage ===
 
-// Voyage — native snapshot of a Voyage run (GET detail / list item; 1:1 shape with Voyage,
-// types.gen.go :3787). Fields required by the hand-written spec (:7789) — without omitempty (attempt/current_
-// batch_index/dry_run/scope_size/total_batches/started_by_aid/voyage_id/kind/status/created_at);
-// pointer-optional WITH omitempty — all nullable fields (batch_*/concurrency/fail_threshold/finished_
-// at/module/on_failure/require_alive/scenario_name/schedule_at/started_at/summary/target). enum
-// kind/status/batch_mode/on_failure — inline oapi enum (huma `type: string`). Target — REUSES the
-// shared api.VoyageTarget (CLASS A; the same schema as the input). Summary — native VoyageSummary.
-// date-time — nanosecond wire precision (the handler assigns a bare time.Time WITHOUT .UTC()/Truncate).
-// The struct name = the contract schema name.
-type Voyage struct {
-	Attempt           int              `json:"attempt"`
-	BatchMode         *VoyageBatchMode `json:"batch_mode,omitempty"`
-	BatchPercent      *int             `json:"batch_percent,omitempty"`
-	BatchSize         *int             `json:"batch_size,omitempty"`
-	Concurrency       *int             `json:"concurrency,omitempty"`
-	CreatedAt         time.Time        `json:"created_at"`
-	CurrentBatchIndex int              `json:"current_batch_index"`
-	DryRun            bool             `json:"dry_run"`
-	FailThreshold     *int             `json:"fail_threshold,omitempty"`
-	FinishedAt        *time.Time       `json:"finished_at,omitempty"`
-	Kind              VoyageKind       `json:"kind"`
-	Module            *string          `json:"module,omitempty"`
-	OnFailure         *VoyageOnFailure `json:"on_failure,omitempty"`
-	RequireAlive      *bool            `json:"require_alive,omitempty"`
-	ScenarioName      *string          `json:"scenario_name,omitempty"`
-	ScheduleAt        *time.Time       `json:"schedule_at,omitempty"`
-	ScopeSize         int              `json:"scope_size"`
-	StartedAt         *time.Time       `json:"started_at,omitempty"`
-	StartedByAID      string           `json:"started_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	Status            VoyageStatus     `json:"status"`
-	Summary           *VoyageSummary   `json:"summary,omitempty"`
-	Target            *VoyageTarget    `json:"target,omitempty"`
-	TotalBatches      int              `json:"total_batches"`
-	VoyageID          string           `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-}
-
 // === wrappers (1:1 shape with legacy-generated) ===
-
-// VoyageListReply — native 200 envelope for GET /v1/voyages (1:1 shape with VoyageListReply,
-// types.gen.go :3923): items/offset/limit/total (offset/limit/total — int, parity with legacy-generated);
-// items.$ref to native Voyage. ★ SHARED type for voyage-list AND cadence-runs (the latter — via
-// a generic envelope alias → api.VoyageListReply, huma_cadence_envelope.go) → one named schema
-// VoyageListReply byte-identical in both domains. The struct name = the contract schema name.
-type VoyageListReply struct {
-	Items  []Voyage `json:"items"`
-	Limit  int      `json:"limit"`
-	Offset int      `json:"offset"`
-	Total  int      `json:"total"`
-}
-
-// VoyageTargetsReply — native 200 body for GET /v1/voyages/{id}/targets (1:1 shape with
-// VoyageTargetsReply, types.gen.go :4021): voyage_id + targets[] (native VoyageTargetEntry),
-// both required. The struct name = the contract schema name.
-type VoyageTargetsReply struct {
-	Targets  []VoyageTargetEntry `json:"targets"`
-	VoyageID string              `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-}
-
-// VoyageCreateReply — native 202 body for POST /v1/voyages (1:1 shape with VoyageCreateReply,
-// types.gen.go :3839): voyage_id/kind/scope_size/status/location (all required). kind/status —
-// inline oapi enum (huma `type: string`). The struct name = the contract schema name.
-type VoyageCreateReply struct {
-	Kind      VoyageCreateReplyKind   `json:"kind"`
-	Location  string                  `json:"location"`
-	ScopeSize int                     `json:"scope_size"`
-	Status    VoyageCreateReplyStatus `json:"status"`
-	VoyageID  string                  `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-}
-
-// VoyagePreviewReply — native 200 body for POST /v1/voyages/preview (1:1 shape with
-// VoyagePreviewReply, types.gen.go :3951): kind/scope_size/total_batches/batch_mode
-// (required) + effective_batch_size (*int WITH omitempty). kind/batch_mode — inline oapi enum.
-// The struct name = the contract schema name.
-type VoyagePreviewReply struct {
-	BatchMode          VoyagePreviewReplyBatchMode `json:"batch_mode"`
-	EffectiveBatchSize *int                        `json:"effective_batch_size,omitempty"`
-	Kind               VoyagePreviewReplyKind      `json:"kind"`
-	ScopeSize          int                         `json:"scope_size"`
-	TotalBatches       int                         `json:"total_batches"`
-}
-
-// VoyageCancelReply — native 202 body for DELETE /v1/voyages/{id} (1:1 shape with
-// VoyageCancelReply, types.gen.go :3830): voyage_id + status:cancelled (required).
-// status — inline oapi enum. The struct name = the contract schema name.
-type VoyageCancelReply struct {
-	Status   VoyageCancelReplyStatus `json:"status"`
-	VoyageID string                  `json:"voyage_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"` // ULID (audit.NewULID)
-}
 
 // === projectors handlers.X → api-native (api↔handlers boundary, byte-exact form passthrough) ===
 //

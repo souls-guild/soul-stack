@@ -8,7 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
-	"github.com/souls-guild/soul-stack/soulctl/internal/client"
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
 
@@ -60,7 +60,7 @@ func newRunPushCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			reply, err := cl.Push.Apply(ctx, client.PushApplyRequest{
+			reply, err := cl.Push.Apply(ctx, wire.PushApplyRequest{
 				Inventory:            target.SIDs,
 				Destiny:              destiny,
 				Input:                input,

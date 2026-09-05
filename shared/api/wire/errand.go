@@ -1,29 +1,17 @@
-package api
+// Errand domain bodies (ADR-033): the single-Errand exec result and its list
+// envelope.
+//
+//   - Status is the INLINE enum ErrandResultStatus - a string on the wire, with
+//     no $ref.
+//   - ErrandListReply carries items/limit/offset/total as Go int.
+//   - ErrandAccepted is the 202 body of a running errand-get. keeper pre-seeds
+//     its schema separately (huma_errand_accepted.go) because the get route
+//     serialises it from a flat domain view rather than reflecting it.
+//
+// The `pattern` tags are for client codegen and OpenAPI documentation: huma does
+// not validate a response body, and a pattern does not affect json.Marshal.
 
-// HUMA-NATIVE wire-DTO of the ERRAND domain (handler-native T5d-2c-full). The Reply/output
-// Body of the huma read routes (list + get) are native Go structs in package api, no legacy
-// generator. The handler (handlers/errand.go) returns domain results with FLAT fields
-// (ErrandResultView / ErrandListPage); the register func (huma_errand.go) projects them
-// INTO THESE types directly — there are no legacy-generator → native converters anymore
-// (the api↔handlers boundary builds the wire-DTO from domain fields). Key points:
-//
-//   - SCHEMA NAME = the contract name (ErrandResult / ErrandListReply): huma's
-//     DefaultSchemaNamer takes reflect.Type.Name() → schema under the same name
-//     (errand-schema-test pins items.$ref → ErrandResult, envelope → ErrandListReply).
-//   - ENUM field Status — native ErrandResultStatus (huma_enums.go, INLINE enum): huma
-//     inlines the string-named type as `type: string` without a $ref; a string on the wire.
-//   - ENVELOPE: the list-schema element is this native ErrandResult; ErrandListReply carries
-//     items/limit/offset/total (Go int, parity with the former oapi shape).
-//   - The wire SHAPE (json tags/omitempty/date-time/nullable/field ORDER) is 1:1 with the
-//     former legacy generator; golden byte-exact is pinned by huma_errand_reply_test.go.
-//   - ErrandAccepted (the 202 body of a running errand-get) is typed separately as a
-//     schema-builder pre-seed (errandAccepted, huma_errand_accepted.go); on the wire the
-//     get-route register func serializes it from the flat handlers.ErrandAcceptedView.
-//
-// OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate the
-// response body (empirically 200, not 500). errand_id is a machine-generated ULID
-// (audit.NewULID, dispatcher.go:262); sid ← soul.SIDPattern; started_by_aid ← operator.AIDPattern.
-// The format is for client codegen; the pattern does not affect json.Marshal (golden intact).
+package wire
 
 import (
 	"time"
@@ -62,4 +50,14 @@ type ErrandListReply struct {
 	Limit  int            `json:"limit"`
 	Offset int            `json:"offset"`
 	Total  int            `json:"total"`
+}
+
+// ErrandAccepted — native 202 body of errand-get-running (errand_id + status). Shape 1:1
+// with the former ErrandAccepted; on the wire it is serialized by the get route's register
+// function via json.RawMessage (errandGetOutput.Body). The schema in components/schemas is
+// emitted by a separate schema-builder pre-seed (errandAccepted, huma_errand_accepted.go) —
+// this type does NOT take part in spec emission, only in the wire serialization of the 202 body.
+type ErrandAccepted struct {
+	ErrandID string `json:"errand_id"`
+	Status   string `json:"status"`
 }

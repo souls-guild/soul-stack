@@ -11,6 +11,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -61,7 +62,7 @@ func newIncarnationListCmd() *cobra.Command {
 			rows := make([][]string, 0, len(reply.Items))
 			for _, it := range reply.Items {
 				rows = append(rows, []string{
-					it.ID, it.Service, it.ServiceVersion, it.Status,
+					it.ID, it.Service, it.ServiceVersion, string(it.Status),
 					output.JoinList(it.Covens),
 				})
 			}
@@ -152,7 +153,7 @@ func newIncarnationRunCmd() *cobra.Command {
 			fmt.Fprintf(out, "status:      %s\n", result.FinalStatus)
 			if result.HistoryEntry != nil {
 				fmt.Fprintf(out, "history_id:  %s\n", result.HistoryEntry.HistoryID)
-				fmt.Fprintf(out, "completed:   %s\n", result.HistoryEntry.CreatedAt)
+				fmt.Fprintf(out, "completed:   %s\n", formatTimeFull(result.HistoryEntry.CreatedAt))
 			}
 			return nil
 		},
@@ -189,7 +190,7 @@ func newIncarnationHistoryCmd() *cobra.Command {
 			rows := make([][]string, 0, len(reply.Items))
 			for _, h := range reply.Items {
 				rows = append(rows, []string{
-					h.ApplyID, h.Scenario, "", "", h.ChangedByAID, h.CreatedAt,
+					h.ApplyID, h.Scenario, "", "", deref(h.ChangedByAID), formatTimeFull(h.CreatedAt),
 				})
 			}
 			// state_history has no STATUS/DURATION (a record only appears
@@ -252,17 +253,9 @@ func newIncarnationRunsCmd() *cobra.Command {
 			}
 			rows := make([][]string, 0, len(reply.Items))
 			for _, r := range reply.Items {
-				startedBy := ""
-				if r.StartedByAID != nil {
-					startedBy = *r.StartedByAID
-				}
-				finished := ""
-				if r.FinishedAt != nil {
-					finished = formatTimeShort(*r.FinishedAt)
-				}
 				rows = append(rows, []string{
 					r.ApplyID, r.Scenario, r.Status,
-					formatTimeShort(r.StartedAt), finished, startedBy,
+					formatTimeShort(r.StartedAt), formatTimeShortPtr(r.FinishedAt), deref(r.StartedByAID),
 				})
 			}
 			return output.Table(cmd.OutOrStdout(),
@@ -289,14 +282,14 @@ func newIncarnationRunsCmd() *cobra.Command {
 // param is checked against is the manifest compiled into THAT agent, so a park
 // mid-upgrade legitimately answers differently host to host. Collapsing them
 // would hide exactly how far the agent rollout has reached.
-func printRunDetail(cmd *cobra.Command, d *client.RunDetail) error {
+func printRunDetail(cmd *cobra.Command, d *wire.RunDetailReply) error {
 	out := cmd.OutOrStdout()
 	fmt.Fprintf(out, "apply_id:   %s\n", d.ApplyID)
 	fmt.Fprintf(out, "scenario:   %s\n", d.Scenario)
 	fmt.Fprintf(out, "status:     %s\n", d.Status)
 	fmt.Fprintf(out, "started_at: %s\n", formatTimeShort(d.StartedAt))
 	if d.FinishedAt != nil {
-		fmt.Fprintf(out, "finished:   %s\n", formatTimeShort(*d.FinishedAt))
+		fmt.Fprintf(out, "finished:   %s\n", formatTimeShortPtr(d.FinishedAt))
 	}
 	if d.StartedByAID != nil {
 		fmt.Fprintf(out, "started_by: %s\n", *d.StartedByAID)
@@ -305,12 +298,8 @@ func printRunDetail(cmd *cobra.Command, d *client.RunDetail) error {
 
 	rows := make([][]string, 0, len(d.Hosts))
 	for _, h := range d.Hosts {
-		errSummary := ""
-		if h.ErrorSummary != nil {
-			errSummary = *h.ErrorSummary
-		}
 		rows = append(rows, []string{
-			h.SID, h.Status, strconv.Itoa(h.Passage), errSummary,
+			h.SID, h.Status, strconv.Itoa(h.Passage), deref(h.ErrorSummary),
 		})
 	}
 	if err := output.Table(out, []string{"SID", "STATUS", "PASSAGE", "ERROR"}, rows); err != nil {
@@ -324,7 +313,7 @@ func printRunDetail(cmd *cobra.Command, d *client.RunDetail) error {
 // printRunNotices writes the deprecation block, or nothing at all when no host
 // reported anything — a quiet run must look exactly as it did before this
 // existed.
-func printRunNotices(out io.Writer, hosts []client.RunHostStatus) {
+func printRunNotices(out io.Writer, hosts []wire.RunHostStatusEntry) {
 	any := false
 	for _, h := range hosts {
 		if len(h.Notices) > 0 {
@@ -356,25 +345,62 @@ func parseInputJSON(s string) (map[string]any, error) {
 	return out, nil
 }
 
-// formatTimeShort truncates RFC3339 to YYYY-MM-DD HH:MM (UTC). An empty
-// string stays empty, so output.Table replaces it with <none>.
-func formatTimeShort(rfc3339 string) string {
-	if rfc3339 == "" {
+// formatTimeShort truncates a timestamp to YYYY-MM-DD HH:MM (UTC), for table
+// columns. A zero time stays empty, so output.Table replaces it with <none>.
+// It takes a time.Time rather than an RFC3339 string because the wire types
+// carry time.Time — the parse step this used to do was the client's own guess
+// at a format the contract already fixes.
+func formatTimeShort(t time.Time) string {
+	if t.IsZero() {
 		return ""
 	}
-	t, err := time.Parse(time.RFC3339, rfc3339)
-	if err != nil {
-		return rfc3339
-	}
 	return t.UTC().Format("2006-01-02 15:04")
+}
+
+// formatTimeShortPtr is formatTimeShort over an optional timestamp: the wire
+// types spell "not yet" as an absent key, i.e. a nil pointer, not a zero time.
+func formatTimeShortPtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return formatTimeShort(*t)
+}
+
+// formatTimeFull renders a timestamp the way the detail views (not the tables)
+// have always rendered one: the full value, as it arrived. Those views used to
+// print the raw RFC3339 string straight off the wire, and truncating them to
+// the minute along with the tables would have dropped precision an operator
+// reading a single record is there for.
+func formatTimeFull(t time.Time) string {
+	if t.IsZero() {
+		return ""
+	}
+	return t.UTC().Format(time.RFC3339Nano)
+}
+
+// formatTimeFullPtr is formatTimeFull over an optional timestamp.
+func formatTimeFullPtr(t *time.Time) string {
+	if t == nil {
+		return ""
+	}
+	return formatTimeFull(*t)
+}
+
+// deref renders an optional wire string: nil (key omitted) → empty, which
+// output.Table shows as <none>.
+func deref(s *string) string {
+	if s == nil {
+		return ""
+	}
+	return *s
 }
 
 // waitResult is the outcome of waitForApply: the final incarnation status +
 // the history entry (if one showed up in time).
 type waitResult struct {
-	ApplyID      string                    `json:"apply_id"`
-	FinalStatus  string                    `json:"final_status"`
-	HistoryEntry *client.StateHistoryEntry `json:"history_entry,omitempty"`
+	ApplyID      string                  `json:"apply_id"`
+	FinalStatus  wire.IncarnationStatus  `json:"final_status"`
+	HistoryEntry *wire.StateHistoryEntry `json:"history_entry,omitempty"`
 }
 
 // waitForApply — poll loop per the openapi MVP contract:
@@ -429,7 +455,7 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 		}
 		if time.Now().After(deadline) {
 			return &waitResult{ApplyID: applyID, FinalStatus: current.Status},
-				errors.New("waiting for apply exceeded wait-timeout (status is still " + current.Status + ")")
+				errors.New("waiting for apply exceeded wait-timeout (status is still " + string(current.Status) + ")")
 		}
 		select {
 		case <-ctx.Done():
@@ -438,9 +464,9 @@ func waitForApply(parent context.Context, cl *client.Client, name, applyID strin
 	}
 }
 
-func isBlockingStatus(s string) bool {
+func isBlockingStatus(s wire.IncarnationStatus) bool {
 	switch s {
-	case "error_locked", "migration_failed", "destroy_failed":
+	case wire.IncarnationStatusErrorLocked, wire.IncarnationStatusMigrationFailed, wire.IncarnationStatusDestroyFailed:
 		return true
 	}
 	return false

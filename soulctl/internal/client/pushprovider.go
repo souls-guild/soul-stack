@@ -5,47 +5,26 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
-	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // PushProvidersAPI holds typed methods for /v1/push-providers/* (ADR-032
 // amendment 2026-05-26, S7-2). A Push-Provider holds per-provider
 // env-payload params for the push-flow SSH plugin (NOT a Cloud Provider —
 // that's a different entity, with separate tables and permission scopes).
+//
+// The request and reply bodies are wire.* — the same declarations keeper's
+// handlers use. This package used to restate them, which is how it kept
+// sending `name` after NIM-729 renamed the field to `id`: the copy compiled
+// perfectly and the server answered 400 (NIM-776).
 type PushProvidersAPI struct {
 	c *Client
 }
 
-// PushProviderBody is the body for POST /v1/push-providers (create).
-type PushProviderBody struct {
-	ID     string         `json:"id"`
-	Params map[string]any `json:"params,omitempty"`
-}
-
-// PushProviderUpdateBody is the body for PUT /v1/push-providers/{name} (replace).
-type PushProviderUpdateBody struct {
-	Params map[string]any `json:"params"`
-}
-
-// PushProviderEntry is the JSON shape of a Push-Provider in responses.
-type PushProviderEntry struct {
-	ID           string         `json:"id"`
-	Params       map[string]any `json:"params"`
-	CreatedAt    time.Time      `json:"created_at"`
-	UpdatedAt    time.Time      `json:"updated_at"`
-	CreatedByAID string         `json:"created_by_aid"`
-	UpdatedByAID *string        `json:"updated_by_aid,omitempty"`
-}
-
-// PushProviderListReply is a list page.
-type PushProviderListReply struct {
-	Items  []PushProviderEntry `json:"items"`
-	Offset int                 `json:"offset"`
-	Limit  int                 `json:"limit"`
-	Total  int                 `json:"total"`
-}
-
-// PushProviderListOptions holds list filters.
+// PushProviderListOptions holds list filters. Not a wire type: these become
+// query parameters, which the server declares one at a time on the operation
+// rather than as a body schema.
 type PushProviderListOptions struct {
 	IDPattern string
 	Limit     int
@@ -53,51 +32,51 @@ type PushProviderListOptions struct {
 }
 
 // Create is POST /v1/push-providers. Permission: push-provider.create.
-func (a *PushProvidersAPI) Create(ctx context.Context, body PushProviderBody) (*PushProviderEntry, error) {
+func (a *PushProvidersAPI) Create(ctx context.Context, body wire.PushProviderCreateRequest) (*wire.PushProvider, error) {
 	if body.ID == "" {
-		return nil, fmt.Errorf("name is empty")
+		return nil, fmt.Errorf("id is empty")
 	}
-	var reply PushProviderEntry
+	var reply wire.PushProvider
 	if err := a.c.Do(ctx, "POST", "/v1/push-providers", body, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// Update is PUT /v1/push-providers/{name}. Permission: push-provider.update.
-func (a *PushProvidersAPI) Update(ctx context.Context, name string, body PushProviderUpdateBody) (*PushProviderEntry, error) {
-	if name == "" {
-		return nil, fmt.Errorf("name is empty")
+// Update is PUT /v1/push-providers/{id} (replace semantics). Permission: push-provider.update.
+func (a *PushProvidersAPI) Update(ctx context.Context, id string, body wire.PushProviderUpdateRequest) (*wire.PushProvider, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id is empty")
 	}
-	var reply PushProviderEntry
-	if err := a.c.Do(ctx, "PUT", "/v1/push-providers/"+name, body, &reply); err != nil {
+	var reply wire.PushProvider
+	if err := a.c.Do(ctx, "PUT", "/v1/push-providers/"+id, body, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// Delete is DELETE /v1/push-providers/{name}. Permission: push-provider.delete.
-func (a *PushProvidersAPI) Delete(ctx context.Context, name string) error {
-	if name == "" {
-		return fmt.Errorf("name is empty")
+// Delete is DELETE /v1/push-providers/{id}. Permission: push-provider.delete.
+func (a *PushProvidersAPI) Delete(ctx context.Context, id string) error {
+	if id == "" {
+		return fmt.Errorf("id is empty")
 	}
-	return a.c.Do(ctx, "DELETE", "/v1/push-providers/"+name, nil, nil)
+	return a.c.Do(ctx, "DELETE", "/v1/push-providers/"+id, nil, nil)
 }
 
-// Get is GET /v1/push-providers/{name}. Permission: push-provider.read.
-func (a *PushProvidersAPI) Get(ctx context.Context, name string) (*PushProviderEntry, error) {
-	if name == "" {
-		return nil, fmt.Errorf("name is empty")
+// Get is GET /v1/push-providers/{id}. Permission: push-provider.read.
+func (a *PushProvidersAPI) Get(ctx context.Context, id string) (*wire.PushProvider, error) {
+	if id == "" {
+		return nil, fmt.Errorf("id is empty")
 	}
-	var reply PushProviderEntry
-	if err := a.c.Do(ctx, "GET", "/v1/push-providers/"+name, nil, &reply); err != nil {
+	var reply wire.PushProvider
+	if err := a.c.Do(ctx, "GET", "/v1/push-providers/"+id, nil, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
 // List is GET /v1/push-providers. Permission: push-provider.list.
-func (a *PushProvidersAPI) List(ctx context.Context, opts PushProviderListOptions) (*PushProviderListReply, error) {
+func (a *PushProvidersAPI) List(ctx context.Context, opts PushProviderListOptions) (*wire.PushProviderListReply, error) {
 	q := url.Values{}
 	if opts.IDPattern != "" {
 		q.Set("id_pattern", opts.IDPattern)
@@ -112,7 +91,7 @@ func (a *PushProvidersAPI) List(ctx context.Context, opts PushProviderListOption
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	var reply PushProviderListReply
+	var reply wire.PushProviderListReply
 	if err := a.c.Do(ctx, "GET", path, nil, &reply); err != nil {
 		return nil, err
 	}

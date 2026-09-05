@@ -59,9 +59,9 @@ func TestSoulsGetFallback(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
 					{"sid": "a.example", "transport": "agent", "status": "connected",
-						"registered_at": "t"},
+						"registered_at": "2026-05-20T00:00:00Z"},
 					{"sid": "b.example", "transport": "ssh", "status": "pending",
-						"registered_at": "t"},
+						"registered_at": "2026-05-20T00:00:00Z"},
 				},
 				"offset": 0, "limit": 1000, "total": 2,
 			})

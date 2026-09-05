@@ -15,11 +15,11 @@ package api
 // ★ DIFFERENCE FROM incarnation/operator/voyage (4-field offset): soul is the ONLY cursor domain.
 // The spec :6766 carries SIX fields — items/offset/limit/total + next_cursor (string) +
 // total_approximate (boolean) — an offset/keyset hybrid (ADR-047 S3b-2a, the server picks the mode from
-// Purview). The named struct soulListReply repeats EXACTLY these 6 fields (NOT the incarnation 4-field shape),
+// Purview). The named struct SoulListReply repeats EXACTLY these 6 fields (NOT the incarnation 4-field shape),
 // checked against the spec. items.$ref to the contract element SoulListEntry; required:[items,offset,
 // limit,total] (next_cursor/total_approximate — optional, omitempty).
 //
-// MECHANISM. RegisterTypeAlias(PagedResponse[SoulListEntry] → soulListReply): huma builds
+// MECHANISM. RegisterTypeAlias(PagedResponse[SoulListEntry] → SoulListReply): huma builds
 // the list-Body schema under the contract name/shape. The wire body (PagedResponse) does NOT change — the json
 // fields are the same (next_cursor/total_approximate omitempty are omitted in offset mode) → golden list
 // byte-exact.
@@ -96,40 +96,23 @@ type soulTraitsAssignReply struct {
 	DryRun  bool     `json:"dry_run" doc:"dry-run without writing"`
 }
 
-// soulListReply — the alias target schema for the GET /v1/souls envelope (CURSOR, 6 fields). The shape is checked against
-// the committed hand-written spec (docs/keeper/openapi.yaml :6766 → SoulListReply): items/offset/limit/total
-// (required) + next_cursor (string, optional) + total_approximate (boolean, optional). offset/
-// limit/total — int32 (the spec's format:int32). items.$ref to the CONTRACT native element
-// SoulListEntry (the same schema the get-Body emits — final T5b, otherwise a huma duplicate-name panic
-// between api.SoulListEntry and SoulListEntry). The type name = the contract schema name (huma
-// DefaultSchemaNamer capitalizes → "SoulListReply"). The json tags repeat sharedapi.PagedResponse
-// (next_cursor/total_approximate omitempty) → the wire does not change.
-type soulListReply struct {
-	Items            []SoulListEntry `json:"items" doc:"page of the souls registry"`
-	Offset           int32           `json:"offset" doc:"offset from start of set (offset mode)"`
-	Limit            int32           `json:"limit" doc:"page size"`
-	Total            int32           `json:"total" doc:"total record count; meaningful only in offset mode"`
-	NextCursor       *string         `json:"next_cursor,omitempty" doc:"opaque keyset cursor for the next page (keyset mode); absent in offset mode and when the set is exhausted"`
-	TotalApproximate *bool           `json:"total_approximate,omitempty" doc:"total is NOT exact (keyset mode); omitted in offset mode"`
-}
-
 // registerSoulEnvelopes registers on the registry a huma alias from the instantiated generic
-// sharedapi.PagedResponse[SoulListEntry] → named-struct soulListReply (contract name/
+// sharedapi.PagedResponse[SoulListEntry] → named-struct SoulListReply (contract name/
 // CURSOR shape, 6 fields) + the coven-assign reply-rename alias (batch N6). Called in
 // newHumaCadenceAPI for every assembled huma.API. The wire type (the body) does NOT change.
 //
 // ★ The alias key PagedResponse[SoulListEntry] is untouched (final T5b): the handler list marshals
-// exactly this wire type; the element soulListReply.Items []SoulListEntry resolves through the same
+// exactly this wire type; the element SoulListReply.Items []SoulListEntry resolves through the same
 // SoulListEntry schema the native get-Body emits (shapes identical → dedup safe).
 func registerSoulEnvelopes(api huma.API) {
 	schemas := api.OpenAPI().Components.Schemas
 	// ★ handler-native T5d: the wire type of list-Body is sharedapi.PagedResponse[handlers.SoulListView]
 	// (Go alias handlers.SoulListReply). The SoulListView element schema is reduced through the same alias
-	// PagedResponse → soulListReply, whose items.$ref points to the CONTRACT schema SoulListEntry
+	// PagedResponse → SoulListReply, whose items.$ref points to the CONTRACT schema SoulListEntry
 	// (the same one the native get-Body emits) → dedup is safe, the name/CURSOR shape is stable.
 	schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[handlers.SoulListView]](),
-		reflect.TypeFor[soulListReply](),
+		reflect.TypeFor[SoulListReply](),
 	)
 	// REPLY-RENAME (batch N6): the coven-assign wire-body handler type → the contract name
 	// SoulCovenAssignReply. SoulSshTargetReply — native (huma_soul_reply.go), alias removed.

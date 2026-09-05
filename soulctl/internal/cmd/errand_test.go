@@ -8,6 +8,7 @@ import (
 	"sync/atomic"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 )
 
@@ -44,9 +45,11 @@ func TestErrandExec_Sync(t *testing.T) {
 		},
 	})
 	res, async, err := cl.Errand.Exec(context.Background(), client.ErrandExecRequest{
-		SID:    "web-01.example.com",
-		Module: "core.cmd.shell",
-		Input:  map[string]any{"command": "uptime"},
+		SID: "web-01.example.com",
+		Body: wire.ErrandRunRequest{
+			Module: "core.cmd.shell",
+			Input:  &map[string]any{"command": "uptime"},
+		},
 	})
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -60,8 +63,8 @@ func TestErrandExec_Sync(t *testing.T) {
 	if res.ExitCode == nil || *res.ExitCode != 0 {
 		t.Errorf("exit_code = %v, want 0", res.ExitCode)
 	}
-	if !strings.Contains(res.Stdout, "uptime ok") {
-		t.Errorf("stdout: %q", res.Stdout)
+	if res.Stdout == nil || !strings.Contains(*res.Stdout, "uptime ok") {
+		t.Errorf("stdout: %v", res.Stdout)
 	}
 }
 
@@ -79,9 +82,11 @@ func TestErrandExec_Async(t *testing.T) {
 		},
 	})
 	res, async, err := cl.Errand.Exec(context.Background(), client.ErrandExecRequest{
-		SID:            "long.example.com",
-		Module:         "core.cmd.shell",
-		TimeoutSeconds: 120,
+		SID: "long.example.com",
+		Body: wire.ErrandRunRequest{
+			Module:         "core.cmd.shell",
+			TimeoutSeconds: optInt(120),
+		},
 	})
 	if err != nil {
 		t.Fatalf("Exec: %v", err)
@@ -112,8 +117,8 @@ func TestErrandExec_Forbidden(t *testing.T) {
 		},
 	})
 	_, _, err := cl.Errand.Exec(context.Background(), client.ErrandExecRequest{
-		SID:    "web-01.example.com",
-		Module: "core.cmd.shell",
+		SID:  "web-01.example.com",
+		Body: wire.ErrandRunRequest{Module: "core.cmd.shell"},
 	})
 	if err == nil {
 		t.Fatal("expected an error")

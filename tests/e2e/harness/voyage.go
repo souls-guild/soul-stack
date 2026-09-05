@@ -18,6 +18,8 @@ import (
 	"strings"
 	"testing"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // VoyageSnapshot is observable state of a voyages row for assertions.
@@ -41,15 +43,17 @@ type VoyageSnapshot struct {
 func (s *Stack) CreateScenarioVoyage(t *testing.T, scenario string, incarnations []string, batchSize int) string {
 	t.Helper()
 	c := s.opClient(t)
-	body := map[string]any{
-		"kind":          "scenario",
-		"scenario_name": scenario,
-		"target": map[string]any{
-			"incarnations": incarnations,
-		},
+	// The request is the contract's own type, not a map: a map body carries no
+	// field names the compiler knows, so a key renamed on the handler reaches
+	// the server as an unknown property and comes back 400 - which reads as a
+	// product failure rather than as the harness being out of date (NIM-776).
+	body := wire.VoyageCreateRequest{
+		Kind:         "scenario",
+		ScenarioName: scenario,
+		Target:       wire.VoyageTarget{Incarnations: incarnations},
 	}
 	if batchSize > 0 {
-		body["batch_size"] = batchSize
+		body.BatchSize = &batchSize
 	}
 
 	var resp []byte
@@ -72,9 +76,7 @@ func (s *Stack) CreateScenarioVoyage(t *testing.T, scenario string, incarnations
 	if status != http.StatusAccepted {
 		t.Fatalf("CreateScenarioVoyage %s: status %d, body=%s", scenario, status, string(resp))
 	}
-	var out struct {
-		VoyageID string `json:"voyage_id"`
-	}
+	var out wire.VoyageCreateReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateScenarioVoyage %s: decode: %v (body=%s)", scenario, err, string(resp))
 	}

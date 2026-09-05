@@ -10,6 +10,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -80,15 +81,15 @@ func newRunScenarioCmd() *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 
-			reply, err := cl.Voyages.Create(ctx, client.VoyageCreateRequest{
+			reply, err := cl.Voyages.Create(ctx, wire.VoyageCreateRequest{
 				Kind:         "scenario",
 				ScenarioName: scenario,
 				Input:        input,
-				Target:       client.VoyageTarget{Incarnations: []string{incName}},
-				BatchSize:    batchSize,
-				Batch:        batch,
-				MaxFailures:  maxFailures,
-				Concurrency:  concurrency,
+				Target:       wire.VoyageTarget{Incarnations: []string{incName}},
+				BatchSize:    optInt(batchSize),
+				Batch:        optString(batch),
+				MaxFailures:  optString(maxFailures),
+				Concurrency:  optInt(concurrency),
 				OnFailure:    onFailure,
 			})
 			if err != nil {

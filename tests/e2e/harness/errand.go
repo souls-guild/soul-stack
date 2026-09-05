@@ -8,27 +8,27 @@ import (
 	"net/http"
 	"testing"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
-// ErrandResult — read projection of ErrandResult (POST /v1/souls/{sid}/exec,
-// ADR-033) for single-Errand e2e asserts. Fields form the handler's public
-// JSON contract.
-type ErrandResult struct {
-	ErrandID string `json:"errand_id"`
-	SID      string `json:"sid"`
-	Module   string `json:"module"`
-	Status   string `json:"status"`
-}
+// ErrandResult is the wire body of POST /v1/souls/{sid}/exec (ADR-033) — the
+// declaration keeper's handler returns, not a projection of it. The harness
+// used to carry a four-field copy "duplicated as a literal (tests/e2e is a
+// separate go module without a dependency on keeper/internal)", which is the
+// dependency NIM-776 removed: the types left internal/ and every consumer
+// names the same ones.
+type ErrandResult = wire.ErrandResult
 
-// errandTerminalStatuses — terminal statuses of a single Errand (ADR-033).
-// Duplicated as a literal (tests/e2e is a separate go module without a
-// dependency on keeper/internal).
-var errandTerminalStatuses = map[string]struct{}{
-	"success":            {},
-	"failed":             {},
-	"timed_out":          {},
-	"cancelled":          {},
-	"module_not_allowed": {},
+// errandTerminalStatuses — terminal statuses of a single Errand (ADR-033),
+// spelled with the contract's own constants so a value added to the enum is a
+// compile-time decision here rather than a silent poll to timeout.
+var errandTerminalStatuses = map[wire.ErrandResultStatus]struct{}{
+	wire.ErrandResultStatusSuccess:          {},
+	wire.ErrandResultStatusFailed:           {},
+	wire.ErrandResultStatusTimedOut:         {},
+	wire.ErrandResultStatusCancelled:        {},
+	wire.ErrandResultStatusModuleNotAllowed: {},
 }
 
 // ExecErrand sends POST /v1/souls/{sid}/exec (single-Errand ad-hoc exec,
@@ -62,13 +62,16 @@ func (s *Stack) ExecErrandRaw(t *testing.T, sid, module string, input map[string
 	return status, string(resp)
 }
 
-func errandBody(module string, input map[string]any, dryRun bool) map[string]any {
-	body := map[string]any{"module": module}
+// errandBody builds the request with the contract's own type: a field renamed
+// on the handler stops compiling here instead of arriving as an unknown key
+// that the server answers 400 to and the test reports as a product failure.
+func errandBody(module string, input map[string]any, dryRun bool) wire.ErrandRunRequest {
+	body := wire.ErrandRunRequest{Module: module}
 	if input != nil {
-		body["input"] = input
+		body.Input = &input
 	}
 	if dryRun {
-		body["dry_run"] = true
+		body.DryRun = &dryRun
 	}
 	return body
 }
@@ -89,9 +92,7 @@ func (s *Stack) execErrand(t *testing.T, sid, module string, input map[string]an
 		}
 		return res
 	case http.StatusAccepted:
-		var acc struct {
-			ErrandID string `json:"errand_id"`
-		}
+		var acc wire.ErrandAccepted
 		if jerr := json.Unmarshal(resp, &acc); jerr != nil || acc.ErrandID == "" {
 			t.Fatalf("ExecErrand %s/%s: 202 without errand_id (body=%s)", sid, module, string(resp))
 		}

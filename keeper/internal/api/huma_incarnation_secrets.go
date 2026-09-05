@@ -28,18 +28,6 @@ type incRevealSecretInput struct {
 	Body IncarnationRevealSecretRequest
 }
 
-// IncarnationRevealSecretRequest — the body of POST .../secrets/reveal.
-type IncarnationRevealSecretRequest struct {
-	SecretID string `json:"secret_id" doc:"id of the declared secret: the state_schema field, or <field>.<property> for a collection"`
-	Key      string `json:"key,omitempty" doc:"element key of the current-state collection; empty for a scalar secret"`
-}
-
-// IncarnationRevealSecretReply — the native 200 body of POST .../secrets/reveal.
-// Value — plaintext (a sanctioned reveal: NOT run through MaskSecrets).
-type IncarnationRevealSecretReply struct {
-	Value string `json:"value" doc:"plaintext value of the secret"`
-}
-
 // incRevealSecretOutput — huma-output POST .../secrets/reveal.
 type incRevealSecretOutput struct {
 	Body IncarnationRevealSecretReply
@@ -87,20 +75,6 @@ func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.Incarn
 // incRevealableSecretsInput — huma-input GET .../secrets/revealable.
 type incRevealableSecretsInput struct {
 	ID string `path:"id" doc:"incarnation id"`
-}
-
-// IncarnationRevealableSecretItem — one item of the discovery response.
-type IncarnationRevealableSecretItem struct {
-	SecretID   string   `json:"secret_id" doc:"id of the secret (passed as secret_id on reveal)"`
-	Label      string   `json:"label" doc:"label for UI"`
-	StatePath  string   `json:"state_path" doc:"top-level state_schema field holding the secret (e.g. redis_users)"`
-	Collection bool     `json:"collection" doc:"true when reveal needs a key; false for one secret per incarnation"`
-	Keys       []string `json:"keys" doc:"allowed keys of the current state (empty for a scalar secret)"`
-}
-
-// IncarnationRevealableSecretsReply — the native 200 body of GET .../secrets/revealable.
-type IncarnationRevealableSecretsReply struct {
-	Items []IncarnationRevealableSecretItem `json:"items" doc:"revealable secrets of the incarnation"`
 }
 
 // incRevealableSecretsOutput — huma-output GET .../secrets/revealable.

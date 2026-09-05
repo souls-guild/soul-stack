@@ -7,12 +7,14 @@ package api
 // openapi.yaml) declares IncarnationStatus as a separate schema with enum values and references
 // it via $ref in every status field — the UI expects exactly the named schema.
 //
-// handler-native T5d: the native enum type IncarnationStatus (huma_enums.go) implements
-// huma.SchemaProvider itself — its Schema() method reads the constants in this file (schemaName/Ref/Enum/
-// Description), registers the named schema "IncarnationStatus" and returns a $ref. Reply/get/list/
-// unlock Body carry native IncarnationStatus DIRECTLY (fields projected from the domain
-// handlers.*View flat strings), so a separate RegisterTypeAlias IncarnationStatus
-// → native is no longer needed (there is no IncarnationStatus field in any reflected Body).
+// The enum TYPE is wire.IncarnationStatus (shared/api/wire/enums.go, NIM-776); the reply/get/list/
+// unlock Body carry it directly, projected from the domain handlers.*View flat strings. It carries
+// no Schema() method, because huma.SchemaProvider is a METHOD and Go allows one only in the
+// declaring package — putting it there would drag huma into shared/ and, through it, into soul.
+// So the SchemaProvider lives on the keeper-local shim incarnationStatusSchema
+// (huma_enums.go), whose Schema() reads the constants in this file, and registerContractEnums
+// points the registry at it with RegisterTypeAlias. huma resolves a registry alias BEFORE it
+// looks for a SchemaProvider (mapRegistry.Schema), so the emitted schema is unchanged.
 
 // incarnationStatusSchemaName — the name of the named schema in components/schemas (the contract name
 // from the spec; the UI references it by $ref).

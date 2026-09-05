@@ -228,7 +228,7 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 		for i := range reply.Items {
 			items[i] = newSoulListEntry(reply.Items[i])
 		}
-		out := soulListReply{
+		out := SoulListReply{
 			Items:      items,
 			Offset:     int32(reply.Offset),
 			Limit:      int32(reply.Limit),

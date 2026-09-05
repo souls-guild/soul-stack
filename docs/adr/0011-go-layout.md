@@ -105,3 +105,62 @@ actually lives, not `proto` — loses `KindCloudDriver` and its `profile_schema`
 and `cloud` as subsystems; `pluginhost` stays, `cloud` goes. The Soul-isolation invariant, the
 `shared/` vs `<binary>/internal/` rule and the joint-tag versioning policy are all untouched —
 this removes leaves, not boundaries.
+
+## Amendment 2026-09-05 (NIM-776): the Operator API wire types live in `shared/api/wire`, not in `keeper/internal/`
+
+**No module moves and no module is added.** This amendment names a package inside `shared/`, which
+the Consequences above already permit in as many words: *"Allowed in `shared/`: interfaces, clients
+(Soul-safe), helpers without a heavy init graph, **data types and enums**."* It is written down
+because the layout question it settles was decided rather than derived, and a decided layout that
+lives only in a commit stops being findable.
+
+**The problem it closes.** The request and reply bodies of the Operator API were declared in
+`keeper/internal/api/huma_*.go`. `internal/` is a compiler-enforced wall around the `keeper` module,
+so every consumer outside it — `soulctl`, `tests/e2e`, `tests/e2e-live`, `tests/e2e-k8s`,
+`tests/load` — was **forced** to declare its own struct with hand-written json tags. That is a second
+description of one contract, and `encoding/json` makes divergence silent: an unknown key decodes to
+a zero value, so a copy that has fallen behind still compiles, still passes, and is still wrong.
+NIM-729 renamed one identifier `name` → `id` across ten registries and left
+`soulctl push-provider create` dead against `additionalProperties:false`; the same rename left
+`soulctl incarnation list` printing an empty first column. Neither the compiler nor CI found it.
+
+**The decision.** The bodies and the contract enums are declared once, in
+**`shared/api/wire`** (package `wire`), beside the existing `shared/api` pagination helpers:
+
+- **`keeper`** keeps the whole server half — huma `Operation` metadata, the register functions, the
+  handlers, `problem` — and names the wire types through aliases in
+  `keeper/internal/api/huma_wire_alias.go`. An alias declares no fields, so it cannot diverge from
+  what it aliases; it exists so ~60 handler files and ~100 golden tests keep naming the types
+  unqualified.
+- **`soulctl`** and the four harness modules import `shared/api/wire`. Renaming a field on the
+  handler is now a compile error in every one of them at once — the effect `soul-stack-web` already
+  gets from generating its client off the spec.
+- The package imports **nothing outside the standard library**, deliberately. `soul` requires
+  `shared`, so a third-party dependency added here would reach `soul` and erode the isolation the
+  Decision above puts in the compiler; and `soulctl` stays a light client.
+
+**Why not `sdk/api`.** The Consequences above name a *"future `sdk/api` module"* for external
+Operator API clients, and that remains the right home **for an external client SDK**. It is not the
+home for this: `sdk/*` is Apache 2.0 under
+[ADR-016(o)](0016-parity-license.md#amendment-2026-07-09-fair-code-bsl-pivot-the-licensing-decision-in-effect)
+while the core is BSL 1.1, so declaring the Operator API contract there would relicense it. That is
+a licensing decision on its own merits, not a side effect a refactor gets to take. In `shared/` the
+bucket is unchanged — core, BSL 1.1 — and no licensing question arises. Publishing an external
+client SDK later can re-export from `wire` or restate it deliberately, with the licence decided
+first.
+
+**The three named-schema enums.** `SoulStatus`, `SoulTransport` and `IncarnationStatus` are emitted
+into `components/schemas` as standalone schemas that the UI references by `$ref`, which huma reaches
+through `huma.SchemaProvider` — a **method**, and Go allows a method only in the package that
+declares the type. The types moved; the method could not follow without pulling huma into `shared/`.
+Each therefore keeps a keeper-local shim carrying the `SchemaProvider`, wired with
+`Registry.RegisterTypeAlias` in `registerContractEnums` (`keeper/internal/api/huma_enums.go`). huma
+resolves a registry alias before it looks for a `SchemaProvider`, so the emitted schema is
+byte-identical to what the method on the enum produced — `docs/keeper/openapi.yaml` does not move,
+which `openapi_drift_test.go` is what proves.
+
+**The guard.** `shared/api/wire/single_source_test.go` fails when a struct under a consumer tree
+re-describes a wire body: it compares json key sets and flags a consumer set that is a subset of a
+wire type's. It runs in `make check`. Its reach is the size of this package — a domain still
+declared in `keeper/internal/api` has nothing to be a subset of, so its hand-written readers pass
+until that domain moves. The test says which ones those are.

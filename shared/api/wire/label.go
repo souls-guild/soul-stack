@@ -1,14 +1,15 @@
-package api
-
 // The wire shape of the label mutation, stated once for all ten registries
-// (ADR-0085, NIM-728). Code is the OpenAPI source (ADR-054), so one Go type here
-// is one schema in the spec, referenced by all ten `PUT
-// /v1/<collection>/{name}/label` operations — a caller (and the generated
-// `types.gen.ts` in the companion UI) learns the body once.
+// (ADR-0085, NIM-728). Code is the OpenAPI source (ADR-054), so this one Go
+// type is one schema in the spec, referenced by all ten
+// `PUT /v1/<collection>/{id}/label` operations - a caller, and the generated
+// types.gen.ts in the companion UI, learns the body once.
 //
 // Every one of the ten operations is otherwise declared in its own domain file
-// next to the routes it belongs with, because the path parameter's pattern is
-// that registry's own name grammar and the 200 body is that registry's own row.
+// in keeper, next to the routes it belongs with, because the path parameter's
+// pattern is that registry's own name grammar and the 200 body is that
+// registry's own row.
+
+package wire
 
 // LabelSetRequest — the body of PUT /v1/<collection>/{name}/label.
 //

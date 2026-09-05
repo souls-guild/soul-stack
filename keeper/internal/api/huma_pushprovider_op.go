@@ -26,24 +26,6 @@ type pushProviderCreateInput struct {
 	Body PushProviderCreateRequest
 }
 
-// PushProviderCreateRequest — the Go shape of the POST /v1/push-providers body (code-first
-// source of the schema AND validation). name + optional params (opaque map; sensitive
-// keys — vault-refs). additionalProperties in params:true (opaque payload), but at the
-// TOP level of the body — false (the huma default) → an unknown body field → 400. The
-// format of name and the sensitive-invariant of params — domain validation in
-// CreateTyped (422). The struct name = the contract schema name (huma DefaultSchemaNamer
-// takes reflect.Type.Name()) — aligned to the committed hand-written spec (rollout batch
-// N3). The register-func projects into the native handlers.PushProviderCreateInput.
-type PushProviderCreateRequest struct {
-	ID string `json:"id" required:"true" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id (= plugins.ssh_providers[].name)"`
-	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/push-providers/{id}/label. No pattern — capitals and spaces
-	// are the point, and the letter-first rule on `name` exists because the NAME
-	// becomes an env-var name, which the caption never does.
-	Label  *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root"`
-	Params map[string]any `json:"params,omitempty" doc:"opaque params; sensitive — vault-refs (values are not logged)"`
-}
-
 // === PUT /v1/push-providers/{id}/label (label-set) — WRITE+AUDIT push-provider.label_changed ===
 
 type pushProviderSetLabelInput struct {
@@ -165,17 +147,6 @@ func pushProviderGetOperation() huma.Operation {
 type pushProviderUpdateInput struct {
 	ID   string `path:"id" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id"`
 	Body PushProviderUpdateRequest
-}
-
-// PushProviderUpdateRequest — the Go shape of the PUT /v1/push-providers/{id} body
-// (replace semantics: params fully replaces the existing set). Params is
-// required:"true" (PUT sends the full new set; an empty {} is legitimate — it clears
-// params). NOT Optional[T]: read-modify-write on the client, no presence distinction.
-// The struct name = the contract schema name (huma DefaultSchemaNamer) — aligned to
-// the committed hand-written spec (rollout batch N3). The register-func projects into
-// the native handlers.PushProviderUpdateInput.
-type PushProviderUpdateRequest struct {
-	Params map[string]any `json:"params" required:"true" doc:"full new set of params (replace); sensitive — vault-refs"`
 }
 
 // pushProviderUpdateOutput — huma output for PUT /v1/push-providers/{id} (FULL-TYPED).

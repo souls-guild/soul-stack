@@ -38,20 +38,6 @@ type soulCreateInput struct {
 	Body SoulCreateRequest
 }
 
-// SoulCreateRequest — Go form of the POST /v1/souls body (code-first source of schema AND validation).
-// Struct name = contract schema name of the reference (docs/keeper/openapi.yaml → SoulCreateRequest):
-// huma DefaultSchemaNamer takes reflect.Type.Name() directly. sid + transport + opt. covens +
-// server-only note (written to souls.note; the reference SoulCreateRequest does NOT declare a note field —
-// here it's present as a code-first body extension, not wire-affecting for golden). The format of
-// sid/transport/coven — domain validation (422 in CreateTyped). additionalProperties:false
-// (huma default) → unknown body field → 400.
-type SoulCreateRequest struct {
-	SID       string   `json:"sid" required:"true" doc:"SID of new host = FQDN"`
-	Transport string   `json:"transport" required:"true" enum:"agent,ssh" doc:"delivery method: agent (mTLS gRPC stream) / ssh (push without agent)"`
-	Covens    []string `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"stable Coven tags of host (kebab-case, ADR-008)"`
-	Note      string   `json:"note,omitempty" doc:"server-only note (souls.note)"`
-}
-
 // soulCreateOutput — huma output POST /v1/souls (FULL-TYPED). Status=201; Body — huma-native
 // 201 body (SoulCreateReply, shape 1:1 with SoulCreateReply; bootstrap_token only for
 // transport=agent). Wire shape is pinned by a golden-JSON byte-exact test
@@ -86,28 +72,6 @@ type soulCovenAssignInput struct {
 	DryRun bool `query:"dry_run" doc:"count matched without UPDATE (OR with body.dry_run)"`
 }
 
-// SoulCovenAssignRequest — Go form of the POST /v1/souls/coven body. Struct name = contract name of
-// the reference schema (docs/keeper/openapi.yaml → SoulCovenAssignRequest). mode (append/remove/
-// replace) + XOR label↔labels (the domain validates the XOR → 422) + selector (at least one criterion) +
-// opt. dry_run. additionalProperties:false → unknown field → 400.
-type SoulCovenAssignRequest struct {
-	Mode     string                  `json:"mode" required:"true" enum:"append,remove,replace" doc:"append — add label; remove — remove; replace — replace set"`
-	Label    string                  `json:"label,omitempty" maxLength:"63" doc:"label for append/remove (forbidden for replace)"`
-	Labels   []string                `json:"labels,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"set for replace (may be empty = remove all; forbidden for append/remove)"`
-	DryRun   bool                    `json:"dry_run,omitempty" doc:"count matched without UPDATE"`
-	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"targeting (at least one criterion; AND combinations)"`
-}
-
-// SoulCovenAssignSelector — Go form of the selector (all/sids/coven/incarnation/status). Struct
-// name = contract name of the reference schema (SoulCovenAssignSelector; input-only — CLASS C).
-type SoulCovenAssignSelector struct {
-	All         bool     `json:"all,omitempty" doc:"no host filter (entire registry ∩ scope)"`
-	Sids        []string `json:"sids,omitempty" doc:"point list of hosts (SID = FQDN)"`
-	Coven       string   `json:"coven,omitempty" maxLength:"63" doc:"hosts carrying this Coven tag on themselves; belonging to an incarnation attaches no tag (NIM-281)"`
-	Incarnation string   `json:"incarnation,omitempty" maxLength:"63" doc:"members of this incarnation, resolved from incarnation_membership — a membership question, never answered from the tags above (ADR-008 amendment NIM-124)"`
-	Status      string   `json:"status,omitempty" enum:"pending,connected,disconnected,revoked,expired,destroyed" doc:"Soul status in registry"`
-}
-
 // soulCovenAssignOutput — huma output POST /v1/souls/coven (FULL-TYPED). Status=200; Body —
 // typed 200 body (handlers.SoulCovenAssignBody; custom MarshalJSON XOR label↔labels).
 type soulCovenAssignOutput struct {
@@ -138,19 +102,6 @@ func soulCovenAssignOperation() huma.Operation {
 type soulTraitsAssignInput struct {
 	Body   SoulTraitsAssignRequest
 	DryRun bool `query:"dry_run" doc:"count matched without UPDATE (OR with body.dry_run)"`
-}
-
-// SoulTraitsAssignRequest — Go form of the POST /v1/souls/traits body (code-first source of schema AND
-// validation; ADR-060). Struct name = contract schema name (huma DefaultSchemaNamer). mode
-// (merge/replace/remove, default merge) + XOR traits↔keys (the domain validates → 422) + selector
-// (at least one criterion) + opt. dry_run. traits — map key→(scalar|list of scalars); nested
-// objects/arrays are rejected by the domain. additionalProperties:false → unknown field → 400.
-type SoulTraitsAssignRequest struct {
-	Mode     string                  `json:"mode,omitempty" enum:"merge,replace,remove" doc:"merge (default) - set/overwrite keys; replace - replace the whole map; remove - delete keys from keys"`
-	Traits   map[string]any          `json:"traits,omitempty" doc:"key->value set for merge/replace (value - scalar or list of scalars); forbidden for remove"`
-	Keys     []string                `json:"keys,omitempty" doc:"list of key names for remove (kebab-case); forbidden for merge/replace"`
-	DryRun   bool                    `json:"dry_run,omitempty" doc:"count matched without UPDATE"`
-	Selector SoulCovenAssignSelector `json:"selector" required:"true" doc:"targeting (at least one criterion; AND combinations)"`
 }
 
 // soulTraitsAssignOutput — huma output POST /v1/souls/traits (FULL-TYPED). Status=200; Body —
@@ -274,25 +225,6 @@ type soulSshTargetInput struct {
 	Body SoulSshTarget
 }
 
-// SoulSshTarget — Go form of the PUT /v1/souls/{sid}/ssh-target body (CLASS A, shared input↔output).
-// Struct name = contract schema name of the reference (docs/keeper/openapi.yaml → SoulSshTarget;
-// the reference SoulSshTargetRequest is a $ref to SoulSshTarget). All fields required except
-// ssh_provider (optional 3-tier routing) — the required set [ssh_port,ssh_user,soul_path] is verified
-// against the reference :6394. OUTPUT (SoulSshTargetReply.ssh_target) is collapsed onto the same schema via
-// aliasSoulSshTarget (SoulSSHTarget → SoulSshTarget). ssh_port range / soul_path absoluteness /
-// ssh_provider format — domain validation (422). additionalProperties:false →
-// unknown → 400.
-// ★ Field order mirrors SoulSSHTarget (soul_path, ssh_port, ssh_provider, ssh_user):
-// encoding/json marshals in declaration order → the aligned order gives a byte-exact wire
-// nested ssh_target in SoulSshTargetReply (output) vs the former legacy generator. For input parsing the order
-// of JSON keys is irrelevant.
-type SoulSshTarget struct {
-	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"absolute install path of the soul binary (starts with /)"`
-	SSHPort     int    `json:"ssh_port" required:"true" minimum:"1" maximum:"65535" doc:"SSH port [1..65535]"`
-	SSHProvider string `json:"ssh_provider,omitempty" doc:"opt. SshProvider name (3-tier routing); empty -> coven/cluster default"`
-	SSHUser     string `json:"ssh_user" required:"true" minLength:"1" doc:"SSH user"`
-}
-
 // soulSshTargetOutput — huma output PUT /v1/souls/{sid}/ssh-target (FULL-TYPED). Status=200;
 // Body — huma-native 200 body (SoulSshTargetReply: snapshot of the saved target; nested
 // ssh_target — class-A reuse of native SoulSshTarget). Wire shape is pinned by a golden-JSON
@@ -344,14 +276,14 @@ type soulListInput struct {
 }
 
 // soulListOutput — huma output GET /v1/souls (FULL-TYPED). Body — a TAGGED native envelope
-// soulListReply (CURSOR, 6 fields: items.$ref to native SoulListEntry with json tags +
+// SoulListReply (CURSOR, 6 fields: items.$ref to native SoulListEntry with json tags +
 // next_cursor/total_approximate omitempty). Body used to be handlers.SoulListReply (=
 // PagedResponse[SoulListView]) — untagged View → PascalCase wire (contract bug #7).
 // The register func projects reply.Items through newSoulListEntry and CARRIES the cursor fields
 // (next_cursor/total_approximate) byte-exact. The OpenAPI schema doesn't change (same alias target
-// soulListReply).
+// SoulListReply).
 type soulListOutput struct {
-	Body soulListReply
+	Body SoulListReply
 }
 
 // soulListOperation — metadata of GET /v1/souls. Path = "/" relative to the chi group /v1/souls.
@@ -499,18 +431,6 @@ func soulHistoryOperation() huma.Operation {
 type errandExecInput struct {
 	SID  string `path:"sid" doc:"SID (FQDN) of the target Soul"`
 	Body ErrandRunRequest
-}
-
-// ErrandRunRequest — Go form of the POST /v1/souls/{sid}/exec body (code-first source of schema AND
-// validation). Struct name = contract request-schema name of the reference (docs/keeper/openapi.yaml
-// → ErrandRunRequest, $ref at requestBody exec). module — required (empty → 422 in ExecTyped
-// via dispatcher); input/timeout_seconds/dry_run — optional-pointer (the handler dereferences).
-// timeout range / dry_run-for-verb / module format — domain validation (422/400 in ExecTyped).
-type ErrandRunRequest struct {
-	Module         string          `json:"module" required:"true" doc:"fully-qualified <ns>.<name>.<state>; without dry_run - core.cmd.shell / core.exec.run / an ErrandReadSafe module, with dry_run - a PlanReadSafe module"`
-	Input          *map[string]any `json:"input,omitempty" doc:"input for the module (validated against input_schema)"`
-	TimeoutSeconds *int            `json:"timeout_seconds,omitempty" maximum:"300" doc:"total Errand timeout [1..300]; 0/omitted -> default 30s; > server-cap (30s) -> 202 + Location"`
-	DryRun         *bool           `json:"dry_run,omitempty" doc:"only for PlanReadSafe modules; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400; target soul must announce the dry_run capability -> 409 otherwise"`
 }
 
 // errandExecOutput — huma output POST /v1/souls/{sid}/exec with TWO success codes under

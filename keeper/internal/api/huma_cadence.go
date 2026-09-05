@@ -546,7 +546,7 @@ func newHumaCadenceAPI(r chi.Router) huma.API {
 	// SOUL (handler-native T5d): enum SoulStatus/SoulTransport are native
 	// SchemaProvider types (huma_soul_status.go), carried directly in the reply
 	// Body → a separate alias is not needed. generic PagedResponse[handlers.
-	// SoulListView] → soulListReply (CURSOR, the 6-field SoulListReply shape,
+	// SoulListView] → SoulListReply (CURSOR, the 6-field SoulListReply shape,
 	// see huma_soul_envelope.go). nested SoulSshTarget — native input↔output
 	// (CLASS A). Only OpenAPI schemas, not the wire.
 	registerSoulEnvelopes(api)
@@ -558,6 +558,12 @@ func newHumaCadenceAPI(r chi.Router) huma.API {
 	// OpenAPI, not the wire. See huma_soul_soulprint.go / huma_errand_accepted.go.
 	registerSoulprintFacts(api)
 	registerErrandAccepted(api)
+	// The three named enums (SoulStatus/SoulTransport/IncarnationStatus) live
+	// in shared/api/wire and cannot carry a huma.SchemaProvider there, so the
+	// registry is pointed at keeper-local shims that do (huma_enums.go).
+	// Without this call those fields degrade to a bare `type: string` — a
+	// silent contract change, caught only by openapi_drift_test.go.
+	registerContractEnums(api)
 	return api
 }
 

@@ -37,6 +37,8 @@ import (
 	"github.com/testcontainers/testcontainers-go"
 	tcpostgres "github.com/testcontainers/testcontainers-go/modules/postgres"
 	tcredis "github.com/testcontainers/testcontainers-go/modules/redis"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // Config - parameters for constructing a Stack.
@@ -713,12 +715,9 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 	t.Helper()
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
-	body := map[string]any{
-		"id":      name,
-		"service": service,
-	}
+	body := wire.IncarnationCreateRequest{ID: name, Service: service}
 	if spec != nil {
-		body["input"] = spec
+		body.Input = spec
 	}
 
 	var resp []byte
@@ -741,10 +740,7 @@ func (s *Stack) CreateIncarnation(t *testing.T, name string, serviceRef string, 
 		}
 		t.Fatalf("CreateIncarnation %s: status %d, body=%s", name, status, string(resp))
 	}
-	var out struct {
-		ApplyID     string `json:"apply_id"`
-		Incarnation string `json:"incarnation"`
-	}
+	var out wire.IncarnationCreateReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateIncarnation %s: decode: %v (body=%s)", name, err, string(resp))
 	}
@@ -770,13 +766,9 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 	t.Helper()
 	c := s.opClient(t)
 	service := stripServiceRef(serviceRef)
-	body := map[string]any{
-		"id":              name,
-		"service":         service,
-		"create_scenario": "create",
-	}
+	body := wire.IncarnationCreateRequest{ID: name, Service: service, CreateScenario: "create"}
 	if spec != nil {
-		body["input"] = spec
+		body.Input = spec
 	}
 
 	var resp []byte
@@ -799,17 +791,16 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 		}
 		t.Fatalf("CreateIncarnationWithApply %s: status %d, body=%s", name, status, string(resp))
 	}
-	var out struct {
-		ApplyID     string `json:"apply_id"`
-		Incarnation string `json:"incarnation"`
-	}
+	var out wire.IncarnationCreateReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateIncarnationWithApply %s: decode: %v (body=%s)", name, err, string(resp))
 	}
-	if out.ApplyID == "" {
+	// apply_id is optional on this body - a create that starts no scenario omits
+	// the key. This helper exists for the case that DOES start one.
+	if out.ApplyID == nil || *out.ApplyID == "" {
 		t.Fatalf("CreateIncarnationWithApply %s: empty apply_id in 202 body=%s (create scenario not started?)", name, string(resp))
 	}
-	return out.Incarnation, out.ApplyID
+	return out.Incarnation, *out.ApplyID
 }
 
 // CreateIncarnationWithApplyScenario - like CreateIncarnationWithApply, but
@@ -819,13 +810,13 @@ func (s *Stack) CreateIncarnationWithApply(t *testing.T, name string, serviceRef
 func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRef, createScenario string, spec map[string]any) (string, string) {
 	t.Helper()
 	c := s.opClient(t)
-	body := map[string]any{
-		"id":              name,
-		"service":         stripServiceRef(serviceRef),
-		"create_scenario": createScenario,
+	body := wire.IncarnationCreateRequest{
+		ID:             name,
+		Service:        stripServiceRef(serviceRef),
+		CreateScenario: createScenario,
 	}
 	if spec != nil {
-		body["input"] = spec
+		body.Input = spec
 	}
 
 	var resp []byte
@@ -848,17 +839,14 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 		}
 		t.Fatalf("CreateIncarnationWithApplyScenario %s: status %d, body=%s", name, status, string(resp))
 	}
-	var out struct {
-		ApplyID     string `json:"apply_id"`
-		Incarnation string `json:"incarnation"`
-	}
+	var out wire.IncarnationCreateReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("CreateIncarnationWithApplyScenario %s: decode: %v (body=%s)", name, err, string(resp))
 	}
-	if out.ApplyID == "" {
+	if out.ApplyID == nil || *out.ApplyID == "" {
 		t.Fatalf("CreateIncarnationWithApplyScenario %s: empty apply_id (create scenario %q not started?) body=%s", name, createScenario, string(resp))
 	}
-	return out.Incarnation, out.ApplyID
+	return out.Incarnation, *out.ApplyID
 }
 
 // RunScenario runs a scenario on an existing incarnation.
@@ -875,10 +863,7 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName string, input map[string]any) string {
 	t.Helper()
 	c := s.opClient(t)
-	body := map[string]any{}
-	if input != nil {
-		body["input"] = input
-	}
+	body := wire.IncarnationRunRequest{Input: input}
 	path := fmt.Sprintf("/v1/incarnations/%s/scenarios/%s", incarnationName, scenarioName)
 
 	var resp []byte
@@ -901,9 +886,7 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 		}
 		t.Fatalf("RunScenario %s/%s: status %d, body=%s", incarnationName, scenarioName, status, string(resp))
 	}
-	var out struct {
-		ApplyID string `json:"apply_id"`
-	}
+	var out wire.IncarnationRunReply
 	if err := json.Unmarshal(resp, &out); err != nil {
 		t.Fatalf("RunScenario %s/%s: decode: %v (body=%s)", incarnationName, scenarioName, err, string(resp))
 	}

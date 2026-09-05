@@ -8,6 +8,7 @@ import (
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 	"github.com/souls-guild/soul-stack/soulctl/internal/output"
 )
@@ -58,7 +59,7 @@ Examples:
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			reply, err := cl.PushProviders.Create(ctx, client.PushProviderBody{ID: name, Params: params})
+			reply, err := cl.PushProviders.Create(ctx, wire.PushProviderCreateRequest{ID: name, Params: params})
 			if err != nil {
 				return renderAPIError(err)
 			}
@@ -90,7 +91,7 @@ func newPushProvidersUpdateCmd() *cobra.Command {
 			}
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
-			reply, err := cl.PushProviders.Update(ctx, name, client.PushProviderUpdateBody{Params: params})
+			reply, err := cl.PushProviders.Update(ctx, name, wire.PushProviderUpdateRequest{Params: params})
 			if err != nil {
 				return renderAPIError(err)
 			}

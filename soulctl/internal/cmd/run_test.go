@@ -12,7 +12,7 @@ import (
 	"sync/atomic"
 	"testing"
 
-	"github.com/souls-guild/soul-stack/soulctl/internal/client"
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // TestRunCmd_BuildPayload — `soulctl run cmd 'uptime' --target-coven dev
@@ -44,17 +44,17 @@ func TestRunCmd_BuildPayload(t *testing.T) {
 		Glob:  "web-*",
 	}
 	target, _ := tf.resolve()
-	req := client.VoyageCreateRequest{
+	req := wire.VoyageCreateRequest{
 		Kind:   "command",
 		Module: "core.cmd.shell",
 		Input:  map[string]any{"cmd": "uptime"},
-		Target: client.VoyageTarget{
+		Target: wire.VoyageTarget{
 			SIDs:  target.SIDs,
 			Coven: target.Coven,
 			Where: target.Where,
 		},
 		OnFailure:   "continue",
-		Concurrency: 50,
+		Concurrency: optInt(50),
 	}
 	reply, err := cl.Voyages.Create(context.Background(), req)
 	if err != nil {
@@ -107,11 +107,11 @@ func TestRunCmd_TargetSIDs(t *testing.T) {
 	})
 	tf := targetFlags{SIDs: "host1,host2"}
 	target, _ := tf.resolve()
-	_, err := cl.Voyages.Create(context.Background(), client.VoyageCreateRequest{
+	_, err := cl.Voyages.Create(context.Background(), wire.VoyageCreateRequest{
 		Kind:   "command",
 		Module: "core.cmd.shell",
 		Input:  map[string]any{"cmd": "id"},
-		Target: client.VoyageTarget{SIDs: target.SIDs},
+		Target: wire.VoyageTarget{SIDs: target.SIDs},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -139,13 +139,13 @@ func TestRunCmd_BatchAndMaxFailures(t *testing.T) {
 			})
 		},
 	})
-	_, err := cl.Voyages.Create(context.Background(), client.VoyageCreateRequest{
+	_, err := cl.Voyages.Create(context.Background(), wire.VoyageCreateRequest{
 		Kind:        "command",
 		Module:      "core.cmd.shell",
 		Input:       map[string]any{"cmd": "uptime"},
-		Target:      client.VoyageTarget{SIDs: []string{"h1"}},
-		Batch:       "25%",
-		MaxFailures: "3",
+		Target:      wire.VoyageTarget{SIDs: []string{"h1"}},
+		Batch:       optString("25%"),
+		MaxFailures: optString("3"),
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -175,11 +175,11 @@ func TestVoyageCreate_BatchOmittedWhenEmpty(t *testing.T) {
 			})
 		},
 	})
-	_, err := cl.Voyages.Create(context.Background(), client.VoyageCreateRequest{
+	_, err := cl.Voyages.Create(context.Background(), wire.VoyageCreateRequest{
 		Kind:   "command",
 		Module: "core.cmd.shell",
 		Input:  map[string]any{"cmd": "uptime"},
-		Target: client.VoyageTarget{SIDs: []string{"h1"}},
+		Target: wire.VoyageTarget{SIDs: []string{"h1"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -305,11 +305,11 @@ func TestRunScenario_BuildPayload(t *testing.T) {
 		},
 	})
 
-	reply, err := cl.Voyages.Create(context.Background(), client.VoyageCreateRequest{
+	reply, err := cl.Voyages.Create(context.Background(), wire.VoyageCreateRequest{
 		Kind:         "scenario",
 		ScenarioName: "converge",
 		Input:        map[string]any{"shards": 3},
-		Target:       client.VoyageTarget{Incarnations: []string{"redis-prod"}},
+		Target:       wire.VoyageTarget{Incarnations: []string{"redis-prod"}},
 	})
 	if err != nil {
 		t.Fatalf("Create: %v", err)
@@ -345,7 +345,7 @@ func TestRunPush_BuildPayload(t *testing.T) {
 			})
 		},
 	})
-	reply, err := cl.Push.Apply(context.Background(), client.PushApplyRequest{
+	reply, err := cl.Push.Apply(context.Background(), wire.PushApplyRequest{
 		Inventory:   []string{"bastion-a", "bastion-b"},
 		Destiny:     "redis-cluster@v2.0.0",
 		SSHProvider: "vault-prod",
@@ -419,12 +419,12 @@ func TestAutoDetectIncarnation(t *testing.T) {
 		{items: []map[string]any{{
 			"id": "redis-prod", "service": "redis", "service_version": "v",
 			"state_schema_version": 1, "covens": []string{}, "status": "ready",
-			"created_by_aid": "x", "created_at": "t", "updated_at": "t",
+			"created_by_aid": "x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z",
 		}}, wantOK: "redis-prod"},
 		{items: []map[string]any{}, wantErr: true},
 		{items: []map[string]any{
-			{"id": "a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
-			{"id": "b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+			{"id": "a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
+			{"id": "b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
 		}, wantErr: true},
 	}
 	for _, tc := range cases {
@@ -460,8 +460,8 @@ func TestRunScenario_AutoDetect_Many(t *testing.T) {
 			atomic.AddInt32(&called, 1)
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"items": []map[string]any{
-					{"id": "redis-a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
-					{"id": "redis-b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "t", "updated_at": "t"},
+					{"id": "redis-a", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
+					{"id": "redis-b", "service": "redis", "service_version": "v", "state_schema_version": 1, "covens": []string{}, "status": "ready", "created_by_aid": "x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
 				},
 				"offset": 0, "limit": 50, "total": 2,
 			})
@@ -478,13 +478,13 @@ func TestRunScenario_AutoDetect_Many(t *testing.T) {
 
 // TestIsVoyageTerminal — Voyage status predicates.
 func TestIsVoyageTerminal(t *testing.T) {
-	terminal := []string{"succeeded", "failed", "partial_failed", "cancelled"}
+	terminal := []wire.VoyageStatus{"succeeded", "failed", "partial_failed", "cancelled"}
 	for _, s := range terminal {
 		if !isVoyageTerminal(s) {
 			t.Errorf("%q should be terminal", s)
 		}
 	}
-	for _, s := range []string{"pending", "running", "scheduled", "", "unknown"} {
+	for _, s := range []wire.VoyageStatus{"pending", "running", "scheduled", "", "unknown"} {
 		if isVoyageTerminal(s) {
 			t.Errorf("%q must NOT be terminal", s)
 		}

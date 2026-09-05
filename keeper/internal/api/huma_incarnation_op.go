@@ -28,41 +28,6 @@ type incCreateInput struct {
 	Body IncarnationCreateRequest
 }
 
-// IncarnationCreateRequest — Go form of the POST /v1/incarnations body. service
-// required; name/covens/input optional. Format of name/service/coven — domain validation
-// (422 in CreateTyped). additionalProperties:false (huma default) → unknown field → 400.
-// Struct name = contract schema name in OpenAPI (huma DefaultSchemaNamer takes
-// reflect.Type.Name() directly) — aligned to the committed hand-written spec (T4b pilot).
-//
-// `id` lost `required:"true"` with ADR-0079: a create scenario declaring
-// `id_template` composes it server-side from input components, and whether it does
-// is only known once the service snapshot resolves — past the schema layer.
-// The domain still rejects an omitted id when nothing composes one (422
-// "field 'id' is required"), so the contract did not loosen, it moved one layer in.
-type IncarnationCreateRequest struct {
-	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares id_template (ADR-0079) — then it is composed server-side from input components."`
-	// label is the optional display caption (ADR-0085): free text, changed later
-	// by PUT /v1/incarnations/{id}/label. Unlike `id` it is never composed by
-	// an id_template — a template composes an identifier, and a caption is not one.
-	Label   *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"`
-	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
-	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags (ADR-008 amendment a)"`
-	Input   map[string]any `json:"input,omitempty" doc:"input for selected create scenario"`
-	// Traits — operator-set trait labels of the incarnation (ADR-060 amend R1): map key →
-	// scalar | list of scalars. Stored in incarnation.traits (source of truth) and
-	// materialized into souls.traits of member hosts. Format/value is validated by the domain
-	// (nested object/array → 422). Operational replacement — PUT .../traits.
-	Traits map[string]any `json:"traits,omitempty" doc:"operator-set trait labels (key → scalar|list of scalars), ADR-060"`
-	// CreateScenario — choice of the start scenario (mechanism of multiple create scenarios).
-	// Optional. Empty-choice contract (Phase 2, union removed): a service offering create
-	// scenarios (scenario with `create: true`) + empty → 422 create_scenario_required; a
-	// service without them + empty → bare incarnation (ready without a run, created_scenario=
-	// NULL). Auto-create by the default `create` is gone. A non-empty name must belong to the
-	// service's create set, otherwise 422; the choice is saved in incarnation.created_scenario
-	// (rerun-last uses it on the create path).
-	CreateScenario string `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"name of start scenario (mechanism for multiple creates, scenario with create:true). Empty: service offers create scenarios → 422 create_scenario_required; service without them → bare incarnation (ready without run)"`
-}
-
 // incCreateOutput — huma output for POST /v1/incarnations (FULL-TYPED). Status=202;
 // Body — native 202 body (IncarnationCreateReply: incarnation + optional apply_id).
 type incCreateOutput struct {
@@ -101,13 +66,13 @@ type incListInput struct {
 }
 
 // incListOutput — huma output for GET /v1/incarnations (FULL-TYPED). Body — TAGGED native
-// envelope incarnationListReply (items.$ref to native IncarnationGetReply with json tags:
+// envelope IncarnationListReply (items.$ref to native IncarnationGetReply with json tags:
 // snake_case wire). Previously Body was handlers.IncarnationListReply (= PagedResponse[
 // IncarnationGetView]) — untagged View → PascalCase wire (contract bug #7). The register func
 // projects reply.Items through newIncarnationGetReply. The OpenAPI schema is unchanged (same
-// alias target incarnationListReply).
+// alias target IncarnationListReply).
 type incListOutput struct {
-	Body incarnationListReply
+	Body IncarnationListReply
 }
 
 func incListOperation() huma.Operation {
@@ -172,13 +137,13 @@ type incHistoryInput struct {
 }
 
 // incHistoryOutput — huma-output GET /v1/incarnations/{id}/history (FULL-TYPED). Body
-// — TAGGED native envelope incarnationHistoryReply (items.$ref to native StateHistoryEntry
+// — TAGGED native envelope IncarnationHistoryReply (items.$ref to native StateHistoryEntry
 // with json tags: snake_case wire). Previously Body was handlers.IncarnationHistoryReply (=
 // PagedResponse[StateHistoryView]) — untagged View → PascalCase wire (contract bug #7).
 // The register func projects reply.Items through newStateHistoryEntry. The OpenAPI schema is
-// unchanged (same alias target incarnationHistoryReply).
+// unchanged (same alias target IncarnationHistoryReply).
 type incHistoryOutput struct {
-	Body incarnationHistoryReply
+	Body IncarnationHistoryReply
 }
 
 func incHistoryOperation() huma.Operation {
@@ -210,9 +175,9 @@ type incRunsInput struct {
 }
 
 // incRunsOutput — huma-output GET .../runs (FULL-TYPED). Body — TAGGED native envelope
-// incarnationRunsReply (items.$ref to native RunSummaryEntry: snake_case wire).
+// IncarnationRunsReply (items.$ref to native RunSummaryEntry: snake_case wire).
 type incRunsOutput struct {
-	Body incarnationRunsReply
+	Body IncarnationRunsReply
 }
 
 func incRunsOperation() huma.Operation {
@@ -295,15 +260,6 @@ type incRunInput struct {
 	Body     *IncarnationRunRequest `doc:"opt. body: scenario input"`
 }
 
-// IncarnationRunRequest — Go form of the POST .../scenarios/{scenario} body. name/scenario
-// echoed from the path are ignored (the path is authoritative). input is optional.
-// additionalProperties:false → unknown field → 400. The name = the contract schema name (T4b).
-type IncarnationRunRequest struct {
-	ID       *string        `json:"id,omitempty" doc:"echo path-id (ignored)"`
-	Scenario *string        `json:"scenario,omitempty" doc:"echo path-scenario (ignored)"`
-	Input    map[string]any `json:"input,omitempty" doc:"scenario input"`
-}
-
 // incRunOutput — huma-output POST .../scenarios/{scenario} (FULL-TYPED). Status=202;
 // Body — native IncarnationRunReply (apply_id + echo incarnation/scenario).
 type incRunOutput struct {
@@ -332,14 +288,6 @@ type incUnlockInput struct {
 	Body IncarnationUnlockRequest
 }
 
-// IncarnationUnlockRequest — Go form of the POST .../unlock body. reason required; name echo
-// is ignored. additionalProperties:false → unknown field → 400. The name = the contract
-// schema name (T4b).
-type IncarnationUnlockRequest struct {
-	ID     *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
-	Reason string  `json:"reason" required:"true" minLength:"1" maxLength:"500" doc:"free text confirmation"`
-}
-
 // incUnlockOutput — huma-output POST .../unlock (FULL-TYPED). Status=200; Body —
 // native IncarnationUnlockReply.
 type incUnlockOutput struct {
@@ -366,14 +314,6 @@ func incUnlockOperation() huma.Operation {
 type incUpgradeInput struct {
 	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationUpgradeRequest
-}
-
-// IncarnationUpgradeRequest — Go form of the POST .../upgrade body. to_version required; name
-// echo is ignored. additionalProperties:false → unknown field → 400. The name = the contract
-// schema name (T4b).
-type IncarnationUpgradeRequest struct {
-	ID        *string `json:"id,omitempty" doc:"echo path-id (ignored)"`
-	ToVersion string  `json:"to_version" required:"true" doc:"target service version (git-ref)"`
 }
 
 // incUpgradeOutput — huma-output POST .../upgrade (FULL-TYPED). Status=202; Body —
@@ -430,18 +370,6 @@ func incUpgradePathsOperation() huma.Operation {
 type incRerunInput struct {
 	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationRerunLastRequest
-}
-
-// IncarnationRerunLastRequest — Go form of the POST .../rerun-last body. reason
-// required; input optional.
-type IncarnationRerunLastRequest struct {
-	Reason string `json:"reason" required:"true" minLength:"1" maxLength:"500" doc:"free text confirmation"`
-	// Input — the operator's input for the restart, used ONLY when the failed
-	// attempt's history row carries no replayable snapshot (NIM-408). It is a
-	// recovery path, not an override: with a snapshot present, sending input is
-	// refused rather than silently ignored, because "rerun that" and "run this
-	// instead" are different requests and the second one has its own endpoint.
-	Input map[string]any `json:"input,omitempty" doc:"operator input, accepted only when the attempt cannot be replayed from history"`
 }
 
 // incRerunOutput — huma-output POST .../rerun-last (FULL-TYPED). Status=202; Body —
@@ -528,14 +456,6 @@ func incSetLabelOperation() huma.Operation {
 type incSetTraitsInput struct {
 	ID   string `path:"id" doc:"incarnation id"`
 	Body IncarnationSetTraitsRequest
-}
-
-// IncarnationSetTraitsRequest — Go form of the PUT .../traits body. traits — a full
-// replacement of operator-set trait labels (key → scalar|list of scalars); empty/absent
-// = clear. The value format (nested forbidden) is validated by the domain → 422.
-// additionalProperties:false → unknown field → 400. The name = the contract schema name.
-type IncarnationSetTraitsRequest struct {
-	Traits map[string]any `json:"traits,omitempty" doc:"full set of trait-tags (key -> scalar|list of scalars); empty/omitted = clear (ADR-060)"`
 }
 
 // incSetTraitsOutput — huma-output PUT .../traits (FULL-TYPED). Status=200; Body —

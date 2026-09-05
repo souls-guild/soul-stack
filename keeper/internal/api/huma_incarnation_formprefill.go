@@ -26,13 +26,6 @@ type incFormPrefillInput struct {
 	Scenario string `path:"scenario" doc:"scenario name"`
 }
 
-// IncarnationFormPrefillReply — the native 200 body of POST .../form-prefill. Values —
-// a map `field → current-value` (only prefill-declared non-secret fields with a
-// covered state path; the rest are omitted). The struct name = the contract schema name.
-type IncarnationFormPrefillReply struct {
-	Values map[string]any `json:"values" doc:"field → current value from incarnation.state (prefill-hint)"`
-}
-
 // incFormPrefillOutput — huma output for POST .../form-prefill (FULL-TYPED). Body —
 // the native 200 body (IncarnationFormPrefillReply: {values}).
 type incFormPrefillOutput struct {

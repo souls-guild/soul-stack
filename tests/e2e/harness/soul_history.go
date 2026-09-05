@@ -11,29 +11,17 @@ import (
 	"encoding/json"
 	"net/http"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
-// SoulHistoryItem — read projection of one items[] element from
-// GET /v1/souls/{sid}/history. Fields form the handler's public JSON contract.
-type SoulHistoryItem struct {
-	Type        string `json:"type"` // scenario | errand.
-	ID          string `json:"id"`
-	Incarnation string `json:"incarnation,omitempty"`
-	Scenario    string `json:"scenario,omitempty"`
-	Module      string `json:"module,omitempty"`
-	Status      string `json:"status"`
-	StartedAt   string `json:"started_at"`
-	FinishedAt  string `json:"finished_at,omitempty"`
-}
-
-// SoulHistoryReply — the 200 body of GET /v1/souls/{sid}/history.
-type SoulHistoryReply struct {
-	SID    string            `json:"sid"`
-	Items  []SoulHistoryItem `json:"items"`
-	Offset int               `json:"offset"`
-	Limit  int               `json:"limit"`
-	Total  int               `json:"total"`
-}
+// SoulHistoryItem / SoulHistoryReply are the wire types of
+// GET /v1/souls/{sid}/history — the declarations keeper's handler returns.
+// The harness used to restate them field by field (NIM-776).
+type (
+	SoulHistoryItem  = wire.SoulHistoryItem
+	SoulHistoryReply = wire.SoulHistoryReply
+)
 
 // SoulHistory calls GET /v1/souls/{sid}/history with an optional type query
 // filter (scenario|errand; empty = both sources) and returns the parsed

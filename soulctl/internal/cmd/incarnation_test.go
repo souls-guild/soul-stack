@@ -9,9 +9,11 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/spf13/cobra"
 
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 	"github.com/souls-guild/soul-stack/soulctl/internal/client"
 )
 
@@ -100,10 +102,10 @@ func TestIncarnationsListCovenClientSide(t *testing.T) {
 				"items": []map[string]any{
 					{"id": "a", "service": "s", "service_version": "v", "state_schema_version": 1,
 						"covens": []string{"prod"}, "status": "ready",
-						"created_by_aid": "archon-x", "created_at": "t", "updated_at": "t"},
+						"created_by_aid": "archon-x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
 					{"id": "b", "service": "s", "service_version": "v", "state_schema_version": 1,
 						"covens": []string{"dev"}, "status": "ready",
-						"created_by_aid": "archon-x", "created_at": "t", "updated_at": "t"},
+						"created_by_aid": "archon-x", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z"},
 				},
 				"offset": 0, "limit": 50, "total": 2,
 			})
@@ -129,7 +131,7 @@ func TestIncarnationsGet(t *testing.T) {
 				"id": "redis-prod", "service": "redis-cluster",
 				"service_version": "v1.2.3", "state_schema_version": 1,
 				"covens": []string{"prod"}, "status": "ready",
-				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",
+				"created_by_aid": "archon-alice", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z",
 			})
 		},
 	})
@@ -264,7 +266,7 @@ func TestWaitForApplySuccess(t *testing.T) {
 			_ = json.NewEncoder(w).Encode(map[string]any{
 				"id": "redis-prod", "service": "s", "service_version": "v",
 				"state_schema_version": 1, "covens": []string{}, "status": "ready",
-				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",
+				"created_by_aid": "archon-alice", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z",
 			})
 		},
 	})
@@ -296,7 +298,7 @@ func TestWaitForApplyBlocking(t *testing.T) {
 				"id": "redis-prod", "service": "s", "service_version": "v",
 				"state_schema_version": 1, "covens": []string{},
 				"status":         "error_locked",
-				"created_by_aid": "archon-alice", "created_at": "t", "updated_at": "t",
+				"created_by_aid": "archon-alice", "created_at": "2026-05-26T10:00:00Z", "updated_at": "2026-05-26T11:00:00Z",
 			})
 		},
 	})
@@ -374,11 +376,11 @@ func TestPrintRunDetailShowsNoticesOnASuccessfulRun(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
-	err := printRunDetail(cmd, &client.RunDetail{
+	err := printRunDetail(cmd, &wire.RunDetailReply{
 		ApplyID: "01HX0000000000000000000000", Scenario: "scale", Status: "success",
-		StartedAt: "2026-05-26T12:00:00Z",
-		Hosts: []client.RunHostStatus{
-			{SID: "host-a", Status: "success", Notices: []client.RunNotice{{
+		StartedAt: time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+		Hosts: []wire.RunHostStatusEntry{
+			{SID: "host-a", Status: "success", Notices: []wire.RunNoticeEntry{{
 				Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address",
 				Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
 			}}},
@@ -402,10 +404,10 @@ func TestPrintRunDetailQuietWhenNoNotices(t *testing.T) {
 	var buf bytes.Buffer
 	cmd := &cobra.Command{}
 	cmd.SetOut(&buf)
-	if err := printRunDetail(cmd, &client.RunDetail{
+	if err := printRunDetail(cmd, &wire.RunDetailReply{
 		ApplyID: "01HX0000000000000000000000", Scenario: "scale", Status: "success",
-		StartedAt: "2026-05-26T12:00:00Z",
-		Hosts:     []client.RunHostStatus{{SID: "host-a", Status: "success"}},
+		StartedAt: time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+		Hosts:     []wire.RunHostStatusEntry{{SID: "host-a", Status: "success"}},
 	}); err != nil {
 		t.Fatalf("printRunDetail: %v", err)
 	}

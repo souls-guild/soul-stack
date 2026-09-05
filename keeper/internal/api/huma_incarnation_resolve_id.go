@@ -27,55 +27,9 @@ import (
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 )
 
-// IncarnationResolveIDRequest — the request body of POST /v1/incarnations/
-// resolve-id. Field names mirror IncarnationCreateRequest deliberately: the same
-// body describes the same intended create, and gate (a) reads `service`/`covens`
-// out of it with the SAME selector, so the two cannot drift on what a request means.
-//
-// There is no `id`: it is the answer, not a parameter. Covens does not affect the
-// composition — it is here so a coven-scoped operator's permission matches on the
-// preview exactly as it matches on the create.
-type IncarnationResolveIDRequest struct {
-	Service        string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
-	CreateScenario string         `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"chosen create scenario, whose id_template composes the id"`
-	Input          map[string]any `json:"input,omitempty" doc:"the create input so far — partial is expected, this is a live preview"`
-	Covens         []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags of the intended create — scope parity with POST /v1/incarnations, not part of the composition"`
-}
-
 // incResolveIDInput — huma input for POST /v1/incarnations/resolve-id.
 type incResolveIDInput struct {
 	Body IncarnationResolveIDRequest
-}
-
-// IncarnationResolveIDReply — the native 200 body of the resolve. The struct name
-// = the contract schema name.
-//
-// `composes: false` says the chosen scenario declares no id_template: the
-// operator types the id and the form keeps its id field. Every other field is
-// then zero.
-//
-// `valid: false` is the ordinary answer while the operator is still typing, and it
-// is a 200, not a 422 — a form that errors on every keystroke has no live preview.
-// `invalid_reason` always says why, so the preview is never a silently empty box;
-// `composed_id` still carries the offending value when there is one, so the
-// character count has something to count.
-//
-// The template TEXT is not in this reply on purpose: the operator is shown the
-// id, not the formula (NIM-340).
-//
-// `available` and `taken_by_service` are meaningful only when `valid`.
-// `taken_by_service` is omitted for a caller who cannot see the occupying
-// incarnation — they still learn the name is taken, they just do not get a report
-// on someone else's estate.
-type IncarnationResolveIDReply struct {
-	Composes       bool   `json:"composes" doc:"the chosen create scenario composes the id from id_template (ADR-0079); false → the operator names the incarnation"`
-	ComposedID     string `json:"composed_id" doc:"the id a create with this input would produce; carries the offending value when invalid"`
-	Length         int    `json:"length" doc:"character count of composed_id"`
-	MaxLength      int    `json:"max_length" doc:"the incarnation id ceiling — server-sourced so the form does not restate it"`
-	Valid          bool   `json:"valid" doc:"composed_id is a legal incarnation id"`
-	InvalidReason  string `json:"invalid_reason,omitempty" doc:"why the id could not be composed or was rejected, in operator terms"`
-	Available      bool   `json:"available" doc:"no incarnation holds this id (meaningful only when valid)"`
-	TakenByService string `json:"taken_by_service,omitempty" doc:"service of the incarnation holding the id — only when the caller may see it"`
 }
 
 // incResolveIDOutput — huma output for the resolve (FULL-TYPED).

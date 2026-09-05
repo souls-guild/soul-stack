@@ -143,16 +143,6 @@ func newErrandListReply(p handlers.ErrandListPage) ErrandListReply {
 	return ErrandListReply{Items: items, Limit: p.Limit, Offset: p.Offset, Total: p.Total}
 }
 
-// ErrandAccepted — native 202 body of errand-get-running (errand_id + status). Shape 1:1
-// with the former ErrandAccepted; on the wire it is serialized by the get route's register
-// function via json.RawMessage (errandGetOutput.Body). The schema in components/schemas is
-// emitted by a separate schema-builder pre-seed (errandAccepted, huma_errand_accepted.go) —
-// this type does NOT take part in spec emission, only in the wire serialization of the 202 body.
-type ErrandAccepted struct {
-	ErrandID string `json:"errand_id"`
-	Status   string `json:"status"`
-}
-
 // newErrandAccepted projects the flat handlers.ErrandAcceptedView into the native 202 body.
 func newErrandAccepted(v handlers.ErrandAcceptedView) ErrandAccepted {
 	return ErrandAccepted{ErrandID: v.ErrandID, Status: v.Status}

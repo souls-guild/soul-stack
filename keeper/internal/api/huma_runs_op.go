@@ -95,7 +95,7 @@ type GlobalRunEntry struct {
 }
 
 // runsListReply — the GET /v1/runs envelope (the contract 4-field form
-// items/offset/limit/total, parity with incarnationRunsReply). The type name = the
+// items/offset/limit/total, parity with IncarnationRunsReply). The type name = the
 // contract schema name (huma DefaultSchemaNamer capitalizes → "RunsListReply").
 type runsListReply struct {
 	Items  []GlobalRunEntry `json:"items" doc:"page of runs across all incarnations (apply_runs fold)"`

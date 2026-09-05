@@ -42,65 +42,6 @@ import (
 // Used ONLY as the shape source for OpenAPI emission (typed_facts on the wire is byte-
 // passthrough json.RawMessage; these types are not serialized on the hot path).
 
-// SoulprintFacts — typed Soulprint facts (ADR-018). Name = the contract schema name from the hand-written spec.
-type SoulprintFacts struct {
-	CPU      *SoulprintCpuFacts     `json:"cpu,omitempty"`
-	Hostname *string                `json:"hostname,omitempty" doc:"short hostname, uname -n"`
-	Kernel   *SoulprintKernelFacts  `json:"kernel,omitempty"`
-	Memory   *SoulprintMemoryFacts  `json:"memory,omitempty" doc:"memory amounts in MB"`
-	Network  *SoulprintNetworkFacts `json:"network,omitempty"`
-	Os       *SoulprintOsFacts      `json:"os,omitempty" doc:"operating-system facts (ADR-018)"`
-	SID      *string                `json:"sid,omitempty" doc:"echo SID for logs; authority - mTLS peer cert"`
-}
-
-// SoulprintCpuFacts — the CPU sub-fact under the CONTRACT name (hand-written spec :7009; the oapi
-// generator would capitalize the acronym into SoulprintCPUFacts — here the name is contract from the start).
-type SoulprintCpuFacts struct {
-	Count  *int32  `json:"count,omitempty" doc:"number of logical CPUs (accounting for HT/SMT)"`
-	Model  *string `json:"model,omitempty"`
-	Vendor *string `json:"vendor,omitempty"`
-}
-
-// SoulprintKernelFacts — kernel facts.
-type SoulprintKernelFacts struct {
-	Release *string `json:"release,omitempty" doc:"kernel version only (5.15.0)"`
-	Version *string `json:"version,omitempty" doc:"full version with dist-suffix (5.15.0-101-generic)"`
-}
-
-// SoulprintMemoryFacts — memory amounts in MB.
-type SoulprintMemoryFacts struct {
-	AvailableMb *int64 `json:"available_mb,omitempty"`
-	SwapMb      *int64 `json:"swap_mb,omitempty"`
-	TotalMb     *int64 `json:"total_mb,omitempty"`
-}
-
-// SoulprintNetworkFacts — network facts.
-type SoulprintNetworkFacts struct {
-	Fqdn       *string                      `json:"fqdn,omitempty"`
-	Interfaces *[]SoulprintNetworkInterface `json:"interfaces,omitempty"`
-	PrimaryIP  *string                      `json:"primary_ip,omitempty" doc:"primary IPv4 (interface with default route)"`
-}
-
-// SoulprintNetworkInterface — a single network interface.
-type SoulprintNetworkInterface struct {
-	Ipv4 *[]string `json:"ipv4,omitempty" doc:"IPv4 addresses in CIDR (10.0.0.1/24)"`
-	Ipv6 *[]string `json:"ipv6,omitempty"`
-	Mac  *string   `json:"mac,omitempty"`
-	Mtu  *int32    `json:"mtu,omitempty"`
-	Name *string   `json:"name,omitempty"`
-}
-
-// SoulprintOsFacts — operating-system facts (ADR-018).
-type SoulprintOsFacts struct {
-	Arch       *string `json:"arch,omitempty" doc:"amd64 / arm64"`
-	Codename   *string `json:"codename,omitempty"`
-	Distro     *string `json:"distro,omitempty"`
-	Family     *string `json:"family,omitempty" doc:"debian / rhel / alpine / windows / darwin"`
-	InitSystem *string `json:"init_system,omitempty" doc:"systemd / openrc / sysv / launchd"`
-	PkgMgr     *string `json:"pkg_mgr,omitempty" doc:"apt / dnf / apk / pacman"`
-	Version    *string `json:"version,omitempty"`
-}
-
 // soulprintReadReply — the alias target of the GET /v1/souls/{sid}/soulprint 200-body schema. The shape
 // is checked against the committed hand-written spec (docs/keeper/openapi.yaml :6858 → SoulprintReadReply):
 // sid/typed_facts (required) + collected_at/received_at (optional). ★ typed_facts here is

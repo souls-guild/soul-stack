@@ -94,14 +94,6 @@ type GitRef struct {
 	Type      GitRefType `json:"type"`
 }
 
-// StateSchemaMigration — native step of the migration chain (element ServiceStateSchemaReply.
-// migrations). from/to — int.
-type StateSchemaMigration struct {
-	From int    `json:"from"`
-	Path string `json:"path"`
-	To   int    `json:"to"`
-}
-
 // ServiceDependency — native destiny[]/modules[] manifest record (element Service-
 // DependenciesReply). git — `*string` WITH omitempty (nil → key omitted).
 type ServiceDependency struct {

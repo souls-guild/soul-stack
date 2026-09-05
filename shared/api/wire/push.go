@@ -1,33 +1,11 @@
-package api
+// Push-flow bodies (ADR-032): the apply request, its 202 reply, and the run
+// list read back from the push registry.
 
-// HUMA-NATIVE reply-DTO for the PUSH domain (handler-native T5d-2c-full). The reply/output Body
-// of huma operations is a native Go struct in package api, no legacy generator. The register func (huma_push.go)
-// projects the handler's flat domain views (PushApplyResultView / PushRunListEntryView)
-// directly INTO THESE types — there are no more legacy-generator→native converters. Key points for push:
-//
-//   - SHAPE byte-for-byte = the former legacy generator (json tags/omitempty/date-time/nullable categories A-D).
-//   - SCHEMA NAME = contractual (PushApplyReply / PushApplyView / PushRunListReply /
-//     PushRunListEntry / PushSummaryCounts): huma's DefaultSchemaNamer takes
-//     reflect.Type.Name() → schema under the same name the former legacy generator produced.
-//   - Status enum fields (PushApplyView.Status / PushRunListEntry.Status) — native
-//     PushApplyViewStatus / PushRunListEntryStatus (huma_enums.go, INLINE enum): the hand-written
-//     code inlines status as `type: string` + enum (no standalone schema), huma inlines a
-//     string-named type the same way → schema byte-identical (parity ServiceView.GitRefType).
-//   - PushRunListReply — NOT a generic envelope (not sharedapi.PagedResponse) but a plain
-//     reply with items[]PushRunListEntry + offset/limit/total (int) → `type: integer`
-//     without format (assertOffsetEnvelopeNoFormat). Top-level reply-DTO, not via an alias.
-//
-// OUTPUT-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
-// the response body (empirically 200, not 500). apply_id — machine ULID (audit.NewULID,
-// pushorch/run.go:182); started_by_aid ← operator.AIDPattern. Format for client
-// codegen; the pattern does not affect json.Marshal. inventory_sids is NOT tagged:
-// a per-element pattern on an array output field is not covered by this batch.
+package wire
 
 import (
 	"time"
 )
-
-// === top-level reply-DTO (shape 1:1 with the former legacy generator shape) ===
 
 // PushApplyReply — native 202 body of POST /v1/push/apply (apply_id async). Shape 1:1 with
 // PushApplyReply.
@@ -63,8 +41,6 @@ type PushRunListReply struct {
 	Total  int                `json:"total"`
 }
 
-// === nested reply-DTO ===
-
 // PushRunListEntry — native compact push_runs row (element of PushRunListReply.items).
 // Shape 1:1 with PushRunListEntry: finished_at/ssh_provider/started_by_aid/summary_counts —
 // `*` fields with omitempty; inventory_sids — array; started_at — nanosecond time-wire;
@@ -88,4 +64,20 @@ type PushSummaryCounts struct {
 	FailCount    *int `json:"fail_count,omitempty"`
 	SuccessCount *int `json:"success_count,omitempty"`
 	Total        *int `json:"total,omitempty"`
+}
+
+// PushApplyRequest — the Go form of the POST /v1/push/apply body (code-first source of the schema AND
+// validation). inventory (SID[] target hosts) + destiny (<name>@<ref>) + optional
+// input/ssh_provider/cleanup_stale_versions. Empty inventory / empty destiny is
+// domain validation (422 in ApplyTyped). additionalProperties:false (huma default) →
+// unknown body field → 400. The struct name = the contract schema name in OpenAPI (huma
+// DefaultSchemaNamer takes reflect.Type.Name() directly) — aligned with the committed
+// hand-written spec (rollout N3). The register func projects into native handlers.PushApplyInput
+// (toPushApplyInput).
+type PushApplyRequest struct {
+	Inventory            []string       `json:"inventory" required:"true" doc:"list of target SID (FQDN) hosts (transport: ssh)"`
+	Destiny              string         `json:"destiny" required:"true" doc:"reference to Destiny in the form <name>@<ref>"`
+	Input                map[string]any `json:"input,omitempty" doc:"input for destiny"`
+	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"SshProvider name; defaults to the first registered one"`
+	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"remove stale soul-binary/module versions in the same SSH session"`
 }

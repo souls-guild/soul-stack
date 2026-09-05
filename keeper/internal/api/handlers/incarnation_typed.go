@@ -1103,7 +1103,7 @@ func (h *IncarnationHandler) GetTyped(ctx context.Context, name string, inScope 
 }
 
 // IncarnationListReply — typed envelope of GET /v1/incarnations (handler-native: element is a
-// domain IncarnationGetView). Package api projects it into the native envelope incarnationListReply
+// domain IncarnationGetView). Package api projects it into the native envelope IncarnationListReply
 // via RegisterTypeAlias on sharedapi.PagedResponse[handlers.IncarnationGetView].
 type IncarnationListReply = sharedapi.PagedResponse[IncarnationGetView]
 
@@ -1195,7 +1195,7 @@ func (h *IncarnationHandler) ListTyped(ctx context.Context, q IncarnationListQue
 
 // IncarnationHistoryReply — typed envelope of GET /v1/incarnations/{id}/history (handler-native:
 // element is a domain StateHistoryView). Package api projects it into the native envelope
-// incarnationHistoryReply via RegisterTypeAlias on sharedapi.PagedResponse[handlers.StateHistoryView].
+// IncarnationHistoryReply via RegisterTypeAlias on sharedapi.PagedResponse[handlers.StateHistoryView].
 type IncarnationHistoryReply = sharedapi.PagedResponse[StateHistoryView]
 
 // HistoryTyped — extracted domain function GET /v1/incarnations/{id}/history

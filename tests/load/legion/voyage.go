@@ -8,16 +8,18 @@ import (
 	"io"
 	"net/http"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // voyageTerminalStatuses -- terminal Voyage statuses (ADR-043): the run is
 // finished, polling stops. running/pending/scheduled are non-terminal (keep
 // waiting).
-var voyageTerminalStatuses = map[string]struct{}{
-	"succeeded":      {},
-	"failed":         {},
-	"partial_failed": {},
-	"cancelled":      {},
+var voyageTerminalStatuses = map[wire.VoyageStatus]struct{}{
+	wire.VoyageStatusSucceeded:     {},
+	wire.VoyageStatusFailed:        {},
+	wire.VoyageStatusPartialFailed: {},
+	wire.VoyageStatusCancelled:     {},
 }
 
 // VoyageRunOptions -- parameters for one command Voyage against the fleet
@@ -79,18 +81,19 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 		timeout = 120 * time.Second
 	}
 
-	reqBody := map[string]any{
-		"kind":   "command",
-		"module": module,
-		"input":  opts.Input,
-		"target": map[string]any{"coven": []string{opts.Coven}},
+	reqBody := wire.VoyageCreateRequest{
+		Kind:   "command",
+		Module: module,
+		Input:  opts.Input,
+		Target: wire.VoyageTarget{Coven: []string{opts.Coven}},
 	}
-	// concurrency=0 -> do NOT send the field (keeper default concurrency=1 +
-	// one Leg over the whole scope = sequential, field shape -- top-level
-	// "concurrency" *int omitempty, huma_voyage_op.go:47, minimum:1
-	// maximum:500).
+	// concurrency=0 -> do NOT send the field: keeper's default is concurrency=1
+	// with one Leg over the whole scope, i.e. sequential. The field is
+	// *int omitempty with minimum:1, so a nil pointer is the only way to mean
+	// "unset" - which the type now states, where the map form left it to this
+	// comment.
 	if opts.Concurrency > 0 {
-		reqBody["concurrency"] = opts.Concurrency
+		reqBody.Concurrency = &opts.Concurrency
 	}
 	body, err := json.Marshal(reqBody)
 	if err != nil {
@@ -139,7 +142,10 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 			}
 			continue
 		}
-		rep.FinalStatus = status
+		// FinalStatus is a plain string: besides the wire statuses it also
+		// carries this loop's own outcomes (ctx_cancelled / timeout), which
+		// the contract does not and should not know about.
+		rep.FinalStatus = string(status)
 		rep.Succeeded = succeeded
 		rep.Failed = failed
 		if _, terminal := voyageTerminalStatuses[status]; terminal {
@@ -153,13 +159,10 @@ func RunCommandVoyage(ctx context.Context, opts VoyageRunOptions) (*VoyageRunRep
 	}
 }
 
-// voyageCreateResp -- fields of the 202 body of POST /v1/voyages that the
-// legion needs.
-type voyageCreateResp struct {
-	VoyageID  string `json:"voyage_id"`
-	ScopeSize int    `json:"scope_size"`
-	Status    string `json:"status"`
-}
+// voyageCreateResp is the 202 body of POST /v1/voyages. It used to be a
+// three-field hand-written subset of it; the whole body is one declaration now
+// and the legion reads the fields it needs off it (NIM-776).
+type voyageCreateResp = wire.VoyageCreateReply
 
 func createVoyage(ctx context.Context, client *http.Client, base, jwt string, body []byte) (voyageCreateResp, error) {
 	var out voyageCreateResp
@@ -187,17 +190,11 @@ func createVoyage(ctx context.Context, client *http.Client, base, jwt string, bo
 	return out, nil
 }
 
-// voyageGetResp -- fields of GET /v1/voyages/{id} that the legion needs
-// (status + summary).
-type voyageGetResp struct {
-	Status  string `json:"status"`
-	Summary *struct {
-		Succeeded int `json:"succeeded"`
-		Failed    int `json:"failed"`
-	} `json:"summary"`
-}
+// voyageGetResp is the 200 body of GET /v1/voyages/{id}; the legion reads
+// status + summary off it.
+type voyageGetResp = wire.Voyage
 
-func getVoyageStatus(ctx context.Context, client *http.Client, base, jwt, id string) (status string, succeeded, failed int, err error) {
+func getVoyageStatus(ctx context.Context, client *http.Client, base, jwt, id string) (status wire.VoyageStatus, succeeded, failed int, err error) {
 	req, rerr := http.NewRequestWithContext(ctx, http.MethodGet, base+"/v1/voyages/"+id, nil)
 	if rerr != nil {
 		return "", 0, 0, rerr

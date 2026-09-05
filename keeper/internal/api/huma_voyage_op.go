@@ -11,7 +11,6 @@ package api
 
 import (
 	"net/http"
-	"time"
 
 	"github.com/danielgtaylor/huma/v2"
 )
@@ -22,41 +21,6 @@ import (
 // body: huma decodes and validates it against the schema from the huma tags of VoyageCreateRequest.
 type voyageCreateInput struct {
 	Body VoyageCreateRequest
-}
-
-// VoyageCreateRequest — the Go form of the POST /v1/voyages body (code-first source of the schema AND
-// validation). Mirrors the domain voyageCreateRequest: the run recipe (kind/scenario_
-// name|module/target/input/scheduling/batch*) + notify[]. kind-dependent validation
-// (scenario↔scenario_name / command↔module, non-empty target, on_failure/batch_mode enum,
-// ranges) is domain (CreateTyped → 422). additionalProperties:false (huma default) →
-// unknown field → 400. kind/batch_mode/on_failure — inline enums (the spec does NOT hoist them
-// as a standalone schema → the enum-alias mechanism does not apply). The struct name = the contract
-// schema name (huma DefaultSchemaNamer takes reflect.Type.Name()) — aligned with the committed
-// hand-written spec (rollout N3). The domain VoyageCreateRequest does not reach the spec (the huma input is
-// this struct; the oapi type is not used as the huma body).
-type VoyageCreateRequest struct {
-	Kind         string         `json:"kind" required:"true" enum:"scenario,command" doc:"recipe type of the run"`
-	ScenarioName string         `json:"scenario_name,omitempty" doc:"scenario name for kind=scenario"`
-	Module       string         `json:"module,omitempty" doc:"module for kind=command"`
-	Input        map[string]any `json:"input,omitempty" doc:"recipe parameters"`
-	Target       VoyageTarget   `json:"target" required:"true" doc:"declarative target (resolved into a snapshot of units)"`
-
-	Batch                *string    `json:"batch,omitempty" doc:"batch size: N hosts or N%"`
-	BatchSize            *int       `json:"batch_size,omitempty" minimum:"1"`
-	BatchPercent         *int       `json:"batch_percent,omitempty" minimum:"1" maximum:"100"`
-	Concurrency          *int       `json:"concurrency,omitempty" minimum:"1" maximum:"500"`
-	BatchMode            string     `json:"batch_mode,omitempty" doc:"barrier (default) | window"`
-	DryRun               bool       `json:"dry_run,omitempty" doc:"for kind=command - each per-host Errand asks the module for a Plan instead of Apply; a verb-shell module (core.cmd.shell / core.exec.run) has no pure-read Plan on any host -> 400"`
-	ScheduleAt           *time.Time `json:"schedule_at,omitempty" doc:"RFC3339 deferred start"`
-	InterBatchIntervalMS *int       `json:"inter_batch_interval_ms,omitempty"`
-	InterUnitIntervalMS  *int       `json:"inter_unit_interval_ms,omitempty"`
-
-	MaxFailures   *string `json:"max_failures,omitempty" doc:"failure threshold: N absolute or N%"`
-	FailThreshold *int    `json:"fail_threshold,omitempty" minimum:"1"`
-	RequireAlive  *bool   `json:"require_alive,omitempty"`
-	OnFailure     string  `json:"on_failure,omitempty" doc:"abort | continue (default)"`
-
-	Notify []VoyageNotify `json:"notify,omitempty" doc:"one-time subscriptions for THIS run (ephemeral)"`
 }
 
 // Nested target/notify — the single api.VoyageTarget/api.VoyageNotify (huma_voyage_target.go),

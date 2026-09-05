@@ -12,6 +12,8 @@ import (
 	"sync"
 	"sync/atomic"
 	"time"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // APILoadOptions -- axis B parameters (docs/testing/load-testing.md §2):
@@ -181,11 +183,11 @@ func RunAPILoad(ctx context.Context, opts APILoadOptions) (*APILoadReport, error
 	// Preview body: kind=command, target by the legion's coven. Read-like
 	// dry-resolve -- same validation/resolve as create, but without creating
 	// a Voyage and without audit.
-	previewBody, err := json.Marshal(map[string]any{
-		"kind":   "command",
-		"module": "core.cmd.shell",
-		"input":  map[string]any{"cmd": "echo ok"},
-		"target": map[string]any{"coven": []string{opts.Coven}},
+	previewBody, err := json.Marshal(wire.VoyageCreateRequest{
+		Kind:   "command",
+		Module: "core.cmd.shell",
+		Input:  map[string]any{"cmd": "echo ok"},
+		Target: wire.VoyageTarget{Coven: []string{opts.Coven}},
 	})
 	if err != nil {
 		return nil, fmt.Errorf("legion: marshal preview body: %w", err)

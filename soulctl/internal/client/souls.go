@@ -5,15 +5,20 @@ import (
 	"fmt"
 	"net/url"
 	"strconv"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
-// SoulsAPI holds typed methods for /v1/souls/*.
+// SoulsAPI holds typed methods for /v1/souls/*. Bodies are wire.* — the copy
+// this file used to carry was missing `traits`, `created_by_aid` and
+// `requested_at` entirely, and nothing said so (NIM-776).
 type SoulsAPI struct {
 	c *Client
 }
 
 // SoulListOptions holds list filters (coven is passed as a repeated query
-// parameter per openapi: `style: form, explode: true`).
+// parameter per openapi: `style: form, explode: true`). Not a wire type:
+// these are query parameters, not a body.
 type SoulListOptions struct {
 	Covens    []string
 	Status    string
@@ -22,27 +27,8 @@ type SoulListOptions struct {
 	Offset    int
 }
 
-// SoulListEntry is a projection of the souls registry (SoulListEntry in openapi.yaml).
-type SoulListEntry struct {
-	SID          string   `json:"sid"`
-	Transport    string   `json:"transport"`
-	Status       string   `json:"status"`
-	Covens       []string `json:"covens,omitempty"`
-	LastSeenAt   string   `json:"last_seen_at,omitempty"`
-	LastSeenByKI string   `json:"last_seen_by_kid,omitempty"`
-	RegisteredAt string   `json:"registered_at"`
-}
-
-// SoulListReply is a list page.
-type SoulListReply struct {
-	Items  []SoulListEntry `json:"items"`
-	Offset int32           `json:"offset"`
-	Limit  int32           `json:"limit"`
-	Total  int32           `json:"total"`
-}
-
 // List is GET /v1/souls. The coven filter in openapi is a repeated query param.
-func (a *SoulsAPI) List(ctx context.Context, opts SoulListOptions) (*SoulListReply, error) {
+func (a *SoulsAPI) List(ctx context.Context, opts SoulListOptions) (*wire.SoulListReply, error) {
 	q := url.Values{}
 	for _, c := range opts.Covens {
 		if c != "" {
@@ -65,37 +51,19 @@ func (a *SoulsAPI) List(ctx context.Context, opts SoulListOptions) (*SoulListRep
 	if encoded := q.Encode(); encoded != "" {
 		path += "?" + encoded
 	}
-	var reply SoulListReply
+	var reply wire.SoulListReply
 	if err := a.c.Do(ctx, "GET", path, nil, &reply); err != nil {
 		return nil, err
 	}
 	return &reply, nil
 }
 
-// SoulSshTargetBody is the body for PUT /v1/souls/{sid}/ssh-target (ADR-032
-// amendment 2026-05-26, S7-1; extended 2026-05-27, P2 W-1). Fields
-// `ssh_port`/`ssh_user`/`soul_path` are required; `ssh_provider` is an
-// optional per-SID explicit SshProvider plugin choice (Level 1 in the
-// 3-tier routing).
-type SoulSshTargetBody struct {
-	SSHPort     int    `json:"ssh_port"`
-	SSHUser     string `json:"ssh_user"`
-	SoulPath    string `json:"soul_path"`
-	SSHProvider string `json:"ssh_provider,omitempty"`
-}
-
-// SoulSshTargetReply is the 200 body for PUT /v1/souls/{sid}/ssh-target.
-type SoulSshTargetReply struct {
-	SID       string            `json:"sid"`
-	SSHTarget SoulSshTargetBody `json:"ssh_target"`
-}
-
 // SetSshTarget is PUT /v1/souls/{sid}/ssh-target. Permission: soul.ssh-target-update.
-func (a *SoulsAPI) SetSshTarget(ctx context.Context, sid string, body SoulSshTargetBody) (*SoulSshTargetReply, error) {
+func (a *SoulsAPI) SetSshTarget(ctx context.Context, sid string, body wire.SoulSshTarget) (*wire.SoulSshTargetReply, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("SID is empty")
 	}
-	var reply SoulSshTargetReply
+	var reply wire.SoulSshTargetReply
 	if err := a.c.Do(ctx, "PUT", "/v1/souls/"+sid+"/ssh-target", body, &reply); err != nil {
 		return nil, err
 	}
@@ -106,7 +74,7 @@ func (a *SoulsAPI) SetSshTarget(ctx context.Context, sid string, body SoulSshTar
 // permission, see operator-api.md → ID in path). Fallback: fetch list with a
 // large limit and filter client-side. This is a known limitation, see
 // soulctl/README.md.
-func (a *SoulsAPI) Get(ctx context.Context, sid string) (*SoulListEntry, error) {
+func (a *SoulsAPI) Get(ctx context.Context, sid string) (*wire.SoulListEntry, error) {
 	if sid == "" {
 		return nil, fmt.Errorf("SID is empty")
 	}

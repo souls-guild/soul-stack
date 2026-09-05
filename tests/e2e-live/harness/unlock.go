@@ -7,6 +7,8 @@ import (
 	"fmt"
 	"net/http"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
 // Unlock clears a blocking incarnation status (error_locked/migration_failed ->
@@ -18,7 +20,7 @@ func (s *Stack) Unlock(t *testing.T, incarnationName, reason string) {
 	t.Helper()
 	c := s.opClient(t)
 	path := fmt.Sprintf("/v1/incarnations/%s/unlock", incarnationName)
-	resp, status, err := c.post(context.Background(), path, map[string]any{"reason": reason})
+	resp, status, err := c.post(context.Background(), path, wire.IncarnationUnlockRequest{Reason: reason})
 	if err != nil {
 		t.Fatalf("Unlock %s: http: %v", incarnationName, err)
 	}
