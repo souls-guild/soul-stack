@@ -47,6 +47,7 @@ type hSvcPool struct {
 	getMissing bool    // SELECT … WHERE id → ErrNoRows (404)
 	getValues  []any   // the row for SELECT … WHERE id (Get)
 	listValues [][]any // the rows for SELECT … ORDER BY id (List)
+	writeProbe
 }
 
 func (p *hSvcPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -56,9 +57,10 @@ func (p *hSvcPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Command
 	return pgconn.CommandTag{}, &hSvcErr{"hSvcPool: unexpected Exec SQL: " + sql}
 }
 
-func (p *hSvcPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (p *hSvcPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "INSERT INTO service_registry"):
+		p.recordInsert(sql, args)
 		return hSvcRow{values: []any{svcAt, svcAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "UPDATE service_registry"):
 		// RETURNING created_at, updated_at, label — the caption comes back so an

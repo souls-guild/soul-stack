@@ -40,6 +40,7 @@ var ppAt = time.Date(2026, 6, 13, 10, 0, 0, 0, time.UTC)
 // classification is validated by handlers/pushprovider_test.go.
 type hPushProviderPool struct {
 	entries map[string]*pushprovider.PushProvider
+	writeProbe
 }
 
 func newHPushProviderPool() *hPushProviderPool {
@@ -87,6 +88,7 @@ func (f *hPushProviderPool) Exec(_ context.Context, sql string, args ...any) (pg
 
 func (f *hPushProviderPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	if strings.Contains(sql, "INSERT INTO push_providers") {
+		f.recordInsert(sql, args)
 		name := args[0].(string)
 		if _, exists := f.entries[name]; exists {
 			return hErrRowPP{err: &pgconn.PgError{Code: "23505", ConstraintName: "push_providers_pkey"}}

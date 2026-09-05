@@ -38,14 +38,7 @@ func registerHumaHeraldCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		if !ok {
 			return nil, heraldMissingClaims()
 		}
-		reply, err := heraldH.CreateHeraldTyped(ctx, claims, handlers.HeraldCreateInput{
-			ID:        in.Body.ID,
-			Type:      in.Body.Type,
-			Config:    in.Body.Config,
-			SecretRef: in.Body.SecretRef,
-			Secret:    in.Body.Secret,
-			Enabled:   in.Body.Enabled,
-		})
+		reply, err := heraldH.CreateHeraldTyped(ctx, claims, toHeraldCreateInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -156,19 +149,7 @@ func registerHumaTidingCreate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		if !ok {
 			return nil, heraldMissingClaims()
 		}
-		reply, err := heraldH.CreateTidingTyped(ctx, claims, handlers.TidingCreateInput{
-			ID:           in.Body.ID,
-			Herald:       in.Body.Herald,
-			EventTypes:   in.Body.EventTypes,
-			OnlyFailures: in.Body.OnlyFailures,
-			OnlyChanges:  in.Body.OnlyChanges,
-			Incarnation:  in.Body.Incarnation,
-			Cadence:      in.Body.Cadence,
-			Task:         in.Body.Task,
-			Annotations:  in.Body.Annotations,
-			Projection:   in.Body.Projection,
-			Enabled:      in.Body.Enabled,
-		})
+		reply, err := heraldH.CreateTidingTyped(ctx, claims, toTidingCreateInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}

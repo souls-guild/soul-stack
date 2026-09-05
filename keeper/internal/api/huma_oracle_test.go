@@ -46,6 +46,7 @@ type hOraclePool struct {
 	decreeGetMissing bool
 	vigilListRows    [][]any
 	decreeListRows   [][]any
+	writeProbe
 }
 
 func (p *hOraclePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -58,11 +59,13 @@ func (p *hOraclePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comm
 	return pgconn.CommandTag{}, &hOracleErr{"hOraclePool: unexpected Exec: " + sql}
 }
 
-func (p *hOraclePool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (p *hOraclePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "INSERT INTO vigils"):
+		p.recordInsert(sql, args)
 		return hOracleRow{values: []any{oracleAt, oracleAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "INSERT INTO decrees"):
+		p.recordInsert(sql, args)
 		return hOracleRow{values: []any{"0s", oracleAt, oracleAt}} // RETURNING cooldown, created_at, updated_at
 	case strings.Contains(sql, "FROM vigils") && strings.Contains(sql, "WHERE id"):
 		if p.vigilGetMissing {

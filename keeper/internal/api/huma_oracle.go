@@ -35,14 +35,7 @@ func registerHumaVigilCreate(humaAPI huma.API, oracleH *handlers.OracleHandler) 
 		if !ok {
 			return nil, oracleMissingClaims()
 		}
-		reply, err := oracleH.CreateVigilTyped(ctx, claims, handlers.VigilCreateInput{
-			ID:       in.Body.ID,
-			Subject:  in.Body.Subject.selector(),
-			Interval: in.Body.Interval,
-			Check:    in.Body.Check,
-			Params:   in.Body.Params,
-			Enabled:  in.Body.Enabled,
-		})
+		reply, err := oracleH.CreateVigilTyped(ctx, claims, toVigilCreateInput(in.Body))
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -128,17 +121,7 @@ func registerHumaDecreeCreate(humaAPI huma.API, oracleH *handlers.OracleHandler)
 		if !ok {
 			return nil, oracleMissingClaims()
 		}
-		reply, err := oracleH.CreateDecreeTyped(ctx, claims, handlers.DecreeCreateInput{
-			ID:              in.Body.ID,
-			OnBeacon:        in.Body.OnBeacon,
-			Subject:         in.Body.Subject.selector(),
-			IncarnationName: in.Body.IncarnationName,
-			ActionScenario:  in.Body.ActionScenario,
-			ActionInput:     in.Body.ActionInput,
-			Where:           in.Body.Where,
-			Cooldown:        in.Body.Cooldown,
-			Enabled:         in.Body.Enabled,
-		})
+		reply, err := oracleH.CreateDecreeTyped(ctx, claims, toDecreeCreateInput(in.Body))
 		if err != nil {
 			return nil, oracleProblem(err)
 		}

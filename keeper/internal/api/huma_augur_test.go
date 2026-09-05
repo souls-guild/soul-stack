@@ -48,6 +48,7 @@ type hAugurPool struct {
 	omenGetMissing bool // GET/INSERT-rite resolve of omens WHERE id → ErrNoRows (404)
 	omenListRows   [][]any
 	riteListRows   [][]any
+	writeProbe
 }
 
 func (p *hAugurPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -60,9 +61,10 @@ func (p *hAugurPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comma
 	return pgconn.CommandTag{}, &hAugurErr{"hAugurPool: unexpected Exec SQL: " + sql}
 }
 
-func (p *hAugurPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (p *hAugurPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	case strings.Contains(sql, "INSERT INTO omens"):
+		p.recordInsert(sql, args)
 		return hAugurRow{values: []any{augurAt}} // RETURNING created_at
 	case strings.Contains(sql, "INSERT INTO rites"):
 		return hAugurRow{values: []any{int64(42), augurAt}} // RETURNING id, created_at

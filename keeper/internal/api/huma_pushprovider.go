@@ -65,12 +65,7 @@ func registerHumaPushProviderCreate(humaAPI huma.API, pushProviderH *handlers.Pu
 		if !ok {
 			return nil, pushProviderMissingClaims()
 		}
-		req := handlers.PushProviderCreateInput{ID: in.Body.ID}
-		if in.Body.Params != nil {
-			p := in.Body.Params
-			req.Params = &p
-		}
-		reply, err := pushProviderH.CreateTyped(ctx, claims, req)
+		reply, err := pushProviderH.CreateTyped(ctx, claims, toPushProviderCreateInput(in.Body))
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}

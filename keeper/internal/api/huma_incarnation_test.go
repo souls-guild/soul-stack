@@ -1177,6 +1177,7 @@ type incTestDB struct {
 	// the same rows from a fake as one that does, so a body assertion would pass
 	// either way.
 	seenSQL []string
+	writeProbe
 }
 
 func (f *incTestDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -1190,6 +1191,7 @@ func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row
 	f.seenSQL = append(f.seenSQL, sql)
 	switch {
 	case strings.Contains(sql, "INSERT INTO incarnation"):
+		f.recordInsert(sql, args)
 		if f.insertRow != nil {
 			return f.insertRow()
 		}

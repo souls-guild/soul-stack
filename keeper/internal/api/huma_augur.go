@@ -34,12 +34,7 @@ func registerHumaOmenCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		if !ok {
 			return nil, augurMissingClaims()
 		}
-		reply, err := augurH.CreateOmenTyped(ctx, claims, handlers.OmenCreateInput{
-			ID:         in.Body.ID,
-			SourceType: in.Body.SourceType,
-			Endpoint:   in.Body.Endpoint,
-			AuthRef:    in.Body.AuthRef,
-		})
+		reply, err := augurH.CreateOmenTyped(ctx, claims, toOmenCreateInput(in.Body))
 		if err != nil {
 			return nil, augurProblem(err)
 		}

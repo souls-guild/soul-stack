@@ -55,9 +55,11 @@ type hHeraldPool struct {
 	tidingGetMissing    bool // SELECT FROM tidings WHERE id → ErrNoRows (404)
 	heraldListRows      [][]any
 	tidingListRows      [][]any
+	writeProbe
 }
 
 func (p *hHeraldPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	p.recordExec(sql)
 	switch {
 	case strings.Contains(sql, "UPDATE heralds"), strings.Contains(sql, "UPDATE tidings"):
 		// heraldUpdateRows is reused for both UPDATE routes (herald.update / tiding.update):
@@ -71,7 +73,7 @@ func (p *hHeraldPool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Comm
 	return pgconn.CommandTag{}, &hHeraldErr{"hHeraldPool: unexpected Exec SQL: " + sql}
 }
 
-func (p *hHeraldPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
+func (p *hHeraldPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 	switch {
 	// The caption update is a QueryRow, not an Exec: it RETURNS the previous
 	// caption so the audit event can carry both sides ([ADR-0085]). Matched
@@ -79,13 +81,16 @@ func (p *hHeraldPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 	// self-join makes it look like one.
 	case strings.Contains(sql, "SET label") &&
 		(strings.Contains(sql, "UPDATE heralds") || strings.Contains(sql, "UPDATE tidings")):
+		p.recordUpdate(sql, args)
 		if p.heraldUpdateRows == 0 {
 			return hHeraldRow{err: pgx.ErrNoRows}
 		}
 		return hHeraldRow{values: []any{p.heraldPreviousLabel}}
 	case strings.Contains(sql, "INSERT INTO heralds"):
+		p.recordInsert(sql, args)
 		return hHeraldRow{values: []any{heraldAt, heraldAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "INSERT INTO tidings"):
+		p.recordInsert(sql, args)
 		return hHeraldRow{values: []any{heraldAt, heraldAt}} // RETURNING created_at, updated_at
 	case strings.Contains(sql, "FROM heralds") && strings.Contains(sql, "WHERE id"):
 		if p.heraldGetMissing {

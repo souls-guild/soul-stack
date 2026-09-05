@@ -35,12 +35,7 @@ func registerHumaServiceRegister(humaAPI huma.API, serviceH *handlers.ServiceHan
 		if !ok {
 			return nil, serviceMissingClaims()
 		}
-		reply, err := serviceH.RegisterTyped(ctx, claims, handlers.ServiceRegisterInput{
-			ID:      in.Body.ID,
-			Git:     in.Body.Git,
-			Ref:     in.Body.Ref,
-			Refresh: in.Body.Refresh,
-		})
+		reply, err := serviceH.RegisterTyped(ctx, claims, toServiceRegisterInput(in.Body))
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
