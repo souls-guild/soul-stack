@@ -5,7 +5,7 @@ import "github.com/souls-guild/soul-stack/shared/config"
 // secretOutputRegisters returns the register names of tasks whose module declares
 // at least one `secret: true` OUTPUT field ([ADR-0083] §8).
 //
-// This is the second source of [cel.SealSources.SealedRegisters], beside the
+// This is the second source of the `register.<name>` addresses in [cel.SealSources.Fields], beside the
 // `vault:` refs resolveRegisterSecrets actually resolved. The two cover different
 // things and the difference is the reason both exist. §6 seals a register because a
 // reference in it resolved — provenance observed at runtime, and the only signal

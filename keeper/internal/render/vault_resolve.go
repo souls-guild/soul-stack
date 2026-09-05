@@ -164,7 +164,7 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 // (service, incarnation) pair, not which mount they live on.
 // The second return value is the set of register names in which at least one
 // reference actually resolved — the seal source for `${ register.<name>.… }`
-// ([cel.SealSources.SealedRegisters]). It is built from what resolved rather than
+// (a `register.<name>` address in [cel.SealSources.Fields]). It is built from what resolved rather than
 // from the schema so that a register carrying no secret is not sealed, and a cell
 // reading a register that DOES carry one is sealed even when the author reached
 // for a neighbouring field.

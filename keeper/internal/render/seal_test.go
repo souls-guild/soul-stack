@@ -43,7 +43,7 @@ func TestSecretInputNames(t *testing.T) {
 func TestCollectSealed_SecretInputInGenericField(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"admin_password": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "admin_password"): true}}
 
 	params := map[string]any{
 		"content": "requirepass ${ input.admin_password }", // (a) generic field, secret
@@ -88,7 +88,7 @@ func TestCollectSealed_VaultValue(t *testing.T) {
 func TestCollectSealed_TernaryReadsSecret(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"tls_cert": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "tls_cert"): true}}
 
 	params := map[string]any{
 		"cert": "${ has(input.tls_cert) ? input.tls_cert : '' }",
@@ -103,7 +103,7 @@ func TestCollectSealed_TernaryReadsSecret(t *testing.T) {
 func TestCollectSealed_MixedLiteralSecret(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"password": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "password"): true}}
 
 	params := map[string]any{
 		"line": "user=admin pass=${ input.password } host=db",
@@ -118,7 +118,7 @@ func TestCollectSealed_MixedLiteralSecret(t *testing.T) {
 func TestCollectSealed_NestedPaths(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"pw": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "pw"): true}}
 
 	params := map[string]any{
 		"acl": []any{
@@ -154,7 +154,7 @@ func TestCollectSealed_NilSetNoop(t *testing.T) {
 func TestCollectSealed_PathConventionMatchesRenderValue(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"s": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "s"): true}}
 	params := map[string]any{"a": map[string]any{"b": []any{"${ input.s }"}}}
 	collectSealed(e, set, params, sources, "")
 	// renderValue would build the path "a.b[0]" for this.
@@ -164,15 +164,17 @@ func TestCollectSealed_PathConventionMatchesRenderValue(t *testing.T) {
 }
 
 // The PEM content of a redis destiny task (core.file.present, content =
-// vault(input.tls.<x>_ref)) gets marked sealed by the vault layer in the
-// destiny pass. Guards PEM masking (ADR-010 §7.4): the destiny pass carries NO
-// secret-input schema (scenarioSealSources returns an empty set), so the only
-// thing that catches sealed for PEM is vault() IN THE content CELL ITSELF
-// (collectSealed without a schema still detects vault). If someone replaces
-// content with an already-resolved PEM via apply.input (`${ input.tls_cert }`
-// without vault()) — this test fails: the destiny-input-secret schema isn't
-// passed through, the cell stops being sealed, and the PEM would leak into
-// error_summary/state. Mirrors L0 tls-enabled-standalone (same content shape there).
+// vault(input.tls.<x>_ref)) gets marked sealed by the VAULT layer alone, with no
+// schema in the sources at all. Guards PEM masking (ADR-010 §7.4) at its
+// narrowest: vault() in the content cell itself is what catches it, and that
+// holds however little else the pass knows.
+//
+// The empty sources here are no longer what a destiny pass actually gets — since
+// NIM-812 it carries the destiny's own `input:` schema, so an already-resolved
+// PEM handed in as `${ input.tls_cert }` is sealed too (that path is guarded by
+// TestRender_ApplyDestinySealsItsOwnSecretInput, which renders it end to end).
+// This case is kept as the floor: the vault layer must not come to DEPEND on the
+// schema being there. Mirrors L0 tls-enabled-standalone (same content shape).
 func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
@@ -320,7 +322,7 @@ func TestMaskSecretsSealed_ResolvedVaultRefSubtree(t *testing.T) {
 func TestSealedValues_PathSpellingComesFromTheCollector(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
-	sources := cel.SealSources{SecretInputs: map[string]bool{"admin_password": true}}
+	sources := cel.SealSources{Fields: map[string]bool{cel.FieldAddr("input", "admin_password"): true}}
 
 	// RAW params, as the author wrote them — what the seal is collected from.
 	raw := map[string]any{

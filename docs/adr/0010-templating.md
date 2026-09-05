@@ -130,3 +130,94 @@ inert while nothing writes there, present so a value arriving by another route (
 migration, a bug) is masked rather than printed — is dropped by the same empty set.
 **Design only, not implemented** — NIM-742 (engine + this walk), NIM-743
 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis service).
+
+## Amendment 2026-09-05 (NIM-811 / NIM-812): the §7.4 seal's two declared-but-absent sources are now populated
+
+The seal's transitive clause — *"`vars.<x>`/`compute.<x>` whose value is itself sealed"* — has been
+in this ADR and in `cel.SealSources` since 2026-06-24 and was implemented by **nothing**:
+`SealedVars`/`SealedCompute` were declared, read by `readsSecretSelect`, and never written outside
+tests. Both were always empty, so `readsSecretSelect` answered false for every `vars.*` and every
+`compute.*` read. The consequence was not a corner: hoisting `${ vault(…) }` or `${ input.<secret> }`
+into a `vars:` entry to remove a repetition — a refactor that looks purely cosmetic — silently
+removed the masking, and the rendered plaintext then reached `apply_run_plan.params`, a durable
+jsonb column served by a read API. The same value written **without** the hop was sealed and masked,
+which is why the gap survived: nothing about the two spellings looks different to an author.
+
+Both sources are now derived at render, before any params walk:
+
+- **`compute:`** — run-level, so once per run, over the RAW block in declaration order (entry *i*
+  may read *j<i*), mirroring `resolveCompute`'s own order.
+- **`vars:`** — from the **RAW** `vars:` text, never from the resolved value. Task vars resolve per
+  task **per host**, while the seal collection deliberately runs once per task because a cell's
+  provenance is host-invariant; deriving the mark from a resolved value would make the seal
+  host-variant and the walk it feeds host-invariant. All layers of the flat `vars.*` namespace
+  ([ADR-0082](0082-service-vars.md)) participate — a destiny's `vars.yml` locals and a task's own
+  `vars:`. The service layer below them is exempt **structurally**, not by omission: its engine
+  (`cel.NewServiceVars`) declares neither `input` nor `vault()`, so a service var has no secret
+  source to read. The lower layer is carried down whole, **shadowed names included** — because of
+  the ones it does not shadow: a `vars.yml` local no task var redeclares is still `vars.<x>` in that
+  task's params, and its mark exists nowhere else. For a shadowed name that over-seals, and it is
+  left rather than subtracted: a shadow cannot carry the lower value today (`resolveTaskVars` hands
+  the task layer only the SERVICE layer as its `lower`, so `pw: "${ vars.pw }-suffix"` derives from a
+  layer with no secret source, or is `ErrVarCycle` when `pw` is only a file var), and the seal should
+  not be what has to notice if that relaxes.
+
+And the **destiny pass** now carries the destiny's own `input:` schema onto the synthetic manifest
+`renderApplyDestiny` builds, which closes the "Limitation (open, security)" of the 2026-06-26
+amendment above (S-1) **and** the plain AST provenance beside it: `${ input.<secret> }` written
+inside a destiny is sealed like any other secret read, and a destiny template reading
+`.input.<secret>` is supported. The schema is the destiny's OWN and never the caller's — the
+caller's names do not exist inside a destiny ([ADR-009](0009-scenario-dsl.md) V2 isolation), and
+`apply: input:` is the only channel across, which is precisely why this was the shape the DSL
+steered a credential through.
+
+A **`loop:` bind** is the third hop and the one that changed the shape of the mechanism
+(NIM-822 / NIM-823). It could not be served the way the other two were: a loop variable is bound at
+the top level of the activation under a name the author chooses (`loop.as:`, default `item`), so it
+is not a fixed root and no fifth field on `SealSources` could name it. Its taint is decided from the
+RAW `items:` expression — once per task, matching a collection that is already iteration- and
+host-invariant — and marks the binding WHOLE, so `${ <as>.<field> }`, a nested read below it, and a
+bare `${ <as> }` are all sealed. `index_as:` is deliberately never marked: it binds a position, and
+sealing it would mask every `${ i }` in the run for nothing.
+
+### The list of seal sources was the defect, not its four entries
+
+Three hops found unsealed in one review is not three oversights. `SealSources` carried one map per
+fixed root and `readsSecretSelect` was a `switch` over root names with `return false` at the bottom,
+so **a kind of binding nobody had named was silently unsealed by default** — the worst default a
+taint system can hold, and the reason each hop had to be discovered by someone reading the code
+rather than by anything failing.
+
+The vocabulary is not actually open-ended: every name an expression can read enters scope in exactly
+one function, `Vars.activation`. So a seal source is an **address in the activation** — a whole
+binding, or one field under it — and `SealSources` is now that address set. A new kind of binding is
+representable with no change to the detector at all; the detector can no longer be the part that is
+out of date.
+
+What no shape removes is somebody having to *compute* that a binding holds a secret. That obligation
+is now in one table, `activationRoots`, classifying every fixed root as `sealedByField` or
+`neverSecret` **with its reason**, and a test compares that table against what `activation()` really
+builds, in both modes and both directions. Adding a root without classifying it fails; deleting a
+root without dropping its row fails. That is the part that makes "why won't there be a fourth hop"
+answerable at all — not the three entries added here.
+
+Two consequences worth recording, both found by the reshape rather than reported:
+
+- a bare **whole-binding read** (`${ item }`) reaches no `Select` node, so the detector visited
+  nothing for it; the `Ident` case exists now.
+- `incarnation.state` is a **fourth open hop** ([NIM-826]), and the table is what found it. The row
+  was first written `neverSecret` on the ground that a declared state secret rides as a `vault:`
+  reference — true of `type: secret`, false of the orthogonal `secret: true` on a state property,
+  which means the opposite: *this value lives in state, mask it on the way out*
+  ([ADR-0083](0083-declared-secret-state-fields.md) §1, both markers stay). So
+  `${ incarnation.state.<field> }` reads plaintext and is unsealed. The row now says
+  `unsealedGap` and cites the ticket.
+
+  This is the mechanism behaving as intended rather than an embarrassment to it: the previous shape
+  had nowhere such a claim would ever be written down, so it could never be found wrong. A
+  completeness table earns its keep only if a reason that does not hold can be read and refuted, and
+  a third classification exists precisely so a gap cannot be dressed as a decision.
+
+**This closes the producer end only.** Masking is a contract between the seal that marks a path and
+the masker that honours it; a mark the masker drops is worth as much as no mark. Impl — NIM-811,
+NIM-812, NIM-822, NIM-823; the consumer end is NIM-810.

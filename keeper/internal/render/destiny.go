@@ -162,8 +162,17 @@ func (p *Pipeline) renderApplyDestiny(
 	// scope. destinyIsolated=true: soulprint.hosts/soulprint.where inside a
 	// destiny is an isolation error (orchestration.md §4.1); the host
 	// projection isn't passed into a destiny.
+	//
+	// The synthetic manifest carries Input as well as Tasks (NIM-812). It is the
+	// destiny's OWN `input:` contract, not the caller's, so it grants the pass
+	// nothing it could not already see — apply.input was checked against this very
+	// schema a few lines up. What it buys is the one reader of `Scenario.Input` in
+	// this package, [secretInputNames]: without it `${ input.<secret> }` written
+	// INSIDE a destiny is sealed by nothing, and `apply: input:` is the only
+	// channel into a destiny (ADR-009 V2), so that is the shape the DSL steers a
+	// credential through.
 	destinyIn := RenderInput{
-		Scenario:        &config.ScenarioManifest{Name: resolved.Name, Tasks: resolved.Tasks},
+		Scenario:        &config.ScenarioManifest{Name: resolved.Name, Tasks: resolved.Tasks, Input: resolved.Input},
 		Input:           destinyInput,
 		Incarnation:     parentIn.Incarnation,
 		Hosts:           targeted,
@@ -187,11 +196,10 @@ func (p *Pipeline) renderApplyDestiny(
 		// Guarded by TestRender_ApplyDestiny_ServiceVarsNotLeaked.
 		ServiceVars: nil,
 		// seal (ADR-010 §7.4): same run-wide accumulator — destiny params with
-		// `${ vault(...) }` get marked sealed just like scenario ones. The
-		// destiny-input secret flag is only detected when ResolvedDestiny
-		// carries an Input schema (not wired in the pilot — vault() provenance
-		// is caught without the schema; transiting a destiny secret input is a
-		// separate slice, see observations).
+		// `${ vault(...) }` get marked sealed just like scenario ones, and since
+		// NIM-812 so does `${ input.<secret> }`, off the destiny's own schema
+		// carried on Scenario above. The accumulator is shared with the parent
+		// deliberately: its paths are matched against each task's own params root.
 		Sealed: parentIn.Sealed,
 	}
 
@@ -206,6 +214,13 @@ func (p *Pipeline) renderApplyDestiny(
 		return nil, nil, verr
 	}
 	destinyIn.DestinyVarsResolved = destinyVars
+
+	// The file layer's taint (NIM-811), from the RAW vars.yml text and once for
+	// the pass — the values above are per-host, the provenance is not. This is the
+	// bottom of the `vars.*` taint every task of this pass stacks its own `vars:`
+	// on; a destiny local written as `${ input.<secret> }` is the same hop a task
+	// var is, and with the destiny schema now carried it is finally detectable.
+	destinyIn.sealedFileVars = sealedVarNames(p.cel, resolved.Vars, scenarioSealSources(destinyIn))
 
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))

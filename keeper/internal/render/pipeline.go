@@ -159,6 +159,12 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	in.sealedRegisters = mergeSealedRegisters(sealedReg,
 		secretOutputRegisters(in.Scenario.Tasks, in.Modules))
 
+	// The `compute:` taint, derived from the RAW block before it resolves: a
+	// compute entry that reads a secret makes every cell reading IT sealed
+	// (NIM-811). Run-level, like the block, and after sealedRegisters because a
+	// compute expression may read one.
+	in.sealedCompute = sealedComputeNames(p.cel, in)
+
 	// compute: resolved ONCE per run (run-level context, no soulprint — a
 	// host-invariance barrier) before task rendering — the `compute.<name>`
 	// result is visible in apply.input/where/params of every host via hostVars
@@ -490,11 +496,12 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	}
 
 	// seal / sealed-paths ([ADR-010] §7.4): mark params cell paths whose raw
-	// `${ … }` value reads a secret source (secret-input/vault()). Walking
-	// raw params (task.Module.Params, before resolveVaultRefs+CEL) is the
-	// only place the original expressions are visible. Per-task
-	// (host-invariant), nil Sealed → no-op.
-	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
+	// `${ … }` value reads a secret source (secret-input/vault()/a sealed
+	// vars./compute. hop). Walking raw params (task.Module.Params, before
+	// resolveVaultRefs+CEL) is the only place the original expressions are
+	// visible. Per-task (host-invariant), nil Sealed → no-op.
+	sources := p.taskSealSources(in, task)
+	collectSealed(p.cel, in.Sealed, task.Module.Params, sources, "")
 
 	isRendered := task.Module.Module == moduleFileRendered
 
@@ -538,6 +545,13 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// render_context.input.<secret> per schema, gated the same as the
 		// input injection itself (see sealRenderContextInput/
 		// buildRenderContext §Security).
+		// The `vars.*` half of the same relocation, and NOT gated on injectInput:
+		// render_context.vars is built from the file layer and params.vars
+		// whatever the template does with `.input`. A sealed var reaching a
+		// rendered template is the destiny-vars.yml shape the seal now derives
+		// (NIM-811), so the mark exists for the first time here.
+		sealRenderContextVars(in.Sealed, sealedVarNamesOf(sources))
+
 		if injectInput {
 			sealRenderContextInput(in.Sealed, in)
 		}
@@ -1153,8 +1167,9 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 
 	// seal / sealed-paths ([ADR-010] §7.4): a keeper-side task
 	// (core.vault.kv-read and similar) can also carry `${ vault(...) }`/`${
-	// input.<secret> }` in params.
-	collectSealed(p.cel, in.Sealed, task.Module.Params, scenarioSealSources(in), "")
+	// input.<secret> }` in params — and its own `vars:`, resolved just below,
+	// are as much of a hop here as on a Soul-side task.
+	collectSealed(p.cel, in.Sealed, task.Module.Params, p.taskSealSources(in, task), "")
 
 	vars := keeperVars(in)
 	// keeper-side task — not a destiny pass (destiny tasks are all Soul-side

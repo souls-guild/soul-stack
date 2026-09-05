@@ -15,7 +15,7 @@ func newSealEngine(t *testing.T) *Engine {
 
 func TestDetectSealed_SecretInputDirect(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{SecretInputs: map[string]bool{"password": true}}
+	src := SealSources{Fields: map[string]bool{FieldAddr("input", "password"): true}}
 
 	if !e.DetectSealed("${ input.password }", src) {
 		t.Fatal("input.password should be sealed")
@@ -27,7 +27,7 @@ func TestDetectSealed_SecretInputDirect(t *testing.T) {
 
 func TestDetectSealed_PlainLiteralNotSealed(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{SecretInputs: map[string]bool{"password": true}}
+	src := SealSources{Fields: map[string]bool{FieldAddr("input", "password"): true}}
 	if e.DetectSealed("just a config line", src) {
 		t.Fatal("a plain literal without ${} is not sealed")
 	}
@@ -45,20 +45,20 @@ func TestDetectSealed_VaultCall(t *testing.T) {
 
 func TestDetectSealed_TernaryReadsSecret(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{SecretInputs: map[string]bool{"tls_cert": true}}
+	src := SealSources{Fields: map[string]bool{FieldAddr("input", "tls_cert"): true}}
 	// Ternary: the secret is read only in the then branch — the whole cell is still sealed.
 	if !e.DetectSealed("${ has(input.tls_cert) ? input.tls_cert : '' }", src) {
 		t.Fatal("a ternary reading a secret-input in either branch is sealed")
 	}
 	// A ternary without a secret input — not sealed.
-	if e.DetectSealed("${ input.enabled ? 'on' : 'off' }", SealSources{SecretInputs: map[string]bool{"tls_cert": true}}) {
+	if e.DetectSealed("${ input.enabled ? 'on' : 'off' }", SealSources{Fields: map[string]bool{FieldAddr("input", "tls_cert"): true}}) {
 		t.Fatal("a ternary without a secret read is NOT sealed")
 	}
 }
 
 func TestDetectSealed_MixedLiteralAndSecret(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{SecretInputs: map[string]bool{"password": true}}
+	src := SealSources{Fields: map[string]bool{FieldAddr("input", "password"): true}}
 	// Concatenating literal + secret → the whole result is sealed (whole-value taint).
 	if !e.DetectSealed("requirepass ${ input.password }", src) {
 		t.Fatal("mixing a literal and secret-input -> the whole thing is sealed")
@@ -67,10 +67,10 @@ func TestDetectSealed_MixedLiteralAndSecret(t *testing.T) {
 
 func TestDetectSealed_TransitiveVarsCompute(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{
-		SealedVars:    map[string]bool{"pw": true},
-		SealedCompute: map[string]bool{"token": true},
-	}
+	src := SealSources{Fields: map[string]bool{
+		FieldAddr("vars", "pw"):       true,
+		FieldAddr("compute", "token"): true,
+	}}
 	if !e.DetectSealed("${ vars.pw }", src) {
 		t.Fatal("vars.<sealed> is transitively sealed")
 	}
@@ -85,8 +85,8 @@ func TestDetectSealed_TransitiveVarsCompute(t *testing.T) {
 func TestDetectSealed_NestedSelect(t *testing.T) {
 	e := newSealEngine(t)
 	// Nesting: vars.tls_cert inside indexing/access — the traversal visits the
-	// vars.tls_cert pair, which is in SealedVars → sealed.
-	src := SealSources{SealedVars: map[string]bool{"tls_cert": true}}
+	// vars.tls_cert pair, whose address is in Fields → sealed.
+	src := SealSources{Fields: map[string]bool{FieldAddr("vars", "tls_cert"): true}}
 	if !e.DetectSealed("${ vars.tls_cert.length() > 0 ? vars.tls_cert : '' }", src) {
 		t.Fatal("a nested reference to sealed vars -> sealed")
 	}

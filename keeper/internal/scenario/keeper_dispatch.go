@@ -430,12 +430,17 @@ func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema co
 //     masking `true` out of a diagnostic would destroy the diagnostic and protect
 //     nothing that could be recognised in text anyway. Composites ARE covered —
 //     see [render.SealedValues], which masks a sealed subtree whole;
-//   - the secret has to have been SEALED at render, and the seal does not follow
-//     a `vars:` hop. `cel.SealSources.SealedVars` is never populated by anything
-//     in this tree, so `params: {pw: "${ vars.db_pw }"}` is unsealed even when
-//     `vars.db_pw` is itself `${ vault(…) }` — and routing a secret through vars
-//     is the commonest idiom in `examples/`. A predating hole in the seal, not one
-//     this path opened, but it bounds this masking exactly as much;
+//   - the secret has to have been SEALED at render. The seal follows a scenario's
+//     own bindings: a `vars:`/`compute:` name (NIM-811), a destiny's own `input:`
+//     (NIM-812) and a `loop:` bind (NIM-822/NIM-823), so
+//     `params: {pw: "${ vars.db_pw }"}` with `vars.db_pw` = `${ vault(…) }` — the
+//     commonest idiom in `examples/` — is covered. Two reads are NOT, and both are
+//     hops the scenario did not create: `register.<name>` is sealed only when that
+//     register was itself marked (a `vault:` payload resolved at the [ADR-0083] §6
+//     boundary, or a module output declared `secret: true`), so a credential a
+//     `core.exec.run` echoed into an ordinary register is not; and
+//     `${ incarnation.state.<field> }` is unsealed outright while NIM-826 is open —
+//     a `secret: true` state property holds its value IN state, as plaintext;
 //   - it masks the MESSAGE and nothing else. The module's `output` is written to
 //     `apply_task_register` verbatim by [Runner.accumulateKeeperRegister] — on
 //     purpose, since that is the value the next task reads through

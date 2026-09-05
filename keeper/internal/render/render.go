@@ -280,9 +280,35 @@ type RenderInput struct {
 	// sealedRegisters — DERIVED inside [Pipeline.Render], not supplied by the
 	// caller (hence unexported): the names of keeper registers whose payload held
 	// a declared secret resolved at the §6 boundary. Feeds
-	// [cel.SealSources.SealedRegisters] so a cell reading `register.<name>.…` is
+	// [cel.SealSources.Fields] as a `register.<name>` address, so a cell reading `register.<name>.…` is
 	// sealed and masked on the way out.
 	sealedRegisters map[string]bool
+
+	// sealedCompute — DERIVED inside [Pipeline.Render] alongside sealedRegisters
+	// (hence unexported): the names of `compute:` entries whose own expression
+	// reads a secret source ([sealedComputeNames]). Feeds
+	// [cel.SealSources.Fields] as a `compute.<name>` address, so a params cell reading `compute.<name>`
+	// is sealed. Run-level, like the block itself.
+	sealedCompute map[string]bool
+
+	// sealedFileVars — the BOTTOM of the `vars.*` taint for this pass: the names
+	// of a destiny's `vars.yml` locals whose own value reads a secret source,
+	// derived by [Pipeline.renderApplyDestiny] for its own pass. A task's own
+	// `vars:` layer is stacked on top of it per task ([Pipeline.taskSealSources])
+	// — that layer is the one thing here that is not pass-wide.
+	//
+	// nil on a scenario pass: there is no file layer there, and the SERVICE layer
+	// under both cannot carry a secret at all — [cel.NewServiceVars] declares
+	// neither `input` nor vault(), so a service var has no secret source to read.
+	sealedFileVars map[string]bool
+
+	// sealedLoopBinds — `loop:` bind names whose value came out of a sealed
+	// `items:` expression, tainted WHOLE ([cel.SealSources.Roots]). Set by
+	// [Pipeline.renderLoopTask] on ITS OWN copy of RenderInput, which is why this
+	// is scoped to one loop's iterations and not to the pass: a bind name is
+	// author-chosen (`as:`, default `item`) and means nothing outside the task
+	// that declared it.
+	sealedLoopBinds map[string]bool
 }
 
 // RenderedTask — a task after the Keeper-side CEL render, an intermediate

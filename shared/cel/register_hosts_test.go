@@ -225,7 +225,7 @@ func TestRegisterHosts_UnknownNameNamesTheRegister(t *testing.T) {
 // TestRegisterHosts_SealedRegisterStaysSealedAcrossHosts — ★ GUARD: reading a
 // SEALED register through the accessor taints the cell exactly as reading it
 // directly does. A module-declared `secret: true` output puts a HOST task's
-// register name into [SealSources.SealedRegisters]
+// register name into [SealSources.Fields] as a register.<name> address
 // ([render.secretOutputRegisters], [ADR-0083] §8), and its payload reaches
 // RegisterByHost in the clear — so before NIM-711 that plaintext was simply
 // unreachable from a keeper task, and now it is one expression away. Unsealed, the
@@ -239,7 +239,7 @@ func TestRegisterHosts_UnknownNameNamesTheRegister(t *testing.T) {
 // Mutation: drop the isRegisterHosts branch in [selectBaseField].
 func TestRegisterHosts_SealedRegisterStaysSealedAcrossHosts(t *testing.T) {
 	e := newSealEngine(t)
-	src := SealSources{SealedRegisters: map[string]bool{"creds": true}}
+	src := SealSources{Fields: map[string]bool{FieldAddr("register", "creds"): true}}
 
 	for _, expr := range []string{
 		"${ register.hosts.creds }",

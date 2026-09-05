@@ -55,6 +55,16 @@ func (p *Pipeline) renderLoopTask(
 		asName = defaultLoopVar
 	}
 
+	// seal (NIM-822, NIM-823): a loop over a secret list binds the secret to
+	// `asName`, and every `${ <as>.<field> }` in this task's params reads it.
+	// Decided here, once, from the RAW `items:` text — before the iteration loop,
+	// because the taint is iteration-invariant for the reason sealedLoopItems
+	// states, and because renderTaskIter takes `in` by value, so marking it here
+	// reaches exactly this loop's iterations.
+	if task.Loop.Items != nil && sealedLoopItems(p.cel, task.Loop.Items, p.taskSealSources(in, task)) {
+		in = withSealedLoopBind(in, asName)
+	}
+
 	// A static-when-false loop task never reaches here: both call sites
 	// (scenario loop in pipeline.go, destiny.go) call emitStaticWhenSkip
 	// first, which emits an N/1 skip-placeholder via loopStaticSkip for a

@@ -49,19 +49,209 @@ func (s *SealedSet) Paths() map[string]bool {
 	return out
 }
 
-// scenarioSealSources builds [cel.SealSources] for a scenario pass: the
-// secret-input set of the active scenario schema, plus the registers whose
-// payload carried a declared secret ([ADR-0083] §6, derived by
-// [Pipeline.resolveRegisterSecrets] before any root is built). vars/compute transitivity
-// isn't precomputed in the pilot (vars resolve per-task; secret provenance via
-// vars is still caught because the vars value itself goes through
-// DetectSealed — an extension of this). nil schema → empty set (the detector
-// only catches vault()).
+// scenarioSealSources builds the PASS-LEVEL [cel.SealSources]: the secret-input
+// set of the active schema (the scenario's on a scenario pass, the destiny's own
+// on a destiny pass), the registers whose payload carried a declared secret
+// ([ADR-0083] §6, derived by [Pipeline.resolveRegisterSecrets] before any root is
+// built), the run's sealed `compute:` names and the pass's sealed file-var names.
+//
+// A task's own `vars:` are NOT here — they are stacked on top per task by
+// [Pipeline.taskSealSources], because that layer is the only one of the four that
+// is not pass-wide. Every caller that walks a task's params must use that one.
+//
+// nil schema → empty set (the detector then only catches vault()).
 func scenarioSealSources(in RenderInput) cel.SealSources {
-	return cel.SealSources{
-		SecretInputs:    secretInputNames(in.Scenario),
-		SealedRegisters: in.sealedRegisters,
+	fields := map[string]bool{}
+	addFieldAddrs(fields, "input", secretInputNames(in.Scenario))
+	addFieldAddrs(fields, "register", in.sealedRegisters)
+	addFieldAddrs(fields, "compute", in.sealedCompute)
+	addFieldAddrs(fields, "vars", in.sealedFileVars)
+	return cel.SealSources{Fields: fields, Roots: in.sealedLoopBinds}
+}
+
+// addFieldAddrs writes the `<root>.<name>` address of every name in the set.
+// Fields is always freshly allocated by [scenarioSealSources], so the callers
+// below may add to it in place without reaching a sibling task's sources.
+func addFieldAddrs(fields map[string]bool, root string, names map[string]bool) {
+	for name := range names {
+		fields[cel.FieldAddr(root, name)] = true
 	}
+}
+
+// taskSealSources is [scenarioSealSources] plus the taint of THIS task's own
+// `vars:` layer — the sources [collectSealed] must walk a task's params with.
+//
+// ★ The vars taint is read from the RAW `vars:` text and never from the resolved
+// per-host value, and the difference is load-bearing. Task vars resolve once per
+// task PER HOST (resolveTaskVars), while collectSealed deliberately runs once per
+// task, because a cell's provenance is host-invariant. Deriving the mark from a
+// resolved value would make the seal depend on a host that the walk it feeds does
+// not — the same cell sealed on one host and not on the next, from one collection
+// that only ran once.
+//
+// The layer BELOW is already in scenarioSealSources (a destiny's `vars.yml`, via
+// in.sealedFileVars), and the service layer under that one cannot read a secret
+// at all — see [RenderInput.sealedFileVars].
+func (p *Pipeline) taskSealSources(in RenderInput, task config.Task) cel.SealSources {
+	src := scenarioSealSources(in)
+	addFieldAddrs(src.Fields, "vars", sealedVarNames(p.cel, task.Vars, src))
+	return src
+}
+
+// sealedVarNames returns the names of one `vars:` layer whose own value reads a
+// secret source. It returns THIS layer's names only; stacking them onto the
+// layer below is the caller's move ([Pipeline.taskSealSources] merges them into
+// the addresses [scenarioSealSources] already built).
+//
+// Transitivity WITHIN the layer is why this iterates instead of walking once:
+// `a: "${ input.pw }"` beside `b: "${ vars.a }-suffix"` seals both, and
+// resolveVarLayer resolves such a layer in topological order rather than map
+// order. A fixpoint reaches the same set without a second spelling of that sort
+// — a layer is units to tens of names, and each round either marks a new name or
+// is the last one.
+//
+// Only string values participate, matching resolveVarLayer exactly: a `${ … }`
+// nested inside a map- or list-valued var is not resolved there either, it
+// survives as its own text (docs/destiny/vars.md, "Valid value types").
+//
+// ★ The layer below is carried down WHOLE, shadowed names included, and the
+// reason is the ones it does NOT shadow: a destiny `vars.yml` local that no task
+// var redeclares is still `vars.<x>` in that task's params, and its mark exists
+// nowhere but the lower layer. Handing the whole set to the collector is what
+// puts it in front of the walk.
+//
+// For a name this layer does shadow, that over-seals — the task layer's value is
+// the one `vars.<x>` resolves to. Left that way deliberately rather than
+// subtracted: the shadow cannot carry the lower value today (resolveTaskVars
+// hands resolveVarLayer the SERVICE layer alone as `lower`, so a shadow-and-derive
+// `pw: "${ vars.pw }-suffix"` either derives from a layer with no secret source in
+// it, or is ErrVarCycle when `pw` exists only as a file var), and the seal should
+// not be the thing that has to notice if that ever relaxes.
+func sealedVarNames(engine *cel.Engine, raw map[string]any, base cel.SealSources) map[string]bool {
+	out := map[string]bool{}
+	if len(raw) == 0 {
+		return out
+	}
+	// A scratch copy of the base addresses that GROWS as names are marked: a var
+	// marked in one round is a secret source for the next, which is the transitive
+	// step. Copied rather than shared so a layer's own marks do not leak back into
+	// the caller's set before it decides to merge them.
+	src := cel.SealSources{Fields: make(map[string]bool, len(base.Fields)+len(raw)), Roots: base.Roots}
+	for addr := range base.Fields {
+		src.Fields[addr] = true
+	}
+	for {
+		grew := false
+		for name, val := range raw {
+			s, ok := val.(string)
+			if !ok || out[name] {
+				continue
+			}
+			if engine.DetectSealed(s, src) {
+				out[name] = true
+				src.Fields[cel.FieldAddr("vars", name)] = true
+				grew = true
+			}
+		}
+		if !grew {
+			return out
+		}
+	}
+}
+
+// sealedComputeNames returns the `compute:` names whose expression reads a secret
+// source. [Pipeline.resolveCompute] evaluates the block ONCE per run in
+// declaration order and entry i may read entries j<i as `compute.<name>`, so the
+// taint accumulates in that same order and needs no fixpoint.
+//
+// It reads the RAW block, not the resolved values, which is what keeps it correct
+// on a staged pass: resolveCompute returns an already-computed in.Compute
+// untouched, so a taint derived from the resolve would be derived only on the
+// pass that happened to do the work.
+//
+// The `vars.*` a compute expression can reach is the service layer alone
+// (resolveCompute's base), which carries no secret — see
+// [RenderInput.sealedFileVars]. `register.*` it can reach, and that is in base.
+func sealedComputeNames(engine *cel.Engine, in RenderInput) map[string]bool {
+	block := in.Scenario.Compute
+	if len(block) == 0 {
+		return nil
+	}
+	out := map[string]bool{}
+	fields := map[string]bool{}
+	addFieldAddrs(fields, "input", secretInputNames(in.Scenario))
+	addFieldAddrs(fields, "register", in.sealedRegisters)
+	src := cel.SealSources{Fields: fields}
+	for _, cv := range block {
+		s, ok := cv.Value.(string)
+		if !ok {
+			continue // literal — resolveCompute passes it through unevaluated
+		}
+		if engine.DetectSealed(s, src) {
+			out[cv.Name] = true
+			// Entry i reads entries j<i as `compute.<name>`, exactly as
+			// resolveCompute evaluates them, so the taint accumulates in the
+			// same declaration order the values do.
+			fields[cel.FieldAddr("compute", cv.Name)] = true
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
+// sealedLoopItems reports whether a `loop:` binds its variable out of a secret,
+// by asking the RAW `items:` expression rather than the resolved element
+// (NIM-822, NIM-823).
+//
+// ★ The items expression, not the element, and the difference is a decision.
+// `items:` resolves once per task (loopInvariantVars carries no soulprint.self),
+// while an element is per iteration and `items:` may yield a heterogeneous list.
+// Deciding from the expression keeps the taint iteration-invariant, matching a
+// collection that runs once per task — at the cost of tainting every iteration
+// when only some elements came from a secret. That over-seals in the same safe
+// direction the rest of this file does, and the alternative — a per-iteration
+// taint — would make one task's params sealed on iteration 3 and not on 4.
+//
+// Items is `any`: a string expression, or a YAML literal list/map whose cells may
+// each be one. Every string in it is asked, because any of them can be what put
+// the secret into the element.
+func sealedLoopItems(engine *cel.Engine, items any, src cel.SealSources) bool {
+	switch t := items.(type) {
+	case string:
+		return engine.DetectSealed(t, src)
+	case []any:
+		for _, v := range t {
+			if sealedLoopItems(engine, v, src) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, v := range t {
+			if sealedLoopItems(engine, v, src) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// withSealedLoopBind returns a copy of in whose `loop:` bind name is tainted
+// WHOLE for the tasks rendered out of that loop. The caller holds RenderInput by
+// value, so the mark reaches this loop's iterations and no sibling task.
+//
+// `index_as:` is deliberately NOT marked: it binds an integer position, never a
+// value out of items, and sealing it would mask every `${ i }` in the run for
+// nothing.
+func withSealedLoopBind(in RenderInput, asName string) RenderInput {
+	binds := make(map[string]bool, len(in.sealedLoopBinds)+1)
+	for name := range in.sealedLoopBinds {
+		binds[name] = true
+	}
+	binds[asName] = true
+	in.sealedLoopBinds = binds
+	return in
 }
 
 // secretInputNames — names of input parameters declared secret:true in the
@@ -104,10 +294,11 @@ const renderContextInputPrefix = paramRenderContext + ".input."
 // seal paths would just produce dead entries for a nonexistent cell — the gate
 // keeps the seal set in sync with the real render_context contents.
 //
-// The list's source is secretInputNames(in.Scenario): in the pilot, a destiny
-// pass doesn't propagate the destiny-input schema (set is empty — destiny's
-// vault() provenance is caught without a schema). set nil → no-op. Called once
-// per task (the path is host-invariant).
+// The list's source is secretInputNames(in.Scenario), which on a destiny pass is
+// the DESTINY's own `input:` schema (renderApplyDestiny carries it onto the
+// synthetic manifest, NIM-812) — so a `.input.<secret>` read by a destiny's own
+// template is marked here the same way a scenario's is. set nil → no-op. Called
+// once per task (the path is host-invariant).
 func sealRenderContextInput(set *SealedSet, in RenderInput) {
 	if set == nil {
 		return
@@ -115,6 +306,49 @@ func sealRenderContextInput(set *SealedSet, in RenderInput) {
 	for name := range secretInputNames(in.Scenario) {
 		set.add(renderContextInputPrefix + name)
 	}
+}
+
+// renderContextVarsPrefix — the cell-path prefix for render_context.vars.<name>,
+// the sibling of [renderContextInputPrefix].
+const renderContextVarsPrefix = paramRenderContext + "." + paramVars + "."
+
+// sealRenderContextVars marks render_context.vars.<name> for every `vars.*` name
+// this task's sources hold sealed.
+//
+// ★ A DECLARATIVE mark is needed here for the same reason as S-1 on
+// render_context.input: `core.file.rendered` RELOCATES the cell. renderTaskIter
+// pulls params.vars out and deletes the key, so a path collectSealed recorded as
+// `vars.pw` off the RAW params matches nothing in what is actually written; and a
+// file-var injected from fileVarsForHost was never in raw params to be walked at
+// all. Both land under render_context.vars, resolved — which is a params cell
+// like any other, written to apply_run_plan.
+//
+// Names whose var is not injected (referencedFileVars filters the file layer by
+// what the template's AST names) produce a dead entry, which is harmless and
+// deliberate: predicting that filter here would be a second spelling of it, and
+// the two would drift the way a seal path and a masker path do.
+func sealRenderContextVars(set *SealedSet, sealedVars map[string]bool) {
+	if set == nil {
+		return
+	}
+	for name := range sealedVars {
+		set.add(renderContextVarsPrefix + name)
+	}
+}
+
+// sealedVarNamesOf reads the `vars.<name>` names back out of a built source set,
+// so the caller marking render_context does not recompute a taint the params walk
+// already derived. The prefix comes from [cel.FieldAddr] rather than a literal —
+// same single-spelling rule the addresses themselves follow.
+func sealedVarNamesOf(src cel.SealSources) map[string]bool {
+	prefix := cel.FieldAddr("vars", "")
+	out := map[string]bool{}
+	for addr := range src.Fields {
+		if name, ok := strings.CutPrefix(addr, prefix); ok {
+			out[name] = true
+		}
+	}
+	return out
 }
 
 // collectSealed walks RAW params (pre vault-resolve+CEL) with the same path
