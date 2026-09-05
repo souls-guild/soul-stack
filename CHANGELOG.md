@@ -447,6 +447,33 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **`make check-vuln` scans every Go module in the tree, not the eight of
+  `$(MODULES)`** (NIM-774). The supply-chain gate ended in "govulncheck is clean
+  across all modules" over a corpus of eight of the twenty `go.mod` files here.
+  The twelve it never opened — the four `tests/*` harnesses, the five
+  `examples/module/*` plugins, the three pluginhost fixtures — produced no row, no
+  skip and no name, which is NIM-494's defect one level further out: that ticket
+  gave every module in the list a verdict, and a module absent from the list has
+  no row to be wrong. **Ten of the twelve were red the first time they were
+  scanned.** Eight standalone modules reported stdlib advisories their own
+  `go 1.26.4` line asked for (`GO-2026-5026`, `-5856`, `-5972`, `-6090`, `-6218`)
+  and now carry `toolchain go1.26.6`, which is what go.work was already lending
+  the other eight; `tests/e2e` and `tests/e2e-live` reported `GO-2026-6253`, a tar
+  path traversal in `github.com/moby/go-archive` reachable from
+  `harness.Stack.startVault`, bumped to v0.3.0. The corpus is now derived
+  (`scripts/vuln-modules.sh`) rather than written down, each module is scanned the
+  way it is built (`scripts/vuln-scan.sh`: inside the workspace, or standalone
+  with `GOWORK=off`, under its `$(VULN_TAGS)` tag), and the run prints what it did
+  NOT scan. An empty package list is no longer accepted as "nothing here" from a
+  module that holds Go files — `tests/e2e` keeps its whole harness behind
+  `//go:build e2e`, so one wrong tag would have turned four thousand lines into a
+  green SKIPPED row. Guarded by `make check-vuln-corpus`
+  (`scripts/vuln-corpus-test.sh`), which runs the real recipe over fixture
+  modules. The CI `govulncheck` job kept its own copy of the eight-module list,
+  its own `2>/dev/null` skip and `set -e` fail-fast, and `@latest` against the
+  pinned scanner; it now runs `make check-vuln`. Two directories hold Go that
+  belongs to no module and so is reachable by no scan of any kind, named on every
+  run: `examples/module/soul-mod-redis-failover` and `dev/stamp-artifact.go`.
 - **`soul-lint` no longer reports a real error as "the include does not resolve"**
   ([ADR-009](docs/adr/0009-scenario-dsl.md) amendment, NIM-716). Linting a scenario
   OUTSIDE a service tree, every error out of an expanded `include:` was downgraded

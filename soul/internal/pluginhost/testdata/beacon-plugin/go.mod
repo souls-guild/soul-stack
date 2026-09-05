@@ -2,6 +2,8 @@ module github.com/souls-guild/soul-stack/soul/internal/pluginhost/testdata/beaco
 
 go 1.26.4
 
+toolchain go1.26.6
+
 require (
 	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
 	github.com/souls-guild/soul-stack/sdk v0.0.0

@@ -2,6 +2,8 @@ module github.com/souls-guild/soul-stack/examples/module/soul-ssh-teleport
 
 go 1.26.4
 
+toolchain go1.26.6
+
 require (
 	github.com/gravitational/teleport/api v0.0.0-20260526093338-eadd0803064f
 	github.com/souls-guild/soul-stack/proto/plugin v0.0.0

@@ -317,32 +317,17 @@ jobs:
         uses: actions/setup-go@v7
         with:
           go-version: ${{ env.GO_VERSION }}
-          cache-dependency-path: |
-            keeper/go.sum
-            proto/go.sum
-            proto/plugin/go.sum
-            sdk/go.sum
-            shared/go.sum
-            soul/go.sum
-            soul-lint/go.sum
-            soulctl/go.sum
+          # Every go.sum, because the corpus is every module (NIM-774) — a glob
+          # rather than a list for the same reason the corpus itself is derived.
+          cache-dependency-path: "**/go.sum"
 
-      - name: Install govulncheck
-        run: go install golang.org/x/vuln/cmd/govulncheck@latest
-
-      # govulncheck doesn't understand go.work directly — we run it per module.
-      # The module list stays in sync with MODULES in the Makefile. A module without
-      # Go packages (empty `go list ./...`) is skipped, otherwise govulncheck fails on
-      # "no packages".
-      - name: Run govulncheck per module
-        run: |
-          set -euo pipefail
-          export PATH="$(go env GOPATH)/bin:$PATH"
-          for m in proto proto/plugin shared sdk keeper soul soul-lint soulctl; do
-            if [ -z "$(cd "$m" && go list ./... 2>/dev/null)" ]; then
-              echo "skip $m (no Go packages)"
-              continue
-            fi
-            echo "govulncheck ./... in $m"
-            (cd "$m" && govulncheck ./...)
-          done
+      # `make check-vuln`, not a loop written out here. This step used to carry its
+      # own copy of the module list ("stays in sync with MODULES in the Makefile"),
+      # its own skip-on-empty test — the `2>/dev/null` one that cannot tell "no
+      # packages" from "go list broke", NIM-481 — and `set -e`, which stops the sweep
+      # at the first failing module and says nothing about the rest, NIM-494. Three
+      # defects the Makefile had already fixed, kept alive by a second home for the
+      # same sweep, plus `@latest` against the Makefile's pinned version. The target
+      # installs the pinned govulncheck itself and reports every module in the tree.
+      - name: make check-vuln
+        run: make check-vuln

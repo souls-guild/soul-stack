@@ -30,6 +30,42 @@ GOVULNCHECK := $(GOPATH_BIN)/govulncheck
 
 MODULES := proto proto/plugin shared sdk keeper soul soul-lint soulctl
 
+# The check-vuln corpus: EVERY go.mod in the tree, derived rather than listed
+# (NIM-774). $(MODULES) above is the eight modules the core targets build and
+# test, and using it for the supply-chain gate meant the other twelve — the
+# tests/ harnesses, the examples/module/* plugins, the pluginhost fixtures —
+# were not scanned, not skipped and not named. Rationale and the orphan warning:
+# scripts/vuln-modules.sh. Overridable from the command line, which is how
+# scripts/vuln-corpus-test.sh points the real recipe at its fixtures.
+#
+# `?=` and not `:=`: recursive, so the derivation runs when check-vuln references
+# it and not on every `make help`, which would walk the tree and print the orphan
+# warning at people asking about something else. The cost of that is one run PER
+# reference, so the recipe expands it once into a shell variable.
+VULN_MODULES ?= $(shell scripts/vuln-modules.sh)
+
+# Build tags for the check-vuln sweep. NOT $(TAGGED_DIRS), and the rule is not
+# that one either: a tag is named here when it makes NON-TEST Go code visible
+# that no other configuration in this sweep reaches. Every custom tag in the tree
+# was enumerated to build this list - `e2e`, `e2e_live`, `e2e_k8s` and
+# `integration` are the four that sit on non-test files, and this names all four.
+#
+# The extremes both matter. tests/e2e keeps its entire harness behind
+# `//go:build e2e`, so an untagged scan there matches no packages at all - four
+# thousand lines answering the probe with a warning and empty stdout, which
+# modules-run.sh would read as a module with nothing in it. `keeper:smoke` is the
+# opposite: its whole content is one `smoke_test.go`, and `govulncheck -test`
+# defaults to false, so no scan under any tag would analyse that file. Scanning
+# keeper a second time under `smoke` cannot produce a different answer, which is
+# why it is absent - and NOT because it would be slow.
+#
+# The residual, because this list is hand-kept where the corpus is not: a module
+# that grows a new tag on non-test files has to be added here. If ALL of its code
+# goes behind that tag the probe refuses the module by name (scripts/vuln-scan.sh),
+# so the loud half is mechanical; a module that is only PARTLY behind a new tag
+# narrows this sweep quietly, and nothing here would say so.
+VULN_TAGS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:integration
+
 # `<dir>:<tag>` pairs whose sources only build under their own tag, vetted by
 # `vet-tags` on top of the `integration` pass over $(MODULES). The tests/ modules
 # are outside $(MODULES) (their own go.mod, no non-test packages); `keeper:smoke`
@@ -93,7 +129,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1402,7 +1438,7 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
-	check-modules-run check-plugin-schema
+	check-modules-run check-vuln-corpus check-plugin-schema
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 check:
@@ -1565,6 +1601,24 @@ check-ci-status:
 # docker-free, about two seconds.
 check-modules-run:
 	@scripts/modules-run-test.sh
+
+# check-vuln-corpus — the guard on WHAT check-vuln scans (NIM-774). Fourth of the
+# same kind, and the outermost: gate.sh reports on tiers, modules-run.sh on the
+# modules inside a tier, check-modules-run on that reporter — and none of them can
+# see a module that was never in the list. `check-vuln` swept eight of the twenty
+# go.mod files in the tree and ended with "clean across all modules", and the
+# twelve it never opened produced no row, no skip and no name. Ten of them were
+# red the first time anybody scanned them.
+#
+# The regression is invisible in the direction that matters, as it is for the other
+# three: narrowing a corpus makes a gate faster and greener, and nothing in the
+# output changes shape. So this runs the REAL recipe over fixture modules with a
+# stub scanner and asserts that a module carrying no `toolchain` line is scanned
+# rather than skipped, and that one that cannot be enumerated is a FAIL rather than
+# a quiet SKIPPED. Go-free apart from `go list` over a stdlib-only fixture,
+# docker-free, offline, about two seconds.
+check-vuln-corpus:
+	@scripts/vuln-corpus-test.sh
 
 # check-plugin-schema — the bundled artifacts' `schema.json` is GENERATED, and this is
 # what makes that checkable (NIM-525, extended to mongo by NIM-769).
@@ -1738,10 +1792,32 @@ check-makefile-recipes:
 	@DEV_STAND=check-recipes DEV_STAND_SLOT=1 $(MAKE) --no-print-directory dev-stop
 	@echo "check-makefile-recipes: dev-stop ran to completion on an empty stand"
 
-# govulncheck - the supply-chain CI gate across all go.work modules (security audit, pre-beta).
+# govulncheck - the supply-chain CI gate across EVERY Go module in the tree (security
+# audit, pre-beta).
 # Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
-# code/dependency call graph - not just "present in go.sum". Same skip-empty-module
-# pattern as vet/test (a module with no go packages is skipped).
+# code/dependency call graph - not just "present in go.sum". The skip-empty-module
+# pattern of vet/test is here in a NARROWER form: those targets skip a module whose
+# `go list ./...` is empty, and an empty package list also means "every file is behind
+# a tag nobody named". A module is skipped here only when it holds no Go file at all
+# (proto/plugin before `make gen`); Go that no build configuration reaches is a
+# failure, not a skip. See the probe in scripts/vuln-scan.sh.
+#
+# The corpus is $(VULN_MODULES) — every go.mod, derived — and not $(MODULES), which is
+# eight of twenty (NIM-774). The eight were the ones that happen to be built and tested
+# by the core targets; the supply-chain question is not about them, it is about every
+# line of Go this repository publishes or executes. What the old corpus omitted was not
+# marginal: ten of the twelve missing modules were red the first time they were scanned
+# - eight on stdlib advisories their own `go 1.26.4` line asked for, two on a reachable
+# tar-traversal in moby/go-archive - and none of it was visible from a gate that ended
+# in "clean across all modules".
+#
+# Each module is scanned the way it is built - inside the workspace if go.work lists it,
+# standalone with GOWORK=off if it does not, under its $(VULN_TAGS) tag where one is
+# needed to reach its non-test code. That decision is per-module, so the command is a
+# script: scripts/vuln-scan.sh, which also prints which of the two it did. MODULES_PROBE_FAIL is
+# left at `fail` on purpose - test-plugins may downgrade an unresolvable module to a
+# SKIPPED row because a plugin it could not build is a plugin it did not test, but here
+# the same row would read "we could not scan it" and count towards a green gate.
 #
 # The binary - `go install` into $(GOPATH)/bin (the protoc-plugins pattern). If not
 # found - installs the pinned version (idempotent).
@@ -1763,9 +1839,19 @@ check-vuln:
 			echo "govulncheck not found - go install @$(GOVULNCHECK_VERSION)"; \
 			go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) || exit 1; \
 		fi; \
-		MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
-			scripts/modules-run.sh check-vuln "$(MODULES)" '$(GOVULNCHECK) ./...' || exit 1; \
-		echo "check-vuln: govulncheck is clean across all modules"; \
+		mods="$(VULN_MODULES)"; count=$$(set -f; set -- $$mods; echo $$#); \
+		VULN_ROOT="$(CURDIR)" VULN_TAGS="$(VULN_TAGS)" GOVULNCHECK="$(GOVULNCHECK)" \
+		MODULES_PROBE="$(CURDIR)/scripts/vuln-scan.sh --probe" \
+		MODULES_SKIP_NOTE='no Go file in this module at all (nothing generated yet)' \
+			scripts/modules-run.sh check-vuln "$$mods" "$(CURDIR)/scripts/vuln-scan.sh" || exit 1; \
+		echo "check-vuln: govulncheck reached nothing it calls in the $$count modules of the corpus above."; \
+		echo "check-vuln:   The table is the corpus - every go.mod in the tree - and it says per module"; \
+		echo "check-vuln:   what was scanned, how, and what it answered. A module missing from it is a"; \
+		echo "check-vuln:   bug in this gate; a SKIPPED row is a module with no Go file in it at all."; \
+		echo "check-vuln: NOT SCANNED, and no run of this target can say anything about either:"; \
+		echo "check-vuln:   * every \`_test.go\` in every module - \`govulncheck -test\` defaults to false."; \
+		echo "check-vuln:   * files built for another GOOS (\`darwin\`, \`!linux\`) - a scan sees one platform,"; \
+		echo "check-vuln:     this host's. Named because a scan nobody ran is not a scan that found nothing."; \
 	fi
 
 # Offline validation of the examples/ corpus with the soul-lint linter. The binary is built
@@ -2076,7 +2162,8 @@ help:
 	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
 	@echo "  check-approle-template  shipped Vault AppRole role template issues a periodic token"
 	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
-	@echo "  check-vuln        govulncheck supply-chain across all modules (offline: SKIP_VULNCHECK=1)"
+	@echo "  check-vuln        govulncheck supply-chain across EVERY go.mod in the tree (offline: SKIP_VULNCHECK=1)"
+	@echo "  check-vuln-corpus guard: check-vuln scans the whole tree, and never skips what it cannot scan"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
 	@echo "  check-plugin-schema  each bundled artifact's schema.json is what \`soul-mod stamp\` derives (NIM-525)"
 	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"

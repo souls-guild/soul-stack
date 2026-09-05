@@ -2,6 +2,8 @@ module github.com/souls-guild/soul-stack/examples/module/soul-ssh-vault
 
 go 1.26.4
 
+toolchain go1.26.6
+
 require (
 	github.com/hashicorp/vault/api v1.23.0
 	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
