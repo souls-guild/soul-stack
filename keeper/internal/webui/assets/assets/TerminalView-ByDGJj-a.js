@@ -1,4 +1,4 @@
-import{r as Re,j as An,s as On}from"./index-CwgPogBs.js";/**
+import{r as Re,j as An,s as On}from"./index-C5MuD6HB.js";/**
  * Copyright (c) 2014-2024 The xterm.js authors. All rights reserved.
  * @license MIT
  *
