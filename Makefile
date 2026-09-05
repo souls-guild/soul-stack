@@ -1437,12 +1437,26 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
-	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-ci-status \
-	check-modules-run check-vuln-corpus check-plugin-schema
+	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-gate-slot \
+	check-ci-status check-modules-run check-vuln-corpus check-plugin-schema
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
+# GATE_SLOTS — how many gates may run at once ON THIS MACHINE, and therefore how
+# much of it each one gets (NIM-801). Up to eight ticket sessions run in parallel
+# here; they never conflict over files (own worktree, own branch) and always
+# conflict over CPU. Three concurrent gates measured load average 25–33 on 24
+# cores and reddened a wall-clock assertion in consolerunner that is not allowed
+# to be loosened — a phantom red in a session that changed nothing near it.
+#
+# scripts/gate-slot.sh holds the slot AND divides the machine by this number
+# (GOMAXPROCS and `go -p`). Both halves matter: the semaphore alone would bound
+# how many gates oversubscribe the box, not whether they do.
+#
+# GATE_SLOTS=1 is the strict serialisation, if 2 turns out to be too many.
+GATE_SLOTS ?= 2
+
 check:
-	@scripts/gate.sh check $(GATE_CHECK_TIERS)
+	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check $(GATE_CHECK_TIERS)
 	@echo "check: all docker-free checks passed"
 	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
 	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
@@ -1570,6 +1584,19 @@ check-e2e-set:
 check-gate:
 	@scripts/gate-test.sh
 
+# check-gate-slot — the guard on the gate's slot semaphore (NIM-801). Same reason
+# check-gate exists, one layer out: gate-slot.sh decides whether two gates share
+# this machine or fight over it, and both ways of breaking it are silent. A lock
+# that stopped locking leaves every gate green here and reddens a wall-clock test
+# in someone else's session days later; a CPU budget that stopped being exported
+# does the same while the locking still looks intact. So the halves are asserted
+# apart: the arithmetic against a pinned core count, the exclusion by actually
+# running two gates at once and watching the second one wait.
+#
+# Docker-free, ~4s (three of the cases hold a slot against a 3s timeout).
+check-gate-slot:
+	@scripts/gate-slot-test.sh
+
 # check-ci-status — the guard on check-ci's report (NIM-393). Same reason
 # check-gate exists, one tool over: ci-status.sh is what answers "has CI verified
 # THIS sha", so a regression there is invisible by construction — it misreports
@@ -1663,7 +1690,7 @@ check-plugin-schema:
 	done
 
 check-all:
-	@scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
+	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
 	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
 	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
 	@echo "check-all:   make e2e-live-gate   (curated subset, before a major batch commit)"
@@ -2176,6 +2203,9 @@ help:
 	@echo "Checks/gate:"
 	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
 	@echo "  check-all         check + test-race + test-integration (L1) + e2e (L3a) = what a green CI run means"
+	@echo "                    — both take one of GATE_SLOTS=$(GATE_SLOTS) machine-wide slots and 1/N of the cores;"
+	@echo "                      GATE_SLOTS=1 serialises strictly, and waiting for a slot is printed"
+	@echo "  check-gate-slot   guard: the slot semaphore locks, and the CPU budget reaches the tiers"
 	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
 	@echo "  check-integration-set  the L1 package set matches the tree (guards a green, empty L1)"
 	@echo "  check-webui-embed embedded UI bundle matches its recorded fingerprint (no companion needed)"

@@ -1043,9 +1043,15 @@ assert_eq yes "$(contains 'has no branch')" "and the script's own words reach th
 # recipe also PRINTS the words "check-webui-freshness" in its closing notes, so
 # grepping the transcript would report membership for a tier that had been
 # deleted from the list - a guard passing on prose about itself.
+#
+# `^.*` and not `^`, because the recipe is no longer the bare command: NIM-801 put
+# `scripts/gate-slot.sh` in front of it. Only the argument-list line carries the
+# words `scripts/gate.sh check`, so the looser anchor still excludes the prose -
+# but the tighter one silently matched NOTHING, and two membership assertions
+# then failed for a reason that had nothing to do with membership.
 it "and the tier is still part of what 'make check' runs"
 out=" $(env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL make -n check 2>/dev/null |
-	sed -n 's|^scripts/gate\.sh check ||p') "
+	sed -n 's|^.*scripts/gate\.sh check ||p') "
 assert_eq yes "$(contains ' check-webui-freshness ')" "GATE_CHECK_TIERS membership"
 assert_eq yes "$(contains ' check-webui-freshness-guard ')" "including this suite"
 
