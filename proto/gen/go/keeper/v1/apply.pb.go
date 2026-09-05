@@ -200,11 +200,19 @@ type RenderedTask struct {
 	FailedWhen string `protobuf:"bytes,9,opt,name=failed_when,json=failedWhen,proto3" json:"failed_when,omitempty"`
 	// flow_context: a literal per-host snapshot of the non-register part of the
 	// flow-control predicates' CEL context: { input, vars, incarnation, self }.
-	// Keeper builds it in the CEL phase (same as for rendering params, MINUS
-	// soulprint.hosts and loop), Soul reads it as DATA (not code): binds
+	// Keeper builds it in the CEL phase, Soul reads it as DATA (not code): binds
 	// soulprint.self <- flow_context.self, the rest becomes top-level activation
 	// variables. Varies per host (self is per-host), so it's excluded from the
 	// per-host params host-invariance check.
+	//
+	// The three operator-supplied sections are NARROWED to what THIS task's four
+	// predicates (when/changed_when/failed_when/until) name, per section, from the
+	// predicates' raw text: a task with no predicate never reads the snapshot and
+	// so carries none of them at all. Do not read a section as "the run's input" —
+	// it is "what this task asked of the run's input". A read the AST holds no
+	// field name for (bare `input`, `input['k']`) widens back to the whole
+	// section. Narrowing the sections is what keeps a run's `secret: true` inputs
+	// off hosts running tasks with no use for them (NIM-813).
 	FlowContext *structpb.Struct `protobuf:"bytes,10,opt,name=flow_context,json=flowContext,proto3" json:"flow_context,omitempty"`
 	// onfail_idx: source-task indices for DSL core `onfail:` (destiny/tasks.md §8):
 	// reference a RenderedTask's position in ApplyRequest.tasks[] (= TaskEvent.task_idx),

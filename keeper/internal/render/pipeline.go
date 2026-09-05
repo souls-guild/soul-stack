@@ -543,6 +543,11 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		}
 	}
 
+	// What flow_context must carry for THIS task: the union of what its
+	// flow-control predicates read. Computed from predicate text, so it is
+	// host-invariant — one set for the whole loop below.
+	fcReads := taskFlowContextReads(p.cel, task)
+
 	var firstSID string
 	for hi, h := range renderHosts {
 		vars := hostLoopVars(in, h, len(targeted), loopVars)
@@ -617,7 +622,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// first host (hi==0). Not a forgotten per-host dispatch — host-variant
 		// flow-control on multi-host is already rejected by
 		// guardFlowControlHostInvariant.
-		fc, err := buildFlowContext(in, h, vars, len(targeted))
+		fc, err := buildFlowContext(in, h, vars, len(targeted), fcReads)
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
@@ -646,6 +651,15 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// its variance doesn't matter; a legitimate task with host-variant
 		// vars-in-params (no when) should fail on paramsHostInvariant above,
 		// not here.
+		//
+		// SUBJECT: the snapshots diffed here are the NARROWED ones (NIM-813) —
+		// both sides came through the same taskFlowContextReads. So a
+		// host-variant `vars.<key>` that no predicate of this task names no
+		// longer fails the render, where the full-snapshot diff used to reject
+		// it. That is deliberate: this layer exists to stop a predicate from
+		// being evaluated against per-host values, and a key that is neither
+		// shipped nor read cannot be. The over-approximation it drops was never
+		// protecting anything the predicate could see.
 		//
 		// Both layers (text regex + snapshot diff) are a temporary
 		// fail-closed measure until per-host dispatch (open Q #25) lands;
@@ -700,6 +714,12 @@ func (p *Pipeline) staticWhenSkips(
 		return nil, nil
 	}
 
+	// The skip placeholder still ships flow_context (Soul re-evaluates the same
+	// when: for its own SKIPPED), so it is narrowed like any other wire snapshot —
+	// task.When is one of the predicates the reads are collected from, so the
+	// static evaluation below keeps every key it needs.
+	fcReads := taskFlowContextReads(p.cel, task)
+
 	var firstFC *structpb.Struct
 	for hi, h := range renderHosts {
 		vars := hostLoopVars(in, h, targetCount, loopVars)
@@ -707,7 +727,7 @@ func (p *Pipeline) staticWhenSkips(
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
-		fc, err := buildFlowContext(in, h, vars, targetCount)
+		fc, err := buildFlowContext(in, h, vars, targetCount, fcReads)
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
@@ -756,7 +776,9 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	if err != nil {
 		return false, fmt.Errorf("render: include-when %q: %w", when, err)
 	}
-	fc, err := buildFlowContext(in, host, vars, len(in.Hosts))
+	// Keeper-local: this snapshot decides keep/drop here and is then dropped
+	// itself, so there is nothing on the wire to narrow (allFlowContextReads).
+	fc, err := buildFlowContext(in, host, vars, len(in.Hosts), allFlowContextReads())
 	if err != nil {
 		return false, fmt.Errorf("render: include-when %q: flow_context: %w", when, err)
 	}
@@ -1021,7 +1043,9 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 		if len(renderHosts) == 0 {
 			renderHosts = []*topology.HostFacts{{}}
 		}
-		fc, err := buildFlowContext(in, renderHosts[0], hostVars(in, renderHosts[0], len(in.Hosts)), len(in.Hosts))
+		// Keeper-local, like evalIncludeWhen: an assert emits no RenderedTask, so
+		// this snapshot never leaves the process (allFlowContextReads).
+		fc, err := buildFlowContext(in, renderHosts[0], hostVars(in, renderHosts[0], len(in.Hosts)), len(in.Hosts), allFlowContextReads())
 		if err != nil {
 			return fmt.Errorf("render: assert %q: when flow_context: %w", task.Name, err)
 		}
@@ -1282,11 +1306,17 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 }
 
 // hasFlowControl reports whether the task has at least one non-empty
-// flow-control predicate (when/changed_when/failed_when). Gates the second
-// fail-closed layer (flowContextHostInvariant): without a predicate, Soul
-// never reads flow_context, so its host-variance doesn't matter.
+// flow-control predicate. Gates the second fail-closed layer
+// (flowContextHostInvariant): without a predicate, Soul never reads
+// flow_context, so its host-variance doesn't matter.
+//
+// retry.until counts, and used not to: Soul evaluates it against the same
+// snapshot through the same engine (applyrunner.runTaskWithRetry →
+// evalFlowPredicate), so a task whose ONLY predicate is `until: vars.x` was
+// reading a host-variant vars.x on every host from the first host's snapshot
+// with neither layer objecting.
 func hasFlowControl(task config.Task) bool {
-	return task.When != "" || task.ChangedWhen != "" || task.FailedWhen != ""
+	return len(flowControlPredicates(task)) > 0
 }
 
 // guardFlowControlHostInvariant rejects a host-variant flow-control

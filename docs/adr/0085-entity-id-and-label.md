@@ -280,6 +280,18 @@ spellings a service repository writes — the CEL root and the scenario key — 
   from `flow_context` and goes through the same activation). It is placed only when `id` is
   present, so an incarnation-free context still answers `incarnation.name` with the ordinary
   no-such-key rather than an empty string;
+
+  > **Amendment 2026-09-05 (NIM-813).** "Placed once" still holds — the alias is still derived in
+  > exactly one place — but the window now has a **second site that must know about it**.
+  > `flow_context` no longer ships whole sections: each is narrowed to the field names the task's
+  > flow-control predicates literally wrote, and `incarnation.name` is a name no map ever carries,
+  > because `incarnationRoot` derives it from `id` when the activation is built. Narrowing to the
+  > author's spelling alone would drop `id` and fail the predicate as a no-such-key **on the host,
+  > mid-run** — the exact failure this section is about. So `taskFlowContextReads`
+  > (`keeper/internal/render/cel_render.go`) maps a read of the legacy spelling back onto the key
+  > it is computed from, via the exported `cel.LegacyIncarnationIDField` / `cel.IncarnationIDField`.
+  > **Step 3 of the plan above therefore has one more site to retire**: drop that fold together
+  > with the alias, or the narrowing keeps a key alive for a spelling nothing accepts any more;
 - the key is folded once, in `config.ScenarioManifest.normalizeIDTemplate`, before any rule
   reads it, so every reader past the load sees one field;
 - `soul-lint` reports `incarnation_name_legacy_root` and `id_template_legacy_spelling`, both
@@ -349,7 +361,8 @@ root does not type-check its fields, so `incarnation.name` after the drop is a *
 evaluation**, not a compile error.
 
 One of those three environments is flow-control, and it is evaluated **on the host**:
-`flow_context = {input, vars, incarnation, self}` (`keeper/internal/render/pipeline.go:1358-1359`).
+`flow_context = {input, vars, incarnation, self}` (`keeper/internal/render.buildFlowContext`, cited by
+name because line numbers there have already drifted twice).
 So a stale `when: incarnation.name == …` does not fail at render — it fails mid-run, on the host,
 after earlier tasks have already applied. That is precisely the class
 [ADR-012](0012-keeper-soul-grpc.md)'s 2026-08-03 amendment recorded for `essence`: `flow_context` is

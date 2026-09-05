@@ -40,6 +40,23 @@ const (
 	legacyIncarnationIDKey = "name"
 )
 
+// The two incarnation-root field names, for a caller that NARROWS the
+// incarnation map down to the fields an expression names (keeper's flow_context
+// projection is the one there is).
+//
+// Such a caller has to keep [IncarnationIDField] whenever the expression asked
+// for [LegacyIncarnationIDField]: the retired spelling is DERIVED from `id` by
+// [Vars.incarnationRoot] when the activation is built, not stored in the map, so
+// narrowing to the spelling the author wrote drops the key it is computed from
+// and takes `incarnation.name` down with it — as a `no such key` at eval, which
+// on the flow-control path lands mid-run on the host.
+//
+// Closing the compatibility window retires both of these with incarnationRoot.
+const (
+	IncarnationIDField       = incarnationIDKey
+	LegacyIncarnationIDField = legacyIncarnationIDKey
+)
+
 // ExpressionReadsLegacyIncarnationID reports whether a WHOLE-STRING CEL
 // expression (an expression key: `when:`, `where:`, `loop.when:`) selects
 // `incarnation.name` — the retired spelling of `incarnation.id`.

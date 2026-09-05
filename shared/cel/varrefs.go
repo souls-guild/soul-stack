@@ -77,6 +77,89 @@ func (e *Engine) VarRefs(raw string) ([]string, error) {
 	return refs, nil
 }
 
+// RootReads is how one CEL root (`input`, `vars`, `incarnation`) is reached by an
+// expression: the field names selected off it, plus Whole for a read no field
+// name can be recovered from — the bare identifier (`size(input)`, `input == {}`)
+// or the index form (`input['k']`, `input[k]`).
+//
+// Whole is what keeps a caller that narrows a map down to Fields from silently
+// handing an expression less than it asked for: a shape this walk cannot name is
+// reported as "all of it", never as "nothing".
+type RootReads struct {
+	Fields map[string]bool
+	Whole  bool
+}
+
+// PredicateReads reports what a BARE CEL predicate reads off each root in roots.
+// Bare means the whole string is the expression (`when:` / `changed_when:` /
+// `failed_when:` / `retry.until`, [templating.md] §2.1) — an interpolated
+// `${ … }` string is [Engine.VarRefs]'s job, not this one. Every root gets an
+// entry; a root the predicate never names gets an empty one.
+//
+// Parsed WITHOUT macros (parseNoMacro), like [Engine.DetectSealed] and
+// [Engine.VarRefs]. That is load-bearing rather than incidental: under the
+// evaluation env `has(input.password)` is a test-only Select, which no field name
+// survives, while here it stays a plain call over `input.password` and the field
+// is seen. A caller that dropped that field would get `has(…) == false` — a
+// different answer, with no error anywhere to say so.
+//
+// A root reached in a shape the AST holds no field name for sets Whole instead of
+// contributing nothing. Same for a predicate that does not parse: it fails at
+// eval on Keeper or on Soul either way, and reporting it as "reads nothing" would
+// convert that failure into a quietly different result. Detection is by count —
+// every `input.f` puts one `input` ident and one Select over that ident in the
+// tree, so an ident the Selects do not account for is a whole-root read.
+//
+// BOUNDARY: the walk does not descend into a `.where("…")` string argument, the
+// one place in this language where a string literal is itself a predicate
+// ([Engine.selectsIncarnationField] does descend, deliberately). It does not have
+// to here: `.where` is only legal on soulprint.hosts, and the flow-control env
+// this serves refuses both — `soulprint.hosts` is ErrUnsupported there and any
+// other receiver is a compile error. A `where`-bearing predicate therefore fails
+// with or without narrowing. Enabling `.where` in flow-control would make this a
+// hole, and that is the change that must revisit it.
+func (e *Engine) PredicateReads(expr string, roots []string) map[string]RootReads {
+	fields := make(map[string]map[string]bool, len(roots))
+	idents := make(map[string]int, len(roots))
+	selects := make(map[string]int, len(roots))
+	for _, root := range roots {
+		fields[root] = map[string]bool{}
+	}
+
+	whole := expr != ""
+	if expr != "" {
+		if parsed, perr := e.parseNoMacro(expr); perr == nil {
+			whole = false
+			ast.PostOrderVisit(parsed.Expr(), ast.NewExprVisitor(func(n ast.Expr) {
+				switch n.Kind() {
+				case ast.IdentKind:
+					if _, ok := fields[n.AsIdent()]; ok {
+						idents[n.AsIdent()]++
+					}
+				case ast.SelectKind:
+					base, field, ok := selectBaseField(n)
+					if !ok {
+						return
+					}
+					if _, tracked := fields[base]; tracked {
+						selects[base]++
+						fields[base][field] = true
+					}
+				}
+			}))
+		}
+	}
+
+	out := make(map[string]RootReads, len(roots))
+	for _, root := range roots {
+		out[root] = RootReads{
+			Fields: fields[root],
+			Whole:  whole || idents[root] > selects[root],
+		}
+	}
+	return out
+}
+
 // isVarsIndex — a node of the form `vars[<expr>]` (CEL index operator `_[_]` over
 // the bare identifier `vars`). cel-go represents `a[b]` as a global call with
 // FunctionName == operators.Index and two arguments; the first argument is

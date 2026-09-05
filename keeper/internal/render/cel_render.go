@@ -7,6 +7,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // renderParams runs the CEL-render phase for one task on one host ([ADR-010]).
@@ -356,6 +357,123 @@ func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, para
 // comparison.
 const flowContextSelfKey = "self"
 
+// The flow_context sections narrowed to what a task's flow-control predicates
+// actually read (flowContextRoots) — everything the run's operator supplied.
+// input is the run input INCLUDING its `secret: true` fields; vars is the task's
+// resolved vars, which may hold a `vault()` result; incarnation carries `state`,
+// whose captured values are secret under the same rules ([ADR-0084]).
+//
+// `self` is deliberately not among them: it is the receiving host's own facts, so
+// shipping it whole widens nothing, and both fail-closed host-invariance layers
+// are defined against its presence (stripSelfKey, guardFlowControlHostInvariant).
+const (
+	flowContextInputKey       = "input"
+	flowContextVarsKey        = "vars"
+	flowContextIncarnationKey = "incarnation"
+)
+
+var flowContextRoots = []string{flowContextInputKey, flowContextVarsKey, flowContextIncarnationKey}
+
+// flowContextReads is what one task's flow-control predicates read out of
+// flow_context's operator-supplied sections, keyed by section name. A task with
+// no predicate reads nothing, and then those sections ship EMPTY: Soul's only
+// readers of flow_context are evalWhen and evalFlowPredicate (applyrunner.go), so
+// a task without a predicate never looks at it, and the run input has no reason
+// to travel to that host at all.
+type flowContextReads map[string]cel.RootReads
+
+// allFlowContextReads ships every section whole — for the call sites that
+// evaluate a predicate on Keeper and then drop the snapshot (evalIncludeWhen,
+// evalAssertTask). Nothing crosses the wire there, so there is nothing to narrow.
+func allFlowContextReads() flowContextReads {
+	reads := make(flowContextReads, len(flowContextRoots))
+	for _, root := range flowContextRoots {
+		reads[root] = cel.RootReads{Whole: true}
+	}
+	return reads
+}
+
+// taskFlowContextReads unions what every flow-control predicate of the task reads
+// (cel.PredicateReads per predicate, per section).
+//
+// The set comes from the predicates' RAW TEXT and never from resolved values: a
+// set derived from what a value turned out to be would differ between hosts, and
+// a host-variant flow_context is exactly what the two fail-closed layers below
+// exist to reject.
+func taskFlowContextReads(engine *cel.Engine, task config.Task) flowContextReads {
+	reads := make(flowContextReads, len(flowContextRoots))
+	for _, root := range flowContextRoots {
+		reads[root] = cel.RootReads{Fields: map[string]bool{}}
+	}
+	for _, expr := range flowControlPredicates(task) {
+		for root, r := range engine.PredicateReads(expr, flowContextRoots) {
+			merged := reads[root]
+			merged.Whole = merged.Whole || r.Whole
+			for field := range r.Fields {
+				merged.Fields[field] = true
+			}
+			reads[root] = merged
+		}
+	}
+
+	// `incarnation.name` is derived from `id` when the activation is built, not
+	// carried in the map (cel.Vars.incarnationRoot, the [ADR-0085] window), so a
+	// predicate on the retired spelling needs the key that spelling is computed
+	// from. Narrowing to what the author literally wrote would fail it as a
+	// no-such-key on the host, mid-run.
+	if inc := reads[flowContextIncarnationKey]; inc.Fields[cel.LegacyIncarnationIDField] {
+		inc.Fields[cel.IncarnationIDField] = true
+		reads[flowContextIncarnationKey] = inc
+	}
+	return reads
+}
+
+// flowControlPredicates lists the task's non-empty flow-control predicates — the
+// complete set of expressions Soul evaluates against flow_context.
+//
+// retry.until is one of the four. hasFlowControl's three are the ones evaluated
+// in runTask; until is evaluated by runTaskWithRetry through the same
+// evalFlowPredicate and the same snapshot (applyrunner.go), so a set that stopped
+// at three would narrow flow_context below what an `until:` predicate needs and
+// break it on Soul rather than here.
+func flowControlPredicates(task config.Task) []string {
+	exprs := make([]string, 0, 4)
+	for _, expr := range []string{task.When, task.ChangedWhen, task.FailedWhen} {
+		if expr != "" {
+			exprs = append(exprs, expr)
+		}
+	}
+	if task.Retry != nil && task.Retry.Until != "" {
+		exprs = append(exprs, task.Retry.Until)
+	}
+	return exprs
+}
+
+// projectFlowSection narrows one flow_context section to the fields reads names
+// for root. A whole-section read gets the whole section, the same rule targeted
+// file-vars injection follows for a template that reads `.vars` as a map
+// (templateReadsWholeVars): narrowing on names an AST cannot see is how an
+// expression ends up evaluating against a section missing the one key it asked
+// for. Doesn't mutate its input.
+//
+// A root absent from reads gets the whole section, not an empty one. Both
+// constructors fill every root of flowContextRoots, so absence means a caller
+// built the set by hand and forgot one — and of the two ways to be wrong about a
+// section, shipping it is the one that does not break a predicate mid-run.
+func projectFlowSection(m map[string]any, reads flowContextReads, root string) map[string]any {
+	r, named := reads[root]
+	if !named || r.Whole {
+		return orEmptyMap(m)
+	}
+	out := make(map[string]any, len(r.Fields))
+	for field := range r.Fields {
+		if v, ok := m[field]; ok {
+			out[field] = v
+		}
+	}
+	return out
+}
+
 // buildFlowContext builds a literal per-host snapshot of the non-register part
 // of the CEL context for flow-control predicates (when:/changed_when:/
 // failed_when:, ADR-012(d)): `{ input, vars, incarnation, self }`.
@@ -368,15 +486,22 @@ const flowContextSelfKey = "self"
 // previous tasks' results.
 //
 // vars is task-level `vars:`, already CEL-resolved (vars.Vars); nil → empty
-// map. MVP: the context is FULL, no static pruning (Soul gets the whole
-// snapshot even if the predicate references only part of it). Returns
-// *structpb.Struct (direct fit for proto RenderedTask.flow_context).
-func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, hostCount int) (*structpb.Struct, error) {
+// map. Returns *structpb.Struct (direct fit for proto
+// RenderedTask.flow_context).
+//
+// reads narrows the operator-supplied sections to what this task's predicates
+// name (see flowContextReads); the snapshot used to be full, which put every
+// `secret: true` field of the run input on the wire to every targeted host — on
+// tasks with no predicate too, which never read the snapshot at all (NIM-813).
+// One compromised host then yielded the whole run's secrets rather than the ones
+// its own tasks used. Callers that keep the snapshot on Keeper pass
+// allFlowContextReads.
+func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, hostCount int, reads flowContextReads) (*structpb.Struct, error) {
 	fc := map[string]any{
-		"input":            orEmptyMap(vars.Input),
-		"vars":             orEmptyMap(vars.Vars),
-		"incarnation":      incarnationVars(in, hostCount),
-		flowContextSelfKey: soulprintSelfMap(host),
+		flowContextInputKey:       projectFlowSection(vars.Input, reads, flowContextInputKey),
+		flowContextVarsKey:        projectFlowSection(vars.Vars, reads, flowContextVarsKey),
+		flowContextIncarnationKey: projectFlowSection(incarnationVars(in, hostCount), reads, flowContextIncarnationKey),
+		flowContextSelfKey:        soulprintSelfMap(host),
 	}
 	st, err := structpb.NewStruct(fc)
 	if err != nil {
