@@ -341,7 +341,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// step commits at the step, so state ACCUMULATES within a run). A plan
 		// without a capture keeps this one snapshot for every Passage.
 		State: stateBefore,
-		Ctx:   ctx, // vault() resolution needs the request ctx explicitly
+		// SecretStateFields — which of those state fields the manifest declares
+		// secret, so a cell reading `${ incarnation.state.<field> }` is sealed
+		// (NIM-826). Derived from the manifest and not from the snapshot: the
+		// declaration is what makes a value a secret, and a field the state does
+		// not carry yet must still seal the cell that will read it after a capture.
+		SecretStateFields: incarnation.StateSchemaSecretFields(art),
+		Ctx:               ctx, // vault() resolution needs the request ctx explicitly
 		// Templates: reader for the service snapshot's .tmpl files, used by
 		// core.file.rendered. Two-level resolve scenario-local→service-level
 		// (ADR-009): reads via artifact.ReadSnapshotFile over art.LocalDir

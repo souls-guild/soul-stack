@@ -105,7 +105,7 @@ func TestComputeScope_EveryVarsBuilderDeclaresItsStance(t *testing.T) {
 					return true
 				}
 				seen[fn.Name.Name] = true
-				if got := celVarsLitValue(fset, lit, "ComputeScope"); got != want.want {
+				if got := litFieldValue(fset, lit, "ComputeScope"); got != want.want {
 					t.Errorf("%s: %s sets ComputeScope=%q, the table says %q (%s)",
 						fset.Position(lit.Pos()), fn.Name.Name, got, want.want, want.reason)
 				}
@@ -135,9 +135,9 @@ func isCelVarsLit(e ast.Expr) bool {
 	return ok && pkg.Name == "cel"
 }
 
-// celVarsLitValue returns the source text of a field's value in a composite
+// litFieldValue returns the source text of a field's value in a composite
 // literal, or "" when the literal does not set the field.
-func celVarsLitValue(fset *token.FileSet, lit *ast.CompositeLit, field string) string {
+func litFieldValue(fset *token.FileSet, lit *ast.CompositeLit, field string) string {
 	for _, el := range lit.Elts {
 		kv, ok := el.(*ast.KeyValueExpr)
 		if !ok {

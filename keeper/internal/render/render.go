@@ -269,6 +269,31 @@ type RenderInput struct {
 	// resolves the run's own namespace before any CEL root is built.
 	KeeperRegister map[string]any
 
+	// SecretStateFields — the top-level [RenderInput.State] field names a read of
+	// which can take home plaintext, from incarnation.StateSchemaSecretFields (seal,
+	// [ADR-010] §7.4, NIM-826). Each becomes the address
+	// `incarnation.state.<field>` ([cel.IncarnationStateAddrRoot]), so a params
+	// cell reading one is sealed and masked on the way out.
+	//
+	// ★ NOT simply "every declared secret". The address can only ever be the TOP
+	// SEGMENT of a state path, so which declarations earn one is a decision about
+	// WIDTH, and it is made where the schema is walked — do not restate it here and
+	// do not summarise it as one marker or the other. Both summaries have already
+	// been written in this comment and both were wrong: "every declared secret"
+	// sealed a whole public ACL collection off one leaf, and "`secret: true` only"
+	// then dropped a case that costs nothing. The rule and its reasons live on
+	// incarnation.StateSchemaSecretFields; read them there before widening or
+	// narrowing this.
+	//
+	// Supplied by the caller rather than derived here because the manifest is the
+	// caller's (scenario.run holds the service artifact; render holds a scenario).
+	// nil — the schema yields no address, or the caller collects no seal at all
+	// ([RenderInput.Sealed] nil: push, trial, pre-flight, Acolyte). Two of those DO
+	// hold a manifest, so wiring is one line away the day one of them starts
+	// collecting; the wiring guard test lists each with its reason and fails if a
+	// collecting builder leaves this unset.
+	SecretStateFields map[string]bool
+
 	// Modules — plugin-manifest resolver for this render (NIM-228), used to
 	// derive [RenderedTask.SecretOutput] for a non-core module ([ADR-0083] §8).
 	// Core modules resolve without it. nil is tolerated and is not a silent

@@ -53,7 +53,9 @@ func (s *SealedSet) Paths() map[string]bool {
 // set of the active schema (the scenario's on a scenario pass, the destiny's own
 // on a destiny pass), the registers whose payload carried a declared secret
 // ([ADR-0083] §6, derived by [Pipeline.resolveRegisterSecrets] before any root is
-// built), the run's sealed `compute:` names and the pass's sealed file-var names.
+// built), the incarnation-state fields the manifest declares secret
+// ([RenderInput.SecretStateFields]), the run's sealed `compute:` names and the
+// pass's sealed file-var names.
 //
 // A task's own `vars:` are NOT here — they are stacked on top per task by
 // [Pipeline.taskSealSources], because that layer is the only one of the four that
@@ -64,6 +66,7 @@ func scenarioSealSources(in RenderInput) cel.SealSources {
 	fields := map[string]bool{}
 	addFieldAddrs(fields, "input", secretInputNames(in.Scenario))
 	addFieldAddrs(fields, "register", in.sealedRegisters)
+	addFieldAddrs(fields, cel.IncarnationStateAddrRoot, in.SecretStateFields)
 	addFieldAddrs(fields, "compute", in.sealedCompute)
 	addFieldAddrs(fields, "vars", in.sealedFileVars)
 	return cel.SealSources{Fields: fields, Roots: in.sealedLoopBinds}
@@ -172,6 +175,10 @@ func sealedVarNames(engine *cel.Engine, raw map[string]any, base cel.SealSources
 // The `vars.*` a compute expression can reach is the service layer alone
 // (resolveCompute's base), which carries no secret — see
 // [RenderInput.sealedFileVars]. `register.*` it can reach, and that is in base.
+// So is `incarnation.state.*` (the run-level context carries the state snapshot,
+// [incarnationVars]): a compute entry is a hop out of state exactly as it is a hop
+// out of an input, and this set is built here rather than taken from
+// [scenarioSealSources] because it must not yet contain `compute.*` itself.
 func sealedComputeNames(engine *cel.Engine, in RenderInput) map[string]bool {
 	block := in.Scenario.Compute
 	if len(block) == 0 {
@@ -181,6 +188,7 @@ func sealedComputeNames(engine *cel.Engine, in RenderInput) map[string]bool {
 	fields := map[string]bool{}
 	addFieldAddrs(fields, "input", secretInputNames(in.Scenario))
 	addFieldAddrs(fields, "register", in.sealedRegisters)
+	addFieldAddrs(fields, cel.IncarnationStateAddrRoot, in.SecretStateFields)
 	src := cel.SealSources{Fields: fields}
 	for _, cv := range block {
 		s, ok := cv.Value.(string)

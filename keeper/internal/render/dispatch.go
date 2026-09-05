@@ -161,11 +161,22 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // incarnation.state — read-only pre-run snapshot (RenderInput.State, the same
 // stateBefore under FOR UPDATE, see [incarnationVars]): a keeper task
 // (a teardown step etc.) reads `incarnation.state.<path>` in params just
-// like Soul-side. The snapshot is invariant (fixed once, not accumulated
-// across passages). nil State → the `state` key isn't set:
+// like Soul-side. The snapshot is invariant WITHIN a Passage; a plan that captures
+// state has run.go re-read it at each Passage boundary ([ADR-0084]), exactly as
+// [incarnationVars] describes for the host side — this said "fixed once, not
+// accumulated across passages" until NIM-826, which contradicted the sibling doc
+// and run.go's own re-assignment. nil State → the `state` key isn't set:
 // `incarnation.state.<x>` gives a normal no-such-key (push/trial without
-// State, backward-compat). The keeper↔soul boundary holds: state is
-// operator-facts (not secrets), soulprint.self/.hosts remain unavailable (no hosts).
+// State, backward-compat). The keeper↔soul boundary holds: soulprint.self/.hosts
+// remain unavailable (no hosts).
+//
+// ★ State is NOT "operator-facts, not secrets", which is what this said until
+// NIM-826. A state property declared `secret: true` ([ADR-010] §7.4) holds its
+// value IN state — only `type: secret` keeps it in Vault ([ADR-0083] §1) — so a
+// keeper task reading `${ incarnation.state.<field> }` renders plaintext into
+// apply_run_plan exactly as a host task does. Both paths are covered by the same
+// address set ([RenderInput.SecretStateFields]) because both build their
+// incarnation root from the same snapshot.
 //
 // register: keeper→keeper chaining (staged render, ADR-056) — a keeper task on
 // the active Passage sees `register.<prev>.*` from keeper tasks of earlier

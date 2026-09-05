@@ -195,6 +195,13 @@ func (p *Pipeline) renderApplyDestiny(
 		// opens the whole service layer to every destiny task var.
 		// Guarded by TestRender_ApplyDestiny_ServiceVarsNotLeaked.
 		ServiceVars: nil,
+		// Carried over although State is NOT (a destiny reads no
+		// `incarnation.state` — the key is absent from its activation, so the
+		// address set is dead here and costs a map of names). It is here so that
+		// forwarding State one day is one edit and not two: a seal that has to be
+		// remembered separately from the value it covers is the shape NIM-811 and
+		// NIM-826 both had.
+		SecretStateFields: parentIn.SecretStateFields,
 		// seal (ADR-010 §7.4): same run-wide accumulator — destiny params with
 		// `${ vault(...) }` get marked sealed just like scenario ones, and since
 		// NIM-812 so does `${ input.<secret> }`, off the destiny's own schema
