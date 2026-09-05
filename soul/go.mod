@@ -6,7 +6,7 @@ require (
 	github.com/cyphar/filepath-securejoin v0.7.0
 	github.com/oklog/ulid/v2 v2.1.1
 	github.com/prometheus/client_golang v1.23.2
-	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 	github.com/souls-guild/soul-stack/shared v0.0.0
 	go.opentelemetry.io/otel v1.44.0

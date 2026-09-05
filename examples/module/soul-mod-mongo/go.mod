@@ -5,7 +5,7 @@ go 1.26.4
 toolchain go1.26.6
 
 require (
-	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 	go.mongodb.org/mongo-driver v1.17.9
 	google.golang.org/grpc v1.82.1

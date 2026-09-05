@@ -22,7 +22,7 @@ require (
 	github.com/prometheus/client_model v0.6.2
 	github.com/redis/go-redis/v9 v9.21.0
 	github.com/robfig/cron/v3 v3.0.1
-	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 	github.com/souls-guild/soul-stack/shared v0.0.0
 	github.com/testcontainers/testcontainers-go v0.43.0

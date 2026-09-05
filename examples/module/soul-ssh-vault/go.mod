@@ -6,7 +6,7 @@ toolchain go1.26.6
 
 require (
 	github.com/hashicorp/vault/api v1.23.0
-	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 	google.golang.org/grpc v1.82.1
 )

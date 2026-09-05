@@ -4,7 +4,7 @@ go 1.26.4
 
 require (
 	github.com/goccy/go-yaml v1.19.2
-	github.com/souls-guild/soul-stack/proto/plugin v0.0.0
+	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
 	github.com/souls-guild/soul-stack/sdk v0.0.0
 )
 
