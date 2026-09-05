@@ -19,10 +19,12 @@ type CompositeRegistry struct {
 // push mode there's no plugin discovery — pass nil); Lookup skips a nil
 // branch.
 //
-// A core ↔ plugin name clash shouldn't normally happen: plugin names resolve
-// as `<namespace>.<name>` (e.g. `community.zfs-degraded`), core as
-// `core.beacon.<name>`. But the check order still guards against it: core is
-// always checked first, even if a name is manually duplicated.
+// A core ↔ plugin name clash shouldn't normally happen, and the key SHAPES are
+// why: a plugin beacon is keyed by its bare registration alias — one level, since
+// the artifact declares no modules ([sharedhost.Discovered.Address] on an empty
+// Module) — and [plugin.AliasPattern] admits no dot, while a core beacon is keyed
+// by the full `core.beacon.<name>`. But the check order still guards against it:
+// core is always checked first, even if a name is manually duplicated.
 func NewCompositeRegistry(core, plugin BeaconLookup, logger *slog.Logger) *CompositeRegistry {
 	if logger == nil {
 		logger = slog.Default()

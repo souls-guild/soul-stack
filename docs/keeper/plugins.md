@@ -656,11 +656,13 @@ This contract covers Vault SSH CA, static-key, Teleport - three candidates for M
 
 What the author writes:
 
+The module is named for the **object** it manages, not for the plugin — `instance`, so that the address reads `haproxy.instance.running` ([address rule](../naming-rules.md#the-discipline-binding-the-three-levels)). Writing `Name: "haproxy"` here would spend level 2 on the plugin's own subject and leave the artifact's other objects — `backend`, `frontend` — nowhere to go.
+
 ```go
-// internal/haproxy/haproxy.go
-var Module = module.Def{
-	Name:        "haproxy",
-	Description: "HAProxy service and configuration",
+// internal/haproxy/instance.go
+var Instance = module.Def{
+	Name:        "instance",
+	Description: "The HAProxy service instance on this host",
 	Capabilities: []module.Capability{module.RunAsRoot, module.ExecSubprocess},
 	SideEffects: []module.SideEffect{
 		{Service: "haproxy"},
@@ -695,7 +697,7 @@ var Module = module.Def{
 func main() {
 	module.ServeBundle(module.Bundle{
 		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
-		Modules: []module.Def{haproxy.Module},
+		Modules: []module.Def{haproxy.Instance},
 	})
 }
 ```
@@ -709,8 +711,8 @@ What `soul-mod stamp` generates (shown indented for reading; the real document i
   "compat": { "keeper": ">=0.9 <2.0" },
   "modules": [
     {
-      "name": "haproxy",
-      "description": "HAProxy service and configuration",
+      "name": "instance",
+      "description": "The HAProxy service instance on this host",
       "capabilities": ["run_as_root", "exec_subprocess"],
       "side_effects": [
         { "service": "haproxy" },
@@ -740,7 +742,7 @@ What `soul-mod stamp` generates (shown indented for reading; the real document i
 }
 ```
 
-Registered as `acme`, this artifact answers `acme.haproxy.running`; registered as `haproxy-community`, the same bytes answer `haproxy-community.haproxy.running`.
+Registered as `haproxy`, this artifact answers `haproxy.instance.running`; registered as `haproxy-community`, the same bytes answer `haproxy-community.instance.running`. **That is the point of the pair:** level 1 is not in the document anywhere — the operator chose it in `keeper.yml::plugins.*[].name` — so one artifact under two aliases answers at two addresses with no rebuild ([ADR-020(p)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name), NIM-377). Only levels 2 and 3 are the author's, and they stay `instance` / `running` under either alias.
 
 ### `kind: soul_module` (a bundle: redis)
 
@@ -927,7 +929,7 @@ params_schema:
     pool: { type: string }    # ZFS pool name to poll
 ```
 
-> The old manifest declared `required_capabilities: [exec_subprocess]` and `side_effects: []`. The schema document declares both **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind). The Vigil address of a plugin beacon is level-1 the registration alias, level-2 the beacon, exactly as for modules.
+> The old manifest declared `required_capabilities: [exec_subprocess]` and `side_effects: []`. The schema document declares both **per module**, and this kind has no `modules[]` — see [Which root field belongs to which kind](#which-root-field-belongs-to-which-kind). **The Vigil address of a plugin beacon is ONE level — the registration alias itself** (`zfs-degraded`), and not two as this line used to claim (**NIM-770**, settled against the code): having no `modules[]` is exactly what leaves no second level to name, so [`Discovered.Address()`](../../shared/pluginhost/discovery.go) returns the bare alias and [`beacon.NewPluginRegistry`](../../soul/internal/beacon/pluginregistry.go) keys on it.
 
 SDK - [`sdk/beacon`](../../sdk/beacon/beacon.go). Minimum plugin code:
 

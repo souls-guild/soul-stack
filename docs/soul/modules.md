@@ -89,11 +89,13 @@ The root fields (`kind`, `protocol_version`, `compat`), the normative handshake 
 
 ### Example: what an author writes
 
+The module is named for the **object** it manages — `instance` — not for the plugin: level 2 is the object and level 3 the action ([address rule](../naming-rules.md#the-discipline-binding-the-three-levels)), so `Name: "haproxy"` here would put the plugin's own subject at level 2 and leave its other objects (`backend`, `frontend`) nowhere to go.
+
 ```go
-// internal/haproxy/haproxy.go
-var Module = module.Def{
-	Name:         "haproxy",
-	Description:  "HAProxy service and configuration",
+// internal/haproxy/instance.go
+var Instance = module.Def{
+	Name:         "instance",
+	Description:  "The HAProxy service instance on this host",
 	Capabilities: []module.Capability{module.RunAsRoot, module.ExecSubprocess},
 	SideEffects: []module.SideEffect{
 		{Service: "haproxy"},
@@ -122,14 +124,14 @@ var Module = module.Def{
 func main() {
 	module.ServeBundle(module.Bundle{
 		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
-		Modules: []module.Def{haproxy.Module},
+		Modules: []module.Def{haproxy.Instance},
 	})
 }
 ```
 
 The build stamps the generated schema into the artifact (`soul-mod stamp`) and CI checks that the stamp still matches the code (`soul-mod verify`) — see [plugins.md → Stamping and verification](../keeper/plugins.md#stamping-and-verification) for the generated document this produces.
 
-Destiny step addressing is `<alias>.<module>.<state>`. Registered as `acme`, the artifact above answers `acme.haproxy.running` / `acme.haproxy.stopped` / `acme.haproxy.reloaded`. **The `acme` is not in the artifact** — an operator who registered the same bytes as `haproxy-community` would write `haproxy-community.haproxy.running` instead.
+Destiny step addressing is `<alias>.<object>.<action>`. Registered as `haproxy`, the artifact above answers `haproxy.instance.running` / `haproxy.instance.stopped` / `haproxy.instance.reloaded`. **The `haproxy` at level 1 is not in the artifact** — an operator who registered the same bytes as `haproxy-community` would write `haproxy-community.instance.running` instead, with no rebuild. Only levels 2 and 3 are the author's.
 
 ### Core modules and their declaration
 

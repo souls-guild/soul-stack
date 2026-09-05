@@ -5,6 +5,13 @@
 // as a sub-process, perform gRPC-stdio handshake (see sdk/handshake)
 // and call SoulModule RPC methods.
 //
+// ⚠ LEAVING THE DICTIONARY (NIM-797). That address is `<vendor>.<subject>.<action>`:
+// `redis-failover` is the plugin's own subject sitting at level 2, where the address
+// rule (ADR-020 amendment 2026-09-02, NIM-764/NIM-765) puts the OBJECT a module manages.
+// Marked rather than rewritten, because re-laying this skeleton out is not a rename —
+// its object would be `replica`, which the shipped soul-mod-redis already serves, so
+// whether this example survives at all is the question NIM-797 settles.
+//
 // This is an illustration — for production code add vault link resolution, idempotency,
 // OTel step tracing and real redis-cli interaction.
 

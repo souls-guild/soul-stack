@@ -42,7 +42,7 @@ Modules within the same collection move together. Not "`pkg@1.5` is compatible w
 
 ### 5. Discovery, UI, MCP
 
-"Show all modules from `acme`", "what states does `acme.haproxy` have". UI Keeper groups the catalog into collections, and the MCP server gives it to operators and LLM agents in a structured form.
+"Show all modules from `acme`", "what states does `haproxy.instance` have". UI Keeper groups the catalog into collections, and the MCP server gives it to operators and LLM agents in a structured form.
 
 ### 6. Delivery cache in push mode
 

@@ -348,17 +348,15 @@ Addressing **declarative**: the third level is a *desired state*, not an *action
 
 **The third level is required.** The entry `core.pkg` without `state` is a validation error, no defaults. Explicit is better than implicit: the operator does not have to "guess" what the default is.
 
-**`required_modules:` in destiny.yml is a declaration of only custom modules** in a two-level form (`<alias>.<module>`): "this destiny requires that the family of custom modules `acme.haproxy`, `acme.myapp`, ..." be available on the host. All state forms inside these modules are available automatically. Specific state instances are called by a 3-level form in `tasks/main.yml` (see ["Task Structure in `tasks:`"](#destiny-task-structure) below).
+**`required_modules:` in destiny.yml is a declaration of only custom modules** in a two-level form (`<alias>.<object>`): "this destiny requires that the family of custom modules `haproxy.instance`, `haproxy.backend`, ..." be available on the host. All state forms inside these modules are available automatically. Specific state instances are called by a 3-level form in `tasks/main.yml` (see ["Task Structure in `tasks:`"](#destiny-task-structure) below).
 
 **Core modules are not listed in `required_modules:`** - they are statically built into the `soul` binary and are always available. If destiny uses only `core.*`, the `required_modules:` block is omitted entirely.
 
 **Example (`tasks/main.yml` destiny with custom modules - top-level task list, without wrapper):**
 
-> ⚠ **LEAVING THE DICTIONARY (NIM-773, not implemented — this is the worked example as it stands today).** The `acme.haproxy` / `acme.myapp` in `required_modules:` and the `acme.haproxy.reloaded` step below are in `<vendor>.<subject>.<action>` form: `acme` is a vendor and `haproxy` the plugin's own subject. Under the [address rule](naming-rules.md#the-discipline-binding-the-three-levels) level 1 is the plugin's **name** and level 2 the **object** it manages, so this example is due to be reworked under **NIM-773**. Everything it illustrates — the two-level `required_modules:` grammar, core needing no declaration, the three-level call form — is unaffected.
-
 ```yaml
 # destiny-<name>/destiny.yml declares required_modules:
-#   required_modules: [acme.haproxy, acme.myapp]
+#   required_modules: [haproxy.instance, haproxy.backend]
 
 # destiny-<name>/tasks/main.yml:
 - name: Install redis-server package
@@ -384,7 +382,7 @@ Addressing **declarative**: the third level is a *desired state*, not an *action
   params: { name: redis-server }
 
 - name: Reload haproxy after config change
-  module: acme.haproxy.reloaded               # custom: declared in required_modules:
+  module: haproxy.instance.reloaded           # custom: declared in required_modules:
   params: { config_path: /etc/haproxy/haproxy.cfg }
 ```
 

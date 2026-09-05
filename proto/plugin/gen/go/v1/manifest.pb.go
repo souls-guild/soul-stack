@@ -22,12 +22,22 @@ const (
 	_ = protoimpl.EnforceVersion(protoimpl.MaxVersion - 20)
 )
 
-// Manifest — the root document of a plugin's `manifest.yaml` (ADR-020(a, e),
-// docs/keeper/plugins.md → Manifest).
+// ⚠ THIS FILE IS A HAND-SYNCED DEAD DOCUMENT (NIM-772).
 //
-// Parsed by `soul-lint` WITHOUT running the binary (ADR-009 requirement).
-// Wire format is YAML on disk; in the Go runtime it's this message
-// (parsed via YAML→JSON→protojson or aligned YAML parsing).
+// `Manifest` and its `*Spec` sub-messages have zero non-test Go references: nothing
+// parses them, nothing emits them, and no wire path carries them. The live contract is
+// the schema document in `sdk/schema` (re-exported at `shared/plugin/document.go`,
+// enforced in `sdk/schema/validate.go`), generated from Go `module.Def` values since
+// NIM-377 — there is no `manifest.yaml` to parse any more. Adding or removing a kind is
+// an `sdk/` change; the contribution here is only that a retired number stays
+// `reserved` (ADR-020(c) — a number is never reused).
+//
+// It is kept, and kept honest, because plugin authors pull `proto/plugin/` as its own Go
+// module (ADR-011) and read it as a contract. Recorded in
+// docs/naming-rules.md → Plugin manifest.
+//
+// Manifest — the root document a plugin used to ship as `manifest.yaml` (ADR-020(a, e),
+// docs/keeper/plugins.md → Manifest).
 type Manifest struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Plugin type discriminator (ADR-020(e)). Closed enum, see common.proto.
@@ -38,13 +48,10 @@ type Manifest struct {
 	// This is an API compat flag, not an artifact version (exception to
 	// ADR-007).
 	ProtocolVersion int32 `protobuf:"varint,2,opt,name=protocol_version,json=protocolVersion,proto3" json:"protocol_version,omitempty"`
-	// Plugin collection: `core` for built-ins, `acme` / `community` / an
-	// organization name.
-	// Regex: `^[a-z][a-z0-9-]{0,30}$` (docs/naming-rules.md → Plugin
-	// manifest: name regexes).
-	Namespace string `protobuf:"bytes,3,opt,name=namespace,proto3" json:"namespace,omitempty"`
-	// Plugin name within its collection. Module addressing is
-	// <namespace>.<name>.<state>.
+	// Plugin name. ⚠ Dead by the same NIM-377 removal as `namespace` above — the artifact
+	// publishes only its modules, and what an operator addresses is the registration
+	// alias. Kept only because retiring a second number is its own decision; nothing
+	// reads it.
 	// Regex: `^[a-z][a-z0-9-]{0,62}$`.
 	Name string `protobuf:"bytes,4,opt,name=name,proto3" json:"name,omitempty"`
 	// Closed enum of capabilities (ADR-020(f), see common.proto).
@@ -110,13 +117,6 @@ func (x *Manifest) GetProtocolVersion() int32 {
 		return x.ProtocolVersion
 	}
 	return 0
-}
-
-func (x *Manifest) GetNamespace() string {
-	if x != nil {
-		return x.Namespace
-	}
-	return ""
 }
 
 func (x *Manifest) GetName() string {
@@ -209,7 +209,9 @@ type SoulModuleSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// Map of the module's supported states. Key is <state-name>,
 	// regex `^[a-z][a-z0-9-]{0,30}$` (`installed` / `running` / `restarted` / …).
-	// Destiny step addressing is <namespace>.<name>.<state>.
+	// Destiny step addressing is <alias>.<object>.<action> — the registration alias, the
+	// object the module manages, and the state it is left in (`haproxy.instance.running`).
+	// ADR-020 amendment 2026-09-02 (NIM-764 / NIM-765).
 	States        map[string]*StateDef `protobuf:"bytes,1,rep,name=states,proto3" json:"states,omitempty" protobuf_key:"bytes,1,opt,name=key" protobuf_val:"bytes,2,opt,name=value"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
@@ -375,8 +377,9 @@ func (x *SshProviderSpec) GetParamsSchema() *structpb.Struct {
 // Beacon is read-only by construction (observes, never mutates the host).
 // No states-map like SoulModule is needed here: a beacon has one operation
 // type (Check); "state" semantics live at the scheduler level
-// (edge-triggered last-state). A Vigil is addressed as `<namespace>.<name>`
-// in `VigilDef.check`.
+// (edge-triggered last-state). A Vigil is addressed in `VigilDef.check` by the
+// bare registration alias — ONE level, because a beacon artifact declares no
+// modules and serves a single endpoint (NIM-770).
 type SoulBeaconSpec struct {
 	state protoimpl.MessageState `protogen:"open.v1"`
 	// JSON Schema for Vigil params (draft 2020-12). Used by the operator when
@@ -428,11 +431,10 @@ var File_v1_manifest_proto protoreflect.FileDescriptor
 
 const file_v1_manifest_proto_rawDesc = "" +
 	"\n" +
-	"\x11v1/manifest.proto\x12\x13soulstack.plugin.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x0fv1/common.proto\"\xcc\x04\n" +
+	"\x11v1/manifest.proto\x12\x13soulstack.plugin.v1\x1a\x1cgoogle/protobuf/struct.proto\x1a\x0fv1/common.proto\"\xbf\x04\n" +
 	"\bManifest\x12-\n" +
 	"\x04kind\x18\x01 \x01(\x0e2\x19.soulstack.plugin.v1.KindR\x04kind\x12)\n" +
-	"\x10protocol_version\x18\x02 \x01(\x05R\x0fprotocolVersion\x12\x1c\n" +
-	"\tnamespace\x18\x03 \x01(\tR\tnamespace\x12\x12\n" +
+	"\x10protocol_version\x18\x02 \x01(\x05R\x0fprotocolVersion\x12\x12\n" +
 	"\x04name\x18\x04 \x01(\tR\x04name\x12T\n" +
 	"\x15required_capabilities\x18\x05 \x03(\x0e2\x1f.soulstack.plugin.v1.CapabilityR\x14requiredCapabilities\x12B\n" +
 	"\fside_effects\x18\x06 \x03(\v2\x1f.soulstack.plugin.v1.SideEffectR\vsideEffects\x12F\n" +
@@ -443,7 +445,7 @@ const file_v1_manifest_proto_rawDesc = "" +
 	"soulBeacon\x12#\n" +
 	"\rbinary_sha256\x18\n" +
 	" \x01(\tR\fbinarySha256B\x06\n" +
-	"\x04specJ\x04\b\b\x10\tR\fcloud_driver\"\xb3\x01\n" +
+	"\x04specJ\x04\b\x03\x10\x04J\x04\b\b\x10\tR\tnamespaceR\fcloud_driver\"\xb3\x01\n" +
 	"\x0eSoulModuleSpec\x12G\n" +
 	"\x06states\x18\x01 \x03(\v2/.soulstack.plugin.v1.SoulModuleSpec.StatesEntryR\x06states\x1aX\n" +
 	"\vStatesEntry\x12\x10\n" +

@@ -8,12 +8,22 @@ import "v1/common.proto";
 
 option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
 
-// Manifest — the root document of a plugin's `manifest.yaml` (ADR-020(a, e),
-// docs/keeper/plugins.md → Manifest).
+// ⚠ THIS FILE IS A HAND-SYNCED DEAD DOCUMENT (NIM-772).
 //
-// Parsed by `soul-lint` WITHOUT running the binary (ADR-009 requirement).
-// Wire format is YAML on disk; in the Go runtime it's this message
-// (parsed via YAML→JSON→protojson or aligned YAML parsing).
+// `Manifest` and its `*Spec` sub-messages have zero non-test Go references: nothing
+// parses them, nothing emits them, and no wire path carries them. The live contract is
+// the schema document in `sdk/schema` (re-exported at `shared/plugin/document.go`,
+// enforced in `sdk/schema/validate.go`), generated from Go `module.Def` values since
+// NIM-377 — there is no `manifest.yaml` to parse any more. Adding or removing a kind is
+// an `sdk/` change; the contribution here is only that a retired number stays
+// `reserved` (ADR-020(c) — a number is never reused).
+//
+// It is kept, and kept honest, because plugin authors pull `proto/plugin/` as its own Go
+// module (ADR-011) and read it as a contract. Recorded in
+// docs/naming-rules.md → Plugin manifest.
+//
+// Manifest — the root document a plugin used to ship as `manifest.yaml` (ADR-020(a, e),
+// docs/keeper/plugins.md → Manifest).
 message Manifest {
   // Plugin type discriminator (ADR-020(e)). Closed enum, see common.proto.
   Kind kind = 1;
@@ -25,14 +35,21 @@ message Manifest {
   // ADR-007).
   int32 protocol_version = 2;
 
-  // Plugin collection: `core` for built-ins, `acme` / `community` / an
-  // organization name.
-  // Regex: `^[a-z][a-z0-9-]{0,30}$` (docs/naming-rules.md → Plugin
-  // manifest: name regexes).
-  string namespace = 3;
+  // 3 was `string namespace`, the plugin's collection (`acme` / `community`), removed
+  // with the mechanism itself (NIM-377): an artifact carries no namespace and no name of
+  // its own, and address level 1 is the alias the operator wrote in
+  // `keeper.yml::plugins.*[].name` (ADR-020(p)). The origin-grouping level it spelled is
+  // separately removed by the ADR-020 amendment of 2026-09-02 (NIM-764 / NIM-765) —
+  // origin is answerable from the catalog entry's `source`, not from an address.
+  // Reserved rather than deleted: an already-built third-party plugin may still put it on
+  // the wire, and reusing 3 would decode that field as something else (ADR-020(c)).
+  reserved 3;
+  reserved "namespace";
 
-  // Plugin name within its collection. Module addressing is
-  // <namespace>.<name>.<state>.
+  // Plugin name. ⚠ Dead by the same NIM-377 removal as `namespace` above — the artifact
+  // publishes only its modules, and what an operator addresses is the registration
+  // alias. Kept only because retiring a second number is its own decision; nothing
+  // reads it.
   // Regex: `^[a-z][a-z0-9-]{0,62}$`.
   string name = 4;
 
@@ -70,7 +87,9 @@ message Manifest {
 message SoulModuleSpec {
   // Map of the module's supported states. Key is <state-name>,
   // regex `^[a-z][a-z0-9-]{0,30}$` (`installed` / `running` / `restarted` / …).
-  // Destiny step addressing is <namespace>.<name>.<state>.
+  // Destiny step addressing is <alias>.<object>.<action> — the registration alias, the
+  // object the module manages, and the state it is left in (`haproxy.instance.running`).
+  // ADR-020 amendment 2026-09-02 (NIM-764 / NIM-765).
   map<string, StateDef> states = 1;
 }
 
@@ -105,8 +124,9 @@ message SshProviderSpec {
 // Beacon is read-only by construction (observes, never mutates the host).
 // No states-map like SoulModule is needed here: a beacon has one operation
 // type (Check); "state" semantics live at the scheduler level
-// (edge-triggered last-state). A Vigil is addressed as `<namespace>.<name>`
-// in `VigilDef.check`.
+// (edge-triggered last-state). A Vigil is addressed in `VigilDef.check` by the
+// bare registration alias — ONE level, because a beacon artifact declares no
+// modules and serves a single endpoint (NIM-770).
 message SoulBeaconSpec {
   // JSON Schema for Vigil params (draft 2020-12). Used by the operator when
   // creating a Vigil via OpenAPI/MCP for validation; runtime checks go

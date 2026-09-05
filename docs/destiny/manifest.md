@@ -81,7 +81,7 @@ validate:
 # This destiny uses only core modules → required_modules is not needed.
 # Appears only when custom modules from third-party collections are needed:
 #
-# required_modules: [acme.haproxy, acme.myapp]
+# required_modules: [haproxy.instance, haproxy.backend]
 ```
 
 A working example with a complete `input:` block is in [examples/destiny/redis/destiny.yml](../../examples/destiny/redis/destiny.yml).
