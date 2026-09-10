@@ -1,16 +1,18 @@
-// Package cloudinit renders cloud-init userdata for VMs created by
-// `core.bootstrap.delivered` with `install: true` (ADR-063; the render was written for
-// the removed `core.cloud.provisioned`, ADR-017(h) amendment 2026-05-27, B-flat).
+// Package cloudinit renders cloud-init userdata for a fresh VM: the config
+// resolver (Vault) plus a thin wrapper over the shared install blueprint. It was
+// written for `core.cloud.provisioned` (removed in NIM-761) and last used by
+// `core.bootstrap.delivered` with `install: true` (removed in NIM-834).
 //
-// Userdata carries ONLY soul bootstrap: installing the `soul` binary via
+// ★ It has no production caller left. See [keeper/internal/soulinstall] for why
+// the blueprint is kept: installing a host is site-specific, and this is the
+// normative description of the result an installer must reach.
+//
+// Userdata carries ONLY the soul bootstrap: installing the `soul` binary via a
 // pinned-CA HTTPS curl, the `soul.yml` config with `keeper.endpoints`
-// (host:port LB), the embedded Keeper CA PEM, and the `soul.service`
-// systemd unit. The per-VM bootstrap token is NOT baked into userdata:
-// cloud-provider APIs store userdata in plaintext metadata accessible to
-// VM processes (security floor). The per-VM token is issued in
-// `applyCreated` after Create and put into the task's register output;
-// delivery to the VM is a separate scenario step (typically `keeper.push`
-// via an SSH provider).
+// (host:port LB), the embedded Keeper CA PEM, and the `soul.service` systemd
+// unit. The per-VM bootstrap token is NOT baked into userdata: cloud-provider
+// APIs store userdata in plaintext metadata readable by VM processes (a security
+// floor), so the token travels by a separate channel.
 //
 // The Keeper CA is resolved from Vault via `tls_ca_ref` (calls `ReadKV` for
 // the `ca` field). The CA is public material, but a single source of truth

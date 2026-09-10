@@ -23,7 +23,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
-	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/sdk/module"
 )
 
@@ -105,45 +104,11 @@ type Deps struct {
 	CertPKIMount    func() string            // hot-reload keeper.yml Vault.PKIMount
 	CertKVMount     func() string            // hot-reload keeper.yml Vault.KVMount
 
-	// BootstrapTransport is token delivery mode for `core.bootstrap.delivered`
-	// (ADR-063 amendment): bootstrap.TransportDirect ("" → direct) or
-	// bootstrap.TransportTeleport. Source is keeper.yml::push.transport.
-	// Determines which other Bootstrap* fields are required for module
-	// registration (see gate in Default).
-	BootstrapTransport string
-
 	// BootstrapIssuer is the transactional ready-made-VM onboarding backend for
-	// `core.bootstrap.issued`. It needs only Keeper Postgres and is independent
-	// of the delivery transport. nil disables the issued state.
+	// `core.bootstrap.issued`. It needs only Keeper Postgres. nil means the
+	// module is not registered and a step with that address fails with "unknown
+	// keeper-side module" — the same "not configured" signal as choir and cert.
 	BootstrapIssuer bootstrap.Issuer
-
-	// BootstrapProviders / BootstrapHostCAs / BootstrapDial are dependencies
-	// for keeper-side core module `core.bootstrap.delivered` (ADR-063, per-VM
-	// bootstrap-token delivery over SSH).
-	//
-	// direct mode: all three are wired from same push infrastructure as
-	// SshDispatcher (discovered SshProvider plugins by registration alias +
-	// host-CA from Vault + push.Dial). Module registered only when
-	// BootstrapProviders non-empty AND BootstrapHostCAs non-empty AND BootstrapDial set.
-	//
-	// teleport mode (ADR-063 amendment): BootstrapDial alone suffices
-	// (push.NewTeleportDialer from keeper.yml::push.teleport); BootstrapProviders/
-	// BootstrapHostCAs not needed (Authorize/Sign not called, host-verify
-	// via Teleport identity-file).
-	//
-	// Any gap → module not registered, step with that address
-	// fails with "unknown keeper-side module" (clear "not configured").
-	BootstrapProviders map[string]bootstrap.SshProviderHost
-	BootstrapHostCAs   []push.NamedHostKeyAuthority
-	BootstrapDial      push.Dialer
-
-	// BootstrapInstall is install-blueprint resolver for install mode
-	// `core.bootstrap.delivered` (param `install: true`, teleport only, ADR-063
-	// amendment "full-install over SSH"). Prod wrapper reads keeper.yml::cloud_init
-	// snapshot + Vault (same cloudinit.Resolver as cloud-init userdata). nil
-	// allowed: task with `install: true` returns error, token-only
-	// delivery unaffected.
-	BootstrapInstall bootstrap.InstallResolver
 
 	// Audit is single audit-writer for keeper-side modules (vault/bootstrap/cert
 	// write audit events; soul/choir do not). nil allowed (modules skip write and
@@ -199,42 +164,18 @@ func Default(d Deps) *Registry {
 		m.CSRGen, m.PKIMount, m.KVMount = d.CertCSRGen, d.CertPKIMount, d.CertKVMount
 		mods[cert.Name] = m
 	}
-	// `core.bootstrap` is registered when either the transactional issuer is
-	// available (`issued`) or the required delivery dependency set is present.
-	// The delivery set depends on transport (ADR-063 amendment):
-	//   - teleport: BootstrapDial alone suffices (Teleport-Dialer); providers/host-CA
-	//     not needed (Authorize/Sign not called, host-verify via Teleport);
-	//   - direct (default): providers + host-CA + dialer (full SSH set).
-	// Any gap means build without push access: step with that
-	// address fails with "unknown keeper-side module" (like any unconfigured one).
-	// Symmetric to conditional `core.choir` registration.
-	if d.BootstrapIssuer != nil || bootstrapDeliveryConfigured(d) {
+	// `core.bootstrap` is registered when the transactional issuer is available.
+	// Since NIM-834 the module has only the `issued` state, so the issuer is the
+	// whole dependency set; nil means a build without Keeper Postgres and a step
+	// with that address fails with "unknown keeper-side module" (like any
+	// unconfigured one). Symmetric to conditional `core.choir` registration.
+	if d.BootstrapIssuer != nil {
 		mods[bootstrap.Name] = &bootstrap.Module{
-			Issuer:    d.BootstrapIssuer,
-			Transport: d.BootstrapTransport,
-			Providers: d.BootstrapProviders,
-			HostCAs:   d.BootstrapHostCAs,
-			Dial:      d.BootstrapDial,
-			Install:   d.BootstrapInstall,
-			Audit:     d.Audit,
+			Issuer: d.BootstrapIssuer,
+			Audit:  d.Audit,
 		}
 	}
 	return NewRegistry(mods)
-}
-
-// bootstrapDeliveryConfigured decides whether `core.bootstrap.delivered` has
-// its transport dependencies. The base module may still register with only an
-// Issuer, in which case delivered fails explicitly if invoked.
-// (ADR-063 + amendment). teleport mode requires only dialer; direct requires
-// full SSH set (providers + host-CA + dialer).
-func bootstrapDeliveryConfigured(d Deps) bool {
-	if d.BootstrapDial == nil {
-		return false
-	}
-	if d.BootstrapTransport == bootstrap.TransportTeleport {
-		return true
-	}
-	return len(d.BootstrapProviders) > 0 && len(d.BootstrapHostCAs) > 0
 }
 
 // NewRegistry builds Registry from arbitrary set of implementations.

@@ -252,22 +252,23 @@ type KeeperConfig struct {
 	// Resolved by [KeeperConfig.WebUIEnabled].
 	WebUIEnabled *bool `yaml:"web_ui_enabled,omitempty"`
 
-	// CloudInit holds the cloud-init userdata render parameters for VMs created
-	// by `core.bootstrap.delivered` with `install: true` (ADR-063; written for the
-	// removed `core.cloud.provisioned`, ADR-017(h) amendment 2026-05-27, B-flat
-	// locked). With nil, userdata generation is unavailable: a scenario with
-	// `generate_userdata: true` fails with an explicit error; an explicit
-	// `userdata` in params keeps working unchanged.
+	// CloudInit holds the parameters of the canonical Soul install blueprint —
+	// where the binary comes from, which Keeper endpoint and CA the host is
+	// pointed at ([keeper/internal/soulinstall]). It fed two renderers:
+	// cloud-init userdata for `core.cloud.provisioned` (removed in NIM-761) and
+	// the SSH install script for `core.bootstrap.delivered` with `install: true`
+	// (removed in NIM-834).
 	//
-	// All fields resolve at the GenerateUserdata call (not at daemon start), so a
-	// `keeper.yml` hot-reload is picked up by the next cloud-create step without
-	// restart — via `config.Store.Get()`.
+	// ★ NOTHING READS IT any more, for the same reason as
+	// [KeeperPush.Transport]: installing a host is site-specific and has no
+	// portable form (ADR-063 amendment 2026-09-09). Kept because the blueprint it
+	// parameterizes is the normative description of what an installed host must
+	// look like — paths, permissions, soul.yml (`event_stream_port` is a separate
+	// port from `bootstrap_endpoint`, a live finding) and the systemd unit — and
+	// a site installer is expected to produce exactly that result.
 	//
-	// Userdata does NOT carry bootstrap tokens: the per-VM token is generated
-	// after Create in `applyCreated` and lands in register-output for delivery by
-	// a separate scenario step (typically `keeper.push` via an SSH provider).
-	// See the ADR-017(h) amendment and docs/keeper/cloud.md → "Cloud-init
-	// bootstrap (MVP)".
+	// It never carried a bootstrap token, deliberately: userdata is logged by the
+	// cloud provider, and a secret must not be put there.
 	CloudInit *KeeperCloudInit `yaml:"cloud_init,omitempty"`
 
 	// MaxAwaitTimeout is the operator ceiling on `await_timeout` of the
@@ -1943,28 +1944,25 @@ type KeeperPush struct {
 	// Hot-reload supported (see CovenDefaultProviders).
 	ClusterDefaultProvider string `yaml:"cluster_default_provider,omitempty" json:"cluster_default_provider,omitempty"`
 
-	// Transport is the bootstrap-token delivery mode for
+	// Transport was the bootstrap-token delivery mode for
 	// `core.bootstrap.delivered` (ADR-063 amendment "Teleport by-name
-	// transport"): `direct` (default) or `teleport`. Affects ONLY the keeper-side
-	// token-delivery core module, not the Destiny push run (that is always
-	// generic).
+	// transport"): `direct` (default) or `teleport`. It never affected the
+	// Destiny push run, which is always generic.
 	//
-	//   - direct: generic push.Dial by primary_ip — plugin Authorize/Sign +
-	//     CA-signed host-cert verify (host-CA from `host_ca_refs[]`).
-	//   - teleport: by-name via the Teleport Proxy (target = SID/FQDN, NOT IP).
-	//     Transport+auth+host-verify entirely through the Teleport identity-file
-	//     (`teleport.*` below); plugin Authorize/Sign and Vault host-CA are NOT
-	//     used. A fresh VM appears in Teleport in ~3-5 min → the module retries
-	//     connect (scenario param `join_wait_timeout`).
-	//
-	// Empty is treated as `direct` (backward-compat). With `teleport` the
-	// `teleport.*` block is required (schema-phase validation).
+	// ★ NOTHING READS IT since NIM-834 removed that module: the value is still
+	// accepted and schema-validated, and then nothing happens. The key and the
+	// `teleport.*` block below are kept rather than deleted because the
+	// live-proven Teleport machinery they configure — [push.NewTeleportDialer]
+	// plus the environment requirements in ADR-066 (bot identity without
+	// `pin_source_ip`, `alpn_upgrade` behind an L7-TLS balancer, an active
+	// external IP for enroll) — is what a site-specific host installer connects
+	// through, and re-deriving it is how those findings get lost. Removing the
+	// key is a config-contract change and belongs to whichever ticket writes
+	// that installer.
 	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
 
-	// Teleport holds Teleport creds for `transport: teleport` (ADR-063
-	// amendment). Required with `transport: teleport`, ignored with `direct`. The
-	// creds live in the keeper.yml push block (NOT in the plugin): in teleport
-	// mode the soul-ssh-teleport plugin does not take part in the delivery flow.
+	// Teleport holds the Teleport identity creds. See [KeeperPush.Transport] for
+	// why this block currently has no consumer.
 	Teleport *KeeperPushTeleport `yaml:"teleport,omitempty" json:"teleport,omitempty"`
 }
 

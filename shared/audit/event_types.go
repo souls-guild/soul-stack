@@ -392,13 +392,18 @@ const (
 	// `created`/`destroyed`. Cloud credentials were never included.
 	EventCloudProvisioned EventType = "cloud.provisioned"
 
-	// EventBootstrapDelivered — the keeper-side core module
-	// `core.bootstrap.delivered` (ADR-063) delivered a per-VM bootstrap token
-	// over SSH to freshly created cloud-init VMs. `source: keeper_internal`,
-	// `archon_aid: NULL`. Payload: `{action: "delivered", ssh_provider, count,
-	// sids}` — WITHOUT tokens (the plain token itself is visible only in the
-	// register of the issuing step and is masked on all of its outputs; it does
-	// not reach here).
+	// EventBootstrapDelivered — RETIRED (NIM-834): nothing emits this any more,
+	// because `core.bootstrap.delivered` is gone — installing a host is
+	// site-specific and has no portable form (ADR-063 amendment 2026-09-09). The
+	// constant stays so the catalog can still describe the audit rows already
+	// written: `source: keeper_internal`, `archon_aid: NULL`, payload
+	// `{action: "delivered", ssh_provider, count, sids}` — WITHOUT tokens.
+	//
+	// ★ The wire value stays RESERVED. Like a proto field number, a retired
+	// event id is never handed to a different event: `audit_log` holds rows
+	// written under it, and a reader labelling them by the catalog would
+	// describe old history with new semantics. Guarded by
+	// TestRetiredEventIDsAreNotReused.
 	EventBootstrapDelivered EventType = "bootstrap.delivered"
 
 	// EventBootstrapIssued — the keeper-side core module

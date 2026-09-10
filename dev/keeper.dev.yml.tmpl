@@ -219,37 +219,22 @@ cadence_scheduler:
 # The RBAC catalog lives in Postgres (ADR-028), managed via the role.* API/MCP;
 # the `rbac:` key in keeper.yml is no longer accepted.
 
-# push - bootstrap delivery of the `core.bootstrap.delivered` token (ADR-063) and
-# push-run of Destiny (ADR-032). The whole block is optional.
+# push - push-run of Destiny over SSH (ADR-032). The whole block is optional.
 #
-# transport (ADR-063 amendment) - the bootstrap token delivery mode:
-#   direct (default): generic SSH via primary_ip (plugin Authorize/Sign +
-#     CA-signed host-cert verify via host_ca_refs[]).
-#   teleport: by-name via Teleport Proxy (target = SID/FQDN, NOT an IP).
-#     Transport+auth+host-verify go entirely through the Teleport identity file;
-#     plugin Authorize/Sign and the Vault host-CA are NOT used. A fresh VM
-#     shows up in Teleport after ~3-5min -> the module retries the connect
-#     (scenario-param join_wait_timeout, default 360s).
-#
-# The stand renders `direct` (NIM-266). teleport is not a matter of taste here: it
-# requires teleport.identity_file, minted by `tctl auth sign` against a live Teleport,
-# and nothing in this repo creates that file - so a committed `transport: teleport`
-# made keeper refuse to start on every clean machine ("build bootstrap teleport
-# dialer: identity file could not be decoded"), which is what the comment three
-# lines above already said would happen.
-#
-# Opt in against a real Teleport through the stand profile - dev/stand-env.sh renders
-# the teleport block, and keeper-run.sh checks the identity file exists first:
-#   DEV_PUSH_TRANSPORT=teleport \
-#   DEV_TELEPORT_PROXY_ADDR=proxy.example.com:443 \  # gRPC sshgrpc-listener of the Proxy
-#   DEV_TELEPORT_CLUSTER=example.com \               # cluster where node names (SID) resolve
-#   DEV_TELEPORT_IDENTITY_FILE=<path>                # default: ${STAND_DEV_DIR}/keeper-push.identity
+# transport: NIM-834 removed `core.bootstrap.delivered`, the only thing that ever
+# read this key, so it is now inert - see shared/config/keeper.go for why the key
+# and the teleport block are kept rather than deleted. `direct` stays the stand
+# default because it is what the stand used (NIM-266) and because it is the value
+# that does nothing surprising.
 push:
   transport: ${PUSH_TRANSPORT}${PUSH_TELEPORT_BLOCK}
 
-# cloud-init userdata for core.cloud.provisioned (ADR-017(h));
-# dev stand: bastion tunnel 192.168.2.3, CA in Vault (field ca), artifact host :8443.
-# dedicated: bootstrap_endpoint/soul_binary_url are hardcoded to the default dev - parameterize for full isolation (NIM-25).
+# cloud_init - the parameters of the canonical Soul install blueprint
+# (keeper/internal/soulinstall). Both of its renderers lost their caller
+# (core.cloud.provisioned in NIM-761, core.bootstrap.delivered in NIM-834), so
+# nothing on the stand reads this block either; it is kept as the normative
+# description of an installed host. dev stand: bastion tunnel 192.168.2.3, CA in
+# Vault (field ca), artifact host :8443.
 cloud_init:
   bootstrap_endpoint: "192.168.2.3:9442"
   # EventStream (mTLS) lives on 9443 - without this, the blueprint derived both ports of

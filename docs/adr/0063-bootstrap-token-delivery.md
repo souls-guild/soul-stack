@@ -1,6 +1,8 @@
 # ADR-063. core.bootstrap.issued / delivered — keeper-side bootstrap tokens and delivery
 
-> **Status: active.** architect's design (A1 "thin delivery"), public names `core.bootstrap.delivered` and `core.bootstrap.issued` confirmed by the user. The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
+> **Status: active for `issued`; `delivered` is REMOVED (amendment 2026-09-09, NIM-834).** Everything below the header describing `core.bootstrap.delivered` — design A1, its parameters, its transports, install mode — is **history**: the module is gone, and installing a host is the site's own job. What it guaranteed is not history: the [amendment 2026-09-09](#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) restates it as **requirements on whoever installs the host**. Read that amendment first; read the rest for the reasoning behind each requirement, which is where the live runs that paid for them are recorded.
+>
+> architect's design (A1 "thin delivery"), public names `core.bootstrap.delivered` and `core.bootstrap.issued` confirmed by the user. The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
 >
 > **Implementation progress.** Pilot slice implemented: module + conditional registration + Deps + scenario-swap (`keeper.push.applied` stub → `core.bootstrap.delivered`) + unit tests. **C1 (cloud-init CA-signed host-key) and live-e2e — the next slice, NOT this one** (see §MVP Boundaries). Before C1 a live run of direct mode will break: `push.Dial` rejects the host-cert of a fresh VM whose cloud-init installed a bare (not CA-signed) host-key.
 >
@@ -37,7 +39,7 @@ The module places on the VM **ONLY the token** (everything else — the soul bin
 
 - Namespace `core`, module `bootstrap`, state `delivered`. The registry key is the base `core.bootstrap`; the state comes from the address suffix via `config.SplitModuleAddr` (like all keeper-side cores).
 - Full task name: `module: core.bootstrap.delivered`. Side **Keeper-side**, the step **must** carry `on: keeper`.
-- Implementation — [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+- Implementation — `keeper/internal/coremod/bootstrap/delivered.go`, deleted in NIM-834.
 
 ## Parameters (`params:`)
 
@@ -153,7 +155,7 @@ test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat
 
 - **Closes BUG#2 cloud-provision** (the `keeper.push.applied` keeper-side stub did not exist).
 - **The name `keeper.push.applied` is rejected** as a keeper-side core address: `push.applied` is the audit-event type of an operator-initiated Destiny push run (`POST /v1/push/apply`), not a keeper-side token-delivery module. The coincidence was an illustrative scenario stub that was misleading.
-- **A separate bin-doc** — [docs/keeper/modules.md → `core.bootstrap.delivered`](../keeper/modules.md#corebootstrapdelivered).
+- **A separate bin-doc** — [docs/keeper/modules.md → `core.bootstrap.delivered`](../keeper/modules.md#corebootstrapdelivered--removed-nim-834), now the removal note.
 
 ## Amendment 2026-07-26 — a host that was already onboarded is skipped, not failed (NIM-189)
 
@@ -284,3 +286,115 @@ caller, ownership irrelevant.
 A scenario that re-maps `register.<issue>.hosts` into delivery's `hosts` must
 carry `onboarded` through. Dropping it turns a converged entry into a host with
 no `bootstrap_token`, which delivery is right to reject.
+
+## Amendment 2026-09-09 — `delivered` is removed, installing a host is site-specific (NIM-834)
+
+**Decision.** `core.bootstrap.delivered` is **removed**. `core.bootstrap.issued`
+**stays**: minting is an INSERT of a pending Soul plus the hash of a fresh
+one-time token in one Postgres transaction, and nothing outside the Keeper can
+do that.
+
+**Why the delivery half had to go.** The module did two unrelated things — it
+put the Soul binary on the host and it handed the host its token — and only the
+second is ours. Installation is different at every site: a prepared image, a
+cloud-init cycle, somebody's own shell script, somebody else's fleet manager.
+The evidence is in this ADR's own history: the module accreted a second
+transport, then a full-install mode, then an init phase, then a second soul.yml
+port, each one a platform meeting the previous design and not fitting. There is
+no right way to install a host from the engine, so the engine should not have
+one. The two paths it grew — `RenderCloudInitYAML` and `RenderInstallScript` in
+[keeper/internal/soulinstall](../../keeper/internal/soulinstall) — are kept as
+the **normative description of the result**, not as an implementation: they
+describe the files, paths, permissions, `soul.yml` and systemd unit an installed
+host must end up with. Neither has a caller any more.
+
+**The engine's remaining half of onboarding** is `core.bootstrap.issued →
+(install, off-engine) → core.soul.registered(await_online)`. The middle step is
+outside the scenario, and a scenario that mints a token and never has it
+redeemed will block at the barrier until the run timeout. That is the honest
+shape of it today; naming it is the point of this amendment.
+
+### ★ Requirements on whoever installs the host
+
+Each of these was paid for by a live run, and **none of them is reproduced by
+writing a file with the token in it**. An installer that misses one produces a
+host that never onboards, silently.
+
+**1. The token must be REDEEMED, not merely placed.** There is no soul-side
+pickup of a token file — the seed is created ONLY by `soul init`. The live run
+that found this delivered the token, nobody redeemed it, and `soul run` sat in a
+restart loop on "SoulSeed not found" (see the [init-phase
+amendment](#amendment-2026-07-02--init-phase-in-the-a1-flow-unit-activation-event_stream_port)).
+The redeem command, and its guard:
+
+```
+test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" /usr/local/bin/soul init --config /etc/soul/soul.yml
+```
+
+The seed-cert guard is **mandatory**, not tidiness: a bootstrap token is
+single-use, so an unguarded retry after a successful redeem fails the host on
+the installer's second run. The guard path is `soulinstall.SeedCertPath`, pinned
+against soul's own seed layout by `TestSeedCertPath_SyncWithSoulSeedLayout` —
+an installer that hardcodes the path instead of taking it from there is one
+refactor away from a guard that never matches.
+
+**2. The token travels in STDIN, never in argv.** A command argument is visible
+in `ps`, in `audit.log` and in journald **on the host itself**, so the write is
+`cat > <token_path>` fed from stdin, and the redeem carries the literal
+unexpanded `$(cat <token_path>)`, which the subshell expands on the host —
+keeping the token out of the caller's argv too. The same floor applies to every
+other secret in the install (the CA PEM, `soul.yml`): body in stdin, path in the
+command. `RenderInstallScript` guarantees this constructively, and the
+ARGV-LEAK-GUARD test in `soulinstall` is what keeps it true.
+
+**3. Unit activation is `daemon-reload && enable && start`, not `start`.** Also
+a live finding: push-install did a bare `systemctl start soul`, and after a VM
+reboot the unit did not come up. `daemon-reload` picks up the freshly written
+unit, `enable` survives the reboot; all three are idempotent.
+
+### What the module gave for free and an installer must now provide itself
+
+- **`Authorize` before the connect (fail-closed).** A provider deny aborted
+  delivery before an SSH session was opened, rather than after.
+- **An ephemeral ed25519 keypair per host, private key never leaving the
+  Keeper.**
+- **CA-signed host-cert verification** against the host CA from Vault. TOFU was
+  refused outright: an empty host-CA set was an error, never a blind connect.
+- **No token in the step output.** The plaintext is revealed exactly once, in
+  the register of the minting step, where the common secret masker redacts it by
+  key; the delivery step's own output carried `{sid, delivered, started}` and
+  nothing else.
+- **B1-strict, per host.** Any host failing anything failed the whole step, so
+  the run went to `error_locked` rather than committing state over a group that
+  was only partly up.
+- **A wait for the host to become reachable, bounded and named.** A fresh VM
+  appeared in Teleport only ~3-5 minutes after creation, so the connect was a
+  retry with backoff against `join_wait_timeout`. Whatever waits now needs the
+  same invariant against the run timeout: a wait ceiling that can exceed the
+  effective run timeout is a dead setting, and the run aborts before the host
+  ever arrives.
+
+### What is kept, and what stopped having a consumer
+
+- **Kept as reference:** [keeper/internal/soulinstall](../../keeper/internal/soulinstall)
+  (the blueprint plus the two guards above) and
+  [keeper/internal/cloudinit](../../keeper/internal/cloudinit) (the resolver over
+  it). **Kept as machinery:** `keeper/internal/push/dial_teleport.go` with
+  `keeper.yml::push.transport` / `push.teleport`, because the environment
+  constraints [ADR-066](0066-teleport-onboarding-profile.md) proved live — a bot
+  identity without `pin_source_ip`, `alpn_upgrade` behind an L7-TLS balancer, an
+  active external IP before enroll — are what a site installer reaching a VM
+  through Teleport has to satisfy, and they are cheaper to keep than to
+  rediscover.
+- **Inert config:** `push.transport` and `cloud_init` are still parsed and
+  validated, and now nothing reads them. Removing them is a config-contract
+  change and belongs to the ticket that writes the installer.
+- **Retired audit event:** `bootstrap.delivered` is emitted by nothing. The
+  constant stays and its wire value stays **reserved** — `audit_log` holds rows
+  written under it, and handing the id to a different event would relabel that
+  history (`TestRetiredEventIDsAreNotReused`). `bootstrap.issued` is unchanged.
+- **`core.bootstrap.delivered` is refused, not ignored**, on both sides:
+  soul-lint does not resolve the address against the core catalog, and the
+  keeper-side module answers `unknown state "delivered"`. Silence would be the
+  dangerous outcome — a run that skips installation reaches `await_online` and
+  fails there, minutes away and one subject away from the cause.

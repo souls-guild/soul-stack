@@ -1,8 +1,10 @@
 # `core.bootstrap`
 
-Keeper-side onboarding of Soul agents. The public states are
-`core.bootstrap.issued` and `core.bootstrap.delivered`; both tasks require
-`on: keeper`.
+Keeper-side onboarding of Soul agents. One public state, `core.bootstrap.issued`;
+the task is routed by its module address and carries no `on:` key.
+
+The second state, `core.bootstrap.delivered`, was **removed in NIM-834** —
+[see below](#corebootstrapdelivered--removed-nim-834).
 
 ## `core.bootstrap.issued`
 
@@ -68,17 +70,17 @@ hosts:
     onboarded: true
 ```
 
-A converged host keeps its slot in `hosts[]`: `core.bootstrap.delivered` skips
-exactly that entry shape, and it refuses an *empty* list — so dropping the entry
-would move the dead end to delivery instead of removing it. `count` stays the
-number of requested SIDs; `skipped` counts the converged ones. The entry carries
-no `primary_ip` and needs none on either transport — delivery settles the
-`onboarded` flag before the `direct`-transport address requirement, because a
-skipped host is never dialed.
+A converged host keeps its slot in `hosts[]`, in order: the list answers for
+every requested host, and the flag carries WHY that one has no token. `count`
+stays the number of requested SIDs; `skipped` counts the converged ones.
 
-⚠ **A scenario that re-maps `hosts` between the two steps must carry `onboarded`
-through.** Rebuilt as `{sid, bootstrap_token, primary_ip}` alone, a converged
-entry reaches delivery as a host with no token, which delivery is right to reject.
+⚠ **Anything that re-maps `hosts` must branch on `onboarded` before reaching for
+the token.** On a converged entry the `bootstrap_token` key is **absent, not
+empty**, and reading an absent key in CEL is an error — so a mapping written for
+the happy path fails the step on exactly the run that was repeated to repair it.
+Writing an empty token in place of the flag satisfies the letter and breaks the
+same thing: the consumer then treats a host with an identity as one waiting for a
+capability.
 
 The plaintext exists only in the current run's register so the next task can
 deliver it. Postgres stores only its SHA-256 hash. `bootstrap_token` is a
@@ -91,38 +93,42 @@ Every successful repeat over an eligible SID returns fresh plaintext and
 invalidates the preceding unused token. This is the recovery path after an
 interrupted or expired delivery.
 
-## `core.bootstrap.delivered`
+## `core.bootstrap.delivered` — REMOVED (NIM-834)
 
-Consumes `hosts` from either `core.bootstrap.issued` or `core.cloud.created`,
-puts each token on its host through stdin, runs guarded `soul init`, and
-optionally starts `soul.service`. With `install: true` it first installs the full
-Soul setup; full-install is available with Teleport transport.
+The state that put the token on the host, redeemed it and started the unit is
+gone. It did two unrelated things — install the Soul binary and hand over the
+token — and installation is different at every site, so the engine no longer has
+one way to do it. Installing a host is the site's own job; minting stays here,
+because it is an INSERT of a pending Soul plus the token hash in one Postgres
+transaction.
 
-Teleport addresses a host by `sid`, so `hosts[].primary_ip` is optional there.
-Direct transport dials by IP and still requires a non-empty `primary_ip` — for
-every host it actually dials. A host flagged `onboarded: true` is not one of
-them and needs no address on either transport (see above). See [keeper module reference](../../../keeper/modules.md#corebootstrapdelivered)
-and [ADR-063](../../../adr/0063-bootstrap-token-delivery.md) for the full delivery
-parameters and secret-transfer invariants.
+Three requirements moved with the work, each paid for by a live run and **none of
+them reproduced by writing a file with the token in it** — full text in the
+[ADR-063 amendment 2026-09-09](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834):
 
-Typical ready-made VM chain:
+1. **Redeem, do not merely place.** There is no soul-side pickup of a token file;
+   `soul init` is the only thing that creates a seed, and it must sit behind the
+   seed-cert guard because a bootstrap token is single-use.
+2. **STDIN, never argv** — argv is visible in `ps`, `audit.log` and journald on
+   the host itself.
+3. **`daemon-reload && enable && start`**, or the unit does not survive a reboot.
+
+The address is refused rather than ignored, offline by soul-lint and at runtime
+by the module (`unknown state "delivered"`).
+
+Ready-made VM chain today:
 
 ```yaml
-- on: keeper
-  module: core.bootstrap.issued
+- module: core.bootstrap.issued
   register: bootstrap
   params: {sids: "${ input.sids }"}
 
-- on: keeper
-  module: core.bootstrap.delivered
-  require: [bootstrap]
-  params:
-    hosts: "${ register.bootstrap.hosts }"
-    ssh_provider: teleport-ready-vm
-    install: true
+# Install the Soul agent on each host and redeem its token — off-engine and
+# site-specific since NIM-834. Until it happens the hosts have no identity, and
+# the barrier below waits for presence that cannot arrive.
 
-- on: keeper
-  module: core.soul.registered
+- module: core.soul.registered
+  require: [bootstrap]
   params:
     sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
     await_online: true

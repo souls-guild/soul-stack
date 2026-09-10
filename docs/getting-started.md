@@ -166,7 +166,7 @@ Checking - the host is visible as `connected`:
 curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
 ```
 
-> **Method of delivering the token and binary to the real host** - operator choice (SSH/SCP, cloud-init, CI, script step `core.bootstrap.delivered`). List - [soul/onboarding.md → Delivery methods](soul/onboarding.md).
+> **Method of delivering the token and binary to the real host** - operator choice (SSH/SCP, cloud-init, CI, a site-specific installer). There is no engine step for it: `core.bootstrap.delivered` was removed in NIM-834. List - [soul/onboarding.md → Delivery methods](soul/onboarding.md).
 
 ## Step 7. Apply: apply script `hello-world`
 

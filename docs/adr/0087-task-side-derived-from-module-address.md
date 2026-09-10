@@ -53,7 +53,7 @@ bases:**
 
 | base | registration |
 |---|---|
-| `core.bootstrap` | [`keeper/internal/coremod/bootstrap/delivered.go:77`](../../keeper/internal/coremod/bootstrap/delivered.go) |
+| `core.bootstrap` | [`keeper/internal/coremod/bootstrap/issued.go`](../../keeper/internal/coremod/bootstrap/issued.go) (was `delivered.go` until NIM-834 removed the delivery state) |
 | `core.cert` | [`keeper/internal/coremod/cert/registered.go:53`](../../keeper/internal/coremod/cert/registered.go) |
 | `core.choir` | [`keeper/internal/coremod/choir/member.go:43`](../../keeper/internal/coremod/choir/member.go) |
 | `core.soul` | [`keeper/internal/coremod/soul/registered.go:55`](../../keeper/internal/coremod/soul/registered.go) |

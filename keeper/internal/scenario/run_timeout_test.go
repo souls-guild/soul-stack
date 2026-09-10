@@ -5,7 +5,6 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
-	"github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -61,8 +60,8 @@ func hostTask() config.Task {
 // TestEffectiveRunTimeout_ProvisionExtends is the RESOLVER UNIT test (the
 // main guard for this bug). A plan with a refresh emitter raises the ceiling
 // to ceiling+deployBudget; a regular plan keeps the base. Without the
-// extension, a provision run would time out at defaultRunTimeout (5m),
-// before joinWait (15m) and await_timeout (up to 30m).
+// extension, a provision run would time out at defaultRunTimeout (5m), before
+// await_timeout (up to 30m).
 func TestEffectiveRunTimeout_ProvisionExtends(t *testing.T) {
 	const ceiling = 30 * time.Minute // same as config.DefaultMaxAwaitTimeout
 	ceilingFn := func() time.Duration { return ceiling }
@@ -142,18 +141,15 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 	}
 }
 
-// TestProvisionTimeoutExceedsJoinWait is a STATIC GUARD INVARIANT (ADR-0061):
-// the provision-aware effective run-timeout (minimum ceiling+deployBudget at
-// the default ceiling) MUST STRICTLY exceed Teleport-join's default
-// joinWait. Otherwise the setting is "dead": the onboarding barrier
-// (`await_online` / join-retry) would hit the run timeout before the host
-// ever joins (the original bug). Catches a future joinWait increase /
-// budget decrease that would make a provision run unreachable again.
-func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
-	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
-	if provisionFloor <= bootstrap.DefaultJoinWaitTimeout {
-		t.Errorf(
-			"provision effective run-timeout floor (%s = DefaultMaxAwaitTimeout %s + deployBudget %s) does NOT exceed joinWait (%s) -- a provision run would abort before onboarding finishes (dead setting)",
-			provisionFloor, config.DefaultMaxAwaitTimeout, deployBudget, bootstrap.DefaultJoinWaitTimeout)
-	}
-}
+// TestProvisionTimeoutExceedsJoinWait was removed with
+// `core.bootstrap.delivered` (NIM-834). Its subject was that module's
+// Teleport-join wait: the provision-aware run-timeout floor had to exceed the
+// window the step spent waiting for a fresh VM to appear in Teleport. With the
+// step gone there is no join wait, and the remaining barrier — `await_online`
+// — is already bounded by DefaultMaxAwaitTimeout, which the floor contains by
+// construction (floor = DefaultMaxAwaitTimeout + deployBudget), so a guard over
+// it would compare a value with itself.
+//
+// It comes back with whatever installs the host: an installer that waits for a
+// host to become reachable reintroduces exactly this class of dead setting, and
+// its own wait ceiling needs the same invariant against the run timeout.

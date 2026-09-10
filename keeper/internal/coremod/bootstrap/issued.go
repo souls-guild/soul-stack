@@ -1,3 +1,19 @@
+// Package bootstrap implements the keeper-side core module `core.bootstrap`
+// (ADR-063, docs/keeper/modules.md). Its single state `issued` mints bootstrap
+// tokens for ready-made VMs: the pending Soul row and the hash of a fresh
+// one-time token are written in one Postgres transaction, which is why minting
+// happens in the Keeper and nowhere else.
+//
+// The second state, `delivered`, was REMOVED in NIM-834. It did two unrelated
+// things — put the Soul binary on the host and hand the host its token — and
+// installation has no portable form: every platform installs differently
+// (image, cloud-init, its own shell, somebody else's fleet manager). Installing
+// a host is now the site's own job. What the module guaranteed for free did NOT
+// go with it: the three live-proven requirements it carried are recorded as
+// requirements on whoever installs the host, in the ADR-063 amendment
+// 2026-09-09 — redeem the token with `soul init` rather than merely writing it,
+// pass it through STDIN and never argv, and activate the unit with
+// `daemon-reload && enable && start` rather than a bare `start`.
 package bootstrap
 
 import (
@@ -14,6 +30,68 @@ import (
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
+
+// Name is the base module name without the state suffix (Registry key). The
+// author form is `core.bootstrap.issued`; the state arrives in
+// pluginv1.ApplyRequest.state and is checked in Validate and Apply.
+const Name = "core.bootstrap"
+
+// StateIssued is the only state this module has. `delivered` was removed in
+// NIM-834 and is deliberately not special-cased here: a scenario still carrying
+// that address must fail as loudly as any other unknown state.
+const StateIssued = "issued"
+
+// AuditWriter writes the `bootstrap.issued` event.
+type AuditWriter interface {
+	Write(ctx context.Context, event *audit.Event) error
+}
+
+// Module implements sdk/module.SoulModule.
+type Module struct {
+	// Issuer atomically prepares pending agent Souls and their one-time tokens.
+	// nil means the state is not configured — Apply says so instead of panicking.
+	Issuer Issuer
+
+	// Audit is the audit-writer. nil → the write is skipped.
+	Audit AuditWriter
+}
+
+// unknownState is the refusal shared by Validate and Apply.
+func unknownState(state string) string {
+	return fmt.Sprintf("unknown state %q (want %q)", state, StateIssued)
+}
+
+func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
+	if req.State != StateIssued {
+		return &pluginv1.ValidateReply{Ok: false, Errors: []string{unknownState(req.State)}}, nil
+	}
+	return validateIssued(req), nil
+}
+
+func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+	return nil
+}
+
+func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	if req.State != StateIssued {
+		return util.SendFailed(stream, unknownState(req.State))
+	}
+	return m.applyIssued(req, stream)
+}
+
+// maskErr masks a possible secret leak (vault-ref / token) in an error text
+// before it is returned in a failed event. Same substring filter as
+// shared/audit, which cleans register output. The key `_` is non-secret.
+func maskErr(err error) string {
+	if err == nil {
+		return ""
+	}
+	masked := audit.MaskSecrets(map[string]any{"_": err.Error()})
+	if s, ok := masked["_"].(string); ok {
+		return s
+	}
+	return "***MASKED***"
+}
 
 // IssuedHost is one successfully prepared ready-made VM. The plaintext token
 // stays wrapped until applyIssued deliberately places it in the current run's

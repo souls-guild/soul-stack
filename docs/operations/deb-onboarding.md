@@ -403,7 +403,7 @@ paths:
 
 > `event_stream_port` and `bootstrap_port` **both are required** and both are explicit - there is no silent leaving of bootstrap to the event-stream port ([ADR-012(b)](../adr/0012-keeper-soul-grpc.md), [config.md → keeper.endpoints](../soul/config.md)). Multiple keepers are listed as multiple `endpoints[]` entries with `priority`.
 
-**Token delivery.** The method of physical delivery of the bootstrap token to the host is the choice of operator ([onboarding.md → Delivery methods](../soul/onboarding.md)): script step `core.bootstrap.delivered`, SSH/SCP, CI/CD, cloud-init. Security Advisory: token file `mode 0400` owner `soul-stack`, directory `mode 0700`; on systemd ≥ 250 - `LoadCredential=` (token in tmpfs, not to disk).
+**Token delivery.** The method of physical delivery of the bootstrap token to the host is the choice of operator ([onboarding.md → Delivery methods](../soul/onboarding.md)): SSH/SCP, CI/CD, cloud-init, a site-specific installer. There is no engine step for it since NIM-834 removed `core.bootstrap.delivered`. Security Advisory: token file `mode 0400` owner `soul-stack`, directory `mode 0700`; on systemd ≥ 250 - `LoadCredential=` (token in tmpfs, not to disk).
 
 ### 8.4. `soul init` - token exchange for SoulSeed
 

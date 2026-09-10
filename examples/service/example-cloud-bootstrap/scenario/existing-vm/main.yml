@@ -1,9 +1,10 @@
 name: existing-vm
 create: true
 description: >-
-  Onboard ready-made VMs without creating them through a CloudDriver. Keeper
-  atomically issues one token per FQDN/SID, installs and redeems it through the
-  configured Teleport transport, then waits for every Soul to come online.
+  Onboard ready-made VMs. Keeper atomically mints one bootstrap token per
+  FQDN/SID, then waits for every Soul to come online. Installing the agent on
+  each host and redeeming its token happens between the two steps and is NOT an
+  engine step — see the README.
 
 input:
   sids:
@@ -12,36 +13,37 @@ input:
       type: string
     required: true
     description: Non-empty unique FQDN/SID list of the ready-made VMs.
-  ssh_provider:
-    type: string
-    required: true
-    description: Audit label for bootstrap delivery (Teleport auth comes from Machine ID).
-  join_wait_timeout:
-    type: string
-    required: false
-    description: Maximum time to wait until each VM joins Teleport.
 
 tasks:
-  - name: Issue bootstrap tokens for ready-made VMs
+  - name: Mint bootstrap tokens for ready-made VMs
     module: core.bootstrap.issued
     register: bootstrap
     params:
       sids: "${ input.sids }"
 
-  - name: Install Soul and deliver tokens through Teleport
-    module: core.bootstrap.delivered
-    register: delivered
-    require: [bootstrap]
-    params:
-      hosts: "${ register.bootstrap.hosts }"
-      ssh_provider: "${ input.ssh_provider }"
-      install: true
-      join_wait_timeout: "${ has(input.join_wait_timeout) ? input.join_wait_timeout : '15m' }"
+  # ── The host is installed HERE, and not by this scenario. ──────────────────
+  #
+  # `core.bootstrap.delivered` used to sit at this point; NIM-834 removed it,
+  # because installing a host is different at every site and the engine has no
+  # portable way to do it. Whatever fills this gap must do three things, each
+  # one paid for by a live run and NONE of them satisfied by writing a file with
+  # the token in it (ADR-063 amendment 2026-09-09):
+  #
+  #   1. REDEEM the token, not just place it — `soul init` behind the seed-cert
+  #      guard. There is no soul-side pickup of a token file, and a bootstrap
+  #      token is single-use, so an unguarded retry fails the host.
+  #   2. Pass the token through STDIN, never argv — argv is visible in `ps`,
+  #      `audit.log` and journald ON THE HOST ITSELF.
+  #   3. Activate with `daemon-reload && enable && start`, or the unit does not
+  #      come back after a reboot.
+  #
+  # Until that happens the hosts have no identity, and the barrier below waits
+  # for a presence that cannot arrive: this run ends at the run timeout.
 
   - name: Await ready-made VM onboarding
     module: core.soul.registered
     register: onboarded
-    require: [delivered]
+    require: [bootstrap]
     params:
       sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
       await_online: true

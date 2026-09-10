@@ -9,7 +9,7 @@ Addressing (`<namespace>.<module>.<state>`) and SoulModule contract are the same
 | `on:` | Where is it performed | Suitable for modules |
 |---|---|---|
 | omitted / `[coven, …]` | on incarnation hosts | Soul-side core (`core.pkg.installed`, `core.file.present`, ...) |
-| **omitted** (keeper-side module address) | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.bootstrap.issued` - tokens for ready-made VMs, `core.bootstrap.delivered` - token delivery via SSH, ...) |
+| **omitted** (keeper-side module address) | on the keeper itself | Keeper-side core (`core.soul.registered`, `core.bootstrap.issued` - tokens for ready-made VMs, ...) |
 
 **The side is the module's, and a task does not restate it** (NIM-747). The six keeper-side core base addresses - `core.bootstrap` / `core.cert` / `core.choir` / `core.soul` / `core.state` / `core.vault` - are disjoint from the twenty-one Soul-side ones, so the address alone routes the step. `on: keeper` on one of them is a validation error (`on_keeper_redundant`), and a Soul-side address is a host task however it is written. The catalog is one list, `shared/coremanifest`, read by both `soul-lint` and the render pipeline; a plugin declares its own side in its schema document (`side: keeper | soul`, default `soul`), and since NIM-758 the Keeper **routes by it** - see [Keeper-side plugin modules](#keeper-side-plugin-modules) below. `on: keeper` on a PLUGIN address stays legal regardless: a scenario cannot read the artifact's document, so unlike a core address it has nothing to derive the side from.
 
@@ -29,7 +29,7 @@ Author-form examples → parsing:
 | Task address (`module:`) | Registry-key (`base`) | `ApplyRequest.state` |
 |---|---|---|
 | `core.soul.registered` | `core.soul` | `registered` |
-| `core.bootstrap.issued` / `core.bootstrap.delivered` | `core.bootstrap` | `issued` / `delivered` |
+| `core.bootstrap.issued` | `core.bootstrap` | `issued` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
 | `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
 | `core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset` | `core.state` | the address suffix, one per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb |
@@ -317,64 +317,21 @@ Input `sids` is a required, non-empty, unique list of canonical SID/FQDN values.
 
 A `connected`/`disconnected` Soul already owns an identity, and what happens to it depends on **whose host it is** ([ADR-063 amendment 2026-09-04](../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780)). A host of **this run** — member of the run's incarnation, or of no incarnation yet — is **converged over**: passed through with no token and no write of any kind, reported as `{sid, onboarded: true}`. That is what lets a `create` which died *after* onboarding be repeated to completion, the case the cloud plugin's own idempotence made reachable. A host belonging to **another** incarnation is an identity takeover and is still refused, still rolling the whole batch back; an unknown incarnation (a call outside a run) can claim only unbound rows. The ownership rule is `EnsureProvisionable`'s, shared rather than restated (`keepersoul.OwnedByRun`).
 
-Output `register.<name>.hosts[] = {sid, bootstrap_token, expires_at, created, reissued}` plus `count` / `created` / `reissued` / `skipped` / `action: issued`. A converged host keeps its slot in `hosts[]` carrying only `{sid, onboarded: true}` — `core.bootstrap.delivered` skips exactly that shape, and dropping the entry instead would leave a fully converged re-run failing on delivery's empty-list refusal. **A scenario that re-maps `hosts` between the two steps must carry `onboarded` through**, or a converged entry arrives as a host with no token. Every successful repeat over an eligible SID returns new plaintext and makes the previous unused token unusable. The plaintext exists only in the current run register for per-host delivery; Postgres stores only SHA-256. The `bootstrap_token` key is masked on audit/OTel/SSE/log surfaces and must not be projected to `incarnation.state`. Audit `bootstrap.issued` carries only `{action,count,created,reissued,skipped,sids}`, converged hosts included in `sids`.
+Output `register.<name>.hosts[] = {sid, bootstrap_token, expires_at, created, reissued}` plus `count` / `created` / `reissued` / `skipped` / `action: issued`. A converged host keeps its slot in `hosts[]` carrying only `{sid, onboarded: true}`: the list answers for every requested host, in order, and the flag carries WHY that one has no token. **Anything downstream that re-maps `hosts` must branch on the flag before reaching for the token** — on a converged entry the `bootstrap_token` key is ABSENT, not empty, so a CEL expression that reads it unconditionally fails the step on a repeat run. Every successful repeat over an eligible SID returns new plaintext and makes the previous unused token unusable. The plaintext exists only in the current run register for per-host delivery; Postgres stores only SHA-256. The `bootstrap_token` key is masked on audit/OTel/SSE/log surfaces and must not be projected to `incarnation.state`. Audit `bootstrap.issued` carries only `{action,count,created,reissued,skipped,sids}`, converged hosts included in `sids`.
 
-Canonical ready-made VM chain: `core.bootstrap.issued` → `core.bootstrap.delivered` (`install: true`, `transport: teleport`) → `core.soul.registered` (`await_online: true`, normally `refresh_soulprint: true`).
+Ready-made VM chain: `core.bootstrap.issued` → **(install the host — off-engine, site-specific since NIM-834)** → `core.soul.registered` (`await_online: true`, normally `refresh_soulprint: true`). The middle step is no longer a scenario step; a run that mints a token nobody redeems blocks at the barrier until the run timeout.
 
-## `core.bootstrap.delivered`
+## `core.bootstrap.delivered` — REMOVED (NIM-834)
 
-Delivery of per-VM bootstrap token via SSH to newly created VMs ([ADR-063](../adr/0063-bootstrap-token-delivery.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.bootstrap`; state `delivered` comes from the address suffix. Implementation - [`keeper/internal/coremod/bootstrap/delivered.go`](../../keeper/internal/coremod/bootstrap/delivered.go).
+The delivery state is **gone**. It did two unrelated things — put the Soul binary on the host and hand the host its token — and installation has no portable form: every platform installs differently (a prepared image, a cloud-init cycle, its own shell, a foreign fleet manager). Installing a host is the site's own job now.
 
-**Two transports** (`keeper.yml::push.transport`, [ADR-063 amendment Teleport](../adr/0063-bootstrap-token-delivery.md#amendment-teleport-by-name-transport)): **`direct`** (default) - generic `push.Dial` by required `primary_ip` via SshProvider plugin (Authorize/Sign + CA-signed host-cert verify from Vault host-CA); **`teleport`** - by-name via Teleport Proxy (target=SID, not IP; `primary_ip` is optional; transport+auth+host-verify entirely via Teleport identity-file, Authorize/Sign/Vault-host-CA are not used, retry-to-join). Delivery dependencies are state-specific: direct needs providers + host CAs + dialer, Teleport needs its dialer.
+**What it guaranteed did not go with it.** Three requirements, each paid for by a live run and **none reproduced by writing a file with the token in it**, now bind whoever installs the host — see the [ADR-063 amendment 2026-09-09](../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) for all of them and for what else came free (fail-closed `Authorize`, an ephemeral keypair that never leaves the Keeper, CA-signed host-cert verify, no token in the step output, B1-strict, a bounded wait for the host to become reachable):
 
-**Two operating modes** ([ADR-063 amendment full-install](../adr/0063-bootstrap-token-delivery.md)): **token-only** (default) - cloud-init has already installed setup, only token + redeem is delivered; **full-install** (`install: true`, only `transport: teleport`) - the module first installs the ENTIRE setup (keeper-ca.pem → soul.yml → soul.service → curl soul binary) in steps `soulinstall.RenderInstallScript` - the same shared-blueprint as cloud-init userdata - then token /redeem/start. For platforms where the provider does not accept userdata.
+1. **Redeem the token, do not merely place it.** There is no soul-side pickup of a token file; the seed is created ONLY by `soul init`, behind the seed-cert guard `test -e /var/lib/soul-stack/seed/current/cert.pem` — a bootstrap token is single-use, so an unguarded retry fails the host on the second run.
+2. **The token travels in STDIN, never in argv** — argv is visible in `ps`, `audit.log` and journald **on the host itself**. The redeem carries the literal unexpanded `$(cat <token_path>)`, expanded by the subshell on the host.
+3. **Activation is `daemon-reload && enable && start`**, not a bare `start`, or the unit does not survive a reboot.
 
-**Closes BUG#2 cloud-provision.** Before ADR-063, the scenario carried a stub address `keeper.push.applied`, which keeper-side does not exist (this is an audit-event of a Destiny push run, not a module) - the created VM ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) did not receive a token, the barrier `await_online` did not typed presence, the run went to `error_locked`.
-
-### Design A1 - "thin delivery" + init phase
-
-cloud-init (B-flat, [ADR-017(h)](../adr/0017-keeper-side-core.md)) has already installed a soul binary + CA + systemd-unit on the VM (but **intentionally NOT a token** - userdata is logged by the provider). The module places a token, **redeems it** (`soul init` is the only mechanism for creating SoulSeed; there is no soul-side "pickup" of the token file, [ADR-063 amendment init-phase](../adr/0063-bootstrap-token-delivery.md)) and optionally activates the unit. Per-host stream (**sequentially**):
-
-1. `SshProvider.Authorize(host, user)` — deny interrupts delivery to connect (**fail-closed**).
-2. ephemeral ed25519-keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`s (reuses `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). The private key does not leave Keeper.
-3. `push.Dial` → `Session` (CA-signed host-cert verify, same path as `SshDispatcher.SendApply`).
-4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` - **★ token in STDIN, NOT in argv** (otherwise it will leak to `ps`/audit/journald on VM).
-5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — redeem the token (CSR→Bootstrap-RPC→SoulSeed). Guard by seed-cert = idempotency(single-use token); the literal `$(cat …)` is expanded by the subshell on the VM - the token is not in the keeper's argv. Executes regardless of `start_soul`.
-6. if `start_soul` is `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity with cloud-init runcmd: daemon-reload picks up a fresh unit in install mode, enable survives VM reboot).
-
-**B1-strict:** any host error (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → step `failed` → state not committed → `error_locked`.
-
-### Addressing and side
-
-- Namespace `core`, module `bootstrap`, state `delivered`.
-- Full task name: `module: core.bootstrap.delivered`.
-- Side: **Keeper-side**, derived from the module address. The step carries **no** `on:` key - writing `on: keeper` on it is an error (`on_keeper_redundant`, NIM-747).
-
-### Parameters (`params:`)
-
-| Parameter | Type | Required | Default | Description |
-|---|---|---|---|---|
-| `hosts` | array of object `{sid, bootstrap_token, primary_ip?}` | required | — | List from `${ register.<issue>.hosts }` (`core.bootstrap.issued`) or the register of a `side: keeper` plugin that created the hosts. `primary_ip` is required in direct transport and optional in Teleport, which dials by `sid`. Empty list → `failed`. An entry marked `onboarded: true` — by `core.bootstrap.issued` (NIM-780) or by whatever produced the list — carries no token and is skipped; that flag is the only exemption for a missing token. A skipped host needs **no `primary_ip` on either transport**, since it is never dialed: the requirement is settled after the flag, so the issuance shape `{sid, onboarded: true}` passes on `direct` too. |
-| `ssh_provider` | string | required | — | SshProvider plugin name (`keeper.yml::plugins.ssh_providers[].name`). **★ In `transport: teleport` DOES NOT define a transport** (Authorize/Sign are not called) - the name goes ONLY to audit-payload. |
-| `token_path` | string | optional | `/etc/soul/token` | Path to the token file on the VM. |
-| `ssh_user` | string | optional | `root` | SSH user. |
-| `ssh_port` | int (1..65535) | optional | `22` | sshd TCP port. |
-| `start_soul` | bool | optional | `true` | Unit activation after init: `systemctl daemon-reload && systemctl enable soul && systemctl start soul`. `soul init` (step 5) goes regardless of the flag. |
-| `install` | bool | optional | `false` | Full-install mode: before the token, put the entire setup via SSH (see "Two modes of operation" above). Only `transport: teleport`; in direct mode → Validate error. Requires a configured block `keeper.yml::cloud_init` (blueprint source, config-reuse). |
-| `join_wait_timeout` | duration string (legacy: int seconds) | optional | `15m` | Host Teleport-join waiting ceiling (retry-with-backoff until a node appears in the cluster); relevant only in `transport: teleport`. Upon expiration, step `failed` (B1-strict). |
-
-### Output contract (`output:` module)
-
-`register.<name>.*`: `hosts[] = {sid, delivered, started}` + `count` + `skipped`. A host that was already onboarded is reported as `{sid, delivered: false, started: false, onboarded: true}` and counted in `skipped` (`0` on a clean run); `count` stays the total number of hosts. Plus standard `.changed` (always `true` on success) / `.failed` DSL cores. **★ WITHOUT token in output** - the plain token is visible only in the register of the issuing step (key `bootstrap_token`, masked by `audit.MaskSecrets`); it is not here.
-
-### Security
-
-- Token in STDIN, not in argv (step 4); init step (5) carries the literal unexpanded `$(cat <token_path>)` - the token is expanded by the subshell on the VM, not by the keeper. Audit-payload `bootstrap.delivered` — `{action, ssh_provider, count, sids}`, **without tokens**. The error text is masked (`audit.MaskSecrets`) before the `failed`-event. CA-signed host-cert verify is required (empty host-CA → obvious error). fail-closed Authorize.
-
-### MVP Limits (ADR-063)
-
-- One key-based SshProvider, hosts sequentially. Full-install - only `transport: teleport`.
-- **★ C1 - cloud-init CA-signed host-key (required-for-live direct-mode, separate slice).** `push.Dial` trusts only host-cert signed by host-CA (TOFU refusal) - fresh VM must have CA-signed host-key, otherwise handshake is rejected: up to C1 live-e2e in **direct** mode will not work (the module is valid in render L0 Trial + unit tests). For `transport: teleport` C1 **not applicable** - host-verify goes through Teleport CA.
+The address is **refused, not ignored**: soul-lint does not resolve it against the core catalog, and the keeper-side module answers `unknown state "delivered"`. The canonical description of an installed host — paths, permissions, `soul.yml`, the systemd unit — remains [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall), which no longer has a caller.
 
 ## `core.vault.kv-read`
 

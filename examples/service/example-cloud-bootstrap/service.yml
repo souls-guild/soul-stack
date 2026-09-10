@@ -1,13 +1,22 @@
 description: >-
-  Minimal demo service for onboarding ready-made VMs (ADR-063): the keeper
-  issues one bootstrap token per SID, installs and redeems it over the
-  configured transport, then blocks until every Soul is online.
+  Minimal demo service for onboarding ready-made VMs (ADR-063): the keeper mints
+  one bootstrap token per SID, then blocks until every Soul is online.
 
   What the example shows — the `existing-vm` scenario:
-    1. core.bootstrap.issued    — one token per FQDN/SID, atomically.
-    2. core.bootstrap.delivered — install Soul and hand it its token
-                                  (install: true, over Teleport).
-    3. core.soul.registered     — await_online, the blocking onboarding barrier.
+    1. core.bootstrap.issued  — one token per FQDN/SID, atomically.
+    2. install the host       — NOT a step: `core.bootstrap.delivered` was
+                                removed in NIM-834 because installation is
+                                site-specific. Read the README before writing
+                                one: the token must be REDEEMED (`soul init`
+                                behind the seed-cert guard), it travels in
+                                STDIN and never argv, and activation is
+                                `daemon-reload && enable && start`.
+    3. core.soul.registered   — await_online, the blocking onboarding barrier.
+
+  Run as it stands, the scenario does not finish: step 1 mints tokens nobody
+  redeems, and step 3 waits for a presence that cannot arrive. That is the real
+  shape of onboarding today, and the example shows it rather than implying an
+  engine step that no longer exists.
 
   The service does NOT create the VMs. Creating one is the job of a cloud
   plugin, which since NIM-761 is an ordinary `side: keeper` SoulModule with its

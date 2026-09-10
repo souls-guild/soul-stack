@@ -1,28 +1,40 @@
-// Package soulinstall is canonical install blueprint for deploying soul agent
-// on a fresh VM. Single source of truth for two delivery paths:
+// Package soulinstall is the canonical install blueprint for deploying the soul
+// agent on a fresh VM: what an installed host must look like, in two renderings
+// of one description.
 //
 //   - cloud-init userdata (B-flat, [ADR-017(h)](../../../docs/adr/0017-keeper-side-core.md)):
-//     [RenderCloudInitYAML] prints cloud-config YAML, provider puts it into VM
-//     metadata during Create. Was used by the removed `core.cloud.created`.
-//   - full install over SSH (Teleport, [ADR-063 amendment](../../../docs/adr/0063-bootstrap-token-delivery.md)):
-//     [RenderInstallScript] returns sequence of SSH commands for platforms
-//     without cloud-init userdata (e.g. a namespace with `ci_user_data` disabled).
-//     Secrets (CA, soul.yml) go through STDIN, not argv. Foundation for now:
-//     called in Slice 2 (install mode `core.bootstrap.delivered`).
+//     [RenderCloudInitYAML] prints cloud-config YAML for the provider to put into
+//     VM metadata during Create. Was used by the removed `core.cloud.created`.
+//   - full install over SSH: [RenderInstallScript] returns the sequence of SSH
+//     commands for platforms without cloud-init userdata (e.g. a namespace with
+//     `ci_user_data` disabled). Secrets (CA, soul.yml) go through STDIN, not
+//     argv. Was used by the removed `core.bootstrap.delivered`.
 //
-// Blueprint describes ONE same install result: same files by same paths with
-// same modes (constants below), same soul.yml and systemd unit. True single
-// source: soul.yml/unit contents are produced by SoulConfigYAML/SystemdUnit, and
-// cloud-init template renders them through {{ .SoulConfigYAMLIndented }} /
-// {{ .SystemdUnitIndented }} (not text copy); both renderers physically take the
-// same material, making drift impossible. Only intentional difference between
-// paths is keeper-ca.pem mode: 0600 in SSH install (stricter floor) vs 0644 in
-// cloud-init (CA is public); see KeeperCAMode.
+// ★ NEITHER RENDERER HAS A PRODUCTION CALLER LEFT (NIM-761, NIM-834): installing
+// a host is site-specific and has no portable form (ADR-063 amendment
+// 2026-09-09). The package stays as the normative description of the result a
+// site installer must reach, and its guards are the part that cannot be carried
+// by prose: the ARGV-LEAK-GUARD (a secret goes in [InstallStep.Stdin], never in
+// `.Cmd`) and TestSeedCertPath_SyncWithSoulSeedLayout, which pins
+// [SeedCertPath] against soul's own seed layout — that path is the idempotency
+// guard of the `soul init` redeem, and a token is single-use, so an installer
+// that gets it wrong breaks the host on its second run.
 //
-// Per-VM bootstrap token is NOT carried by blueprint (in either renderer):
-// userdata is logged by provider (security floor), token is a separate scenario
-// step (see ADR-017(h) B-flat). RenderInstallScript does NOT include token write
-// and `systemctl start`; delivered mode adds that in Slice 2.
+// Blueprint describes ONE install result: the same files at the same paths with
+// the same modes (constants below), the same soul.yml and systemd unit. Drift
+// between the renderings is constructively impossible: the soul.yml and unit
+// bodies come from SoulConfigYAML/SystemdUnit, and the cloud-init template
+// renders them through {{ .SoulConfigYAMLIndented }} / {{ .SystemdUnitIndented }}
+// rather than a textual copy. The one intentional difference is the
+// keeper-ca.pem mode: 0600 over SSH (a stricter floor) vs 0644 in cloud-init
+// (the CA is public); see KeeperCAMode.
+//
+// The per-VM bootstrap token is NOT carried by the blueprint in either
+// rendering: userdata is logged by the provider (a security floor), and the
+// token is delivered separately. RenderInstallScript likewise stops short of the
+// token write, the `soul init` redeem and unit activation — those were the
+// caller's three steps, and they are now the installer's (ADR-063 amendment
+// 2026-09-09).
 package soulinstall
 
 import (

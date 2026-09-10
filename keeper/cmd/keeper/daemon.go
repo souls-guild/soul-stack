@@ -42,7 +42,6 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/cadence"
 	"github.com/souls-guild/soul-stack/keeper/internal/certissue"
 	"github.com/souls-guild/soul-stack/keeper/internal/certpolicy"
-	"github.com/souls-guild/soul-stack/keeper/internal/cloudinit"
 	"github.com/souls-guild/soul-stack/keeper/internal/conductor"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/consolepg"
@@ -1107,36 +1106,6 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			slog.Int("count", len(names)),
 			slog.Any("modules", names))
 	}
-	// Keeper daemon runtime wiring note.
-	// `generate_userdata: true` (ADR-017(h) amendment 2026-05-27, B-flat).
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	userdataProvider := &cloudInitProvider{store: d.store, resolver: cloudinit.NewResolver(d.vc)}
-
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	var bootstrapTransport string
-	var bootstrapDial push.Dialer
-	if cfg.Push != nil && cfg.Push.Transport == config.PushTransportTeleport {
-		td, terr := buildBootstrapTeleportDialer(cfg.Push)
-		if terr != nil {
-			fmt.Fprintf(os.Stderr, "keeper run: build bootstrap teleport dialer: %v\n", terr)
-			return errSetupFailed
-		}
-		bootstrapTransport = config.PushTransportTeleport
-		bootstrapDial = td
-		logger.Info("keeper run: bootstrap token delivery transport = teleport (by-name)",
-			slog.String("proxy_addr", cfg.Push.Teleport.ProxyAddr),
-			slog.String("cluster", cfg.Push.Teleport.Cluster))
-	}
-
 	coreReg := coremod.Default(coremod.Deps{
 		SoulStore: coremodsoul.NewPGStore(d.pool),
 		// Keeper daemon runtime wiring note.
@@ -1187,19 +1156,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			}
 			return ""
 		},
-		// `core.bootstrap.delivered` teleport mode (ADR-063 amendment): dialer
-		// from keeper.yml::push.teleport. nil/"" → direct, and since the direct
-		// set (providers/host-CA) is not filled in here, the module does not
-		// register.
-		BootstrapTransport: bootstrapTransport,
-		BootstrapIssuer:    coremodbootstrap.NewIssuerPG(d.pool, bootstraptoken.DefaultTokenTTL),
-		BootstrapDial:      bootstrapDial,
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		// Keeper daemon runtime wiring note.
-		BootstrapInstall: userdataProvider,
+		BootstrapIssuer: coremodbootstrap.NewIssuerPG(d.pool, bootstraptoken.DefaultTokenTTL),
 	})
 	logger.Info("keeper run: core modules registered",
 		slog.Int("count", len(coreReg.Names())))
@@ -1208,76 +1165,6 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	d.coreModules = coreReg
 	return nil
-}
-
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-type cloudInitProvider struct {
-	store    *config.Store[config.KeeperConfig]
-	resolver *cloudinit.Resolver
-}
-
-func (p *cloudInitProvider) GenerateUserdata(ctx context.Context) (string, error) {
-	cfg := p.store.Get()
-	if cfg == nil {
-		return "", fmt.Errorf("cloud_init: keeper config snapshot is nil")
-	}
-	resolved, err := p.resolver.Resolve(ctx, cfg.CloudInit)
-	if err != nil {
-		return "", err
-	}
-	return cloudinit.GenerateUserdata(resolved)
-}
-
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-func (p *cloudInitProvider) GenerateUserdataSelfOnboard(ctx context.Context, tokens map[string]string) (string, error) {
-	cfg := p.store.Get()
-	if cfg == nil {
-		return "", fmt.Errorf("cloud_init: keeper config snapshot is nil")
-	}
-	resolved, err := p.resolver.Resolve(ctx, cfg.CloudInit)
-	if err != nil {
-		return "", err
-	}
-	return cloudinit.GenerateUserdataSelfOnboard(resolved, tokens)
-}
-
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-func (p *cloudInitProvider) Resolve(ctx context.Context) (cloudinit.Config, error) {
-	cfg := p.store.Get()
-	if cfg == nil {
-		return cloudinit.Config{}, fmt.Errorf("cloud_init: keeper config snapshot is nil")
-	}
-	return p.resolver.Resolve(ctx, cfg.CloudInit)
-}
-
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-// Keeper daemon runtime wiring note.
-func buildBootstrapTeleportDialer(p *config.KeeperPush) (push.Dialer, error) {
-	if p.Teleport == nil {
-		return nil, fmt.Errorf("push.transport=teleport requires push.teleport block")
-	}
-	return push.NewTeleportDialer(push.TeleportDialerConfig{
-		ProxyAddr:      p.Teleport.ProxyAddr,
-		IdentityFile:   p.Teleport.IdentityFile,
-		Cluster:        p.Teleport.Cluster,
-		UseSystemTrust: p.Teleport.UseSystemTrust,
-		AlpnUpgrade:    p.Teleport.AlpnUpgrade,
-	})
 }
 
 // Keeper daemon runtime wiring note.
