@@ -80,7 +80,23 @@ type Scenario struct {
 	ComposesID  bool           `json:"composes_id,omitempty"`
 	Description string         `json:"description,omitempty"`
 	InputSchema map[string]any `json:"input_schema,omitempty"`
-	Tags        []string       `json:"tags,omitempty"`
+	// Validate is the scenario's `validate:` block — the declarative requirements
+	// over the request, in declaration order (NIM-833). It travels BESIDE
+	// input_schema because that is what it is: the half of the input contract a
+	// single field's schema cannot express ("port is required when tls is off",
+	// "this id must fit the cloud's name grammar"). A form that shows only
+	// input_schema shows half the contract, and the operator meets the other half
+	// as a 422 after submitting.
+	//
+	// Only the TEXT travels — `that` and `message`. Evaluation stays keeper-side
+	// (config.EvalValidateRules) and is not duplicated in a client: two evaluators
+	// of one rule diverge, and the question is only when. A client that wants a
+	// verdict rather than the requirements asks the server.
+	//
+	// omitempty: a scenario with no rules serializes exactly as it did before this
+	// field existed.
+	Validate []ScenarioValidateRule `json:"validate,omitempty"`
+	Tags     []string               `json:"tags,omitempty"`
 	// Form is an optional presentation layer (top-level `form:` in scenario
 	// manifest): sections with field labels for UI Run modal. omitempty: no form:
 	// in YAML → no field in reply (exactly as before this feature); UI renders
@@ -88,6 +104,15 @@ type Scenario struct {
 	// input_schema; form is presentation only. Server-side does NOT validate form
 	// (soul-lint/render-validator does); listing returns it as-is for UI.
 	Form *ScenarioForm `json:"form,omitempty"`
+}
+
+// ScenarioValidateRule is one rule of [Scenario.Validate]: the CEL predicate the
+// keeper will evaluate and the reason an operator is shown when it comes out
+// false. JSON field names match the YAML keys, so a form renders the rule the
+// author wrote and not a paraphrase of it.
+type ScenarioValidateRule struct {
+	That    string `json:"that"`
+	Message string `json:"message"`
 }
 
 // ScenarioForm, ScenarioFormSection, and ScenarioFormField are JSON projections of
@@ -232,6 +257,36 @@ type scenarioFormFieldYAML struct {
 	Hint        string `yaml:"hint"`
 }
 
+// scenarioValidateRuleYAML is the YAML form of one `validate:` rule. Separate from
+// the JSON projection [ScenarioValidateRule] for the same reason the form types
+// are: listing does not import shared/config (the import direction is the reverse).
+type scenarioValidateRuleYAML struct {
+	That    string `yaml:"that"`
+	Message string `yaml:"message"`
+}
+
+// validateRulesYAML decodes ONLY the `validate:` section, in a pass of its own.
+//
+// A second Unmarshal over the same bytes rather than a field on [scenarioYAML],
+// because the two sections must not share a failure. `that:` is typed as a string,
+// so a rule written `that: 8080` fails the decode — and inside the main struct that
+// failure takes the WHOLE scenario down: no input_schema, no form, the entry gone
+// from the dropdown, over a section that is presentation only. The blast radius has
+// to be the section, which is what the struct's "best-effort projection" comment
+// claims of every other field here.
+//
+// A malformed block is soul-lint's business (shared/config.validateValidateBlock);
+// this returns nothing and lets the rest of the listing through.
+func validateRulesYAML(data []byte) []scenarioValidateRuleYAML {
+	var doc struct {
+		Validate []scenarioValidateRuleYAML `yaml:"validate"`
+	}
+	if err := yaml.Unmarshal(data, &doc); err != nil {
+		return nil
+	}
+	return doc.Validate
+}
+
 // ListScenarios scans `scenario/*/main.yml` in a materialized Service repository
 // snapshot (serviceRoot is absolute path to snapshot, typically
 // [ServiceArtifact.LocalDir]) and returns a list of scenario metadata sorted by
@@ -320,6 +375,9 @@ func listFromDir(serviceRoot, dir string, logger *slog.Logger) ([]Scenario, erro
 		// a labelled field with nothing behind it — "not on the form" has to be true
 		// of both halves or it is not true.
 		sc.Form = dropStrippedFormFields(sc.Form, resolvedSchema, sc.InputSchema)
+		// The rule text is the third half, and it names input fields (and often
+		// compares them to a literal) — see dropStrippedValidateRules.
+		sc.Validate = dropStrippedValidateRules(sc.Validate, resolvedSchema, sc.InputSchema)
 		out = append(out, sc)
 	}
 	sort.Slice(out, func(i, j int) bool { return out[i].Name < out[j].Name })
@@ -366,15 +424,19 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 	if schema == nil {
 		schema = raw.Input
 	}
-	// covenant-merge BEFORE returning input_schema: a scenario with `extends:` inherits
-	// covenant.yml.input (same add-only merge as runtime LoadScenarioManifest Resolved →
+	rules := validateRulesYAML(data)
+	// covenant-merge BEFORE returning input_schema/validate: a scenario with
+	// `extends:` inherits covenant.yml's input and validate sections (same add-only
+	// merge as runtime LoadScenarioManifest Resolved →
 	// config.ResolveScenarioCovenant). Without it, a scenario with zero input delta
-	// (all schema in covenant — create_from_souls) would return empty form to UI.
+	// (all schema in covenant — create_from_souls) would return empty form to UI,
+	// and a scenario whose requirements all live in the shared contract would
+	// publish none of them.
 	// Resolution is at raw level (covenant-input remains a raw map for UI), $type
 	// references of covenant fields are resolved AFTER — in ListScenarios, together
 	// with locals (single pass resolveScenarioTypeRefs).
 	if raw.Extends != "" {
-		schema = mergeCovenantInputRaw(serviceRoot, raw.Extends, schema, logger)
+		schema, rules = mergeCovenantSectionsRaw(serviceRoot, raw.Extends, schema, rules, logger)
 	}
 	sc := Scenario{
 		Name:   name,
@@ -385,6 +447,7 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 		ComposesID:  raw.composesID(),
 		Description: raw.Description,
 		InputSchema: schema,
+		Validate:    scenarioValidateProjection(rules),
 		Tags:        raw.Tags,
 		Form:        scenarioFormProjection(raw.Form),
 	}
@@ -397,53 +460,67 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 	return sc, true
 }
 
-// mergeCovenantInputRaw reads covenant.yml by name from `extends:` and merges
-// its `input:` section (raw-map) into `local` ADD-ONLY: covenant is BASE, scenario
-// delta supplements (local fields are NOT overwritten — parallel to
-// config.mergeInputSections, but at raw level for UI). This is the listing
-// projection of the same covenant resolution runtime does (LoadScenarioManifestResolved
-// → config.ResolveScenarioCovenant) — without it, a scenario with zero input delta
-// (all schema in covenant) returns empty form.
+// mergeCovenantSectionsRaw reads covenant.yml by name from `extends:` and merges
+// its `input:` and `validate:` sections into the scenario's own ADD-ONLY: covenant
+// is BASE, scenario delta supplements (local input fields are NOT overwritten —
+// parallel to config.mergeInputSections, but at raw level for UI; validate rules
+// are appended covenant-FIRST, as config.MergeCovenant orders them). This is the
+// listing projection of the same covenant resolution runtime does
+// (LoadScenarioManifestResolved → config.ResolveScenarioCovenant) — without it, a
+// scenario with zero input delta (all schema in covenant) returns an empty form,
+// and one whose requirements all live in the shared contract publishes none.
 //
 // Covenant name is validated by [config.ValidExtendsName] (single source of truth
 // for the form), path is securejoin from serviceRoot (traversal clamp over name
 // grammar). Partial-success like all listing: invalid name / missing / broken
-// covenant.yml → warning + local as-is (UI gets at least local delta, not 500;
+// covenant.yml → warning + locals as-is (UI gets at least the local delta, not 500;
 // full error covenant_extends_* is raised by runtime-load and soul-lint).
 //
 // Key conflict (field in both covenant and local) at runtime → section_key_conflict;
 // here listing does NOT fail: local-schema wins (covenant does not override), form
-// still renders. Returns map for InputSchema (may be nil if neither covenant nor
-// local provided fields).
-func mergeCovenantInputRaw(serviceRoot, extends string, local map[string]any, logger *slog.Logger) map[string]any {
+// still renders. The returned schema may be nil if neither side provided fields.
+func mergeCovenantSectionsRaw(
+	serviceRoot, extends string,
+	local map[string]any,
+	localRules []scenarioValidateRuleYAML,
+	logger *slog.Logger,
+) (map[string]any, []scenarioValidateRuleYAML) {
 	if !config.ValidExtendsName(extends) {
-		logger.Warn("artifact: covenant-input skipped — invalid extends name",
+		logger.Warn("artifact: covenant sections skipped — invalid extends name",
 			slog.String("extends", extends))
-		return local
+		return local, localRules
 	}
 	covenantFile := extends + ".yml"
 	data, err := readSnapshotFile(serviceRoot, covenantFile)
 	if err != nil {
 		if !errors.Is(err, fs.ErrNotExist) {
-			logger.Warn("artifact: covenant-input skipped — error reading covenant.yml",
+			logger.Warn("artifact: covenant sections skipped — error reading covenant.yml",
 				slog.String("extends", extends), slog.Any("error", err))
 		}
 		// Missing covenant.yml with declared extends is a repo error
 		// (covenant_extends_target_not_found at runtime); listing does not fail the
 		// form, returns local delta as-is.
-		return local
+		return local, localRules
+	}
+
+	// `validate:` is decoded in its own pass, so a malformed rule in the covenant
+	// cannot take its `input:` down with it — see validateRulesYAML.
+	if fragRules := validateRulesYAML(data); len(fragRules) > 0 {
+		merged := make([]scenarioValidateRuleYAML, 0, len(fragRules)+len(localRules))
+		merged = append(merged, fragRules...)
+		localRules = append(merged, localRules...)
 	}
 
 	var frag struct {
 		Input map[string]any `yaml:"input"`
 	}
 	if err := yaml.Unmarshal(data, &frag); err != nil {
-		logger.Warn("artifact: covenant-input skipped — invalid YAML covenant.yml",
+		logger.Warn("artifact: covenant sections skipped — invalid YAML covenant.yml",
 			slog.String("extends", extends), slog.Any("error", err))
-		return local
+		return local, localRules
 	}
 	if len(frag.Input) == 0 {
-		return local
+		return local, localRules
 	}
 
 	if local == nil {
@@ -457,7 +534,32 @@ func mergeCovenantInputRaw(serviceRoot, extends string, local map[string]any, lo
 		}
 		local[name] = schema
 	}
-	return local
+	return local, localRules
+}
+
+// scenarioValidateProjection converts the YAML rules to the JSON projection
+// [ScenarioValidateRule], preserving declaration order — the order the keeper
+// evaluates them in, and therefore the order the first failure comes from.
+//
+// A rule missing `that` is dropped: an empty predicate names no requirement, and
+// publishing a bare `message` would put a requirement on the form that the keeper
+// does not enforce. The file itself is rejected by soul-lint
+// (missing_required_field), which is where that is reported.
+func scenarioValidateProjection(in []scenarioValidateRuleYAML) []ScenarioValidateRule {
+	if len(in) == 0 {
+		return nil
+	}
+	out := make([]ScenarioValidateRule, 0, len(in))
+	for _, r := range in {
+		if r.That == "" {
+			continue
+		}
+		out = append(out, ScenarioValidateRule{That: r.That, Message: r.Message})
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
 }
 
 // scenarioFormProjection converts YAML form `form:` to JSON projection [ScenarioForm]

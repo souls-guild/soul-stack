@@ -83,7 +83,7 @@ func TestResolveInputContract_Table(t *testing.T) {
 
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
-			merged, err := ResolveInputContract(schema, rules, tc.in)
+			merged, err := ResolveInputContract(schema, rules, tc.in, ValidateContext{})
 			if tc.wantErr == "" {
 				if err != nil {
 					t.Fatalf("ResolveInputContract: unexpected error: %v", err)
@@ -114,7 +114,7 @@ func TestResolveInputContract_SchemaBeforeRules(t *testing.T) {
 	schema := InputSchemaMap{"port": {Type: "integer", Required: true}}
 	rules := []ValidateRule{{That: "input.port > 0", Message: "port must be positive"}}
 
-	_, err := ResolveInputContract(schema, rules, map[string]any{"port": "not-a-number"})
+	_, err := ResolveInputContract(schema, rules, map[string]any{"port": "not-a-number"}, ValidateContext{})
 	if err == nil {
 		t.Fatal("want an error for a non-integer port")
 	}
@@ -134,7 +134,7 @@ func TestResolveInputContract_SchemaBeforeRules(t *testing.T) {
 func TestResolveInputContract_EvalFailureIsInternal(t *testing.T) {
 	rules := []ValidateRule{{That: "input.port", Message: "not a bool predicate"}}
 
-	_, err := ResolveInputContract(nil, rules, map[string]any{"port": 6379})
+	_, err := ResolveInputContract(nil, rules, map[string]any{"port": 6379}, ValidateContext{})
 	if err == nil {
 		t.Fatal("want an error for a non-bool predicate")
 	}
@@ -169,21 +169,21 @@ func TestResolveInputContract_EmptyStringIsAbsentAtEveryLevel(t *testing.T) {
 	// version is not applicable for method=package; the caller passes "".
 	if _, err := ResolveInputContract(schema, nil, map[string]any{
 		"install": map[string]any{"method": "package", "version": ""},
-	}); err != nil {
+	}, ValidateContext{}); err != nil {
 		t.Errorf(`nested "" for an optional string must count as absent, got: %v`, err)
 	}
 
 	// allow_empty opts back in to real value checks — "" is then a value.
 	if _, err := ResolveInputContract(schema, nil, map[string]any{
 		"install": map[string]any{"method": "package", "marker": ""},
-	}); err == nil {
+	}, ValidateContext{}); err == nil {
 		t.Error(`allow_empty field: "" is a real value and must be pattern-checked`)
 	}
 
 	// A required property is still missing when passed as "".
 	if _, err := ResolveInputContract(schema, nil, map[string]any{
 		"install": map[string]any{"method": ""},
-	}); err == nil {
+	}, ValidateContext{}); err == nil {
 		t.Error(`required nested property passed as "" must still be reported missing`)
 	}
 }

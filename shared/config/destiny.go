@@ -166,9 +166,12 @@ func schemaValidateDestiny(path string, root *ast.MappingNode, m *DestinyManifes
 	}
 
 	// 4a) `validate:` — top-level input invariants, shared validator with
-	// scenario/covenant (only when the key is present).
+	// scenario/covenant (only when the key is present). INPUT-ONLY here: the
+	// destiny pass is isolated (ADR-009 V2) and has no incarnation to read, so
+	// `incarnation.*` is caught at authoring time rather than as a render failure
+	// for every caller.
 	if topKeys["validate"] {
-		out = append(out, validateValidateBlock(root, "$.validate")...)
+		out = append(out, validateValidateBlock(root, "$.validate", validateInputOnly)...)
 	}
 
 	// 5) compat: — optional engine-compatibility window (ADR-0076). Same grammar

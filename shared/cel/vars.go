@@ -207,15 +207,28 @@ func (v Vars) activation(migration bool) map[string]any {
 //
 // [ADR-0085]: docs/adr/0085-entity-id-and-label.md
 func (v Vars) incarnationRoot() map[string]any {
-	id, ok := v.Incarnation[incarnationIDKey]
+	return IncarnationRoot(v.Incarnation)
+}
+
+// IncarnationRoot is [Vars.incarnationRoot] for a caller that builds the
+// `incarnation` root for an environment OUTSIDE this package — the pre-flight
+// `validate:` context (shared/config), which declares its own narrow env and
+// therefore never passes through [Vars.activation].
+//
+// It is exported rather than restated there for the reason the window has one
+// statement at all: a second copy is a context that can be forgotten when the
+// window closes, and the failure mode is a `no such key` at evaluation with no
+// static catcher on either side.
+func IncarnationRoot(m map[string]any) map[string]any {
+	id, ok := m[incarnationIDKey]
 	if !ok {
-		return orEmpty(v.Incarnation)
+		return orEmpty(m)
 	}
-	if _, taken := v.Incarnation[legacyIncarnationIDKey]; taken {
-		return v.Incarnation
+	if _, taken := m[legacyIncarnationIDKey]; taken {
+		return m
 	}
-	out := make(map[string]any, len(v.Incarnation)+1)
-	for k, val := range v.Incarnation {
+	out := make(map[string]any, len(m)+1)
+	for k, val := range m {
 		out[k] = val
 	}
 	out[legacyIncarnationIDKey] = id

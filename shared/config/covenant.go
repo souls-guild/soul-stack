@@ -210,7 +210,9 @@ func schemaValidateCovenant(_ string, root *ast.MappingNode, m *ScenarioFragment
 		out = append(out, validateComputeBlock(root, "$.compute")...)
 	}
 	if topKeys["validate"] {
-		out = append(out, validateValidateBlock(root, "$.validate")...)
+		// A fragment is merged into a SCENARIO, so its rules run on a request path
+		// that has an incarnation — the same scope the scenario's own rules get.
+		out = append(out, validateValidateBlock(root, "$.validate", validateWithIncarnation)...)
 	}
 	return out
 }

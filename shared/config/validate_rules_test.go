@@ -107,6 +107,12 @@ func TestLoadScenarioManifest_ValidateInputOnlyBarrier(t *testing.T) {
 		`vars.redis_port > 0`,
 		`register.probe.changed`,
 		`size(soulprint.hosts) == 3`,
+		// NIM-833 widened the env by `incarnation` and by nothing else. `compute` is
+		// the root a reader is most likely to expect to come with it, and it stays
+		// out on purpose: it resolves inside the run, later than this gate. (`vars`
+		// above is the other deliberate omission — service parameters, not the
+		// request.)
+		`compute.cluster_size > 0`,
 	}
 	for _, expr := range forbidden {
 		src := "name: x\nvalidate:\n  - that: \"" + expr + "\"\n    message: \"m\"\ntasks: []\n"
@@ -169,7 +175,7 @@ func TestEvalValidateRules_AllPass(t *testing.T) {
 		{That: "input.port > 0", Message: "port positive"},
 		{That: "input.port < 65536", Message: "port in range"},
 	}
-	fail, err := EvalValidateRules(rules, map[string]any{"port": 6379})
+	fail, err := EvalValidateRules(rules, map[string]any{"port": 6379}, ValidateContext{})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
 	}
@@ -186,7 +192,7 @@ func TestEvalValidateRules_FirstFalseWins(t *testing.T) {
 		{That: "input.name != ''", Message: "second rule"},
 	}
 	// port=0 fails the first; name is also empty (would fail the second) — but the first wins.
-	fail, err := EvalValidateRules(rules, map[string]any{"port": 0, "name": ""})
+	fail, err := EvalValidateRules(rules, map[string]any{"port": 0, "name": ""}, ValidateContext{})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
 	}
@@ -208,7 +214,7 @@ func TestEvalValidateRules_CrossField(t *testing.T) {
 		{That: "input.tls || input.port > 0", Message: "set port or enable tls"},
 	}
 	// tls=false, port=0 → rule false.
-	fail, err := EvalValidateRules(rules, map[string]any{"tls": false, "port": 0})
+	fail, err := EvalValidateRules(rules, map[string]any{"tls": false, "port": 0}, ValidateContext{})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
 	}
@@ -216,7 +222,7 @@ func TestEvalValidateRules_CrossField(t *testing.T) {
 		t.Fatalf("expected cross-field failure")
 	}
 	// tls=true covers the missing port → passes.
-	fail, err = EvalValidateRules(rules, map[string]any{"tls": true, "port": 0})
+	fail, err = EvalValidateRules(rules, map[string]any{"tls": true, "port": 0}, ValidateContext{})
 	if err != nil {
 		t.Fatalf("eval err: %v", err)
 	}
@@ -229,7 +235,7 @@ func TestEvalValidateRules_CrossField(t *testing.T) {
 // "passed"/"failed"): the caller maps it to 500, not 422.
 func TestEvalValidateRules_NonBool(t *testing.T) {
 	rules := []ValidateRule{{That: "input.port", Message: "m"}}
-	_, err := EvalValidateRules(rules, map[string]any{"port": 6379})
+	_, err := EvalValidateRules(rules, map[string]any{"port": 6379}, ValidateContext{})
 	if err == nil {
 		t.Fatalf("expected error for non-bool predicate")
 	}
@@ -237,7 +243,7 @@ func TestEvalValidateRules_NonBool(t *testing.T) {
 
 // TestEvalValidateRules_Empty — empty list / nil merged → no-op.
 func TestEvalValidateRules_Empty(t *testing.T) {
-	fail, err := EvalValidateRules(nil, nil)
+	fail, err := EvalValidateRules(nil, nil, ValidateContext{})
 	if err != nil || fail != nil {
 		t.Fatalf("empty rules must be no-op, got fail=%+v err=%v", fail, err)
 	}

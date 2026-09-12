@@ -54,7 +54,7 @@ func TestExampleRedis_NameTemplateComposesReadmeName(t *testing.T) {
 		"name": "cache", "project": "billing", "subproject": "invoices",
 		"redis_type": "sentinel", "version": "7.4.1",
 		"hosts": []any{"node-1.example.com", "node-2.example.com", "node-3.example.com"},
-	})
+	}, config.ComposedIncarnation())
 	if err != nil {
 		t.Fatalf("ResolveInputContract: %v", err)
 	}

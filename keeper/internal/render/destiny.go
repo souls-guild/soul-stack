@@ -494,7 +494,8 @@ func (p *Pipeline) resolveApplyInput(
 		rendered[name] = val
 	}
 
-	merged, err := config.ResolveInputContract(resolved.Input, resolved.Validate, rendered)
+	merged, err := config.ResolveInputContract(resolved.Input, resolved.Validate, rendered,
+		config.OutOfScopeIncarnation(config.IncarnationOutOfScopeDestiny))
 	if err != nil {
 		return nil, destinyInputError(apply.Destiny, err)
 	}

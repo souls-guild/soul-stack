@@ -532,3 +532,69 @@ authored nowhere in the DSL.
 two state fields called `type` and `properties`, which moves every real field a level down and
 loses every declared secret with no error raised. **Design only, not implemented** — engine
 NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the WB redis service NIM-744.
+
+## Amendment 2026-09-05 (NIM-833): `validate:` is the static check over the request — its context is `input` + `incarnation`, and the block is published
+
+The 2026-06-23 amendment introduced `validate:` with an **input-only** context, on the reasoning
+that a declarative invariant is a pure function of what the operator typed. That was too narrow by
+one root, and the gap has a name: a service could not declare a constraint on the **incarnation
+identifier**, because the identifier is not an `input:` field. The constraint therefore moved into
+an `assert:` task, which runs in the RUN — after the row is written. An operator got a half-created
+entity and an error about the cloud (NIM-832 is that report, from the WB redis service).
+
+**The definition this settles on.** `validate:` is the **static check over the request**:
+everything decidable from what arrived on the request is decided here, and **before a single task
+runs**. Two roots follow from that and no more:
+
+- `input` — what the operator sent, after the schema phase;
+- `incarnation` — the entity the request is about, to the extent this point on the path knows it.
+
+`vars` are deliberately **not** added: they are the service's parameters, not the request, so a rule
+that needs them is not checking the request and does not live here. `compute` is not added either —
+it resolves inside the run, which is later than this point by construction.
+
+**The create/day-2 difference is expressed, not smoothed over.** On day-2 the row is loaded and a
+rule reads it. On create the incarnation does not exist yet: only the identity the request itself
+carries is knowable, and for a scenario with `id_template:` not even that, since the id is composed
+from the very input the gate is still resolving. Each path declares what it knows
+(`config.ValidateContext`), and a rule reaching outside that set is **refused at compile**:
+
+| Path | `incarnation.*` carries |
+|---|---|
+| day-2 run | `id` (+ the `name` window alias), `service`, `service_version`, `state` — a subset of the run's own namespace |
+| create, operator-supplied id | `id` / `name` |
+| create, `id_template:` scenario | nothing |
+| isolated destiny pass, L0 trial case | nothing |
+
+Refusing rather than substituting an empty map is the whole point, and the reason is the one NIM-619
+recorded for `compute` ([ADR-0009 §2.4 scoping](0009-scenario-dsl.md)): an empty namespace is **silent** in exactly
+the forms a defensive rule is written in. `has(incarnation.state)` answers `false` and
+`size(incarnation)` answers `0`, so `!has(incarnation.state) || <check>` reports success having
+checked nothing — worse than no rule, because it is believed. The refusal is classified as a
+pre-flight malfunction (5xx, `config.ErrIncarnationNotInScope`) and **not** a 422: the operator's
+input is not what is wrong, so a 422 would send them to fix a value that is correct.
+
+**The block becomes a published contract.** `that` and `message` travel in the scenario listing
+(`GET /v1/services/{id}/scenarios` → `scenarios[].validate[]`) beside `input_schema`, covenant rules
+first, so an operator form can show the requirements before anything is submitted rather than
+surfacing them as a 422 afterwards. Only the **text** travels. Evaluating CEL in the client was
+considered and rejected: it is a second implementation of one rule, and two of those diverge — the
+question is only when. A client that wants a verdict rather than the requirements asks the server,
+which is the same evaluator the run uses.
+
+**Three consequences that are easy to get wrong, and are settled here.** What a path ANSWERS FOR is
+fixed and does not depend on the row: `incarnation.state` is in scope on every day-2 request, and a
+NULL state column gives the ordinary `no such key` the run gives — deriving the answerable set from
+the row instead reports the same scenario broken for one incarnation and fine for its sibling. The
+check is a PRE-PASS over every rule, not a step inside the eval loop, or it would sit behind the
+first-false short-circuit and a scenario's brokenness would depend on what the operator typed. And a
+`create: true` scenario is judged OFFLINE against the create stance (`validate_rule_out_of_scope`,
+ERROR, covenant-inherited rules included, post-merge) through that same runtime guard — otherwise a
+rule that can never run ships green and 5xx's once per request.
+
+**What this does NOT close.** A create scenario that composes its id still cannot constrain it
+through `incarnation.*` — there the id *is* its input components, and the rule belongs on
+`input.*`. A service-level declaration of the identifier's grammar, applied by the keeper on every
+create however the id arrives, is NIM-832 and is not decided here. The L0 trial harness has no
+incarnation either, so a create scenario's identifier rule has no offline test surface beyond
+`expect_render_error`; giving a case one is its own ticket.

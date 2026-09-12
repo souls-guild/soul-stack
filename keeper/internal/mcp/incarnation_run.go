@@ -112,10 +112,20 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// enqueue (parity with REST Run, both modes). nil loader → degrades to no
 	// validation. Invalid input → validation-failed; snapshot failure → internal.
 	if h.deps.ServiceLoader != nil {
-		if _, err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input); err != nil {
+		inputScope := scenario.DayTwoIncarnation(inc.ID, inc.Service, inc.ServiceVersion, inc.State)
+		if _, err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input, inputScope); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
 					"input_invalid: "+err.Error())
+			}
+			// A `validate:` rule that evaluated FALSE is the operator's input being
+			// refused, not a malfunction — the REST twin answers 422 for it
+			// (handlers.RunTyped) and so does the MCP create twin
+			// (callIncarnationCreate). This arm was missing, so one of the four
+			// surfaces reported a declared invariant as an internal error.
+			if errors.Is(err, scenario.ErrValidateFailed) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"validation_failed: "+err.Error())
 			}
 			h.deps.Logger.Error("mcp: incarnation.run input validation failed",
 				slog.String("name", a.ID),

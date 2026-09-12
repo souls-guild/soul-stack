@@ -295,7 +295,12 @@ func ResolveCreatePlan(
 		// bare (no create scenario): skip ValidateInput / lifecycle resolve —
 		// there's no run, and nothing to validate input against.
 		if !isBare {
-			gate, err := ValidateInput(ctx, loader, serviceRef, chosen, input)
+			// The create path answers for the identity the request carried and
+			// nothing else — the incarnation does not exist yet. A scenario with
+			// `id_template` carries not even that, and ValidateInput withdraws it
+			// there (only the manifest knows).
+			gate, err := ValidateInput(ctx, loader, serviceRef, chosen, input,
+				config.RequestedIncarnation(incarnationName))
 			if err != nil {
 				return CreatePlan{}, err
 			}

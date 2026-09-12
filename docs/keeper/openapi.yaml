@@ -3414,6 +3414,12 @@ components:
           type:
             - array
             - "null"
+        validate:
+          items:
+            $ref: "#/components/schemas/ScenarioValidateRule"
+          type:
+            - array
+            - "null"
       required:
         - name
         - path
@@ -3467,6 +3473,17 @@ components:
           type: string
       required:
         - key
+      type: object
+    ScenarioValidateRule:
+      additionalProperties: false
+      properties:
+        message:
+          type: string
+        that:
+          type: string
+      required:
+        - that
+        - message
       type: object
     ServiceCompatReply:
       additionalProperties: false

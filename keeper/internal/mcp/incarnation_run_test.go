@@ -109,6 +109,46 @@ func TestToolsCall_IncarnationRun_RBACForbidden(t *testing.T) {
 	}
 }
 
+// scenarioMCPDayTwoIncarnationRule is a day-2 scenario whose only rule reads the
+// incarnation the request is about — the context NIM-833 gave `validate:`. The
+// backing row's id is `redis-prod`, so the rule comes out false.
+const scenarioMCPDayTwoIncarnationRule = `name: rotate
+validate:
+  - that: "incarnation.id.matches('^[a-z]+$')"
+    message: the identifier must be letters only
+tasks: []
+`
+
+// TestToolsCall_IncarnationRun_ValidateRuleFails_422 — a false `validate:` rule on
+// the run path is the operator's request being refused, so it answers
+// validation-failed like its three siblings (REST RunTyped, and both create twins);
+// before NIM-833 this surface reported a declared invariant as an internal error.
+//
+// The rule reads `incarnation.*`, so the test also fails if the handler stops
+// handing ValidateInput the loaded row: an empty context turns the same rule into a
+// scope refusal, which is an internal error rather than validation-failed.
+func TestToolsCall_IncarnationRun_ValidateRuleFails_422(t *testing.T) {
+	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
+	starter := &mcpStarter{}
+	loader := &mcpLoader{scenarioYAML: scenarioMCPDayTwoIncarnationRule}
+	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, loader)
+
+	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
+		`{"id":"redis-prod","scenario":"rotate"}`)
+	if resp.Error == nil {
+		t.Fatal("expected validation_failed for a failing validate rule")
+	}
+	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeValidationFailed {
+		t.Errorf("data.code = %q, want validation-failed", data.Code)
+	}
+	if starter.calls != 0 {
+		t.Error("validate-fail must not start the scenario")
+	}
+	if len(rec.events) != 0 {
+		t.Error("validate-fail must not write audit")
+	}
+}
+
 func TestToolsCall_IncarnationRun_InvalidScenario(t *testing.T) {
 	h, _ := newTestHandlerFull(t, &fakePool{}, runnerRBAC(), &mcpStarter{}, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",

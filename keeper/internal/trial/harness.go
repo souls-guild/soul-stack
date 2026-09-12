@@ -243,7 +243,8 @@ func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (re
 	// (scenario.ValidateInput) and the destiny render pass use — L0 cannot drift
 	// from prod on what a contract means. The first failure aborts the case
 	// (testable via expect_render_error).
-	effectiveInput, err := config.ResolveInputContract(scn.Input, scn.Validate, c.Fixtures.Input)
+	effectiveInput, err := config.ResolveInputContract(scn.Input, scn.Validate, c.Fixtures.Input,
+		config.OutOfScopeIncarnation(config.IncarnationOutOfScopeTrial))
 	if err != nil {
 		var fail *config.ValidateRuleFailure
 		if errors.As(err, &fail) {

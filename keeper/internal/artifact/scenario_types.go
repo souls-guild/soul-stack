@@ -365,6 +365,56 @@ func dropStrippedFormFields(form *ScenarioForm, before, after map[string]any) *S
 	return out
 }
 
+// dropStrippedValidateRules is [dropStrippedFormFields] for the third half of the
+// same reply (NIM-833). A `validate:` rule's PREDICATE names input fields by name
+// and often carries a literal beside one (`input.admin_password != 'changeme'`), so
+// publishing it verbatim would hand back — under `service.list`, a weaker permission
+// than `incarnation.run` — the name and comparison value of a field that was just
+// stripped from `input_schema` for being a declared secret. "Not on the form" has
+// to be true of all three halves or it is not true.
+//
+// A rule whose input references cannot be read statically (`input[k]`, a bare
+// `input` in `size()`, unparseable text) is dropped too: the question is whether it
+// mentions a stripped name, and "I could not tell" is not an answer to publish on.
+// The rule still RUNS — this drops it from the published contract, not from the
+// gate.
+func dropStrippedValidateRules(rules []ScenarioValidateRule, before, after map[string]any) []ScenarioValidateRule {
+	if len(rules) == 0 {
+		return rules
+	}
+	stripped := make(map[string]bool)
+	for name := range before {
+		if _, kept := after[name]; !kept {
+			stripped[name] = true
+		}
+	}
+	if len(stripped) == 0 {
+		return rules
+	}
+
+	out := make([]ScenarioValidateRule, 0, len(rules))
+	for _, r := range rules {
+		names, dynamic := config.ValidateRuleInputRefs(r.That)
+		if dynamic {
+			continue
+		}
+		leaks := false
+		for _, n := range names {
+			if stripped[n] {
+				leaks = true
+				break
+			}
+		}
+		if !leaks {
+			out = append(out, r)
+		}
+	}
+	if len(out) == 0 {
+		return nil
+	}
+	return out
+}
+
 // stringValue — safe extraction of a string from any.
 func stringValue(v any) (string, bool) {
 	s, ok := v.(string)

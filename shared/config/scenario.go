@@ -102,14 +102,25 @@ type ScenarioManifest struct {
 // `that` is a CEL bool predicate (whole string = CEL, like `where:`/`assert.that`)
 // and `message` is the human-readable reason for `that == false`.
 //
-// RULE CONTEXT IS INPUT-ONLY: the env carries the single variable `input` (the same
-// narrow cel-go sandbox as `required_when` — input_required_when.go). validate:
-// covers INPUT INVARIANTS (cross-field preconditions not expressible by a single
-// schema key — e.g. "`port` is required when `tls` is off"). Referencing
-// vars/soulprint/register/vault in `that` → compile-time undeclared-reference
-// error (a structural barrier, not a textual guard). Topology/roster checks stay
+// RULE CONTEXT IS `input` + `incarnation`, and nothing else (NIM-833): everything
+// decidable from what arrived on the request is decided here, before a single task
+// runs. `vars` are the service's parameters rather than the request, so a rule that
+// needs them is not checking the request; `compute` resolves inside the run, later
+// than this point by construction. Referencing either — or
+// vars/soulprint/register/vault — in `that` is a compile-time
+// undeclared-reference error (a structural barrier, not a textual guard).
+//
+// WHICH incarnation facts a rule may read depends on the path: day-2 has the row,
+// create has only the identity the request carries, and a create scenario composing
+// its own id has not even that. That difference is expressed rather than papered
+// over — see [ValidateContext] (validate_scope.go). Topology/roster checks stay
 // with `assert:` (which has the full scenario CEL context with soulprint.hosts);
 // validate: COMPLEMENTS, it does not replace assert or required_when.
+//
+// The rules are also part of the SERVICE'S PUBLIC CONTRACT: `that` and `message`
+// travel in the scenario listing beside `input_schema` (artifact.Scenario), so an
+// operator form can show the requirements before anything is submitted. The
+// evaluation stays here — one evaluator, one truth.
 //
 // WHEN: pre-flight on CreateTyped/RunTyped (request path) — the first failing rule
 // yields HTTP 422 validation_failed BEFORE the incarnation commit and BEFORE
@@ -394,7 +405,7 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 
 	// 5a) `validate:` — top-level list of input invariants (only if the key is present).
 	if topKeys["validate"] {
-		out = append(out, validateValidateBlock(root, "$.validate")...)
+		out = append(out, validateValidateBlock(root, "$.validate", validateWithIncarnation)...)
 	}
 
 	// 5b) `form:` — the form presentation layer + cross-invariants against input:
@@ -438,6 +449,16 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// ([validateAssertReachability], NIM-272). WARNING: the construct is legal,
 	// only the author's expectation of a 422 is not.
 	out = append(out, validateAssertReachability(tasksNode, m.Tasks, m.Create)...)
+
+	// 8) Where each `validate:` rule can be answered — a create scenario reading an
+	// incarnation fact that does not exist yet ([validateCreateScopeRules],
+	// NIM-833). ERROR, unlike the assert twin above: an assert deferred to render
+	// still runs, this rule can never run at all. Under the same covenant gate as
+	// `form:`/`id_template:` — an extends scenario's EFFECTIVE rule list exists only
+	// post-merge, and is checked there by the same core.
+	if m.Extends == "" {
+		out = append(out, validateCreateScopeRules(root, m, m.Validate)...)
+	}
 
 	return out
 }

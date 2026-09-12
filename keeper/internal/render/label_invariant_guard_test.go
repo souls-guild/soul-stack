@@ -5,9 +5,11 @@ package render
 // is the identifier, and `incarnation.label` does not resolve at all.
 //
 // Why the guard is here and not only in a doc comment: `incarnation` is declared
-// `cel.DynType` in all three CEL environments, so a DynType root does not
-// type-check its fields. Nothing about this is a compile error — a wrong root is
-// a no-such-key at EVALUATION. One of the three environments is flow-control,
+// `cel.DynType` in all four CEL environments (NIM-833 added the pre-flight
+// `validate:` one, guarded beside its builder in
+// keeper/internal/scenario/validate_scope_guard_test.go), so a DynType root does
+// not type-check its fields. Nothing about this is a compile error — a wrong root
+// is a no-such-key at EVALUATION. One of the four environments is flow-control,
 // evaluated on the HOST, so an expression reading a caption would fail mid-run,
 // after earlier tasks had already applied. There is no static catcher on either
 // side of the wire; this test is it.

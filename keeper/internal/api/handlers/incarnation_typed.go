@@ -390,7 +390,10 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 	}
 
 	if h.loader != nil {
-		if _, err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input); err != nil {
+		// Day-2: the row is loaded, so a `validate:` rule may read the same
+		// incarnation facts the run will (NIM-833).
+		inputScope := scenario.DayTwoIncarnation(inc.ID, inc.Service, inc.ServiceVersion, inc.State)
+		if _, err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input, inputScope); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
 			}

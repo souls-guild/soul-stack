@@ -130,7 +130,7 @@ func IDTemplateInputRefs(tmpl string) ([]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	p, err := idTemplateParserInstance()
+	p, err := noMacroParserInstance()
 	if err != nil {
 		return nil, err
 	}
@@ -256,22 +256,23 @@ func parseIDBlock(raw string, start int) (string, int, error) {
 }
 
 var (
-	idTemplateParserOnce sync.Once
-	idTemplateParser     *parser.Parser
-	idTemplateParserErr  error
+	noMacroParserOnce sync.Once
+	noMacroParser     *parser.Parser
+	noMacroParserErr  error
 )
 
-// idTemplateParserInstance returns the shared macro-free parser used for
-// reference extraction: with macros disabled, `has()`/`.filter()` stay plain calls
-// instead of expanding into comprehensions that hide the `input.<name>` selects.
-func idTemplateParserInstance() (*parser.Parser, error) {
-	idTemplateParserOnce.Do(func() {
-		idTemplateParser, idTemplateParserErr = parser.NewParser()
-		if idTemplateParserErr != nil {
-			idTemplateParserErr = fmt.Errorf("building CEL parser for id_template: %w", idTemplateParserErr)
+// noMacroParserInstance returns the package's shared macro-free parser, used for
+// reference extraction here and in validate_scope.go: with macros disabled,
+// `has()`/`.filter()` stay plain calls instead of expanding into comprehensions
+// that hide the `input.<name>` / `incarnation.<field>` selects.
+func noMacroParserInstance() (*parser.Parser, error) {
+	noMacroParserOnce.Do(func() {
+		noMacroParser, noMacroParserErr = parser.NewParser()
+		if noMacroParserErr != nil {
+			noMacroParserErr = fmt.Errorf("building the macro-free CEL parser: %w", noMacroParserErr)
 		}
 	})
-	return idTemplateParser, idTemplateParserErr
+	return noMacroParser, noMacroParserErr
 }
 
 // validateIDTemplate is the schema-time check of `id_template:` against the

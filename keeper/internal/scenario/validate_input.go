@@ -88,16 +88,31 @@ type InputScenarioLoader interface {
 //
 // AFTER value validation succeeds, the same pass (no second snapshot load)
 // evaluates the top-level `validate:` section's declarative rules over the
-// MERGED input (input-only eval, config.EvalValidateRules). First failure →
-// [ErrValidateFailed] (handler → 422 validation_failed). Order is strict:
-// schema/required/type first, then validate invariants — `that` rules are
-// written assuming correct types (input.port > 0 is meaningless if port isn't
-// a number).
-func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any) (InputGate, error) {
+// MERGED input and the incarnation facts inc says this path knows
+// (config.EvalValidateRules). First failure → [ErrValidateFailed] (handler → 422
+// validation_failed). Order is strict: schema/required/type first, then validate
+// invariants — `that` rules are written assuming correct types (input.port > 0 is
+// meaningless if port isn't a number).
+//
+// inc is the caller's stance: [DayTwoIncarnation] on the run path,
+// config.RequestedIncarnation on create. A rule reading a fact the stance does not
+// carry is refused rather than evaluated against an empty namespace — the failure
+// is wrapped in config.ErrValidateRuleEval, so the handler reports it as a
+// scenario malfunction and not as the operator's input being wrong.
+func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact.ServiceRef, scenarioName string, provided map[string]any, inc config.ValidateContext) (InputGate, error) {
 	var zero InputGate
 	scn, err := loadScenarioManifest(ctx, loader, ref, scenarioName, "validate input")
 	if err != nil {
 		return zero, err
+	}
+
+	// A create scenario that composes its own id (ADR-0079) has no identifier to
+	// offer the rules: the id is a function of the input this gate is still
+	// resolving, and it is composed after the gate returns (ResolveCreatePlan).
+	// Only the manifest says so, so the withdrawal happens here rather than at the
+	// call site, which has not read it.
+	if scn.IDTemplate != "" {
+		inc = inc.WithComposedID()
 	}
 
 	// The full input gate in one call (config.ResolveInputContract, shared with
@@ -105,7 +120,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	// validation (type/enum/pattern/length, recursively into array/object), then
 	// the `validate:` invariants over the merged input. vault-ref isn't resolved
 	// (string pass-through).
-	merged, err := config.ResolveInputContract(scn.Input, scn.Validate, provided)
+	merged, err := config.ResolveInputContract(scn.Input, scn.Validate, provided, inc)
 	if err != nil {
 		var fail *config.ValidateRuleFailure
 		switch {

@@ -137,7 +137,33 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 	// same AST (the form: node from doc).
 	fdiags = append(fdiags, resolveCovenantFormDiags(m, doc, scenarioPath)...)
 	fdiags = append(fdiags, resolveCovenantIDTemplateDiags(m, doc, scenarioPath)...)
+	fdiags = append(fdiags, resolveCovenantValidateScopeDiags(m, doc, scenarioPath)...)
 	return fdiags
+}
+
+// resolveCovenantValidateScopeDiags runs the create-path scope check over the
+// EFFECTIVE `validate:` list (NIM-833) — same motive and same core as the two above.
+// A covenant fragment cannot be checked on its own: a rule reading
+// `incarnation.state` is correct for every day-2 scenario that extends it and fatal
+// for every create scenario that does, and only the merged manifest says which this
+// one is.
+//
+// A diagnostic about an INHERITED rule has no position in the scenario file, so it
+// carries the scenario's path with line 0 — the rule is not in that file, and
+// pointing at a line in it would be a lie. The message names the index in the
+// merged list, which is the order the keeper evaluates.
+func resolveCovenantValidateScopeDiags(m *ScenarioManifest, doc *Document, scenarioPath string) []diag.Diagnostic {
+	root := rootMapping(doc)
+	if root == nil {
+		return nil
+	}
+	out := validateCreateScopeRules(root, m, m.Validate)
+	for i := range out {
+		if out[i].File == "" {
+			out[i].File = scenarioPath
+		}
+	}
+	return out
 }
 
 // resolveCovenantIDTemplateDiags runs the covenant scenario's post-merge
