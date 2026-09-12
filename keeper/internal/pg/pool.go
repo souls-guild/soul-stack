@@ -96,6 +96,53 @@ func NewPool(ctx context.Context, cfg config.KeeperPostgres, vc *keepervault.Cli
 	return pool, nil
 }
 
+// NewBootstrapPool opens a second, small pool with the same connection settings
+// as `shared`, for the exclusive use of the pre-auth gRPC Bootstrap listener
+// (NIM-839).
+//
+// That listener is reachable without any credential — a host that has not been
+// onboarded has to be able to reach it — and the first thing it does is read
+// the database, to check the token it was handed. On the shared pool that put
+// unauthenticated traffic in the same `Acquire` queue as `/v1`, EventStream,
+// the Reaper and the audit writer, so enough of it starved the control plane
+// without ever presenting a credential. A separate pool does not make the read
+// cheaper; it makes the connections it competes for a different set.
+//
+// MinConns AND MinIdleConns are both zeroed, so an idle keeper pays nothing for
+// the pool; MaxConns is [BootstrapPoolMax], which is what bounds the cost under
+// load. Zeroing only MinConns would not be enough: pgxpool creates
+// max(MinConns, MinIdleConns) resources eagerly, and MinIdleConns arrives from
+// the shared config, where `pool_min_idle_conns` in the DSN can have set it.
+func NewBootstrapPool(ctx context.Context, shared *pgxpool.Pool) (*pgxpool.Pool, error) {
+	if shared == nil {
+		return nil, errors.New("pg.NewBootstrapPool: nil shared pool")
+	}
+	cfg := shared.Config()
+	cfg.MaxConns = BootstrapPoolMax(cfg.MaxConns)
+	cfg.MinConns = 0
+	cfg.MinIdleConns = 0
+	pool, err := pgxpool.NewWithConfig(ctx, cfg)
+	if err != nil {
+		return nil, fmt.Errorf("pg: new bootstrap pool: %w", err)
+	}
+	return pool, nil
+}
+
+// BootstrapPoolMax sizes the pre-auth pool at a quarter of the shared one, and
+// never below two.
+//
+// Derived rather than configured: `postgres.pool.max` stays the single number
+// an operator sizes against their server's `max_connections`, and a quarter of
+// it is a cost they can reason about from the number they already set. A
+// quarter is enough because onboarding is bounded by how fast Vault signs, not
+// by how many connections the pre-check is given.
+func BootstrapPoolMax(sharedMax int32) int32 {
+	if n := sharedMax / 4; n > 2 {
+		return n
+	}
+	return 2
+}
+
 // parsePoolConfig is [pgxpool.ParseConfig] with the DSN kept out of the error.
 // Failures are [ErrMalformedDSN]; see the note there for why pgx's own message
 // cannot be passed on.

@@ -186,6 +186,16 @@ Reading goes through `current/{cert,key,ca}.pem`. After reading, the `cert↔key
 
 Rotation happens exclusively over the live stream; no separate re-bootstrap flow via a token is required. If the stream was dropped and Soul did not arrive for a long time — after returning it first connects on the old seed, then initiates a rotation.
 
+### The rate Keeper will serve (NIM-840)
+
+Each `SeedRotationRequest` costs Keeper a Vault PKI signature and a Postgres transaction, so it is bounded twice: **per SID**, 3 back to back and then one per 10 minutes, and **globally per Keeper instance**, 10/s with a burst of 64. A weekly rotation asked for 24h in advance is four orders of magnitude inside the per-SID budget; what the budget stops is a host whose rotation loop is retrying because something upstream keeps failing. The global bound is the one that matters to everyone else: the PKI mount rotations issue from is the mount **onboarding** issues from, so a fleet flooding it would fail new hosts as well as every other host's legitimate rotation.
+
+Over budget the request is **dropped**, not answered — `SeedRotationReply` has no field for a refusal, and an empty reply would read as a rotation that succeeded and issued nothing. That is the same path every other rotation failure takes, and it rests on the Soul retrying on its own interval.
+
+⚠️ **That retry does not exist yet.** Nothing under `soul/` sends a `SeedRotationRequest` — the only sender in the tree is an integration test, and `soul/cmd/soul` logs `SeedRotationReply` as ignored. So the drop is safe *by design* and unverified *in fact*: there is no consumer to observe it or recover from it. Whoever builds the Soul-side rotation loop owns closing that gap; the budgets above are sized for a loop that backs off, not one that spins.
+
+Keeper logs the refusal once per episode, never once per dropped request. The two cases throttle differently, because they mean different things: a **per-SID** refusal logs once per SID and re-arms only when that host is served again — an episode that never resolves is one line; a **global** refusal logs once a minute for the whole fleet and re-arms on the clock, because it says nothing about the SID that happened to arrive during it and a 5000-host fleet must not be 5000 warnings.
+
 ## Revocation (revoke)
 
 - An operator operation via API/MCP. It changes `souls.status = 'revoked'` and `soul_seeds.status = 'revoked'` for all active/live seeds of the SID.

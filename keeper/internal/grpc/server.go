@@ -23,6 +23,7 @@ import (
 	"sync"
 	"time"
 
+	"golang.org/x/net/netutil"
 	grpclib "google.golang.org/grpc"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/keepalive"
@@ -41,10 +42,17 @@ const graceDuration = 10 * time.Second
 // at message-read time), so the limits are strict.
 const (
 	// bootstrapMaxRecvMsgSize — the maximum size of an incoming message.
-	// BootstrapRequest carries SID + bootstrap_token + one CSR PEM; even an
-	// RSA-4096 CSR fits in a few KiB. 256 KiB leaves orders of magnitude of
-	// headroom without opening up the gRPC default's 4 MiB attack surface.
-	bootstrapMaxRecvMsgSize = 256 * 1024
+	// BootstrapRequest carries SID + bootstrap_token + one CSR PEM +
+	// soul_version; an FQDN, 43 base64url characters, an RSA-4096 CSR and a
+	// version string come to under 3 KiB, so 16 KiB is five times the largest
+	// legitimate request.
+	//
+	// It was 256 KiB, on the reasoning that headroom was free. It stopped being
+	// free when the pre-auth budget gained a wait (NIM-839): a request now
+	// stays live for as long as its caller queues, and 256 conns × 10 streams
+	// of the old ceiling was ~640 MiB of heap an unauthenticated peer could
+	// pin with one precomputed CSR and a padded token.
+	bootstrapMaxRecvMsgSize = 16 * 1024
 
 	// bootstrapMaxConcurrentStreams — the limit on concurrent RPCs per
 	// connection. Bootstrap is a short unary call (Ping/Bootstrap); a
@@ -57,6 +65,30 @@ const (
 	// listener and holds the connection for a few seconds; any ping more
 	// frequent than 30s is a flood.
 	bootstrapKeepaliveMinTime = 30 * time.Second
+
+	// defaultBootstrapMaxConns — the ceiling on concurrent TCP connections the
+	// listener accepts (NIM-839). [bootstrapMaxConcurrentStreams] is a
+	// per-connection ceiling and nothing bounded the number of connections, so
+	// pre-auth concurrency was M×10 for an M the attacker chose. Over the
+	// ceiling a connection is not accepted at all — it waits in the kernel
+	// backlog and the client's own deadline ends it.
+	defaultBootstrapMaxConns = 256
+
+	// bootstrapConnectionTimeout — the ceiling on connection setup (TLS
+	// handshake plus HTTP/2 preface). Without it a peer that opens a socket and
+	// then says nothing holds an accept slot for as long as it likes, which
+	// makes the connection ceiling above the cheaper thing to attack.
+	bootstrapConnectionTimeout = 10 * time.Second
+
+	// bootstrapMaxConnectionIdle / Age / AgeGrace — the same reasoning past the
+	// handshake. A bootstrap exchange is a Ping plus one unary call and is over
+	// in seconds, so a connection with no RPC on it has no reason to keep a
+	// slot; Age bounds the held-open case where a Ping arrives just often
+	// enough to look busy. A gRPC client treats the resulting GOAWAY as a
+	// reconnect, so a health-checker polling Ping sees nothing.
+	bootstrapMaxConnectionIdle     = 2 * time.Minute
+	bootstrapMaxConnectionAge      = 5 * time.Minute
+	bootstrapMaxConnectionAgeGrace = 20 * time.Second
 )
 
 // BootstrapServer — the gRPC server for the Bootstrap listener.
@@ -69,6 +101,7 @@ const (
 type BootstrapServer struct {
 	srv        *grpclib.Server
 	configAddr string
+	maxConns   int
 
 	mu     sync.Mutex
 	addr   string
@@ -105,6 +138,12 @@ func NewBootstrapServer(cfg config.KeeperListenGRPCBootstrap, deps BootstrapDeps
 		grpclib.Creds(credentials.NewTLS(tlsCfg)),
 		grpclib.MaxRecvMsgSize(bootstrapMaxRecvMsgSize),
 		grpclib.MaxConcurrentStreams(bootstrapMaxConcurrentStreams),
+		grpclib.ConnectionTimeout(bootstrapConnectionTimeout),
+		grpclib.KeepaliveParams(keepalive.ServerParameters{
+			MaxConnectionIdle:     bootstrapMaxConnectionIdle,
+			MaxConnectionAge:      bootstrapMaxConnectionAge,
+			MaxConnectionAgeGrace: bootstrapMaxConnectionAgeGrace,
+		}),
 		grpclib.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             bootstrapKeepaliveMinTime,
 			PermitWithoutStream: false,
@@ -112,9 +151,15 @@ func NewBootstrapServer(cfg config.KeeperListenGRPCBootstrap, deps BootstrapDeps
 	)
 	keeperv1.RegisterKeeperServer(srv, newBootstrapHandler(deps, logger))
 
+	maxConns := deps.MaxConns
+	if maxConns <= 0 {
+		maxConns = defaultBootstrapMaxConns
+	}
+
 	return &BootstrapServer{
 		srv:        srv,
 		configAddr: cfg.Addr,
+		maxConns:   maxConns,
 		addr:       cfg.Addr,
 		logger:     logger,
 	}, nil
@@ -134,7 +179,9 @@ func (s *BootstrapServer) Start(ctx context.Context) error {
 	s.mu.Lock()
 	s.addr = actual
 	s.mu.Unlock()
-	s.logger.Info("gRPC Bootstrap listener started", slog.String("addr", actual))
+	ln = netutil.LimitListener(ln, s.maxConns)
+	s.logger.Info("gRPC Bootstrap listener started",
+		slog.String("addr", actual), slog.Int("max_conns", s.maxConns))
 
 	errCh := make(chan error, 1)
 	go func() {

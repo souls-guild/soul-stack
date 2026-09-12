@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"log/slog"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -96,6 +97,21 @@ type BootstrapDeps struct {
 	// RPC (ADR-0076(h)). Empty → Ping answers with an empty version, which is
 	// exactly what a pre-ADR-0076 keeper looked like on the wire.
 	KeeperVersion string
+
+	// MaxConns bounds concurrent TCP connections on the listener; a listener
+	// knob rather than a handler one, but this is the only struct
+	// [NewBootstrapServer] takes that is not the config schema. <=0 →
+	// [defaultBootstrapMaxConns].
+	MaxConns int
+
+	// PreauthConcurrency bounds how many Bootstrap RPCs may be holding a
+	// database connection at once (NIM-839). <=0 →
+	// [defaultBootstrapPreauthConcurrency].
+	PreauthConcurrency int
+
+	// PreauthWait is how long a caller waits for a slot in that budget before
+	// being refused. <=0 → [bootstrapPreauthWait].
+	PreauthWait time.Duration
 }
 
 func (d BootstrapDeps) validate() error {
@@ -129,10 +145,223 @@ type bootstrapHandler struct {
 	keeperv1.UnimplementedKeeperServer
 	deps   BootstrapDeps
 	logger *slog.Logger
+
+	// preauth is the admission budget for the part of Bootstrap that costs a
+	// pooled database connection; preauthWait is how long a caller may wait for
+	// a slot before being refused. See [bootstrapHandler.acquirePreauth].
+	preauth     chan struct{}
+	preauthWait time.Duration
+
+	// lastRefusalLog throttles the "budget spent" warning; see
+	// [bootstrapHandler.notePreauthRefusal].
+	refusalMu      sync.Mutex
+	lastRefusalLog time.Time
 }
 
+const (
+	// defaultBootstrapPreauthConcurrency — how many Bootstrap RPCs may be past
+	// the free checks at once (NIM-839).
+	//
+	// A ceiling on pre-auth work in flight, not on request rate: the value is
+	// only meaningful against the pool the listener is given, which is its own
+	// ([pg.NewBootstrapPool]) and small. What it buys is that a caller over the
+	// budget waits WITHOUT a pooled connection, instead of queueing on
+	// `Acquire` and holding one.
+	defaultBootstrapPreauthConcurrency = 16
+
+	// bootstrapPreauthWait — how long a caller waits for a slot before being
+	// refused. Sized off the work a slot holds: one Vault PKI signature plus
+	// one short transaction, so 16 slots turn over tens of times a second and a
+	// burst of a few hundred hosts clears well inside this. A flood never
+	// drains, which is what makes the wait a refusal rather than a queue.
+	bootstrapPreauthWait = 5 * time.Second
+
+	// bootstrapPreauthWaitShare — the DIVISOR on the caller's remaining time
+	// bounding how much of it queueing may take: 2 means at most one half, and
+	// at least one half is always left for the work.
+	//
+	// A ratio and not a duration on purpose. The caller's budget is
+	// `keeper.retry.handshake_timeout` in `soul.yml`, which this server cannot
+	// read and which operators are told to lower for faster failover; any fixed
+	// number subtracted from it silently becomes "no wait at all" below that
+	// number. See [bootstrapHandler.acquirePreauth].
+	//
+	// Typed, so it cannot be mistaken for a duration: untyped, every use site
+	// would infer time.Duration and a future `remaining * share` or
+	// `slog.Duration(…, share)` would silently mean two nanoseconds.
+	bootstrapPreauthWaitShare time.Duration = 2
+
+	// bootstrapRefusalLogInterval — the floor between two "budget spent"
+	// warnings. See [bootstrapHandler.notePreauthRefusal].
+	bootstrapRefusalLogInterval = 30 * time.Second
+
+	// bootstrapMaxTokenLen — the ceiling on the presented token, in bytes. A
+	// real one is 32 random bytes as base64url, 43 characters
+	// ([bootstraptoken.Generate]); the cap is two orders of magnitude of
+	// headroom and exists so the free checks stay free, which they are not if a
+	// padded token can be parked for the length of the wait.
+	bootstrapMaxTokenLen = 256
+)
+
 func newBootstrapHandler(deps BootstrapDeps, logger *slog.Logger) *bootstrapHandler {
-	return &bootstrapHandler{deps: deps, logger: logger}
+	limit := deps.PreauthConcurrency
+	if limit <= 0 {
+		limit = defaultBootstrapPreauthConcurrency
+	}
+	wait := deps.PreauthWait
+	if wait <= 0 {
+		wait = bootstrapPreauthWait
+	}
+	return &bootstrapHandler{
+		deps:        deps,
+		logger:      logger,
+		preauth:     make(chan struct{}, limit),
+		preauthWait: wait,
+	}
+}
+
+// errPreauthBudgetSpent — the budget refused: no slot came free inside the
+// wait, or the caller had too little time left to be worth admitting.
+var errPreauthBudgetSpent = errors.New("grpc: bootstrap pre-auth budget spent")
+
+// errPreauthCallerGone — the caller's context ended while it waited. Distinct
+// from a spent budget: it is not a capacity signal, must not be logged as one,
+// and the caller should hear its own reason back.
+var errPreauthCallerGone = errors.New("grpc: bootstrap caller gave up while waiting")
+
+// acquirePreauth takes a slot in the pre-auth budget, waiting for one, and
+// returns nil if it got one.
+//
+// The wait is the difference between bounding the pool and breaking onboarding.
+// A caller waiting here holds a goroutine, a stream and its (16 KiB-capped)
+// request, and holds NO pooled connection — which is the property the budget
+// exists for. Refusing outright would be an outage for the legitimate case:
+// `soul bootstrap` tries each endpoint exactly once and does not retry
+// ([soul/internal/bootstrap.Run]), so a mass onboarding that briefly exceeds
+// the budget would fail on the hosts that lost the race with nothing to pick
+// them back up.
+//
+// **The guarantee is proportional: queueing never takes more than 1 in
+// [bootstrapPreauthWaitShare] of the caller's remaining time**, so at least the
+// same proportion is still there when the slot is won. That matters because the
+// Soul wraps dial, handshake and RPC in ONE deadline and writes its private key
+// only after a successful reply, while the server burns the token
+// mid-transaction: time this queue spends is time the work does not get.
+//
+// A share rather than a fixed reserve. The caller's budget is
+// `keeper.retry.handshake_timeout` in `soul.yml` — an operator knob this server
+// cannot see, documented with advice to lower it. Any fixed number subtracted
+// from it is a cliff: set the timeout at or under that number and every
+// contended caller takes an immediate refusal, which is the NIM-839 onboarding
+// outage restored by a setting in a different file.
+//
+// **What this does NOT promise, deliberately:** that an admitted caller has
+// enough time to finish. The server cannot know — the cost is dominated by a
+// Vault round trip of "unpredictable latency", and an UNCONTENDED caller with
+// the same short deadline faces exactly the same risk without ever touching
+// this function. An absolute floor would only be that same cliff at a different
+// value: it would refuse callers whose deadline is short but whose Vault is
+// fast, which is a working deployment today. The residual risk — a commit that
+// lands after the reply can be delivered, burning a token for a host that never
+// learns it onboarded — belongs to the burn itself and is NIM-865, not to how
+// long anyone queued.
+//
+// release is never nil, on any path, so a caller that defers it without
+// checking the error cannot panic. waited is what was actually spent queueing,
+// for the refusal log.
+func (h *bootstrapHandler) acquirePreauth(ctx context.Context) (release func(), waited time.Duration, err error) {
+	noop := func() {}
+	take := func() { <-h.preauth }
+	if h.preauth == nil {
+		return noop, 0, nil
+	}
+	// A caller that is already gone gets nothing, contended or not: the fast
+	// path would otherwise hand it a slot and a pooled connection.
+	// A caller that is already gone gets nothing, contended or not: the fast
+	// path would otherwise hand it a slot and a pooled connection.
+	if ctx.Err() != nil {
+		return noop, 0, errPreauthCallerGone
+	}
+	select {
+	case h.preauth <- struct{}{}:
+		return take, 0, nil
+	default:
+	}
+
+	wait := h.preauthWait
+	if remaining, bounded := timeLeft(ctx); bounded {
+		if share := remaining / bootstrapPreauthWaitShare; share < wait {
+			wait = share
+		}
+	}
+	if wait <= 0 {
+		// Only reachable once the deadline has already passed — the share of a
+		// positive remainder is positive. That is a caller that is gone, not a
+		// keeper that is full, and must not be counted as capacity.
+		return noop, 0, errPreauthCallerGone
+	}
+
+	start := time.Now()
+	timer := time.NewTimer(wait)
+	defer timer.Stop()
+	select {
+	case h.preauth <- struct{}{}:
+	case <-timer.C:
+		return noop, time.Since(start), errPreauthBudgetSpent
+	case <-ctx.Done():
+		return noop, time.Since(start), errPreauthCallerGone
+	}
+
+	// A select with two ready cases picks pseudo-randomly, so winning the slot
+	// is not evidence the caller is still there. Check before spending its
+	// share of the pool on a peer that has gone.
+	if ctx.Err() != nil {
+		take()
+		return noop, time.Since(start), errPreauthCallerGone
+	}
+	return take, time.Since(start), nil
+}
+
+// timeLeft reports how long ctx has, and whether it is bounded at all. A
+// context with no deadline is the unit-test case — every real Bootstrap client
+// is `soul bootstrap`, which always sets one. It is not treated as infinite
+// headroom by accident; it simply has no budget to protect.
+func timeLeft(ctx context.Context) (time.Duration, bool) {
+	deadline, ok := ctx.Deadline()
+	if !ok {
+		return 0, false
+	}
+	return time.Until(deadline), true
+}
+
+// notePreauthRefusal reports a spent budget at most once per
+// [bootstrapRefusalLogInterval]. A refusal is what a flood produces, so one
+// line per refused attempt would be a second way to spend the host — but with
+// no line at all the budget is undiagnosable, because [GRPCMetrics.ObserveBootstrap]
+// has only `ok` and `failed` and cannot tell "at capacity" from a Vault outage
+// or a bad token.
+func (h *bootstrapHandler) notePreauthRefusal(now time.Time, waited time.Duration) {
+	h.refusalMu.Lock()
+	due := h.lastRefusalLog.IsZero() || now.Sub(h.lastRefusalLog) >= bootstrapRefusalLogInterval
+	if due {
+		h.lastRefusalLog = now
+	}
+	h.refusalMu.Unlock()
+
+	// Outside the lock: this runs on the refusal path of a flood, and a slow
+	// log writer holding it would put every refused caller in a convoy behind
+	// the line describing the flood.
+	if due {
+		// `waited` is MEASURED, not predicted. It differs from the configured
+		// wait whenever the caller's own deadline was the smaller of the two,
+		// and reporting the configured value there would tell the operator to
+		// add capacity when the answer is `keeper.retry.handshake_timeout`.
+		h.logger.Warn("bootstrap: pre-auth budget spent — refusing onboarding attempts",
+			slog.Int("budget", cap(h.preauth)),
+			slog.Duration("waited", waited),
+			slog.Duration("wait_configured", h.preauthWait),
+		)
+	}
 }
 
 // Ping — health-check RPC, available without authorization (server-only TLS
@@ -205,6 +434,11 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if strings.TrimSpace(plainToken) == "" {
 		return nil, status.Error(codes.InvalidArgument, "bootstrap_token is empty")
 	}
+	// Length is not a secret and discloses nothing a caller does not already
+	// know, so this stays outside the anti-enum single-answer rule below.
+	if len(plainToken) > bootstrapMaxTokenLen {
+		return nil, status.Error(codes.InvalidArgument, "bootstrap_token is too long")
+	}
 	csrPEM := req.GetCsrPem()
 	if len(csrPEM) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "csr_pem is empty")
@@ -217,6 +451,31 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if err := validateCSRCommonName(csrPEM, sid); err != nil {
 		return nil, err
 	}
+
+	// Past this line every step costs a resource the cluster shares — a pooled
+	// database connection for the pre-check, then Vault, then a transaction —
+	// and the caller is still unauthenticated: the token is what the pre-check
+	// is about to read. The budget is therefore taken BEFORE the pool and not
+	// after, so a caller over it never reaches one (NIM-839).
+	release, waited, acqErr := h.acquirePreauth(ctx)
+	defer release()
+	switch {
+	case errors.Is(acqErr, errPreauthCallerGone):
+		// Its own reason back, not a capacity signal: a client that hung up is
+		// not evidence the keeper is full, and counting it as such is how the
+		// one diagnostic an operator has stops meaning anything. The nil guard
+		// is for a future second return site: FromContextError(nil) yields a
+		// nil *Status whose Err() is nil, which would make this RPC answer
+		// (nil, nil) and be recorded as a success.
+		if ctxErr := ctx.Err(); ctxErr != nil {
+			return nil, status.FromContextError(ctxErr).Err()
+		}
+		return nil, status.Error(codes.Canceled, "caller left before onboarding started")
+	case acqErr != nil:
+		h.notePreauthRefusal(time.Now(), waited)
+		return nil, status.Error(codes.ResourceExhausted, "bootstrap is at capacity")
+	}
+
 	tokenHash := bootstraptoken.HashToken(plainToken)
 
 	// Cheap token pre-check BEFORE the Vault round trip (M3): a junk token

@@ -237,6 +237,11 @@ type EventStreamDeps struct {
 	// ModuleFetchPerSID limits parallel FetchModule calls per SID (protects
 	// the control plane from flooding). <=0 → [defaultModuleFetchPerSID].
 	ModuleFetchPerSID int
+
+	// SeedRotationLimit bounds how often SeedRotationRequest is served, per SID
+	// and globally. Zero fields take the defaults; ignored when
+	// SeedRotation==nil.
+	SeedRotationLimit SeedRotationLimit
 }
 
 // TollNotifier is the narrow surface of the Toll disconnect-event hook.
@@ -492,6 +497,13 @@ type eventStreamHandler struct {
 	// (lazy map).
 	fetchInflight sidInflight
 
+	// seedRotation bounds the rate of SeedRotationRequest, per SID and
+	// globally. Unlike its two neighbours on the dispatch table the cost here
+	// is not goroutines but a Vault PKI signature and a PG transaction per
+	// message, and dispatch runs inline — so what needed bounding was rate,
+	// not concurrency. nil → no limit (rotation not wired up).
+	seedRotation *seedRotationLimiter
+
 	// soulLeaseOwner / instanceAlive are seams for the presence-gated
 	// force-release of a SID lease (ADR-027 amend (n)) in
 	// [acquireSoulLease]. By default they are the direct
@@ -526,11 +538,17 @@ func newEventStreamHandler(deps EventStreamDeps, logger *slog.Logger) *eventStre
 		augurSem = make(chan struct{}, limit)
 	}
 
+	var seedRotation *seedRotationLimiter
+	if deps.SeedRotation != nil {
+		seedRotation = newSeedRotationLimiter(deps.SeedRotationLimit)
+	}
+
 	return &eventStreamHandler{
 		deps:           deps,
 		logger:         logger,
 		lastSeenFlush:  newLastSeenFlusher(flushInterval),
 		augurSem:       augurSem,
+		seedRotation:   seedRotation,
 		soulLeaseOwner: keeperredis.SoulLeaseOwner,
 		instanceAlive:  keeperredis.InstanceAlive,
 	}

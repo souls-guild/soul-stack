@@ -2446,6 +2446,43 @@ func (b errandApplyBusBridge) SubscribeWithBridge(ctx context.Context, applyID s
 
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
+// buildBootstrapDeps assembles the Bootstrap listener's dependencies and opens
+// the pool they carry.
+//
+// Split out of [daemon.setupGRPCBootstrap] so the NIM-839 invariant is
+// something a test can hold: the pre-auth listener MUST NOT be handed `d.pool`.
+// It is the one listener an unauthenticated caller can reach and it reads the
+// database before the token it was given is checked, so sharing the pool puts
+// that traffic in the same Acquire queue as `/v1`, EventStream, the Reaper and
+// the audit writer. That is one assignment, and until this seam existed nothing
+// but review stood between it and a revert.
+//
+// The audit writer is deliberately NOT moved: it runs only after the token is
+// burned, so nothing unauthenticated reaches it.
+func (d *daemon) buildBootstrapDeps(ctx context.Context) (keepergrpc.BootstrapDeps, error) {
+	bootstrapPool, err := keeperpg.NewBootstrapPool(ctx, d.pool)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: bootstrap pg pool: %v\n", err)
+		return keepergrpc.BootstrapDeps{}, errSetupFailed
+	}
+	d.cleanups.push(bootstrapPool.Close)
+
+	deps := keepergrpc.BootstrapDeps{
+		Pool:          bootstrapPool,
+		VaultClient:   d.vc,
+		AuditWriter:   d.auditWriter,
+		KID:           d.cfg.KID,
+		PKIMount:      d.cfg.Vault.PKIMount,
+		PKIRole:       d.cfg.Vault.PKIRole,
+		Metrics:       d.grpcMetrics,
+		KeeperVersion: version,
+	}
+	if d.sigilAnchorSource != nil {
+		deps.SigilAnchorSource = d.sigilAnchorSource
+	}
+	return deps, nil
+}
+
 func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	cfg := d.cfg
 	logger := d.logger
@@ -2457,24 +2494,9 @@ func (d *daemon) setupGRPCBootstrap(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	grpcDone := make(chan struct{})
-	bootstrapDeps := keepergrpc.BootstrapDeps{
-		Pool:          d.pool,
-		VaultClient:   d.vc,
-		AuditWriter:   d.auditWriter,
-		KID:           cfg.KID,
-		PKIMount:      cfg.Vault.PKIMount,
-		PKIRole:       cfg.Vault.PKIRole,
-		Metrics:       d.grpcMetrics,
-		KeeperVersion: version,
-	}
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	if d.sigilAnchorSource != nil {
-		bootstrapDeps.SigilAnchorSource = d.sigilAnchorSource
+	bootstrapDeps, err := d.buildBootstrapDeps(ctx)
+	if err != nil {
+		return err
 	}
 	grpcSrv, err := keepergrpc.NewBootstrapServer(cfg.Listen.GRPC.Bootstrap, bootstrapDeps, logger)
 	if err != nil {
