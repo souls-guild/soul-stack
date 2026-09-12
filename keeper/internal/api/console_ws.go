@@ -38,10 +38,27 @@ import (
 // the upgrade itself; the per-host `host=<sid>` scope is checked per session,
 // in-handler, because the SID arrives in the `open` frame rather than the URL.
 
+// consoleRBAC — the RBAC surface this endpoint needs: the scope-aware check for
+// the per-`open` host gate, and the revocation projection for the re-check that
+// keeps an established socket honest (NIM-844).
+//
+// Declared as one interface rather than reached by a type assertion on the
+// checker: a wiring that cannot answer "is this Archon revoked" must fail to
+// compile, not fail to notice.
+type consoleRBAC interface {
+	middleware.PermissionChecker
+	middleware.RevocationChecker
+	// ActionHolder answers "is this right held at all", with no scope context and
+	// no database read. The re-check needs it for the case where the host's
+	// Coven labels cannot be resolved: a `coven=` grant is then unjudgeable, but
+	// whether the operator holds `soul.console` in any form still has an answer.
+	middleware.ActionHolder
+}
+
 // consoleWSDeps wires the endpoint.
 type consoleWSDeps struct {
 	Hub      *console.Hub
-	Enforcer middleware.PermissionChecker
+	Enforcer consoleRBAC
 	// SoulReader resolves the target host's Coven labels for the per-`open`
 	// scope check (NIM-650). nil → the `{host}` context alone, i.e. a
 	// `coven=`-scoped `soul.console` fails closed, which is what this endpoint
@@ -57,6 +74,11 @@ type consoleWSDeps struct {
 	// Only the socket's own tests set it, to reach an expiry the production
 	// value is deliberately too generous to wait for.
 	WriteWait time.Duration
+	// ReauthInterval overrides how often the socket re-asks whether the operator
+	// may still hold it (NIM-844); zero takes longLivedReauthInterval. Same
+	// reason as WriteWait: a test must reach the second check without waiting out
+	// the production interval.
+	ReauthInterval time.Duration
 }
 
 // consoleUpgrader turns the request into a socket.
@@ -358,6 +380,15 @@ const (
 	// finishes) produces no next chunk, so the operator would be left looking
 	// at spliced output with no sign anything was lost.
 	consoleDropFlush = 250 * time.Millisecond
+	// consoleReauthReadBudget bounds the one database read the re-authorization
+	// loop makes per session per tick (NIM-844). It exists because
+	// [consoleConn.run] joins that goroutine before reaping the ptys: without a
+	// bound, a pool with no free connection would hold a whole socket's worth of
+	// root shells open for as long as it stayed wedged. Generous next to an
+	// indexed single-row SELECT and far inside the interval it runs on, so a
+	// healthy cluster never reaches it; a sick one converges to "keep the pane,
+	// ask again next tick" instead of to a stuck teardown.
+	consoleReauthReadBudget = 2 * time.Second
 )
 
 // run drives the socket until either side closes it, then reaps every session.
@@ -378,6 +409,12 @@ func (c *consoleConn) run(ctx context.Context) {
 	go func() {
 		defer close(claimsDone)
 		c.refreshClaimsLoop()
+	}()
+
+	reauthDone := make(chan struct{})
+	go func() {
+		defer close(reauthDone)
+		c.reauthorizeLoop(ctx)
 	}()
 
 	c.readPump(ctx)
@@ -401,6 +438,7 @@ func (c *consoleConn) run(ctx context.Context) {
 		<-writerDone
 	}
 	<-claimsDone
+	<-reauthDone
 	_ = c.ws.Close()
 
 	sessions := c.takeAllSessions()
@@ -424,10 +462,20 @@ func (c *consoleConn) run(ctx context.Context) {
 }
 
 // socketDiedBadly reports whether the socket ended in a failure rather than an
-// ordinary close. Only the socket's own reasons reach here, and exactly one of
-// them is not a failure.
+// ordinary close — which decides whether the reap line is WARN or INFO.
+//
+// Two of the reasons that reach here are not failures. CloseSocketClosed is the
+// ordinary end of a console. CloseAccessRevoked is a POLICY decision (NIM-844):
+// the socket ended because Keeper decided it should, nothing malfunctioned, and
+// [consoleConn.reauthorize] has already written its own WARN naming the Archon —
+// a second one here would read as a fault and bury the real failures.
 func socketDiedBadly(reason console.CloseReason) bool {
-	return reason != console.CloseSocketClosed
+	switch reason {
+	case console.CloseSocketClosed, console.CloseAccessRevoked:
+		return false
+	default:
+		return true
+	}
 }
 
 // shutdown signals both pumps to stop, and unparks the read pump if it is
@@ -640,6 +688,29 @@ func (c *consoleConn) handleClose(ctx context.Context, f *console.ClientFrame) {
 	c.hub.Close(ctx, sess, console.CloseOperatorDetached)
 }
 
+// drainQueued writes out whatever is left in the queue, stopping at the first
+// failure. Called once, from the teardown branch of [consoleConn.writePump], so
+// there is still exactly one writer on the socket.
+//
+// It is not bounded by the queue's contents, and that is worth knowing: a
+// `sendControl` after `done` refuses to enqueue, but [consoleConn.DeliverChunk]
+// does not look at `done` at all, so the EventStream goroutine can keep feeding
+// pty output while this drains. The real bound is the one teardown already
+// provides — [consoleConn.run] takes the socket away after consoleWriterGrace,
+// which fails the write in progress and returns from here.
+func (c *consoleConn) drainQueued() {
+	for {
+		f, ok := c.out.pop()
+		if !ok {
+			return
+		}
+		_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
+		if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
+			return
+		}
+	}
+}
+
 // writePump owns the socket's write side: it drains `out`, and pings to keep
 // the peer's liveness observable.
 func (c *consoleConn) writePump() {
@@ -651,6 +722,16 @@ func (c *consoleConn) writePump() {
 	for {
 		select {
 		case <-c.done:
+			// Anything a teardown queued on its way out goes first. Without this
+			// the frame explaining WHY the socket is closing is a coin flip: the
+			// sender pushes it and then closes `done`, and this select has no
+			// preference between the two ready cases — so roughly half the time
+			// the operator's wall went dark with no reason in it. Draining costs
+			// only what is already queued and delays nothing that matters: the
+			// sessions are reaped by [consoleConn.run], not here, and that path
+			// already takes the socket away after consoleWriterGrace if this
+			// writer parks on a peer that stopped reading (NIM-844).
+			c.drainQueued()
 			// Best-effort goodbye; a dead peer just makes this fail.
 			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
 			_ = c.ws.WriteMessage(websocket.CloseMessage,
@@ -786,6 +867,135 @@ func (c *consoleConn) refreshClaimsLoop() {
 			c.refreshClaims()
 		}
 	}
+}
+
+// reauthorizeLoop re-asks, while the socket is up, what was decided once when it
+// opened (NIM-844, see longlived_reauth.go). A socket that outlives the
+// operator's rights is the one place the revocation perimeter has a hole by
+// construction rather than by omission.
+func (c *consoleConn) reauthorizeLoop(ctx context.Context) {
+	interval := c.deps.ReauthInterval
+	if interval <= 0 {
+		interval = longLivedReauthInterval
+	}
+	ticker := time.NewTicker(interval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.reauthorize(ctx)
+		}
+	}
+}
+
+// reauthorize drops what the operator may no longer hold.
+//
+// Two outcomes, because the two losses are not the same size. A revoked Archon
+// loses the socket: the token itself is no longer trusted, so there is nothing
+// left to keep any pane open for. An Archon narrowed out of `soul.console` for
+// one host loses that pane and keeps the others, which is exactly what the
+// narrowing says.
+//
+// The per-session check is the SAME question [consoleConn.handleOpen] asks,
+// against freshly read Coven labels — a label moving off a host narrows the scope
+// just as a permission edit does, and re-using the contexts captured at `open`
+// would miss it.
+//
+// But it is NOT the same call, and the difference is the one place this loop
+// could have made things worse than no loop at all. `soul.HostContextsBySID`
+// answers an unreadable row with the `{host}` context alone, which denies every
+// `coven=` grant — right for `open`, where the alternative is opening a pane on
+// an unverified host, and wrong here, where it would turn one exhausted pool into
+// "your permission was withdrawn" on every coven-scoped console in the fleet at
+// the same tick. Taking something away needs certainty, so this path asks the
+// form that reports the failure and KEEPS a pane it could not judge. A host whose
+// row is simply gone ([soul.ErrSoulNotFound]) is not that case: the answer is
+// known, and a pane on a host that no longer exists is not worth defending.
+//
+// Losing `soul.console` outright needs no separate branch: the per-session check
+// denies every host, so every pane goes, and the next `open` frame is refused by
+// handleOpen. A socket with no session left is harmless — it can reach nothing
+// without asking again.
+//
+// The `error` frame is best-effort, and deliberately not waited for. It is queued
+// ahead of the teardown, but the writer may take its `done` branch first (the
+// select has no preference), and making delivery certain would mean holding a
+// revoked operator's root shell open until a possibly-stalled browser drained its
+// queue. The shells going is the control; telling the operator why is a courtesy
+// that must not gate it.
+func (c *consoleConn) reauthorize(ctx context.Context) {
+	if c.deps.Enforcer == nil || c.closing() {
+		return
+	}
+	if c.deps.Enforcer.IsRevoked(c.aid) {
+		c.sendError("", console.ErrCodeForbidden, "archon "+c.aid+" has been revoked")
+		c.logger.Warn("console: socket closed, operator revoked under it",
+			slog.String("aid", c.aid))
+		c.shutdown(console.CloseAccessRevoked)
+		return
+	}
+	for _, s := range c.sessionTargets() {
+		if c.closing() {
+			// Teardown started under us: the sessions are the reaper's now, and
+			// closing one here would file it under the wrong reason.
+			return
+		}
+		// The read is bounded. The loop runs on a context detached from the
+		// request (the socket outlives it), nothing in this tree sets a
+		// statement or acquire timeout, and [consoleConn.run] waits for this
+		// goroutine before reaping — so an unbounded read here would let a
+		// wedged pool hold every pty on the socket open, on the very failure
+		// this branch exists to tolerate.
+		readCtx, cancel := context.WithTimeout(ctx, consoleReauthReadBudget)
+		contexts, err := soul.HostContextsBySIDOrError(readCtx, c.deps.SoulReader, s.sid)
+		cancel()
+		if err != nil && !errors.Is(err, soul.ErrSoulNotFound) {
+			// Unresolved covens make a `coven=` grant unjudgeable, not absent —
+			// but they say nothing about whether the right is held AT ALL, and
+			// that question needs no row: HoldsAction reads the snapshot. A
+			// deferral that skipped it would keep a pane whose permission was
+			// deleted outright for as long as the pool stayed down, which is the
+			// opposite mistake to the one this branch fixes.
+			if c.deps.Enforcer.HoldsAction(c.aid, "soul", "console") {
+				c.logger.Warn("console: host scope unreadable, session kept",
+					slog.String("aid", c.aid), slog.String("sid", s.sid), slog.Any("error", err))
+				continue
+			}
+			c.logger.Warn("console: host scope unreadable and soul.console is not held at all, session closed",
+				slog.String("aid", c.aid), slog.String("sid", s.sid), slog.Any("error", err))
+		}
+		if err := soul.AllowAnyContext(c.deps.Enforcer, c.aid, "soul", "console", contexts); err == nil {
+			continue
+		}
+		sess := c.removeSession(s.clientID)
+		if sess == nil {
+			continue // the operator closed it while we were asking
+		}
+		c.sendError(s.clientID, console.ErrCodeForbidden, "console permission for this host was withdrawn")
+		c.logger.Warn("console: session closed, host scope withdrawn under it",
+			slog.String("aid", c.aid), slog.String("sid", s.sid))
+		c.hub.Close(ctx, sess, console.CloseAccessRevoked)
+	}
+}
+
+// consoleTarget pairs a socket-local session id with the host it reaches, which
+// is all [consoleConn.reauthorize] needs and the only pair it may hold outside
+// the lock.
+type consoleTarget struct {
+	clientID string
+	sid      string
+}
+
+func (c *consoleConn) sessionTargets() []consoleTarget {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]consoleTarget, 0, len(c.sessions))
+	for clientID, sess := range c.sessions {
+		out = append(out, consoleTarget{clientID: clientID, sid: sess.SID})
+	}
+	return out
 }
 
 // refreshClaims re-stamps the cluster routing claims of this socket's sessions.

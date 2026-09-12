@@ -59,6 +59,13 @@ const (
 	// failure: an operator declared this cluster has no consoles, and a switch
 	// that let the shells already open keep running would not be one.
 	ClosePlaneDisabled CloseReason = "console_plane_disabled"
+
+	// CloseAccessRevoked — the Archon holding the session stopped being allowed
+	// to hold it: revoked outright, or narrowed out of `soul.console` for this
+	// host (NIM-844). A policy decision like ClosePlaneDisabled, and for the same
+	// reason it cannot wait for the operator to close the pane: the right that
+	// was taken away is the right to be at a root prompt on that host.
+	CloseAccessRevoked CloseReason = "access_revoked"
 )
 
 // closeReasonText is the registry of known reasons. Membership here is what
@@ -78,6 +85,7 @@ var closeReasonText = map[CloseReason]string{
 	CloseIdleTimeout:          "idle timeout",
 	CloseRecordingUnavailable: "recording unavailable",
 	ClosePlaneDisabled:        "console plane disabled",
+	CloseAccessRevoked:        "operator access revoked",
 }
 
 // Label is the metric label. Anything outside the table collapses to `unknown`

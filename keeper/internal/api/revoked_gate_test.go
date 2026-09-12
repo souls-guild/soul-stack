@@ -98,6 +98,17 @@ func revokedGateRouter(t *testing.T, enforcer RBACProvider) http.Handler {
 	return revokedGateRouterWith(t, enforcer, handlers.NewSoulHandler(nil, nil, nil, nil), nil)
 }
 
+// revokedGateRouterWebUI is [revokedGateRouter] with the embedded UI mounted as a
+// default production deployment mounts it. Only the RBAC completeness guard uses
+// it (NIM-843): `/ui` and `/ui/*` are registered behind a config boolean and carry
+// no OpenAPI operation, so a router built with the toggle off puts them in
+// neither half of that guard's route universe — and then anything added beside
+// them is invisible to it.
+func revokedGateRouterWebUI(t *testing.T, enforcer RBACProvider) http.Handler {
+	t.Helper()
+	return revokedGateRouterFull(t, enforcer, handlers.NewSoulHandler(nil, nil, nil, nil), nil, true)
+}
+
 // revokedGateRouterWith is [revokedGateRouter] with the two dependencies a
 // caller may need ALIVE rather than stubbed: the Soul handler and the audit
 // writer. The route-permission guard (NIM-386) needs both — its positive
@@ -106,6 +117,14 @@ func revokedGateRouter(t *testing.T, enforcer RBACProvider) http.Handler {
 // route is not mounted at all", and those are the two outcomes the guard exists
 // to separate.
 func revokedGateRouterWith(t *testing.T, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer) http.Handler {
+	t.Helper()
+	return revokedGateRouterFull(t, enforcer, soulH, auditW, false)
+}
+
+// revokedGateRouterFull is [revokedGateRouterWith] with the web-UI toggle exposed.
+// Separate so the ordinary callers keep the perimeter-only router they want and
+// only the completeness guard asks for the static mount as well.
+func revokedGateRouterFull(t *testing.T, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer, webUI bool) http.Handler {
 	t.Helper()
 	verifier, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer)
 	if err != nil {
@@ -155,7 +174,7 @@ func revokedGateRouterWith(t *testing.T, enforcer RBACProvider, soulH *handlers.
 		nil,                                  // tempoMetrics
 		nil,                                  // tempoVoyageCreateLimits
 		nil,                                  // tempoVoyagePreviewLimits
-		false,                                // webUIEnabled — /ui is static and public, outside the authenticated perimeter
+		webUI,                                // webUIEnabled — /ui is static and public, outside the authenticated perimeter
 		nil,                                  // ldapAuth — /auth/* is pre-authentication, outside this perimeter
 		nil,                                  // oidcAuth — ditto
 		nil,                                  // authToken — ditto

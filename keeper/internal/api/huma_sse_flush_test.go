@@ -32,7 +32,7 @@ import (
 // sseHarnessProdMiddleware — a /v1 router with the events route behind the PROD ResponseWriter
 // wrappers: the obs-metrics recorder (like router.go) + the audit StatusRecorder. Both embed
 // http.ResponseWriter; we check that the SSE flush passes through them to the socket.
-func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac apimiddleware.PermissionChecker) (*httptest.Server, func(aid string) string) {
+func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac runEventsRBAC) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
 	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer)

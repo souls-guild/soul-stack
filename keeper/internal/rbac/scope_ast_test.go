@@ -117,8 +117,12 @@ func TestGlobMatch(t *testing.T) {
 		{"exact", "exacto", false},
 	}
 	for _, c := range cases {
-		if got := globMatch(c.glob, c.target); got != c.want {
-			t.Errorf("globMatch(%q,%q) = %v, want %v", c.glob, c.target, got, c.want)
+		cond, err := newGlobCond(dimHost, c.glob)
+		if err != nil {
+			t.Fatalf("newGlobCond(%q): %v", c.glob, err)
+		}
+		if got := cond.matchGlob(c.target); got != c.want {
+			t.Errorf("%q matches %q = %v, want %v", c.glob, c.target, got, c.want)
 		}
 	}
 }

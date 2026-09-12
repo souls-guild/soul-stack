@@ -46,14 +46,41 @@ func HostContexts(sid string, covens []string) []map[string]string {
 // context set. A nil db, a missing row or a Postgres failure all yield the
 // `{host}` context alone — see [HostContexts] for why that, and not nil.
 func HostContextsBySID(ctx context.Context, db ExecQueryRower, sid string) []map[string]string {
+	contexts, _ := HostContextsBySIDOrError(ctx, db, sid)
+	return contexts
+}
+
+// HostContextsBySIDOrError is [HostContextsBySID] for the one caller that must
+// tell a DENIAL from "could not tell": the console's re-authorization of an
+// already-established session (NIM-844).
+//
+// The collapse the other form performs is right when the question is whether to
+// GRANT access — an unreadable row must not open a pane for a `coven=`-scoped
+// operator. It is wrong when the question is whether to WITHDRAW access that was
+// already granted: the `{host}`-only fallback denies every `coven=` grant, so one
+// exhausted pool or one Postgres restart would read as "this operator's
+// permission was withdrawn" on every coven-scoped console in the fleet at once,
+// and the operator would be told exactly that. A caller that is taking something
+// away has to be able to distinguish the two, and keep what it cannot judge.
+//
+// A nil db is NOT an error: it is the dev wiring where the coven is genuinely
+// unknown, and there a `coven=`-scoped pane could never have been opened, so
+// there is nothing established to take away.
+//
+// The error is returned verbatim so the caller can separate the two kinds
+// [CovenBySID] produces: [ErrSoulNotFound] is a FACT — the host's row is gone,
+// and the `{host}`-only contexts are the honest answer to a question that now has
+// one — while anything else is a failure to ask. Only the second is a reason to
+// keep what you cannot judge.
+func HostContextsBySIDOrError(ctx context.Context, db ExecQueryRower, sid string) ([]map[string]string, error) {
 	if db == nil {
-		return HostContexts(sid, nil)
+		return HostContexts(sid, nil), nil
 	}
 	covens, err := CovenBySID(ctx, db, sid)
 	if err != nil {
-		return HostContexts(sid, nil)
+		return HostContexts(sid, nil), err
 	}
-	return HostContexts(sid, covens)
+	return HostContexts(sid, covens), nil
 }
 
 // HostContextsBySIDs is [HostContextsBySID] over a batch, in one round-trip.

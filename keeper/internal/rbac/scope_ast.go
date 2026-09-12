@@ -89,6 +89,58 @@ type ScopeCond struct {
 	Key    string   // trait key (Dim==trait only); "" otherwise
 	Match  MatchOp  // MatchIn | MatchGlob
 	Values []string // exact set (>=1); a single glob for MatchGlob
+
+	// glob is Values[0] compiled, for MatchGlob only, built once by
+	// [newGlobCond] (NIM-845).
+	//
+	// It lives here rather than in a cache because the condition is exactly the
+	// thing whose lifetime the pattern should share: an [Enforcer] is immutable
+	// after [NewEnforcerFromSnapshot] and rebuilt wholesale on refresh, so a
+	// pattern compiled at parse time is compiled once per role version. A cache
+	// would need a key, and a key shared across operators is a liveness problem
+	// looking for a place to happen — the glob is the key's only candidate and it
+	// comes from a role definition, so the cache would grow with every role ever
+	// parsed and never shrink.
+	//
+	// Unexported on purpose: a [ScopeCond] with MatchGlob and no compiled pattern
+	// matches NOTHING (see [ScopeCond.anyGlobMatch]), so it must not be possible
+	// to build one from outside this package and have it quietly deny.
+	glob *regexp.Regexp
+}
+
+// newGlobCond builds a MatchGlob leaf with its pattern already compiled. The
+// only constructor of a glob condition: [ScopeCond.anyGlobMatch] fails closed
+// without the compiled pattern, so a glob condition that did not come through
+// here would deny every host.
+func newGlobCond(dim, glob string) (*ScopeCond, error) {
+	re, err := compileGlob(glob)
+	if err != nil {
+		return nil, fmt.Errorf("scope: glob %q does not compile: %w", glob, err)
+	}
+	return &ScopeCond{Dim: dim, Match: MatchGlob, Values: []string{glob}, glob: re}, nil
+}
+
+// anyGlobMatch reports whether this condition's glob matches any element of
+// have. Empty have → false (fail-closed: a dimension absent from the context
+// does not satisfy a condition on it), and so is a condition with no compiled
+// pattern — one cannot be produced by the parser, and a hand-built one is a
+// programming error that must not read as a grant.
+func (c *ScopeCond) anyGlobMatch(have []string) bool {
+	if c.glob == nil {
+		return false
+	}
+	for _, h := range have {
+		if c.glob.MatchString(h) {
+			return true
+		}
+	}
+	return false
+}
+
+// matchGlob reports whether this condition's glob matches target. Same
+// fail-closed rule as [ScopeCond.anyGlobMatch].
+func (c *ScopeCond) matchGlob(target string) bool {
+	return c.glob != nil && c.glob.MatchString(target)
 }
 
 // ScopeExpr is a boolean scope predicate tree. A leaf holds Cond; an internal
@@ -362,7 +414,7 @@ func (p *scopeParser) parseCondition() (*ScopeCond, error) {
 		if err != nil {
 			return nil, err
 		}
-		return &ScopeCond{Dim: dim, Match: MatchGlob, Values: []string{g}}, nil
+		return newGlobCond(dim, g)
 	default:
 		return nil, fmt.Errorf("scope: expected '=', 'in (...)', or 'matches' after %q, got %q", dim, p.peek().text)
 	}

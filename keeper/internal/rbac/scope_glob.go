@@ -3,6 +3,7 @@ package rbac
 import (
 	"regexp"
 	"strings"
+	"sync/atomic"
 )
 
 // Host glob support (NIM-128, ADR-047 S5). `host matches <glob>` replaces the
@@ -33,19 +34,30 @@ func globToRE2(glob string) string {
 // compileGlob compiles a glob to a *regexp.Regexp. Never fails for a
 // well-formed glob (QuoteMeta escapes everything), but the error is propagated
 // defensively.
+//
+// There is deliberately NO `globMatch(glob, target string)` beside it (NIM-845).
+// Such a helper compiled the pattern on every call, and its callers were not the
+// per-REQUEST gate they looked like: `soulpurview.InScope` is asked once per
+// resolved host, so a role with two `host matches` predicates against a
+// 5000-host command Voyage paid 10 000 compiles inside one
+// `POST /v1/voyages`. The compiled pattern belongs to the condition that owns
+// the glob — see [newGlobCond] — and a match is asked of that condition, so
+// there is no longer a spelling of "match this glob" that can compile.
 func compileGlob(glob string) (*regexp.Regexp, error) {
+	globCompiles.Add(1)
 	return regexp.Compile(globToRE2(glob))
 }
 
-// globMatch reports whether target matches glob (anchored). On a compile error
-// (unreachable for validated globs) it fails closed (no match).
-func globMatch(glob, target string) bool {
-	re, err := compileGlob(glob)
-	if err != nil {
-		return false
-	}
-	return re.MatchString(target)
-}
+// globCompiles counts calls to [compileGlob] — the only place this package
+// compiles a glob.
+//
+// It is here for the guard in scope_glob_compile_guard_test.go (NIM-845). The
+// invariant worth holding is "a visibility decision over N elements compiles
+// ZERO patterns", and there is no way to state that as a test from the outside:
+// an allocation threshold would be a proxy that drifts with the regexp package,
+// and nothing else about a compile is observable. One atomic increment, paid once
+// per glob per role version, next to the compile it counts.
+var globCompiles atomic.Uint64
 
 // globToSQLLike translates a glob into a SQL LIKE pattern (`*`→`%`, `?`→`_`),
 // escaping LIKE metacharacters (`%` `_` `\`) that appear literally in the

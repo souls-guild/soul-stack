@@ -229,6 +229,7 @@ type allowAllRBAC struct{}
 
 func (allowAllRBAC) Check(string, string, string, map[string]string) error { return nil }
 func (allowAllRBAC) HoldsAction(string, string, string) bool               { return true }
+func (allowAllRBAC) IsRevoked(string) bool                                 { return false }
 
 type denyHostRBAC struct{ deny string }
 
@@ -239,6 +240,7 @@ func (d denyHostRBAC) Check(_, _, _ string, ctx map[string]string) error {
 	return nil
 }
 func (denyHostRBAC) HoldsAction(string, string, string) bool { return true }
+func (denyHostRBAC) IsRevoked(string) bool                   { return false }
 
 // hostScopedRBAC models the role the ADR is written for: `soul.console on
 // host=<allow>`. It holds the action (so the socket must open) but denies every
@@ -254,6 +256,7 @@ func (h hostScopedRBAC) Check(_, _, _ string, ctx map[string]string) error {
 	return errors.New("forbidden")
 }
 func (hostScopedRBAC) HoldsAction(string, string, string) bool { return true }
+func (hostScopedRBAC) IsRevoked(string) bool                   { return false }
 
 // consoleTestServer is a live HTTP server carrying the real /v1 chain.
 type consoleTestServer struct {
@@ -293,14 +296,16 @@ func (s *consoleTestServer) socketsActive(t *testing.T) float64 {
 	return 0
 }
 
-// consoleRBAC is what the console plane actually needs from RBAC: the
-// existence gate for the socket and the scope-aware check per session.
-type consoleRBAC interface {
-	apimiddleware.PermissionChecker
+// consoleTestRBAC is everything a console fixture has to answer: the
+// production surface the socket needs ([consoleRBAC] — the scope-aware check
+// per session and the revocation projection for the re-check) plus the
+// existence gate the chi middleware puts in front of the upgrade.
+type consoleTestRBAC interface {
+	consoleRBAC
 	apimiddleware.ActionHolder
 }
 
-func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits, opts ...func(*consoleWSDeps)) *consoleTestServer {
+func newConsoleTestServer(t *testing.T, rbac consoleTestRBAC, limits console.Limits, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
 	return newConsoleTestServerWriteWait(t, rbac, limits, 0, opts...)
 }
@@ -308,7 +313,7 @@ func newConsoleTestServer(t *testing.T, rbac consoleRBAC, limits console.Limits,
 // newConsoleTestServerWriteWait is newConsoleTestServer with the socket's write
 // budget compressed, so a test can reach its expiry without waiting out the
 // production value. Zero keeps the default.
-func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, opts ...func(*consoleWSDeps)) *consoleTestServer {
+func newConsoleTestServerWriteWait(t *testing.T, rbac consoleTestRBAC, limits console.Limits, writeWait time.Duration, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
 	return newConsoleTestServerLogging(t, rbac, limits, writeWait,
 		slog.New(slog.NewTextHandler(io.Discard, nil)), opts...)
@@ -317,7 +322,7 @@ func newConsoleTestServerWriteWait(t *testing.T, rbac consoleRBAC, limits consol
 // newConsoleTestServerLogging is newConsoleTestServerWriteWait with Keeper's own
 // logger supplied, for tests that assert on what the socket plane REPORTS
 // rather than on what it does.
-func newConsoleTestServerLogging(t *testing.T, rbac consoleRBAC, limits console.Limits, writeWait time.Duration, logger *slog.Logger, opts ...func(*consoleWSDeps)) *consoleTestServer {
+func newConsoleTestServerLogging(t *testing.T, rbac consoleTestRBAC, limits console.Limits, writeWait time.Duration, logger *slog.Logger, opts ...func(*consoleWSDeps)) *consoleTestServer {
 	t.Helper()
 
 	soul := &fakeSoul{autoOpen: true}
@@ -1150,6 +1155,7 @@ func (denyAllRBAC) Check(string, string, string, map[string]string) error {
 	return errors.New("forbidden")
 }
 func (denyAllRBAC) HoldsAction(string, string, string) bool { return false }
+func (denyAllRBAC) IsRevoked(string) bool                   { return false }
 
 // The socket-level gate cannot see the target host, so a per-host scope has to
 // be re-checked when the `open` frame names it.

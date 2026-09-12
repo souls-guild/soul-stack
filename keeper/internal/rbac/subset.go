@@ -408,7 +408,7 @@ func atomSubset(ar, ac *ScopeCond) bool {
 	case ar.Match == MatchIn && ac.Match == MatchGlob:
 		// ar is an exact host set; each value must match ac's glob.
 		for _, v := range ar.Values {
-			if !globMatch(ac.Values[0], v) {
+			if !ac.matchGlob(v) {
 				return false
 			}
 		}

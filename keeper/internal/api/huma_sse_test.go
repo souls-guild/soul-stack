@@ -42,8 +42,12 @@ func (f fakeRunAccess) Access(context.Context, string) (*applyrun.Access, error)
 	return f.acc, f.err
 }
 
-// stubRBACChecker — a PermissionChecker with an explicit allow-set keyed by "resource.action".
-type stubRBACChecker struct{ allow map[string]bool }
+// stubRBACChecker — the stream's RBAC surface with an explicit allow-set keyed by
+// "resource.action", plus the revoked set the re-check reads (NIM-844).
+type stubRBACChecker struct {
+	allow   map[string]bool
+	revoked map[string]bool
+}
 
 func (s stubRBACChecker) Check(_, resource, action string, _ map[string]string) error {
 	if s.allow[resource+"."+action] {
@@ -52,13 +56,15 @@ func (s stubRBACChecker) Check(_, resource, action string, _ map[string]string) 
 	return errors.New("denied")
 }
 
+func (s stubRBACChecker) IsRevoked(aid string) bool { return s.revoked[aid] }
+
 func ptrStr(s string) *string { return &s }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
 
 // sseTestHarness — a minimal /v1 router (RequireJWT + huma) with the SSE route +
 // a function that mints an operator JWT. access nil → run-events is not mounted.
-func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac apimiddleware.PermissionChecker) (*httptest.Server, func(aid string) string) {
+func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac runEventsRBAC, opts ...func(*runEventsDeps)) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
 	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer)
@@ -82,6 +88,9 @@ func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess
 						RBAC:    rbac,
 						Limiter: newSSEConnLimiter(sseMaxConnsGlobal, sseMaxConnsPerAID),
 						Logger:  discardLogger(),
+					}
+					for _, o := range opts {
+						o(deps)
 					}
 					registerHumaIncarnationRunEvents(newHumaCadenceAPI(r), deps)
 				})
@@ -144,7 +153,7 @@ func TestAuthorizeRunEventsSSE_Matrix(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			got := authorizeRunEventsSSE(context.Background(), c.deps, sub, name, "01APPLY00000000000000000000")
+			_, got := authorizeRunEventsSSE(context.Background(), c.deps, sub, name, "01APPLY00000000000000000000")
 			if got != c.want {
 				t.Errorf("authorizeRunEventsSSE = %v, want %v", got, c.want)
 			}

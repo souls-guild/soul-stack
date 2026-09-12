@@ -58,6 +58,11 @@ const (
 	// ErrCodeBadFrame — malformed JSON, unknown type or a missing field.
 	ErrCodeBadFrame = "bad_frame"
 	// ErrCodeForbidden — RBAC refused this SID (the socket itself was allowed).
+	// Socket-scoped (no `session_id`) when the refusal is the socket's own: the
+	// Archon holding it was revoked under an established session and the whole
+	// connection goes with it (NIM-844). No separate code for that, because the
+	// client's branch is the same one — the operator lost access — and a second
+	// code would be a wire change for a distinction the UI does not act on.
 	ErrCodeForbidden = "forbidden"
 	// ErrCodeSoulOffline — no EventStream for the SID anywhere in the cluster.
 	ErrCodeSoulOffline = "soul_offline"

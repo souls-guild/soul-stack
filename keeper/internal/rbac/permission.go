@@ -199,27 +199,16 @@ func evalCond(c *ScopeCond, in ScopeInput) bool {
 		return anyInSet(in.Services, c.Values)
 	case dimIncarnation:
 		if c.Match == MatchGlob {
-			return anyGlobMatch(c.Values[0], in.Incarnations)
+			return c.anyGlobMatch(in.Incarnations)
 		}
 		return anyInSet(in.Incarnations, c.Values)
 	case dimHost:
 		if c.Match == MatchGlob {
-			return anyGlobMatch(c.Values[0], in.Hosts)
+			return c.anyGlobMatch(in.Hosts)
 		}
 		return anyInSet(in.Hosts, c.Values)
 	case dimTrait:
 		return anyInSet(in.Traits[c.Key], c.Values)
-	}
-	return false
-}
-
-// anyGlobMatch reports whether the glob matches any element of have. Empty
-// have → false (fail-closed).
-func anyGlobMatch(glob string, have []string) bool {
-	for _, h := range have {
-		if globMatch(glob, h) {
-			return true
-		}
 	}
 	return false
 }

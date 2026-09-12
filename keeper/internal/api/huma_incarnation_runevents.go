@@ -65,20 +65,37 @@ func (a runEventsPGAccess) Access(ctx context.Context, applyID string) (*applyru
 	return applyrun.SelectAccessByApplyID(ctx, a.db, applyID)
 }
 
+// runEventsRBAC — the RBAC surface this stream needs: the scope-aware check that
+// decides the subscription, and the revocation projection that keeps deciding it
+// while the stream runs (NIM-844, see longlived_reauth.go).
+//
+// Declared as one interface rather than reached by a type assertion on the
+// checker: a wiring that cannot answer "is this Archon revoked" must fail to
+// compile, not fail to notice.
+type runEventsRBAC interface {
+	apimiddleware.PermissionChecker
+	apimiddleware.RevocationChecker
+}
+
 // runEventsDeps — dependencies of the run SSE handler. Bus/Access/RBAC provide the stream +
 // the RBAC subscription; Limiter/Logger are the resource-guard and observability. Any nil
 // (except Limiter/Logger) → the subscription is rejected fail-closed (see [authorizeRunEventsSSE]).
 type runEventsDeps struct {
 	Bus     *applybus.EventBus
 	Access  runEventsAccess
-	RBAC    apimiddleware.PermissionChecker
+	RBAC    runEventsRBAC
 	Limiter *sseConnLimiter
 	Logger  *slog.Logger
+	// ReauthInterval overrides how often an open stream re-asks whether the
+	// subscriber may still have it (NIM-844); zero takes
+	// longLivedReauthInterval. Only this file's tests set it, to reach the
+	// second check without waiting out the production interval.
+	ReauthInterval time.Duration
 }
 
 // newRunEventsDeps assembles the prod deps over applybus + Operator-pool + enforcer.
 // db/rbac/bus nil → the SSE route is not mounted in router.go (opt-in wire-up).
-func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac apimiddleware.PermissionChecker, logger *slog.Logger) *runEventsDeps {
+func newRunEventsDeps(bus *applybus.EventBus, db applyrun.ExecQueryRower, rbac runEventsRBAC, logger *slog.Logger) *runEventsDeps {
 	if bus == nil || db == nil || rbac == nil {
 		return nil
 	}
@@ -140,7 +157,8 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 		}
 		// anti-enum: ANY denial (not found / foreign incarnation / no rights) → the same
 		// 403, indistinguishable from "no access" (ULIDs are guessable, parity /mcp/events).
-		if !authorizeRunEventsSSE(ctx, deps, claims.Subject, in.ID, in.ApplyID) {
+		grant, ok := authorizeRunEventsSSE(ctx, deps, claims.Subject, in.ID, in.ApplyID)
+		if !ok {
 			return nil, sseForbidden()
 		}
 		// conn-limit (M4): take a slot ONLY for an authorized subscription, release it in the
@@ -154,9 +172,21 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 			if deps.Limiter != nil {
 				defer deps.Limiter.Release(aid)
 			}
-			streamRunEvents(hctx, deps, applyID, aid)
+			streamRunEvents(hctx, deps, applyID, aid, grant)
 		}}, nil
 	})
+}
+
+// runEventsGrant — what the opening decision learned from the run's row, kept so
+// the re-check (NIM-844) does not have to read it again. Both fields are
+// immutable for a given apply_id: a run does not change which incarnation it
+// belongs to, nor who started it. Everything that CAN change — the Archon's
+// roles, their scope, whether they are revoked at all — is re-read per check.
+type runEventsGrant struct {
+	incarnation string
+	// initiator is true when this subscriber started the run, which is the half
+	// of the rule no permission can express.
+	initiator bool
 }
 
 // authorizeRunEventsSSE — RBAC check of the subscription to apply_id (ADR-068 §A3, parity
@@ -165,39 +195,76 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 //   - apply_id belongs to a DIFFERENT incarnation (not path-{name}) → deny (foreign run);
 //   - the run initiator (started_by_aid == sub) → allow;
 //   - otherwise allow on incarnation.get OR incarnation.history on the incarnation.
-func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, applyID string) bool {
+//
+// On allow it returns the [runEventsGrant] the stream re-checks against.
+func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, applyID string) (runEventsGrant, bool) {
+	var zero runEventsGrant
 	if deps.Access == nil {
-		return false
+		return zero, false
 	}
 	acc, err := deps.Access.Access(ctx, applyID)
 	if err != nil {
-		return false
+		return zero, false
 	}
 	// apply_id must be a run of THIS exact incarnation (path-{name}); otherwise it is a foreign
 	// run, deny without revealing that apply_id lives in another incarnation.
 	if acc.IncarnationName != name {
+		return zero, false
+	}
+	grant := runEventsGrant{
+		incarnation: name,
+		initiator:   acc.StartedByAID != nil && *acc.StartedByAID == sub,
+	}
+	if grant.initiator {
+		return grant, true
+	}
+	if deps.RBAC == nil {
+		return zero, false
+	}
+	if deps.RBAC.Check(sub, "incarnation", "get", map[string]string{"incarnation": name}) == nil {
+		return grant, true
+	}
+	if deps.RBAC.Check(sub, "incarnation", "history", map[string]string{"incarnation": name}) == nil {
+		return grant, true
+	}
+	return zero, false
+}
+
+// runEventsStillAuthorized re-decides the RBAC half of [authorizeRunEventsSSE]
+// for a stream already running (NIM-844). A stream lives up to [sseMaxLifetime]
+// and `apimiddleware.RejectRevoked` cannot reach a request already inside its
+// handler, so the only place left to ask is here.
+//
+// It is the opening rule with revocation added in front of it, and the same rule
+// in the same order otherwise — including the initiator short-circuit that
+// precedes the nil-RBAC refusal. Making the continuing check STRICTER than the
+// opening one would produce a stream that opens and then dies for a reason that
+// was already true when it opened, which tells the operator nothing and costs
+// them the run they were watching.
+//
+// Revocation comes first because it is not a permission question: the token is no
+// longer trusted, so being the run's initiator stops earning anything.
+func runEventsStillAuthorized(deps *runEventsDeps, sub string, g runEventsGrant) bool {
+	if deps.RBAC != nil && deps.RBAC.IsRevoked(sub) {
 		return false
 	}
-	if acc.StartedByAID != nil && *acc.StartedByAID == sub {
+	if g.initiator {
 		return true
 	}
 	if deps.RBAC == nil {
 		return false
 	}
-	if deps.RBAC.Check(sub, "incarnation", "get", map[string]string{"incarnation": name}) == nil {
+	if deps.RBAC.Check(sub, "incarnation", "get", map[string]string{"incarnation": g.incarnation}) == nil {
 		return true
 	}
-	if deps.RBAC.Check(sub, "incarnation", "history", map[string]string{"incarnation": name}) == nil {
-		return true
-	}
-	return false
+	return deps.RBAC.Check(sub, "incarnation", "history", map[string]string{"incarnation": g.incarnation}) == nil
 }
 
 // streamRunEvents pushes applyID's apply events into the SSE stream until the client
 // disconnects, max-lifetime, or the bus closes. Frame `event/id/data`, heartbeat 30s (parity
 // with mcp/sse.go). The payload is masked by [audit.MaskSecrets] on the write path (a second
 // barrier over the publishers' secret hygiene).
-func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string) {
+func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string, grant runEventsGrant) {
 	hctx.SetHeader("Content-Type", "text/event-stream")
 	hctx.SetHeader("Cache-Control", "no-cache")
 	hctx.SetHeader("Connection", "keep-alive")
@@ -230,10 +297,29 @@ func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string
 	heartbeat := time.NewTicker(sseHeartbeatInterval)
 	defer heartbeat.Stop()
 
+	// Its own ticker rather than a branch on the heartbeat: the heartbeat is a
+	// client-liveness interval and this is an authorization one, and tying them
+	// together would mean changing either to change the other.
+	reauthEvery := deps.ReauthInterval
+	if reauthEvery <= 0 {
+		reauthEvery = longLivedReauthInterval
+	}
+	reauth := time.NewTicker(reauthEvery)
+	defer reauth.Stop()
+
 	for {
 		select {
 		case <-ctx.Done():
 			return
+		case <-reauth.C:
+			if !runEventsStillAuthorized(deps, aid, grant) {
+				// No closing frame: the event kinds on this stream are the bus's
+				// (ADR-068 §A3), and the client learns the same way it would after
+				// any disconnect — by re-opening and being answered 403.
+				deps.Logger.Warn("v1/sse: run-events subscriber closed, access withdrawn under it",
+					slog.String("apply_id", applyID), slog.String("aid", aid))
+				return
+			}
 		case <-heartbeat.C:
 			if _, err := bw.Write([]byte(":keepalive\n\n")); err != nil {
 				return

@@ -238,6 +238,41 @@ the abandoned root shell this reaps.
 This is Keeper-side on purpose: it is operator policy, and the host has no idea
 whether anyone is watching.
 
+### Authorization is re-asked, not decided once
+
+`soul.console` gates the upgrade and the per-`open` host scope is checked when the
+frame names its target (§RBAC) — and then the socket would have carried traffic
+for as long as the operator kept it. `RejectRevoked` refuses the *next* request,
+and an established socket makes none, so a revoked Archon kept typing at a root
+prompt (NIM-844).
+
+Every **15 s** (`longLivedReauthInterval`) the socket asks again, and the two
+answers cost it differently:
+
+| What changed | What the socket loses |
+|---|---|
+| the Archon was revoked | the **whole socket**: an `error` frame with no `session_id` (socket-scoped `forbidden`), then every pty on it, reason `access_revoked` |
+| `soul.console` was narrowed out of one host — a permission edit, or that host's Coven label moving | that **one pane**, reason `access_revoked`; the other panes on the socket keep going, which is what the narrowing says |
+| `soul.console` was withdrawn entirely | every pane, one at a time by the rule above; the next `open` frame is then refused as usual |
+
+The re-check reads the host's Coven labels afresh — a label moving off a host
+narrows a `coven=`-scoped grant exactly as a permission edit does, so the
+contexts captured at `open` would miss it. **When that read fails** (an exhausted
+pool, a Postgres restart) the pane is KEPT and the decision waits for the next
+tick: the `{host}`-only fallback every other caller uses denies each `coven=`
+grant, which is the right answer when deciding whether to OPEN a pane and would
+otherwise report one database blip as a withdrawn permission on every
+coven-scoped console at once. Two things survive the outage — a host whose row is
+simply gone is an answer rather than a failure, and a caller who does not hold
+`soul.console` in any form is refused without a row, since no scope could have
+rescued them. So a withdrawal can be **deferred** by an unhealthy database, and
+the worst case below is the healthy one. It is a timer and not the data path on
+purpose: on a keystroke it would charge an RBAC evaluation and an indexed SELECT
+to every character typed, while on a timer the cost is per socket per interval
+however loud the socket is. The worst case from `POST /v1/operators/{aid}/revoke`
+to a dead shell is one RBAC snapshot refresh (10 s) plus one interval — while the
+`souls` read answers; see the deferral above for when it does not.
+
 ### Terminal semantics
 
 The Soul sends exactly one `ConsoleExit` per session it was asked to open,
@@ -625,6 +660,7 @@ which is what reaches the Soul's log through `ConsoleClose`, the recording's
 | `operator_socket_congested` | A lifecycle frame found the outbound queue full. Control frames are never dropped, so the socket goes instead. |
 | `idle_timeout` | No operator input for `idle_timeout`. |
 | `recording_unavailable` | The session could no longer be recorded, and a console that stops being recorded stops. |
+| `access_revoked` | The Archon holding the session stopped being allowed to hold it — revoked, or narrowed out of `soul.console` for that host (§"Authorization is re-asked"). A policy decision rather than a failure. |
 
 `operator_socket_write_failed` is the one worth an alert, and the one an operator
 will come asking about: it takes the *whole wall* down at once, and nothing can
