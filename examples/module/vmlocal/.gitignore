@@ -1,0 +1,2 @@
+# `go build ./...` in a main package drops the binary here.
+/vmlocal
