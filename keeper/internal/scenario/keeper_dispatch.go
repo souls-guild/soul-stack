@@ -288,7 +288,7 @@ func keeperTaskStatus(changed, failed bool) keeperv1.TaskStatus {
 // ([ADR-0083] §4). stateSchema is the loaded artifact's map, shared not copied —
 // every reader treats it as immutable.
 func (r *Runner) applyKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask, sealedPaths map[string]bool) (changed, failed bool, output map[string]any, message string) {
-	changed, failed, output, message = r.runKeeperTask(ctx, spec, stateSchema, rt)
+	changed, failed, output, message = r.runKeeperTask(ctx, spec, stateSchema, rt, sealedPaths)
 	return changed, failed, output, maskKeeperTaskMessage(rt, sealedPaths, message)
 }
 
@@ -325,7 +325,7 @@ func (r *Runner) lookupKeeperPlugin(base, addr string) (module.SoulModule, error
 // runKeeperTask is [Runner.applyKeeperTask] without the masking of its result
 // message — see that function for the contract. Split out so masking has one
 // place to happen rather than one per return.
-func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask) (changed, failed bool, output map[string]any, message string) {
+func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema config.InputSchemaMap, rt *render.RenderedTask, sealedPaths map[string]bool) (changed, failed bool, output map[string]any, message string) {
 	base, state, ok := config.SplitModuleAddr(rt.Module)
 	if !ok {
 		return false, true, nil, fmt.Sprintf("invalid keeper-side module address %q (want <namespace>.<module>.<state>)", rt.Module)
@@ -373,6 +373,12 @@ func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema co
 		Match: matchEval,
 		Op:    opEval,
 	})
+	// The run's seal, for a module that must REFUSE a secret rather than let it
+	// through and mask the aftermath: `core.ssh.run` will not put a sealed cell
+	// into a command line, because argv is visible on the host itself. The same
+	// set [maskKeeperTaskMessage] uses on the way out, delivered on the way in —
+	// masking a message after the command has already run is too late.
+	modCtx = coremodutil.WithSealedPaths(modCtx, sealedPaths)
 	sink := newKeeperApplyStream(modCtx)
 	if err := mod.Apply(req, sink); err != nil {
 		return false, true, nil, err.Error()

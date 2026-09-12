@@ -153,6 +153,7 @@ components:
             - soul.token-issued
             - soul.traits-changed
             - soulprint.received
+            - ssh.run
             - synod.created
             - synod.deleted
             - synod.operator-added

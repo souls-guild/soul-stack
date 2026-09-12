@@ -1,10 +1,10 @@
 name: existing-vm
 create: true
 description: >-
-  Onboard ready-made VMs. Keeper atomically mints one bootstrap token per
-  FQDN/SID, then waits for every Soul to come online. Installing the agent on
-  each host and redeeming its token happens between the two steps and is NOT an
-  engine step — see the README.
+  Onboard ready-made VMs. Keeper mints one bootstrap token per FQDN/SID, runs
+  this site's install commands on each host over SSH, and then waits for every
+  Soul to come online. The middle step carries the transport; what it runs is
+  authored here, not by the engine.
 
 input:
   sids:
@@ -21,29 +21,46 @@ tasks:
     params:
       sids: "${ input.sids }"
 
-  # ── The host is installed HERE, and not by this scenario. ──────────────────
+  # ── Installing the host: the engine's transport, THIS service's policy. ────
   #
-  # `core.bootstrap.delivered` used to sit at this point; NIM-834 removed it,
-  # because installing a host is different at every site and the engine has no
-  # portable way to do it. Whatever fills this gap must do three things, each
-  # one paid for by a live run and NONE of them satisfied by writing a file with
-  # the token in it (ADR-063 amendment 2026-09-09):
+  # `core.ssh.run` reaches a machine that has no agent on it yet and runs these
+  # commands there. It has no opinion about what they are — that opinion is what
+  # NIM-834 removed from the engine, and re-adding it here rather than there is
+  # the whole point. The three things below are NOT decoration; each was paid
+  # for by a live run and none is satisfied by writing a file with the token in
+  # it (ADR-063 amendment 2026-09-09):
   #
-  #   1. REDEEM the token, not just place it — `soul init` behind the seed-cert
-  #      guard. There is no soul-side pickup of a token file, and a bootstrap
-  #      token is single-use, so an unguarded retry fails the host.
-  #   2. Pass the token through STDIN, never argv — argv is visible in `ps`,
-  #      `audit.log` and journald ON THE HOST ITSELF.
-  #   3. Activate with `daemon-reload && enable && start`, or the unit does not
+  #   1. the token must be REDEEMED, not merely placed — `soul init` behind the
+  #      seed-cert guard, because a bootstrap token is single-use and an
+  #      unguarded retry fails the host on the second run;
+  #   2. it travels in STDIN, never argv — argv is visible in `ps`, `audit.log`
+  #      and journald ON THE HOST. `stdin_from:` is how; a secret written into
+  #      `run:` is refused before the connect;
+  #   3. activation is `daemon-reload && enable && start`, or the unit does not
   #      come back after a reboot.
   #
-  # Until that happens the hosts have no identity, and the barrier below waits
-  # for a presence that cannot arrive: this run ends at the run timeout.
+  # A host already onboarded before this run carries no `bootstrap_token` key at
+  # all and is skipped by the step itself — `when:` could not do it, since a
+  # predicate reading `register.*` on an `on: keeper` task is silently ignored.
+  - name: Install soul and redeem the token
+    module: core.ssh.run
+    register: install
+    require: [bootstrap]
+    params:
+      hosts: "${ register.bootstrap.hosts }"
+      ssh_provider: "${ vars.ssh_provider }"
+      join_wait_timeout: "${ vars.join_wait_timeout }"
+      steps:
+        - run: "curl -fsSL ${ vars.soul_binary_url } -o /usr/local/bin/soul && chmod 0755 /usr/local/bin/soul"
+        - run: "install -d -m 0700 /etc/soul && umask 077 && cat > /etc/soul/token && chmod 0400 /etc/soul/token"
+          stdin_from: bootstrap_token
+        - run: 'test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat /etc/soul/token)" /usr/local/bin/soul init --config /etc/soul/soul.yml'
+        - run: "systemctl daemon-reload && systemctl enable soul && systemctl start soul"
 
   - name: Await ready-made VM onboarding
     module: core.soul.registered
     register: onboarded
-    require: [bootstrap]
+    require: [install]
     params:
       sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
       await_online: true

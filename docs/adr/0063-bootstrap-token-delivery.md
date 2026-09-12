@@ -1,6 +1,6 @@
 # ADR-063. core.bootstrap.issued / delivered — keeper-side bootstrap tokens and delivery
 
-> **Status: active for `issued`; `delivered` is REMOVED (amendment 2026-09-09, NIM-834).** Everything below the header describing `core.bootstrap.delivered` — design A1, its parameters, its transports, install mode — is **history**: the module is gone, and installing a host is the site's own job. What it guaranteed is not history: the [amendment 2026-09-09](#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) restates it as **requirements on whoever installs the host**. Read that amendment first; read the rest for the reasoning behind each requirement, which is where the live runs that paid for them are recorded.
+> **Status: active for `issued` and for `core.ssh.run`; `delivered` is REMOVED (amendment 2026-09-09, NIM-834).** Everything below the header describing `core.bootstrap.delivered` — design A1, its parameters, its transports, install mode — is **history**: the module is gone, and WHAT to install on a host is the site's own job. What it guaranteed is not history. Read the last two amendments first, in order: [2026-09-09](#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) restates the guarantees as **requirements on whoever installs the host**, and [2026-09-12](#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849) brings the **transport** back as `core.ssh.run` — the engine executes the site's commands on an agentless host and enforces the secret floor, without owning the policy. Read the rest for the reasoning behind each requirement, which is where the live runs that paid for them are recorded.
 >
 > architect's design (A1 "thin delivery"), public names `core.bootstrap.delivered` and `core.bootstrap.issued` confirmed by the user. The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
 >
@@ -398,3 +398,134 @@ unit, `enable` survives the reboot; all three are idempotent.
   keeper-side module answers `unknown state "delivered"`. Silence would be the
   dangerous outcome — a run that skips installation reaches `await_online` and
   fails there, minutes away and one subject away from the cause.
+
+## Amendment 2026-09-12 — the transport comes back, without the policy (NIM-849)
+
+**What the 2026-09-09 amendment did not foresee.** Removing `delivered` removed
+the policy, which was right, and the **transport**, which was not. Verified
+2026-09-12: `keeper/internal/push` had no caller outside its own tests, and with
+it went the engine's only way to execute anything on a host that has no agent —
+`core.exec.run` and `core.file.present` are Soul-side and a fresh VM has no
+Soul. The amendment above describes the middle step as "off-engine", but there
+was no channel for a site installer to be off-engine *in*: a `create` minted
+tokens nobody could redeem and hung at `await_online`. That is an MVP blocker,
+not a documented boundary.
+
+**Decision: a keeper-side core module `core.ssh.run`.** It takes a list of hosts
+and an ordered list of shell steps, opens one SSH session per host and runs the
+steps on it. What the commands do is the service author's business; the module
+carries the transport and the secret floor and nothing else.
+
+**The name is the boundary.** `core` for the namespace, `ssh` for the module —
+the transport — and `run` for the state, the verb, symmetric with Soul-side
+`core.exec.run`. `core.bootstrap.installed` was the alternative and was
+rejected: a name that says *bootstrap* invites policy back in, and this ADR's own
+history is what that costs — a second transport, then a full-install mode, then
+an init phase, then a second `soul.yml` port, each one a platform meeting the
+previous design and not fitting. A module named for its transport has nowhere to
+put an opinion about what it transports. `core.push.run` was rejected too: in
+this repository "push" already names an operator-initiated Destiny push run, and
+[the 2026-07-02 amendment](#amendment-2026-07-02--init-phase-in-the-a1-flow-unit-activation-event_stream_port)
+already refused `keeper.push.applied` for exactly that confusion.
+
+### Parameters
+
+`hosts` (required), `steps` (required), `ssh_provider` (required), `ssh_user`
+(default `root`), `ssh_port` (default `22`), `join_wait_timeout` (default 15m).
+Transport comes from `keeper.yml::push.transport` — `direct` or `teleport` —
+and is deliberately not a scenario param: which way a Keeper installation
+reaches its hosts is a property of the installation, and a task that could pick
+one would be a task that has to know the site's topology. That key and the
+`push.teleport` block, inert between NIM-834 and this ticket, have a consumer
+again.
+
+Each step carries `run:` (a shell command line) and at most one stdin source:
+
+- `stdin:` — a literal value, the same on every host (`${ vault(…) }`,
+  `${ vars.* }`);
+- `stdin_from:` — the NAME of a field of the host entry, whose value the module
+  feeds to the process.
+
+**Why `stdin_from:` rather than `${ host.bootstrap_token }`.** There is no
+`host.*` CEL root, and there cannot be one here: a keeper-side task is rendered
+ONCE for the whole run, not once per host (`keeperVars` binds no roster, and the
+seal's host-invariance is itself guarded by
+`TestRender_SealedSetDoesNotMoveWithTheRoster`), so a per-host value has no
+expression that could reach a params cell. `loop:` is not an escape either —
+it is not supported on `on: keeper` at all. Naming the field is what remains,
+and it is the better shape anyway: the per-host secret never enters the task's
+params, so keeping it out of argv is constructive rather than checked.
+
+### The three guarantees, and how each is kept
+
+**1. STDIN, never argv — a refusal, not a redaction.** The value of `stdin:` /
+`stdin_from:` is passed to `session.Run` as the process's stdin and is formatted
+into a command line nowhere in the module. A `run:` that nevertheless holds a
+secret is refused **before the connect**, by two independent checks, because
+neither covers the other's case:
+
+- a `run:` cell the render SEALED ([ADR-010] §7.4 — it read `${ vault(…) }`, a
+  vault-backed `vars:` name, a secret `input:`, a `loop:` bind) is refused by
+  PATH. The run's sealed set already reached `dispatchKeeperTasks`, for masking
+  on the way out; it now also travels into the module on the module context, the
+  same channel `WithIncarnation`/`WithService` use, because masking a message
+  after the command has run is too late;
+- a `run:` that quotes the VALUE of a secret-named field of one of the hosts —
+  the token pulled out of `register.<mint>.hosts` and interpolated by hand — is
+  refused by value. The seal cannot see this one: a register is not a sealed
+  source unless the module declared the output `secret: true`, which
+  `core.bootstrap.issued` does not. Only fields whose NAME the platform already
+  treats as sensitive are compared: a sid is a plausible substring of an ordinary
+  command, and under B1-strict one false positive costs the whole run.
+
+Masking downstream is the wrong instrument here. Argv is visible in `ps`, in
+`audit.log` and in journald **on the host itself**, which is a machine we do not
+own yet; redacting the operator's copy would hide the leak rather than prevent
+it.
+
+**2. No token in the output.** The step's own output is `hosts[] = {sid, ran,
+skipped}` + `count` + `skipped`. Command stdout is not captured, not registered
+and not audited — a step whose job is to write a secret can echo it, and
+`accumulateKeeperRegister` writes the register row verbatim on purpose. The
+audit event `ssh.run` carries `{action, ssh_provider, transport, count, skipped,
+steps, sids}`: counts and addressing, never the command text, which is the
+site's own policy and nothing the module can vouch for.
+
+**3. Fail-closed before the connect**, reusing `keeper/internal/push` rather
+than restating it: `Authorize` (a deny stops the run before a session is
+opened), an ephemeral ed25519 keypair per host whose private half never leaves
+the Keeper (`push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`, the two
+wrappers `export.go` exists for), and `push.Dial` with the host CA from Vault —
+an empty CA set is an error, never a blind connect. In teleport mode
+Authorize/Sign are not called and host-verify comes from the identity file, as
+before; the bounded wait for a fresh VM to join is `join_wait_timeout`, and the
+invariant that the effective run timeout must exceed it is guarded again by
+`TestProvisionTimeoutExceedsJoinWait`.
+
+**The `onboarded` branch survives.** A host flagged `onboarded: true` carries no
+per-host material at all — reaching for `bootstrap_token` on it in CEL is an
+error, not an empty string — so it is skipped and not dialed, and the
+`primary_ip` requirement of the direct transport is settled AFTER the flag (the
+[2026-09-04 amendment](#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780)'s
+lesson). The skip lives inside the module because a scenario cannot do it:
+`when:` on an `on: keeper` task is only half-evaluated — a static predicate
+works, one reading `register.*` is silently ignored.
+
+### What is still the service author's, and still binding
+
+`core.ssh.run` does not know what a host should end up with. The
+[requirements above](#-requirements-on-whoever-installs-the-host) are unchanged
+and now bind the author of the `steps:` list rather than a hypothetical
+off-engine installer — redeem the token with `soul init` behind the
+`soulinstall.SeedCertPath` guard rather than merely writing the file, keep the
+token in stdin (which the module now enforces), and activate with
+`daemon-reload && enable && start` rather than a bare `start`. The module
+refuses the argv mistake; it cannot refuse a missing redeem or a missing
+`enable`, and both still produce a host that never onboards, silently. The
+canonical description of the result remains
+[keeper/internal/soulinstall](../../keeper/internal/soulinstall), which still has
+no caller — it describes an outcome, not a procedure.
+
+The ready-made VM chain is therefore whole again:
+`core.bootstrap.issued` → `core.ssh.run` → `core.soul.registered(await_online)`,
+with the middle step's CONTENT authored per site.

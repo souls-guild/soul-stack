@@ -45,6 +45,7 @@ var keeperSideCore = map[string]struct{}{
 	Namespace + ".cert":      {}, // NIM-99 — warrant issue/registration
 	Namespace + ".choir":     {}, // ADR-044 — choir voice membership
 	Namespace + ".soul":      {}, // ADR-009 — soul registration
+	Namespace + ".ssh":       {}, // NIM-849 — agentless command transport
 	StateModuleAddr:          {}, // ADR-0084 — incarnation state capture
 	Namespace + ".vault":     {}, // ADR-017 — Vault KV read/write
 }

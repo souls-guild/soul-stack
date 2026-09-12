@@ -1,12 +1,24 @@
 # Default service parameters.
 #
-# The `existing-vm` scenario takes the SIDs and the transport label as input, so
-# there is nothing here it needs pre-seeded. The file stays as the anchor of the
-# vars layer (ADR-0082): a fleet that needs different defaults forks this repo
-# and edits this file.
+# The `existing-vm` scenario takes the SIDs as input; everything the install
+# step needs to be site-specific lives here (ADR-0082): a fleet with a different
+# binary mirror or a different SSH provider forks this repo and edits this file.
 #
 # The provider/profile row names and the inline cloud tuple that used to live
 # here belonged to the `create` / `create-inline` scenarios, which went with the
 # CloudDriver contract in NIM-761.
 
+# The SshProvider plugin the keeper authenticates with
+# (keeper.yml::plugins.ssh_providers[].name). Under `push.transport: teleport`
+# the name goes only into the audit payload — the transport comes from the
+# identity file.
+ssh_provider: vault-ssh
+
+# Where the install step fetches the agent from. A site with no egress points
+# this at its own mirror; nothing in the engine knows this URL.
+soul_binary_url: https://dist.example.com/soul-stack/soul
+
+# Ceiling on the wait for a freshly created host to become reachable. It MUST
+# stay below the run's effective timeout, or the run aborts before the host ever
+# arrives and the setting can never be spent.
 join_wait_timeout: 15m

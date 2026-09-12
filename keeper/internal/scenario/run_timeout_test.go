@@ -5,6 +5,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	coremodssh "github.com/souls-guild/soul-stack/keeper/internal/coremod/ssh"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -141,15 +142,22 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 	}
 }
 
-// TestProvisionTimeoutExceedsJoinWait was removed with
-// `core.bootstrap.delivered` (NIM-834). Its subject was that module's
-// Teleport-join wait: the provision-aware run-timeout floor had to exceed the
-// window the step spent waiting for a fresh VM to appear in Teleport. With the
-// step gone there is no join wait, and the remaining barrier — `await_online`
-// — is already bounded by DefaultMaxAwaitTimeout, which the floor contains by
-// construction (floor = DefaultMaxAwaitTimeout + deployBudget), so a guard over
-// it would compare a value with itself.
+// TestProvisionTimeoutExceedsJoinWait is a STATIC GUARD INVARIANT (ADR-0061),
+// removed with `core.bootstrap.delivered` (NIM-834) and back with the transport
+// that replaced it (NIM-849) — exactly as that removal note predicted, because
+// anything that waits for a host to become reachable reintroduces this class of
+// dead setting.
 //
-// It comes back with whatever installs the host: an installer that waits for a
-// host to become reachable reintroduces exactly this class of dead setting, and
-// its own wait ceiling needs the same invariant against the run timeout.
+// The provision-aware effective run-timeout floor (ceiling + deployBudget at the
+// default ceiling) MUST STRICTLY exceed the default Teleport-join wait of
+// `core.ssh.run`. Otherwise the setting is dead: the run aborts before the host
+// ever joins, so the wait can never be spent. It catches a future join-wait
+// increase or budget decrease that would make a provision run unreachable again.
+func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
+	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
+	if provisionFloor <= coremodssh.DefaultJoinWaitTimeout {
+		t.Errorf(
+			"provision effective run-timeout floor (%s = DefaultMaxAwaitTimeout %s + deployBudget %s) does NOT exceed join_wait_timeout (%s) — a provision run would abort before onboarding finishes (a dead setting)",
+			provisionFloor, config.DefaultMaxAwaitTimeout, deployBudget, coremodssh.DefaultJoinWaitTimeout)
+	}
+}

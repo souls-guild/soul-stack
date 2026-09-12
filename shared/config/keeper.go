@@ -259,9 +259,13 @@ type KeeperConfig struct {
 	// the SSH install script for `core.bootstrap.delivered` with `install: true`
 	// (removed in NIM-834).
 	//
-	// ★ NOTHING READS IT any more, for the same reason as
-	// [KeeperPush.Transport]: installing a host is site-specific and has no
-	// portable form (ADR-063 amendment 2026-09-09). Kept because the blueprint it
+	// ★ NOTHING READS IT any more: installing a host is site-specific and has no
+	// portable form (ADR-063 amendment 2026-09-09), so WHAT to put on a host left
+	// the engine with the two renderers this block fed. Unlike
+	// [KeeperPush.Transport], which describes HOW the Keeper reaches a host and
+	// has a consumer again since NIM-849, this block has none: `core.ssh.run`
+	// carries the site's own commands and reads no install blueprint. Kept
+	// because the blueprint it
 	// parameterizes is the normative description of what an installed host must
 	// look like — paths, permissions, soul.yml (`event_stream_port` is a separate
 	// port from `bootstrap_endpoint`, a live finding) and the systemd unit — and
@@ -1944,25 +1948,27 @@ type KeeperPush struct {
 	// Hot-reload supported (see CovenDefaultProviders).
 	ClusterDefaultProvider string `yaml:"cluster_default_provider,omitempty" json:"cluster_default_provider,omitempty"`
 
-	// Transport was the bootstrap-token delivery mode for
-	// `core.bootstrap.delivered` (ADR-063 amendment "Teleport by-name
-	// transport"): `direct` (default) or `teleport`. It never affected the
-	// Destiny push run, which is always generic.
+	// Transport is how the Keeper reaches a host that has no agent on it yet —
+	// the keeper-side `core.ssh.run` module (NIM-849): `direct` (default,
+	// [push.Dial] by IP with Authorize/Sign and a CA-signed host-cert) or
+	// `teleport` (by-name through the Teleport proxy, host-verify from the
+	// identity file). It never affected the Destiny push run, which is always
+	// generic.
 	//
-	// ★ NOTHING READS IT since NIM-834 removed that module: the value is still
-	// accepted and schema-validated, and then nothing happens. The key and the
-	// `teleport.*` block below are kept rather than deleted because the
-	// live-proven Teleport machinery they configure — [push.NewTeleportDialer]
-	// plus the environment requirements in ADR-066 (bot identity without
-	// `pin_source_ip`, `alpn_upgrade` behind an L7-TLS balancer, an active
-	// external IP for enroll) — is what a site-specific host installer connects
-	// through, and re-deriving it is how those findings get lost. Removing the
-	// key is a config-contract change and belongs to whichever ticket writes
-	// that installer.
+	// ★ A property of the INSTALLATION, deliberately not a scenario param: a task
+	// that could pick a transport would be a task that has to know the site's
+	// topology. It went briefly unread between NIM-834 (which removed
+	// `core.bootstrap.delivered`) and NIM-849 (which restored the transport
+	// without the policy); the `teleport.*` block was kept through that window
+	// precisely because the live-proven machinery it configures —
+	// [push.NewTeleportDialer] plus the ADR-066 environment requirements (a bot
+	// identity without `pin_source_ip`, `alpn_upgrade` behind an L7-TLS balancer,
+	// an active external IP for enroll) — is what a site installer connects
+	// through, and re-deriving it is how those findings get lost.
 	Transport string `yaml:"transport,omitempty" json:"transport,omitempty"`
 
-	// Teleport holds the Teleport identity creds. See [KeeperPush.Transport] for
-	// why this block currently has no consumer.
+	// Teleport holds the Teleport identity creds, required when
+	// [KeeperPush.Transport] is `teleport`.
 	Teleport *KeeperPushTeleport `yaml:"teleport,omitempty" json:"teleport,omitempty"`
 }
 

@@ -36,6 +36,7 @@ var expectedModules = map[string][]string{
 	"core.module":    {"installed"},             // SoulModule plugin delivery (ADR-065)
 	"core.soul":      {"registered"},            // keeper-side (on: keeper)
 	"core.bootstrap": {"issued"},                // keeper-side ready-made VM token minting (delivery removed, NIM-834)
+	"core.ssh":       {"run"},                   // keeper-side agentless command transport (NIM-849)
 	"core.vault":     {"kv-read", "kv-present"}, // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
 	"core.choir":     {"present", "absent"},     // keeper-side (ADR-044)
 	// keeper-side: the write point of a state field ([ADR-0084]); the state suffix

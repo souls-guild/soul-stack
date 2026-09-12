@@ -135,6 +135,7 @@ var allEventTypes = []EventType{
 	"soul.token-issued",                         // EventSoulTokenIssued
 	"soul.traits-changed",                       // EventSoulTraitsChanged
 	"soulprint.received",                        // EventSoulprintReceived
+	"ssh.run",                                   // EventSSHRun
 	"synod.created",                             // EventSynodCreated
 	"synod.deleted",                             // EventSynodDeleted
 	"synod.operator-added",                      // EventSynodOperatorAdded

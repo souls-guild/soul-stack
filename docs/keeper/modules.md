@@ -319,7 +319,38 @@ A `connected`/`disconnected` Soul already owns an identity, and what happens to 
 
 Output `register.<name>.hosts[] = {sid, bootstrap_token, expires_at, created, reissued}` plus `count` / `created` / `reissued` / `skipped` / `action: issued`. A converged host keeps its slot in `hosts[]` carrying only `{sid, onboarded: true}`: the list answers for every requested host, in order, and the flag carries WHY that one has no token. **Anything downstream that re-maps `hosts` must branch on the flag before reaching for the token** — on a converged entry the `bootstrap_token` key is ABSENT, not empty, so a CEL expression that reads it unconditionally fails the step on a repeat run. Every successful repeat over an eligible SID returns new plaintext and makes the previous unused token unusable. The plaintext exists only in the current run register for per-host delivery; Postgres stores only SHA-256. The `bootstrap_token` key is masked on audit/OTel/SSE/log surfaces and must not be projected to `incarnation.state`. Audit `bootstrap.issued` carries only `{action,count,created,reissued,skipped,sids}`, converged hosts included in `sids`.
 
-Ready-made VM chain: `core.bootstrap.issued` → **(install the host — off-engine, site-specific since NIM-834)** → `core.soul.registered` (`await_online: true`, normally `refresh_soulprint: true`). The middle step is no longer a scenario step; a run that mints a token nobody redeems blocks at the barrier until the run timeout.
+Ready-made VM chain: `core.bootstrap.issued` → [`core.ssh.run`](#coresshrun) (the site's own install commands) → `core.soul.registered` (`await_online: true`, normally `refresh_soulprint: true`). The middle step carries the transport and not the policy: what gets installed is the service author's shell, and a run whose commands never redeem the token still blocks at the barrier until the run timeout.
+
+## `core.ssh.run`
+
+The **transport** for a host that has no agent on it yet: it opens an SSH session to each host of a list and executes an ordered list of shell steps on it ([ADR-063 amendment 2026-09-12](../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849), NIM-849). **Keeper-side**, routed by its module address. Registry key — base `core.ssh`; state `run`. Implementation: [`keeper/internal/coremod/ssh/run.go`](../../keeper/internal/coremod/ssh/run.go). Complete per-module reference: [docs/module/core/ssh](../module/core/ssh/README.md).
+
+It exists because `core.exec.run` and `core.file.present` are Soul-side and a freshly created VM has no Soul. **It carries no opinion about what the commands do** — that was `core.bootstrap.delivered`'s mistake (NIM-834) and the reason that module accreted a second transport, a full-install mode, an init phase and a second `soul.yml` port. Installing the host is the service author's shell; the three requirements binding that author are in the [2026-09-09 amendment](../adr/0063-bootstrap-token-delivery.md#-requirements-on-whoever-installs-the-host).
+
+```yaml
+- name: Install soul and redeem the token
+  module: core.ssh.run
+  require: [tokens]
+  params:
+    hosts: "${ register.tokens.hosts }"
+    ssh_provider: vault-ssh
+    steps:
+      - run: "curl -fsSL ${ vars.soul_binary_url } -o /usr/local/bin/soul && chmod 0755 /usr/local/bin/soul"
+      - run: "install -d -m 0700 /etc/soul && umask 077 && cat > /etc/soul/token && chmod 0400 /etc/soul/token"
+        stdin_from: bootstrap_token
+      - run: 'test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat /etc/soul/token)" soul init --config /etc/soul/soul.yml'
+      - run: "systemctl daemon-reload && systemctl enable --now soul"
+```
+
+**`stdin_from:` names a FIELD of the host entry, and `${ host.* }` does not exist.** A keeper-side task renders ONCE for the whole run, not once per host — `keeperVars` binds no roster — and `loop:` is not supported on `on: keeper`, so a per-host value has no expression that could reach a params cell. Naming the field instead keeps the per-host secret out of the task's params entirely. `stdin:` is the other source, for a value that is the same on every host (`${ vault(…) }`, `${ vars.* }`); declaring both on one step is a refusal, not a precedence rule.
+
+**A secret in `run:` is REFUSED, before the connect.** A command argument is visible in `ps`, in `audit.log` and in journald **on the host itself**, so masking the copy that comes back to the operator would hide the leak rather than prevent it. Two independent checks, because neither covers the other's case: a `run:` cell the render SEALED (it read `${ vault(…) }`, a vault-backed `vars:` name, a secret `input:`) is refused by path; a `run:` that quotes the value of a secret-NAMED host field — the token pulled out of the minting register by hand, which the seal never sees because a register is not a sealed source — is refused by value. The second compares only fields the platform already treats as sensitive: a sid is a plausible substring of an ordinary command, and under B1-strict one false positive costs the run.
+
+A host entry flagged **`onboarded: true` is skipped, not dialed** — it carries no per-host material at all (NIM-189, NIM-780), and the `primary_ip` requirement of the direct transport is settled AFTER the flag. The skip lives inside the module on purpose: `when:` on an `on: keeper` task is only half-evaluated (a static predicate works, one reading `register.*` is silently ignored), so a scenario cannot do it.
+
+Parameters: `hosts` (required), `steps` (required), `ssh_provider` (required), `ssh_user` (default `root`), `ssh_port` (default `22`), `join_wait_timeout` (default `15m` — the bounded wait for a host to become reachable, relevant only to the `teleport` transport, where a fresh VM joins minutes after it is created; `direct` never waits). The **transport** is `keeper.yml::push.transport`, not a param: `direct` dials `primary_ip` with `Authorize` → ephemeral ed25519 keypair + `Sign` → CA-signed host-cert verify against the Vault host CA; `teleport` dials the SID by name and takes transport, user-auth and host-verify from the identity file. An empty host-CA set is an error, never a blind connect.
+
+Output `register.<name>` = `hosts[] = {sid, ran, skipped}` + `count` + `skipped`. **No command output**: stdout is not captured, not registered and not audited — a step whose job is to write a secret can echo it, and the register row is written verbatim. B1-strict: a failure on any host fails the step. Audit `ssh.run` carries `{action, ssh_provider, transport, count, skipped, steps, sids}` — counts and addressing, never the command text.
 
 ## `core.bootstrap.delivered` — REMOVED (NIM-834)
 
@@ -332,6 +363,8 @@ The delivery state is **gone**. It did two unrelated things — put the Soul bin
 3. **Activation is `daemon-reload && enable && start`**, not a bare `start`, or the unit does not survive a reboot.
 
 The address is **refused, not ignored**: soul-lint does not resolve it against the core catalog, and the keeper-side module answers `unknown state "delivered"`. The canonical description of an installed host — paths, permissions, `soul.yml`, the systemd unit — remains [`keeper/internal/soulinstall`](../../keeper/internal/soulinstall), which no longer has a caller.
+
+The **transport** half of what it did came back as [`core.ssh.run`](#coresshrun) (NIM-849), without the policy half: the engine can again execute commands on a host with no agent, and still has no opinion about what those commands install.
 
 ## `core.vault.kv-read`
 

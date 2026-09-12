@@ -21,8 +21,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/cert"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	coremodssh "github.com/souls-guild/soul-stack/keeper/internal/coremod/ssh"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
+	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	"github.com/souls-guild/soul-stack/sdk/module"
 )
 
@@ -110,6 +112,28 @@ type Deps struct {
 	// keeper-side module" — the same "not configured" signal as choir and cert.
 	BootstrapIssuer bootstrap.Issuer
 
+	// SSHDial opens the SSH session for `core.ssh.run` and is that module's whole
+	// registration gate: without a dialer there is no transport, and a step with
+	// that address must answer "unknown keeper-side module" like any other
+	// unconfigured keeper-side core. Prod is push.Dial (direct) or
+	// push.NewTeleportDialer (teleport).
+	SSHDial push.Dialer
+
+	// SSHTransport is `keeper.yml::push.transport` — which way this Keeper
+	// installation reaches its hosts. "" is direct. It is deliberately not a
+	// scenario param: the transport is a property of the installation, and a task
+	// that could pick one would be a task that has to know the site's topology.
+	SSHTransport string
+
+	// SSHProviders / SSHHostCAs resolve the direct transport's authentication at
+	// APPLY time rather than at registration. The push dispatcher spawns the
+	// SshProvider plugins and loads the Vault host CAs AFTER the core modules are
+	// registered (setupPushDispatchers follows setupCoreModules), and spawning a
+	// second copy of every provider here in order to have them earlier would
+	// double the plugin processes. nil in teleport mode, where neither is used.
+	SSHProviders func() map[string]coremodssh.SshProviderHost
+	SSHHostCAs   func() []push.NamedHostKeyAuthority
+
 	// Audit is single audit-writer for keeper-side modules (vault/bootstrap/cert
 	// write audit events; soul/choir do not). nil allowed (modules skip write and
 	// continue), but prod wire-up from main should provide real
@@ -123,6 +147,7 @@ type AuditWriter interface {
 	vault.AuditWriter
 	bootstrap.AuditWriter
 	cert.AuditWriter
+	coremodssh.AuditWriter
 }
 
 // Default builds Registry with keeper-side core modules: unconditionally
@@ -173,6 +198,22 @@ func Default(d Deps) *Registry {
 		mods[bootstrap.Name] = &bootstrap.Module{
 			Issuer: d.BootstrapIssuer,
 			Audit:  d.Audit,
+		}
+	}
+	// `core.ssh.run` (NIM-849) is registered when there is a dialer, which is the
+	// whole of its transport. It is the engine's only way to execute anything on
+	// a host that has no agent yet — `core.exec.run` and `core.file.present` are
+	// Soul-side, and a bare VM has no Soul — so a build without it mints tokens
+	// nobody can redeem and blocks at the onboarding barrier. The direct
+	// transport's providers and host CAs arrive through accessors read at Apply,
+	// not here: they are spawned and loaded after this runs.
+	if d.SSHDial != nil {
+		mods[coremodssh.Name] = &coremodssh.Module{
+			Transport: d.SSHTransport,
+			Providers: d.SSHProviders,
+			HostCAs:   d.SSHHostCAs,
+			Dial:      d.SSHDial,
+			Audit:     d.Audit,
 		}
 	}
 	return NewRegistry(mods)

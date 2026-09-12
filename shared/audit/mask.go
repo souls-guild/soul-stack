@@ -60,6 +60,14 @@ func isSensitiveKey(key string) bool {
 	return ok
 }
 
+// IsSensitiveKey reports whether a key names a value this package would mask.
+// Exported for a caller that must REFUSE rather than mask: `core.ssh.run`
+// (NIM-849) will not put a host field with such a name into a command line at
+// all, and the one catalog of sensitive names has to be the same one the
+// maskers use — a second spelling would let the refusal and the masking
+// disagree about which field is the token.
+func IsSensitiveKey(key string) bool { return isSensitiveKey(key) }
+
 // CredentialsRefPrefix is the canonical form of a vault reference to a KV secret
 // ([ADR-017]: `vault:<mount>/<path>`, default mount `secret`). Any string value
 // CONTAINING this marker is masked whole (a vault path can leak into

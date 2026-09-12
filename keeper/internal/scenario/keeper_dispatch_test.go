@@ -12,6 +12,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
+	coremodutil "github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
 	"github.com/souls-guild/soul-stack/sdk/module"
@@ -111,6 +112,62 @@ func TestApplyKeeperTask_Success(t *testing.T) {
 	if output["created"] != true {
 		t.Fatalf("output[created] = %v, want true", output["created"])
 	}
+}
+
+// ★ GUARD (NIM-849). The run's seal must reach the MODULE, not only the masker
+// on the way out. `core.ssh.run` refuses a secret in a command line rather than
+// masking the aftermath — argv is visible in `ps`, `audit.log` and journald on
+// the host itself, so by the time a message is masked the command has run — and
+// [coremodutil.SealedPathsFrom] is the only way it can know which cell holds
+// one.
+//
+// This is the last hop, and it is one line: drop the WithSealedPaths call in
+// runKeeperTask and every guard test in the ssh package still passes, because
+// those inject the context themselves. Then the refusal silently stops existing
+// in production.
+func TestApplyKeeperTask_SealReachesTheModule(t *testing.T) {
+	sealed := map[string]bool{"steps[0].run": true}
+	var got map[string]bool
+	mod := &ctxProbeModule{onApply: func(ctx context.Context) {
+		got = coremodutil.SealedPathsFrom(ctx)
+	}}
+	r := &Runner{keeperModules: fakeKeeperRegistry{"core.ssh": mod}}
+
+	rt := &render.RenderedTask{Module: "core.ssh.run", Params: mustStruct(t, map[string]any{"hosts": []any{}})}
+	r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, sealed)
+
+	if len(got) != 1 || !got["steps[0].run"] {
+		t.Fatalf("the module saw sealed paths %v, want the run's set %v", got, sealed)
+	}
+}
+
+// A run that sealed nothing hands the module nothing — and that must stay
+// distinguishable from "the wiring is gone", which is why the test above asserts
+// the positive case rather than this one.
+func TestApplyKeeperTask_NoSealIsAnEmptySet(t *testing.T) {
+	var got map[string]bool
+	mod := &ctxProbeModule{onApply: func(ctx context.Context) {
+		got = coremodutil.SealedPathsFrom(ctx)
+	}}
+	r := &Runner{keeperModules: fakeKeeperRegistry{"core.ssh": mod}}
+
+	rt := &render.RenderedTask{Module: "core.ssh.run"}
+	r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
+
+	if got != nil {
+		t.Fatalf("the module saw %v, want nil", got)
+	}
+}
+
+// ctxProbeModule reports what the runner put on the module context.
+type ctxProbeModule struct {
+	module.BaseModule
+	onApply func(context.Context)
+}
+
+func (m *ctxProbeModule) Apply(_ *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	m.onApply(stream.Context())
+	return stream.Send(&pluginv1.ApplyEvent{Changed: true})
 }
 
 func TestApplyKeeperTask_FailedEvent(t *testing.T) {

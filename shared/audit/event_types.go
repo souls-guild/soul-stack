@@ -413,6 +413,17 @@ const (
 	// count, created, reissued, sids}` — WITHOUT plaintext tokens or hashes.
 	EventBootstrapIssued EventType = "bootstrap.issued"
 
+	// EventSSHRun — the keeper-side core module `core.ssh.run` opened an SSH
+	// session to a batch of hosts and executed the step list on each
+	// (ADR-063 amendment 2026-09-12). A Keeper reaching into hosts without an
+	// agent is a security signal in its own right, which `task.executed` does
+	// not name. `source: keeper_internal`, `archon_aid: NULL`. Payload:
+	// `{action: "run", ssh_provider, transport, count, skipped, steps, sids}` —
+	// counts and addressing only. The command strings are NOT included: they are
+	// the site's own policy and the module cannot vouch for what an author put
+	// in one.
+	EventSSHRun EventType = "ssh.run"
+
 	// EventApplyDispatched — Keeper sent an `ApplyRequest` to a Soul over the
 	// EventStream (M2.5, outbound direction). `source: soul_grpc`,
 	// `archon_aid: NULL`, `correlation_id = apply_id`. Payload:

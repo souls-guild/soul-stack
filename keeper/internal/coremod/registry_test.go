@@ -2,6 +2,7 @@ package coremod_test
 
 import (
 	"context"
+	"errors"
 	"sort"
 	"testing"
 	"time"
@@ -11,9 +12,11 @@ import (
 	coremodbootstrap "github.com/souls-guild/soul-stack/keeper/internal/coremod/bootstrap"
 	coremodchoir "github.com/souls-guild/soul-stack/keeper/internal/coremod/choir"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	coremodssh "github.com/souls-guild/soul-stack/keeper/internal/coremod/ssh"
 	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
 	keeperincarnation "github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/push"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
@@ -144,6 +147,14 @@ func TestDefault_ChoirMember_AbsentWhenStoreNil(t *testing.T) {
 	}
 }
 
+// noopDialer stands in for the transport of `core.ssh.run`: the module's whole
+// registration gate is having a dialer, so a nil one is what "not configured"
+// means there. It is never called — these tests only ask whether the registry
+// holds the address.
+func noopDialer(_ context.Context, _ push.DialConfig) (push.Session, error) {
+	return nil, errors.New("noop dialer")
+}
+
 // baseDeps is a common set for bootstrap-gate tests (minimally sufficient
 // for unconditional core-modules).
 func baseDeps() coremod.Deps {
@@ -168,5 +179,21 @@ func TestDefault_Bootstrap_GateIsTheIssuerAlone(t *testing.T) {
 
 	if _, ok := coremod.Default(baseDeps()).Lookup(coremodbootstrap.Name); ok {
 		t.Errorf("Lookup(%q): must NOT register without an issuer", coremodbootstrap.Name)
+	}
+}
+
+// TestDefault_SSH_GateIsTheDialer: `core.ssh.run` is a transport and nothing
+// else, so the dialer is the whole of it. The direct transport's providers and
+// host-CAs arrive through accessors read at Apply — they cannot gate
+// registration, because the push dispatcher resolves them after this runs.
+func TestDefault_SSH_GateIsTheDialer(t *testing.T) {
+	d := baseDeps()
+	d.SSHDial = noopDialer
+	if _, ok := coremod.Default(d).Lookup(coremodssh.Name); !ok {
+		t.Fatalf("Lookup(%q): must register with a dialer present", coremodssh.Name)
+	}
+
+	if _, ok := coremod.Default(baseDeps()).Lookup(coremodssh.Name); ok {
+		t.Errorf("Lookup(%q): must NOT register without a dialer", coremodssh.Name)
 	}
 }

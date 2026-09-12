@@ -36,6 +36,7 @@ func everyKeeperModuleDeps() coremod.Deps {
 	d.ChoirStore = noopChoirStore{}
 	d.CertStore = noopCertStore{}
 	d.BootstrapIssuer = noopBootstrapIssuer{}
+	d.SSHDial = noopDialer
 	return d
 }
 

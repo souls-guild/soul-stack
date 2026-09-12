@@ -1524,6 +1524,67 @@
           }
         }
       }
+    },
+    {
+      "name": "ssh",
+      "states": {
+        "run": {
+          "description": "Keeper-side (on:keeper). Open an SSH session to each host and execute an ordered list of shell steps on it, feeding a value to a step's stdin (NIM-849).",
+          "input": {
+            "hosts": {
+              "description": "Per-host objects, in practice `${ register.<mint>.hosts }`. `sid` is required; `primary_ip` only for the direct transport; an entry with `onboarded: true` is skipped, not dialed.",
+              "items": {
+                "type": "map"
+              },
+              "required": true,
+              "type": "list"
+            },
+            "join_wait_timeout": {
+              "description": "Ceiling on the wait for a host to become reachable (Teleport join), default 15m. Integer seconds are also accepted at runtime.",
+              "format": "duration",
+              "type": "string"
+            },
+            "ssh_port": {
+              "description": "SSH port (default 22).",
+              "type": "int"
+            },
+            "ssh_provider": {
+              "description": "SshProvider name for Authorize/Sign; retained as audit metadata in Teleport mode.",
+              "required": true,
+              "type": "string"
+            },
+            "ssh_user": {
+              "description": "SSH user (default root).",
+              "type": "string"
+            },
+            "steps": {
+              "description": "Ordered steps, each `run:` (a shell command line) plus at most one stdin source: `stdin:` (a literal, the same on every host) or `stdin_from:` (the name of a host field). A `run:` holding a declared secret is REFUSED — argv is visible in ps, audit.log and journald on the host itself.",
+              "items": {
+                "type": "map"
+              },
+              "required": true,
+              "type": "list"
+            }
+          },
+          "output": {
+            "count": {
+              "description": "Hosts in the list.",
+              "type": "int"
+            },
+            "hosts": {
+              "description": "Per-host outcome `{sid, ran, skipped}`. No command output: stdout is not captured.",
+              "items": {
+                "type": "map"
+              },
+              "type": "list"
+            },
+            "skipped": {
+              "description": "Hosts that carried `onboarded: true` and were not dialed.",
+              "type": "int"
+            }
+          }
+        }
+      }
     }
   ]
 }

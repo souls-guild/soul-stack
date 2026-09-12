@@ -116,6 +116,41 @@ func RunScopeFrom(ctx context.Context) (RunScope, bool) {
 	return s, ok
 }
 
+// sealedPathsKey carries the run's seal — the params-cell paths whose value
+// came from a secret source ([ADR-010] §7.4, render.SealedSet.Paths) — into a
+// keeper-side core module. Same channel and same reasoning as
+// [incarnationKey]: ApplyRequest carries params, not their provenance.
+//
+// The consumer is a module that must REFUSE a secret rather than mask it.
+// `core.ssh.run` will not put a secret in a command line, because argv is
+// visible in `ps`, in `audit.log` and in journald on the host itself — and the
+// seal is the only record of which cell holds one. Masking downstream is the
+// wrong answer there: by the time a message is masked the command has already
+// run.
+type sealedPathsKey struct{}
+
+// WithSealedPaths returns ctx carrying the run's sealed-path set. An empty set
+// is a no-op. The map is NOT copied: it belongs to the run's render pass and
+// every reader treats it as immutable.
+func WithSealedPaths(ctx context.Context, paths map[string]bool) context.Context {
+	if len(paths) == 0 {
+		return ctx
+	}
+	return context.WithValue(ctx, sealedPathsKey{}, paths)
+}
+
+// SealedPathsFrom returns the run's sealed-path set, or nil when the module was
+// called outside a scenario run or the run sealed nothing.
+//
+// ★ An empty result means "nothing was sealed", NOT "nothing is secret": the
+// seal follows a scenario's own bindings, so a secret with no render-time
+// provenance (a plaintext literal, a value a module invented) is absent from it.
+// A guard built on this is therefore one layer, never the whole floor.
+func SealedPathsFrom(ctx context.Context) map[string]bool {
+	paths, _ := ctx.Value(sealedPathsKey{}).(map[string]bool)
+	return paths
+}
+
 // stateOpEvaluatorsKey carries the merge-time CEL evaluators into a keeper-side
 // core module. Same channel and same reasoning as [incarnationKey]: `add` dedup
 // and `modify`/`remove` matching evaluate a predicate PER ELEMENT, so they
