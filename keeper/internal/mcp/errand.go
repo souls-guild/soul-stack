@@ -9,8 +9,10 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 )
 
 // errandNotConfigured — public-detail nil-guard for errand-tools.
@@ -191,10 +193,10 @@ func (h *Handler) callErrandList(ctx context.Context, claims *jwt.Claims, req js
 		}
 	}
 
-	// RBAC: errand.list without a selector (NoSelector). Per-row filtering by
-	// host/coven is a separate slice (see handlers/errand.go::List); no point
-	// duplicating it here (read-only).
-	if err := h.deps.RBAC.Check(claims.Subject, "errand", "list", nil); err != nil {
+	// RBAC: the existence half — is `errand.list` held at all — with the host
+	// boundary from the same Purview pushed into the query below (NIM-841).
+	scope, holds := h.errandPurview(claims, "list")
+	if !holds {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.list")
 	}
@@ -221,6 +223,10 @@ func (h *Handler) callErrandList(ctx context.Context, claims *jwt.Claims, req js
 				"field 'started_after' must be RFC3339 timestamp")
 		}
 		filter.StartedAfter = ts
+	}
+
+	filter.Scope = func(startIdx int) (string, []any, int) {
+		return scope.WhereSQL(errandScopeColumns, startIdx)
 	}
 
 	offset, limit := clampErrandPage(a.Offset, a.Limit)
@@ -271,8 +277,9 @@ func (h *Handler) callErrandGet(ctx context.Context, claims *jwt.Claims, req jso
 			"field 'errand_id' is required")
 	}
 
-	// RBAC: errand.list (the read permission covers both get and list — rbac.md §Errand).
-	if err := h.deps.RBAC.Check(claims.Subject, "errand", "list", nil); err != nil {
+	// RBAC: errand.list (the read permission covers both get and list — rbac.md §Errand),
+	// existence here and the host boundary once the row is loaded (NIM-841).
+	if _, holds := h.errandPurview(claims, "list"); !holds {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.list")
 	}
@@ -289,6 +296,12 @@ func (h *Handler) callErrandGet(ctx context.Context, claims *jwt.Claims, req jso
 			slog.Any("error", err))
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "get errand failed")
 	}
+	// Out of scope answers as "not found", the same as the REST twin: a distinct
+	// refusal would confirm the errand exists (NIM-841).
+	if !h.errandInScope(claims, "list", row) {
+		return h.toolError(req.ID, toolName, mcpCodeNotFound,
+			"errand "+a.ErrandID+" not found")
+	}
 	return h.toolResult(req.ID, rowToMCP(row))
 }
 
@@ -301,13 +314,18 @@ type errandCancelArgs struct {
 // Transport over [errand.Dispatcher.Cancel]: business logic (lookup,
 // terminal-check, send cancel local/remote, audit) lives in the dispatcher.
 //
-// RBAC — errand.cancel without a selector (NoSelector): the SID is only
-// known after looking up the errand row, which is incompatible with a
-// pre-check. Mirrors REST DELETE /v1/errands/{errand_id}.
+// RBAC — the existence half of `errand.cancel`, then the target host against the
+// caller's `errand.cancel` purview once the row is loaded (NIM-841). Mirrors REST
+// DELETE /v1/errands/{errand_id}, including the out-of-scope → not-found fold.
 func (h *Handler) callErrandCancel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
 	const toolName = "keeper.errand.cancel"
 
 	if h.deps.ErrandDispatcher == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, errandNotConfigured)
+	}
+	if h.deps.ErrandStore == nil {
+		// Fail-closed: without the store the target host is unknowable, and
+		// cancelling a command on an unknown host is what the check prevents.
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, errandNotConfigured)
 	}
 
@@ -323,9 +341,26 @@ func (h *Handler) callErrandCancel(ctx context.Context, claims *jwt.Claims, req 
 			"field 'errand_id' is required")
 	}
 
-	if err := h.deps.RBAC.Check(claims.Subject, "errand", "cancel", nil); err != nil {
+	if _, holds := h.errandPurview(claims, "cancel"); !holds {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
 			"operator lacks required permission errand.cancel")
+	}
+
+	row, err := h.deps.ErrandStore.Get(ctx, a.ErrandID)
+	if err != nil {
+		if errors.Is(err, errand.ErrNotFound) {
+			return h.toolError(req.ID, toolName, mcpCodeNotFound,
+				"errand "+a.ErrandID+" not found")
+		}
+		h.deps.Logger.Error("mcp: errand.cancel store failed",
+			slog.String("errand_id", a.ErrandID),
+			slog.String("by_aid", claims.Subject),
+			slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "errand cancel failed")
+	}
+	if !h.errandInScope(claims, "cancel", row) {
+		return h.toolError(req.ID, toolName, mcpCodeNotFound,
+			"errand "+a.ErrandID+" not found")
 	}
 
 	if err := h.deps.ErrandDispatcher.Cancel(ctx, errand.CancelRequest{
@@ -427,6 +462,54 @@ func rowToMCP(row *errand.Row) errandRow {
 		out.FinishedAt = row.FinishedAt.UTC().Format(time.RFC3339)
 	}
 	return out
+}
+
+// errandScopeColumns maps an errand onto the RBAC scope dimensions, from the
+// store's own aliases rather than a second copy of the strings (the REST twin
+// holds the same map for the same reason).
+var errandScopeColumns = rbac.ScopeColumns{
+	Coven:  errand.ScopeCovenColumn,
+	Host:   errand.ScopeHostColumn,
+	Traits: errand.ScopeTraitsColumn,
+}
+
+// errandPurview resolves the caller's `errand.<action>` boundary — WHICH hosts'
+// command output this operator may reach (NIM-841) — together with the existence
+// half: whether the right is held at all.
+//
+// Both come from ONE resolved Purview, and the existence half is [rbac.Purview.Holds],
+// the very predicate [rbac.Enforcer.HoldsAction] is built on. That is what makes
+// this tool agree with the REST route's [RequireAction] gate rather than
+// re-deciding the question with a second formula.
+//
+// It replaces a bare `RBAC.Check(aid, "errand", <action>, nil)`, which could not
+// serve a narrowed grant at all: a scoped permission cannot match a nil context,
+// so `errand.list on coven=dev` was denied outright and the right had only two
+// settings — nothing, or the whole fleet.
+//
+// No claims / no resolver → a zero Purview: holds=false, and the scope renders
+// FALSE (fail-closed, ADR-047).
+func (h *Handler) errandPurview(claims *jwt.Claims, action string) (soulpurview.Scope, bool) {
+	if claims == nil || h.deps.PurviewResolver == nil {
+		return soulpurview.Scope{}, false
+	}
+	p := h.deps.PurviewResolver.ResolvePurview(claims.Subject, "errand", action)
+	return soulpurview.Resolve(p), p.Holds()
+}
+
+// errandScope is [Handler.errandPurview] without the existence half, for a caller
+// that has already established the right is held.
+func (h *Handler) errandScope(claims *jwt.Claims, action string) soulpurview.Scope {
+	scope, _ := h.errandPurview(claims, action)
+	return scope
+}
+
+// errandInScope is the single-object half of [Handler.errandScope]; it must keep
+// answering alike with the list pushdown, or a tool would return an errand the
+// list never showed.
+func (h *Handler) errandInScope(claims *jwt.Claims, action string, row *errand.Row) bool {
+	return soulpurview.InScope(h.errandScope(claims, action), row.SID, row.Covens,
+		soulpurview.TraitsFromJSON(row.TraitsRaw))
 }
 
 // validErrandStatusForMCP — closed enum for the query filter. Matches the

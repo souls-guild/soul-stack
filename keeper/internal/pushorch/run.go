@@ -226,6 +226,12 @@ func (r *PushRun) GetRow(ctx context.Context, applyID string) (*PushRunRow, erro
 	return r.deps.Store.Get(ctx, applyID)
 }
 
+// GetRowScoped is [PushRun.GetRow] narrowed to the caller's host boundary
+// (NIM-842) — the operator read, where GetRow is the orchestration one.
+func (r *PushRun) GetRowScoped(ctx context.Context, applyID string, hostScope func(startIdx int) (string, []any, int)) (*PushRunRow, error) {
+	return r.deps.Store.GetScoped(ctx, applyID, hostScope)
+}
+
 // ListRows is a global list of push runs (`GET /v1/push-runs`, UI-4). Thin wrapper
 // over Store.SelectAll, symmetric to GetRow: handler and MCP-tool go through the
 // orchestrator object, not Store directly.

@@ -85,6 +85,12 @@ type CadenceHandler struct {
 	scenarioResolver VoyageScenarioResolver
 	incReader        IncarnationContextReader
 	enforcer         middleware.PermissionChecker
+	// scoper resolves the caller's `soul.list` purview, which narrows the child
+	// Voyages `GET /v1/cadences/{id}/runs` returns (NIM-842). That route hands
+	// back the SAME voyageDTO under the SAME `incarnation.history` gate as
+	// `GET /v1/voyages`, so leaving it unnarrowed would be a side door into the
+	// host identity the Voyage list hides. nil is fail-closed.
+	scoper PurviewResolver
 	// gate — the console gate over a kind=command recipe (ADR-0074 amendment,
 	// NIM-197). nil → the deprecation window (see shellgate.Gate).
 	gate   *shellgate.Gate
@@ -118,6 +124,7 @@ func NewCadenceHandler(
 	scenarioResolver VoyageScenarioResolver,
 	incReader IncarnationContextReader,
 	enforcer middleware.PermissionChecker,
+	scoper PurviewResolver,
 	gate *shellgate.Gate,
 	auditW audit.Writer,
 	tidingInvalidator TidingInvalidator,
@@ -132,6 +139,7 @@ func NewCadenceHandler(
 		scenarioResolver:  scenarioResolver,
 		incReader:         incReader,
 		enforcer:          enforcer,
+		scoper:            scoper,
 		gate:              gate,
 		auditW:            auditW,
 		tidingInvalidator: tidingInvalidator,
@@ -1541,6 +1549,11 @@ func (h *CadenceHandler) Runs(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "cadence registry is not configured"))
 		return
 	}
+	claims, ok := middleware.ClaimsFromContext(r.Context())
+	if !ok {
+		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "missing claims"))
+		return
+	}
 	id := chi.URLParam(r, "id")
 	if !audit.IsValidULID(id) {
 		problem.Write(w, problem.New(problem.TypeValidationFailed, r.URL.Path,
@@ -1572,6 +1585,7 @@ func (h *CadenceHandler) Runs(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 
+	filter.HostScope = voyageHostScopeFor(h.scoper, claims)
 	items, total, err := voyage.List(r.Context(), h.store, filter, page.Offset, page.Limit)
 	if err != nil {
 		h.logger.Error("cadence.runs: voyage list failed", slog.String("cadence_id", id), slog.Any("error", err))
@@ -1601,7 +1615,7 @@ type CadenceRunsReply = sharedapi.PagedResponse[voyageDTO]
 // The offset/limit range is enforced by CheckPageBounds → 400 (parity with legacy
 // ParsePage). Errors — *problemError: 422 bad id / 400 out-of-range pagination / 422
 // bad status / 404 no schedule / 500 DB failure. Success — [CadenceRunsReply].
-func (h *CadenceHandler) RunsTyped(ctx context.Context, id string, statuses []string, offset, limit int) (CadenceRunsReply, error) {
+func (h *CadenceHandler) RunsTyped(ctx context.Context, claims *jwt.Claims, id string, statuses []string, offset, limit int) (CadenceRunsReply, error) {
 	var zero CadenceRunsReply
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "cadence registry is not configured")}
@@ -1630,6 +1644,7 @@ func (h *CadenceHandler) RunsTyped(ctx context.Context, id string, statuses []st
 		}
 	}
 
+	filter.HostScope = voyageHostScopeFor(h.scoper, claims)
 	items, total, err := voyage.List(ctx, h.store, filter, offset, limit)
 	if err != nil {
 		h.logger.Error("cadence.runs: voyage list failed", slog.String("cadence_id", id), slog.Any("error", err))

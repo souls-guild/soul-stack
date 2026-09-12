@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -116,8 +117,29 @@ WHERE apply_id = $1
 `
 
 // Get reads a record by apply_id. ErrNotFound means record does not exist (caller → 404).
+//
+// Unnarrowed: the orchestration paths must see every run regardless of who is
+// asking. An operator READ goes through [Store.GetScoped].
 func (s *Store) Get(ctx context.Context, applyID string) (*PushRunRow, error) {
-	row := s.db.QueryRow(ctx, selectPushRunSQL, applyID)
+	return s.GetScoped(ctx, applyID, nil)
+}
+
+// GetScoped reads a record by apply_id, narrowed to the caller's host boundary
+// (NIM-842). hostScope is the per-host predicate, wrapped by [HostScopeSQL]; nil
+// applies no narrowing.
+//
+// A run whose inventory reaches outside the boundary is ErrNotFound — the SAME
+// answer an absent apply_id gets, and the reason the narrowing is in the WHERE
+// rather than a check on the scanned row. A distinct refusal would confirm the
+// run exists, which is the disclosure this closes, one id at a time.
+func (s *Store) GetScoped(ctx context.Context, applyID string, hostScope func(startIdx int) (string, []any, int)) (*PushRunRow, error) {
+	sql, args := selectPushRunSQL, []any{applyID}
+	if hostScope != nil {
+		pred, scopeArgs, _ := hostScope(len(args) + 1)
+		sql += "  AND " + pred + "\n"
+		args = append(args, scopeArgs...)
+	}
+	row := s.db.QueryRow(ctx, sql, args...)
 	var (
 		r           PushRunRow
 		statusStr   string
@@ -268,6 +290,70 @@ func marshalJSONB(m map[string]any) ([]byte, error) {
 type ListFilter struct {
 	Statuses    []PushRunStatus
 	SSHProvider string
+
+	// HostScope renders the caller's purview over the hosts a push run NAMES,
+	// starting at placeholder $startIdx (NIM-842). Supply the per-host predicate;
+	// [HostScopeSQL] wraps it. A nil HostScope applies NO narrowing.
+	//
+	// It is pushed into the query rather than applied to the rows that come back
+	// because `total` is counted under the same WHERE: a Go post-filter would
+	// hide the runs and still publish how many of them there are.
+	HostScope func(startIdx int) (string, []any, int)
+}
+
+// The column aliases a per-host predicate must be written against inside
+// [HostScopeSQL]'s subquery. Exported so the RBAC-side mapping is built from
+// these rather than from a second copy of the same strings.
+//
+// [ScopeHostColumn] is the SID the run RECORDED, not the joined one, so a run
+// against a host since removed from the registry stays reachable by an operator
+// scoped to that host. Coven and traits come from the join and go NULL with the
+// host, which the `IS NOT TRUE` in [HostScopeSQL] reads as out-of-scope.
+const (
+	ScopeHostColumn   = "_t.sid"
+	ScopeCovenColumn  = "_s.coven"
+	ScopeTraitsColumn = "_s.traits"
+)
+
+// spliceBefore inserts ins immediately before the first occurrence of anchor,
+// and PANICS when the anchor is absent. A panic on a constant this package owns
+// is a programming error surfaced at the first test that runs the query — the
+// alternative is a statement whose bindings and placeholders have silently
+// stopped matching, which fails as a 500 on a security path in production.
+func spliceBefore(stmt, anchor, ins string) string {
+	i := strings.Index(stmt, anchor)
+	if i < 0 {
+		panic("pushorch: scope splice anchor not found in statement: " + anchor)
+	}
+	return stmt[:i] + ins + stmt[i:]
+}
+
+// HostScopeSQL renders "every host in this run's inventory is inside the
+// operator's boundary", wrapping the per-host predicate inner produces (NIM-842).
+//
+// A push run is an SSH delivery to a literal list of hosts, so `inventory_sids`
+// IS the disclosure — `GET /v1/push/{apply_id}` hands it back whole under
+// `push.read`, a right that says nothing about which hosts the caller may know
+// exist.
+//
+// ALL, not ANY, for the same reason as the Voyage twin: showing a run means
+// showing its inventory, and a partially-visible inventory is still a list of
+// SIDs the caller may not see. `IS NOT TRUE`, not `NOT`, because a host missing
+// from `souls` makes the coven overlap NULL, and under plain `NOT` that NULL
+// would count as in-scope — open exactly where least is known.
+//
+// Same gap as the Voyage twin, named here so the asymmetry does not read as its
+// absence: a run with an EMPTY `inventory_sids` has no host to fail the test, so
+// NOT EXISTS holds vacuously and it stays visible to an operator entitled to no
+// host. It names no machine, and `PushRun.Apply` refuses an empty inventory
+// before a row is ever written, so this is a property of the predicate rather
+// than a reachable disclosure.
+func HostScopeSQL(inner func(startIdx int) (string, []any, int), startIdx int) (string, []any, int) {
+	pred, args, next := inner(startIdx)
+	return `(NOT EXISTS (
+        SELECT 1 FROM unnest(push_runs.inventory_sids) AS _t(sid)
+        LEFT JOIN souls _s ON _s.sid = _t.sid
+        WHERE (` + pred + `) IS NOT TRUE))`, args, next
 }
 
 // SQL for global list endpoint `GET /v1/push-runs` (UI-4). Parameters:
@@ -318,12 +404,31 @@ func (s *Store) SelectAll(ctx context.Context, filter ListFilter, offset, limit 
 		providerArg = filter.SSHProvider
 	}
 
+	// The scope predicate is ANDed LAST, after every user-supplied filter, so no
+	// filter can widen it. Its placeholders start after the fixed ones, which
+	// differ between the two statements ($1..$2 for the count, $1..$4 for the
+	// page), so each is rendered against its own starting index.
+	countStmt, countArgs := countAllPushRunsSQL, []any{statusesArg, providerArg}
+	listStmt, listArgs := selectAllPushRunsSQL, []any{statusesArg, providerArg, limit, offset}
+	if filter.HostScope != nil {
+		sql, args, _ := filter.HostScope(len(countArgs) + 1)
+		countStmt += "  AND " + sql + "\n"
+		countArgs = append(countArgs, args...)
+
+		sql, args, _ = filter.HostScope(len(listArgs) + 1)
+		// spliceBefore, not strings.Replace: see the note on the Voyage twin —
+		// Replace silently no-ops on a reworded ORDER BY while the args are
+		// appended regardless, which is a runtime 500 and an invisible review.
+		listStmt = spliceBefore(listStmt, "ORDER BY started_at DESC", "  AND "+sql+"\n")
+		listArgs = append(listArgs, args...)
+	}
+
 	var total int
-	if err := s.db.QueryRow(ctx, countAllPushRunsSQL, statusesArg, providerArg).Scan(&total); err != nil {
+	if err := s.db.QueryRow(ctx, countStmt, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("pushorch: count all: %w", err)
 	}
 
-	rows, err := s.db.Query(ctx, selectAllPushRunsSQL, statusesArg, providerArg, limit, offset)
+	rows, err := s.db.Query(ctx, listStmt, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("pushorch: select all: %w", err)
 	}

@@ -46,7 +46,7 @@ import (
 // (GET/{id}, GET/{id}/runs, PATCH, DELETE) exactly once. Before the blocker fix PATCH/DELETE
 // are absent from the walk (the sibling chi.Route swallowed the /{id} node) → the test is RED.
 func TestHumaCadence_RestReachable_ChiCoexistence(t *testing.T) {
-	cadenceH := handlers.NewCadenceHandler(foundCadenceStore(), nil, nil, nil, nil /*gate*/, nil, nil, 0, nil)
+	cadenceH := handlers.NewCadenceHandler(foundCadenceStore(), nil, nil, nil, unrestrictedScoper{}, nil /*gate*/, nil, nil, 0, nil)
 	h := buildRouter(
 		nil, // verifier
 		nil, // healthH
@@ -187,7 +187,7 @@ func (r cadenceRestStoredRow) Scan(dest ...any) error {
 func humaCadenceRestRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *strictFakeCadenceStore) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, nil /*gate*/, auditW, nil, 0, nil)
+	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, unrestrictedScoper{}, nil /*gate*/, auditW, nil, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
@@ -536,7 +536,7 @@ func TestHumaCadenceRest_Runs_BadLimit_400(t *testing.T) {
 func humaCadenceListRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, store *strictFakeCadenceStore) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, nil /*gate*/, nil, nil, 0, nil)
+	cadenceH := handlers.NewCadenceHandler(store, nil, nil, enforcer, unrestrictedScoper{}, nil /*gate*/, nil, nil, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

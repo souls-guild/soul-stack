@@ -66,6 +66,17 @@ type Row struct {
 	StartedAt       time.Time
 	FinishedAt      *time.Time
 	TTLAt           time.Time
+
+	// Covens / TraitsRaw come from the LEFT JOIN on `souls` and are the target
+	// host's CURRENT ones, not the ones it carried when the command ran. They
+	// exist for the single-object scope check (NIM-841) and are not part of any
+	// wire shape.
+	//
+	// Both are empty when the host is gone from the registry: a coven-scoped
+	// operator can then no longer show the errand is inside their coven, while a
+	// `host=`-scoped one still matches on `sid`, which the errand carries itself.
+	Covens    []string
+	TraitsRaw []byte
 }
 
 // ListFilter — parameters for `GET /v1/errands`. Empty fields = "no filter".
@@ -77,7 +88,38 @@ type ListFilter struct {
 	Status       Status
 	StartedAfter time.Time
 	Modules      []string
+
+	// Scope renders the caller's purview into a SQL boolean over the joined
+	// columns, starting at placeholder $startIdx. A nil Scope applies NO
+	// narrowing and must therefore only ever be passed by a caller that has
+	// already established the operator is unrestricted — the API layer resolves
+	// it from `errand.list` and fails closed on doubt (NIM-841).
+	//
+	// It is pushed into the query rather than applied to the returned rows
+	// because `total` is counted under the same WHERE: a Go post-filter would
+	// hide the rows and still publish how many of them there are.
+	Scope func(startIdx int) (string, []any, int)
 }
+
+// The column aliases a [ListFilter.Scope] predicate must be written against
+// (the [consolepg] pattern). Exported so the RBAC-side mapping is built from
+// these rather than from a second copy of the same strings — a scope predicate
+// naming a column this query does not have is a runtime SQL error on a security
+// path.
+//
+// [ScopeHostColumn] is the ERRAND's own `sid`, not the joined one: an errand
+// against a host since removed from the registry stays reachable by an operator
+// scoped to that host. Coven and traits necessarily come from the join and go
+// NULL with the host, which renders the predicate NULL and hides the row —
+// fail-closed, and the direction ADR-047 asks for.
+//
+// There is no service or incarnation column: an errand carries neither, so a
+// condition on those dimensions renders FALSE.
+const (
+	ScopeHostColumn   = "e.sid"
+	ScopeCovenColumn  = "s.coven"
+	ScopeTraitsColumn = "s.traits"
+)
 
 // ExecQueryRower — narrow surface of pgxpool.Pool, needed by Store
 // (symmetric with pushorch / soul / topology). Allows faking in unit tests
@@ -133,15 +175,25 @@ func (s *Store) Insert(ctx context.Context, row Row) error {
 	return nil
 }
 
-const selectByIDSQL = `
-SELECT errand_id, sid, module, input, status,
-       exit_code, COALESCE(stdout, ''), COALESCE(stderr, ''),
-       stdout_truncated, stderr_truncated,
-       duration_ms, COALESCE(error_message, ''),
-       output, started_by_aid, started_by_kid,
-       started_at, finished_at, ttl_at
-FROM errands
-WHERE errand_id = $1
+// selectColumns / fromClause — one projection for Get and List. The join is
+// LEFT, not INNER: an INNER one would make the errands of a decommissioned host
+// invisible to EVERYONE, unrestricted operators included, so deleting a host
+// would quietly delete the record of what was run on it.
+const selectColumns = `
+    e.errand_id, e.sid, e.module, e.input, e.status,
+    e.exit_code, COALESCE(e.stdout, ''), COALESCE(e.stderr, ''),
+    e.stdout_truncated, e.stderr_truncated,
+    e.duration_ms, COALESCE(e.error_message, ''),
+    e.output, e.started_by_aid, e.started_by_kid,
+    e.started_at, e.finished_at, e.ttl_at,
+    COALESCE(s.coven, '{}'), s.traits`
+
+const fromClause = `
+FROM errands e
+LEFT JOIN souls s ON s.sid = e.sid`
+
+const selectByIDSQL = `SELECT` + selectColumns + fromClause + `
+WHERE e.errand_id = $1
 `
 
 // Get reads Errand row by ULID. Returns ErrNotFound if missing.
@@ -223,21 +275,14 @@ func (s *Store) MarkTerminal(ctx context.Context, errandID string, upd TerminalU
 func (s *Store) List(ctx context.Context, f ListFilter, offset, limit int) ([]*Row, int, error) {
 	whereSQL, args := buildListWhere(f)
 
-	countSQL := "SELECT COUNT(*) FROM errands" + whereSQL
+	countSQL := "SELECT COUNT(*)" + fromClause + whereSQL
 	var total int
 	if err := s.db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("errand: list count: %w", err)
 	}
 
-	selectSQL := `
-SELECT errand_id, sid, module, input, status,
-       exit_code, COALESCE(stdout, ''), COALESCE(stderr, ''),
-       stdout_truncated, stderr_truncated,
-       duration_ms, COALESCE(error_message, ''),
-       output, started_by_aid, started_by_kid,
-       started_at, finished_at, ttl_at
-FROM errands` + whereSQL + `
-ORDER BY started_at DESC
+	selectSQL := `SELECT` + selectColumns + fromClause + whereSQL + `
+ORDER BY e.started_at DESC
 LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 	args = append(args, limit, offset)
 
@@ -264,6 +309,9 @@ LIMIT $` + itoa(len(args)+1) + ` OFFSET $` + itoa(len(args)+2)
 // buildListWhere builds WHERE predicate for ListFilter. Parameters are
 // written incrementally to args ([]any), placeholders $N are positional.
 // Returns string with leading " WHERE …" or "" if filter is empty.
+//
+// The scope predicate is ANDed LAST so no filter can widen it: a caller
+// narrowing by `sid` still only sees the hosts their purview allows.
 func buildListWhere(f ListFilter) (string, []any) {
 	var (
 		conds []string
@@ -271,15 +319,15 @@ func buildListWhere(f ListFilter) (string, []any) {
 	)
 	if f.SID != "" {
 		args = append(args, f.SID)
-		conds = append(conds, "sid = $"+itoa(len(args)))
+		conds = append(conds, "e.sid = $"+itoa(len(args)))
 	}
 	if f.Status != "" {
 		args = append(args, string(f.Status))
-		conds = append(conds, "status = $"+itoa(len(args)))
+		conds = append(conds, "e.status = $"+itoa(len(args)))
 	}
 	if !f.StartedAfter.IsZero() {
 		args = append(args, f.StartedAfter.UTC())
-		conds = append(conds, "started_at > $"+itoa(len(args)))
+		conds = append(conds, "e.started_at > $"+itoa(len(args)))
 	}
 	if len(f.Modules) > 0 {
 		// IN ($n,$n+1,…) — exact-match OR; regex/glob not introduced (spec).
@@ -291,7 +339,12 @@ func buildListWhere(f ListFilter) (string, []any) {
 			}
 			ph += "$" + itoa(len(args))
 		}
-		conds = append(conds, "module IN ("+ph+")")
+		conds = append(conds, "e.module IN ("+ph+")")
+	}
+	if f.Scope != nil {
+		sql, scopeArgs, _ := f.Scope(len(args) + 1)
+		conds = append(conds, sql)
+		args = append(args, scopeArgs...)
 	}
 	if len(conds) == 0 {
 		return "", args
@@ -382,6 +435,8 @@ func scanRow(r scanner) (*Row, error) {
 		&row.StartedAt,
 		&finishedAt,
 		&row.TTLAt,
+		&row.Covens,
+		&row.TraitsRaw,
 	); err != nil {
 		return nil, err
 	}

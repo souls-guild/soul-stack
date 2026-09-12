@@ -34,7 +34,11 @@ func registerHumaErrandList(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 		return
 	}
 	huma.Register(humaAPI, errandListOperation(), func(ctx context.Context, in *errandListInput) (*errandListOutput, error) {
-		page, err := errandH.ListTyped(ctx, handlers.ErrandListInput{
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, errandMissingClaims()
+		}
+		page, err := errandH.ListTyped(ctx, claims, handlers.ErrandListInput{
 			SID:          in.SID,
 			Status:       in.Status,
 			StartedAfter: in.StartedAfter,
@@ -58,7 +62,11 @@ func registerHumaErrandGet(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 		return
 	}
 	huma.Register(humaAPI, errandGetOperation(), func(ctx context.Context, in *errandGetInput) (*errandGetOutput, error) {
-		reply, err := errandH.GetTyped(ctx, in.ErrandID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, errandMissingClaims()
+		}
+		reply, err := errandH.GetTyped(ctx, claims, in.ErrandID)
 		if err != nil {
 			return nil, errandProblem(err)
 		}

@@ -786,7 +786,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	// oracleH/augurH.
 	var pushH *handlers.PushHandler
 	if deps.PushRun != nil {
-		pushH = handlers.NewPushHandler(deps.PushRun, logger)
+		pushH = handlers.NewPushHandler(deps.PushRun, deps.RBAC, logger)
 	}
 
 	// errandH is optional: when nil ErrandDispatcher / ErrandStore the errand.* routes
@@ -799,7 +799,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		// deps.SoulDB is the souls read surface the console gate resolves the
 		// target's covens through (NIM-650) — the same pool the route's
 		// `errand.run` middleware reads, so both layers see one answer.
-		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, deps.RBAC, deps.ShellGate, deps.SoulDB, logger)
+		errandH = handlers.NewErrandHandler(deps.ErrandDispatcher, deps.ErrandStore, deps.RBAC, deps.ShellGate, deps.SoulDB, deps.RBAC, logger)
 	}
 
 	// auditH is optional: when nil AuditReader the audit route isn't wired (the
@@ -905,7 +905,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		// CRUD — after the tx-creation of a Cadence with notify rules it drops the
 		// dispatcher's TTL snapshot (ADR-052 §m, parity voyageH). nil (dev without herald)
 		// → no-op, degrading to TTL convergence.
-		cadenceH = handlers.NewCadenceHandler(deps.CadenceDB, deps.VoyageScenarioResolver, deps.IncarnationDB, deps.RBAC, deps.ShellGate, deps.AuditWriter, deps.HeraldSvc, deps.CadencePollFloorSeconds, logger)
+		cadenceH = handlers.NewCadenceHandler(deps.CadenceDB, deps.VoyageScenarioResolver, deps.IncarnationDB, deps.RBAC, deps.RBAC, deps.ShellGate, deps.AuditWriter, deps.HeraldSvc, deps.CadencePollFloorSeconds, logger)
 	}
 
 	// Tempo voyage-create/preview limits providers: when nil from the caller

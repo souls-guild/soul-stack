@@ -77,7 +77,9 @@ func humaPushRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, audi
 	return r
 }
 
-func nilSvcPushHandler() *handlers.PushHandler { return handlers.NewPushHandler(nil, nil) }
+func nilSvcPushHandler() *handlers.PushHandler {
+	return handlers.NewPushHandler(nil, nil /*scoper*/, nil)
+}
 
 // === APPLY (WRITE+AUDIT push.applied) ===
 

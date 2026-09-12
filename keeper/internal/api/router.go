@@ -1792,10 +1792,17 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// /v1/errands — the Errand registry (ADR-033). The mutating POST lives under
 		// /v1/souls/{sid}/exec (above, on huma — registerHumaSoulExec); here — Get/List + DELETE
 		// (slice E5 cancel). Permission `errand.list` for read, `errand.cancel` for
-		// DELETE; the selector for cancel — NoSelector (per-row host=<sid>-scope in RBAC
-		// will be added once a multi-tenant scenario appears; the SID is known only
-		// after looking up the errand row, which is incompatible with a pre-handler-middleware
-		// check). Audit is NOT wired on the read endpoints (the push.read /
+		// DELETE.
+		//
+		// [RequireAction] existence-gate, NOT RequirePermission+NoSelector (NIM-841):
+		// none of these three routes carries the target host in its path, so a
+		// scope-aware gate would be asked with an absent host dimension and would fail
+		// closed on exactly the `coven=`/`host=`-scoped roles the scoping exists to
+		// serve (ADR-047 §g G1). The gate therefore asks only whether the right is
+		// held, and the boundary is resolved where a SID exists — in the handler, which
+		// pushes it into the list query and folds an out-of-scope single read into the
+		// same 404 an unknown id gets. The same split the console-recording routes use.
+		// Audit is NOT wired on the read endpoints (the push.read /
 		// role.list pattern — read without audit); DELETE writes EventTypeErrandCancelled.
 		//
 		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2c of the errand domain over the augur/
@@ -1813,19 +1820,19 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// MCP errand-tools call errand.Dispatcher/Store directly.
 		if errandH != nil {
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "errand", "list", apimiddleware.NoSelector),
+				apimiddleware.RequireAction(enforcer, "errand", "list"),
 			).Group(func(r chi.Router) {
 				registerHumaErrandList(newHumaCadenceAPI(r), errandH)
 			})
 
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "errand", "list", apimiddleware.NoSelector),
+				apimiddleware.RequireAction(enforcer, "errand", "list"),
 			).Group(func(r chi.Router) {
 				registerHumaErrandGet(newHumaCadenceAPI(r), errandH)
 			})
 
 			r.With(
-				apimiddleware.RequirePermission(enforcer, "errand", "cancel", apimiddleware.NoSelector),
+				apimiddleware.RequireAction(enforcer, "errand", "cancel"),
 			).Group(func(r chi.Router) {
 				registerHumaErrandCancel(newHumaErrandAPI(r, auditWriter, audit.EventTypeErrandCancelled, logger), errandH)
 			})

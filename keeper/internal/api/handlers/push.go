@@ -11,6 +11,8 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/pushorch"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
@@ -26,12 +28,27 @@ type pushApplier interface {
 	Apply(ctx context.Context, req pushorch.ApplyRequest) (applyID string, err error)
 }
 
+// pushReader is the narrow orchestrator surface the two READ routes need, and it
+// exists for the reason [pushApplier] does: `*pushorch.PushRun` holds a real
+// `*Store` on PG, so nothing about the read paths could be asserted without
+// testcontainers.
+//
+// What that hid is specific (NIM-842): the scope boundary is rendered by
+// [PushHandler.pushHostScope] but it only protects anything if the handler
+// actually hands it to the store, and a test that can see the filter is the only
+// thing that says so. Prod still passes `*pushorch.PushRun`, which satisfies this
+// automatically.
+type pushReader interface {
+	GetRowScoped(ctx context.Context, applyID string, hostScope func(startIdx int) (string, []any, int)) (*pushorch.PushRunRow, error)
+	ListRows(ctx context.Context, filter pushorch.ListFilter, offset, limit int) ([]*pushorch.PushRunRow, int, error)
+}
+
 // PushHandler exposes the Destiny push-run endpoints over SSH (`POST /v1/push/apply` +
 // `GET /v1/push/{apply_id}`, ADR-004 push-flow + Variant C orchestrator
 // docs/keeper/push.md). svc is `*pushorch.PushRun` (optional api.Deps field): when
 // nil the router does not mount the routes (SigilSvc/AugurSvc pattern). All business
-// logic lives in pushorch. applier is the narrow Apply surface (== svc in prod; fake in
-// the S6 test); read paths (GetTyped/ListRunsTyped) hit svc directly.
+// logic lives in pushorch. applier and reader are the narrow write/read surfaces
+// (both == svc in prod; fakes in the unit tests).
 //
 // T5d-2c-full (handler-native): the push domain is decoupled from the legacy generator.
 // The *Typed functions accept/return NATIVE types with flat wire fields (PushApplyInput /
@@ -39,22 +56,29 @@ type pushApplier interface {
 // (OpenAPI schema) from these fields (register func huma_push.go). HTTP is served by huma
 // full-typed, MCP calls pushorch.PushRun directly (bypassing the handler).
 type PushHandler struct {
-	svc     *pushorch.PushRun
+	reader  pushReader
 	applier pushApplier
-	logger  *slog.Logger
+	// scoper resolves the caller's `soul.list` purview, the boundary narrowing
+	// the two read routes (NIM-842). `push.read` and `incarnation.history` gate
+	// them, and neither says anything about hosts — while `inventory_sids` is a
+	// literal list of them. nil is fail-closed: a zero Purview renders FALSE and
+	// hides every run.
+	scoper PurviewResolver
+	logger *slog.Logger
 }
 
 // NewPushHandler constructs the handler. svc nil → the caller (api.NewServer)
 // decides not to mount the push routes (see router.go); nil is allowed here only
 // for constructor unit tests. applier == svc (the orchestrator implements Apply);
 // with nil svc, applier stays nil → ApplyTyped returns 500 "not configured".
-func NewPushHandler(svc *pushorch.PushRun, logger *slog.Logger) *PushHandler {
+func NewPushHandler(svc *pushorch.PushRun, scoper PurviewResolver, logger *slog.Logger) *PushHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	h := &PushHandler{svc: svc, logger: logger}
+	h := &PushHandler{scoper: scoper, logger: logger}
 	if svc != nil {
 		h.applier = svc
+		h.reader = svc
 	}
 	return h
 }
@@ -67,6 +91,16 @@ func NewPushHandlerWithApplier(applier pushApplier, logger *slog.Logger) *PushHa
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 	return &PushHandler{applier: applier, logger: logger}
+}
+
+// NewPushHandlerWithReader is a test-only constructor: injects a fake orchestrator
+// into the READ paths so the scope wiring can be asserted without PG (NIM-842).
+// applier stays nil → ApplyTyped returns 500. Do NOT use in prod.
+func NewPushHandlerWithReader(reader pushReader, scoper PurviewResolver, logger *slog.Logger) *PushHandler {
+	if logger == nil {
+		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
+	}
+	return &PushHandler{reader: reader, scoper: scoper, logger: logger}
 }
 
 // PushSpecStub is a non-empty *PushHandler stub for generating the huma OpenAPI
@@ -171,15 +205,20 @@ func (h *PushHandler) ApplyTyped(ctx context.Context, claims *jwt.Claims, req Pu
 
 // GetTyped is the domain function for GET /v1/push/{apply_id}. Errors are *problemError (422 empty
 // id / 404 no record / 500 svc nil / PG failure); success is [PushApplyResultView].
-func (h *PushHandler) GetTyped(ctx context.Context, applyID string) (PushApplyResultView, error) {
+//
+// The reply's `InventorySids` is the run's whole SSH inventory, so the read is
+// narrowed to the caller's `soul.list` purview (NIM-842). A run reaching outside
+// it answers with the same 404 an unknown apply_id gets — the narrowing is in the
+// WHERE, so the two are one answer rather than two branches that could drift.
+func (h *PushHandler) GetTyped(ctx context.Context, claims *jwt.Claims, applyID string) (PushApplyResultView, error) {
 	var zero PushApplyResultView
-	if h.svc == nil {
+	if h.reader == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "push orchestrator is not configured")}
 	}
 	if applyID == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path parameter 'apply_id' is required")}
 	}
-	row, err := h.svc.GetRow(ctx, applyID)
+	row, err := h.reader.GetRowScoped(ctx, applyID, h.pushHostScope(claims))
 	if err != nil {
 		if errors.Is(err, pushorch.ErrNotFound) {
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", "push run "+applyID+" not found")}
@@ -195,7 +234,10 @@ func (h *PushHandler) GetTyped(ctx context.Context, applyID string) (PushApplyRe
 // enforced by CheckPageBounds → 400 (NOT huma min/max — parity legacy ParsePage). Errors are
 // *problemError (400 out-of-range / 422 invalid status / 500 svc nil / PG failure); success is
 // [PushRunListPage].
-func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshProvider string, offset, limit int) (PushRunListPage, error) {
+// The page is narrowed to the caller's `soul.list` purview, pushed into the query
+// so `total` is counted under the same WHERE (NIM-842): a run whose inventory
+// reaches a host the caller may not know about is neither listed nor counted.
+func (h *PushHandler) ListRunsTyped(ctx context.Context, claims *jwt.Claims, statuses []string, sshProvider string, offset, limit int) (PushRunListPage, error) {
 	var zero PushRunListPage
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
@@ -218,11 +260,12 @@ func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshP
 	}
 
 	// nil check AFTER validation (deterministic 400/422 regardless of svc).
-	if h.svc == nil {
+	if h.reader == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "push orchestrator is not configured")}
 	}
 
-	rows, total, err := h.svc.ListRows(ctx, filter, offset, limit)
+	filter.HostScope = h.pushHostScope(claims)
+	rows, total, err := h.reader.ListRows(ctx, filter, offset, limit)
 	if err != nil {
 		h.logger.Error("push.list: orchestrator read failed", slog.Any("filter", filter), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "list push runs failed")}
@@ -232,6 +275,40 @@ func (h *PushHandler) ListRunsTyped(ctx context.Context, statuses []string, sshP
 		items = append(items, rowToPushRunListEntryView(row))
 	}
 	return PushRunListPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// pushHostScopeColumns maps ONE inventory host onto the RBAC scope dimensions,
+// from the store's own aliases rather than a second copy of the strings.
+//
+// Service and incarnation stay empty — an inventory entry is a host and carries
+// neither, so a condition on them renders FALSE (fail-closed).
+var pushHostScopeColumns = rbac.ScopeColumns{
+	Coven:  pushorch.ScopeCovenColumn,
+	Host:   pushorch.ScopeHostColumn,
+	Traits: pushorch.ScopeTraitsColumn,
+}
+
+// pushHostScope builds the per-host predicate the read routes narrow by — the
+// caller's `soul.list` purview, the same boundary `GET /v1/souls` draws.
+//
+// `soul.list`, not `push.read`: the right that decides which runs you may READ
+// and the right that decides which hosts you may KNOW ABOUT are different
+// questions, and this route answers the second one by handing back the whole
+// inventory. Narrowing by the route's own gate would be a no-op, since holding it
+// is the precondition for being here at all.
+//
+// No claims / no scoper → a zero Purview, which renders FALSE: every run is then
+// hidden rather than every one shown.
+func (h *PushHandler) pushHostScope(claims *jwt.Claims) func(startIdx int) (string, []any, int) {
+	var scope soulpurview.Scope
+	if claims != nil && h.scoper != nil {
+		scope = soulpurview.Resolve(h.scoper.ResolvePurview(claims.Subject, "soul", "list"))
+	}
+	return func(startIdx int) (string, []any, int) {
+		return pushorch.HostScopeSQL(func(i int) (string, []any, int) {
+			return scope.WhereSQL(pushHostScopeColumns, i)
+		}, startIdx)
+	}
 }
 
 // PushApplyResultView is the FLAT wire shape of GET /v1/push/{apply_id} (handler-native,

@@ -55,9 +55,9 @@ func (f *fakeErrandPool) Query(_ context.Context, sql string, args ...any) (pgx.
 func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 	pool := &fakeErrandPool{}
 	store := errand.NewStore(pool)
-	h := NewErrandHandler(nil, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := NewErrandHandler(nil, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
 
-	_, err := h.ListTyped(context.Background(), ErrandListInput{
+	_, err := h.ListTyped(context.Background(), claimsFor("archon-alice"), ErrandListInput{
 		Modules: []string{"core.cmd.shell", "core.exec.run"},
 		Offset:  0,
 		Limit:   50,
@@ -89,9 +89,9 @@ func TestErrandHandler_ListTyped_ModuleFilter_ForwardedToStore(t *testing.T) {
 func TestErrandHandler_ListTyped_NoModule_NoINPredicate(t *testing.T) {
 	pool := &fakeErrandPool{}
 	store := errand.NewStore(pool)
-	h := NewErrandHandler(nil, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := NewErrandHandler(nil, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
 
-	if _, err := h.ListTyped(context.Background(), ErrandListInput{Offset: 0, Limit: 50}); err != nil {
+	if _, err := h.ListTyped(context.Background(), claimsFor("archon-alice"), ErrandListInput{Offset: 0, Limit: 50}); err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
 	if strings.Contains(pool.countSQL, "module IN") {
@@ -120,9 +120,21 @@ func cancelProblemType(t *testing.T, err error) string {
 	return d.Type
 }
 
+// cancelHandler wires the two stores the cancel path reads: the handler's own,
+// which resolves the target host for the scope check (NIM-841), and the
+// dispatcher's, which decides the running→terminal race. ids are served by both.
+func cancelHandler(t *testing.T, statuses map[string]errand.Status) *ErrandHandler {
+	t.Helper()
+	rows := map[string][]any{}
+	for id := range statuses {
+		rows[id] = errandScopeRow(id, "host.test", []string{"web"})
+	}
+	return NewErrandHandler(buildCancelDispatcher(t, statuses), errand.NewStore(&errandRowPool{rows: rows}),
+		nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
+}
+
 func TestErrandHandler_CancelTyped_NotFound(t *testing.T) {
-	d := buildCancelDispatcher(t, nil) // empty store
-	h := NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := cancelHandler(t, nil) // empty store
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "MISSING-ID")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "not-found") {
 		t.Fatalf("problem.Type = %q, expected not-found", got)
@@ -130,8 +142,7 @@ func TestErrandHandler_CancelTyped_NotFound(t *testing.T) {
 }
 
 func TestErrandHandler_CancelTyped_TerminalState(t *testing.T) {
-	d := buildCancelDispatcher(t, map[string]errand.Status{"ERR-TERM": errand.StatusSuccess})
-	h := NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := cancelHandler(t, map[string]errand.Status{"ERR-TERM": errand.StatusSuccess})
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "ERR-TERM")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "errand-not-cancellable") {
 		t.Fatalf("problem.Type = %q, expected errand-not-cancellable (409 terminal)", got)
@@ -139,7 +150,7 @@ func TestErrandHandler_CancelTyped_TerminalState(t *testing.T) {
 }
 
 func TestErrandHandler_CancelTyped_NoDispatcher(t *testing.T) {
-	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
 	_, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "ANY")
 	if got := cancelProblemType(t, err); !strings.Contains(got, "internal") {
 		t.Fatalf("problem.Type = %q, expected internal (dispatcher nil)", got)
@@ -147,8 +158,7 @@ func TestErrandHandler_CancelTyped_NoDispatcher(t *testing.T) {
 }
 
 func TestErrandHandler_CancelTyped_Happy(t *testing.T) {
-	d := buildCancelDispatcher(t, map[string]errand.Status{"ERR-OK": errand.StatusRunning})
-	h := NewErrandHandler(d, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := cancelHandler(t, map[string]errand.Status{"ERR-OK": errand.StatusRunning})
 	reply, err := h.CancelTyped(context.Background(), claimsFor("archon-alice"), "ERR-OK")
 	if err != nil {
 		t.Fatalf("CancelTyped: %v", err)
@@ -383,7 +393,7 @@ func TestNewErrandAcceptedView_FieldProjection(t *testing.T) {
 // there". Falling through to the default 500 would report the cluster's own bug
 // for what is a target-state problem.
 func TestErrandHandler_DispatchError_DryRunCapability(t *testing.T) {
-	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
 
 	for _, tc := range []struct {
 		name       string
@@ -440,7 +450,7 @@ func TestErrandHandler_DispatchError_DryRunCapability(t *testing.T) {
 // default branch would report keeper's own bug ("errand dispatch failed") for an operator
 // mistake and log it as an internal error on every occurrence.
 func TestErrandHandler_DispatchError_DryRunVerbShell(t *testing.T) {
-	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	h := NewErrandHandler(nil, nil, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, fakeScoper{unrestricted: true}, nil)
 
 	// Wrapped, the way a dispatcher on the way out would carry it — the mapper must
 	// still recognise it, or the 400 silently degrades to 500 the first time some layer

@@ -112,7 +112,11 @@ func registerHumaPushGet(humaAPI huma.API, pushH *handlers.PushHandler) {
 		return
 	}
 	huma.Register(humaAPI, pushGetOperation(), func(ctx context.Context, in *pushGetInput) (*pushGetOutput, error) {
-		reply, err := pushH.GetTyped(ctx, in.ApplyID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, pushMissingClaims()
+		}
+		reply, err := pushH.GetTyped(ctx, claims, in.ApplyID)
 		if err != nil {
 			return nil, pushProblem(err)
 		}
@@ -129,7 +133,11 @@ func registerHumaPushRunsList(humaAPI huma.API, pushH *handlers.PushHandler) {
 		return
 	}
 	huma.Register(humaAPI, pushRunsListOperation(), func(ctx context.Context, in *pushRunsListInput) (*pushRunsListOutput, error) {
-		reply, err := pushH.ListRunsTyped(ctx, in.Statuses, in.SSHProvider, int(in.Offset), int(in.Limit))
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, pushMissingClaims()
+		}
+		reply, err := pushH.ListRunsTyped(ctx, claims, in.Statuses, in.SSHProvider, int(in.Offset), int(in.Limit))
 		if err != nil {
 			return nil, pushProblem(err)
 		}

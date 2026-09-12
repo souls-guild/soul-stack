@@ -75,7 +75,11 @@ func registerHumaVoyageList(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 		if err := sharedapi.CheckPageBounds(int(in.Offset), int(in.Limit)); err != nil {
 			return nil, humaProblemError{Details: problem.New(problem.TypeMalformedRequest, "", err.Error())}
 		}
-		reply, err := voyageH.ListTyped(ctx, handlers.VoyageListInput{
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, voyageMissingClaims()
+		}
+		reply, err := voyageH.ListTyped(ctx, claims, handlers.VoyageListInput{
 			Kind:     in.Kind,
 			Statuses: in.Statuses,
 			Page:     sharedapi.Page{Offset: int(in.Offset), Limit: int(in.Limit)},
@@ -93,7 +97,11 @@ func registerHumaVoyageGet(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 		return
 	}
 	huma.Register(humaAPI, voyageGetOperation(), func(ctx context.Context, in *voyageGetInput) (*voyageGetOutput, error) {
-		dto, err := voyageH.GetTyped(ctx, in.ID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, voyageMissingClaims()
+		}
+		dto, err := voyageH.GetTyped(ctx, claims, in.ID)
 		if err != nil {
 			return nil, voyageProblem(err)
 		}
@@ -108,7 +116,11 @@ func registerHumaVoyageTargets(humaAPI huma.API, voyageH *handlers.VoyageHandler
 		return
 	}
 	huma.Register(humaAPI, voyageTargetsOperation(), func(ctx context.Context, in *voyageTargetsInput) (*voyageTargetsOutput, error) {
-		reply, err := voyageH.TargetsTyped(ctx, in.ID)
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, voyageMissingClaims()
+		}
+		reply, err := voyageH.TargetsTyped(ctx, claims, in.ID)
 		if err != nil {
 			return nil, voyageProblem(err)
 		}

@@ -1384,8 +1384,13 @@ func (h *VoyageHandler) List(w http.ResponseWriter, r *http.Request) {
 		problem.Write(w, problem.New(problem.TypeMalformedRequest, r.URL.Path, err.Error()))
 		return
 	}
+	claims, ok := middleware.ClaimsFromContext(r.Context())
+	if !ok {
+		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "missing claims"))
+		return
+	}
 	q := r.URL.Query()
-	reply, perr := h.ListTyped(r.Context(), VoyageListInput{
+	reply, perr := h.ListTyped(r.Context(), claims, VoyageListInput{
 		Kind:     q.Get("kind"),
 		Statuses: q["status"],
 		Page:     page,
@@ -1418,7 +1423,15 @@ type VoyageListReply struct {
 
 // ListTyped — the extracted domain function GET /v1/voyages (READ, no audit; FULL-TYPED
 // ADR-054 §Pattern). enum validation of kind/status → 422; DB failure → 500.
-func (h *VoyageHandler) ListTyped(ctx context.Context, in VoyageListInput) (VoyageListReply, error) {
+//
+// The caller's `soul.list` purview is pushed into the query (NIM-842). The route's
+// own gate is `incarnation.history`, which says nothing about hosts — and what a
+// kind=command Voyage discloses IS host identity: `target_origin` names the
+// covens and SIDs it was aimed at, and `/targets` names the resolved ones. Before
+// this, a bare `incarnation.history` and no soul right at all enumerated the SIDs
+// of every host any command run had ever touched, covens included whose existence
+// `GET /v1/souls` would have hidden entirely.
+func (h *VoyageHandler) ListTyped(ctx context.Context, claims *jwt.Claims, in VoyageListInput) (VoyageListReply, error) {
 	var zero VoyageListReply
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "voyage orchestrator is not configured")}
@@ -1443,6 +1456,7 @@ func (h *VoyageHandler) ListTyped(ctx context.Context, in VoyageListInput) (Voya
 			filter.Statuses = append(filter.Statuses, st)
 		}
 	}
+	filter.HostScope = h.voyageHostScope(claims)
 	items, total, err := voyage.List(ctx, h.store, filter, in.Page.Offset, in.Page.Limit)
 	if err != nil {
 		h.logger.Error("voyage.list: select failed", slog.Any("error", err))
@@ -1457,7 +1471,12 @@ func (h *VoyageHandler) ListTyped(ctx context.Context, in VoyageListInput) (Voya
 
 // Get — GET /v1/voyages/{id} (detail + summary).
 func (h *VoyageHandler) Get(w http.ResponseWriter, r *http.Request) {
-	dto, err := h.GetTyped(r.Context(), chi.URLParam(r, "id"))
+	claims, ok := middleware.ClaimsFromContext(r.Context())
+	if !ok {
+		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "missing claims"))
+		return
+	}
+	dto, err := h.GetTyped(r.Context(), claims, chi.URLParam(r, "id"))
 	if err != nil {
 		writeProblemError(w, r, err)
 		return
@@ -1477,7 +1496,11 @@ type (
 
 // GetTyped — the extracted domain function GET /v1/voyages/{id} (READ, no audit;
 // FULL-TYPED ADR-054 §Pattern). 404 not-found, 422 bad id, 500 DB failure.
-func (h *VoyageHandler) GetTyped(ctx context.Context, id string) (VoyageDTO, error) {
+//
+// A Voyage naming a host outside the caller's `soul.list` purview answers with
+// the same 404 an unknown id gets (NIM-842) — the narrowing is in the WHERE, so
+// the two are one answer rather than two branches that could drift.
+func (h *VoyageHandler) GetTyped(ctx context.Context, claims *jwt.Claims, id string) (VoyageDTO, error) {
 	var zero VoyageDTO
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "voyage orchestrator is not configured")}
@@ -1486,7 +1509,7 @@ func (h *VoyageHandler) GetTyped(ctx context.Context, id string) (VoyageDTO, err
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'id' must be a Crockford-base32 ULID (26 chars)")}
 	}
-	v, err := voyage.SelectByID(ctx, h.store, id)
+	v, err := voyage.SelectByIDScoped(ctx, h.store, id, h.voyageHostScope(claims))
 	if err != nil {
 		if errors.Is(err, voyage.ErrVoyageNotFound) {
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", "voyage "+id+" not found")}
@@ -1499,7 +1522,12 @@ func (h *VoyageHandler) GetTyped(ctx context.Context, id string) (VoyageDTO, err
 
 // Targets — GET /v1/voyages/{id}/targets (All-runs drill).
 func (h *VoyageHandler) Targets(w http.ResponseWriter, r *http.Request) {
-	reply, err := h.TargetsTyped(r.Context(), chi.URLParam(r, "id"))
+	claims, ok := middleware.ClaimsFromContext(r.Context())
+	if !ok {
+		problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "missing claims"))
+		return
+	}
+	reply, err := h.TargetsTyped(r.Context(), claims, chi.URLParam(r, "id"))
 	if err != nil {
 		writeProblemError(w, r, err)
 		return
@@ -1516,7 +1544,14 @@ type VoyageTargetsReply struct {
 
 // TargetsTyped — the extracted domain function GET /v1/voyages/{id}/targets (READ, no
 // audit; FULL-TYPED ADR-054 §Pattern). Existence-probe → 404; 422 bad id; 500 DB failure.
-func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTargetsReply, error) {
+//
+// This is the route that actually hands back SIDs — `voyageTargetEntryDTO.TargetID`
+// IS the host for a kind=command Voyage — so the probe below is the SCOPED read
+// (NIM-842). Narrowing the parent rather than the target rows is deliberate: a
+// partially-filtered target list would still publish, through its length and the
+// Voyage's own `scope_size`, how many hosts were touched that the caller may not
+// see.
+func (h *VoyageHandler) TargetsTyped(ctx context.Context, claims *jwt.Claims, id string) (VoyageTargetsReply, error) {
 	var zero VoyageTargetsReply
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "voyage orchestrator is not configured")}
@@ -1525,9 +1560,10 @@ func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTarg
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'id' must be a Crockford-base32 ULID (26 chars)")}
 	}
-	// Existence-probe: 404 if the Voyage does not exist (otherwise an empty list
-	// is indistinguishable from a "nonexistent id").
-	if _, err := voyage.SelectByID(ctx, h.store, id); err != nil {
+	// Existence-probe: 404 if the Voyage does not exist OR lies outside the
+	// caller's host boundary (otherwise an empty list is indistinguishable from a
+	// "nonexistent id" — and a populated one would be the leak).
+	if _, err := voyage.SelectByIDScoped(ctx, h.store, id, h.voyageHostScope(claims)); err != nil {
 		if errors.Is(err, voyage.ErrVoyageNotFound) {
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", "voyage "+id+" not found")}
 		}
@@ -1553,6 +1589,53 @@ func (h *VoyageHandler) TargetsTyped(ctx context.Context, id string) (VoyageTarg
 		})
 	}
 	return VoyageTargetsReply{VoyageID: id, Targets: out}, nil
+}
+
+// voyageTargetScopeColumns maps ONE resolved Voyage target onto the RBAC scope
+// dimensions. The aliases come from the voyage package rather than being
+// repeated here: a predicate naming a column the subquery does not have is a
+// runtime SQL error on a security path.
+//
+// Service and incarnation stay empty — a target row is a host and carries
+// neither, so a condition on them renders FALSE (fail-closed).
+var voyageTargetScopeColumns = rbac.ScopeColumns{
+	Coven:  voyage.ScopeCovenColumn,
+	Host:   voyage.ScopeHostColumn,
+	Traits: voyage.ScopeTraitsColumn,
+}
+
+// voyageHostScopeFor builds the per-target predicate the Voyage read family
+// narrows by (NIM-842) — the caller's `soul.list` purview, the same boundary
+// `GET /v1/souls` draws.
+//
+// `soul.list`, not `incarnation.history`: the right that decides which runs you
+// may READ and the right that decides which hosts you may KNOW ABOUT are
+// different questions, and these routes answer the second one by handing back
+// SIDs. Reusing the route's own gate would make the narrowing a no-op, since
+// holding it is the precondition for being here at all.
+//
+// A package-level function rather than a method because TWO handlers serve
+// Voyage rows — [VoyageHandler] and [CadenceHandler], whose `/runs` route lists
+// child Voyages through the same DTO under the same `incarnation.history` gate.
+// Two copies of this would be two boundaries, and the looser one would win.
+//
+// No claims / no scoper → a zero Purview, which renders FALSE: every command
+// Voyage is then hidden rather than every one shown.
+func voyageHostScopeFor(scoper PurviewResolver, claims *jwt.Claims) func(startIdx int) (string, []any, int) {
+	var scope soulpurview.Scope
+	if claims != nil && scoper != nil {
+		scope = soulpurview.Resolve(scoper.ResolvePurview(claims.Subject, "soul", "list"))
+	}
+	return func(startIdx int) (string, []any, int) {
+		return voyage.HostScopeSQL(func(i int) (string, []any, int) {
+			return scope.WhereSQL(voyageTargetScopeColumns, i)
+		}, startIdx)
+	}
+}
+
+// voyageHostScope — [voyageHostScopeFor] over this handler's resolver.
+func (h *VoyageHandler) voyageHostScope(claims *jwt.Claims) func(startIdx int) (string, []any, int) {
+	return voyageHostScopeFor(h.scoper, claims)
 }
 
 // --- DELETE /v1/voyages/{id} ---
@@ -1602,10 +1685,26 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'id' must be a Crockford-base32 ULID (26 chars)")}
 	}
+	// Anti-enumeration, first half (NIM-846): whether this caller may cancel
+	// ANYTHING is settled BEFORE the row is read. This route carries no chi RBAC
+	// gate — deliberately, because the required permission depends on the Voyage's
+	// `kind`, which only the loaded row shows (the two POSTs on /v1/voyages are
+	// ungated for the sibling reason: they pick by the body's kind) — and reading
+	// first meant an Archon holding neither run right learned, from 403-vs-404,
+	// whether any ULID they could guess or observe was a real run.
+	//
+	// The disjunction is exactly the two rights the by-kind check below can ask
+	// for, so this never refuses a caller the second gate would have admitted: it
+	// moves the refusal earlier and says plainly what is missing.
+	if h.enforcer != nil && !h.holdsEitherRunRight(claims.Subject) {
+		return zero, &problemError{problem.New(problem.TypeForbidden, "",
+			"cancelling a Voyage requires permission incarnation.run (kind=scenario) or errand.run (kind=command)")}
+	}
+
 	v, err := voyage.SelectByID(ctx, h.store, id)
 	if err != nil {
 		if errors.Is(err, voyage.ErrVoyageNotFound) {
-			return zero, &problemError{problem.New(problem.TypeNotFound, "", "voyage "+id+" not found")}
+			return zero, voyageNotFound(id)
 		}
 		h.logger.Error("voyage.cancel: select failed", slog.String("voyage_id", id), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "cancel voyage failed")}
@@ -1619,7 +1718,13 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 	}
 	if h.enforcer != nil {
 		if err := h.checkPermissionErr(claims.Subject, resource, action, nil); err != nil {
-			return zero, err
+			// Anti-enumeration, second half: a caller who holds ONE of the two
+			// rights would otherwise still tell a Voyage of the other kind (403)
+			// from an absent id (404). Both answer as absent — the same choice
+			// [ConsoleRecordingHandler.load] makes, and for the same reason. An
+			// entitled caller keeps a true 404 on a mistyped id, which is why the
+			// fold goes this way rather than turning every not-found into a 403.
+			return zero, voyageNotFound(id)
 		}
 	}
 
@@ -1654,6 +1759,25 @@ func (h *VoyageHandler) CancelTyped(ctx context.Context, claims *jwt.Claims, id 
 		VoyageID: id,
 		Status:   string(voyage.StatusCancelled),
 	}, nil
+}
+
+// holdsEitherRunRight reports whether the caller holds either of the two rights
+// a Voyage cancel can require (NIM-846) — the existence question a chi gate would
+// have asked, asked here because the route cannot have one.
+//
+// Bare [middleware.PermissionChecker], the same surface and the same nil context
+// the by-kind check below uses: the two must agree, and a second formula here
+// could admit someone the real gate then refuses, putting the oracle back.
+func (h *VoyageHandler) holdsEitherRunRight(aid string) bool {
+	return h.enforcer.Check(aid, "incarnation", "run", nil) == nil ||
+		h.enforcer.Check(aid, "errand", "run", nil) == nil
+}
+
+// voyageNotFound — the single refusal for "absent", "out of the caller's host
+// boundary" (NIM-842) and "not entitled to this kind" (NIM-846). One spelling,
+// so the three are one answer rather than three that could be told apart.
+func voyageNotFound(id string) error {
+	return &problemError{problem.New(problem.TypeNotFound, "", "voyage "+id+" not found")}
 }
 
 // --- audit emitters ---

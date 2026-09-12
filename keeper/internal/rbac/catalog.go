@@ -314,10 +314,13 @@ var AllowedPermissions = map[string]struct{}{
 
 	// errand.* — pull ad-hoc exec of a single module (ADR-033, rbac.md
 	// §Errand). Selectors — `host=<sid>` / `coven=<label>` (same as
-	// soul.list / soul.issue-token); bare — unrestricted. errand.cancel is
-	// slice E5 (the DELETE endpoint isn't implemented yet); the permission
-	// is registered forward-only so role configs don't break once the
-	// endpoint lands.
+	// soul.list / soul.issue-token); bare — unrestricted.
+	//
+	// All three are genuinely scopable, including the two read paths
+	// (NIM-841): their routes carry no SID, so the gate asks only whether
+	// the right is held and the boundary is resolved in the handler —
+	// pushed into the list query, folded into the not-found of a
+	// single-object read.
 	"errand.run":    {},
 	"errand.cancel": {},
 	"errand.list":   {},

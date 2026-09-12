@@ -35,16 +35,16 @@ func pushProblemType(t *testing.T, err error) string {
 }
 
 func TestPush_ListRunsTyped_BadStatus_422(t *testing.T) {
-	h := NewPushHandler(nil, nil)
-	_, err := h.ListRunsTyped(context.Background(), []string{"bogus"}, "", 0, 50)
+	h := NewPushHandler(nil, nil /*scoper*/, nil)
+	_, err := h.ListRunsTyped(context.Background(), claimsFor("archon-alice"), []string{"bogus"}, "", 0, 50)
 	if got := pushProblemType(t, err); got != problem.TypeValidationFailed {
 		t.Fatalf("problem.Type = %q, want %q", got, problem.TypeValidationFailed)
 	}
 }
 
 func TestPush_ListRunsTyped_BadLimit_400(t *testing.T) {
-	h := NewPushHandler(nil, nil)
-	_, err := h.ListRunsTyped(context.Background(), nil, "", 0, 99999)
+	h := NewPushHandler(nil, nil /*scoper*/, nil)
+	_, err := h.ListRunsTyped(context.Background(), claimsFor("archon-alice"), nil, "", 0, 99999)
 	if got := pushProblemType(t, err); got != problem.TypeMalformedRequest {
 		t.Fatalf("problem.Type = %q, want %q (out-of-range pagination → 400)", got, problem.TypeMalformedRequest)
 	}
@@ -54,8 +54,8 @@ func TestPush_ListRunsTyped_NilSvc_500(t *testing.T) {
 	// Valid request: query validation passed, but svc==nil → 500.
 	// Simulates a production build where PushRun is not configured
 	// (no SshDispatcher) — the handler must not panic on ListRows.
-	h := NewPushHandler(nil, nil)
-	_, err := h.ListRunsTyped(context.Background(), nil, "", 0, 50)
+	h := NewPushHandler(nil, nil /*scoper*/, nil)
+	_, err := h.ListRunsTyped(context.Background(), claimsFor("archon-alice"), nil, "", 0, 50)
 	if got := pushProblemType(t, err); !strings.Contains(got, "internal") {
 		t.Fatalf("problem.Type = %q, want internal (svc nil)", got)
 	}
@@ -64,8 +64,8 @@ func TestPush_ListRunsTyped_NilSvc_500(t *testing.T) {
 func TestPush_ListRunsTyped_ValidStatusAndProvider_PassValidation(t *testing.T) {
 	// status and ssh_provider valid → query validation passes; svc=nil →
 	// then 500. Goal: make sure valid values are NOT rejected (not 422).
-	h := NewPushHandler(nil, nil)
-	_, err := h.ListRunsTyped(context.Background(), []string{"success", "failed"}, "openssh", 0, 50)
+	h := NewPushHandler(nil, nil /*scoper*/, nil)
+	_, err := h.ListRunsTyped(context.Background(), claimsFor("archon-alice"), []string{"success", "failed"}, "openssh", 0, 50)
 	if got := pushProblemType(t, err); !strings.Contains(got, "internal") {
 		t.Fatalf("problem.Type = %q, want internal (validation passed, svc=nil)", got)
 	}

@@ -50,6 +50,13 @@ type fakeVoyageStore struct {
 	heraldExists    bool
 	insertTidings   int
 	insertTidingErr error
+
+	// Captured statements (NIM-842 scope guards): the last count/list/get SQL and
+	// its bindings. The guards assert on these rather than on the rows, because a
+	// fake replays the same rows whatever the WHERE says — and because `total`
+	// travelling on a query the predicate never reached IS the leak.
+	countSQL, listSQL, getSQL    string
+	countArgs, listArgs, getArgs []any
 }
 
 func (f *fakeVoyageStore) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
@@ -81,11 +88,13 @@ func (f *fakeVoyageStore) QueryRow(_ context.Context, sql string, args ...any) p
 		}
 		return voyageScalarRow{vals: []any{time.Now().UTC()}}
 	case strings.Contains(sql, "FROM voyages\nWHERE voyage_id = $1"):
+		f.getSQL, f.getArgs = sql, args
 		if f.selectByID != nil {
 			return f.selectByID(args[0].(string))
 		}
 		return voyageErrRow{err: pgx.ErrNoRows}
 	case strings.Contains(sql, "SELECT COUNT(*) FROM voyages"):
+		f.countSQL, f.countArgs = sql, args
 		return voyageScalarRow{vals: []any{f.listCount}}
 	case strings.Contains(sql, "FROM heralds\nWHERE id = $1"):
 		// notify existence-check: heralds(name,type,config,secret_ref,enabled,
@@ -111,7 +120,7 @@ func (f *fakeVoyageStore) QueryRow(_ context.Context, sql string, args ...any) p
 	return voyageErrRow{err: errors.New("fakeVoyageStore.QueryRow: unexpected SQL: " + sql)}
 }
 
-func (f *fakeVoyageStore) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, error) {
+func (f *fakeVoyageStore) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
 	case strings.Contains(sql, "FROM voyage_targets"):
 		if f.targetsRows != nil {
@@ -119,6 +128,7 @@ func (f *fakeVoyageStore) Query(_ context.Context, sql string, _ ...any) (pgx.Ro
 		}
 		return &emptyRows{}, nil
 	case strings.Contains(sql, "FROM voyages"):
+		f.listSQL, f.listArgs = sql, args
 		if f.listRows != nil {
 			return f.listRows()
 		}
@@ -220,9 +230,15 @@ func (r voyageScalarRow) Scan(dest ...any) error {
 // selectColumns order). nil values in vals → NULL.
 type voyageFullRow struct {
 	vals []any
+	// noRows makes the row answer as an absent id, so a test can compare the
+	// refusal for a Voyage that exists against the one for a Voyage that does not.
+	noRows bool
 }
 
 func (r voyageFullRow) Scan(dest ...any) error {
+	if r.noRows {
+		return pgx.ErrNoRows
+	}
 	for i, d := range dest {
 		v := r.vals[i]
 		switch p := d.(type) {
@@ -1406,14 +1422,64 @@ func TestVoyageCancel_TerminalConflict(t *testing.T) {
 	}
 }
 
+// TestVoyageCancel_RBACDenied — a caller holding ONE of the two run rights, sent
+// at a Voyage of the OTHER kind, is answered exactly as if the id did not exist
+// (NIM-846).
+//
+// This route has no chi RBAC gate — the permission depends on `kind`, which only
+// the loaded row shows — so it used to read first and refuse second: a real
+// Voyage answered 403 and an absent one 404, which told a read-only auditor
+// whether any ULID they could guess or observe was a live run. The refusal is now
+// the same not-found either way; an ENTITLED caller still gets a true 404 on a
+// mistyped id, which is why the fold goes this way round.
 func TestVoyageCancel_RBACDenied(t *testing.T) {
 	id := audit.NewULID()
+	newStore := func() *fakeVoyageStore {
+		return &fakeVoyageStore{
+			selectByID: func(gotID string) pgx.Row {
+				return voyageFullRow{vals: voyageRowVals(gotID, voyage.KindScenario, voyage.StatusPending)}
+			},
+		}
+	}
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
+
+	// The Voyage exists and is kind=scenario, which this caller may not cancel.
+	existing := httptest.NewRecorder()
+	newVoyageHandler(newStore(), &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, enf).
+		Cancel(existing, voyageReqID(http.MethodDelete, "/v1/voyages/"+id, id, ""))
+
+	// The same caller, an id that resolves to nothing.
+	missing := httptest.NewRecorder()
+	missingStore := &fakeVoyageStore{selectByID: func(string) pgx.Row { return voyageFullRow{noRows: true} }}
+	newVoyageHandler(missingStore, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, enf).
+		Cancel(missing, voyageReqID(http.MethodDelete, "/v1/voyages/"+id, id, ""))
+
+	if existing.Code != http.StatusNotFound {
+		t.Fatalf("existing-but-forbidden status = %d, want 404; body=%s", existing.Code, existing.Body.String())
+	}
+	if existing.Code != missing.Code || existing.Body.String() != missing.Body.String() {
+		t.Errorf("a Voyage that exists is distinguishable from one that does not:\n exists : %d %s\n absent : %d %s",
+			existing.Code, existing.Body.String(), missing.Code, missing.Body.String())
+	}
+}
+
+// TestVoyageCancel_NoRunRightRefusesBeforeReadingTheRow — a caller holding
+// NEITHER run right is refused 403 without the Voyage ever being read (NIM-846).
+//
+// The status differs from the guard above on purpose, and discloses nothing: this
+// caller gets the same 403 for every id, existing or not, so the pair still
+// carries no signal — it just says plainly which right is missing instead of
+// pretending the run is absent.
+func TestVoyageCancel_NoRunRightRefusesBeforeReadingTheRow(t *testing.T) {
+	id := audit.NewULID()
+	reads := 0
 	store := &fakeVoyageStore{
 		selectByID: func(gotID string) pgx.Row {
+			reads++
 			return voyageFullRow{vals: voyageRowVals(gotID, voyage.KindScenario, voyage.StatusPending)}
 		},
 	}
-	enf := &fakeVoyageEnforcer{allow: map[string]bool{"errand.run": true}} // no incarnation.run
+	enf := &fakeVoyageEnforcer{allow: map[string]bool{}} // neither incarnation.run nor errand.run
 	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, enf)
 
 	rec := httptest.NewRecorder()
@@ -1421,6 +1487,10 @@ func TestVoyageCancel_RBACDenied(t *testing.T) {
 
 	if rec.Code != http.StatusForbidden {
 		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if reads != 0 {
+		t.Errorf("the Voyage was read %d time(s) before the rights were checked — existence "+
+			"must not be established for a caller who may cancel nothing", reads)
 	}
 }
 

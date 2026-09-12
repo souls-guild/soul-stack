@@ -354,7 +354,11 @@ func registerHumaCadenceRuns(humaAPI huma.API, cadenceH *handlers.CadenceHandler
 		return
 	}
 	huma.Register(humaAPI, cadenceRunsOperation(), func(ctx context.Context, in *cadenceRunsInput) (*cadenceRunsOutput, error) {
-		reply, err := cadenceH.RunsTyped(ctx, in.ID, in.Statuses, int(in.Offset), int(in.Limit))
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, cadenceMissingClaims()
+		}
+		reply, err := cadenceH.RunsTyped(ctx, claims, in.ID, in.Statuses, int(in.Offset), int(in.Limit))
 		if err != nil {
 			return nil, cadenceProblem(err)
 		}

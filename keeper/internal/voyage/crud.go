@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -257,11 +258,33 @@ WHERE voyage_id = $1
 `
 
 // SelectByID reads a Voyage by PK. [ErrVoyageNotFound] if absent.
+//
+// Unnarrowed: the orchestration paths (claim, finalize, cancel) must see every
+// Voyage regardless of who is asking. An operator READ goes through
+// [SelectByIDScoped] instead.
 func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*Voyage, error) {
+	return SelectByIDScoped(ctx, db, id, nil)
+}
+
+// SelectByIDScoped reads a Voyage by PK, narrowed to the caller's host boundary
+// (NIM-842). hostScope is the per-target predicate, wrapped by [HostScopeSQL];
+// nil applies no narrowing.
+//
+// A Voyage outside the boundary is [ErrVoyageNotFound] — the SAME answer an
+// absent id gets, and the reason the narrowing lives in the WHERE rather than in
+// a check on the scanned row. A distinct refusal would confirm the run exists,
+// which is the disclosure this is closing, only one id at a time.
+func SelectByIDScoped(ctx context.Context, db ExecQueryRower, id string, hostScope func(startIdx int) (string, []any, int)) (*Voyage, error) {
 	if id == "" {
 		return nil, fmt.Errorf("voyage: empty voyage_id")
 	}
-	row := db.QueryRow(ctx, selectByIDSQL, id)
+	sql, args := selectByIDSQL, []any{id}
+	if hostScope != nil {
+		pred, scopeArgs, _ := hostScope(len(args) + 1)
+		sql += "  AND " + pred + "\n"
+		args = append(args, scopeArgs...)
+	}
+	row := db.QueryRow(ctx, sql, args...)
 	v, err := scanVoyage(row)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -390,6 +413,77 @@ type ListFilter struct {
 	Kind         Kind
 	CreatedAfter time.Time
 	CadenceID    string
+
+	// HostScope renders the caller's purview over the hosts a Voyage NAMES,
+	// starting at placeholder $startIdx (NIM-842). Supply the per-target
+	// predicate; [HostScopeSQL] wraps it. A nil HostScope applies NO narrowing
+	// and must therefore only ever be passed by a caller that has already
+	// established the operator may see every host.
+	//
+	// It is pushed into the query rather than applied to the rows that come
+	// back because `total` is counted under the same WHERE: a Go post-filter
+	// would hide the runs and still publish how many of them there are.
+	HostScope func(startIdx int) (string, []any, int)
+}
+
+// The column aliases a per-target predicate must be written against inside
+// [HostScopeSQL]'s subquery. Exported so the RBAC-side mapping is built from
+// these rather than from a second copy of the same strings — a predicate naming
+// a column the subquery does not have is a runtime SQL error on a security path.
+//
+// [ScopeHostColumn] is the SID the Voyage RECORDED, not the joined one, so a run
+// against a host since removed from the registry stays reachable by an operator
+// scoped to that host. Coven and traits come from the join and go NULL with the
+// host, which the `IS NOT TRUE` in [HostScopeSQL] reads as out-of-scope.
+const (
+	ScopeHostColumn   = "_t.sid"
+	ScopeCovenColumn  = "_s.coven"
+	ScopeTraitsColumn = "_s.traits"
+)
+
+// HostScopeSQL renders "every host this Voyage names is inside the operator's
+// boundary", wrapping the per-target predicate inner produces (NIM-842).
+//
+// Only a kind=command Voyage names hosts: its `target_resolved` is a JSON array
+// of SIDs and its per-target rows carry them as `target_id`. A kind=scenario
+// Voyage names incarnations, which `incarnation.history` — the right already
+// gating these routes — is the correct control for, so it is left alone rather
+// than narrowed by a host permission that says nothing about it.
+//
+// ALL, not ANY: a run is shown only when every host it touched is visible. The
+// alternative would hand back a target list mixing hosts the caller may see with
+// hosts they may not, and the identities of the second kind are the disclosure.
+//
+// `IS NOT TRUE`, not `NOT`: the coven predicate is an array overlap, and a host
+// missing from `souls` makes it NULL rather than false. Under plain `NOT` that
+// NULL would drop the target from the subquery and count as in-scope — open in
+// exactly the case where least is known.
+//
+// The three purview arms fall out of inner without a branch here: Unrestricted
+// renders TRUE, so no target is ever out of scope; an empty purview renders
+// FALSE, so every target is. The one gap is a command Voyage that resolved to NO
+// hosts — it has no target to fail the test, so it stays visible, carrying its
+// declared `target_origin`. It names no host that exists, which is why this is
+// left rather than closed with a length guard that would also hide it from an
+// unrestricted operator.
+// The `jsonb_typeof = 'array'` arm is availability, not scope:
+// `jsonb_array_elements_text` RAISES on a scalar rather than returning no rows,
+// so a single malformed `target_resolved` would 500 the whole list for every
+// caller, cluster-admin included. Nothing writes one today — the create paths
+// refuse an empty target with 422 — but this predicate is the first thing to
+// read that column's SHAPE, so it carries its own guard. It is a CASE and not an
+// AND because AND has no evaluation order in Postgres and the point is to not
+// reach the function. A non-array falls to FALSE: hidden, like any target that
+// cannot be shown to be in scope.
+func HostScopeSQL(inner func(startIdx int) (string, []any, int), startIdx int) (string, []any, int) {
+	pred, args, next := inner(startIdx)
+	return `(voyages.kind <> 'command' OR CASE
+        WHEN jsonb_typeof(voyages.target_resolved) <> 'array' THEN FALSE
+        ELSE NOT EXISTS (
+            SELECT 1 FROM jsonb_array_elements_text(voyages.target_resolved) AS _t(sid)
+            LEFT JOIN souls _s ON _s.sid = _t.sid
+            WHERE (` + pred + `) IS NOT TRUE)
+        END)`, args, next
 }
 
 const listSQL = `SELECT ` + selectColumns + `
@@ -436,12 +530,34 @@ func List(ctx context.Context, db ExecQueryRower, filter ListFilter, offset, lim
 		cadenceIDArg = filter.CadenceID
 	}
 
+	// The scope predicate is ANDed LAST, after every user-supplied filter, so no
+	// filter can widen it. Its placeholders start after the fixed ones, which
+	// differ between the two statements ($1..$4 for the count, $1..$6 for the
+	// page), so each is rendered against its own starting index.
+	countArgs := []any{statusesArg, kindArg, createdAfterArg, cadenceIDArg}
+	countStmt := countSQL
+	listArgs := []any{statusesArg, kindArg, createdAfterArg, limit, offset, cadenceIDArg}
+	listStmt := listSQL
+	if filter.HostScope != nil {
+		sql, args, _ := filter.HostScope(len(countArgs) + 1)
+		countStmt += "  AND " + sql + "\n"
+		countArgs = append(countArgs, args...)
+
+		sql, args, _ = filter.HostScope(len(listArgs) + 1)
+		// spliceBefore, not strings.Replace: Replace returns the input unchanged
+		// when the needle is absent, while the args are appended either way — so
+		// rewording the ORDER BY would give the page N+1 bindings for N
+		// placeholders and a runtime 500, with nothing at review time to see.
+		listStmt = spliceBefore(listStmt, "ORDER BY created_at DESC", "  AND "+sql+"\n")
+		listArgs = append(listArgs, args...)
+	}
+
 	var total int
-	if err := db.QueryRow(ctx, countSQL, statusesArg, kindArg, createdAfterArg, cadenceIDArg).Scan(&total); err != nil {
+	if err := db.QueryRow(ctx, countStmt, countArgs...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("voyage: count: %w", err)
 	}
 
-	rows, err := db.Query(ctx, listSQL, statusesArg, kindArg, createdAfterArg, limit, offset, cadenceIDArg)
+	rows, err := db.Query(ctx, listStmt, listArgs...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("voyage: list: %w", err)
 	}
@@ -557,4 +673,17 @@ func VerifyOwnership(ctx context.Context, db ExecQueryRower, id, kid string, att
 		return fmt.Errorf("voyage: verify ownership: %w", err)
 	}
 	return nil
+}
+
+// spliceBefore inserts ins immediately before the first occurrence of anchor,
+// and PANICS when the anchor is absent. A panic on a constant this package owns
+// is a programming error surfaced at the first test that runs the query — the
+// alternative is a statement whose bindings and placeholders have silently
+// stopped matching, which fails as a 500 on a security path in production.
+func spliceBefore(stmt, anchor, ins string) string {
+	i := strings.Index(stmt, anchor)
+	if i < 0 {
+		panic("voyage: scope splice anchor not found in statement: " + anchor)
+	}
+	return stmt[:i] + ins + stmt[i:]
 }

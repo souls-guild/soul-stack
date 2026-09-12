@@ -12,8 +12,10 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 	"github.com/souls-guild/soul-stack/keeper/internal/shellgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulpurview"
 	"github.com/souls-guild/soul-stack/shared/api"
 )
 
@@ -54,6 +56,17 @@ type ErrandHandler struct {
 	// admitted it one layer up. nil → the `{host}` context alone.
 	soulReader SoulHostContextReader
 
+	// scoper resolves the caller's `errand` purview, which is what decides WHICH
+	// hosts' command output they may read back (NIM-841). Before it existed the
+	// read side was all-or-nothing: the route gate asked only whether
+	// `errand.list` was held, so a bare grant returned the stdout and stderr of
+	// every command run anywhere in the fleet, and the narrower spelling
+	// `errand.list on coven=dev` was denied outright by the NoSelector gate.
+	//
+	// nil is fail-closed rather than permissive — a zero Purview renders FALSE
+	// and hides everything (the [ConsoleRecordingHandler] rule).
+	scoper PurviewResolver
+
 	logger *slog.Logger
 }
 
@@ -63,12 +76,14 @@ type ErrandHandler struct {
 // nil-safe: a nil enforcer makes the gate count the decision as `unconfigured`
 // rather than silently allow or deny it. soulReader is the souls read surface
 // the console gate resolves the host's covens through (NIM-650); nil-safe, and
-// nil means coven-scoped `soul.console` fails closed on this route.
-func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, enforcer middleware.PermissionChecker, gate *shellgate.Gate, soulReader SoulHostContextReader, logger *slog.Logger) *ErrandHandler {
+// nil means coven-scoped `soul.console` fails closed on this route. scoper is
+// the read-side scope boundary (NIM-841); nil hides every errand rather than
+// showing all of them.
+func NewErrandHandler(dispatcher *errand.Dispatcher, store *errand.Store, enforcer middleware.PermissionChecker, gate *shellgate.Gate, soulReader SoulHostContextReader, scoper PurviewResolver, logger *slog.Logger) *ErrandHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
-	return &ErrandHandler{dispatcher: dispatcher, store: store, enforcer: enforcer, gate: gate, soulReader: soulReader, logger: logger}
+	return &ErrandHandler{dispatcher: dispatcher, store: store, enforcer: enforcer, gate: gate, soulReader: soulReader, scoper: scoper, logger: logger}
 }
 
 // ErrandSpecStub — a non-empty *ErrandHandler stub for generating the huma OpenAPI
@@ -234,9 +249,15 @@ type ErrandGetReply struct {
 }
 
 // GetTyped — domain function for GET /v1/errands/{errand_id} (READ with path, no audit):
-// path-id validation + store.Get + sentinel→problem. running → 202 Accepted, terminal →
-// 200 Result. Errors are *problemError (404/422/500); store nil → 500.
-func (h *ErrandHandler) GetTyped(ctx context.Context, errandID string) (ErrandGetReply, error) {
+// path-id validation + store.Get + scope + sentinel→problem. running → 202 Accepted,
+// terminal → 200 Result. Errors are *problemError (404/422/500); store nil → 500.
+//
+// An errand on a host outside the caller's `errand.list` purview answers with the
+// SAME 404 an unknown id gets (NIM-841), deliberately: a 403 would confirm that an
+// errand with that id exists, turning the route into an oracle over which hosts have
+// been commanded and when. [ConsoleRecordingHandler.load] answers the same way for
+// the same reason.
+func (h *ErrandHandler) GetTyped(ctx context.Context, claims *keeperjwt.Claims, errandID string) (ErrandGetReply, error) {
 	var zero ErrandGetReply
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "errand store is not configured")}
@@ -247,11 +268,14 @@ func (h *ErrandHandler) GetTyped(ctx context.Context, errandID string) (ErrandGe
 	row, err := h.store.Get(ctx, errandID)
 	if err != nil {
 		if errors.Is(err, errand.ErrNotFound) {
-			return zero, &problemError{problem.New(problem.TypeNotFound, "", "errand "+errandID+" not found")}
+			return zero, errandNotFound(errandID)
 		}
 		h.logger.Error("errand.get: store failed",
 			slog.String("errand_id", errandID), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "get errand failed")}
+	}
+	if !h.inScope(claims, "list", row) {
+		return zero, errandNotFound(errandID)
 	}
 	if row.Status == errand.StatusRunning {
 		return ErrandGetReply{Running: true, Accepted: newErrandAcceptedView(row.ErrandID, row.Status)}, nil
@@ -277,7 +301,12 @@ type ErrandListInput struct {
 // (parity with ParsePage). sid format / status enum → 422. StartedAfter — a bad value is
 // already rejected by huma-bind date-time (400). A read error → *problemError (500); store
 // nil → 500.
-func (h *ErrandHandler) ListTyped(ctx context.Context, in ErrandListInput) (ErrandListPage, error) {
+//
+// The caller's `errand.list` purview is pushed into the query, not applied to the
+// rows that come back (NIM-841): `total` is counted under the same WHERE, so a
+// post-filter would hide the out-of-scope errands and still publish how many of
+// them exist. An operator entitled to no host gets an empty page with total=0.
+func (h *ErrandHandler) ListTyped(ctx context.Context, claims *keeperjwt.Claims, in ErrandListInput) (ErrandListPage, error) {
 	var zero ErrandListPage
 	if h.store == nil {
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "errand store is not configured")}
@@ -306,6 +335,10 @@ func (h *ErrandHandler) ListTyped(ctx context.Context, in ErrandListInput) (Erra
 		// Exact-match OR, no regex/glob (by spec). Duplicates are allowed — they pass
 		// into the IN predicate as-is, PG normalizes.
 		filter.Modules = in.Modules
+	}
+	scope := h.scopeFor(claims, "list")
+	filter.Scope = func(startIdx int) (string, []any, int) {
+		return scope.WhereSQL(errandScopeColumns, startIdx)
 	}
 
 	rows, total, err := h.store.List(ctx, filter, in.Offset, in.Limit)
@@ -341,8 +374,18 @@ func (r ErrandCancelReply) AuditPayload() middleware.AuditPayload {
 }
 
 // CancelTyped — domain function for DELETE /v1/errands/{errand_id} (handler-native):
-// path-id validation + dispatcher.Cancel + sentinel→problem. Errors are *problemError;
-// success is [ErrandCancelReply]. dispatcher nil → 500.
+// path-id validation + scope + dispatcher.Cancel + sentinel→problem. Errors are
+// *problemError; success is [ErrandCancelReply]. dispatcher nil → 500.
+//
+// The target host is resolved and checked against the caller's `errand.cancel`
+// purview BEFORE anything is dispatched (NIM-841): the route gate can only ask
+// whether the right is held at all, because the SID is not in the path. An errand
+// outside the boundary answers with the same 404 an unknown id gets, so the refusal
+// cannot be used to probe what is running where.
+//
+// The row is read here even though [errand.Dispatcher.Cancel] reads it again: this
+// read decides authorization, its read decides the running→terminal race, and
+// collapsing them would make one of the two answer the wrong question.
 func (h *ErrandHandler) CancelTyped(ctx context.Context, claims *keeperjwt.Claims, errandID string) (ErrandCancelReply, error) {
 	var zero ErrandCancelReply
 	if h.dispatcher == nil {
@@ -350,6 +393,24 @@ func (h *ErrandHandler) CancelTyped(ctx context.Context, claims *keeperjwt.Claim
 	}
 	if errandID == "" {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", "path 'errand_id' is required")}
+	}
+	if h.store == nil {
+		// Fail-closed: without the store the target host is unknowable, and
+		// cancelling a command on an unknown host is exactly what the scope check
+		// exists to prevent.
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "errand store is not configured")}
+	}
+	row, err := h.store.Get(ctx, errandID)
+	if err != nil {
+		if errors.Is(err, errand.ErrNotFound) {
+			return zero, errandNotFound(errandID)
+		}
+		h.logger.Error("errand.cancel: store failed",
+			slog.String("errand_id", errandID), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "errand cancel failed")}
+	}
+	if !h.inScope(claims, "cancel", row) {
+		return zero, errandNotFound(errandID)
 	}
 	if err := h.dispatcher.Cancel(ctx, errand.CancelRequest{
 		ErrandID:    errandID,
@@ -482,6 +543,52 @@ func (h *ErrandHandler) dispatchError(err error) error {
 		h.logger.Error("errand.exec: dispatcher failed", slog.Any("error", err))
 		return &problemError{problem.New(problem.TypeInternalError, "", "errand dispatch failed")}
 	}
+}
+
+// errandScopeColumns maps an errand onto the RBAC scope dimensions. The aliases
+// come from the store rather than being repeated here: a predicate naming a
+// column the query does not have is a runtime SQL error on a security path, and
+// two copies of the same strings is how that happens.
+//
+// Service and incarnation stay empty — an errand carries neither, so a condition
+// on them renders FALSE (fail-closed).
+var errandScopeColumns = rbac.ScopeColumns{
+	Coven:  errand.ScopeCovenColumn,
+	Host:   errand.ScopeHostColumn,
+	Traits: errand.ScopeTraitsColumn,
+}
+
+// scopeFor resolves the caller's `errand.<action>` purview.
+//
+// The action is the one being performed — `list` for the two reads, `cancel` for
+// the abort — rather than one boundary shared by both. They are separate rights
+// in the catalogue, so folding them together would let whichever is granted more
+// widely decide for the other.
+//
+// Purview, never [rbac.Enforcer.Check]: Check takes a context map and looks like
+// it honours it, but a role's `default_scope` lives outside the permission it
+// matches, so a bare `errand.list` passes Check for ANY host (ADR-047 — Check is
+// the route gate, scope is resolved here). No claims / no scoper → a zero
+// Purview, which renders FALSE and hides everything.
+func (h *ErrandHandler) scopeFor(claims *keeperjwt.Claims, action string) soulpurview.Scope {
+	if claims == nil || h.scoper == nil {
+		return soulpurview.Scope{}
+	}
+	return soulpurview.Resolve(h.scoper.ResolvePurview(claims.Subject, "errand", action))
+}
+
+// inScope is the single-object half of [ErrandHandler.scopeFor] — the gate for
+// the two routes that reach one errand by id. It must keep answering alike with
+// the list pushdown: a single-object gate reading a wider set than the list
+// predicate would 200 on an errand the list never showed.
+func (h *ErrandHandler) inScope(claims *keeperjwt.Claims, action string, row *errand.Row) bool {
+	return soulpurview.InScope(h.scopeFor(claims, action), row.SID, row.Covens,
+		soulpurview.TraitsFromJSON(row.TraitsRaw))
+}
+
+// errandNotFound — the single refusal for "absent" and "out of scope".
+func errandNotFound(errandID string) error {
+	return &problemError{problem.New(problem.TypeNotFound, "", "errand "+errandID+" not found")}
 }
 
 // validErrandStatus — closed enum for the query filter. Matches the CHECK

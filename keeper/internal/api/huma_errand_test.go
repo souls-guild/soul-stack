@@ -66,7 +66,7 @@ func (p *hErrandPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row 
 			return hErrandRow{err: pgx.ErrNoRows}
 		}
 		return hErrandRow{values: errandScanRow("ERR-01", p.getStatus)}
-	case strings.Contains(sql, "COUNT(*) FROM errands"):
+	case strings.Contains(sql, "COUNT(*)") && strings.Contains(sql, "FROM errands"):
 		return hErrandRow{values: []any{len(p.listRows)}}
 	}
 	return hErrandRow{err: &hErrandErr{"hErrandPool: unexpected QueryRow: " + sql}}
@@ -82,7 +82,9 @@ func (p *hErrandPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, 
 // errandScanRow — scanRow columns: errand_id, sid, module, input(jsonb), status,
 // exit_code, stdout, stderr, stdout_truncated, stderr_truncated, duration_ms,
 // error_message, output(jsonb), started_by_aid, started_by_kid, started_at,
-// finished_at, ttl_at. success terminal: exit_code=0, finished_at=errandAt.
+// finished_at, ttl_at, coven, traits. success terminal: exit_code=0,
+// finished_at=errandAt. The last two come from the LEFT JOIN on souls and feed
+// the scope check (NIM-841).
 func errandScanRow(id, status string) []any {
 	var exit *int32
 	var finished *time.Time
@@ -97,6 +99,7 @@ func errandScanRow(id, status string) []any {
 		exit, "", "", false, false,
 		(*int64)(nil), "", []byte(nil), "archon-alice", "kid-1",
 		errandAt, finished, errandAt,
+		[]string{"web"}, []byte(nil),
 	}
 }
 
@@ -129,6 +132,12 @@ func (r hErrandRow) Scan(dest ...any) error {
 				*dd = nil
 			} else {
 				*dd = r.values[i].([]byte)
+			}
+		case *[]string:
+			if r.values[i] == nil {
+				*dd = nil
+			} else {
+				*dd = r.values[i].([]string)
 			}
 		case **int32:
 			if r.values[i] == nil {
@@ -260,7 +269,7 @@ func buildHErrandDispatcher(t *testing.T, statuses map[string]errand.Status) *er
 func humaErrandRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, store *errand.Store, dispatcher *errand.Dispatcher) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	errandH := handlers.NewErrandHandler(dispatcher, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, nil)
+	errandH := handlers.NewErrandHandler(dispatcher, store, nil /*enforcer*/, nil /*gate*/, nil /*soulReader*/, unrestrictedScoper{}, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
@@ -284,6 +293,38 @@ func humaErrandRouter(t *testing.T, enforcer apimiddleware.PermissionChecker, au
 }
 
 func hErrandStore(pool *hErrandPool) *errand.Store { return errand.NewStore(pool) }
+
+// hCancelStore — the store the CANCEL handler reads to resolve the target host
+// for its scope check (NIM-841). It is separate from the dispatcher's own
+// in-memory store on purpose: the two reads answer different questions
+// (authorization vs the running→terminal race) and production wires both.
+// Every id listed resolves to a host in coven `web`; anything else is ErrNotFound.
+func hCancelStore(ids ...string) *errand.Store {
+	rows := map[string][]any{}
+	for _, id := range ids {
+		rows[id] = errandScanRow(id, "running")
+	}
+	return errand.NewStore(&hCancelPool{rows: rows})
+}
+
+type hCancelPool struct{ rows map[string][]any }
+
+func (p *hCancelPool) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
+	return pgconn.CommandTag{}, &hErrandErr{"hCancelPool: unexpected Exec"}
+}
+
+func (p *hCancelPool) QueryRow(_ context.Context, _ string, args ...any) pgx.Row {
+	if len(args) == 1 {
+		if v, ok := p.rows[args[0].(string)]; ok {
+			return hErrandRow{values: v}
+		}
+	}
+	return hErrandRow{err: pgx.ErrNoRows}
+}
+
+func (p *hCancelPool) Query(context.Context, string, ...any) (pgx.Rows, error) {
+	return nil, &hErrandErr{"hCancelPool: unexpected Query"}
+}
 
 // === ERRAND LIST (READ with typed query, no audit) ===
 
@@ -461,7 +502,7 @@ func TestHumaErrand_Get_NotFound_404(t *testing.T) {
 
 func TestHumaErrand_Cancel_204(t *testing.T) {
 	d := buildHErrandDispatcher(t, map[string]errand.Status{"ERR-OK": errand.StatusRunning})
-	r := humaErrandRouter(t, strictAllowAll{}, nil, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, nil, hCancelStore("ERR-OK"), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/ERR-OK", nil)
 	r.ServeHTTP(rec, req)
@@ -475,7 +516,7 @@ func TestHumaErrand_Cancel_204(t *testing.T) {
 
 func TestHumaErrand_Cancel_NotFound_404(t *testing.T) {
 	d := buildHErrandDispatcher(t, nil)
-	r := humaErrandRouter(t, strictAllowAll{}, nil, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, nil, hCancelStore(), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/GHOST", nil)
 	r.ServeHTTP(rec, req)
@@ -487,7 +528,7 @@ func TestHumaErrand_Cancel_NotFound_404(t *testing.T) {
 
 func TestHumaErrand_Cancel_Terminal_409(t *testing.T) {
 	d := buildHErrandDispatcher(t, map[string]errand.Status{"ERR-DONE": errand.StatusSuccess})
-	r := humaErrandRouter(t, strictAllowAll{}, nil, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, nil, hCancelStore("ERR-DONE"), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/ERR-DONE", nil)
 	r.ServeHTTP(rec, req)
@@ -511,7 +552,7 @@ func TestHumaErrand_Cancel_RBACDeny_403(t *testing.T) {
 func TestHumaAudit_ErrandCancel_RecordsOnSuccess(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	d := buildHErrandDispatcher(t, map[string]errand.Status{"ERR-OK": errand.StatusRunning})
-	r := humaErrandRouter(t, strictAllowAll{}, auditCap, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, auditCap, hCancelStore("ERR-OK"), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/ERR-OK", nil)
 	r.ServeHTTP(rec, req)
@@ -524,7 +565,7 @@ func TestHumaAudit_ErrandCancel_RecordsOnSuccess(t *testing.T) {
 func TestHumaAudit_ErrandCancel_NoAudit_OnNotFound(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	d := buildHErrandDispatcher(t, nil)
-	r := humaErrandRouter(t, strictAllowAll{}, auditCap, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, auditCap, hCancelStore(), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/GHOST", nil)
 	r.ServeHTTP(rec, req)
@@ -539,7 +580,7 @@ func TestHumaAudit_ErrandCancel_NoAudit_OnNotFound(t *testing.T) {
 func TestHumaAudit_ErrandCancel_NoAudit_OnTerminal(t *testing.T) {
 	auditCap := &auditCaptureWriter{}
 	d := buildHErrandDispatcher(t, map[string]errand.Status{"ERR-DONE": errand.StatusSuccess})
-	r := humaErrandRouter(t, strictAllowAll{}, auditCap, nil, d)
+	r := humaErrandRouter(t, strictAllowAll{}, auditCap, hCancelStore("ERR-DONE"), d)
 	rec := httptest.NewRecorder()
 	req := httptest.NewRequest(http.MethodDelete, "/v1/errands/ERR-DONE", nil)
 	r.ServeHTTP(rec, req)

@@ -249,7 +249,7 @@ func TestErrandExec_CovenScopeNarrowsTheConsoleHalf(t *testing.T) {
 	for _, f := range covenForms() {
 		t.Run(f.name, func(t *testing.T) {
 			h := NewErrandHandler(nil, nil, f.enforcer(t, "errand.run", "soul.console"),
-				shellgate.New(shellgate.ModeEnforce, nil, nil), reader, nil)
+				shellgate.New(shellgate.ModeEnforce, nil, nil), reader, nil /*scoper*/, nil)
 
 			if err := h.authorizeShell(context.Background(), "archon-alice", "host-web", "core.cmd.shell"); err != nil {
 				t.Errorf("host-web: %v, want nil — `errand.run` already admitted this host one layer "+
@@ -270,7 +270,7 @@ func TestErrandExec_ConsoleHalfIsNotConsultedForOrdinaryModules(t *testing.T) {
 	h := NewErrandHandler(nil, nil, rbactest.MustEnforcer(t, &rbactest.Config{Roles: []rbactest.Role{
 		{Name: "web-ops", Operators: []string{"archon-alice"},
 			Permissions: []string{"errand.run on coven=web"}},
-	}}), shellgate.New(shellgate.ModeEnforce, nil, nil), reader, nil)
+	}}), shellgate.New(shellgate.ModeEnforce, nil, nil), reader, nil /*scoper*/, nil)
 
 	if err := h.authorizeShell(context.Background(), "archon-alice", "host-db", "core.pkg.present"); err != nil {
 		t.Fatalf("a read-safe module was refused by the console gate: %v", err)

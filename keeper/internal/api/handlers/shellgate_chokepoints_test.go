@@ -66,7 +66,7 @@ func TestErrandExec_ShellGate(t *testing.T) {
 	}
 	for _, c := range cases {
 		t.Run(c.name, func(t *testing.T) {
-			h := NewErrandHandler(nil, nil, perms(c.granted...), shellgate.New(c.mode, nil, nil), nil /*soulReader*/, nil)
+			h := NewErrandHandler(nil, nil, perms(c.granted...), shellgate.New(c.mode, nil, nil), nil /*soulReader*/, nil /*scoper*/, nil)
 			err := h.authorizeShell(context.Background(), "archon-alice", "host.test", c.module)
 			if got := isConsoleForbidden(err); got != c.wantDenied {
 				t.Fatalf("console-forbidden = %v, want %v (err = %v)", got, c.wantDenied, err)
@@ -81,7 +81,7 @@ func TestErrandExec_ShellGate(t *testing.T) {
 func TestErrandExec_ShellGate_WiredIntoExec(t *testing.T) {
 	t.Parallel()
 	h := NewErrandHandler(buildCancelDispatcher(t, nil), nil, perms("errand.run"),
-		shellgate.New(shellgate.ModeEnforce, nil, nil), nil /*soulReader*/, nil)
+		shellgate.New(shellgate.ModeEnforce, nil, nil), nil /*soulReader*/, nil /*scoper*/, nil)
 	_, err := h.ExecTyped(context.Background(), claimsFor("archon-alice"), "host.test",
 		ErrandRunInput{Module: "core.cmd.shell"})
 	if !isConsoleForbidden(err) {
