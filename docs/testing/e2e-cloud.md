@@ -110,7 +110,7 @@ E2E_BRINGUP_STEPS="deploy-keeper deploy-service batch-onboard distribute-plugin 
 - `deploy-keeper` — roll out/restart keeper on the VM;
 - `deploy-service` — upload service repo (`example-cloud-bootstrap`);
 - `batch-onboard` - Souls fleet onboarding on VM;
-- `distribute-plugin` - deliver `redis` + `example`;
+- `distribute-plugin` - deliver `redis` + `soul-cloud-example`;
 - `autoprov-run` / `poll-autoprov` - start cloud-provision and wait for the VM.
 
 Both lists are examples. The order and composition are set by the operator; empty `$E2E_BRINGUP_STEPS`

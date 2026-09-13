@@ -168,7 +168,7 @@ until that domain moves. The test says which ones those are.
 ## Amendment 2026-09-05 (NIM-825): the `examples/` rule is enforced, most of the way
 
 The rule above — "**`examples/` — non-Go artifacts only** … Runnable Go examples go in
-`tools/` or **separate repos**" — had drifted: six Go modules had accumulated under
+`tools/` or **separate repos**" — had drifted: seven Go modules had accumulated under
 `examples/module/`, each with its own `go.mod` reaching `sdk` and `proto/plugin`
 through a RELATIVE `replace` at `v0.0.0`. That replace is what made them buildable
 only inside this checkout, which is the coupling this ADR exists to prevent.
@@ -188,14 +188,22 @@ which is what the Consequences section above already described plugin authors do
 Each move left the sources untouched: the stamped `schema.json` is byte-identical on
 both sides, which is the evidence that the relocation changed no behaviour.
 
-**`examples/module/redis` has NOT moved, and the drift is therefore only
-mostly closed.** A `soul-stack-plugin/redis` repository already exists, created
+**Two have NOT moved, and the drift is therefore only mostly closed.**
+
+`examples/module/redis` — a `soul-stack-plugin/redis` repository already exists, created
 2026-08-07, carrying a DIFFERENT and partial implementation — one object (`acl`) laid
 out as `cmd/` + `internal/<object>/` — with two unmerged branches on it. Choosing
 between that layout and this tree's is not a relocation decision, so redis stays here
-until someone who owns that work decides. `redis-failover` is a skeleton with
-no `go.mod` yet (NIM-797); when it gets one it should be created in its own repository
-rather than here.
+until someone who owns that work decides.
+
+`examples/module/vmlocal` — the libvirt machine provider NIM-850 landed days before this
+ticket, carrying the same relative `replace` at `v0.0.0`. It is out of scope here only
+because it arrived after the census was taken, not because anything exempts it: it is a
+runnable Go module under `examples/` exactly as the five that left were, and it owes the
+same move.
+
+`redis-failover` is a skeleton with no `go.mod` yet (NIM-797); when it gets one it
+should be created in its own repository rather than here.
 
 **What the move cost, recorded so it is not rediscovered.** `examples/service/mongo`
 is off the scenario lint and the L0 trial (`LINT_SCENARIO_SKIP` in the Makefile),
@@ -215,4 +223,7 @@ the three repositories keep the marker (`ssh-static`, `ssh-teleport`, `ssh-vault
 
 Reasoning, and the check that could have gone the other way, are in
 [ADR-020's amendment of this date](0020-plugin-infrastructure.md#amendment-2026-09-12-nim-851-the-soul-mod--and-soul-cloud--prefixes-are-dropped-soul-ssh--stays).
-`sdk/` and `proto/plugin/` are untouched: they are interfaces, not artifacts.
+No name in `sdk/` or `proto/plugin/` moves: they are interfaces, not artifacts. Comments
+in both did change — `common.proto` and `soulmodule.proto` described the artifact by the
+prefix, and a sentence whose subject is gone has to be rewritten rather than stripped —
+and the generated mirror was re-emitted by `make gen`, not edited.

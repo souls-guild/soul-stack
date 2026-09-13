@@ -106,7 +106,7 @@ func isPolicyEnv(name string) bool {
 // it had to be cut, and an entry that stops firing fails the guard: a stale
 // exemption covers whatever moves into it next.
 //
-// Empty since NIM-761 removed examples/module/*, which held the only
+// Empty since NIM-761 removed examples/module/soul-cloud-*, which held the only
 // one. That is the strongest state for this guard, not a gap in it: every file
 // under the checkout now goes through the helper.
 var exemptFiles = map[string]string{}
@@ -131,7 +131,7 @@ type envRead struct {
 // The other half of NIM-481. The guard used to anchor on filepath.Join("..",
 // ".."), which from here is the keeper module root — so shared/, soul/, tests/
 // and examples/ were outside its world entirely, and a second copy of the trap
-// was living in examples/module/aws the whole time. Anchoring on a
+// was living in examples/module/soul-cloud-aws the whole time. Anchoring on a
 // marker instead of a hop count also means the guard fails loudly if the layout
 // moves, rather than silently narrowing its coverage. (That second copy went with
 // the CloudDriver examples in NIM-761; the anchoring is what still matters.)

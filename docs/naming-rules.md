@@ -587,7 +587,7 @@ See sections ["Plugin infrastructure"](architecture.md#plugin-infrastructure), [
 
 **Official CloudDriver binaries (first set, [ADR-017 amendment](adr/0017-keeper-side-core.md)):** `soul-cloud-aws` / `soul-cloud-gcp` / `soul-cloud-azure` / `soul-cloud-yc` (Yandex Cloud) / `soul-cloud-proxmox` / `soul-cloud-openstack`. **vSphere** - community / deferred. AWS - pilot (reference). **By 2026-05-26 all 6 are committed and working** ([ADR-017 amendment 2026-05-26](adr/0017-keeper-side-core.md), Track 3 [roadmap.md](roadmap.md)).
 
-> ⛔ **The `soul-cloud-*` binary family left the dictionary with the contract (NIM-757 / NIM-761, removed 2026-09-04).** All six `examples/module/soul-cloud-*` are deleted; the surviving cloud driver is the WB one, rebuilt as an ordinary SoulModule plugin declaring `side: keeper` (NIM-760) and renamed `wbcloud` when NIM-851 dropped the family prefixes. The six above remain committed and working until then.
+> ⛔ **The `soul-cloud-*` binary family left the dictionary with the contract (NIM-757 / NIM-761, removed 2026-09-04).** All six `examples/module/soul-cloud-*` are deleted; the surviving cloud driver is the WB one, rebuilt as an ordinary SoulModule plugin declaring `side: keeper` (NIM-760) and renamed `wbcloud` when NIM-851 dropped the family prefixes. The six above remained committed and working until that removal.
 
 **The WB cloud's registration alias is `wbcloud` — no hyphen** (decided 2026-09-12). This
 is an ADDRESS, not a name: a scenario says `wbcloud.vm.created`, level 1 being what an

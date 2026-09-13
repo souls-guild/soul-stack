@@ -288,22 +288,20 @@ test:
 # masking in the redis plugin (59 test functions), which would otherwise
 # stay outside the gate.
 #
-# Skip-on-unresolvable: the ssh providers (soul-ssh-*) don't resolve
-# standalone-offline (workspace go.mod pins diverge from standalone-tidy, needs network).
-#
-# ⚠ Since NIM-825 nothing in this corpus is skipped — the three soul-ssh-* modules
-# that were the reason for the skip have left this tree for their own repositories,
-# and the skip is kept only for a plugin that lands here in future. Worth recording
-# WHY they resolve now and did not before: in-tree they reached sdk/proto-plugin
-# through a relative `replace` at v0.0.0, which is what "diverges from
-# standalone-tidy" means; out of tree they require the published v0.1.0-beta.1 and
-# build offline from the module cache like anything else. The skip was a symptom of
-# the layout ADR-011 forbids, not of the plugins.
+# Skip-on-unresolvable: the cloud/ssh plugins did not resolve standalone-offline
+# (workspace go.mod pins diverge from standalone-tidy, needs network).
 # `go list ./...` under GOWORK=off fails for them -> we skip LOUDLY with a warning (the same
 # trick as `go list` empty -> skip in `test`/`vet`). This is NOT a silent pass: the skip
 # is printed, and a plugin that *does* resolve offline (redis) isn't covered by it -
 # its regressions are caught by the gate. Merge() tests are NOT here: they live in shared/cel
 # (workspace, covered by `make test`), no need to duplicate.
+#
+# ⚠ Since NIM-825 nothing in this corpus is skipped: the modules that triggered the skip
+# have left this tree for their own repositories, and it is kept only for a plugin that
+# lands here in future. The cause above is left as it was WRITTEN rather than explained
+# away — a relative `replace` at v0.0.0 is NOT it, since examples/module/redis carries
+# exactly that replace and resolves offline. Whatever broke `go list` for them went
+# unmeasured and left with them; do not restate it as settled.
 # `-count=1` - no cache (the plugin may depend on external fake state).
 #
 # `MODULES_PROBE_FAIL=skip` is what makes the skip above legal HERE and nowhere
@@ -1942,6 +1940,12 @@ LINT_MODULES_REDIS ?= examples/module/redis
 # list, and it would take the whole lint target down rather than skip anything.
 LINT_SCENARIO_SKIP ?= mongo
 
+# What the recipes interpolate. An EMPTY override — `make lint LINT_SCENARIO_SKIP=`, the
+# obvious way to ask for "skip nothing, lint the mongo corpus too" — expands the case arm
+# to a bare `)`, a syntax error that takes the target down instead of linting more. Falls
+# back to a pattern no service directory can be named.
+LINT_SCENARIO_SKIP_PAT := $(or $(strip $(LINT_SCENARIO_SKIP)),@@none@@)
+
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
 		[ -e "$$f" ] || continue; \
@@ -1984,7 +1988,7 @@ lint: build
 		esac; \
 		svc=$$(echo "$$f" | cut -d/ -f3); \
 		case "$$svc" in \
-			$(LINT_SCENARIO_SKIP)) echo "skip validate-scenario $$f ($$svc's plugin left this tree, NIM-825)"; continue;; \
+			$(LINT_SCENARIO_SKIP_PAT)) echo "skip validate-scenario $$f ($$svc's plugin left this tree, NIM-825)"; continue;; \
 		esac; \
 		case "$$svc" in \
 			*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
@@ -2076,7 +2080,7 @@ trial: build
 				continue; \
 			fi; \
 			case "$$name" in \
-				$(LINT_SCENARIO_SKIP)) \
+				$(LINT_SCENARIO_SKIP_PAT)) \
 					echo "SKIP trial $$name ($$name's plugin left this tree, NIM-825 — a run here would be" ; \
 					echo "     FALSE-GREEN: its params would go unchecked and the PASS would cover less" ; \
 					echo "     than it looks)"; \

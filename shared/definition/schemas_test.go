@@ -25,8 +25,9 @@ const invalidSchemaJSON = `{"kind":"soul_module","protocol_version":1,` +
 // The indexing decision, pinned.
 //
 // The artifact carries no self-name, so the address a task writes has to be STATED. It
-// is stated on the binding, not read off the path: the directory here is named after the
-// binary (`community-redis`), and the very same bytes bound under two aliases
+// is stated on the binding, not read off the path: the file here is named `community-redis`,
+// which is deliberately neither alias — rename it to match one and the test starts
+// asserting what it was written to refute — and the very same bytes bound under two aliases
 // have to produce two independent address spaces.
 func TestLoadSchemas_AddressComesFromTheBindingNotThePath(t *testing.T) {
 	dir := t.TempDir()
