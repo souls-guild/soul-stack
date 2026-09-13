@@ -28,9 +28,11 @@ MAIN interface to **live MongoDB**: the service scenario orchestrates order/targ
 performs **one** operation on one `mongod` instance. Custom plugin
 `kind: soul_module` serving **eight objects** — `collection`, `command`, `database`,
 `index`, `instance`, `replicaset`, `role`, `user` — from one
-binary, `soul-mod-mongo`; the artifact carries no name of its own (NIM-377), so level 1 is
+binary, `mongo`; the artifact carries no name of its own (NIM-377), so level 1 is
 whatever alias the operator registers it under. Implementation -
-[`examples/module/soul-mod-mongo/`](../../../examples/module/soul-mod-mongo/)
+[`github.com/soul-stack-plugin/mongo`](https://github.com/soul-stack-plugin/mongo) — its OWN repository since NIM-825,
+because ADR-011 reserves `examples/` for non-Go artifacts and sends runnable Go to
+separate repos
 (`object.go` - the object tables and the dispatch, `bundle.go` - the eight `module.Def`s
 the schema document is generated from, `obj_*.go` - one file per object's declaration,
 `impl.go` - the shared driver + instance.pinged/command.run, `user.go` -
@@ -699,7 +701,7 @@ converged one.
 ## Tests
 
 - **L0 dispatcher (instance/command)**
-  ([`impl_test.go`](../../../examples/module/soul-mod-mongo/impl_test.go)):
+  (`impl_test.go`):
 fake `mongoConn` + fake `ApplyEvent`-stream. `Validate` (empty addr/command,
 unknown state), `instance.pinged` happy-path (`Ping` → `Output.ok`, `changed=false`)
 and error `Ping` → `failed`; `command.run` happy-path (`runCommand` → `ok`,
@@ -708,7 +710,7 @@ sanitized connection error. Plus the **object boundary** (NIM-769): an object re
 another object's action on the Apply path as well as on Validate, and a refused state
 reaches no socket.
 - **L0 user (localhost-exception)**
-  ([`user_test.go`](../../../examples/module/soul-mod-mongo/user_test.go)):
+  (`user_test.go`):
   fake `mongoConn`. `Validate` (addr+name on both actions);
 idempotency (present+is / absent+isn't → no-op); create/drop
 (`changed=true`); **localhost-exception** (auth probe fails
@@ -716,12 +718,12 @@ idempotency (present+is / absent+isn't → no-op); create/drop
 breeding `password` (connect) vs `user_password` (createUser-pwd);
 **IS-invariant** (neither `password` nor `user_password` leaks).
 - **L0 harness**
-  ([`helpers_test.go`](../../../examples/module/soul-mod-mongo/helpers_test.go)):
+  (`helpers_test.go`):
 general test inventory for L0 (fake `mongoConn`, fake `ApplyEvent`-stream,
 `mustStruct`-params builder, assertion `assertEventsNoSecret` - check of information security invariant
 "secret does not flow into events" used in `impl_test`/`user_test`).
 - **L0 manifest ↔ implementation**
-  ([`manifest_test.go`](../../../examples/module/soul-mod-mongo/manifest_test.go)):
+  (`manifest_test.go`):
 the committed `schema.json` is what `mongoBundle` renders byte for byte, the object that
 DECLARES a state is the one that SERVES it (both directions), every action declares
 EXACTLY the params it reads, every secret param is `secret: true` + `^vault:.*`, and every
@@ -729,7 +731,7 @@ module declares `side: soul` (NIM-749). Plus, since NIM-800, that **every object
 its declaration at runtime** — an object added later that forgot to wire it would silently
 accept every coercion the type check exists to refuse.
 - **L0 replicaset**
-  ([`replicaset_test.go`](../../../examples/module/soul-mod-mongo/replicaset_test.go)):
+  (`replicaset_test.go`):
   assertions are **on the wire** — which command was sent, to which node, carrying what
   document — because the invariants are not visible in a message. `replSetInitiate` is
   never sent at a set that has a config; a reconfig KEEPS `settings` and `protocolVersion`
@@ -741,7 +743,7 @@ accept every coercion the type check exists to refuse.
   table, including the direction that is easier to get wrong — `reconfigured` must NOT
   refuse a patch naming only `hidden`.
 - **L0 params / type strictness**
-  ([`params_test.go`](../../../examples/module/soul-mod-mongo/params_test.go)):
+  (`params_test.go`):
   `tls: "true"` as a string is REFUSED and **no connection is opened**. The assertion is
   on the refusal, deliberately — asserting instead that the password is absent from
   `argv` would pass on the broken build too, since the password was never in `argv`, it
@@ -754,7 +756,7 @@ accept every coercion the type check exists to refuse.
   key declared in the reverse order is refused as a DIFFERENT index rather than reported
   as converged (`index`).
 - **L0 shared fakes**
-  ([`mongo_test.go`](../../../examples/module/soul-mod-mongo/mongo_test.go)):
+  (`mongo_test.go`):
   bson reply builders, a connection whose answers change across calls, and a module that
   hands out a different fake per address — the last one is what lets a test prove which
   node a reconfig reached.
@@ -767,8 +769,8 @@ connection, with no live `mongod`.
 ## Assembly
 
 ```sh
-cd examples/module/soul-mod-mongo
-GOWORK=off go build ./...   # binary soul-mod-mongo (gitignored)
+git clone https://github.com/soul-stack-plugin/mongo && cd mongo
+GOWORK=off go build ./...   # binary mongo (gitignored)
 GOWORK=off go test ./...    # L0
 ```
 

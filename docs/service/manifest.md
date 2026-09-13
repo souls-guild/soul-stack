@@ -145,7 +145,7 @@ state_schema:
 
 Only the keys with an input-DSL counterpart are renamed. Do not transliterate the pattern onto a key not in the table — the counterpart of `uniqueItems`, for instance, is **`unique`**, not `unique_items` ([`shared/config/input_schema.go`](../../shared/config/input_schema.go)).
 
-**What does NOT move: genuine JSON Schema stays JSON Schema.** This dialect is what *we* author. Schemas published to a foreign contract are unaffected and must not be migrated — the SshProvider / soul-beacon **`params_schema`** ([`sdk/schema/schema.go`](../../sdk/schema/schema.go)) ([`examples/module/soul-ssh-static/schema.json`](../../examples/module/soul-ssh-static/schema.json)), the MCP tool input schemas ([`docs/keeper/mcp-tools.md`](../keeper/mcp-tools.md)) and [`docs/keeper/openapi.yaml`](../keeper/openapi.yaml). A `required: [...]` in any of those is somebody else's grammar, not a leftover of ours.
+**What does NOT move: genuine JSON Schema stays JSON Schema.** This dialect is what *we* author. Schemas published to a foreign contract are unaffected and must not be migrated — the SshProvider / soul-beacon **`params_schema`** ([`sdk/schema/schema.go`](../../sdk/schema/schema.go)) ([`soul-stack-plugin/ssh-static` → `schema.json`](https://github.com/soul-stack-plugin/ssh-static/blob/main/schema.json)), the MCP tool input schemas ([`docs/keeper/mcp-tools.md`](../keeper/mcp-tools.md)) and [`docs/keeper/openapi.yaml`](../keeper/openapi.yaml). A `required: [...]` in any of those is somebody else's grammar, not a leftover of ours.
 
 **`$type` may carry the node's own `properties:`** — in `state_schema` only. Inside `input:` the existing rule stands unchanged: `$type` next to any of `{type, properties, items}` is `input_type_ref_conflict` ([`shared/config/input_types.go`](../../shared/config/input_types.go)). `description`, `required` and `required_when` are already overlaid on a reference node (`applyRefOverlay` in the same file); in `state_schema` the overlay widens by exactly one key, `properties`, so a state field can reuse a named type and add the properties that field alone carries. Merge is **add-only shallow** and **fail-closed**, the `extends:` covenant of [ADR-009](../adr/0009-scenario-dsl.md): a key present in both the type and the reference is a conflict (`input_type_ref_overlay_conflict`), never last-wins and never a deep merge.
 
@@ -391,7 +391,7 @@ destiny:
 # params.name of that step is level 1 alone - `redis`, the slot the alias names -
 # because a slot holds an artifact, and level 2 addresses a module inside it (NIM-524).
 modules:
-  # One artifact, one row. soul-mod-redis serves acl, cluster, instance, replica,
+  # One artifact, one row. redis serves acl, cluster, instance, replica,
   # sentinel and user as OBJECTS inside the one binary — they arrive with the install
   # and are not separately installable, so they are not listed (NIM-829).
   - { name: redis, ref: v1.0.0 }

@@ -1522,7 +1522,7 @@ func (p *KeeperPlugins) ResolvedMaxCloneSize() int64 {
 //
 //	# kind: git (the default; an entry with no `kind:` is this)
 //	- name: redis
-//	  source: https://github.com/example/soul-mod-redis.git
+//	  source: https://github.com/example/redis.git
 //	  ref: v1.4.0
 //
 //	# kind: artifact

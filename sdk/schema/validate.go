@@ -217,7 +217,7 @@ func validateModules(doc Document) []Issue {
 				Hint:    "kebab-case: lowercase letters, digits, dashes; must start with a letter; at most 63 characters",
 			})
 		case m.Name == SchemaSubcommand:
-			// Dispatch is a subcommand (`soul-mod-redis acl`), and `schema` is
+			// Dispatch is a subcommand (`redis acl`), and `schema` is
 			// taken by the document dump — a module of that name could never be
 			// invoked.
 			out = append(out, Issue{

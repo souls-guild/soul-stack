@@ -21,7 +21,7 @@ import (
 )
 
 // TestL3bPluginChannel_CatalogAndAllow - smoke S1:
-//  1. harness builds soul-mod-redis and publishes it into per-test
+//  1. harness builds redis and publishes it into per-test
 //     git repo (dist/ holding the stamped artifact + schema.json, tag v1.0.0);
 //  2. keeper starts with `plugins.soul_modules[]` registering that repo under the
 //     alias `redis` and materializes slot `<cache_root>/redis/current/`
@@ -32,7 +32,7 @@ import (
 //     (content-addressed authority ADR-065(b)).
 //
 // The alias is `redis` since NIM-766: the artifact declares SIX modules, one per
-// OBJECT it manages (examples/module/soul-mod-redis/schema.json), the registry key
+// OBJECT it manages (examples/module/redis/schema.json), the registry key
 // is `<alias>.<module>`, and every scenario addresses `redis.<object>.<action>`.
 // The old alias `community` named where the plugin came from rather than what it
 // manages, which is the grouping level ADR-020's 2026-09-02 amendment removed.

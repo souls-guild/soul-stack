@@ -40,7 +40,7 @@ func sampleDocumentBytes(t *testing.T) []byte {
 // stampedArtifact writes a fake artifact with a schema trailer and returns its path.
 func stampedArtifact(t *testing.T, payload []byte) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "soul-mod-redis")
+	path := filepath.Join(t.TempDir(), "redis")
 	body := schema.AppendTrailer([]byte("pretend this is an ELF"), payload)
 	if err := os.WriteFile(path, body, 0o755); err != nil {
 		t.Fatalf("write artifact: %v", err)
@@ -88,7 +88,7 @@ func TestReadArtifact_FailsClosed(t *testing.T) {
 	}{
 		"never_stamped": {
 			artifact: func(t *testing.T) string {
-				path := filepath.Join(t.TempDir(), "soul-mod-redis")
+				path := filepath.Join(t.TempDir(), "redis")
 				if err := os.WriteFile(path, []byte("a plain artifact"), 0o755); err != nil {
 					t.Fatalf("write: %v", err)
 				}
@@ -164,7 +164,7 @@ func TestReadArtifact_DoesNotFallBackToSchemaFile(t *testing.T) {
 	// trailer must refuse the artifact, not read a file anyone could have dropped
 	// next to it.
 	dir := t.TempDir()
-	path := filepath.Join(dir, "soul-mod-redis")
+	path := filepath.Join(dir, "redis")
 	if err := os.WriteFile(path, []byte("an unstamped artifact"), 0o755); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}

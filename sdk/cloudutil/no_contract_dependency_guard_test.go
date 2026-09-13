@@ -7,7 +7,7 @@ package cloudutil
 // convergence plumbing every slow-remote-API plugin needs — retry, wait-until-ready,
 // confirm-destroy, error classification. The contract went away with NIM-761; the
 // plumbing moved here verbatim because it was never about clouds and its only live
-// consumer, `soul-cloud-wb`, already links `sdk/module` for its actual contract.
+// consumer, `wbcloud`, already links `sdk/module` for its actual contract.
 //
 // The invariant is that the two halves stay apart. A single `pluginv1` import here and
 // the package is contract-coupled again — silently, because it would still compile and

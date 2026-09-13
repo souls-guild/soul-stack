@@ -143,7 +143,7 @@ type Def struct {
 }
 
 // Bundle is one artifact: several modules of one subject, served by one executable and
-// dispatched by subcommand (`soul-mod-redis acl`).
+// dispatched by subcommand (`redis acl`).
 //
 // The host forks per Apply (ADR-020(d), one-shot), so serving several modules from one
 // long-lived process would buy nothing — the bundle exists to make one artifact, one

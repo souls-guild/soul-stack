@@ -288,8 +288,17 @@ test:
 # masking in the redis plugin (59 test functions), which would otherwise
 # stay outside the gate.
 #
-# Skip-on-unresolvable: cloud/ssh plugins (soul-cloud-*/soul-ssh-*) don't resolve
+# Skip-on-unresolvable: the ssh providers (soul-ssh-*) don't resolve
 # standalone-offline (workspace go.mod pins diverge from standalone-tidy, needs network).
+#
+# ⚠ Since NIM-825 nothing in this corpus is skipped — the three soul-ssh-* modules
+# that were the reason for the skip have left this tree for their own repositories,
+# and the skip is kept only for a plugin that lands here in future. Worth recording
+# WHY they resolve now and did not before: in-tree they reached sdk/proto-plugin
+# through a relative `replace` at v0.0.0, which is what "diverges from
+# standalone-tidy" means; out of tree they require the published v0.1.0-beta.1 and
+# build offline from the module cache like anything else. The skip was a symptom of
+# the layout ADR-011 forbids, not of the plugins.
 # `go list ./...` under GOWORK=off fails for them -> we skip LOUDLY with a warning (the same
 # trick as `go list` empty -> skip in `test`/`vet`). This is NOT a silent pass: the skip
 # is printed, and a plugin that *does* resolve offline (redis) isn't covered by it -
@@ -1669,7 +1678,7 @@ check-vuln-corpus:
 # The list is every artifact served through `module.ServeBundle`, which is what gives
 # it a `schema` subcommand for stamp to run. An artifact still on the single-module
 # `module.Serve` has no document to derive and belongs nowhere near this list.
-PLUGIN_SCHEMA_DIRS ?= examples/module/soul-mod-redis examples/module/soul-mod-mongo examples/module/soul-mod-cassandra examples/module/vmlocal
+PLUGIN_SCHEMA_DIRS ?= examples/module/redis examples/module/vmlocal
 check-plugin-schema:
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
@@ -1910,8 +1919,28 @@ check-vuln:
 # NIM-769 — one alias each, one module per OBJECT it manages. The origin-grouping level
 # `community` is gone from both, so the two aliases differ by SUBJECT now, which is
 # what makes the collision above moot rather than the rule that avoided it.
-LINT_MODULES_REDIS ?= examples/module/soul-mod-redis
-LINT_MODULES_MONGO ?= examples/module/soul-mod-mongo
+LINT_MODULES_REDIS ?= examples/module/redis
+
+# Services whose plugin has LEFT this tree, and whose scenarios are therefore not
+# scenario-linted here at all (NIM-825).
+#
+# ⚠ This is a real loss, decided deliberately. `mongo` now lives in its own
+# repository (github.com/soul-stack-plugin/mongo) per ADR-011 — "examples/ —
+# non-Go artifacts only … separate repos" — so `--modules=mongo=<path>` has nothing
+# in this checkout to point at. The alternatives were a relative path into a sibling
+# checkout (breaks a clean CI clone of this repo alone) or vendoring the plugin's
+# schema.json here behind a freshness gate (the check-webui-freshness shape). Taking
+# the corpus off the lint was chosen instead, and the cost is exactly what the
+# FALSE-GREEN guard below exists to prevent: NOTHING checks the `params:` of the
+# `mongo.*` steps in examples/service/mongo now. `validate-service` still runs on it,
+# and the plugin's own repository gates its schema document; what is gone is the one
+# place where BOTH halves were present at once.
+#
+# The same line will be needed for `redis` when the redis artifact follows (NIM-825).
+# ⚠ This value is interpolated as a shell `case` PATTERN, so a second service is
+# `mongo|redis`, NOT `mongo redis` — the space form is a syntax error, not a two-element
+# list, and it would take the whole lint target down rather than skip anything.
+LINT_SCENARIO_SKIP ?= mongo
 
 lint: build
 	@for f in examples/destiny/*/destiny.yml; do \
@@ -1955,7 +1984,9 @@ lint: build
 		esac; \
 		svc=$$(echo "$$f" | cut -d/ -f3); \
 		case "$$svc" in \
-			mongo) mods="--modules=mongo=$(LINT_MODULES_MONGO)";; \
+			$(LINT_SCENARIO_SKIP)) echo "skip validate-scenario $$f ($$svc's plugin left this tree, NIM-825)"; continue;; \
+		esac; \
+		case "$$svc" in \
 			*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
 		esac; \
 		echo "validate-scenario $$f $$mods --service-name=$$svc"; \
@@ -2045,7 +2076,13 @@ trial: build
 				continue; \
 			fi; \
 			case "$$name" in \
-				mongo) mods="--modules=mongo=$(LINT_MODULES_MONGO)";; \
+				$(LINT_SCENARIO_SKIP)) \
+					echo "SKIP trial $$name ($$name's plugin left this tree, NIM-825 — a run here would be" ; \
+					echo "     FALSE-GREEN: its params would go unchecked and the PASS would cover less" ; \
+					echo "     than it looks)"; \
+					continue;; \
+			esac; \
+			case "$$name" in \
 				*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
 			esac; \
 			echo "soul-trial run $$svc $$mods"; \

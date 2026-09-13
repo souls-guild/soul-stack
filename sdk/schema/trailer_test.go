@@ -13,7 +13,7 @@ import (
 // a loader would map, and nothing else.
 func fakeArtifact(t *testing.T, body []byte) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "soul-mod-redis")
+	path := filepath.Join(t.TempDir(), "redis")
 	if err := os.WriteFile(path, body, 0o755); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}

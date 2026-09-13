@@ -240,7 +240,7 @@ See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper)
 
 ## "Sigil verify failed - the plugin does not start"
 
-**Symptoms.** Apply using community plugin (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`) crashes with `sigil verify failed`. Audit-event `plugin.verify_failed`.
+**Symptoms.** Apply using a community plugin (a SoulModule artifact or an `soul-ssh-*` provider) crashes with `sigil verify failed`. Audit-event `plugin.verify_failed`.
 
 **Root.** The plugin's Sigil signature did not match - either the plugin is not allowed through `plugin.allow`, or has been revoked (`revoked_at`), or the SHA-256 of the binary does not match the entry in `plugin_sigils`.
 
@@ -249,11 +249,11 @@ See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper)
 1. Verify entry in `plugin_sigils`:
    ```sql
    SELECT namespace, name, ref, sha256, revoked_at FROM plugin_sigils
-   WHERE namespace = 'cloud' AND name = 'soul-cloud-aws' AND revoked_at IS NULL;
+   WHERE namespace = 'cloud' AND name = 'aws' AND revoked_at IS NULL;
    ```
 2. Verify SHA-256 of the actual binary:
    ```sh
-   sha256sum /var/lib/soul-stack-keeper/plugins/cloud/soul-cloud-aws/<commit_sha>/soul-cloud-aws
+   sha256sum /var/lib/soul-stack-keeper/plugins/cloud/aws/<commit_sha>/aws
    ```
 3. If there is a match, verify the trust-anchor set on Soul (re-broadcast may not have reached). See [`docs/observability.md` → keeper_sigil_anchors_last_delivered](../observability.md).
 4. If the plugin has been updated and the SHA has changed, you need to explicitly allow the new one via the Operator API (`plugin.allow`).

@@ -30,7 +30,7 @@ type Kind int32
 
 const (
 	Kind_KIND_UNSPECIFIED  Kind = 0
-	Kind_KIND_SOUL_MODULE  Kind = 1 // Soul-side: soul-mod-<name> binary, implements Destiny steps.
+	Kind_KIND_SOUL_MODULE  Kind = 1 // Soul-side: the artifact implements Destiny steps.
 	Kind_KIND_SSH_PROVIDER Kind = 3 // Keeper-side: soul-ssh-<provider> binary, SSH credentials for push.
 	Kind_KIND_SOUL_BEACON  Kind = 4 // Soul-side: soul-beacon-<name> binary, observes host state (ADR-030 V5-2).
 )

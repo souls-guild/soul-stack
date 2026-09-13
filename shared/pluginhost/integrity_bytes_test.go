@@ -89,7 +89,7 @@ func TestVerifyArtifactBytesFailures(t *testing.T) {
 		{
 			name: "source tampered",
 			mutate: func(data []byte, rec *SigilRecord, anchors *AnchorSet) ([]byte, *SigilRecord, *AnchorSet) {
-				rec.Source = "https://evil.example.com/soul-mod-redis"
+				rec.Source = "https://evil.example.com/redis"
 				return data, rec, anchors
 			},
 			reason: VerifyReasonBadSignature,

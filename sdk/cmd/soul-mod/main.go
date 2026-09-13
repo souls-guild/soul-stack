@@ -2,11 +2,11 @@
 // schema into the artifact, and verifies that the stamp still matches the code.
 //
 //	build:
-//		go build -trimpath -ldflags="-s -w" -o dist/soul-mod-redis ./cmd/soul-mod-redis
-//		soul-mod stamp dist/soul-mod-redis        # schema into the artifact + dist/schema.json
+//		go build -trimpath -ldflags="-s -w" -o dist/redis ./cmd/redis
+//		soul-mod stamp dist/redis        # schema into the artifact + dist/schema.json
 //
 //	check:
-//		soul-mod verify dist/soul-mod-redis       # stamped schema == code schema
+//		soul-mod verify dist/redis       # stamped schema == code schema
 //
 // # This is not a fourth Soul Stack binary
 //

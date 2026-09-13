@@ -31,7 +31,7 @@ const (
 // SoulModule — service contract for `kind: soul_module` plugins
 // (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
 //
-// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Host is the `soul` binary. Plugin binaries carry no fixed name.
 // Destiny step addressing is <namespace>.<name>.<state>.
 //
 // rpc Manifest() is NOT introduced in MVP — the host reads the manifest
@@ -112,7 +112,7 @@ type SoulModule_ApplyClient = grpc.ServerStreamingClient[ApplyEvent]
 // SoulModule — service contract for `kind: soul_module` plugins
 // (ADR-020, docs/keeper/plugins.md → SoulModule service contract).
 //
-// Host is the `soul` binary. Plugin binaries are soul-mod-<name>.
+// Host is the `soul` binary. Plugin binaries carry no fixed name.
 // Destiny step addressing is <namespace>.<name>.<state>.
 //
 // rpc Manifest() is NOT introduced in MVP — the host reads the manifest

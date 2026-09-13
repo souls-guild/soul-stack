@@ -22,8 +22,9 @@ that misrepresents affiliation or origin.
 - The designations **"official"**, **"certified"**, and **"official managed"** in
   connection with Soul Stack.
 
-Plugin binary prefixes (`soul-mod-*`, `soul-cloud-*`, `soul-ssh-*`) are a technical
-naming convention for the ecosystem — see [Permitted uses](#permitted-uses).
+Plugin binary names — a SoulModule artifact named after the module it serves, an
+`soul-ssh-*` provider named for its contract — are a technical naming convention
+for the ecosystem — see [Permitted uses](#permitted-uses).
 
 ## Permitted uses
 
@@ -36,9 +37,10 @@ You do **not** need permission to:
 - **State compatibility** factually — "compatible with Soul Stack", "works with Soul
   Stack", "a plugin for Soul Stack" — as long as it doesn't imply you *are* Soul Stack
   or are endorsed by it.
-- **Write and publish plugins** and name them with the ecosystem prefixes
-  (`soul-mod-<name>`, `soul-cloud-<name>`, `soul-ssh-<name>`). These name *your*
-  plugin for Soul Stack; they don't claim to be the official project.
+- **Write and publish plugins** and name them by the ecosystem convention — a
+  SoulModule artifact after the module it serves, an SshProvider `soul-ssh-<name>`.
+  Such a name designates *your* plugin for Soul Stack; it does not claim to be the
+  official project.
 - **Teach, write about, review, and reference** Soul Stack — talks, blog posts,
   tutorials, courses — using the name to refer to the project.
 - **Use the name in text** to refer to the project (nominative use), without altering

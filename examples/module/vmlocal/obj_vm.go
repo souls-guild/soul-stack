@@ -1,15 +1,15 @@
 // The `vm` object — a virtual machine on a local libvirt/QEMU host, as address
 // level 2 of `<alias>.vm.<action>`.
 //
-// ★ The object name and the four action names are `wb-cloud`'s, verbatim, and
+// ★ The object name and the four action names are `wbcloud`'s, verbatim, and
 // that is the whole point of this artifact rather than an aesthetic choice. A
 // plugin document carries no name of its own — address level 1 is the alias an
-// operator registers it under — so registering THIS binary as `wb-cloud` on a
+// operator registers it under — so registering THIS binary as `wbcloud` on a
 // local stand makes the unmodified WB service scenario provision against libvirt.
 // No fork, no `when:` on a mode, no test double. Renaming the object so that
 // `vmlocal.vm.created` would not read with a stutter would throw that away.
 //
-// The param surface is `wb-cloud`'s too, key for key, and
+// The param surface is `wbcloud`'s too, key for key, and
 // TestParamSurfaceMatchesWBCloud holds it there against a vendored copy of that
 // artifact's published document. Only the descriptions differ, because they are
 // what an operator reads and a WB description would be a lie here.
@@ -24,13 +24,13 @@ import "github.com/souls-guild/soul-stack/sdk/module"
 // all. [module.SideSoul] is the zero value, so losing this line fails at dispatch
 // with nothing to point at.
 //
-// Capabilities are `wb-cloud`'s as well, and honestly so: `endpoint` may name a
+// Capabilities are `wbcloud`'s as well, and honestly so: `endpoint` may name a
 // remote libvirt (`qemu+ssh://`, `qemu+tcp://`), and everything this artifact
 // writes it writes THROUGH libvirtd rather than to the filesystem itself.
 func vmDef(m *VMLocal) module.Def {
 	return module.Def{
 		Name:         "vm",
-		Description:  "A virtual machine on a local libvirt/QEMU host: provision a batch, tear one down, resize it, or read the inventory. Speaks the `wb-cloud` vm contract so an unmodified cloud scenario runs against a workstation.",
+		Description:  "A virtual machine on a local libvirt/QEMU host: provision a batch, tear one down, resize it, or read the inventory. Speaks the `wbcloud` vm contract so an unmodified cloud scenario runs against a workstation.",
 		Side:         module.SideKeeper,
 		Capabilities: []module.Capability{module.NetworkOutbound},
 		Impl:         m.vm(),

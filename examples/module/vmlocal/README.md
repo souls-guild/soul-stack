@@ -1,4 +1,4 @@
-# vmlocal — a machine provider over libvirt/QEMU, speaking the `wb-cloud` contract
+# vmlocal — a machine provider over libvirt/QEMU, speaking the `wbcloud` contract
 
 `vmlocal` provisions virtual machines on a local libvirt host. It exists so that
 bootstrap work can be debugged against a workstation instead of costing a billed
@@ -7,11 +7,11 @@ cloud VM per cycle.
 ## The property this is built around
 
 A plugin document carries **no name of its own**. Address level 1 —
-the `wb-cloud` in `wb-cloud.vm.created` — is the alias an operator writes in
+the `wbcloud` in `wbcloud.vm.created` — is the alias an operator writes in
 `keeper.yml::plugins.soul_modules[].name`, and it appears nowhere in the artifact's
 bytes.
 
-So registering this binary under the alias `wb-cloud` on a local stand makes a
+So registering this binary under the alias `wbcloud` on a local stand makes a
 cloud service scenario provision against libvirt **with its YAML unchanged**. No
 fork, no `when:` on a mode, no test double. In production the substitution is
 closed by the grant: the sigil pins a sha256.
@@ -32,7 +32,7 @@ carrying a key the state does not declare. So:
   `resized`**;
 - the parameter surface matches key for key, type for type, including
   `required`, `secret`, `pattern` and defaults;
-- `testdata/wb-cloud.schema.json` is a vendored copy of what the cloud artifact
+- `testdata/wbcloud.schema.json` is a vendored copy of what the cloud artifact
   publishes, and `TestParamSurfaceMatchesWBCloud` compares the two. When the
   cloud contract moves, that test reddens. Re-copy the fixture and decide whether
   `vmlocal` follows — do not delete the test.

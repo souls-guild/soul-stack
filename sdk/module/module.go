@@ -28,7 +28,7 @@
 //		// ...
 //	}
 //
-//	// cmd/soul-mod-redis/main.go
+//	// cmd/redis/main.go
 //	func main() {
 //		module.ServeBundle(module.Bundle{
 //			Compat:  module.Compat{Keeper: ">=0.9 <2.0"},

@@ -313,7 +313,7 @@ func TestSlotCommitSHA_CurrentNotSymlink(t *testing.T) {
 func TestSingleArtifactIn_Arithmetic(t *testing.T) {
 	t.Run("one executable plus schema.json", func(t *testing.T) {
 		dir := t.TempDir()
-		if err := os.WriteFile(filepath.Join(dir, "soul-mod-redis"), []byte("x"), 0o755); err != nil {
+		if err := os.WriteFile(filepath.Join(dir, "redis"), []byte("x"), 0o755); err != nil {
 			t.Fatal(err)
 		}
 		if err := os.WriteFile(filepath.Join(dir, schema.SchemaFileName), []byte("{}"), 0o644); err != nil {
@@ -323,7 +323,7 @@ func TestSingleArtifactIn_Arithmetic(t *testing.T) {
 		if err != nil {
 			t.Fatalf("SingleArtifactIn: %v", err)
 		}
-		if filepath.Base(got) != "soul-mod-redis" {
+		if filepath.Base(got) != "redis" {
 			t.Errorf("got %q, want the executable", got)
 		}
 	})

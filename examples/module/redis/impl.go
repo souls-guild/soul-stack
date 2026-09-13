@@ -1,4 +1,4 @@
-// soul-mod-redis is a real SoulModule plugin for Soul Stack: the PRIMARY interface
+// redis is a real SoulModule plugin for Soul Stack: the PRIMARY interface
 // to live Redis in redis consolidation. A service scenario orchestrates
 // order/targeting, the plugin executes ONE operation on one instance.
 //

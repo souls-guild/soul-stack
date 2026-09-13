@@ -26,11 +26,11 @@ const invalidSchemaJSON = `{"kind":"soul_module","protocol_version":1,` +
 //
 // The artifact carries no self-name, so the address a task writes has to be STATED. It
 // is stated on the binding, not read off the path: the directory here is named after the
-// binary (`soul-mod-community-redis`), and the very same bytes bound under two aliases
+// binary (`community-redis`), and the very same bytes bound under two aliases
 // have to produce two independent address spaces.
 func TestLoadSchemas_AddressComesFromTheBindingNotThePath(t *testing.T) {
 	dir := t.TempDir()
-	p := deftest.WriteSchemaFile(t, dir, "soul-mod-community-redis", deftest.SchemaJSON)
+	p := deftest.WriteSchemaFile(t, dir, "community-redis", deftest.SchemaJSON)
 
 	r, err := definition.LoadSchemas([]string{"redis=" + p, "redis-community=" + p})
 	if err != nil {
@@ -47,7 +47,7 @@ func TestLoadSchemas_AddressComesFromTheBindingNotThePath(t *testing.T) {
 	}
 	// Nothing may be reachable under the directory's name, or the path would be
 	// deciding an address again.
-	if _, ok := r.ResolveModule("soul-mod-community-redis", "acl"); ok {
+	if _, ok := r.ResolveModule("community-redis", "acl"); ok {
 		t.Error("the directory name resolved as an alias — the address is following the file again")
 	}
 	if _, ok := r.ResolveModule("community", "redis"); ok {
@@ -56,7 +56,7 @@ func TestLoadSchemas_AddressComesFromTheBindingNotThePath(t *testing.T) {
 }
 
 func TestLoadSchemas_AcceptsStampedArtifact(t *testing.T) {
-	art := deftest.WriteStampedArtifact(t, filepath.Join(t.TempDir(), "soul-mod-redis"), deftest.SchemaJSON)
+	art := deftest.WriteStampedArtifact(t, filepath.Join(t.TempDir(), "redis"), deftest.SchemaJSON)
 
 	r, err := definition.LoadSchemas([]string{"redis=" + art})
 	if err != nil {
@@ -87,7 +87,7 @@ func TestLoadSchemas_AcceptsDistDirectory(t *testing.T) {
 // read is a check they asked for and did not get.
 func TestLoadSchemas_UnreadableBindingsAreFatal(t *testing.T) {
 	dir := t.TempDir()
-	noTrailer := filepath.Join(dir, "soul-mod-unstamped")
+	noTrailer := filepath.Join(dir, "unstamped")
 	if err := os.WriteFile(noTrailer, []byte("\x7fELF never stamped"), 0o700); err != nil {
 		t.Fatalf("write: %v", err)
 	}
@@ -112,7 +112,7 @@ func TestLoadSchemas_UnreadableBindingsAreFatal(t *testing.T) {
 // A reserved alias cannot be registered in a cluster, so binding one here would let a
 // document of the author's choosing describe what `core.*` accepts.
 func TestLoadSchemas_ReservedAliasIsRefused(t *testing.T) {
-	p := deftest.WriteSchemaFile(t, t.TempDir(), "soul-mod-redis", deftest.SchemaJSON)
+	p := deftest.WriteSchemaFile(t, t.TempDir(), "redis", deftest.SchemaJSON)
 	for _, name := range plugin.ReservedNames() {
 		_, err := definition.LoadSchemas([]string{name + "=" + p})
 		if err == nil {
@@ -127,7 +127,7 @@ func TestLoadSchemas_ReservedAliasIsRefused(t *testing.T) {
 
 func TestLoadSchemas_MalformedBindingIsRefused(t *testing.T) {
 	dir := t.TempDir()
-	p := deftest.WriteSchemaFile(t, dir, "soul-mod-redis", deftest.SchemaJSON)
+	p := deftest.WriteSchemaFile(t, dir, "redis", deftest.SchemaJSON)
 
 	for _, tc := range []struct{ name, binding string }{
 		// The old form. It cannot work any more and must say so rather than index

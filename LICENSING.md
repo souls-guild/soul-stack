@@ -15,7 +15,7 @@ third parties as a hosted/managed service or product is restricted.
 |---|---|---|
 | **Core** — Keeper, Soul, soulctl, soul-lint, built-in `core.*` modules (this repository) | **BSL 1.1** (fair-code) → after 2 years each version becomes **Apache 2.0** | code is open; production use is limited to your own or your organization's infrastructure (incl. commercial internal ops) — providing it to third parties (hosted/managed service, product, white-label, OEM) needs a commercial license |
 | **Web interface** (`soul-stack-web`) | **BSL 1.1** → Apache 2.0 | same as the core |
-| **SDK, plugin protocol, examples, plugins** (`sdk/*`, `proto/plugin/*`, `examples/`, official/community `soul-mod-*`) | **Apache 2.0** | fully free, including proprietary third-party plugins |
+| **SDK, plugin protocol, examples, plugins** (`sdk/*`, `proto/plugin/*`, `examples/`, official/community plugins) | **Apache 2.0** | fully free, including proprietary third-party plugins |
 | **Premium packs, enterprise modules** (later) | commercial | separate products on top of the open core |
 
 ## What BSL is and why not "fully open source"

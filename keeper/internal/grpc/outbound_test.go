@@ -213,14 +213,14 @@ func TestOutbound_SendSigilSnapshot_HappyPath(t *testing.T) {
 	set := []*keeperv1.PluginSigil{
 		{
 			Alias:     "template",
-			Source:    "https://example.com/soul-mod-template.git",
+			Source:    "https://example.com/template.git",
 			Ref:       "v1.0.0",
 			Kind:      "git",
 			Artifacts: []*keeperv1.SigilArtifact{{Sha256: "abc123"}},
 			Signature: []byte("sig"),
 			Schema:    []byte(`{"kind":"soul_module","protocol_version":1}`),
 		},
-		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2",
+		{Alias: "hetzner", Source: "https://example.com/hetzner.git", Ref: "v2",
 			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "def456"}}},
 	}
 	if err := ob.SendSigilSnapshot(context.Background(), "sid", set); err != nil {
@@ -270,7 +270,7 @@ func TestOutbound_SendSigilSnapshot_NotConnected(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})
 	err := ob.SendSigilSnapshot(context.Background(), "sid",
-		[]*keeperv1.PluginSigil{{Alias: "template", Source: "https://example.com/soul-mod-template.git"}})
+		[]*keeperv1.PluginSigil{{Alias: "template", Source: "https://example.com/template.git"}})
 	if !errors.Is(err, ErrSoulNotConnected) {
 		t.Fatalf("err = %v, want ErrSoulNotConnected", err)
 	}

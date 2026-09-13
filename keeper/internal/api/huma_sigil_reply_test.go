@@ -27,7 +27,7 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 	ts := time.Date(2026, 6, 14, 12, 34, 56, 789012345, time.UTC)
 	ts2 := time.Date(2026, 6, 13, 1, 2, 3, 456789012, time.UTC)
 	const sha = "deadbeef0123456789abcdefdeadbeef0123456789abcdefdeadbeef01234567"
-	const src = "https://example.com/soul-mod-redis.git"
+	const src = "https://example.com/redis.git"
 	// A two-platform release, so the golden pins the shape a real artifact grant has
 	// rather than the one-row shape a git grant happens to share with the old field.
 	arts := []PluginSigilArtifactView{
@@ -40,15 +40,15 @@ func TestGoldenWire_SigilReply(t *testing.T) {
 	// --- PluginSigilAllowReply ---
 	goldenSigilWire(t, "AllowReply",
 		PluginSigilAllowReply{Alias: "redis", Ref: "v1.2.0", Kind: "artifact", Artifacts: arts, Source: src},
-		`{"alias":"redis","ref":"v1.2.0","kind":"artifact","artifacts":`+artsJSON+`,"source":"https://example.com/soul-mod-redis.git"}`)
+		`{"alias":"redis","ref":"v1.2.0","kind":"artifact","artifacts":`+artsJSON+`,"source":"https://example.com/redis.git"}`)
 
 	// --- PluginSigilView (nested): revoked_at omitempty — both branches ---
 	goldenSigilWire(t, "PluginSigilView/active",
 		PluginSigilView{Alias: "redis", AllowedAt: ts, AllowedByAID: "archon-alice", Ref: "v1.2.0", Source: src, RevokedAt: nil, Kind: "artifact", Artifacts: arts},
-		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/soul-mod-redis.git","kind":"artifact","artifacts":`+artsJSON+`}`)
+		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/redis.git","kind":"artifact","artifacts":`+artsJSON+`}`)
 	goldenSigilWire(t, "PluginSigilView/revoked",
 		PluginSigilView{Alias: "redis", AllowedAt: ts, AllowedByAID: "archon-alice", Ref: "v1.2.0", Source: src, RevokedAt: &ts2, Kind: "artifact", Artifacts: arts},
-		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/soul-mod-redis.git","revoked_at":"2026-06-13T01:02:03.456789012Z","kind":"artifact","artifacts":`+artsJSON+`}`)
+		`{"alias":"redis","allowed_at":"2026-06-14T12:34:56.789012345Z","allowed_by_aid":"archon-alice","ref":"v1.2.0","source":"https://example.com/redis.git","revoked_at":"2026-06-13T01:02:03.456789012Z","kind":"artifact","artifacts":`+artsJSON+`}`)
 }
 
 // TestGoldenWire_SigilProjection verifies that the projection of domain handlers.Sigil* results

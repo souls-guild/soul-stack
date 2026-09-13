@@ -74,7 +74,7 @@ func (f *fakeFetcher) FetchModule(_ context.Context, req *keeperv1.PluginFetchRe
 // what a signature can be about.
 const (
 	testAlias  = "redis"
-	testSource = "https://github.com/souls-guild/soul-mod-redis"
+	testSource = "https://github.com/souls-guild/redis"
 	testRef    = "v1.2.0"
 )
 
@@ -128,7 +128,7 @@ func (f *fixture) resign(t *testing.T) {
 
 func newFixture(t *testing.T) *fixture {
 	t.Helper()
-	binData := []byte("#!/bin/sh\necho soul-mod-redis fake binary\n")
+	binData := []byte("#!/bin/sh\necho redis fake binary\n")
 	sum := sha256.Sum256(binData)
 	binSHA := hex.EncodeToString(sum[:])
 
@@ -356,6 +356,11 @@ func TestApplyInstallClearsAForeignArtifact(t *testing.T) {
 	if err := os.MkdirAll(slotDir, 0o755); err != nil {
 		t.Fatal(err)
 	}
+	// The foreign name has to differ from testAlias or the install simply
+	// overwrites it and the guard tests nothing. `soul-mod-redis` is not an
+	// arbitrary choice: it is what a slot written before NIM-851 actually holds,
+	// so this is the upgrade case that rename created — old artifact in the slot,
+	// new install writing `redis` beside it.
 	stale := filepath.Join(slotDir, "soul-mod-redis")
 	if err := os.WriteFile(stale, []byte("#!/bin/sh\nexit 0\n"), 0o755); err != nil {
 		t.Fatal(err)

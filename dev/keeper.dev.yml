@@ -73,7 +73,7 @@ logging:
 # is deferred until after `keeper init` runs - rerun `make dev-provision`.
 
 # Sigil - plugin binary signing + trust-allowlist registry (ADR-026). Without this block
-# spawning ANY keeper-side plugin (CloudDriver soul-cloud-example / SshProvider)
+# spawning ANY keeper-side plugin (CloudDriver example / SshProvider)
 # fail-closes (no_trust_anchor). signing_key_ref -> Vault KV holding an ed25519 private key
 # (field signing_key, PEM PKCS#8). After adding it - restart keeper (hot-reload
 # does NOT pick up the Sigil block) + allow the binary via POST /v1/plugins/sigils.
@@ -93,7 +93,7 @@ plugins:
   #
   # DEV shortcut (no public driver git repo yet): the cache slot
   # /tmp/keeper-dev/plugins/example-example/{manual-0001,current} is populated MANUALLY
-  # (manifest.yaml + the soul-cloud-example binary from <path-to>/cloud-plugins).
+  # (manifest.yaml + the example binary from <path-to>/cloud-plugins).
   # source is file:// without SOUL_STACK_ALLOW_FILE_REPOS=1 set: the git resolver
   # rejects the scheme (validateGitScheme -> ErrSourceUnavailable), turns it into a warning
   # and does NOT touch the manual current symlink (per-entry fail-closed in ResolveCatalog).

@@ -344,7 +344,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	if err := os.WriteFile(localSoul, []byte("#!/bin/sh\ncat >/dev/null\nprintf '{\"apply_id\":\"integration-1\",\"status\":\"RUN_STATUS_SUCCESS\"}\\n'\n"), 0o755); err != nil {
 		t.Fatalf("write soul: %v", err)
 	}
-	localMod := filepath.Join(t.TempDir(), "soul-mod-pkg")
+	localMod := filepath.Join(t.TempDir(), "pkg")
 	if err := os.WriteFile(localMod, []byte("MODULE-V1"), 0o755); err != nil {
 		t.Fatalf("write mod: %v", err)
 	}
@@ -358,7 +358,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 		Cleaner:         NewShaCleaner(),
 		SoulSpec: SoulSpec{
 			SoulBinaryPath: localSoul,
-			Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: localMod}},
+			Modules:        []ModuleSpec{{Name: "pkg", Path: localMod}},
 		},
 		Logger:      slog.New(slog.NewTextHandler(io.Discard, nil)),
 		DialTimeout: 15 * time.Second,

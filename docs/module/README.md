@@ -116,10 +116,22 @@ in an address:
 | Directory | Index | What is this |
 |---|---|---|
 | `official/` | [official/README.md](official/README.md) | Soul Stack team plugins (`soul-mod-official-*`), companion repo `soul-stack-plugins`. Their `official.*` addresses are the old form; no follow-up ticket, the artifacts are not in this repo. |
-| `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, seven objects / nineteen actions (`soul-mod-redis`). It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. The `user` object (`ACL SETUSER`/`DELUSER` on one user) was added by NIM-767. |
-| `mongo/` | [mongo/README.md](mongo/README.md) | The `mongo` plugin — interface to live MongoDB, standalone AND replica-set, eight objects / fifteen actions (`soul-mod-mongo`). Moved out from under `community/` by NIM-769, which also split `user` into the `present` / `absent` actions the address rule asks for; NIM-805 added `replicaset`, `role`, `collection`, `index` and `database` beside the first three and made a wrong-typed param a refusal rather than a coercion (NIM-800). Sharding is deferred with a reason in NIM-820. |
+| `redis/` | [redis/README.md](redis/README.md) | The `redis` plugin — interface to live Redis, seven objects / nineteen actions. It is NOT under `community/` since NIM-766: with the origin-grouping level gone from the address, the document sits under the plugin's own name. The `user` object (`ACL SETUSER`/`DELUSER` on one user) was added by NIM-767. |
+| `mongo/` | [mongo/README.md](mongo/README.md) | The `mongo` plugin — interface to live MongoDB, standalone AND replica-set, eight objects / fifteen actions. Moved out from under `community/` by NIM-769, which also split `user` into the `present` / `absent` actions the address rule asks for; NIM-805 added `replicaset`, `role`, `collection`, `index` and `database` beside the first three and made a wrong-typed param a refusal rather than a coercion (NIM-800). Sharding is deferred with a reason in NIM-820. |
 
 ## Catalog status
+
+> ★ **Where the artifacts live (NIM-825).** The plugins are no longer under
+> `examples/module/`: [ADR-011](../adr/0011-go-layout.md) reserves `examples/` for
+> non-Go artifacts and sends runnable Go to separate repositories. Five now live in
+> the [`soul-stack-plugin`](https://github.com/soul-stack-plugin) organisation, one
+> repository each — [`mongo`](https://github.com/soul-stack-plugin/mongo),
+> [`cassandra`](https://github.com/soul-stack-plugin/cassandra),
+> [`ssh-static`](https://github.com/soul-stack-plugin/ssh-static),
+> [`ssh-teleport`](https://github.com/soul-stack-plugin/ssh-teleport),
+> [`ssh-vault`](https://github.com/soul-stack-plugin/ssh-vault) — and each carries its
+> own gate (`make check`). `redis` is still in this tree; see the ADR-011
+> amendment for why it did not follow the others.
 
 The catalog is complete. What we think (the source of truth is the registry in the code,
 `soul/internal/coremod/registry.go` and `keeper/internal/coremod/registry.go`):

@@ -241,7 +241,7 @@ func taskErrorByPlan(t *testing.T, s *harness.Stack, applyID, sid string, planId
 }
 
 // assertHostFileExecutable checks file exists and has x bit (host binary slot for
-// soul-mod-redis, ADR-065(g)). Reusing assertHostFileAbsent is not enough:
+// redis, ADR-065(g)). Reusing assertHostFileAbsent is not enough:
 // `test -x` is required.
 func assertHostFileExecutable(t *testing.T, s *harness.Stack, soulIdx int, path string) {
 	t.Helper()

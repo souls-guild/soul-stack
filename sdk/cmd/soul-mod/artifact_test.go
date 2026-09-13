@@ -24,7 +24,7 @@ func buildArtifact(t *testing.T) string {
 	if err := os.MkdirAll(dist, 0o755); err != nil {
 		t.Fatalf("mkdir dist: %v", err)
 	}
-	out := filepath.Join(dist, "soul-mod-redis")
+	out := filepath.Join(dist, "redis")
 
 	cmd := exec.Command("go", "build", "-o", out, "./testdata/bundle-artifact")
 	cmd.Env = append(os.Environ(), "CGO_ENABLED=0")

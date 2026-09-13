@@ -123,9 +123,11 @@ destiny: []
 
 # Custom service modules: ONE ROW PER ARTIFACT, named by the REGISTRATION ALIAS the
 # operator gives it (docs/service/manifest.md → modules[]). The scenarios here address
-# mongo.*, so a cluster running this service registers soul-mod-mongo as `mongo`. That
+# mongo.*, so a cluster running this service registers the artifact under the alias
+# `mongo`. The artifact's own repository is also named mongo; that is a coincidence,
+# not the mechanism — the binary carries no name, the alias is the operator's. That
 # one artifact is the MAIN interface to a live MongoDB
-# (examples/module/soul-mod-mongo/); `instance`, `user` and the raw `command` are
+# (github.com/soul-stack-plugin/mongo); `instance`, `user` and the raw `command` are
 # objects inside it, and listing them was never a choice about what gets installed
 # (NIM-829) — the row installs the binary, and the binary brings all three.
 modules:

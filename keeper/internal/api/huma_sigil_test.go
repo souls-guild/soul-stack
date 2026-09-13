@@ -63,7 +63,7 @@ func (s *hsigilStore) GetActive(_ context.Context, alias string) (*sigil.Sigil, 
 func (s *hsigilStore) ListActive(context.Context) ([]*sigil.Sigil, error) { return s.listResult, nil }
 
 // hsigilSource — the git remote the fixture grants are issued on (the signed identity).
-const hsigilSource = "https://example.com/soul-cloud-hetzner.git"
+const hsigilSource = "https://example.com/hetzner.git"
 
 // hsigilSlots — a mock [sigil.SlotReader]: a readable slot + its commit_sha, keyed by
 // the registration alias.

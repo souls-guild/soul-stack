@@ -15,7 +15,7 @@ import (
 // catalogSource is the git remote the fixture grants were issued on. It is the artifact's
 // signed identity; the catalog shows it so an operator can see which repository the
 // modules in their catalog actually came from.
-const catalogSource = "https://example.com/soul-mod-postgres.git"
+const catalogSource = "https://example.com/postgres.git"
 
 // fakeCatalogPlugins — mock [ModuleCatalogPlugins] for the transport tests.
 type fakeCatalogPlugins struct {

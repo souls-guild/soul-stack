@@ -101,7 +101,7 @@ var fixtureSHA256 = hex.EncodeToString(func() []byte { d := sha256.Sum256([]byte
 
 // mcpSigilSource — the git remote the fixture grants are issued on (the signed
 // identity; the artifact carries no name of its own).
-const mcpSigilSource = "https://example.com/soul-cloud-hetzner.git"
+const mcpSigilSource = "https://example.com/hetzner.git"
 
 // sigilSlotFixture — a valid cache slot (artifact + stamped schema) for the Allow flow.
 func sigilSlotFixture() *pluginhost.SlotContents {

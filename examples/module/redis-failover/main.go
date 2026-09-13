@@ -1,6 +1,6 @@
 // Skeleton of a custom Soul Stack module in Go.
 //
-// Builds into a single static binary `soul-mod-redis-failover` via `go build`.
+// Builds into a single static binary `redis-failover` via `go build`.
 // Soul will run this binary when applying a Destiny step like `module: acme.redis-failover.promoted`
 // as a sub-process, perform gRPC-stdio handshake (see sdk/handshake)
 // and call SoulModule RPC methods.
@@ -9,7 +9,7 @@
 // `redis-failover` is the plugin's own subject sitting at level 2, where the address
 // rule (ADR-020 amendment 2026-09-02, NIM-764/NIM-765) puts the OBJECT a module manages.
 // Marked rather than rewritten, because re-laying this skeleton out is not a rename —
-// its object would be `replica`, which the shipped soul-mod-redis already serves, so
+// its object would be `replica`, which the shipped redis already serves, so
 // whether this example survives at all is the question NIM-797 settles.
 //
 // This is an illustration — for production code add vault link resolution, idempotency,
@@ -101,7 +101,7 @@ func paramString(s *structpb.Struct, key string) string {
 
 func main() {
 	if err := module.Serve(&RedisFailover{}); err != nil {
-		fmt.Fprintln(os.Stderr, "soul-mod-redis-failover:", err)
+		fmt.Fprintln(os.Stderr, "redis-failover:", err)
 		os.Exit(1)
 	}
 }

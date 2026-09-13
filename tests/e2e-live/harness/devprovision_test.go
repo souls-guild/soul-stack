@@ -108,7 +108,7 @@ func TestDevProvisionPublishesTheSameArtifactAsTheFixture(t *testing.T) {
 	}
 
 	// (3) The artifact itself lands in dist/, anchored on the copy that puts it there.
-	// The name alone is not evidence: `local bin="soul-mod-redis"` satisfies a substring
+	// The name alone is not evidence: `local bin="redis"` satisfies a substring
 	// match on its own, so deleting the copy left every other assertion in this test
 	// green while dist/ held nothing but the document — no executable, ErrArtifactNotFound,
 	// a per-entry warning, and a stand that comes up healthy with redis absent.

@@ -636,9 +636,9 @@ provision_git_repo \
 # already-issued Sigil grant. Stamping keeps that property: the same binary and the same
 # document append the same bytes.
 provision_redis_plugin() {
-    local src="${EXAMPLES}/module/soul-mod-redis"
+    local src="${EXAMPLES}/module/redis"
     local dest="${KEEPER_DEV_DIR}/plugin-repos/redis"
-    local bin="soul-mod-redis"
+    local bin="redis"
     # The document IS the module's contract now, and it is read without running the
     # artifact (at plugin.allow the binary is not approved yet). Absent, there is nothing
     # to stamp - and an unstamped artifact is one plugingit rejects per-entry, so the

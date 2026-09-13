@@ -29,7 +29,7 @@ import (
 // keeper.yml plus the dead key, and a minimum of my own invention could pass this
 // while the real thing still failed on something else in the same phase.
 const removedCloudDriversBlock = `  cloud_drivers:
-    - { name: aws, source: "git@example.com:soul-cloud-aws.git", ref: v2.0.0 }
+    - { name: aws, source: "git@example.com:aws.git", ref: v2.0.0 }
 `
 
 // keeperYAMLWithRemovedKey re-inserts the removed block into the reference config,

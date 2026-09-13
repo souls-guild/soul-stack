@@ -1,6 +1,6 @@
 // Guards on the schema document ↔ implementation contract, and on the one
 // property this artifact exists for: that its address and param surface are
-// `wb-cloud`'s.
+// `wbcloud`'s.
 //
 // `modules[<object>].states.<action>.input` is the ONLY thing param-level
 // strictness reads (ADR-0076, NIM-163/NIM-204): a key a state omits has no
@@ -139,12 +139,12 @@ func TestSecretParamsAreDeclaredSecret(t *testing.T) {
 // ★★ THE POINT OF THIS ARTIFACT.
 //
 // A plugin document carries no name of its own — address level 1 is the alias an
-// operator registers it under — so registering this binary as `wb-cloud` makes an
+// operator registers it under — so registering this binary as `wbcloud` makes an
 // unmodified WB service scenario provision against libvirt. That only holds while
 // the OBJECT, the ACTIONS and the PARAM SURFACE are identical, because param-level
 // strictness refuses a call carrying a key the state does not declare.
 //
-// testdata/wb-cloud.schema.json is a vendored copy of what that artifact
+// testdata/wbcloud.schema.json is a vendored copy of what that artifact
 // publishes. Both sides are compared as PARSED JSON so the numeric types match
 // (a Go `int` default renders as a JSON number either way).
 //
@@ -156,21 +156,21 @@ func TestSecretParamsAreDeclaredSecret(t *testing.T) {
 func TestParamSurfaceMatchesWBCloud(t *testing.T) {
 	ours := parseDoc(t)
 
-	raw, err := os.ReadFile("testdata/wb-cloud.schema.json")
+	raw, err := os.ReadFile("testdata/wbcloud.schema.json")
 	if err != nil {
-		t.Fatalf("read the vendored wb-cloud document: %v", err)
+		t.Fatalf("read the vendored wbcloud document: %v", err)
 	}
 	theirs, err := schema.Unmarshal(raw)
 	if err != nil {
-		t.Fatalf("unmarshal the vendored wb-cloud document: %v", err)
+		t.Fatalf("unmarshal the vendored wbcloud document: %v", err)
 	}
 
 	if theirs.Modules[0].Name != ours.Modules[0].Name {
-		t.Fatalf("object name is %q, wb-cloud's is %q: the address must match or the scenario does not resolve",
+		t.Fatalf("object name is %q, wbcloud's is %q: the address must match or the scenario does not resolve",
 			ours.Modules[0].Name, theirs.Modules[0].Name)
 	}
 	if theirs.Modules[0].Side != ours.Modules[0].Side {
-		t.Errorf("side is %q, wb-cloud's is %q", ours.Modules[0].Side, theirs.Modules[0].Side)
+		t.Errorf("side is %q, wbcloud's is %q", ours.Modules[0].Side, theirs.Modules[0].Side)
 	}
 
 	wantStates := make([]string, 0, len(theirs.Modules[0].States))
@@ -184,7 +184,7 @@ func TestParamSurfaceMatchesWBCloud(t *testing.T) {
 	slices.Sort(wantStates)
 	slices.Sort(gotStates)
 	if !slices.Equal(wantStates, gotStates) {
-		t.Fatalf("actions are %v, wb-cloud's are %v", gotStates, wantStates)
+		t.Fatalf("actions are %v, wbcloud's are %v", gotStates, wantStates)
 	}
 
 	for _, state := range wantStates {
@@ -192,48 +192,48 @@ func TestParamSurfaceMatchesWBCloud(t *testing.T) {
 		for key, wp := range want.Input {
 			gp, ok := got.Input[key]
 			if !ok {
-				t.Errorf("state %q does not declare %q, which wb-cloud declares: a scenario passing it is refused as module.unknown_param", state, key)
+				t.Errorf("state %q does not declare %q, which wbcloud declares: a scenario passing it is refused as module.unknown_param", state, key)
 				continue
 			}
 			if wp.Type != gp.Type {
-				t.Errorf("state %q param %q: type=%q, wb-cloud's is %q", state, key, gp.Type, wp.Type)
+				t.Errorf("state %q param %q: type=%q, wbcloud's is %q", state, key, gp.Type, wp.Type)
 			}
 			if wp.Required != gp.Required {
-				t.Errorf("state %q param %q: required=%v, wb-cloud's is %v", state, key, gp.Required, wp.Required)
+				t.Errorf("state %q param %q: required=%v, wbcloud's is %v", state, key, gp.Required, wp.Required)
 			}
 			if wp.Secret != gp.Secret {
-				t.Errorf("state %q param %q: secret=%v, wb-cloud's is %v", state, key, gp.Secret, wp.Secret)
+				t.Errorf("state %q param %q: secret=%v, wbcloud's is %v", state, key, gp.Secret, wp.Secret)
 			}
 			if wp.Pattern != gp.Pattern {
-				t.Errorf("state %q param %q: pattern=%q, wb-cloud's is %q", state, key, gp.Pattern, wp.Pattern)
+				t.Errorf("state %q param %q: pattern=%q, wbcloud's is %q", state, key, gp.Pattern, wp.Pattern)
 			}
 			if !reflect.DeepEqual(wp.Default, gp.Default) {
-				t.Errorf("state %q param %q: default=%#v, wb-cloud's is %#v", state, key, gp.Default, wp.Default)
+				t.Errorf("state %q param %q: default=%#v, wbcloud's is %#v", state, key, gp.Default, wp.Default)
 			}
 		}
 		for key := range got.Input {
 			if _, ok := want.Input[key]; !ok {
-				t.Errorf("state %q declares %q, which wb-cloud does not: a scenario using it cannot run against the cloud", state, key)
+				t.Errorf("state %q declares %q, which wbcloud does not: a scenario using it cannot run against the cloud", state, key)
 			}
 		}
 	}
 }
 
-// A parameter surface identical to wb-cloud's is only half of it: the batch
+// A parameter surface identical to wbcloud's is only half of it: the batch
 // identity label the two artifacts filter on has to be the same string too, or an
 // adopted batch here is an orphan there.
 func TestRunLabelKeyMatchesWBCloud(t *testing.T) {
-	raw, err := os.ReadFile("testdata/wb-cloud.schema.json")
+	raw, err := os.ReadFile("testdata/wbcloud.schema.json")
 	if err != nil {
-		t.Fatalf("read the vendored wb-cloud document: %v", err)
+		t.Fatalf("read the vendored wbcloud document: %v", err)
 	}
 	var generic map[string]any
 	if err := json.Unmarshal(raw, &generic); err != nil {
 		t.Fatalf("unmarshal: %v", err)
 	}
-	// The key is named in wb-cloud's own prose rather than in a field, so this is
+	// The key is named in wbcloud's own prose rather than in a field, so this is
 	// the honest check available: the string must appear in the document it filters by.
 	if !bytes.Contains(raw, []byte(runLabelKey)) {
-		t.Errorf("wb-cloud's document does not mention %q — the batch identity label diverged", runLabelKey)
+		t.Errorf("wbcloud's document does not mention %q — the batch identity label diverged", runLabelKey)
 	}
 }

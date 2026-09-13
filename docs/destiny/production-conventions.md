@@ -227,4 +227,4 @@ This is an invariant, not a recommendation: it keeps destiny reusable and indepe
 
 ## Folder naming convention in `examples/`
 
-The example folder in `examples/destiny/` and `examples/service/` is called **bare dependency name without parent prefix** (`destiny-`/`service-`): directory is `node-exporter/`, `redis/`, `monitoring/`, not `destiny-node-exporter/` `service-monitoring/`. The type (destiny or service) is determined by the parent directory; there is no need to duplicate it in the folder name. Plugin binary prefixes (`soul-mod-`/`soul-cloud-`/`soul-ssh-`) - **remain**: these are the names of plugin binaries, not example folders.
+The example folder in `examples/destiny/` and `examples/service/` is called **bare dependency name without parent prefix** (`destiny-`/`service-`): directory is `node-exporter/`, `redis/`, `monitoring/`, not `destiny-node-exporter/` `service-monitoring/`. The type (destiny or service) is determined by the parent directory; there is no need to duplicate it in the folder name. Plugin binary prefixes (``/``/`soul-ssh-`) - **remain**: these are the names of plugin binaries, not example folders.

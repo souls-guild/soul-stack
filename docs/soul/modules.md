@@ -11,15 +11,15 @@ This section is about the **host side** of modules: where they physically live, 
   modules/
     redis/                     # slot of a custom module, named by the REGISTRATION ALIAS
       <schema document>        #   canonical JSON, from the artifact's trailer
-      soul-mod-redis           #   the single executable (single-active, atomic rename)
+      redis                    #   the single executable (single-active, atomic rename)
     acme/
       <schema document>
-      soul-mod-haproxy
+      haproxy                  #   named after its module; the alias above need not match
 ```
 
 - **`bin/soul-<sha>`** — the agent executable itself. The name contains the SHA-256 of the binary, which allows keeping several versions side by side and rolling back without re-downloading. Used by the push mode (Keeper rolls out the binary over SSH); in the pull mode updating the daemon is the operator's task (a systemd unit, a package manager).
 - **`modules/<alias>/`** — the slot of a custom module ([ADR-065](../adr/0065-core-module-installed.md#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact); the names — [naming-rules.md → Destiny modules](../naming-rules.md)). **The slot is named by the registration alias** — the name the operator chose on Keeper, not one read out of the artifact, because the artifact carries none (NIM-377). **Single-active** per alias: one active version, written by atomic rename; versions are not kept side by side — the authority is the active Sigil grant, and a "rollback" is revoke+allow of another grant on Keeper plus a repeated install step.
-- **The executable's filename means nothing.** The slot holds exactly one and the host takes it; `soul-mod-<name>` survives only as a habit of the repositories that build them. The `soul` binary launches it as a sub-process over gRPC-stdio, naming the module it wants as a **subcommand** (`soul-mod-redis acl`) — one artifact serves several modules.
+- **The executable's filename means nothing.** The slot holds exactly one and the host takes it; the name is only a habit of the repository that built it — since NIM-851 that habit is to call the artifact after the module it serves. The `soul` binary launches it as a sub-process over gRPC-stdio, naming the module it wants as a **subcommand** (`redis acl`) — one artifact serves several modules.
 - **The schema document replaces `manifest.yaml`** in the slot: canonical JSON, generated from Go, stamped into the artifact as a trailer. It is also carried by `PluginSigil.manifest_raw` in a `SigilSnapshot`, which is what the allow-check reads **before** any fetch. Since the schema now travels inside the bytes as well, Keeper's signed copy and the artifact's own copy are the same bytes by construction.
 - **Core modules do not lie on disk.** They are statically built into the `soul-<sha>` binary.
 
@@ -120,7 +120,7 @@ var Instance = module.Def{
 ```
 
 ```go
-// cmd/soul-mod-haproxy/main.go
+// cmd/haproxy/main.go
 func main() {
 	module.ServeBundle(module.Bundle{
 		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
@@ -168,4 +168,4 @@ Adding a param to a core module is therefore a Soul-side compat event: an agent 
 - [architecture.md → ADR-020](../adr/0020-plugin-infrastructure.md) — the normative decision on the plugin infrastructure.
 - [`../keeper/plugins.md`](../keeper/plugins.md) — the **normative source** on the manifest, handshake, lifecycle, capabilities, side_effects (the format is unified for all three kinds).
 - [keeper/push.md](../keeper/push.md) — the push algorithm and the delivery of the `soul` binary/modules from the Keeper side.
-- [naming-rules.md → Destiny modules](../naming-rules.md) — the vocabulary of names (`soul-mod-<name>`, core modules, custom modules).
+- [naming-rules.md → Destiny modules](../naming-rules.md) — the vocabulary of names (artifact naming, core modules, custom modules).

@@ -61,7 +61,7 @@ type sigilTestEnv struct {
 
 const (
 	testAlias  = "redis"
-	testSource = "https://github.com/souls-guild/soul-mod-redis"
+	testSource = "https://github.com/souls-guild/redis"
 	testRef    = "v1.0.0"
 )
 
@@ -303,7 +303,7 @@ func TestSigilVerifyRefTampered(t *testing.T) {
 func TestSigilVerifySourceTampered(t *testing.T) {
 	e := setupSigilEnv(t)
 	h := e.host(t, true)
-	e.rec.Source = "https://evil.example.com/soul-mod-redis"
+	e.rec.Source = "https://evil.example.com/redis"
 
 	_, err := h.Spawn(context.Background(), e.discovered)
 	if ve := asVerifyError(t, err); ve.Reason != VerifyReasonBadSignature {
@@ -338,7 +338,7 @@ func TestSigilVerifySecondAliasNeedsNoNewSignature(t *testing.T) {
 // the block the Keeper Sign flow signs: both call BuildSigilBlock + SchemaDigest
 // (shared code, not a second implementation).
 func TestSigilSymmetryBlockMatchesSign(t *testing.T) {
-	const source, ref = "https://example.com/soul-mod-git", "v2.0.0"
+	const source, ref = "https://example.com/git", "v2.0.0"
 	schemaDoc, err := schema.Marshal(soulModuleDoc(modDef("clone", nil, nil)))
 	if err != nil {
 		t.Fatalf("marshal: %v", err)

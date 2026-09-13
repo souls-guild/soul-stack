@@ -44,7 +44,7 @@ func fixedDeriver(payload []byte) deriver {
 
 func writeArtifact(t *testing.T, body string) string {
 	t.Helper()
-	path := filepath.Join(t.TempDir(), "soul-mod-redis")
+	path := filepath.Join(t.TempDir(), "redis")
 	if err := os.WriteFile(path, []byte(body), 0o755); err != nil {
 		t.Fatalf("write artifact: %v", err)
 	}

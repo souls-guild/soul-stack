@@ -142,12 +142,12 @@ func TestDeliver_UploadsWhenMissing(t *testing.T) {
 	fs := newFakeFile()
 	sess := newFakeShell(fs)
 	soulPath := writeTemp(t, "soul", "SOUL-BINARY-V1")
-	modPath := writeTemp(t, "soul-mod-pkg", "MOD-PKG-V1")
+	modPath := writeTemp(t, "pkg", "MOD-PKG-V1")
 
 	d := NewShaDeliverer()
 	err := d.Deliver(context.Background(), sess, SoulSpec{
 		SoulBinaryPath: soulPath,
-		Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: modPath}},
+		Modules:        []ModuleSpec{{Name: "pkg", Path: modPath}},
 	})
 	if err != nil {
 		t.Fatalf("Deliver: %v", err)
@@ -156,7 +156,7 @@ func TestDeliver_UploadsWhenMissing(t *testing.T) {
 	if got, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; !ok || string(got) != "SOUL-BINARY-V1" {
 		t.Errorf("soul not delivered, got %q ok=%v", got, ok)
 	}
-	if got, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; !ok || string(got) != "MOD-PKG-V1" {
+	if got, ok := fs.files[hostModulesDir+"/pkg"]; !ok || string(got) != "MOD-PKG-V1" {
 		t.Errorf("module not delivered, got %q ok=%v", got, ok)
 	}
 	// Check chmod by the presence of a subcommand in the exec log.
@@ -304,7 +304,7 @@ func TestCleanup_RemovesArtifactDirs(t *testing.T) {
 	fs.dirs[hostSoulDir] = true
 	fs.dirs[hostModulesDir] = true
 	fs.files[hostSoulDir+"/"+hostSoulFile] = []byte("SOUL")
-	fs.files[hostModulesDir+"/soul-mod-pkg"] = []byte("MOD")
+	fs.files[hostModulesDir+"/pkg"] = []byte("MOD")
 	sess := newFakeShell(fs)
 
 	c := NewShaCleaner()
@@ -314,7 +314,7 @@ func TestCleanup_RemovesArtifactDirs(t *testing.T) {
 	if _, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; ok {
 		t.Error("soul binary not removed")
 	}
-	if _, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; ok {
+	if _, ok := fs.files[hostModulesDir+"/pkg"]; ok {
 		t.Error("module not removed")
 	}
 	if fs.dirs[hostSoulDir] || fs.dirs[hostModulesDir] {

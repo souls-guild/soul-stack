@@ -28,7 +28,7 @@ The document covers **all kinds of plugins** (the schema-document format is the 
 | `ssh_provider` | `keeper` (module `keeper.push`) | SSH credentials for push run: [`SshProvider`](#service-contract-sshprovider). |
 | `soul_beacon` | `soul` | Read-only host observation for Vigil: [ADR-030 V5-2](../adr/0030-vigil-oracle.md). |
 
-**There is no binary-name column, and that is the point.** `soul-mod-<name>` / `soul-cloud-<provider>` / `soul-ssh-<provider>` used to be listed here as the naming convention; the loader computed a filename from the artifact's own `name:` and looked for it. With no self-name in the artifact there is nothing to compute — `dist/` holds **exactly one executable** and the host takes it, whatever it is called. Repositories may keep naming their output `soul-mod-redis` for the humans reading `dist/`; nothing reads it.
+**There is no binary-name column, and that is the point.** `soul-mod-<name>` / `soul-cloud-<provider>` / `soul-ssh-<provider>` used to be listed here as the naming convention; the loader computed a filename from the artifact's own `name:` and looked for it. With no self-name in the artifact there is nothing to compute — `dist/` holds **exactly one executable** and the host takes it, whatever it is called. NIM-851 then dropped the first two prefixes from the artifacts themselves (one contract, so one naming rule: a SoulModule artifact is called after the module it serves); `soul-ssh-*` stayed, because SshProvider is a genuinely different contract. Either way nothing reads the filename.
 
 ## Type conventions
 
@@ -52,7 +52,7 @@ A single type dictionary is used, as in [`config.md`](config.md):
 The plugin's self-description. **Generated** from Go, never authored ([ADR-020(n)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)), and published in two places by one generator:
 
 - **stamped into the artifact** — so Keeper always has it, whatever route the binary took;
-- **written to `dist/schema.json`** — so `soul-lint` can validate a destiny without downloading the binary. An author binds it to the address their tasks use: `soul-lint validate-scenario <path> --modules redis=./soul-mod-redis/dist/schema.json` ([soul-lint.md](../soul-lint.md#plugin-module-params---modules-aliaspath)). The **alias goes on the flag** because the artifact carries none — nothing on disk could say what a task should call it.
+- **written to `dist/schema.json`** — so `soul-lint` can validate a destiny without downloading the binary. An author binds it to the address their tasks use: `soul-lint validate-scenario <path> --modules redis=./redis/dist/schema.json` ([soul-lint.md](../soul-lint.md#plugin-module-params---modules-aliaspath)). The **alias goes on the flag** because the artifact carries none — nothing on disk could say what a task should call it.
 
 Keeper reads it **without executing the artifact**. That constraint is not stylistic: the schema is read at `plugin.allow`, and at that moment the operator has not yet approved the binary. A design where the host runs `<plugin> --schema` to find out what it is would execute the thing it is deciding whether to trust.
 
@@ -105,7 +105,7 @@ func (a *ACL) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServe
 One artifact serves several modules, declared as a bundle:
 
 ```go
-// cmd/soul-mod-redis/main.go
+// cmd/redis/main.go
 func main() {
 	module.ServeBundle(module.Bundle{
 		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
@@ -120,11 +120,11 @@ func main() {
 
 ```make
 build:
-	go build -trimpath -ldflags="-s -w" -o dist/soul-mod-redis ./cmd/soul-mod-redis
-	soul-mod stamp dist/soul-mod-redis        # schema into the artifact + dist/schema.json
+	go build -trimpath -ldflags="-s -w" -o dist/redis ./cmd/redis
+	soul-mod stamp dist/redis        # schema into the artifact + dist/schema.json
 
 check:
-	soul-mod verify dist/soul-mod-redis       # stamped schema == code schema
+	soul-mod verify dist/redis       # stamped schema == code schema
 ```
 
 - **`soul-mod stamp`** appends the schema to the built artifact and writes `dist/schema.json` beside it.
@@ -606,7 +606,7 @@ The audience for this field is the operator reading the schema at `plugin.allow`
 
 Host is the `soul` binary. The artifact is **the single executable in `dist/`** — its filename is not a contract ([Registration alias](#registration-alias)).
 
-**The host selects a module by subcommand:** it forks `<artifact> <module>` — `soul-mod-redis acl` — and the process serves that one module for that one Apply. `ServeBundle` dispatches on the argument and also answers a `schema` subcommand, which is why `schema` is a reserved module name. This costs no proto change and does not move `protocol_version`: the host already forks per Apply ([ADR-020(d)](../adr/0020-plugin-infrastructure.md), one-shot), so multiplexing several modules over one socket would buy nothing.
+**The host selects a module by subcommand:** it forks `<artifact> <module>` — `redis acl` — and the process serves that one module for that one Apply. `ServeBundle` dispatches on the argument and also answers a `schema` subcommand, which is why `schema` is a reserved module name. This costs no proto change and does not move `protocol_version`: the host already forks per Apply ([ADR-020(d)](../adr/0020-plugin-infrastructure.md), one-shot), so multiplexing several modules over one socket would buy nothing.
 
 | Method | Destination |
 |---|---|
@@ -694,7 +694,7 @@ var Instance = module.Def{
 ```
 
 ```go
-// cmd/soul-mod-haproxy/main.go
+// cmd/haproxy/main.go
 func main() {
 	module.ServeBundle(module.Bundle{
 		Compat:  module.Compat{Keeper: ">=0.9 <2.0"},
@@ -769,7 +769,7 @@ Registered as `redis`, it serves `redis.acl.present`, `redis.config.present` and
 
 ### `kind: ssh_provider` (Vault SSH CA)
 
-The actual implementation is [`examples/module/soul-ssh-vault/`](../../examples/module/soul-ssh-vault). Vault SSH CA: the plugin goes to Vault itself (variant B, see below), calls `ssh/sign/<role>` to sign Keeper-ephemeral pubkey, returns only `certificate` (`private_key=""`).
+The actual implementation is [`soul-stack-plugin/ssh-vault`](https://github.com/soul-stack-plugin/ssh-vault). Vault SSH CA: the plugin goes to Vault itself (variant B, see below), calls `ssh/sign/<role>` to sign Keeper-ephemeral pubkey, returns only `certificate` (`private_key=""`).
 
 **Canonical mode - Keeper-ephemeral** (security-first, PM-decision):
 
@@ -833,7 +833,7 @@ Example `SOUL_SSH_VAULT_PARAMS` (JSON, passed to the plugin env during fork):
 
 ### `kind: ssh_provider` (static-key)
 
-Reference implementation of SshProvider (circulation pilot) - [`examples/module/soul-ssh-static/`](../../examples/module/soul-ssh-static). Static-key: long-lived private key on the keeper host, its public part is in `authorized_keys` target hosts ([push.md → static key](push.md)). `Sign` gives a ready pair (`certificate=""`), `Authorize` — deny-list (default allow-all, for dev/test). Params of the provider (`key_path` / deny-list) arrive at the start via env (SshProvider contract does not carry per-request parameters of the provider; `vault_ref` resolves `keeper.push` to `key_path` before launching the plugin - A-flow, parallel with cloud credentials).
+Reference implementation of SshProvider (circulation pilot) - [`soul-stack-plugin/ssh-static`](https://github.com/soul-stack-plugin/ssh-static). Static-key: long-lived private key on the keeper host, its public part is in `authorized_keys` target hosts ([push.md → static key](push.md)). `Sign` gives a ready pair (`certificate=""`), `Authorize` — deny-list (default allow-all, for dev/test). Params of the provider (`key_path` / deny-list) arrive at the start via env (SshProvider contract does not carry per-request parameters of the provider; `vault_ref` resolves `keeper.push` to `key_path` before launching the plugin - A-flow, parallel with cloud credentials).
 
 ```yaml
 # schema document for soul-ssh-static (generated; shown as YAML for readability)
@@ -862,7 +862,7 @@ params_schema:
 
 ### `kind: ssh_provider` (Teleport)
 
-The actual implementation is [`examples/module/soul-ssh-teleport/`](../../examples/module/soul-ssh-teleport). Teleport provider: the plugin goes to Teleport Auth itself (creds-flow B, symmetrically to Vault SSH CA), calls `GenerateUserCerts(SSHPublicKey)` to sign the Keeper-ephemeral pubkey, returns only `certificate` (`private_key=""`) and fills in the only-add field with `SignReply.proxy_jump` endpoint of the Teleport-proxy.
+The actual implementation is [`soul-stack-plugin/ssh-teleport`](https://github.com/soul-stack-plugin/ssh-teleport). Teleport provider: the plugin goes to Teleport Auth itself (creds-flow B, symmetrically to Vault SSH CA), calls `GenerateUserCerts(SSHPublicKey)` to sign the Keeper-ephemeral pubkey, returns only `certificate` (`private_key=""`) and fills in the only-add field with `SignReply.proxy_jump` endpoint of the Teleport-proxy.
 
 **Canonical mode - Keeper-ephemeral** (security-first, PM-decision): Teleport API (`api/client.GenerateUserCerts`) accepts `SSHPublicKey []byte` and returns a signed SSH-cert for this pubkey - variant A (Vault-style) fits into Teleport without deviating from the key-ownership solution.
 
@@ -973,7 +973,7 @@ plugins:
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
 
   soul_modules:                     # SoulModule plugins (ADR-065): resolved by the same catalog, allowed by the same Sigil flow
-    - { name: redis, source: "git@github.com:souls-guild/soul-mod-redis.git", ref: v1.2.0 }
+    - { name: redis, source: "git@github.com:souls-guild/redis.git", ref: v1.2.0 }
 
     # kind: artifact — an already-built release published under a base URL (NIM-793).
     - name: pkg

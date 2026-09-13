@@ -1,4 +1,4 @@
-module github.com/souls-guild/soul-stack/examples/module/soul-mod-redis
+module github.com/souls-guild/soul-stack/examples/module/redis
 
 go 1.26.4
 

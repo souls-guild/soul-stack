@@ -13,7 +13,7 @@
 // # One spawn, one module
 //
 // An artifact serves several modules and dispatch is a subcommand
-// (`soul-mod-redis acl`, NIM-377). Every [Host.Spawn] therefore names exactly one
+// (`redis acl`, NIM-377). Every [Host.Spawn] therefore names exactly one
 // module, and everything the host decides from the declaration — the capability check,
 // the disclosure it reports — reads that module alone. Widening one module's
 // declaration with another's would approve a footprint nobody agreed to.
@@ -189,7 +189,7 @@ func WithEnv(env []string) SpawnOption {
 // (timeout, handshake drift, dial fail) the plugin process is stopped and the socket
 // removed — no BasePlugin is returned.
 //
-// The module travels as argv: `soul-mod-redis acl`. d.Module says which one, and it is
+// The module travels as argv: `redis acl`. d.Module says which one, and it is
 // the only one this spawn discloses, checks or serves; an artifact asked for a module
 // it does not have exits non-zero rather than falling through to another (sdk/module
 // → ServeBundle). A single-endpoint kind (ssh_provider / soul_beacon)

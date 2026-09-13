@@ -11,7 +11,7 @@ Documentation for the `soul` binary — the agent daemon on a managed host. The 
 | [onboarding.md](onboarding.md) | Bootstrap-token lifecycle (issue → delivery → CSR → burn), details on the Keeper and Soul sides, operator recommendations, ways to deliver the token to the host, protections. |
 | [connection.md](connection.md) | Connecting to the Keeper cluster: the `priority + failback` algorithm, the YAML config of the `keeper:` block, parameters (`retry`, `failback.interval`, `failback.spray`), guarantees. |
 | [config.md](config.md) | The `soul.yml` format: `sid`, `paths`, `keeper:`, `soulprint:`, `cleanup:`, `logging:`, `metrics:`, `otel:`, `tls`. Config layout on the Soul host side. |
-| [modules.md](modules.md) | The cache of core and custom modules on the host: the `/var/lib/soul-stack/{bin,modules}/` layout, the `soul-mod-<name>-<sha>` naming scheme, behavior in pull and push, local cleanup. |
+| [modules.md](modules.md) | The cache of core and custom modules on the host: the `/var/lib/soul-stack/{bin,modules}/` layout, the `<name>-<sha>` naming scheme, behavior in pull and push, local cleanup. |
 | [console.md](console.md) | Interactive console (PTY) sessions: why it is not an Errand, the only-add `console_*` wire contract on EventStream, Soul-side flow control, the kill-on-disconnect teardown and the per-host resource limits. |
 | [soulprint.md](soulprint.md) | The Soulprint typed schema MVP ([ADR-018](../adr/0018-soulprint-typed.md)): the `SoulprintFacts` fields (os/kernel/cpu/memory/network/hostname/sid), the `family→pkg_mgr/init_system` mapping table, the canonical CEL accessors `soulprint.self.<path>`, the Soulprint↔`souls`-registry boundary (covens — a Keeper-side projection), `collected_at` vs `received_at`. |
 

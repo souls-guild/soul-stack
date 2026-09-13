@@ -5,7 +5,7 @@
 
 # Где живут артефакты на этом хосте
 paths:
-  modules: /var/lib/soul-stack/modules   # кеш custom-модулей soul-mod-<имя>-<sha>
+  modules: /var/lib/soul-stack/modules   # кеш custom-модулей <имя>-<sha>
   seed:    /var/lib/soul-stack/seed      # SoulSeed-cert + private key (выпускается через `soul init`)
 
 # Подключение к Keeper-кластеру.

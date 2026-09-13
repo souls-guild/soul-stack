@@ -61,7 +61,7 @@ preflight() {
 		# exist any more (NIM-520). An environment that does stage the published
 		# document adds it via $E2E_ARTIFACTS.
 		local art_dir="${ARTIFACTS_DIR:-/opt/soul-stack}" art
-		for art in ${E2E_ARTIFACTS:-soul-cloud-example-linux soul-mod-redis}; do
+		for art in ${E2E_ARTIFACTS:-soul-cloud-example-linux redis}; do
 			if [[ -e "${art_dir}/${art}" ]]; then
 				_e2e_log "  ✓ artifact is in place: ${art_dir}/${art}"
 			else

@@ -186,7 +186,7 @@ func entryFor(fr *fixtureRepo, ref string) config.PluginCatalogEntry {
 func TestResolveEntry_HappyPath(t *testing.T) {
 	body := []byte("fake-built-cloud-binary")
 	fr := newFixtureRepo(t)
-	wantSHA := taggedPlugin(t, fr, "soul-cloud-hetzner", body)
+	wantSHA := taggedPlugin(t, fr, "hetzner", body)
 	r, cacheRoot := newTestResolver(t)
 
 	got, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -288,7 +288,7 @@ func TestResolveEntry_ArtifactNameIsIrrelevant(t *testing.T) {
 // executable.
 func TestResolveEntry_DistWithSchemaFileIsNotAmbiguous(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
+	fr.writeArtifact("hetzner", sshDoc(), []byte("bin"))
 	payload, err := schema.Marshal(sshDoc())
 	if err != nil {
 		t.Fatalf("marshal: %v", err)
@@ -306,7 +306,7 @@ func TestResolveEntry_DistWithSchemaFileIsNotAmbiguous(t *testing.T) {
 // TestResolveEntry_BranchRef checks resolving a branch ref (`main`), not just a tag.
 func TestResolveEntry_BranchRef(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
+	fr.writeArtifact("hetzner", sshDoc(), []byte("bin"))
 	wantSHA := fr.commit("plugin on main")
 	r, _ := newTestResolver(t)
 
@@ -321,7 +321,7 @@ func TestResolveEntry_BranchRef(t *testing.T) {
 
 func TestResolveEntry_ErrRefNotResolved(t *testing.T) {
 	fr := newFixtureRepo(t)
-	taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, fr, "hetzner", []byte("bin"))
 	r, _ := newTestResolver(t)
 
 	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "no-such-ref"))
@@ -351,8 +351,8 @@ func TestResolveEntry_ErrArtifactNotFound_Empty(t *testing.T) {
 // up approving. Two executables must stop the entry.
 func TestResolveEntry_ErrArtifactNotFound_TwoExecutables(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin-a"))
-	fr.writeArtifact("soul-cloud-hetzner-debug", sshDoc(), []byte("bin-b"))
+	fr.writeArtifact("hetzner", sshDoc(), []byte("bin-a"))
+	fr.writeArtifact("hetzner-debug", sshDoc(), []byte("bin-b"))
 	fr.commit("two artifacts")
 	fr.tag("v1.0.0")
 	r, cacheRoot := newTestResolver(t)
@@ -374,7 +374,7 @@ func TestResolveEntry_ErrArtifactNotFound_TwoExecutables(t *testing.T) {
 // disclosure to approve, so it never reaches the cache.
 func TestResolveEntry_ErrSchemaUnreadable_NoTrailer(t *testing.T) {
 	fr := newFixtureRepo(t)
-	fr.writeUnstampedArtifact("soul-cloud-hetzner", []byte("bin without a trailer"))
+	fr.writeUnstampedArtifact("hetzner", []byte("bin without a trailer"))
 	fr.commit("unstamped")
 	fr.tag("v1.0.0")
 	r, cacheRoot := newTestResolver(t)
@@ -393,7 +393,7 @@ func TestResolveEntry_ErrSchemaUnreadable_NoTrailer(t *testing.T) {
 func TestResolveEntry_ErrSchemaUnreadable_CorruptTrailer(t *testing.T) {
 	fr := newFixtureRepo(t)
 	full := stamped(t, sshDoc(), []byte("bin"))
-	fr.writeUnstampedArtifact("soul-cloud-hetzner", full[:len(full)-1])
+	fr.writeUnstampedArtifact("hetzner", full[:len(full)-1])
 	fr.commit("corrupt trailer")
 	fr.tag("v1.0.0")
 	r, _ := newTestResolver(t)
@@ -410,7 +410,7 @@ func TestResolveEntry_ErrSchemaUnreadable_InvalidDocument(t *testing.T) {
 	fr := newFixtureRepo(t)
 	// kind=soul_module with no modules: the validator rejects it.
 	bad := schema.Document{Kind: schema.KindSoulModule, ProtocolVersion: 1}
-	fr.writeArtifact("soul-mod-redis", bad, []byte("bin"))
+	fr.writeArtifact("redis", bad, []byte("bin"))
 	fr.commit("invalid document")
 	fr.tag("v1.0.0")
 	r, _ := newTestResolver(t)
@@ -476,7 +476,7 @@ func TestResolveEntry_ErrSourceUnavailable(t *testing.T) {
 // the env flag is rejected as ErrSourceUnavailable before any git operation.
 func TestResolveEntry_FileSchemeRequiresFlag(t *testing.T) {
 	fr := newFixtureRepo(t)
-	taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, fr, "hetzner", []byte("bin"))
 	r, _ := newTestResolver(t)
 
 	t.Setenv(allowFileReposEnv, "")
@@ -499,7 +499,7 @@ func TestResolveEntry_UnsupportedScheme(t *testing.T) {
 
 func TestResolveEntry_Idempotent(t *testing.T) {
 	fr := newFixtureRepo(t)
-	sha := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("idempotent-binary"))
+	sha := taggedPlugin(t, fr, "hetzner", []byte("idempotent-binary"))
 	r, cacheRoot := newTestResolver(t)
 
 	first, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -533,14 +533,14 @@ func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
 	// Resolve tag v1.0.0, then advance main with a new build and resolve main: current
 	// must switch to the second commit atomically, and both slots must remain.
 	fr := newFixtureRepo(t)
-	shaA := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("bin-a"))
+	shaA := taggedPlugin(t, fr, "hetzner", []byte("bin-a"))
 	r, cacheRoot := newTestResolver(t)
 
 	if _, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0")); err != nil {
 		t.Fatalf("resolve A (tag): %v", err)
 	}
 
-	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin-b"))
+	fr.writeArtifact("hetzner", sshDoc(), []byte("bin-b"))
 	shaB := fr.commit("advance main")
 	if shaB == shaA {
 		t.Fatal("commit B matched A — setup broken")
@@ -568,10 +568,10 @@ func TestResolveEntry_CurrentSymlinkAtomicSwap(t *testing.T) {
 func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 	// Good entries: cloud + soul_module; a broken one (no artifact in the checkout).
 	okRepo := newFixtureRepo(t)
-	taggedPlugin(t, okRepo, "soul-cloud-hetzner", []byte("bin"))
+	taggedPlugin(t, okRepo, "hetzner", []byte("bin"))
 
 	modRepo := newFixtureRepo(t)
-	modRepo.writeArtifact("soul-mod-redis", moduleDoc("acl", "config"), []byte("modbin"))
+	modRepo.writeArtifact("redis", moduleDoc("acl", "config"), []byte("modbin"))
 	modRepo.commit("soul module plugin")
 	modRepo.tag("v1.0.0")
 
@@ -628,7 +628,7 @@ func TestResolveCatalog_CollectsWarningsAndDoesNotFail(t *testing.T) {
 func TestResolveEntry_ErrArtifactTooLarge(t *testing.T) {
 	fr := newFixtureRepo(t)
 	oversized := make([]byte, 4096) // > the 1024-byte limit
-	sha := taggedPlugin(t, fr, "soul-cloud-hetzner", oversized)
+	sha := taggedPlugin(t, fr, "hetzner", oversized)
 	r, cacheRoot := newTestResolverWithLimits(t, 1024, 0)
 
 	_, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))
@@ -649,7 +649,7 @@ func TestResolveEntry_ErrArtifactTooLarge(t *testing.T) {
 func TestResolveEntry_ErrCloneTooLarge(t *testing.T) {
 	fr := newFixtureRepo(t)
 	// A tree bloated with a junk file beside a valid plugin.
-	fr.writeArtifact("soul-cloud-hetzner", sshDoc(), []byte("bin"))
+	fr.writeArtifact("hetzner", sshDoc(), []byte("bin"))
 	fr.writeFile("bloat.dat", make([]byte, 8192))
 	fr.commit("bloated plugin")
 	fr.tag("v1.0.0")
@@ -674,7 +674,7 @@ func TestResolveEntry_ErrCloneTooLarge(t *testing.T) {
 // resolves without error — the happy path is not broken by the hardening.
 func TestResolveEntry_WithinSizeLimits(t *testing.T) {
 	fr := newFixtureRepo(t)
-	wantSHA := taggedPlugin(t, fr, "soul-cloud-hetzner", []byte("small-binary"))
+	wantSHA := taggedPlugin(t, fr, "hetzner", []byte("small-binary"))
 	r, cacheRoot := newTestResolverWithLimits(t, 1<<20, 16<<20)
 
 	got, err := r.ResolveEntry(context.Background(), entryFor(fr, "v1.0.0"))

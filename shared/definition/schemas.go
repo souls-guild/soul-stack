@@ -18,7 +18,7 @@ package definition
 //
 // The alias goes on the flag rather than being taken from the directory. Directory
 // naming was already rejected once for the manifest form, and every reason still holds:
-// a plugin checkout is named after its binary (`soul-mod-redis`) or after
+// a plugin checkout is named after its binary (`redis`) or after
 // whatever `git clone` produced, while a task addresses `redis.instance`. Reading the
 // alias off the path would make a definition's address depend on where a file happens
 // to sit — rename the folder and the same definition stops or starts validating, with
@@ -141,7 +141,7 @@ func parseBinding(s string) (alias, path string, err error) {
 //
 // The two carriers are told apart by content, not by extension: a canonical document is
 // a JSON object and so begins with `{`, an artifact does not. Guessing from the
-// filename would misread `dist/soul-mod-redis.json` and, worse, would read an artifact
+// filename would misread `dist/redis.json` and, worse, would read an artifact
 // named `schema.json` as text and report a parse error instead of a missing trailer.
 func readSchemaDocument(path string) (*plugin.Document, error) {
 	info, err := os.Stat(path)

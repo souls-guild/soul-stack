@@ -87,7 +87,7 @@ func TestSigilRecordSource_ProjectsEveryVerifyField(t *testing.T) {
 	want := &sigil.Sigil{
 		ID:     42,
 		Alias:  "redis",
-		Source: "https://example.com/soul-mod-redis.git",
+		Source: "https://example.com/redis.git",
 		Ref:    "v2.0.0",
 		Kind:   "artifact",
 		Artifacts: []sharedhost.SigilArtifact{

@@ -55,7 +55,7 @@ Division of responsibilities (architect B-hybrid, ADR-009):
   `merge()`) + orchestration (step order, targeting, health-gate, unrolling the
   cluster topology into a `nodes` MAP; in future batches - rolling-restart, day-2).
 - **plugin [`redis`](../../../docs/module/redis/README.md)**
-  (binary `soul-mod-redis`) - the **primary interface** to a **live** Redis
+  (binary `redis`) - the **primary interface** to a **live** Redis
   (`CONFIG SET`, ACL, cluster, sentinel, failover, raw commands). Wired in via
   [`service.yml → modules[]`](service.yml).
 

@@ -148,5 +148,5 @@ func WriteStampedArtifact(t *testing.T, path, body string) string {
 // `--modules` binding that binds it to [Alias].
 func Binding(t *testing.T) string {
 	t.Helper()
-	return Alias + "=" + WriteSchemaFile(t, t.TempDir(), "soul-mod-redis", SchemaJSON)
+	return Alias + "=" + WriteSchemaFile(t, t.TempDir(), "redis", SchemaJSON)
 }

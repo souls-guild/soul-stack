@@ -45,7 +45,7 @@ func sigilFor(t *testing.T, d Discovered) (ed25519.PublicKey, sharedhost.SigilLo
 	schemaDigest := sharedhost.SchemaDigest(schemaDoc)
 	const (
 		ref    = "v1.0.0"
-		source = "https://github.com/souls-guild/soul-mod-echo"
+		source = "https://github.com/souls-guild/echo"
 	)
 	// A git-resolved grant: one artifact, no platform stated, so it answers on
 	// whatever platform this test runs on.
@@ -102,7 +102,7 @@ func stampArtifact(t *testing.T, binPath string) {
 }
 
 // buildEchoPlugin builds the testdata/echo-plugin test plugin and places it in
-// outDir as `soul-mod-echo`. Returns the absolute path to the binary.
+// outDir as `echo`. Returns the absolute path to the binary.
 //
 // Builds with GOWORK=off because the plugin is a separate go.mod module under
 // testdata/ (not formally part of the workspace; otherwise go tooling would
@@ -116,7 +116,7 @@ func buildEchoPlugin(t *testing.T, outDir string) string {
 	if err != nil {
 		t.Fatalf("abs testdata: %v", err)
 	}
-	binPath := filepath.Join(outDir, "soul-mod-echo")
+	binPath := filepath.Join(outDir, "echo")
 	cmd := exec.Command("go", "build", "-o", binPath, ".")
 	cmd.Dir = srcDir
 	cmd.Env = append(os.Environ(), "GOWORK=off")

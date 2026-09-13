@@ -64,7 +64,7 @@ Checks only **presence**, does not collect anything:
 → "do `tsh login`"), resolve proxy host;
 - if `$E2E_BRINGUP_STEPS` is non-empty - execution of each step in `$SCRIPTS_DIR`
 **and** presence of pre-collected artifacts in `$ARTIFACTS_DIR`
-(`soul-cloud-example-linux` / `soul-mod-redis` - overridden via `$E2E_ARTIFACTS`).
+(`soul-cloud-example-linux` / `redis` - overridden via `$E2E_ARTIFACTS`).
 The orchestrator **checks artifacts, but does not collect them** - collect them in advance.
 The default list is binaries and nothing beside them: since
 [NIM-377](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)
@@ -99,7 +99,7 @@ E2E_BRINGUP_STEPS="restore-after-reboot onboard-e2e distribute-plugin-e2e"
 
 - `restore-after-reboot` — raise `/tmp/keeper-dev` (PG / Vault / Redis / keeper) after reboot;
 - `onboard-e2e` — Soul onboarding via the reverse tunnel;
-- `distribute-plugin-e2e` - Deliver `soul-mod-redis` to a locally connected Soul.
+- `distribute-plugin-e2e` - Deliver `redis` to a locally connected Soul.
 
 **Cloud-track** (`EXEC_MODE=tsh`, native-keeper on VM):
 
@@ -110,7 +110,7 @@ E2E_BRINGUP_STEPS="deploy-keeper deploy-service batch-onboard distribute-plugin 
 - `deploy-keeper` — roll out/restart keeper on the VM;
 - `deploy-service` — upload service repo (`example-cloud-bootstrap`);
 - `batch-onboard` - Souls fleet onboarding on VM;
-- `distribute-plugin` - deliver `soul-mod-redis` + `soul-cloud-example`;
+- `distribute-plugin` - deliver `redis` + `example`;
 - `autoprov-run` / `poll-autoprov` - start cloud-provision and wait for the VM.
 
 Both lists are examples. The order and composition are set by the operator; empty `$E2E_BRINGUP_STEPS`

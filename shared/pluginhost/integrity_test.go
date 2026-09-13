@@ -10,7 +10,7 @@ import (
 // writePluginBin writes a fake plugin binary into dir and returns its path.
 func writePluginBin(t *testing.T, dir, content string) string {
 	t.Helper()
-	p := filepath.Join(dir, "soul-mod-x")
+	p := filepath.Join(dir, "x")
 	if err := os.WriteFile(p, []byte(content), 0o755); err != nil {
 		t.Fatalf("write bin: %v", err)
 	}

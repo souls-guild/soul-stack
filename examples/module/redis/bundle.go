@@ -1,4 +1,4 @@
-// The artifact's bundle — the seven objects `soul-mod-redis` serves, and the schema
+// The artifact's bundle — the seven objects `redis` serves, and the schema
 // document generated from them.
 //
 // The Go value is the source of truth (NIM-377): `soul-mod stamp` runs the

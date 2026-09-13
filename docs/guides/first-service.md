@@ -192,7 +192,7 @@ which **alias**, since the artifact carries no name of its own
 ```sh
 ./soul-lint/bin/soul-lint validate-scenario \
     examples/service/redis/scenario/add_user/main.yml \
-    --modules redis=./soul-mod-redis/dist/schema.json \
+    --modules redis=./redis/dist/schema.json \
     --service-name redis
 ```
 

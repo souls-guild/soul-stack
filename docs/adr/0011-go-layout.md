@@ -32,7 +32,7 @@
   - **`examples/` — non-Go artifacts only** (YAML, configs, templates). Runnable Go examples go in `tools/` or separate repos. This closes the risk of "accidentally creating a Go module in examples".
 - **Consequences.**
   - The first code commit creates 7 `go.mod` files + `go.work` + empty `cmd/<binary>/main.go` for the three binaries + a placeholder `proto/keeper/v1/keeper.proto` with a single RPC `Ping` to verify generation.
-  - Plugin authors (`soul-mod-*`, `soul-cloud-*`, `soul-ssh-*`) in their repositories write `require github.com/soul-stack/soul-stack/proto/plugin v0.X.Y` and `require github.com/soul-stack/soul-stack/sdk v0.X.Y` — without a dependency on keeper/soul/shared.
+  - Plugin authors (a SoulModule artifact is named after the module it serves since [NIM-851](#amendment-2026-09-12-nim-851-the-soul-mod--and-soul-cloud--prefixes-are-dropped-soul-ssh--stays); `soul-ssh-*` for SshProvider) in their repositories write `require github.com/soul-stack/soul-stack/proto/plugin v0.X.Y` and `require github.com/soul-stack/soul-stack/sdk v0.X.Y` — without a dependency on keeper/soul/shared.
   - External integrators (for the Operator API client SDK) pull `require github.com/soul-stack/soul-stack/proto v0.X.Y` or the future `sdk/api` module (a separate task after the first Operator API release).
   - A change to the Keeper↔Soul proto contract is edited in `proto/keeper/v1/`, regenerate, edit the host side — all in one PR in one repo. **The shape of the Operator API** is edited not in proto but in the **OpenAPI spec** ([`docs/keeper/openapi.yaml`](../keeper/openapi.yaml)) → `make gen-api` (oapi-codegen → `keeper/internal/api/oapi/`, [ADR-051](0051-operator-api-codegen.md#adr-051-operator-api-codegen-openapi--go-types-oapi-codegen-types-only--strict)); the markdown normalization of transport and the endpoint ↔ MCP-tool ↔ permission mapping — [`docs/keeper/operator-api.md`](../keeper/operator-api.md). `proto/operator/v1` is abolished (see the Amendment below).
   - A change to the plugin contract is edited in `proto/plugin/v1/`, regenerate `proto/plugin/gen/go/`, the version of `proto/plugin/` is bumped (via the shared repo tag); updating dependent plugin repos is a separate synchronization.
@@ -164,3 +164,55 @@ re-describes a wire body: it compares json key sets and flags a consumer set tha
 wire type's. It runs in `make check`. Its reach is the size of this package — a domain still
 declared in `keeper/internal/api` has nothing to be a subset of, so its hand-written readers pass
 until that domain moves. The test says which ones those are.
+
+## Amendment 2026-09-05 (NIM-825): the `examples/` rule is enforced, most of the way
+
+The rule above — "**`examples/` — non-Go artifacts only** … Runnable Go examples go in
+`tools/` or **separate repos**" — had drifted: six Go modules had accumulated under
+`examples/module/`, each with its own `go.mod` reaching `sdk` and `proto/plugin`
+through a RELATIVE `replace` at `v0.0.0`. That replace is what made them buildable
+only inside this checkout, which is the coupling this ADR exists to prevent.
+
+Five have left, each to its own repository in the `soul-stack-plugin` organisation,
+depending on the PUBLISHED `sdk` / `proto/plugin` `v0.1.0-beta.1` with no `replace` —
+which is what the Consequences section above already described plugin authors doing:
+
+| was | now |
+|---|---|
+| `examples/module/soul-mod-mongo` | [`soul-stack-plugin/mongo`](https://github.com/soul-stack-plugin/mongo) |
+| `examples/module/soul-mod-cassandra` | [`soul-stack-plugin/cassandra`](https://github.com/soul-stack-plugin/cassandra) |
+| `examples/module/soul-ssh-static` | [`soul-stack-plugin/ssh-static`](https://github.com/soul-stack-plugin/ssh-static) |
+| `examples/module/soul-ssh-teleport` | [`soul-stack-plugin/ssh-teleport`](https://github.com/soul-stack-plugin/ssh-teleport) |
+| `examples/module/soul-ssh-vault` | [`soul-stack-plugin/ssh-vault`](https://github.com/soul-stack-plugin/ssh-vault) |
+
+Each move left the sources untouched: the stamped `schema.json` is byte-identical on
+both sides, which is the evidence that the relocation changed no behaviour.
+
+**`examples/module/redis` has NOT moved, and the drift is therefore only
+mostly closed.** A `soul-stack-plugin/redis` repository already exists, created
+2026-08-07, carrying a DIFFERENT and partial implementation — one object (`acl`) laid
+out as `cmd/` + `internal/<object>/` — with two unmerged branches on it. Choosing
+between that layout and this tree's is not a relocation decision, so redis stays here
+until someone who owns that work decides. `redis-failover` is a skeleton with
+no `go.mod` yet (NIM-797); when it gets one it should be created in its own repository
+rather than here.
+
+**What the move cost, recorded so it is not rediscovered.** `examples/service/mongo`
+is off the scenario lint and the L0 trial (`LINT_SCENARIO_SKIP` in the Makefile),
+because `--modules=mongo=<path>` has nothing in this checkout to point at and the
+FALSE-GREEN guard fails the build rather than let a plugin step go param-unchecked.
+Nothing now checks the `params:` of the `mongo.*` steps there. The same will be true of
+`examples/service/redis` AND `examples/service/dragonfly` — dragonfly uses eight
+`redis.*` addresses — if redis follows.
+
+## Amendment 2026-09-12 (NIM-851): the `soul-mod-` and `soul-cloud-` prefixes are dropped, `soul-ssh-` stays
+
+The directory names in the table above are what they were at the time of that move. Since
+NIM-851 a SoulModule artifact is named after the module it serves, so `examples/module/`
+now holds `redis`, `redis-failover` and `vmlocal`, and the WB cloud plugin is
+`wb/plugins/wbcloud`. `soul-ssh-*` is unchanged — SshProvider is a separate contract, and
+the three repositories keep the marker (`ssh-static`, `ssh-teleport`, `ssh-vault`).
+
+Reasoning, and the check that could have gone the other way, are in
+[ADR-020's amendment of this date](0020-plugin-infrastructure.md#amendment-2026-09-12-nim-851-the-soul-mod--and-soul-cloud--prefixes-are-dropped-soul-ssh--stays).
+`sdk/` and `proto/plugin/` are untouched: they are interfaces, not artifacts.

@@ -52,12 +52,12 @@ func TestApplyKeeperTask_PluginWithSideKeeperExecutes(t *testing.T) {
 	r := &Runner{
 		keeperModules: fakeKeeperRegistry{},
 		keeperPlugins: fakePluginRegistry{
-			keeperSide: map[string]module.SoulModule{"wb-cloud.vm": mod},
-			sides:      map[string]schema.Side{"wb-cloud.vm": schema.SideKeeper},
+			keeperSide: map[string]module.SoulModule{"wbcloud.vm": mod},
+			sides:      map[string]schema.Side{"wbcloud.vm": schema.SideKeeper},
 		},
 	}
 
-	rt := &render.RenderedTask{Index: 0, Module: "wb-cloud.vm.created",
+	rt := &render.RenderedTask{Index: 0, Module: "wbcloud.vm.created",
 		Params: mustStruct(t, map[string]any{"count": float64(1)})}
 	changed, failed, output, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil, rt, nil)
 	if failed {
@@ -137,11 +137,11 @@ func TestApplyKeeperTask_UnknownPluginAddress(t *testing.T) {
 		t.Run(tc.name, func(t *testing.T) {
 			r := &Runner{keeperModules: fakeKeeperRegistry{}, keeperPlugins: tc.reg}
 			_, failed, _, msg := r.applyKeeperTask(context.Background(), RunSpec{}, nil,
-				&render.RenderedTask{Module: "wb-cloud.vm.created"}, nil)
+				&render.RenderedTask{Module: "wbcloud.vm.created"}, nil)
 			if !failed {
 				t.Fatal("failed=false, want true")
 			}
-			if !strings.Contains(msg, `unknown keeper-side module "wb-cloud.vm.created"`) {
+			if !strings.Contains(msg, `unknown keeper-side module "wbcloud.vm.created"`) {
 				t.Errorf("message = %q, want the unchanged unknown-module refusal", msg)
 			}
 		})
@@ -189,19 +189,19 @@ func TestApplyKeeperTask_SecretParamMaskedInMessage(t *testing.T) {
 	const secret = "s3cr3t-token-value"
 	mod := &fakeKeeperModule{final: &pluginv1.ApplyEvent{
 		Failed:  true,
-		Message: "authenticate to wb-cloud with token=" + secret + " failed",
+		Message: "authenticate to wbcloud with token=" + secret + " failed",
 	}}
 	r := &Runner{
 		keeperModules: fakeKeeperRegistry{},
 		keeperPlugins: fakePluginRegistry{
-			keeperSide: map[string]module.SoulModule{"wb-cloud.vm": mod},
-			sides:      map[string]schema.Side{"wb-cloud.vm": schema.SideKeeper},
+			keeperSide: map[string]module.SoulModule{"wbcloud.vm": mod},
+			sides:      map[string]schema.Side{"wbcloud.vm": schema.SideKeeper},
 		},
 	}
 
 	rt := &render.RenderedTask{
 		Index:  2,
-		Module: "wb-cloud.vm.created",
+		Module: "wbcloud.vm.created",
 		Params: mustStruct(t, map[string]any{
 			"credentials": map[string]any{"token": secret},
 			"region":      "ru-central1",
@@ -224,7 +224,7 @@ func TestApplyKeeperTask_SecretParamMaskedInMessage(t *testing.T) {
 	}
 	// Everything else the module said survives: masking the value, not the
 	// diagnostic, is the whole point of the per-cell seal.
-	if !strings.Contains(msg, "authenticate to wb-cloud") {
+	if !strings.Contains(msg, "authenticate to wbcloud") {
 		t.Errorf("message = %q, want the module's diagnostic intact around the masked value", msg)
 	}
 	// The observable summary is composed from this message — it must inherit
@@ -239,7 +239,7 @@ func TestApplyKeeperTask_SecretParamMaskedInMessage(t *testing.T) {
 // apart.
 func TestMaskKeeperTaskMessage_LeavesUnsealedValues(t *testing.T) {
 	rt := &render.RenderedTask{
-		Module: "wb-cloud.vm.created",
+		Module: "wbcloud.vm.created",
 		Params: mustStruct(t, map[string]any{"region": "ru-central1", "token": "abc"}),
 	}
 	got := maskKeeperTaskMessage(rt, map[string]bool{"token": true}, "region ru-central1 is closed (token abc)")
@@ -255,7 +255,7 @@ func TestMaskKeeperTaskMessage_LeavesUnsealedValues(t *testing.T) {
 // dot/idx, and a credential list is an ordinary shape for a provisioning step.
 func TestMaskKeeperTaskMessage_ReachesListElements(t *testing.T) {
 	rt := &render.RenderedTask{
-		Module: "wb-cloud.vm.created",
+		Module: "wbcloud.vm.created",
 		Params: mustStruct(t, map[string]any{"keys": []any{"public-part", "private-part"}}),
 	}
 	got := maskKeeperTaskMessage(rt, map[string]bool{"keys[1]": true}, "rejected key private-part")
@@ -271,7 +271,7 @@ func TestMaskKeeperTaskMessage_ReachesListElements(t *testing.T) {
 // in the clear — the ordering inside the masker is what prevents it.
 func TestMaskKeeperTaskMessage_OverlappingSecrets(t *testing.T) {
 	rt := &render.RenderedTask{
-		Module: "wb-cloud.vm.created",
+		Module: "wbcloud.vm.created",
 		Params: mustStruct(t, map[string]any{"short": "abc", "long": "abcdef"}),
 	}
 	got := maskKeeperTaskMessage(rt, map[string]bool{"short": true, "long": true}, "token abcdef rejected")
@@ -287,7 +287,7 @@ func TestMaskKeeperTaskMessage_OverlappingSecrets(t *testing.T) {
 // written that way today.
 func TestPluginAddressWithOnKeeperStillRoutesKeeperSide(t *testing.T) {
 	task := config.Task{
-		Module: &config.ModuleTask{Module: "wb-cloud.vm.created"},
+		Module: &config.ModuleTask{Module: "wbcloud.vm.created"},
 		On:     config.KeeperTarget,
 	}
 	if !config.IsKeeperSideTask(task) {
@@ -295,7 +295,7 @@ func TestPluginAddressWithOnKeeperStillRoutesKeeperSide(t *testing.T) {
 	}
 	// Without the key it is a Soul-side task, as before: the plugin's own side
 	// declaration lives in its schema document, which the scenario cannot see.
-	if config.IsKeeperSideTask(config.Task{Module: &config.ModuleTask{Module: "wb-cloud.vm.created"}}) {
+	if config.IsKeeperSideTask(config.Task{Module: &config.ModuleTask{Module: "wbcloud.vm.created"}}) {
 		t.Error("a plugin address without `on: keeper` routed keeper-side — the scenario has nothing to derive that from")
 	}
 }

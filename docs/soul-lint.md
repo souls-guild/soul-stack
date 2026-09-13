@@ -283,7 +283,7 @@ artifact, so the linter has to be handed it
 ([ADR-0076(x–z)](adr/0076-engine-compat-window.md)):
 
 ```sh
-soul-lint validate-scenario <path> --modules redis=./soul-mod-redis/dist/schema.json
+soul-lint validate-scenario <path> --modules redis=./redis/dist/schema.json
 ```
 
 That path is the **published sidecar** `soul-mod stamp` writes next to the artifact, so
@@ -295,7 +295,7 @@ The flag is **repeatable** — one binding per plugin, appended in order.
 **`<path>`** is a `schema.json`, a stamped artifact, or the `dist/` directory holding
 one. The two carriers are told apart **by content**, not by extension: a canonical
 document is a JSON object and begins with `{`, an artifact does not. Guessing from the
-filename would misread `dist/soul-mod-redis.json` and — worse — would read an artifact
+filename would misread `dist/redis.json` and — worse — would read an artifact
 named `schema.json` as text and report a parse error instead of a missing trailer.
 
 **The alias is stated on the flag, not inferred**, and this is the part that surprises
@@ -436,7 +436,7 @@ The L0 runner spells it the same way and parses it with the same loader
 (**NIM-790**), because it had the same gap and had it in all three places at once:
 
 ```sh
-soul-trial run examples/service/redis --modules redis=examples/module/soul-mod-redis
+soul-trial run examples/service/redis --modules redis=examples/module/redis
 ```
 
 L0 loaded every scenario and every destiny task file with empty validate options,

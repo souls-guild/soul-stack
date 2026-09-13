@@ -59,7 +59,7 @@ func TestPluginsCatalog_ArtifactEntryParsed(t *testing.T) {
 func TestPluginsCatalog_OmittedKindIsGit(t *testing.T) {
 	src := keeperBaseRequired + `plugins:
   soul_modules:
-    - { name: redis, source: "https://example.com/soul-mod-redis.git", ref: "v1.2.0" }
+    - { name: redis, source: "https://example.com/redis.git", ref: "v1.2.0" }
 `
 	cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", []byte(src), ValidateOptions{})
 	if err != nil {
@@ -73,7 +73,7 @@ func TestPluginsCatalog_OmittedKindIsGit(t *testing.T) {
 	if e.ResolvedKind() != plugin.SourceKindGit {
 		t.Errorf("ResolvedKind = %q, want git", e.ResolvedKind())
 	}
-	if e.SourceURL() != "https://example.com/soul-mod-redis.git" {
+	if e.SourceURL() != "https://example.com/redis.git" {
 		t.Errorf("SourceURL = %q, want the source", e.SourceURL())
 	}
 }
@@ -107,7 +107,7 @@ func TestPluginsCatalog_ArtifactEntryRejections(t *testing.T) {
 		"source under an artifact entry": {
 			entry: `    - name: redis
       kind: artifact
-      source: "https://example.com/soul-mod-redis.git"
+      source: "https://example.com/redis.git"
       base_url: "https://n.internal/redis"
       ref: v1
       artifacts:

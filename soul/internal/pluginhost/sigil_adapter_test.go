@@ -20,7 +20,7 @@ func (c fakeCache) Get(alias string) *keeperv1.PluginSigil { return c[alias] }
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	sig := &keeperv1.PluginSigil{
 		Alias:  "redis",
-		Source: "https://github.com/souls-guild/soul-mod-redis",
+		Source: "https://github.com/souls-guild/redis",
 		Ref:    "v2.0.0",
 		Kind:   "artifact",
 		Artifacts: []*keeperv1.SigilArtifact{
@@ -72,7 +72,7 @@ func TestSigilLookupAdapter_Maps(t *testing.T) {
 func TestSigilLookupAdapter_KeyIsTheAlias(t *testing.T) {
 	sig := &keeperv1.PluginSigil{
 		Alias:  "redis-community",
-		Source: "https://github.com/souls-guild/soul-mod-redis",
+		Source: "https://github.com/souls-guild/redis",
 	}
 	a := NewSigilLookupAdapter(fakeCache{"redis-community": sig})
 

@@ -39,7 +39,7 @@ var (
 	redisBuildErr  error
 )
 
-// BuildRedisPlugin builds soul-mod-redis (linux/amd64,
+// BuildRedisPlugin builds redis (linux/amd64,
 // per-process cache) and materializes a per-test git repo in the layout the
 // plugingit resolver expects (ADR-026(g) F-fetch, parity with fixtureRepo in
 // keeper/internal/plugingit/resolver_test.go): dist/ holding the stamped
@@ -72,7 +72,7 @@ func BuildRedisPlugin(t *testing.T) string {
 	infraUp := false
 	defer declareStandSetupFailure(t, t.Failed(), &infraUp)
 
-	repoDir := filepath.Join(t.TempDir(), "soul-mod-redis-repo")
+	repoDir := filepath.Join(t.TempDir(), "redis-repo")
 	distDir := filepath.Join(repoDir, "dist")
 	if err := os.MkdirAll(distDir, 0o755); err != nil {
 		t.Fatalf("BuildRedisPlugin: mkdir %s: %v", distDir, err)
@@ -213,7 +213,7 @@ func copyFileMode(dst, src string, mode os.FileMode) error {
 func buildRedisArtifact(t *testing.T) (artifact, document string) {
 	t.Helper()
 	redisBuildOnce.Do(func() {
-		outDir, err := os.MkdirTemp("", "soul-mod-build-")
+		outDir, err := os.MkdirTemp("", "build-")
 		if err != nil {
 			redisBuildErr = fmt.Errorf("mkdtemp: %w", err)
 			return

@@ -49,7 +49,7 @@ func sourceWith(recs ...*sharedhost.SigilRecord) *fakeSource {
 func TestSigilLookupAdapter_Maps(t *testing.T) {
 	want := &sharedhost.SigilRecord{
 		Alias:     "hetzner",
-		Source:    "https://example.com/soul-cloud-hetzner.git",
+		Source:    "https://example.com/hetzner.git",
 		Ref:       "v2.0.0",
 		Kind:      sharedplugin.SourceKindGit,
 		Artifacts: []sharedhost.SigilArtifact{{SHA256: "abc123"}},
@@ -213,7 +213,7 @@ func TestSigilLookupAdapter_CarriesTheCallersContext(t *testing.T) {
 //     the same artifact: same source, same ref, same signature. Nothing about trust
 //     changes with the name.
 func TestSigilLookupAdapter_AliasIsALookupKeyNotATrustClaim(t *testing.T) {
-	const source = "https://example.com/soul-mod-redis.git"
+	const source = "https://example.com/redis.git"
 	sig := []byte{9, 9, 9}
 	schema := []byte(`{"kind":"soul_module","protocol_version":1}`)
 	// The same artifact registered twice. The rows differ ONLY in the alias — which

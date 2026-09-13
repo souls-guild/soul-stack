@@ -1,5 +1,5 @@
 // Entry-point of the vmlocal plugin: a machine provider over libvirt/QEMU that
-// speaks the `wb-cloud` vm contract, so bootstrap work can be debugged against a
+// speaks the `wbcloud` vm contract, so bootstrap work can be debugged against a
 // workstation instead of a billed cloud VM.
 //
 // Collected into one static binary via `go build` — the libvirt bindings are pure

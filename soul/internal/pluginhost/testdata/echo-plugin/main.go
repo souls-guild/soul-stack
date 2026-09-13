@@ -1,5 +1,5 @@
 // A minimal SoulModule bundle for the pluginhost integration test.
-// Build: `go build -o soul-mod-echo .` in this directory, then stamp it
+// Build: `go build -o echo .` in this directory, then stamp it
 // (`<artifact> schema` piped into the trailer) — see stampArtifact in the test.
 //
 // The artifact serves TWO modules so the test can prove that dispatch actually reaches
@@ -131,7 +131,7 @@ func main() {
 		},
 	}, os.Args[1:], os.Stdout, os.Stderr)
 	if code != 0 {
-		fmt.Fprintln(os.Stderr, "soul-mod-echo: exit", code)
+		fmt.Fprintln(os.Stderr, "echo: exit", code)
 	}
 	os.Exit(code)
 }

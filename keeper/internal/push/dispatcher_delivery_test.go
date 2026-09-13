@@ -151,7 +151,7 @@ func TestSendApply_PropagatesSoulSpecToDeliverer(t *testing.T) {
 	deliv := &orderingDeliverer{}
 	spec := SoulSpec{
 		SoulBinaryPath: "/local/soul-v2",
-		Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: "/local/mod"}},
+		Modules:        []ModuleSpec{{Name: "pkg", Path: "/local/mod"}},
 	}
 	disp := newTestDispatcher(t, Deps{
 		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
@@ -170,7 +170,7 @@ func TestSendApply_PropagatesSoulSpecToDeliverer(t *testing.T) {
 	if deliv.gotSpec.SoulBinaryPath != spec.SoulBinaryPath {
 		t.Errorf("SoulBinaryPath=%q, want %q", deliv.gotSpec.SoulBinaryPath, spec.SoulBinaryPath)
 	}
-	if len(deliv.gotSpec.Modules) != 1 || deliv.gotSpec.Modules[0].Name != "soul-mod-pkg" {
+	if len(deliv.gotSpec.Modules) != 1 || deliv.gotSpec.Modules[0].Name != "pkg" {
 		t.Errorf("Modules did not make it through: %+v", deliv.gotSpec.Modules)
 	}
 }

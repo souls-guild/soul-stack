@@ -42,7 +42,7 @@ func writeScenario(t *testing.T, root string, params deftest.Params) string {
 // module.unknown_param (ADR-0076(t)).
 func TestRun_BoundSchemaCatchesUndeclaredParam(t *testing.T) {
 	dir := t.TempDir()
-	doc := deftest.WriteSchemaFile(t, dir, "soul-mod-redis", deftest.SchemaJSON)
+	doc := deftest.WriteSchemaFile(t, dir, "redis", deftest.SchemaJSON)
 	scenario := writeScenario(t, dir, deftest.Undeclared)
 
 	var out, errOut bytes.Buffer
@@ -94,7 +94,7 @@ func TestRun_UnreadableBindingIsFatalNotUnchecked(t *testing.T) {
 func TestRun_ValidateManifestReadsBothCarriers(t *testing.T) {
 	dir := t.TempDir()
 	file := deftest.WriteSchemaFile(t, dir, "published", deftest.SchemaJSON)
-	art := deftest.WriteStampedArtifact(t, filepath.Join(dir, "soul-mod-redis"), deftest.SchemaJSON)
+	art := deftest.WriteStampedArtifact(t, filepath.Join(dir, "redis"), deftest.SchemaJSON)
 
 	for _, p := range []string{file, art} {
 		var out, errOut bytes.Buffer
@@ -107,7 +107,7 @@ func TestRun_ValidateManifestReadsBothCarriers(t *testing.T) {
 // An artifact that was never stamped has no disclosure to approve, and the finding says
 // so rather than "this file is not JSON".
 func TestRun_ValidateManifestFailsClosedOnUnstampedArtifact(t *testing.T) {
-	p := filepath.Join(t.TempDir(), "soul-mod-redis")
+	p := filepath.Join(t.TempDir(), "redis")
 	if err := os.WriteFile(p, []byte("\x7fELF never stamped"), 0o700); err != nil {
 		t.Fatalf("write: %v", err)
 	}

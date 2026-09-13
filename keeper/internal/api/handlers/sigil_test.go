@@ -78,7 +78,7 @@ func (f fakeSigilSlots) SlotCommitSHA(string) (string, error) {
 
 // sigilTestSource is the git remote the fixture grants are issued on — with no
 // self-name in the artifact, this and the ref are the whole signed identity.
-const sigilTestSource = "https://example.com/soul-cloud-hetzner.git"
+const sigilTestSource = "https://example.com/hetzner.git"
 
 // listFixtureSHA is a well-formed digest for the list-feed fixture: the store projects
 // rows through CanonicalArtifacts, which refuses anything no signature could cover.

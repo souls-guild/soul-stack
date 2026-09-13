@@ -19,7 +19,7 @@ import (
 func TestSigilRecordsToProto_MapsBothIdentitiesAndSchema(t *testing.T) {
 	recs := []*sigil.Sigil{{
 		Alias:  "pkg",
-		Source: "https://example.com/soul-mod-pkg.git",
+		Source: "https://example.com/pkg.git",
 		Ref:    "v1",
 		Kind:   sharedplugin.SourceKindArtifact,
 		// A two-platform release: the projection must carry BOTH rows, because the
@@ -88,9 +88,9 @@ func TestOutbound_RebroadcastSigils_AllLocalStreams(t *testing.T) {
 	ob := newOutboundForTest(t, m, nopAudit{})
 
 	set := []*keeperv1.PluginSigil{
-		{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v1",
+		{Alias: "pkg", Source: "https://example.com/pkg.git", Ref: "v1",
 			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "aa"}}},
-		{Alias: "hetzner", Source: "https://example.com/soul-cloud-hetzner.git", Ref: "v2",
+		{Alias: "hetzner", Source: "https://example.com/hetzner.git", Ref: "v2",
 			Kind: "git", Artifacts: []*keeperv1.SigilArtifact{{Sha256: "bb"}}},
 	}
 
@@ -153,7 +153,7 @@ func TestOutbound_RebroadcastSigils_NoStreams(t *testing.T) {
 	m := NewStreamManager(discardLogger(t))
 	ob := newOutboundForTest(t, m, nopAudit{})
 	if got := ob.RebroadcastSigils(context.Background(),
-		[]*keeperv1.PluginSigil{{Alias: "pkg", Source: "https://example.com/soul-mod-pkg.git"}}); got != 0 {
+		[]*keeperv1.PluginSigil{{Alias: "pkg", Source: "https://example.com/pkg.git"}}); got != 0 {
 		t.Fatalf("delivered = %d, want 0", got)
 	}
 }

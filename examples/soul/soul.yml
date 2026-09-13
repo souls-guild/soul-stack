@@ -5,7 +5,7 @@
 
 # Where artifacts live on this host
 paths:
-  modules: /var/lib/soul-stack/modules   # cache of custom modules soul-mod-<name>-<sha>
+  modules: /var/lib/soul-stack/modules   # cache of custom modules <name>-<sha>
   seed:    /var/lib/soul-stack/seed      # SoulSeed cert + private key (issued via `soul init`)
 
 # Connection to the Keeper cluster.

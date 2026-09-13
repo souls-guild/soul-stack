@@ -89,7 +89,7 @@
 
   In `sdk/handshake/` — a single Go type `Manifest` with `oneof` sub-messages `SoulModuleSpec` / `CloudDriverSpec` / `SshProviderSpec` (proto-style). Evolving new kinds (`secrets_provider` etc.) — adding a variant to the enum without breaking changes.
 
-  The binary name (`soul-mod-*` / `soul-cloud-*` / `soul-ssh-*`) is a **convention, not a contract**. A cross-check `manifest.kind == "soul_module"` && the binary name is `soul-mod-*` → warns in the log on mismatch, does not fail (aliases/symlinks are acceptable).
+  The binary name is a **convention, not a contract**. A cross-check `manifest.kind == "soul_module"` && the binary name is `soul-mod-*` → warns in the log on mismatch, does not fail (aliases/symlinks are acceptable). ⚠ **AMENDED by [2026-09-12 (NIM-851)](#amendment-2026-09-12-nim-851-the-soul-mod--and-soul-cloud--prefixes-are-dropped-soul-ssh--stays):** the `soul-mod-*` and `soul-cloud-*` families are gone — a SoulModule artifact is named after the module it serves — so that cross-check has nothing left to compare against; `soul-ssh-*` stays.
 
   Rejected: three separate formats (drift of common fields as they evolve); a hybrid (equivalent to (e)); the binary name as a discriminator (a weak discriminator).
 
@@ -210,7 +210,7 @@ Consequently **`Manifest.BinaryName()` goes away** — with no self-name there i
 
 The full addressing model is **NIM-376**, a separate open ticket; this amendment fixes only where level 1 comes from.
 
-**(q) Dispatch is a subcommand.** One artifact serves several modules and the host names the one it wants as the first argument: `soul-mod-redis acl`. `ServeBundle` dispatches on it and also answers a `schema` subcommand. **No proto change, `protocol_version` does not move** — the host already forks per Apply ((d), one-shot), so serving several modules from one process would buy nothing.
+**(q) Dispatch is a subcommand.** One artifact serves several modules and the host names the one it wants as the first argument: `redis acl`. `ServeBundle` dispatches on it and also answers a `schema` subcommand. **No proto change, `protocol_version` does not move** — the host already forks per Apply ((d), one-shot), so serving several modules from one process would buy nothing.
 
 **(r) `required_capabilities` and `side_effects` are disclosure, not controls.** This is the correction to (f) and (g), and it is a correction of fact, not a change of policy — the code never did what those paragraphs promised:
 
@@ -569,3 +569,60 @@ The user was asked and did **not** rule on it. It is recorded as open rather tha
 It also interacts with a pending decision on the **signature mechanism itself**, so the two should be looked at together rather than one being settled under the other's assumptions.
 
 **There is a second open fork of this date, and it is not here.** What fills the grant's `source` for an artifact-kind entry is also unresolved — `base_url` is the presumptive answer, but `source` is `NOT NULL`, is signed, and is half the trust key, so a silent pick is architecture. It is recorded in [ADR-026's amendment of this date](0026-sigil.md#an-open-fork-what-fills-source-for-an-artifact-kind-entry), where grant identity lives. Both forks are NIM-795's, and both wait on the signature-mechanism decision.
+
+## Amendment 2026-09-12 (NIM-851): the `soul-mod-` and `soul-cloud-` prefixes are dropped, `soul-ssh-` stays
+
+**(e)'s three binary-name families were three contracts. There are two contracts left, so
+there are two families left.**
+
+`soul-mod-*`, `soul-cloud-*` and `soul-ssh-*` encoded SoulModule / CloudDriver /
+SshProvider. The [2026-09-01 amendment above](#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it)
+removed `cloud_driver`, which left `soul-cloud-wb` an ordinary SoulModule declaring
+`side: keeper` — identical in contract to `soul-mod-redis` — while still spelling a
+distinction in its name. A reader cannot tell a decoration from a difference, so the
+decoration had to go.
+
+**What was checked before removing it, because this is the one place the answer could have
+been the other way.** `soul-ssh-*` is NOT decoration: `proto/plugin/v1/sshprovider.proto`
+declares `service SshProvider { Sign, Authorize }` against `soulmodule.proto`'s
+`service SoulModule { Validate, Plan, Apply }` — two disjoint gRPC services, no shared
+RPC, and `sdk/sshprovider/` is its own package beside `sdk/module/`. By contrast
+`sdk/clouddriver/` and `clouddriver.proto` no longer exist at all. So the three
+`soul-ssh-*` binaries are three implementations of one contract and their prefix states
+something true; it stays.
+
+A SoulModule artifact is now named **after the module it serves**: `redis`, `mongo`,
+`cassandra`, `vmlocal`, `wbcloud`.
+
+★ **This renames an ARTIFACT, never an ADDRESS.** The two are independent and stay
+independent — a plugin document carries no name of its own ((o) above), so address level 1
+is the alias an operator writes in `keeper.yml::plugins.soul_modules[].name` and appears
+nowhere in the artifact's bytes. Renaming a directory moves no address; changing an alias
+touches no directory. Where the two now coincide (the `redis` artifact under the alias
+`redis`) that is two independent choices landing on one spelling, not a rule — and the
+property it protects is worth naming: registering `vmlocal` under the alias `wbcloud`
+still runs an unmodified WB cloud scenario against libvirt.
+
+**Not renamed, and why.** `sdk/cmd/soul-mod` is the author's stamping tool, not an
+artifact — `sdk/` and `proto/plugin/` are interfaces and out of scope. The
+`soul-mod-official-*` artifacts live in the companion `soul-stack-plugins` repository,
+which this one cannot edit.
+
+⚠ **`soul-lint plugin-init` still scaffolds `soul-mod-<namespace>-<name>`, and that is a
+known gap rather than an oversight.** `soul-lint/internal/plugininit/template/` is a
+`go:embed` MIRROR of `soul-stack-plugins/soul-mod-template/`, held byte-identical by
+`make check-template` (`diff -r`). Renaming the embedded copy alone would put the drift
+gate red against a source of truth this repository cannot edit, and would make the
+scaffold emit names unlike the twelve `soul-mod-official-*` artifacts that companion
+actually ships. So the scaffold keeps teaching the old convention until the companion
+moves.
+
+**It is not the only such mirror, and the second one is operator-facing.**
+`keeper/internal/webui/assets/` is a `go:embed` copy of `soul-stack-web/dist`, gated by
+`check-webui` / `check-webui-freshness` the same way — and its Russian locale still offers
+`acme / soul-mod-acme` as the placeholder on the plugin REGISTRATION NAME field, which is
+address level 1, not a filename. Both gaps close in their own repositories; neither can
+close here. Dated records of what a past ticket did — `CHANGELOG.md`, the
+amendment logs in this file and in [ADR-017](0017-keeper-side-core.md) — keep the names
+those artifacts actually had at the time; rewriting them would make the history report
+something that never happened.

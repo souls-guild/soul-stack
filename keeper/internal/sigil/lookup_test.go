@@ -15,7 +15,7 @@ import (
 // the ARTIFACT is not — address level 1 comes from the grant's alias.
 const soulModuleSchemaJSON = `{"kind":"soul_module","modules":[{"name":"acl","states":{"present":{"description":"the ACL user exists"}}}],"protocol_version":1}`
 
-const moduleSourceURL = "https://example.com/soul-mod-redis.git"
+const moduleSourceURL = "https://example.com/redis.git"
 
 // mapSlotReader is a SlotReader keyed by ALIAS (for lookup tests with several slots;
 // fakeSlotReader returns a single fixed slot).

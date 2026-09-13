@@ -10,7 +10,7 @@
 // The document carries NO name of its own — not the artifact's, not a namespace.
 // Address level 1 is the alias an operator writes in
 // `keeper.yml::plugins.soul_modules[].name`, so registering these bytes as
-// `wb-cloud` is what makes an unmodified cloud scenario address them.
+// `wbcloud` is what makes an unmodified cloud scenario address them.
 package main
 
 import "github.com/souls-guild/soul-stack/sdk/module"

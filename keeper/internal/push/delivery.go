@@ -42,7 +42,7 @@ type Deliverer interface {
 }
 
 // SoulSpec — what to deliver to the host: the path to the local soul binary
-// + plugins (`soul-mod-*`). Versions are pinned by git tag (ADR-007);
+// + plugin artifacts. Versions are pinned by git tag (ADR-007);
 // resolving concrete files on the keeper side is a layer above (S3/runner).
 type SoulSpec struct {
 	// SoulBinaryPath — the absolute path to the local ./soul binary on the
@@ -52,7 +52,7 @@ type SoulSpec struct {
 	Modules []ModuleSpec
 }
 
-// ModuleSpec — a single plugin (`soul-mod-*`).
+// ModuleSpec — a single plugin artifact.
 type ModuleSpec struct {
 	// Name — the file name on the host (no directory). Validated by moduleNameRe.
 	Name string

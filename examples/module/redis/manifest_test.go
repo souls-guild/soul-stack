@@ -136,7 +136,7 @@ func TestPublishedSchemaMatchesTheBundle(t *testing.T) {
 		t.Fatalf("read %s: %v", schema.SchemaFileName, err)
 	}
 	if !bytes.Equal(published, fromCode) {
-		t.Fatalf("%s disagrees with the bundle — re-run `soul-mod stamp dist/soul-mod-redis`\n"+
+		t.Fatalf("%s disagrees with the bundle — re-run `soul-mod stamp dist/redis`\n"+
 			"  published: %d bytes\n  code:      %d bytes", schema.SchemaFileName, len(published), len(fromCode))
 	}
 }

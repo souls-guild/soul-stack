@@ -18,7 +18,7 @@
 
   **(b) Parity strategy — a hybrid without a wrapper.** No embedding of third-party copyleft module code into Soul Stack in any form. Parity is achieved through:
   - **Core MVP — our rewrite in Go** (see [ADR-015](0015-core-modules-mvp.md#adr-015-core-modules-mvp-exact-list)). Statically built into the `soul` binary.
-  - **Exotics — community plugins** `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` in separate repositories via our Go SDK ([ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules), `sdk/`). Plugin authors decide for themselves: write from scratch, port from a permissively-licensed source (license-wise ok), port from a GPLv3 source (not allowed in a plugin for our system, a rewrite is needed).
+  - **Exotics — community plugins** (a SoulModule artifact, named after the module it serves since NIM-851; an `soul-ssh-*` SshProvider) in separate repositories via our Go SDK ([ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules), `sdk/`). Plugin authors decide for themselves: write from scratch, port from a permissively-licensed source (license-wise ok), port from a GPLv3 source (not allowed in a plugin for our system, a rewrite is needed).
   - **Wrapping GPLv3 modules is forbidden** — copyleft contamination risk, a foreign language runtime + attack surface contradicts "security first," and the templating engines do not match (external template engines vs CEL+Go text/template).
   - **Wrapping permissively-licensed external modules is not recommended** — license-wise ok, but the foreign runtime is the same risk, and such modules are tied to their own facts/parameters/loader — the wrapper becomes a half-rewrite.
 
@@ -42,7 +42,7 @@
 - **Consequences.**
   - At the repo root the file [`LICENSE`](../../LICENSE) — ~~Apache 2.0~~ **BSL 1.1** [per the fair-code amendment](#amendment-2026-07-09-fair-code-bsl-pivot-the-licensing-decision-in-effect).
   - In [`docs/architecture.md`](../architecture.md) a new "License" section appears (or a link to LICENSE) — a separate task.
-  - Any plugin in a `soul-mod-*` / `soul-cloud-*` / `soul-ssh-*` repository that uses code under GPLv3 **cannot be included in the official Soul Stack list** without a rewrite. Community plugins under any compatible license are accepted as community.
+  - Any plugin repository, SoulModule or `soul-ssh-*`, that uses code under GPLv3 **cannot be included in the official Soul Stack list** without a rewrite. Community plugins under any compatible license are accepted as community.
   - Wrapping GPLv3 modules is not considered as an option at any stage.
   - Open Q #5 in the strategy part — closed. The open Q "Soul Stack license" — does not arise (closed immediately).
 - **Trade-offs.**

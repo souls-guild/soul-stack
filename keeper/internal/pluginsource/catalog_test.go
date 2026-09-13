@@ -49,7 +49,7 @@ func TestResolveCatalog_DispatchesByKind(t *testing.T) {
 		SoulModules: []config.PluginCatalogEntry{
 			{Name: "redis", Kind: sharedplugin.SourceKindArtifact,
 				BaseURL: "https://nexus.internal/plugins/redis", Ref: "v1.4.0"},
-			{Name: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v2"},
+			{Name: "pkg", Source: "https://example.com/pkg.git", Ref: "v2"},
 		},
 	}
 
@@ -83,7 +83,7 @@ func TestResolveCatalog_PerEntryFailureIsAWarning(t *testing.T) {
 		SoulModules: []config.PluginCatalogEntry{
 			{Name: "redis", Kind: sharedplugin.SourceKindArtifact,
 				BaseURL: "https://nexus.internal/plugins/redis", Ref: "v1.4.0"},
-			{Name: "pkg", Source: "https://example.com/soul-mod-pkg.git", Ref: "v2"},
+			{Name: "pkg", Source: "https://example.com/pkg.git", Ref: "v2"},
 		},
 	})
 	if err != nil {

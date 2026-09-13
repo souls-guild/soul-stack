@@ -173,8 +173,8 @@ func TestIsKeeperTask_SideFollowsTheModuleAddress(t *testing.T) {
 		"keeper-side core, on: keeper":    {config.Task{On: "keeper", Module: mod("core.cloud.created")}, true},
 		"soul-side core, no on:":          {config.Task{Module: mod("core.pkg.present")}, false},
 		"soul-side core, on: a coven":     {config.Task{On: []any{"primary"}, Module: mod("core.exec.run")}, false},
-		"plugin address, on: keeper":      {config.Task{On: "keeper", Module: mod("wb-cloud.vm.created")}, true},
-		"plugin address, no on:":          {config.Task{Module: mod("wb-cloud.vm.created")}, false},
+		"plugin address, on: keeper":      {config.Task{On: "keeper", Module: mod("wbcloud.vm.created")}, true},
+		"plugin address, no on:":          {config.Task{Module: mod("wbcloud.vm.created")}, false},
 		"block task carries no module":    {config.Task{Block: &config.BlockTask{}}, false},
 		"block task with the on: literal": {config.Task{On: "keeper", Block: &config.BlockTask{}}, true},
 	} {

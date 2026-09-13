@@ -34,7 +34,7 @@ If the task from PM contains diff or links to specific files, read them too.
 "Contract" is any point of connection between sections of code, the failure of which breaks the consumer. In Soul Stack, the key contracts are:
 
 - **Keeper↔Soul gRPC** (`proto/keeper/v1/*` + generated `proto/gen/go/`) - consumers: `keeper/internal/grpc`, `soul/internal/runtime`, any code that reads `ApplyRequest`/`RunResult`/`EventStream`-oneof.
-- **Plugin gRPC** (`proto/plugin/v1/*`) - consumers: `sdk/*` (module/clouddriver/sshprovider/beacon), `shared/pluginhost`, all `soul-mod-*`/`soul-cloud-*`/`soul-ssh-*`/`soul-beacon-*` in companion-repo.
+- **Plugin gRPC** (`proto/plugin/v1/*`) - consumers: `sdk/*` (module/clouddriver/sshprovider/beacon), `shared/pluginhost`, every plugin artifact (SoulModule ones carry no family prefix since NIM-851; `soul-ssh-*`/`soul-beacon-*` still do) in companion-repo.
 - **Operator API** (`docs/keeper/openapi.yaml` + `keeper/internal/api/meta/openapi.yaml`) - consumers: UI companion-repo (`soul-stack-web`, codegen `types.gen.ts`), `soulctl/internal/client`, MCP-tools.
 - **PG-schema** (`keeper/migrations/*`) - consumers: all `keeper/internal/*` packages that read/write the corresponding tables; back-link-FK (for example `apply_runs.tide_id`, `errands.errand_run_id`).
 - **state_schema** + DSL migrations - consumers: `incarnation.state`, `statemigrate`, scenario-applier.

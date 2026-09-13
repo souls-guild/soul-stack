@@ -6,7 +6,7 @@ package harness
 // model without one.
 
 // redisPluginDir - plugin sources relative to the repo root.
-const redisPluginDir = "examples/module/soul-mod-redis"
+const redisPluginDir = "examples/module/redis"
 
 // redisBuildFlags - what makes the build of that artifact reproducible.
 // plugin.go passes them here, dev/provision.sh passes them on a dev stand, and
@@ -52,4 +52,4 @@ var redisObjects = []string{"acl", "cluster", "command", "instance", "replica", 
 // (plugingit TestResolveEntry_ArtifactNameIsIrrelevant) and renames it to the
 // registration alias in the slot. Kept only so the fixture repo looks like a real
 // one an author would publish.
-const redisBinaryName = "soul-mod-redis"
+const redisBinaryName = "redis"

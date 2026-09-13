@@ -10,7 +10,7 @@
 >
 > **Amendment 2026-09-05 (NIM-829)** — see ["a `modules[]` entry declares an ARTIFACT, not one of its objects"](#amendment-2026-09-05-nim-829-a-modules-entry-declares-an-artifact-not-one-of-its-objects): the 2026-08-07 amendment kept the declaration as an address while NIM-765 turned level 2 into an OBJECT inside the one binary, so a service declared one artifact once per object. The entry is now the registration alias; the two-level form is deprecated with `module_name_two_level_deprecated` until 2026-12-01, and `conflicting_module_ref` is retired with it because one row per artifact cannot express two refs for one slot.
 
-**Context.** `core.module.installed` was declared as of [ADR-015](0015-core-modules-mvp.md) as an infrastructure core module for delivering custom modules (`soul-mod-*`) to a managed host, but neither the byte transport Keeper→Soul nor a registry of SoulModule sources on the Keeper existed — the specification was deferred "until the Soul daemon is implemented". Meanwhile all the adjacent infrastructure is already live: git resolution of the plugin catalog into an FS cache ([`keeper/internal/plugingit`](../../keeper/internal/plugingit), [ADR-026(g)](0026-sigil.md) — but only for keeper-side kinds `cloud_drivers`/`ssh_providers`), Sigil allowances in PG (`plugin_sigils` + persisted `manifest_raw`) and their distribution to the Soul (`SigilSnapshot`/`SigilTrustAnchors`, ReplaceAll), host-side verify ([`shared/pluginhost`](../../shared/pluginhost)). The first real consumer is `community.redis.*` in cloud-provision runs: a freshly created VM must receive the plugin **within the same run** that installs the redis role ([ADR-061](0061-onboarding-await-and-midrun-reresolve.md)/[ADR-063](0063-bootstrap-token-delivery.md)). Exactly two pieces were missing: (1) a channel to transfer the binary's bytes Keeper→Soul; (2) where the Keeper takes those bytes from (open Q No. 5).
+**Context.** `core.module.installed` was declared as of [ADR-015](0015-core-modules-mvp.md) as an infrastructure core module for delivering custom module artifacts to a managed host, but neither the byte transport Keeper→Soul nor a registry of SoulModule sources on the Keeper existed — the specification was deferred "until the Soul daemon is implemented". Meanwhile all the adjacent infrastructure is already live: git resolution of the plugin catalog into an FS cache ([`keeper/internal/plugingit`](../../keeper/internal/plugingit), [ADR-026(g)](0026-sigil.md) — but only for keeper-side kinds `cloud_drivers`/`ssh_providers`), Sigil allowances in PG (`plugin_sigils` + persisted `manifest_raw`) and their distribution to the Soul (`SigilSnapshot`/`SigilTrustAnchors`, ReplaceAll), host-side verify ([`shared/pluginhost`](../../shared/pluginhost)). The first real consumer is `community.redis.*` in cloud-provision runs: a freshly created VM must receive the plugin **within the same run** that installs the redis role ([ADR-061](0061-onboarding-await-and-midrun-reresolve.md)/[ADR-063](0063-bootstrap-token-delivery.md)). Exactly two pieces were missing: (1) a channel to transfer the binary's bytes Keeper→Soul; (2) where the Keeper takes those bytes from (open Q No. 5).
 
 ## Decision
 
@@ -42,7 +42,7 @@ service Keeper {
 ```yaml
 plugins:
   soul_modules:
-    - { name: redis, source: "git@github.com:souls-guild/soul-mod-redis.git", ref: v1.2.0 }
+    - { name: redis, source: "git@github.com:souls-guild/redis.git", ref: v1.2.0 }
 ```
 
 - **Resolution — the existing `plugingit`** (go-git F-fetch → R-nested FS cache `cache_root`, [ADR-026(g)](0026-sigil.md)) reusing all the hardening (scheme-allowlist, size-limits, fail-closed per-entry).
@@ -110,7 +110,7 @@ The operator writes the install step **explicitly** before the first use of the 
 
 ⚠ **Amended 2026-08-06 (NIM-377)** — the slot is `<paths.modules>/<alias>/`, holding one executable and no `manifest.yaml`; see the [amendment](#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact). Original text follows.
 
-`<paths.modules>/<ns>-<name>/{manifest.yaml, soul-mod-<name>}` — a single-active slot per `(namespace, name)` pair, written via atomic rename. Replaces the early flat schema `soul-mod-<name>-<sha>` (doc-fix [soul/modules.md](../soul/modules.md)). There is deliberately no `commit_sha` axis (as in the keeper-side R-nested) on the Soul: multiple versions side by side are not needed — authority = the active Sigil, "rollback" = revoke+allow of another allowance on the Keeper + a repeated install step.
+`<paths.modules>/<ns>-<name>/{manifest.yaml, <name>}` — a single-active slot per `(namespace, name)` pair, written via atomic rename (the binary was `soul-mod-<name>` until NIM-851 dropped the prefix; nothing reads the filename either way). Replaces the early flat schema `soul-mod-<name>-<sha>` (doc-fix [soul/modules.md](../soul/modules.md)). There is deliberately no `commit_sha` axis (as in the keeper-side R-nested) on the Soul: multiple versions side by side are not needed — authority = the active Sigil, "rollback" = revoke+allow of another allowance on the Keeper + a repeated install step.
 
 ## MVP boundaries
 
@@ -165,7 +165,7 @@ Amends (c), (f) and (g). Decisions settled with the user 2026-08-06; the counter
 <paths.modules>/
   redis/                     # the REGISTRATION ALIAS, not <ns>-<name>
     <schema document>        #   canonical JSON, from the artifact's trailer
-    soul-mod-redis           #   the single executable delivered by FetchModule
+    redis                    #   the single executable delivered by FetchModule
 ```
 
 - **The slot name is the registration alias.** Previously `<ns>-<name>/`, composed from fields inside the artifact. Those fields are gone ([ADR-020(p)](0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)) and the alias is what the operator chose at registration, so it is both the only name available and the right one: the same artifact registered twice under two aliases occupies two slots and answers at two addresses, with no rebuild.

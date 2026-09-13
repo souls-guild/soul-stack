@@ -567,7 +567,7 @@ tasks:
 		src := `name: x
 tasks:
   - name: create the VM
-    module: wb-cloud.vm.created
+    module: wbcloud.vm.created
     on: keeper
     params: { flavor: small }
 `
@@ -1643,7 +1643,7 @@ tasks:
 		src := `name: x
 tasks:
   - name: create the VM
-    module: wb-cloud.vm.created
+    module: wbcloud.vm.created
     on: keeper
     params: { flavor: small }
 `

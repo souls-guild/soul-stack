@@ -113,7 +113,7 @@ func writeModuleFile(t *testing.T, size int) (path string, content []byte) {
 	if _, err := rand.Read(content); err != nil {
 		t.Fatalf("rand: %v", err)
 	}
-	path = filepath.Join(t.TempDir(), "soul-mod-test")
+	path = filepath.Join(t.TempDir(), "test")
 	if err := os.WriteFile(path, content, 0o600); err != nil {
 		t.Fatalf("write module file: %v", err)
 	}

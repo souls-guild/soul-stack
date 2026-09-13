@@ -2539,7 +2539,7 @@ func TestVoyageCreate_CommandDryRunAdmitted(t *testing.T) {
 		},
 		{
 			name: "dry_run of an unknown module is not keeper's call either",
-			body: `{"kind":"command","module":"soul-mod-acme.thing.present","dry_run":true,"target":{"sids":["host-a"]}}`,
+			body: `{"kind":"command","module":"acme.thing.present","dry_run":true,"target":{"sids":["host-a"]}}`,
 		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {

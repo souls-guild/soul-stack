@@ -405,9 +405,12 @@ destiny:
 
 # Custom modules for the service: ONE ROW PER ARTIFACT, named by the REGISTRATION
 # ALIAS the operator gives it (docs/service/manifest.md → modules[]). The scenarios
-# here address redis.*, so a cluster running this service registers soul-mod-redis as
-# `redis` — that one artifact is the MAIN interface to a live Redis
-# (examples/module/soul-mod-redis/) and it serves every object the scenarios touch:
+# here address redis.*, so a cluster running this service registers the artifact
+# under the alias `redis`. Its directory is also called redis since NIM-851 dropped
+# the `soul-mod-` prefix — the same spelling twice, arrived at independently: the
+# binary carries no name, the alias is what the operator writes. That one artifact
+# is the MAIN interface to a live Redis
+# (examples/module/redis/) and it serves every object the scenarios touch:
 # acl, cluster, command, instance, replica, sentinel, user. They are objects inside the
 # one binary, not separately installable modules, so they are not listed and never were
 # installable apart — six rows always collapsed to a single core.module.installed on the

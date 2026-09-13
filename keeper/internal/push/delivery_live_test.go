@@ -172,7 +172,7 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	if err := os.WriteFile(soulPath, []byte("SOUL-BIN-LIVE"), 0o755); err != nil {
 		t.Fatalf("write soul: %v", err)
 	}
-	modPath := filepath.Join(soulDir, "soul-mod-pkg")
+	modPath := filepath.Join(soulDir, "pkg")
 	if err := os.WriteFile(modPath, []byte("MOD-PKG-LIVE"), 0o755); err != nil {
 		t.Fatalf("write mod: %v", err)
 	}
@@ -180,14 +180,14 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	d := NewShaDeliverer()
 	if err := d.Deliver(ctx, sess, SoulSpec{
 		SoulBinaryPath: soulPath,
-		Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: modPath}},
+		Modules:        []ModuleSpec{{Name: "pkg", Path: modPath}},
 	}); err != nil {
 		t.Fatalf("Deliver: %v", err)
 	}
 	if got, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; !ok || string(got) != "SOUL-BIN-LIVE" {
 		t.Fatalf("soul binary did not arrive, got %q ok=%v", got, ok)
 	}
-	if got, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; !ok || string(got) != "MOD-PKG-LIVE" {
+	if got, ok := fs.files[hostModulesDir+"/pkg"]; !ok || string(got) != "MOD-PKG-LIVE" {
 		t.Fatalf("module did not arrive, got %q ok=%v", got, ok)
 	}
 
@@ -195,7 +195,7 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	beforeFiles := len(fs.files)
 	if err := d.Deliver(ctx, sess, SoulSpec{
 		SoulBinaryPath: soulPath,
-		Modules:        []ModuleSpec{{Name: "soul-mod-pkg", Path: modPath}},
+		Modules:        []ModuleSpec{{Name: "pkg", Path: modPath}},
 	}); err != nil {
 		t.Fatalf("Deliver (retry): %v", err)
 	}
@@ -210,7 +210,7 @@ func TestDeliverThenCleanup_LiveSSH(t *testing.T) {
 	if _, ok := fs.files[hostSoulDir+"/"+hostSoulFile]; ok {
 		t.Error("soul binary remained after Cleanup")
 	}
-	if _, ok := fs.files[hostModulesDir+"/soul-mod-pkg"]; ok {
+	if _, ok := fs.files[hostModulesDir+"/pkg"]; ok {
 		t.Error("module remained after Cleanup")
 	}
 }

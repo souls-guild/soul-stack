@@ -59,7 +59,7 @@ assert_eq "${expected}" "${corpus}" "module list"
 
 it "each family the old eight-module corpus never opened is in it"
 assert_eq yes "$(contains 'tests/e2e')" "the e2e harnesses"
-assert_eq yes "$(contains 'examples/module/soul-mod-redis')" "the community plugins"
+assert_eq yes "$(contains 'examples/module/redis')" "the community plugins"
 assert_eq yes "$(contains 'keeper/internal/pluginhost/testdata/ssh-plugin')" "the pluginhost fixtures"
 
 it "a module whose go.mod names no toolchain is in the corpus like any other"

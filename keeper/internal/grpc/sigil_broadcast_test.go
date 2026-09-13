@@ -74,7 +74,7 @@ func newBroadcastHandler(t *testing.T, store SigilStore) *eventStreamHandler {
 func TestBroadcastSigils_SendsSnapshotWithSignedSchema(t *testing.T) {
 	rec := &sigil.Sigil{
 		Alias:     "template",
-		Source:    "https://example.com/soul-mod-template.git",
+		Source:    "https://example.com/template.git",
 		Ref:       "v1.0.0",
 		Kind:      sharedplugin.SourceKindGit,
 		Artifacts: []sharedhost.SigilArtifact{{SHA256: "deadbeef"}},
