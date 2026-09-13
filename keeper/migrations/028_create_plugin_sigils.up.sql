@@ -8,7 +8,7 @@
 --
 -- Plugin identity is a triple (namespace, name, ref):
 --   - namespace - plugin type: cloud / ssh / mod;
---   - name      - binary name (hetzner and so on);
+--   - name      - binary name (soul-cloud-hetzner and so on);
 --   - ref       - version. In MVP (ADR-026(g), Variant C) this is an
 --                 operator-asserted LABEL (typically a git-tag per ADR-007),
 --                 NOT a git-verified ref: on allow, the Keeper reads the

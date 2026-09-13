@@ -4,7 +4,7 @@
 //
 // Core modules (ADR-015) run in-process through [inProcApplyStream] — an
 // adapter from `grpc.ServerStreamingServer[pluginv1.ApplyEvent]` over a Go
-// channel. Custom modules (ADR-020, *) run as a sub-process via
+// channel. Custom modules (ADR-020) run as a sub-process via
 // [soul/internal/pluginhost] (M2.3+: wire-up currently just takes a Registry,
 // no distinction yet).
 package runtime

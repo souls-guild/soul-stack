@@ -45,9 +45,10 @@ fi
 # by construction — that is the point — and they are the one blind spot this
 # script cannot close by widening its own answer: no module means no `go list`,
 # no `go build` and no scan, from any tool, ever. Two live cases:
-# examples/module/redis-failover (main.go + schema.json, no go.mod), so
-# `test-plugins` sweeps five modules across six directories and every scan
-# misses the sixth; and dev/stamp-artifact.go, a `go run` file deliberately
+# examples/module/redis-failover (main.go + schema.json, no go.mod), which
+# `test-plugins` therefore does not sweep and no scan reaches — stated without a
+# count, because the count moved twice while this comment stood still; and
+# dev/stamp-artifact.go, a `go run` file deliberately
 # outside the workspace. Named on stderr, never fatal — whether a directory is
 # meant to be a module is a question for a person, and a gate that failed on it
 # would be answering it.

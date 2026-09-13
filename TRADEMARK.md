@@ -22,7 +22,7 @@ that misrepresents affiliation or origin.
 - The designations **"official"**, **"certified"**, and **"official managed"** in
   connection with Soul Stack.
 
-Plugin binary names — a SoulModule artifact named after the module it serves, an
+Plugin binary names — a SoulModule artifact named after the module it serves, a
 `soul-ssh-*` provider named for its contract — are a technical naming convention
 for the ecosystem — see [Permitted uses](#permitted-uses).
 

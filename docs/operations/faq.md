@@ -240,7 +240,7 @@ See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper)
 
 ## "Sigil verify failed - the plugin does not start"
 
-**Symptoms.** Apply using a community plugin (a SoulModule artifact or an `soul-ssh-*` provider) crashes with `sigil verify failed`. Audit-event `plugin.verify_failed`.
+**Symptoms.** Apply using a community plugin (a SoulModule artifact or a `soul-ssh-*` provider) crashes with `sigil verify failed`. Audit-event `plugin.verify_failed`.
 
 **Root.** The plugin's Sigil signature did not match - either the plugin is not allowed through `plugin.allow`, or has been revoked (`revoked_at`), or the SHA-256 of the binary does not match the entry in `plugin_sigils`.
 

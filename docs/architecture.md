@@ -645,7 +645,7 @@ A clear boundary between **code** (static, versioned with git tags, reviewed via
 |---|---|---|---|
 | **Service** | Definition (service type) | git, separate repo for the service | git tag → registry in master |
 | **Destiny** | Definition (atomic brick) | git, separate repo on destiny | git tag → transitively via service.yml |
-| **Module** (a SoulModule artifact, or an `soul-ssh-*` provider) | Definition + binary | git sources + artifact-cache in master | release in git → master pulls binary |
+| **Module** (a SoulModule artifact, or a `soul-ssh-*` provider) | Definition + binary | git sources + artifact-cache in master | release in git → master pulls binary |
 | **Profile** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
 | **Provider** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
 | **Coven** | Runtime state | **Postgres** | API/MCP, or synchronized from incarnation |

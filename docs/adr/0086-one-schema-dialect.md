@@ -524,7 +524,7 @@ wrong files.
   `soul-mod-*` are `kind: soul_module` and carry neither — and those nine use exactly the
   vocabulary §3 renames: the six `soul-cloud-*/schema.json`
   spell `required`, `minimum`, `maximum`, `additionalProperties`, and
-  `soul-stack-plugin/ssh-static`'s `schema.json` spells a `oneOf` of two `required` lists.
+  `examples/module/soul-ssh-static/schema.json` spells a `oneOf` of two `required` lists.
   These are a plugin author's document, not a service author's, and they stay.
 - **MCP tool schemas.** `inputSchema` / `outputSchema` are *"JSON Schema draft 2020-12"*
   with *"Required fields in `required: [...]`"* — [mcp-tools.md](../keeper/mcp-tools.md),
