@@ -32,11 +32,7 @@ func registerHumaSigilAllow(humaAPI huma.API, sigilH *handlers.SigilHandler) {
 		if !ok {
 			return nil, sigilMissingClaims()
 		}
-		reply, err := sigilH.AllowTyped(ctx, claims, handlers.SigilAllowInput{
-			Alias:  in.Body.Alias,
-			Source: in.Body.Source,
-			Ref:    in.Body.Ref,
-		})
+		reply, err := sigilH.AllowTyped(ctx, claims, toSigilAllowInput(in.Body))
 		if err != nil {
 			return nil, sigilProblem(err)
 		}

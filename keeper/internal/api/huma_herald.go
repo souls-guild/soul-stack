@@ -87,13 +87,7 @@ func registerHumaHeraldUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, heraldUpdateOperation(), func(ctx context.Context, in *heraldUpdateInput) (*heraldUpdateOutput, error) {
-		reply, err := heraldH.UpdateHeraldTyped(ctx, in.ID, handlers.HeraldUpdateInput{
-			Type:      in.Body.Type,
-			Config:    in.Body.Config,
-			SecretRef: in.Body.SecretRef,
-			Secret:    in.Body.Secret,
-			Enabled:   in.Body.Enabled,
-		})
+		reply, err := heraldH.UpdateHeraldTyped(ctx, in.ID, toHeraldUpdateInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -109,7 +103,7 @@ func registerHumaHeraldSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandle
 		return
 	}
 	huma.Register(humaAPI, heraldSetLabelOperation(), func(ctx context.Context, in *heraldSetLabelInput) (*heraldSetLabelOutput, error) {
-		reply, err := heraldH.SetHeraldLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := heraldH.SetHeraldLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -198,18 +192,7 @@ func registerHumaTidingUpdate(humaAPI huma.API, heraldH *handlers.HeraldHandler)
 		return
 	}
 	huma.Register(humaAPI, tidingUpdateOperation(), func(ctx context.Context, in *tidingUpdateInput) (*tidingUpdateOutput, error) {
-		reply, err := heraldH.UpdateTidingTyped(ctx, in.ID, handlers.TidingUpdateInput{
-			Herald:       in.Body.Herald,
-			EventTypes:   in.Body.EventTypes,
-			OnlyFailures: in.Body.OnlyFailures,
-			OnlyChanges:  in.Body.OnlyChanges,
-			Incarnation:  in.Body.Incarnation,
-			Cadence:      in.Body.Cadence,
-			Task:         in.Body.Task,
-			Annotations:  in.Body.Annotations,
-			Projection:   in.Body.Projection,
-			Enabled:      in.Body.Enabled,
-		})
+		reply, err := heraldH.UpdateTidingTyped(ctx, in.ID, toTidingUpdateInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}
@@ -225,7 +208,7 @@ func registerHumaTidingSetLabel(humaAPI huma.API, heraldH *handlers.HeraldHandle
 		return
 	}
 	huma.Register(humaAPI, tidingSetLabelOperation(), func(ctx context.Context, in *tidingSetLabelInput) (*tidingSetLabelOutput, error) {
-		reply, err := heraldH.SetTidingLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := heraldH.SetTidingLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, heraldProblem(err)
 		}

@@ -12,6 +12,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -25,17 +26,39 @@ import (
 // bus works fine with none). All other deps go to [HandlerDeps] (the
 // internal MCP-method dispatcher).
 //
-// ApplyAccess and RBAC gate SSE-subscription RBAC (M1): only the run's
-// initiator or an Archon with `incarnation.get` may subscribe to an
-// apply_id. ApplyAccess == nil disables SSE RBAC checking (single-node dev
-// without apply_runs); production main must supply [ApplyAccessPG].
+// ApplyAccess and RBAC gate SSE-subscription RBAC (M1): a live Archon who either
+// started the run or holds `incarnation.get` on its incarnation may subscribe,
+// and the same rule is re-asked every 15s while the stream runs (NIM-858).
+// Both deps are FAIL-CLOSED, not opt-in: a nil ApplyAccess refuses every
+// subscription (the run's owner cannot be resolved, and fail-open would hand
+// one Archon another's stream), and a nil RBAC is refused by NewServer
+// outright. Production main supplies [ApplyAccessPG] and the rbac Holder.
 type ServerDeps struct {
 	JWTVerifier *jwt.Verifier
 	Handler     *Handler
 	Bus         *applybus.EventBus
 	ApplyAccess applyAccessStore
-	RBAC        PermissionChecker
+	RBAC        ServerRBAC
 	Logger      *slog.Logger
+}
+
+// ServerRBAC — the RBAC surface this listener needs: the scope-aware check that
+// decides a subscription, and the revocation projection that keeps deciding it
+// while the stream runs (NIM-858, see middleware/longlived.go).
+//
+// Declared as one interface rather than reached by a type assertion on the
+// checker: a checker that cannot answer "is this Archon revoked" fails to
+// COMPILE here. That is only half of it — an unset field satisfies any interface
+// — so NewServer refuses a nil as well, which is why this is a required
+// dependency rather than an optional one. (A TYPED nil inside the interface, a
+// nil *rbac.Holder, passes both and panics on use; nothing here defends against
+// that, and no wiring in this repo produces it.) It matters more here than on the
+// /v1 surface, because this listener has no [middleware.RejectRevoked] on it
+// (NIM-551): with nothing to ask, an event stream held by a revoked Archon would
+// never end.
+type ServerRBAC interface {
+	PermissionChecker
+	middleware.RevocationChecker
 }
 
 // Server — wraps http.Server for the MCP listener. Listens on
@@ -89,6 +112,12 @@ func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) 
 	}
 	if deps.Bus == nil {
 		return nil, errors.New("mcp: Bus is required")
+	}
+	// Required because /mcp/events has no other way to learn that an Archon was
+	// revoked (NIM-858): no RejectRevoked runs on this listener, and the
+	// initiator branch admits a subscriber holding no permission at all.
+	if deps.RBAC == nil {
+		return nil, errors.New("mcp: RBAC is required (the event stream re-checks revocation on it)")
 	}
 	if deps.Logger == nil {
 		return nil, errors.New("mcp: Logger is required")

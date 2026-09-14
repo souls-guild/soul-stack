@@ -182,7 +182,7 @@ func registerHumaIncarnationSetLabel(humaAPI huma.API, incH *handlers.Incarnatio
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		body, err := incH.SetLabelTyped(ctx, claims, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		body, err := incH.SetLabelTyped(ctx, claims, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, incProblem(err)
 		}
@@ -254,17 +254,9 @@ func registerHumaIncarnationList(humaAPI huma.API, incH *handlers.IncarnationHan
 	}
 	huma.Register(humaAPI, incListOperation(), func(ctx context.Context, in *incListInput) (*incListOutput, error) {
 		claims, _ := apimiddleware.ClaimsFromContext(ctx)
-		q := handlers.IncarnationListQuery{
-			Offset:      int(in.Offset),
-			Limit:       int(in.Limit),
-			Service:     in.Service,
-			Status:      in.Status,
-			Coven:       in.Coven,
-			SortBy:      in.SortBy,
-			SortDir:     in.SortDir,
-			StateParams: stateParamsFromContext(ctx),
-		}
-		reply, err := incH.ListTyped(ctx, q, incH.ResolveListScopeFor(ctx, claims))
+		reply, err := incH.ListTyped(ctx,
+			toIncarnationListQuery(in, stateParamsFromContext(ctx)),
+			incH.ResolveListScopeFor(ctx, claims))
 		if err != nil {
 			return nil, incProblem(err)
 		}

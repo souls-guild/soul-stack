@@ -33,12 +33,7 @@ func registerHumaChoirCreate(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		view, err := choirH.CreateTyped(ctx, claims, in.ID, handlers.ChoirCreateInput{
-			ChoirName:   in.Body.ChoirName,
-			Description: in.Body.Description,
-			MinSize:     in.Body.MinSize,
-			MaxSize:     in.Body.MaxSize,
-		})
+		view, err := choirH.CreateTyped(ctx, claims, in.ID, toChoirCreateInput(in.Body))
 		if err != nil {
 			return nil, choirProblem(err)
 		}
@@ -90,11 +85,7 @@ func registerHumaVoiceAdd(humaAPI huma.API, choirH *handlers.ChoirHandler) {
 		if !ok {
 			return nil, choirMissingClaims()
 		}
-		view, err := choirH.AddVoiceTyped(ctx, claims, in.ID, in.Choir, handlers.VoiceAddInput{
-			SID:      in.Body.SID,
-			Role:     in.Body.Role,
-			Position: in.Body.Position,
-		})
+		view, err := choirH.AddVoiceTyped(ctx, claims, in.ID, in.Choir, toVoiceAddInput(in.Body))
 		if err != nil {
 			return nil, choirProblem(err)
 		}

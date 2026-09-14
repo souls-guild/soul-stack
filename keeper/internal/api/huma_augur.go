@@ -82,7 +82,7 @@ func registerHumaOmenSetLabel(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		return
 	}
 	huma.Register(humaAPI, omenSetLabelOperation(), func(ctx context.Context, in *omenSetLabelInput) (*omenSetLabelOutput, error) {
-		reply, err := augurH.SetOmenLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := augurH.SetOmenLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, augurProblem(err)
 		}
@@ -120,14 +120,7 @@ func registerHumaRiteCreate(humaAPI huma.API, augurH *handlers.AugurHandler) {
 		if !ok {
 			return nil, augurMissingClaims()
 		}
-		reply, err := augurH.CreateRiteTyped(ctx, claims, handlers.RiteCreateInput{
-			Omen:         in.Body.Omen,
-			Subject:      in.Body.Subject.selector(),
-			Allow:        in.Body.Allow,
-			Delegate:     in.Body.Delegate,
-			TokenTTL:     in.Body.TokenTTL,
-			TokenNumUses: in.Body.TokenNumUses,
-		})
+		reply, err := augurH.CreateRiteTyped(ctx, claims, toRiteCreateInput(in.Body))
 		if err != nil {
 			return nil, augurProblem(err)
 		}

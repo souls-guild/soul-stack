@@ -43,9 +43,7 @@ func registerHumaProvisioningPolicyPut(humaAPI huma.API, h *handlers.Provisionin
 		if !ok {
 			return nil, provisioningMissingClaims()
 		}
-		reply, err := h.PutTyped(ctx, claims, handlers.ProvisioningPolicyUpdateInput{
-			AllowedMethods: in.Body.AllowedMethods,
-		})
+		reply, err := h.PutTyped(ctx, claims, toProvisioningPolicyUpdateInput(in.Body))
 		if err != nil {
 			return nil, provisioningProblem(err)
 		}

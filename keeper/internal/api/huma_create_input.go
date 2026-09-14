@@ -24,7 +24,10 @@ package api
 // That guard is no longer about these eight: [NIM-824] extended it to every
 // hand-written wire→native projection in the package, and it derives the list from
 // the package's own source, so a projection written anywhere here is covered
-// whether or not it lives in this file.
+// whether or not it lives in this file. [NIM-831] then extracted the thirty
+// mappings still written inline into huma_request_input.go, the sibling of this
+// file — so there is no longer any form of wire→native mapping here that the guard
+// only counts.
 //
 // Both guards are needed and neither subsumes the other: this file's functions can
 // be correct while a route stops calling one, which is why huma_label_test.go

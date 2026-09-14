@@ -48,14 +48,7 @@ func registerHumaRole(humaAPI huma.API, roleH *handlers.RoleHandler) {
 		if !ok {
 			return nil, roleMissingClaims()
 		}
-		reply, err := roleH.CreateTyped(ctx, claims, handlers.RoleCreateInput{
-			Name:         in.Body.Name,
-			Description:  in.Body.Description,
-			Permissions:  in.Body.Permissions,
-			DefaultScope: in.Body.DefaultScope,
-			ParentRole:   in.Body.ParentRole,
-			ScopeMode:    in.Body.ScopeMode,
-		})
+		reply, err := roleH.CreateTyped(ctx, claims, toRoleCreateInput(in.Body))
 		if err != nil {
 			return nil, roleProblem(err)
 		}
@@ -129,17 +122,7 @@ func registerHumaRoleUpdatePermissions(humaAPI huma.API, roleH *handlers.RoleHan
 		if !ok {
 			return nil, roleMissingClaims()
 		}
-		reply, err := roleH.UpdatePermissionsTyped(ctx, claims, handlers.UpdatePermissionsInput{
-			Name:            in.Name,
-			Permissions:     in.Body.Permissions,
-			SetDefaultScope: in.Body.DefaultScope.Set,
-			DefaultScope:    optionalToPtr(in.Body.DefaultScope),
-			SetParentRole:   in.Body.ParentRole.Set,
-			ParentRole:      optionalToPtr(in.Body.ParentRole),
-			SetScopeMode:    in.Body.ScopeMode.Set,
-			ScopeMode:       optionalString(in.Body.ScopeMode),
-			ConfirmCascade:  in.Body.ConfirmCascade,
-		})
+		reply, err := roleH.UpdatePermissionsTyped(ctx, claims, toUpdatePermissionsInput(in.Body, in.Name))
 		if err != nil {
 			return nil, roleProblem(err)
 		}

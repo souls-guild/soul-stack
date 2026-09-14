@@ -75,9 +75,9 @@ type consoleWSDeps struct {
 	// value is deliberately too generous to wait for.
 	WriteWait time.Duration
 	// ReauthInterval overrides how often the socket re-asks whether the operator
-	// may still hold it (NIM-844); zero takes longLivedReauthInterval. Same
-	// reason as WriteWait: a test must reach the second check without waiting out
-	// the production interval.
+	// may still hold it (NIM-844); zero takes
+	// [middleware.LongLivedReauthInterval]. Same reason as WriteWait: a test must
+	// reach the second check without waiting out the production interval.
 	ReauthInterval time.Duration
 }
 
@@ -870,15 +870,11 @@ func (c *consoleConn) refreshClaimsLoop() {
 }
 
 // reauthorizeLoop re-asks, while the socket is up, what was decided once when it
-// opened (NIM-844, see longlived_reauth.go). A socket that outlives the
+// opened (NIM-844, see middleware/longlived.go). A socket that outlives the
 // operator's rights is the one place the revocation perimeter has a hole by
 // construction rather than by omission.
 func (c *consoleConn) reauthorizeLoop(ctx context.Context) {
-	interval := c.deps.ReauthInterval
-	if interval <= 0 {
-		interval = longLivedReauthInterval
-	}
-	ticker := time.NewTicker(interval)
+	ticker := middleware.ReauthTicker(c.deps.ReauthInterval)
 	defer ticker.Stop()
 	for {
 		select {

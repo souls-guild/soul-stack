@@ -15,6 +15,11 @@ package api
 // by this slice — a narrow duplicate of the stream/masking lives here (ADR-068 §A3
 // "duplicate narrowly", instead of sharing code from mcp/sse.go).
 //
+// ★ That duplication is also how NIM-844's re-authorization reached this stream and not the
+// one it was copied from. The re-check is therefore NOT duplicated: both call
+// apimiddleware.ReauthTicker, and middleware/longlived_guard_test.go derives the list of
+// long-lived channels from the source so a fourth cannot appear unnoticed (NIM-858).
+//
 // Registered via huma.StreamResponse → the operation lands in the OpenAPI spec (drift-guard
 // TestFullSpec_CoversAllRoutes) with full control of the stream body
 // (heartbeat/max-lifetime/frame/masking/limits), which the huma/sse helper does not give.
@@ -67,7 +72,7 @@ func (a runEventsPGAccess) Access(ctx context.Context, applyID string) (*applyru
 
 // runEventsRBAC — the RBAC surface this stream needs: the scope-aware check that
 // decides the subscription, and the revocation projection that keeps deciding it
-// while the stream runs (NIM-844, see longlived_reauth.go).
+// while the stream runs (NIM-844, see middleware/longlived.go).
 //
 // Declared as one interface rather than reached by a type assertion on the
 // checker: a wiring that cannot answer "is this Archon revoked" must fail to
@@ -88,8 +93,8 @@ type runEventsDeps struct {
 	Logger  *slog.Logger
 	// ReauthInterval overrides how often an open stream re-asks whether the
 	// subscriber may still have it (NIM-844); zero takes
-	// longLivedReauthInterval. Only this file's tests set it, to reach the
-	// second check without waiting out the production interval.
+	// [apimiddleware.LongLivedReauthInterval]. Only this file's tests set it, to
+	// reach the second check without waiting out the production interval.
 	ReauthInterval time.Duration
 }
 
@@ -300,11 +305,7 @@ func streamRunEvents(hctx huma.Context, deps *runEventsDeps, applyID, aid string
 	// Its own ticker rather than a branch on the heartbeat: the heartbeat is a
 	// client-liveness interval and this is an authorization one, and tying them
 	// together would mean changing either to change the other.
-	reauthEvery := deps.ReauthInterval
-	if reauthEvery <= 0 {
-		reauthEvery = longLivedReauthInterval
-	}
-	reauth := time.NewTicker(reauthEvery)
+	reauth := apimiddleware.ReauthTicker(deps.ReauthInterval)
 	defer reauth.Stop()
 
 	for {

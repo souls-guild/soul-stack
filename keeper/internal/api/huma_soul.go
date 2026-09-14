@@ -212,15 +212,7 @@ func registerHumaSoulList(humaAPI huma.API, soulH *handlers.SoulHandler) {
 		if perr != nil {
 			return nil, perr
 		}
-		reply, err := soulH.ListTyped(ctx, claimsOrNil(ctx), handlers.SoulListInput{
-			Covens:     in.Coven,
-			Status:     in.Status,
-			Transport:  in.Transport,
-			Unassigned: in.Unassigned,
-			SIDPrefix:  in.SIDPrefix,
-			Page:       page,
-			Cursor:     cursor,
-		})
+		reply, err := soulH.ListTyped(ctx, claimsOrNil(ctx), toSoulListInput(in, page, cursor))
 		if err != nil {
 			return nil, soulProblem(err)
 		}
@@ -311,13 +303,7 @@ func registerHumaSoulHistory(humaAPI huma.API, soulH *handlers.SoulHandler) {
 		return
 	}
 	huma.Register(humaAPI, soulHistoryOperation(), func(ctx context.Context, in *soulHistoryInput) (*soulHistoryOutput, error) {
-		reply, err := soulH.HistoryTyped(ctx, claimsOrNil(ctx), handlers.SoulHistoryInput{
-			SID:    in.SID,
-			Types:  in.Types,
-			Since:  in.Since,
-			Offset: int(in.Offset),
-			Limit:  int(in.Limit),
-		})
+		reply, err := soulH.HistoryTyped(ctx, claimsOrNil(ctx), toSoulHistoryInput(in))
 		if err != nil {
 			return nil, soulProblem(err)
 		}

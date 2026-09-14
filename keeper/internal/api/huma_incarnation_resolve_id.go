@@ -65,12 +65,7 @@ func registerHumaIncarnationResolveID(humaAPI huma.API, incH *handlers.Incarnati
 		if !ok {
 			return nil, incMissingClaims()
 		}
-		res, err := incH.ResolveIDTyped(ctx, claims, handlers.ResolveIDRequest{
-			Service:        in.Body.Service,
-			CreateScenario: in.Body.CreateScenario,
-			Input:          in.Body.Input,
-			Covens:         in.Body.Covens,
-		}, incH.GetInScopeFor(claims, "get"))
+		res, err := incH.ResolveIDTyped(ctx, claims, toResolveIDRequest(in.Body), incH.GetInScopeFor(claims, "get"))
 		if err != nil {
 			return nil, incProblem(err)
 		}

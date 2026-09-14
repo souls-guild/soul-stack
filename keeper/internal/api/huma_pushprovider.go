@@ -113,7 +113,7 @@ func registerHumaPushProviderSetLabel(humaAPI huma.API, pushProviderH *handlers.
 		return
 	}
 	huma.Register(humaAPI, pushProviderSetLabelOperation(), func(ctx context.Context, in *pushProviderSetLabelInput) (*pushProviderSetLabelOutput, error) {
-		reply, err := pushProviderH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := pushProviderH.SetLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}
@@ -134,7 +134,7 @@ func registerHumaPushProviderUpdate(humaAPI huma.API, pushProviderH *handlers.Pu
 		if !ok {
 			return nil, pushProviderMissingClaims()
 		}
-		reply, err := pushProviderH.UpdateTyped(ctx, claims, in.ID, handlers.PushProviderUpdateInput{Params: in.Body.Params})
+		reply, err := pushProviderH.UpdateTyped(ctx, claims, in.ID, toPushProviderUpdateInput(in.Body))
 		if err != nil {
 			return nil, pushProviderProblem(err)
 		}

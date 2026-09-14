@@ -121,10 +121,17 @@ route happens to use.
   Two MCP paths are not merely mislabelled. `initialize` and `tools/list` carry
   no gate at all, so a revoked operator can still handshake and enumerate the
   catalog — no data, the MCP counterpart of the four ungated HTTP catalog
-  routes. And `authorizeSSE` (`internal/mcp/sse.go`) returns `true` for an apply
-  the caller started *before* it reaches `Check`, so a revoked operator keeps
-  streaming events for her own runs until the stream drops: a read that survives
-  revocation, not a refusal with the wrong label. Both are NIM-551.
+  routes. That one is NIM-551 and is still open.
+
+  The second — `authorizeSSE` (`internal/mcp/sse.go`) returning `true` for an
+  apply the caller started *before* it reaches `Check`, so a revoked operator
+  kept streaming events for her own runs — is **CLOSED (NIM-858, 2026-09-14)**.
+  It was worse than a read that survives revocation: the initiator branch is the
+  only path on this listener that consults the RBAC surface at all, so nothing
+  anywhere asked. `authorizeSSE` now asks revocation FIRST, and an established
+  stream re-asks the same rule every 15s
+  (`keeper/internal/api/middleware/longlived.go`) — so revocation reaches an open
+  MCP stream on the same terms as every ordinary route.
   
   The timing half above is surface-independent: it is a property of the
   snapshot, so MCP gets it too.

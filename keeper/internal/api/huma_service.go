@@ -82,7 +82,7 @@ func registerHumaServiceSetLabel(humaAPI huma.API, serviceH *handlers.ServiceHan
 		return
 	}
 	huma.Register(humaAPI, serviceSetLabelOperation(), func(ctx context.Context, in *serviceSetLabelInput) (*serviceSetLabelOutput, error) {
-		reply, err := serviceH.SetLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := serviceH.SetLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, serviceProblem(err)
 		}
@@ -103,11 +103,7 @@ func registerHumaServiceUpdate(humaAPI huma.API, serviceH *handlers.ServiceHandl
 		if !ok {
 			return nil, serviceMissingClaims()
 		}
-		reply, err := serviceH.UpdateTyped(ctx, claims, in.ID, handlers.ServiceUpdateInput{
-			Git:     in.Body.Git,
-			Ref:     in.Body.Ref,
-			Refresh: in.Body.Refresh,
-		})
+		reply, err := serviceH.UpdateTyped(ctx, claims, in.ID, toServiceUpdateInput(in.Body))
 		if err != nil {
 			return nil, serviceProblem(err)
 		}

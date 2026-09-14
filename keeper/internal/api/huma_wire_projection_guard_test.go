@@ -22,10 +22,11 @@ package api
 // and left the other hand-written projections in this package uncovered, because
 // they TRANSFORM as they project and a value-equality check reported a false drop on
 // every transformed field. The ticket called those nine; the source sweep below
-// finds TWENTY projection functions — the eight captioned creates plus twelve — and
-// thirty more mappings still written inline. Writing
-// nine more per-route tests would have been green today and hollow tomorrow: a
-// per-route test guards the fields somebody remembered to enumerate, and the fields
+// found TWENTY projection functions — the eight captioned creates plus twelve — and
+// thirty more mappings still written inline, which [NIM-831] has since extracted
+// into huma_request_input.go. There are now FORTY-THREE, and no inline mapping left.
+// Writing nine more per-route tests would have been green today and hollow tomorrow:
+// a per-route test guards the fields somebody remembered to enumerate, and the fields
 // that go missing are exactly the ones nobody enumerated. So the subject here is the
 // MECHANISM, and the property it has to have is this one:
 //
@@ -41,10 +42,11 @@ package api
 //     — a `handlers.X{…}` LITERAL outside any such function, which must be named in
 //     inlineProjections with a reason.
 //     Both are red the day a new one appears unlisted. The second form is the one
-//     NIM-817's defect had, and there are thirty of them here today: they are
-//     inventoried, NOT driven — see WHAT IT DOES NOT COVER. The matcher errs wide on
-//     purpose; it was narrow once, missed toAuditListFilter for having a pointer
-//     parameter, and reported full coverage while doing so.
+//     NIM-817's defect had; there were thirty of them, inventoried but NOT driven,
+//     and [NIM-831] extracted all thirty, so inlineProjections is now empty and
+//     every mapping in this package is driven. The matcher errs wide on purpose; it
+//     was narrow once, missed toAuditListFilter for having a pointer parameter, and
+//     reported full coverage while doing so.
 //
 //  2. PER-FIELD, by reflection over the real projection function, in three passes,
 //     and none of the three subsumes another:
@@ -95,25 +97,34 @@ package api
 //
 // WHAT IT DOES NOT COVER, deliberately and by name:
 //
-//   - THE THIRTY INLINE MAPPINGS. inlineProjections names every `handlers.X{…}`
-//     literal written outside a projection function, but naming is ALL it does:
-//     there is no function to call, so no pass below proves a field of theirs
-//     arrives. What is closed is the set — a thirty-first goes red — not the fields.
-//     Fourteen of the thirty are write bodies, which is [NIM-817] exactly. Extracting
-//     them is [NIM-831].
+//   - AN INLINE MAPPING, if one is written again. inlineProjections names every
+//     `handlers.X{…}` literal outside a projection function, and naming is ALL it
+//     does: there is no function to call, so no pass below would prove a field of
+//     its arrives. It is EMPTY today — [NIM-831] extracted the thirty that were
+//     there — so the weak half currently covers nothing, and the guarantee is the
+//     strong one. A new literal is in neither registry and goes red.
 //   - A route that stops CALLING its projection. This drives the functions, not the
 //     routes. TestLabelOnCreate_ReachesTheWriteAndTheReply (huma_label_test.go)
 //     closes it FOR THE CAPTION by driving all eight create routes over HTTP. Only
 //     for the caption: a closure that went back to an inline literal carrying
 //     `Label` but dropping some other field leaves both guards green — though the
 //     literal itself would now have to be declared.
-//   - A mapping whose shape neither half recognises: a projection with more than one
-//     parameter, a second result that is not `error`, a METHOD with a receiver, or a
-//     result outside package handlers. `Subject.selector()` (huma_subject.go) is all
-//     three of the last ones at once and is invisible to both halves — its fields are
-//     covered here only because subjectFlattening spells them out on the two
-//     projections that call it. The pointer, slice and variadic forms ARE matched,
-//     after one of them was missed.
+//   - A VALUE THE PROJECTION IS HANDED rather than reads — by THE REFLECTION
+//     PASSES, which is why it is not left there. Three extracted mappings take an
+//     argument beyond the wire root (a page the route parsed and could REFUSE, the
+//     dynamic `state.<field>` filters huma cannot bind, a {name} path parameter),
+//     and the walk SUPPLIES it, so deleting the line that carries one leaves all
+//     three passes green. They are driven instead by
+//     TestWireProjections_CarryTheArgumentsTheyAreHanded, and the completeness half
+//     refuses any projection with extra parameters that is not named in
+//     extraArgumentsDriven — so the assertion cannot be forgotten for a fourth.
+//   - A mapping whose shape neither half recognises: a second result that is not
+//     `error`, a METHOD with a receiver, or a result outside package handlers.
+//     `Subject.selector()` (huma_subject.go) is all three at once and is invisible
+//     to both halves — its fields are covered here only because subjectFlattening
+//     spells them out on the two projections that call it. The pointer, slice and
+//     variadic forms ARE matched, after one of them was missed, and since
+//     [NIM-831] so are extra parameters in any position.
 //   - A mapping written by assignment rather than as a literal
 //     (`in := handlers.XInput{}; in.A = b.A`). The inline sweep looks for a non-empty
 //     composite literal, so this form is in neither inventory. None exists today.
@@ -143,7 +154,16 @@ package api
 //     `wire.VoyageNotify`, `auditListInput` — and leave the projection alone →
 //     named as having no field on the handler input;
 //   - add a new to<X>Input function and forget to register it, or write a new
-//     `handlers.X{…}` literal in a closure → half 1 names it.
+//     `handlers.X{…}` literal in a closure → half 1 names it;
+//   - add a field to ServiceUpdateRequest and leave toServiceUpdateInput alone →
+//     all three passes name it. That same edit was GREEN before [NIM-831]: the
+//     mapping was a literal inside the register closure, inlineProjections is keyed
+//     by file/func/type and a new wire field changes no key, so the only thing that
+//     knew about the field was the schema;
+//   - drop `Modules:` from toErrandListInput → named as a dropped filter, which on
+//     a list narrowed by an RBAC purview WIDENS the read;
+//   - change `SortDir: in.SortDir` to `in.SortBy` in toIncarnationListQuery →
+//     reported as reading the wrong source, not as a drop.
 
 import (
 	"encoding/json"
@@ -161,6 +181,8 @@ import (
 	"time"
 
 	"github.com/danielgtaylor/huma/v2"
+
+	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 )
 
 // fieldTransform — a wire field whose native form cannot be compared to it by
@@ -199,7 +221,8 @@ type wireProjection struct {
 	shaped map[string]fieldTransform
 
 	// unmapped names the wire paths the projection deliberately does not carry at
-	// all, with the reason. Empty on every projection today.
+	// all, with the reason. Two projections have one ([NIM-831]):
+	// optionalNullHasNoFieldOfItsOwn and pageParsedBeforeProjection.
 	unmapped map[string]string
 }
 
@@ -361,6 +384,193 @@ var wireProjections = []wireProjection{
 			"Limit":  widenInt32,
 		},
 	},
+
+	// The thirty that were written as a literal inside a huma.Register closure
+	// until [NIM-831] extracted them, in huma_request_input.go: fourteen write
+	// bodies plus one read-resolve, the eight captions now sharing one projection,
+	// and seven list/query inputs.
+	{
+		fn:      "toRiteCreateInput",
+		wire:    RiteCreateRequest{},
+		project: func(b any) any { return toRiteCreateInput(b.(RiteCreateRequest)) },
+		renames: subjectFlattening,
+	},
+	{
+		fn:      "toChoirCreateInput",
+		wire:    ChoirCreateRequest{},
+		project: func(b any) any { return toChoirCreateInput(b.(ChoirCreateRequest)) },
+	},
+	{
+		fn:      "toVoiceAddInput",
+		wire:    VoiceAddRequest{},
+		project: func(b any) any { return toVoiceAddInput(b.(VoiceAddRequest)) },
+	},
+	{
+		fn:      "toHeraldUpdateInput",
+		wire:    HeraldUpdateRequest{},
+		project: func(b any) any { return toHeraldUpdateInput(b.(HeraldUpdateRequest)) },
+	},
+	{
+		fn:      "toTidingUpdateInput",
+		wire:    TidingUpdateRequest{},
+		project: func(b any) any { return toTidingUpdateInput(b.(TidingUpdateRequest)) },
+	},
+	{
+		fn:      "toResolveIDRequest",
+		wire:    IncarnationResolveIDRequest{},
+		project: func(b any) any { return toResolveIDRequest(b.(IncarnationResolveIDRequest)) },
+	},
+	{
+		fn:      "toOperatorCreateInput",
+		wire:    OperatorCreateRequest{},
+		project: func(b any) any { return toOperatorCreateInput(b.(OperatorCreateRequest)) },
+	},
+	{
+		fn:      "toProvisioningPolicyUpdateInput",
+		wire:    ProvisioningPolicyUpdateRequest{},
+		project: func(b any) any { return toProvisioningPolicyUpdateInput(b.(ProvisioningPolicyUpdateRequest)) },
+	},
+	{
+		fn:      "toPushProviderUpdateInput",
+		wire:    PushProviderUpdateRequest{},
+		project: func(b any) any { return toPushProviderUpdateInput(b.(PushProviderUpdateRequest)) },
+	},
+	{
+		fn:      "toRoleCreateInput",
+		wire:    RoleCreateRequest{},
+		project: func(b any) any { return toRoleCreateInput(b.(RoleCreateRequest)) },
+	},
+	{
+		// Rooted on the BODY even though the role's name is a path parameter, so
+		// that the one-field-at-a-time pass can isolate the four booleans each
+		// [Optional] contributes; `name` is asserted separately. See the
+		// projection's own doc for why the input struct would be worse.
+		fn:   "toUpdatePermissionsInput",
+		wire: RolePermissionsUpdateRequest{},
+		project: func(b any) any {
+			return toUpdatePermissionsInput(b.(RolePermissionsUpdateRequest), "")
+		},
+		renames: map[string]string{
+			"DefaultScope.Set":   "SetDefaultScope",
+			"DefaultScope.Value": "DefaultScope",
+			"ParentRole.Set":     "SetParentRole",
+			"ParentRole.Value":   "ParentRole",
+			"ScopeMode.Set":      "SetScopeMode",
+			"ScopeMode.Value":    "ScopeMode",
+		},
+		unmapped: optionalNullHasNoFieldOfItsOwn,
+	},
+	{
+		fn:      "toServiceUpdateInput",
+		wire:    ServiceUpdateRequest{},
+		project: func(b any) any { return toServiceUpdateInput(b.(ServiceUpdateRequest)) },
+	},
+	{
+		fn:      "toSigilAllowInput",
+		wire:    PluginSigilAllowRequest{},
+		project: func(b any) any { return toSigilAllowInput(b.(PluginSigilAllowRequest)) },
+	},
+	{
+		fn:      "toSynodCreateInput",
+		wire:    SynodCreateRequest{},
+		project: func(b any) any { return toSynodCreateInput(b.(SynodCreateRequest)) },
+	},
+	{
+		fn:      "toSynodUpdateInput",
+		wire:    SynodUpdateRequest{},
+		project: func(b any) any { return toSynodUpdateInput(b.(SynodUpdateRequest)) },
+	},
+	{
+		// One projection for all eight captioned registries — the eight identical
+		// literals it replaced were eight places for a ninth to be written
+		// differently.
+		fn:      "toLabelSetInput",
+		wire:    LabelSetRequest{},
+		project: func(b any) any { return toLabelSetInput(b.(LabelSetRequest)) },
+	},
+	{
+		fn:      "toConsoleRecordingListInput",
+		wire:    consoleRecordingListInput{},
+		project: func(b any) any { v := b.(consoleRecordingListInput); return toConsoleRecordingListInput(&v) },
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+	{
+		fn:      "toErrandListInput",
+		wire:    errandListInput{},
+		project: func(b any) any { v := b.(errandListInput); return toErrandListInput(&v) },
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+	{
+		fn:      "toIncarnationListQuery",
+		wire:    incListInput{},
+		project: func(b any) any { v := b.(incListInput); return toIncarnationListQuery(&v, nil) },
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+	{
+		fn:      "toAllRunsInput",
+		wire:    runsListInput{},
+		project: func(b any) any { v := b.(runsListInput); return toAllRunsInput(&v) },
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+	{
+		fn:      "toSoulHistoryInput",
+		wire:    soulHistoryInput{},
+		project: func(b any) any { v := b.(soulHistoryInput); return toSoulHistoryInput(&v) },
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+	{
+		fn:   "toSoulListInput",
+		wire: soulListInput{},
+		project: func(b any) any {
+			v := b.(soulListInput)
+			return toSoulListInput(&v, sharedapi.Page{}, nil)
+		},
+		renames:  map[string]string{"Coven": "Covens"},
+		unmapped: pageParsedBeforeProjection,
+	},
+	{
+		fn:      "toVoyageListInput",
+		wire:    voyageListInput{},
+		project: func(b any) any { v := b.(voyageListInput); return toVoyageListInput(&v) },
+		renames: map[string]string{"Offset": "Page.Offset", "Limit": "Page.Limit"},
+		shaped:  map[string]fieldTransform{"Offset": widenInt32, "Limit": widenInt32},
+	},
+}
+
+// optionalNullHasNoFieldOfItsOwn — an [Optional]'s `Null` bit, on each of the three
+// PATCH-presence fields of the role-permissions body.
+//
+// It is not dropped: it CHOOSES between the two values the native pointer can hold
+// — present-and-null becomes nil, present-with-a-value becomes &Value — so there is
+// no field for the walk to land on, and declaring a rename onto DefaultScope would
+// claim the bit arrives there when what arrives is its consequence.
+//
+// What is lost by not walking it is the `null` branch of optionalToPtr, and that is
+// covered where it belongs: TestOptional_UnmarshalJSON_ThreeBranches and
+// TestOptional_optionalToPtr (huma_optional_test.go) drive all three readings of a
+// PATCH key — omitted, null, valued — against the helper every one of these
+// projections calls.
+var optionalNullHasNoFieldOfItsOwn = map[string]string{
+	"DefaultScope.Null": "present-and-null is carried as a NIL DefaultScope rather than by a field of " +
+		"its own; the branch itself is driven by TestOptional_optionalToPtr",
+	"ParentRole.Null": "as DefaultScope.Null — an explicit null becomes a nil ParentRole",
+	"ScopeMode.Null": "as DefaultScope.Null, and flatter still: optionalString reads null and empty " +
+		"as the same thing, which is what the domain already treats as unset",
+}
+
+// pageParsedBeforeProjection — the three soul-list query fields that do NOT reach
+// the handler input through the projection, because soulParsePage turns them into
+// the (Page, Cursor) pair FIRST and can refuse the request while doing it.
+//
+// Declared rather than carried: moving the parse inside the projection would mean
+// answering a 400 from inside one, and the walk supplies the pair itself, so
+// checking it here would assert the fixture rather than the code.
+var pageParsedBeforeProjection = map[string]string{
+	"Offset": "soulParsePage validates it (out of range -> 400, offset together with a cursor -> 422) " +
+		"and returns it inside sharedapi.Page before this projection runs; the route passes that pair in",
+	"Limit": "as Offset — validated and folded into sharedapi.Page by soulParsePage before the projection",
+	"Cursor": "soulParsePage DECODES it (malformed -> 400) into a *sharedapi.KeysetCursor; the string " +
+		"never reaches the handler input, the decoded value does",
 }
 
 // widenInt32 — pagination crosses the boundary as a widening cast. Declared rather
@@ -383,69 +593,17 @@ var projectionsNotDriven = map[string]string{}
 // literal inside a huma.Register closure instead of as a named function, keyed
 // "<file>:<enclosing func>:<type>".
 //
-// This map is an INVENTORY, not an approval. Every entry has the [NIM-817] hazard
-// and none of them is driven by the reflection halves: there is no function to
-// call, so nothing here proves a field arrives. What it does prove is that the set
-// is CLOSED — a new inline mapping is not in this map and goes red the day it is
-// written, which is the property the ticket asks for.
+// EMPTY, and that is the state [NIM-831] left the package in: all thirty were
+// extracted into huma_request_input.go and are now DRIVEN by the three reflection
+// passes rather than merely counted. An empty map is not a dead one — the sweep
+// still runs, and a literal written inline tomorrow is in neither registry and goes
+// red the same day.
 //
-// Extracting them is the same mechanical change NIM-817 made for the eight create
-// bodies, and it is deliberately NOT done here: [NIM-824] is scoped to the
-// projections that are already functions and to the mechanism, and moving thirty
-// literals across nineteen production files is its own ticket with its own review.
-// Tracked in [NIM-831].
-//
-// The three reasons below are the three shapes the thirty fall into. They are
-// ordered by how much a dropped field costs, and the first one is the one that
-// matters: a write body that silently discards a field is [NIM-817] exactly.
-const (
-	inlineWriteBody = "a WRITE body mapped inline — the [NIM-817] shape itself, and the " +
-		"highest-value extraction of the thirty ([NIM-831])"
-	inlineLabelSet = "the one-field caption literal `{Label: in.Body.Label}` — too small to " +
-		"lose a field in, and the caption's path to the write is driven over HTTP by " +
-		"TestLabelOnCreate_ReachesTheWriteAndTheReply and TestLabelSet_DoesNotTouchTheIdentifier"
-	inlineListQuery = "a LIST/query input mapped inline — the same hazard, but a dropped " +
-		"filter WIDENS a read rather than losing a write, so it surfaces as wrong results " +
-		"instead of vanishing silently ([NIM-831])"
-	inlineReadResolve = "a READ resolve mapped inline — the route writes nothing " +
-		"(huma_incarnation_resolve_id.go says so), so a dropped field costs a wrong " +
-		"lookup rather than a lost write ([NIM-831])"
-)
-
-var inlineProjections = map[string]string{
-	"huma_augur.go:registerHumaRiteCreate:RiteCreateInput":                                 inlineWriteBody,
-	"huma_choir.go:registerHumaChoirCreate:ChoirCreateInput":                               inlineWriteBody,
-	"huma_choir.go:registerHumaVoiceAdd:VoiceAddInput":                                     inlineWriteBody,
-	"huma_herald.go:registerHumaHeraldUpdate:HeraldUpdateInput":                            inlineWriteBody,
-	"huma_herald.go:registerHumaTidingUpdate:TidingUpdateInput":                            inlineWriteBody,
-	"huma_incarnation_resolve_id.go:registerHumaIncarnationResolveID:ResolveIDRequest":     inlineReadResolve,
-	"huma_operator.go:registerHumaOperatorCreate:OperatorCreateInput":                      inlineWriteBody,
-	"huma_provisioning.go:registerHumaProvisioningPolicyPut:ProvisioningPolicyUpdateInput": inlineWriteBody,
-	"huma_pushprovider.go:registerHumaPushProviderUpdate:PushProviderUpdateInput":          inlineWriteBody,
-	"huma_role.go:registerHumaRole:RoleCreateInput":                                        inlineWriteBody,
-	"huma_role.go:registerHumaRoleUpdatePermissions:UpdatePermissionsInput":                inlineWriteBody,
-	"huma_service.go:registerHumaServiceUpdate:ServiceUpdateInput":                         inlineWriteBody,
-	"huma_sigil.go:registerHumaSigilAllow:SigilAllowInput":                                 inlineWriteBody,
-	"huma_synod.go:registerHumaSynodCreate:SynodCreateInput":                               inlineWriteBody,
-	"huma_synod.go:registerHumaSynodUpdate:SynodUpdateInput":                               inlineWriteBody,
-
-	"huma_augur.go:registerHumaOmenSetLabel:LabelSetInput":                inlineLabelSet,
-	"huma_herald.go:registerHumaHeraldSetLabel:LabelSetInput":             inlineLabelSet,
-	"huma_herald.go:registerHumaTidingSetLabel:LabelSetInput":             inlineLabelSet,
-	"huma_incarnation.go:registerHumaIncarnationSetLabel:LabelSetInput":   inlineLabelSet,
-	"huma_oracle.go:registerHumaDecreeSetLabel:LabelSetInput":             inlineLabelSet,
-	"huma_oracle.go:registerHumaVigilSetLabel:LabelSetInput":              inlineLabelSet,
-	"huma_pushprovider.go:registerHumaPushProviderSetLabel:LabelSetInput": inlineLabelSet,
-	"huma_service.go:registerHumaServiceSetLabel:LabelSetInput":           inlineLabelSet,
-
-	"huma_console_recording.go:registerHumaConsoleRecordingList:ConsoleRecordingListInput": inlineListQuery,
-	"huma_errand.go:registerHumaErrandList:ErrandListInput":                                inlineListQuery,
-	"huma_incarnation.go:registerHumaIncarnationList:IncarnationListQuery":                 inlineListQuery,
-	"huma_runs.go:registerHumaRunsList:AllRunsInput":                                       inlineListQuery,
-	"huma_soul.go:registerHumaSoulHistory:SoulHistoryInput":                                inlineListQuery,
-	"huma_soul.go:registerHumaSoulList:SoulListInput":                                      inlineListQuery,
-	"huma_voyage.go:registerHumaVoyageList:VoyageListInput":                                inlineListQuery,
-}
+// An entry here is a deliberate exception, not a backlog item. It says "this
+// mapping stays inline, and here is why" — and the reason had better be stronger
+// than "it is small", because the literal that lost `label` on eight registries
+// was small.
+var inlineProjections = map[string]string{}
 
 // captionedCreateProjections — the create route each captioned body reaches, by
 // projection name. Half 3 compares its key set against the spec's own topology, and
@@ -589,7 +747,7 @@ func TestWireProjections_InventNothingFromAnEmptyBody(t *testing.T) {
 // that generalises past `label`: the set of projections driven above must be the set
 // the package's OWN SOURCE declares.
 //
-// The shape it matches — one parameter of a package-local type, one `handlers.`
+// The shape it matches — a package-local parameter somewhere, one `handlers.`
 // result — is what every wire→native projection here looks like and what nothing
 // else here looks like. The reply projections go the other way (`handlers.X` in, a
 // local type out) and are not this ticket's hazard: a field missing from a reply is
@@ -644,8 +802,8 @@ func TestWireProjections_CoverEveryProjectionInThePackage(t *testing.T) {
 			"pass vacuously from here on")
 	}
 
-	var missing, stale []string
-	for fn, where := range declared.funcs {
+	var missing, stale, undrivenArgs []string
+	for fn, d := range declared.funcs {
 		_, driven := byName[fn]
 		why, exempt := projectionsNotDriven[fn]
 		switch {
@@ -654,7 +812,25 @@ func TestWireProjections_CoverEveryProjectionInThePackage(t *testing.T) {
 		case exempt && why == "":
 			t.Errorf("%s is exempt with no reason recorded", fn)
 		case !driven && !exempt:
-			missing = append(missing, fmt.Sprintf("%s (%s)", fn, where))
+			missing = append(missing, fmt.Sprintf("%s (%s)", fn, d.at))
+		}
+		// A parameter beyond the wire root is invisible to all three reflection
+		// passes: the walk descends the ROOT, and the extra value is supplied by
+		// the fixture, so deleting the line that carries it leaves every pass
+		// green. Each one therefore owes an explicit assertion — but only if it is
+		// DRIVEN at all; telling the reader to assert a projection that is on
+		// record as not driven would be unactionable.
+		if _, checked := extraArgumentsDriven[fn]; d.params > 1 && driven && !checked {
+			undrivenArgs = append(undrivenArgs, fmt.Sprintf("%s (%s), %d parameters", fn, d.at, d.params))
+		}
+	}
+	for fn, what := range extraArgumentsDriven {
+		if what == "" {
+			t.Errorf("%s is listed in extraArgumentsDriven with no argument named — the entry has to "+
+				"say WHAT is asserted, or it records only that somebody looked", fn)
+		}
+		if d, ok := declared.funcs[fn]; !ok || d.params <= 1 {
+			stale = append(stale, "extraArgumentsDriven: "+fn)
 		}
 	}
 	for fn := range byName {
@@ -699,6 +875,15 @@ func TestWireProjections_CoverEveryProjectionInThePackage(t *testing.T) {
 	sort.Strings(stale)
 	sort.Strings(undeclaredInline)
 
+	sort.Strings(undrivenArgs)
+	if len(undrivenArgs) > 0 {
+		t.Errorf("A PROJECTION TAKES A VALUE NOTHING CHECKS — %d:\n  %s\n"+
+			"-> the three reflection passes descend the WIRE ROOT and the test supplies every other "+
+			"argument, so deleting the line that carries one leaves all three green and the call site "+
+			"compiling (an unused parameter is legal Go). Assert it in "+
+			"TestWireProjections_CarryTheArgumentsTheyAreHanded and name it in extraArgumentsDriven.",
+			len(undrivenArgs), strings.Join(undrivenArgs, "\n  "))
+	}
 	if len(missing) > 0 {
 		t.Errorf("HAND-WRITTEN PROJECTION WITH NO GUARD — %d:\n  %s\n"+
 			"-> add each to wireProjections. Until then nothing proves the fields it enumerates "+
@@ -726,8 +911,8 @@ func TestWireProjections_CoverEveryProjectionInThePackage(t *testing.T) {
 // writes a wire→native mapping. Both are hand-written field lists and both carry the
 // [NIM-817] hazard; only the first can be driven by reflection.
 type packageProjections struct {
-	// funcs — named projection functions, by name → source position.
-	funcs map[string]string
+	// funcs — named projection functions, by name → what the sweep learned.
+	funcs map[string]declaredProjection
 	// inline — a `handlers.X{…}` composite literal written OUTSIDE any projection
 	// function, which is where the mapping sits when nobody has extracted it. This
 	// is the form the eight create bodies had when `label` went missing. Keyed by
@@ -742,8 +927,17 @@ type packageProjections struct {
 
 // projectionsDeclaredInPackage parses every non-test file in dir and returns both
 // forms of hand-written mapping it declares.
+// declaredProjection — one projection function as the source declares it.
+type declaredProjection struct {
+	at string
+	// params is the full parameter count. Anything above one is a value the
+	// projection is HANDED rather than reads off the wire root, which no
+	// reflection pass can drive — see extraArgumentsDriven.
+	params int
+}
+
 func projectionsDeclaredInPackage(dir string) (packageProjections, error) {
-	out := packageProjections{funcs: map[string]string{}, inline: map[string]string{}}
+	out := packageProjections{funcs: map[string]declaredProjection{}, inline: map[string]string{}}
 	entries, err := os.ReadDir(dir)
 	if err != nil {
 		return out, err
@@ -761,7 +955,10 @@ func projectionsDeclaredInPackage(dir string) (packageProjections, error) {
 		for _, d := range f.Decls {
 			fd, ok := d.(*ast.FuncDecl)
 			if ok && fd.Recv == nil && isWireToNativeShape(fd.Type) {
-				out.funcs[fd.Name.Name] = fmt.Sprintf("%s:%d", name, fset.Position(fd.Pos()).Line)
+				out.funcs[fd.Name.Name] = declaredProjection{
+					at:     fmt.Sprintf("%s:%d", name, fset.Position(fd.Pos()).Line),
+					params: paramCount(fd.Type),
+				}
 				// Its own literals ARE the projection this file drives by reflection.
 				continue
 			}
@@ -798,16 +995,26 @@ func projectionsDeclaredInPackage(dir string) (packageProjections, error) {
 	return out, nil
 }
 
-// isWireToNativeShape reports whether a signature is "one wire-side value in, one
+// isWireToNativeShape reports whether a signature is "a wire-side value in, one
 // handlers value out" — the shape of every projection function in this package.
 //
 // Slices, pointers and variadics are unwrapped on both sides, and a trailing `error`
 // result is allowed, because none of those changes what the function IS. The matcher
 // was narrower once and missed toAuditListFilter, whose parameter is a pointer, while
-// reporting full coverage — so it now errs wide: a false match costs one line in
+// reporting full coverage — so it errs wide: a false match costs one line in
 // projectionsNotDriven, a false miss is an unguarded projection that looks guarded.
+//
+// [NIM-831] widened it twice more, to "ANY parameter is wire-side" and to accepting a
+// grouped parameter list. Three of the thirty literals it extracted read a value that
+// is neither the body nor a bound parameter — a page that had to be parsed and
+// REFUSED before the projection ran, the dynamic `state.<field>` filters huma cannot
+// bind, a path parameter — and the one-parameter rule left the choice between
+// changing what the route does and leaving the mapping inline. Which parameter is the
+// WIRE ROOT is then a convention the registry entry states rather than something the
+// matcher can know, so the matcher only has to FIND the function; the arguments the
+// walk cannot drive are covered by extraArgumentsDriven.
 func isWireToNativeShape(ft *ast.FuncType) bool {
-	if ft.Params == nil || len(ft.Params.List) != 1 || len(ft.Params.List[0].Names) > 1 {
+	if ft.Params == nil || len(ft.Params.List) == 0 {
 		return false
 	}
 	if ft.Results == nil || len(ft.Results.List) == 0 || len(ft.Results.List) > 2 {
@@ -816,7 +1023,35 @@ func isWireToNativeShape(ft *ast.FuncType) bool {
 	if len(ft.Results.List) == 2 && !isErrorType(ft.Results.List[1].Type) {
 		return false
 	}
-	return isWireSideType(ft.Params.List[0].Type) && isHandlersType(ft.Results.List[0].Type)
+	if !isHandlersType(ft.Results.List[0].Type) {
+		return false
+	}
+	// ANY parameter, not the first: which one is the wire root is a convention
+	// the registry entry states, and a projection written `to<X>(h handlers.Foo,
+	// in *fooInput)` would otherwise be invisible to BOTH halves — matched by
+	// neither the function sweep nor the inline one. Wider again, same direction.
+	for _, p := range ft.Params.List {
+		if isWireSideType(p.Type) {
+			return true
+		}
+	}
+	return false
+}
+
+// paramCount counts a signature's parameters, expanding a grouped declaration
+// (`a, b string` is two). A projection with more than one is taking a value it
+// does not READ from the wire root, which the walk cannot drive — so the count is
+// what makes such a projection owe an entry in extraArgumentsDriven.
+func paramCount(ft *ast.FuncType) int {
+	n := 0
+	for _, p := range ft.Params.List {
+		if len(p.Names) == 0 {
+			n++
+			continue
+		}
+		n += len(p.Names)
+	}
+	return n
 }
 
 // unwrapToNamed strips the wrappers that do not change which type is being named:
@@ -1377,6 +1612,19 @@ func (f *uniqueFiller) fill(t *testing.T, v reflect.Value, where string) {
 		v.Set(reflect.ValueOf(time.Unix(int64(f.next()), 0).UTC()))
 		return
 	}
+	// [Optional] is a THREE-field presence carrier and only two of its eight
+	// combinations are representable: `Null` is documented as "Set must be true",
+	// and `Value` as "the decoded value when Set && !Null". Filling all three
+	// field-by-field produces present-AND-null-AND-valued, a body no decoder can
+	// produce — and optionalToPtr then correctly answers nil, which the walk reads
+	// as a dropped field. So the fixture builds the one shape a real PATCH has:
+	// present, not null, carrying a value.
+	if isOptionalCarrier(v.Type()) {
+		v.FieldByName("Set").SetBool(true)
+		f.next()
+		f.fill(t, v.FieldByName("Value"), where)
+		return
+	}
 	switch v.Kind() {
 	case reflect.String:
 		v.SetString(fmt.Sprintf("guard-%d", f.next()))
@@ -1444,5 +1692,127 @@ func (f *uniqueFiller) fill(t *testing.T, v reflect.Value, where string) {
 	default:
 		t.Fatalf("%s: the filler cannot produce a distinguishable %s — "+
 			"a field of an unhandled kind would look dropped whatever the projection does", where, v.Kind())
+	}
+}
+
+// isOptionalCarrier reports whether t is an [Optional] instantiation, by SHAPE
+// rather than by name: a struct of exactly `Set bool`, `Null bool`, `Value T`.
+//
+// By shape because a generic instantiation has no stable name to compare against
+// across type arguments, and because a second carrier written to the same shape
+// would have the same unrepresentable-combination problem and should get the same
+// treatment.
+func isOptionalCarrier(t reflect.Type) bool {
+	if t.Kind() != reflect.Struct || t.NumField() != 3 {
+		return false
+	}
+	set, setOK := t.FieldByName("Set")
+	null, nullOK := t.FieldByName("Null")
+	_, valueOK := t.FieldByName("Value")
+	return setOK && nullOK && valueOK &&
+		set.Type.Kind() == reflect.Bool && null.Type.Kind() == reflect.Bool
+}
+
+// extraArgumentsDriven — the projections that take a value they are HANDED
+// rather than read off the wire root, and the fact that
+// TestWireProjections_CarryTheArgumentsTheyAreHanded asserts about each.
+//
+// The three reflection passes cannot reach these. They fill the wire root and
+// compare the native side against it; an argument the ROUTE computes is supplied
+// by the fixture itself, so `StateParams: stateParams` can be deleted outright and
+// all three stay green while every `state.<field>` filter silently stops narrowing
+// the list. That is the [NIM-817] defect with a different entry point, and the
+// completeness half above refuses a projection with extra parameters that is not
+// named here.
+var extraArgumentsDriven = map[string]string{
+	"toIncarnationListQuery":   "stateParams — the dynamic `state.<field>` filters, which huma cannot bind",
+	"toSoulListInput":          "page and cursor — the pair soulParsePage validated before the projection ran",
+	"toUpdatePermissionsInput": "name — the {name} path parameter naming the role being edited",
+}
+
+// TestWireProjections_CarryTheArgumentsTheyAreHanded drives the values the walk
+// cannot: one assertion per extra argument, each with the value arriving distinct
+// from anything else in the struct so "carried" is not confused with "defaulted".
+func TestWireProjections_CarryTheArgumentsTheyAreHanded(t *testing.T) {
+	// Every projection the registry claims is covered has to be covered HERE.
+	// Without this, membership in extraArgumentsDriven is the only thing the
+	// completeness half checks, and a fourth extra-argument projection is green on
+	// one map line and no assertion — which is the gap this test exists to close,
+	// reopened one level up.
+	asserted := map[string]bool{}
+	t.Cleanup(func() {
+		for fn := range extraArgumentsDriven {
+			if !asserted[fn] {
+				t.Errorf("%s is named in extraArgumentsDriven and has no subtest here — the registry "+
+					"says its handed-in argument is checked and nothing checks it", fn)
+			}
+		}
+	})
+
+	asserted["toIncarnationListQuery"] = true
+	t.Run("toIncarnationListQuery/stateParams", func(t *testing.T) {
+		want := map[string][]string{"state.version": {"7.2"}}
+		got := toIncarnationListQuery(&incListInput{}, want)
+		if !reflect.DeepEqual(got.StateParams, want) {
+			t.Errorf("StateParams = %v, want %v — the `state.<field>` filters do not reach the query, "+
+				"so a list narrowed by them returns rows the caller asked to exclude", got.StateParams, want)
+		}
+	})
+
+	asserted["toSoulListInput"] = true
+	t.Run("toSoulListInput/page+cursor", func(t *testing.T) {
+		page := sharedapi.Page{Offset: 11, Limit: 22}
+		cursor := &sharedapi.KeysetCursor{}
+		got := toSoulListInput(&soulListInput{}, page, cursor)
+		if got.Page != page {
+			t.Errorf("Page = %+v, want %+v — the page soulParsePage validated is not the page the "+
+				"handler reads, so the bounds it enforced apply to nothing", got.Page, page)
+		}
+		if got.Cursor != cursor {
+			t.Errorf("Cursor = %p, want %p — the decoded keyset cursor is dropped and the request "+
+				"silently falls back to offset pagination", got.Cursor, cursor)
+		}
+	})
+
+	asserted["toUpdatePermissionsInput"] = true
+	t.Run("toUpdatePermissionsInput/name", func(t *testing.T) {
+		got := toUpdatePermissionsInput(RolePermissionsUpdateRequest{}, "role-under-edit")
+		if got.Name != "role-under-edit" {
+			t.Errorf("Name = %q, want role-under-edit — the path parameter naming the role does not "+
+				"reach the update, so the write would land on no role or the wrong one", got.Name)
+		}
+	})
+}
+
+// TestRoleUpdatePermissionsInput_HasOnlyTheFieldsTheProjectionAccountsFor — the
+// tripwire that pays for rooting toUpdatePermissionsInput on the BODY.
+//
+// The wire root is `RolePermissionsUpdateRequest`, so the huma input struct around
+// it is walked by nothing: a THIRD field added to it — a new query parameter on
+// PATCH /v1/roles/{name}/permissions, say — would reach no guard, which is exactly
+// the silence this file exists to end. Its two fields are accounted for by name
+// (`Name` is asserted in TestWireProjections_CarryTheArgumentsTheyAreHanded,
+// `Body` is the wire root), so a third is a decision somebody has to make.
+func TestRoleUpdatePermissionsInput_HasOnlyTheFieldsTheProjectionAccountsFor(t *testing.T) {
+	accounted := map[string]string{
+		"Name": "the {name} path parameter, passed to toUpdatePermissionsInput as its second argument",
+		"Body": "the wire root the three reflection passes walk",
+	}
+	rt := reflect.TypeOf(roleUpdatePermissionsInput{})
+	for i := 0; i < rt.NumField(); i++ {
+		f := rt.Field(i)
+		if !f.IsExported() {
+			continue
+		}
+		if _, ok := accounted[f.Name]; !ok {
+			t.Errorf("roleUpdatePermissionsInput grew the field %q, which nothing checks: the "+
+				"projection is rooted on the BODY (see toUpdatePermissionsInput), so this struct is "+
+				"walked by no pass. Carry it in the projection and assert it, or account for it here "+
+				"with the reason it is not carried ([NIM-831]).", f.Name)
+		}
+		delete(accounted, f.Name)
+	}
+	for name := range accounted {
+		t.Errorf("roleUpdatePermissionsInput no longer has %q — this list is stale", name)
 	}
 }

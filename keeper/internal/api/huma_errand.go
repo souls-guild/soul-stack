@@ -38,14 +38,7 @@ func registerHumaErrandList(humaAPI huma.API, errandH *handlers.ErrandHandler) {
 		if !ok {
 			return nil, errandMissingClaims()
 		}
-		page, err := errandH.ListTyped(ctx, claims, handlers.ErrandListInput{
-			SID:          in.SID,
-			Status:       in.Status,
-			StartedAfter: in.StartedAfter,
-			Modules:      in.Modules,
-			Offset:       int(in.Offset),
-			Limit:        int(in.Limit),
-		})
+		page, err := errandH.ListTyped(ctx, claims, toErrandListInput(in))
 		if err != nil {
 			return nil, errandProblem(err)
 		}

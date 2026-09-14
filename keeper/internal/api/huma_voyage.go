@@ -79,11 +79,7 @@ func registerHumaVoyageList(humaAPI huma.API, voyageH *handlers.VoyageHandler) {
 		if !ok {
 			return nil, voyageMissingClaims()
 		}
-		reply, err := voyageH.ListTyped(ctx, claims, handlers.VoyageListInput{
-			Kind:     in.Kind,
-			Statuses: in.Statuses,
-			Page:     sharedapi.Page{Offset: int(in.Offset), Limit: int(in.Limit)},
-		})
+		reply, err := voyageH.ListTyped(ctx, claims, toVoyageListInput(in))
 		if err != nil {
 			return nil, voyageProblem(err)
 		}

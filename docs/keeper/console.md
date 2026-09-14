@@ -246,7 +246,9 @@ for as long as the operator kept it. `RejectRevoked` refuses the *next* request,
 and an established socket makes none, so a revoked Archon kept typing at a root
 prompt (NIM-844).
 
-Every **15 s** (`longLivedReauthInterval`) the socket asks again, and the two
+Every **15 s** (`middleware.LongLivedReauthInterval`, shared with the two event
+streams — see `keeper/internal/api/middleware/longlived.go`) the socket asks again,
+and the two
 answers cost it differently:
 
 | What changed | What the socket loses |

@@ -55,10 +55,11 @@ func (allowAllAccess) Access(_ context.Context, _ string) (*applyrun.Access, err
 	return &applyrun.Access{IncarnationName: "test-inc"}, nil
 }
 
-// allowAllRBAC — a PermissionChecker that allows any check.
+// allowAllRBAC — a [ServerRBAC] that allows any check and revokes nobody.
 type allowAllRBAC struct{}
 
 func (allowAllRBAC) Check(_, _, _ string, _ map[string]string) error { return nil }
+func (allowAllRBAC) IsRevoked(string) bool                           { return false }
 
 func sseTestServer(t *testing.T, bus *applybus.EventBus) *httptest.Server {
 	t.Helper()
@@ -230,8 +231,8 @@ func (f fakeAccess) Access(_ context.Context, applyID string) (*applyrun.Access,
 	return acc, nil
 }
 
-// fakeRBAC — a PermissionChecker stub: allows only a given (aid,
-// incarnation) set on (incarnation, get).
+// fakeRBAC — a [ServerRBAC] stub: allows only a given (aid, incarnation) set on
+// (incarnation, get), and revokes nobody.
 type fakeRBAC struct {
 	allow map[string]string // aid → incarnation
 }
@@ -245,9 +246,11 @@ func (f fakeRBAC) Check(aid, resource, action string, ctx map[string]string) err
 	return errors.New("rbac: denied")
 }
 
+func (fakeRBAC) IsRevoked(string) bool { return false }
+
 func ptr(s string) *string { return &s }
 
-func sseRBACServer(t *testing.T, bus *applybus.EventBus, access applyAccessStore, rbac PermissionChecker) *httptest.Server {
+func sseRBACServer(t *testing.T, bus *applybus.EventBus, access applyAccessStore, rbac ServerRBAC) *httptest.Server {
 	t.Helper()
 	h := buildSSEHandler(sseDeps{
 		JWTVerifier: sseTestVerifier(t),

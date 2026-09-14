@@ -11,6 +11,7 @@ import (
 	"sync"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
@@ -62,9 +63,14 @@ type sseDeps struct {
 	JWTVerifier *jwt.Verifier
 	Bus         *applybus.EventBus
 	Access      applyAccessStore
-	RBAC        PermissionChecker
+	RBAC        ServerRBAC
 	Limiter     *sseConnLimiter
 	Logger      *slog.Logger
+	// ReauthInterval overrides how often an open stream re-asks whether the
+	// subscriber may still have it (NIM-858); zero takes
+	// [middleware.LongLivedReauthInterval]. Only this file's tests set it, to
+	// reach the second check without waiting out the production interval.
+	ReauthInterval time.Duration
 }
 
 // sseConnLimiter — active SSE stream counter: global + per-AID (M4).
@@ -172,7 +178,8 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 
 		// Subscription RBAC check (M1). Runs BEFORE Acquire/headers — a
 		// denial returns as a plain JSON error, stream never opens.
-		if !authorizeSSE(r.Context(), deps, claims.Subject, applyID) {
+		grant, ok := authorizeSSE(r.Context(), deps, claims.Subject, applyID)
+		if !ok {
 			writeJSONError(w, http.StatusForbidden,
 				"forbidden: no access to this apply_id")
 			return
@@ -240,10 +247,27 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 		heartbeat := time.NewTicker(sseHeartbeatInterval)
 		defer heartbeat.Stop()
 
+		// Its own ticker rather than a branch on the heartbeat: the heartbeat
+		// is a client-liveness interval and this is an authorization one, and
+		// tying them together would mean changing either to change the other.
+		reauth := middleware.ReauthTicker(deps.ReauthInterval)
+		defer reauth.Stop()
+
 		for {
 			select {
 			case <-ctx.Done():
 				return
+			case <-reauth.C:
+				if !sseStillAuthorized(deps, claims.Subject, grant) {
+					// No closing frame: the event kinds on this stream are the
+					// bus's, and the client learns the same way it would after
+					// any disconnect — by re-opening and being answered 403.
+					deps.Logger.Warn("mcp/sse: subscriber closed, access withdrawn under it",
+						slog.String("apply_id", applyID),
+						slog.String("aid", claims.Subject),
+					)
+					return
+				}
 			case <-heartbeat.C:
 				if _, err := w.Write([]byte(":keepalive\n\n")); err != nil {
 					return
@@ -270,9 +294,22 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 	}
 }
 
+// sseGrant — what the opening decision learned from the run's row, kept so the
+// re-check (NIM-858) does not have to read it again. Both fields are immutable
+// for a given apply_id: a run does not change which incarnation it belongs to,
+// nor who started it. Everything that CAN change — the Archon's roles, their
+// scope, whether they are revoked at all — is re-read per check.
+type sseGrant struct {
+	incarnation string
+	// initiator is true when this subscriber started the run, which is the half
+	// of the rule no permission can express.
+	initiator bool
+}
+
 // authorizeSSE — subscription RBAC check for apply_id (M1).
 //
 // Rules:
+//   - revoked Archon → deny (NIM-858, see below).
 //   - Access == nil → deny (fail-closed): without an access-store the run's
 //     owner/incarnation can't be resolved, so the check can't run and the
 //     subscription is denied. Production always wires up Access.
@@ -285,12 +322,35 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 //
 // Any infrastructure error (PG unavailable) → deny (fail-closed): safer to
 // refuse the subscription than expose another user's stream.
-func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) bool {
+//
+// WHY REVOCATION IS ASKED HERE AND NOT ON THE /v1 TWIN. The initiator branch
+// admits an Archon holding no permission at all — having started the run is the
+// whole of the rule — so nothing else on this path ever consults the revoked
+// projection: [jwt.Verifier.Verify] checks the signature and `exp`, not the
+// registry, and this listener carries no [middleware.RejectRevoked] (NIM-551).
+// The /v1 stream can leave the question to that middleware; here there is nobody
+// to leave it to, and without this line a revoked Archon opens the stream, loses
+// it to the re-check one interval later, and re-opens — delivery continuing
+// indefinitely at 15-second intervals rather than stopping.
+//
+// It also makes the opening decision and [sseStillAuthorized] the SAME rule,
+// which is the property that keeps the two from drifting apart.
+//
+// On allow it returns the [sseGrant] the stream re-checks against.
+func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) (sseGrant, bool) {
+	var zero sseGrant
+	if deps.RBAC != nil && deps.RBAC.IsRevoked(sub) {
+		deps.Logger.Warn("mcp/sse: subscription refused, operator revoked",
+			slog.String("apply_id", applyID),
+			slog.String("aid", sub),
+		)
+		return zero, false
+	}
 	if deps.Access == nil {
 		deps.Logger.Warn("mcp/sse: apply access-store not configured (deny)",
 			slog.String("apply_id", applyID),
 		)
-		return false
+		return zero, false
 	}
 	acc, err := deps.Access.Access(ctx, applyID)
 	if err != nil {
@@ -300,18 +360,56 @@ func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) bool {
 				slog.Any("error", err),
 			)
 		}
+		return zero, false
+	}
+	grant := sseGrant{
+		incarnation: acc.IncarnationName,
+		initiator:   acc.StartedByAID != nil && *acc.StartedByAID == sub,
+	}
+	if grant.initiator {
+		return grant, true
+	}
+	if deps.RBAC == nil {
+		return zero, false
+	}
+	err = deps.RBAC.Check(sub, "incarnation", "get", map[string]string{
+		"incarnation": grant.incarnation,
+	})
+	if err != nil {
+		return zero, false
+	}
+	return grant, true
+}
+
+// sseStillAuthorized re-decides the RBAC half of [authorizeSSE] for a stream
+// already running (NIM-858). A stream lives up to [sseMaxLifetime], and this
+// listener has no [middleware.RejectRevoked] in front of it at all (NIM-551) —
+// so unlike every other surface here, there is not even a next request that
+// would refuse a revoked Archon. The only place left to ask is here.
+//
+// It is the SAME rule as [authorizeSSE] in the same order, minus the two facts
+// that cannot change (the run's incarnation and its initiator, carried in the
+// grant). Exactly the same and not stricter: a continuing check stricter than the
+// opening one produces a stream that opens and then dies for a reason that was
+// already true when it opened, which tells the caller nothing and costs them the
+// run they were watching. That is also why revocation is asked at the open —
+// see [authorizeSSE].
+//
+// Revocation comes first because it is not a permission question: the token is no
+// longer trusted, so being the run's initiator stops earning anything.
+func sseStillAuthorized(deps sseDeps, sub string, g sseGrant) bool {
+	if deps.RBAC != nil && deps.RBAC.IsRevoked(sub) {
 		return false
 	}
-	if acc.StartedByAID != nil && *acc.StartedByAID == sub {
+	if g.initiator {
 		return true
 	}
 	if deps.RBAC == nil {
 		return false
 	}
-	err = deps.RBAC.Check(sub, "incarnation", "get", map[string]string{
-		"incarnation": acc.IncarnationName,
-	})
-	return err == nil
+	return deps.RBAC.Check(sub, "incarnation", "get", map[string]string{
+		"incarnation": g.incarnation,
+	}) == nil
 }
 
 // writeSSEEvent serializes one apply event into an SSE frame:

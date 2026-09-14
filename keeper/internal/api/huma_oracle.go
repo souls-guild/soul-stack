@@ -83,7 +83,7 @@ func registerHumaVigilSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandler
 		return
 	}
 	huma.Register(humaAPI, vigilSetLabelOperation(), func(ctx context.Context, in *vigilSetLabelInput) (*vigilSetLabelOutput, error) {
-		reply, err := oracleH.SetVigilLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := oracleH.SetVigilLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, oracleProblem(err)
 		}
@@ -169,7 +169,7 @@ func registerHumaDecreeSetLabel(humaAPI huma.API, oracleH *handlers.OracleHandle
 		return
 	}
 	huma.Register(humaAPI, decreeSetLabelOperation(), func(ctx context.Context, in *decreeSetLabelInput) (*decreeSetLabelOutput, error) {
-		reply, err := oracleH.SetDecreeLabelTyped(ctx, in.ID, handlers.LabelSetInput{Label: in.Body.Label})
+		reply, err := oracleH.SetDecreeLabelTyped(ctx, in.ID, toLabelSetInput(in.Body))
 		if err != nil {
 			return nil, oracleProblem(err)
 		}

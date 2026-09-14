@@ -196,7 +196,10 @@ func startMCPServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shu
 		JWTVerifier: verifier,
 		Handler:     handler,
 		Bus:         applybus.NewBus(slog.New(slog.NewJSONHandler(io.Discard, nil))),
-		Logger:      slog.New(slog.NewJSONHandler(io.Discard, nil)),
+		// RBAC is required (NIM-858): /mcp/events re-checks revocation on it,
+		// and no RejectRevoked runs on this listener.
+		RBAC:   enforcer,
+		Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 	})
 	if err != nil {
 		t.Fatalf("mcp.NewServer: %v", err)

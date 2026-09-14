@@ -34,10 +34,7 @@ func registerHumaSynodCreate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 		if !ok {
 			return nil, synodMissingClaims()
 		}
-		reply, err := synodH.CreateTyped(ctx, claims, handlers.SynodCreateInput{
-			Name:        in.Body.Name,
-			Description: in.Body.Description,
-		})
+		reply, err := synodH.CreateTyped(ctx, claims, toSynodCreateInput(in.Body))
 		if err != nil {
 			return nil, synodProblem(err)
 		}
@@ -79,9 +76,7 @@ func registerHumaSynodUpdate(humaAPI huma.API, synodH *handlers.SynodHandler) {
 		if !ok {
 			return nil, synodMissingClaims()
 		}
-		reply, err := synodH.UpdateTyped(ctx, claims, in.Name, handlers.SynodUpdateInput{
-			Description: in.Body.Description,
-		})
+		reply, err := synodH.UpdateTyped(ctx, claims, in.Name, toSynodUpdateInput(in.Body))
 		if err != nil {
 			return nil, synodProblem(err)
 		}

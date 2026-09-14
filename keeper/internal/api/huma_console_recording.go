@@ -57,15 +57,7 @@ func registerHumaConsoleRecordingList(humaAPI huma.API, h *handlers.ConsoleRecor
 		if !ok {
 			return nil, consoleRecordingMissingClaims()
 		}
-		page, err := h.ListTyped(ctx, claims, handlers.ConsoleRecordingListInput{
-			SID:           in.SID,
-			ArchonAID:     in.ArchonAID,
-			Kind:          in.Kind,
-			StartedAfter:  in.StartedAfter,
-			StartedBefore: in.StartedBefore,
-			Offset:        int(in.Offset),
-			Limit:         int(in.Limit),
-		})
+		page, err := h.ListTyped(ctx, claims, toConsoleRecordingListInput(in))
 		if err != nil {
 			return nil, consoleRecordingProblem(err)
 		}

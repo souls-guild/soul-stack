@@ -37,11 +37,7 @@ func registerHumaOperatorCreate(humaAPI huma.API, opH *handlers.OperatorHandler)
 		if !ok {
 			return nil, operatorMissingClaims()
 		}
-		reply, err := opH.CreateTyped(ctx, claims, handlers.OperatorCreateInput{
-			AID:         in.Body.AID,
-			DisplayName: in.Body.DisplayName,
-			Roles:       in.Body.Roles,
-		})
+		reply, err := opH.CreateTyped(ctx, claims, toOperatorCreateInput(in.Body))
 		if err != nil {
 			return nil, operatorProblem(err)
 		}
