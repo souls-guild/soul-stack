@@ -221,7 +221,6 @@ tests/e2e/
 │   └── soulstub/              # fake-Soul helper package (NOT a binary, ADR-004)
 ├── smoke-nginx/  hello-world/  noop/  coven-probe/  long-runner/
 │   └── fixtures/ + expectations/   # per-example service fixtures
-├── redis/  redis-cluster-live/  redis-monitored/  redis-sentinel/
 ├── staged-failover/           # WIP service for the staged-render proof (NOT examples/**)
 ├── oracle_typed_portent/
 └── <name>_test.go             # one file per case
@@ -237,10 +236,7 @@ tests/e2e/
 | `TestE2EServiceCovenProbe_Create` | 1 | `core.file.present` init marker + double state mutation. |
 | `TestE2EServiceLongRunner_Create` | 1 | `core.file.present` + double state mutation. |
 | `TestE2EStagedFailover_2Passage` | 2 | **staged-render probe→where** (ADR-056): Passage 0 probes everyone, Passage 1 `where: register.role=='master'` ONLY on the master. |
-| `TestE2EServiceRedisCluster_UpdateAcl` | 3 | redis-cluster `update_acl` on a PG-seeded ready incarnation: per-host role probe (3 hosts) + ACL-apply only-master + state.redis_users patch + scoped-vault reachability. |
-| `TestE2EServiceRedisClusterLive_*` (`Create`/`AddUser`/`UpdateConfig`/`UpdateAcl`/`AddReplica`/`RemoveReplica`/`Reshard`) | 1–3 | redis-cluster-live on core modules: lifecycle of mutating scenarios. |
-| `TestE2EServiceRedis_*` (`Create`/`AddAclUser`/`UpdateConfig`/`AddReplicas`/`*NodeExporter`) | 1+ | redis service + node-exporter destiny. |
-| `TestE2EServiceRedisMonitored_Create` / `TestE2EServiceRedisSentinel_Create` | | redis + monitoring / sentinel topology. |
+| ~~`TestE2EServiceRedis_*` / `TestE2EServiceRedisCluster_*`~~ | | **GONE (NIM-871)** — the L3a service lifecycle ran `examples/service/redis`, which left the engine. No in-tree service replaces it at this tier: the fixtures below are single-scenario smokes, not a create-plus-day-2 lifecycle. |
 | `TestE2EKeeperSideDispatch_CovenRegistered` | | keeper-side core `core.soul.registered` (`on: keeper` dispatcher). |
 | `TestE2EOracleTypedPortent_*` / `TestOracle_FileChanged_FiresScenario` / `TestL3b_VigilDecreeOracleFlow_Smoke` | | Vigil/Oracle event-driven: portent → fired scenario. |
 | `TestSoulHistory_AggregatesScenarioAndErrand` | | scenario+errand history aggregation by SID. |

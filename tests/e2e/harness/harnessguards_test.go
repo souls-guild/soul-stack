@@ -2788,11 +2788,10 @@ func TestMissingKeeperBinaryFailsTheTierInsteadOfSkipping(t *testing.T) {
 // stand that was never built.
 //
 // Scoped to the harness sources, not the tests: a deliberately parked TEST still
-// skips (redis_test.go and oracle_typed_portent_test.go do, each naming the
-// batch that unparks it). That is a decision someone made and a reader can find
-// in the diff. The harness discovering it has no keeper binary is not a
-// decision, it is a failure, and a skip is this tier's one way to render a
-// failure invisible.
+// skips (oracle_typed_portent_test.go does, naming the batch that unparks it).
+// That is a decision someone made and a reader can find in the diff. The harness
+// discovering it has no keeper binary is not a decision, it is a failure, and a
+// skip is this tier's one way to render a failure invisible.
 func TestNoHarnessEntryPointSkipsOnAMissingEnvironment(t *testing.T) {
 	forEachHarnessFile(t, func(base string, file *ast.File, fset *token.FileSet) {
 		ast.Inspect(file, func(n ast.Node) bool {

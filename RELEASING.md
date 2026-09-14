@@ -123,7 +123,7 @@ unfixed drift.
 **Required step before creating a tag.** unit/integration drive stubs; the only one
 test proving that `apply` works on a **real** host end-to-end
 soul binary in a privileged Debian container, real `apt`-install + systemd), —
-L3b `make e2e-live` (nginx / drift / redis-cluster cases). Without green e2e-live tag
+L3b `make e2e-live` (nginx / module-delivery / plugin-channel cases). Without green e2e-live tag
 **not cut**: apply on a real host could break, and only this one will catch it
 level. It's the local equivalent of CI-gate - without the GitHub minutes.
 
@@ -133,11 +133,19 @@ level. It's the local equivalent of CI-gate - without the GitHub minutes.
    make check    # build + vet + test + check-gen/openapi/template/doc-links + vuln + lint
    ```
 
-2. L3b real apply - **all three cases** are green:
+2. L3b real apply - **every case** is green:
 
    ```sh
-   make e2e-live    # nginx / drift / redis-cluster — real apt-install + systemd
+   make e2e-live    # nginx / module-delivery / plugin-channel — real apt-install + systemd
    ```
+
+   > ★ **This step proves less than it used to (NIM-871).** The gate went from nine
+   > tests to three when `examples/service/redis` left the engine: the six
+   > `TestL3bRedisLive_Day2*` cases were the only ones that ran a service `create` on
+   > a real host and then an operational scenario against it. Green here now means a
+   > module is **delivered** and an ordinary apply works — not that any service
+   > lifecycle does. Until the out-of-tree service repository grows its own live
+   > suite, a day-2 regression passes this step.
 
 On **WSL2 + Docker-Desktop**, forward the real WSL2 host-IP before running
 (the soul container will not reach the keeper via `host.docker.internal` - that

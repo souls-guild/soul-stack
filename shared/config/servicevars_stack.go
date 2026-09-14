@@ -29,8 +29,8 @@ const (
 	// StrategyReplace — each top-level key of the layer replaces the
 	// accumulated value ENTIRELY, without recursing into it.
 	//
-	// Not a convenience. `examples/service/redis` documents `install_package`
-	// as "it is the whole map that an override replaces, not individual keys",
+	// Not a convenience. A service documenting an `install_package` map means
+	// "it is the whole map that an override replaces, not individual keys",
 	// while a deep merge leaves the base's `gpg_key_url` attached to an
 	// overridden `repo_uri` — a mirror URL from one place and its signing key
 	// from another. That intent had no way to be expressed.

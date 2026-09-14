@@ -2,8 +2,6 @@ package statemigrate
 
 import (
 	"errors"
-	"os"
-	"path/filepath"
 	"strings"
 	"testing"
 
@@ -22,48 +20,6 @@ func parseErr(t *testing.T, src string) *ParseError {
 		t.Fatalf("expected *ParseError, got: %v", err)
 	}
 	return pe
-}
-
-// TestParse_RealFixture — a real migration file parses without errors and yields
-// the expected operation shape.
-func TestParse_RealFixture(t *testing.T) {
-	stepDoc := filepath.Join(fixtureDir, firstStepDir, config.MigrationStepFile)
-	data, err := os.ReadFile(stepDoc)
-	if err != nil {
-		t.Fatalf("read: %v", err)
-	}
-	mig, err := Parse(data, 2, stepDoc)
-	if err != nil {
-		t.Fatalf("Parse: %v", err)
-	}
-	// The file states neither number: both come from the 002 the caller read off
-	// the directory, and the "from" is derived from it.
-	if mig.FromVersion != 1 || mig.ToVersion != 2 {
-		t.Fatalf("versions = %d→%d", mig.FromVersion, mig.ToVersion)
-	}
-	if mig.Path != stepDoc {
-		t.Fatalf("path = %q, want %q", mig.Path, stepDoc)
-	}
-	if len(mig.Transform) != 4 {
-		t.Fatalf("operations = %d, want 4", len(mig.Transform))
-	}
-	if mig.Transform[0].Rename == nil {
-		t.Errorf("op0 is not rename")
-	}
-	if mig.Transform[1].Set == nil {
-		t.Errorf("op1 is not set (materializing the target map)")
-	}
-	if mig.Transform[2].Foreach == nil {
-		t.Errorf("op2 is not foreach")
-	} else {
-		fe := mig.Transform[2].Foreach
-		if fe.As != "user_name" || len(fe.Do) != 1 || fe.Do[0].Set == nil {
-			t.Errorf("foreach shape = %#v", fe)
-		}
-	}
-	if mig.Transform[3].Delete == nil {
-		t.Errorf("op3 is not delete")
-	}
 }
 
 func TestParse_Empty(t *testing.T) {

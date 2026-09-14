@@ -160,11 +160,11 @@ Restart remains **only** for changes that hot-reload **does not physically cover
 
 This narrows the previous formulation of "restart reactively to a config/drop-in change": rendering the desired state to disk (`redis.conf`/`users.acl`/PEM) remains in destiny, but **revitalizing** the changes is done by the hot-reload-step of the day-2-scenario, rather than `core.service.restarted` by `onchanges` on these files.
 
-Illustrations - day-2-scenarios of the service [`redis`](../../examples/service/redis/) (next to `restart`, which remains behind the unit level, §3a / §7a):
+Illustrations - day-2-scenarios of the service `redis` (next to `restart`, which remains behind the unit level, §3a / §7a):
 
-- [`update_config`](../../examples/service/redis/scenario/update_config/main.yml) — `redis.instance.configured` (CONFIG SET hot-settable + CONFIG REWRITE);
-- [`add_user`](../../examples/service/redis/scenario/add_user/main.yml) — `redis.acl.reloaded` (ACL LOAD rereads `aclfile`, without restart);
-- [`rotate_tls`](../../examples/service/redis/scenario/rotate_tls/main.yml) - CONFIG SET `tls-*-file` (Redis 6.2+ rereads cert/key/CA live).
+- `update_config` — `redis.instance.configured` (CONFIG SET hot-settable + CONFIG REWRITE);
+- `add_user` — `redis.acl.reloaded` (ACL LOAD rereads `aclfile`, without restart);
+- `rotate_tls` - CONFIG SET `tls-*-file` (Redis 6.2+ rereads cert/key/CA live).
 
 At the same time, the destiny rendering of these files itself remains idempotent according to §6 (the same ref/content → no-op), and the "already applied" attribute of the hot-reload step gives a comparison live ↔ the desired one in the plugin itself (honest diff `CONFIG GET` / `ACL LIST`), and not `onchanges` (see. [`docs/module/redis/README.md`](../module/redis/README.md)). The exception is an action operation like `rotate_tls` (force re-read SSL_CTX): it is non-idempotent **by design**, just like exec-style `reshard`.
 
@@ -195,7 +195,7 @@ Therefore, the day-2 scenario takes the detailed fact (whether TLS is enabled, o
 
 **Named intent field is preferable to parsing opaque config.** When `state` carries both opaque total (`redis_config`, computed by redis.conf-map) and **named intent field** (`state.tls`, `state.persistence`, `state.install`, ...), day-2 scenario reads the **named** field. It is typed, does not require bracket notation of hyphen keys, and explicitly expresses the intent of the statement (read-model), rather than being reverse-convolved from the write-model. So in the service `redis` (`state_schema v3`) next to `redis_config` live `tls`/`install`/`persistence`/`memory_mb`/`maxmemory_policy`/`modules`/`sysctl_settings` + topology (`shards`/`replicas`/`sentinel_quorum`); both views are filled with `create` from ONE compute pass (there is no out of sync), but day-2 reads namedfield.
 
-Working illustration - `restart` service [`redis`](../../examples/service/redis/scenario/restart/main.yml): TLS discriminator for the plugin connection to Redis (via TLS or plaintext, on which port) is taken from the NAMED field of the expanded `incarnation.state.tls` (`state.tls.enable` / `state.tls.port`), not from `vars.tls_*` or parsing `redis_config['tls-port']`. If it had looked at `vars`, with the operator's TLS input, day-2 would have gone with a plaintext connection to TLS-only Redis (health-gate failure; in the worst case, AUTH plaintext with an open plain-port).
+Working illustration - `restart` service `redis`: TLS discriminator for the plugin connection to Redis (via TLS or plaintext, on which port) is taken from the NAMED field of the expanded `incarnation.state.tls` (`state.tls.enable` / `state.tls.port`), not from `vars.tls_*` or parsing `redis_config['tls-port']`. If it had looked at `vars`, with the operator's TLS input, day-2 would have gone with a plaintext connection to TLS-only Redis (health-gate failure; in the worst case, AUTH plaintext with an open plain-port).
 
 Edge cases:
 

@@ -15,7 +15,7 @@ import (
 // sets keeper_settings[default_destiny_source].
 //
 // Why: service composition via apply:destiny (ADR-009) — e.g.
-// examples/service/redis — references a standalone destiny by name; the
+// examples/service/dragonfly — references a standalone destiny by name; the
 // keeper-side scenario resolver pulls the git URL from
 // keeper_settings[default_destiny_source] with {name} substitution
 // (ADR-029). The service fixture repo (git.go) doesn't contain these
@@ -40,8 +40,7 @@ const destinyURLPlaceholder = "{name}"
 //
 // ref is a git tag from service.yml::destiny[] (ADR-007: dependency version =
 // git ref); the artifact resolver checks out the destiny by exactly that ref
-// (NOT main). All three destinies of examples/service/redis are declared as
-// ref:v1.0.0.
+// (NOT main). Every corpus service declares its destinies as ref:v1.0.0.
 //
 // Call BEFORE registerExampleService (NewStack does the registration itself
 // — in L3b MaterializeDestinies is called by the test AFTER NewStack, so it

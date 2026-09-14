@@ -44,10 +44,10 @@ import (
 )
 
 // clusterAssertServiceRepo is a service repo with a create scenario carrying a
-// cluster topology size-guard via assert: (same invariant as
-// examples/service/redis/scenario/create/cluster.yml). input.shards /
+// cluster topology size-guard via assert:. input.shards /
 // input.replicas_per_shard are ints with defaults; assert is active only when
-// redis_type==cluster (gated by when:, as in prod).
+// redis_type==cluster (gated by when:, as in prod). The invariant was lifted from
+// the redis service's create scenario, which left the tree with NIM-871.
 func clusterAssertServiceRepo(t *testing.T) string {
 	t.Helper()
 	dir := t.TempDir()

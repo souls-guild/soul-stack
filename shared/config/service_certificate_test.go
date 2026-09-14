@@ -272,10 +272,11 @@ func TestLoadServiceManifest_CertificateDecodeRoleOnly(t *testing.T) {
 	}
 }
 
-// TestLoadServiceManifest_CertificateExamples — golden examples of redis and
-// dragonfly with the `certificate:` section load without errors.
+// TestLoadServiceManifest_CertificateExamples — the golden examples carrying a
+// `certificate:` section load without errors. `redis` was the second entry until
+// NIM-871 cut that service out of the corpus.
 func TestLoadServiceManifest_CertificateExamples(t *testing.T) {
-	for _, svc := range []string{"redis", "dragonfly"} {
+	for _, svc := range []string{"dragonfly"} {
 		svc := svc
 		t.Run(svc, func(t *testing.T) {
 			path := filepath.FromSlash("../../examples/service/" + svc + "/service.yml")

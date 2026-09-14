@@ -12,8 +12,9 @@ import (
 	metav1 "k8s.io/apimachinery/pkg/apis/meta/v1"
 )
 
-// multisoul.go — DeployMultiSoul for L3c-5 (TestL3cToll_DegradedMode and
-// TestL3cRedisCluster_Resharding).
+// multisoul.go — DeployMultiSoul for L3c-5 (TestL3cToll_DegradedMode; its second
+// consumer, TestL3cRedisCluster_Resharding, ran examples/service/redis and left
+// with it in NIM-871).
 //
 // Architectural difference from [Stack.DeploySoul] (L3c-3, single-pod
 // StatefulSet): here we spin up N independent Pods (kind=Pod) via

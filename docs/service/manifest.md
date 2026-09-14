@@ -397,7 +397,7 @@ modules:
   - { name: redis, ref: v1.0.0 }
 ```
 
-Working example with full folder layout - [`examples/service/redis/`](../../examples/service/redis/).
+Working example with full folder layout - [`examples/service/dragonfly/`](../../examples/service/dragonfly/).
 
 ## Scripts
 

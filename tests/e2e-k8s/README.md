@@ -95,8 +95,7 @@ tests/e2e-k8s/
 ├── keeper_ping_test.go                # L3c-2: TestL3cKeeperPing_Single (/readyz=200)
 ├── multi_keeper_bootstrap_test.go     # L3c-3: TestL3cMultiKeeper_BootstrapAndConnect
 ├── multi_keeper_failover_test.go      # L3c-4: TestL3cMultiKeeper_KillLeader
-├── toll_degraded_test.go              # L3c-5 part A: TestL3cToll_DegradedMode
-└── redis_cluster_resharding_test.go   # L3c-5 part B: t.Skip scaffold (needs a git-server-pod in kind)
+└── toll_degraded_test.go              # L3c-5 part A: TestL3cToll_DegradedMode
 ```
 
 Additionally in `harness/` for L3c-4:
@@ -120,7 +119,7 @@ L3c is implemented iteratively. The slice map (architect verdict `a241beb181086d
 | **L3c-2** | `Stack.DeployInfra` (bitnami Helm PG/Redis/Vault) + `Stack.DeployKeeper` (single keeper pod, distroless, `--initialize` mode, raw YAML Deployment+Service+ConfigMap+Secret) + Vault PKI/JWT/DSN seed via port-forward + `TestL3cKeeperPing_Single` (port-forward keeper:8080 → /readyz=200). | **done** |
 | **L3c-3** | `Stack.DeployKeeper` replicas: 3 (HA) + `Stack.DeploySoul` (privileged systemd-PID-1 StatefulSet, parity with L3b) + a real CSR bootstrap flow (IssueBootstrapToken via port-forward to PG → `soul init` + `systemctl start soul.service` via client-go remotecommand-exec) + `TestL3cMultiKeeper_BootstrapAndConnect`. | **done** |
 | **L3c-4** | HA-failover scenario: `TestL3cMultiKeeper_KillLeader` (per-pod KID via init-container + `reaper.enabled` with a short lock_ttl + `kubectl delete pod --grace-period=0` on the leader → wait for a new leader in `GET reaper:leader` → Deployment self-heal → Soul reconnect). | **done** |
-| **L3c-5** | Toll degraded-mode (`TestL3cToll_DegradedMode`: 5 souls → kill 3 → cluster:degraded → POST scenario=503 + Retry-After + audit `cluster.degraded_set`) + Redis-cluster resharding (`TestL3cRedisCluster_Resharding`: scaffold+t.Skip until in-cluster git-server-pod infra exists — needs propose-and-wait for the service-loader in kind). | **done** (part A) / **deferred** (part B) |
+| **L3c-5** | Toll degraded-mode (`TestL3cToll_DegradedMode`: 5 souls → kill 3 → cluster:degraded → POST scenario=503 + Retry-After + audit `cluster.degraded_set`) + ~~Redis-cluster resharding~~ (`TestL3cRedisCluster_Resharding`: was a scaffold+t.Skip awaiting in-cluster git-server-pod infra; it ran `examples/service/redis`, which left the engine with NIM-871, and the scaffold went with it — part B now has no artifact behind it). | **done** (part A) / **dropped** (part B) |
 
 ## PM decisions for L3c
 

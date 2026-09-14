@@ -584,9 +584,9 @@ build-linux: bin-keeper bin-soul
 #
 # e2e-live-artifacts for the same reason the gate does it: the tarball cache
 # is filled once, up front and named, instead of at the first `create` twenty
-# minutes in. The nightly run needs the network anyway (TestL3bRedisLiveUpstream_*
-# fetches from real github on purpose), so this costs nothing there and makes a
-# fetch failure legible.
+# minutes in. The justification used to add "the nightly run needs the network
+# anyway", naming TestL3bRedisLiveUpstream_* — which left with the service NIM-871
+# cut, so priming is now pure insurance for the suite that inherits the create.
 e2e-live: build build-linux e2e-live-artifacts
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
@@ -600,13 +600,22 @@ e2e-live: build build-linux e2e-live-artifacts
 	fi
 
 # e2e-live-gate - the MANDATORY local live gate before a batch-commit of a large
-# feature (~15-25 min, docker). L3b subset: SoulModule delivery mechanics
+# feature (docker). L3b subset: SoulModule delivery mechanics
 # (TestL3bModuleDeliveryLive - ADR-065 install-synthesis -> FetchModule -> Sigil-verify
 # -> hot-register -> live apply against redis) + nginx apply smoke (TestL3bSmokeNginxLive)
-# + plugin-channel smoke (TestL3bPluginChannel) + operational add_user against live redis
-# (TestL3bRedisLive_Day2AddUser - the full ADR-065 plugin channel against real redis+sentinel)
-# + operational update_config/restart/update_users/destroy/rotate_tls (CA rollover) on the same channel.
+# + plugin-channel smoke (TestL3bPluginChannel).
 # The full `make e2e-live` remains nightly/pre-release.
+#
+# ★ NIM-871 SHRANK THIS GATE FROM NINE TESTS TO THREE, and that is a coverage hole,
+# not a cleanup. The six it lost - TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,
+# UpdateUsers,Destroy,RotateTls} - were the only day-2 operations this gate ever ran
+# against a live service: create, then an operational scenario through the ADR-065
+# plugin channel against real redis+sentinel. They ran examples/service/redis, which
+# left the engine with that ticket, and no in-tree service replaces them: the corpus
+# services are render-only (L0) and no other L3b test drives a day-2 scenario end to
+# end. What remains here proves DELIVERY of a module, not OPERATION of a service.
+# The successor is the out-of-tree service repo's own live suite, which does not
+# exist yet - until it does, a day-2 regression reaches a tag unchallenged.
 #
 # Deps DIFFER from e2e-live: also needs the native `build` - the harness runs
 # Keeper ON THE HOST (host-arch keeper/bin/keeper, see locateKeeperBinary), not in a
@@ -655,20 +664,23 @@ e2e-live: build build-linux e2e-live-artifacts
 # neighbour's line, and the classifier reported all three as NOT-RUN on every
 # red run. Read the script's header before editing this list.
 E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
-	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow \
-	TestL3bRedisLive_Day2AddUser TestL3bRedisLive_Day2UpdateConfig TestL3bRedisLive_Day2Restart \
-	TestL3bRedisLive_Day2UpdateUsers TestL3bRedisLive_Day2Destroy TestL3bRedisLive_Day2RotateTls
+	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow
 
 # e2e-live-artifacts - fills the local cache of upstream release tarballs that the
 # L3b stand serves to the soul containers (NIM-542).
 #
-# Six of the nine gate tests run a live `create`, and that create used to fetch
-# node_exporter, redis_exporter and vector from github.com INSIDE the container -
-# about 18 downloads per gate run. The gate is the blocking pre-tag step
+# A live `create` used to fetch node_exporter, redis_exporter and vector from
+# github.com INSIDE the container - about 18 downloads per gate run when six of the
+# nine gate tests ran one. The gate is the blocking pre-tag step
 # (RELEASING.md step e) and its acceptance is "three runs on an unchanged slice
-# agree"; github.com is not in the slice. The harness now serves those tarballs from
+# agree"; github.com is not in the slice. The harness serves those tarballs from
 # a local mirror over an ephemeral port and points the FIXTURE's service-vars at it
-# (never examples/service/redis - the example is the subject under test, NIM-211).
+# (never a corpus service - a shipped example is a subject under test, NIM-211).
+#
+# Those six creates left with examples/service/redis (NIM-871), so the mirror now
+# has no gate test driving it. It stays wired and primed rather than removed: the
+# out-of-tree service repo's live suite will need it back, and a mirror re-derived
+# later from a changed destiny would silently no longer pin what it pins now.
 #
 # The cache lives outside the repo and outside $TMPDIR ($SOUL_STACK_E2E_ARTIFACT_CACHE,
 # else $XDG_CACHE_HOME/soul-stack/e2e-live/artifacts): it must survive `git clean` and
@@ -2029,7 +2041,7 @@ lint: build
 # Only trees with at least one ladder step are listed. A service still at version 1
 # is not stamped and does not need to be: the lock is required once a ladder has a
 # rung, and adopting it earlier is the service author's call, not the corpus's.
-STAMP_TREES := examples/service/redis examples/service/mongo examples/service/dragonfly \
+STAMP_TREES := examples/service/mongo examples/service/dragonfly \
 	dev/upgrade-demo/tree/v2.0.0 dev/upgrade-demo/tree/v2.0.1
 
 stamp-examples: build
@@ -2058,8 +2070,8 @@ stamp-examples: build
 # exactly as soul-lint's). It is what makes an L0 PASS mean something over a plugin
 # step: before it, a case rendered `redis.acl.present` with params NOBODY had checked
 # and printed PASS, which is indistinguishable from checked-and-clean. The corpus is
-# the one place both halves are present — 328 such steps in examples/service/redis
-# alone — so leaving the flag off would run L0 without the check it demonstrates.
+# the one place both halves are present, so leaving the flag off would run L0 without
+# the check it demonstrates.
 #
 # And the run is failed on a leftover `plugin_params_unchecked`, mirroring the guard
 # `lint` has carried since NIM-294: a green trial over a module nobody bound is the

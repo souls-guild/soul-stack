@@ -2,64 +2,12 @@ package config
 
 import (
 	"fmt"
-	"path/filepath"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
 	"github.com/souls-guild/soul-stack/shared/plugin"
 )
-
-func TestLoadServiceManifest_Golden(t *testing.T) {
-	path := filepath.FromSlash("../../examples/service/redis/service.yml")
-	cfg, doc, diags, err := LoadServiceManifest(path, ValidateOptions{})
-	if err != nil {
-		t.Fatalf("io error: %v", err)
-	}
-	if cfg == nil || doc == nil {
-		t.Fatalf("cfg/doc must be non-nil")
-	}
-	if diag.HasErrors(diags) {
-		for _, d := range diags {
-			t.Logf("[%s] %s:%d:%d %s %s", d.Code, d.File, d.Line, d.Column, d.Message, d.YAMLPath)
-		}
-		t.Fatalf("expected 0 errors on golden service example, got %d diagnostics", len(diags))
-	}
-	// The manifest states no version at all (NIM-735); the golden example's is the
-	// top of its own ladder, which is what ScanMigrationLadder answers.
-	if v := goldenServiceLadderVersion(t, path); v != 15 {
-		t.Errorf("derived state-schema version: got %d want 15", v)
-	}
-	if len(cfg.Destiny) != 4 {
-		t.Errorf("destiny len: got %d want 4", len(cfg.Destiny))
-	}
-	if cfg.Destiny[0].Name != "redis" || cfg.Destiny[0].Ref != "v1.0.0" {
-		t.Errorf("destiny[0]: %#v", cfg.Destiny[0])
-	}
-	if cfg.Destiny[1].Name != "node-exporter" || cfg.Destiny[1].Ref != "v1.0.0" {
-		t.Errorf("destiny[1]: %#v", cfg.Destiny[1])
-	}
-	if cfg.Destiny[2].Name != "redis-exporter" || cfg.Destiny[2].Ref != "v1.0.0" {
-		t.Errorf("destiny[2]: %#v", cfg.Destiny[2])
-	}
-	if cfg.Destiny[3].Name != "vector" || cfg.Destiny[3].Ref != "v1.0.0" {
-		t.Errorf("destiny[3]: %#v", cfg.Destiny[3])
-	}
-	// ONE row per artifact (NIM-829). The six rows this used to expect were the same
-	// binary declared once per object it manages, and they always collapsed to a single
-	// core.module.installed; the row is now what installs. `user` — the object NIM-767
-	// added and NIM-768 wires in — needs no row of its own and never did.
-	wantModules := []string{"redis"}
-	if len(cfg.Modules) != len(wantModules) {
-		t.Errorf("modules: %#v", cfg.Modules)
-	} else {
-		for i, want := range wantModules {
-			if cfg.Modules[i].Name != want || cfg.Modules[i].Ref != "v1.0.0" {
-				t.Errorf("modules[%d]: %#v, want %s v1.0.0", i, cfg.Modules[i], want)
-			}
-		}
-	}
-}
 
 // ★ NIM-726. A manifest without `name:` is the NORMAL shape now — the field is gone,
 // and a service is named once, at registration. This is the guard the whole ticket
@@ -890,18 +838,4 @@ modules:
 			t.Fatalf("unexpected error diagnostic on a valid manifest: %s at %s", d.Code, d.YAMLPath)
 		}
 	}
-}
-
-// goldenServiceLadderVersion reads the derived state-schema version of the service
-// whose manifest sits at manifestPath.
-func goldenServiceLadderVersion(t *testing.T, manifestPath string) int {
-	t.Helper()
-	ladder, diags := ScanMigrationLadder(filepath.Dir(manifestPath))
-	if diag.HasErrors(diags) {
-		for _, d := range diags {
-			t.Logf("[%s] %s %s", d.Code, d.File, d.Message)
-		}
-		t.Fatalf("golden service ladder is not clean")
-	}
-	return ladder.Version()
 }

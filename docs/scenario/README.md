@@ -26,4 +26,4 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 - [`docs/input.md`](../input.md) - **general** format standard for `input:` (applies to destiny, scenario and module manifest).
 - [`docs/templating.md`](../templating.md) — template engine spec (ADR-010): CEL for all scenario expressions (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`, `params:`, `apply: input:`, `on:`-literals), marker `${ … }`, border with Go text/template, footguns `soulprint.where(...)` vs `soulprint.hosts.where(...)`.
 - [`docs/soul-lint.md`](../soul-lint.md) - static checks (including backlog for scenario specifics).
-- [`examples/service/redis/`](../../examples/service/redis/) - working example of a service repo with layout `scenario/` (create + day-2 `add_node`/`remove_node`/`reshard`/`restart`).
+- [`examples/service/dragonfly/`](../../examples/service/dragonfly/) - working example of a service repo with layout `scenario/` (create + day-2 `add_user`/`update_users`/`restart`/`rotate_tls`/`destroy`).

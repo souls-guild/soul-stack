@@ -699,7 +699,7 @@ The element key is state **data** and cannot be constrained, so the fence is on 
 |---|---|
 | `tls` | `certissue` — an incarnation's certificate and private key. |
 
-Diagnostic **`secret_field_reserved_state_name`** (error), raised at manifest load. Only a field that *declares a secret* is checked: a plain `tls:` object holding ports and cipher lists derives nothing and is untouched ([`examples/services/redis/service.yml`](../examples/service/redis/service.yml) and `dragonfly` both have one).
+Diagnostic **`secret_field_reserved_state_name`** (error), raised at manifest load. Only a field that *declares a secret* is checked: a plain `tls:` object holding ports and cipher lists derives nothing and is untouched (`examples/services/redis/service.yml` and `dragonfly` both have one).
 
 Both lists are closed. Adding to either is propose-and-wait plus a PR here.
 

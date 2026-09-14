@@ -443,13 +443,12 @@ repo from `examples/` under file://-URLs pointed to
 | Artifact | git-URL (from `keeper.dev.yml`) | ref | source in `examples/` |
 |---|---|---|---|
 | service `hello-world` | `file:///tmp/keeper-dev/repos/hello-world` | `main` | `examples/service/hello-world` |
-| service `redis` | `file:///tmp/keeper-dev/repos/redis` | `main` | `examples/service/redis` |
 | destiny `redis` | `file:///tmp/keeper-dev/destiny/redis` | `v1.0.0` | `examples/destiny/redis` |
 | destiny `redis-exporter` | `file:///tmp/keeper-dev/destiny/redis-exporter` | `v1.0.0` | `examples/destiny/redis-exporter` |
 | destiny `node-exporter` | `file:///tmp/keeper-dev/destiny/node-exporter` | `v1.0.0` | `examples/destiny/node-exporter` |
 
 destiny-URL is `default_destiny_source` (`file:///tmp/keeper-dev/destiny/{name}`)
-with substitution `{name}` from `redis/service.yml::destiny[]`; ref `v1.0.0`
+with substitution `{name}` from the service's `service.yml::destiny[]`; ref `v1.0.0`
 announced there. The destiny-repo directory is named `{name}` (`redis`), and the directory
 in `examples/` is now also naked `{name}` (`redis`, without the prefix `destiny-`).
 

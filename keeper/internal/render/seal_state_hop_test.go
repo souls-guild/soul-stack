@@ -202,9 +202,9 @@ func TestRender_IncarnationStateNestedSecretSealsItsTopSegment(t *testing.T) {
 // let the first version of this fix pass its own tests while sealing the wrong
 // thing: the derivation said `redis_users` and the fixtures never asked it.
 //
-// The `redis_users` half is the examples/service/redis shape in structure — a
+// The `redis_users` half has the shape an ACL inventory has — a
 // `type: secret` under `items:`, keyed by a sibling — trimmed of the properties
-// that make no difference here; the corpus carries two such collections. The other two are NOT in the
+// that make no difference here. The other two are NOT in the
 // corpus and are honest about it: no shipped service declares `secret: true` on a
 // state property at all, and none carries a top-level scalar `type: secret`. That
 // is worth knowing rather than hiding, because it says what this fix does today —

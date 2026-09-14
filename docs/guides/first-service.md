@@ -191,12 +191,12 @@ which **alias**, since the artifact carries no name of its own
 
 ```sh
 ./soul-lint/bin/soul-lint validate-scenario \
-    examples/service/redis/scenario/add_user/main.yml \
+    examples/service/dragonfly/scenario/add_user/main.yml \
     --modules redis=./redis/dist/schema.json \
-    --service-name redis
+    --service-name dragonfly
 ```
 
-The `redis` you write here is the `redis` the task writes in `redis.acl.present` — the
+The `redis` you write here is the `redis` the task writes in `redis.acl.reloaded` — the
 registration alias your operator chose, not something read off the path. The artifact
 carries no name of its own, so nothing on disk could tell the linter what to call it.
 
@@ -305,4 +305,4 @@ You've put together a single-script service. Further - as it grows:
 - **Dependencies.** Reused task packages - move them to separate destinies and connect them via `destiny[]` to `service.yml` + `apply:` in the script. Custom modules - via `modules[]`. Format - [docs/service/manifest.md](../service/manifest.md).
 - **Host facts.** Targeting and values ​​for system facts - `soulprint.self.*` (OS-family, pkg_mgr, IP, ...). Scheme - [docs/soul/soulprint.md](../soul/soulprint.md).
 - **Day-2 operations** (monitoring, upgrade, cluster restoration) - section [To do](../README.md) in the documentation map and [docs/operations/](../operations/README.md).
-- **Ready samples** of more complex services - [`examples/service/`](../../examples/service/) (for example, [`redis/`](../../examples/service/redis/) - one service for all deployment modes standalone/sentinel/cluster/sentinel_only with day-2 rolling-restart and reshard).
+- **Ready samples** of more complex services - [`examples/service/`](../../examples/service/) (for example, [`dragonfly/`](../../examples/service/dragonfly/) - sentinel-mode deployment with a migration ladder and day-2 `restart`/`add_user`/`update_users`/`rotate_tls`/`destroy`).

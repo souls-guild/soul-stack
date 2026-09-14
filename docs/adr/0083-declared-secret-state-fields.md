@@ -777,12 +777,12 @@ disagreed until now, and this one was the wrong one.
 **field**, and an empty list or map is non-nil, so `present` yields to it; a collection with no
 elements then offers no declared-secret position to resolve, and the step neither mints nor refuses.
 The live example of a re-pointed derived path is
-[`examples/service/redis/migrations/015_system_acl_users/main.yml`](../../examples/service/redis/migrations/015_system_acl_users/main.yml)
+`examples/service/redis/migrations/015_system_acl_users/main.yml`
 — v14 minted under `secret/redis/<inc>/users/<name>`, v15 derives
 `secret/redis/<inc>/system_acl_users/<name>` — and it is exactly this shape: the step defaults the new
 field to `[]`, so a v14 incarnation's next day-2 run (`core.state.set` over
 `${ default(incarnation.state.system_acl_users, []) }`, e.g.
-[`scenario/restart/main.yml`](../../examples/service/redis/scenario/restart/main.yml) `:62-69`)
+`scenario/restart/main.yml` `:62-69`)
 writes an empty list and reports success. **Cite it for the path shape only** — its own description
 comment claims that run fails closed on the missing secret, and NIM-738 corrects it.
 

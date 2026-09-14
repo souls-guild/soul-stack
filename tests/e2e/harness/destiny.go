@@ -15,7 +15,7 @@ import (
 // keeper_settings[default_destiny_source].
 //
 // Why separate from RegisterService (git.go): service composition via
-// apply:destiny (ADR-009) — e.g. examples/service/redis — references a
+// apply:destiny (ADR-009) — e.g. examples/service/dragonfly — references a
 // standalone destiny by name (`apply: { destiny: redis-single }`). The
 // keeper-side scenario resolver pulls the git URL for such a destiny from
 // keeper_settings[default_destiny_source] with a {name} substitution
@@ -48,8 +48,8 @@ const destinyURLPlaceholder = "{name}"
 // keeper_settings[default_destiny_source] = file://$TMP/destiny-repos/{name}.
 //
 // ref — the git tag under which each destiny is declared in
-// service.yml::destiny[] (ADR-007: dependency version = git ref). For
-// examples/service/redis all three destinies are declared ref:v1.0.0 — the
+// service.yml::destiny[] (ADR-007: dependency version = git ref). Every corpus
+// service declares its destinies at ref:v1.0.0 — the
 // artifact resolver takes the ref from the service.yml entry and checks out
 // exactly that (NOT main). Without the tag the resolve fails with "ref <ref>
 // does not resolve: reference not found".

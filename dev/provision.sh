@@ -507,7 +507,7 @@ ensure_stand_db
 # seeded by step 10 below:
 #   - service repo   - from service_registry entries (git/ref);
 #   - destiny repo   - from keeper_settings[default_destiny_source] with {name}
-#                      substitution, ref from service.yml::destiny[] (v1.0.0 for redis).
+#                      substitution, ref from service.yml::destiny[] (v1.0.0 here).
 # Nobody creates the repositories themselves automatically - this step materializes them
 # from examples/ as local git repos under file://-URLs, pointed to by the
 # seeded registry.
@@ -584,14 +584,15 @@ provision_git_repo \
     "${EXAMPLES}/service/hello-world" \
     "${KEEPER_DEV_DIR}/repos/hello-world" \
     main "service hello-world"
-provision_git_repo \
-    "${EXAMPLES}/service/redis" \
-    "${KEEPER_DEV_DIR}/repos/redis" \
-    main "service redis"
 
 # destiny repos (keeper_settings[default_destiny_source]=file://.../destiny/{name},
-# see step 10; ref: v1.0.0 - from redis/service.yml::destiny[]). The directory name
+# see step 10; ref: v1.0.0 - from service.yml::destiny[]). The directory name
 # = {name} from destiny[], and the examples directory is now also a bare {name}.
+#
+# These outlive the service that used to declare them: NIM-871 cut
+# examples/service/redis out of the engine, and the destiny bricks below are
+# separate artifacts consumed by the out-of-tree service repo. The stand keeps
+# materializing them because a destiny is resolvable on its own.
 provision_git_repo \
     "${EXAMPLES}/destiny/redis" \
     "${KEEPER_DEV_DIR}/destiny/redis" \
@@ -607,7 +608,7 @@ provision_git_repo \
     "${EXAMPLES}/destiny/node-exporter" \
     "${KEEPER_DEV_DIR}/destiny/node-exporter" \
     v1.0.0 "destiny node-exporter"
-# vector (log pipeline, Slice I of redis monitoring) - declared in redis/service.yml::destiny[].
+# vector (log pipeline, Slice I of redis monitoring).
 provision_git_repo \
     "${EXAMPLES}/destiny/vector" \
     "${KEEPER_DEV_DIR}/destiny/vector" \
@@ -708,10 +709,9 @@ provision_redis_plugin
 # default_destiny_source; the S4 hard-cut removed them from config - now the resolver
 # (serviceregistry.Holder.Resolve / DefaultDestinySource) reads only the DB.
 # Without the seed, E2E-smoke would come up with an empty registry and
-# Resolve("hello-world"/"redis") would return false. We seed the same entries that
+# Resolve("hello-world") would return false. We seed the same entries that
 # used to be in services[]:
 #   - service hello-world → file://${KEEPER_DEV_DIR}/repos/hello-world @ main
-#   - service redis       → file://${KEEPER_DEV_DIR}/repos/redis @ main
 #   - keeper_settings[default_destiny_source] = file://${KEEPER_DEV_DIR}/destiny/{name}
 #
 # Method - direct psql INSERT (provision has PG access; an Archon/JWT for the
@@ -737,21 +737,20 @@ seed_service_registry() {
         return 0
     fi
 
-    log "seeding service_registry (hello-world, redis) + keeper_settings[default_destiny_source]"
+    log "seeding service_registry (hello-world) + keeper_settings[default_destiny_source]"
     # Unquoted heredoc: only ${KEEPER_DEV_DIR} gets substituted; {name} (without $) remains
     # a keeper placeholder -- the destiny-source template, NOT the renamed registry
     # column (ADR-0085/NIM-729 moved that to `id`). There are no other $-literals in the SQL.
     psql_stand -f - <<SQL
 INSERT INTO service_registry (id, git, ref) VALUES
-    ('hello-world', 'file://${KEEPER_DEV_DIR}/repos/hello-world', 'main'),
-    ('redis',       'file://${KEEPER_DEV_DIR}/repos/redis',       'main')
+    ('hello-world', 'file://${KEEPER_DEV_DIR}/repos/hello-world', 'main')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO keeper_settings (key, value) VALUES
     ('default_destiny_source', 'file://${KEEPER_DEV_DIR}/destiny/{name}')
 ON CONFLICT (key) DO NOTHING;
 SQL
-    log "service registry seeded (hello-world, redis, default_destiny_source)"
+    log "service registry seeded (hello-world, default_destiny_source)"
 }
 
 seed_service_registry

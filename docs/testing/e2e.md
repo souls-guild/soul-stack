@@ -252,8 +252,14 @@ Smoke tests:
 - `TestL3bBootstrap_OneSoul` - real CSR Bootstrap-flow + `souls.status=connected`.
 - `TestL3bSmokeNginxLive_InstallAndStart` - real `apt install nginx` +
   `systemctl start` + `core.file.rendered` (single-host).
-- `TestL3bRedisClusterLive_ThreeNode` - multi-host (3 soul containers) +
-Redis Cluster via `redis-cli --cluster create`.
+- `TestL3bModuleDeliveryLive_SynthesisFetchHotRegister` - ADR-065 install-synthesis →
+FetchModule → Sigil-verify → hot-register → live apply.
+- `TestL3bPluginChannel_CatalogAndAllow` - module catalog + allow mechanics over the
+gRPC-stdio plugin channel.
+
+The multi-host `TestL3bRedisClusterLive_ThreeNode` and the six
+`TestL3bRedisLive_Day2*` cases ran `examples/service/redis` and left with it
+(NIM-871); no live test drives a service lifecycle now.
 
 Build-tag: `e2e_live`. Run: `make e2e-live` (requires `make build-linux` +
 docker with privileged mode). Frequency: on-demand (pre-tag gate in
@@ -339,7 +345,7 @@ in `tests/e2e-shared/` is a separate slice after L3c-1..L3c-5).
 | **L3c-2** | `Stack.DeployInfra` (bitnami Helm PG/Redis/Vault) + `Stack.DeployKeeper` (single keeper-pod, distroless, `--initialize` mode) + Vault PKI/JWT/DSN seed via port-forward + `TestL3cKeeperPing_Single` (port-forward keeper:8080 → /readyz=200). | done |
 | **L3c-3** | `Stack.DeployKeeper` replicas: 3 (HA) + `Stack.DeploySoul` (StatefulSet privileged systemd-PID-1) + `TestL3cMultiKeeper_BootstrapAndConnect`. | done |
 | **L3c-4** | HA-failover scenario: `TestL3cMultiKeeper_KillLeader` (per-pod KID via init-container + reaper.enabled with lock_ttl=15s + kubectl delete leader pod → new leader in `GET reaper:leader` → Deployment self-heal → Soul reconnect). | done |
-| **L3c-5** | Toll degraded-mode test (`TestL3cToll_DegradedMode`: 5 souls → kill 3 grace=0 → `cluster:degraded` flag → POST scenario=503 + Retry-After + audit `cluster.degraded_set`) + Redis-cluster resharding (parity with mega-test 2026-05-25; framework `TestL3cRedisCluster_Resharding` with t.Skip to in-cluster git-server-pod infra - propose-and-wait named `git-server-pod`). | done (part A) / deferred (part B) |
+| **L3c-5** | Toll degraded-mode test (`TestL3cToll_DegradedMode`: 5 souls → kill 3 grace=0 → `cluster:degraded` flag → POST scenario=503 + Retry-After + audit `cluster.degraded_set`) + ~~Redis-cluster resharding~~ (parity with mega-test 2026-05-25; the `TestL3cRedisCluster_Resharding` framework was a t.Skip awaiting in-cluster git-server-pod infra, ran `examples/service/redis`, and left with it — NIM-871). | done (part A) / dropped (part B) |
 
 L3c - full map and quickstart - [`tests/e2e-k8s/README.md`](../../tests/e2e-k8s/README.md).
 

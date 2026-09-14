@@ -201,7 +201,7 @@ func TestBuildRotateTLSVoyage_WholeIncarnation_ScenarioFromArg(t *testing.T) {
 }
 
 // TestRotateTLSScenario_ContractAnchor — contract anchor: the default scenario name
-// is NOT renamed (examples/service/redis/scenario/rotate_tls).
+// is NOT renamed (e.g. examples/service/dragonfly/scenario/rotate_tls).
 func TestRotateTLSScenario_ContractAnchor(t *testing.T) {
 	if rotateTLSScenario != "rotate_tls" {
 		t.Fatalf("contract scenario name renamed: %q != rotate_tls", rotateTLSScenario)

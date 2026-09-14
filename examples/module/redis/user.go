@@ -6,10 +6,10 @@
 // WHOLE users.acl to disk and `acl.reloaded` made the instance re-read it (ACL
 // LOAD). The source of truth was the file, so adding one user meant re-rendering
 // every user, and forgetting to merge the service accounts back into that render
-// wiped replication — see the ★★ CRITICAL note in
-// examples/service/redis/scenario/add_user/main.yml, which exists because the
-// render is total. Here the subject is the user, and the rest of the file is
-// nobody's business.
+// wiped replication: an `add_user` scenario needs a ★★ CRITICAL note telling its
+// author to merge the system accounts back in, precisely because the render is
+// total. Here the subject is the user, and the rest of the file is nobody's
+// business.
 //
 // ★ THE PASSWORD NEVER REACHES THE WIRE IN THE CLEAR. ACL SETUSER takes a
 // credential as either `>plaintext` or `#<sha256hex>`, and this object only ever

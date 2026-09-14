@@ -149,10 +149,11 @@ tasks: []
 }
 
 // typesAclUserPerms — a catalog with AclUser carrying a pattern on perms
-// (token-shape filter for Redis ACL, examples/service/redis/types.yml). The
+// (token-shape filter for Redis ACL). The
 // pattern is checked on the RUNTIME path ValidateInput → ResolveInputValues →
-// validateValueAt for each element of the users array. Source of the pattern is
-// the redis service's types.yml; duplicated 1:1 here as the guard test's canon.
+// validateValueAt for each element of the users array. It came from the redis
+// service's types.yml, copied 1:1; that service left the tree with NIM-871, so the
+// copy here is now the canon rather than a mirror of one.
 const typesAclUserPerms = `types:
   AclUser:
     type: object

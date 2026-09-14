@@ -279,7 +279,7 @@ unconfigured `aclfile` - this is the Redis response (not an operator secret), go
 the **file**: a destiny renders the whole `users.acl` and the plugin makes Redis re-read
 it, so every edit runs through both halves and forgetting to merge the service accounts
 back into that render wipes replication (the ★★ note in
-[`scenario/add_user/main.yml`](../../../examples/service/redis/scenario/add_user/main.yml)
+`scenario/add_user/main.yml`
 exists for exactly that reason). In `user` the subject is the **user**: `ACL SETUSER`
 reaches it directly and the rest of the ACL is nobody's business.
 
@@ -1094,12 +1094,13 @@ Module - separate go.mod from `replace` to core (`../../../proto/plugin`,
 ## See also
 
 - [README.md](../../README.md) - module directory (directory status).
-- [examples/service/redis/](../../../examples/service/redis/) - redis service:
-  scenario `create` (standalone/cluster/sentinel), `add_node`, `remove_node`,
-`reshard` (day-2, **NOT idempotent**) and day-2 hot-reload `update_config`
-  (→ `instance.configured`), `add_user` (→ `acl.reloaded`), `rotate_tls` (→ `command.run`,
-force re-read SSL_CTX), `migrate_cluster` (→ the `cluster` live migration + `replica.present`
-  `source_external` + `replica.offset-synced`), `detach_source` (→ `replica.detached` + `replica.offset-synced`)
+- The redis **service** that drove every object below left the engine with NIM-871 and
+  now lives out of tree; the scenarios it carried — `create` (standalone/cluster/sentinel),
+  `add_node`, `remove_node`, `reshard`, `update_config` (→ `instance.configured`),
+  `add_user` (→ `acl.reloaded`), `rotate_tls` (→ `command.run`, force re-read SSL_CTX),
+  `migrate_cluster`, `detach_source` — are the plugin's real consumers and are no longer
+  readable here. [`examples/service/dragonfly/`](../../../examples/service/dragonfly/) is
+  the in-tree caller that remains, and it exercises a subset
 call the states of this plugin.
 - [examples/destiny/redis/](../../../examples/destiny/redis/) —
 mode-agnostic per-host brick (install + render `redis.conf` + systemd).

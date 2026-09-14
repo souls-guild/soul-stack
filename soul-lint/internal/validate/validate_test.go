@@ -59,12 +59,6 @@ func TestGolden_ServiceModuleTwoLevelIsAWarning(t *testing.T) {
 		KindService, true, ExitOK, []string{"module_name_two_level_deprecated"})
 }
 
-func TestGolden_ServiceExample_FromRepo(t *testing.T) {
-	// The full example from examples/service/redis/service.yml (the consolidated
-	// redis) must validate directly with 0 diagnostics — a regression contract.
-	runExpect(t, "../../../examples/service/redis/service.yml", KindService, false, ExitOK, nil)
-}
-
 func TestGolden_ScenarioExample(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/redis-create.yml", KindScenario, false, ExitOK, nil)
 }

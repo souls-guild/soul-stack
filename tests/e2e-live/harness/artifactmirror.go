@@ -32,8 +32,8 @@ import (
 // HTTPS server in the harness process that serves it under the upstream layout.
 //
 // NIM-542, and the reason it is a mirror rather than a stub: what the product
-// fetches here is the REAL tarball, byte for byte, so the checksums
-// examples/service/redis pins still verify, `core.archive.extracted` still
+// fetches here is the REAL tarball, byte for byte, so the checksums a service
+// pins still verify, `core.archive.extracted` still
 // unpacks a real tree and the exporters that come out still run. Hermetic and
 // fake are different properties; this buys the first without the second.
 //

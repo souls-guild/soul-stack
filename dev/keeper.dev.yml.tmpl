@@ -65,10 +65,9 @@ logging:
 # outside dev - managed via the `service.*` API, see keeper/operator-api.md):
 #   - keeper_settings[default_destiny_source] = file:///tmp/keeper-dev/destiny/{name}
 #   - service hello-world -> file:///tmp/keeper-dev/repos/hello-world @ main
-#   - service redis       -> file:///tmp/keeper-dev/repos/redis @ main
-#     (consolidated redis, ADR-029/redis consolidation: one mode-agnostic
-#      `redis` destiny for all redis_type; resolved via default_destiny_source:
-#      {name} = redis, ref v1.0.0 from redis/service.yml::destiny[]={redis}).
+# hello-world is the only seeded service: NIM-871 cut examples/service/redis out of
+# the engine, and the out-of-tree service repo that replaced it is deliberately NOT
+# registered here - the stand would then depend on a foreign repository.
 # Seeding requires the schema to already be applied (migrations 034/035); on a fresh DB it
 # is deferred until after `keeper init` runs - rerun `make dev-provision`.
 
@@ -162,7 +161,7 @@ allow_unsafe_single_path_multi_keeper: false
 # matches keeper-b.dev.yml and the mega-test stand (3x acolytes:2).
 acolytes: 2
 
-# Ceiling on the onboarding-barrier await_timeout (ADR-061): provision run budget = max_await_timeout + 10m deploy -> 20m. fail-fast: a VM usually comes online in ~5m, a large timeout would mask an enroll failure (redis service vars: join_wait 10m + await 8m fit within it).
+# Ceiling on the onboarding-barrier await_timeout (ADR-061): provision run budget = max_await_timeout + 10m deploy -> 20m. fail-fast: a VM usually comes online in ~5m, a large timeout would mask an enroll failure (a service wanting join_wait 10m + await 8m fits within it).
 max_await_timeout: 10m
 
 # VoyageWorker pool (ADR-043): claim+execute for unified Voyage runs

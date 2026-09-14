@@ -724,7 +724,7 @@ Each folder `scenario/<name>/` is a separate operation (CRUD-style) on the servi
 > `type` and `properties`, which is why the old form will be refused by name
 > (`state_schema_legacy_json_schema_form`) rather than left to parse. Implementation is NIM-742 (engine
 > and the masking walk), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB
-> redis service — the corpus, including `examples/service/redis/service.yml`, is still in the old
+> redis service — the corpus is still in the old
 > form). The rest of the manifest is current.
 
 ```yaml

@@ -15,7 +15,7 @@ import (
 // fixture's local stand-in for them.
 //
 // NIM-542. `make e2e-live-gate` is a blocking pre-tag step (RELEASING.md step e),
-// and six of its nine tests run a create of examples/service/redis. Every one of
+// and six of its then-nine tests ran a service create. Every one of
 // those creates reached out to github.com three times — node_exporter,
 // redis_exporter and vector, ~18 downloads per gate run — so the gate's verdict
 // was decided partly by a network nobody in the release process controls. NIM-406
@@ -25,8 +25,8 @@ import (
 // the weather is a gate people learn to rerun, and that habit is what retires a
 // regression.
 //
-// The lever is the example's own, not one invented for the test.
-// examples/service/redis/vars/00-base.yaml already documents it: point
+// The lever is the service's own, not one invented for the test. A service's
+// `vars/00-base.yaml` documents it: point
 // `<prefix>_base_url` at "an internal raw-proxy mirroring the github path 1:1,
 // plus `<prefix>_allow_private: true` when that mirror resolves to a private IP".
 // The fixture is such a mirror. Nothing in examples/ changes — it is the subject
@@ -34,10 +34,11 @@ import (
 // the gate green about a service nobody runs.
 //
 // Deliberately untagged, like setupdecl.go and waitstrategy.go: everything below
-// is a claim about what the example declares, and a claim that only compiles with
-// docker present is one that drifts unobserved. artifactcatalog_test.go checks
-// every field here against examples/, docker-free, inside `make e2e-live-gate`'s
-// first step.
+// is a claim about what a service declares, and a claim that only compiles with
+// docker present is one that drifts unobserved. artifactcatalog_test.go used to
+// check every field here against the service, docker-free, inside
+// `make e2e-live-gate`'s first step — see the ★ note on artifactCatalog() for why
+// it no longer does.
 
 // artifactArch — the only architecture the fixture caches for.
 //
@@ -56,7 +57,7 @@ type upstreamArtifact struct {
 	// varPrefix — the service-vars prefix the create scenario reads. For
 	// node_exporter that is `vars.node_exporter_base_url` /
 	// `vars.node_exporter_allow_private` / `vars.node_exporter_version`
-	// (examples/service/redis/scenario/create/main.yml).
+	// (the create scenario of the service under test).
 	varPrefix string
 
 	// upstreamBase — the public release root, and the literal the scenario falls
@@ -101,12 +102,15 @@ func (a upstreamArtifact) cacheRel() string {
 	return path.Join(a.varPrefix, "v"+a.version, a.file)
 }
 
-// artifactCatalog — the three tarballs, as examples/service/redis declares them.
+// artifactCatalog — the three tarballs, as the service that used to drive the
+// gate's create declared them.
 //
-// Every field is checked against the example by artifactcatalog_test.go. A
-// version bump there, a fourth fetch added to the scenario, or a changed release
-// root all go red there rather than quietly restoring the outbound dependency
-// this ticket removed.
+// ★ NOTHING CHECKS THESE FIELDS ANY MORE. Six guards in artifactcatalog_test.go
+// re-read examples/service/redis and went red on a version bump, a fourth fetch,
+// or a changed release root; NIM-871 cut that service out of the engine and the
+// guards went with their subject. Until the out-of-tree service repo brings
+// equivalents, a bump here that disagrees with the service restores the outbound
+// dependency NIM-542 removed — silently, with a green run.
 func artifactCatalog() []upstreamArtifact {
 	return []upstreamArtifact{
 		{
@@ -141,12 +145,13 @@ func artifactCatalog() []upstreamArtifact {
 //
 // A vars LAYER, not an edit: shared/config and keeper/internal/servicevars
 // assemble `vars/*.yaml` in lexical order and a later file wins (ADR-0082 §3), so
-// a file that sorts after the example's own leaves 00-base.yaml untouched and
-// overrides three keys. `99-` puts it last among numbered layers, and
-// TestArtifactMirrorOverlaySortsLast checks that against the directory as it
-// actually is rather than against that intention — `_` is 0x5F and lower-case
-// letters are above every digit, so "sorts last" is a property of the siblings,
-// not of the prefix.
+// a file that sorts after the service's own leaves 00-base.yaml untouched and
+// overrides three keys. `99-` puts it last among numbered layers. That was checked
+// against the directory as it actually is — rather than against the intention — by
+// TestArtifactMirrorOverlaySortsLast, which read the service's own vars/ and left
+// with it (NIM-871). `_` is 0x5F and lower-case letters are above every digit, so
+// "sorts last" is a property of the SIBLINGS, not of the prefix, and nothing
+// verifies it for the next service this fixture is pointed at.
 const artifactMirrorVarsFile = "vars/99-e2e-live-artifact-mirror.yaml"
 
 // artifactMirrorOverlay renders that layer for a mirror rooted at mirrorBase
@@ -159,17 +164,16 @@ const artifactMirrorVarsFile = "vars/99-e2e-live-artifact-mirror.yaml"
 // internal network (examples/destiny/*/tasks: `allow_private: "${ input.allow_private }"`).
 func artifactMirrorOverlay(mirrorBase string, cat []upstreamArtifact) []byte {
 	var b strings.Builder
-	b.WriteString(`# GENERATED BY tests/e2e-live — NOT part of examples/service/redis.
+	b.WriteString(`# GENERATED BY tests/e2e-live — NOT part of the service repo it is written into.
 #
 # Written into the fixture's throwaway copy of the service repo, never into the
-# tree (NIM-542, NIM-211: examples/ is the subject of these tests). It points the
-# three release fetches of scenario/create/main.yml at the harness's local mirror,
-# so a gate run needs nothing from github.com. The real upstream path stays
-# covered outside the blocking gate — see TestL3bRedisLive_UpstreamArtifactsLive.
+# tree (NIM-542, NIM-211: a shipped example is the subject of these tests). It
+# points the release fetches of scenario/create/main.yml at the harness's local
+# mirror, so a gate run needs nothing from github.com.
 #
-# 00-base.yaml documents this exact override as the supported way to run against
-# an internal mirror. This layer is that, with the mirror served out of the
-# harness process.
+# A service's 00-base.yaml documents this exact override as the supported way to
+# run against an internal mirror. This layer is that, with the mirror served out
+# of the harness process.
 `)
 	for _, a := range cat {
 		fmt.Fprintf(&b, "\n%s_base_url: %q\n%s_allow_private: true\n",

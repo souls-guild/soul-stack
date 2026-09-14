@@ -224,8 +224,8 @@ vault_ref: { type: secret }
 // per marker. ADR-0083 §1 permits `type: secret` in two positions, and they land on
 // opposite sides of the rule: a top-level scalar folds to itself, while a property
 // of a top-level array's items folds to the whole ENCLOSING COLLECTION —
-// `redis_users` in examples/service/redis, the ACL inventory, which is public and
-// read by every day-2 scenario.
+// an ACL inventory keyed by user name, which is public and read by every day-2
+// scenario.
 //
 // The first version of this fix inherited every path from the collector and folded
 // them all, so on the two flagship example services it masked the inventory out of
@@ -235,9 +235,9 @@ vault_ref: { type: secret }
 // dropped the marker entirely, which threw away the scalar case for no gain.
 func TestStateSchemaSecretFields_DeclaredSecretDoesNotSealItsCollection(t *testing.T) {
 	art := &artifact.ServiceArtifact{Manifest: &config.ServiceManifest{
-		// The examples/service/redis shape in structure: a typed array whose element
-		// carries one `type: secret` property keyed by a sibling. Trimmed — the real
-		// declaration has more properties and the corpus has two such collections.
+		// The shape an ACL inventory has: a typed array whose element carries one
+		// `type: secret` property keyed by a sibling. Trimmed — a real declaration
+		// carries more properties.
 		StateSchema: stateSchemaFixture(t, `
 redis_users:
   type: array

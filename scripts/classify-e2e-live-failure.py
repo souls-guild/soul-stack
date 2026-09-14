@@ -13,7 +13,7 @@ that habit is what silently retires a regression.
 
 This does NOT rerun anything, does NOT relax a wait, and does NOT touch the
 caller's exit code. It labels, and it labels per TEST rather than per package:
-the e2e-live gate is one package running nine tests, so a package-level verdict
+the e2e-live gate is one package running several tests, so a package-level verdict
 would let one stand failure speak for a real assertion failure in the same run.
 That case is fixture-pinned below, because it is the whole reason this is not
 just `classify-l1-failure.py` pointed at a different log.

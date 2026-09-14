@@ -40,9 +40,8 @@ const RedisAlias = "redis"
 // are the author's.
 //
 // Together they are `redis.<object>`, which is what the fixtures write:
-// `tests/e2e-live/module-delivery-live/service.yml`, `examples/service/redis`
-// (its `modules:` entries and its scenarios) and the asserts in
-// module_delivery_live_test.go. None of those is Go, so nothing but the guard
+// `tests/e2e-live/module-delivery-live/service.yml` and the asserts in
+// module_delivery_live_test.go. Neither is Go, so nothing but the guard
 // makes them agree with the artifact.
 var redisObjects = []string{"acl", "cluster", "command", "instance", "replica", "sentinel", "user"}
 

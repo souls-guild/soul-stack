@@ -10,13 +10,15 @@ the specific shape of the instance — that is chosen by the service scenario vi
 config passed through `apply: input:`. Combinations of flags cover both cluster and
 sentinel (master-replica + sentinel daemon), and a **thin sentinel layer over an
 external master** (`deploy_redis: false`) — the latter remains a **brick capability**
-for reuse by other services (e.g. DragonFly), even though the [`redis`](../../service/redis/README.md)
+for reuse by other services (e.g. DragonFly), even though the `redis`
 service deploys only `redis_type ∈ [sentinel, cluster]` modes (`standalone`/`sentinel_only`
 were removed from the service on 2026-06-25).
 
 The brick stays **"dumb"**: all orchestration — topology, master election,
 rolling restart, failover, sentinel reconcile, health-gate, merging `redis.conf` —
-lives in the service scenario [`examples/service/redis/`](../../service/redis/README.md).
+lives in the service scenario. The in-tree one is
+[`examples/service/dragonfly/`](../../service/dragonfly/); the redis service that used
+to sit beside this brick left the engine with NIM-871 and is now its own repository.
 The destiny receives values already resolved (config as a ready-made merged map,
 secrets via `vault()` in Keeper's render phase) and only materializes them on the host.
 
@@ -56,7 +58,7 @@ inside [`install.yml`](tasks/install.yml).
 The destiny sees **only its own** `input:` (isolation, [ADR-009](../../../docs/adr/0009-scenario-dsl.md)).
 The full typed schema with a description of every field is [`destiny.yml → input:`](destiny.yml);
 how the service scenario builds and passes these values to the operator is in
-[service-README → Input contract](../../service/redis/README.md). Key groups:
+service-README → Input contract. Key groups:
 
 - **Data-plane gate.** `deploy_redis` (bool, default `true`) — whether to deploy
   `redis-server`. `false` (the `sentinel_only` mode) mutes the whole data plane
@@ -77,7 +79,7 @@ how the service scenario builds and passes these values to the operator is in
   `install.version` is for the binary branch. **The service-level `install_method`
   (default `package`) sets the installation method, while the repository and the binary
   `base_url`/`version` come from `service vars`** (see
-  [service-README](../../service/redis/README.md)); the destiny assembles the `install`
+  service-README); the destiny assembles the `install`
   struct from them.
 - **TLS.** `tls: {enable, only, port, cert_ref, key_ref, ca_ref}` — a single dict
   (host-invariant). PEM material is rendered **through `core.file.present` +
@@ -130,7 +132,7 @@ so their system user sets don't overlap. Which set is placed (`replica`/`monitor
 `haproxy`, plus `default` only in the sentinel-aclfile) and where the passwords come
 from is decided by the **service scenario**; the destiny receives the ready-made map
 and only renders it. See
-[service-README → "System ACL users"](../../service/redis/README.md#system-acl-users).
+service-README → "System ACL users".
 
 `sentinel-users.acl` is rendered as the **first** task of [`sentinel.yml`](tasks/sentinel.yml)
 (BEFORE `sentinel.conf` — its `aclfile` directive must point to an already-existing
@@ -152,16 +154,17 @@ This is a **destiny brick** (a per-host task package for a single instance), **n
 service**. There is no `state_schema`, no migrations, no simple-input operator
 (`memory_mb` / `persistence` / `shards` / `redis_type`), no translation into
 `redis_config`, no orchestration and no operational scenarios — all of that lives in
-the service wrapper [`examples/service/redis/`](../../service/redis/README.md).
+the service wrapper, which since NIM-871 is an out-of-tree repository.
 The destiny does not decide which mode is deployed and does not call the
 [`redis`](../../../docs/module/redis/README.md) plugin (a live
 Redis is the service scenario's territory).
 
 ## References
 
-- [`examples/service/redis/`](../../service/redis/README.md) — service wrapper:
-  operator input contract, `state_schema`, translation, orchestration, modes, and
-  operational scenarios.
+- The service wrapper — operator input contract, `state_schema`, translation,
+  orchestration, modes and operational scenarios — is out of tree since NIM-871.
+  [`examples/service/dragonfly/`](../../service/dragonfly/) is the in-tree service that
+  consumes this brick (in `sentinel_only` mode).
 - [`destiny.yml`](destiny.yml) — manifest and the full `input:` schema.
 - [docs/destiny/](../../../docs/destiny/README.md) — destiny format and `tasks:`/`include:` mechanics.
 - [docs/templating.md](../../../docs/templating.md) — CEL + text/template, `${ vault(ref) }`, seal-masking.

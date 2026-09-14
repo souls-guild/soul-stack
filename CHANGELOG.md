@@ -461,6 +461,35 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Removed
 
+- **`examples/service/redis` is gone, and it took real coverage with it** (NIM-871).
+  A service is its own repository; the engine bundling one made the engine's own gate
+  depend on a service's lifecycle. The tree, its twelve scenarios, its fifteen-rung
+  migration ladder and its ~180 L0 cases are out of tree now, and so is
+  `scripts/gen-redis-catalog.sh`, which generated its directive catalog.
+  `examples/destiny/redis` and `examples/module/redis` **stay**: a destiny and a
+  SoulModule are independent artifacts and the out-of-tree service consumes both.
+  The dev stand and `make dev-smoke` register `examples/service/hello-world` alone —
+  the out-of-tree repository is deliberately NOT registered, or the stand would
+  depend on a foreign repository.
+  **What is no longer covered, stated plainly rather than folded into "cleanup":**
+  `make e2e-live-gate` — the blocking pre-tag step ([RELEASING.md](RELEASING.md) step e) —
+  went from nine tests to three, because six of them were `TestL3bRedisLive_Day2*`
+  and each ran a live create of this service followed by a day-2 scenario through
+  the ADR-065 plugin channel. Nothing in the tree replaces them: the remaining corpus
+  services are render-only (L0), so **no live test now proves that a `create` reaches
+  a running service, nor that any day-2 scenario operates one.** The L3a lifecycle
+  (`TestE2EServiceRedis_*`, `TestE2EServiceRedis_CreateCluster`), the k8s resharding
+  test, and ~15 engine guards that used the tree as a fixture — the golden `service.yml`
+  load, the ladder traversal and parse, the block fan-out and sentinel-replica render
+  acceptance, the soul-lint golden, the directive-catalog guards, the trial secret-mint
+  set — went the same way. The six guards that kept the e2e-live harness's
+  `artifactCatalog()` honest against the service's own pins also had no subject left,
+  so that catalog is now an **unverified copy** (flagged in place). The successor to
+  all of it is the out-of-tree service repository's own live suite, which does not
+  exist yet; until it does, a day-2 regression reaches a tag unchallenged.
+  Incidentally moot: **NIM-738**, which tracked a wrong description comment in
+  `migrations/015_system_acl_users` — that file no longer exists.
+
 - **`name:` is gone from `service.yml`** ([ADR-0085](docs/adr/0085-entity-id-and-label.md), NIM-726). A service is named once, when
   it is registered, and that name is the registry row's primary key, the segment
   every derived Vault path is built from, and the value of `incarnation.service`.

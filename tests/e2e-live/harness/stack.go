@@ -67,16 +67,19 @@ type Config struct {
 	// UpstreamArtifacts — fetch the release tarballs from the public internet
 	// instead of from the harness's local mirror (NIM-542).
 	//
-	// Off by default, and that default is the ticket: six of the nine gate tests
-	// run a create of examples/service/redis, and each create pulled three
-	// tarballs from github.com — ~18 downloads whose outcome decided a blocking
-	// release gate. With this off, NewStack serves them from a local cache and
-	// the run needs nothing from the public internet.
+	// Off by default, and that default is the ticket: six of the then-nine gate
+	// tests ran a service create, and each create pulled three tarballs from
+	// github.com — ~18 downloads whose outcome decided a blocking release gate.
+	// With this off, NewStack serves them from a local cache and the run needs
+	// nothing from the public internet. Those six left with the service NIM-871
+	// cut; the cache stays primed for the suite that inherits the create.
 	//
-	// Exactly one test turns it ON — the non-gate TestL3bRedisLiveUpstream_*,
-	// which exists so the real github path stays covered somewhere. It is
-	// deliberately not in E2E_GATE_TESTS: a test whose verdict depends on a
-	// network outside the slice must not be able to block a release.
+	// ★ NOTHING SETS THIS TODAY. One test turned it ON — the non-gate
+	// TestL3bRedisLiveUpstream_*, which existed so the real github path stayed
+	// covered somewhere, deliberately outside E2E_GATE_TESTS because a test whose
+	// verdict depends on a network outside the slice must not block a release. It
+	// ran the service NIM-871 cut. The field and its read site are kept for the
+	// suite that inherits the create; until then the upstream path is uncovered.
 	UpstreamArtifacts bool
 }
 

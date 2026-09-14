@@ -120,7 +120,7 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 // addArtifactMirrorLayer writes the local-mirror service-vars layer into the
 // materialized COPY of the service, between the copy and the commit (NIM-542).
 //
-// Here and nowhere else. examples/service/redis is the subject of these tests
+// Here and nowhere else. A shipped example is the subject of these tests
 // (NIM-211) and editing it to suit the fixture would leave the gate green about
 // a service nobody runs; the copy is the fixture's own, and a layer added to it
 // is the same thing an operator does when they run against an internal mirror —
@@ -146,9 +146,9 @@ func (s *Stack) addArtifactMirrorLayer(t *testing.T, repoDir string) {
 	}
 	// A prefix the service fetches and the catalog does not carry would be left
 	// pointing at github while its neighbours go to the mirror — a partly
-	// hermetic gate, which reads as a hermetic one. The docker-free guard
-	// TestArtifactCatalogCoversEveryDefaultFetch catches this twenty minutes
-	// earlier for the example the gate uses; this catches it for any other.
+	// hermetic gate, which reads as a hermetic one. A docker-free guard used to
+	// catch this twenty minutes earlier for the one service the gate created; that
+	// service left the tree with NIM-871, so this runtime check is now the only one.
 	if len(cat) != len(prefixes) {
 		var uncovered []string
 		for prefix := range prefixes {

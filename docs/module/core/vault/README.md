@@ -256,8 +256,10 @@ service's own namespace, where nothing derives a path for you:
 > phase of any task reading the same path through `${ vault(...) }` (staged-render
 > [ADR-056](../../../adr/0056-staged-render-passage.md)) - a render phase resolves what
 > is there at the time, and there is no re-render after a later write. For the service's
-> own secrets that edge is now a `core.state.<verb>` step → register, guarded by
-> [`keeper/internal/trial/redis_secret_mint_test.go`](../../../../keeper/internal/trial/redis_secret_mint_test.go).
+> own secrets that edge is now a `core.state.<verb>` step → register. It was guarded by
+> `keeper/internal/trial/redis_secret_mint_test.go`, which read the redis service's own
+> `case.yml` set and left the tree with that service (NIM-871) — **the ordering rule below
+> is currently unguarded in both halves.**
 > For a shared path like the one above the same rule applies, and the ordering is the
 > author's to establish.
 

@@ -84,14 +84,21 @@ Without `E2E_KEEPER_HOST` behavior doesn't change (CI default `host.docker.inter
 
 ## Upstream release artifacts (NIM-542)
 
-`examples/service/redis`'s create deploys three upstream binaries — `node_exporter`,
-`redis_exporter` and `vector` — each from a pinned GitHub release tarball. Six of the
-nine `make e2e-live-gate` tests run that create, so the blocking pre-tag gate used to
+A service create deploys three upstream binaries — `node_exporter`, `redis_exporter`
+and `vector` — each from a pinned GitHub release tarball. Six of the then-nine
+`make e2e-live-gate` tests ran such a create, so the blocking pre-tag gate used to
 pull ~18 tarballs from **public github.com**, from inside the soul container, on every
 run. The gate's acceptance is "three runs on an unchanged slice give the same result";
 github.com is not in the slice.
 
-The harness now serves those tarballs itself:
+> ★ Those six tests ran `examples/service/redis`, which NIM-871 cut out of the engine,
+> so **no gate test drives this mirror today**. The machinery below stays wired and
+> primed — every `NewStack` still fills the cache — because the out-of-tree service
+> repo that inherits the create will need it. What did NOT survive is the set of guards
+> that kept `artifactCatalog()` honest against the service's own pins; see the header of
+> `harness/artifactcatalog.go`.
+
+The harness serves those tarballs itself:
 
 1. `ensureArtifactCache` fills a cache **outside the repo and outside `$TMPDIR`** —
    `$SOUL_STACK_E2E_ARTIFACT_CACHE`, else `$XDG_CACHE_HOME/soul-stack/e2e-live/artifacts`.
@@ -123,10 +130,11 @@ whatever the container will dial — an IP on WSL2, a name on native Linux), and
 `update-ca-certificates` **before the soul is started**. The product's fetch path —
 scheme check, TLS handshake, chain validation — runs exactly as it does against github.
 
-**The layer goes into the copy, never into `examples/service/redis`.** The example is
+**The layer goes into the copy, never into the service tree.** A shipped example is
 the subject of these tests (NIM-211); bending it to suit the fixture would leave the
 gate green about a service nobody runs. What the fixture does here is exactly the
-override `vars/00-base.yaml` documents for an operator with an internal mirror.
+override a service's `vars/00-base.yaml` documents for an operator with an internal
+mirror.
 
 The layer is written only for the prefixes the materialized service actually reads,
 scanned out of its own `scenario/` tree (`scenarioArtifactPrefixes`) — a
@@ -152,32 +160,35 @@ rename a var, and the layer contributes nothing at all — the create still pass
 github, and the gate is quietly back on the public internet with a green result.
 
 So the mirror **counts what it served**, and `Stack.Cleanup` fails the test if a
-successful run never asked it for an artifact it had redirected. Alongside it, the
-docker-free guards in `harness/artifactcatalog_test.go` fail twenty minutes earlier if
-the example grows a fourth external fetch, bumps a version or digest the catalog does
-not carry, gains a vars layer that out-sorts `99-*`, or declares a `_stack.yaml`.
+successful run never asked it for an artifact it had redirected. Alongside it there used
+to be docker-free guards in `harness/artifactcatalog_test.go` that failed twenty minutes
+earlier if the service grew a fourth external fetch, bumped a version or digest the
+catalog does not carry, gained a vars layer that out-sorted `99-*`, or declared a
+`_stack.yaml`. ★ **Those six guards re-read `examples/service/redis` and left with it
+(NIM-871)** — none of that is checked today.
 
-One of those guards ties the two ends of the URL together:
-`TestArtifactMirrorURLIsOneTheDestinyWillAccept` generates the overlay this fixture
-would write and matches it against the `pattern:` the destiny declares — both read at
+One guard of that family survives, because its subject is a destiny rather than the
+deleted service: `TestArtifactMirrorURLIsOneTheDestinyWillAccept` generates the overlay
+this fixture would write and matches it against the `pattern:` the destiny declares — both read at
 run time, neither hardcoded. That is the guard the http/https mistake above walked
 straight into, and it now costs a second instead of a live run.
 
-### The real github path is still covered
+### The real github path is no longer covered
 
 Hermetizing the gate moved a real dependency out of it, and a dependency nobody
-exercises rots. `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` runs the same create with
-`harness.Config{UpstreamArtifacts: true}` — tarballs straight from GitHub Releases, the
-way an operator's first run gets them. It is **deliberately not in `E2E_GATE_TESTS`**:
-it is the one test in the tier allowed to fail for a reason outside the repository, and
-a blocking gate must never be.
+exercises rots. `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` was the answer: the same
+create with `harness.Config{UpstreamArtifacts: true}` — tarballs straight from GitHub
+Releases, the way an operator's first run gets them — deliberately **outside**
+`E2E_GATE_TESTS`, as the one test in the tier allowed to fail for a reason outside the
+repository.
 
-It draws the environment-vs-defect line twice. `harness.RequireUpstreamArtifacts` probes
-the three real URLs *before* the stand and skips, naming the host — nothing of this
-repository has run yet, so the failure cannot be about this repository, and 25 minutes
-are not spent to learn that. `harness.ReportUpstreamIfItWentAway` re-probes *after* a
-failure and prints one decisive line: either "read the failure above as environment" or —
-the more valuable half — "upstream is still reachable, so this is a finding".
+It ran `examples/service/redis` and left with it (NIM-871). The harness half survives
+and is still worth reusing: `harness.RequireUpstreamArtifacts` probes the real URLs
+*before* the stand and skips naming the host — nothing of this repository has run yet,
+so the failure cannot be about this repository — and
+`harness.ReportUpstreamIfItWentAway` re-probes *after* a failure to print either "read
+the failure above as environment" or, the more valuable half, "upstream is still
+reachable, so this is a finding". Nothing calls either today.
 
 ### What is still not hermetic
 
@@ -217,12 +228,12 @@ tests/e2e-live/
 │   ├── probe.go                    # waitForReady
 │   ├── git.go                      # SetupGitRepo
 │   └── destiny.go                  # MaterializeDestinies
-├── smoke-nginx-live/  redis/  redis-cluster-live/  staged-probe-live/
+├── smoke-nginx-live/  staged-probe-live/  when-gate-live/  module-delivery-live/
 │   └── …/expectations/             # per-example host_state expectations
 ├── smoke_bootstrap_test.go         # TestL3bBootstrap_OneSoul
 ├── smoke_nginx_live_test.go        # TestL3bSmokeNginxLive_InstallAndStart
-├── redis_live_test.go              # TestL3bRedisLive_CreateWithNodeExporter
-├── redis_cluster_live_test.go      # TestL3bRedisClusterLive_ThreeNode
+├── module_delivery_live_test.go    # TestL3bModuleDeliveryLive_SynthesisFetchHotRegister
+├── plugin_channel_test.go          # TestL3bPluginChannel_CatalogAndAllow
 ├── staged_probe_live_test.go       # TestL3bStagedProbeLive_WhereTargetsOnlyMaster
 └── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
@@ -269,7 +280,7 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | **L3b-2** | Real Bootstrap flow: `IssueBootstrapToken` + `SpawnSoulContainer` (privileged Debian-12 + soul-binary mount + CSR Bootstrap RPC). | done |
 | **L3b-3** | First L3b example `smoke-nginx-live` (actually installs nginx via apt + systemctl start). | done |
 | **L3b-4** | Container-side asserts (`AssertHostPkgInstalled` / `AssertHostServiceActive` / `AssertHostFileExists` / `AssertHostFileContent`). | done |
-| **L3b-5** | Multi-host (`redis-cluster-live` with 3 soul containers) + YAML expectations loader (`harness.LoadExpectations` / `Stack.AssertExpectations`). | done |
+| **L3b-5** | Multi-host (`redis-cluster-live` with 3 soul containers) + YAML expectations loader (`harness.LoadExpectations` / `Stack.AssertExpectations`). The multi-host FIXTURE left with `examples/service/redis` (NIM-871); the loader and the multi-container machinery it delivered are still in use. | done, subject removed |
 | **L3b-6** | ~~Drift-live~~ — removed with the drift circuit (NIM-446). It was the only live exercise of `core.file.Plan` end to end; the module's own `Plan` is still covered by its unit tests, but nothing drives it over a real Soul any more. **Errand's dry-run is the intended replacement, and since NIM-488 it reaches `Plan` at all** — the runner used to ask the `ErrandReadSafe` (Apply-path) condition on the dry-run path too, and since the two marker sets do not intersect, every `dry_run: true` Errand was terminal before reaching a `Plan`. Admission is now per-path (`dry_run: true` requires `PlanReadSafe`), so `core.file.present` plans on request while its `Apply` stays closed to ad-hoc. **It is not yet an equal replacement:** the `PlanEvent` the module sends is dropped on the floor (`errandrunner` builds a plan collector and never reads it; `ErrandResult` has no `changed` field at all — NIM-487), so a drifted host and a clean one return byte-identical results. A live test written today can assert "the host was not touched" and "Plan's body actually ran", but not "drift detected" — the verdict L3b-6 used to check. Writing that test is NIM-555 (NIM-455 asked for it first but was closed without it), and it needs NIM-487 to carry the verdict back. The inventory that used to be duplicated here now lives in one place, [`errandrunner/whitelist.go`](../../soul/internal/runtime/errandrunner/whitelist.go). | removed, superseded by NIM-555 |
 
 ## Tests
@@ -278,35 +289,25 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 |---|---|---|
 | `TestL3bBootstrap_OneSoul` | 1 | Real CSR Bootstrap flow + `souls.status=connected` after `SpawnSoulContainer`. |
 | `TestL3bSmokeNginxLive_InstallAndStart` | 1 | Real `apt install nginx` + `systemctl start nginx` + `core.file.rendered` site config. Uses `harness.LoadExpectations` + `Stack.AssertExpectations`. |
-| `TestL3bRedisLive_CreateWithNodeExporter` | 1 | Real redis service: `apt install redis` + node-exporter destiny on a live host. |
-| `TestL3bRedisClusterLive_ThreeNode` | 3 | Multi-host: install redis on 3 containers + form a Redis Cluster (`redis-cli --cluster create --cluster-replicas 0`); independent check `cluster_state:ok`. |
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where on a live soul** (ADR-056): a real probe step emits a per-host register, and the Passage action `where: register.*=='master'` is genuinely applied ONLY on the master host. L3b analog of `TestE2EStagedFailover_2Passage`, but via a real apply instead of a stub. |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Real `soul_beacon` plugin (gRPC-over-stdio): inotify portent → Vigil → Decree → Oracle → fired scenario on a live soul. |
-| `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` | 1 | The same create with the release tarballs from **real github.com** instead of the local mirror — keeps the public path covered after NIM-542. **Not in `E2E_GATE_TESTS`**: the only test in the tier allowed to fail for a reason outside the repository. Skips (naming the host) if upstream is unreachable before the stand. |
-| `TestL3bRedisClusterCreate_FullLifecycle` | 3 | **SKIPPED (structural blocker, see below)**. Body kept: documents the target create-lifecycle. Its `SeedIncarnationForCreate` helper is gone with `spec.hosts[]` (NIM-330) - a declared role is now a Voice, seeded via `incarnation_choir_voices` or laid down by a `core.choir.present` step. |
 
 ## Known coverage blockers (NOT-L3b-able)
 
-### `redis-cluster` (full) create — host-variant destiny-when (layer 3)
+### ★ No live test drives a service day-2 any more (NIM-871)
 
-`TestL3bRedisClusterCreate_FullLifecycle` is marked `t.Skip` and **not counted** in
-coverage. The reason is a structural defect in the service itself, not the test:
+This tier used to carry a service create and six day-2 operations against it —
+`TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,UpdateUsers,Destroy,RotateTls}`,
+all in `E2E_GATE_TESTS`, all running `examples/service/redis`. That service left the
+engine, and nothing in the tree replaces it: the remaining corpus services are
+render-only (L0), and the three tests left in the gate prove a module is **delivered**,
+not that a service is **operated**.
 
-- destiny `redis-replication-config` (`tasks/main.yml`) uses
-  host-variant flow control `when: soulprint.self.<...> != input.master_addr`
-  on a multi-host `apply: destiny:`. The engine rejects this
-  (`guardFlowControlHostInvariant`, split-brain prevention; per-host
-  destiny-dispatch is a deferred engine feature, a separate ADR).
-- The canon (ADR-009 / [orchestration §4.1](../../docs/scenario/orchestration.md))
-  intends a **host-invariant destiny** + per-role targeting at the scenario level
-  (`where:`). redis-cluster was written with the wrong pattern.
-- The create-lifecycle **is covered** by the simplified `redis-cluster-LIVE`
-  (`TestL3bRedisClusterLive_ThreeNode`): install redis on 3 nodes + form the
-  cluster, independent `cluster_state:ok`.
-- Reactivation once: **(a)** redis-cluster create is rewritten to per-role
-  scenario steps (`where: primary`/`replica` + host-invariant destinies) —
-  a service-design follow-up; **OR (b)** per-host destiny-dispatch (an engine
-  feature, deferred ADR).
+So the whole class is uncovered here: create against real hosts, an operational
+scenario through the ADR-065 plugin channel, a state migration on a live incarnation,
+CA rollover. The successor is the out-of-tree service repo's own live suite. Until it
+exists, a day-2 regression reaches a tag unchallenged — this is a hole, not a
+simplification, and it is the first thing to check when that repo grows a CI.
 
 ### Layer-1 finding: the form invariant "secret = vault:-ref only" is unenforceable
 

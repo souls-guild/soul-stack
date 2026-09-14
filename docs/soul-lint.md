@@ -436,13 +436,13 @@ The L0 runner spells it the same way and parses it with the same loader
 (**NIM-790**), because it had the same gap and had it in all three places at once:
 
 ```sh
-soul-trial run examples/service/redis --modules redis=examples/module/redis
+soul-trial run examples/service/dragonfly --modules redis=examples/module/redis
 ```
 
 L0 loaded every scenario and every destiny task file with empty validate options,
 expanded every `include:` with no resolver, and filtered both sets of diagnostics to
 errors before printing. So a case rendering `redis.acl.present` printed `PASS` over
-`params:` nobody had checked — 328 such steps in `examples/service/redis` alone — and
+`params:` nobody had checked — hundreds of such steps across the corpus — and
 `plugin_params_unchecked` was produced on every one of them, discarded, and never
 seen.
 
@@ -450,9 +450,9 @@ The runner reports a case's non-error findings under its result, at their own le
 and file, whether the case passed or failed:
 
 ```
-PASS  examples/service/redis/scenario/add_node/tests/happy/case.yml
-    hint [plugin_params_unchecked] scenario/add_node/main.yml:195: params of
-    redis.command were not checked: no module manifests were supplied
+PASS  examples/service/dragonfly/scenario/add_user/tests/add-user-plaintext/case.yml
+    hint [plugin_params_unchecked] scenario/add_user/main.yml:190: params of
+    redis.acl.reloaded were not checked: no module manifests were supplied
 ```
 
 They do not fail a case — an unbound manifest is not the case author's defect, the

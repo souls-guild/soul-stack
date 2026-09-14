@@ -13,7 +13,7 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 | **L1** - integration | `<module>/<pkg>/integration_test.go` | `integration` | testcontainers per-package (PG / Redis / Vault), real CRUD calls. | each PR, `make test-integration` (needs docker) |
 | **L2** - Trial | `examples/destiny/<name>/_trial/`, `examples/service/<name>/scenario/<n>/tests/` | no | Hermetic prerender + migration-assert on fixtures (`soul-trial`). Bind `--modules <alias>=<path>` or a plugin step's `params:` are checked by nobody and the case says so ([soul-lint.md](../soul-lint.md#soul-trial-takes-the-same-flag)). | each PR via `make build` + `soul-trial` |
 | **L3a** - E2E fast-loop | `tests/e2e/` | `e2e` | testcontainers (PG/Redis/Vault) + Keeper-process in-process + soul-stub. Contract tests apply_runs lifecycle / RBAC / audit / MCP. | every PR (when L3a-imp slice stabilizes), `make e2e` |
-| **L3b** - E2E smoke | `tests/e2e-live/` | `e2e_live` | Real `soul`-binary in a privileged Debian-12 container (systemd-PID-1) + Keeper process + mTLS + real apply. Flagship scripts. | nightly/on-demand; **feature-complete** (5 slices L3b-1..L3b-5 = done): real CSR Bootstrap + `smoke-nginx-live` (apt + systemd) + multi-host `redis-cluster-live` (3 containers); `make e2e-live` really drives nightly. L3b-6 (drift-live) - done: `TestL3bDriftLive_HelloWorld` runs drift-check on a live soul through a real `core.file.Plan` (module `core.file.present`), and not stub-Plan like L3a |
+| **L3b** - E2E smoke | `tests/e2e-live/` | `e2e_live` | Real `soul`-binary in a privileged Debian-12 container (systemd-PID-1) + Keeper process + mTLS + real apply. Flagship scripts. | nightly/on-demand; **feature-complete** (5 slices L3b-1..L3b-5 = done): real CSR Bootstrap + `smoke-nginx-live` (apt + systemd) + module delivery + the plugin channel; `make e2e-live` really drives nightly. ★ The multi-host `redis-cluster-live` fixture and every service-lifecycle case left with `examples/service/redis` (NIM-871), taking the blocking gate from nine tests to three. L3b-6 (drift-live) - done: `TestL3bDriftLive_HelloWorld` runs drift-check on a live soul through a real `core.file.Plan` (module `core.file.present`), and not stub-Plan like L3a |
 | **L3c** - E2E k8s | `tests/e2e-k8s/` | `e2e_k8s` | kind-cluster, real K8s-deployment Keeper + Soul + Redis-Cluster + PG. HA cases (Watchman, Toll, leader-failover). | weekly / pre-release, **L3c-1..L3c-5 part A ready** (single-keeper ping, multi-keeper + Soul CSR Bootstrap, kill-leader failover, Toll degraded-mode); L3c-5 part B (redis-cluster resharding) - framework + t.Skip to in-cluster git-server-pod |
 | **L4** – manual soak + cloud live-run | — | — | Manual pre-release testing under load **+ repeatable cloud orchestrator** `scripts/e2e-cloud/` (create / day-2 / destroy via keeper's Operator API on VM, teleport), see [e2e-cloud.md](e2e-cloud.md). | first product post / on-demand |
 
@@ -398,9 +398,13 @@ delivered module vs real redis.
 `core.service` systemd-start on a live host - checks that normal apply is not broken.
 - **Smoke plugin channel** (`TestL3bPluginChannel_*`): module directory + allow mechanics
 gRPC-stdio plugin channel.
-- **Day-2 operations on a live redis** (`TestL3bRedisLive_Day2*`: add-user, update-config,
-restart, update-users, destroy, rotate-tls) — the incarnation scripts an operator
-actually runs after `create`, each against a real redis in a real container.
+- ~~**Day-2 operations on a live service**~~ (`TestL3bRedisLive_Day2*`: add-user,
+update-config, restart, update-users, destroy, rotate-tls) — **GONE (NIM-871)**. These
+were the incarnation scripts an operator actually runs after `create`, each against a
+real service in a real container, and they ran `examples/service/redis`, which left the
+engine. Nothing replaces them: the three bullets above prove a module is **delivered**,
+not that a service is **operated**. See "A service create is NO LONGER locally covered"
+below.
 
 **When required.** Before a batch commit of a feature that meets the "major" criterion -
 same triggers that escalate to architect: **>5 files are affected** OR being corrected
@@ -524,7 +528,7 @@ remainder and fails without naming itself. `-timeout` is loud — it kills the
 binary with a panic naming the test it was in, tests that already reported keep
 their printed verdicts, and tests that never started are labelled NOT-RUN. So its
 correct value is "comfortably above an honest run", not "above the worst case its
-contents can ask for": an honest 9-test gate is ~10-15 min (a passing test costs
+contents can ask for": an honest gate run is ~10-15 min (a passing test costs
 44-105 s), and reaching 45 m needs six consecutive full-budget bring-up timeouts
 (6 × `standBringUpTimeout` = 42 min) — a machine so broken that the gate is
 comprehensively red either way and the last verdicts buy nothing. Sizing it to
@@ -547,7 +551,7 @@ gate's `-timeout` was the thing that expired before treating it as a finding.
 
 The classifier above answers "bring-up or the code?", and for a while there was a
 third answer it could not give, because the gate had a third way to fail: the
-network. Six of the nine gate tests run a live `create` of `examples/service/redis`,
+network. Six of the then-nine gate tests ran a live service `create`,
 and that create fetched `node_exporter`, `redis_exporter` and `vector` from **public
 github.com** from inside the container — about 18 downloads per gate run. A blocking
 pre-tag step whose acceptance is "three runs on an unchanged slice give the same
@@ -558,7 +562,7 @@ above died exactly there.
 `e2e-live-gate` now runs as an early, named step — fills a digest-verified cache
 outside the repo, the harness serves it over HTTPS on an ephemeral local port, and the
 **fixture's** copy of the service gets a `vars/99-*` layer pointing `base_url` there.
-The layer goes into the fixture's copy and never into `examples/service/redis`: the
+The layer goes into the fixture's copy and never into the service tree: a shipped
 example is the subject under test (NIM-211). HTTPS rather than plain http for the same
 reason — the destinies declare `base_url` as `^https://…` and `core.url` refuses http
 without an opt-out, so the mirror mints a per-run CA the container is taught to trust
@@ -566,45 +570,47 @@ instead of the destiny being loosened to accept the fixture. Mechanics and the g
 that keep the override falsifiable are in [tests/e2e-live/README.md](../../tests/e2e-live/README.md#upstream-release-artifacts-nim-542).
 
 So no fourth verdict was added, and deliberately: the category the gate would have
-needed it for **does not occur inside the gate any more**. The one place it can still
-occur is `TestL3bRedisLiveUpstream_ArtifactsFromGitHub`, which keeps the real github
-path covered and is **not** in `E2E_GATE_TESTS` — it is the one L3b test allowed to
-fail for a reason outside the repository, and a blocking gate must never be. It
-handles the distinction itself, in the test rather than in the classifier: it probes
-the three real URLs before the stand and **skips** if they are unreachable (nothing of
-this repository has run yet, so the failure cannot be about this repository), and
-re-probes after a failure to print either "read this as environment" or — the more
-useful half — "upstream is still reachable, so read this as a finding".
+needed it for **does not occur inside the gate any more**. The one place it could still
+occur was `TestL3bRedisLiveUpstream_ArtifactsFromGitHub`, which kept the real github
+path covered and was **not** in `E2E_GATE_TESTS` — the one L3b test allowed to fail for
+a reason outside the repository, since a blocking gate must never be. It handled the
+distinction in the test rather than in the classifier: probe the real URLs before the
+stand and **skip** if unreachable (nothing of this repository has run yet, so the
+failure cannot be about this repository), then re-probe after a failure to print either
+"read this as environment" or — the more useful half — "upstream is still reachable, so
+read this as a finding". It ran `examples/service/redis` and left with it (NIM-871);
+`harness.RequireUpstreamArtifacts` / `ReportUpstreamIfItWentAway` survive uncalled.
 
 **Still not hermetic:** `core.pkg.installed` reaches `deb.debian.org` and
 `packages.redis.io` on every live create. NIM-542 fixed the tarballs only.
 
 The wall itself is also not derived from anything, and the two runs disagree:
-`make e2e-live` gives the whole 19-test package 30 m while the 9-test gate gets
-45 m, so the larger run has the tighter budget. Tracked in **NIM-512**.
+`make e2e-live` gives the whole package 30 m while the gate gets 45 m, so the larger
+run has the tighter budget. Tracked in **NIM-512**.
 
 **What it DOESN'T cover** (this is stand/cloud/PHASE 2/L3c-k8s, not local gate):
 cloud provision (`CloudDriver`), `install_method=binary` (there is no public source of
 standalone redis binaries), cluster redis topology, multi-keeper HA.
 
-**Redis-create IS locally covered.** Each of the six `TestL3bRedisLive_Day2*` tests runs
-`examples/service/redis::create` end to end first - installing a real `redis-server`
-plus the node-exporter / redis-exporter / vector destinies into a Debian-12 container -
-and only then exercises its day-2 scenario against that live instance. Sentinel mode
-with `replicas_per_master: 0` (a standalone-equivalent) is what they create.
+**★ A service create is NO LONGER locally covered (NIM-871).** Each of the six
+`TestL3bRedisLive_Day2*` tests ran `examples/service/redis::create` end to end first —
+a real `redis-server` plus the node-exporter / redis-exporter / vector destinies into a
+Debian-12 container — and only then exercised its day-2 scenario against that live
+instance. That service left the engine and the six tests went with it, taking the gate
+from nine tests to three. Nothing in the tree replaces them: the remaining corpus
+services are render-only (L0), so no live test now proves that a `create` reaches a
+running service, let alone that a day-2 scenario operates one. The successor is the
+out-of-tree service repo's own live suite, which does not exist yet.
 
-This is what the examples corpus is FOR: e2e runs against `examples/service/*`, so a
-green gate is the guarantee that the documented example still works. That guarantee has
-one hard prerequisite - **the examples must install from PUBLIC sources only**. Point one
-at an internal mirror and the gate stops being runnable, the red goes unnoticed, and the
-example rots invisibly (which is exactly what happened between `22130c2b` and NIM-208:
-`examples/service/redis` pointed at an internal Nexus placeholder and nobody could run
-it). `examples/service/redis` therefore installs from the official Redis apt repository
-by default; a fleet on an internal mirror forks the service repo and edits
-`vars/00-base.yaml`.
+This used to be what the examples corpus was FOR: e2e ran against `examples/service/*`,
+so a green gate guaranteed the documented example still worked. That guarantee had one
+hard prerequisite — **an example must install from PUBLIC sources only**. Point one at
+an internal mirror and the gate stops being runnable, the red goes unnoticed, and the
+example rots invisibly (exactly what happened between `22130c2b` and NIM-208, when the
+redis service pointed at an internal Nexus placeholder and nobody could run it). The
+rule still binds every example that a live test drives; what changed is that no live
+test drives a service any more, so nothing enforces it.
 
-`TestL3bRedisLive_CreateStandalone` remains skipped for an unrelated reason: it targets
-the `standalone` redis_type removed in 2026-06-25, not any coverage gap.
 
 ## Documents by level
 

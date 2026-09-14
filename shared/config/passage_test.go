@@ -1083,27 +1083,14 @@ tasks:
 	}
 }
 
-// TestWithinBlock_AcceptanceRestart (guard #6) — ★ ACCEPTANCE: the real
-// examples/service/redis/scenario/restart/main.yml (probe redis_role top-level, block
-// with where on an external register) is VALID → ok==false. Plus a regression loop
-// over ALL committed example scenarios: none must be caught by the detector (else a
-// valid example would silently stop running).
-func TestWithinBlock_AcceptanceRestart(t *testing.T) {
-	restartPath := filepath.FromSlash("../../examples/service/redis/scenario/restart/main.yml")
-	m, _, diags, err := LoadScenarioManifest(restartPath, ValidateOptions{})
-	if err != nil {
-		t.Fatalf("LoadScenarioManifest(restart): %v", err)
-	}
-	for _, d := range diags {
-		if d.Level == diag.LevelError {
-			t.Fatalf("restart diagnostic (%s): %s", d.Code, d.Message)
-		}
-	}
-	if info, bad := WithinBlockRegisterDependency(m.Tasks); bad {
-		t.Fatalf("ACCEPTANCE BROKEN: restart/main.yml reported as within-block peer (%+v) - the external probe redis_role is valid", info)
-	}
-
-	// Acceptance regression: no committed example scenario is caught by the detector.
+// TestWithinBlock_AcceptanceCorpus (guard #6) — ★ ACCEPTANCE regression over ALL
+// committed example scenarios: none must be caught by the detector, else a valid
+// example would silently stop running. The named subject used to be
+// examples/service/redis/scenario/restart/main.yml — a probe register read from a
+// block's `where:` — and that shape left the tree with the service (NIM-871); the
+// sweep is what survives it, so a replacement carrying the shape is picked up here
+// by being committed, not by being named.
+func TestWithinBlock_AcceptanceCorpus(t *testing.T) {
 	all, gerr := filepath.Glob(filepath.FromSlash("../../examples/service/*/scenario/*/main.yml"))
 	if gerr != nil {
 		t.Fatalf("glob examples: %v", gerr)
