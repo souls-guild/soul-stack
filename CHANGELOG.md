@@ -35,6 +35,43 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **The live gate has a SERVICE as its subject again, and it is not in this tree**
+  (NIM-876). `make e2e-live-gate` — the blocking pre-tag step
+  ([RELEASING.md](RELEASING.md) step e) — goes from three tests to five, and the two added
+  are the ones that make a claim the other three cannot:
+  `TestL3bRedisServiceLive_CreateFromSouls` (a published service rolled onto a roster ends
+  in a live Redis answering to a credential it minted for itself into Vault at a
+  keeper-derived path) and `TestL3bRedisServiceLive_Day2AddUser` (a day-2 scenario reads
+  that state back, upserts one ACL user, re-renders `users.acl` whole and reaches the live
+  ACL — while the credential an existing client already holds keeps working). NIM-871 had
+  left the gate proving a module is **delivered**, which is a different sentence from a
+  service being **operated**, and the count going from nine to three is what hid the
+  difference.
+  **The subject is fetched, not bundled** — bundling one is what made the engine's gate
+  depend on a service's lifecycle in the first place. It is
+  `github.com/soul-stack-services/redis` at a full 40-hex commit pinned in
+  `tests/e2e-live/harness/servicecatalog.go`, fetched once by `make e2e-live-services` into
+  a cache outside the repo and outside `$TMPDIR`, and extracted to `tree/<alias>/<commit>`
+  — **the commit is in the path**, so an extracted tree cannot hold anything but the commit
+  it is named after. Both halves are load-bearing: without the pin the gate proves whatever
+  happened to be in some directory, and without the cache its verdict is again a question
+  about github.com being up (the dependency NIM-542 spent a ticket removing from this same
+  gate). `SOUL_STACK_E2E_SERVICE_OFFLINE=1` is how "needs nothing from the network" is
+  demonstrated rather than asserted. Two overrides exist and are deliberately NOT
+  interchangeable: `SOUL_STACK_E2E_SERVICE_REMOTE_<ALIAS>` moves where the pinned commit is
+  fetched from (the pin still holds, so the gate may run under it), while
+  `SOUL_STACK_E2E_SERVICE_DIR_<ALIAS>` replaces the subject with a working tree — and the
+  gate **refuses to start** under that one, because its verdict would be about a directory
+  nobody can name.
+  **What a green run still does not prove**, recorded where a reader meets it (the gate
+  target, RELEASING step (e), both e2e READMEs, docs/testing) rather than folded into the
+  entry above: the published service's own `create` raises MACHINES — libvirt VMs, an SSH
+  host CA, cloud-init, an agent installed over `core.ssh.run` — and a docker tier whose
+  souls are already onboarded cannot host that, so the gate drives `create_from_souls`, the
+  same rollout onto an existing roster. Four of the six day-2 claims NIM-871 removed
+  (`update_config`, `restart`, `destroy`, `rotate_tls`) are scenarios the published service
+  does not have yet.
+
 - **`soul-mod-mongo` serves eight objects instead of three** — `replicaset`, `role`,
   `collection`, `index` and `database` beside `command` / `instance` / `user`, which are
   unchanged ([docs/module/mongo/README.md](docs/module/mongo/README.md), NIM-805). The
@@ -489,6 +526,30 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Removed
 
+- **The e2e-live artifact mirror, and with it the unverified pin table NIM-871 left
+  behind** (NIM-876). NIM-542 built it for a measured reason: six gate tests ran a live
+  create, each create pulled `node_exporter`, `redis_exporter` and `vector` from
+  github.com — ~18 downloads per run — and NIM-406 measured three runs on an unchanged
+  slice giving three different answers. NIM-871 then cut the service those six tests
+  created, and the six guards that held `artifactCatalog()` against that service's own
+  declarations went with their subject, leaving a digest table that was a claim about a
+  service existing nowhere.
+  Making that copy TRUE is what decided its fate: it is a claim about what the subjects
+  fetch, and **no live subject fetches anything** — the in-tree fixtures download nothing
+  and the pinned out-of-tree service installs from an apt repository, which is a different
+  mechanism. A pin table with no consumer cannot be held to a subject; it can only be
+  removed, or left to be revived by someone pointing a new service at digests nothing ever
+  checked. So `harness/artifactcatalog.go`, `harness/artifactmirror.go`, their tests,
+  `cmd/artifact-cache`, `make e2e-live-artifacts`, `Config.UpstreamArtifacts` and the
+  per-container mirror-CA install are gone (~900 lines).
+  **The absence is enforced, not assumed:** `harness/upstreamfetch.go` keeps the scanner
+  and a docker-free guard that fails the moment any live subject — in-tree fixture or
+  pinned service — declares `default(vars.<prefix>_base_url, 'http…')` again, naming both
+  ways out (point the subject at a mirror it controls, or restore the harness's own from
+  the commit that removed it). The alternative to dead machinery is not "no machinery", it
+  is "an outbound dependency nobody notices". The tier remains non-hermetic for apt
+  (`deb.debian.org`, `packages.redis.io`), as it always has been.
+
 - **`examples/service/redis` is gone, and it took real coverage with it** (NIM-871).
   A service is its own repository; the engine bundling one made the engine's own gate
   depend on a service's lifecycle. The tree, its twelve scenarios, its fifteen-rung
@@ -512,9 +573,10 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   acceptance, the soul-lint golden, the directive-catalog guards, the trial secret-mint
   set — went the same way. The six guards that kept the e2e-live harness's
   `artifactCatalog()` honest against the service's own pins also had no subject left,
-  so that catalog is now an **unverified copy** (flagged in place). The successor to
-  all of it is the out-of-tree service repository's own live suite, which does not
-  exist yet; until it does, a day-2 regression reaches a tag unchallenged.
+  so that catalog was left an **unverified copy** — NIM-876 removed it and the mirror
+  around it (see above). The successor to the coverage is the out-of-tree service
+  repository, driven at a pinned commit; NIM-876 brought back two of the six claims, and
+  four (`update_config`, `restart`, `destroy`, `rotate_tls`) are still uncovered.
   Incidentally moot: **NIM-738**, which tracked a wrong description comment in
   `migrations/015_system_acl_users` — that file no longer exists.
 
@@ -552,6 +614,15 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
     The engine-compat error text likewise names the registered service.
 
 ### Fixed
+
+- **The blocking pre-tag gate was red on the release tip, and not about the product**
+  (NIM-876). Migration `118_registry_id` renamed `incarnation.name` to `id` ([ADR-0085](docs/adr/0085-entity-id-and-label.md))
+  and deliberately left the five `*_name` FK columns alone, `apply_runs.incarnation_name`
+  among them. The e2e-live harness's `WaitApplySuccess` joined on `i.name`, so every gate
+  test that waits for an apply died with `column i.name does not exist (SQLSTATE 42703)` —
+  two of the three — while the runs they were waiting for **succeeded**. Nothing caught it
+  because nothing runs this tier in CI, and the one harness query that reaches the
+  incarnation row is not compiled against the schema anywhere.
 
 - **`soul-mod-mongo` REFUSES a parameter of the wrong type instead of coercing it**
   (NIM-800, the mongo half of the redis artifact's NIM-778). `tls: "true"` written as a

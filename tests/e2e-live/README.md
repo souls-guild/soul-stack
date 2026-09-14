@@ -82,120 +82,79 @@ E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') \
 
 Without `E2E_KEEPER_HOST` behavior doesn't change (CI default `host.docker.internal`).
 
-## Upstream release artifacts (NIM-542)
+## The subject of the two service tests lives outside this tree (NIM-876)
 
-A service create deploys three upstream binaries — `node_exporter`, `redis_exporter`
-and `vector` — each from a pinned GitHub release tarball. Six of the then-nine
-`make e2e-live-gate` tests ran such a create, so the blocking pre-tag gate used to
-pull ~18 tarballs from **public github.com**, from inside the soul container, on every
-run. The gate's acceptance is "three runs on an unchanged slice give the same result";
-github.com is not in the slice.
+A service is its own repository (NIM-871), so the tier's real subject — a `state_schema`
+with declared secrets, a vars ladder, a destiny brick, a plugin — is not in here. It is
+fetched:
 
-> ★ Those six tests ran `examples/service/redis`, which NIM-871 cut out of the engine,
-> so **no gate test drives this mirror today**. The machinery below stays wired and
-> primed — every `NewStack` still fills the cache — because the out-of-tree service
-> repo that inherits the create will need it. What did NOT survive is the set of guards
-> that kept `artifactCatalog()` honest against the service's own pins; see the header of
-> `harness/artifactcatalog.go`.
+- **pinned** — `github.com/soul-stack-services/redis` at a full 40-hex commit named in
+  [`harness/servicecatalog.go`](harness/servicecatalog.go). Not a tag: a tag moves, and
+  "the gate runs v1.2.0" then stops being a fact.
+- **cached** — outside the repo and outside `$TMPDIR`
+  (`$SOUL_STACK_E2E_SERVICE_CACHE`, else `$XDG_CACHE_HOME/soul-stack/e2e-live/services`),
+  so it survives `git clean` and a reboot. The clone lives under `repo/`, and each pin is
+  extracted to `tree/<alias>/<commit>` — **the commit is in the path**, so an extracted
+  tree cannot hold anything but the commit it is named after, and a pin bump adds a
+  directory rather than rewriting one.
 
-The harness serves those tarballs itself:
-
-1. `ensureArtifactCache` fills a cache **outside the repo and outside `$TMPDIR`** —
-   `$SOUL_STACK_E2E_ARTIFACT_CACHE`, else `$XDG_CACHE_HOME/soul-stack/e2e-live/artifacts`.
-   It must survive `git clean` and a reboot, or "hermetic" would only mean "downloads
-   once per run". Entries are digest-verified on the way in, and a wrong-digest file is
-   deleted rather than reused. That verification is the harness's own, and it has to be:
-   `vector` and `redis-exporter` pass `checksum: "${ input.sha256 }"` to `core.url` and
-   would reject bad bytes inside the container, but `node-exporter/tasks/install.yml`
-   declares no checksum by design, so a truncated node_exporter tarball would pass the
-   fetch and arrive as a `--- FAIL` somewhere later — unpack, or a service that never
-   comes up — reading as a defect in the code.
-2. `startArtifactMirror` raises a read-only **HTTPS** server over that cache on an
-   **ephemeral port**, advertised at the address the container reaches the host on
-   (`keeperEndpointHost()`). The cache is laid out exactly like upstream —
-   `<prefix>/v<version>/<file>` — so only `base_url` has to change.
-3. `addArtifactMirrorLayer` writes `vars/99-e2e-live-artifact-mirror.yaml` into the
-   **fixture's materialized copy** of the service, setting `<prefix>_base_url` at the
-   mirror and `<prefix>_allow_private: true` (the mirror is on a private address, and
-   the SSRF guard is on by default).
-
-**Why HTTPS and not HTTP.** All three destinies declare `base_url` with
-`pattern: "^https://…"`, because `core.url` refuses plain http without an explicit
-opt-out — transport security is a property of the artifact under test. The first cut of
-this mirror served http and died inside the container on `input $.base_url … does not
-match pattern`; the fix belonged on the fixture's side, not in the destiny. So the
-mirror generates a throwaway CA and leaf per run (`generateArtifactMirrorTLS`, SAN =
-whatever the container will dial — an IP on WSL2, a name on native Linux), and
-`SpawnSoulContainer` drops that root into `/usr/local/share/ca-certificates/` and runs
-`update-ca-certificates` **before the soul is started**. The product's fetch path —
-scheme check, TLS handshake, chain validation — runs exactly as it does against github.
-
-**The layer goes into the copy, never into the service tree.** A shipped example is
-the subject of these tests (NIM-211); bending it to suit the fixture would leave the
-gate green about a service nobody runs. What the fixture does here is exactly the
-override a service's `vars/00-base.yaml` documents for an operator with an internal
-mirror.
-
-The layer is written only for the prefixes the materialized service actually reads,
-scanned out of its own `scenario/` tree (`scenarioArtifactPrefixes`) — a
-`smoke-nginx-live` stand fetches nothing and gets no layer.
+Both halves are load-bearing. Without the pin the gate proves whatever happened to be in
+some directory; without the cache its verdict depends on github.com being up, which is the
+dependency NIM-542 spent a ticket removing from this same gate.
 
 ```sh
-# Prime the cache deliberately (idempotent; also the gate's first step)
-make e2e-live-artifacts
+# Prime deliberately (idempotent; also a named step of the gate)
+make e2e-live-services
 
-# Then the gate needs no outbound access for these artifacts at all
-SOUL_STACK_E2E_ARTIFACT_OFFLINE=1 make e2e-live-gate
+# Then prove the subject needs nothing from the network
+SOUL_STACK_E2E_SERVICE_OFFLINE=1 make e2e-live-gate
 ```
 
-`SOUL_STACK_E2E_ARTIFACT_OFFLINE=1` turns a cache miss into a loud error instead of a
-silent fetch. That is the switch the "no outbound access" property is *checked* with —
-not a mode to run in normally.
+### Two overrides, and they are not interchangeable
 
-### How this stays honest
+| variable | what changes | may the gate run under it |
+|---|---|---|
+| `SOUL_STACK_E2E_SERVICE_REMOTE_<ALIAS>` | where the pinned commit is fetched FROM — a local clone, an internal mirror | **yes**: the commit is still verified after the fetch, so the bytes are the same |
+| `SOUL_STACK_E2E_SERVICE_DIR_<ALIAS>` | the subject itself — a working tree instead of the pin | **no**: `make e2e-live-gate` refuses to start, because the verdict would be about a directory nobody can name |
 
-An override three YAML layers away from where it is read is a claim, and claims like
-that hold until they don't: rename the file, add a `vars/_stack.yaml` to the example,
-rename a var, and the layer contributes nothing at all — the create still passes, from
-github, and the gate is quietly back on the public internet with a green result.
+The second one is for developing a service change and an engine change together; the
+harness logs loudly when it is in force, so a transcript always says which subject it was
+about. A hand-run `go test -tags=e2e_live` honours it.
 
-So the mirror **counts what it served**, and `Stack.Cleanup` fails the test if a
-successful run never asked it for an artifact it had redirected. Alongside it there used
-to be docker-free guards in `harness/artifactcatalog_test.go` that failed twenty minutes
-earlier if the service grew a fourth external fetch, bumped a version or digest the
-catalog does not carry, gained a vars layer that out-sorted `99-*`, or declared a
-`_stack.yaml`. ★ **Those six guards re-read `examples/service/redis` and left with it
-(NIM-871)** — none of that is checked today.
+### Bumping a pin is a decision
 
-One guard of that family survives, because its subject is a destiny rather than the
-deleted service: `TestArtifactMirrorURLIsOneTheDestinyWillAccept` generates the overlay
-this fixture would write and matches it against the `pattern:` the destiny declares — both read at
-run time, neither hardcoded. That is the guard the http/https mistake above walked
-straight into, and it now costs a second instead of a live run.
+The new commit is what the blocking pre-tag gate will prove. There is no CI on the service
+repository and nothing else looks at it, so the procedure is the whole of it: run
+`make e2e-live-gate` against the candidate commit, then change the pin.
 
-### The real github path is no longer covered
+## Release tarballs: the mirror is gone, the tripwire is not (NIM-542 → NIM-876)
 
-Hermetizing the gate moved a real dependency out of it, and a dependency nobody
-exercises rots. `TestL3bRedisLiveUpstream_ArtifactsFromGitHub` was the answer: the same
-create with `harness.Config{UpstreamArtifacts: true}` — tarballs straight from GitHub
-Releases, the way an operator's first run gets them — deliberately **outside**
-`E2E_GATE_TESTS`, as the one test in the tier allowed to fail for a reason outside the
-repository.
+A service create used to fetch `node_exporter`, `redis_exporter` and `vector` from pinned
+GitHub releases — six of the then-nine gate tests ran such a create, ~18 downloads per run
+from inside the container. NIM-406 measured the cost: three runs on a slice that had not
+changed by a byte gave three different answers. So the harness grew a local mirror (a
+digest-verified cache, an https server over it, and a `vars/99-…yaml` layer written into
+the fixture's copy of the service), and `artifactCatalog()` held the three pins.
 
-It ran `examples/service/redis` and left with it (NIM-871). The harness half survives
-and is still worth reusing: `harness.RequireUpstreamArtifacts` probes the real URLs
-*before* the stand and skips naming the host — nothing of this repository has run yet,
-so the failure cannot be about this repository — and
-`harness.ReportUpstreamIfItWentAway` re-probes *after* a failure to print either "read
-the failure above as environment" or, the more valuable half, "upstream is still
-reachable, so this is a finding". Nothing calls either today.
+NIM-871 then cut the service those six tests created, taking with it the guards that held
+that catalog against the service's own declarations — leaving an unverified copy of a
+service that existed nowhere. NIM-876 removed the mechanism, because the way to make that
+copy *true* is to ask what the subjects declare, and no live subject declares such a fetch:
+the in-tree fixtures download nothing, and the pinned service installs Redis from an apt
+repository, which is a different mechanism.
+
+What stays is [`harness/upstreamfetch.go`](harness/upstreamfetch.go): the scanner, plus a
+docker-free guard that fails the moment any live subject — in-tree fixture or pinned
+service — declares `default(vars.<prefix>_base_url, 'http…')` again. The alternative to
+dead machinery is not "no machinery", it is "an outbound dependency nobody notices". If a
+subject legitimately needs one, the mirror is in git whole, at the commit that removed it.
 
 ### What is still not hermetic
 
-`core.pkg.installed` still reaches `deb.debian.org` and `packages.redis.io` (redis-tools,
-redis-server, redis-sentinel, plus smartmontools/nvme-cli/ipmitool for node_exporter's
-default collectors). NIM-542 scoped and fixed the github.com tarballs; **apt is untouched**,
-so "three runs on an unchanged slice agree" is closer but not yet reachable offline.
+`core.pkg.installed` reaches `deb.debian.org` and `packages.redis.io`: the nginx smoke
+installs from Debian's own mirror, the redis service from the apt repository its vars name.
+This tier has never been offline-clean, and the guard above is about one class only — the
+class that was measured making this gate's verdict random.
 
 ## Frequency
 
@@ -209,12 +168,12 @@ so "three runs on an unchanged slice agree" is closer but not yet reachable offl
 tests/e2e-live/
 ├── README.md
 ├── go.mod                          # separate go module (deps don't leak)
-├── cmd/artifact-cache/             # `make e2e-live-artifacts` — primes the tarball cache
+├── cmd/service-cache/              # `make e2e-live-services` — primes the pinned-service cache
 ├── dockerfiles/
 │   └── debian-12.Dockerfile        # privileged systemd-PID-1 base image
 ├── harness/                        # copy of L3a harness + L3b-specific helpers
-│   ├── artifactcatalog.go          # the pinned upstream tarballs + the vars overlay (NIM-542)
-│   ├── artifactmirror.go           # local cache + HTTP mirror + upstream probe (NIM-542)
+│   ├── servicecatalog.go           # the pinned out-of-tree subjects + their cache (NIM-876)
+│   ├── upstreamfetch.go            # "no live subject fetches release tarballs" (NIM-542 → NIM-876)
 │   ├── stack.go                    # NewStack — PG/Redis/Vault/keeper
 │   ├── bootstrap.go                # IssueBootstrapToken
 │   ├── container.go                # SoulContainer + SpawnSoulContainer (privileged Debian-12)
@@ -223,7 +182,7 @@ tests/e2e-live/
 │   ├── coven.go                    # AddMember (roster via incarnation_membership)
 │   ├── seed.go                     # direct-SQL seeds + CreateIncarnationOnRoster (bootstrap order)
 │   ├── operator.go                 # Operator API HTTP client
-│   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV
+│   ├── vault.go                    # InitVaultTestSecrets / IssueKeeperServerCert / Seed+ReadVaultKV
 │   ├── config_builder.go           # buildKeeperYAML
 │   ├── probe.go                    # waitForReady
 │   ├── git.go                      # SetupGitRepo
@@ -234,6 +193,7 @@ tests/e2e-live/
 ├── smoke_nginx_live_test.go        # TestL3bSmokeNginxLive_InstallAndStart
 ├── module_delivery_live_test.go    # TestL3bModuleDeliveryLive_SynthesisFetchHotRegister
 ├── plugin_channel_test.go          # TestL3bPluginChannel_CatalogAndAllow
+├── redis_service_live_test.go      # TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}
 ├── staged_probe_live_test.go       # TestL3bStagedProbeLive_WhereTargetsOnlyMaster
 └── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
@@ -291,23 +251,27 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | `TestL3bSmokeNginxLive_InstallAndStart` | 1 | Real `apt install nginx` + `systemctl start nginx` + `core.file.rendered` site config. Uses `harness.LoadExpectations` + `Stack.AssertExpectations`. |
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where on a live soul** (ADR-056): a real probe step emits a per-host register, and the Passage action `where: register.*=='master'` is genuinely applied ONLY on the master host. L3b analog of `TestE2EStagedFailover_2Passage`, but via a real apply instead of a stub. |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Real `soul_beacon` plugin (gRPC-over-stdio): inotify portent → Vigil → Decree → Oracle → fired scenario on a live soul. |
+| `TestL3bRedisServiceLive_CreateFromSouls` | 1 | **A service is brought to a working state** (NIM-876): the pinned out-of-tree redis service, rolled onto the roster through `POST /v1/incarnations` with `source: { roster: true }`, ending in a live Redis that answers to the credential it minted for itself into Vault at a keeper-derived path. |
+| `TestL3bRedisServiceLive_Day2AddUser` | 1 | **A service is operated** (NIM-876): a day-2 scenario reads the state the create wrote, upserts one ACL user, re-renders `users.acl` whole and reaches the live ACL — while the credential an existing client already holds keeps working. |
 
 ## Known coverage blockers (NOT-L3b-able)
 
-### ★ No live test drives a service day-2 any more (NIM-871)
+### ★ The machine half of a create is not covered here (NIM-876)
 
-This tier used to carry a service create and six day-2 operations against it —
-`TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,UpdateUsers,Destroy,RotateTls}`,
-all in `E2E_GATE_TESTS`, all running `examples/service/redis`. That service left the
-engine, and nothing in the tree replaces it: the remaining corpus services are
-render-only (L0), and the three tests left in the gate prove a module is **delivered**,
-not that a service is **operated**.
+NIM-871 took this tier's service create and its six day-2 operations
+(`TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,UpdateUsers,Destroy,RotateTls}`) out
+with `examples/service/redis`. Two of those claims are back as
+`TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}`, driving the pinned out-of-tree
+service; four are not, because `update_config`, `restart`, `destroy` and `rotate_tls` are
+scenarios the published service does not have yet.
 
-So the whole class is uncovered here: create against real hosts, an operational
-scenario through the ADR-065 plugin channel, a state migration on a live incarnation,
-CA rollover. The successor is the out-of-tree service repo's own live suite. Until it
-exists, a day-2 regression reaches a tag unchallenged — this is a hole, not a
-simplification, and it is the first thing to check when that repo grows a CI.
+What remains structurally out of reach here is the **bootstrap path**: the published
+service's own `create` raises libvirt VMs through a keeper-side provider, hands them an SSH
+host certificate through cloud-init, installs the agent over `core.ssh.run` and redeems a
+bootstrap token. A docker tier whose souls are already onboarded cannot host any of that,
+so the gate drives `create_from_souls` — the same rollout onto a roster that already
+exists. The machine half is proven by a hand-run workstation stand (the service
+repository's README records what it costs) and by nothing automated.
 
 ### Layer-1 finding: the form invariant "secret = vault:-ref only" is unenforceable
 

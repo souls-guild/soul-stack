@@ -60,27 +60,22 @@ import (
 // ed25519 signing key into Vault) - without a Signer the allow flow doesn't come up.
 type Config struct {
 	ExamplePath string
+
+	// ServiceRepo — the alias of an out-of-tree service in serviceCatalog(), run at the
+	// commit pinned there (NIM-876). Mutually exclusive with ExamplePath.
+	//
+	// The two name different KINDS of subject, not two paths to one. ExamplePath is a
+	// fixture inside this repository, sized to one mechanic: does `when:` gate, does the
+	// barrier hold. ServiceRepo is a published service — a state_schema, declared secrets,
+	// a destiny brick, a plugin — which is the only kind of subject that can show a
+	// service being brought to a working state and then operated. The gate lost that
+	// second kind when NIM-871 cut the bundled example, and this field is how it comes
+	// back without the engine carrying a service again.
+	ServiceRepo string
+
 	ServiceName string
 	Souls       int
 	SoulModules []SoulModuleEntry
-
-	// UpstreamArtifacts — fetch the release tarballs from the public internet
-	// instead of from the harness's local mirror (NIM-542).
-	//
-	// Off by default, and that default is the ticket: six of the then-nine gate
-	// tests ran a service create, and each create pulled three tarballs from
-	// github.com — ~18 downloads whose outcome decided a blocking release gate.
-	// With this off, NewStack serves them from a local cache and the run needs
-	// nothing from the public internet. Those six left with the service NIM-871
-	// cut; the cache stays primed for the suite that inherits the create.
-	//
-	// ★ NOTHING SETS THIS TODAY. One test turned it ON — the non-gate
-	// TestL3bRedisLiveUpstream_*, which existed so the real github path stayed
-	// covered somewhere, deliberately outside E2E_GATE_TESTS because a test whose
-	// verdict depends on a network outside the slice must not block a release. It
-	// ran the service NIM-871 cut. The field and its read site are kept for the
-	// suite that inherits the create; until then the upstream path is uncovered.
-	UpstreamArtifacts bool
 }
 
 // SoulModuleEntry - one entry of the `plugins.soul_modules[]` catalog
@@ -136,24 +131,6 @@ type Stack struct {
 	// dockerNetwork - user-defined bridge for soul containers. nil on L3a-style
 	// runs (cfg.Souls=0); created on the first SpawnSoulContainer call.
 	dockerNetwork *testcontainers.DockerNetwork
-
-	// mirror — the local stand-in for github.com's release downloads, started in
-	// NewStack unless cfg.UpstreamArtifacts (NIM-542). nil means the run fetches
-	// from upstream, which is the non-gate real-path test and nothing else.
-	mirror *artifactMirror
-
-	// mirroredArtifacts — the catalog entries the materialized service actually
-	// reads, filled in by materializeServiceRepo from the service's own scenario
-	// tree. Empty for a service that fetches nothing (smoke-nginx-live), which is
-	// what keeps the assertion below from accusing it of skipping a mirror it had
-	// no reason to touch.
-	mirroredArtifacts []upstreamArtifact
-
-	// sawSuccessfulApply — did any run reach success? Set by WaitApplySuccess.
-	// The mirror assertion is worthless before the first apply and misleading
-	// after a failed one: a test that died on bring-up would collect a second
-	// complaint about a mirror that was never going to be asked.
-	sawSuccessfulApply bool
 
 	// Internal state.
 	vaultToken string
@@ -252,33 +229,6 @@ func NewStack(t *testing.T, cfg Config) *Stack {
 	// in the next run's slice, which is the exact failure this ticket exists to
 	// remove.
 	t.Cleanup(s.runCleanups)
-
-	// The local mirror for the release tarballs a create would otherwise pull
-	// from github.com (NIM-542). Before the containers on purpose: priming a cold
-	// cache is the one step here that can take minutes, and paying it after three
-	// containers are up only makes them wait.
-	//
-	// Infrastructure, and declared as such — a machine that cannot reach its own
-	// cache directory, or cannot prime it on the very first run, has said
-	// something about itself and nothing about this repo's code.
-	if !cfg.UpstreamArtifacts {
-		cacheDir, err := artifactCacheDir()
-		if err != nil {
-			t.Fatalf("NewStack: artifact cache: %v", err)
-		}
-		if err := ensureArtifactCache(cacheDir, artifactCatalog()); err != nil {
-			t.Fatalf("NewStack: %v", err)
-		}
-		// Advertised at the address the SOUL CONTAINER dials, not at the
-		// harness's own view of the socket: the fetch happens inside the
-		// container, where 127.0.0.1 is the container itself.
-		mirror, err := startArtifactMirror(cacheDir, keeperEndpointHost())
-		if err != nil {
-			t.Fatalf("NewStack: %v", err)
-		}
-		s.mirror = mirror
-		s.cleanups = append(s.cleanups, mirror.close)
-	}
 
 	// Derived from the per-container budget, not chosen next to it: this ctx is
 	// what actually caps the waits below, and an outer bound smaller than the sum
@@ -398,36 +348,7 @@ func (s *Stack) Cleanup() {
 	if s == nil {
 		return
 	}
-	s.assertArtifactsCameFromTheMirror()
 	s.runCleanups()
-}
-
-// assertArtifactsCameFromTheMirror — the run fetched its tarballs from HERE.
-//
-// The one assertion that can tell hermetic from lucky. Everything else about the
-// override is a claim made three layers from where it is read: the fixture writes
-// vars/99-*.yaml into a copy of the service, keeper merges it, the scenario reads
-// it, the destiny builds a URL from it. Every link in that chain can quietly stop
-// carrying the value — the layer out-sorted by a new sibling, silenced by a
-// `vars/_stack.yaml`, or reading a var the scenario renamed — and in every case
-// the create still SUCCEEDS, from github.com, and the gate is back to being
-// decided by a network outside its slice with a green run to show for it.
-//
-// Guarded by sawSuccessfulApply so it stays quiet when there was nothing to
-// fetch: a test that died during bring-up must not collect a second complaint
-// about a mirror it never reached the point of using. Guarded by t.Failed() for
-// the same reason one step later — an earlier apply can succeed and a later one
-// fail, and then this fires on a red test with the word "succeeded" in it,
-// pointing at the vars layer while the real failure sits above. A test that has
-// already failed has its finding; a second, wrongly-worded one only competes
-// with it.
-func (s *Stack) assertArtifactsCameFromTheMirror() {
-	if s.mirror == nil || len(s.mirroredArtifacts) == 0 || !s.sawSuccessfulApply || s.t.Failed() {
-		return
-	}
-	if msg := missingArtifacts(s.mirror, s.mirroredArtifacts); msg != "" {
-		s.t.Errorf("the run succeeded without using the local artifact mirror: %s", msg)
-	}
 }
 
 func (s *Stack) runCleanups() {
@@ -911,10 +832,17 @@ func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName s
 // Terminal != success - an immediate t.Fatal with a dump of the status matrix.
 func (s *Stack) WaitApplySuccess(t *testing.T, applyID string, timeoutSec int) {
 	t.Helper()
+	// The join is asymmetric on purpose and migration 118 is why: it renamed
+	// `incarnation.name` to `id` (ADR-0085) and deliberately left the five FK
+	// columns spelled `incarnation_name`, `apply_runs`' among them. Written as
+	// `i.name` this query raised 42703 on every call, which made the two gate tests
+	// that wait for an apply fail with a SQL error while the runs they were waiting
+	// for succeeded — a blocking pre-tag gate red for a reason that was not about
+	// the product, and red since 118 landed, because nothing runs this tier in CI.
 	const q = `
 SELECT ar.sid, ar.status, i.applying_apply_id
 FROM apply_runs ar
-LEFT JOIN incarnation i ON i.name = ar.incarnation_name
+LEFT JOIN incarnation i ON i.id = ar.incarnation_name
 WHERE ar.apply_id = $1`
 	deadline := time.Now().Add(time.Duration(timeoutSec) * time.Second)
 	var lastSnap []ApplyRunRow
@@ -945,10 +873,6 @@ WHERE ar.apply_id = $1`
 			t.Fatalf("WaitApplySuccess %s: sid=%s reached terminal %q (rows=%v)", applyID, failSID, failStatus, snap)
 		}
 		if done {
-			// A run got all the way through, so whatever it needed to download,
-			// it downloaded. Cleanup checks it came from the local mirror
-			// (NIM-542) — before this point there is nothing to check.
-			s.sawSuccessfulApply = true
 			return
 		}
 		time.Sleep(300 * time.Millisecond)

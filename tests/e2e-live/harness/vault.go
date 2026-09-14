@@ -12,6 +12,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"sort"
 	"strings"
 	"testing"
 	"time"
@@ -235,6 +236,72 @@ func SeedVaultKV(t *testing.T, stack *Stack, rel string, fields map[string]any) 
 	}
 }
 
+// ReadVaultKV reads one field of the KV v2 secret at logical path `secret/<rel>`,
+// with the same `rel` spelling SeedVaultKV takes.
+//
+// It exists for the credentials a service MINTS rather than receives (NIM-876): a
+// `core.state.present`/`set` write over a `type: secret` field puts a crypto-random value
+// at a path keeper derives from (service, incarnation, state field, key) — nobody passes it
+// in, so the only way to hold the live instance to it is to read it back out.
+//
+// That read is the assertion worth making. Pre-seeding the derived path would also let a
+// test authenticate, and it would prove nothing: the value would be the test's own, and a
+// service that minted nothing at all would pass. Reading proves the mint happened, at the
+// derived path, with the value the instance actually accepts.
+func ReadVaultKV(t *testing.T, stack *Stack, rel, field string) string {
+	t.Helper()
+	if stack == nil || stack.VaultAddr == "" || stack.vaultToken == "" {
+		t.Fatal("ReadVaultKV: stack.VaultAddr / vaultToken empty (NewStack not called?)")
+	}
+	vc := newVaultClient(stack.VaultAddr, stack.vaultToken)
+	ctx, cancel := context.WithTimeout(context.Background(), vaultHTTPTimeout)
+	defer cancel()
+	out, err := vc.read(ctx, "secret/data/"+rel)
+	if err != nil {
+		t.Fatalf("ReadVaultKV(%q): %v", rel, err)
+	}
+	// KV v2 nests the payload one level down (`data.data`), and the outer `data` is
+	// unwrapped by the client. A missing inner level is a real answer — the path exists
+	// with no payload — and must not read as a missing field.
+	inner, ok := out["data"].(map[string]any)
+	if !ok {
+		t.Fatalf("ReadVaultKV(%q): no KV v2 `data` payload at that path (keys: %v)", rel, mapKeys(out))
+	}
+	v, ok := inner[field].(string)
+	if !ok || v == "" {
+		t.Fatalf("ReadVaultKV(%q): field %q is absent or not a non-empty string (fields: %v)",
+			rel, field, mapKeys(inner))
+	}
+	return v
+}
+
+// read does a GET of `<addr>/v1/<path>` and returns the decoded `data` field.
+func (vc *vaultClient) read(ctx context.Context, path string) (map[string]any, error) {
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, vc.addr+"/v1/"+path, nil)
+	if err != nil {
+		return nil, fmt.Errorf("vault read %s: build request: %w", path, err)
+	}
+	req.Header.Set(vaultTokenHeader, vc.token)
+
+	resp, err := vc.http.Do(req)
+	if err != nil {
+		return nil, fmt.Errorf("vault read %s: http: %w", path, err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode >= 400 {
+		b, _ := io.ReadAll(resp.Body)
+		return nil, fmt.Errorf("vault read %s: status %d: %s", path, resp.StatusCode, string(b))
+	}
+	var out map[string]any
+	if err := json.NewDecoder(resp.Body).Decode(&out); err != nil {
+		return nil, fmt.Errorf("vault read %s: decode response: %w", path, err)
+	}
+	if data, ok := out["data"].(map[string]any); ok {
+		return data, nil
+	}
+	return out, nil
+}
+
 // generateHS256Key returns 32 random bytes as a base64-encoded string.
 // Symmetric with `openssl rand -base64 32` in `dev/provision.sh:90`.
 func generateHS256Key(t *testing.T) string {
@@ -304,10 +371,13 @@ func stringField(t *testing.T, data map[string]any, field string) []byte {
 	return []byte(s)
 }
 
+// mapKeys — the keys, sorted. Sorted because these end up in failure messages, and a
+// message whose key order changes run to run is one nobody can diff against a previous run.
 func mapKeys(m map[string]any) []string {
 	out := make([]string, 0, len(m))
 	for k := range m {
 		out = append(out, k)
 	}
+	sort.Strings(out)
 	return out
 }

@@ -129,7 +129,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-artifacts e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -582,12 +582,10 @@ build-linux: bin-keeper bin-soul
 # depended on both; it did so for its own reasons and the reasoning never
 # reached here.
 #
-# e2e-live-artifacts for the same reason the gate does it: the tarball cache
-# is filled once, up front and named, instead of at the first `create` twenty
-# minutes in. The justification used to add "the nightly run needs the network
-# anyway", naming TestL3bRedisLiveUpstream_* — which left with the service NIM-871
-# cut, so priming is now pure insurance for the suite that inherits the create.
-e2e-live: build build-linux e2e-live-artifacts
+# e2e-live-services for the same reason the gate does it: the tier's real subject is an
+# out-of-tree service repository, and fetching it is named and paid for up front instead of
+# discovered inside a test that has already brought up five containers (NIM-876).
+e2e-live: build build-linux e2e-live-services
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -600,27 +598,53 @@ e2e-live: build build-linux e2e-live-artifacts
 	fi
 
 # e2e-live-gate - the MANDATORY local live gate before a batch-commit of a large
-# feature (docker). L3b subset: SoulModule delivery mechanics
-# (TestL3bModuleDeliveryLive - ADR-065 install-synthesis -> FetchModule -> Sigil-verify
-# -> hot-register -> live apply against redis) + nginx apply smoke (TestL3bSmokeNginxLive)
-# + plugin-channel smoke (TestL3bPluginChannel).
-# The full `make e2e-live` remains nightly/pre-release.
+# feature (docker). The full `make e2e-live` remains nightly/pre-release.
 #
-# ★ NIM-871 SHRANK THIS GATE FROM NINE TESTS TO THREE, and that is a coverage hole,
-# not a cleanup. The six it lost - TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,
-# UpdateUsers,Destroy,RotateTls} - were the only day-2 operations this gate ever ran
-# against a live service: create, then an operational scenario through the ADR-065
-# plugin channel against real redis+sentinel. They ran examples/service/redis, which
-# left the engine with that ticket, and no in-tree service replaces them: the corpus
-# services are render-only (L0) and no other L3b test drives a day-2 scenario end to
-# end. What remains here proves DELIVERY of a module, not OPERATION of a service.
-# The successor is the out-of-tree service repo's own live suite, which does not
-# exist yet - until it does, a day-2 regression reaches a tag unchallenged.
+# FIVE TESTS, AND WHAT EACH ONE IS FOR. The count is not the point - it was the count that
+# hid the loss when NIM-871 took this gate from nine tests to three - so each is named by
+# its claim:
+#
+#   TestL3bModuleDeliveryLive_SynthesisFetchHotRegister
+#       a MODULE is delivered: ADR-065 install-synthesis -> FetchModule -> Sigil-verify ->
+#       hot-register -> a live apply through the plugin channel.
+#   TestL3bPluginChannel_CatalogAndAllow
+#       the plugin catalog and the Sigil allow flow come up at all (keeper-side, no souls).
+#   TestL3bSmokeNginxLive_InstallAndStart
+#       the wire works end to end on one host: keeper render -> ApplyRequest -> real soul
+#       Apply (core.pkg/core.file.rendered/core.service) -> RunResult -> apply_runs.
+#   TestL3bRedisServiceLive_CreateFromSouls                     (NIM-876)
+#       a SERVICE is brought to a working state: a published service repo at a pinned
+#       commit, rolled onto the roster, ending in a Redis that answers with the credential
+#       it minted for itself into Vault at a keeper-derived path.
+#   TestL3bRedisServiceLive_Day2AddUser                          (NIM-876)
+#       a SERVICE is OPERATED: a day-2 scenario reads the state the create wrote, upserts
+#       it, re-renders users.acl whole, and reaches the live ACL - while the credential an
+#       existing client already holds keeps working.
+#
+# ★ THE HOLE NIM-871 OPENED IS CLOSED, and not by putting a service back in the tree. The
+# six tests it removed (TestL3bRedisLive_Day2*) ran `examples/service/redis`; a service is
+# its own repository, so the subject is now fetched - github.com/soul-stack-services/redis
+# at the commit pinned in tests/e2e-live/harness/servicecatalog.go. Two of the six claims
+# come back that way (create, one day-2 operation) and four do not: update_config, restart,
+# destroy and rotate_tls are scenarios the published service does not have yet.
+#
+# ★ WHAT A GREEN RUN STILL DOES NOT PROVE: the published service's own `create` raises
+# MACHINES - libvirt VMs, an SSH host CA, cloud-init, a token redeemed over core.ssh.run -
+# and none of that is reachable from a docker tier whose souls are already onboarded. The
+# gate drives `create_from_souls` instead, the same rollout onto an existing roster. The
+# machine half is covered by a hand-run workstation stand and by nothing automated.
 #
 # Deps DIFFER from e2e-live: also needs the native `build` - the harness runs
 # Keeper ON THE HOST (host-arch keeper/bin/keeper, see locateKeeperBinary), not in a
-# container. The redis plugin is built by the test itself (harness.BuildCommunityRedisPlugin),
+# container. The redis plugin is built by the test itself (harness.BuildRedisPlugin),
 # no need to build it in the Makefile.
+#
+# The run needs egress. The redis service installs from packages.redis.io and the nginx
+# smoke from Debian's own mirror, so this tier has never been hermetic; what IS held out is
+# the one class that was measured making this gate's verdict random - release tarballs
+# fetched through `core.url` (NIM-542, NIM-406: three runs on an unchanged slice, three
+# answers). A guard in tests/e2e-live/harness/upstreamfetch.go fails the docker-free step
+# if any live subject declares such a fetch again.
 #
 # E2E_KEEPER_HOST - the IP the soul container uses to reach Keeper on the host;
 # on WSL2 an explicit LAN IP is needed (localhost isn't visible from the container). If not set
@@ -664,35 +688,38 @@ e2e-live: build build-linux e2e-live-artifacts
 # neighbour's line, and the classifier reported all three as NOT-RUN on every
 # red run. Read the script's header before editing this list.
 E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
-	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow
+	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow \
+	TestL3bRedisServiceLive_CreateFromSouls TestL3bRedisServiceLive_Day2AddUser
 
-# e2e-live-artifacts - fills the local cache of upstream release tarballs that the
-# L3b stand serves to the soul containers (NIM-542).
+# e2e-live-services - fetches the out-of-tree service repositories this tier drives, at the
+# commits tests/e2e-live/harness/servicecatalog.go pins (NIM-876).
 #
-# A live `create` used to fetch node_exporter, redis_exporter and vector from
-# github.com INSIDE the container - about 18 downloads per gate run when six of the
-# nine gate tests ran one. The gate is the blocking pre-tag step
-# (RELEASING.md step e) and its acceptance is "three runs on an unchanged slice
-# agree"; github.com is not in the slice. The harness serves those tarballs from
-# a local mirror over an ephemeral port and points the FIXTURE's service-vars at it
-# (never a corpus service - a shipped example is a subject under test, NIM-211).
+# A service is its own repository (NIM-871), so the subject of the two service tests is not
+# in this tree, and there are exactly two ways to get it - each with a cost the ticket asked
+# to be named rather than absorbed. Cloning per run makes a blocking pre-tag gate depend on
+# github.com being up, which is the dependency NIM-542 spent a ticket removing from this same
+# gate. Reading a checkout on disk makes the gate prove whatever happened to be in that
+# directory - a colleague's half-finished edit, a stale clone, a rebase in flight.
 #
-# Those six creates left with examples/service/redis (NIM-871), so the mirror now
-# has no gate test driving it. It stays wired and primed rather than removed: the
-# out-of-tree service repo's live suite will need it back, and a mirror re-derived
-# later from a changed destiny would silently no longer pin what it pins now.
+# So: a PINNED COMMIT in a cache. The pin is what makes the run reproducible, the cache is
+# what makes it offline after the first fill, and the extracted tree is named after the
+# commit so "which bytes did this run read" stays answerable afterwards.
 #
-# The cache lives outside the repo and outside $TMPDIR ($SOUL_STACK_E2E_ARTIFACT_CACHE,
-# else $XDG_CACHE_HOME/soul-stack/e2e-live/artifacts): it must survive `git clean` and
-# a reboot, or "hermetic" would only mean "downloads once per run".
+# The cache lives outside the repo and outside $TMPDIR ($SOUL_STACK_E2E_SERVICE_CACHE, else
+# $XDG_CACHE_HOME/soul-stack/e2e-live/services): it must survive `git clean` and a reboot, or
+# "offline" would only mean "clones once per run". Priming is idempotent, so this is safe to
+# run at any time; it is also the deliberate way to prepare a machine that is about to go
+# offline, after which SOUL_STACK_E2E_SERVICE_OFFLINE=1 turns a missing pin into a loud error
+# instead of a silent fetch.
 #
-# Priming is idempotent and digest-checked, so this is safe to run at any time; it is
-# also the deliberate way to prepare a machine that is about to go offline. Once the
-# cache is warm, SOUL_STACK_E2E_ARTIFACT_OFFLINE=1 makes a missing entry a loud error
-# instead of a silent fetch - that is the switch acceptance (a) is checked with.
-e2e-live-artifacts:
-	@echo "e2e-live-artifacts: priming the L3b upstream-tarball cache"
-	@(cd tests/e2e-live && go run ./cmd/artifact-cache)
+# Two overrides, and they are NOT interchangeable:
+#   SOUL_STACK_E2E_SERVICE_REMOTE_<ALIAS>  fetch the pinned commit from elsewhere (a local
+#       clone, an internal mirror). The pin still holds, so the verdict is unchanged.
+#   SOUL_STACK_E2E_SERVICE_DIR_<ALIAS>     run a working tree instead of the pin, for
+#       developing a service and the engine together. The gate REFUSES to start under it.
+e2e-live-services:
+	@echo "e2e-live-services: priming the L3b out-of-tree service cache"
+	@(cd tests/e2e-live && go run ./cmd/service-cache)
 
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
@@ -701,8 +728,10 @@ e2e-live-gate: build build-linux
 		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
 	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS) \
 		|| { echo "e2e-live-gate: the gate list does not name real tests - fix it before spending 20 minutes on a run whose verdict would be about the wrong set" >&2; exit 1; }
-	@$(MAKE) --no-print-directory e2e-live-artifacts \
-		|| { echo "e2e-live-gate: the upstream-tarball cache is neither warm nor fillable - the run below would have died on it twenty minutes in, inside a container, as a failed fetch against the product" >&2; exit 1; }
+	@(cd tests/e2e-live && go run ./cmd/service-cache -check-overrides) \
+		|| { echo "e2e-live-gate: refusing to run - see above. This gate's verdict is about pinned commits; under a working-tree override it would be about a directory nobody can name, which is the failure the pin exists to prevent" >&2; exit 1; }
+	@$(MAKE) --no-print-directory e2e-live-services \
+		|| { echo "e2e-live-gate: the out-of-tree service cache is neither warm nor fillable - the two service tests below would have died on it after bringing up five containers, and a cold cache would have been reported as a stand failure" >&2; exit 1; }
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -2245,7 +2274,7 @@ help:
 	@echo "  bin-soul          cross-compile only soul (linux-amd64) -> soul/bin/soul-linux-amd64"
 	@echo "  bin-soul-lint     cross-compile only soul-lint (linux-amd64) -> soul-lint/bin/soul-lint-linux-amd64"
 	@echo "  e2e-live          L3b smoke-loop (tests/e2e-live, -tags=e2e_live, privileged docker, nightly)"
-	@echo "  e2e-live-artifacts  prime the L3b upstream-tarball cache (run before going offline)"
+	@echo "  e2e-live-services   prime the L3b out-of-tree service cache (run before going offline)"
 	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
 	@echo "  docker-build-keeper  build the keeper:e2e-k8s image (for L3c kind load docker-image)"
 	@echo "  docker-build-soul    build the soul:e2e-k8s image (privileged systemd Debian-12 for L3c-3+)"

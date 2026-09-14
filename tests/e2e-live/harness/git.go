@@ -9,7 +9,6 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"sort"
 	"testing"
 )
 
@@ -55,11 +54,11 @@ var gitFixtureEnv = []string{
 // registration). No-op if ServiceName/ExamplePath is empty.
 func (s *Stack) registerExampleService(t *testing.T) {
 	t.Helper()
-	if s.cfg.ServiceName == "" || s.cfg.ExamplePath == "" {
+	if s.cfg.ServiceName == "" || (s.cfg.ExamplePath == "" && s.cfg.ServiceRepo == "") {
 		return
 	}
 
-	gitURL := s.materializeServiceRepo(t, s.cfg.ServiceName, s.cfg.ExamplePath)
+	gitURL := s.materializeServiceRepo(t, s.cfg.ServiceName, s.serviceSourceDir(t))
 
 	c := s.opClient(t)
 	resp, status, err := c.post(context.Background(), "/v1/services", map[string]any{
@@ -84,13 +83,62 @@ func (s *Stack) registerExampleService(t *testing.T) {
 	t.Logf("registerExampleService: registered id=%s git=%s ref=%s (status=%d)", out.ID, gitURL, out.Ref, status)
 }
 
-// materializeServiceRepo copies the example directory into a per-test git
+// serviceSourceDir — the directory the fixture copies the service out of, and the one
+// place the in-tree and out-of-tree cases diverge (NIM-876).
+//
+// cfg.ExamplePath is a path inside THIS repository: the small live fixtures that exist to
+// exercise one mechanic (smoke-nginx-live, when-gate-live). cfg.ServiceRepo names a
+// catalogued out-of-tree service, resolved to the extracted pinned commit — a directory
+// whose name carries the commit, so what a test read is answerable after the fact.
+//
+// The two are mutually exclusive rather than ordered: a stand configured with both would
+// run one of them and report on the other, and which one is a detail of this function.
+func (s *Stack) serviceSourceDir(t *testing.T) string {
+	t.Helper()
+	if s.cfg.ExamplePath != "" && s.cfg.ServiceRepo != "" {
+		t.Fatalf("Config: ExamplePath=%q and ServiceRepo=%q are both set — name one subject",
+			s.cfg.ExamplePath, s.cfg.ServiceRepo)
+	}
+	if s.cfg.ServiceRepo == "" {
+		return filepath.Join(repoRoot(t), s.cfg.ExamplePath)
+	}
+
+	svc, err := serviceByAlias(s.cfg.ServiceRepo)
+	if err != nil {
+		t.Fatalf("serviceSourceDir: %v", err)
+	}
+	// The override is not a quiet fallback: a run under it is about a working tree, and
+	// what it proves is true of no commit. `make e2e-live-gate` refuses to start while it
+	// is set; a hand-run `go test` is allowed, and this line is what tells the reader of
+	// the transcript which one they are looking at.
+	if dir := serviceDirOverride(svc.alias); dir != "" {
+		t.Logf("serviceSourceDir(%s): PIN OVERRIDDEN by %s%s=%s — this run is about that working "+
+			"tree, not about commit %s",
+			svc.alias, serviceDirEnvPrefix, serviceEnvSuffix(svc.alias), dir, svc.commit)
+		return dir
+	}
+
+	root, err := serviceCacheDir()
+	if err != nil {
+		t.Fatalf("serviceSourceDir(%s): %v", svc.alias, err)
+	}
+	tree, err := ensureServiceTree(root, svc)
+	if err != nil {
+		t.Fatalf("serviceSourceDir(%s): the pinned subject is not available.\n"+
+			"  This tier drives it for %s.\n"+
+			"  %v\n"+
+			"  Prime the cache with: make e2e-live-services", svc.alias, svc.why, err)
+	}
+	t.Logf("serviceSourceDir(%s): %s (commit %s)", svc.alias, tree, svc.commit)
+	return tree
+}
+
+// materializeServiceRepo copies the service directory into a per-test git
 // repo under $TMP and makes one deterministic commit on the main branch.
 // Returns the file://-URL.
-func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath string) string {
+func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, srcDir string) string {
 	t.Helper()
 
-	srcDir := filepath.Join(repoRoot(t), relativePath)
 	if _, err := os.Stat(srcDir); err != nil {
 		t.Fatalf("materializeServiceRepo %s: source %s: %v", serviceName, srcDir, err)
 	}
@@ -105,75 +153,15 @@ func (s *Stack) materializeServiceRepo(t *testing.T, serviceName, relativePath s
 	// `cp -R src/. dest/`), commit with one deterministic commit.
 	runGit(t, "", "init", "-q", "-b", "main", repoDir)
 	copyTree(t, srcDir, repoDir)
-	s.addArtifactMirrorLayer(t, repoDir)
 	runGit(t, repoDir, "add", "-A")
 	// commit.gpgsign=false is local to the call: the operator's global
 	// ~/.gitconfig may require a signature (gpg/ssh key) that isn't
 	// available in the run environment — the fixture must be hermetic
 	// and not depend on host settings.
 	runGit(t, repoDir, "-c", "commit.gpgsign=false",
-		"commit", "-q", "-m", "e2e-live service snapshot from "+relativePath)
+		"commit", "-q", "-m", "e2e-live service snapshot from "+srcDir)
 
 	return "file://" + repoDir
-}
-
-// addArtifactMirrorLayer writes the local-mirror service-vars layer into the
-// materialized COPY of the service, between the copy and the commit (NIM-542).
-//
-// Here and nowhere else. A shipped example is the subject of these tests
-// (NIM-211) and editing it to suit the fixture would leave the gate green about
-// a service nobody runs; the copy is the fixture's own, and a layer added to it
-// is the same thing an operator does when they run against an internal mirror —
-// vars/00-base.yaml documents that override as supported and this is it.
-//
-// Written for the prefixes the service ITSELF reads, not for the whole catalog: a
-// smoke-nginx-live stand fetches nothing, gets no layer, and is therefore never
-// accused by assertArtifactsCameFromTheMirror of failing to use a mirror it had
-// no reason to touch.
-func (s *Stack) addArtifactMirrorLayer(t *testing.T, repoDir string) {
-	t.Helper()
-	if s.mirror == nil {
-		return
-	}
-
-	prefixes, err := scenarioArtifactPrefixes(repoDir)
-	if err != nil {
-		t.Fatalf("addArtifactMirrorLayer: scan %s: %v", repoDir, err)
-	}
-	cat := catalogSubset(artifactCatalog(), prefixes)
-	if len(cat) == 0 {
-		return
-	}
-	// A prefix the service fetches and the catalog does not carry would be left
-	// pointing at github while its neighbours go to the mirror — a partly
-	// hermetic gate, which reads as a hermetic one. A docker-free guard used to
-	// catch this twenty minutes earlier for the one service the gate created; that
-	// service left the tree with NIM-871, so this runtime check is now the only one.
-	if len(cat) != len(prefixes) {
-		var uncovered []string
-		for prefix := range prefixes {
-			if len(catalogSubset(artifactCatalog(), map[string]bool{prefix: true})) == 0 {
-				uncovered = append(uncovered, prefix)
-			}
-		}
-		sort.Strings(uncovered)
-		t.Fatalf("addArtifactMirrorLayer: %s fetches %v, which artifactCatalog() does not carry.\n"+
-			"  Those would still come from the public internet while the rest go to the mirror.\n"+
-			"  Add them to tests/e2e-live/harness/artifactcatalog.go and prime the cache:\n"+
-			"      make e2e-live-artifacts",
-			s.cfg.ExamplePath, uncovered)
-	}
-
-	dst := filepath.Join(repoDir, filepath.FromSlash(artifactMirrorVarsFile))
-	if err := os.MkdirAll(filepath.Dir(dst), 0o755); err != nil {
-		t.Fatalf("addArtifactMirrorLayer: mkdir %s: %v", filepath.Dir(dst), err)
-	}
-	if err := os.WriteFile(dst, artifactMirrorOverlay(s.mirror.baseURL, cat), 0o644); err != nil {
-		t.Fatalf("addArtifactMirrorLayer: write %s: %v", dst, err)
-	}
-
-	s.mirroredArtifacts = cat
-	t.Logf("addArtifactMirrorLayer: %s -> %s for %v", artifactMirrorVarsFile, s.mirror.baseURL, artifactMirrorPrefixes(cat))
 }
 
 // runGit runs a git command in dir (empty dir -> cwd from args) with the

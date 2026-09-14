@@ -139,13 +139,23 @@ level. It's the local equivalent of CI-gate - without the GitHub minutes.
    make e2e-live    # nginx / module-delivery / plugin-channel — real apt-install + systemd
    ```
 
-   > ★ **This step proves less than it used to (NIM-871).** The gate went from nine
-   > tests to three when `examples/service/redis` left the engine: the six
-   > `TestL3bRedisLive_Day2*` cases were the only ones that ran a service `create` on
-   > a real host and then an operational scenario against it. Green here now means a
-   > module is **delivered** and an ordinary apply works — not that any service
-   > lifecycle does. Until the out-of-tree service repository grows its own live
-   > suite, a day-2 regression passes this step.
+   > ★ **What green here means, and what it does not (NIM-871 → NIM-876).** The gate went
+   > from nine tests to three when `examples/service/redis` left the engine, and green then
+   > meant a module was *delivered* rather than a service *operated*. NIM-876 brought the
+   > second claim back with a subject that is not in this tree: the two
+   > `TestL3bRedisServiceLive_*` cases run `github.com/soul-stack-services/redis` at the
+   > commit pinned in `tests/e2e-live/harness/servicecatalog.go` — a create onto a roster,
+   > then a day-2 scenario against the live instance.
+   >
+   > Still uncovered, and worth knowing before a tag: `update_config`, `restart`, `destroy`
+   > and `rotate_tls` (scenarios the published service does not have yet), and the whole
+   > **machine** half of a create — VMs, cloud-init, agent install over SSH — which a docker
+   > tier whose souls are already onboarded cannot host. That half is proven by a hand-run
+   > workstation stand and by nothing automated.
+   >
+   > **Bumping the pin is part of releasing a service change, not of releasing the engine.**
+   > The gate proves the pinned commit; a fix in the service repository does not reach a tag
+   > here until someone bumps that pin and re-runs this step.
 
 On **WSL2 + Docker-Desktop**, forward the real WSL2 host-IP before running
 (the soul container will not reach the keeper via `host.docker.internal` - that

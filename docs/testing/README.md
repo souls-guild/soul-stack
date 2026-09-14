@@ -398,13 +398,15 @@ delivered module vs real redis.
 `core.service` systemd-start on a live host - checks that normal apply is not broken.
 - **Smoke plugin channel** (`TestL3bPluginChannel_*`): module directory + allow mechanics
 gRPC-stdio plugin channel.
-- ~~**Day-2 operations on a live service**~~ (`TestL3bRedisLive_Day2*`: add-user,
-update-config, restart, update-users, destroy, rotate-tls) — **GONE (NIM-871)**. These
-were the incarnation scripts an operator actually runs after `create`, each against a
-real service in a real container, and they ran `examples/service/redis`, which left the
-engine. Nothing replaces them: the three bullets above prove a module is **delivered**,
-not that a service is **operated**. See "A service create is NO LONGER locally covered"
-below.
+- **A service brought to a working state, then operated** (`TestL3bRedisServiceLive_*`:
+create-from-souls, day-2 add-user) — the claim the three bullets above cannot make. They
+prove a module is **delivered**; these prove a **service** is stood up and then changed:
+state written and read back, secrets minted at keeper-derived Vault paths, `users.acl`
+re-rendered whole, the live ACL reconciled through the plugin channel. The subject is out
+of tree and pinned by commit (NIM-876) — `examples/service/redis` used to play this part
+and left with NIM-871, taking six `TestL3bRedisLive_Day2*` cases with it. Four of those six
+claims (update-config, restart, destroy, rotate-tls) are still uncovered, as is the machine
+half of a create; see "A service create is NO LONGER locally covered" below.
 
 **When required.** Before a batch commit of a feature that meets the "major" criterion -
 same triggers that escalate to architect: **>5 files are affected** OR being corrected
@@ -547,42 +549,50 @@ were not. A distinct TIMEOUT verdict is tracked in **NIM-511**; until then, read
 "TEST-FAILURE on the test the panic names" as "unknown", and check whether the
 gate's `-timeout` was the thing that expired before treating it as a finding.
 
-### What the gate downloads (NIM-542)
+### What the gate downloads (NIM-542 → NIM-876)
 
 The classifier above answers "bring-up or the code?", and for a while there was a
 third answer it could not give, because the gate had a third way to fail: the
-network. Six of the then-nine gate tests ran a live service `create`,
-and that create fetched `node_exporter`, `redis_exporter` and `vector` from **public
-github.com** from inside the container — about 18 downloads per gate run. A blocking
-pre-tag step whose acceptance is "three runs on an unchanged slice give the same
-result" was resting on something that is not in the slice, and both red runs measured
-above died exactly there.
+network. Six of the then-nine gate tests ran a live service `create`, and that create
+fetched `node_exporter`, `redis_exporter` and `vector` from **public github.com** from
+inside the container — about 18 downloads per gate run. A blocking pre-tag step whose
+acceptance is "three runs on an unchanged slice give the same result" was resting on
+something that is not in the slice, and both red runs measured above died exactly there.
 
-**The gate no longer downloads them.** `make e2e-live-artifacts` — which
-`e2e-live-gate` now runs as an early, named step — fills a digest-verified cache
-outside the repo, the harness serves it over HTTPS on an ephemeral local port, and the
-**fixture's** copy of the service gets a `vars/99-*` layer pointing `base_url` there.
-The layer goes into the fixture's copy and never into the service tree: a shipped
-example is the subject under test (NIM-211). HTTPS rather than plain http for the same
-reason — the destinies declare `base_url` as `^https://…` and `core.url` refuses http
-without an opt-out, so the mirror mints a per-run CA the container is taught to trust
-instead of the destiny being loosened to accept the fixture. Mechanics and the guards
-that keep the override falsifiable are in [tests/e2e-live/README.md](../../tests/e2e-live/README.md#upstream-release-artifacts-nim-542).
+NIM-542 answered that with a local mirror: a digest-verified cache outside the repo, an
+HTTPS server over it, and a `vars/99-*` layer written into the **fixture's** copy of the
+service. NIM-871 then cut the service those six tests created, and the guards that held the
+mirror's pin table against the service's own declarations went with it — leaving an
+unverified copy of a service that existed nowhere.
 
-So no fourth verdict was added, and deliberately: the category the gate would have
-needed it for **does not occur inside the gate any more**. The one place it could still
-occur was `TestL3bRedisLiveUpstream_ArtifactsFromGitHub`, which kept the real github
-path covered and was **not** in `E2E_GATE_TESTS` — the one L3b test allowed to fail for
-a reason outside the repository, since a blocking gate must never be. It handled the
-distinction in the test rather than in the classifier: probe the real URLs before the
-stand and **skip** if unreachable (nothing of this repository has run yet, so the
-failure cannot be about this repository), then re-probe after a failure to print either
-"read this as environment" or — the more useful half — "upstream is still reachable, so
-read this as a finding". It ran `examples/service/redis` and left with it (NIM-871);
-`harness.RequireUpstreamArtifacts` / `ReportUpstreamIfItWentAway` survive uncalled.
+**NIM-876 removed the mechanism rather than leaving the copy to rot.** The way to make such
+a table true is to ask what the subjects declare, and no live subject declares a release
+fetch: the in-tree fixtures download nothing, and the pinned out-of-tree service installs
+from an apt repository, which is a different mechanism. What replaced it is a docker-free
+guard (`harness/upstreamfetch.go`) that fails the moment any live subject declares
+`default(vars.<prefix>_base_url, 'http…')` again — so the absence stays a decision instead
+of turning back into an outbound dependency nobody notices. The mirror is in git whole, at
+the commit that removed it, for the subject that legitimately needs one.
+
+So no fourth verdict was added, and deliberately: the category the gate would have needed
+it for does not occur inside the gate. The one test that kept the real github path covered
+(`TestL3bRedisLiveUpstream_ArtifactsFromGitHub`, deliberately outside `E2E_GATE_TESTS`, as
+a blocking gate must never depend on something outside the repository) ran
+`examples/service/redis` and left with it in NIM-871.
+
+**What the gate DOES download, on purpose:** the subject itself. A service is its own
+repository, so the two service tests run `github.com/soul-stack-services/redis` at a commit
+pinned in `tests/e2e-live/harness/servicecatalog.go`, fetched once into a cache outside the
+repo and extracted to a path that carries the commit. The pin is what makes the run
+reproducible; the cache is what makes it offline after the first fill. Neither alone would
+do: without the pin the gate proves whatever is in some directory, and without the cache
+its verdict is again a question about github.com. `make e2e-live-services` primes it, and
+`SOUL_STACK_E2E_SERVICE_OFFLINE=1` is how "needs nothing from the network" is demonstrated
+rather than asserted.
 
 **Still not hermetic:** `core.pkg.installed` reaches `deb.debian.org` and
-`packages.redis.io` on every live create. NIM-542 fixed the tarballs only.
+`packages.redis.io` on every live create. NIM-542 scoped the tarballs only, and NIM-876
+did not widen that scope.
 
 The wall itself is also not derived from anything, and the two runs disagree:
 `make e2e-live` gives the whole package 30 m while the gate gets 45 m, so the larger
@@ -592,24 +602,35 @@ run has the tighter budget. Tracked in **NIM-512**.
 cloud provision (`CloudDriver`), `install_method=binary` (there is no public source of
 standalone redis binaries), cluster redis topology, multi-keeper HA.
 
-**★ A service create is NO LONGER locally covered (NIM-871).** Each of the six
-`TestL3bRedisLive_Day2*` tests ran `examples/service/redis::create` end to end first —
-a real `redis-server` plus the node-exporter / redis-exporter / vector destinies into a
-Debian-12 container — and only then exercised its day-2 scenario against that live
-instance. That service left the engine and the six tests went with it, taking the gate
-from nine tests to three. Nothing in the tree replaces them: the remaining corpus
-services are render-only (L0), so no live test now proves that a `create` reaches a
-running service, let alone that a day-2 scenario operates one. The successor is the
-out-of-tree service repo's own live suite, which does not exist yet.
+**★ A service create is covered again, by a subject that is not in this tree (NIM-876).**
+Each of the six `TestL3bRedisLive_Day2*` tests ran `examples/service/redis::create` end to
+end first — a real `redis-server` plus the node-exporter / redis-exporter / vector
+destinies into a Debian-12 container — and only then exercised its day-2 scenario against
+that live instance. That service left the engine with NIM-871 and the six tests went with
+it, taking the gate from nine tests to three.
 
-This used to be what the examples corpus was FOR: e2e ran against `examples/service/*`,
-so a green gate guaranteed the documented example still worked. That guarantee had one
-hard prerequisite — **an example must install from PUBLIC sources only**. Point one at
-an internal mirror and the gate stops being runnable, the red goes unnoticed, and the
-example rots invisibly (exactly what happened between `22130c2b` and NIM-208, when the
-redis service pointed at an internal Nexus placeholder and nobody could run it). The
-rule still binds every example that a live test drives; what changed is that no live
-test drives a service any more, so nothing enforces it.
+Two of those claims are back as `TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}`,
+driving `github.com/soul-stack-services/redis` at a pinned commit. Three things are still
+NOT covered, and each for its own reason:
+
+- **four day-2 scenarios** — `update_config`, `restart`, `destroy`, `rotate_tls` — because
+  the published service does not have them yet;
+- **the machine half of a create** — VMs through a keeper-side provider, cloud-init, an
+  agent installed over `core.ssh.run`, a bootstrap token redeemed — because a docker tier
+  whose souls are already onboarded cannot host it. A hand-run workstation stand covers it,
+  and nothing automated does;
+- **the exporters and vector** — the published service deploys the redis brick alone, so
+  the three-destiny composition the old create exercised has no live test.
+
+This used to be what the examples corpus was FOR: e2e ran against `examples/service/*`, so
+a green gate guaranteed the documented example still worked. That guarantee had one hard
+prerequisite — **a subject a live test drives must install from PUBLIC sources only**.
+Point one at an internal mirror and the gate stops being runnable, the red goes unnoticed,
+and the subject rots invisibly (exactly what happened between `22130c2b` and NIM-208, when
+the redis service pointed at an internal Nexus placeholder and nobody could run it). The
+rule did not go away with the corpus — it moved onto the pinned service, where it is
+enforced by whoever bumps the pin, and by `make e2e-live-gate` refusing a commit it cannot
+fetch.
 
 
 ## Documents by level

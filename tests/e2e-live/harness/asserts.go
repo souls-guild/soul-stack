@@ -896,6 +896,50 @@ func (s *Stack) AssertRedisACLUserAbsent(t *testing.T, c RedisConn, user string)
 // permissions substring wantPermsSubstr (e.g. "+@read") — for update_users,
 // where the user was assigned a new permission set. A missing user → `(nil)`,
 // substring not found → fail.
+// AssertRedisUserAuthenticates — the live instance accepts THIS user's own credential, and
+// the user can read a key its rights cover.
+//
+// For the credentials a service mints rather than receives (NIM-876). A service generates a
+// password into Vault at a keeper-derived path and renders its sha256 into users.acl; the
+// only way to know the two are the same value is to authenticate as that user. Everything
+// cheaper is satisfied by a broken service: `ACL LIST` through the admin shows the account
+// exists whatever its password is, and state carries no password at all.
+//
+// A restricted user cannot run `ACL GETUSER` or `CONFIG GET` — asking it to is a NOPERM
+// about the test, not about the product — so the probe is a `GET` of a key the caller says
+// the user's pattern covers. The VALUE is irrelevant (the key does not exist); what is read
+// is whether Redis answered at all.
+func (s *Stack) AssertRedisUserAuthenticates(t *testing.T, c RedisConn, readableKey string) {
+	t.Helper()
+	sc := s.soulContainerByIdx(t, c.SoulIdx)
+
+	ctx, cancel := context.WithTimeout(context.Background(), hostExecTimeout)
+	defer cancel()
+
+	script := c.redisCLIPrefix() + " GET " + shellQuote(readableKey)
+	out, code, err := sc.Exec(ctx, []string{"/bin/sh", "-c", script})
+	if err != nil {
+		t.Fatalf("AssertRedisUserAuthenticates(soulIdx=%d user=%s): exec: %v\noutput=%s", c.SoulIdx, c.User, err, out)
+	}
+	// redis-cli exits 0 on a server-side error and prints it, so the exit code is not the
+	// check — the text is. Each of these three means something different and all three are
+	// failures of this assertion: WRONGPASS/NOAUTH — the credential is not the live one;
+	// NOPERM — it is, but the key was a bad choice for this user's pattern, which is a
+	// defect in the caller and must not read as a pass.
+	for _, bad := range []string{"WRONGPASS", "NOAUTH", "NOPERM", "invalid username-password"} {
+		if strings.Contains(out, bad) {
+			t.Fatalf("AssertRedisUserAuthenticates(soulIdx=%d user=%s key=%s): %s\n"+
+				"  The password read from Vault is not the one the live instance holds for this user,\n"+
+				"  or the key is outside the user's pattern. code=%d output=%s",
+				c.SoulIdx, c.User, readableKey, bad, code, out)
+		}
+	}
+	if code != 0 {
+		t.Fatalf("AssertRedisUserAuthenticates(soulIdx=%d user=%s key=%s): redis-cli exit=%d\noutput=%s",
+			c.SoulIdx, c.User, readableKey, code, out)
+	}
+}
+
 func (s *Stack) AssertRedisACLUserPerms(t *testing.T, c RedisConn, user, wantPermsSubstr string) {
 	t.Helper()
 	sc := s.soulContainerByIdx(t, c.SoulIdx)
