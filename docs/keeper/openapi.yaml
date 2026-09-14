@@ -4268,7 +4268,7 @@ components:
       additionalProperties: false
       properties:
         soul_path:
-          description: absolute install path of the soul binary (starts with /)
+          description: absolute path the applier is exec'd from; send /var/lib/soul-stack/bin/soul, which is where push delivery writes the binary (an override opts out of delivery)
           pattern: ^/
           type: string
         ssh_port:

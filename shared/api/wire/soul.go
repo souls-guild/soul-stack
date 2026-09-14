@@ -191,8 +191,20 @@ type SoulTraitsAssignRequest struct {
 // encoding/json marshals in declaration order → the aligned order gives a byte-exact wire
 // nested ssh_target in SoulSshTargetReply (output) vs the former legacy generator. For input parsing the order
 // of JSON keys is irrelevant.
+// PushSoulBinaryPath is where a push run delivers the `soul` binary and,
+// therefore, the path it execs — the default for [SoulSshTarget.SoulPath] and
+// for `soulctl souls ssh-target --soul-path`.
+//
+// It lives in the wire package because it is operator-facing and read from
+// three sides that cannot import each other: the keeper's delivery layer, the
+// CLI's flag default, and the OpenAPI field description. It had three separate
+// literals and two of them said `/usr/local/bin/soul` — the PULL install path,
+// which no push delivery writes to — so a host registered through the CLI ran
+// `exit 127` (NIM-869).
+const PushSoulBinaryPath = "/var/lib/soul-stack/bin/soul"
+
 type SoulSshTarget struct {
-	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"absolute install path of the soul binary (starts with /)"`
+	SoulPath    string `json:"soul_path" required:"true" pattern:"^/" doc:"absolute path the applier is exec'd from; send /var/lib/soul-stack/bin/soul, which is where push delivery writes the binary (an override opts out of delivery)"`
 	SSHPort     int    `json:"ssh_port" required:"true" minimum:"1" maximum:"65535" doc:"SSH port [1..65535]"`
 	SSHProvider string `json:"ssh_provider,omitempty" doc:"opt. SshProvider name (3-tier routing); empty -> coven/cluster default"`
 	SSHUser     string `json:"ssh_user" required:"true" minLength:"1" doc:"SSH user"`

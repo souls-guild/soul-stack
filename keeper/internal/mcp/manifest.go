@@ -422,7 +422,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.soul.ssh-target.update",
-			Description:  "Updates per-host SSH credentials for the push flow (souls.ssh_target jsonb, ADR-032 amendment 2026-05-26, S7-1): ssh_port/ssh_user/soul_path. Source-of-truth for PGFallbackTargetResolver; keeper.yml::push.targets[] - legacy fallback under the push.allow_legacy_push_targets flag. Permission: soul.ssh-target-update; selector host=<sid>. Fails with code=not-found if the SID isn't in the souls registry.",
+			Description:  "Updates per-host SSH credentials for the push flow (souls.ssh_target jsonb, ADR-032 amendment 2026-05-26, S7-1): ssh_port/ssh_user/soul_path (soul_path is the path the applier is exec'd from - send /var/lib/soul-stack/bin/soul, where push delivery writes the binary; an override opts out of delivery). Source-of-truth for PGFallbackTargetResolver; keeper.yml::push.targets[] - legacy fallback under the push.allow_legacy_push_targets flag. Permission: soul.ssh-target-update; selector host=<sid>. Fails with code=not-found if the SID isn't in the souls registry.",
 			InputSchema:  schemaSoulSshTargetUpdateInput,
 			OutputSchema: schemaSoulSshTargetUpdateOutput,
 		},
@@ -1781,7 +1781,7 @@ var (
 "sid":{"type":"string","pattern":"^[a-z0-9][a-z0-9.-]{0,253}$"},
 "ssh_port":{"type":"integer","minimum":1,"maximum":65535},
 "ssh_user":{"type":"string","minLength":1},
-"soul_path":{"type":"string","pattern":"^/.+","description":"Absolute Unix path to the soul binary on the host."}}}`)
+"soul_path":{"type":"string","pattern":"^/.+","description":"Absolute path the applier is exec'd from. Send /var/lib/soul-stack/bin/soul - that is where push delivery writes the binary; any other value opts out of delivery and the binary is yours to place."}}}`)
 
 	schemaSoulSshTargetUpdateOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

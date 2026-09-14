@@ -78,7 +78,7 @@ func newSoulsSshTargetSetCmd() *cobra.Command {
 	}
 	c.Flags().IntVar(&port, "port", 22, "SSH port (1..65535)")
 	c.Flags().StringVar(&user, "user", "root", "SSH user")
-	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "absolute path to the soul binary on the host")
+	c.Flags().StringVar(&soulPath, "soul-path", wire.PushSoulBinaryPath, "absolute path the applier is exec'd from; the default is where push delivery writes the binary")
 	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "per-SID explicit SshProvider plugin name (Level 1 routing); empty → routing via coven/cluster-default")
 	return c
 }
@@ -169,7 +169,7 @@ func newSoulsSshTargetBulkSetCmd() *cobra.Command {
 	c.Flags().StringVar(&sshProvider, "ssh-provider", "", "SshProvider plugin name (required)")
 	c.Flags().IntVar(&port, "port", 22, "SSH port (1..65535)")
 	c.Flags().StringVar(&user, "user", "root", "SSH user")
-	c.Flags().StringVar(&soulPath, "soul-path", "/usr/local/bin/soul", "absolute path to the soul binary on the host")
+	c.Flags().StringVar(&soulPath, "soul-path", wire.PushSoulBinaryPath, "absolute path the applier is exec'd from; the default is where push delivery writes the binary")
 	return c
 }
 

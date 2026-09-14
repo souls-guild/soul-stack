@@ -19,7 +19,20 @@ Used for:
 - **`soul_seeds` is not used for push.** Push hosts have no mTLS identity — no certificate, no private key, nothing to rotate.
 - **No daemon.** Between runs the host does nothing; no stream hangs.
 - **Audit.** Each push run is an event in Keeper's journal (what, where, by whom, result) with an RBAC filter ([rbac.md](rbac.md)).
-- **push ↔ agent migration.** A host can be in `transport: ssh` and then migrated to `transport: agent` (a Soul was installed) — the record is the same, the field changes, history is not lost.
+- **push ↔ agent migration.** A host can be in `transport: ssh` and then migrated to `transport: agent` (a Soul was installed) — the record is the same, the field changes, history is not lost. ⚠ **Design, not built:** nothing in the tree writes `souls.transport` after the row is created. Whoever builds it owes the presence rule below a second look — the agent→ssh direction can leave a host at `status='connected'`, and a `connected` ssh host passes the scenario roster's status filter and then the presence exemption, landing in a run that cannot dispatch to it.
+
+### Presence: a push host is never "online"
+
+Targeting an agent host asks Redis whether it holds a live EventStream lease (`soul:<sid>:lock`, [ADR-006](../adr/0006-cache-redis.md)); with no Redis the roster degrades to the `souls.status='connected'` snapshot. **Neither applies to a push host, and both used to exclude it** (NIM-869): the lease is written only by the EventStream handler and `connected` only by the agent's Bootstrap RPC, so a `transport: ssh` host has neither, ever. `pending` is in fact the only status such a host holds for its whole life.
+
+So `topology.Resolver` exempts `transport='ssh'` from both arms, and the push inventory query excludes `pending` for agent hosts only. Reachability for a push host is answered by the dial at dispatch time and nowhere earlier — a dead machine surfaces as a per-host connect error in `push_runs.summary`, not as an empty roster.
+
+★ **The SCENARIO roster does not get this.** `LoadIncarnationHosts` still excludes `pending` outright, so an ssh host bound to an incarnation stays invisible to a scenario run — deliberately, because a scenario dispatches over the gRPC stream and has no push branch: admitting the host would turn "the run does not see it" into `soul_not_connected`. The exemption above is reachable only from the push inventory path.
+
+### What a push run does NOT do
+
+- **`register:` does not fill, and a barrier on it would not release.** `register_data` rides on `TaskEvent`, `RunResult` has no field for it, and `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid)` — a row a push run never writes (it writes `push_runs`). Nothing reaches this state today: the scenario dispatcher has no push branch at all. The ticket that adds one has to decide whether a push run mints an `apply_runs` row; that is an ADR.
+- **It does not bootstrap a bare machine.** `souls.ssh_target` has no address column — `SSHTarget.Host` IS the SID — and a fresh VM's address is the provider's `primary_ip`, not yet in DNS. `core.bootstrap.issued` also writes `transport='agent'` as a literal and refuses `ssh`, so there is no scenario step that mints a push host. Minting one is a registry change, not a transport one.
 
 ## SSH authentication — pluggable provider
 
@@ -49,26 +62,38 @@ Push mode reuses the same `soul` binary and the same modules as pull ([architect
 ```
 /var/lib/soul-stack/
   bin/
-    soul-<sha>          # the current version + 1–2 previous ones for rollback
-  modules/
-    <alias>/                    # one executable + the schema document (NIM-377)
-    ...
+    soul                # the delivered agent, mode 0755 — the path push execs
+  modules/              # created, and empty: module delivery is NOT wired (below)
 ```
+
+This is **not** the pull layout, and it is worth saying because the code claimed otherwise until NIM-869: a pull host gets its agent at `/usr/local/bin/soul` from the install blueprint, the Soul's own `paths:` block declares `modules` and `seed` and no `bin`, and nothing on the Soul side reads this prefix. The path is hardcoded in the delivery and cleanup code and nowhere else — no setting moves it, and there is no second party that has to agree. What it buys is an install needing no privilege it was not given: `/var/lib/soul-stack/` can be chowned to whatever account the host admits, and it is exactly the tree `keeper.push.cleanup` wipes, so delivery and cleanup own one subtree and nothing outside it. That is a reason for the choice, not a constraint the code enforces — the SSH user defaults to `root`, and a root delivery could write `/usr/local/bin` just as well.
+
+It is an operator-facing contract of the host filesystem, so moving it is a PM decision. `push.targets[].soul_path` / `souls.ssh_target.soul_path` default to exactly this path, so the ordinary run execs the binary it just delivered and verified. An explicit `soul_path` is honoured and opts out of the pairing: delivery still writes to `bin/soul`, and getting the binary to the overridden path is then the operator's job.
+
+### What Keeper ships, and from where
+
+`push.soul_binary_path` in `keeper.yml` is the absolute path, **on the keeper node**, of the `soul` binary to deliver. There is no default: keeper and soul are separate artifacts (ADR-004) and only the operator knows where the matching build sits.
+
+- set and readable → delivery is on;
+- set and unreadable → the daemon refuses to start, naming the path;
+- **omitted → delivery is OFF**, and the run execs whatever is already at the target's `soul_path`. On a bare host that is `exit 127`, which is the honest outcome; it is a configuration rather than an error because the same wiring serves `core.ssh.run`, and a pull-only installation must not lose its daemon over an unset push key. The daemon logs a WARN at start.
 
 ### Algorithm of each push run
 
 1. Keeper connects to the host through the chosen SSH provider.
-2. Compares by SHA-256 the target version of the `soul` binary with what lies in `/var/lib/soul-stack/bin/`. Matches — copying is skipped, otherwise the binary is delivered.
-3. **All modules registered in Keeper** are transferred (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — copying is skipped. Works thanks to the hot cache.
-4. `soul apply` is launched — the rendered plan (`ApplyRequest`: `apply_id` + `RenderedTask[]` after Keeper-side phases `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) is passed to stdin as protojson and is not written to disk. Raw Destiny and service vars do not reach the push host — Keeper resolves Vault on its side, the Soul only executes the plan. Stdout is read as an NDJSON stream of `TaskEvent` + a final `RunResult`.
-5. Afterwards — the artifacts remain in the cache; host-side cleanup of stale versions is a separate operation, see [`../soul/modules.md`](../soul/modules.md).
+2. Compares by SHA-256 the `push.soul_binary_path` artifact with what lies at `/var/lib/soul-stack/bin/soul`. Matches — copying is skipped, otherwise the binary is delivered and the written file's SHA is re-read and compared. Delivery is fail-closed: an error aborts the run before `soul apply`.
+3. `soul apply` is launched from the target's `soul_path` — the rendered plan (`ApplyRequest`: `apply_id` + `RenderedTask[]` after Keeper-side phases `vault-resolve → input-validation → CEL-render → text/template-render`, ADR-012(d)) is passed to stdin as protojson and is not written to disk. Raw Destiny and service vars do not reach the push host — Keeper resolves Vault on its side, the Soul only executes the plan. Stdout is read as an NDJSON stream of `TaskEvent` + a final `RunResult`.
+4. Afterwards — the artifacts remain in the cache; host-side cleanup is a separate operation (`keeper.push.cleanup`), see below.
 
 ### Key properties
 
-- **We transfer everything, we do not guess.** Static analysis of "which modules this particular Destiny needs" is deceptive (modules are invoked dynamically from templates and conditions). Transferring all + a hash cache = simple and without surprises. A future optimization — mandatory declaration of `required_modules` in Destiny — is described in [open Q No. 5](../architecture.md).
-- **Hash cache.** The first run on a new host is slow (the binary and all modules are copied). Subsequent ones are instant.
-- **Versions are stored explicitly.** The file name contains the SHA, which allows keeping several versions side by side and rolling back without re-downloading.
-- **The module registry is in Keeper** - where it is physically (Postgres `bytea` / a separate artifact store / the FS) - [open Q No. 5](../architecture.md). Affects operations and backup strategy, but not the delivery protocol itself.
+- **Hash cache.** The first run on a new host copies the binary (tens of MB); subsequent ones compare a SHA and skip the upload.
+- **One name, not one per version.** `bin/soul` is overwritten in place. There is no `soul-<sha>` fan-out and no host-side rollback set: the version that runs is whatever the keeper delivering this run holds.
+- **Only `core.*` modules work over push today.** `soul apply` on a host without `soul.yml` falls back to "core modules only" by design, which is what a bare push host is. That is the whole current envelope — see the gap below.
+
+### Not wired: delivering plugin modules (as of NIM-869)
+
+[ADR-004](../adr/0004-binaries.md) says push transfers **all modules registered in Keeper**. It does not. `push.SoulSpec.Modules` exists and `ShaDeliverer` honours it, but nothing in the daemon fills it, and the shape would not work if it did: `ShaDeliverer` lays one flat FILE per module under `modules/`, while a Soul reads its plugin cache as `modules/<alias>/<artifact>` (`shared/pluginhost.Discover`), which skips plain files. Wiring module delivery means fixing the slot layout first. Until then a Destiny that addresses a plugin module is a pull-mode Destiny.
 
 ## Cleanup on the host
 
@@ -95,11 +120,11 @@ The pilot phase of enabling `keeper.push.apply` in prod (single-CA, config-backe
 
 5. **Assembly of SshDispatcher.** `push.NewSshDispatcher` with:
    - `Provider` — a wrapper `pluginhost.SshProviderPlugin` over the spawned plugin;
-   - `Targets` — `push.NewConfigTargetResolver(cfg.Push.Targets)` (per-SID lookup, defaults port=22/user=root/soul_path=/usr/local/bin/soul);
+   - `Targets` — `push.NewConfigTargetResolver(cfg.Push.Targets)` (per-SID lookup, defaults port=22/user=root/soul_path=/var/lib/soul-stack/bin/soul);
    - `Souls` — `push.NewPGSoulLookup(pool)` (checking the precondition `transport=ssh`);
    - `HostAuthorities` — the resolved multi-CA set (S7-3, OR-check via `ssh.CertChecker.IsHostAuthority`);
    - `Metrics` — `push.Metrics` (the counter `keeper_push_host_ca_used_total{ca_name=...}` on each CA match);
-   - `Deliverer` / `Cleaner` — `ShaDeliverer` / `ShaCleaner` (S1/S5).
+   - `Deliverer` / `SoulSpec` — `push.DeliveryFromConfig(cfg.Push)`, which returns BOTH or neither (NIM-869: the pilot wired a `ShaDeliverer` with a zero `SoulSpec`, and `Deliver` refuses an empty `SoulBinaryPath`, so every push run died right after connect for as long as that pairing stood); `Cleaner` — `ShaCleaner` (S5).
 
 6. **Plugin-handle lifecycle.** The spawned plugin is held **until shutdown** (a long-living handle, unlike cloud plugins where Spawn is per-RPC). Close is registered in the `cleanups` stack AFTER all ssh consumers (LIFO will run it BEFORE Redis/Pool — the plugin holds a unix socket on the keeper-host side, reasonable to tidy up first).
 
@@ -119,7 +144,7 @@ ADR-032 amendment 2026-05-26 (S7-1) moves the per-host SSH details of the push f
 
 **Read path (the resolver):** `PGFallbackTargetResolver` (`keeper/internal/push/target_pg.go`) on every `SshDispatcher.SendApply` does a SELECT by the PK `souls.sid` and:
 
-- PG-row.ssh_target is set → returns an SSHTarget with defaults substituted (port 22 / user root / soul-path `/usr/local/bin/soul`) for the omitted fields.
+- PG-row.ssh_target is set → returns an SSHTarget with defaults substituted (port 22 / user root / soul-path `/var/lib/soul-stack/bin/soul`, the delivery path) for the omitted fields.
 - PG-row.ssh_target IS NULL and `push.allow_legacy_push_targets: false` (default) → `ErrTargetNotConfigured` (fail-closed, the operator sees a clear message in `push_runs.summary`).
 - PG-row.ssh_target IS NULL and `push.allow_legacy_push_targets: true` → a one-time WARN deprecation + fallback to `ConfigTargetResolver` over `keeper.yml::push.targets[]`.
 

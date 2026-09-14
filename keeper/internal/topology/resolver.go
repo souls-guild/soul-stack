@@ -81,8 +81,18 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 // belonging to this incarnation attaches no label, so `soulprint.self.covens` /
 // `.traits` show exactly what an operator put on the host — the same set the RBAC
 // scope predicate resolves.
+//
+// ★ NO transport carve-out here, unlike [inventorySQL]. A `transport=ssh` host
+// is `pending` for its whole life, so this query never returns one — and that is
+// the current behaviour, kept deliberately (NIM-869): a scenario run reaches
+// hosts through [scenario.ApplyDispatcher], whose only implementation is the
+// gRPC stream, so an ssh host admitted to the roster would reach dispatch and
+// fail `soul_not_connected` where today the run simply does not see it. Binding
+// one to an incarnation is not prevented anywhere, so this is reachable, not
+// hypothetical. The ticket that gives the scenario path a push branch (NIM-870)
+// is the one that gets to widen this, together with the dispatch it needs.
 const rosterSQL = `
-SELECT s.sid, s.coven, s.traits, s.status,
+SELECT s.sid, s.coven, s.traits, s.status, s.transport,
        s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at
 FROM souls s
 JOIN incarnation_membership m ON m.sid = s.sid
@@ -177,17 +187,38 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 // the entire incarnation (no_hosts → error_locked), degrade to the same
 // SQL-presence fallback (status='connected') with warning, not returning error
 // to run. Run targets the last known snapshot until Redis recovers.
+//
+// A transport=ssh host is EXEMPT from both branches and is always kept
+// (NIM-869). Presence for it is not a fact anyone observes: the Keeper reaches
+// it by opening a connection at dispatch time, and whether that works is
+// answered by the dial, not by a lease this host will never take or a
+// `connected` status only the agent's Bootstrap RPC writes. Filtering it here
+// was not conservative, it was unconditional — no push host ever survived the
+// phase.
+//
+// Reachable only from [Resolver.LoadByInventory] today: [rosterSQL] returns no
+// ssh host at all, on purpose (see its doc). The exemption lives here rather
+// than in the push caller because presence is this function's question, and a
+// second copy of "what counts as present" is how the two answers drift.
 func (r *Resolver) filterAlive(ctx context.Context, candidates []*HostFacts) ([]*HostFacts, error) {
 	if len(candidates) == 0 {
 		return candidates, nil
 	}
-	if r.lease == nil {
-		return filterConnectedSnapshot(candidates), nil
+
+	// Only the streamed hosts are asked about; an ssh host is kept whatever the
+	// answer, so putting it in the query would only widen it.
+	sids := make([]string, 0, len(candidates))
+	for _, h := range candidates {
+		if h.Transport != transportSSH {
+			sids = append(sids, h.SID)
+		}
 	}
 
-	sids := make([]string, len(candidates))
-	for i, h := range candidates {
-		sids[i] = h.SID
+	if len(sids) == 0 {
+		return keepAlive(candidates, nil, false), nil
+	}
+	if r.lease == nil {
+		return keepAlive(candidates, nil, true), nil
 	}
 	alive, err := r.lease.SoulsStreamAlive(ctx, sids)
 	if err != nil {
@@ -195,30 +226,39 @@ func (r *Resolver) filterAlive(ctx context.Context, candidates []*HostFacts) ([]
 			r.logger.Warn("topology: lease presence check failed — fallback to SQL snapshot (fail-safe)",
 				slog.Any("error", err))
 		}
-		return filterConnectedSnapshot(candidates), nil
+		return keepAlive(candidates, nil, true), nil
 	}
-
-	out := make([]*HostFacts, 0, len(candidates))
-	for _, h := range candidates {
-		if _, ok := alive[h.SID]; ok {
-			out = append(out, h)
-		}
-	}
-	return out, nil
+	return keepAlive(candidates, alive, false), nil
 }
 
-// filterConnectedSnapshot — SQL-presence fallback: keeps candidates with
-// legacy snapshot status='connected' in PG. Used when lease==nil or on
-// Redis failure (fail-safe). Candidate Status is read from scan ([HostFacts.Status]).
-func filterConnectedSnapshot(candidates []*HostFacts) []*HostFacts {
+// keepAlive walks candidates IN ORDER — the SQL `ORDER BY sid` is what makes a
+// serial wave reproducible, so presence filtering must not reshuffle — and
+// keeps a host when it is reachable by construction (transport ssh) or present
+// by the chosen source. snapshot=true selects the SQL fallback
+// (`status='connected'`); otherwise membership in alive decides.
+func keepAlive(candidates []*HostFacts, alive map[string]struct{}, snapshot bool) []*HostFacts {
 	out := make([]*HostFacts, 0, len(candidates))
 	for _, h := range candidates {
-		if h.Status == "connected" {
+		switch {
+		case h.Transport == transportSSH:
 			out = append(out, h)
+		case snapshot:
+			if h.Status == "connected" {
+				out = append(out, h)
+			}
+		default:
+			if _, ok := alive[h.SID]; ok {
+				out = append(out, h)
+			}
 		}
 	}
 	return out
 }
+
+// transportSSH duplicates soul.TransportSSH as a literal: topology is a
+// read-only projection over `souls` and importing the registry package for one
+// enum value would invert that dependency. Guarded by a test comparing the two.
+const transportSSH = "ssh"
 
 // loadChoirMemberships reads `incarnation_choir_voices` and builds two maps:
 //   - choirs: SID → names of Choirs where this SID is a Voice (ADR-044, S-T4);
@@ -298,7 +338,7 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 		collectedAt *time.Time
 		receivedAt  *time.Time
 	)
-	if err := row.Scan(&h.SID, &h.Coven, &traitsJSON, &h.Status, &factsJSON, &collectedAt, &receivedAt); err != nil {
+	if err := row.Scan(&h.SID, &h.Coven, &traitsJSON, &h.Status, &h.Transport, &factsJSON, &collectedAt, &receivedAt); err != nil {
 		return nil, fmt.Errorf("topology: scan host: %w", err)
 	}
 
@@ -329,17 +369,24 @@ func scanHost(row pgx.Row) (*HostFacts, error) {
 //
 // Difference from rosterSQL — filter is NOT by Coven membership, but by exact SID list;
 // the Choir phase is not here (push run is not tied to an incarnation, so there are
-// no Voices to read — Role="" for all). Status filter is the same:
-// exclude terminal (`revoked`/`expired`/`destroyed`) and onboarding (`pending`) —
-// SshDispatcher makes no sense on "not-ready" hosts regardless of lease.
+// no Voices to read — Role="" for all). Terminal statuses are excluded the same way.
+//
+// ★ `pending` is excluded for an AGENT host ONLY, and this is the one query
+// where that holds (NIM-869). A pending agent has a bootstrap token issued and
+// no identity yet — targeting it is meaningless. A `transport=ssh` host is
+// pending for its whole life: `connected` is written by the agent's Bootstrap
+// RPC and by nothing else, and an ssh host never makes that call. Excluding it
+// by status excluded the entire push inventory, which is the only inventory
+// this query serves. [rosterSQL] deliberately does NOT copy this.
 //
 // ORDER BY sid — determinism for per-host dispatch.
 const inventorySQL = `
-SELECT sid, coven, traits, status,
+SELECT sid, coven, traits, status, transport,
        soulprint_facts, soulprint_collected_at, soulprint_received_at
 FROM souls
 WHERE sid = ANY($1)
-  AND status NOT IN ('pending', 'revoked', 'expired', 'destroyed')
+  AND status NOT IN ('revoked', 'expired', 'destroyed')
+  AND (status <> 'pending' OR transport = 'ssh')
 ORDER BY sid ASC
 `
 
@@ -351,11 +398,13 @@ ORDER BY sid ASC
 //   - declared roles are absent (Role="" for all — push hosts belong to no
 //     incarnation, so they have no Voice);
 //   - second phase (filterAlive) applies the same: lease-presence for
-//     fail-safe filter of "live" hosts; lease==nil → SQL-snapshot fallback.
+//     fail-safe filter of "live" hosts; lease==nil → SQL-snapshot fallback;
+//     transport=ssh hosts skip the phase (NIM-869).
 //
 // Semantics:
-//   - not-found SID / hard-terminal status / onboarding → silently absent
-//     from result (caller gets len(out) < len(sids));
+//   - not-found SID / hard-terminal status / an ONBOARDING AGENT → silently
+//     absent from result (caller gets len(out) < len(sids)); a pending ssh host
+//     is kept, since `pending` is the only status it ever holds;
 //   - empty sids → empty result, not error;
 //   - stale soulprint (`received_at < now - 10m`) → warn to logger,
 //     run is not blocked (parity with LoadIncarnationHosts).

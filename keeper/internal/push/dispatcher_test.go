@@ -86,7 +86,7 @@ func validSignReply(t *testing.T) *pluginv1.SignReply {
 }
 
 func sshTarget() SSHTarget {
-	return SSHTarget{Host: "host-1.example.com", Port: 22, User: "soul", SoulPath: "/usr/local/bin/soul"}
+	return SSHTarget{Host: "host-1.example.com", Port: 22, User: "soul", SoulPath: HostSoulBinaryPath}
 }
 
 func sshSoul() *soul.Soul {

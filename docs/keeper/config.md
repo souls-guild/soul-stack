@@ -916,6 +916,7 @@ Optional block: if there is no (or empty `targets[]` / missing `host_ca_ref` AND
 
 ```yaml
 push:
+  soul_binary_path: /usr/local/lib/soul-stack/soul  # the soul artifact ON THE KEEPER NODE; omitted → no delivery
   host_ca_refs:                                   # S7-3: multi-CA OR check via CertChecker.IsHostAuthority
     - ref: vault:secret/keeper/ssh-host-ca-prod   # vault-ref, required
       name: trusted-bastion-1                     # kebab-case, label in keeper_push_host_ca_used_total{ca_name=...}
@@ -925,7 +926,7 @@ push:
     - sid: soul-a.example.com                    # = souls.sid (FQDN)
       ssh_port: 22                               # opt., default 22
       ssh_user: root                             # opt., default root
-      soul_path: /usr/local/bin/soul             # opt., default /usr/local/bin/soul
+      soul_path: /var/lib/soul-stack/bin/soul    # opt., default = the delivery path
     - sid: soul-b.example.com
       ssh_port: 2222
       ssh_user: deploy
@@ -939,12 +940,13 @@ push:
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
+| `push.soul_binary_path` | `path` (absolute) | — | The `soul` binary ON THE KEEPER NODE that a push run delivers to the host before `soul apply`. The only source of `push.SoulSpec`. Omitted → delivery is OFF and the run execs whatever is already at the target's `soul_path` (on a bare host: `exit 127`) — a WARN at start, not an error, because `core.ssh.run` shares this wiring. Set but unreadable → the daemon refuses to start. A relative path is rejected at the schema phase (`path_not_absolute`). Before NIM-869 this key did not exist and the dispatcher was wired with a Deliverer and an empty spec, so **every** push run died right after connect. |
 | `push.host_ca_refs[]` | `array<{ref, name}>` | — (one of: `host_ca_refs[]` or deprecated `host_ca_ref` is required) | Multi-CA set for verify host-cert on SSH handshake (S7-3, [ADR-032 amendment](../architecture.md)). Each `ref` is a vault-ref (`vault:<mount>/<path>`), `name` is an operator-defined kebab-case (label in `keeper_push_host_ca_used_total{ca_name=...}`). During handshake, **OR-check** is done via `ssh.CertChecker.IsHostAuthority` for all CAs: cert signed by any → trusted; otherwise reject. Names in the set must be unique (`duplicate_push_host_ca_name`). Plaintext-PEM is disabled (`vault_ref_invalid`). Per-provider CA-override - deferred post-MVP. |
 | `push.host_ca_ref` | `vault-ref` | — | **Deprecated (S7-3, 1-release WARN window).** Singular vault-ref on public host-CA. When singular is filled and `host_ca_refs[]` is empty, daemon auto-adapts singular in `host_ca_refs[0]` with auto-name `default` and writes a one-time WARN. Concurrent presence with `host_ca_refs[]` is rejected by the schema phase (`mutually_exclusive_keys`). Plaintext-inline-PEM is prohibited ("security first"): non-vault-ref → diag `vault_ref_invalid`. Symmetry with `auth.jwt.signing_key_ref` / `sigil.signing_key_ref`. |
 | `push.targets[].sid` | `string` (FQDN) | — | Mandatory. The SID of the push host is the same as `souls.sid`. SID without entry in `targets[]` → `target_not_configured` on resolve in SshDispatcher. Duplicate SIDs are rejected (`duplicate_push_target_sid`). |
 | `push.targets[].ssh_port` | `int` (1..65535) | `22` | TCP port of sshd on push host. `0`/omitted → default. |
 | `push.targets[].ssh_user` | `string` | `root` | SSH user to login. Opt. (the typical value depends on the provider: vault-issued user-cert is usually the principal of a specific user). |
-| `push.targets[].soul_path` | `path` | `/usr/local/bin/soul` | The absolute path to the soul binary on the push host. Delivered by ShaDeliverer during the first push pass (see [push.md → Delivery](push.md)); the path must match where Deliverer puts the binary. |
+| `push.targets[].soul_path` | `path` | `/var/lib/soul-stack/bin/soul` | The absolute path the applier is exec'd from on the push host. The default IS where ShaDeliverer writes (`wire.PushSoulBinaryPath`, hardcoded in the delivery and cleanup code — NOT the pull install path, which is `/usr/local/bin/soul`), so the ordinary run execs the binary it just delivered. An explicit value is honoured and opts OUT of that pairing — delivery still writes to the contract path, and putting the binary at the override is then the operator's job. |
 | `push.providers[].name` | `string` (kebab-case) | — | Mandatory. The name of the SshProvider plugin, references `plugins.ssh_providers[].name`. Duplicates are rejected (`duplicate_push_provider_name`). |
 | `push.providers[].params` | `map<string, any>` | — | Opaque form of provider parameters (vault_addr/role/proxy_addr/...). When the plugin is spawned, it is serialized in JSON and placed in an env variable named `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` ([ADR-020 amendment l](../adr/0020-plugin-infrastructure.md)): `vault-bastion` → `SOUL_SSH_VAULT_BASTION_PARAMS`. There is no entry → the plugin starts without env-payload (the behavior depends on the plugin itself: `soul-ssh-static` works with defaults, `soul-ssh-vault` without params will return an error). |
 | `push.allow_legacy_push_targets` | `bool` | `false` | S7-1 deprecation window: PG source (`souls.ssh_target` jsonb) canonical, `push.targets[]` legacy. When `false` entry is not in PG → `target_not_configured` (fail-closed); with `true` → fallback to inline-`targets[]` + one-time WARN at start. After S8 hard-cut the field is deleted (`unknown_key`). |

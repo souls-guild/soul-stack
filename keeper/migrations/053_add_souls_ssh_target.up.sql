@@ -20,8 +20,10 @@
 -- soul_path: text }. NULL semantics for the whole field: the Soul's record
 -- has no configured target (fallback to keeper.yml or ErrTargetNotConfigured).
 -- Defaults for omitted fields (port 22 / user root / soul-path
--- /usr/local/bin/soul) are resolved on the Go side in
--- PGFallbackTargetResolver: the schema stores ONLY what the operator set.
+-- /var/lib/soul-stack/bin/soul, where push delivery writes the binary) are
+-- resolved on the Go side in PGFallbackTargetResolver: the schema stores ONLY
+-- what the operator set. The soul-path default read /usr/local/bin/soul until
+-- NIM-869 -- the PULL install path, which no push delivery writes to.
 
 ALTER TABLE souls ADD COLUMN IF NOT EXISTS ssh_target jsonb;
 

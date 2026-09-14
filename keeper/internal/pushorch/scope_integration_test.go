@@ -3,8 +3,10 @@
 // L1 integration for the push-run host-scope pushdown (NIM-842).
 //
 // WHY this package grew a Postgres. `internal/pushorch` had no PG suite at all —
-// its only integration file is a skipped S6 skeleton — so [HostScopeSQL] was the
-// one narrowing predicate on a read path whose SQL had never met a database. It
+// its only integration file was a skipped S6 skeleton, since replaced by the live
+// push run that reuses the pool this file brings up (NIM-869) — so [HostScopeSQL]
+// was the one narrowing predicate on a read path whose SQL had never met a
+// database. It
 // is a correlated NOT EXISTS over `unnest(inventory_sids)` LEFT JOINed onto
 // `souls` and closed with `IS NOT TRUE`; the unit guards can assert its text and
 // nothing else.

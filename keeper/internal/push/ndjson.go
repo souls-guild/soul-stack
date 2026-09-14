@@ -21,9 +21,21 @@ import (
 var ErrNoRunResult = errors.New("push: NDJSON stream ended without RunResult")
 
 // EventHandler — callback for each intermediate TaskEvent in the NDJSON
-// stream. nil is fine: the pilot only needs TaskEvents end-to-end (RunResult
-// carries the outcome), full per-task handling/writing to
-// apply_task_register is a runner-integration slice (S3).
+// stream. nil is fine: RunResult carries the run's outcome.
+//
+// ★ A push run's `register:` DOES NOT FILL, and this is the seam where that is
+// decided (verified for NIM-869). `register_data` rides on TaskEvent and
+// nothing else — RunResult has no field for it — so a push run's only copy
+// passes through here, and [SshDispatcher.SendApply] gives this callback to a
+// debug log. Persisting it is not a matter of holding onto the events either:
+// `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid)`,
+// and a push run writes `push_runs` and no row there. So a scenario task
+// executed over push would leave `register.<name>` unresolved and any barrier
+// waiting on it unreleased. Nothing reaches that state today — the scenario
+// dispatcher has no push branch ([scenario.ApplyDispatcher] is implemented
+// only by [grpc.Outbound]) — but the ticket that adds one (NIM-870) has to
+// decide whether a push run mints an `apply_runs` row, and that decision is an
+// ADR, not an implementation detail of this callback.
 type EventHandler func(*keeperv1.TaskEvent)
 
 // ParseStream reads the line-delimited NDJSON stdout of `soul apply`

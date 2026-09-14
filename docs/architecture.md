@@ -443,7 +443,7 @@ Soul Stack accepts "an executable that does a gRPC-stdio handshake." What's unde
 
 ### Host behavior and cleanup
 
-`/var/lib/soul-stack/{bin,modules}/` layout, SHA-256 module cache, pull behavior (the daemon pulls a custom module via `core.module.installed`) and push (Keeper transfers all registered modules en masse), local cache clearing via TTL, separate operation `keeper.push.cleanup` when revoke the host - collected in [`docs/soul/modules.md`](soul/modules.md).
+`/var/lib/soul-stack/{bin,modules}/` layout, SHA-256 module cache, pull behavior (the daemon pulls a custom module via `core.module.installed`) and push (design: Keeper transfers all registered modules en masse — **not wired**, push ships the `soul` binary and nothing else, see [`docs/keeper/push.md`](keeper/push.md)), local cache clearing via TTL, separate operation `keeper.push.cleanup` when revoke the host - collected in [`docs/soul/modules.md`](soul/modules.md).
 
 Limit of responsibility: Reaper on the Keeper side works **only on Postgres** and does not access hosts via SSH - otherwise you would have to give it SSH rights to all the Souls (bad for blast radius). Host cleaning is the task of the Soul daemon (pull) or `keeper.push` itself (push).
 

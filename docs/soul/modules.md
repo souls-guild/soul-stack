@@ -7,7 +7,7 @@ This section is about the **host side** of modules: where they physically live, 
 ```
 /var/lib/soul-stack/
   bin/
-    soul-<sha>                 # current version + 1–2 previous for rollback
+    soul                       # the agent; push overwrites this one path in place
   modules/
     redis/                     # slot of a custom module, named by the REGISTRATION ALIAS
       <schema document>        #   canonical JSON, from the artifact's trailer
@@ -17,11 +17,11 @@ This section is about the **host side** of modules: where they physically live, 
       haproxy                  #   named after its module; the alias above need not match
 ```
 
-- **`bin/soul-<sha>`** — the agent executable itself. The name contains the SHA-256 of the binary, which allows keeping several versions side by side and rolling back without re-downloading. Used by the push mode (Keeper rolls out the binary over SSH); in the pull mode updating the daemon is the operator's task (a systemd unit, a package manager).
+- **`bin/soul`** — the agent executable itself. In pull mode updating the daemon is the operator's task (a systemd unit, a package manager); in push mode Keeper rolls the binary out over SSH into `bin/soul`, overwriting in place. ⚠ The `soul-<sha>` naming this line used to describe — several versions side by side for rollback without re-downloading — is a design that was never built on either side.
 - **`modules/<alias>/`** — the slot of a custom module ([ADR-065](../adr/0065-core-module-installed.md#amendment-2026-08-06-nim-377-the-slot-is-named-by-the-alias-and-the-schema-rides-in-the-artifact); the names — [naming-rules.md → Destiny modules](../naming-rules.md)). **The slot is named by the registration alias** — the name the operator chose on Keeper, not one read out of the artifact, because the artifact carries none (NIM-377). **Single-active** per alias: one active version, written by atomic rename; versions are not kept side by side — the authority is the active Sigil grant, and a "rollback" is revoke+allow of another grant on Keeper plus a repeated install step.
 - **The executable's filename means nothing.** The slot holds exactly one and the host takes it; the name is only a habit of the repository that built it — since NIM-851 that habit is to call the artifact after the module it serves. The `soul` binary launches it as a sub-process over gRPC-stdio, naming the module it wants as a **subcommand** (`redis acl`) — one artifact serves several modules.
 - **The schema document replaces `manifest.yaml`** in the slot: canonical JSON, generated from Go, stamped into the artifact as a trailer. It is also carried by `PluginSigil.manifest_raw` in a `SigilSnapshot`, which is what the allow-check reads **before** any fetch. Since the schema now travels inside the bytes as well, Keeper's signed copy and the artifact's own copy are the same bytes by construction.
-- **Core modules do not lie on disk.** They are statically built into the `soul-<sha>` binary.
+- **Core modules do not lie on disk.** They are statically built into the `soul` binary.
 
 The path `/var/lib/soul-stack/modules/` is configured via `paths.modules` in [`soul.yml`](config.md#paths). The path to `bin/` is currently fixed by convention (the push binary is rolled out into it).
 
@@ -33,10 +33,9 @@ The path `/var/lib/soul-stack/modules/` is configured via `paths.modules` in [`s
 
 ## Behavior in push (keeper.push)
 
-- Keeper delivers to the host **all modules registered in Keeper** (without static analysis of the Destiny). Comparison by SHA-256 per module; nothing changed — the copy is skipped. This works thanks to the hot cache on the host (the same alias-named slots as in pull).
-- The `soul` binary itself is rolled out by the same mechanism: Keeper compares the SHA-256 of the target version with what lies in `bin/`, and copies only on a mismatch.
-- The first run on a new host is slow (the binary and all modules are copied). Subsequent ones are instant.
-- For `bin/`, the file names with a SHA suffix allow keeping several agent versions side by side and rolling back without re-downloading; module slots are single-active ([ADR-065](../adr/0065-core-module-installed.md)).
+- The `soul` binary is rolled out over SSH from `keeper.yml::push.soul_binary_path`: Keeper compares its SHA-256 with what lies at `bin/soul` and copies only on a mismatch. The first run on a new host is slow (tens of MB); subsequent ones compare a hash and skip the upload.
+- **Module delivery is designed and NOT wired** (as of NIM-869). The design is "all modules registered in Keeper, without static analysis of the Destiny, SHA-256 per module". Nothing fills `push.SoulSpec.Modules`, and the mechanism that would use it lays one flat FILE per module under `modules/`, which the alias-slot walk skips — so the slot layout has to come first. Until then a Destiny that addresses a plugin module is a pull-mode Destiny; over push only the statically built-in `core.*` modules resolve.
+- **`bin/` holds one name, not one per version.** Push writes `bin/soul` and overwrites it in place; there is no `soul-<sha>` fan-out on a push host and no host-side rollback set. Module slots are single-active ([ADR-065](../adr/0065-core-module-installed.md)).
 
 The full push-delivery algorithm is in [keeper/push.md → Delivering the `soul` binary and modules to the host](../keeper/push.md).
 

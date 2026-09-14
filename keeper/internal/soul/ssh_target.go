@@ -14,7 +14,8 @@ import (
 // per-host SSH credentials for the push flow directly in the souls registry,
 // replacing the pilot form `keeper.yml::push.targets[]` (S6).
 //
-// Defaults for omitted fields (port 22 / user root / soul-path /usr/local/bin/soul)
+// Defaults for omitted fields (port 22 / user root / soul-path =
+// push.HostSoulBinaryPath, where delivery puts the agent)
 // are resolved NOT here but in keeper/internal/push.PGFallbackTargetResolver:
 // storage holds ONLY what the operator explicitly set (NULL/0/"" → default at
 // resolve time). This lets defaults change centrally in the future without a

@@ -20,10 +20,17 @@ var ErrTargetNotConfigured = errors.New("push: SID not configured in push.target
 // Defaults for the pilot resolver's omitted `push.targets[].*` fields (see
 // the [config.KeeperPushTarget] doc). Canonical unix conventions; the
 // operator can override per-target with an explicit value.
+//
+// defaultSoulPath is [HostSoulBinaryPath] and must stay so: delivery writes
+// there and nowhere else, so the exec side is the half that moves. It read
+// `/usr/local/bin/soul` until NIM-869 — the path the PULL install blueprint
+// uses, which no push delivery has ever written to. An operator who overrides
+// `soul_path` still gets what they asked for; they are then responsible for the
+// binary being there, because delivery does not follow the override.
 const (
 	defaultSSHPort  = 22
 	defaultSSHUser  = "root"
-	defaultSoulPath = "/usr/local/bin/soul"
+	defaultSoulPath = HostSoulBinaryPath
 )
 
 // ConfigTargetResolver is the pilot resolver for SSH credentials from
@@ -32,7 +39,7 @@ const (
 // SendApply hot path.
 //
 // Resolve: SID → [SSHTarget] with defaults filled in (port 22 / user root /
-// soul-path /usr/local/bin/soul, symmetric with docs/keeper/push.md).
+// soul-path [HostSoulBinaryPath], symmetric with docs/keeper/push.md).
 // A SID without an entry → [ErrTargetNotConfigured] (fail-closed; the
 // operator sees a clear message in push_runs.summary).
 //

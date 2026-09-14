@@ -1910,6 +1910,15 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	respawner := newPushProviderRespawner(d.pushPluginHost, d.pushDiscoveredSsh, providerResolver,
 		logger.With(slog.String("component", "push-provider-respawner")))
+	deliverer, soulSpec, err := push.DeliveryFromConfig(cfg.Push)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: push dispatcher artifact delivery: %v\n", err)
+		return errSetupFailed
+	}
+	if deliverer == nil {
+		logger.Warn("keeper run: push artifact delivery is OFF (push.soul_binary_path is unset) - a push run execs whatever is already at the target's soul_path",
+			slog.String("expected_host_path", push.HostSoulBinaryPath))
+	}
 	dispatcher, err := push.NewSshDispatcher(push.Deps{
 		Providers:       providers,
 		Respawner:       respawner,
@@ -1917,7 +1926,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		Souls:           push.NewPGSoulLookup(d.pool),
 		HostAuthorities: hostAuthorities,
 		Metrics:         d.pushMetrics,
-		Deliverer:       push.NewShaDeliverer(),
+		Deliverer:       deliverer,
+		SoulSpec:        soulSpec,
 		Cleaner:         push.NewShaCleaner(),
 		Logger:          logger.With(slog.String("component", "push-dispatcher")),
 	})
@@ -1946,7 +1956,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 		slog.Bool("allow_legacy_push_providers", cfg.Push.AllowLegacyPushProviders),
 		slog.Int("host_authorities", len(hostAuthorities)),
 		slog.String("cluster_default_provider", cfg.Push.ClusterDefaultProvider),
-		slog.Int("coven_default_providers", len(cfg.Push.CovenDefaultProviders)))
+		slog.Int("coven_default_providers", len(cfg.Push.CovenDefaultProviders)),
+		slog.String("soul_binary_path", cfg.Push.SoulBinaryPath))
 	return nil
 }
 

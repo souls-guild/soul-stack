@@ -33,7 +33,7 @@ Operator API; links to endpoints — [operator-api.md](../docs/keeper/operator-a
 |---|---|---|
 | `souls list` | list registered Souls | `--coven` (repeatable), `--status`, `--transport` (`agent\|ssh`), `--limit`, `--offset` |
 | `souls get <sid>` | show a Soul by SID (fallback via list — `soul.get` isn't exposed in MVP), JSON | — |
-| `souls ssh-target set <sid>` | set per-host `ssh_target` push flow ↔ `PUT /v1/souls/{sid}/ssh-target` | `--port` (default `22`), `--user` (default `root`), `--soul-path` (default `/usr/local/bin/soul`), `--ssh-provider` |
+| `souls ssh-target set <sid>` | set per-host `ssh_target` push flow ↔ `PUT /v1/souls/{sid}/ssh-target` | `--port` (default `22`), `--user` (default `root`), `--soul-path` (default `/var/lib/soul-stack/bin/soul` — where push delivery writes the binary), `--ssh-provider` |
 | `souls ssh-target bulk-set` | bulk-set `ssh_provider` for all Souls in a Coven (client-side list→per-SID PUT) | `--coven` (required), `--ssh-provider` (required), `--port`, `--user`, `--soul-path` |
 
 ### `soul` — single actions on one specific host (singular)

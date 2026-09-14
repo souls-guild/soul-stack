@@ -969,6 +969,8 @@ func validatePush(root *ast.MappingNode, p *KeeperPush) []diag.Diagnostic {
 	}
 	out = append(out, validatePushHostCARefs(root, p.HostCARefs)...)
 	out = append(out, validatePushTransport(root, p)...)
+	out = append(out, checkAbsolutePath(root, "$.push.soul_binary_path", p.SoulBinaryPath,
+		"the path is resolved on the keeper node; use e.g. /usr/local/lib/soul-stack/soul")...)
 	seenSIDs := make(map[string]int, len(p.Targets))
 	for i, t := range p.Targets {
 		yp := fmt.Sprintf("$.push.targets[%d]", i)

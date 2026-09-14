@@ -42,7 +42,7 @@
 
 **Amendment (2026-05-26, S6 pilot wire-up SshDispatcher).** ADR-032 aims at the production form of the push-orchestrator with the PG table push_providers, souls.ssh_target jsonb and push.host_ca_refs[] (multi-CA, multi-provider routing) — that is S7, a separate slice. Until S7 closes, "production" is enabled via a **pilot form** through 3 inline fields in `keeper.yml::push:`:
 
-- **`push.targets[]`** — per-SID SSH credentials (host=SID, ssh_port/ssh_user/soul_path with defaults 22/root/`/usr/local/bin/soul`). Without the migration `souls.ssh_target jsonb` — pilot. A SID with no record → `ErrTargetNotConfigured` on resolve in the SshDispatcher (fail-closed).
+- **`push.targets[]`** — per-SID SSH credentials (host=SID, ssh_port/ssh_user/soul_path with defaults 22/root/`/var/lib/soul-stack/bin/soul`). Without the migration `souls.ssh_target jsonb` — pilot. A SID with no record → `ErrTargetNotConfigured` on resolve in the SshDispatcher (fail-closed).
 - **`push.providers[]`** — per-provider `params` (an opaque form), serialized to JSON and injected into the env `SOUL_SSH_<UPPER_SNAKE(name)>_PARAMS` of the plugin at spawn (ADR-020 amendment l). Without the PG table `push_providers` — pilot.
 - **`push.host_ca_ref`** — a single Vault-ref to the PEM public host-CA (the field `public_key`). Single-CA (multi-CA `host_ca_refs[]` — S7). Plaintext-inline-PEM is rejected (`vault_ref_invalid` in the schema phase).
 
@@ -54,7 +54,7 @@ The pilot **deliberately** does not introduce new entities (a dual registry `pus
 
 - **Column `souls.ssh_target jsonb`** (migration 053) + CHECK `souls_ssh_target_shape` (typed shape: integer/text/text). A NULL semantics of the whole field means "target not configured".
 - **Operator API:** `PUT /v1/souls/{sid}/ssh-target` with body `{ssh_port, ssh_user, soul_path}`. Permission `soul.ssh-target-update` (with the selector `host=<sid>`), audit `soul.ssh-target.updated`. MCP-tool: `keeper.soul.ssh-target.update` (the 3-segment pattern `keeper.sigil.key.<verb>` ↔ permission `sigil.key-<verb>`).
-- **Push-flow resolver:** `PGFallbackTargetResolver` (PG-first; `souls.ssh_target` → defaults port=22/user=root/soul-path=/usr/local/bin/soul for omitted fields). PG-row.ssh_target IS NULL → a check of the flag `push.allow_legacy_push_targets` (default `false`): false → `ErrTargetNotConfigured`; true → a one-time WARN deprecation + fallback onto `ConfigTargetResolver` over `push.targets[]`.
+- **Push-flow resolver:** `PGFallbackTargetResolver` (PG-first; `souls.ssh_target` → defaults port=22/user=root/soul-path=`/var/lib/soul-stack/bin/soul` for omitted fields). PG-row.ssh_target IS NULL → a check of the flag `push.allow_legacy_push_targets` (default `false`): false → `ErrTargetNotConfigured`; true → a one-time WARN deprecation + fallback onto `ConfigTargetResolver` over `push.targets[]`.
 - **PM-decisions S7-1:** (1) push-providers/conduit as an "SSH Provider" variant of Provider (S7-2, not this slice); (2) the deprecation policy of `keeper.yml::push.targets[]` — 1 release WARN → hard-cut; (3) the audit-event name `soul.ssh-target.updated`; (4) the permission `soul.ssh-target-update`; (5) a typed JSON-shape, validated by CHECK; (6) **no auto-import** of keeper.yml targets[] into PG in S7-1 (deferred to S7-4, requires explicit consent + idempotency); (7) priority PG > keeper.yml (DB is the source of truth).
 - **What is NOT in S7-1:** the push_providers PG table (S7-2), multi-CA `push.host_ca_refs[]` (S7-3), auto-import of legacy targets (S7-4).
 
@@ -133,3 +133,24 @@ The pilot **deliberately** does not introduce new entities (a dual registry `pus
 - **A read failure is still propagated, not swallowed.** Falling through to the cluster default because the coven read failed would be a silent provider fallback, which (2) of the P2 decisions refuses.
 - **Not changed:** Level 1 and Level 3, the `source` labels (`soul`/`coven`/`cluster`), the metric, the audit summary, and the keeper.yml grammar.
 - **Migration note.** A fleet that had come to rely on the NIM-251 reading — an incarnation labelled `bastion-eu`, its members untagged — falls through to the cluster default after this change, which is a **change of SSH perimeter, not an error**, and it is silent. Before upgrading, list the covens named in `push.coven_default_providers` and confirm each one is carried by the hosts it is meant to route; tag any host that was matching only by inheritance.
+
+**Amendment (2026-09-14, NIM-869): the `soul_path` default is the DELIVERY path.**
+Both resolvers defaulted `soul_path` to `/usr/local/bin/soul`, which is where the
+PULL install blueprint puts the agent and not anywhere a push run has ever
+written: `ShaDeliverer` lays the binary at `/var/lib/soul-stack/bin/soul`. A run
+that delivered therefore exec'd a path nothing had written and died `exit 127`,
+and the two prose paragraphs above stated the broken value as fact.
+
+⚠ In production no run ever got that far: the daemon paired a `ShaDeliverer` with
+a zero `SoulSpec`, so every run aborted earlier still, at
+`push: artifact delivery <sid>: SoulBinaryPath is required`. Two independent
+defects, fixed together; neither is the cause of the other. The default is now the delivery path; an explicit
+`soul_path` is still honoured and opts out of the pairing (delivery does not
+follow the override).
+
+★ `soul_path` remains **required** in `PUT /v1/souls/{sid}/ssh-target` and in the
+MCP tool, so an operator registering a host through the API still types the value
+rather than inheriting the default, and a row written before this amendment still
+carries `/usr/local/bin/soul` and still fails. Re-PUT those rows.  Making the
+field optional is the ergonomic follow-up NIM-869 deliberately did not take on
+its own — it is a change to a published Operator API contract.

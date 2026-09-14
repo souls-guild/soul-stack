@@ -148,7 +148,7 @@ This is the only destructive action on the resource, and the only one an agent c
 
 #### `keeper.soul.ssh-target.update`
 
-Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../../adr/0032-push-orchestrator.md) amendment 2026-05-26, S7-1). Source-of-truth for `PGFallbackTargetResolver`; `keeper.yml::push.targets[]` - legacy fallback under the `push.allow_legacy_push_targets` flag. Permission: `soul.ssh-target-update`; selectors `host=<sid>` and `coven=<coven-tag>` (the host's own labels, resolved before the tool body runs - [rbac.md](../rbac.md)). Endpoint: [`PUT /v1/souls/{sid}/ssh-target`](../operator-api/souls.md). Async: no.
+Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ssh_user`/`soul_path`, [ADR-032](../../adr/0032-push-orchestrator.md) amendment 2026-05-26, S7-1; `soul_path` is the path the applier is exec'd from — send `/var/lib/soul-stack/bin/soul`, where push delivery writes the binary, per the [2026-09-14 amendment](../../adr/0032-push-orchestrator.md)). Source-of-truth for `PGFallbackTargetResolver`; `keeper.yml::push.targets[]` - legacy fallback under the `push.allow_legacy_push_targets` flag. Permission: `soul.ssh-target-update`; selectors `host=<sid>` and `coven=<coven-tag>` (the host's own labels, resolved before the tool body runs - [rbac.md](../rbac.md)). Endpoint: [`PUT /v1/souls/{sid}/ssh-target`](../operator-api/souls.md). Async: no.
 
 3-segment MCP-tool `keeper.soul.ssh-target.update` ↔ 2-segment permission `soul.ssh-target-update` (permission grammar is exactly `<resource>.<action>`; parallel `keeper.sigil.key.introduce` ↔ `sigil.key-introduce`).
 
@@ -159,7 +159,7 @@ Updates per-host SSH push-flow details (`souls.ssh_target` jsonb: `ssh_port`/`ss
 | `sid` | `string` (FQDN, echo path-param) | yes | Host SID. |
 | `ssh_port` | `integer` (1..65535) | yes | SSH port. |
 | `ssh_user` | `string` (≥1) | yes | SSH user. |
-| `soul_path` | `string` (abs. Unix path `^/.+`) | yes | Path to the `soul` binary on the host. |
+| `soul_path` | `string` (abs. Unix path `^/.+`) | yes | Path the applier is exec'd from. Send `/var/lib/soul-stack/bin/soul` — where push delivery writes the binary; any other value opts out of delivery. |
 
 **Output:** `{sid, ssh_target: {ssh_port, ssh_user, soul_path}}`. Errors: `not-found` (SID missing from registry `souls`).
 

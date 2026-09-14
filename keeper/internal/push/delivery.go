@@ -11,17 +11,49 @@ import (
 	"path"
 	"regexp"
 	"strings"
+
+	"github.com/souls-guild/soul-stack/shared/api/wire"
 )
 
-// Host-side delivery layout. Fixed, so the Soul side looks for the binary
-// and plugins at the same path in pull/push (ADR-004, docs/keeper/push.md).
-// Changing it is a PM decision (affects the Soul agent).
+// Host-side delivery layout. Hardcoded here and in [ShaCleaner]: these two are
+// the only writers, so this IS the contract — there is no configuration that
+// moves it and no second party to agree with.
+//
+// ★ It is NOT the pull layout, and the comment that used to say so was wrong
+// (corrected by NIM-869): a pull host gets its agent at `/usr/local/bin/soul`
+// from the install blueprint ([keeper/internal/soulinstall]), the Soul's own
+// `paths:` config declares `modules` and `seed` and no `bin` at all, and
+// nothing on the Soul side reads this prefix.
+//
+// What this prefix buys is an install that needs no privilege it was not
+// given: `/var/lib/soul-stack/` can be chowned to whatever account the push
+// host admits, and it is exactly the tree [ShaCleaner] wipes, so delivery and
+// cleanup own one subtree and nothing outside it. That is an argument for the
+// choice, not a constraint enforced anywhere — the ssh user defaults to `root`
+// ([defaultSSHUser]), and a root delivery could write `/usr/local/bin` just as
+// well.
+//
+// Moving it is a PM decision: it is the operator-facing contract of the host
+// filesystem, `soul_path` defaults to it ([wire.PushSoulBinaryPath]), and a
+// host already carrying an explicit `soul_path` would not follow.
 const (
 	hostSoulDir    = "/var/lib/soul-stack/bin"
 	hostModulesDir = "/var/lib/soul-stack/modules"
 	hostSoulFile   = "soul"
 	hostFileMode   = "0755"
 )
+
+// HostSoulBinaryPath is where the agent lands, and therefore what a push run
+// must exec. Exported so the exec side names this rather than restating the
+// literal: until NIM-869 delivery wrote here and the dispatcher ran
+// `/usr/local/bin/soul` — the PULL install path — so a run that delivered
+// correctly still died with "command not found".
+//
+// Taken from the wire package rather than composed here, because the CLI flag
+// default and the OpenAPI field description read the same value and cannot
+// import this one. That the composition below still agrees with it is a guard
+// test, not an assumption.
+const HostSoulBinaryPath = wire.PushSoulBinaryPath
 
 // moduleNameRe restricts the module name to a safe alphabet. The name comes
 // from the keeper config (not from Soul), but even a trusted source is
@@ -49,6 +81,14 @@ type SoulSpec struct {
 	// keeper node. Delivered as `<hostSoulDir>/soul` with mode 0755.
 	SoulBinaryPath string
 	// Modules — what to deliver into `<hostModulesDir>/<Name>`. Order doesn't matter.
+	//
+	// NOT WIRED IN PRODUCTION, and the shape is why: a Soul reads its plugin
+	// cache as `<root>/<alias>/<artifact>` ([sharedpluginhost.Discover]), while
+	// this lays one flat FILE per module, which that walk skips. Delivering the
+	// keeper's registered modules therefore needs the slot layout first — NIM-869
+	// left both alone rather than shipping artifacts a host cannot load. Unit and
+	// integration tests do exercise the flat form; they assert the transfer, not
+	// that the Soul finds it.
 	Modules []ModuleSpec
 }
 

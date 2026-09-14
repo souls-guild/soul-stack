@@ -20,11 +20,13 @@ import (
 )
 
 // SSHTarget — SSH connection details for a push host: host (= SID/FQDN), port,
-// user, and the path to an already-installed soul binary.
+// user, and the path the applier is exec'd from.
 //
-// In the pilot, the soul binary is assumed to already be on the host at a
-// known path (SHA-256 delivery/sync cache is the S1 slice), so SoulPath comes
-// from the resolve step rather than being computed.
+// SoulPath defaults to [HostSoulBinaryPath] — the path [Deliverer] writes to —
+// so the ordinary run execs the binary this run just delivered and verified by
+// SHA-256. It stays a resolved field rather than a constant only so an operator
+// can point at a differently-installed agent; overriding it opts out of the
+// pairing, and the binary is then theirs to place.
 type SSHTarget struct {
 	Host     string
 	Port     int

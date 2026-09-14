@@ -1970,6 +1970,23 @@ type KeeperPush struct {
 	// Teleport holds the Teleport identity creds, required when
 	// [KeeperPush.Transport] is `teleport`.
 	Teleport *KeeperPushTeleport `yaml:"teleport,omitempty" json:"teleport,omitempty"`
+
+	// SoulBinaryPath is the absolute path, ON THE KEEPER NODE, of the `soul`
+	// binary a push run ships to the host before `soul apply`. It is the only
+	// source of [push.SoulSpec]: the delivery layer holds no default, because
+	// keeper and soul are separate artifacts (ADR-004) and only the operator
+	// knows where the matching build sits on this node.
+	//
+	// Empty disables delivery: the dispatcher then execs whatever is already at
+	// the target's `soul_path`. That is the pre-delivery pilot behaviour and it
+	// is kept as a value rather than an error because `core.ssh.run` shares this
+	// wiring and must not lose its daemon over an unset push key. Until NIM-869
+	// this key did not exist at all, so the dispatcher was wired WITH a Deliverer
+	// and WITHOUT a spec, and every push run died at delivery.
+	//
+	// Registered plugin modules are NOT delivered: see the module-delivery note
+	// in keeper/internal/push/delivery.go.
+	SoulBinaryPath string `yaml:"soul_binary_path,omitempty" json:"soul_binary_path,omitempty"`
 }
 
 // Allowed `push.transport` values (ADR-063 amendment). Empty string =
@@ -2049,7 +2066,9 @@ const DefaultHostCAName = "default"
 // The SSHPort / SSHUser / SoulPath defaults are applied at resolve time (see
 // keeper/internal/push.ConfigTargetResolver), not in the schema phase: the
 // operator may omit any field, and the standard value is then substituted
-// (22 / root / /usr/local/bin/soul).
+// (22 / root / `/var/lib/soul-stack/bin/soul`, the path delivery writes to —
+// push.HostSoulBinaryPath). An explicit `soul_path` is honoured, and then the
+// operator owns getting the binary there: delivery does not follow it.
 type KeeperPushTarget struct {
 	SID      string `yaml:"sid"                json:"sid"`
 	SSHPort  int    `yaml:"ssh_port,omitempty" json:"ssh_port,omitempty"`

@@ -668,3 +668,125 @@ func TestIntegration_OperatorBoundRosterIsVisibleToTheRunner(t *testing.T) {
 		t.Fatalf("roster after the unbind = %v, want only node-1", shrunk)
 	}
 }
+
+// --- transport=ssh presence (NIM-869) ---------------------------------
+//
+// A push host is `pending` for its whole life and never holds an EventStream
+// lease, so both phases of the roster dropped it: the SQL excluded `pending`
+// outright, and filterAlive kept only what Redis (or `status='connected'`)
+// vouched for. These run the real queries against a real Postgres, which is
+// the only place the WHERE clause is the subject.
+
+func seedSSHSoul(t *testing.T, sid string, status soul.Status) {
+	t.Helper()
+	s := &soul.Soul{SID: sid, Transport: soul.TransportSSH, Status: status}
+	if err := soul.Insert(context.Background(), integrationPool, s); err != nil {
+		t.Fatalf("seedSSHSoul(%s): %v", sid, err)
+	}
+}
+
+// TestIntegration_LoadByInventory_PendingSSHHostIsTargetable — the push read
+// path, with no Redis at all. Without the carve-out the SQL returns nothing and
+// the run ends `no_live_hosts`.
+func TestIntegration_LoadByInventory_PendingSSHHostIsTargetable(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedSSHSoul(t, "push.example.com", soul.StatusPending)
+
+	hosts, err := NewResolver(integrationPool, nil, nil).LoadByInventory(ctx, []string{"push.example.com"})
+	if err != nil {
+		t.Fatalf("LoadByInventory: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].SID != "push.example.com" {
+		t.Fatalf("got %v, want [push.example.com]", sids(hosts))
+	}
+	if hosts[0].Transport != string(soul.TransportSSH) {
+		t.Errorf("Transport = %q, want ssh — the presence filter keys on it", hosts[0].Transport)
+	}
+}
+
+// TestIntegration_LoadByInventory_PendingAgentIsStillExcluded — the carve-out
+// is scoped to transport, not widened to `pending`. A pending agent has a
+// bootstrap token and no identity; nothing may target it.
+func TestIntegration_LoadByInventory_PendingAgentIsStillExcluded(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedSoul(t, "onboarding.example.com", nil, soul.StatusPending)
+	seedSSHSoul(t, "push.example.com", soul.StatusPending)
+
+	hosts, err := NewResolver(integrationPool, nil, nil).LoadByInventory(ctx,
+		[]string{"onboarding.example.com", "push.example.com"})
+	if err != nil {
+		t.Fatalf("LoadByInventory: %v", err)
+	}
+	if !equalSIDs(sids(hosts), []string{"push.example.com"}) {
+		t.Fatalf("got %v, want only the ssh host", sids(hosts))
+	}
+}
+
+// TestIntegration_LoadByInventory_TerminalSSHHostIsExcluded — a revoked push
+// host is gone for good; the carve-out must not reach past `pending`.
+func TestIntegration_LoadByInventory_TerminalSSHHostIsExcluded(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedSSHSoul(t, "revoked.example.com", soul.StatusRevoked)
+	seedSSHSoul(t, "live.example.com", soul.StatusPending)
+
+	hosts, err := NewResolver(integrationPool, nil, nil).LoadByInventory(ctx,
+		[]string{"revoked.example.com", "live.example.com"})
+	if err != nil {
+		t.Fatalf("LoadByInventory: %v", err)
+	}
+	if !equalSIDs(sids(hosts), []string{"live.example.com"}) {
+		t.Fatalf("got %v, want only the non-terminal ssh host", sids(hosts))
+	}
+}
+
+// TestIntegration_LoadByInventory_SSHHostSurvivesALiveLeaseCheck — with Redis
+// present and reporting nothing alive, the ssh host is still targeted and the
+// agent beside it is not.
+func TestIntegration_LoadByInventory_SSHHostSurvivesALiveLeaseCheck(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	lease, mr := newLeaseChecker(t)
+
+	seedSoul(t, "agent.example.com", nil, soul.StatusConnected)
+	seedSSHSoul(t, "push.example.com", soul.StatusPending)
+	clearLease(mr, "agent.example.com")
+
+	hosts, err := NewResolver(integrationPool, lease, nil).LoadByInventory(ctx,
+		[]string{"agent.example.com", "push.example.com"})
+	if err != nil {
+		t.Fatalf("LoadByInventory: %v", err)
+	}
+	if !equalSIDs(sids(hosts), []string{"push.example.com"}) {
+		t.Fatalf("got %v, want only the ssh host (the agent holds no lease)", sids(hosts))
+	}
+}
+
+// TestIntegration_LoadIncarnationHosts_SSHMemberStaysOutOfTheScenarioRoster —
+// the BOUNDARY of the carve-out, and the direction symmetry would erase.
+// Binding a push host to an incarnation is not prevented anywhere, and a
+// scenario run reaches its hosts over the gRPC stream: admitting one here would
+// turn "the run does not see this host" into "the run fails soul_not_connected".
+// NIM-870 widens this together with a push dispatch branch, not before.
+func TestIntegration_LoadIncarnationHosts_SSHMemberStaysOutOfTheScenarioRoster(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedIncarnation(t, "redis-prod")
+	seedSSHSoul(t, "push.example.com", soul.StatusPending)
+	seedSoul(t, "agent.example.com", nil, soul.StatusConnected)
+	seedMembership(t, "redis-prod", "push.example.com", "agent.example.com")
+
+	hosts, err := NewResolver(integrationPool, nil, nil).LoadIncarnationHosts(ctx, "redis-prod")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts: %v", err)
+	}
+	if !equalSIDs(sids(hosts), []string{"agent.example.com"}) {
+		t.Fatalf("got %v, want only the agent member", sids(hosts))
+	}
+}

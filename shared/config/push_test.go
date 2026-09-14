@@ -385,3 +385,58 @@ func TestPush_Transport(t *testing.T) {
 		})
 	}
 }
+
+// push.soul_binary_path is the only source of push.SoulSpec: without it the
+// dispatcher had a Deliverer and nothing to deliver, and every push run died
+// after connect (NIM-869).
+func TestPush_SoulBinaryPath(t *testing.T) {
+	cases := []struct {
+		name     string
+		value    string
+		wantCode string
+	}{
+		{name: "absolute", value: "/usr/local/lib/soul-stack/soul"},
+		{name: "relative", value: "bin/soul", wantCode: "path_not_absolute"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			src := keeperBaseWithPush("push:\n  host_ca_ref: vault:secret/keeper/ssh-host-ca\n  soul_binary_path: " + tc.value + "\n")
+			cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+			if err != nil {
+				t.Fatalf("io error: %v", err)
+			}
+			if tc.wantCode != "" {
+				if !hasCodeAt(diags, tc.wantCode, "$.push.soul_binary_path") {
+					dump(t, diags)
+					t.Fatalf("expected %s at $.push.soul_binary_path", tc.wantCode)
+				}
+				return
+			}
+			if diag.HasErrors(diags) {
+				dump(t, diags)
+				t.Fatalf("expected 0 errors")
+			}
+			if cfg.Push == nil || cfg.Push.SoulBinaryPath != tc.value {
+				t.Fatalf("SoulBinaryPath = %q, want %q", cfg.Push.SoulBinaryPath, tc.value)
+			}
+		})
+	}
+}
+
+// Omitting the key must stay valid: delivery is then off, which is a
+// configuration, not an error. Making it required would refuse to start every
+// daemon that only uses `core.ssh.run`, which shares this wiring.
+func TestPush_SoulBinaryPathOptional(t *testing.T) {
+	src := keeperBaseWithPush("push:\n  host_ca_ref: vault:secret/keeper/ssh-host-ca\n")
+	cfg, _, diags, err := LoadKeeperFromBytes("keeper.yml", src, ValidateOptions{})
+	if err != nil {
+		t.Fatalf("io error: %v", err)
+	}
+	if diag.HasErrors(diags) {
+		dump(t, diags)
+		t.Fatalf("omitting push.soul_binary_path must be valid")
+	}
+	if cfg.Push == nil || cfg.Push.SoulBinaryPath != "" {
+		t.Fatalf("SoulBinaryPath = %q, want empty", cfg.Push.SoulBinaryPath)
+	}
+}

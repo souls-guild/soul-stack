@@ -63,10 +63,16 @@ type HostFacts struct {
 	// list). Registry data `souls.traits` (migration 087); projected into
 	// `soulprint.self.traits` / `soulprint.hosts[].traits` for `where:`
 	// targeting (registry projection, like Coven). nil/empty - no labels.
-	Traits      map[string]any
-	Role        string
-	Choirs      []string
-	Status      string
+	Traits map[string]any
+	Role   string
+	Choirs []string
+	Status string
+	// Transport is `souls.transport` — `agent` or `ssh`. It is here for ONE
+	// reason: presence. An agent host is online iff it holds a live EventStream
+	// lease; an ssh host never holds one and never will, so the same filter that
+	// keeps the roster honest for agents empties it for push (NIM-869). See
+	// [Resolver.filterAlive].
+	Transport   string
 	Soulprint   map[string]any
 	CollectedAt time.Time
 	ReceivedAt  time.Time

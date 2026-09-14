@@ -46,6 +46,7 @@ type rosterRow struct {
 	coven       []string
 	traitsJSON  []byte     // nil = '{}' (jsonb NOT NULL DEFAULT) → empty map; ADR-060
 	status      string     // "" → default "connected" in Scan (SQL-presence fallback)
+	transport   string     // "" → default "agent" in Scan (the column is NOT NULL)
 	factsJSON   []byte     // nil = NULL soulprint
 	collectedAt *time.Time // nil = NULL
 	receivedAt  *time.Time // nil = NULL
@@ -91,13 +92,18 @@ func (r *rosterRows) Scan(dest ...any) error {
 		// "connected" so nil-lease SQL fallback of resolver passes them.
 		status = "connected"
 	}
+	transport := row.transport
+	if transport == "" {
+		transport = "agent"
+	}
 	*(dest[0].(*string)) = row.sid
 	*(dest[1].(*[]string)) = row.coven
 	*(dest[2].(*[]byte)) = row.traitsJSON
 	*(dest[3].(*string)) = status
-	*(dest[4].(*[]byte)) = row.factsJSON
-	*(dest[5].(**time.Time)) = row.collectedAt
-	*(dest[6].(**time.Time)) = row.receivedAt
+	*(dest[4].(*string)) = transport
+	*(dest[5].(*[]byte)) = row.factsJSON
+	*(dest[6].(**time.Time)) = row.collectedAt
+	*(dest[7].(**time.Time)) = row.receivedAt
 	return nil
 }
 

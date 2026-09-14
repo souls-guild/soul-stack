@@ -47,7 +47,7 @@ func (r *pgPoolTargetReader) SelectSshTarget(ctx context.Context, sid string) (*
 //     before this point in SendApply, but it's a defensive guard);
 //     - ssh_target IS NULL → go to step 2;
 //     - ssh_target is set → assemble [SSHTarget], filling in defaults
-//     (port 22 / user root / soul-path /usr/local/bin/soul) for omitted
+//     (port 22 / user root / soul-path [HostSoulBinaryPath]) for omitted
 //     fields. Return.
 //
 //  2. AllowLegacy=false (default for S7-1) → return
@@ -78,6 +78,15 @@ func (r *PGFallbackTargetResolver) Resolve(ctx context.Context, sid string) (SSH
 		return SSHTarget{}, fmt.Errorf("push: read ssh_target %s: %w", sid, err)
 	}
 	if target != nil {
+		// ★ Host IS the SID, and `ssh_target` has no address column to hold
+		// anything else — so a push host must be resolvable by its SID. A
+		// freshly minted VM is not: its address is the provider's `primary_ip`
+		// and the SID is not in DNS yet, which is why `core.ssh.run` takes the
+		// address as a task param instead. Bootstrapping a bare machine over
+		// push therefore needs an address here AND a way to mint
+		// `transport=ssh` (`core.bootstrap.issued` writes `transport='agent'`
+		// as a literal and refuses anything else). Recorded, deliberately not
+		// fixed, by NIM-869 — it is a registry change, not a transport one.
 		return SSHTarget{
 			Host:     sid,
 			Port:     resolveInt(target.SSHPort, defaultSSHPort),

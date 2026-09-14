@@ -437,6 +437,12 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 // inventory is usually small; large-scale rolling is a separate slice via
 // render.DispatchPlan.SerialWidth, not used in pilot).
 //
+// ★ What comes back is a RunResult and nothing else — no per-task register.
+// A push run therefore records its outcome in `push_runs` and writes no
+// `apply_runs`/`apply_task_register` row at all, which is why the synthetic
+// scenario above carries one `apply:` task and no `register:`. See the
+// [push.EventHandler] doc for where that ends and what NIM-870 has to decide.
+//
 // sidProvider is map sid → provider name (P2 W-3 multi-provider routing).
 // SID without entry in map is invariant violation (resolveProviders already
 // filtered such), defensive guard inside.
