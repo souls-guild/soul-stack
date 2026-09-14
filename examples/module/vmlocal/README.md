@@ -1,109 +1,146 @@
-# vmlocal — a machine provider over libvirt/QEMU, speaking the `wbcloud` contract
+# vmlocal — a machine provider over libvirt/QEMU
 
-`vmlocal` provisions virtual machines on a local libvirt host. It exists so that
-bootstrap work can be debugged against a workstation instead of costing a billed
-cloud VM per cycle.
+`vmlocal` provisions virtual machines on a libvirt host. It exists so that work
+which needs real machines — bootstrap, onboarding, a service's `create` path —
+can be done against a host you already have instead of a billed cloud VM per
+cycle.
 
-## The property this is built around
+It is a machine provider in its own right, not a local stand-in for one. The
+object is `vm`, the actions are `created` / `destroyed` / `probed` / `resized`,
+and every parameter below is there because libvirt can answer for it.
 
-A plugin document carries **no name of its own**. Address level 1 —
-the `wbcloud` in `wbcloud.vm.created` — is the alias an operator writes in
-`keeper.yml::plugins.soul_modules[].name`, and it appears nowhere in the artifact's
-bytes.
+> **History, because the code reads oddly without it.** Until NIM-873 this
+> artifact was built as a key-for-key mirror of a cloud provider's published
+> document, so that registering it under that provider's alias would run an
+> unmodified cloud scenario against libvirt. That bought one property and cost
+> the contract its shape: five credential params it could not use, two spellings
+> of `namespace`, and a profile whose field list was a diff against someone
+> else's. The mirror is gone. **A scenario written for a cloud provider no longer
+> runs here unedited** — the ask changes, not just the vault values.
 
-So registering this binary under the alias `wbcloud` on a local stand makes a
-cloud service scenario provision against libvirt **with its YAML unchanged**. No
-fork, no `when:` on a mode, no test double. In production the substitution is
-closed by the grant: the sigil pins a sha256.
+## The parameter surface, and what holds it still
 
-The claim is bounded, and the bound is worth stating rather than discovering:
-**a scenario that asks for something a single libvirt host cannot do is refused,
-not quietly served.** That is `set_external_ip`, `external_ip_id`,
-`anti_affinity`, `cluster` and `image_version` — see the profile table below. A
-scenario using none of them runs unchanged; one using any of them is told which
-field and why. The vault values change too (`endpoint` becomes a libvirt URI);
-what does not change is the scenario.
+Two connection params, because libvirt needs two:
 
-That only holds while the object, the actions and the parameter surface are
-identical, because param-level strictness (ADR-0076, NIM-204) refuses a call
-carrying a key the state does not declare. So:
+| param | meaning |
+|---|---|
+| `endpoint` | the libvirt connection URI — `qemu:///system`, or `qemu+ssh://host/system` for a remote hypervisor |
+| `namespace` | the scope label stamped into domain metadata. It is what keeps this artifact away from machines it did not create: `probed` and `destroyed` see nothing outside it |
 
-- the object is **`vm`**, the actions are **`created` / `destroyed` / `probed` /
-  `resized`**;
-- the parameter surface matches key for key, type for type, including
-  `required`, `secret`, `pattern` and defaults;
-- `testdata/wbcloud.schema.json` is a vendored copy of what the cloud artifact
-  publishes, and `TestParamSurfaceMatchesWBCloud` compares the two. When the
-  cloud contract moves, that test reddens. Re-copy the fixture and decide whether
-  `vmlocal` follows — do not delete the test.
+**There is no credential.** A libvirtd over its unix socket authenticates by the
+permissions on that socket, and TLS to a remote one is configured in libvirt's
+own client files. `TestNoParamCarriesACredential` keeps it that way: a
+`secret: true` param reappearing means this artifact has acquired something to
+authenticate *with*, which is a design decision rather than a parameter
+addition.
 
-There are **no extra params**. Local knobs are environment variables, because a
-param this artifact has and the cloud does not would make a scenario using it
-unrunnable in the cloud.
+The declared surface is pinned by `ownParams` in `bundle_test.go` — a table of
+what each action offers. That table is what replaced the guard that used to
+compare this surface against a vendored copy of a foreign document. It is a
+statement of what `vmlocal` provides, so the surface moves by an edit a reviewer
+sees.
 
-## The rule the refusals follow
+### Profile fields — a CLOSED set
 
-> **Inert is accepted. A promise that cannot be kept is refused.**
-
-A field that affects nothing observable here is accepted and recorded
-(`rm_external_id`). A field that promises a property of the machine which a single
-libvirt host cannot provide is refused in `Validate`. A silent no-op there is
-exactly what would turn a second implementation from a check on the contract into
-a way around it.
-
-And in the other direction:
-
-> **Mirror the cloud's validation, or be stricter — never laxer.**
-
-`rm_external_id` is inert here and still **required**; `userdata` is capped at the
-cloud's 32 KiB even though an ISO would hold more; a cpu/ram change demands
-`allow_downtime` even though libvirt could hot-plug it. A surface laxer than the
-cloud's would green a scenario the cloud then refuses.
-
-## Profile fields
+`profile` is declared `map`, so param-level strictness (ADR-0076) type-checks
+nothing inside it: the fields that decide what machine gets built are exactly the
+ones the platform cannot see. So the artifact closes the set itself
+(`profileVocabulary`), and **a key it does not read is refused rather than
+ignored** — an ignored key in a machine spec looks exactly like an honoured one
+to the operator who wrote it.
 
 | field | local meaning |
 |---|---|
-| `namespace` / `namespace_id` | scope label in the domain metadata — what keeps `probed` and `destroyed` away from machines this artifact did not create |
-| `network_id` | the **UUID of a libvirt network**; libvirt networks carry real UUIDs, so this is 1:1 |
+| `namespace` | placement scope; wins over the step's `namespace` |
+| `network_id` | the **UUID of a libvirt network** — libvirt networks carry real UUIDs |
 | `image_name` | a volume in the image pool, e.g. `debian-12` |
 | `image_id` | a UUIDv5 derived from the image NAME (the volume filename without its extension), so an operator can compute it without asking this host; a miss lists the catalogue |
-| `image_version` | **refused** — the catalogue is a pool with one volume per name, so there is no set of versions to pin |
 | `cpu_size` | `<vcpu>`, in cores |
 | `ram_size` | `<memory>`, in **BYTES** |
 | `boot_disk_size` | virtual size of the qcow2 overlay, in **BYTES** |
 | `boot_disk_name` | volume name in the disk pool |
 | `labels` | domain metadata; `soulstack-run` carries the batch identity and is load-bearing for idempotency |
 | `deletion_protection` | honoured: `destroyed` refuses a domain carrying it |
-| `rm_external_id` | **accepted and required, inert** — recorded in metadata, affects nothing |
-| `set_external_ip`, `external_ip_id` | **refused** — there is no external-address pool |
-| `anti_affinity` | **refused** — one hypervisor, so machines cannot be spread across hosts |
-| `cluster` | **refused** — no cluster placement |
 
-### Connection params
+`image_id` XOR `image_name`: both at once is refused rather than silently
+preferring one, because an author who wrote both had two intentions and only one
+of them would happen.
 
-`endpoint` is the one that carries a local meaning: the **libvirt connection URI**
-(`qemu:///system`), as the cloud endpoint is where the compute API lives. Put it
-in the same Vault key the scenario already reads.
+`userdata` is cloud-init user-data, capped at 32 KiB — the bound on what goes
+onto the NoCloud seed. The ISO would hold megabytes; a document that large is a
+rendering accident.
 
-`key_id`, `secret`, `ca_cert_pem`, `client_cert_pem`, `client_key_pem` are
-**accepted and unused**: a local libvirtd over its unix socket authenticates by
-the permissions on that socket, and TLS to a remote libvirt is configured in
-libvirt's own client files. This is documented rather than silent, and
-`TestCredentialsAreAcceptedAndUnused` pins it.
+## ★ The OUTPUT shape, which no document declares
+
+A module document declares its **inputs** and nothing else. `register.<task>.*`
+is therefore the one dimension of this contract the platform cannot police, and
+where an implementation drifts from what its consumers read with every test still
+green. It had already drifted when this was written: the state descriptions
+promised an `external_ip` this artifact has never emitted, and omitted the
+`state` it always has.
+
+So the shape is declared in code (`hostEntryKeys`, `hostAttrKeys`,
+`hostStubKeys`, `resizeKeys` in `apply.go`), quoted in the state descriptions an
+operator reads, and held to the emitters by `TestOutputShapeIsDeclared`.
+
+- **`created`, `probed` → `output.hosts[]`**, one entry per machine:
+  `{vm_id, sid, primary_ip, state, attributes}`, with
+  `attributes = {namespace, name, cpu_size, ram_size, image_id, network_id, created_at, run_label}`.
+- **`destroyed` → `output.hosts[]`** of bare `{vm_id}`, one per id addressed.
+- **`resized` → `output.results[]`**, one
+  `{vm_id, changed, caused_downtime}` per machine, plus `error` only on a
+  failure — a key holding `""` would make `has(r.error)` true for the whole
+  batch, and that is the predicate a scenario writes.
+
+`primary_ip` is **flat**. Nesting it under `network:` — which is the soulprint's
+shape and a plausible thing to reach for — makes it invisible to the consumer
+while every test that only checks `sid` stays green.
+
+A machine that never came up appears in `hosts` as a bare `{vm_id}` and the step
+reports **failed**. It deliberately carries no `sid`: the fallback would
+manufacture `<name>.<namespace>` for a machine that never announced one, and that
+is the field the downstream bootstrap guard keys on — filling it in disables the
+check that would have caught the failure.
+
+`hosts[]` carries **no `bootstrap_token`**, and cannot: minting one needs the
+Keeper's token store, which a plugin has no access to.
 
 ## Where `sid` and `primary_ip` come from
 
 Both are read from the **DHCP lease** (`virNetworkGetDhcpLeases`), matched by the
 domain's interface MAC. The guest announces its hostname over DHCP because the
 NoCloud seed sets `local-hostname`, so the answer is the machine's own account of
-itself — the same kind of fact the cloud reports from `vm.hostname`, not an echo
-of what was asked for.
+itself rather than an echo of what was asked for. Readiness is a lease with both
+an address and a hostname.
 
-Readiness is therefore the cloud's predicate exactly: a lease with both an address
-and a hostname.
+## Resize semantics
 
-`external_ip` is always empty here.
+Disk grows online through a block resize and never shrinks (a target at or below
+the current size is an idempotent skip); the guest filesystem follows only if it
+runs `growpart`. cpu and ram go through **stop → update → start**, so they need
+`allow_downtime: true` — the consent the param asks for is consent the operation
+actually spends. libvirt could hot-plug some of it; this does not.
+
+The host's free memory and the disk pool's free space are prechecked against the
+batch's summed positive delta, so a batch that will not fit fails **before any
+machine is touched**.
+
+Past the precheck the batch is not abandoned on the first per-machine error: a
+machine stopped to have its cpu changed would be left stopped with nobody told
+which one. Every machine is attempted and reports its own outcome in
+`output.results`.
+
+## Idempotency, and adopting a stopped member
+
+`created` is idempotent on the batch identity: a rerun adopts the domains it
+already made (matched by the metadata label `soulstack-run`, or by the name
+`<name>-<seq>`) and tops up only what is missing, at the first free indexes.
+
+**A member of the batch that is powered down is adopted and STARTED.** A
+workstation that rebooted leaves every machine stopped and nothing autostarts;
+building a sibling instead would leave the dead one behind for the next rerun to
+ignore as well. `created` is a state, not an imperative, and converging a stopped
+member onto "running" is what the state says.
 
 ## Setting up a host
 
@@ -160,7 +197,7 @@ in a different VM: nothing routes to `192.168.122.0/24` from there.
    machine ready, at the old address, about a second after defining it, before it
    had booted at all. Two consecutive live runs both "came up" at
    `192.168.122.198`, the second in 1s. A recreated machine is a different machine
-   and gets a different `vm_id`, which is the cloud's semantics too.
+   and gets a different `vm_id`.
 
 A fourth, less a trap than a fact worth knowing: **stock cloud images do not act on
 the ACPI power button**, so the graceful stop before a cpu/ram resize always times
@@ -179,61 +216,9 @@ lane drives the whole lifecycle against a real host and is the only thing that
 exercises `libvirt.go`; it skips with a named reason when a prerequisite is
 missing.
 
-## What each action publishes
+Regenerate `schema.json` after any change to the bundle:
 
-`created` and `probed` publish `output.hosts`; `resized` publishes
-`output.results` with one `{vm_id, caused_downtime, changed, error?}` per machine
-— the same keys and shapes the cloud artifact publishes, so a scenario that
-registers any of these steps reads the same thing from either provider.
-
-`TestParamSurfaceMatchesWBCloud` compares only the INPUT surface, because that is
-what the published document declares. The output shape is not in the document at
-all, which makes it the dimension where the two implementations can diverge with
-every test still green — the `resized` results block was exactly that, found by
-review rather than by a test.
-
-A machine that never came up appears in `hosts` as a bare `{vm_id}` and the step
-reports **failed**. It deliberately carries no `sid`: the fallback would
-manufacture `<name>.<namespace>` for a machine that never announced one, and that
-is the field the downstream bootstrap guard keys on — filling it in disables the
-check that would have caught the failure.
-
-## Where this is deliberately MORE permissive than the cloud
-
-One divergence, stated rather than left implicit, because everywhere else this
-artifact refuses what it cannot match:
-
-**A member of the batch that is powered down is adopted and STARTED.** The cloud
-excludes non-live VMs from its adoption scan, reuses the index, and fails loudly
-with `AlreadyExists`. Here, a workstation that rebooted leaves every machine
-stopped and nothing autostarts, so the cloud's behaviour would build a sibling on
-every rerun and leave the dead one behind for the next rerun to ignore as well.
-`created` is a state, not an imperative, and converging a stopped member onto
-"running" is what the state says.
-
-The cost is the direction that normally gets refused here: a scenario that relies
-on it is green locally and red in the cloud. It is on this list for that reason.
-
-## Known limits
-
-- **`hosts[]` carries no `bootstrap_token`**, and cannot: minting one needs the
-  Keeper's token store, which a plugin has no access to. `vmlocal` hits the
-  identical wall the cloud artifact hits — which is itself useful information, in
-  that the gap is in the contract rather than in one provider.
-- `resized` grows the block device online; the guest filesystem follows only if it
-  runs `growpart`. That is the cloud's behaviour too.
-
-## What a second implementation found out about the contract
-
-- **`key_id` / `secret` are `required: true` on all four states, and that is the
-  WB-shaped part of the contract.** `endpoint` generalises; a key-and-secret pair
-  does not — a local hypervisor authenticates by socket permissions. Any second
-  implementation is forced to invent a dummy. A contract-level fix would make them
-  optional and let each implementation refuse when it needs them.
-- **`profile` is declared `map`, so nothing inside it is type-checked**, which
-  puts the ten fields that decide what machine gets built outside NIM-778's reach.
-  The cloud artifact's reader answers `0` for a mistyped number and the resulting
-  message reports a supplied field as *missing*. `vmlocal` names the type instead.
-- **`run_label` is an input filter with no output counterpart**: the cloud's
-  `attributes` carries no labels, so a scenario cannot read back the batch
-  identity it filtered by. `vmlocal` echoes `run_label` in `attributes`.
+```bash
+go run ./sdk/cmd/soul-mod stamp examples/module/vmlocal/dist/vmlocal
+cp examples/module/vmlocal/dist/schema.json examples/module/vmlocal/schema.json
+```

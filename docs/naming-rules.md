@@ -587,17 +587,27 @@ See sections ["Plugin infrastructure"](architecture.md#plugin-infrastructure), [
 
 **Official CloudDriver binaries (first set, [ADR-017 amendment](adr/0017-keeper-side-core.md)):** `soul-cloud-aws` / `soul-cloud-gcp` / `soul-cloud-azure` / `soul-cloud-yc` (Yandex Cloud) / `soul-cloud-proxmox` / `soul-cloud-openstack`. **vSphere** - community / deferred. AWS - pilot (reference). **By 2026-05-26 all 6 are committed and working** ([ADR-017 amendment 2026-05-26](adr/0017-keeper-side-core.md), Track 3 [roadmap.md](roadmap.md)).
 
-> ⛔ **The `soul-cloud-*` binary family left the dictionary with the contract (NIM-757 / NIM-761, removed 2026-09-04).** All six `examples/module/soul-cloud-*` are deleted; the surviving cloud driver is the WB one, rebuilt as an ordinary SoulModule plugin declaring `side: keeper` (NIM-760) and renamed `wbcloud` when NIM-851 dropped the family prefixes. The six above remained committed and working until that removal.
+> ⛔ **The `soul-cloud-*` binary family left the dictionary with the contract (NIM-757 / NIM-761, removed 2026-09-04).** All six `examples/module/soul-cloud-*` are deleted; the surviving cloud driver lives in a downstream repository, rebuilt as an ordinary SoulModule plugin declaring `side: keeper` (NIM-760) and renamed when NIM-851 dropped the family prefixes. The six above remained committed and working until that removal.
 
-**The WB cloud's registration alias is `wbcloud` — no hyphen** (decided 2026-09-12). This
-is an ADDRESS, not a name: a scenario says `wbcloud.vm.created`, level 1 being what an
-operator writes in `keeper.yml::plugins.soul_modules[].name`. It reads the same as the
-`wbcloud` artifact and is a separate fact from it — the document carries no name, so the
-two are chosen independently and either can move without the other. What that buys is
-concrete: registering [`vmlocal`](../examples/module/vmlocal/README.md) under the alias
-`wbcloud` runs an unmodified WB cloud scenario against a local libvirt host. ⚠ Changing
-this alias moves the address, so scenarios and the `keeper.yml` registration must change
-**together** — a mismatch is `unknown module` at run time, not a build error.
+**A registration alias is an ADDRESS, not a name.** A scenario says
+`<alias>.vm.created`, and level 1 is what an operator writes in
+`keeper.yml::plugins.soul_modules[].name`. It is a separate fact from the artifact
+it points at — the document carries no name of its own, so the two are chosen
+independently and either can move without the other. ⚠ Changing an alias moves the
+address, so scenarios and the `keeper.yml` registration must change **together** —
+a mismatch is `unknown module` at run time, not a build error.
+
+**`democloud` is the neutral placeholder alias in tests and doc examples** (NIM-873).
+A scenario fixture needs an address level 1 and the plugin it stands for does not exist
+in this tree, so one spelling is used everywhere rather than a different invented name
+per test file. It names no real provider and nothing registers it; a doc example that
+means a specific provider names that provider instead.
+
+> An alias used to carry a second job: [`vmlocal`](../examples/module/vmlocal/README.md)
+> was built as a key-for-key mirror of a cloud provider's parameter surface so that
+> registering it under that provider's alias would run an unmodified cloud scenario
+> against libvirt. **That is no longer true (NIM-873)** — `vmlocal` has its own
+> contract, and a scenario written for a cloud provider needs editing to run on it.
 
 **Official SshProvider binaries (MVP set, [ADR-020 amendment 2026-05-26 (i)](adr/0020-plugin-infrastructure.md)):** `soul-ssh-static` (commit `4f95ef6`, reference) / `soul-ssh-vault` (commit `3642520`, Vault SSH CA, ephemeral keypair) / `soul-ssh-teleport` (commit `af27678`, Teleport-CA + `SignReply.proxy_jump` only-add field 4). MVP recruitment is closed.
 

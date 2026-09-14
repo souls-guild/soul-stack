@@ -35,10 +35,9 @@ type action struct {
 //
 // It implements SoulModule, so the value goes straight into [module.Def].Impl;
 // BaseModule supplies the no-op Plan, which keeps the default-deny on dry_run (no
-// PlanReadSafe) and on Errand (no ErrandReadSafe). Both are deliberate and both
-// match the cloud artifact: every action here creates, deletes or resizes a
-// machine, and `probed` is a read that answers about the hypervisor rather than
-// about drift.
+// PlanReadSafe) and on Errand (no ErrandReadSafe). Both are deliberate: every
+// action here creates, deletes or resizes a machine, and `probed` is a read that
+// answers about the hypervisor rather than about drift.
 type object struct {
 	module.BaseModule
 
@@ -74,10 +73,56 @@ func (o *object) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if !ok {
 		return &pluginv1.ValidateReply{Ok: false, Errors: []string{o.unknownState(req.GetState())}}, nil
 	}
-	if errs := act.validate(req.GetParams().AsMap()); len(errs) > 0 {
+	errs := append(undeclaredParams(req.GetState(), req.GetParams().AsMap()), act.validate(req.GetParams().AsMap())...)
+	if len(errs) > 0 {
 		return &pluginv1.ValidateReply{Ok: false, Errors: errs}, nil
 	}
 	return &pluginv1.ValidateReply{Ok: true}, nil
+}
+
+// undeclaredParams refuses a step param this state does not declare.
+//
+// ★★ It looks redundant with param-level strictness (ADR-0076), and on the path
+// where that runs it is. It does not always run: soul-lint walks the tasks in the
+// AST of the document it was handed and does not reach a step behind an
+// `include:` (NIM-779/NIM-785), so a service that keeps its plugin step in a
+// service-level include — which is the layout the published redis service uses —
+// has its params checked by NOBODY. There, an undeclared key is dropped in
+// silence.
+//
+// That is the same hole the profile vocabulary closes one level down, for the
+// same reason: a key the operator wrote and this artifact ignores is a property
+// they asked for and did not get. The artifact is the last place that can say so,
+// so it says so.
+//
+// The declaration is read from [vmDef], not restated, so this cannot drift from
+// what the document publishes.
+func undeclaredParams(state string, params map[string]any) []string {
+	st, ok := vmDef(&VMLocal{}).States[state]
+	if !ok {
+		return nil
+	}
+	var unknown []string
+	for key := range params {
+		if _, declared := st.Input[key]; !declared {
+			unknown = append(unknown, key)
+		}
+	}
+	if len(unknown) == 0 {
+		return nil
+	}
+	sort.Strings(unknown)
+	declared := make([]string, 0, len(st.Input))
+	for key := range st.Input {
+		declared = append(declared, key)
+	}
+	sort.Strings(declared)
+	out := make([]string, 0, len(unknown))
+	for _, key := range unknown {
+		out = append(out, fmt.Sprintf("%s is not a param of vm.%s. The params are: %s.",
+			key, state, strings.Join(declared, ", ")))
+	}
+	return out
 }
 
 // Apply dispatches by state within this object. The final event carries
@@ -92,7 +137,8 @@ func (o *object) Apply(req *pluginv1.ApplyRequest, stream eventStream) error {
 	if !ok {
 		return sendFailure(stream, o.unknownState(req.GetState()))
 	}
-	if errs := act.validate(req.GetParams().AsMap()); len(errs) > 0 {
+	errs := append(undeclaredParams(req.GetState(), req.GetParams().AsMap()), act.validate(req.GetParams().AsMap())...)
+	if len(errs) > 0 {
 		return sendFailure(stream, "invalid params: "+strings.Join(errs, "; "))
 	}
 	return act.apply(o.impl, stream.Context(), stream, req.GetParams())

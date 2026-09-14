@@ -17,7 +17,7 @@ import (
 // listing hands to the UI and asserts the property is not in it. A test that only
 // pinned an error string would still pass with the property on the form.
 
-// The canonical shape, and the one the WB redis service is written in: a shared
+// The canonical shape, and the one a real redis service is written in: a shared
 // element type whose password the platform mints, referenced from an array in
 // `input:`. The rest of the element must survive — the whole point of §5 is that
 // the type stays shared between the form and `state_schema`.

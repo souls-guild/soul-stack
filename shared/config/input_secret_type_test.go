@@ -12,7 +12,7 @@ import (
 // property reached from `input:` through `$type` is not required of the operator,
 // takes no default, and refuses a value supplied anyway.
 //
-// The shape under test is the one WB's redis is written in and the one §5 exists
+// The shape under test is the one a downstream redis is written in and the one §5 exists
 // for: one shared type feeding both `state_schema` and a scenario's `input:`.
 
 // aclUserWithSecret — a shared element type whose password the platform mints.

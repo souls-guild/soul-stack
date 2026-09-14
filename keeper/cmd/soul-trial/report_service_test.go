@@ -27,10 +27,10 @@ func TestPrintResults_NamesTheFencedService(t *testing.T) {
 		var b bytes.Buffer
 		printResults(&b, []trial.Result{{
 			Case: "c", Pass: true, Level: trial.LevelL0,
-			Service: "wb-service-redis", ServiceStated: false,
+			Service: "demo-service-redis", ServiceStated: false,
 		}})
 		got := b.String()
-		if !strings.Contains(got, `"wb-service-redis"`) {
+		if !strings.Contains(got, `"demo-service-redis"`) {
 			t.Fatalf("report does not name the fenced service\n%s", got)
 		}
 		// The hint has to name the escape hatch: an operator who sees a word that is

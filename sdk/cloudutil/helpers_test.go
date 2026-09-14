@@ -330,7 +330,7 @@ func TestWaitUntilReady_ReadyOnFinalAttempt(t *testing.T) {
 // state never moves must NOT be diagnosed as stuck. "creating" spans the whole
 // boot, so a VM slower than the budget never leaves it — the message that ruled
 // out a larger budget sent an operator hunting a broken VM that was booting
-// normally (NIM-787, found live on `wbcloud` where a boot takes 60-90s).
+// normally (NIM-787, found live against a cloud where a boot takes 60-90s).
 func TestWaitUntilReady_DeadlineDiagnostics_StateNeverChanged(t *testing.T) {
 	cfg := BackoffConfig{Initial: time.Millisecond, Max: time.Millisecond, Factor: 2, MaxAttempts: 3}
 	probe := func(_ context.Context, vmID string) ProbeResult {

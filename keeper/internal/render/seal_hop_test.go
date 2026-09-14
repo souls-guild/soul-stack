@@ -73,7 +73,7 @@ func hopRenderInput(scn *config.ScenarioManifest) RenderInput {
 	return RenderInput{
 		Scenario:    scn,
 		Input:       hopInput(),
-		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "demo-service-redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
 	}
 }

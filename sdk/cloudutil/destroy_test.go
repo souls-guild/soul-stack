@@ -73,7 +73,7 @@ func TestConfirmDestroy_NotConfirmed_IsNotSuccess(t *testing.T) {
 }
 
 // TestConfirmDestroy_ReissuesOnDeleteFailed: a VM the provider refused to
-// delete (WB parks it in DELETE_FAILED) never leaves that state on its own —
+// delete (parking it in DELETE_FAILED) never leaves that state on its own —
 // the delete has to be issued again, which is what the manual recovery did.
 func TestConfirmDestroy_ReissuesOnDeleteFailed(t *testing.T) {
 	rec := newDeleteRecorder()

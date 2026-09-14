@@ -3,7 +3,7 @@
 # It exists for one assertion (NIM-753): a whole-service run reports every one of
 # them. Before the mode, the service repository's own `set -e` script stopped at
 # the manifest and the scenarios below were never looked at — which is how eight
-# divergences accumulated in the WB redis service behind one red line here.
+# divergences accumulated in a real redis service behind one red line here.
 #
 # THE MANIFEST'S OWN DEFECTS are deliberately boring — the point of the fixture is
 # what they HID, not what they are. `strng` is the one-line typo that turns the

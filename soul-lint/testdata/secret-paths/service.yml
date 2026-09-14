@@ -1,6 +1,6 @@
 # Fixture for `soul-lint list-secret-paths` (NIM-743).
 #
-# Shaped after wb-service-redis: two collections whose element password is a declared
+# Shaped after demo-service-redis: two collections whose element password is a declared
 # secret addressed by a sibling `name`, plus a scalar secret for the whole incarnation.
 # The three cover both declaration forms the command has to print — the acceptance run
 # against the real service repository is manual and separate.

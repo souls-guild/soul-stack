@@ -7,7 +7,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// usersSchema is the wb-service-redis shape: a collection whose elements each carry
+// usersSchema is the demo-service-redis shape: a collection whose elements each carry
 // a `password` declared `type: secret` and addressed by the `name` sibling.
 func usersSchema(t *testing.T) InputSchemaMap {
 	t.Helper()

@@ -18,10 +18,10 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 )
 
-// readyTimeout bounds the wait for a batch to take its DHCP leases. It is not a
-// param: the cloud contract has no such knob, and adding one here would make a
-// scenario that tunes it unrunnable against the cloud. Tests shorten it; nothing
-// at runtime writes it.
+// readyTimeout bounds the wait for a batch to take its DHCP leases. Not a param:
+// a scenario has no information a hypervisor does not about how long a lease
+// takes, so the knob would only ever be tuned to paper over a broken network.
+// Tests shorten it; nothing at runtime writes it.
 var readyTimeout = 5 * time.Minute
 
 // pollInterval paces both the readiness wait and the teardown confirmation.
@@ -55,10 +55,31 @@ func finish(stream eventStream, changed, failed bool, msg string, out map[string
 func failWithHosts(stream eventStream, msg string, ids []string, changed bool) error {
 	hosts := make([]any, 0, len(ids))
 	for _, id := range ids {
-		hosts = append(hosts, map[string]any{"vm_id": id})
+		hosts = append(hosts, hostStub(id))
 	}
 	return finish(stream, changed, true, msg, map[string]any{"hosts": hosts})
 }
+
+// ★★ THE DECLARED OUTPUT SHAPE.
+//
+// A module document declares its INPUTS and nothing else, so the platform
+// type-checks no part of what comes back out. `register.<task>.*` is therefore
+// the one dimension of this contract that can change under a consumer with every
+// test in the tree still green — and it did: the state descriptions promised
+// `external_ip` this artifact has never emitted and omitted `state`, which it
+// always has.
+//
+// These lists are the artifact's own statement of that shape. Each is quoted in
+// the state description an operator reads, and [TestOutputShapeIsDeclared] holds
+// BOTH the emitters and those descriptions to them — so a key added to a map
+// below without a line here is a red test rather than a scenario that quietly
+// starts reading nothing.
+var (
+	hostEntryKeys = []string{"vm_id", "sid", "primary_ip", "state", "attributes"}
+	hostAttrKeys  = []string{"namespace", "name", "cpu_size", "ram_size", "image_id", "network_id", "created_at", "run_label"}
+	hostStubKeys  = []string{"vm_id"}
+	resizeKeys    = []string{"vm_id", "changed", "caused_downtime"} // plus "error" on a failure
+)
 
 // hostEntry is the shape `core.soul.registered` and the bootstrap consumers read,
 // for a machine that IS ready.
@@ -69,8 +90,7 @@ func failWithHosts(stream eventStream, msg string, ids []string, changed bool) e
 //
 // bootstrap_token is absent, and that is a known red downstream rather than an
 // oversight: minting one needs the Keeper's token store, which a plugin has no
-// access to. vmlocal hits the identical wall the cloud artifact hits, which is
-// itself worth knowing — the gap is in the contract, not in one provider.
+// access to.
 func hostEntry(d domainInfo, ip, hostname string) map[string]any {
 	h := map[string]any{
 		"vm_id":      d.UUID,
@@ -85,13 +105,9 @@ func hostEntry(d domainInfo, ip, hostname string) map[string]any {
 		"image_id":   d.ImageID,
 		"network_id": d.NetworkID,
 		"created_at": d.CreatedAt,
-		// The cloud always sets `cluster`; there is no cluster placement here, so
-		// it is present and empty rather than missing — a consumer reading the key
-		// gets a value in both providers.
-		"cluster": "",
-		// ★ The batch identity is echoed back, which the cloud artifact does NOT
-		// do: there, run_label is an input filter with no output counterpart, so
-		// a scenario cannot read back the identity it filtered by.
+		// The batch identity is echoed back so a scenario can read the identity it
+		// filtered `probed` by, which `run_label` as an input filter alone would
+		// not let it do.
 		"run_label": d.runLabel(),
 	}
 	h["state"] = powerState(d)
@@ -103,10 +119,20 @@ func hostEntry(d domainInfo, ip, hostname string) map[string]any {
 // ★ Deliberately not a hostEntry with blank fields. `sidFor` would fall back to
 // `<name>.<namespace>` and manufacture a plausible sid for a machine that never
 // announced one — and a manufactured sid is exactly what the downstream guard
-// keys on, so filling it in disables the check that would have caught this. The
-// cloud emits a bare `{vm_id}` here for the same reason.
+// keys on, so filling it in disables the check that would have caught this.
 func hostStub(vmID string) map[string]any {
 	return map[string]any{"vm_id": vmID}
+}
+
+// resizeResult is one machine's entry in `output.results`. `error` is present
+// only on a failure: a key holding "" would make `has(r.error)` true for every
+// machine in the batch, and that is the predicate a scenario writes.
+func resizeResult(vmID string, changed, downtime bool, err error) map[string]any {
+	r := map[string]any{"vm_id": vmID, "changed": changed, "caused_downtime": downtime}
+	if err != nil {
+		r["error"] = err.Error()
+	}
+	return r
 }
 
 func powerState(d domainInfo) string {
@@ -116,8 +142,8 @@ func powerState(d domainInfo) string {
 	return "STOPPED"
 }
 
-// sidFor mirrors the cloud's fallback chain: the hostname the guest reported,
-// then the domain name qualified by the namespace.
+// sidFor prefers the machine's own account of itself — the hostname it announced
+// over DHCP — and falls back to the domain name qualified by the namespace.
 func sidFor(d domainInfo, hostname string) string {
 	if hostname != "" {
 		return hostname
@@ -147,9 +173,6 @@ func (m *VMLocal) applyCreated(ctx context.Context, stream eventStream, params *
 	prof, _ := parseProfile(rawProfile)
 
 	namespace := prof.scope(f.str(connNamespace))
-	if namespace == "" {
-		namespace = f.str(connNamespaceID)
-	}
 	name := f.str("name")
 	count := f.integer("count")
 	if count == 0 {
@@ -285,12 +308,12 @@ func (m *VMLocal) applyCreated(ctx context.Context, stream eventStream, params *
 
 // batchMemberName is the deterministic name of the seq-th machine in a batch.
 //
-// ★ Character-for-character the cloud's rule: `<name>-<seq>` when the step named
-// the batch, `soul-<runLabel>-<seq>` when the identity came only from the run
-// label. It matters beyond tidiness — on both sides the machine name is what
-// `sid` falls back to when the guest announced none, so a different name here is
-// a different sid there, in the one artifact whose premise is name-for-name
-// parity.
+// `<name>-<seq>` when the step named the batch, `soul-<runLabel>-<seq>` when the
+// identity came only from the run label.
+//
+// ★ It matters beyond tidiness: the machine name is what `sid` falls back to when
+// the guest announced none, so changing the rule silently renames every host in
+// an existing batch and orphans the registry rows keyed on the old sid.
 func batchMemberName(name, runLabel string, seq int) string {
 	if name != "" {
 		return fmt.Sprintf("%s-%d", name, seq)
@@ -338,9 +361,10 @@ func adoptBatch(domains []domainInfo, runLabel, name string) map[string]domainIn
 
 // awaitBatch blocks until every machine has a lease, or readyTimeout passes.
 //
-// Readiness is "the guest took a DHCP lease and reported a hostname" — the same
-// predicate the cloud artifact uses (internal_ip and hostname both present), read
-// from the same kind of source: the machine telling the network who it is.
+// Readiness is "the guest took a DHCP lease and reported a hostname", and both
+// halves are load-bearing: an address without a hostname is a machine that booted
+// but has not run cloud-init, which is exactly the state that later surfaces as an
+// SSH timeout three steps away.
 func (m *VMLocal) awaitBatch(ctx context.Context, stream eventStream, h hypervisor, networkID string, batch map[string]domainInfo) ([]any, []string, error) {
 	names := make([]string, 0, len(batch))
 	for n := range batch {
@@ -407,9 +431,6 @@ func (m *VMLocal) applyDestroyed(ctx context.Context, stream eventStream, params
 	defer h.Close()
 
 	namespace := f.str(connNamespace)
-	if namespace == "" {
-		namespace = f.str(connNamespaceID)
-	}
 
 	torn := 0
 	var failed []string
@@ -508,9 +529,6 @@ func (m *VMLocal) applyProbed(ctx context.Context, stream eventStream, params *s
 	defer h.Close()
 
 	namespace := f.str(connNamespace)
-	if namespace == "" {
-		namespace = f.str(connNamespaceID)
-	}
 	domains, err := h.ListDomains(namespace)
 	if err != nil {
 		return sendFailure(stream, fmt.Sprintf("list namespace %q: %v", namespace, err))
@@ -548,10 +566,10 @@ func (m *VMLocal) applyProbed(ctx context.Context, stream eventStream, params *s
 
 // applyResized moves every machine in the batch to an ABSOLUTE target.
 //
-// The quota precheck is the local analogue of the cloud's namespace remainder: the
-// host's free memory and the disk pool's free space, against the batch's summed
-// POSITIVE delta. It fails closed, before the first machine is touched, so a batch
-// never ends up half-resized because the box ran out on VM four of six.
+// The precheck is the host's free memory and the disk pool's free space against the
+// batch's summed POSITIVE delta. It fails closed, before the first machine is
+// touched, so a batch never ends up half-resized because the box ran out on VM four
+// of six.
 //
 // ★ Past the precheck the batch is NOT abandoned on the first per-VM error. A
 // machine is stopped to have its cpu changed, and returning there leaves it
@@ -573,9 +591,6 @@ func (m *VMLocal) applyResized(ctx context.Context, stream eventStream, params *
 	defer h.Close()
 
 	namespace := f.str(connNamespace)
-	if namespace == "" {
-		namespace = f.str(connNamespaceID)
-	}
 
 	targets := make([]domainInfo, 0, len(ids))
 	for _, id := range ids {
@@ -623,19 +638,16 @@ func (m *VMLocal) applyResized(ctx context.Context, stream eventStream, params *
 	var problems []string
 	for _, d := range targets {
 		changed, downtime, rerr := m.resizeOne(ctx, stream, h, d, cpu, targetRAM, targetDisk)
-		res := map[string]any{"vm_id": d.UUID, "caused_downtime": downtime, "changed": changed}
 		if rerr != nil {
-			res["error"] = rerr.Error()
 			problems = append(problems, d.UUID+": "+rerr.Error())
 		}
 		anyChanged = anyChanged || changed
-		results = append(results, res)
+		results = append(results, resizeResult(d.UUID, changed, downtime, rerr))
 	}
 
-	// ★ `output.results`, the same key and per-VM shape the cloud publishes. A
-	// scenario that registers this step and reads `.results` gets an answer from
-	// either provider; emitting no output at all was a contract divergence the
-	// param-surface guard cannot see, because it only compares INPUTS.
+	// `output.results` rather than `hosts`: a resize answers about the operation,
+	// not about the inventory, and a per-VM outcome is the only honest report for
+	// a batch that is attempted machine by machine. The keys are [resizeKeys].
 	out := map[string]any{"results": results}
 	if len(problems) > 0 {
 		return finish(stream, anyChanged, true, strings.Join(problems, "; "), out)
@@ -668,9 +680,9 @@ func (m *VMLocal) resizeOne(ctx context.Context, stream eventStream, h hyperviso
 		return changed, false, nil
 	}
 
-	// stop → update → start, which is what the cloud does. libvirt could hot-plug
-	// some of this; doing so would let a scenario pass here without
-	// allow_downtime and fail there.
+	// stop → update → start. libvirt could hot-plug some of this; the artifact does
+	// not, and `allow_downtime` is the operator's consent to the stop this actually
+	// performs.
 	forced, err := h.StopDomain(ctx, d.UUID)
 	if err != nil {
 		return changed, false, fmt.Errorf("stop: %w", err)

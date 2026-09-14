@@ -23,7 +23,7 @@ type GoneResult struct {
 	// diagnostics when the budget runs out.
 	State string
 	// DeleteFailed means the provider actively refused or failed the deletion
-	// (e.g. WB parks such a VM in DELETE_FAILED) rather than still working on
+	// (a provider typically parks such a VM in DELETE_FAILED) rather than still working on
 	// it. A VM in that state never leaves it on its own, so the poller issues
 	// the delete again. Leave false while a deletion is merely in flight —
 	// re-issuing then only spams the API.
@@ -59,7 +59,7 @@ type DestroyResult struct {
 //
 // Why this exists: provider delete calls are asynchronous — a successful RPC
 // means "accepted", not "deleted". A driver that reports success right after
-// the call can leave a VM alive (WB parks a VM deleted mid-create in
+// the call can leave a VM alive (a VM deleted mid-create is commonly parked in
 // DELETE_FAILED), while Keeper's cascade already marked the soul destroyed —
 // a silent registry/cloud divergence, and precisely a failure of the
 // anti-orphan cleanup, since the VMs it exists to remove are the ones caught

@@ -395,7 +395,7 @@ func TestRender_ApplyDestiny_SecretOutputStillDerived(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    applyScenario("grant-acl", nil),
-		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
+		Incarnation: IncarnationMeta{ID: "redis-prod", Service: "demo-service-redis"},
 		Hosts:       []*topology.HostFacts{host("a", []string{"redis"}, nil)},
 		Destiny:     &stubDestinyResolver{resolved: dst},
 		Modules:     manifests,

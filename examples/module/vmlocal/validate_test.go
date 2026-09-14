@@ -37,7 +37,7 @@ func createParams(profileEdits map[string]any, own map[string]any) map[string]an
 	return p
 }
 
-func TestCreatedAcceptsAProfileTheCloudWouldAccept(t *testing.T) {
+func TestCreatedAcceptsAValidProfile(t *testing.T) {
 	if errs := validateCreated(createParams(nil, nil)); len(errs) > 0 {
 		t.Fatalf("a valid profile was refused: %v", errs)
 	}
@@ -46,8 +46,8 @@ func TestCreatedAcceptsAProfileTheCloudWouldAccept(t *testing.T) {
 // ★ NIM-778: a param of the wrong type is REFUSED, not coerced.
 //
 // `profile` is declared Map, so the schema type-checks nothing inside it — these
-// ten fields are exactly the ones the type system cannot see. The cloud artifact
-// answers 0 for a mistyped number and then reports the field as MISSING, which
+// fields are exactly the ones the type system cannot see. Coercing instead would
+// answer 0 for a mistyped number and then report the field as MISSING, which
 // sends an operator looking for a field they did in fact write.
 func TestMistypedProfileFieldsAreRefusedByType(t *testing.T) {
 	cases := []struct {
@@ -77,51 +77,49 @@ func TestMistypedProfileFieldsAreRefusedByType(t *testing.T) {
 	}
 }
 
-// ★ A promise that cannot be kept locally is REFUSED, not quietly dropped. A
-// silent no-op here is what would make the second implementation stop being a
-// check on the contract.
-func TestUnsupportablePromisesAreRefused(t *testing.T) {
-	cases := []struct {
-		field string
-		value any
-		want  string
-	}{
-		{"set_external_ip", true, "no external-address pool"},
-		{"external_ip_id", "eip-1", "no external-address pool"},
-		{"anti_affinity", "spread", "one hypervisor"},
-		{"cluster", "cl-1", "no cluster placement"},
-	}
-	for _, tc := range cases {
-		t.Run(tc.field, func(t *testing.T) {
-			errs := validateCreated(createParams(map[string]any{tc.field: tc.value}, nil))
-			if !hasError(errs, tc.want) {
-				t.Errorf("errors=%v, want a refusal mentioning %q", errs, tc.want)
+// ★ A key vmlocal does not read is REFUSED, not quietly dropped.
+//
+// This is the guard that keeps the profile honest, and it has to be in code:
+// `profile` is a Map, so the platform type-checks nothing inside it and an
+// ignored key looks exactly like an honoured one to the operator who wrote it.
+func TestUnknownProfileFieldsAreRefused(t *testing.T) {
+	for _, field := range []string{"set_external_ip", "external_ip_id", "anti_affinity", "cluster", "image_version", "rm_external_id", "namespace_id"} {
+		t.Run(field, func(t *testing.T) {
+			errs := validateCreated(createParams(map[string]any{field: "x"}, nil))
+			if !hasError(errs, "profile."+field+" is not a vmlocal profile field") {
+				t.Errorf("errors=%v, want %q refused", errs, field)
 			}
 		})
 	}
 }
 
-// Asking for nothing is not a promise, so there is nothing to refuse.
-func TestAFalseOrEmptyUnsupportedFieldIsAccepted(t *testing.T) {
-	errs := validateCreated(createParams(map[string]any{
-		"set_external_ip": false,
-		"anti_affinity":   "",
-		"cluster":         "",
-	}, nil))
-	if len(errs) > 0 {
-		t.Errorf("a profile asking for none of the unsupported features was refused: %v", errs)
+// ★ A key is refused for BEING THERE, not for asking for something. The old
+// denylist let `cluster: ""` and `set_external_ip: false` through on the grounds
+// that a default asks for nothing — which was right while the point was to stay
+// runnable against a contract that had those fields. It is wrong now: a key
+// vmlocal does not read is a key vmlocal does not read, whatever its value, and
+// an author who wrote one has a wrong idea about this artifact either way.
+func TestAnUnknownProfileKeyIsRefusedAtAnyValue(t *testing.T) {
+	// Built directly rather than through createParams, whose nil means "drop the
+	// key" — the case that matters most here is a key PRESENT and null, which is
+	// what a bare `cluster:` in YAML becomes.
+	for name, value := range map[string]any{
+		"empty string": "", "false": false, "zero": float64(0), "null": nil,
+	} {
+		prof := validProfile()
+		prof["cluster"] = value
+		if _, errs := parseProfile(prof); !hasError(errs, "profile.cluster is not a vmlocal profile field") {
+			t.Errorf("%s: errors=%v, want the key refused", name, errs)
+		}
 	}
 }
 
-// rm_external_id is inert here and required anyway: a profile accepted locally
-// must be accepted by the cloud, or this artifact is a worse gate than none.
-func TestRmExternalIDIsRequiredEvenThoughItIsInert(t *testing.T) {
-	errs := validateCreated(createParams(map[string]any{"rm_external_id": nil}, nil))
-	if !hasError(errs, "profile.rm_external_id is required") {
-		t.Errorf("errors=%v, want rm_external_id required", errs)
-	}
-	if !hasError(errs, "accepted here is accepted by the cloud") {
-		t.Error("the message does not explain why an inert field is required")
+// The refusal names the whole vocabulary, because "not a field" without the list
+// leaves an author guessing which spelling was wanted.
+func TestTheRefusalNamesTheVocabulary(t *testing.T) {
+	errs := validateCreated(createParams(map[string]any{"cpu_sizes": 2}, nil))
+	if !hasError(errs, strings.Join(profileVocabulary, ", ")) {
+		t.Errorf("errors=%v, want every accepted field listed", errs)
 	}
 }
 
@@ -138,7 +136,7 @@ func TestImageIDAndImageNameAreExclusive(t *testing.T) {
 func TestNetworkIDMustBeAUUID(t *testing.T) {
 	errs := validateCreated(createParams(map[string]any{"network_id": "default"}, nil))
 	if !hasError(errs, "profile.network_id must be a UUID") {
-		t.Errorf("errors=%v, want the UUID refusal the cloud also makes", errs)
+		t.Errorf("errors=%v, want the UUID refusal", errs)
 	}
 }
 
@@ -158,35 +156,17 @@ func TestBatchIdentityIsRequired(t *testing.T) {
 	}
 }
 
-// ★ The endpoint is the one connection param with a local meaning. A step still
-// carrying the cloud's endpoint is told exactly that, rather than failing inside a
-// dial with a message about a hostname.
+// ★ A step pointed at some other provider's endpoint is told exactly that,
+// rather than failing inside a dial with a message about a hostname.
 func TestEndpointMustBeALibvirtURI(t *testing.T) {
 	p := createParams(nil, nil)
-	p[connEndpoint] = "grpc.clv3:80"
+	p[connEndpoint] = "grpc.example:80"
 	errs := validateCreated(p)
 	if !hasError(errs, "is not a libvirt URI") {
 		t.Fatalf("errors=%v, want the URI refusal", errs)
 	}
-	if !hasError(errs, "addressing the local provider with the cloud's connection details") {
+	if !hasError(errs, "some other provider's connection details") {
 		t.Error("the message does not say what actually went wrong")
-	}
-}
-
-// ★ key_id and secret are accepted and unused, and that is DOCUMENTED rather than
-// silent. If this test is ever deleted because "they do nothing", the no-op stops
-// being a decision and becomes an accident.
-func TestCredentialsAreAcceptedAndUnused(t *testing.T) {
-	p := createParams(nil, nil)
-	p[connKeyID] = "any-value-at-all"
-	p[connSecret] = "any-value-at-all"
-	if errs := validateCreated(p); len(errs) > 0 {
-		t.Fatalf("credentials that mean nothing locally must still be accepted: %v", errs)
-	}
-
-	delete(p, connKeyID)
-	if errs := validateCreated(p); !hasError(errs, "key_id is required") {
-		t.Errorf("errors=%v: key_id must stay REQUIRED — the cloud requires it, and a laxer surface here greens a scenario the cloud refuses", errs)
 	}
 }
 
@@ -227,7 +207,7 @@ func TestActionsOnExistingVMsRequireANamespace(t *testing.T) {
 	p := validConn()
 	delete(p, connNamespace)
 	p["vm_ids"] = []any{"70b148c1-76bb-46c7-8f58-3f81783ac7a0"}
-	if errs := validateVMIDs(p); !hasError(errs, "namespace or namespace_id is required") {
+	if errs := validateVMIDs(p); !hasError(errs, "namespace is required") {
 		t.Errorf("errors=%v, want the scope requirement", errs)
 	}
 }
@@ -236,7 +216,7 @@ func TestVMIDsMustBeAListOfNonEmptyStrings(t *testing.T) {
 	p := validConn()
 	p["vm_ids"] = "70b148c1-76bb-46c7-8f58-3f81783ac7a0"
 	if errs := validateVMIDs(p); !hasError(errs, "must be a list of strings") {
-		t.Errorf("errors=%v: a bare string must be refused, because the cloud declares a list", errs)
+		t.Errorf("errors=%v: a bare string must be refused, because vm_ids is declared a list", errs)
 	}
 
 	p["vm_ids"] = []any{"ok", float64(3)}
@@ -245,12 +225,12 @@ func TestVMIDsMustBeAListOfNonEmptyStrings(t *testing.T) {
 	}
 }
 
-func TestUserdataOverTheCloudCapIsRefused(t *testing.T) {
+func TestUserdataOverTheCapIsRefused(t *testing.T) {
 	errs := validateCreated(createParams(nil, map[string]any{
 		"userdata": strings.Repeat("x", userdataMaxBytes+1),
 	}))
 	if !hasError(errs, "over the 32768-byte cap") {
-		t.Errorf("errors=%v, want the cap mirrored from the cloud", errs)
+		t.Errorf("errors=%v, want the seed cap enforced", errs)
 	}
 }
 
@@ -259,7 +239,7 @@ func TestUserdataOverTheCloudCapIsRefused(t *testing.T) {
 // the four functions, so a fifth action cannot be added without being covered.
 func TestApplyRefusesEverythingValidateRefuses(t *testing.T) {
 	obj := (&VMLocal{}).vm()
-	broken := map[string]any{connEndpoint: "grpc.clv3:80"}
+	broken := map[string]any{connEndpoint: "grpc.example:80"}
 
 	brokenPB, err := structpb.NewStruct(broken)
 	if err != nil {
@@ -269,7 +249,7 @@ func TestApplyRefusesEverythingValidateRefuses(t *testing.T) {
 	for _, state := range obj.states() {
 		t.Run(state, func(t *testing.T) {
 			if errs := obj.actions[state].validate(broken); len(errs) == 0 {
-				t.Fatalf("state %q accepted a param set with no credentials and a cloud endpoint", state)
+				t.Fatalf("state %q accepted a param set whose endpoint is not a libvirt URI", state)
 			}
 			// Drive it through the object so the dispatch path is the one tested.
 			reply, err := obj.Validate(context.Background(), &pluginv1.ValidateRequest{State: state, Params: brokenPB})

@@ -318,14 +318,12 @@ func withFake(t *testing.T, f *fakeHV) *VMLocal {
 // validConn is the connection block every action carries.
 func validConn() map[string]any {
 	return map[string]any{
-		connKeyID:     "unused-here",
-		connSecret:    "unused-here",
 		connEndpoint:  "qemu:///system",
 		connNamespace: "proofns",
 	}
 }
 
-// validProfile is a profile the cloud artifact would also accept.
+// validProfile is the minimum a machine can be built from.
 func validProfile() map[string]any {
 	return map[string]any{
 		"namespace":      "proofns",
@@ -334,7 +332,6 @@ func validProfile() map[string]any {
 		"cpu_size":       float64(2),
 		"ram_size":       float64(2 << 30),
 		"boot_disk_size": float64(5 << 30),
-		"rm_external_id": "cmdb-123",
 	}
 }
 

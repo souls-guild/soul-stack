@@ -5,6 +5,34 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ## [Unreleased]
 
+### Changed
+
+- **`vmlocal` is a libvirt machine provider in its own right, not a mirror of a cloud
+  contract (NIM-873).** It was built so that registering it under a cloud provider's
+  alias ran that provider's scenario unmodified, which cost it five credential params it
+  declared, required and could not use, a second spelling of `namespace`, and a profile
+  whose field list was a diff against someone else's. All of that is gone; the parameters
+  are now the ones libvirt can answer for. **Breaking for a caller:** `key_id`, `secret`,
+  `ca_cert_pem`, `client_cert_pem`, `client_key_pem`, `namespace_id` and the profile
+  fields `rm_external_id` / `image_version` / `set_external_ip` / `external_ip_id` /
+  `anti_affinity` / `cluster` are refused rather than accepted, and a scenario written
+  against a cloud provider no longer runs on `vmlocal` unedited.
+- **The profile is a closed vocabulary and the step params are checked by the artifact
+  itself.** `profile` is declared `map`, so the platform type-checks nothing inside it,
+  and `soul-lint` does not reach a step behind an `include:` (NIM-779/NIM-785) — the
+  layout a real service uses. A key `vmlocal` does not read is now refused at both levels
+  rather than silently ignored.
+- **`vmlocal` declares its OUTPUT shape.** A module document declares inputs only, so
+  `register.<task>.*` could move under a consumer with every test green — and had: the
+  state descriptions promised an `external_ip` the artifact has never emitted and omitted
+  the `state` it always has. The four shapes are named in code, quoted in the
+  descriptions, and held to the emitters by a guard.
+- **The customer name is out of the engine.** `wbcloud` in test fixtures is `democloud`;
+  `wb-service-redis` is `demo-service-redis`; prose naming a customer's service or stand
+  as the origin of a behaviour says what it was instead. Dated records — CHANGELOG
+  entries, ADR amendment logs, the epic order in `roadmap.md` and `known-limitations.md`
+  — keep `soul-cloud-wb` deliberately: there it names an artifact as it was at that date.
+
 ### Added
 
 - **`soul-mod-mongo` serves eight objects instead of three** — `replicaset`, `role`,

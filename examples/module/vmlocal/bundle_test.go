@@ -1,6 +1,6 @@
-// Guards on the schema document ↔ implementation contract, and on the one
-// property this artifact exists for: that its address and param surface are
-// `wbcloud`'s.
+// Guards on this artifact's contract: the schema document against the Go value
+// it is generated from, the parameter surface against drift, and the OUTPUT
+// shape — which no document declares at all.
 //
 // `modules[<object>].states.<action>.input` is the ONLY thing param-level
 // strictness reads (ADR-0076, NIM-163/NIM-204): a key a state omits has no
@@ -14,10 +14,12 @@ package main
 
 import (
 	"bytes"
-	"encoding/json"
+	"errors"
+	"fmt"
+	"maps"
 	"os"
-	"reflect"
 	"slices"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/sdk/schema"
@@ -41,18 +43,59 @@ func parseDoc(t *testing.T) schema.Document {
 	return doc
 }
 
-// connParams — the params every action carries. The list is the constants
-// themselves, so a rename breaks this test rather than silently leaving a state
-// undeclared.
-var connParams = []string{
-	connKeyID, connSecret, connEndpoint,
-	connNamespace, connNamespaceID,
-	connCACertPEM, connClientCertPEM, connClientKeyPEM,
+// spec is one param as this artifact promises to declare it. Everything
+// param-level strictness and soul-lint read about a param is here, because
+// everything here is a separate way the surface can move: a `Required` dropped
+// silently accepts a call that is missing what the action needs, a `Type`
+// widened lets a string reach a reader expecting a number, and a `Default`
+// changed moves what a scenario gets without the scenario changing.
+type spec struct {
+	typ      schema.ParamType
+	required bool
+	def      any
 }
 
-// secretParams — params carrying a credential or a PEM key. Declaring one without
-// `secret: true` would leave it unmasked in logs, traces and the UI (ADR-010).
-var secretParams = []string{connSecret, connCACertPEM, connClientCertPEM, connClientKeyPEM}
+// connParams — the params every action carries.
+var connParams = map[string]spec{
+	connEndpoint:  {typ: schema.String, required: true},
+	connNamespace: {typ: schema.String},
+}
+
+// ownParams — what each action declares BEYOND the connection params.
+//
+// ★★ This table replaces the guard that compared this surface, key for key,
+// against a vendored copy of a cloud provider's published document (NIM-873).
+// That comparison was the only thing holding the parameters still, and dropping
+// it without a replacement would have left them free to drift by accident.
+//
+// It is a better replacement for a plugin that answers to libvirt rather than to
+// a foreign contract, because it states what vmlocal OFFERS rather than how far
+// it has strayed from someone else. It has to pin the same FIVE dimensions the
+// old one did, though — name, type, required, default, and (in
+// [TestNoParamCarriesACredential]) secret/pattern — since a guard over names
+// alone would let `Required: true` fall off `endpoint` in silence.
+var ownParams = map[string]map[string]spec{
+	"created": {
+		"count":    {typ: schema.Int, def: 1},
+		"name":     {typ: schema.String},
+		"profile":  {typ: schema.Map, required: true},
+		"userdata": {typ: schema.String},
+	},
+	"destroyed": {
+		"vm_ids": {typ: schema.List, required: true},
+	},
+	"probed": {
+		"vm_ids":    {typ: schema.List},
+		"run_label": {typ: schema.String},
+	},
+	"resized": {
+		"vm_ids":         {typ: schema.List, required: true},
+		"cpu_cores":      {typ: schema.Int, def: 0},
+		"ram_mb":         {typ: schema.Int, def: 0},
+		"disk_gb":        {typ: schema.Int, def: 0},
+		"allow_downtime": {typ: schema.Bool, def: false},
+	},
+}
 
 func TestPublishedSchemaMatchesTheBundle(t *testing.T) {
 	published, err := os.ReadFile("schema.json")
@@ -110,130 +153,203 @@ func TestDeclaredStatesAreDispatched(t *testing.T) {
 	}
 }
 
-func TestEveryStateDeclaresTheConnectionParams(t *testing.T) {
+// The PUBLISHED input surface is exactly what [ownParams] plus [connParams] say
+// it is — every key, and every property of every key.
+//
+// No more, because a param an artifact declares and cannot use is a promise to
+// the operator that nobody keeps; no less, because a key a state omits is
+// refused on a call that was perfectly legitimate.
+//
+// ⚠ "cannot use" is a JUDGEMENT made when this table is edited, not a property
+// checked here — nothing proves a declared step param is read by anything. The
+// profile half below does check that, because it can: parseProfile fills a
+// struct. A step param reaches four different functions.
+func TestPublishedInputSurfaceIsExactlyDeclared(t *testing.T) {
+	states := parseDoc(t).Modules[0].States
+	if got := slices.Sorted(maps.Keys(states)); !slices.Equal(got, slices.Sorted(maps.Keys(ownParams))) {
+		t.Fatalf("actions are %v, the table covers %v", got, slices.Sorted(maps.Keys(ownParams)))
+	}
+	for state, own := range ownParams {
+		want := maps.Clone(own)
+		maps.Copy(want, connParams)
+
+		got := states[state].Input
+		if a, b := slices.Sorted(maps.Keys(got)), slices.Sorted(maps.Keys(want)); !slices.Equal(a, b) {
+			t.Errorf("state %q declares %v, want %v", state, a, b)
+			continue
+		}
+		for key, w := range want {
+			p := got[key]
+			if p.Type != w.typ {
+				t.Errorf("state %q param %q: type=%q, declared %q", state, key, p.Type, w.typ)
+			}
+			if p.Required != w.required {
+				t.Errorf("state %q param %q: required=%v, declared %v", state, key, p.Required, w.required)
+			}
+			// The document is JSON, so an int default comes back a float64.
+			if !sameDefault(p.Default, w.def) {
+				t.Errorf("state %q param %q: default=%#v, declared %#v", state, key, p.Default, w.def)
+			}
+		}
+	}
+}
+
+// sameDefault compares a default across the JSON round trip the document makes.
+func sameDefault(published, declared any) bool {
+	if published == nil || declared == nil {
+		return published == nil && declared == nil
+	}
+	return fmt.Sprintf("%v", published) == fmt.Sprintf("%v", declared)
+}
+
+// ★ The batch-identity label is a STRING the descriptions name in prose, and
+// `probed`'s `run_label` filter is only usable if the two agree. Renaming the
+// constant without the prose leaves an operator filtering on a label nothing
+// stamps — a silent empty result, not an error.
+func TestTheRunLabelKeyIsNamedInTheDocument(t *testing.T) {
 	doc := parseDoc(t)
-	for name, st := range doc.Modules[0].States {
-		for _, key := range connParams {
-			if _, ok := st.Input[key]; !ok {
-				t.Errorf("state %q does not declare %q, which every action reads", name, key)
+	for _, state := range []string{"created", "probed"} {
+		if !strings.Contains(doc.Modules[0].States[state].Description+fmt.Sprint(doc.Modules[0].States[state].Input), runLabelKey) {
+			t.Errorf("state %q never names %q, the label it stamps and filters by", state, runLabelKey)
+		}
+	}
+	if !slices.Contains(hostAttrKeys, "run_label") {
+		t.Error("hosts[].attributes no longer echoes run_label; a scenario cannot read back the identity it filtered by")
+	}
+}
+
+// ★ No param of this artifact carries a credential, and that is a property
+// rather than an accident: a libvirtd over its unix socket authenticates by the
+// permissions on that socket, and TLS to a remote one is configured in libvirt's
+// own client files. Re-introducing a `secret: true` param means this artifact
+// has acquired something to authenticate WITH — which is a design decision, not
+// a parameter addition.
+func TestNoParamCarriesACredential(t *testing.T) {
+	for name, st := range parseDoc(t).Modules[0].States {
+		for key, p := range st.Input {
+			if p.Secret || p.Pattern == "^vault:.*" {
+				t.Errorf("state %q declares %q as a secret; vmlocal presents no credential to libvirt", name, key)
 			}
 		}
 	}
 }
 
-func TestSecretParamsAreDeclaredSecret(t *testing.T) {
-	doc := parseDoc(t)
-	for name, st := range doc.Modules[0].States {
-		for _, key := range secretParams {
-			p, ok := st.Input[key]
-			if !ok {
-				continue
-			}
-			if !p.Secret {
-				t.Errorf("state %q: param %q must be secret: true", name, key)
-			}
+// ★★ The profile is the half of the surface the PLATFORM CANNOT SEE.
+//
+// `profile` is declared [module.Map], so param-level strictness type-checks
+// nothing inside it — the ten fields that decide what machine gets built are
+// exactly the ten the schema does not reach. [profileVocabulary] closes that set
+// in code, and this holds it to the parser: a name in the vocabulary that
+// parseProfile does not read leaves its field at the zero value here and reds.
+//
+// ⚠ The other direction is NOT held, and cannot be cheaply: a reader added for a
+// key left out of the vocabulary is dead rather than dangerous — the vocabulary
+// refuses that key, so the reader never sees it. The failure it would cause is a
+// refusal, which is loud.
+func TestProfileVocabularyIsClosedAndFullyRead(t *testing.T) {
+	full := map[string]any{
+		"namespace":           "ns",
+		"image_name":          "debian-12",
+		"image_id":            "11111111-2222-3333-4444-555555555555",
+		"network_id":          "66666666-7777-8888-9999-000000000000",
+		"cpu_size":            2,
+		"ram_size":            1 << 30,
+		"boot_disk_size":      3 << 30,
+		"boot_disk_name":      "disk-0",
+		"deletion_protection": true,
+		"labels":              map[string]any{runLabelKey: "batch"},
+	}
+	if got := slices.Sorted(maps.Keys(full)); !slices.Equal(got, slices.Sorted(slices.Values(profileVocabulary))) {
+		t.Fatalf("this test populates %v, the vocabulary is %v", got, profileVocabulary)
+	}
+
+	// Every vocabulary key reaches the struct. A name nothing reads would leave
+	// its field at the zero value here.
+	p, errs := parseProfile(full)
+	if len(errs) > 0 {
+		t.Fatalf("a fully populated profile was refused: %v", errs)
+	}
+	for name, zero := range map[string]bool{
+		"namespace": p.namespace == "", "image_id": p.imageID == "", "image_name": p.imageName == "",
+		"network_id": p.networkID == "", "cpu_size": p.cpuSize == 0, "ram_size": p.ramSize == 0,
+		"boot_disk_size": p.bootDiskSize == 0, "boot_disk_name": p.bootDiskName == "",
+		"deletion_protection": !p.deletionProtection, "labels": len(p.labels) == 0,
+		"labels[soulstack-run]": p.runLabel == "",
+	} {
+		if zero {
+			t.Errorf("profile.%s is in the vocabulary but parseProfile did not read it", name)
+		}
+	}
+
+	// And a key outside the set is refused rather than ignored — the five that
+	// used to be refused by name because a cloud contract declared them, the two
+	// this artifact itself dropped, and a plain typo.
+	for _, key := range []string{
+		"set_external_ip", "external_ip_id", "anti_affinity", "cluster", "image_version",
+		"rm_external_id", "namespace_id",
+		"cpu_sizes",
+	} {
+		one := maps.Clone(full)
+		one[key] = "x"
+		_, errs := parseProfile(one)
+		if !hasError(errs, "profile."+key+" is not a vmlocal profile field") {
+			t.Errorf("profile.%s was accepted; errors=%v", key, errs)
 		}
 	}
 }
 
-// ★★ THE POINT OF THIS ARTIFACT.
+// ★★ THE OUTPUT SHAPE, which no document declares.
 //
-// A plugin document carries no name of its own — address level 1 is the alias an
-// operator registers it under — so registering this binary as `wbcloud` makes an
-// unmodified WB service scenario provision against libvirt. That only holds while
-// the OBJECT, the ACTIONS and the PARAM SURFACE are identical, because param-level
-// strictness refuses a call carrying a key the state does not declare.
+// A module document declares INPUTS only, so `register.<task>.*` is the one
+// dimension of this contract that can move under a consumer with every other
+// test still green. It had already moved before this guard existed: the state
+// descriptions promised `external_ip`, which this artifact has never emitted,
+// and omitted `state`, which it always has.
 //
-// testdata/wbcloud.schema.json is a vendored copy of what that artifact
-// publishes. Both sides are compared as PARSED JSON so the numeric types match
-// (a Go `int` default renders as a JSON number either way).
-//
-// Descriptions are deliberately NOT compared: they are what an operator reads,
-// and a WB description would be a lie here.
-//
-// When this reddens, the contract moved. Re-copy the fixture and decide whether
-// vmlocal follows — do not delete the test.
-func TestParamSurfaceMatchesWBCloud(t *testing.T) {
-	ours := parseDoc(t)
+// The emitters are checked against the lists the descriptions quote, so the two
+// cannot part company again in silence.
+func TestOutputShapeIsDeclared(t *testing.T) {
+	d := domainInfo{UUID: "vm-1", Name: "web-0", Namespace: "ns"}
 
-	raw, err := os.ReadFile("testdata/wbcloud.schema.json")
-	if err != nil {
-		t.Fatalf("read the vendored wbcloud document: %v", err)
-	}
-	theirs, err := schema.Unmarshal(raw)
-	if err != nil {
-		t.Fatalf("unmarshal the vendored wbcloud document: %v", err)
-	}
-
-	if theirs.Modules[0].Name != ours.Modules[0].Name {
-		t.Fatalf("object name is %q, wbcloud's is %q: the address must match or the scenario does not resolve",
-			ours.Modules[0].Name, theirs.Modules[0].Name)
-	}
-	if theirs.Modules[0].Side != ours.Modules[0].Side {
-		t.Errorf("side is %q, wbcloud's is %q", ours.Modules[0].Side, theirs.Modules[0].Side)
-	}
-
-	wantStates := make([]string, 0, len(theirs.Modules[0].States))
-	for n := range theirs.Modules[0].States {
-		wantStates = append(wantStates, n)
-	}
-	gotStates := make([]string, 0, len(ours.Modules[0].States))
-	for n := range ours.Modules[0].States {
-		gotStates = append(gotStates, n)
-	}
-	slices.Sort(wantStates)
-	slices.Sort(gotStates)
-	if !slices.Equal(wantStates, gotStates) {
-		t.Fatalf("actions are %v, wbcloud's are %v", gotStates, wantStates)
-	}
-
-	for _, state := range wantStates {
-		want, got := theirs.Modules[0].States[state], ours.Modules[0].States[state]
-		for key, wp := range want.Input {
-			gp, ok := got.Input[key]
-			if !ok {
-				t.Errorf("state %q does not declare %q, which wbcloud declares: a scenario passing it is refused as module.unknown_param", state, key)
-				continue
-			}
-			if wp.Type != gp.Type {
-				t.Errorf("state %q param %q: type=%q, wbcloud's is %q", state, key, gp.Type, wp.Type)
-			}
-			if wp.Required != gp.Required {
-				t.Errorf("state %q param %q: required=%v, wbcloud's is %v", state, key, gp.Required, wp.Required)
-			}
-			if wp.Secret != gp.Secret {
-				t.Errorf("state %q param %q: secret=%v, wbcloud's is %v", state, key, gp.Secret, wp.Secret)
-			}
-			if wp.Pattern != gp.Pattern {
-				t.Errorf("state %q param %q: pattern=%q, wbcloud's is %q", state, key, gp.Pattern, wp.Pattern)
-			}
-			if !reflect.DeepEqual(wp.Default, gp.Default) {
-				t.Errorf("state %q param %q: default=%#v, wbcloud's is %#v", state, key, gp.Default, wp.Default)
-			}
-		}
-		for key := range got.Input {
-			if _, ok := want.Input[key]; !ok {
-				t.Errorf("state %q declares %q, which wbcloud does not: a scenario using it cannot run against the cloud", state, key)
-			}
+	for _, tc := range []struct {
+		what string
+		got  map[string]any
+		want []string
+	}{
+		{"created/probed hosts[] entry", hostEntry(d, "10.0.0.2", "web-0.ns"), hostEntryKeys},
+		{"hosts[] attributes", hostEntry(d, "10.0.0.2", "web-0.ns")["attributes"].(map[string]any), hostAttrKeys},
+		{"hosts[] entry for a machine that never came up", hostStub("vm-1"), hostStubKeys},
+		{"resized results[] entry", resizeResult("vm-1", true, true, nil), resizeKeys},
+		{"resized results[] entry, failed", resizeResult("vm-1", false, true, errors.New("boom")), append(slices.Clone(resizeKeys), "error")},
+	} {
+		if got := slices.Sorted(maps.Keys(tc.got)); !slices.Equal(got, slices.Sorted(slices.Values(tc.want))) {
+			t.Errorf("%s emits %v, declared %v", tc.what, got, tc.want)
 		}
 	}
-}
 
-// A parameter surface identical to wbcloud's is only half of it: the batch
-// identity label the two artifacts filter on has to be the same string too, or an
-// adopted batch here is an orphan there.
-func TestRunLabelKeyMatchesWBCloud(t *testing.T) {
-	raw, err := os.ReadFile("testdata/wbcloud.schema.json")
-	if err != nil {
-		t.Fatalf("read the vendored wbcloud document: %v", err)
-	}
-	var generic map[string]any
-	if err := json.Unmarshal(raw, &generic); err != nil {
-		t.Fatalf("unmarshal: %v", err)
-	}
-	// The key is named in wbcloud's own prose rather than in a field, so this is
-	// the honest check available: the string must appear in the document it filters by.
-	if !bytes.Contains(raw, []byte(runLabelKey)) {
-		t.Errorf("wbcloud's document does not mention %q — the batch identity label diverged", runLabelKey)
+	// ★ The descriptions an operator reads are part of the declaration, and the
+	// fragment they must contain is DERIVED from the same lists — so reordering or
+	// renaming a key forces the prose to move with it. A literal here would let the
+	// code and the document drift apart together, which is the failure this guard
+	// exists for: the descriptions promised `external_ip` for as long as they did
+	// because nothing tied them to what `hostEntry` returns.
+	hostShape := "{" + strings.Join(hostEntryKeys, ", ") + "}"
+	attrShape := "{" + strings.Join(hostAttrKeys, ", ") + "}"
+	stubShape := "{" + strings.Join(hostStubKeys, ", ") + "}"
+	resizeShape := "{" + strings.Join(resizeKeys, ", ") + ", error?}"
+
+	states := parseDoc(t).Modules[0].States
+	for _, tc := range []struct{ state, want string }{
+		{"created", hostShape},
+		{"created", attrShape},
+		{"created", stubShape},
+		{"probed", hostShape},
+		{"probed", attrShape},
+		{"destroyed", stubShape},
+		{"resized", resizeShape},
+	} {
+		if !strings.Contains(states[tc.state].Description, tc.want) {
+			t.Errorf("state %q does not describe its output as %s", tc.state, tc.want)
+		}
 	}
 }

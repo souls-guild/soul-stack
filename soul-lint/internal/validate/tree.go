@@ -7,7 +7,7 @@ package validate
 // Why this is a mode of the linter and not a loop in a shell script (NIM-753).
 // The per-file commands check one document per invocation, so a service
 // repository had to orchestrate the sequence itself — and the orchestrator, being
-// an ordinary `set -e` script, stopped at the first non-zero exit. In the WB redis
+// an ordinary `set -e` script, stopped at the first non-zero exit. In one such
 // service that first exit was a one-line manifest error, and behind it sat eight
 // accumulated divergences that nobody saw for as long as the manifest stayed red:
 // a dead `state_changes:` block (thirteen state fields silently not written), the

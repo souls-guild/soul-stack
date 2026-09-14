@@ -209,3 +209,26 @@ func TestDomainDefinitionShape(t *testing.T) {
 		t.Error("the MAC is not pinned; libvirt would regenerate it on every redefine")
 	}
 }
+
+// ★ Metadata written by an OLDER build must still read as ours. `rm_external_id`
+// left the element with NIM-873, and a reader that choked on it — or stopped
+// recognising the namespace — would make `created` orphan every existing batch
+// and build siblings beside it. encoding/xml ignores an unmatched element; this
+// pins that it keeps doing so for the fields that decide ownership.
+func TestMetadataFromAnOlderBuildStillReads(t *testing.T) {
+	old := `<vm xmlns="https://souls.guild/vmlocal/1"><namespace>ns</namespace>` +
+		`<created_at>2026-09-13T00:00:00Z</created_at><image_id>img</image_id>` +
+		`<network_id>net</network_id><deletion_protection>true</deletion_protection>` +
+		`<rm_external_id>cmdb-123</rm_external_id>` +
+		`<label><key>soulstack-run</key><value>b</value></label></vm>`
+	var m vmMetaRead
+	if err := xml.Unmarshal([]byte(old), &m); err != nil {
+		t.Fatalf("metadata from an older build no longer parses: %v", err)
+	}
+	if !m.ours() {
+		t.Fatal("metadata from an older build is no longer recognised as ours — an existing batch would be orphaned")
+	}
+	if m.Namespace != "ns" || !m.DeletionProtection || len(m.Labels) != 1 {
+		t.Errorf("fields lost: %+v", m.vmMetaBody)
+	}
+}

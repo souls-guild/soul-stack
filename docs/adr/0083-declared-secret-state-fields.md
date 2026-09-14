@@ -9,7 +9,7 @@
 A service author who needs a generated password writes a Vault path. Not once — in
 every channel that touches it, by hand, and nothing checks that the copies agree.
 
-`wb-service-redis` is the worked example. The same path is spelled in four places:
+The downstream redis service is the worked example. The same path is spelled in four places:
 
 - `scenario-create.yml:127` — `compute.users_path`, read by the Soul-side consumers;
 - `scenario/deploy.yml:22` — `vars.users_path`, because `compute.*` is not in scope on
@@ -22,7 +22,7 @@ The comment above the second one states the invariant and its enforcement mechan
 > It must match compute.users_path, or we generate passwords at one path and read them
 > from another.
 
-(translated — `wb-service-redis` keeps its comments in Russian by design)
+(translated — that repository keeps its comments in Russian by design)
 
 The invariant is enforced by a comment. Change the shape of one and the run generates
 passwords at one path and reads them from another — no diagnostic, no test, a Redis that
@@ -479,7 +479,7 @@ default alphabet while the YAML said otherwise, and nothing reported it.
 ### What this ADR does not carry
 
 - **Declared cross-namespace reads (`external_secrets`).** The mechanism that would let
-  §7's fence become a deletion. `wb-service-redis` needs zero entries, so it is not on
+  §7's fence become a deletion. The downstream redis service needs zero entries, so it is not on
   this ticket's critical path.
 - **Rotation.** Deliberately inexpressible under §4. Making it expressible is a decision
   about who may rotate what and what happens to the previous value — its own ticket.
@@ -491,7 +491,7 @@ default alphabet while the YAML said otherwise, and nothing reported it.
 ### Consequences
 
 **For the service author.** A secret is declared once, next to the field it belongs to,
-and referenced by name. `wb-service-redis` loses its `revealable_secrets` block, its
+and referenced by name. The downstream redis service loses its `revealable_secrets` block, its
 prose path in `types.yml`, both `users_path` computations, and all 17 `vault()` call
 sites; the `merge(merge(...), has(input.users) ? ... : {})` construction in
 `deploy.yml:67-85` collapses to a single `.map()` over the register, because the state
@@ -644,7 +644,7 @@ on the field instead of a root `required: [names]` list, and a snake_case vocabu
 declaration is untouched in substance: the two supported shapes, the `key:` sibling, the derived
 path, the closed node grammar and the total refusal all stand. Four things change, and one of them
 changes an error code that today fires for the wrong reason. **Design only, not implemented** —
-NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis
+NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (`examples/` and the downstream redis
 service).
 
 **(a) The `required:` refusal survives, but it has to be re-hung on a different key, and the naive

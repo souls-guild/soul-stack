@@ -91,7 +91,7 @@ func TestCreatedOutputIsTheShapeTheConsumerReads(t *testing.T) {
 }
 
 // ★ sid is the hostname the GUEST announced over DHCP, not the name this artifact
-// chose. That is what makes it the same kind of fact the cloud reports, and it is
+// chose. That is what makes it the machine's own account of itself, and it is
 // what catches a machine whose cloud-init rewrote its hostname.
 func TestSidComesFromTheLeaseHostname(t *testing.T) {
 	f := newFakeHV()
@@ -330,7 +330,8 @@ func TestResizedFailsClosedOnQuota(t *testing.T) {
 	}
 }
 
-// ★ cpu/ram go through stop → update → start, which is what the cloud does.
+// ★ cpu/ram go through stop → update → start, so `allow_downtime` is consent to
+// a stop that actually happens.
 // libvirt can hot-plug some of this; doing so would let a scenario pass here
 // without allow_downtime and fail there.
 func TestResizedStopsBeforeChangingCPU(t *testing.T) {
@@ -401,7 +402,7 @@ func TestForcedStopIsReported(t *testing.T) {
 	}
 }
 
-// Shrinking a disk is an idempotent skip, as in the cloud — never a silent
+// Shrinking a disk is an idempotent skip — never a silent
 // destructive truncation.
 func TestResizedSkipsAShrink(t *testing.T) {
 	f := newFakeHV()

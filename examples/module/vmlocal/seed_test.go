@@ -143,8 +143,8 @@ func TestMACIsAFunctionOfMachineIdentity(t *testing.T) {
 }
 
 // ★ A recreated machine is a DIFFERENT machine and gets a different vm_id, which
-// is the cloud's semantics — and is what stops a stale dnsmasq lease from
-// reporting it ready before it has booted.
+// is what stops a stale dnsmasq lease from reporting it ready before it has
+// booted.
 func TestEachCreationMintsAFreshIdentity(t *testing.T) {
 	prof, errs := parseProfile(validProfile())
 	if len(errs) > 0 {

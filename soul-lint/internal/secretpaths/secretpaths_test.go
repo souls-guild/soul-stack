@@ -23,11 +23,11 @@ func run(t *testing.T, src, serviceName string) (stdout, stderr string, code int
 	return out.String(), errOut.String(), code
 }
 
-// wbRedisShape — the two collections wb-service-redis actually declares. Kept in the
+// demoRedisShape — the two collections demo-service-redis actually declares. Kept in the
 // test rather than read from that repository: the acceptance run against the real file
 // is a separate, manual step, and a unit test that reads a neighbouring checkout would
 // pass or fail on whether the checkout is there.
-const wbRedisShape = `
+const demoRedisShape = `
 state_schema:
   namespace: { type: string }
   redis_users:
@@ -55,7 +55,7 @@ state_schema:
 // TestRun_CollectionShape — the acceptance case. Both collections appear, in sorted
 // declaration order, each ending in the sibling property that addresses one element.
 func TestRun_CollectionShape(t *testing.T) {
-	stdout, stderr, code := run(t, wbRedisShape, "redis")
+	stdout, stderr, code := run(t, demoRedisShape, "redis")
 	if code != ExitOK {
 		t.Fatalf("code = %d, want ExitOK; stderr = %q", code, stderr)
 	}
@@ -196,7 +196,7 @@ state_schema:
 // through this command too. A path under a reserved namespace is never printed, not
 // even as a shape: an author who saw it would build on an address registration refuses.
 func TestRun_ReservedServiceNamespaceFailsClosed(t *testing.T) {
-	stdout, stderr, code := run(t, wbRedisShape, "keeper")
+	stdout, stderr, code := run(t, demoRedisShape, "keeper")
 	if code != ExitHasErrors {
 		t.Fatalf("code = %d, want ExitHasErrors", code)
 	}
@@ -211,7 +211,7 @@ func TestRun_ReservedServiceNamespaceFailsClosed(t *testing.T) {
 // TestRun_UnsafeServiceNameFailsClosed — the name arrives on a flag and becomes a path
 // segment, so it is checked by the same grammar every other segment is.
 func TestRun_UnsafeServiceNameFailsClosed(t *testing.T) {
-	stdout, stderr, code := run(t, wbRedisShape, "../keeper")
+	stdout, stderr, code := run(t, demoRedisShape, "../keeper")
 	if code != ExitHasErrors {
 		t.Fatalf("code = %d, want ExitHasErrors", code)
 	}
@@ -226,7 +226,7 @@ func TestRun_UnsafeServiceNameFailsClosed(t *testing.T) {
 // TestRun_MissingServiceName — refused before anything is read. A default would put a
 // wrong word in the one segment the reader came here to check.
 func TestRun_MissingServiceName(t *testing.T) {
-	stdout, stderr, code := run(t, wbRedisShape, "")
+	stdout, stderr, code := run(t, demoRedisShape, "")
 	if code != ExitIOFatal {
 		t.Fatalf("code = %d, want ExitIOFatal", code)
 	}

@@ -11,17 +11,20 @@ package main
 import (
 	"fmt"
 	"math"
+	"slices"
 	"sort"
 	"strings"
 )
 
-// runLabelKey is the metadata label carrying the batch identity — the same key
-// the cloud artifact stamps, because a scenario filtering on it must filter the
-// same way here.
+// runLabelKey is the domain-metadata label carrying the batch identity. It is
+// what `created` matches its own machines by on a rerun, and what `probed`
+// filters on.
 const runLabelKey = "soulstack-run"
 
-// userdataMaxBytes mirrors the cloud's declared ci_user_data cap. A seed ISO
-// would hold far more; accepting more would green a scenario the cloud refuses.
+// userdataMaxBytes bounds what goes onto the NoCloud seed. The ISO would hold
+// megabytes; a cloud-init document that large is a rendering accident rather
+// than an intention, and it is cheaper to refuse it than to boot a machine that
+// then fails to configure itself.
 const userdataMaxBytes = 32 * 1024
 
 // fields reads one param map, accumulating type errors rather than returning
@@ -112,9 +115,9 @@ func (f *fields) has(name string) bool {
 	return ok && v != nil
 }
 
-// strList reads a list of strings, refusing a bare string. The cloud contract
-// declares vm_ids as a list and a scenario that passes one id unwrapped is a
-// scenario that will behave differently in the cloud.
+// strList reads a list of strings, refusing a bare string. `vm_ids` is declared
+// a list; accepting one id unwrapped would make the single-machine case take a
+// different code path from every other case, which is where such a path rots.
 func (f *fields) strList(name string) []string {
 	v, ok := f.m[name]
 	if !ok || v == nil {
@@ -142,8 +145,8 @@ func (f *fields) strList(name string) []string {
 }
 
 // labels reads the label map, refusing a non-string value rather than dropping
-// it. The cloud artifact drops silently, which loses the batch identity when
-// someone writes `soulstack-run: 12345` — and a lost identity spawns orphans.
+// it: dropping would lose the batch identity when someone writes
+// `soulstack-run: 12345`, and a lost identity spawns orphans.
 func (f *fields) labels(name string) map[string]string {
 	v, ok := f.m[name]
 	if !ok || v == nil {
@@ -171,13 +174,12 @@ func (f *fields) labels(name string) map[string]string {
 	return out
 }
 
-// vmProfile is the machine spec, in the cloud artifact's field names.
+// vmProfile is the machine spec: one libvirt domain's worth of decisions, and
+// nothing that a libvirt host cannot answer for.
 type vmProfile struct {
 	namespace    string
-	namespaceID  string
 	imageID      string
 	imageName    string
-	imageVersion int64
 	networkID    string
 	cpuSize      int64
 	ramSize      int64 // bytes
@@ -185,41 +187,40 @@ type vmProfile struct {
 	bootDiskName string
 
 	deletionProtection bool
-	rmExternalID       string
 	labels             map[string]string
 	runLabel           string
 }
 
-// profileScope is the namespace a profile places its machines in; profile wins
-// over the step param, as in the cloud.
+// scope is the namespace a profile places its machines in; the profile wins over
+// the step param, so one step can provision into a namespace of the spec's
+// choosing without the caller restating it.
 func (p vmProfile) scope(stepNS string) string {
 	if p.namespace != "" {
 		return p.namespace
 	}
-	if p.namespaceID != "" {
-		return p.namespaceID
-	}
 	return stepNS
 }
 
-// refusedProfileFields are the fields the cloud accepts that a single libvirt
-// host cannot honour. They are REFUSED rather than ignored: each one is a
-// promise about the machine, and accepting a promise you do not keep is how a
-// second implementation stops being a check on the contract and becomes a way
-// around it. Fields that are merely inert here (rm_external_id) are accepted.
-var refusedProfileFields = []struct {
-	key    string
-	reason string
-}{
-	{"set_external_ip", "vmlocal has no external-address pool; a VM is reachable on its NAT lease only"},
-	{"external_ip_id", "vmlocal has no external-address pool; a VM is reachable on its NAT lease only"},
-	{"anti_affinity", "vmlocal runs one hypervisor, so machines cannot be spread across hosts"},
-	{"cluster", "vmlocal has no cluster placement"},
-	// The local catalogue is a storage pool: one volume per image name, so there
-	// is no set of versions for a version to pick from. Accepting it and
-	// resolving the one volume anyway would be the silent no-op this list exists
-	// to prevent — the operator would believe they had pinned something.
-	{"image_version", "the local image catalogue is a storage pool with one volume per name, so there are no versions to pin"},
+// profileVocabulary is the CLOSED set of profile keys, and closing it is this
+// artifact's own guard on its parameter surface.
+//
+// ★ It has to live here rather than in the schema document: `profile` is
+// declared [module.Map], so param-level strictness (ADR-0076) type-checks
+// nothing inside it and an unknown key there is invisible to the platform. An
+// ignored key in a machine spec is the worst kind of silence — the operator
+// asked for a property, was not refused, and gets a machine without it.
+//
+// Adding a field means adding it here, which is the point: the set drifts by an
+// edit that a reviewer sees, not by a reader quietly starting to read one more
+// key.
+var profileVocabulary = []string{
+	"namespace",
+	"image_id", "image_name",
+	"network_id",
+	"cpu_size", "ram_size",
+	"boot_disk_size", "boot_disk_name",
+	"deletion_protection",
+	"labels",
 }
 
 // parseProfile builds the spec and reports everything wrong with it. One
@@ -230,10 +231,8 @@ func parseProfile(raw map[string]any) (vmProfile, []string) {
 
 	p := vmProfile{
 		namespace:          f.str("namespace"),
-		namespaceID:        f.str("namespace_id"),
 		imageID:            f.str("image_id"),
 		imageName:          f.str("image_name"),
-		imageVersion:       f.integer("image_version"),
 		networkID:          f.str("network_id"),
 		cpuSize:            f.integer("cpu_size"),
 		ramSize:            f.integer("ram_size"),
@@ -244,49 +243,16 @@ func parseProfile(raw map[string]any) (vmProfile, []string) {
 	}
 	p.runLabel = p.labels[runLabelKey]
 
-	// rm_external_id is inert here but required, because the cloud requires it:
-	// a profile that validates locally and is then refused by the cloud would
-	// make this artifact a worse gate than no gate.
-	switch v := raw["rm_external_id"].(type) {
-	case nil:
-		if _, present := raw["rm_external_id"]; !present {
-			f.errs = append(f.errs, "profile.rm_external_id is required (Resource Manager id of the owning system: cmdb_system_id as a string, or the legacy numeric id). It is inert on vmlocal and is required anyway, so that a profile accepted here is accepted by the cloud too.")
-		} else {
-			f.errs = append(f.errs, "profile.rm_external_id must be a non-empty string or a positive number")
+	unknown := make([]string, 0)
+	for k := range raw {
+		if !slices.Contains(profileVocabulary, k) {
+			unknown = append(unknown, k)
 		}
-	case string:
-		if strings.TrimSpace(v) == "" {
-			f.errs = append(f.errs, "profile.rm_external_id must be a non-empty string or a positive number")
-		}
-		p.rmExternalID = v
-	case float64:
-		if v <= 0 || v != math.Trunc(v) {
-			f.errs = append(f.errs, "profile.rm_external_id must be a non-empty string or a positive number")
-		} else {
-			p.rmExternalID = fmt.Sprintf("%d", int64(v))
-		}
-	case int, int64, uint64:
-		p.rmExternalID = fmt.Sprintf("%d", v)
-	default:
-		f.errs = append(f.errs, fmt.Sprintf("profile.rm_external_id must be a non-empty string or a positive number, got %T", v))
 	}
-
-	for _, r := range refusedProfileFields {
-		if !f.has(r.key) {
-			continue
-		}
-		// A false, empty or zero value asks for nothing, so there is nothing to
-		// refuse. A scenario that carries the key with its default still runs.
-		if b, ok := raw[r.key].(bool); ok && !b {
-			continue
-		}
-		if s, ok := raw[r.key].(string); ok && s == "" {
-			continue
-		}
-		if n, ok := raw[r.key].(float64); ok && n == 0 {
-			continue
-		}
-		f.errs = append(f.errs, fmt.Sprintf("profile.%s is not supported by vmlocal: %s. Remove it, or run this scenario against the cloud artifact.", r.key, r.reason))
+	sort.Strings(unknown)
+	for _, k := range unknown {
+		f.errs = append(f.errs, fmt.Sprintf("profile.%s is not a vmlocal profile field. A key this artifact does not read would be silently ignored, "+
+			"so it is refused instead. The fields are: %s.", k, strings.Join(profileVocabulary, ", ")))
 	}
 
 	return p, f.errs

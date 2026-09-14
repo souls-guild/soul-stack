@@ -187,7 +187,7 @@ close it. The restriction is pinned by `TestRender_LoopOnKeeperTaskRejected`
 The full inventory is in the NIM-699 comment; the sizing facts that constrain this ADR:
 
 **55 authored blocks · 113 ops · 100 % verb `set` · 10 services** (81 ops after de-duplicating the
-`wb-service-redis` ↔ `examples/service/redis` mirror). Twenty-two of the 55 blocks are
+downstream ↔ in-tree mirror). Twenty-two of the 55 blocks are
 `state_changes: {}` and translate to nothing at all.
 
 ★ **The ADR-057 CRUD-verb grammar has zero real users.** No scenario in any reachable repo uses
@@ -528,7 +528,7 @@ to report the field it patched, that is an additive change and does not block th
 Decided with the user 2026-08-25.
 
 The largest single block — redis's 23 ops at `examples/service/redis/covenant.yml:700-880` (the
-wb-service-redis mirror carries 22 at `covenant.yml:688-847`) — lives in a shared contract fragment
+downstream mirror carries 22 at `covenant.yml:688-847`) — lives in a shared contract fragment
 and reaches three scenarios through `extends: covenant` (`scenario/create/main.yml:22`,
 `scenario/create_from_souls/main.yml:33`, `scenario/migrate_cluster/main.yml:46`; merge at
 `shared/config/covenant.go:197-215`). `create` has no block of its own; it inherits all 23.
@@ -584,7 +584,7 @@ no such step: the family disappears instead of moving.
 ### F-C. How does L0 assert capture? — DECIDED: C4 + C3
 
 **141 case files, 905 asserted fields** hang off `assert.state_changes`
-(`examples/service/redis` 64/426, `wb-service-redis` 64/426, dragonfly 10/47, mongo 3/6). The
+(`examples/service/redis` 64/426, its downstream mirror 64/426, dragonfly 10/47, mongo 3/6). The
 comparison target is `setOpsProjection` (`trial/diff.go:346-357`), which projects `set` ops into a
 field→value map. `assert.state_after` — the shape that would survive this change intact — is
 implemented (`keeper/internal/trial/harness.go:280-291`) and has **zero** users, i.e. it is

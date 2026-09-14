@@ -105,7 +105,7 @@ already said the reuse mechanism lives *"in the same DSL — one vocabulary, one
 errors"*, and rejected `$ref` precisely to avoid a second one; the move finishes that argument by
 removing the last schema in the tree that was written in the other dialect. A `types.yml` catalog
 is now shared by both contracts, which lands three deltas here. **All three are design only** —
-engine NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the WB redis service
+engine NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the downstream redis service
 NIM-744.
 
 **(1) The list form `required: [names]` leaves `types.yml` too.** Requiredness is `required: true`

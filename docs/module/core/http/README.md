@@ -188,8 +188,8 @@ Deregister on destroy:
     headers: { X-Consul-Token: "${ input.consul_token }" }
 ```
 
-These are contract examples only; WB service wiring is intentionally outside
-NIM-608.
+These are contract examples only; downstream service wiring is intentionally
+outside NIM-608.
 
 ## See also
 

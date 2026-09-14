@@ -129,7 +129,7 @@ defensive entry [ADR-0083](0083-declared-secret-state-fields.md) §1 put in this
 inert while nothing writes there, present so a value arriving by another route (an old snapshot, a
 migration, a bug) is masked rather than printed — is dropped by the same empty set.
 **Design only, not implemented** — NIM-742 (engine + this walk), NIM-743
-(`soul-lint list-secret-paths`), NIM-744 (`examples/` and the WB redis service).
+(`soul-lint list-secret-paths`), NIM-744 (`examples/` and the downstream redis service).
 
 ## Amendment 2026-09-05 (NIM-811 / NIM-812): the §7.4 seal's two declared-but-absent sources are now populated
 

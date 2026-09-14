@@ -51,7 +51,7 @@ func TestSpawnSoulModule_RefusesUnrecognisedSide(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
-	if _, err := h.SpawnSoulModule(context.Background(), keeperSideEntry("wbcloud", "vm", "Keeper")); err == nil {
+	if _, err := h.SpawnSoulModule(context.Background(), keeperSideEntry("democloud", "vm", "Keeper")); err == nil {
 		t.Fatal("SpawnSoulModule: nil error, want a refusal for a side outside the enum")
 	}
 }
@@ -75,14 +75,14 @@ func TestSpawn_StillRefusesSoulModule(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewHost: %v", err)
 	}
-	_, err = h.Spawn(context.Background(), keeperSideEntry("wbcloud", "vm", schema.SideKeeper))
+	_, err = h.Spawn(context.Background(), keeperSideEntry("democloud", "vm", schema.SideKeeper))
 	if err == nil || !strings.Contains(err.Error(), "ssh_provider") {
 		t.Fatalf("Spawn(soul_module) = %v, want the kind refusal", err)
 	}
 }
 
 func TestDeclaredSide(t *testing.T) {
-	if got := DeclaredSide(keeperSideEntry("wbcloud", "vm", schema.SideKeeper)); got != schema.SideKeeper {
+	if got := DeclaredSide(keeperSideEntry("democloud", "vm", schema.SideKeeper)); got != schema.SideKeeper {
 		t.Errorf("DeclaredSide(side: keeper) = %q, want keeper", got)
 	}
 	if got := DeclaredSide(keeperSideEntry("legacy", "thing", "")); got != schema.SideSoul {

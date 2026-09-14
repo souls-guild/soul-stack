@@ -26,7 +26,7 @@ func runTree(t *testing.T, opts TreeOptions) (int, string, string) {
 // print BOTH, not the first.
 //
 // This is the assertion the whole mode exists for. The failure it pins is not
-// hypothetical: in the WB redis service a one-line manifest error stopped the
+// hypothetical: in a real redis service a one-line manifest error stopped the
 // repository's `set -e` script before it reached a single scenario, and eight
 // divergences sat behind it — a dead state_changes: block among them, thirteen
 // state fields silently not written — for as long as the manifest stayed red.

@@ -26,14 +26,14 @@ import (
 )
 
 // A keeper-side cloud module with one required param, shaped like the live
-// `wbcloud` document this ticket came off: `wbcloud.vm.created`.
+// machine-provider document this ticket came off: `democloud.vm.created`.
 const vmSchemaJSON = `{"kind":"soul_module","protocol_version":1,` +
 	`"modules":[{"name":"vm","side":"keeper","description":"cloud VMs","states":{"created":{` +
 	`"description":"the batch exists","input":{` +
 	`"count":{"type":"int","required":true},"name":{"type":"string"}}}}}]}`
 
 // includeTree writes a service whose only plugin step sits in a service-level
-// include, the layout of the WB redis service: `scenario/create/main.yml`
+// include, the layout a real service repository uses: `scenario/create/main.yml`
 // includes `provision.yml`, resolved one level up at `scenario/`. params is
 // spliced into that step. It returns the tree root.
 func includeTree(t *testing.T, params string) string {
@@ -42,7 +42,7 @@ func includeTree(t *testing.T, params string) string {
 	stageWrite(t, filepath.Join(root, "service.yml"),
 		"description: A service whose plugin step lives in an include\n\nstate_schema:\n  greeting:\n    type: string\n")
 	stageWrite(t, filepath.Join(root, "scenario", "provision.yml"),
-		"- name: provision the batch\n  on: keeper\n  module: wbcloud.vm.created\n  params:\n"+params)
+		"- name: provision the batch\n  on: keeper\n  module: democloud.vm.created\n  params:\n"+params)
 	stageWrite(t, filepath.Join(root, "scenario", "create", "main.yml"),
 		"name: create\ndescription: provisions through an include\n\ntasks:\n  - include: provision.yml\n")
 	return root
@@ -74,7 +74,7 @@ func runScenario(t *testing.T, root string, modules []string) (int, string) {
 // bindVM writes the module document and returns the `--modules` binding for it.
 func bindVM(t *testing.T) []string {
 	t.Helper()
-	return []string{"wbcloud=" + deftest.WriteSchemaFile(t, t.TempDir(), "wbcloud", vmSchemaJSON)}
+	return []string{"democloud=" + deftest.WriteSchemaFile(t, t.TempDir(), "democloud", vmSchemaJSON)}
 }
 
 // THE guard. No manifest bound, so the params genuinely cannot be checked — and
@@ -186,7 +186,7 @@ func TestInlinePluginStep_StillCheckedExactlyOnce(t *testing.T) {
 	main := filepath.Join(root, "scenario", "create", "main.yml")
 	stageWrite(t, main, "name: create\ndescription: provisions inline and through an include\n\ntasks:\n"+
 		"  - include: provision.yml\n"+
-		"  - name: provision another batch\n    on: keeper\n    module: wbcloud.vm.created\n    params:\n      count: 1\n      bogus_param: \"x\"\n")
+		"  - name: provision another batch\n    on: keeper\n    module: democloud.vm.created\n    params:\n      count: 1\n      bogus_param: \"x\"\n")
 
 	code, out := runScenario(t, root, bindVM(t))
 
@@ -211,7 +211,7 @@ func TestIncludedPluginStep_NestedIncludeIsCheckedToo(t *testing.T) {
 	root := includeTree(t, goodParams)
 	stageWrite(t, filepath.Join(root, "scenario", "provision.yml"), "- include: cloud.yml\n")
 	stageWrite(t, filepath.Join(root, "scenario", "cloud.yml"),
-		"- name: provision the batch\n  on: keeper\n  module: wbcloud.vm.created\n  params:\n"+bogusParams)
+		"- name: provision the batch\n  on: keeper\n  module: democloud.vm.created\n  params:\n"+bogusParams)
 
 	code, out := runScenario(t, root, bindVM(t))
 
@@ -269,7 +269,7 @@ func TestIncludedPluginStep_InsideABlockIsCheckedToo(t *testing.T) {
 	root := includeTree(t, goodParams)
 	stageWrite(t, filepath.Join(root, "scenario", "provision.yml"),
 		"- name: the batch\n  block:\n"+
-			"    - name: provision\n      module: wbcloud.vm.created\n      params:\n        count: 1\n        bogus_param: \"x\"\n")
+			"    - name: provision\n      module: democloud.vm.created\n      params:\n        count: 1\n        bogus_param: \"x\"\n")
 
 	code, out := runScenario(t, root, bindVM(t))
 

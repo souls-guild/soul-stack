@@ -169,7 +169,7 @@ func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 
 // TestMaskRunPlanParams_SealedResolvedRefSubtree ★ — the shape a cloud step
 // has by the time it reaches this channel (NIM-668): the author wrote
-// `credentials: vault:secret/cloud/wb-dev`, and the vault-resolve phase
+// `credentials: vault:secret/cloud/demo-dev`, and the vault-resolve phase
 // (ADR-010, phase 1) already replaced that string with the secret MAP.
 //
 // This is the DOWNSTREAM half of that chain, and only that half: it hands the
@@ -186,12 +186,12 @@ func TestMaskRunPlanParams_NilAndEmptyRemainder(t *testing.T) {
 // the JSON. `credentials` is kept alongside it deliberately: that name IS
 // caught by the key regex, so it alone would prove nothing about the seal.
 func TestMaskRunPlanParams_SealedResolvedRefSubtree(t *testing.T) {
-	const secret = "wb-inline-access-key-DO-NOT-LEAK"
+	const secret = "demo-inline-access-key-DO-NOT-LEAK"
 	task := &render.RenderedTask{
 		Name:   "provision",
 		Module: "core.cloud.created",
 		Params: mustParamsStruct(t, map[string]any{
-			"driver": "wb",
+			"driver": "democloud",
 			"region": "ru-central1",
 			"credentials": map[string]any{
 				"access_key_id":     "AKIAINLINE",
@@ -212,8 +212,8 @@ func TestMaskRunPlanParams_SealedResolvedRefSubtree(t *testing.T) {
 			t.Errorf("%s = %#v, want ***MASKED*** (whole subtree, not a map)", k, got[k])
 		}
 	}
-	if got["driver"] != "wb" {
-		t.Errorf("driver = %v, want wb (the alias is what audit names - kept)", got["driver"])
+	if got["driver"] != "democloud" {
+		t.Errorf("driver = %v, want democloud (the alias is what audit names - kept)", got["driver"])
 	}
 	if got["region"] != "ru-central1" {
 		t.Errorf("region = %v, want ru-central1 (not a secret - kept)", got["region"])

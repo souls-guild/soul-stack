@@ -333,7 +333,7 @@ a host silently.
 ### (j) The break, stated without softening — there is no transition window
 
 171 lines go from legal to a **load-time validation error in one release**: here, and in every
-external service repository (`wb-service-redis`, customer forks). The YAML still parses — the
+external service repository (a downstream redis, customer forks). The YAML still parses — the
 diagnostics of (b) are raised at `PhaseSchemaValidate` / `PhaseSemanticValidate`, the phases the
 `on:`-keyed validators already use — but the definition no longer loads, which for the operator is
 the same wall.

@@ -400,7 +400,7 @@ gave their common tasks one flat namespace to live in.
 
 **Backward compatibility is total.** The grammar is a strict superset and the discovery skip keys
 on a prefix no existing directory carries, so a service in the flat layout — `examples/service/redis`
-and `wb-service-redis` both are — loads bit-for-bit as before. There is no migration: the new
+and the downstream redis service both are — loads bit-for-bit as before. There is no migration: the new
 layout is available, not required.
 
 Normative edits — [`docs/scenario/orchestration.md`](../scenario/orchestration.md) §1 (the layout
@@ -531,7 +531,7 @@ authored nowhere in the DSL.
 (`state_schema_legacy_json_schema_form`) rather than left to parse: read as the new dialect it is
 two state fields called `type` and `properties`, which moves every real field a level down and
 loses every declared secret with no error raised. **Design only, not implemented** — engine
-NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the WB redis service NIM-744.
+NIM-742, `soul-lint list-secret-paths` NIM-743, `examples/` and the downstream redis service NIM-744.
 
 ## Amendment 2026-09-05 (NIM-833): `validate:` is the static check over the request — its context is `input` + `incarnation`, and the block is published
 
@@ -540,7 +540,7 @@ that a declarative invariant is a pure function of what the operator typed. That
 one root, and the gap has a name: a service could not declare a constraint on the **incarnation
 identifier**, because the identifier is not an `input:` field. The constraint therefore moved into
 an `assert:` task, which runs in the RUN — after the row is written. An operator got a half-created
-entity and an error about the cloud (NIM-832 is that report, from the WB redis service).
+entity and an error about the cloud (NIM-832 is that report, from a downstream redis service).
 
 **The definition this settles on.** `validate:` is the **static check over the request**:
 everything decidable from what arrived on the request is decided here, and **before a single task

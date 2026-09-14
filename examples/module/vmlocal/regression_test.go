@@ -9,6 +9,9 @@ import (
 	"fmt"
 	"strings"
 	"testing"
+
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"google.golang.org/protobuf/types/known/structpb"
 )
 
 func mustFail(t *testing.T, s *applyStream) string {
@@ -194,9 +197,9 @@ func TestANameHeldByAForeignMachineIsNamed(t *testing.T) {
 	}
 }
 
-// ★ `resized` publishes `output.results` with one entry per machine — the same
-// key and shape the cloud publishes. Emitting no output was a contract divergence
-// the param-surface guard cannot see, because that guard only compares INPUTS.
+// ★ `resized` publishes `output.results` with one entry per machine. Emitting no
+// output at all was a divergence no input guard can see — which is why the shape
+// is now declared in [resizeKeys] and held there by TestOutputShapeIsDeclared.
 func TestResizedPublishesPerMachineResults(t *testing.T) {
 	f := newFakeHV()
 	m := withFake(t, f)
@@ -286,10 +289,9 @@ func containsCall(calls []string, want string) bool {
 	return false
 }
 
-// `probed` reports `state`, which the cloud always sets, and `cluster`, which its
-// attributes always carry. A scenario filtering on either resolves to null
-// otherwise.
-func TestProbedReportsStateAndCluster(t *testing.T) {
+// `probed` reports `state`, so a scenario can tell a running machine from a
+// stopped one. A scenario filtering on it resolves to null otherwise.
+func TestProbedReportsPowerState(t *testing.T) {
 	f := newFakeHV()
 	m := withFake(t, f)
 	mustSucceed(t, apply(t, m, "created", createOwn(map[string]any{"count": float64(1)})))
@@ -300,11 +302,6 @@ func TestProbedReportsStateAndCluster(t *testing.T) {
 	if h["state"] != "RUNNING" {
 		t.Errorf("state=%v, want RUNNING", h["state"])
 	}
-	attrs, _ := h["attributes"].(map[string]any)
-	if _, ok := attrs["cluster"]; !ok {
-		t.Error("attributes has no cluster key; the cloud always sets one")
-	}
-
 	f.domains[f.idOf(t, "batch-0")].Running = false
 	s = apply(t, m, "probed", nil)
 	mustSucceed(t, s)
@@ -347,33 +344,63 @@ func TestDestroyReportsAVolumeThatSurvived(t *testing.T) {
 	}
 }
 
-// `key_id: ""` is a missing credential written down. The cloud would refuse it,
-// so refusing it here keeps the surface from being laxer than the cloud's.
-func TestEmptyCredentialsAreRefused(t *testing.T) {
-	p := createParams(nil, nil)
-	p[connKeyID] = ""
-	if errs := validateCreated(p); !hasError(errs, "key_id is required") {
-		t.Errorf("errors=%v, want an empty key_id refused", errs)
-	}
-	p = createParams(nil, nil)
-	p[connSecret] = ""
-	if errs := validateCreated(p); !hasError(errs, "secret is required") {
-		t.Errorf("errors=%v, want an empty secret refused", errs)
+// ★★ A step param this state does not declare is REFUSED BY THE ARTIFACT, not
+// left to param-level strictness.
+//
+// That looks redundant and is not: soul-lint does not reach a step behind an
+// `include:` (NIM-779/NIM-785), which is the layout the published redis service
+// uses — so on the one path this artifact is actually driven from, nothing else
+// checks these keys. The five credential params NIM-873 removed are the worked
+// example: a scenario that still sends `key_id` is told so.
+func TestUndeclaredStepParamsAreRefused(t *testing.T) {
+	for _, key := range []string{"key_id", "secret", "ca_cert_pem", "client_cert_pem", "client_key_pem", "namespace_id", "typo"} {
+		p := createParams(nil, map[string]any{key: "x"})
+		pb, err := structpb.NewStruct(p)
+		if err != nil {
+			t.Fatalf("build params: %v", err)
+		}
+		obj := (&VMLocal{}).vm()
+
+		reply, err := obj.Validate(context.Background(), &pluginv1.ValidateRequest{State: "created", Params: pb})
+		if err != nil {
+			t.Fatalf("Validate: %v", err)
+		}
+		if reply.GetOk() {
+			t.Errorf("Validate accepted the undeclared param %q", key)
+		}
+		if !hasError(reply.GetErrors(), key+" is not a param of vm.created") {
+			t.Errorf("errors=%v, want %q named", reply.GetErrors(), key)
+		}
+
+		// ★ And Apply refuses it too. Validate is a call a runner is not obliged
+		// to make, and every action here builds or destroys a machine.
+		st := &applyStream{}
+		if err := obj.Apply(&pluginv1.ApplyRequest{State: "created", Params: pb}, st); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		if last := st.last(); last == nil || !last.GetFailed() {
+			t.Errorf("Apply accepted the undeclared param %q", key)
+		}
 	}
 }
 
-// ★ `image_version` is REFUSED rather than accepted and ignored. The local
-// catalogue is a storage pool with one volume per name, so there is no set of
-// versions for a version to pick from — and resolving the one volume anyway would
-// leave the operator believing they had pinned something.
-func TestImageVersionIsRefusedRatherThanIgnored(t *testing.T) {
-	errs := validateCreated(createParams(map[string]any{"image_version": float64(3)}, nil))
-	if !hasError(errs, "no versions to pin") {
-		t.Errorf("errors=%v, want image_version refused with a reason", errs)
+// The refusal names what IS accepted: "not a param" alone leaves an author
+// guessing which spelling was wanted.
+func TestTheStepRefusalNamesTheDeclaredParams(t *testing.T) {
+	errs := undeclaredParams("created", map[string]any{"key_id": "x"})
+	for _, want := range []string{"endpoint", "namespace", "profile", "userdata", "count", "name"} {
+		if !hasError(errs, want) {
+			t.Errorf("errors=%v, want %q listed", errs, want)
+		}
 	}
-	// Carrying the key at its default asks for nothing, so it still runs.
-	if errs := validateCreated(createParams(map[string]any{"image_version": float64(0)}, nil)); len(errs) > 0 {
-		t.Errorf("image_version: 0 asks for nothing and must be accepted: %v", errs)
+}
+
+// A state the object does not serve has no declaration to check against, and
+// must not be reported as "every param is unknown" — the unknown STATE is the
+// answer, and object.Validate gives it before this is reached.
+func TestUndeclaredParamsIsSilentOnAnUnknownState(t *testing.T) {
+	if errs := undeclaredParams("provisioned", map[string]any{"anything": 1}); len(errs) != 0 {
+		t.Errorf("errors=%v, want none for a state with no declaration", errs)
 	}
 }
 
@@ -447,25 +474,26 @@ func TestATransientLookupErrorDoesNotFailAConfirmedTeardown(t *testing.T) {
 	}
 }
 
-// ★ The machine name is the cloud's, character for character. On both sides the
-// name is what `sid` falls back to when the guest announced none, so a different
-// name here is a different sid there.
-func TestBatchMemberNameMatchesTheCloud(t *testing.T) {
+// ★ The machine-name rule is pinned because `sid` falls back to it when the guest
+// announced no hostname. Changing it renames every host in an existing batch.
+func TestBatchMemberNameIsStable(t *testing.T) {
 	if got := batchMemberName("web", "run-7", 0); got != "web-0" {
 		t.Errorf("named batch: got %q, want web-0", got)
 	}
 	if got := batchMemberName("web", "run-7", 3); got != "web-3" {
 		t.Errorf("named batch: got %q, want web-3", got)
 	}
-	// Label-only: the cloud prefixes `soul-`; dropping it is a silent sid change.
+	// Label-only: the name is prefixed `soul-`, because a run label is an arbitrary
+	// operator string and a bare one could start with a digit, which a domain name
+	// may not. Dropping the prefix is a silent sid change.
 	if got := batchMemberName("", "run-7", 0); got != "soul-run-7-0" {
-		t.Errorf("label-only batch: got %q, want soul-run-7-0 — the cloud's vmName prefixes `soul-`", got)
+		t.Errorf("label-only batch: got %q, want soul-run-7-0", got)
 	}
 }
 
-// A label-only batch names its machines the cloud's way end to end, and adopts
-// them again on a rerun.
-func TestALabelOnlyBatchUsesTheCloudNamingAndIsIdempotent(t *testing.T) {
+// A label-only batch applies that naming rule end to end, and adopts its machines
+// again on a rerun.
+func TestALabelOnlyBatchNamesAndAdoptsIdempotently(t *testing.T) {
 	f := newFakeHV()
 	m := withFake(t, f)
 

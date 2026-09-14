@@ -102,7 +102,7 @@ Offline tooling has no registry to ask, so it takes the name as an argument: `so
 > the list form by `input_required_list_removed`. Both are live (NIM-742). The change is
 > **breaking, with no transition window**: no manifest parses under both forms. Write the
 > form this section describes. `soul-lint list-secret-paths`, which prints the Vault paths
-> a manifest derives, is NIM-743; the rewrite of the WB redis service is **NIM-744**.
+> a manifest derives, is NIM-743; the rewrite of the downstream redis service is **NIM-744**.
 
 `state_schema` describes the expected structure of the JSONB field `incarnation.state` in Postgres. It is written in the **input DSL** ([`docs/input.md`](../input.md)) — the same dialect `input:` uses — and at the root it is a **map `<field name>` → schema**, not a schema document:
 

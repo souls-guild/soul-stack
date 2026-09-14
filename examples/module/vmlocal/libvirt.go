@@ -8,8 +8,8 @@
 // artifact's: the image catalogue is a pool, so "the list of images" is a real
 // libvirt read and the files are owned by the daemon that runs the machines
 // instead of by whichever user launched the plugin. Names come from the
-// environment, not from params — a knob in the params would be a knob the cloud
-// contract does not have, and a scenario that set it could not run against WB.
+// environment, not from params — where the daemon keeps its files is a property of
+// the host, and a scenario that had to name it could not move between hosts.
 package main
 
 import (
@@ -53,8 +53,8 @@ const (
 )
 
 // supportedURISchemes are the libvirt transports this artifact accepts. The list
-// exists so that a step pointed at a cloud endpoint is told so, rather than
-// failing later inside a dial with a message about a hostname.
+// exists so that a step pointed at some other provider's endpoint is told so,
+// rather than failing later inside a dial with a message about a hostname.
 var supportedURISchemes = []string{"qemu", "qemu+unix", "qemu+ssh", "qemu+tcp", "qemu+tls", "test"}
 
 func knownLibvirtURI(raw string) bool {
@@ -149,8 +149,8 @@ func formatUUID(u libvirt.UUID) string {
 }
 
 // imageUUID derives a stable UUID for a catalogue entry, so that `image_id` can
-// be an exact UUID here as it is in the cloud. Version 5 over the artifact's
-// metadata URI.
+// name an image exactly rather than by a string a pool might spell two ways.
+// Version 5 over the artifact's metadata URI.
 //
 // ★ It hashes the IMAGE NAME — the volume name with its file extension stripped —
 // and not the volume's filename. Hashing the filename would make the id depend on
@@ -179,7 +179,6 @@ type vmMetaBody struct {
 	ImageID            string      `xml:"image_id"`
 	NetworkID          string      `xml:"network_id"`
 	DeletionProtection bool        `xml:"deletion_protection"`
-	RMExternalID       string      `xml:"rm_external_id,omitempty"`
 	Labels             []metaLabel `xml:"label"`
 }
 
@@ -805,8 +804,8 @@ func (h *libvirtHV) SetMemoryBytes(uuid string, b int64) error {
 }
 
 // ResizeDiskBytes grows the boot volume online. The block device grows; the
-// filesystem inside follows only if the guest runs growpart, which is the cloud's
-// behaviour too.
+// filesystem inside follows only if the guest runs growpart — this reaches the
+// device, not the partition table on it.
 //
 // ★ The size goes in BYTES because the BYTES flag is set. virDomainBlockResize
 // takes kibibytes when flags is 0 and bytes when VIR_DOMAIN_BLOCK_RESIZE_BYTES is
@@ -888,8 +887,7 @@ func rawVolumeXML(name string, size int64) string {
 //     Measured: two consecutive live runs both "came up" at 192.168.122.198, the
 //     second in 1s. A fresh identity has no lease to inherit.
 //
-// A recreated machine is a different machine and gets a different vm_id, which is
-// the cloud's semantics too.
+// A recreated machine is a different machine and gets a different vm_id.
 func domainDefinition(spec domainSpec, bootPath, seedPath string) (string, error) {
 	domUUID, err := randomUUID()
 	if err != nil {
@@ -906,7 +904,6 @@ func domainDefinition(spec domainSpec, bootPath, seedPath string) (string, error
 		ImageID:            spec.ImageID,
 		NetworkID:          spec.NetworkID,
 		DeletionProtection: spec.Profile.deletionProtection,
-		RMExternalID:       spec.Profile.rmExternalID,
 	}}
 	keys := make([]string, 0, len(spec.Labels))
 	for k := range spec.Labels {

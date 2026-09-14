@@ -1,10 +1,9 @@
 // The NoCloud seed.
 //
-// cloud-init is not decoration here: user-data is the half of an installation the
-// cloud does for you, and a local stand that skipped it would not exercise the
-// path that is actually broken. The seed also carries `local-hostname`, which is
-// what makes the machine announce a name over DHCP — and that announcement is
-// where `sid` comes from.
+// cloud-init is not decoration here: a machine with no datasource comes up as
+// `localhost` with no key on it, which is not a machine anything downstream can
+// use. The seed also carries `local-hostname`, which is what makes the machine
+// announce a name over DHCP — and that announcement is where `sid` comes from.
 package main
 
 import (

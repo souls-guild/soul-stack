@@ -291,7 +291,7 @@ func ownNamespaceVaultGuard(service string) cel.VaultPathGuard {
 // secrets derive into.
 //
 // The segments are compared whole. A prefix comparison would accept
-// `secret/<mount>/wb-service-redis-evil/…`, and a `..` segment is rejected outright
+// `secret/<mount>/demo-service-redis-evil/…`, and a `..` segment is rejected outright
 // rather than cleaned: this is a gate, and a gate that normalises its input decides
 // on a path different from the one it was given.
 func ownNamespaceRef(ref, service, incarnation string) bool {

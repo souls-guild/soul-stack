@@ -88,7 +88,7 @@ A keeper task's `register.*` context holds **keeper** tasks only. A capture that
 
 **A keeper-side module does not have to be built in** (NIM-758, closing NIM-688). A task address the core Registry does not know is looked up among the plugins this Keeper discovered and allow-listed, and a module whose schema document declares **`side: keeper`** ([ADR-0087](../adr/0087-task-side-derived-from-module-address.md), [plugins.md → per-module fields](plugins.md#per-module-fields)) executes locally, through the same gRPC-over-stdio infrastructure the Soul host uses. The SoulModule contract is one contract for both sides ([ADR-009](../adr/0009-scenario-dsl.md)/[ADR-017](../adr/0017-keeper-side-core.md)); only the place of execution differs, and a keeper-side plugin therefore follows every rule this page states for a keeper-side core module — run-level `params:` context, one `apply_runs` row per Passage, the same `register:` accumulation and audit trail.
 
-The address is the plugin's, not the core namespace's: `<alias>.<module>.<state>`, where level 1 is the **registration alias** the operator chose ([plugins.md → registration alias](plugins.md#registration-alias)). `wbcloud.vm.created` resolves to `(base=wbcloud.vm, state=created)` exactly as a core address does.
+The address is the plugin's, not the core namespace's: `<alias>.<module>.<state>`, where level 1 is the **registration alias** the operator chose ([plugins.md → registration alias](plugins.md#registration-alias)). `democloud.vm.created` resolves to `(base=democloud.vm, state=created)` exactly as a core address does.
 
 **Three answers, and the difference between the last two is the point:**
 

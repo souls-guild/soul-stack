@@ -17,10 +17,10 @@ import (
 func regKV() *countingKV {
 	return &countingKV{
 		secrets: map[string]map[string]any{
-			"secret/wb-service-redis/redis-prod/redis_users/alice": {"password": "ALICE-PW"},
-			"secret/wb-service-redis/redis-prod/admin_password":    {"value": "ADMIN-PW"},
-			"secret/keeper/jwt-signing-key":                        {"key": "CLUSTER-SIGNING-KEY"},
-			"secret/other-service/redis-prod/admin_password":       {"value": "NEIGHBOUR-PW"},
+			"secret/demo-service-redis/redis-prod/redis_users/alice": {"password": "ALICE-PW"},
+			"secret/demo-service-redis/redis-prod/admin_password":    {"value": "ADMIN-PW"},
+			"secret/keeper/jwt-signing-key":                          {"key": "CLUSTER-SIGNING-KEY"},
+			"secret/other-service/redis-prod/admin_password":         {"value": "NEIGHBOUR-PW"},
 		},
 		calls: map[string]int{},
 	}
@@ -28,7 +28,7 @@ func regKV() *countingKV {
 
 func regInput(keeper map[string]any) RenderInput {
 	return RenderInput{
-		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
+		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "demo-service-redis"},
 		KeeperRegister: keeper,
 	}
 }
@@ -44,12 +44,12 @@ func TestResolveRegisterSecrets_OwnNamespace(t *testing.T) {
 	in := regInput(map[string]any{
 		"redis_users": map[string]any{
 			"effective": []any{
-				map[string]any{"name": "alice", "password": "vault:secret/wb-service-redis/redis-prod/redis_users/alice#password"},
+				map[string]any{"name": "alice", "password": "vault:secret/demo-service-redis/redis-prod/redis_users/alice#password"},
 			},
 		},
 		"admin": map[string]any{
-			"effective": "vault:secret/wb-service-redis/redis-prod/admin_password#value",
-			"again":     "vault:secret/wb-service-redis/redis-prod/admin_password#value",
+			"effective": "vault:secret/demo-service-redis/redis-prod/admin_password#value",
+			"again":     "vault:secret/demo-service-redis/redis-prod/admin_password#value",
 		},
 	})
 
@@ -70,13 +70,13 @@ func TestResolveRegisterSecrets_OwnNamespace(t *testing.T) {
 	if admin["effective"] != "ADMIN-PW" || admin["again"] != "ADMIN-PW" {
 		t.Errorf("scalar refs = %v", admin)
 	}
-	if got := kv.calls["secret/wb-service-redis/redis-prod/admin_password"]; got != 1 {
+	if got := kv.calls["secret/demo-service-redis/redis-prod/admin_password"]; got != 1 {
 		t.Errorf("ReadKV calls = %d, want 1 (the boundary must share the render-pass memo)", got)
 	}
 	// The source map is rendered again per passage and per retry — it must not have
 	// been mutated into plaintext.
 	src, _ := in.KeeperRegister["admin"].(map[string]any)
-	if src["effective"] != "vault:secret/wb-service-redis/redis-prod/admin_password#value" {
+	if src["effective"] != "vault:secret/demo-service-redis/redis-prod/admin_password#value" {
 		t.Errorf("the input register was mutated: %v", src)
 	}
 }
@@ -87,13 +87,13 @@ func TestResolveRegisterSecrets_OwnNamespace(t *testing.T) {
 // NOT an error (a keeper module may legitimately carry such a string as data).
 func TestResolveRegisterSecrets_ForeignNamespaceLeftLiteral(t *testing.T) {
 	foreign := []string{
-		"vault:secret/keeper/jwt-signing-key#key",                                   // the cluster's own signing key
-		"vault:secret/other-service/redis-prod/admin_password#value",                // a neighbouring service
-		"vault:secret/wb-service-redis/other-inc/admin_password#value",              // a neighbouring incarnation
-		"vault:secret/wb-service-redis-evil/redis-prod/x#value",                     // prefix, not a whole segment
-		"vault:secret/wb-service-redis/redis-prod/../../keeper/jwt-signing-key#key", // traversal
-		"vault:secret/wb-service-redis/redis-prod//x#value",                         // empty segment
-		"vault:secret/wb-service-redis#value",                                       // too few segments
+		"vault:secret/keeper/jwt-signing-key#key",                                     // the cluster's own signing key
+		"vault:secret/other-service/redis-prod/admin_password#value",                  // a neighbouring service
+		"vault:secret/demo-service-redis/other-inc/admin_password#value",              // a neighbouring incarnation
+		"vault:secret/demo-service-redis-evil/redis-prod/x#value",                     // prefix, not a whole segment
+		"vault:secret/demo-service-redis/redis-prod/../../keeper/jwt-signing-key#key", // traversal
+		"vault:secret/demo-service-redis/redis-prod//x#value",                         // empty segment
+		"vault:secret/demo-service-redis#value",                                       // too few segments
 	}
 	for _, ref := range foreign {
 		kv := regKV()
@@ -128,8 +128,8 @@ func TestResolveRegisterSecrets_ForeignNamespaceLeftLiteral(t *testing.T) {
 func TestResolveRegisterSecrets_PerHostBucketNeverResolved(t *testing.T) {
 	kv := regKV()
 	p := NewPipeline(kv, nil, nil, nil)
-	legit := "vault:secret/wb-service-redis/redis-prod/admin_password#value"
-	evil := "vault:secret/wb-service-redis/redis-prod/redis_users/alice#password"
+	legit := "vault:secret/demo-service-redis/redis-prod/admin_password#value"
+	evil := "vault:secret/demo-service-redis/redis-prod/redis_users/alice#password"
 	in := regInput(map[string]any{"admin": map[string]any{"effective": legit}})
 	in.Register = map[string]any{"evil": map[string]any{"stdout": evil}}
 	in.RegisterByHost = map[string]map[string]any{
@@ -155,7 +155,7 @@ func TestResolveRegisterSecrets_PerHostBucketNeverResolved(t *testing.T) {
 	if _, ok := out["evil"]; ok {
 		t.Errorf("a Soul-reported register entered the resolved bucket: %v", out)
 	}
-	if n := kv.calls["secret/wb-service-redis/redis-prod/redis_users/alice"]; n != 0 {
+	if n := kv.calls["secret/demo-service-redis/redis-prod/redis_users/alice"]; n != 0 {
 		t.Errorf("a Soul-reported register was read from Vault %d times", n)
 	}
 	// And the bucket the host actually reads still holds the literal.
@@ -172,7 +172,7 @@ func TestResolveRegisterSecrets_PerHostBucketNeverResolved(t *testing.T) {
 func TestResolveRegisterSecrets_UnknownOwner(t *testing.T) {
 	kv := regKV()
 	p := NewPipeline(kv, nil, nil, nil)
-	ref := "vault:secret/wb-service-redis/redis-prod/admin_password#value"
+	ref := "vault:secret/demo-service-redis/redis-prod/admin_password#value"
 	in := RenderInput{KeeperRegister: map[string]any{"a": ref}}
 
 	out, sealed, err := p.resolveRegisterSecrets(cel.WithVaultMemo(context.Background()), in)
@@ -197,12 +197,12 @@ func TestResolveRegisterSecrets_ReadFailureIsAnError(t *testing.T) {
 	kv := &countingKV{secrets: map[string]map[string]any{}, calls: map[string]int{}}
 	p := NewPipeline(kv, nil, nil, nil)
 	_, _, err := p.resolveRegisterSecrets(cel.WithVaultMemo(context.Background()), regInput(map[string]any{
-		"admin": "vault:secret/wb-service-redis/redis-prod/admin_password#value",
+		"admin": "vault:secret/demo-service-redis/redis-prod/admin_password#value",
 	}))
 	if err == nil {
 		t.Fatal("expected an error for an unresolvable own-namespace ref")
 	}
-	if !strings.Contains(err.Error(), "secret/wb-service-redis/redis-prod/admin_password") {
+	if !strings.Contains(err.Error(), "secret/demo-service-redis/redis-prod/admin_password") {
 		t.Errorf("error does not name the path: %q", err.Error())
 	}
 }
@@ -218,7 +218,7 @@ func TestResolveRegisterSecrets_ReadFailureIsAnError(t *testing.T) {
 func TestRender_KeeperRegisterSecretReachesHostTask(t *testing.T) {
 	kv := regKV()
 	p := NewPipeline(kv, newEngine(t), nil, nil)
-	evil := "vault:secret/wb-service-redis/redis-prod/redis_users/alice#password"
+	evil := "vault:secret/demo-service-redis/redis-prod/redis_users/alice#password"
 
 	in := RenderInput{
 		Scenario: &config.ScenarioManifest{
@@ -235,9 +235,9 @@ func TestRender_KeeperRegisterSecretReachesHostTask(t *testing.T) {
 				},
 			}},
 		},
-		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "wb-service-redis"},
+		Incarnation:    IncarnationMeta{ID: "redis-prod", Service: "demo-service-redis"},
 		Hosts:          []*topology.HostFacts{host("a.example.com", []string{"redis"}, nil)},
-		KeeperRegister: map[string]any{"admin": map[string]any{"effective": "vault:secret/wb-service-redis/redis-prod/admin_password#value"}},
+		KeeperRegister: map[string]any{"admin": map[string]any{"effective": "vault:secret/demo-service-redis/redis-prod/admin_password#value"}},
 		RegisterByHost: map[string]map[string]any{
 			"a.example.com": {"evil": map[string]any{"stdout": evil}},
 		},
@@ -258,7 +258,7 @@ func TestRender_KeeperRegisterSecretReachesHostTask(t *testing.T) {
 	if got := f["leak"].GetStringValue(); got != evil {
 		t.Errorf("leak = %v, want the host-reported ref left as the literal string", got)
 	}
-	if n := kv.calls["secret/wb-service-redis/redis-prod/redis_users/alice"]; n != 0 {
+	if n := kv.calls["secret/demo-service-redis/redis-prod/redis_users/alice"]; n != 0 {
 		t.Errorf("a host-reported ref was read from Vault %d times", n)
 	}
 	// ★ And the cell that now holds the password is SEALED: a resolved reference

@@ -392,7 +392,7 @@ modules:
 // TestLoadServiceManifest_ModuleSingleLevelName — the canonical form (NIM-829).
 //
 // `modules[]` declares an ARTIFACT: one entry, one ref, one slot. The bare alias was
-// refused outright until NIM-829, which is why the WB redis manifest had to spell out
+// refused outright until NIM-829, which is why a downstream redis manifest had to spell out
 // six entries for one binary — and why `conflicting_module_ref` had to exist to catch
 // the two-ref state that spelling makes writable.
 func TestLoadServiceManifest_ModuleSingleLevelName(t *testing.T) {
@@ -449,7 +449,7 @@ func TestLoadServiceManifest_ModuleSixObjectsCollapseToOne(t *testing.T) {
 	_, _, diags, _ := LoadServiceManifestFromBytes("service.yml", []byte(old.String()), ValidateOptions{})
 	if diag.HasErrors(diags) {
 		dump(t, diags)
-		t.Fatalf("the pre-NIM-829 WB redis manifest stopped validating; the window has not opened yet")
+		t.Fatalf("the pre-NIM-829 six-entry manifest stopped validating; the window has not opened yet")
 	}
 	warned := 0
 	for _, d := range diags {

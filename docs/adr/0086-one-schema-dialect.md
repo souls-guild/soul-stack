@@ -1,8 +1,8 @@
 ## ADR-0086. One schema dialect — `state_schema` is written in the input DSL
 
-**Status:** accepted, implemented — NIM-742 (engine), NIM-743 (`list-secret-paths`), NIM-751 (the input side of §5). NIM-744 (`examples/**` + the WB redis mirror) is outstanding.
+**Status:** accepted, implemented — NIM-742 (engine), NIM-743 (`list-secret-paths`), NIM-751 (the input side of §5). NIM-744 (`examples/**` + the downstream redis mirror) is outstanding.
 **Amends:** [ADR-003](0003-destiny-format.md) (the manifest's typed schema stops being JSON Schema and becomes the platform's own input DSL), [ADR-009](0009-scenario-dsl.md) (`state_schema` joins the `input:`/`output:` grammar instead of sitting beside it), [ADR-010](0010-templating.md) (`secret: true` and `type: secret` now live in one dialect and must be told apart by the reader, not by the file they are in), [ADR-062](0062-input-types.md) (`$type` becomes readable from `state_schema`, and its closed conflict set gains exactly one key there), [ADR-0083](0083-declared-secret-state-fields.md) (§1's declaration is re-spelled in the new dialect; §7's refusal of `required:` on a secret keeps its ground and changes its mechanism)
-**Implemented by:** NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (rewrite `examples/**` + the `wb-service-redis` mirror). Recorded by NIM-741, epic NIM-740.
+**Implemented by:** NIM-742 (engine), NIM-743 (`soul-lint list-secret-paths`), NIM-744 (rewrite `examples/**` + the downstream redis mirror). Recorded by NIM-741, epic NIM-740.
 
 > This ADR was authored **without a number**, as `draft-one-schema-dialect.md`, and stamped
 > **0086** when it was squash-merged into the release — the convention decided 2026-09-01 and

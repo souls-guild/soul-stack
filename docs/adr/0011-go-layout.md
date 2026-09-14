@@ -217,8 +217,8 @@ Nothing now checks the `params:` of the `mongo.*` steps there. The same will be 
 
 The directory names in the table above are what they were at the time of that move. Since
 NIM-851 a SoulModule artifact is named after the module it serves, so `examples/module/`
-now holds `redis`, `redis-failover` and `vmlocal`, and the WB cloud plugin is
-`wb/plugins/wbcloud`. `soul-ssh-*` is unchanged — SshProvider is a separate contract, and
+now holds `redis`, `redis-failover` and `vmlocal`; cloud provider plugins live in their own
+downstream repositories. `soul-ssh-*` is unchanged — SshProvider is a separate contract, and
 the three repositories keep the marker (`ssh-static`, `ssh-teleport`, `ssh-vault`).
 
 Reasoning, and the check that could have gone the other way, are in

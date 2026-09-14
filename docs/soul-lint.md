@@ -138,7 +138,7 @@ not a convenience.
 
 The per-file commands check one document per invocation, so a service repository
 had to orchestrate the sequence itself — and the orchestrator, an ordinary `set -e`
-script, stopped at the first non-zero exit. In the WB redis service that first exit
+script, stopped at the first non-zero exit. In one such service that first exit
 was a one-line manifest error, and behind it sat **eight** accumulated divergences
 that nobody saw for as long as the manifest stayed red: a dead `state_changes:`
 block (thirteen state fields silently not written, NIM-739), the renamed capture
@@ -363,7 +363,7 @@ of its own, reached only through include expansion. That path carried neither th
 bound manifests into the body nor the body's non-fatal findings back out, so a plugin
 step living there produced **nothing**: no `unknown_param`, and no
 `plugin_params_unchecked` either. This is the exact outcome the hint exists to
-prevent, and the path NIM-778 took — a `tls: "true"` written as a string, in the WB
+prevent, and the path NIM-778 took — a `tls: "true"` written as a string, in a downstream
 redis service's `scenario/provision.yml`, past a lint that said `OK:`.
 
 The second half is what the first rests on: expansion now carries a body's hints out

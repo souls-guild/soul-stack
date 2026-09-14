@@ -1,6 +1,6 @@
-// Entry-point of the vmlocal plugin: a machine provider over libvirt/QEMU that
-// speaks the `wbcloud` vm contract, so bootstrap work can be debugged against a
-// workstation instead of a billed cloud VM.
+// Entry-point of the vmlocal plugin: a machine provider over libvirt/QEMU, so
+// that work needing real machines can be done against a host you already have
+// instead of a billed cloud VM per cycle.
 //
 // Collected into one static binary via `go build` — the libvirt bindings are pure
 // Go (digitalocean/go-libvirt speaks the RPC protocol itself), so CGO_ENABLED=0

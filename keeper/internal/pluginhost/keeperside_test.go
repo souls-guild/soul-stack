@@ -44,21 +44,21 @@ func keeperSideEntry(alias, module string, side schema.Side) Discovered {
 // own process tree, so this is the boundary the whole path rests on.
 func TestKeeperSideModules_IndexesOnlyKeeperSide(t *testing.T) {
 	r := NewKeeperSideModules(&fakeSoulModuleSpawner{}, []Discovered{
-		keeperSideEntry("wbcloud", "vm", schema.SideKeeper),
+		keeperSideEntry("democloud", "vm", schema.SideKeeper),
 		keeperSideEntry("redis", "acl", schema.SideSoul),
 		keeperSideEntry("legacy", "thing", ""),
 	}, nil)
 
-	if _, ok := r.LookupKeeperSide("wbcloud.vm"); !ok {
-		t.Error("LookupKeeperSide(wbcloud.vm): not found, want the side: keeper module")
+	if _, ok := r.LookupKeeperSide("democloud.vm"); !ok {
+		t.Error("LookupKeeperSide(democloud.vm): not found, want the side: keeper module")
 	}
 	for _, addr := range []string{"redis.acl", "legacy.thing"} {
 		if _, ok := r.LookupKeeperSide(addr); ok {
 			t.Errorf("LookupKeeperSide(%s): found — a Soul-side module must not be executable on the keeper", addr)
 		}
 	}
-	if got := r.Names(); len(got) != 1 || got[0] != "wbcloud.vm" {
-		t.Errorf("Names() = %v, want exactly [wbcloud.vm]", got)
+	if got := r.Names(); len(got) != 1 || got[0] != "democloud.vm" {
+		t.Errorf("Names() = %v, want exactly [democloud.vm]", got)
 	}
 }
 
@@ -108,11 +108,11 @@ func TestKeeperSideModules_ApplySpawnsForwardsAndCloses(t *testing.T) {
 		}},
 	}
 	r := NewKeeperSideModules(spawner, []Discovered{
-		keeperSideEntry("wbcloud", "vm", schema.SideKeeper),
+		keeperSideEntry("democloud", "vm", schema.SideKeeper),
 	}, nil)
-	mod, ok := r.LookupKeeperSide("wbcloud.vm")
+	mod, ok := r.LookupKeeperSide("democloud.vm")
 	if !ok {
-		t.Fatal("LookupKeeperSide(wbcloud.vm): not found")
+		t.Fatal("LookupKeeperSide(democloud.vm): not found")
 	}
 
 	stream := &collectingApplyStream{ctx: context.Background()}
@@ -125,8 +125,8 @@ func TestKeeperSideModules_ApplySpawnsForwardsAndCloses(t *testing.T) {
 	if spawner.spawnCount != 1 {
 		t.Errorf("spawnCount = %d, want 1 (one-shot per Apply, ADR-020(d))", spawner.spawnCount)
 	}
-	if spawner.lastDiscovered.Module != "vm" || spawner.lastDiscovered.Alias != "wbcloud" {
-		t.Errorf("spawned %s.%s, want wbcloud.vm", spawner.lastDiscovered.Alias, spawner.lastDiscovered.Module)
+	if spawner.lastDiscovered.Module != "vm" || spawner.lastDiscovered.Alias != "democloud" {
+		t.Errorf("spawned %s.%s, want democloud.vm", spawner.lastDiscovered.Alias, spawner.lastDiscovered.Module)
 	}
 	if !spawner.session.closed {
 		t.Error("session not closed after Apply — a leaked plugin process per keeper-side step")

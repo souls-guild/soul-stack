@@ -204,7 +204,7 @@ func TestCollectSealed_RedisTLSPEMContentViaVault(t *testing.T) {
 // side and the resolve side are asked about the same strings.
 func literalRefParams() map[string]any {
 	return map[string]any{
-		// The NIM-668 shape: `credentials: vault:secret/cloud/wb-dev` on a
+		// The NIM-668 shape: `credentials: vault:secret/cloud/demo-dev` on a
 		// core.cloud.provisioned step — a whole-cell ref with no `${ … }` for
 		// DetectSealed to read.
 		"credentials": "vault:secret/redis/admin",
@@ -281,14 +281,14 @@ func TestMaskSecretsSealed_ResolvedVaultRefSubtree(t *testing.T) {
 	e := sealTestEngine(t)
 	set := NewSealedSet()
 	params := map[string]any{
-		"driver":      "wb",
+		"driver":      "democloud",
 		"credentials": "vault:secret/redis/admin",
 	}
 	collectSealed(e, set, params, cel.SealSources{}, "")
 
 	// What the cell looks like once the vault phase has replaced it.
 	rendered := map[string]any{
-		"driver":      "wb",
+		"driver":      "democloud",
 		"credentials": map[string]any{"password": "s3cr3t", "access_key_id": "AKIA"},
 	}
 
@@ -304,7 +304,7 @@ func TestMaskSecretsSealed_ResolvedVaultRefSubtree(t *testing.T) {
 	if sub, isMap := masked["credentials"].(map[string]any); isMap {
 		t.Fatalf("credentials masked per-key instead of as a whole subtree: %v", sub)
 	}
-	if masked["driver"] != "wb" {
+	if masked["driver"] != "democloud" {
 		t.Errorf("driver = %v, want it untouched", masked["driver"])
 	}
 	if len(alarms) != 0 {
@@ -365,7 +365,7 @@ func TestSealedValues_SealedSubtreeIsMaskedWhole(t *testing.T) {
 	set := NewSealedSet()
 
 	// One raw cell, one sealed path: the bare vault-ref branch of walkSealed.
-	raw := map[string]any{"creds": "vault:secret/wb/prod/cloud", "region": "ru-central1"}
+	raw := map[string]any{"creds": "vault:secret/democloud/prod/cloud", "region": "ru-central1"}
 	collectSealed(e, set, raw, cel.SealSources{}, "")
 	if paths := set.Paths(); !paths["creds"] || len(paths) != 1 {
 		t.Fatalf("sealed paths = %v, want exactly {creds} (the raw cell is one string)", paths)

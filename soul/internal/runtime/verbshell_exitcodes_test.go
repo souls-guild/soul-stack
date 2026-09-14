@@ -29,7 +29,7 @@ import (
 // declare `exit_codes`, or declared it in a shape that rejects a range string,
 // reddens here too.
 //
-// What made the parameter necessary: a wb-service-redis run whose
+// What made the parameter necessary: a demo-service-redis run whose
 // cluster-slot step exited 1 with "Connection refused". Nothing failed —
 // core.cmd.shell reported no failure, so the task was recorded CHANGED, the run
 // went on and died a minute later on a neighbouring `until:` task. The

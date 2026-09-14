@@ -29,8 +29,6 @@ const liveNamespace = "vmlocal-live-test"
 func liveParams(t *testing.T, own map[string]any) *structpb.Struct {
 	t.Helper()
 	m := map[string]any{
-		connKeyID:     "unused",
-		connSecret:    "unused",
 		connEndpoint:  "qemu:///system",
 		connNamespace: liveNamespace,
 	}
@@ -56,10 +54,9 @@ func liveApply(t *testing.T, m *VMLocal, state string, own map[string]any) *appl
 	return s
 }
 
-// liveProfile takes the network UUID rather than a name: the contract requires
-// `network_id` to be a UUID, mirroring the cloud, so a scenario never names a
-// network. Discovering it here instead of hardcoding one keeps the test portable
-// to any host with a `default` network.
+// liveProfile takes the network UUID rather than a name: libvirt networks carry
+// real UUIDs and `network_id` is declared as one. Discovering it here instead of
+// hardcoding one keeps the test portable to any host with a `default` network.
 func liveProfile(networkUUID string) map[string]any {
 	return map[string]any{
 		"namespace":      liveNamespace,
@@ -68,7 +65,6 @@ func liveProfile(networkUUID string) map[string]any {
 		"cpu_size":       float64(1),
 		"ram_size":       float64(1 << 30),
 		"boot_disk_size": float64(4 << 30),
-		"rm_external_id": "live-test",
 	}
 }
 
@@ -154,7 +150,7 @@ func TestLiveLifecycle(t *testing.T) {
 		t.Fatal("the machine came up with no address — the DHCP lease never carried one")
 	}
 	// ★ sid is the name the GUEST announced, which is what makes it the same kind
-	// of fact the cloud reports rather than an echo of what we asked for.
+	// of fact the machine reports rather than an echo of what we asked for.
 	if sid != "live-0" {
 		t.Errorf("sid=%q, want live-0 as announced over DHCP; a mismatch means cloud-init did not apply the seed", sid)
 	}

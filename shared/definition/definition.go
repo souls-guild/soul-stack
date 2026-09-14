@@ -20,7 +20,7 @@
 // (NIM-783), `soul-trial` missed all three (NIM-790), and the keeper still misses
 // them by an open decision (NIM-785). One of those gaps carried a real defect to
 // production: NIM-778 shipped `tls: "true"` — a string where the manifest declares
-// a bool — into the WB redis service, past a lint that printed `OK:`.
+// a bool — into a downstream redis service, past a lint that printed `OK:`.
 //
 // Four in a row is a property of the shape, not four separate lapses. So the
 // wiring lives here, once, and a fifth tool attaches to it by calling one of the

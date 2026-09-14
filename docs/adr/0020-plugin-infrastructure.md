@@ -391,8 +391,8 @@ not touched, exactly as the paragraph below said it would not be.
 on ONE user, so the subject is the user rather than the aclfile a destiny renders. It is the
 address this amendment used as its own worked example, and it now resolves. It does **not** retire
 `acl.reloaded`: the two have different subjects and a service still holding its ACL in a rendered
-file keeps the file-shaped one. Moving the WB redis service off `redis-cli` is **NIM-768** and
-remains open.
+file keeps the file-shaped one. Moving the downstream redis service off `redis-cli` is
+**NIM-768** and remains open.
 
 ★ **Status 2026-09-05 (NIM-769): the mongo artifact serves it, and no artifact here carries the
 grouping level any more.** `soul-mod-community-mongo` is `soul-mod-mongo`, registered under the
@@ -592,16 +592,22 @@ RPC, and `sdk/sshprovider/` is its own package beside `sdk/module/`. By contrast
 something true; it stays.
 
 A SoulModule artifact is now named **after the module it serves**: `redis`, `mongo`,
-`cassandra`, `vmlocal`, `wbcloud`.
+`cassandra`, `vmlocal`.
 
 ★ **This renames an ARTIFACT, never an ADDRESS.** The two are independent and stay
 independent — a plugin document carries no name of its own ((o) above), so address level 1
 is the alias an operator writes in `keeper.yml::plugins.soul_modules[].name` and appears
 nowhere in the artifact's bytes. Renaming a directory moves no address; changing an alias
 touches no directory. Where the two now coincide (the `redis` artifact under the alias
-`redis`) that is two independent choices landing on one spelling, not a rule — and the
-property it protects is worth naming: registering `vmlocal` under the alias `wbcloud`
-still runs an unmodified WB cloud scenario against libvirt.
+`redis`) that is two independent choices landing on one spelling, not a rule.
+
+> **Amendment 2026-09-14 (NIM-873): an alias no longer substitutes one provider for
+> another.** Until now this independence carried a second claim — that registering
+> `vmlocal` under a cloud provider's alias ran that provider's scenario unmodified,
+> because `vmlocal` mirrored its parameter surface key for key. That mirror is
+> removed: `vmlocal` declares the surface libvirt can answer for, and a scenario
+> written against a cloud provider must be edited to run on it. The independence of
+> artifact and address is unchanged; only the substitution it was said to buy is gone.
 
 **Not renamed, and why.** `sdk/cmd/soul-mod` is the author's stamping tool, not an
 artifact — `sdk/` and `proto/plugin/` are interfaces and out of scope. The

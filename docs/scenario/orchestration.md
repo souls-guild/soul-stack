@@ -1323,7 +1323,7 @@ The shape is a capture reading the register of a keeper step from an earlier Pas
 
 ```yaml
 - name: create the VMs
-  module: wbcloud.vm.created
+  module: democloud.vm.created
   register: provision
   params: { … }
 

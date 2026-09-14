@@ -9,7 +9,7 @@ import (
 )
 
 // writeSecretCollectionService lays out a service whose state_schema declares one
-// collection secret — the wb-service-redis shape — plus the scenario and any file
+// collection secret — the demo-service-redis shape — plus the scenario and any file
 // an `include:` resolves against. Returns the path to main.yml.
 func writeSecretCollectionService(t *testing.T, mainYAML string, extra map[string]string) string {
 	t.Helper()

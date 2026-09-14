@@ -24,7 +24,7 @@ func stateSchema(t *testing.T, src string) InputSchemaMap {
 	return m
 }
 
-// redisStateSchema — the collection shape wb-service-redis actually declares
+// redisStateSchema — the collection shape demo-service-redis actually declares
 // ([ADR-0083] §1): one secret per element of a top-level array, addressed by a sibling.
 func redisStateSchema(t *testing.T) InputSchemaMap {
 	t.Helper()
@@ -334,7 +334,7 @@ func TestServiceManifest_SecretFieldDiagnosticIsPositional(t *testing.T) {
 	}
 }
 
-// TestServiceManifest_ValidSecretFieldLoadsClean — the shape wb-service-redis migrates
+// TestServiceManifest_ValidSecretFieldLoadsClean — the shape demo-service-redis migrates
 // to must load without a diagnostic; a guard that rejects everything guards nothing.
 func TestServiceManifest_ValidSecretFieldLoadsClean(t *testing.T) {
 	src := `state_schema:

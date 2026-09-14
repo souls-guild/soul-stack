@@ -23,7 +23,7 @@ import (
 // the process could not be run at all: a command that started and exited non-zero
 // was CHANGED, and the code was merely data in `register`. docs/destiny/tasks.md
 // promised the opposite — that `failed` defaults to `exit_code != 0` — and had
-// promised it in every release. A live run of wb-service-redis lost its real cause
+// promised it in every release. A live run of demo-service-redis lost its real cause
 // to that gap: the cluster-slot step exited 1 with "Connection refused", the
 // framework recorded CHANGED, the run carried on and died a minute later on a
 // neighbouring `until:` task, so the incarnation ended up holding somebody else's

@@ -85,7 +85,7 @@ func (a *fakeAudit) Write(_ context.Context, e *audit.Event) error {
 	return nil
 }
 
-// collectionSchema is the wb-service-redis shape: a list of users, each with a
+// collectionSchema is the demo-service-redis shape: a list of users, each with a
 // `password` declared `type: secret` and addressed by its `name` sibling.
 func collectionSchema() config.InputSchemaMap {
 	return config.InputSchemaMap{
@@ -112,7 +112,7 @@ func scalarSchema() config.InputSchemaMap {
 }
 
 func runScope(schema config.InputSchemaMap) context.Context {
-	ctx := coremodutil.WithService(context.Background(), "wb-service-redis")
+	ctx := coremodutil.WithService(context.Background(), "demo-service-redis")
 	ctx = coremodutil.WithIncarnation(ctx, "redis-prod")
 	ctx = coremodutil.WithStateSchema(ctx, schema)
 	return coremodutil.WithRunScope(ctx, coremodutil.RunScope{
@@ -224,7 +224,7 @@ func TestSecret_Collection_MintsAbsent(t *testing.T) {
 		t.Error("changed = false, want true (a secret was minted)")
 	}
 
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	stored, _ := fv.store[path]["password"].(string)
 	if len(stored) != 40 {
 		t.Fatalf("vault %s#password: length %d, want 40", path, len(stored))
@@ -253,7 +253,7 @@ func TestSecret_Collection_MintsAbsent(t *testing.T) {
 // what a first run would have left, so the run is a true repeat and `changed`
 // answers for the state write as well as for the mint.
 func TestSecret_Collection_KeepsExisting(t *testing.T) {
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	fv := newFakeVault(map[string]map[string]any{path: {"password": "the-first-run-value"}})
 	fs := newFakeStore()
 	fs.state = map[string]any{"redis_users": []any{map[string]any{"name": "alice", "perms": "+@read"}}}
@@ -283,7 +283,7 @@ func TestSecret_Collection_KeepsExisting(t *testing.T) {
 // TestPresent_Collection_MergesNeighbouringField: minting one field must not drop
 // another field of the same KV entry.
 func TestSecret_Collection_MergesNeighbouringField(t *testing.T) {
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	fv := newFakeVault(map[string]map[string]any{path: {"note": "keep-me"}})
 	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
 
@@ -315,7 +315,7 @@ func TestSecret_Scalar_MintsAndReferences(t *testing.T) {
 	if ev.GetFailed() {
 		t.Fatalf("failed: %s", ev.GetMessage())
 	}
-	const path = "secret/wb-service-redis/redis-prod/admin_password"
+	const path = "secret/demo-service-redis/redis-prod/admin_password"
 	stored, _ := fv.store[path]["value"].(string)
 	if len(stored) != 16 || strings.Trim(stored, "0123456789abcdef") != "" {
 		t.Fatalf("stored value %q does not match the requested policy", stored)
@@ -328,7 +328,7 @@ func TestSecret_Scalar_MintsAndReferences(t *testing.T) {
 // TestPresent_EmptyStringCountsAsAbsent: an empty stored value must be mintable,
 // or a botched first write would leave the field permanently empty.
 func TestSecret_EmptyStringCountsAsAbsent(t *testing.T) {
-	const path = "secret/wb-service-redis/redis-prod/admin_password"
+	const path = "secret/demo-service-redis/redis-prod/admin_password"
 	fv := newFakeVault(map[string]map[string]any{path: {"value": ""}})
 	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
 
@@ -351,7 +351,7 @@ func TestSecret_RejectsPlaintextOnSecretProperty(t *testing.T) {
 	// update branch rather than the create one. An empty store sends the module down
 	// the "absent" arm, where a write is a fresh secret; the arm that already holds a
 	// value is the one where a literal could plausibly be taken as the new content.
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	fv := newFakeVault(map[string]map[string]any{path: {"password": "minted-earlier"}})
 	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
 
@@ -584,8 +584,8 @@ func TestSecret_Collection_DuplicateKeyIsPerDeclaredSecret(t *testing.T) {
 		t.Fatalf("failed: %s", ev.GetMessage())
 	}
 	for _, path := range []string{
-		"secret/wb-service-redis/redis-prod/accounts/alice",
-		"secret/wb-service-redis/redis-prod/accounts/ops",
+		"secret/demo-service-redis/redis-prod/accounts/alice",
+		"secret/demo-service-redis/redis-prod/accounts/ops",
 	} {
 		if len(fv.store[path]) != 2 {
 			t.Errorf("vault %s = %v, want both a password and a token", path, fv.store[path])
@@ -679,7 +679,7 @@ func TestSecret_MissingValueWithoutRequest(t *testing.T) {
 // TestPresent_MissingValueWithExisting: the same property IS satisfiable once a
 // value exists — a scenario that only reads must not have to re-request.
 func TestSecret_MissingValueWithExisting(t *testing.T) {
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	fv := newFakeVault(map[string]map[string]any{path: {"password": "already-there"}})
 	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
 
@@ -774,8 +774,8 @@ func TestSecret_GeneratedPathsAreSorted(t *testing.T) {
 	}
 	gen := ev.GetOutput().AsMap()[coremodstate.OutputGenerated].([]any)
 	want := []string{
-		"secret/wb-service-redis/redis-prod/redis_users/alice#password",
-		"secret/wb-service-redis/redis-prod/redis_users/zoe#password",
+		"secret/demo-service-redis/redis-prod/redis_users/alice#password",
+		"secret/demo-service-redis/redis-prod/redis_users/zoe#password",
 	}
 	for i, w := range want {
 		if gen[i] != w {
@@ -845,11 +845,11 @@ func TestCapture_WritesStrippedFieldAtTheStep(t *testing.T) {
 	// The same value went into the register and into the write. The write strips;
 	// the register must not, or the reference the next step reads is gone.
 	elem := effectiveList(t, ev)[0].(map[string]any)
-	const want = "vault:secret/wb-service-redis/redis-prod/redis_users/alice#password"
+	const want = "vault:secret/demo-service-redis/redis-prod/redis_users/alice#password"
 	if elem["password"] != want {
 		t.Errorf("effective[0].password = %v, want %v", elem["password"], want)
 	}
-	minted, _ := fv.store["secret/wb-service-redis/redis-prod/redis_users/alice"]["password"].(string)
+	minted, _ := fv.store["secret/demo-service-redis/redis-prod/redis_users/alice"]["password"].(string)
 	if minted == "" {
 		t.Fatal("nothing was minted")
 	}
@@ -904,7 +904,7 @@ func TestCapture_NoRunScopeMintsNothing(t *testing.T) {
 	fv := newFakeVault(nil)
 	m := coremodstate.New(fv, nil, "secret").WithStore(newFakeStore())
 
-	ctx := coremodutil.WithService(context.Background(), "wb-service-redis")
+	ctx := coremodutil.WithService(context.Background(), "demo-service-redis")
 	ctx = coremodutil.WithIncarnation(ctx, "redis-prod")
 	ctx = coremodutil.WithStateSchema(ctx, collectionSchema())
 
@@ -1059,7 +1059,7 @@ func TestState_PresentFillsAnEmptySlot(t *testing.T) {
 // state BEFORE resolving: minting a secret for a write that is then discarded
 // would leave a live credential nothing in state points at.
 func TestState_PresentOverAnExistingFieldMintsNothing(t *testing.T) {
-	const path = "secret/wb-service-redis/redis-prod/redis_users/alice"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/alice"
 	fv := newFakeVault(map[string]map[string]any{path: {"password": "already-there"}})
 	fs := storeWith(map[string]any{"redis_users": []any{map[string]any{"name": "alice"}}})
 	m := coremodstate.New(fv, nil, "secret").WithStore(fs)
@@ -1295,7 +1295,7 @@ func TestState_AddResolvesTheElementsSecret(t *testing.T) {
 	if ev.GetFailed() {
 		t.Fatalf("failed: %s", ev.GetMessage())
 	}
-	const path = "secret/wb-service-redis/redis-prod/redis_users/carol"
+	const path = "secret/demo-service-redis/redis-prod/redis_users/carol"
 	if got, _ := fv.store[path]["password"].(string); len(got) != 24 {
 		t.Fatalf("vault %s#password: length %d, want 24", path, len(got))
 	}
