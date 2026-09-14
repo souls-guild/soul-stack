@@ -270,9 +270,10 @@ push:
 
 ### Selector R1 — 3-tier resolve
 
-The router (`keeper/internal/push/router.go::PGRouter`) resolves the SshProvider plugin name per-SID in three levels:
+The router (`keeper/internal/push/router.go::PGRouter`) resolves the SshProvider plugin name per-SID in three levels, with a fourth above them since NIM-870:
 
-1. **Level 1: `souls.ssh_target.ssh_provider`** (per-SID explicit). An optional field in the jsonb-shape `souls.ssh_target` (migration 056). When set — it always wins. `source: soul` in audit.
+0. **Level 0: the task's `transport: { ssh: { ssh_provider: … } }`** (NIM-870). Above everything else, including the α-compat preset below; when it answers the router is not invoked at all. `source: task`. See [Transport precedence](#transport-precedence).
+1. **Level 1: `souls.ssh_target.ssh_provider`** (per-SID explicit). An optional field in the jsonb-shape `souls.ssh_target` (migration 056). When set — it wins over Levels 2 and 3. Two things still sit above it: Level 0, and the α-compat per-job preset below. `source: soul` in audit.
 2. **Level 2: `push.coven_default_providers: { <coven>: <provider_name> }`** (per-coven default). A map in `keeper.yml`, hot-reload-aware. Matched against the host's own `souls.coven[]` — the tags an operator attached to it. Belonging to an incarnation attaches no tag ([NIM-281](../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)), so to put a whole instance behind one bastion, tag its hosts. Tiebreak on a multiple coven-match — **alphabetical order**, first match wins (determinism). `source: coven`.
 
    > ⚠ **Upgrade note (2026-08-05).** Between NIM-251 and NIM-281 this level matched an inherited label set, so an entry naming an incarnation (or a tag put on one) routed its member hosts. That reading is gone: such an entry now matches nothing and those hosts fall through to Level 3 — a **change of SSH perimeter, and a silent one**. Before upgrading, check every coven named in `push.coven_default_providers` against the hosts it is meant to route, and tag any host that was matching only by inheritance.
@@ -299,7 +300,7 @@ On a spawn-fail of any plugin — `errSetupFailed` (the operator explicitly decl
 ### Audit and metrics
 
 - **Audit:** a routing decision is **NOT** written as a separate event (excessive noise with N_SIDs in a run). The actual SshProvider per-SID is saved in **`push_runs.summary.hosts[sid].ssh_provider`** — an operator query via `GET /v1/push/{apply_id}`.
-- **Metric:** `keeper_push_provider_routed_total{provider, decision_source}` (counter). `decision_source ∈ {soul, coven, cluster}`. Cardinality-safe: ~N_providers × 3 = single-digit series.
+- **Metric:** `keeper_push_provider_routed_total{provider, decision_source}` (counter). `decision_source ∈ {task, soul, coven, cluster}`. Cardinality-safe: ~N_providers × 4 = single-digit series.
 
 ### keeper.yml grammar
 
@@ -348,6 +349,58 @@ In these cases `/v1/push/*` returns 404 (the routes are not mounted), MCP `keepe
 - Building the `SshDispatcher` failed (a code inconsistency, not runtime).
 
 See also [`config.md → push`](config.md#push) for the normative grammar of the block.
+
+## Transport precedence
+
+A task may name its own transport and override the registry —
+[`transport:`](../scenario/orchestration.md#225-transport--how-this-task-reaches-its-hosts), NIM-870,
+owner's decision 2026-09-14. For the three fields it carries the order is:
+
+| field | task `transport.ssh.*` | then | then | then |
+|---|---|---|---|---|
+| SshProvider | `ssh_provider` | the request's α-compat `ssh_provider` preset | `souls.ssh_target.ssh_provider` | `push.coven_default_providers` → `push.cluster_default_provider` |
+| SSH user | `user` | — | `souls.ssh_target.ssh_user` | default `root` |
+| SSH port | `port` | — | `souls.ssh_target.ssh_port` | default `22` |
+
+The preset is a per-JOB field of `POST /v1/push/apply`, not a per-SID one, and it
+answers for the provider only — which is why it has no column for user or port.
+
+The provider and the connection fields are **independent axes**: a task that named only
+a `user` keeps it even though the cluster default answered for the provider.
+
+★ **This is a third source of truth for those three fields, accepted knowingly — so the
+run has to say which source answered.** Each entry of `push_runs.summary.hosts[]` carries:
+
+| key | meaning |
+|---|---|
+| `ssh_provider` | the plugin the host was actually dispatched through |
+| `route_source` | which level picked it: `task` / `soul` / `coven` / `cluster` |
+| `transport` | present exactly when the TASK named one — the scalar `transport: ssh` included, which names a transport and overrides nothing |
+| `ssh_user`, `ssh_port` | present **only** when the TASK set them |
+
+Their absence is information too: a summary with no `transport` key is a run no task
+routed, and an `ssh_user` that IS there was put there by a task. The converse is
+deliberately not claimed — a missing `ssh_user` means the resolver answered, and only the
+resolver knows whether that was the `souls.ssh_target` row or its own `root`/`22`
+default, so a label here would be a guess in the one field whose job is provenance.
+
+### ⚠ The key has no end-to-end production path yet
+
+Stated plainly because the opposite prose about push has already misled a whole
+reconnaissance once (NIM-866). As of NIM-870 **nothing in production sets a transport**:
+
+- a scenario `apply:` task carrying `transport: ssh` is validated offline, rendered and
+  carried on the dispatch plan, but `scenario.ApplyDispatcher` is implemented by
+  `grpc.Outbound` alone — the scenario dispatcher has no push branch, and adding one is
+  the `apply_runs`/`register:`/barrier question NIM-869 recorded as needing its own ADR;
+- `pushorch.ApplyRequest.Transport` is the input the precedence chain reads, and
+  `POST /v1/push/apply` / the `keeper.push.apply` MCP tool do not carry it — extending a
+  published Operator API contract was left to the owner rather than taken silently.
+
+So the grammar, the offline refusal, the precedence and the summary are implemented and
+covered (`TestIntegration_PushRun_LiveSSHD_TaskTransportBeatsTheRegistry` proves them on
+a real host), and an operator cannot yet reach them. Closing either bullet makes the key
+usable; both are the owner's call.
 
 ## See also
 

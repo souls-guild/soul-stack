@@ -109,7 +109,7 @@ type fakeDispatcher struct {
 	received map[string][]*keeperv1.RenderedTask
 }
 
-func (f *fakeDispatcher) SendApply(_ context.Context, sid string, _ string, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
+func (f *fakeDispatcher) SendApply(_ context.Context, sid string, _ push.Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
 	atomic.AddInt32(&f.calls, 1)
 	if f.delay > 0 {
 		time.Sleep(f.delay)
@@ -278,7 +278,7 @@ func TestSummarize_Empty(t *testing.T) {
 
 func TestBuildHostResult_SendApplyError(t *testing.T) {
 	err := errors.New("dial timeout")
-	got := buildHostResult("host1", "test-provider", nil, err)
+	got := buildHostResult("host1", push.Route{Provider: "test-provider"}, push.SourceSoul, "", nil, err)
 	if got.ok {
 		t.Error("ok = true, want false on SendApply error")
 	}
@@ -292,7 +292,7 @@ func TestBuildHostResult_SendApplyError(t *testing.T) {
 
 func TestBuildHostResult_RunSuccess(t *testing.T) {
 	rr := &keeperv1.RunResult{ApplyId: "x", Status: keeperv1.RunStatus_RUN_STATUS_SUCCESS}
-	got := buildHostResult("host1", "test-provider", rr, nil)
+	got := buildHostResult("host1", push.Route{Provider: "test-provider"}, push.SourceSoul, "", rr, nil)
 	if !got.ok {
 		t.Error("ok = false, want true on RUN_STATUS_SUCCESS")
 	}
@@ -303,7 +303,7 @@ func TestBuildHostResult_RunSuccess(t *testing.T) {
 
 func TestBuildHostResult_RunFailed(t *testing.T) {
 	rr := &keeperv1.RunResult{ApplyId: "x", Status: keeperv1.RunStatus_RUN_STATUS_FAILED}
-	got := buildHostResult("host1", "test-provider", rr, nil)
+	got := buildHostResult("host1", push.Route{Provider: "test-provider"}, push.SourceSoul, "", rr, nil)
 	if got.ok {
 		t.Error("ok = true, want false on RUN_STATUS_FAILED")
 	}
@@ -328,7 +328,7 @@ func TestResolveProviders_AlphaCompatPreset(t *testing.T) {
 		},
 	}
 	sids := []string{"sid-1", "sid-2", "sid-3"}
-	sidProv, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{SSHProvider: "preset-provider"}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	sidProv, _, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{SSHProvider: "preset-provider"}, "", push.TransportOverride{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if calledRouter {
 		t.Error("router was called with α-compat preset set")
 	}
@@ -336,8 +336,8 @@ func TestResolveProviders_AlphaCompatPreset(t *testing.T) {
 		t.Errorf("fails = %d, want 0 (preset should not fail)", len(fails))
 	}
 	for _, sid := range sids {
-		if sidProv[sid] != "preset-provider" {
-			t.Errorf("sidProv[%s] = %q, want preset-provider", sid, sidProv[sid])
+		if sidProv[sid].Provider != "preset-provider" {
+			t.Errorf("sidProv[%s] = %q, want preset-provider", sid, sidProv[sid].Provider)
 		}
 	}
 }
@@ -353,7 +353,7 @@ func TestResolveProviders_RouterNotRouted_FailPerHost(t *testing.T) {
 		},
 	}
 	sids := []string{"sid-1", "sid-2"}
-	sidProv, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	sidProv, _, fails := run.resolveProviders(context.Background(), sids, ApplyRequest{}, "", push.TransportOverride{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if len(sidProv) != 0 {
 		t.Errorf("sidProv must be empty on all fail, got %d", len(sidProv))
 	}
@@ -392,11 +392,11 @@ func TestResolveProviders_RouterHappyPath(t *testing.T) {
 			Logger: slog.New(slog.NewJSONHandler(io.Discard, nil)),
 		},
 	}
-	sidProv, fails := run.resolveProviders(context.Background(), []string{"sid-1", "sid-2"}, ApplyRequest{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	sidProv, _, fails := run.resolveProviders(context.Background(), []string{"sid-1", "sid-2"}, ApplyRequest{}, "", push.TransportOverride{}, slog.New(slog.NewJSONHandler(io.Discard, nil)))
 	if len(fails) != 0 {
 		t.Fatalf("unexpected fails: %v", fails)
 	}
-	if sidProv["sid-1"] != "vault" || sidProv["sid-2"] != "static" {
+	if sidProv["sid-1"].Provider != "vault" || sidProv["sid-2"].Provider != "static" {
 		t.Errorf("sidProv = %v, want sid-1=vault sid-2=static", sidProv)
 	}
 }
@@ -430,7 +430,7 @@ func (p *perSIDRouter) RouteFor(_ context.Context, sid string) (string, push.Rou
 
 func TestBuildHostResult_RunErrorLocked(t *testing.T) {
 	rr := &keeperv1.RunResult{ApplyId: "x", Status: keeperv1.RunStatus_RUN_STATUS_ERROR_LOCKED}
-	got := buildHostResult("host1", "test-provider", rr, nil)
+	got := buildHostResult("host1", push.Route{Provider: "test-provider"}, push.SourceSoul, "", rr, nil)
 	if got.ok {
 		t.Error("ok = true, want false on ERROR_LOCKED")
 	}

@@ -254,7 +254,7 @@ func TestDispatcher_SendApply_UnknownProvider(t *testing.T) {
 	})
 	// A non-nil request is required to pass SendApply's first check.
 	req := &keeperv1.ApplyRequest{ApplyId: "ap-ghost"}
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", "ghost", req)
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: "ghost"}, req)
 	if !errors.Is(err, ErrProviderUnknown) {
 		t.Errorf("err = %v, want ErrProviderUnknown", err)
 	}

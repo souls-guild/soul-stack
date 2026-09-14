@@ -322,9 +322,12 @@ var ErrProviderUnknown = errors.New("push: SshProvider not registered")
 // keypair → Authorize → Sign(pubkey) → connect (CA-host-cert verify) →
 // `soul apply` with stdin=ApplyRequest → parse NDJSON stdout → RunResult.
 //
-// providerName — the SshProvider plugin name (resolved by
-// pushorch.ProviderRouter before the call). An empty string or an
-// unregistered name → ErrProviderUnknown.
+// route carries the whole transport decision for this host: the SshProvider
+// plugin name (resolved by pushorch.ProviderRouter before the call — an empty
+// string or an unregistered name → ErrProviderUnknown) and the task's
+// `transport:` override, which is laid over the registry-resolved target
+// (NIM-870). A zero Override leaves the registry's answer untouched, which is
+// every run that does not write the key.
 //
 // Returns:
 //   - (*RunResult, nil) — the run reached a RunResult (its status can be
@@ -332,10 +335,11 @@ var ErrProviderUnknown = errors.New("push: SshProvider not registered")
 //   - (nil, error) — failure BEFORE a RunResult: ErrProviderUnknown, an
 //     Authorize deny, a connect/Sign failure, a cut-off before RunResult, a
 //     malformed NDJSON.
-func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName string, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
+func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
 	if req == nil {
 		return nil, errors.New("push: ApplyRequest is nil")
 	}
+	providerName := route.Provider
 	if providerName == "" {
 		return nil, fmt.Errorf("push: providerName is empty for sid=%s", sid)
 	}
@@ -363,6 +367,12 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 	if err != nil {
 		return nil, fmt.Errorf("push: resolve ssh-target %s: %w", sid, err)
 	}
+	// The task's `transport:` beats the registry row, by the owner's decision
+	// (NIM-870). The effective pair is logged here and lands in the run summary
+	// through pushorch — an override nobody can see is the failure mode that
+	// decision knowingly bought.
+	target = route.Override.Apply(target)
+	log = log.With(slog.String("ssh_user", target.User), slog.Int("ssh_port", target.Port))
 
 	prov := entry.Provider
 
@@ -451,12 +461,14 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, providerName 
 // Cleanup opens an SSH session to host sid and removes soul artifacts
 // (`/var/lib/soul-stack/{bin,modules}/`) via [Cleaner].
 //
-// providerName — the same SshProvider plugin name used in the preceding
-// SendApply (the caller keeps the correspondence in push_runs.summary).
-func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName string) error {
+// route is the same one used in the preceding SendApply, override included —
+// cleanup opens a SECOND session to the same host and must land on the same
+// account and port (the caller keeps the correspondence in push_runs.summary).
+func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, route Route) error {
 	if d.deps.Cleaner == nil {
 		return errors.New("push: Cleaner is not configured")
 	}
+	providerName := route.Provider
 	if providerName == "" {
 		return fmt.Errorf("push: providerName is empty for sid=%s (cleanup)", sid)
 	}
@@ -483,6 +495,12 @@ func (d *SshDispatcher) Cleanup(ctx context.Context, sid string, providerName st
 	if err != nil {
 		return fmt.Errorf("push: resolve ssh-target %s: %w", sid, err)
 	}
+	// ★ The SAME route the apply ran under. Cleanup opens a second session to
+	// the same host, so it has to land on the same account and port: resolving
+	// the registry here while the apply used the task's override would dial an
+	// account that may not exist, and the stale artifacts would stay on the host
+	// with only a warn log to say so (cleanup is best-effort).
+	target = route.Override.Apply(target)
 
 	prov := entry.Provider
 

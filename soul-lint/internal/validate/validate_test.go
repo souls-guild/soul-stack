@@ -103,6 +103,19 @@ func TestGolden_ScenarioIncarnationStateRead(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/incarnation-state-read.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioTransportTaskKey — the task-level `transport:` (NIM-870)
+// in every form that must LINT CLEAN: the scalar, the dict with params, the
+// dict with none, and a block whose descendant overrides the inherited key.
+//
+// It is the positive half of the offline contract; the six
+// `scenario-broken/scenario-transport-*` fixtures are the negative half. The
+// pair is what makes "the enumeration is closed" checkable with no keeper
+// running: an unregistered name is refused here, by the linter, not at connect
+// time by a provider lookup on a machine somebody else owns.
+func TestGolden_ScenarioTransportTaskKey(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/transport-task-key.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) is VALID
 // (ADR-056 §S4 amend, S-2D1): the serial_staged_unsupported restriction was
 // lifted, 2D serial×passage is implemented. The scenario passes lint with

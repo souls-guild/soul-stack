@@ -1,0 +1,8 @@
+name: transport-unknown-param
+tasks:
+  - name: A param the ssh transport does not take
+    transport:
+      ssh:
+        primary_ip: 10.0.0.7
+    apply:
+      destiny: soul-install

@@ -1,0 +1,8 @@
+name: transport-bad-port
+tasks:
+  - name: A port outside the range
+    transport:
+      ssh:
+        port: 70000
+    apply:
+      destiny: soul-install

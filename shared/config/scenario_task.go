@@ -44,10 +44,11 @@ type Task struct {
 	Timeout     string         `yaml:"timeout,omitempty"`
 
 	// Scenario delta (orchestration.md §2).
-	On      any    `yaml:"on,omitempty"`     // "keeper" | []string
-	Where   string `yaml:"where,omitempty"`  // CEL string
-	Serial  any    `yaml:"serial,omitempty"` // int >= 1 | "<N>%"
-	RunOnce bool   `yaml:"run_once,omitempty"`
+	On        any    `yaml:"on,omitempty"`     // "keeper" | []string
+	Where     string `yaml:"where,omitempty"`  // CEL string
+	Serial    any    `yaml:"serial,omitempty"` // int >= 1 | "<N>%"
+	RunOnce   bool   `yaml:"run_once,omitempty"`
+	Transport any    `yaml:"transport,omitempty"` // "<name>" | {<name>: {params}} — see TransportSpec
 
 	// Discriminator (exactly one non-nil).
 	Module  *ModuleTask  `yaml:"module,omitempty"`
@@ -206,7 +207,7 @@ var taskBoolOrCELFields = map[string]bool{
 //   - discriminator keys (`module`, `apply`, `include`, `block`) — they are yaml:"-"
 //     because UnmarshalYAML decodes them itself;
 //   - `params:` — a neighbour of `module:`, technically living in ModuleTask;
-//   - scenario delta (`on`, `where`, `serial`, `run_once`);
+//   - scenario delta (`on`, `where`, `serial`, `run_once`, `transport`);
 //   - deprecated (`wait`, `filter`) — their diagnostic is raised separately with a
 //     hint in step 1 of validateTaskNode, but they must be in the whitelist to avoid
 //     a duplicate `unknown_key`.
@@ -717,6 +718,10 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	out = append(out, validateAsyncOnKeeper(present, pathPrefix)...)
 	out = append(out, validateWhenOnKeeper(present, pathPrefix)...)
 	out = append(out, validateBlockOnKeeper(present, pathPrefix)...)
+	out = append(out, validateTransportOnKeeper(present, pathPrefix)...)
+	if kv, ok := present["transport"]; ok {
+		out = append(out, validateTransportField(kv, pathPrefix)...)
+	}
 	if kv, ok := present["serial"]; ok {
 		out = append(out, validateSerialField(kv, pathPrefix)...)
 	}

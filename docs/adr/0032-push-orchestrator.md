@@ -30,6 +30,8 @@
 - The `DestinyResolver` for push is separate (`pushorch.pushDestinyResolver`), it does not overlap with the scenario-side `DestinySource` (which is tied to service.yml).
 - `topology.LoadByInventory(sids)` — a new only-add point, without an incarnation phase and declared-role.
 
+**Amendment 2026-09-14 (NIM-870).** The 3-tier provider resolve gains a **Level 0 above it** — a task's own `transport: { ssh: { ssh_provider: … } }`, which beats `souls.ssh_target` and both cluster defaults; its `RouteSource` label is `task`, so `decision_source` now has **four** values and the metric's cardinality is ~N_providers × 4. `push_runs.summary.hosts[]` gains `route_source`, `transport`, `ssh_user` and `ssh_port` alongside `ssh_provider`. Rationale and the refusals — [ADR-0088](0088-task-transport-key.md).
+
 **Rejected alternatives.**
 - (a) Reuse `apply_runs` for push — rejected, the application lifecycles of a scenario and push differ (no state_changes, no attempt-fencing, no barrier).
 - (b) `RenderDestinyStandalone` as a separate public API in render/ — rejected (drift risk, two entry points into CEL+template).
@@ -115,7 +117,7 @@ The pilot **deliberately** does not introduce new entities (a dual registry `pus
   - All three empty → `ErrProviderNotRouted` → fail per-host (status=`error`, error_code=`provider_not_routed`). **WITHOUT a provider-chain fallback** (a security invariant: the auth-perimeter of different providers is different, a silent fallback breaks trust).
 - **α-compat** REST/MCP `POST /v1/push/apply::ssh_provider`: with a non-empty field — the per-job preset applies to ALL SIDs, the router is NOT called. The source is treated as `soul`. With an empty one — a router resolve per-SID.
 - **Eager spawn.** `setupPushDispatchers` spawns ALL discovered SshProvider plugins at Keeper startup (UX predictability + the plugin-start cost is a one-time one). A spawn-fail of any plugin → `errSetupFailed` (the operator explicitly declared it in the catalog).
-- **Audit/Metrics.** The per-SID routing decision is **NOT** written as a separate audit-event (redundant noise). The actual SshProvider is stored in `push_runs.summary.hosts[sid].ssh_provider`. The counter `keeper_push_provider_routed_total{provider, decision_source}` (low cardinality ~N\_providers × 3) — on each successful RouteFor + on the α-compat preset path.
+- **Audit/Metrics.** The per-SID routing decision is **NOT** written as a separate audit-event (redundant noise). The actual SshProvider is stored in `push_runs.summary.hosts[sid].ssh_provider`. The counter `keeper_push_provider_routed_total{provider, decision_source}` (low cardinality ~N\_providers × 4 — see the NIM-870 amendment above) — on each successful RouteFor, on the α-compat preset path, and on the task's own `transport:` (`decision_source: task`).
 - **Hot-reload** for Level 2/3: `RouterConfigSource.Snapshot()` pulls a fresh `*KeeperConfig` via `config.Store.Get()` on each RouteFor (an atomic read, no PGRouter rebuild).
 - **Operator surface:**
   - Per-SID: an extended `PUT /v1/souls/{sid}/ssh-target` body + the `keeper.soul.ssh-target.update` MCP-tool + `soulctl souls ssh-target set --ssh-provider=<name>`.

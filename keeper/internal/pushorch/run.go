@@ -3,6 +3,7 @@ package pushorch
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log/slog"
 	"sync"
 	"time"
@@ -32,20 +33,22 @@ const orchestratorContextTimeout = 30 * time.Minute
 
 // SshDispatcher is a narrow interface of [push.SshDispatcher] for the orchestrator.
 // per-host SendApply returns RunResult synchronously (push S1+S5, oneshot).
-// `providerName` is the name of the SshProvider plugin selected by ProviderRouter
-// (ADR-032 amendment 2026-05-27, P2 W-2/W-3 multi-provider routing); empty string
-// or unknown name → push.ErrProviderUnknown.
+// [push.Route] carries the SshProvider plugin name selected by ProviderRouter
+// (ADR-032 amendment 2026-05-27, P2 W-2/W-3 multi-provider routing; empty string
+// or unknown name → push.ErrProviderUnknown) together with the task's
+// `transport:` override (NIM-870).
 type SshDispatcher interface {
-	SendApply(ctx context.Context, sid string, providerName string, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error)
+	SendApply(ctx context.Context, sid string, route push.Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error)
 }
 
 // Cleaner is a narrow interface of [push.SshDispatcher.Cleanup] for best-effort
 // post-success cleanup of stale versions (`cleanup_stale_versions: true`).
 // The same *push.SshDispatcher satisfies both interfaces — wire-up passes it to
-// both fields. `providerName` is the same one used in the preceding SendApply
-// (caller maintains per-SID decision).
+// both fields. The [push.Route] is the SAME one the preceding SendApply ran
+// under, override included: cleanup opens a second session to the same host and
+// must land on the same account and port (caller maintains the per-SID decision).
 type Cleaner interface {
-	Cleanup(ctx context.Context, sid string, providerName string) error
+	Cleanup(ctx context.Context, sid string, route push.Route) error
 }
 
 // ProviderRouter is a narrow interface of [push.ProviderRouter] for the orchestrator.
@@ -162,6 +165,14 @@ type ApplyRequest struct {
 	Input         map[string]any
 	CleanupStale  bool
 	StartedByAID  string
+
+	// Transport is the task-level `transport:` in its raw DSL form — the scalar
+	// or the one-key mapping [config.TransportSpecOf] decodes (NIM-870). It is
+	// put on the synthetic task below and read back off the RENDERED PLAN, not
+	// from here: that is the path a scenario task will take when the scenario
+	// dispatcher grows a push branch, and having one reader means the precedence
+	// cannot come out differently on the two routes.
+	Transport any
 }
 
 // Apply receives a push run, performs Insert(pending), and spawns an async goroutine
@@ -285,7 +296,8 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		Name: syntheticScenarioName,
 		Tasks: []config.Task{
 			{
-				Name: syntheticTaskName,
+				Name:      syntheticTaskName,
+				Transport: req.Transport,
 				Apply: &config.ApplyTask{
 					Destiny: name,
 					Input:   req.Input,
@@ -336,12 +348,26 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 
 	protoTasks := render.ToProtoTasks(tasks)
 
+	// The task's `transport:` (NIM-870), read off the rendered plan. A param that
+	// did not decode fails the RUN rather than falling back to the registry: the
+	// key exists in order to beat the registry, so answering from the registry
+	// after failing to read it would be the silent wrong answer this key's whole
+	// audit requirement is about.
+	transportName, override, oerr := transportOverrideOf(plans)
+	if oerr != nil {
+		log.Error("pushorch: transport override unusable", slog.Any("error", oerr))
+		r.finalize(ctx, applyID, StatusFailed, map[string]any{
+			"error": "transport_invalid: " + oerr.Error(),
+		}, req.StartedByAID, req)
+		return
+	}
+
 	// P2 W-3 routing phase. Runs BEFORE fanOut: per-SID routing miss must not open
 	// SSH session and must not consume plugin env-payload.
 	// α-compat (PM-decision): non-empty req.SSHProvider → per-job preset applied to
 	// ALL SIDs, overrides router. Otherwise router.RouteFor per-SID; error → per-host
 	// status="error" + error_code="provider_not_routed".
-	sidProvider, routingResults := r.resolveProviders(ctx, target, req, log)
+	sidRoute, sidSource, routingResults := r.resolveProviders(ctx, target, req, transportName, override, log)
 
 	// hostResults are collected by target; for SIDs where routing failed, there's
 	// already an entry in routingResults (we exclude them from dispatch list).
@@ -353,7 +379,7 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		dispatchTargets = append(dispatchTargets, sid)
 	}
 
-	hostResults := r.fanOut(ctx, applyID, dispatchTargets, sidProvider, protoTasks, log)
+	hostResults := r.fanOut(ctx, applyID, dispatchTargets, sidRoute, sidSource, transportName, protoTasks, log)
 	// Merge: routing failures (no dispatch) + dispatch results.
 	if len(routingResults) > 0 {
 		for sid, hr := range routingResults {
@@ -371,41 +397,70 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 	// Runs AFTER finalization so run terminate status is not blocked by
 	// SSH roundtrips of cleanup. All errors go to logs, not summary.
 	if req.CleanupStale && r.deps.Cleaner != nil {
-		go r.cleanupHosts(dispatchTargets, sidProvider, log)
+		go r.cleanupHosts(dispatchTargets, sidRoute, log)
 	}
 }
 
-// resolveProviders resolves provider name for each SID in inventory.
+// resolveProviders resolves the route for each SID in inventory, in four
+// levels, highest first:
 //
-// α-compat (PM-decision P2 W-3): if req.SSHProvider is non-empty — preset is
-// applied to ALL SIDs, ProviderRouter is NOT called. Source in audit summary
-// is marked as "soul" (per-job override is semantically equivalent to per-SID
-// explicit for all targets).
+//	Level 0:    the task's `transport: { ssh: { ssh_provider: … } }` (NIM-870)
+//	α-compat:   req.SSHProvider, the per-job preset (PM-decision P2 W-3)
+//	Levels 1-3: ProviderRouter (per-SID → per-coven → cluster)
 //
-// Without preset: for each SID call router.RouteFor. ErrProviderNotRouted →
+// A hit at level 0 or at the α-compat preset applies to ALL SIDs and the
+// ProviderRouter is NOT called; the source recorded in the run summary is
+// "task" and "soul" respectively (a per-job preset is semantically the per-SID
+// explicit answer for every target).
+//
+// Without either: for each SID call router.RouteFor. ErrProviderNotRouted →
 // hostResult with status="error" + errText="provider_not_routed" placed in
 // routingResults[sid]. Real PG error → same, errText contains underlying message
 // (transient — operator retries).
 //
+// The task's user/port override rides EVERY route regardless of which level
+// picked the provider: choosing a provider and overriding the connection fields
+// are independent axes, and a task that named only a user must not lose it
+// because the cluster default answered for the provider.
+//
 // Return:
-//   - sidProvider: map[sid]provider, populated for SUCCESSFULLY resolved SIDs
-//     (including α-compat preset);
+//   - sidRoute: map[sid]push.Route for SUCCESSFULLY resolved SIDs;
+//   - sidSource: map[sid]push.RouteSource, the level that picked the provider;
 //   - routingResults: map[sid]hostResult for SIDs where routing failed
 //     (caller adds them to final hosts[] without dispatch).
-func (r *PushRun) resolveProviders(ctx context.Context, target []string, req ApplyRequest, log *slog.Logger) (map[string]string, map[string]hostResult) {
-	sidProvider := make(map[string]string, len(target))
+func (r *PushRun) resolveProviders(ctx context.Context, target []string, req ApplyRequest, transportName string, override push.TransportOverride, log *slog.Logger) (map[string]push.Route, map[string]push.RouteSource, map[string]hostResult) {
+	sidRoute := make(map[string]push.Route, len(target))
+	sidSource := make(map[string]push.RouteSource, len(target))
 	routingResults := make(map[string]hostResult)
+
+	// Level 0 — the task's own `transport: { ssh: { ssh_provider: … } }`. It
+	// stands above the α-compat preset and above all three router levels, by the
+	// owner's decision that the task beats the registry (NIM-870). The router is
+	// not called at all: its cheapest level is a PG read per SID, and there is
+	// nothing left for it to decide.
+	if override.Provider != "" {
+		for _, sid := range target {
+			sidRoute[sid] = push.Route{Provider: override.Provider, Override: override}
+			sidSource[sid] = push.SourceTask
+			observeRouted(r.deps.ProviderMetrics, override.Provider, push.SourceTask.String())
+		}
+		log.Info("pushorch: transport: on the task selected the provider for all SIDs",
+			slog.String("provider", override.Provider),
+			slog.Int("count", len(target)))
+		return sidRoute, sidSource, routingResults
+	}
 
 	if req.SSHProvider != "" {
 		// α-compat: per-job preset, single provider for all SIDs.
 		for _, sid := range target {
-			sidProvider[sid] = req.SSHProvider
+			sidRoute[sid] = push.Route{Provider: req.SSHProvider, Override: override}
+			sidSource[sid] = push.SourceSoul
 			observeRouted(r.deps.ProviderMetrics, req.SSHProvider, push.SourceSoul.String())
 		}
 		log.Info("pushorch: α-compat ssh_provider preset applied to all SIDs",
 			slog.String("provider", req.SSHProvider),
 			slog.Int("count", len(target)))
-		return sidProvider, routingResults
+		return sidRoute, sidSource, routingResults
 	}
 
 	for _, sid := range target {
@@ -419,17 +474,24 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 				slog.String("sid", sid),
 				slog.String("error_code", errCode),
 				slog.Any("error", rerr))
+			// The transport fields ride a routing failure too: the host never
+			// dialled, but the summary still has to say what the task asked for —
+			// otherwise the one entry an incident starts from reads as "went by
+			// the registry", which is exactly the wrong place to look.
 			routingResults[sid] = hostResult{
-				sid:     sid,
-				status:  "error",
-				errText: errCode + ": " + rerr.Error(),
+				sid:           sid,
+				status:        "error",
+				errText:       errCode + ": " + rerr.Error(),
+				transportName: transportName,
+				override:      override,
 			}
 			continue
 		}
-		sidProvider[sid] = providerName
+		sidRoute[sid] = push.Route{Provider: providerName, Override: override}
+		sidSource[sid] = source
 		observeRouted(r.deps.ProviderMetrics, providerName, source.String())
 	}
-	return sidProvider, routingResults
+	return sidRoute, sidSource, routingResults
 }
 
 // fanOut runs per-host SendApply in parallel (one goroutine per host), collects
@@ -441,37 +503,40 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 // A push run therefore records its outcome in `push_runs` and writes no
 // `apply_runs`/`apply_task_register` row at all, which is why the synthetic
 // scenario above carries one `apply:` task and no `register:`. See the
-// [push.EventHandler] doc for where that ends and what NIM-870 has to decide.
+// [push.EventHandler] doc for where that ends; the decision it names is still
+// open (NIM-870 added the `transport:` key, not the dispatcher's push branch).
 //
-// sidProvider is map sid → provider name (P2 W-3 multi-provider routing).
-// SID without entry in map is invariant violation (resolveProviders already
-// filtered such), defensive guard inside.
-func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sidProvider map[string]string, tasks []*keeperv1.RenderedTask, log *slog.Logger) []hostResult {
+// sidRoute is map sid → route (P2 W-3 multi-provider routing + the NIM-870
+// task override); sidSource is the level that picked the provider, carried into
+// the summary. A SID without an entry is an invariant violation (resolveProviders
+// already filtered such), defensive guard inside.
+func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sidRoute map[string]push.Route, sidSource map[string]push.RouteSource, transportName string, tasks []*keeperv1.RenderedTask, log *slog.Logger) []hostResult {
 	results := make([]hostResult, len(sids))
 	var wg sync.WaitGroup
 	for i, sid := range sids {
 		wg.Add(1)
-		providerName := sidProvider[sid]
-		go func(idx int, sid string, providerName string) {
+		route := sidRoute[sid]
+		source := sidSource[sid]
+		go func(idx int, sid string, route push.Route, source push.RouteSource) {
 			defer wg.Done()
 			req := &keeperv1.ApplyRequest{
 				ApplyId: applyID,
 				Tasks:   tasks,
 			}
-			rr, err := r.deps.Dispatcher.SendApply(ctx, sid, providerName, req)
-			results[idx] = buildHostResult(sid, providerName, rr, err)
+			rr, err := r.deps.Dispatcher.SendApply(ctx, sid, route, req)
+			results[idx] = buildHostResult(sid, route, source, transportName, rr, err)
 			if err != nil {
 				log.Warn("pushorch: SendApply failed",
 					slog.String("sid", sid),
-					slog.String("ssh_provider", providerName),
+					slog.String("ssh_provider", route.Provider),
 					slog.Any("error", err))
 			} else {
 				log.Info("pushorch: per-host run completed",
 					slog.String("sid", sid),
-					slog.String("ssh_provider", providerName),
+					slog.String("ssh_provider", route.Provider),
 					slog.String("status", rr.GetStatus().String()))
 			}
-		}(i, sid, providerName)
+		}(i, sid, route, source)
 	}
 	wg.Wait()
 	return results
@@ -480,29 +545,29 @@ func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sid
 // cleanupHosts runs per-host Cleanup; best-effort, errors → log-warn, do not
 // affect run status. Uses its own bg-ctx with the same cap-timeout as executeAsync.
 //
-// sidProvider is map sid → provider, populated by resolveProviders. SID without
+// sidRoute is map sid → route, populated by resolveProviders. SID without
 // entry (failed routing) does not reach here (cleanupHosts receives only
 // dispatchTargets).
-func (r *PushRun) cleanupHosts(sids []string, sidProvider map[string]string, log *slog.Logger) {
+func (r *PushRun) cleanupHosts(sids []string, sidRoute map[string]push.Route, log *slog.Logger) {
 	ctx, cancel := context.WithTimeout(context.Background(), orchestratorContextTimeout)
 	defer cancel()
 	var wg sync.WaitGroup
 	for _, sid := range sids {
 		wg.Add(1)
-		providerName := sidProvider[sid]
-		go func(sid string, providerName string) {
+		route := sidRoute[sid]
+		go func(sid string, route push.Route) {
 			defer wg.Done()
-			if err := r.deps.Cleaner.Cleanup(ctx, sid, providerName); err != nil {
+			if err := r.deps.Cleaner.Cleanup(ctx, sid, route); err != nil {
 				log.Warn("pushorch: post-success cleanup failed",
 					slog.String("sid", sid),
-					slog.String("ssh_provider", providerName),
+					slog.String("ssh_provider", route.Provider),
 					slog.Any("error", err))
 				return
 			}
 			log.Info("pushorch: post-success cleanup OK",
 				slog.String("sid", sid),
-				slog.String("ssh_provider", providerName))
-		}(sid, providerName)
+				slog.String("ssh_provider", route.Provider))
+		}(sid, route)
 	}
 	wg.Wait()
 }
@@ -591,6 +656,18 @@ type hostResult struct {
 	ok       bool   // true iff SendApply returned nil error and RunStatus==SUCCESS
 	status   string // string form for summary (`success`/`failed`/`cancelled`/`error_locked`/`error`)
 	errText  string // non-empty only when ok=false; SendApply error or the non-SUCCESS status reason
+
+	// The transport decision this host was dispatched under (NIM-870), recorded
+	// so an incident review can see WHICH source answered rather than infer it
+	// from a registry the run may not have read. routeSource is the level that
+	// picked the provider; transportName is what the task NAMED (empty = it wrote
+	// no key) and override is what it overrode — the two are separate because
+	// `transport: ssh` names a transport and overrides nothing, and a summary
+	// that showed only the override would make that run indistinguishable from
+	// one that never wrote the key.
+	routeSource   push.RouteSource
+	transportName string
+	override      push.TransportOverride
 }
 
 // buildHostResult classifies SendApply return:
@@ -598,22 +675,22 @@ type hostResult struct {
 //   - rr.Status == SUCCESS → ok=true;
 //   - rr.Status other → ok=false, status is enum string.
 //
-// Provider is always remembered (even on error path) so summary shows
-// which SshProvider the fail occurred on.
-func buildHostResult(sid string, providerName string, rr *keeperv1.RunResult, err error) hostResult {
+// The route is always remembered (even on the error path) so the summary shows
+// which SshProvider the fail occurred on, and under whose say.
+func buildHostResult(sid string, route push.Route, source push.RouteSource, transportName string, rr *keeperv1.RunResult, err error) hostResult {
+	base := hostResult{sid: sid, provider: route.Provider, routeSource: source, transportName: transportName, override: route.Override}
 	if err != nil {
-		return hostResult{sid: sid, provider: providerName, status: "error", errText: err.Error()}
+		base.status, base.errText = "error", err.Error()
+		return base
 	}
 	st := rr.GetStatus()
 	if st == keeperv1.RunStatus_RUN_STATUS_SUCCESS {
-		return hostResult{sid: sid, provider: providerName, ok: true, status: "success"}
+		base.ok, base.status = true, "success"
+		return base
 	}
-	return hostResult{
-		sid:      sid,
-		provider: providerName,
-		status:   runStatusLabel(st),
-		errText:  "run_status=" + runStatusLabel(st),
-	}
+	base.status = runStatusLabel(st)
+	base.errText = "run_status=" + runStatusLabel(st)
+	return base
 }
 
 // runStatusLabel is short kebab-case label of RunStatus for summary (no `RUN_STATUS_`
@@ -641,11 +718,28 @@ func runStatusLabel(st keeperv1.RunStatus) string {
 // Summary form (jsonb in push_runs.summary):
 //
 //	{
-//	  "hosts":         [ {sid, status, error?}, … ],
+//	  "hosts":         [ {sid, status, error?, ssh_provider?, route_source?,
+//	                      transport?, ssh_user?, ssh_port?}, … ],
 //	  "total":         <int>,
 //	  "success_count": <int>,
 //	  "fail_count":    <int>
 //	}
+//
+// ★ The transport fields are the visibility half of NIM-870. The task's
+// `transport:` beats `souls.ssh_target` and the cluster config, which makes a
+// THIRD source of truth for provider/user/port; the price of that decision is
+// that a run must say which source actually answered, or an incident review
+// reads a registry the run never went to.
+//
+//   - `transport` is present exactly when the TASK named one — the scalar
+//     `transport: ssh` included, which names a transport and overrides nothing;
+//   - `route_source` is the level that picked the provider (`task`/`soul`/
+//     `coven`/`cluster`);
+//   - `ssh_user`/`ssh_port` appear only when the TASK set them. Their absence
+//     means the resolver answered, and only the resolver knows whether that was
+//     the `souls.ssh_target` row or its own default — a label here would have to
+//     guess, and guessing in the field whose whole job is provenance is worse
+//     than leaving it out.
 //
 // Hosts order is by fanOut positions (= sids; already sorted via union).
 func summarize(results []hostResult) (PushRunStatus, map[string]any) {
@@ -660,6 +754,18 @@ func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 			// P2 W-3: routing decision is saved in push_runs.summary.hosts[sid]
 			// (architect decision: no separate per-routing event in audit_log).
 			entry["ssh_provider"] = h.provider
+			entry["route_source"] = h.routeSource.String()
+		}
+		if h.transportName != "" {
+			// Present exactly when the TASK named a transport — including the
+			// scalar form, which names one and overrides nothing.
+			entry["transport"] = h.transportName
+		}
+		if h.override.User != "" {
+			entry["ssh_user"] = h.override.User
+		}
+		if h.override.Port != 0 {
+			entry["ssh_port"] = h.override.Port
 		}
 		if h.errText != "" {
 			entry["error"] = h.errText
@@ -686,6 +792,41 @@ func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 	default:
 		return StatusPartialFailed, summary
 	}
+}
+
+// transportOverrideOf reads the task's `transport:` off the rendered plans
+// (NIM-870). A push run renders ONE synthetic apply task, so every plan of the
+// expansion carries the same decision and the first non-empty one is the answer.
+//
+// Two refusals, both because this key exists in order to beat the registry and a
+// key that quietly stops beating it is worse than no key:
+//   - a transport the push flow cannot serve (`agent`, whose transport is the
+//     pull stream) is an error, not a silent fall-through to SSH;
+//   - two plans disagreeing is an error rather than first-wins — today it cannot
+//     happen, and the day it can, a run that picked one silently is a run nobody
+//     can explain.
+func transportOverrideOf(plans []render.DispatchPlan) (string, push.TransportOverride, error) {
+	var (
+		out   push.TransportOverride
+		named string
+	)
+	for _, p := range plans {
+		if p.TransportName == "" {
+			continue
+		}
+		if named != "" && p.TransportName != named {
+			return "", push.TransportOverride{}, fmt.Errorf("pushorch: plans disagree on transport: %q and %q", named, p.TransportName)
+		}
+		o, ok, err := push.TransportOverrideFrom(p.TransportName, p.TransportParams)
+		if err != nil {
+			return "", push.TransportOverride{}, err
+		}
+		if !ok {
+			return "", push.TransportOverride{}, fmt.Errorf("pushorch: transport %q cannot carry a push run (push is the ssh transport)", p.TransportName)
+		}
+		named, out = p.TransportName, o
+	}
+	return named, out, nil
 }
 
 // unionTargetSIDs builds a sorted unique list of SIDs from all plans (union by tasks).

@@ -48,11 +48,12 @@ type ProviderRouter interface {
 	RouteFor(ctx context.Context, sid string) (providerName string, source RouteSource, err error)
 }
 
-// RouteSource is which of the three resolve levels produced the answer.
+// RouteSource is which resolve level produced the answer — the three router
+// levels plus [SourceTask], the task's own `transport:` above them (NIM-870).
 // Carried in the audit summary (`push_runs.summary.hosts[sid].route_source`)
 // and in the Prometheus counter
 // `keeper_push_provider_routed_total{provider, decision_source}` (low
-// cardinality: per-provider × 3 labels = a handful of series).
+// cardinality: per-provider × 4 labels = a handful of series).
 type RouteSource int
 
 const (
@@ -66,6 +67,11 @@ const (
 	SourceCoven
 	// SourceCluster is Level 3, cluster fallback (`push.cluster_default_provider`).
 	SourceCluster
+	// SourceTask is the task's own `transport:` (NIM-870) — above all three
+	// levels, because the owner's decision is that the task wins. Appended
+	// rather than inserted at the top: the numbers are compared nowhere and
+	// renumbering a constant that a summary label is derived from buys nothing.
+	SourceTask
 )
 
 // String returns a kebab-case label for logs / audit payloads.
@@ -77,6 +83,8 @@ func (s RouteSource) String() string {
 		return "coven"
 	case SourceCluster:
 		return "cluster"
+	case SourceTask:
+		return "task"
 	default:
 		return "unknown"
 	}

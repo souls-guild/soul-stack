@@ -550,6 +550,13 @@ func guardDestinyTask(task config.Task, idx int, destiny string) error {
 		return fmt.Errorf("%w: run_once: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Serial != nil:
 		return fmt.Errorf("%w: serial: in destiny %q (task[%d] %q)", ErrUnsupportedDSL, destiny, idx, task.Name)
+	case task.Transport != nil:
+		// A destiny is rendered per host and shipped whole to ONE transport that
+		// the scenario task chose; a destiny task naming a second one has nothing
+		// to act on. Refused rather than ignored — the whole point of NIM-870 is
+		// that the key is not decorative, and a silently dropped `transport: ssh`
+		// is a file that says one thing while the run dials another.
+		return fmt.Errorf("%w: transport: in destiny %q (task[%d] %q) - the transport is chosen by the scenario task that applies this destiny", ErrUnsupportedDSL, destiny, idx, task.Name)
 	case task.Block != nil:
 		// LOAD-BEARING (not dead code) — see doc comment above: block passes
 		// this guard first (return nil), renderDestinyBlock handles it next.
@@ -653,6 +660,8 @@ func guardDestinyBlockChild(child config.Task, idx int, blockName string) error 
 		return fmt.Errorf("%w: run_once: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.On != nil:
 		return fmt.Errorf("%w: on: on a destiny-block child %q (task[%d] %q) - scenario orchestration in a destiny is forbidden", ErrUnsupportedDSL, blockName, idx, child.Name)
+	case child.Transport != nil:
+		return fmt.Errorf("%w: transport: on a destiny-block child %q (task[%d] %q) - the transport is chosen by the scenario task that applies this destiny", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Async:
 		return fmt.Errorf("%w: async: on a destiny-block child %q (task[%d] %q) - async inside a block is a deferred slice (ADR-0075)", ErrUnsupportedDSL, blockName, idx, child.Name)
 	case child.Loop != nil:

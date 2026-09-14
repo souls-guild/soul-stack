@@ -89,8 +89,11 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 // gRPC stream, so an ssh host admitted to the roster would reach dispatch and
 // fail `soul_not_connected` where today the run simply does not see it. Binding
 // one to an incarnation is not prevented anywhere, so this is reachable, not
-// hypothetical. The ticket that gives the scenario path a push branch (NIM-870)
-// is the one that gets to widen this, together with the dispatch it needs.
+// hypothetical. Whichever ticket gives the scenario path a push branch is the
+// one that gets to widen this, together with the dispatch it needs. ★ NIM-870
+// did NOT: it added the task-level `transport:` key and its precedence and left
+// the dispatcher exactly where NIM-869 left it, so that ticket is still open and
+// still unassigned (see the [push.EventHandler] doc).
 const rosterSQL = `
 SELECT s.sid, s.coven, s.traits, s.status, s.transport,
        s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at

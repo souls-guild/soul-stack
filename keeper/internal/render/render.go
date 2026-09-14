@@ -623,4 +623,17 @@ type DispatchPlan struct {
 	// execution on this flag (run.go::dispatchKeeperTasks). false → ordinary
 	// Soul-side task.
 	Keeper bool
+
+	// TransportName / TransportParams carry the task's `transport:` (NIM-870),
+	// already decoded by [config.TransportSpecOf]. Empty name = the key was not
+	// written, and the dispatcher keeps whatever the registry says.
+	//
+	// They ride the PLAN rather than the RenderedTask on purpose: the transport
+	// decides how the task reaches a host, which is a dispatch fact, and
+	// RenderedTask is the part that crosses the wire TO the host — a value that
+	// only the Keeper reads has no business being shipped to the Soul that was
+	// reached with it. An `apply:` expands into many rendered tasks and one
+	// transport decision, and every plan of the expansion carries the same pair.
+	TransportName   string
+	TransportParams map[string]any
 }

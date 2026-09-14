@@ -1,0 +1,7 @@
+name: transport-on-keeper
+tasks:
+  - name: A transport on a task that never leaves the Keeper
+    module: core.soul.registered
+    transport: ssh
+    params:
+      sid: a.example.com

@@ -22,6 +22,8 @@ import (
 //   - where: AND-merge with child.where (same rule; resolved Keeper-side on the descendant).
 //   - vars: block.vars is the base, child.vars overrides (child wins on same names).
 //   - onchanges/onfail: union of block+child names → descendant.
+//   - transport: the child's own key wins, the block's is the default — so the
+//     NEAREST enclosing block wins on nesting (NIM-870).
 //
 // width is computed ONCE from block.Serial against the number of targeted hosts
 // and inherited by all descendants (SerialWidth in every DispatchPlan). targeted
@@ -99,11 +101,13 @@ type blockChildRecurser func(child config.Task, idx int, childTargeted []*topolo
 // so block inheritance doesn't drift between renderBlockTask and
 // renderDestinyBlock (major drift risk):
 //
-//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites
+//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites/transport
 //	→ keepIncludeGroup(child)                 — conditional-include group-drop
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
 //	→ render: nested block (recurse) / apply / module
+//	→ stampTransport(child)                   — the descendant's effective transport
+//	                                            onto the plans it just produced
 //
 // The two gates are independent axes and compose in that order, mirroring the
 // top-level loops: group-drop removes a child PHYSICALLY (no placeholder, no
@@ -199,6 +203,11 @@ func (p *Pipeline) walkBlockChildren(
 		// core.noop.run (Variant B, renderApplyDestiny) — a block-descendant's
 		// applier-register is addressable from outside as register.<child>.*
 		// (orchestration.md §2.1.1).
+		// The descendant's EFFECTIVE transport — its own, or the block's, already
+		// resolved by mergeBlockInheritance above. Stamped here rather than left
+		// to the caller's stamp because the caller only knows the block's.
+		planStart := len(plans)
+
 		if child.Apply != nil {
 			dt, dp, derr := p.renderApplyDestiny(ctx, in, child, idx, childTargeted, width)
 			if derr != nil {
@@ -207,6 +216,9 @@ func (p *Pipeline) walkBlockChildren(
 			tasks = append(tasks, dt...)
 			plans = append(plans, dp...)
 			idx += len(dt)
+			if terr := stampTransport(plans[planStart:], child); terr != nil {
+				return nil, nil, terr
+			}
 			continue
 		}
 
@@ -222,6 +234,9 @@ func (p *Pipeline) walkBlockChildren(
 			SerialWidth: width,
 		})
 		idx++
+		if terr := stampTransport(plans[planStart:], child); terr != nil {
+			return nil, nil, terr
+		}
 	}
 	return tasks, plans, nil
 }
@@ -251,7 +266,8 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 // mergeBlockInheritance builds a block descendant with inheritance from the
 // container merged in (destiny/tasks.md §6.5). Does NOT mutate the source
 // structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail/Require
-// rewritten. Other fields (Module/Apply/Block/Loop/Register/params/serial/run_once/…)
+// and Transport rewritten. Other fields (Module/Apply/Block/Loop/Register/params/
+// serial/run_once/…)
 // stay as in the source descendant: serial is NOT inherited by the descendant
 // (wave width is distributed via DispatchPlan in renderBlockTask, not through a
 // task field).
@@ -269,7 +285,48 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.OnChanges = unionNames(blockTask.OnChanges, child.OnChanges)
 	out.OnFail = unionNames(blockTask.OnFail, child.OnFail)
 	out.Require = mergeRequire(blockTask.Require, child.Require)
+	out.Transport = mergeTransport(blockTask.Transport, child.Transport)
+
 	return out
+}
+
+// mergeTransport merges a block's `transport:` into a descendant's (NIM-870):
+// the descendant's own key wins, the block's is the default. Same direction as
+// `where:`/`serial:`, and doing it HERE rather than at the stamp is what makes
+// nesting work — a nested block receives the outer key as an ordinary child and
+// then passes its own down to its own descendants, so the NEAREST enclosing
+// block wins rather than the outermost. A stamp at the plan level cannot express
+// that: by the time the outer block stamps, the inner one has already been
+// flattened away.
+//
+// It does NOT merge the two maps. `transport: { ssh: { user: x } }` on a block
+// beside `transport: { ssh: { ssh_provider: y } }` on a child is the child's
+// statement whole: the map is a discriminator carrying one transport's
+// parameters, and half-inheriting them would produce a connection neither line
+// describes.
+// ★ Any non-nil child value wins, VALID OR NOT. Asking the decoder here is what
+// a first version did, and it opened the one hole the key must not have: a
+// malformed child value answered "not a transport", the block's value took its
+// place, and the descendant was dispatched through a bastion its own line does
+// not name — or, with no key on the block, fell back to the registry the key
+// exists to beat. Validity is judged downstream (stampTransport for a scenario
+// descendant, guardDestinyBlockChild for a destiny one).
+//
+// Two bounds, because "non-nil" is not "written":
+//
+//   - an explicit YAML null (`transport:` with no value) decodes to a Go nil and
+//     is therefore indistinguishable from an absent key — such a child still
+//     inherits the block's. Emptying the key is not a way to opt out of the
+//     inheritance; there is none, and the two spellings have no difference to
+//     tell apart at this layer;
+//   - an inherited malformed value is refused NAMING THE DESCENDANT, because by
+//     then it is the descendant's value. The block's own name appears only when
+//     it has no children to hand the key to.
+func mergeTransport(blockTransport, childTransport any) any {
+	if childTransport != nil {
+		return childTransport
+	}
+	return blockTransport
 }
 
 // mergeApplierInheritance builds a destiny-pass child with the applier task's

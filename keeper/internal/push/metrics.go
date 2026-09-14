@@ -17,11 +17,12 @@ type Metrics struct {
 	// format is validated by the schema phase.
 	HostCAUsed *prometheus.CounterVec
 	// ProviderRouted — counter of per-SID routing decisions (P2 W-4): broken
-	// down by {provider, decision_source}. decision_source ∈ {soul, coven,
-	// cluster}. Cardinality-safe: ~N_providers × 3 decision_source values =
-	// a handful of series. Incremented in pushorch.executeAsync after a
-	// successful resolve via ProviderRouter (including the α-compat preset
-	// path, where source = "soul" by per-job override semantics).
+	// down by {provider, decision_source}. decision_source ∈ {task, soul,
+	// coven, cluster}. Cardinality-safe: ~N_providers × 4 decision_source
+	// values = a handful of series. Incremented in pushorch.executeAsync after
+	// a successful resolve: `task` is the task's own `transport:` (NIM-870,
+	// above the router and above the preset), and the α-compat preset path
+	// reports "soul" by per-job override semantics.
 	ProviderRouted *prometheus.CounterVec
 }
 
@@ -39,7 +40,7 @@ func RegisterMetrics(reg *obs.Registry) *Metrics {
 		ProviderRouted: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "keeper_push_provider_routed_total",
-				Help: "Routing decisions per-SID in Multi-provider push (P2 W-4); broken down by SshProvider plugin name and resolve level (soul/coven/cluster).",
+				Help: "Routing decisions per-SID in Multi-provider push (P2 W-4); broken down by SshProvider plugin name and resolve level (task/soul/coven/cluster).",
 			},
 			[]string{"provider", "decision_source"},
 		),

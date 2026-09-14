@@ -58,6 +58,19 @@ const proofPath = "/tmp/nim869-push-reached-the-host"
 
 const liveProviderName = "live-ssh"
 
+// The two deliberately-wrong seeds of the NIM-870 acceptance. Both are wrong in
+// a way that fails the run on its own, so a green run is evidence the task's
+// key overrode them and not evidence that neither mattered.
+const (
+	// wrongRegistryUser goes into `souls.ssh_target.ssh_user`. sshd does not
+	// admit it, and the provider signs for the real user, so a dial that took
+	// this one presents a certificate for a different principal.
+	wrongRegistryUser = "not-the-user-sshd-admits"
+	// unregisteredProviderName is what the router answers. It is absent from
+	// the dispatcher's Providers map → push.ErrProviderUnknown before connect.
+	unregisteredProviderName = "router-provider-that-is-not-registered"
+)
+
 // TestIntegration_PushRun_LiveSSHD_ReachesRunResultOnARealHost is the
 // acceptance for NIM-869.
 func TestIntegration_PushRun_LiveSSHD_ReachesRunResultOnARealHost(t *testing.T) {
@@ -235,6 +248,169 @@ func TestIntegration_PushRun_LiveSSHD_NoDeliveryIsNotSilentSuccess(t *testing.T)
 	if _, err := host.Exec(ctx, "test -e "+proofPath); err == nil {
 		t.Errorf("%s exists although nothing could have run", proofPath)
 	}
+}
+
+// TestIntegration_PushRun_LiveSSHD_TaskTransportBeatsTheRegistry is the
+// acceptance for NIM-870: the task's `transport:` beats `souls.ssh_target` and
+// beats the router, and the effective values come back in the run summary.
+//
+// WHY IT CANNOT GO GREEN BY ACCIDENT. Both sources the task overrides are
+// seeded WRONG on purpose, and each is wrong in a way that kills the run on its
+// own:
+//
+//   - the registry row carries a user sshd will not admit, and the provider
+//     signs a certificate whose principal is the real one — so a dial that took
+//     the registry's user presents a cert for somebody else and is refused at
+//     the handshake;
+//   - the router answers with a provider name that is not in the dispatcher's
+//     map, so a route that consulted it dies ErrProviderUnknown before connect.
+//
+// A green run therefore proves the task won BOTH, and the file the destiny
+// writes proves it won them against a real host rather than in a mock.
+func TestIntegration_PushRun_LiveSSHD_TaskTransportBeatsTheRegistry(t *testing.T) {
+	if testing.Short() {
+		t.Skip("integration test requires docker")
+	}
+	ctx, cancel := integrationenv.SetupContextFor(10 * time.Minute)
+	defer cancel()
+
+	soulBinary := buildSoulBinary(t)
+
+	ca := sshdtest.NewCA(t)
+	host := sshdtest.Start(ctx, t, ca, sshdtest.Options{})
+	sshdtest.AssertHostCertPrincipal(t, host.Addr)
+
+	sid := host.Addr
+	seedPushHost(t, sid, host.Port, wrongRegistryUser)
+
+	deliverer, soulSpec, err := push.DeliveryFromConfig(&config.KeeperPush{SoulBinaryPath: soulBinary})
+	if err != nil {
+		t.Fatalf("DeliveryFromConfig: %v", err)
+	}
+
+	dispatcher, err := push.NewSshDispatcher(push.Deps{
+		Providers: map[string]push.ProviderEntry{
+			liveProviderName: {Provider: &sshdtest.Provider{CA: ca, User: host.User}},
+		},
+		Targets:         &push.PGFallbackTargetResolver{Reader: push.NewPGTargetReader(integrationPool)},
+		Souls:           push.NewPGSoulLookup(integrationPool),
+		HostAuthorities: []push.NamedHostKeyAuthority{{Name: "test-ca", CAPubKey: ca.Pub}},
+		Deliverer:       deliverer,
+		SoulSpec:        soulSpec,
+		Logger:          slog.New(slog.NewTextHandler(io.Discard, nil)),
+		DialTimeout:     20 * time.Second,
+	})
+	if err != nil {
+		t.Fatalf("NewSshDispatcher: %v", err)
+	}
+
+	engine, err := cel.New()
+	if err != nil {
+		t.Fatalf("cel.New: %v", err)
+	}
+	runner, err := NewPushRun(Deps{
+		Store:         NewStore(integrationPool),
+		Topology:      topology.NewResolver(integrationPool, nil, nil),
+		Render:        render.NewPipeline(nil, engine, nil, nil),
+		DestinyLoader: &liveDestinyLoader{dir: t.TempDir()},
+		Template:      liveDestinyTemplate{},
+		Dispatcher:    dispatcher,
+		Router:        fixedRouter(unregisteredProviderName),
+		Logger:        slog.New(slog.NewTextHandler(io.Discard, nil)),
+		KID:           "keeper-live-test",
+	})
+	if err != nil {
+		t.Fatalf("NewPushRun: %v", err)
+	}
+
+	// The key exactly as a scenario writes it — the raw DSL value, decoded by
+	// the same config.TransportSpecOf the linter validated it with.
+	applyID, err := runner.Apply(ctx, ApplyRequest{
+		InventorySIDs: []string{sid},
+		DestinyRef:    "push-proof@v1",
+		StartedByAID:  "archon-live",
+		Transport: map[string]any{"ssh": map[string]any{
+			"ssh_provider": liveProviderName,
+			"user":         host.User,
+			"port":         host.Port,
+		}},
+	})
+	if err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+
+	row := awaitTerminal(ctx, t, runner, applyID)
+	if row.Status != StatusSuccess {
+		t.Fatalf("push run finished %s, want success; summary=%s", row.Status, mustJSON(t, row.Summary))
+	}
+
+	// The host's own state: the run reached the machine using what the TASK
+	// said, since neither seeded source could have got there.
+	got, err := host.Exec(ctx, "cat "+proofPath)
+	if err != nil {
+		t.Fatalf("the destiny's file is not on the host: %v (summary=%s)", err, mustJSON(t, row.Summary))
+	}
+	if strings.TrimSpace(got) != "reached" {
+		t.Errorf("%s = %q, want \"reached\"", proofPath, strings.TrimSpace(got))
+	}
+
+	// ★ The other direction, on the same host: a key that is WRITTEN but does
+	// not decode must FAIL the run, not quietly fall back to the registry. The
+	// registry here is the seeded-wrong one, so a fallback would dial an account
+	// sshd refuses — but the failure that matters is the refusal itself, since a
+	// registry that happened to be right would make the fallback invisible.
+	badID, err := runner.Apply(ctx, ApplyRequest{
+		InventorySIDs: []string{sid},
+		DestinyRef:    "push-proof@v1",
+		StartedByAID:  "archon-live",
+		Transport:     map[string]any{"ssh": nil, "agent": nil},
+	})
+	if err != nil {
+		t.Fatalf("Apply (malformed transport): %v", err)
+	}
+	badRow := awaitTerminal(ctx, t, runner, badID)
+	if badRow.Status == StatusSuccess {
+		t.Errorf("a run with an undecodable transport: reported success — it fell back to the registry the key exists to beat: %s", mustJSON(t, badRow.Summary))
+	}
+	// ★ The STATUS alone proves nothing: any loader or render failure is also
+	// non-success, so a broken fixture would keep this phase green while it
+	// claims the key was refused. The error text has to name the key.
+	if badErr, _ := badRow.Summary["error"].(string); !strings.Contains(badErr, "transport:") {
+		t.Errorf("run failed with %q, want a refusal naming transport: — the failure must be the key's, not something else's", badErr)
+	}
+
+	// The visibility half: the summary has to name the source that answered,
+	// or the override is invisible to whoever reads this run afterwards.
+	entry := summaryHostEntry(t, row.Summary, sid)
+	for key, want := range map[string]any{
+		"transport":    config.TransportSSH,
+		"route_source": "task",
+		"ssh_provider": liveProviderName,
+		"ssh_user":     host.User,
+	} {
+		if entry[key] != want {
+			t.Errorf("summary.hosts[%s].%s = %v, want %v (full=%s)", sid, key, entry[key], want, mustJSON(t, row.Summary))
+		}
+	}
+}
+
+// summaryHostEntry pulls one host's entry out of push_runs.summary. The row
+// comes back through jsonb, so the shape is map[string]any all the way down —
+// reading it the way an operator's GET /v1/push/{apply_id} does.
+func summaryHostEntry(t *testing.T, summary map[string]any, sid string) map[string]any {
+	t.Helper()
+	hosts, ok := summary["hosts"].([]any)
+	if !ok {
+		t.Fatalf("summary.hosts is %T, want a list: %s", summary["hosts"], mustJSON(t, summary))
+	}
+	for _, h := range hosts {
+		entry, isMap := h.(map[string]any)
+		if isMap && entry["sid"] == sid {
+			return entry
+		}
+	}
+	t.Fatalf("no entry for %s in %s", sid, mustJSON(t, summary))
+	return nil
 }
 
 // --- fixtures ---------------------------------------------------------

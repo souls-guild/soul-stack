@@ -305,6 +305,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// rendering params and building the plan — orchestration.md §2.2.2.
 		targeted = applyRunOnce(targeted, task.RunOnce)
 
+		// Everything appended from here on belongs to THIS task's fan-out, and
+		// carries its transport (stampTransport below, once per branch).
+		planStart := len(plans)
+
 		// apply: destiny — isolated destiny render pass (V2). Its tasks are
 		// spliced into the overall plan with contiguous indices; one apply
 		// task expands into N destiny tasks. The parent's run_once is already
@@ -320,6 +324,9 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, dp...)
 			idx += len(dt)
 			stampPassage(tasks, passageStart, passage)
+			if terr := stampTransport(plans[planStart:], task); terr != nil {
+				return nil, nil, terr
+			}
 			continue
 		}
 
@@ -338,6 +345,9 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, lp...)
 			idx += len(lt)
 			stampPassage(tasks, passageStart, passage)
+			if terr := stampTransport(plans[planStart:], task); terr != nil {
+				return nil, nil, terr
+			}
 			continue
 		}
 
@@ -361,6 +371,9 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, bp...)
 			idx += len(bt)
 			stampPassage(tasks, passageStart, passage)
+			if terr := stampTransport(plans[planStart:], task); terr != nil {
+				return nil, nil, terr
+			}
 			continue
 		}
 
@@ -377,6 +390,9 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		})
 		idx++
 		stampPassage(tasks, passageStart, passage)
+		if terr := stampTransport(plans[planStart:], task); terr != nil {
+			return nil, nil, terr
+		}
 	}
 
 	// Resolve `onchanges:`/`onfail:` register names to task indices (Variant
@@ -1156,6 +1172,13 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	if task.Async {
 		return nil, fmt.Errorf("%w: async: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	}
+	// transport: names a way to reach a host, and a keeper task never leaves the
+	// Keeper (NIM-870). Refused offline as transport_on_keeper_invalid; this is
+	// the defense-in-depth half, for a plan that did not come through the
+	// validator.
+	if task.Transport != nil {
+		return nil, fmt.Errorf("%w: transport: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
+	}
 	if err := guardKeeperWhen(task, idx); err != nil {
 		return nil, err
 	}
@@ -1828,6 +1851,45 @@ func stampPassage(tasks []*RenderedTask, from, passage int) {
 	for i := from; i < len(tasks); i++ {
 		tasks[i].Passage = passage
 	}
+}
+
+// stampTransport copies a task's `transport:` (NIM-870) onto every plan that
+// task expanded into — one `apply:` becomes N destiny plans and one transport
+// decision, and a dispatcher reading any of them must see the same answer.
+//
+// It never overwrites a plan that already carries a name, which is what makes
+// a block's key an INHERITED default rather than an override: the descendants
+// stamp their own first (block.go), the block stamps the rest. Same direction as
+// `where:`/`serial:` on a block, opposite direction to clobbering a child that
+// said something more specific.
+//
+// ★ A key that is WRITTEN but does not decode is an ERROR, not a no-op. Offline
+// validation refuses every such shape, so a linted scenario never reaches this —
+// but `pushorch` hands the raw DSL value in from its own API, and there the
+// alternative to failing is a run that silently falls back to the registry the
+// key exists to beat. That is the one outcome the whole audit requirement of
+// NIM-870 is about, so it must not be reachable by writing a malformed key.
+//
+// Bound: a task whose `when:` is statically false never gets here — it becomes a
+// skip placeholder before the plans it would stamp exist — so its malformed key
+// is caught offline and nowhere else. That task runs on no host, so there is no
+// dispatch to answer wrongly.
+func stampTransport(plans []DispatchPlan, task config.Task) error {
+	name, params, ok := config.TransportSpecOf(task.Transport)
+	if !ok {
+		if task.Transport == nil {
+			return nil
+		}
+		return fmt.Errorf("%w: transport: on task %q is not a transport name or a one-key mapping of one (got %T)", ErrUnsupportedDSL, task.Name, task.Transport)
+	}
+	for i := range plans {
+		if plans[i].TransportName != "" {
+			continue
+		}
+		plans[i].TransportName = name
+		plans[i].TransportParams = params
+	}
+	return nil
 }
 
 // compile-time check that *structpb.Struct implements proto.Message (used

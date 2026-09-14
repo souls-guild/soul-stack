@@ -165,7 +165,7 @@ func TestSendApply_HappyPath(t *testing.T) {
 	})
 
 	req := &keeperv1.ApplyRequest{ApplyId: "ap-1", Tasks: []*keeperv1.RenderedTask{{Name: "noop", Module: "core.exec.run"}}}
-	rr, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, req)
+	rr, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, req)
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
@@ -208,7 +208,7 @@ func TestSendApply_FailedRunResult_NoTransportError(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 
-	got, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-2"})
+	got, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-2"})
 	if err != nil {
 		t.Fatalf("a FAILED run with a valid RunResult must not produce a transport error: %v", err)
 	}
@@ -226,7 +226,7 @@ func TestSendApply_AuthorizeDeny(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-3"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-3"})
 	if err == nil {
 		t.Fatal("expected an error on Authorize deny")
 	}
@@ -248,7 +248,7 @@ func TestSendApply_ConnectFail(t *testing.T) {
 		},
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-4"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-4"})
 	if err == nil {
 		t.Fatal("expected an error on connect-fail")
 	}
@@ -267,7 +267,7 @@ func TestSendApply_RejectsNonSSHTransport(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-5"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-5"})
 	if err == nil {
 		t.Fatal("expected an error for transport=agent")
 	}
@@ -290,7 +290,7 @@ func TestSendApply_NoRunResultIsTransportError(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-6"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-6"})
 	if err == nil {
 		t.Fatal("a break before RunResult must be a transport error")
 	}
@@ -307,7 +307,7 @@ func TestSendApply_SignError(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-7"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-7"})
 	if err == nil || !strings.Contains(err.Error(), "Sign") {
 		t.Fatalf("expected a Sign error, got %v", err)
 	}
@@ -382,7 +382,7 @@ func TestSendApply_VaultEphemeralMode(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 
-	rr, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-vault-1"})
+	rr, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-vault-1"})
 	if err != nil {
 		t.Fatalf("SendApply (vault-mode): %v", err)
 	}
@@ -410,7 +410,7 @@ func TestSendApply_VaultEphemeralMode_RejectsEmptyCert(t *testing.T) {
 		Souls:     &mockSouls{s: sshSoul()},
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
 	})
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-vault-2"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-vault-2"})
 	if err == nil {
 		t.Fatal("expected an error: a SignReply with empty private_key and certificate must be rejected (fail-closed)")
 	}
@@ -494,7 +494,7 @@ func TestSendApply_ProxyJumpPropagatedToDial(t *testing.T) {
 		},
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-pj-1"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-pj-1"})
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
@@ -527,7 +527,7 @@ func TestSendApply_ProxyJumpEmpty_DirectFlow(t *testing.T) {
 		},
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-pj-empty"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-pj-empty"})
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}

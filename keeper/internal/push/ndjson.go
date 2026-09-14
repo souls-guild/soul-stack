@@ -33,9 +33,12 @@ var ErrNoRunResult = errors.New("push: NDJSON stream ended without RunResult")
 // executed over push would leave `register.<name>` unresolved and any barrier
 // waiting on it unreleased. Nothing reaches that state today — the scenario
 // dispatcher has no push branch ([scenario.ApplyDispatcher] is implemented
-// only by [grpc.Outbound]) — but the ticket that adds one (NIM-870) has to
-// decide whether a push run mints an `apply_runs` row, and that decision is an
-// ADR, not an implementation detail of this callback.
+// only by [grpc.Outbound]) — but the ticket that adds one has to decide whether
+// a push run mints an `apply_runs` row, and that decision is an ADR, not an
+// implementation detail of this callback. ★ NIM-870 did NOT decide it: that
+// ticket added the task-level `transport:` key and its precedence, and left the
+// dispatcher's push branch exactly where NIM-869 left it. The question is still
+// open and still unassigned.
 type EventHandler func(*keeperv1.TaskEvent)
 
 // ParseStream reads the line-delimited NDJSON stdout of `soul apply`

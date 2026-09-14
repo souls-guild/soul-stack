@@ -44,6 +44,7 @@ On top of the tasks from [destiny/tasks.md](../destiny/tasks.md), the scenario t
 | `assert:` | map (`that:` + `message:`) | assert task | alternative `module:`/`apply:`/`include:`/`block:` (see §2.3) |
 | `serial:` | int (1..M) OR string `"<N>%"` | module/apply/`block:`-task | optional (omitted = entire target width) *Granularity - per-Passage min-width (in N=1 = per-RUN), see subsection §2.2.1 below* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-task | optional |
+| `transport:` | string (transport name) OR map keyed by ONE transport name | module/apply/`block:`-task, Soul-side only | optional (omitted = the registry decides) — see §2.2.5 |
 
 In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1).
 
@@ -356,6 +357,82 @@ examples `wait: { condition: C, timeout: T }` → probe step with
 `retry: { count:, delay:, until: C' }`, where `C'` was rewritten from a remote
 `soulprint.self.*` on `register.self.*` fresh probe
 ([ADR-008](../adr/0008-coven-stable-tags.md)).
+
+#### 2.2.5. `transport:` — how this task reaches its hosts
+
+`transport:` names the way the Keeper gets to a host for this task. It sits at the
+TASK level, beside `on:`/`where:`/`serial:`/`run_once:`, and **not** inside `apply:`:
+the key is about delivery, not about appliers, and it is meant to cover a `module:`
+task as well (NIM-870, owner's decision 2026-09-14).
+
+Two forms — the scalar, and a map keyed by the transport's NAME. They mean the same
+thing; the map only exists to carry parameters:
+
+```yaml
+- name: Install the agent over SSH
+  transport: ssh
+  apply: { destiny: soul-install }
+
+- name: The same, through a named bastion, as a named user
+  transport:
+    ssh:
+      ssh_provider: vault-bastion
+      user: deploy
+      port: 2222
+  apply: { destiny: soul-install }
+```
+
+Scalar-or-map is the established idiom here: `on:` is `"keeper" | [list]`, `require:`
+is `[list] | "all"`, `serial:` is `int | "50%"`. **Exactly one key** in the map — two
+transports on one task have no defined order of preference, and picking one would make
+the run depend on map iteration order.
+
+The value space is a **closed enumeration**, so `soul-lint` can judge the key offline
+with no keeper to ask:
+
+| transport | what it is | params |
+|---|---|---|
+| `agent` | the gRPC EventStream to a Soul already running on the host ([ADR-012](../adr/0012-keeper-soul-grpc.md)). What a task without the key gets — but ⚠ writing it inside a **push** run is a contradiction (the run *is* the ssh transport) and fails the run rather than falling through. | none |
+| `ssh` | the agentless push flow ([ADR-004](../adr/0004-binaries.md), [ADR-032](../adr/0032-push-orchestrator.md)): the Keeper opens an SSH session, delivers `soul` and execs it. | `ssh_provider`, `user`, `port` |
+
+An unregistered name is `transport_unknown`; a map with two keys is
+`transport_multiple`; a param the transport does not take is `unknown_key`.
+
+**The task wins.** `transport.ssh.{ssh_provider,user,port}` beats `souls.ssh_target`
+and beats the cluster defaults in `keeper.yml::push.*`. ★ That knowingly makes a THIRD
+source of truth for those three fields, so a run that used the key **says so**: the
+transport the task named, the effective provider, the fields the task overrode, and the
+level that picked the provider are written into `push_runs.summary.hosts[]` — see
+[keeper/push.md](../keeper/push.md#transport-precedence). Without that an incident review
+reads a registry row the run never went to.
+
+⚠ **Nothing in production sets this key yet** — the scenario dispatcher has no push
+branch, and `POST /v1/push/apply` does not carry a transport. The grammar, the offline
+refusal and the precedence are implemented and live-tested; reaching them from an
+operator's hands is open work, recorded in
+[keeper/push.md](../keeper/push.md#-the-key-has-no-end-to-end-production-path-yet).
+
+**Three things the key deliberately does not do.**
+
+- **It does not bootstrap a bare VM.** The host, its ADDRESS and its provider still
+  come from the registry: `core.bootstrap.issued` writes `transport='agent'` as a
+  literal and refuses `ssh`, and `souls.ssh_target` has no address column at all (its
+  `Host` is the SID, while a fresh VM has only a `primary_ip`). There is deliberately
+  no address parameter, so the key cannot be read as solving this.
+- **It is refused on a keeper-side task** (`transport_on_keeper_invalid`) and **inside a
+  destiny**. A keeper task never leaves the Keeper, so there is no host at the far end; a
+  destiny is rendered per host and shipped whole to the ONE transport the scenario task
+  that applies it chose, so a second name there has nothing to act on. A keeper-side
+  module that dials hosts itself — `core.ssh.run` — takes its own `ssh_provider`/
+  `hosts` params, and its direct/teleport mode stays `keeper.yml::push.transport`.
+- **It is not interpolated** (`transport_interpolation_unsupported`). The key is
+  decided once per task, before the hosts are resolved, so there is no per-host env
+  to resolve `${ … }` against. Write the values literally.
+
+On a `block:` the key is an inherited default: descendants that write their own win,
+the rest take the block's — the same direction as `where:` and `serial:`. Blocks nest,
+and the **nearest** enclosing block wins: an inner block's key is not overridden by the
+one outside it.
 
 ### 2.4. `compute:` - calculated vars of the run
 

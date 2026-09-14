@@ -264,7 +264,7 @@ func TestSendApply_UnknownProvider_ReturnsSentinel(t *testing.T) {
 		Targets: &mockTargets{target: sshTarget()},
 		Souls:   &mockSouls{s: sshSoul()},
 	})
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", "ghost-provider", nil)
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: "ghost-provider"}, nil)
 	// A nil ApplyRequest would fail earlier; we pass non-nil to specifically
 	// test the provider-unknown path.
 	_ = err

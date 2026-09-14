@@ -1,0 +1,40 @@
+name: transport-task-key
+description: Both spellings of the task-level transport key (NIM-870), side by side.
+
+tasks:
+  # Scalar form — the transport takes no parameters.
+  - name: Install the agent over SSH
+    transport: ssh
+    apply:
+      destiny: soul-install
+
+  # Dict form — the same transport, with the registry overridden.
+  - name: Install it through a named bastion, as a named user
+    transport:
+      ssh:
+        ssh_provider: vault-bastion
+        user: deploy
+        port: 2222
+    apply:
+      destiny: soul-install
+
+  # The dict form with no params is the scalar form written long.
+  - name: Install it, dict form, nothing overridden
+    transport:
+      ssh:
+    apply:
+      destiny: soul-install
+
+  # A block's key is an inherited default; a descendant's own key wins.
+  - name: A group that travels over SSH
+    transport: ssh
+    block:
+      - name: Inherits the block's transport
+        apply:
+          destiny: soul-install
+      - name: Overrides it with its own bastion
+        transport:
+          ssh:
+            ssh_provider: edge-bastion
+        apply:
+          destiny: soul-install

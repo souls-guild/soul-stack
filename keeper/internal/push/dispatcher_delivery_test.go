@@ -94,7 +94,7 @@ func TestSendApply_DeliverHappensBeforeExec(t *testing.T) {
 		},
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-1"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-1"})
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSendApply_DeliverFailAbortsExec(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-2"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-2"})
 	if err == nil {
 		t.Fatal("expected fail-closed on delivery error")
 	}
@@ -141,7 +141,7 @@ func TestSendApply_DelivererNilSkipsDelivery_S0BC(t *testing.T) {
 		Souls:     &mockSouls{s: sshSoul()},
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
-	if _, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-3"}); err != nil {
+	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-3"}); err != nil {
 		t.Fatalf("S0-flow without Deliverer should work: %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestSendApply_PropagatesSoulSpecToDeliverer(t *testing.T) {
 		SoulSpec:  spec,
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
-	if _, err := disp.SendApply(context.Background(), "host-1.example.com", testProviderName, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-4"}); err != nil {
+	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-4"}); err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
 	if deliv.deliverN != 1 {
@@ -185,7 +185,7 @@ func TestDispatcher_Cleanup_UsesCleaner(t *testing.T) {
 		Cleaner:   cleaner,
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
-	if err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName); err != nil {
+	if err := disp.Cleanup(context.Background(), "host-1.example.com", Route{Provider: testProviderName}); err != nil {
 		t.Fatalf("Cleanup: %v", err)
 	}
 	if cleaner.cleanupN != 1 {
@@ -203,7 +203,7 @@ func TestDispatcher_Cleanup_NoCleanerConfigured(t *testing.T) {
 		Souls:     &mockSouls{s: sshSoul()},
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
 	})
-	err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName)
+	err := disp.Cleanup(context.Background(), "host-1.example.com", Route{Provider: testProviderName})
 	if err == nil {
 		t.Fatal("without Cleaner, cleanup should return an error")
 	}
@@ -219,7 +219,7 @@ func TestDispatcher_Cleanup_RejectsNonSSHTransport(t *testing.T) {
 		Cleaner:   &orderingCleaner{},
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { dialed = true; return &mockSession{}, nil },
 	})
-	if err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName); err == nil {
+	if err := disp.Cleanup(context.Background(), "host-1.example.com", Route{Provider: testProviderName}); err == nil {
 		t.Fatal("expected error for transport=agent")
 	}
 	if dialed {
@@ -236,7 +236,7 @@ func TestDispatcher_Cleanup_AuthorizeDeny(t *testing.T) {
 		Logger:    slog.New(slog.NewTextHandler(io.Discard, nil)),
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
 	})
-	if err := disp.Cleanup(context.Background(), "host-1.example.com", testProviderName); err == nil {
+	if err := disp.Cleanup(context.Background(), "host-1.example.com", Route{Provider: testProviderName}); err == nil {
 		t.Fatal("expected Authorize failure -> Cleanup error")
 	}
 }
