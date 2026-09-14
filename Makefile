@@ -70,7 +70,10 @@ VULN_TAGS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:
 # `vet-tags` on top of the `integration` pass over $(MODULES). The tests/ modules
 # are outside $(MODULES) (their own go.mod, no non-test packages); `keeper:smoke`
 # is one legacy ad-hoc file that would otherwise never be compiled by anything.
-TAGGED_DIRS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:smoke
+# `keeper:libvirt` is the NIM-872 live lane: it needs a hypervisor to RUN, but vet
+# only compiles, and a live test nothing compiles is a live test that quietly stops
+# existing.
+TAGGED_DIRS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:smoke keeper:libvirt
 
 # Directory for built binaries relative to the root of each module with `main`.
 # Covered by `.gitignore` (`*/bin/`).

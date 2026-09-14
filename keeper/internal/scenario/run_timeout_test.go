@@ -149,10 +149,12 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 // dead setting.
 //
 // The provision-aware effective run-timeout floor (ceiling + deployBudget at the
-// default ceiling) MUST STRICTLY exceed the default Teleport-join wait of
-// `core.ssh.run`. Otherwise the setting is dead: the run aborts before the host
-// ever joins, so the wait can never be spent. It catches a future join-wait
-// increase or budget decrease that would make a provision run unreachable again.
+// default ceiling) MUST STRICTLY exceed the default connect wait of
+// `core.ssh.run` — which since NIM-872 bounds BOTH transports, a Teleport join
+// and a fresh VM's sshd alike, off one default. Otherwise the setting is dead:
+// the run aborts before the host is ever reachable, so the wait can never be
+// spent. It catches a future join-wait increase or budget decrease that would
+// make a provision run unreachable again.
 func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
 	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
 	if provisionFloor <= coremodssh.DefaultJoinWaitTimeout {

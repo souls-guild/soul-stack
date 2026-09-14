@@ -1540,7 +1540,7 @@
               "type": "list"
             },
             "join_wait_timeout": {
-              "description": "Ceiling on the wait for a host to become reachable (Teleport join), default 15m. Integer seconds are also accepted at runtime.",
+              "description": "Ceiling on the wait for a host to become reachable, default 15m — a Teleport join, or an sshd that has not started yet on a freshly created VM. Bounds the connect on both transports; a rejected handshake, an Authorize deny and a non-zero exit are not waits and fail at once. Integer seconds are also accepted at runtime.",
               "format": "duration",
               "type": "string"
             },

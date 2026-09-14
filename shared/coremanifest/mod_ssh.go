@@ -17,7 +17,7 @@ var modSSH = schema.Module{
 			Description: "Keeper-side (on:keeper). Open an SSH session to each host and execute an ordered list of shell steps on it, feeding a value to a step's stdin (NIM-849).",
 			Input: schema.Input{
 				"hosts":             {Type: schema.List, Required: true, Items: &schema.Param{Type: schema.Map}, Description: "Per-host objects, in practice `${ register.<mint>.hosts }`. `sid` is required; `primary_ip` only for the direct transport; an entry with `onboarded: true` is skipped, not dialed."},
-				"join_wait_timeout": {Type: schema.String, Format: "duration", Description: "Ceiling on the wait for a host to become reachable (Teleport join), default 15m. Integer seconds are also accepted at runtime."},
+				"join_wait_timeout": {Type: schema.String, Format: "duration", Description: "Ceiling on the wait for a host to become reachable, default 15m — a Teleport join, or an sshd that has not started yet on a freshly created VM. Bounds the connect on both transports; a rejected handshake, an Authorize deny and a non-zero exit are not waits and fail at once. Integer seconds are also accepted at runtime."},
 				"ssh_port":          {Type: schema.Int, Description: "SSH port (default 22)."},
 				"ssh_provider":      {Type: schema.String, Required: true, Description: "SshProvider name for Authorize/Sign; retained as audit metadata in Teleport mode."},
 				"ssh_user":          {Type: schema.String, Description: "SSH user (default root)."},

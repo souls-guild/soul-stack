@@ -7,7 +7,10 @@ import (
 	"encoding/pem"
 	"errors"
 	"fmt"
+	"net"
+	"os"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -63,6 +66,7 @@ func (s *fakeSession) Close() error {
 type fakeProvider struct {
 	allow      bool
 	reason     string
+	signErr    error
 	authorized *int
 	signed     *int
 }
@@ -77,6 +81,9 @@ func (p *fakeProvider) Authorize(_ context.Context, _ *pluginv1.AuthorizeRequest
 func (p *fakeProvider) Sign(_ context.Context, req *pluginv1.SignRequest) (*pluginv1.SignReply, error) {
 	if p.signed != nil {
 		*p.signed++
+	}
+	if p.signErr != nil {
+		return nil, p.signErr
 	}
 	if req.GetPublicKey() == "" {
 		return nil, errors.New("sign called without an ephemeral public key")
@@ -885,6 +892,330 @@ func TestApply_TeleportRetriesUntilTheNodeJoins(t *testing.T) {
 	}
 	if len(*ran) != 2 {
 		t.Errorf("ran %d command(s) after the join, want 2", len(*ran))
+	}
+}
+
+// --- the direct connect waits for sshd (NIM-872) ---------------------------
+
+// connRefused is what a VM that booted seconds ago answers on port 22, in the
+// shape the live path produces it: net.Dialer returns *net.OpError{Op: "dial"}
+// and push.Dial wraps it with %w. The classifier reads that shape and nothing
+// else, so a double returning a bare errors.New would go green against a
+// classifier that reads nothing at all.
+func connRefused(ip string) error {
+	return fmt.Errorf("push: TCP connection to %s:22: %w", ip, &net.OpError{
+		Op:   "dial",
+		Net:  "tcp",
+		Addr: &net.TCPAddr{IP: net.ParseIP(ip), Port: 22},
+		Err:  &os.SyscallError{Syscall: "connect", Err: syscall.ECONNREFUSED},
+	})
+}
+
+// proxyRefused is the SAME event one hop away: an SshProvider that returns
+// `proxy_jump` sends push.Dial through dialViaProxy, where the target connect is
+// the bastion's direct-tcpip channel and an absent sshd comes back as the proxy
+// refusing to open it. x/crypto returns *ssh.OpenChannelError here and never a
+// net.OpError, which is why the classifier has to know both shapes.
+func proxyRefused(ip string) error {
+	return fmt.Errorf("push: direct-tcpip through proxy bastion:22 to %s:22: %w", ip,
+		&ssh.OpenChannelError{Reason: ssh.ConnectionFailed, Message: "connect failed"})
+}
+
+// hostCertRejected is the other side of the boundary the classifier draws: the
+// host answered on 22 and the SSH handshake refused it. push wraps a handshake
+// failure with no dial-level OpError under it, which is exactly what makes the
+// two distinguishable without parsing text.
+func hostCertRejected(ip string) error {
+	return fmt.Errorf("push: SSH handshake with %s:22: %w", ip,
+		errors.New("ssh: handshake failed: ssh: no authorities for hostname"))
+}
+
+// directModule wires a direct-transport Module over the given dialer, with the
+// backoff shortened so a test does not sleep the production interval.
+func directModule(prov *fakeProvider, dial push.Dialer) *Module {
+	return &Module{
+		Providers:   func() map[string]SshProviderHost { return map[string]SshProviderHost{"vault-ssh": prov} },
+		HostCAs:     fakeCA,
+		RetryBase:   time.Millisecond,
+		RetryJitter: time.Millisecond,
+		Dial:        dial,
+	}
+}
+
+func allowingProvider() *fakeProvider {
+	return &fakeProvider{allow: true, authorized: new(int), signed: new(int)}
+}
+
+// ★ GUARD (NIM-872). A machine whose DHCP lease has arrived is not a machine
+// whose sshd is listening: the readiness predicate every cloud here uses is "a
+// lease with an address and a name", and sshd starts well after it. The connect
+// on `direct` is therefore the same bounded retry `teleport` has always had —
+// `join_wait_timeout` is a knob the step advertises, and on this transport it
+// used to do nothing at all.
+//
+// Mutation: call m.Dial directly in dialDirect instead of dialWithJoinRetry and
+// this reddens — the first refusal fails the run, ten seconds after creation.
+func TestApply_DirectRetriesUntilSshdListens(t *testing.T) {
+	attempts := 0
+	ran := &[]ranCmd{}
+	prov := allowingProvider()
+	m := directModule(prov, func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, connRefused("192.168.122.173")
+		}
+		return &fakeSession{ran: ran, closed: new(int)}, nil
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "1m",
+	}))
+	mustSucceed(t, st)
+
+	if attempts != 3 {
+		t.Errorf("attempted %d time(s), want 3 — the first two refusals are an sshd that has not started yet", attempts)
+	}
+	if len(*ran) != 2 {
+		t.Errorf("ran %d command(s) once the host came up, want 2", len(*ran))
+	}
+	// The credential is minted once and outlives the wait; re-signing per attempt
+	// would burn a provider-side issuance on every refusal.
+	if *prov.authorized != 1 || *prov.signed != 1 {
+		t.Errorf("authorized=%d signed=%d across 3 attempts, want 1 each", *prov.authorized, *prov.signed)
+	}
+}
+
+// ★ GUARD (NIM-872). The same wait behind a BASTION. An SshProvider returning
+// `proxy_jump` on its SignReply — which the Teleport provider does — sends
+// push.Dial through dialViaProxy, where the target connect is the proxy's
+// direct-tcpip channel: the identical absent sshd arrives as *ssh.OpenChannelError
+// and not as a net.OpError, so a classifier reading only the socket shape would
+// leave the bastion half of the direct transport exactly as broken as before.
+//
+// Mutation: drop the OpenChannelError arm of isConnectFailure and this reddens
+// while every other test here stays green.
+func TestApply_DirectRetriesThroughABastion(t *testing.T) {
+	attempts := 0
+	ran := &[]ranCmd{}
+	m := directModule(allowingProvider(), func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		if attempts < 3 {
+			return nil, proxyRefused("192.168.122.173")
+		}
+		return &fakeSession{ran: ran, closed: new(int)}, nil
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "1m",
+	}))
+	mustSucceed(t, st)
+
+	if attempts != 3 {
+		t.Errorf("attempted %d time(s) through the bastion, want 3", attempts)
+	}
+}
+
+// The wait on `direct` is bounded and names the setting, the same way teleport's
+// does — a host that never comes up must fail the step (B1-strict) rather than
+// hold the run to the run timeout.
+//
+// `join_wait_timeout: 0` is the deterministic form of "past the deadline" — one
+// attempt, no sleep — so the assertion does not race the scheduler.
+func TestApply_DirectJoinWaitIsBoundedAndNamed(t *testing.T) {
+	attempts := 0
+	m := directModule(allowingProvider(), func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		return nil, connRefused("192.168.122.173")
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": float64(0),
+	}))
+
+	msg := mustFail(t, st)
+	if !strings.Contains(msg, "join_wait_timeout") {
+		t.Errorf("refusal = %q, want the setting named", msg)
+	}
+	if !strings.Contains(msg, "connection refused") {
+		t.Errorf("refusal = %q, want the last connect error kept", msg)
+	}
+	if attempts != 1 {
+		t.Errorf("attempted %d time(s) with a zero budget, want exactly one (the first attempt is immediate)", attempts)
+	}
+}
+
+// ★ GUARD (NIM-872). The retry covers the TCP connect and stops there. An SSH
+// handshake the host rejected — a host cert not from our CA, a public key it
+// will not take — is a misconfiguration, and spending the whole join budget on
+// one turns a clear refusal into a fifteen-minute hang.
+//
+// Mutation: give directJoinRetry teleportJoinRetry's `retryable` (retry
+// everything) and this reddens — the handshake rejection is dialed again. The
+// budget is short so that mutant reddens on the count in milliseconds instead of
+// burning the whole wait first.
+func TestApply_DirectDoesNotRetryAHandshakeRejection(t *testing.T) {
+	attempts := 0
+	m := directModule(allowingProvider(), func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		return nil, hostCertRejected("192.168.122.173")
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "20ms",
+	}))
+
+	msg := mustFail(t, st)
+	if !strings.Contains(msg, "no authorities for hostname") {
+		t.Errorf("refusal = %q, want the handshake reason kept", msg)
+	}
+	if strings.Contains(msg, "join_wait_timeout") {
+		t.Errorf("refusal = %q — a handshake rejection was reported as a wait that ran out", msg)
+	}
+	if attempts != 1 {
+		t.Errorf("dialed %d time(s), want exactly one — waiting cannot fix a rejected handshake", attempts)
+	}
+}
+
+// ★ GUARD (NIM-872). An `Authorize` deny is POLICY: the same question asked
+// again gets the same answer. It is upstream of the retry loop entirely, so a
+// deny costs one call and fails the step immediately — it must never consume the
+// join budget.
+//
+// The budget here is short on purpose: a mutant that does retry the deny reddens
+// on the count in milliseconds rather than hanging for a minute first.
+//
+// Mutation: move the Authorize call inside the loop AND broaden `retryable` —
+// both halves, because the classifier alone already refuses to retry a deny (it
+// is no dial error), so moving the call is not by itself observable. That the
+// invariant survives either mutation singly is the defence in depth, not a hole;
+// what guards the placement on its own is the one-call assertion in
+// TestApply_DirectRetriesUntilSshdListens, which reddens when Authorize is moved
+// under a dialer that DOES refuse.
+func TestApply_DirectDoesNotRetryAnAuthorizeDeny(t *testing.T) {
+	prov := &fakeProvider{allow: false, reason: "host not in scope", authorized: new(int), signed: new(int)}
+	attempts := 0
+	m := directModule(prov, func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		return &fakeSession{ran: &[]ranCmd{}, closed: new(int)}, nil
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "20ms",
+	}))
+
+	if msg := mustFail(t, st); !strings.Contains(msg, "host not in scope") {
+		t.Errorf("refusal = %q, want the provider's reason", msg)
+	}
+	if *prov.authorized != 1 {
+		t.Errorf("authorized %d time(s), want exactly one — a deny is policy, not a host that is late", *prov.authorized)
+	}
+	if attempts != 0 {
+		t.Errorf("dialed %d time(s) after a deny", attempts)
+	}
+}
+
+// ★ GUARD (NIM-872). A `Sign` failure is the credential mint refusing, which a
+// wait cannot fix either. Same shape as the deny, and a separate test because
+// the two are separate calls: a retry wrapped around the wrong one of them would
+// leave the other guard green.
+//
+// Mutation: as for the deny above — move the call inside the loop AND broaden
+// `retryable`.
+func TestApply_DirectDoesNotRetryASignFailure(t *testing.T) {
+	prov := allowingProvider()
+	prov.signErr = errors.New("vault: ssh role not found")
+	attempts := 0
+	m := directModule(prov, func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		return &fakeSession{ran: &[]ranCmd{}, closed: new(int)}, nil
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "20ms",
+	}))
+
+	if msg := mustFail(t, st); !strings.Contains(msg, "ssh role not found") {
+		t.Errorf("refusal = %q, want the sign error", msg)
+	}
+	if *prov.signed != 1 {
+		t.Errorf("signed %d time(s), want exactly one", *prov.signed)
+	}
+	if attempts != 0 {
+		t.Errorf("dialed %d time(s) after a failed sign", attempts)
+	}
+}
+
+// ★ GUARD (NIM-872). The retry is the CONNECT's, not the step's. A command that
+// exits non-zero has reached the host and answered; redialing it would re-run
+// every earlier step in the list on a machine that already has them, and the
+// bare `retry:` a scenario can put on the task is the author's own decision to
+// make, not one the transport makes for them.
+//
+// Mutation: wrap runHost rather than the dial AND broaden `retryable` — a bare
+// `exit status 1` is no dial error, so the classifier blocks the replay even
+// from the wrong loop. Moving the loop alone is caught by
+// TestApply_DirectRetriesUntilSshdListens and TestApply_DirectRetriesThroughABastion.
+func TestApply_DirectDoesNotRetryANonZeroExit(t *testing.T) {
+	attempts := 0
+	ran := &[]ranCmd{}
+	m := directModule(allowingProvider(), func(_ context.Context, _ push.DialConfig) (push.Session, error) {
+		attempts++
+		return &fakeSession{ran: ran, failOn: 1, closed: new(int)}, nil
+	})
+	st := apply(t, m, params(t, map[string]any{
+		"ssh_provider":      "vault-ssh",
+		"hosts":             []any{tokenHost("redis-demo-0", "192.168.122.173")},
+		"steps":             writeTokenSteps(),
+		"join_wait_timeout": "20ms",
+	}))
+
+	if msg := mustFail(t, st); !strings.Contains(msg, "step 1") {
+		t.Errorf("refusal = %q, want the failing step named", msg)
+	}
+	if attempts != 1 {
+		t.Errorf("dialed %d time(s), want exactly one — a non-zero exit is an answer, not an absent host", attempts)
+	}
+	if len(*ran) != 1 {
+		t.Errorf("ran %d command(s), want 1 — the failed step must not be replayed", len(*ran))
+	}
+}
+
+// The classifier is the whole of the difference between the two transports, so
+// it is asserted directly as well: the table is the failure modes a booting VM
+// actually produces against the ones above the TCP layer.
+func TestIsConnectFailure(t *testing.T) {
+	for name, tc := range map[string]struct {
+		err  error
+		want bool
+	}{
+		"connection refused":      {connRefused("192.168.122.173"), true},
+		"host unreachable":        {fmt.Errorf("push: TCP connection to x: %w", &net.OpError{Op: "dial", Err: syscall.EHOSTUNREACH}), true},
+		"dial timeout":            {fmt.Errorf("push: TCP connection to x: %w", &net.OpError{Op: "dial", Err: os.ErrDeadlineExceeded}), true},
+		"target refused by proxy": {proxyRefused("192.168.122.173"), true},
+		"proxy declines on policy": {fmt.Errorf("push: direct-tcpip through proxy p to x: %w",
+			&ssh.OpenChannelError{Reason: ssh.Prohibited, Message: "administratively prohibited"}), false},
+		"handshake rejected":   {hostCertRejected("192.168.122.173"), false},
+		"read after handshake": {fmt.Errorf("push: SSH handshake with x: %w", &net.OpError{Op: "read", Err: errors.New("reset")}), false},
+		"empty host CA set":    {errors.New("push: HostAuthorities is empty (CA-signed host-cert verification)"), false},
+		"nil":                  {nil, false},
+	} {
+		t.Run(name, func(t *testing.T) {
+			if got := isConnectFailure(tc.err); got != tc.want {
+				t.Errorf("isConnectFailure(%v) = %v, want %v", tc.err, got, tc.want)
+			}
+		})
 	}
 }
 

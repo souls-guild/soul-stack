@@ -53,14 +53,21 @@
 //   - teleport: by-name through the Teleport proxy (target = SID, never the IP).
 //     Authorize/Sign are not called and a Vault host CA is not required —
 //     transport, user-auth and host-verify all come from the Teleport identity
-//     file. A fresh VM joins Teleport minutes after it is created, so the connect
-//     is a bounded retry against `join_wait_timeout`.
+//     file.
+//
+// Both transports reach a machine that was created seconds ago, so on both the
+// connect is a bounded retry against `join_wait_timeout` (NIM-872): a fresh VM
+// joins Teleport minutes after creation, and on direct its sshd starts listening
+// well after the DHCP lease the readiness predicate watches. What is retried
+// differs, because what "not there yet" looks like differs — see [joinRetry].
 package ssh
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math/rand"
+	"net"
 	"sort"
 	"strconv"
 	"strings"
@@ -72,6 +79,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"golang.org/x/crypto/ssh"
 	"google.golang.org/grpc"
 	"google.golang.org/protobuf/types/known/structpb"
 )
@@ -101,14 +109,17 @@ const (
 	TransportTeleport = "teleport"
 )
 
-// Connect-retry parameters for teleport mode: a fresh cloud VM appears in
-// Teleport minutes after it is created, so the first attempts legitimately
-// answer "offline or does not exist".
+// Connect-retry parameters, on both transports: a machine created seconds ago
+// is not reachable yet, so the first attempts legitimately answer "offline or
+// does not exist" (teleport) or "connection refused" (direct).
 const (
 	// defaultJoinWaitTimeout is the default ceiling on the wait (param
 	// `join_wait_timeout`). 15 min: the reverse-tunnel agent on a fresh VM shows
 	// up considerably later than the typical 3-5 min, and a step failed over a
-	// slow join is a step failed over a host that did come up.
+	// slow join is a step failed over a host that did come up. It is a ceiling
+	// and not a wait — a host already listening pays nothing — so the direct
+	// transport, where sshd arrives in tens of seconds rather than minutes,
+	// shares it rather than naming a second number.
 	//
 	// ★ A wait ceiling that can exceed the effective run timeout is a dead
 	// setting — the run aborts before the host ever arrives. Guarded by
@@ -173,9 +184,9 @@ type Module struct {
 	// push.NewTeleportDialer; tests: a mock.
 	Dial push.Dialer
 
-	// RetryBase / RetryJitter override the teleport connect backoff. Zero →
-	// joinRetryBase / joinRetryJitter. They exist so a unit test does not sleep
-	// the production interval; the wire-up leaves them unset.
+	// RetryBase / RetryJitter override the connect backoff on both transports.
+	// Zero → joinRetryBase / joinRetryJitter. They exist so a unit test does not
+	// sleep the production interval; the wire-up leaves them unset.
 	RetryBase   time.Duration
 	RetryJitter time.Duration
 
@@ -378,7 +389,7 @@ func (m *Module) runHost(ctx context.Context, prov SshProviderHost, hostCAs []pu
 	if m.teleport() {
 		sess, err = m.dialTeleport(ctx, h, user, port, joinWait)
 	} else {
-		sess, err = m.dialDirect(ctx, prov, hostCAs, h, user, port)
+		sess, err = m.dialDirect(ctx, prov, hostCAs, h, user, port, joinWait)
 	}
 	if err != nil {
 		return err
@@ -403,7 +414,15 @@ func (m *Module) runHost(ctx context.Context, prov SshProviderHost, hostCAs []pu
 // dialDirect: Authorize → ephemeral keypair + Sign → push.Dial by primary_ip
 // with CA-signed host-cert verification. The same flow as
 // SshDispatcher.SendApply, reused whole.
-func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, hostCAs []push.NamedHostKeyAuthority, h hostInput, user string, port int) (push.Session, error) {
+//
+// ★ Only the last of those is inside the join retry (NIM-872). Authorize is
+// policy and Sign is a credential mint: repeating either cannot change its
+// answer, and repeating a deny for fifteen minutes would turn a refusal into a
+// hang. The credential is therefore minted once and must outlive the wait — a
+// provider issuing certificates shorter-lived than `join_wait_timeout` would
+// hand back one that expires mid-wait, which is a provider-side TTL question and
+// not something this module can detect.
+func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, hostCAs []push.NamedHostKeyAuthority, h hostInput, user string, port int, joinWait time.Duration) (push.Session, error) {
 	// fail-closed: a deny stops us before an SSH session is opened.
 	authReply, err := prov.Authorize(ctx, &pluginv1.AuthorizeRequest{Host: h.primaryIP, User: user})
 	if err != nil {
@@ -428,21 +447,21 @@ func (m *Module) dialDirect(ctx context.Context, prov SshProviderHost, hostCAs [
 		return nil, fmt.Errorf("ssh auth: %w", err)
 	}
 
-	sess, err := m.Dial(ctx, push.DialConfig{
+	sess, err := m.dialWithJoinRetry(ctx, push.DialConfig{
 		Host:            h.primaryIP,
 		Port:            port,
 		User:            user,
 		Auth:            auth,
 		HostAuthorities: hostCAs,
 		ProxyJump:       signReply.GetProxyJump(),
-	})
+	}, joinWait, directJoinRetry)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	return sess, nil
 }
 
-// dialTeleport: by-name connect through the Teleport dialer, wrapped in a
+// dialTeleport: by-name connect through the Teleport dialer, wrapped in the same
 // bounded retry. Auth/HostAuthorities/ProxyJump are deliberately absent — in
 // this mode they come from the identity file, and Authorize/Sign are not called
 // at all.
@@ -451,17 +470,76 @@ func (m *Module) dialTeleport(ctx context.Context, h hostInput, user string, por
 		Host: h.sid, // ★ node name = SID, never primary_ip
 		Port: port,
 		User: user,
-	}, joinWait)
+	}, joinWait, teleportJoinRetry)
 	if err != nil {
 		return nil, fmt.Errorf("connect: %w", err)
 	}
 	return sess, nil
 }
 
+// joinRetry is what the two transports disagree about inside one retry loop:
+// which Dial failure a wait can still fix, and what to call the host that never
+// arrived.
+type joinRetry struct {
+	// retryable decides whether to spend more of the budget on this error. False
+	// ends the wait immediately and returns the error unwrapped by the deadline
+	// text — the caller is not waiting for anything.
+	retryable func(error) bool
+	// unreached opens the deadline message: "<unreached> within
+	// join_wait_timeout (…)".
+	unreached string
+}
+
+var (
+	// teleportJoinRetry retries every Dial error. In this mode the proxy answers
+	// for a node that has not enrolled yet with an ordinary error string ("node
+	// offline or does not exist") that carries no shape a classifier could read,
+	// and the transport, user-auth and host-verify a direct dial could fail on
+	// separately all happen behind that same one call.
+	teleportJoinRetry = joinRetry{
+		retryable: func(error) bool { return true },
+		unreached: "node not reachable via Teleport",
+	}
+	// directJoinRetry retries only a failure to establish the TCP connection.
+	directJoinRetry = joinRetry{
+		retryable: isConnectFailure,
+		unreached: "host not reachable",
+	}
+)
+
+// isConnectFailure reports whether err is a failure to ESTABLISH the connection
+// to the host — connection refused, host or network unreachable, a dial timeout.
+//
+// ★ The layer boundary is the point (NIM-872). Everything a booting VM produces
+// is below it: sshd is not listening yet. Everything above it is a
+// misconfiguration that waiting cannot fix — a host cert not signed by our CA or
+// a public key the host rejects arrives as an SSH handshake error, and spending
+// the whole join budget on one would turn a clear refusal into a fifteen-minute
+// hang.
+//
+// It takes two shapes because the direct transport has two sub-paths, and the
+// bastion one is not optional: an SshProvider returning `proxy_jump` on its
+// SignReply sends [push.Dial] through `dialViaProxy` (that is what the Teleport
+// provider does), and there the target connect is the PROXY's direct-tcpip
+// channel rather than our own socket. The same absent sshd then arrives as the
+// proxy refusing to open the channel. `ssh.Prohibited` — the bastion declining
+// on policy — is deliberately not included; it is a deny, like Authorize's.
+func isConnectFailure(err error) bool {
+	// Our own socket: net.Dialer reports every connect failure as Op == "dial",
+	// and push.Dial wraps it with %w, so the shape survives to here.
+	var opErr *net.OpError
+	if errors.As(err, &opErr) {
+		return opErr.Op == "dial"
+	}
+	var chErr *ssh.OpenChannelError
+	return errors.As(err, &chErr) && chErr.Reason == ssh.ConnectionFailed
+}
+
 // dialWithJoinRetry repeats Dial with a fixed backoff plus jitter until a
-// session opens or joinWait expires. The first attempt is immediate: a node that
-// is already online must not pay an interval.
-func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joinWait time.Duration) (push.Session, error) {
+// session opens, joinWait expires, or r rejects the error as one no wait can
+// fix. The first attempt is immediate: a host that is already listening must not
+// pay an interval.
+func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joinWait time.Duration, r joinRetry) (push.Session, error) {
 	base, jitter := m.retryBackoff()
 	deadline := time.Now().Add(joinWait)
 	var lastErr error
@@ -472,19 +550,22 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 		}
 		lastErr = err
 
+		if !r.retryable(err) {
+			return nil, err
+		}
 		if ctx.Err() != nil {
-			return nil, fmt.Errorf("teleport join wait cancelled after %d attempt(s): %w", attempt+1, ctx.Err())
+			return nil, fmt.Errorf("join wait cancelled after %d attempt(s): %w", attempt+1, ctx.Err())
 		}
 		wait := base + time.Duration(rand.Int63n(int64(jitter)+1))
 		if time.Now().Add(wait).After(deadline) {
-			return nil, fmt.Errorf("node not reachable via Teleport within join_wait_timeout (%s, %d attempt(s)): %w", joinWait, attempt+1, lastErr)
+			return nil, fmt.Errorf("%s within join_wait_timeout (%s, %d attempt(s)): %w", r.unreached, joinWait, attempt+1, lastErr)
 		}
 
 		t := time.NewTimer(wait)
 		select {
 		case <-ctx.Done():
 			t.Stop()
-			return nil, fmt.Errorf("teleport join wait cancelled after %d attempt(s): %w", attempt+1, ctx.Err())
+			return nil, fmt.Errorf("join wait cancelled after %d attempt(s): %w", attempt+1, ctx.Err())
 		case <-t.C:
 		}
 	}

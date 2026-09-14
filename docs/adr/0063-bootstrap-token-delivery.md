@@ -87,7 +87,7 @@ Registration in `coremod.Default` is **conditional** (like `core.choir` with `Ch
 
 The module gains a second transport mode `transport: teleport` (vs the default `direct`=generic push.Dial). In teleport mode delivery goes through the Teleport proxy by-name (target=SID/FQDN, NOT primary_ip): the keeper-side Teleport-Dialer ([keeper/internal/push/dial_teleport.go](../../keeper/internal/push/dial_teleport.go)) does transport+user-auth+host-verify entirely through the Teleport identity-file (`creds.SSHClientConfig()`). Deviations from A1: (1) Authorize/Sign/ephemeral-keypair are NOT called; (2) a Vault host-CA is NOT required for teleport — host-verify goes through the Teleport CA (C1 is not applicable to teleport mode); (3) a retry-with-backoff until Teleport-join (~3-5 min) is added. The direct mode (Vault/static, CA-signed host-cert, C1) is unchanged. Teleport creds — the keeper.yml push block (`push.transport` + `push.teleport.{proxy_addr,identity_file,cluster}`), the soul-ssh-teleport plugin does not participate in this flow.
 
-A new scenario parameter `join_wait_timeout` (int, seconds; default 360) — the ceiling for waiting for Teleport-join, relevant only in teleport mode; on expiry the step is `failed` (B1-strict, `error_locked`). Registration of the module in teleport mode requires only the dialer (`BootstrapDial`), providers/host-CA are not needed (see the gate in `coremod.Default`).
+A new scenario parameter `join_wait_timeout` (int, seconds; default 360) — the ceiling for waiting for Teleport-join, relevant only in teleport mode; on expiry the step is `failed` (B1-strict, `error_locked`). Registration of the module in teleport mode requires only the dialer (`BootstrapDial`), providers/host-CA are not needed (see the gate in `coremod.Default`). **Superseded in two places:** the default is 15m, and the parameter is no longer teleport-only — see the [2026-09-14 amendment](#amendment-2026-09-14--the-bounded-wait-applies-to-direct-too-nim-872).
 
 ### Amendment 2026-06-30 — Teleport proxy behind an L7-TLS load balancer (`use_system_trust` + `alpn_upgrade`)
 
@@ -498,9 +498,11 @@ the Keeper (`push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`, the two
 wrappers `export.go` exists for), and `push.Dial` with the host CA from Vault —
 an empty CA set is an error, never a blind connect. In teleport mode
 Authorize/Sign are not called and host-verify comes from the identity file, as
-before; the bounded wait for a fresh VM to join is `join_wait_timeout`, and the
-invariant that the effective run timeout must exceed it is guarded again by
-`TestProvisionTimeoutExceedsJoinWait`.
+before; the bounded wait for a fresh VM to become reachable is
+`join_wait_timeout` (on both transports since the
+[2026-09-14 amendment](#amendment-2026-09-14--the-bounded-wait-applies-to-direct-too-nim-872)),
+and the invariant that the effective run timeout must exceed it is guarded again
+by `TestProvisionTimeoutExceedsJoinWait`.
 
 **The `onboarded` branch survives.** A host flagged `onboarded: true` carries no
 per-host material at all — reaching for `bootstrap_token` on it in CEL is an
@@ -529,3 +531,106 @@ no caller — it describes an outcome, not a procedure.
 The ready-made VM chain is therefore whole again:
 `core.bootstrap.issued` → `core.ssh.run` → `core.soul.registered(await_online)`,
 with the middle step's CONTENT authored per site.
+
+## Amendment 2026-09-14 — the bounded wait applies to `direct` too (NIM-872)
+
+`join_wait_timeout` did nothing on the `direct` transport. `dialTeleport` was a
+bounded retry; `dialDirect` was `Authorize` → `Sign` → `push.Dial`, and the first
+error went straight up. A step advertising a wait ceiling that half its
+transports ignore is worse than one with no ceiling at all — the setting reads as
+a guarantee.
+
+Found by a live `create` on `vmlocal` (NIM-867): the VM was created, the lease
+arrived, and the run failed about ten seconds later with `dial tcp
+192.168.122.173:22: connect: connection refused`, because sshd starts well into
+the boot.
+
+**This is not a `vmlocal` defect.** The readiness predicate — a DHCP lease
+carrying an address and a name — is the cloud contract's, and `vmlocal`
+reproduces it verbatim. `wbcloud` has the same race; it is invisible there only
+because that site dials over Teleport, which already retried.
+
+**What changed.** One retry loop serves both transports. What differs between
+them is which failure a wait can still fix, so that is the only parameter:
+
+- **`teleport` retries every `Dial` error**, as before. The proxy answers for an
+  unenrolled node with an ordinary error string ("node offline or does not
+  exist") that carries no shape to classify, and transport, user-auth and
+  host-verify all happen behind that one call.
+- **`direct` retries only a failure to ESTABLISH the connection** — connection
+  refused, host or network unreachable, a dial timeout. Nothing is matched on
+  error text; the classifier reads the error's SHAPE, and there are two, because
+  the direct transport has two sub-paths. Over our own socket `net.Dialer`
+  reports each failure as a `*net.OpError` with `Op == "dial"`, wrapped by
+  `push.Dial` with `%w`. When the SshProvider returns `proxy_jump` on its
+  `SignReply`, `push.Dial` goes through `dialViaProxy` instead and the target
+  connect is the bastion's `direct-tcpip` channel: the identical absent sshd then
+  arrives as an `*ssh.OpenChannelError` with `Reason == ConnectionFailed` and no
+  `net.OpError` under it at all. A classifier reading only the socket shape would
+  have left the bastion half of `direct` exactly as broken as before the fix —
+  which is how it was first written here, and what the review caught.
+  `ssh.Prohibited` (the bastion declining on policy) is excluded: that is a deny,
+  like `Authorize`'s.
+
+**What is deliberately NOT retried**, because repeating it cannot change the
+answer and would turn a clear refusal into a fifteen-minute hang:
+
+- an **`Authorize` deny** — policy, and upstream of the loop entirely;
+- a **`Sign` failure** — the credential mint refusing, also upstream;
+- an **SSH handshake rejection** — a host cert not signed by our CA, a public key
+  the host will not take. This is the layer boundary the classifier draws, and it
+  is the whole of the design: everything a booting machine produces is below it;
+- a **non-zero exit from a step** — the command reached the host and answered.
+  Redialing would replay the earlier steps of the list on a machine that already
+  has them. A scenario-level `retry:` on the task is still legitimate and still
+  the author's call — it is a different thing from a retried dial.
+
+Each of the five is a guard test in `keeper/internal/coremod/ssh/run_test.go`,
+mutated in the form of real code (drop the retry; give `direct` teleport's
+predicate; wrap `runHost` rather than the dial).
+
+**Proven against a real machine**, because a mock dialer cannot: every failure
+those guards hand the dialer is a value a test wrote, so a classifier reading a
+shape the live path never produces would leave all five green and the fix inert.
+The `libvirt`-tagged lane `keeper/internal/coremod/ssh/live_vmlocal_test.go`
+provisions a VM through the `vmlocal` artifact and waits out a real refused
+window: four refusals, connected on the fifth attempt 58s after the lease, the
+steps then running on the guest, and `Authorize`/`Sign` called once each across
+the whole wait. The refusal arrived as `*net.OpError{Op: "dial"}` — the shape the
+classifier reads, measured rather than assumed. With the retry mutated out the
+same lane dies on the first refusal with this ticket's error verbatim.
+
+★ **The width of the window belongs to the image and the host, not to the
+engine.** Measured on a workstation with no artificial delay: `vmlocal` reported
+the lease 15s after the request and the FIRST dial connected — on a Debian-12
+cloud image here, sshd is already listening when the lease lands. The race is
+real (this ticket was filed off a live run that hit it, with a stale lease
+widening it) but it is not reproducible on demand, so the live lane holds sshd
+down for a fixed period instead of hoping: the machine, the kernel's refusal and
+the sshd that finally answers are all real, and only the moment it answers is
+deterministic. A test that exercises its subject only sometimes is not a test —
+the first version of that lane asserted a natural window, found none, and failed
+rather than passing vacuously.
+
+The credential is minted once and must outlive the wait: a provider issuing
+certificates shorter-lived than `join_wait_timeout` would hand back one that
+expires mid-wait, and the expiry would then surface as a handshake rejection —
+which is not retried, so the step fails at once, minutes into the budget. That is
+a provider-side TTL question the module cannot detect, and the alternative —
+re-signing per attempt — burns an issuance on every refusal. It is stated for
+operators in the module README rather than only here, because the person who sets
+the Vault SSH role TTL reads that page.
+
+Two bounds worth recording rather than fixing. `DialConfig.Timeout` is unset (as
+before this ticket), so the deadline is tested BETWEEN attempts and a single
+attempt that hangs on a dropped SYN can overrun `join_wait_timeout` by the OS TCP
+timeout. And the deadline is per host, so N hosts can each spend the budget,
+while `TestProvisionTimeoutExceedsJoinWait` guards the run timeout against one —
+pre-existing on teleport, newly reachable on the default transport, and in
+practice amortised because hosts boot in parallel.
+
+The default stays one number for both. 15m is a ceiling, not a wait: a host
+already listening pays nothing, so the direct transport, where sshd arrives in
+tens of seconds rather than minutes, shares it rather than naming a second
+setting. `TestProvisionTimeoutExceedsJoinWait` is unchanged and still guards it
+against the effective run timeout.
