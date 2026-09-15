@@ -6,6 +6,37 @@
 #
 # GH-MINUTE SAVINGS (2k/month limit): runs EXCLUSIVELY on push of a `v*` tag —
 # releases are rare. Regular pushes/PRs are ci.yml's job. One tag = one run.
+#
+# THE LIVE GATE RUNS HERE, AND goreleaser IS BEHIND IT (NIM-879). RELEASING.md
+# step (e) called `make e2e-live-gate` blocking for months while nothing ran it:
+# the tier was in no CI job that had ever executed, so it stayed red on the release
+# tip from migration 118 onward and only a hand-run at NIM-876 found out. A blocking step
+# that only a human performs is not a gate, it is the appearance of one — the same
+# shape as the `t.Skip` in the single e2e push test (NIM-869), and the same cost:
+# a month of decisions taken against a green nobody produced.
+#
+# So the enforcement is the pipeline, not the procedure. `live-gate` runs the tier
+# against the tagged sha and `release` declares `needs: live-gate`, which means a
+# tag whose live tier is red — or never ran — produces nothing from THIS workflow:
+# no GitHub Release, no GHCR image, no cosign signature, no deb/rpm/brew/AUR/winget.
+#
+# Three things it does not prevent, named rather than absorbed:
+#   - pushing the tag ref. Not blockable from a file; it leaves a tag with no release,
+#     which is visible, and `gh workflow run release.yml --ref <tag>` re-runs the whole
+#     thing once the tier is green.
+#   - a human building `dist/pkg` by hand (RELEASING.md steps (g)/(h)) and attaching it
+#     to a Release created with `gh release create`. apt-publish.yml fires on
+#     `release: published` and would mirror those .debs into the R2 apt pool, so "no
+#     package anywhere" would be false. Closing this needs a repository ruleset on who
+#     may publish a release — an organisation setting, not a file here.
+#   - `workflow_dispatch` against an arbitrary ref: a branch at the tag's commit with
+#     `needs:` deleted publishes a full release, and the only thing that objects is the
+#     `check` job on that push.
+#
+# Deliberately absent: `continue-on-error`, and any input that skips the gate. Both
+# would satisfy `needs:` on a failure, which is the exact substitution this job
+# exists to refuse. scripts/check-release-gate.py asserts their absence on every
+# push, because removing them here is silent in the direction that matters.
 name: Release
 
 on:
@@ -30,11 +61,104 @@ permissions:
 env:
   # Go toolchain from go.work, synced with ci.yml.
   GO_VERSION: "1.26.6"
+  # protoc and its plugins, synced with ci.yml — `make build` pulls in `make gen`.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
 
 jobs:
+  # L3b live gate on the tagged sha — RELEASING.md step (e), now enforced (NIM-879).
+  #
+  # `make e2e-live-gate` and not `make e2e-live`, deliberately. The full tier runs
+  # more tests; the gate is the only one that cannot report a green it did not earn.
+  # It refuses on a `(cached)` summary, on any of the five named tests giving no
+  # `--- PASS`, on an empty package set, and on a working-tree service override —
+  # and NIM-871 is what that list is made of: a tier went from nine tests to three
+  # and the count was the only thing that noticed. For a step whose whole job is to
+  # block a release, "cannot lie" outranks "covers more".
+  #
+  # ubuntu-latest is enough, and that is measured rather than assumed: this tier had
+  # never run on a hosted runner at all, so NIM-879 pushed the job on a branch first
+  # and it came back with all five `--- PASS` in 227s of test time, ~10 minutes wall
+  # (run 34871024617). What it needs is docker with privileged containers and systemd
+  # as PID 1 (tests/e2e-live/harness/container.go), not a hypervisor. The libvirt half —
+  # VMs, cloud-init, the agent installed over SSH — is the machine half of a create,
+  # which this docker tier cannot host and which the Makefile already declares
+  # uncovered. A self-hosted runner is the answer to THAT, not to this.
+  live-gate:
+    name: e2e-live-gate (L3b live, blocking)
+    runs-on: ubuntu-latest
+    # The tier's own `go test` budget is 45m; the rest is the docker build of the
+    # soul image, the service cache fetch and two builds.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # VERSION comes from `git describe`, and the tier asserts the keeper
+          # binary reports it (KEEPER_EXPECTED_VERSION). A shallow clone has no
+          # tag to describe, so the assertion would be about `dev`.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e-live/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The recipe writes its transcript to `mktemp` under TMPDIR and prints the path;
+      # pinning TMPDIR here is what lets the upload step below name it, and on a red
+      # gate that transcript is the finding. It is set on THIS step and not on the job:
+      # as a job-level env it also reaches `Setup Go`, whose `go env` runs before
+      # anything has created the directory and dies on it.
+      - name: make e2e-live-gate
+        env:
+          TMPDIR: ${{ github.workspace }}/.e2e-live-gate-tmp
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMPDIR"
+          make e2e-live-gate
+
+      - name: Upload the gate transcript on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-live-gate-transcript
+          if-no-files-found: ignore
+          path: |
+            ${{ github.workspace }}/.e2e-live-gate-tmp/soul-e2e-live-gate.*.log
+
   release:
     name: goreleaser + GHCR + cosign + SBOM
     runs-on: ubuntu-latest
+    # The gate above is what makes RELEASING.md step (e) a gate rather than a
+    # reminder: no green live tier on this sha, no release artifacts at all.
+    needs: live-gate
     steps:
       - name: Checkout
         uses: actions/checkout@v7

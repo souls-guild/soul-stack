@@ -29,7 +29,7 @@ or L3a; it now prints the tiers it skipped. Do not measure release readiness wit
 it (see [docs/testing/README.md](docs/testing/README.md) for what a green `check`
 was actually worth: nine tests were red behind one).
 
-Here are docker-dependent levels up to L3a. Long-term L3b (`make e2e-live`) is a separate **blocking** pre-tag step (e), L3c (`make e2e-k8s`) is chased on-demand. The release is not issued until the gate is green.
+Here are docker-dependent levels up to L3a. Long-term L3b is step (e) and is the one step the pipeline enforces by itself — `make e2e-live-gate` runs on the tagged sha and goreleaser is behind it. L3c (`make e2e-k8s`) is chased on-demand. The release is not issued until the gate is green.
 
 **Then confirm CI verified the exact commit you are about to ship — blocking:**
 
@@ -118,14 +118,56 @@ in CHANGELOG / flag `adr_drift` PM if the code and ADR diverge). Release not
 is tagged as long as the surfaces being documented remain uncovered or
 unfixed drift.
 
-### (e) e2e-live gate (real apply on a real host) - blocking
+### (e) e2e-live gate (real apply on a real host) - ENFORCED, not asked
 
-**Required step before creating a tag.** unit/integration drive stubs; the only one
-test proving that `apply` works on a **real** host end-to-end
-soul binary in a privileged Debian container, real `apt`-install + systemd), —
-L3b `make e2e-live` (nginx / module-delivery / plugin-channel cases). Without green e2e-live tag
-**not cut**: apply on a real host could break, and only this one will catch it
-level. It's the local equivalent of CI-gate - without the GitHub minutes.
+**This step is the one the pipeline refuses on.** unit/integration drive stubs; the
+only tests proving that `apply` works on a **real** host end to end (a real soul binary
+in a privileged Debian container, real `apt`-install + systemd) are L3b, and
+`make e2e-live-gate` is the five of them that block a tag.
+
+**How it is enforced (NIM-879).** `.github/workflows/release.yml` runs
+`make e2e-live-gate` against the tagged sha as the job `live-gate`, and the
+`release` job declares `needs: live-gate`. So a tag whose live tier is red — or
+never ran — produces **nothing from that workflow**: no GitHub Release, no GHCR
+image, no cosign signature, no deb/rpm/brew/AUR/winget. There is no input that
+skips it, no `continue-on-error` on the path and no `if:` calling a status function
+— `always()`, `failure()`, `cancelled()` **or `success()`**, each of which drops a
+job's implicit "all needs succeeded"; `success() || <anything>` releases over a red
+gate while looking careful. `make check-release-gate` asserts those on every push,
+along with the rule that every command named in this file is either gated on a tag or listed in
+[`scripts/release-gate-allowlist.txt`](scripts/release-gate-allowlist.txt) with the
+reason it stays a human's.
+
+**Three things it does not prevent**, so that nobody reads the paragraph above as
+wider than it is:
+
+- Pushing the tag ref. Not blockable from inside the repository. It leaves a tag with
+  no release, which is visible, and is re-run once the tier is green:
+
+  ```sh
+  gh workflow run release.yml --ref vX.Y.Z-beta.N
+  ```
+
+- Building `dist/pkg` by hand (steps (g)/(h) below) and attaching it to a Release made
+  with `gh release create`. [`apt-publish.yml`](.github/workflows/apt-publish.yml) fires
+  on `release: published` — any release — and would mirror those `.deb`s into the R2 apt
+  pool. Closing that path needs a repository ruleset on who may publish a release, which
+  is an organisation setting rather than a file in this tree.
+- `workflow_dispatch` against an arbitrary ref: a branch sitting at the tag's commit with
+  `needs:` deleted publishes a full release, and the only thing that objects is the
+  `check` job on that push.
+
+> ★ **Why this section used to read differently.** Until NIM-879 it said "required
+> step before creating a tag" and nothing executed it. The L3b tier ran in no CI job
+> that had ever fired, so `make e2e-live-gate` sat **red on the release tip from
+> migration 118** (`i.name` → `i.id`) and it surfaced only because someone ran the
+> tier by hand while working on NIM-876. A month of decisions cited a green that was
+> never produced. If you are tempted to add a step here that only a human performs,
+> read that sentence again and then add the allowlist line that says so out loud.
+
+**Run it locally first anyway.** The tag run is where it is enforced, not where you
+want to discover it — a red gate at that point costs the tag and 45 minutes. Before
+step (f):
 
 1. Docker-free gate - green:
 
@@ -133,11 +175,17 @@ level. It's the local equivalent of CI-gate - without the GitHub minutes.
    make check    # build + vet + test + check-gen/openapi/template/doc-links + vuln + lint
    ```
 
-2. L3b real apply - **every case** is green:
+2. L3b, the five gate tests - **every case** is green:
 
    ```sh
-   make e2e-live    # nginx / module-delivery / plugin-channel — real apt-install + systemd
+   make e2e-live-gate    # the same target release.yml will run on the tag
    ```
+
+   The broader tier (`make e2e-live`, every test behind the `e2e_live` tag) is
+   dispatched from `.github/workflows/nightly.yml` and is not on a schedule — the
+   repository is private, and a daily hour of L3b would consume most of the monthly
+   Actions budget. Nothing therefore finds this tier's rot between releases; the tag
+   gate is the backstop, and running it locally is how you avoid meeting it there.
 
    > ★ **What green here means, and what it does not (NIM-871 → NIM-876).** The gate went
    > from nine tests to three when `examples/service/redis` left the engine, and green then
@@ -162,10 +210,11 @@ On **WSL2 + Docker-Desktop**, forward the real WSL2 host-IP before running
 points to the DD-VM gateway, not the WSL2 host):
 
    ```sh
-   E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') make e2e-live
+   E2E_KEEPER_HOST=$(hostname -I | awk '{print $1}') make e2e-live-gate
    ```
 
-On native-Linux env-override is not needed (CI default `host.docker.internal`).
+On native Linux the override is not needed — the recipe falls back to the first
+address `hostname -I` reports, which is what the Actions runner uses too.
 Environment details and recipe - [tests/e2e-live/README.md](tests/e2e-live/README.md).
 
 **If it goes red, read the label before deciding anything.** `make e2e-live-gate`
@@ -176,7 +225,9 @@ every gate test says `--- PASS`, and on nothing else: STAND-SETUP is a reason to
 rerun one test, not a reason to tag. Details - [docs/testing/README.md, "Reading a
 red gate"](docs/testing/README.md#reading-a-red-gate-nim-406).
 
-The release is not tagged until `make check` and all `make e2e-live` cases are green.
+A red gate no longer depends on anyone acting on it: the tag run stops at `live-gate`
+and `release` never starts. Reading the label is how you find out **why** in one pass
+instead of rerunning until green.
 
 ### (f) Annotated git tag
 
@@ -209,8 +260,9 @@ Attach artifacts from `dist/pkg/` and `dist/sbom/` to the GitHub Release of the 
 The steps above describe the manual `make`-based flow (still valid for local
 builds). On a real release the same artifacts are produced automatically by
 **GoReleaser** on a `v*` tag push — see [`.goreleaser.yaml`](.goreleaser.yaml)
-and [`.github/workflows/release.yml`](.github/workflows/release.yml). One tag
-run yields:
+and [`.github/workflows/release.yml`](.github/workflows/release.yml). GoReleaser
+does not start until the `live-gate` job it depends on is green (step (e)), so one
+tag run is two jobs and the first is the L3b tier. One tag run yields:
 
 - binaries + `.tar.gz` archives (linux amd64/arm64), `.deb` + `.rpm` (nfpm),
   a Homebrew tap entry, winget manifests, and a `checksums.txt`;
@@ -224,11 +276,19 @@ run yields:
 Validate the config without releasing: `goreleaser check`. Dry-run the whole
 pipeline offline: `goreleaser release --snapshot --clean`.
 
-Two distribution channels run **out of band** from the tag workflow because
-they need credentials we keep off GitHub Actions:
+Two distribution channels run **out of band** from the tag workflow:
 
-- **apt repo on Cloudflare R2** — mirror the `.deb` assets with
-  [`deploy/apt-r2/publish-apt.sh`](deploy/apt-r2/README.md) after the release.
+- **apt repo on Cloudflare R2** — a separate workflow,
+  [`apt-publish.yml`](.github/workflows/apt-publish.yml), fires on `release: published`
+  and mirrors the `.deb` assets into the R2 pool by running
+  [`deploy/apt-r2/publish-apt.sh`](deploy/apt-r2/README.md) with the R2 and GPG secrets
+  release CI does not carry. It is out of band from the tag workflow, not out of band from
+  Actions — the earlier wording here said this was a manual step after the release, which
+  stopped being true when that workflow landed (NIM-174). Running the script by hand is
+  still the fallback, and `workflow_dispatch` re-publishes an already-released tag.
+
+  ★ It fires on **any** published release, including one created by hand, so it is the one
+  publishing path the live gate does not cover — see step (e).
 - **curl-installer** — `scripts/install.sh` pulls a released binary by tag and
   verifies its checksum (`curl -fsSL …/install.sh | sh`).
 

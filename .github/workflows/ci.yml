@@ -27,9 +27,12 @@ on:
 #
 # Cost of this exception, stated: on a busy release branch runs queue instead of
 # cancelling, so the tip's verdict can arrive later and several runs occupy
-# runners at once. That is affordable here (public repo, standard runners are
-# unmetered) and it is the price of every merge having its own verdict. Feature
-# branches keep the eviction.
+# runners at once. That is the price of every merge having its own verdict, and it
+# is affordable because release branches are not busy for long — not, as this line
+# claimed until NIM-879, because the repository is public and its minutes unmetered.
+# It is PRIVATE (`gh api repos/souls-guild/soul-stack -q .private` → true), so the
+# monthly Actions budget is real and a queue spends it. Feature branches keep the
+# eviction.
 #
 # Queueing is not enough by itself — a human can still read the wrong row. The
 # other half is `make check-ci`, which derives the sha from git instead of
@@ -131,8 +134,11 @@ jobs:
   # The two jobs are independent signals. A tree that does not compile fails e2e on its
   # own `make build` step, which is an honest FAILURE rather than a skip; anything
   # cheaper that `check` catches (fmt, lint, a stale snapshot) has no bearing on whether
-  # the L3a contract holds. Running both costs a runner — free on a public repository —
-  # and buys the ability to read the two answers separately.
+  # the L3a contract holds. Running both costs a runner and buys the ability to read the
+  # two answers separately. (This line used to justify the cost by the repository being
+  # public and its minutes therefore unmetered. It is PRIVATE — `gh api
+  # repos/souls-guild/soul-stack -q .private` → true, checked at NIM-879 — so the
+  # justification is the separable signal, not free minutes.)
   e2e:
     name: e2e (L3a fast-loop)
     runs-on: ubuntu-latest

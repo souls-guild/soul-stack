@@ -17,7 +17,7 @@ All commands are from the root of the repository.
 
 ## Step 0. Get sources
 
-The repository is public, and every tag publishes signed binaries, native packages and container images - see [README → Install](../README.md#install) if all you want is to run Soul Stack. This quickstart still starts from a source checkout, because it drives the `dev/` targets (`make dev-up`, `make dev-provision`, `make dev-smoke`) that only exist in the repo:
+Every tag publishes signed binaries, native packages and container images - see [README → Install](../README.md#install) if all you want is to run Soul Stack. This quickstart still starts from a source checkout, because it drives the `dev/` targets (`make dev-up`, `make dev-provision`, `make dev-smoke`) that only exist in the repo:
 
 ```sh
 git clone https://github.com/souls-guild/soul-stack.git

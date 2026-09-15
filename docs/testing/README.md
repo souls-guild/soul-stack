@@ -13,7 +13,7 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 | **L1** - integration | `<module>/<pkg>/integration_test.go` | `integration` | testcontainers per-package (PG / Redis / Vault), real CRUD calls. | each PR, `make test-integration` (needs docker) |
 | **L2** - Trial | `examples/destiny/<name>/_trial/`, `examples/service/<name>/scenario/<n>/tests/` | no | Hermetic prerender + migration-assert on fixtures (`soul-trial`). Bind `--modules <alias>=<path>` or a plugin step's `params:` are checked by nobody and the case says so ([soul-lint.md](../soul-lint.md#soul-trial-takes-the-same-flag)). | each PR via `make build` + `soul-trial` |
 | **L3a** - E2E fast-loop | `tests/e2e/` | `e2e` | testcontainers (PG/Redis/Vault) + Keeper-process in-process + soul-stub. Contract tests apply_runs lifecycle / RBAC / audit / MCP. | every PR (when L3a-imp slice stabilizes), `make e2e` |
-| **L3b** - E2E smoke | `tests/e2e-live/` | `e2e_live` | Real `soul`-binary in a privileged Debian-12 container (systemd-PID-1) + Keeper process + mTLS + real apply. Flagship scripts. | nightly/on-demand; **feature-complete** (5 slices L3b-1..L3b-5 = done): real CSR Bootstrap + `smoke-nginx-live` (apt + systemd) + module delivery + the plugin channel; `make e2e-live` really drives nightly. ★ The multi-host `redis-cluster-live` fixture and every service-lifecycle case left with `examples/service/redis` (NIM-871), taking the blocking gate from nine tests to three. L3b-6 (drift-live) - done: `TestL3bDriftLive_HelloWorld` runs drift-check on a live soul through a real `core.file.Plan` (module `core.file.present`), and not stub-Plan like L3a |
+| **L3b** - E2E smoke | `tests/e2e-live/` | `e2e_live` | Real `soul`-binary in a privileged Debian-12 container (systemd-PID-1) + Keeper process + mTLS + real apply. Flagship scripts. | **a tag** (`make e2e-live-gate` is a blocking job in `release.yml`, NIM-879) + on demand; **feature-complete** (5 slices L3b-1..L3b-5 = done): real CSR Bootstrap + `smoke-nginx-live` (apt + systemd) + module delivery + the plugin channel. ★ The broad `make e2e-live` is dispatched from `nightly.yml`, which has **no schedule and had never run once** before NIM-879 — the line here used to say it "really drives nightly", and that is exactly the false green the ticket was about. ★ The multi-host `redis-cluster-live` fixture and every service-lifecycle case left with `examples/service/redis` (NIM-871), taking the blocking gate from nine tests to three. L3b-6 (drift-live) - done: `TestL3bDriftLive_HelloWorld` runs drift-check on a live soul through a real `core.file.Plan` (module `core.file.present`), and not stub-Plan like L3a |
 | **L3c** - E2E k8s | `tests/e2e-k8s/` | `e2e_k8s` | kind-cluster, real K8s-deployment Keeper + Soul + Redis-Cluster + PG. HA cases (Watchman, Toll, leader-failover). | weekly / pre-release, **L3c-1..L3c-5 part A ready** (single-keeper ping, multi-keeper + Soul CSR Bootstrap, kill-leader failover, Toll degraded-mode); L3c-5 part B (redis-cluster resharding) - framework + t.Skip to in-cluster git-server-pod |
 | **L4** – manual soak + cloud live-run | — | — | Manual pre-release testing under load **+ repeatable cloud orchestrator** `scripts/e2e-cloud/` (create / day-2 / destroy via keeper's Operator API on VM, teleport), see [e2e-cloud.md](e2e-cloud.md). | first product post / on-demand |
 
@@ -38,7 +38,11 @@ therefore says nothing about L1 or L3a; those were two different claims that
 both ended in the word "passed", and neither implied the other. That is how a
 rotted L1 suite (NIM-221) and four L3a tests failing since ADR-029 (NIM-317)
 stayed invisible for a whole release. `check` now prints what it did NOT run;
-`check-all` runs it. L3b stays outside both — CI does not run it either.
+`check-all` runs it. L3b stays outside both, and outside CI's push jobs — but **not**
+outside CI: since NIM-879 `release.yml` runs `make e2e-live-gate` on a tag and goreleaser
+is behind it. That covers the tag pipeline and nothing else: a release created by hand
+still publishes, and `apt-publish.yml` still mirrors it (RELEASING.md step (e) names the
+three residual paths).
 One difference from CI survives on purpose: CI gives each tier its own runner,
 `check-all` gives them one docker daemon and starts L3a right after ~300
 container-starting L1 packages. A failure at container startup there is that
@@ -373,8 +377,10 @@ fix.
 ## Local live-gate of large features (`make e2e-live-gate`)
 
 `e2e-live-gate` - **mandatory local live run before batch commit of each
-major feature**. This is a curated subset of L3b (~15-25 min, docker required), not
-all `make e2e-live` (that one remains nightly / pre-release). The point of the gate is to prove
+major feature**, and since NIM-879 the blocking job `release.yml` runs on a tag: goreleaser
+declares `needs: live-gate`, so a red tier produces no release artifacts. This is a curated
+subset of L3b (~15-25 min, docker required), not all `make e2e-live` — that one is the broad
+tier, dispatched from `nightly.yml`, which has no schedule. The point of the gate is to prove
 on a real `soul` binary that the key mechanics are alive before the edits go to
 commit.
 
@@ -412,7 +418,7 @@ half of a create; see "A service create is NO LONGER locally covered" below.
 same triggers that escalate to architect: **>5 files are affected** OR being corrected
 **key nodes** (Keeper↔Soul contract, plugin infrastructure, render/dispatch pipeline,
 `state_schema`, template engine). The gate does not require minor adjustments. `make check` gate
-**doesn't** include (it's docker-free); full `make e2e-live` - nightly / pre-release.
+**doesn't** include (it's docker-free); full `make e2e-live` is dispatched from `nightly.yml`.
 
 **How ​​to launch:**
 

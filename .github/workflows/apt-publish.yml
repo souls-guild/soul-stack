@@ -1,10 +1,19 @@
 # Mirror the release .deb assets into the Cloudflare R2 apt repo (NIM-174). Runs on a
-# GitHub-hosted runner: the repo is public, so hosted minutes are free and unmetered,
-# and there is no self-hosted machine to keep online. The R2 write key and the apt
-# signing key live in repo secrets; on a public repo they are unavailable to fork PRs,
-# and both triggers below require write access, so untrusted forks can never read them.
-# The R2 token is scoped to write only the apt bucket, and the GPG key is a dedicated
-# apt-signing key (not a personal key) — a bounded, rotatable blast radius.
+# GitHub-hosted runner because there is no self-hosted machine to keep online; the job is
+# short and rare, so the metered minutes of a PRIVATE repository are not an argument
+# against it. (This header claimed the repository was public until NIM-879 checked:
+# `gh api repos/souls-guild/soul-stack -q .private` → true. The security argument below
+# was resting on that.) The R2 write key and the apt signing key live in repo secrets;
+# both triggers below require write access, and a private repository has no untrusted
+# fork PRs to leak them to. The R2 token is scoped to write only the apt bucket, and the
+# GPG key is a dedicated apt-signing key (not a personal key) — a bounded, rotatable
+# blast radius.
+#
+# ★ THIS IS A PUBLISHING PATH THE RELEASE GATE DOES NOT COVER (NIM-879). It fires on
+# `release: published` — ANY release, including one a human creates by hand with
+# `gh release create` from locally built artifacts. release.yml's `live-gate` blocks
+# goreleaser, not this. Closing that path needs a repository ruleset on who may publish
+# a release, which is an organisation setting rather than a file here.
 name: Publish apt (R2)
 
 on:

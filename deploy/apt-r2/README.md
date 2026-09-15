@@ -23,13 +23,16 @@ provide:
 - the **GPG key** that signs the apt `Release`.
 
 Both live as **repo secrets** and are injected into the publish workflow. This is a
-deliberate, bounded trade-off for a public repo:
+deliberate, bounded trade-off:
 
-- The repo is **public**, so GitHub-hosted runners are free and unmetered — no
-  self-hosted machine to own, and no metered minutes.
-- On a public repo, **secrets are not exposed to workflows from forked PRs**, and both
-  triggers (`release: published`, `workflow_dispatch`) require write access — so
-  untrusted contributors can never read them.
+- GitHub-hosted runners mean no self-hosted machine to own. The minutes are metered — the
+  repository is **private** (`gh api repos/souls-guild/soul-stack -q .private` → true),
+  and this text claimed the opposite until NIM-879 — but the job is short and fires only
+  on a release.
+- A private repository has no untrusted fork PRs to leak secrets to, and both triggers
+  (`release: published`, `workflow_dispatch`) require write access anyway. The earlier
+  version of this bullet rested the same conclusion on the repo being public; the
+  conclusion holds, its stated reason did not.
 - The R2 token is **scoped to Object Read & Write on the single apt bucket** (not the
   whole account), and the signing key is a **dedicated apt key**, not a personal one.
   Blast radius is one bucket + one rotatable signing key.

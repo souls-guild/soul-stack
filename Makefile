@@ -132,7 +132,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -1489,7 +1489,7 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-gate-slot \
-	check-ci-status check-modules-run check-vuln-corpus check-plugin-schema
+	check-ci-status check-release-gate check-modules-run check-vuln-corpus check-plugin-schema
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 # GATE_SLOTS — how many gates may run at once ON THIS MACHINE, and therefore how
@@ -1535,9 +1535,10 @@ check:
 # failing since ADR-029 stayed invisible for a release (NIM-221, NIM-317).
 #
 # The fix is not a note in the docs: it is one command that covers the same
-# ground, plus `check` stating out loud what it left out. L3b (`make e2e-live`)
-# stays outside on purpose — CI does not run it either; it is nightly /
-# pre-release, see docs/testing/README.md.
+# ground, plus `check` stating out loud what it left out. L3b stays outside on
+# purpose — ci.yml does not run it on a push either. Where it DOES run is a tag:
+# release.yml's `live-gate` job blocks goreleaser on `make e2e-live-gate` (NIM-879).
+# See docs/testing/README.md.
 #
 # One honest difference from CI, stated here because it bites on the first run:
 # CI gives each tier its own runner, this target gives them one docker daemon, and
@@ -1663,6 +1664,37 @@ check-gate-slot:
 check-ci-status:
 	@scripts/ci-status-test.sh
 
+# RELEASE_GATE_TARGETS — the targets a tag is BLOCKED on, as opposed to the
+# ones RELEASING.md merely asks a human to run (NIM-879).
+#
+# The distinction had no representation anywhere, and that is the whole defect. Step (e)
+# of RELEASING.md called `make e2e-live-gate` blocking, in bold, for months; the tier ran
+# in no CI job that had ever executed, so it was red on the release tip from migration 118 until
+# somebody ran it by hand at NIM-876. Five steps of that procedure are marked blocking and
+# not one of them was enforced by anything — a class, not an oversight.
+#
+# A target listed here must be run by a job that release.yml's PUBLISHING job needs — the
+# one that runs goreleaser, found by that rather than by its key, so that renaming it or
+# putting a decoy beside it is loud rather than quiet. A red tier then means a
+# tag that produces nothing from that workflow. Every OTHER command named in RELEASING.md —
+# `make …` and `scripts/…` alike — must appear in scripts/release-gate-allowlist.txt with
+# the reason it stays a human's. check-release-gate below holds both halves.
+RELEASE_GATE_TARGETS := e2e-live-gate
+
+# check-release-gate — the guard on the release procedure's own enforcement (NIM-879).
+# Same family as check-gate / check-ci-status / check-modules-run / check-vuln-corpus, one
+# level further out: those guard the reporters, this guards whether the blocking steps run
+# at all.
+#
+# The regression is invisible in the direction that matters, which is why it needs a guard
+# rather than a review: dropping `needs: live-gate` from release.yml, or adding
+# `continue-on-error` to the gate job, makes tag runs faster and greener and changes nothing
+# in the output. So does adding a `make …` line to RELEASING.md that nothing will ever run —
+# that is exactly how step (e) came to exist. Docker-free, network-free, under a second.
+check-release-gate:
+	@scripts/check-release-gate.py
+	@scripts/check-release-gate.py --self-test
+
 # check-modules-run — the guard on the per-module sweep (NIM-494). Third of the
 # same kind, one level down from check-gate: gate.sh reports on tiers,
 # modules-run.sh reports on the eight modules INSIDE a tier, and until this
@@ -1744,8 +1776,8 @@ check-all:
 	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
 	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
 	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
-	@echo "check-all:   make e2e-live-gate   (curated subset, before a major batch commit)"
-	@echo "check-all:   make e2e-live        (full, nightly / pre-release)"
+	@echo "check-all:   make e2e-live-gate   (the five that block a tag; run before a batch commit)"
+	@echo "check-all:   make e2e-live        (full tier; dispatched from nightly.yml, which has no schedule)"
 	@echo "check-all: a container-startup failure here is contention (one docker daemon,"
 	@echo "check-all:   two tiers back to back), not a regression — rerun that package alone."
 

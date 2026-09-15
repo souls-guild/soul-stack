@@ -4,23 +4,35 @@
 # Contents:
 #   - e2e-live:    L3b real-soul-in-container (Makefile target `e2e-live`):
 #                  real soul binary in a privileged container, full
-#                  gRPC-handshake + apply/Scry pipeline. continue-on-error —
-#                  job informational: a failure on runner infrastructure (docker-
-#                  in-docker, privileged, systemd-PID-1) files a bug, doesn't fail
-#                  the whole nightly run.
+#                  gRPC-handshake + apply/Scry pipeline. This is the BROAD tier —
+#                  every test behind the e2e_live tag. The five curated ones that
+#                  block a release are `make e2e-live-gate`, run from release.yml.
 #
 name: Nightly
 
-# Schedule (daily cron) is DELIBERATELY disabled. `e2e-live` moved to the local
-# pre-tag gate (RELEASING.md step e) and runs on the developer's machine before
-# tagging, not in Actions, so a nightly run of it would burn an hour to repeat a
-# check that already has an owner. Manual-only (workflow_dispatch — from the UI or
-# `gh workflow run`). This is NOT a forgotten cron: to restore the daily run,
-# restore `schedule:` below.
+# Manual-only (workflow_dispatch — from the UI or `gh workflow run`). No schedule.
 #
-# The earlier reason given here was the 2000 min/month Actions limit. That limit
-# applies to PRIVATE repositories; this one is public, so standard runners are
-# unmetered and minutes are not an argument for or against anything in this file.
+# ★ AS OF NIM-879 (2026-09-14) THIS WORKFLOW HAD NEVER RUN, not once since it was
+# added at v0.1.0-beta.1 — `gh run list --workflow=nightly.yml` returned []. It also
+# carried `continue-on-error: true` until that ticket removed it, so even a manual run
+# could not have failed anything. Read that before treating its existence as coverage
+# of L3b: until then the live tier ran in no CI at all, which is how `make
+# e2e-live-gate` stayed red on the release tip from migration 118 until a human ran it
+# by hand.
+#
+# The text here used to justify the missing schedule by saying `e2e-live` had moved
+# to the local pre-tag gate and therefore "already has an owner". It had no owner —
+# that was the defect. It has one now: `.github/workflows/release.yml` runs
+# `make e2e-live-gate` as a blocking job on the tagged sha, and goreleaser is behind
+# it. A tag is the moment the answer is needed, and that is where it is taken.
+#
+# What a schedule would still buy is finding rot BEFORE tag day rather than on it,
+# and that was weighed and declined (NIM-879): this repository is PRIVATE — the
+# earlier note here claiming it is public, and Actions minutes therefore unmetered,
+# was wrong — so the 2000 min/month limit applies and a daily hour of L3b would
+# consume most of it. To restore a periodic run, add `schedule:` below — and do not
+# bring `continue-on-error` back with it; a scheduled job that cannot fail repeats this
+# file's own history.
 #
 # `race-tests` (`make test-race`) USED to live here and no longer does — it is a
 # blocking job in ci.yml (NIM-312). Here it produced nothing: no schedule meant it
@@ -43,14 +55,22 @@ env:
 jobs:
   # L3b real-soul-in-container (ADR-039 level B). Instead of a soul-stub, runs
   # the real `soul` binary inside a privileged container: covers the whole gRPC
-  # handshake + apply/Scry pipeline (including a real SoulModule.Plan
-  # in the drift test). Makefile target `e2e-live` is implemented; continue-on-error
-  # keeps the job informational — flakiness on runner infrastructure (docker-in-docker,
-  # privileged, systemd-PID-1) doesn't fail the whole nightly run.
+  # handshake + apply/Scry pipeline (including a real SoulModule.Plan in the drift
+  # test).
+  #
+  # `continue-on-error: true` is GONE (NIM-879). It made this job incapable of
+  # failing, on the only tier nothing else covers — so the one way to learn
+  # anything from it was to read the log, which is the definition of a result
+  # nobody reads. A dispatched run now concludes what it found. Infrastructure
+  # flakiness on the runner (docker-in-docker, privileged, systemd-PID-1) is a
+  # real possibility and is the reason this tier is dispatched rather than
+  # scheduled; it is not a reason for its verdict to be unreadable.
   e2e-live:
     name: e2e-live (L3b real-soul-in-container)
     runs-on: ubuntu-latest
-    continue-on-error: true
+    # Unchanged. That the five-test gate in release.yml gets 90 while this superset gets 60
+    # is a real inversion — it follows the `go test` budgets, 45m there against 30m here —
+    # and it is NIM-512, not this ticket.
     timeout-minutes: 60
     steps:
       - name: Checkout
