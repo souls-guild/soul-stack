@@ -245,7 +245,7 @@ sequence is forced:
    REQUIRED on a plugin address. A plugin's side lives in its stamped schema document, which the
    Keeper reads at dispatch and a scenario cannot read at all — so unlike a core address, a plugin
    address does not announce its own side to the linter or the render pipeline.
-2. **NIM-760 — `soul-cloud-wb` moves to an ordinary plugin with `side: keeper`,** and VM creation
+2. **NIM-760 — the cloud driver moves to an ordinary plugin with `side: keeper`,** and VM creation
    is verified live against a real provider before anything is deleted.
 3. **NIM-761 — removal.** The contract, the registries, the module, the SDK directory, the proto.
 

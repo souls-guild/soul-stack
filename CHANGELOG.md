@@ -27,11 +27,15 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   state descriptions promised an `external_ip` the artifact has never emitted and omitted
   the `state` it always has. The four shapes are named in code, quoted in the
   descriptions, and held to the emitters by a guard.
-- **The customer name is out of the engine.** `wbcloud` in test fixtures is `democloud`;
-  `wb-service-redis` is `demo-service-redis`; prose naming a customer's service or stand
-  as the origin of a behaviour says what it was instead. Dated records — CHANGELOG
-  entries, ADR amendment logs, the epic order in `roadmap.md` and `known-limitations.md`
-  — keep `soul-cloud-wb` deliberately: there it names an artifact as it was at that date.
+- **The customer name is out of the engine, dated records included.** Test fixtures that
+  used a customer's cloud alias now say `democloud`, and its service `demo-service-redis`;
+  prose naming a customer's service or stand as the origin of a behaviour says what it
+  was instead.
+  The first pass kept the name in dated records — ADR amendment logs, the epic order in
+  `roadmap.md` and `known-limitations.md` — on the grounds that there it named an
+  artifact as it stood at that date. That exception was withdrawn: the subject is renamed
+  rather than deleted, so the NIM-757 / 760 / 761 ordering still reads and still checks
+  out, it just calls the artifact *the cloud driver*. No ticket number, date or claim moved.
 
 ### Added
 
@@ -129,7 +133,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   ([docs/soul-lint.md](docs/soul-lint.md), NIM-753). **One broken part does not hide the others** — that is the whole
   feature. The per-file commands check one document per invocation, so a service
   repository had to orchestrate the sequence in a `set -e` script that stopped at
-  the first non-zero exit; in the WB redis service that first exit was a one-line
+  the first non-zero exit; in a downstream redis service that first exit was a one-line
   manifest error, and eight accumulated divergences sat behind it for as long as
   the manifest stayed red. Nothing here ends the walk: a part that cannot be read
   contributes an `io_error`, a check that panics contributes `lint_internal_panic`,
@@ -386,7 +390,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   it for the same reason it excluded a service with no section at all.
   **No transition window**: the old key is refused (`unknown_key`) with a hint
   carrying the new form, because the three manifests in the world that carried it
-  were all ours (`examples/service/dragonfly`, `examples/service/redis`, and the WB
+  were all ours (`examples/service/dragonfly`, `examples/service/redis`, and a downstream
   redis service, whose `enable: false` section — inert by contract — was already
   deleted). Refusing beats reading it for a release: a rotation policy the engine
   silently ignores is the worse of the two failures. `core.cert.issued` still

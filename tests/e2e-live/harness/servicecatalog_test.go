@@ -65,9 +65,9 @@ func TestServiceCatalogEntriesAreAddressable(t *testing.T) {
 // be silently unavailable for exactly the service that needed it.
 func TestServiceEnvSuffixIsAShellIdentifier(t *testing.T) {
 	cases := map[string]string{
-		"redis":        "REDIS",
-		"wb-redis":     "WB_REDIS",
-		"redis.legacy": "REDIS_LEGACY",
+		"redis":              "REDIS",
+		"demo-service-redis": "DEMO_SERVICE_REDIS",
+		"redis.legacy":       "REDIS_LEGACY",
 	}
 	for in, want := range cases {
 		if got := serviceEnvSuffix(in); got != want {

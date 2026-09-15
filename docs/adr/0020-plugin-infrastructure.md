@@ -362,7 +362,7 @@ as they were — this decision says nothing about them.
 
 **The executing half landed first (NIM-758, closing NIM-688): `side: keeper` on a plugin is
 routed, not inert** — see the amended block above. The rest followed: **NIM-760** moved
-`soul-cloud-wb` onto it and proved VM creation live, and **NIM-761** removed the kind, its
+the cloud driver onto it and proved VM creation live, and **NIM-761** removed the kind, its
 `profile_schema` root field, the contract and the six drivers.
 
 ⚠ One hedge above has gone stale and is corrected here rather than rewritten in place: the 2026-08-06
@@ -577,7 +577,7 @@ there are two families left.**
 
 `soul-mod-*`, `soul-cloud-*` and `soul-ssh-*` encoded SoulModule / CloudDriver /
 SshProvider. The [2026-09-01 amendment above](#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it)
-removed `cloud_driver`, which left `soul-cloud-wb` an ordinary SoulModule declaring
+removed `cloud_driver`, which left the cloud driver an ordinary SoulModule declaring
 `side: keeper` — identical in contract to `soul-mod-redis` — while still spelling a
 distinction in its name. A reader cannot tell a decoration from a difference, so the
 decoration had to go.

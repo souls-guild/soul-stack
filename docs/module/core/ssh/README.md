@@ -148,7 +148,7 @@ A machine that answers a readiness check is not a machine you can reach. The
 readiness predicate is the cloud's, and the weakest form of it — a DHCP lease
 carrying an address and a name, which `vmlocal` uses verbatim — is satisfied well
 before sshd starts. Stronger predicates narrow the window without closing it
-(the wbcloud driver waits for the external IP to be *activated*,
+(the surviving cloud driver waits for the external IP to be *activated*,
 [ADR-066 §(c)](../../../adr/0066-teleport-onboarding-profile.md)). So the connect
 waits, and only the connect (NIM-872,
 [ADR-063 amendment 2026-09-14](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-14--the-bounded-wait-applies-to-direct-too-nim-872)).

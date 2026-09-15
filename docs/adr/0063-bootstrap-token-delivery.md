@@ -547,8 +547,9 @@ the boot.
 
 **This is not a `vmlocal` defect.** The readiness predicate — a DHCP lease
 carrying an address and a name — is the cloud contract's, and `vmlocal`
-reproduces it verbatim. `wbcloud` has the same race; it is invisible there only
-because that site dials over Teleport, which already retried.
+reproduces it verbatim. The surviving cloud driver has the same race; it is
+invisible there only because that site dials over Teleport, which already
+retried.
 
 **What changed.** One retry loop serves both transports. What differs between
 them is which failure a wait can still fix, so that is the only parameter:
