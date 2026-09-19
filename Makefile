@@ -33,8 +33,9 @@ MODULES := proto proto/plugin shared sdk keeper soul soul-lint soulctl
 # The check-vuln corpus: EVERY go.mod in the tree, derived rather than listed
 # (NIM-774). $(MODULES) above is the eight modules the core targets build and
 # test, and using it for the supply-chain gate meant the other twelve — the
-# tests/ harnesses, the examples/module/* plugins, the pluginhost fixtures —
-# were not scanned, not skipped and not named. Rationale and the orphan warning:
+# tests/ harnesses, the examples/module/* plugins (gone since NIM-868; the
+# derivation is why nothing here had to be edited when they left), the pluginhost
+# fixtures — were not scanned, not skipped and not named. Rationale and the orphan warning:
 # scripts/vuln-modules.sh. Overridable from the command line, which is how
 # scripts/vuln-corpus-test.sh points the real recipe at its fixtures.
 #
@@ -132,7 +133,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-plugins test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -279,49 +280,23 @@ build-soulctl:
 # Without `-count=1`, editing such a .tmpl (without touching the .go test) leaves the result
 # `(cached) ok` - a broken test passes the gate silently (this is how the broken redis-render
 # slipped through in f40da00: a conf_dir/data_dir wave changed the .tmpl without touching the .go test).
-# The same trick is already in place in test-plugins / test-integration / gen-openapi.
+# The same trick is already in place in test-integration / gen-openapi.
 test:
 	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
 		scripts/modules-run.sh test "$(MODULES)" 'go test -count=1 ./...'
 
-# Tests for community plugins examples/module/* - each is a SEPARATE go.mod OUTSIDE go.work
-# (ADR-016: community plugins pull the core as a regular dependency, not a workspace member).
-# So they run with `GOWORK=off` per-module, and NOT via the MODULES list in `make test`
-# (which doesn't see them at all). This also covers the security guard on secret
-# masking in the redis plugin (59 test functions), which would otherwise
-# stay outside the gate.
+# `test-plugins` stood here until NIM-868. It swept `examples/module/*/go.mod` under
+# GOWORK=off — the community plugins, each a separate module outside go.work — and the
+# last two of them (`redis`, `vmlocal`) left for their own repositories, which is what
+# ADR-011's "examples/ — non-Go artifacts only" always asked for.
 #
-# Skip-on-unresolvable: the cloud/ssh plugins did not resolve standalone-offline
-# (workspace go.mod pins diverge from standalone-tidy, needs network).
-# `go list ./...` under GOWORK=off fails for them -> we skip LOUDLY with a warning (the same
-# trick as `go list` empty -> skip in `test`/`vet`). This is NOT a silent pass: the skip
-# is printed, and a plugin that *does* resolve offline (redis) isn't covered by it -
-# its regressions are caught by the gate. Merge() tests are NOT here: they live in shared/cel
-# (workspace, covered by `make test`), no need to duplicate.
-#
-# ⚠ Since NIM-825 nothing in this corpus is skipped: the modules that triggered the skip
-# have left this tree for their own repositories, and it is kept only for a plugin that
-# lands here in future. The cause above is left as it was WRITTEN rather than explained
-# away — a relative `replace` at v0.0.0 is NOT it, since examples/module/redis carries
-# exactly that replace and resolves offline. Whatever broke `go list` for them went
-# unmeasured and left with them; do not restate it as settled.
-# `-count=1` - no cache (the plugin may depend on external fake state).
-#
-# `MODULES_PROBE_FAIL=skip` is what makes the skip above legal HERE and nowhere
-# else: for $(MODULES) a probe that cannot run is a failure, because a core
-# module nobody could enumerate is not a module with nothing in it. The empty
-# glob is no longer a quiet pass either — a plugin corpus that matched zero
-# directories used to print the green line below, and modules-run.sh refuses a
-# sweep over nothing (NIM-392's shape).
-test-plugins:
-	@MODULES_PROBE='GOWORK=off go list ./...' \
-	MODULES_PROBE_FAIL=skip \
-	MODULES_PROBE_SKIP_NOTE="standalone-offline doesn't resolve (GOWORK=off go list failed; cloud/ssh plugin or go.mod drift)" \
-	MODULES_SKIP_NOTE='no Go packages in this plugin' \
-		scripts/modules-run.sh test-plugins \
-		"$(sort $(patsubst %/go.mod,%,$(wildcard examples/module/*/go.mod)))" \
-		'GOWORK=off go test -count=1 ./...'
-	@echo "test-plugins: community plugins (resolvable offline) green"
+# It is DELETED rather than kept over an empty glob, and the distinction is the point:
+# modules-run.sh refuses a sweep over nothing (NIM-392's shape), so the target could not
+# have gone quietly green — but a tier that must be special-cased to survive having no
+# subject is a tier claiming coverage it does not have. The coverage itself moved intact:
+# each plugin repository runs `go test -race` over its own sources in its own `make
+# check`, on amd64 and arm64. What this tree still checks about those artifacts is their
+# schema document — see `check-plugin-schema`.
 
 # Runs tests with the race detector - a separate target so the plain `make test`
 # stays fast. CI should run both: `test` (fast, on every push) and
@@ -588,7 +563,7 @@ build-linux: bin-keeper bin-soul
 # e2e-live-services for the same reason the gate does it: the tier's real subject is an
 # out-of-tree service repository, and fetching it is named and paid for up front instead of
 # discovered inside a test that has already brought up five containers (NIM-876).
-e2e-live: build build-linux e2e-live-services
+e2e-live: build build-linux plugin-sources e2e-live-services
 	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
 		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
 		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
@@ -726,6 +701,17 @@ e2e-live-services:
 
 e2e-live-gate: SHELL := /bin/bash
 e2e-live-gate: build build-linux
+	@overrides=$$(scripts/plugin-source.sh overrides) || exit 1; \
+	if [ -n "$$overrides" ]; then \
+		echo "e2e-live-gate: refusing to run - a plugin pin is overridden by a working tree:" >&2; \
+		echo "$$overrides" | sed 's/^/  /' >&2; \
+		echo "  This gate's verdict is about PINNED commits. Under SOUL_STACK_PLUGIN_DIR_* it would be" >&2; \
+		echo "  about a directory nobody can name - the same failure the service-side override is refused" >&2; \
+		echo "  for, one artifact over. Unset it, or bump the pin to a commit you have pushed." >&2; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory plugin-sources \
+		|| { echo "e2e-live-gate: the pinned plugin source cache is neither warm nor fillable - the harness guards below resolve that pin, and four of the five gate tests build the artifact from it" >&2; exit 1; }
 	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
 	@(cd tests/e2e-live && go test -count=1 ./harness/) \
 		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
@@ -1457,8 +1443,14 @@ sign:
 # (sbom/pkg/sign) are NOT part of this - external tooling.
 # `check-vuln` requires access to vuln.go.dev - offline
 # it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
-# `test-plugins` - go.mod plugins outside go.work (GOWORK=off). `trial` - L0-render
-# over the examples/service/ corpus (catches broken case.yml assertions).
+# `trial` - L0-render over the examples/service/ corpus (catches broken case.yml
+# assertions).
+#
+# `test-plugins` stood here until NIM-868 and is GONE, not disabled: it swept the
+# `examples/module/*/go.mod` plugins under GOWORK=off, and the last two left for their own
+# repositories. The coverage did not evaporate — each plugin repo runs `go test -race` in
+# its own `make check`, on two architectures — but it is no longer this gate's to claim,
+# which is why the tier is deleted rather than kept green over an empty glob.
 # GATE_CHECK_TIERS / GATE_L1_TIERS — the gate's tiers, in the order they run.
 #
 # These are a LIST, not a prerequisite chain, and that is the whole point
@@ -1483,7 +1475,7 @@ sign:
 # `vet-tags` keep their place ahead of `build` and are NOT marked: they compile
 # the tree themselves, so on a broken build they report the same root cause
 # first-hand instead of being skipped for it.
-GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build test-plugins@build \
+GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build \
 	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
 	check-soul-template check-dev-stand-build check-webui check-webui-embed \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
@@ -1746,31 +1738,76 @@ check-vuln-corpus:
 # manifest_test.go asserts the same equality from inside the package; this asserts it
 # through the tool a plugin author actually runs, which is the half that was untested.
 #
-# GOWORK=off for the artifact (examples/module/* are outside the workspace, ADR-016);
+# GOWORK=off for the artifact (a plugin is its own module, outside the workspace, ADR-016);
 # GOWORK= for soul-mod (it lives in the sdk module and resolves through the workspace).
 #
-# The list is every artifact served through `module.ServeBundle`, which is what gives
-# it a `schema` subcommand for stamp to run. An artifact still on the single-module
-# `module.Serve` has no document to derive and belongs nowhere near this list.
-PLUGIN_SCHEMA_DIRS ?= examples/module/redis examples/module/vmlocal
+# ★ NIM-868 MOVED THE SUBJECT, NOT THE CHECK. The sources are no longer in this tree —
+# `redis` and `vmlocal` were the last two Go modules under `examples/`, and they left for
+# one repository each. What stayed is `examples/module/redis/schema.json`, VENDORED, and
+# this target is what keeps that copy honest: it builds the artifact from the PINNED
+# COMMIT (scripts/plugin-source.sh) and refuses if what the real `soul-mod stamp` derives
+# there is not byte-identical to the copy here.
+#
+# So this is the freshness gate for the vendored document, and it is the reason the
+# document could be vendored at all. Without it, `LINT_MODULES_REDIS` would be pointing
+# soul-lint at a file whose only claim to being the module's contract is that somebody
+# copied it once — which is the check-webui-embed failure mode (a bundle compared against
+# a fingerprint IT wrote, so a stale one matches its own record perfectly).
+#
+# ⚠ The corpus is what the catalog carries AND what this tree vendors, intersected: only
+# `redis` is vendored here, because only `redis` has scenarios in this tree to lint. The
+# empty case is a FAILURE, not a quiet pass — a gate sweeping nothing is the NIM-392 shape.
+PLUGIN_SCHEMA_VENDORED ?= redis
 check-plugin-schema:
+	@if [ -z "$(strip $(PLUGIN_SCHEMA_VENDORED))" ]; then \
+		echo "check-plugin-schema: the vendored-document list is EMPTY, so this gate would sweep" >&2; \
+		echo "  nothing and report green. If no document is vendored here any more, delete the" >&2; \
+		echo "  tier rather than letting it pass on an empty list (NIM-392)." >&2; \
+		exit 1; \
+	fi
 	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
 	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
-	for dir in $(PLUGIN_SCHEMA_DIRS); do \
-		bin=$$(basename "$$dir"); \
-		( cd "$$dir" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
-		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
-		"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
-		if ! cmp -s "$$tmp/schema.json" "$$dir/schema.json"; then \
-			echo "check-plugin-schema: $$dir/schema.json is NOT what the artifact publishes." >&2; \
-			echo "  It is generated from the module.Def values, not written by hand. Rebuild and re-stamp:" >&2; \
-			echo "    (cd $$dir && GOWORK=off go build -o dist/$$bin . )" >&2; \
-			echo "    go run ./sdk/cmd/soul-mod stamp $$dir/dist/$$bin" >&2; \
-			echo "    cp $$dir/dist/schema.json $$dir/schema.json" >&2; \
+	for alias in $(PLUGIN_SCHEMA_VENDORED); do \
+		vendored="examples/module/$$alias/schema.json"; \
+		if [ ! -f "$$vendored" ]; then \
+			echo "check-plugin-schema: $$vendored is missing — it is the document this gate exists to hold to the pin." >&2; \
 			exit 1; \
 		fi; \
-		echo "check-plugin-schema: $$dir/schema.json is what \`soul-mod stamp\` derives, and verify is green"; \
+		src=$$(scripts/plugin-source.sh dir "$$alias") || exit 1; \
+		( cd "$$src" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+		"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
+		if ! cmp -s "$$tmp/schema.json" "$$vendored"; then \
+			echo "check-plugin-schema: $$vendored is NOT what the pinned $$alias artifact publishes." >&2; \
+			echo "  The document is generated from module.Def values, never hand-edited. Either the" >&2; \
+			echo "  vendored copy is stale, or the pin is behind a change in the plugin repository:" >&2; \
+			echo "    make plugin-schema-vendor            # re-vendor from the CURRENT pin" >&2; \
+			echo "    scripts/plugin-source.sh             # bump the pin first if the change is newer" >&2; \
+			echo "  The pinned tree that disagrees is $$src" >&2; \
+			exit 1; \
+		fi; \
+		echo "check-plugin-schema: $$vendored is what \`soul-mod stamp\` derives at the pinned $$alias commit, and verify is green"; \
 	done
+
+# plugin-schema-vendor — re-vendor the document from the pinned commit. The remedy
+# `check-plugin-schema` names, so that a red gate has a command behind it rather than a
+# description of one (a remedy nobody can run is how a gate stops being read).
+plugin-schema-vendor:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
+	for alias in $(PLUGIN_SCHEMA_VENDORED); do \
+		src=$$(scripts/plugin-source.sh dir "$$alias") || exit 1; \
+		( cd "$$src" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+		cp "$$tmp/schema.json" "examples/module/$$alias/schema.json"; \
+		echo "plugin-schema-vendor: examples/module/$$alias/schema.json re-vendored from $$src"; \
+	done
+
+# plugin-sources — fill the pinned-plugin cache up front. The deliberate way to prepare a
+# machine that is about to go offline; after it, SOUL_STACK_PLUGIN_OFFLINE=1 turns a
+# missing pin into a loud error instead of a silent fetch.
+plugin-sources:
+	@scripts/plugin-source.sh prime
 
 check-all:
 	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
@@ -1925,9 +1962,9 @@ check-makefile-recipes:
 # standalone with GOWORK=off if it does not, under its $(VULN_TAGS) tag where one is
 # needed to reach its non-test code. That decision is per-module, so the command is a
 # script: scripts/vuln-scan.sh, which also prints which of the two it did. MODULES_PROBE_FAIL is
-# left at `fail` on purpose - test-plugins may downgrade an unresolvable module to a
-# SKIPPED row because a plugin it could not build is a plugin it did not test, but here
-# the same row would read "we could not scan it" and count towards a green gate.
+# left at `fail` on purpose - the retired `test-plugins` could downgrade an unresolvable
+# module to a SKIPPED row, because a plugin it could not build is a plugin it did not test,
+# but here the same row would read "we could not scan it" and count towards a green gate.
 #
 # The binary - `go install` into $(GOPATH)/bin (the protoc-plugins pattern). If not
 # found - installs the pinned version (idempotent).
@@ -2300,7 +2337,8 @@ help:
 	@echo "  build             build keeper / soul-trial / soul / soul-lint / soulctl"
 	@echo "  build-soulctl     build only soulctl (operator client CLI)"
 	@echo "  test              go test ./... across all modules (no docker)"
-	@echo "  test-plugins      GOWORK=off go test over go.mod plugins examples/module/* (redis)"
+	@echo "  plugin-sources    fill the pinned out-of-tree plugin cache (run before going offline)"
+	@echo "  plugin-schema-vendor  re-vendor examples/module/*/schema.json from the pinned commit"
 	@echo "  test-race         go test -race -count=1 ./... — the unit corpus under the detector (no docker)"
 	@echo "  test-integration  go test -tags=integration -race over the tagged packages only (needs docker)"
 	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, needs docker for the imp-slice)"
@@ -2318,7 +2356,7 @@ help:
 	@echo "  tidy              go mod tidy across all modules"
 	@echo ""
 	@echo "Checks/gate:"
-	@echo "  check             docker-free local gate (fmt+vet+build+test+test-plugins+openapi+gen+lint+trial)"
+	@echo "  check             docker-free local gate (fmt+vet+build+test+openapi+gen+lint+trial)"
 	@echo "  check-all         check + test-race + test-integration (L1) + e2e (L3a) = what a green CI run means"
 	@echo "                    — both take one of GATE_SLOTS=$(GATE_SLOTS) machine-wide slots and 1/N of the cores;"
 	@echo "                      GATE_SLOTS=1 serialises strictly, and waiting for a slot is printed"

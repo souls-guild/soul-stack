@@ -247,7 +247,8 @@ destiny:
 
 # Service custom modules: ONE ROW PER ARTIFACT, named by the alias the operator
 # registers it under — these scenarios address redis.*, so the artifact from
-# examples/module/redis/ is registered under the alias `redis` on a DragonFly
+# github.com/soul-stack-plugin/redis (it left this tree in NIM-868; what stayed is
+# its schema document, which is what lints these steps) is registered under `redis` on a DragonFly
 # cluster. The two spellings coincide and nothing enforces it: the binary carries
 # no name of its own (NIM-851 dropped the `soul-mod-` prefix from the directory,
 # which changed the artifact and not the address). It is the MAIN interface to the

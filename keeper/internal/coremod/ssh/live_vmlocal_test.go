@@ -248,10 +248,25 @@ func liveRepoRoot(t *testing.T) string {
 
 func liveBuildVmlocal(t *testing.T, root string) string {
 	t.Helper()
-	src := filepath.Join(root, "examples", "module", "vmlocal")
-	if _, err := os.Stat(src); err != nil {
-		t.Skipf("the vmlocal artifact is not in this tree (%s): %v", src, err)
+	// ★ The artifact left this tree in NIM-868 for github.com/soul-stack-plugin/vmlocal,
+	// so it is resolved at its PINNED commit through the one script that owns the pin.
+	//
+	// The skip below is a cache miss, NEVER "there is no such artifact". Those read
+	// identically and mean opposite things: the first is fixed by `make plugin-sources`,
+	// the second would mean this lane has no subject at all. A bare os.Stat on the old
+	// in-tree path would now always take the second branch and this lane — the only thing
+	// that provisions a real VM and holds sshd down, which is how NIM-872's missing
+	// `direct` retry was found — would quietly stop running while reporting a reason that
+	// was no longer true.
+	resolve := exec.Command(filepath.Join(root, "scripts", "plugin-source.sh"), "dir", "vmlocal")
+	resolve.Dir = root
+	resolved, err := resolve.CombinedOutput()
+	if err != nil {
+		t.Skipf("the pinned vmlocal artifact could not be materialized: %v\n%s\n"+
+			"\tit lives in its own repository since NIM-868 — fill the cache with `make plugin-sources`",
+			err, resolved)
 	}
+	src := strings.TrimSpace(string(resolved))
 	out := filepath.Join(t.TempDir(), "vmlocal")
 	cmd := exec.Command("go", "build", "-o", out, ".")
 	cmd.Dir = src

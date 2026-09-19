@@ -30,7 +30,7 @@ import (
 // on agreeing with the old model after the product has left it — which is the
 // shape of the bug, not a check for it.
 func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
-	dir := filepath.Join(repoRoot(t), redisPluginDir)
+	dir := filepath.Join(repoRoot(t), redisDocumentDir)
 
 	// (1) The document the builder stamps into the fixture is published where the
 	// builder looks for it. Absent, and BuildRedisPlugin dies before the
@@ -45,7 +45,7 @@ func TestFixturePluginMatchesTheArtifactModel(t *testing.T) {
 	// are live at once, which is how the disagreement lasted a whole release.
 	if _, err := os.Stat(filepath.Join(dir, "manifest.yaml")); err == nil {
 		t.Errorf("%s/manifest.yaml exists — NIM-377 replaced it with the generated %s, and the slot holds the artifact and nothing else (ADR-065(g))",
-			redisPluginDir, schema.SchemaFileName)
+			redisDocumentDir, schema.SchemaFileName)
 	}
 
 	// (3) Canonical, because the signature is over these exact bytes (ADR-026): a

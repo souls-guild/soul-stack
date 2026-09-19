@@ -57,11 +57,14 @@ modules_arg="${2:-}"
 command_arg="${3:-}"
 
 # Argument COUNT, not emptiness, decides whether this is a usage error. An empty
-# second argument is a caller that expanded a glob to nothing — `test-plugins`
-# passes `$(wildcard examples/module/*/go.mod)` — and telling that caller it got
-# the calling convention wrong sends them to read the invocation instead of
-# looking for the missing plugins. Both refuse; only one of them says what
-# actually happened, and this script exists to keep those apart.
+# second argument is a caller that expanded a glob to nothing — `test-plugins` used to
+# pass `$(wildcard examples/module/*/go.mod)`, and that is exactly the glob that went
+# empty when NIM-868 sent the last plugins to their own repositories — and telling that
+# caller it got the calling convention wrong sends them to read the invocation instead
+# of looking for the missing plugins. Both refuse; only one of them says what actually
+# happened, and this script exists to keep those apart. The caller is gone (a tier that
+# must be special-cased to survive an empty subject is not reporting on anything), but
+# the distinction it motivated holds for the next glob-expanding caller.
 if [ "$#" -ne 3 ] || [ -z "${label}" ]; then
   echo "modules-run.sh: usage: modules-run.sh <label> <modules> <command>" >&2
   exit 2

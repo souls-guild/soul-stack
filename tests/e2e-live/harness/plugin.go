@@ -117,7 +117,7 @@ func BuildRedisPlugin(t *testing.T) string {
 // corpus against.
 func readRedisDocument(t *testing.T) []byte {
 	t.Helper()
-	path := filepath.Join(repoRoot(t), redisPluginDir, schema.SchemaFileName)
+	path := filepath.Join(repoRoot(t), redisDocumentDir, schema.SchemaFileName)
 	document, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatalf("readRedisDocument: %v", err)
@@ -169,7 +169,7 @@ func assertStampMatchesPublished(t *testing.T, docPath string) {
 	if !bytes.Equal(stamped, published) {
 		t.Fatalf("`soul-mod stamp` derived a document the repository does not publish "+
 			"(%d bytes stamped, %d bytes in %s/%s) — rebuild the artifact, re-run `soul-mod stamp` on it, and commit the result",
-			len(stamped), len(published), redisPluginDir, schema.SchemaFileName)
+			len(stamped), len(published), redisDocumentDir, schema.SchemaFileName)
 	}
 }
 
@@ -266,17 +266,24 @@ func buildRedisArtifact(t *testing.T) (artifact, document string) {
 	return redisBinPath, redisDocPath
 }
 
-// goBuildPlugin — `GOWORK=off CGO_ENABLED=0 go build` of the plugin sources (its
-// go.mod replace directives resolve inside the repo), with redisBuildFlags for a
-// reproducible artifact. Output goes outside the repo.
+// goBuildPlugin — `GOWORK=off CGO_ENABLED=0 go build` of the plugin sources, with
+// redisBuildFlags for a reproducible artifact. Output goes outside the repo.
+//
+// The sources are the PINNED commit's, extracted into a cache outside this tree
+// (NIM-868). GOWORK=off is no longer about the plugin sitting outside go.work — it sits
+// outside the repository altogether — but it still matters: an operator's exported
+// GOWORK pointing at this tree's workspace would resolve `sdk` to the working copy
+// instead of the published version the plugin's own go.mod asks for, and the artifact
+// the gate delivers would then not be the one the plugin repository builds.
 func goBuildPlugin(t *testing.T, out string, env ...string) error {
 	t.Helper()
+	src := redisPluginSourceDir(t)
 	args := append([]string{"build"}, redisBuildFlags...)
 	cmd := exec.Command("go", append(args, "-o", out, ".")...)
-	cmd.Dir = filepath.Join(repoRoot(t), redisPluginDir)
+	cmd.Dir = src
 	cmd.Env = append(append(os.Environ(), "GOWORK=off", "CGO_ENABLED=0"), env...)
 	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("go build %s (%v): %w\nOUTPUT:\n%s", redisPluginDir, env, err, output)
+		return fmt.Errorf("go build %s (%v): %w\nOUTPUT:\n%s", src, env, err, output)
 	}
 	return nil
 }

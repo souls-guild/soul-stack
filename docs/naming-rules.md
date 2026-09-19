@@ -603,7 +603,7 @@ in this tree, so one spelling is used everywhere rather than a different invente
 per test file. It names no real provider and nothing registers it; a doc example that
 means a specific provider names that provider instead.
 
-> An alias used to carry a second job: [`vmlocal`](../examples/module/vmlocal/README.md)
+> An alias used to carry a second job: [`vmlocal`](https://github.com/soul-stack-plugin/vmlocal)
 > was built as a key-for-key mirror of a cloud provider's parameter surface so that
 > registering it under that provider's alias would run an unmodified cloud scenario
 > against libvirt. **That is no longer true (NIM-873)** — `vmlocal` has its own

@@ -41,7 +41,11 @@ const redisProvisionFunc = "provision_redis_plugin"
 // commit itself.
 func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 	code := redisProvisionStep(t)
-	dir := filepath.Join(repoRoot(t), redisPluginDir)
+	// The pinned tree, not a path in this repository: NIM-868 took the sources out, and
+	// what the step reads is whatever scripts/plugin-source.sh materializes. Resolving it
+	// the same way the step does is the point — a guard reading a different directory
+	// would answer about a plugin the stand never builds.
+	dir := redisPluginSourceDir(t)
 
 	for _, name := range pluginDirReferences(t, code) {
 		if _, err := os.Stat(filepath.Join(dir, name)); err != nil {
@@ -49,7 +53,7 @@ func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 				"\tthe step calls `fail` on it, so `make dev-provision` stops and no stand comes up at all — "+
 				"fix the step to read what the plugin publishes now, do not soften the fail to a warn "+
 				"(the plugin would then silently not arrive and the failure would move into a scenario run)",
-				devProvisionScript, redisPluginDir, name, err)
+				devProvisionScript, dir, name, err)
 		}
 	}
 
@@ -61,7 +65,7 @@ func TestDevProvisionReadsOnlyFilesThatExist(t *testing.T) {
 	if strings.Contains(code, "manifest.yaml") {
 		t.Errorf("%s still names manifest.yaml — NIM-377 replaced it with the generated %s, "+
 			"and %s asserts it stays deleted",
-			devProvisionScript, schema.SchemaFileName, redisPluginDir)
+			devProvisionScript, schema.SchemaFileName, redisDocumentDir)
 	}
 }
 
@@ -282,16 +286,20 @@ func redisBinaryVar(t *testing.T, code string) string {
 // stays green while checking nothing.
 func pluginDirReferences(t *testing.T, code string) []string {
 	t.Helper()
-	// EXAMPLES is ${REPO_ROOT}/examples, so the shell literal is the tail of the
-	// path this package names. Derived, so renaming the directory on one side only
-	// is a failure here instead of a silent no-op.
-	rel := strings.TrimPrefix(redisPluginDir, "examples/")
-	assign := regexp.MustCompile(`local[[:space:]]+([A-Za-z_][A-Za-z0-9_]*)="\$\{EXAMPLES\}/` + regexp.QuoteMeta(rel) + `"`)
+	// ★ The step must take its sources from scripts/plugin-source.sh, at the alias this
+	// package builds from. That is the invariant NIM-868 leaves behind: the dev stand and
+	// the live gate resolve ONE pin, so a bump moves both and neither can quietly build a
+	// different artifact than the other. Matching the resolver call rather than a path is
+	// also what keeps this guard true when the pin moves, which a literal never would.
+	assign := regexp.MustCompile(`([A-Za-z_][A-Za-z0-9_]*)="\$\(.*plugin-source\.sh" dir ` +
+		regexp.QuoteMeta(redisPluginAlias) + `\)"`)
 	m := assign.FindStringSubmatch(code)
 	if m == nil {
-		t.Fatalf("the redis step in %s no longer takes its sources from ${EXAMPLES}/%s — "+
-			"this package says that is where the plugin lives (%s)",
-			devProvisionScript, rel, redisPluginDir)
+		t.Fatalf("the redis step in %s no longer resolves its sources through "+
+			"scripts/plugin-source.sh dir %s — that script owns the pin, and the L3b fixture "+
+			"(redisPluginSourceDir) builds from the same one. Two ways of finding the sources "+
+			"is two artifacts, and only one of them is in the gate",
+			devProvisionScript, redisPluginAlias)
 	}
 	// Only literals can be stat'ed, and an indirect read is precisely the one this
 	// guard would miss — NIM-516 was a read of a file that was not there.

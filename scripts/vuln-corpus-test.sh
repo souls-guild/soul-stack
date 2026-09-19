@@ -59,8 +59,14 @@ assert_eq "${expected}" "${corpus}" "module list"
 
 it "each family the old eight-module corpus never opened is in it"
 assert_eq yes "$(contains 'tests/e2e')" "the e2e harnesses"
-assert_eq yes "$(contains 'examples/module/redis')" "the community plugins"
 assert_eq yes "$(contains 'keeper/internal/pluginhost/testdata/ssh-plugin')" "the pluginhost fixtures"
+# The community-plugin row stood here until NIM-868 and named examples/module/redis. That
+# family has no member left in this tree — the last two plugins went to their own
+# repositories — so the row is REMOVED rather than repointed at a survivor there is none of.
+# Nothing is weakened by dropping it: the assertion above this block already holds the
+# corpus to EVERY go.mod in the tree, and these rows only ever named families the derivation
+# would have to have missed. A plugin landing here again is covered the moment it has a
+# go.mod, with no edit to this file.
 
 it "a module whose go.mod names no toolchain is in the corpus like any other"
 missing=""

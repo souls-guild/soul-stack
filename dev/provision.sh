@@ -630,14 +630,24 @@ provision_git_repo \
 # being able to reproduce what the gate sees. This step read manifest.yaml for a whole
 # release after NIM-377 removed it, and every fresh stand died at bring-up (NIM-516).
 #
-# In-place build (cwd=source directory): the plugin's go.mod uses relative-replace
-# (../../../sdk, ../../../proto/plugin) - the tree cannot be copied. GOWORK=off - the plugin
-# is outside go.work (precedent from Makefile test-plugins). -trimpath -ldflags "-buildid=" -
+# ★ The sources are NOT in this tree since NIM-868: the plugin left for
+# github.com/soul-stack-plugin/redis, and scripts/plugin-source.sh materializes it at the
+# PINNED commit into a cache outside the repository. So a stand builds the same bytes the
+# live gate does, which is the parity this step exists to keep — both now resolve the
+# sources through that one script, and a pin bump moves them together.
+#
+# Build with cwd=the pinned tree. GOWORK=off - the plugin resolves `sdk` and `proto/plugin`
+# at their PUBLISHED versions, and an operator's exported GOWORK pointing at this tree's
+# workspace would silently substitute the working copy. -trimpath -ldflags "-buildid=" -
 # a reproducible sha256: otherwise a repeat provision changes the binary → invalidates an
 # already-issued Sigil grant. Stamping keeps that property: the same binary and the same
 # document append the same bytes.
 provision_redis_plugin() {
-    local src="${EXAMPLES}/module/redis"
+    local src
+    if ! src="$("${REPO_ROOT}/scripts/plugin-source.sh" dir redis)"; then
+        fail "could not materialize the pinned redis plugin sources (scripts/plugin-source.sh dir redis).
+  They left this tree in NIM-868. Fill the cache with: make plugin-sources"
+    fi
     local dest="${KEEPER_DEV_DIR}/plugin-repos/redis"
     local bin="redis"
     # The document IS the module's contract now, and it is read without running the

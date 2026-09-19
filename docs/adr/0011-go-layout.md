@@ -227,3 +227,71 @@ No name in `sdk/` or `proto/plugin/` moves: they are interfaces, not artifacts. 
 in both did change — `common.proto` and `soulmodule.proto` described the artifact by the
 prefix, and a sentence whose subject is gone has to be rewritten rather than stripped —
 and the generated mirror was re-emitted by `make gen`, not edited.
+
+## Amendment 2026-09-19 (NIM-868): the last two Go modules leave `examples/`, and one document is vendored back
+
+The drift the 2026-09-05 amendment left open is closed. `redis` and `vmlocal` moved to one
+repository each, requiring the published `sdk` / `proto/plugin` with no `replace`:
+
+| was | is |
+|---|---|
+| `examples/module/redis` | [`soul-stack-plugin/redis`](https://github.com/soul-stack-plugin/redis) |
+| `examples/module/vmlocal` | [`soul-stack-plugin/vmlocal`](https://github.com/soul-stack-plugin/vmlocal) |
+
+**There is no longer a single `go.mod` under `examples/`**, which is what this ADR has
+asked for since it was written and what NIM-825 could only mostly deliver.
+
+The redis repository already existed and the amendment above is why it had not been used:
+it carried a partial `cmd/` + `internal/acl/` implementation of one object. That question
+was decided rather than deferred — the seven-object implementation from this tree replaced
+it whole, on `main`, because re-laying a working bundle of 7 objects and 19 actions under
+the other arrangement is churn with no functional gain and the partial implementation would
+be discarded either way. Its `.github` workflows were the one thing worth keeping and were
+carried across; the `live` job among them was not, because it drove a `make l1` target the
+surviving implementation has no equivalent of, and a workflow calling a target that does
+not exist is a permanently-red CI. The two unmerged branches on that repository were left
+untouched for their owner to rebase.
+
+`vmlocal` arrived as [NIM-873](0020-plugin-infrastructure.md) left it — a libvirt machine
+provider in its own right, not a mirror of a cloud provider's parameter surface. The
+`testdata/wbcloud.schema.json` the epic expected to travel with it did not, because that
+ticket had already deleted it along with the mirror it policed.
+
+### ★ One document is vendored back, and this is the part that is not symmetric with NIM-825
+
+`examples/module/redis/schema.json` **stays in this tree**, alone, with no Go beside it —
+a non-Go artifact, which is exactly what `examples/` is for.
+
+The 2026-09-05 amendment recorded the cost of not doing this for mongo: `--modules=<alias>=<path>`
+has nothing to point at once the plugin leaves, so the corpus comes off the scenario lint
+and nothing checks that plugin's `params:` at all. For mongo that was one service. For
+redis it is **eleven steps** — six `redis.*` addresses in `examples/service/redis` and five
+in `examples/service/dragonfly`, which the same artifact serves. Taking eleven off the lint
+to stay consistent with one was refused; the balance the earlier amendment named as the
+reason to reconsider had in fact tipped.
+
+What makes a vendored copy worth anything is the check that it is still the original, and
+it has one. `make check-plugin-schema` no longer builds sources in this tree — it builds
+the artifact from a **pinned commit** of the plugin repository, runs the real `soul-mod
+stamp` over it, and refuses unless the derived document is byte-identical to the vendored
+file. The failure mode it avoids is [check-webui-embed](../../Makefile)'s: a copy compared
+against a fingerprint it wrote itself matches its own record perfectly no matter how stale
+it is.
+
+The pin lives in `scripts/plugin-source.sh`, once, because three readers need the same
+answer — that gate, the L3b live fixture (`harness.BuildRedisPlugin`) and `dev/provision.sh`.
+A pin spelled in three places drifts in one of them. The mechanism is
+[NIM-876](../../tests/e2e-live/harness/servicecatalog.go)'s for out-of-tree SERVICE
+repositories, reused: a pinned commit in a cache outside the repository, offline after the
+first fill, with a working-tree override that `make e2e-live-gate` refuses to start under.
+
+### What this cost
+
+`make test-plugins` is **deleted**, not disabled. It swept `examples/module/*/go.mod` under
+`GOWORK=off`, and it now has no subject. The coverage did not evaporate — each plugin
+repository runs `go test -race` over its own sources in its own `make check`, on two
+architectures — but it is no longer this tree's to claim, and a tier special-cased to
+survive having nothing to sweep is a tier reporting on nothing.
+
+`redis-failover` still has no `go.mod` (NIM-797) and so does not affect the criterion above;
+when it gets one it belongs in its own repository.

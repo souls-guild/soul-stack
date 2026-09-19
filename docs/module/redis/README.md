@@ -19,7 +19,7 @@ performs **one** operation on one Redis instance. Custom plugin
 `replica`, `sentinel`, `user` — from one binary, `redis`; the artifact carries no
 name of its own (NIM-377), so level 1 is whatever alias the operator registers it under.
 Implementation -
-[`examples/module/redis/`](../../../examples/module/redis/)
+[`examples/module/redis/`](https://github.com/soul-stack-plugin/redis)
 (`object.go` - the object tables and the dispatch, `bundle.go` - the seven `module.Def`s the
 schema document is generated from, `obj_*.go` - one file per object's declaration,
 `impl.go` - the shared driver + command.run/instance.configured/acl.reloaded, `probe.go` -
@@ -229,7 +229,7 @@ idempotency on the plugin side.
 > hot-settable applies as usual. Changing the startup-only directive will take effect when
 > **next restart** of the process (it is triggered by a change in hardening unit, destiny
 > [`redis/tasks/server.yml`](../../../examples/destiny/redis/tasks/server.yml)).
-> Deniliste (`startupOnlyDirectives` in [`impl.go`](../../../examples/module/redis/impl.go)):
+> Deniliste (`startupOnlyDirectives` in [`impl.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/impl.go)):
 > `port` · `tls-port` · `bind` · `unixsocket` · `unixsocketperm` · `io-threads` ·
 > `io-threads-do-reads` · `cluster-enabled` · `cluster-config-file` · `aclfile` ·
 > `logfile` · `pidfile` · `dir` · `daemonize` · `supervised` · `dbfilename` ·
@@ -587,7 +587,7 @@ downtime (mirror manual `redis-cli --cluster add-node`/`--cluster failover`/
 **single** password/TLS (operator aligns `new == old` before migration). Order
 strict: `external-joined` (replicas are catching up with the old masters) → `failed-over`
 (promotion, slots are moving to new ones) → `external-forgotten` (old nodes are forgotten).
-Implementation - [`migrate.go`](../../../examples/module/redis/migrate.go).
+Implementation - [`migrate.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/migrate.go).
 
 **`external-joined`** — merge new nodes into the old cluster and make each one a replica
 old master **1:1**: connection to `source_nodes` → `CLUSTER NODES` old cluster
@@ -691,7 +691,7 @@ Detaches the instance from the master via `REPLICAOF NO ONE` (go-redis), promoti
 independent master. **The final** step of migration from an external source is after
 `replica.offset-synced` confirmed catch-up (`caught_up == true`). Idempotent (`INFO
 replication`): instance already `role == master` → `changed=false`, no-op (safe for
-I will repeat). Implementation - [`detach.go`](../../../examples/module/redis/detach.go).
+I will repeat). Implementation - [`detach.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/detach.go).
 
 | Param | Type | Required/default | Meaning |
 |---|---|---|---|
@@ -771,7 +771,7 @@ to Redis over TLS. Two states have a **second** set of TLS parameters for the ex
 > the manifest header is not a declaration. Four states used to omit the set
 > entirely, so an operator's typo in a TLS key passed unnoticed (NIM-206). The
 > guard is a table test over all eleven states in
-> [`manifest_test.go`](../../../examples/module/redis/manifest_test.go).
+> [`manifest_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/manifest_test.go).
 > `cluster` is the one exception on `addr`/`db`: it has no single instance.
 
 | Parameter | Type | Default | Destination |
@@ -820,7 +820,7 @@ Two consequences worth knowing before you write a scenario:
 The rule is derived from what each state declares in its own `input:`, so a
 parameter added later inherits it without anyone remembering to. Guarded by a table
 test that walks every object, every action and every declared `bool`/`int` parameter
-in [`params_test.go`](../../../examples/module/redis/params_test.go). Keys
+in [`params_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/params_test.go). Keys
 **nested inside** a map-typed parameter are not declared individually and are checked
 by hand where they are read: `monitor.port`, `monitor.quorum`, and the `port` of a
 cluster node spec.
@@ -932,7 +932,7 @@ Migration from external Redis (three steps, health-gate by `caught_up`):
 ## Tests
 
 - **L0 command/config/acl**
-  ([`impl_test.go`](../../../examples/module/redis/impl_test.go)):
+  ([`impl_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/impl_test.go)):
 fake `redisConn` + fake `ApplyEvent`-stream. Covers `Validate` (empty
 addr/args/config, acl requires addr, unimplemented state), Apply happy-path
 command/config, unix-socket-parsing, `changed`-semantics, numeric stringification
@@ -944,7 +944,7 @@ before/after, `changed=true` on diff / `false` on match, error `LOAD`/`LIST` →
 `failed`); and **IS-invariant** - the password does not leak into events or arguments
 commands, nor in a sanitized connection error.
 - **L0 probe (pinged/role/replica-synced)**
-  ([`probe_test.go`](../../../examples/module/redis/probe_test.go)):
+  ([`probe_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/probe_test.go)):
 fake `redisConn`. Covers `Validate` (empty `addr`); `instance.pinged` happy-path
 (`PING` → `Output.result == 'PONG'`, `changed=false`), error `PING` → `failed`;
   `instance.role-probed` happy-path (`INFO replication` → `Output.role` = `master`/`slave`,
@@ -953,7 +953,7 @@ fake `redisConn`. Covers `Validate` (empty `addr`); `instance.pinged` happy-path
 reason); **IS-invariant** (password does not flow into events/sanitized error
 connection).
 - **L0 offset-synced**
-  ([`offset_synced_test.go`](../../../examples/module/redis/offset_synced_test.go)):
+  ([`offset_synced_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/offset_synced_test.go)):
 fake `redisConn` (own + external source). Covers `Validate` (requires `addr` +
 `source_addr`, rejects negative `lag_threshold`); `caught_up=true` when
 catching up; `lag > threshold` / `lag <= threshold`; `master_sync_in_progress` → not
@@ -962,7 +962,7 @@ caught_up; `link down` → not caught_up; lack of offset → not caught_up; opt.
 details and `source_tls` (regardless of its TLS); **IS-invariant** (neither yours nor
 source password does not leak - incl. when the second connection fails).
 - **L0 cluster**
-  ([`cluster_test.go`](../../../examples/module/redis/cluster_test.go)):
+  ([`cluster_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/cluster_test.go)):
 fake-fleet of nodes by addr. Covers `Validate` (empty `nodes`, non-`created`
 action, indivisible composition, negative `replicas_per_shard`); happy create
 (`MEET`/`ADDSLOTS`/`REPLICATE` with correct arguments, full coverage
@@ -980,14 +980,14 @@ source slots in ascending order via `SETSLOT IMPORTING`/`MIGRATING`/`MIGRATE`/
 flows into events/commands/connection error; the only wire-AUTH is in `MIGRATE`,
 is checked by a separate assert).
 - **L3c reshard skeleton**
-  ([`cluster_reshard_l3c_test.go`](../../../examples/module/redis/cluster_reshard_l3c_test.go)):
+  ([`cluster_reshard_l3c_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/cluster_reshard_l3c_test.go)):
 e2e-live vs real cluster (build-tag `e2e_live` + `t.Skip` to
 harness-entity "live redis cluster"). TODO-invariant: writing keys to slots
 source (incl. whitespace+TTL), one imperative reshard, real check
 slot owner changes + lossless keys + TTL + convergence `DBSIZE`.
 Compiled in a gate, it really doesn't run without a live cluster.
 - **L0 replica**
-  ([`replica_test.go`](../../../examples/module/redis/replica_test.go)):
+  ([`replica_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/replica_test.go)):
 fake `redisConn` with scripted `INFO replication`. Covers `Validate`
 (no `master_addr`); `REPLICAOF` + `masterauth` BEFORE it; idempotency (already
 replica of the desired master → no-op); `addr == master_addr` → master-guard no-op
@@ -996,14 +996,14 @@ replica of the desired master → no-op); `addr == master_addr` → master-guard
 at `master_tls`); **IS-invariant** (neither `password` nor `master_password` flows
 in events/sanitized connection error).
 - **L0 detached**
-  ([`detach_test.go`](../../../examples/module/redis/detach_test.go)):
+  ([`detach_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/detach_test.go)):
 fake `redisConn` with scripted `INFO replication`. Covers `Validate` (empty
 `addr`); slave → `REPLICAOF NO ONE` + `changed=true` + `previous_master` in Output;
 already master → no-op (`changed=false`, no commands); error `INFO` → `failed`;
 **IS-invariant** (the password does not flow into the sanitized connection error).
 - **L0 cluster live migration (join-external/failover-takeover/forget-external)**
-  ([`migrate_test.go`](../../../examples/module/redis/migrate_test.go)
-  + [`migrate_failover_test.go`](../../../examples/module/redis/migrate_failover_test.go)):
+  ([`migrate_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/migrate_test.go)
+  + [`migrate_failover_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/migrate_failover_test.go)):
 fake-fleet of nodes (new + old cluster by `source_nodes`). `join-external`:
 `Validate` (empty `nodes`/`source_nodes`/invalid `shards_dest`); happy 1:1-
 mapping nodes↔masters (by **first slot**, not node-id); fail-fast with mismatch
@@ -1017,7 +1017,7 @@ external`: `FORGET` all old ids on **each** new node; doesn't foreget himself
 seed-failover and "all seeds are gone" → `failed`. In all - **IS-invariant** (password
 does not leak).
 - **L0 user (present/absent)**
-  ([`user_test.go`](../../../examples/module/redis/user_test.go)):
+  ([`user_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/user_test.go)):
 fake `redisConn` with a scripted `ACL LIST` (before/after) and a per-verb failure, so
 "`SETUSER` failed" and "`ACL SAVE` failed" are distinguishable — the difference IS the
 persistence invariant. Covers `Validate` (empty `addr`/`name`/`perms`, a name carrying
@@ -1067,7 +1067,7 @@ failure; and a **credential inside a selector** (`(>secret +get)`) is refused, w
 prefix test on byte 0 let it reach Redis, which quoted the plaintext straight back into
 the failure message.
 - **L0 sentinel**
-  ([`sentinel_test.go`](../../../examples/module/redis/sentinel_test.go)):
+  ([`sentinel_test.go`](https://github.com/soul-stack-plugin/redis/blob/b42cf6f9e11a6facb4fb1c0ae22a1b5f0f747981/sentinel_test.go)):
 fake `redisConn` with scripted `SENTINEL MASTER`/`CONFIG GET`. Covers
 pure transfer functions (`classifyConfig`/`supportedGlobals` version-gate +
 secret-filter/`computeMonitorAction`/`computeSetUpdates`); `Validate`; `MONITOR`
@@ -1081,15 +1081,23 @@ in events/connection error).
 
 ## Assembly
 
+The sources are not in this repository. Since **NIM-868** the artifact is built and
+released from [`soul-stack-plugin/redis`](https://github.com/soul-stack-plugin/redis),
+which depends on the published `sdk` and `proto/plugin` with no `replace`:
+
 ```sh
-cd examples/module/redis
-GOWORK=off go build ./...   # binary redis (gitignored)
-GOWORK=off go test ./...    # L0
+git clone https://github.com/soul-stack-plugin/redis
+cd redis
+make check                  # fmt, vet, no-replace, test -race, schema
 ```
 
-Module - separate go.mod from `replace` to core (`../../../proto/plugin`,
-`../../../sdk`); going standalone, not included in `go.work` (convention
-`examples/module/`).
+What this tree keeps is the module's **schema document**, vendored at
+`examples/module/redis/schema.json`, so that `soul-lint` can check the `params:` of the
+`redis.*` steps in `examples/service/{redis,dragonfly}` without fetching a binary. It is
+pinned: `make check-plugin-schema` builds the artifact from the commit
+`scripts/plugin-source.sh` names and refuses unless the document it derives is
+byte-identical to the vendored copy. To take a change from the plugin repository, bump
+that pin and run `make plugin-schema-vendor`.
 
 ## See also
 

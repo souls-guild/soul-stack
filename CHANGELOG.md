@@ -7,6 +7,30 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **`redis` and `vmlocal` leave `examples/` for their own repositories (NIM-868).** They
+  were the last two Go modules under a directory [ADR-011](docs/adr/0011-go-layout.md)
+  reserves for non-Go artifacts, and each reached the core through a relative `replace` —
+  the coupling that rule exists to prevent. They now live at
+  [`soul-stack-plugin/redis`](https://github.com/soul-stack-plugin/redis) and
+  [`soul-stack-plugin/vmlocal`](https://github.com/soul-stack-plugin/vmlocal), depending on
+  the published `sdk` and `proto/plugin` with no `replace`. **There is no longer a single
+  `go.mod` under `examples/`**, closing the criterion NIM-825 left open.
+  - **One document is vendored back.** `examples/module/redis/schema.json` stays, alone,
+    so `soul-lint` can go on checking the `params:` of eleven `redis.*` steps in
+    `examples/service/{redis,dragonfly}` — the alternative, taking those corpora off the
+    scenario lint as NIM-825 did for mongo's one service, was refused at eleven.
+  - **`check-plugin-schema` keeps its name and changes its subject.** It builds the
+    artifact from a commit pinned in `scripts/plugin-source.sh`, stamps it with the real
+    `soul-mod`, and refuses unless the derived document is byte-identical to the vendored
+    copy — so the copy cannot go stale silently. `make plugin-schema-vendor` is the remedy
+    it names, `make plugin-sources` fills the cache before going offline.
+  - **`make test-plugins` is deleted, not disabled** — it swept `examples/module/*/go.mod`
+    and has no subject left. Each plugin repository runs `go test -race` on two
+    architectures in its own `make check`.
+  - **Breaking for anyone building the plugin from this tree:** `cd examples/module/redis
+    && go build` no longer exists. `dev/provision.sh` and the L3b live fixture both resolve
+    the sources through the one pin instead, so a dev stand and the gate cannot build
+    different artifacts.
 - **`vmlocal` is a libvirt machine provider in its own right, not a mirror of a cloud
   contract (NIM-873).** It was built so that registering it under a cloud provider's
   alias ran that provider's scenario unmodified, which cost it five credential params it
