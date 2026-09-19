@@ -39,7 +39,7 @@ func TestL3bBootstrap_OneSoul(t *testing.T) {
 	}
 
 	// soul.bootstrapped is written by the keeper-side bootstrapHandler after
-	// a successful COMMIT of the "burn token + insert seed + status flip" transaction.
+	// a successful COMMIT of the "burn token + write seed" transaction.
 	// The subset includes SID (a stable payload field).
 	stack.AssertAuditEvent(t, "soul.bootstrapped", map[string]any{
 		"sid": wantSID,
@@ -47,7 +47,9 @@ func TestL3bBootstrap_OneSoul(t *testing.T) {
 
 	// Sanity-check: the souls row's connected status is visible directly (waitFor*
 	// inside Spawn already checked it, this is an extra guarantee after the full-Cleanup
-	// gate: the snapshot is taken before teardown).
+	// gate: the snapshot is taken before teardown). Since NIM-865 this asserts the
+	// EventStream handshake rather than the Bootstrap RPC — `soul init` alone leaves
+	// the row `pending`, so reaching `connected` means `soul run` really connected.
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 	var status string

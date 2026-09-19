@@ -20,8 +20,10 @@ import (
 // specifically tests the gRPC Bootstrap flow (CSR → Keeper.Bootstrap →
 // leaf-cert + audit `soul.bootstrapped`); RBAC/admin API is a separate area
 // covered by L2 Operator API tests. The keeper handler itself reads
-// `bootstrap_tokens` and upgrades `souls.status pending → connected` — that
-// is the behavior under test.
+// `bootstrap_tokens` and issues the seed; `souls.status` reaches `connected`
+// from the EventStream handshake, not from this RPC (NIM-865) — so
+// waitForSoulConnected is a real test of `soul run`, not a restatement of what
+// bootstrap just wrote.
 //
 // The plain token is returned to the caller (passed into the soul
 // container's env). Only the SHA-256 hex of the plain value is stored in the

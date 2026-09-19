@@ -58,7 +58,13 @@ type fakeSoulPool struct {
 	lastListArgs []any
 
 	expireCalled bool
-	tokenInserts int
+	// closeRecoveryCalled — `force` must also disarm tokens that were already
+	// BURNED (NIM-865). Those stay redeemable by the key they bound until the
+	// host connects, and ExpireActiveBySID cannot see them: it matches
+	// `used_at IS NULL`. Without this second write an operator reacting to a
+	// leak is told the old token was killed while it still works.
+	closeRecoveryCalled bool
+	tokenInserts        int
 
 	commitCalled   bool
 	rollbackCalled bool
@@ -197,6 +203,13 @@ func (f *fakeSoulPool) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, erro
 }
 
 func (f *fakeSoulPool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	// CloseRecoveryBySID (NIM-865) — the only Exec'd bootstrap_tokens write;
+	// its sibling ExpireActiveBySID carries a RETURNING and goes through
+	// QueryRow above.
+	if strings.Contains(sql, "UPDATE bootstrap_tokens") && !strings.Contains(sql, "RETURNING") {
+		f.closeRecoveryCalled = true
+		return pgconn.CommandTag{}, nil
+	}
 	return pgconn.CommandTag{}, errors.New("fakeSoulPool.Exec: unexpected SQL: " + sql)
 }
 
@@ -1370,8 +1383,39 @@ func TestSoulIssueToken_Force_ExpiresOld(t *testing.T) {
 	if !pool.expireCalled {
 		t.Errorf("expire should be called with force=true")
 	}
+	// `force` has to close the reply-loss recovery window too, not only free the
+	// active-token slot — see [fakeSoulPool.closeRecoveryCalled].
+	if !pool.closeRecoveryCalled {
+		t.Error("force=true did not disarm already-burned tokens; a leaked burned token would stay redeemable")
+	}
 	if pool.tokenInserts != 1 {
 		t.Errorf("token inserts = %d, want 1", pool.tokenInserts)
+	}
+}
+
+// ★ The recovery window must close on a PLAIN issue-token, not only under
+// `force` (NIM-865). In the state that matters — a reply lost in flight — the
+// old token is already burned, so there is no ACTIVE token to conflict with and
+// the operator never passes `force`. Gating the disarm on it would mean the
+// plain call reports a fresh token issued while the leaked burned one is live.
+func TestSoulIssueToken_WithoutForce_StillClosesTheRecoveryWindow(t *testing.T) {
+	pool := &fakeSoulPool{
+		existingSoul: &soul.Soul{
+			SID: "web-01.example.com", Transport: soul.TransportAgent, Status: soul.StatusPending,
+		},
+		// No active token: exactly the post-burn state.
+	}
+	h := NewSoulHandler(pool, nil, nil, nil)
+
+	rec := doIssueToken(t, h, "web-01.example.com", "")
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200, body=%s", rec.Code, rec.Body.String())
+	}
+	if pool.expireCalled {
+		t.Error("expire should not be called without force=true")
+	}
+	if !pool.closeRecoveryCalled {
+		t.Error("a plain issue-token left the burned token redeemable")
 	}
 }
 

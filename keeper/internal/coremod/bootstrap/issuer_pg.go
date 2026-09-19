@@ -51,6 +51,26 @@ WHERE sid = $1
 FOR UPDATE
 `
 
+// hasActiveSeedSQL asks the question `souls.status` only approximates: does
+// this host already hold a machine identity?
+//
+// It is the seed, not the status, that decides whether issuing a token is safe
+// (NIM-865). Bootstrap used to flip the row to `connected` the instant it
+// signed a certificate, so the status happened to answer this — but it answered
+// by asserting a stream that did not exist, and a host whose Bootstrap reply
+// was lost then read `connected` forever. With the status left honest at
+// `pending` until a stream really opens, a status-only test would send exactly
+// that host — and every host in the ordinary window between onboarding and its
+// first connect — down the re-arm path below, minting it a fresh token while an
+// active seed is on file. That token supersedes the seed for whoever redeems
+// it, which is the identity takeover the `connected` arm refuses by name.
+const hasActiveSeedSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM soul_seeds
+     WHERE sid = $1 AND status = 'active'
+)
+`
+
 const refreshPendingSoulSQL = `
 UPDATE souls
 SET status           = 'pending',
@@ -139,12 +159,44 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 	if transport != string(keepersoul.TransportAgent) {
 		return IssuedHost{}, fmt.Errorf("transport is %q, want %q", transport, keepersoul.TransportAgent)
 	}
-	switch keepersoul.Status(status) {
+	// Read under the same row lock as the status, so nothing can onboard between
+	// the two reads and slip past the onboarded arm below.
+	var hasActiveSeed bool
+	if err := tx.QueryRow(ctx, hasActiveSeedSQL, sid).Scan(&hasActiveSeed); err != nil {
+		return IssuedHost{}, fmt.Errorf("check active seed: %w", err)
+	}
+
+	// An active seed means the host holds an identity, so it is judged by the
+	// onboarded arm even while it is still `pending`, waiting to open its first
+	// stream. See [hasActiveSeedSQL].
+	//
+	// Only those two statuses are redirected, deliberately: `revoked` and
+	// `destroyed` are operator and cascade decisions that must keep falling to
+	// the refusal below, and a leftover active seed under one of them is a
+	// registry inconsistency, not a reason to call the host onboarded.
+	effective := keepersoul.Status(status)
+	if hasActiveSeed && (effective == keepersoul.StatusPending || effective == keepersoul.StatusExpired) {
+		effective = keepersoul.StatusConnected
+	}
+
+	switch effective {
 	case keepersoul.StatusPending, keepersoul.StatusExpired:
 		// A fresh token gets a fresh pending window too. This also re-arms an
 		// explicitly expired-but-never-onboarded record without touching identity.
 		if _, err := tx.Exec(ctx, refreshPendingSoulSQL, sid); err != nil {
 			return IssuedHost{}, fmt.Errorf("refresh pending Soul: %w", err)
+		}
+		// That statement sets `last_seen_at = NULL`, which is the predicate the
+		// reply-loss recovery reads as "this host has never held a stream"
+		// (NIM-865). A host that HAD streamed, and still carries an unexpired
+		// token burned by a real KID, would therefore have its recovery window
+		// re-opened by the re-arm — so the burned tokens are disarmed in the
+		// same transaction. ExpireActiveBySID below cannot do it: it matches
+		// `used_at IS NULL`.
+		if _, err := bootstraptoken.CloseRecoveryBySID(
+			ctx, tx, sid, bootstraptoken.SystemKIDBootstrapIssuedReissue,
+		); err != nil {
+			return IssuedHost{}, fmt.Errorf("close recovery window: %w", err)
 		}
 	case keepersoul.StatusConnected, keepersoul.StatusDisconnected:
 		// Converge in place rather than refuse, for a host this run already
@@ -183,7 +235,7 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 					owner = "not a member of any incarnation"
 				}
 			}
-			return IssuedHost{}, fmt.Errorf("Soul is already onboarded (status %q) and is not this run's own (%s); refusing identity takeover", status, owner)
+			return IssuedHost{}, fmt.Errorf("Soul is already onboarded (status %q, active seed %t) and is not this run's own (%s); refusing identity takeover", status, hasActiveSeed, owner)
 		}
 		return IssuedHost{SID: sid, Onboarded: true}, nil
 	default:

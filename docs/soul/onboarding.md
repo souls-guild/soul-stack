@@ -23,12 +23,29 @@ RETURNING token_id;
 
 - `UPDATE … WHERE used_at IS NULL` + a row-level lock makes the operation race-safe: two simultaneous presentations of the same token yield one success and one rejection.
 - An empty `RETURNING` — the token is already burned, expired, or does not exist → `403`, `souls.status` stays `pending`.
-- In the same transaction: `souls.status: pending → connected`, and an `active` record with the signed certificate is created in `soul_seeds`. The half-state "the token is burned but the seed is not created" is impossible.
+- In the same transaction an `active` record with the signed certificate is created in `soul_seeds`. The half-state "the token is burned but the seed is not created" is impossible.
+- **`souls.status` is NOT written here.** It stays `pending` — "token issued, Soul not yet connected", which is what is true: a signed certificate is one network hop short of a host holding one. The row reaches `connected` from the EventStream handshake. See [identity.md → Soul statuses and transitions](identity.md#soul-statuses-and-transitions) and [ADR-0090](../adr/0090-bootstrap-reply-loss-recovery.md) (NIM-865).
 - Keeper does not store the plain token — after being issued to the operator it leaves memory. In the DB — only `token_hash` (SHA-256, hex, no salt — the token is already high-entropy by itself).
+
+#### Recovery: a burn commits before the reply is known to have arrived
+
+The burn above records that a certificate was **produced**. The Soul wraps dial, handshake and RPC in one deadline and writes nothing to disk until the reply lands, so a slow Vault PKI inside that deadline leaves the token spent and the host with no credential. A re-presentation is therefore admitted under **all** of:
+
+1. the token has not expired;
+2. the burn was a Soul's — not a marker written by `issue-token?force=true` or by a cascade (`used_by_kid` is a real KID);
+3. `souls.last_seen_at IS NULL` — the host has never held a stream;
+4. the presented CSR carries the **same public key** as the active seed already issued for that SID.
+
+It re-signs and re-stamps that seed **in place**: the fingerprint is the SubjectPublicKeyInfo hash, so re-signing one key does not move the identity, and `soul_seeds_fingerprint_idx` is globally unique anyway.
+
+**What stays one-shot is the binding `SID → public key`, not the presentation.** An attacker replaying a captured token wants a certificate for their own key, and condition (4) refuses that exactly as a second burn refuses it. Condition (3) is what keeps the window from becoming a hole in the other direction: once the host has appeared the credential provably arrived, so a token plaintext still sitting in `/etc/soul/token` cannot be turned against a host that is up and working.
+
+Every refusal is the same `PermissionDenied`, undistinguished, as on the first-presentation path.
 
 ### On the Soul side
 
 - `soul init` receives the token as a **string** — from the `--token` flag or the env `SOUL_BOOTSTRAP_TOKEN` (see [§ Onboarding flow](#onboarding-flow-agent-mode)); the binary itself **does not read or delete** any token files. One `init` process = one presentation; after a successful bootstrap the token is already burned on the Keeper side (the SQL transaction above) and is not reusable.
+- **A failed `init` may be re-run, and that is the supported recovery.** The private key is written to `paths.seed/pending-key.pem` (`0400`) before the RPC and reused by the next attempt, so the retry presents the same public key and the Keeper recognizes it as the same onboarding (conditions above). The file sits beside the version directories, not in one, so `seed.Load` — which reads only through `current/` — never mistakes it for a half-written seed; it is removed once the seed is on disk. A key with no certificate authenticates nothing, which is why it may be left there at all.
 - If the delivery channel put the token into a file (for example, `/etc/soul/token`, the path the removed `core.bootstrap.delivered` used, [ADR-063](../adr/0063-bootstrap-token-delivery.md)) — the file remains an artifact of the **delivery channel**, and its hygiene (`0400` permissions, cleanup) is on the channel/operator, not on the `soul` binary. The main protections are the one-time use and the short TTL of the token, not overwriting the disk.
 - The token contents are **never** logged — neither by `soul` nor by Keeper (on Keeper's outputs the `bootstrap_token` key is masked by `audit.MaskSecrets`).
 
@@ -91,7 +108,7 @@ For a Soul with `transport: ssh`, `issue-token` returns `422 validation-failed` 
 ## Protections on the Soul Stack side
 
 - **Token TTL** — short by default (24h), configurable by the operator.
-- **One-time use** — the token is burned on the first successful CSR (the SQL transaction above).
+- **One-time binding** — the first successful CSR burns the token and fixes the keypair it may ever issue for. A later presentation is admitted only as a retry of that same binding by the same key, on a host that has never connected ([§ Recovery](#recovery-a-burn-commits-before-the-reply-is-known-to-have-arrived)); everything else, an attacker's own CSR included, is refused as it always was.
 - **Binding to a specific SID** — the token is valid only for the FQDN it was issued for.
 - **Audit** — every issue and use of a token is logged in Keeper.
 

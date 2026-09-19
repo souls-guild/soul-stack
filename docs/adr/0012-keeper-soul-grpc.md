@@ -111,3 +111,11 @@ The same rename applies to `core.file.rendered`'s `render_context` (`{ vars, sel
 ## Amendment 2026-08-19 (NIM-698, [ADR-0083](0083-declared-secret-state-fields.md)): a module marks its own secret output fields
 
 Per-field **`secret: true` on module output** — a plugin-protocol capability on `ApplyEvent.output`, not a task keyword. The module that produced a field is the one that knows whether it is a secret, so the marking travels with the output instead of being restated by every task author. It retires **`no_log`**, which suppressed a whole task's diagnostics to hide one field. Only-add on the wire ([ADR-012(c)](#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add)): an older Soul sends no marks and its output is treated exactly as before.
+
+## Amendment 2026-09-19 (NIM-865, [ADR-0090](0090-bootstrap-reply-loss-recovery.md)): the Bootstrap RPC is retryable, and one-shot means the binding
+
+**(b)**'s onboarding is no longer "one presentation, ever". The Keeper burns the bootstrap token when it **signs** the certificate, and the Soul wraps dial, handshake and RPC in one deadline — so a slow Vault PKI inside that deadline leaves the token spent and the host with no credential, permanently unonboardable. The burn was measuring the wrong event.
+
+What may not be repeated is **binding a SID to a public key**, not presenting the token. A repeat presentation is admitted only when it carries the key the first one bound, on a host that has never held a stream, for a burn a Soul actually made. An attacker's replay carries an attacker's key and is refused exactly as a second burn refuses it; once the host appears, the token is finished for good.
+
+**No wire change** — the property is derived from the CSR that `BootstrapRequest` already carries (its SubjectPublicKeyInfo hashes to the seed fingerprint, which is why re-signing one key does not move the identity). Two behaviours changed underneath: the Soul persists its key between attempts, and the Bootstrap RPC no longer writes `souls.status` — `connected` is written by the EventStream handshake, which is the event **(f)**'s mTLS listener actually witnesses.

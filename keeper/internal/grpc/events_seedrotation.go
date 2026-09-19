@@ -308,13 +308,15 @@ func (h *eventStreamHandler) handleSeedRotationRequest(ctx context.Context, sid,
 			slog.String("sid", sid), slog.String("session_id", sessionID))
 		return
 	}
-	// The rotation CSR's CN must match the stream's SID (defense-in-depth BEFORE
-	// Vault SignCSR). sid here is authoritative — taken from the mTLS peer cert, not
-	// from the payload; a CSR with a foreign/empty CN is rejected, without relying on the
-	// broad allowed_domains of the Vault PKI role. Doesn't fatal the stream (like other
-	// errors on the rotation path): warn + skip, the Soul-side loop will retry.
+	// The rotation CSR's CN must match the stream's SID, and its self-signature
+	// must verify (defense-in-depth BEFORE Vault SignCSR). sid here is
+	// authoritative — taken from the mTLS peer cert, not from the payload; a CSR
+	// with a foreign/empty CN, or one carrying a key the sender does not hold, is
+	// rejected without relying on the broad allowed_domains of the Vault PKI role.
+	// Doesn't fatal the stream (like other errors on the rotation path): warn +
+	// skip, the Soul-side loop will retry.
 	if err := validateCSRCommonName(csrPEM, sid); err != nil {
-		h.logger.Warn("eventstream: seed-rotation CSR common name mismatch",
+		h.logger.Warn("eventstream: seed-rotation CSR rejected",
 			slog.String("sid", sid),
 			slog.String("session_id", sessionID),
 			slog.Any("error", err),

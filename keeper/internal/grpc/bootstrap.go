@@ -53,9 +53,9 @@ type CSRSigner interface {
 
 // BootstrapDeps — wire-up dependencies for the onboarding handler.
 //
-// All fields are required: Pool — the "burn token + supersede seed +
-// insert seed + flip status" transaction; VaultClient.SignCSR — CSR signing via
-// Vault PKI; AuditWriter — `soul.bootstrapped` + `soul.seed-issued`.
+// All fields are required: Pool — the "authorize the token + write the seed"
+// transaction; VaultClient.SignCSR — CSR signing via Vault PKI; AuditWriter —
+// `soul.bootstrapped` + `soul.seed-issued`.
 //
 // KID — the keeper instance identifier; written to `bootstrap_tokens.used_by_kid`
 // and `souls.last_seen_by_kid`, and shows up in the audit payload.
@@ -378,24 +378,47 @@ func (h *bootstrapHandler) Ping(_ context.Context, _ *keeperv1.PingRequest) (*ke
 // Bootstrap — implements the unary onboarding RPC per [docs/soul/onboarding.md].
 //
 // Flow:
-//  1. Validate (SID format, token_hash format, CSR PEM non-empty).
-//  2. Hash plain-token → token_hash.
-//  3. Cheap token pre-check (SelectByHash, no Burn) — early-reject junk
-//     BEFORE the expensive Vault round trip (M3). Anti-enum: any failure → a
-//     single PermissionDenied, indistinguishable from not-found/expired/used.
-//  4. Vault PKI SignCSR — issue the certificate (only once pre-check passed).
-//  5. Parse cert → compute fingerprint (SHA-256 SubjectPublicKeyInfo).
-//  6. Tx BEGIN.
-//  7. Burn token (race-safe UPDATE with WHERE used_at IS NULL) — the
-//     authoritative anti-replay check under load (the step-3 pre-check is an
-//     optimization, not a replacement: the TOCTOU gap between select and burn
-//     is closed by this UPDATE).
-//  8. Supersede the previous active seed (no-op for a new Soul).
-//  9. Insert the new active seed.
+//  1. Free checks (SID format, reserved SID, token present and bounded,
+//     CSR PEM non-empty).
+//  2. Take the pre-auth budget — everything below costs a shared resource.
+//  3. Parse the CSR: CN must equal the SID, and the self-signature must verify
+//     (possession of the key being bound). Its SubjectPublicKeyInfo hash is the
+//     fingerprint the seed decisions below are made on.
+//  4. Hash plain-token → token_hash.
+//  5. Cheap token pre-check (SelectByHash, no Burn) — early-reject junk
+//     BEFORE the expensive Vault round trip (M3), and decide which of the two
+//     authorization paths this is. Anti-enum: any failure → a single
+//     PermissionDenied, indistinguishable from not-found/expired/used.
+//  6. Vault PKI SignCSR — issue the certificate (only once pre-check passed).
+//  7. Tx BEGIN.
+//  8. Authorize the token: [bootstraptoken.Burn] for a first presentation —
+//     the race-safe UPDATE that is the authoritative anti-replay check under
+//     load (step 5 is an optimization, not a replacement: the TOCTOU gap
+//     between select and burn is closed by this UPDATE) — or
+//     [bootstraptoken.RedeemAgain] for a retry after a lost reply.
+//  9. Write the seed ([bootstrapHandler.writeSeed]).
 //
-// 10. UpdateStatus soul: pending → connected, last_seen_by_kid = KID.
-// 11. COMMIT.
-// 12. Audit: `soul.bootstrapped` + `soul.seed-issued` (one correlation_id = token_id).
+// 10. COMMIT.
+// 11. Audit: `soul.bootstrapped` + `soul.seed-issued` (one correlation_id = token_id).
+//
+// **Step 9 chooses insert-vs-re-stamp from the REGISTRY, not from step 8.** A
+// key `soul_seeds` has never seen is inserted after superseding whatever was
+// active; a key already recorded for this SID has its row re-stamped in place,
+// because the globally unique fingerprint index forbids a second row and the
+// fingerprint IS the identity, which did not move. Both authorization paths can
+// arrive at either branch — a fresh token redeemed by a host that kept its key
+// is a FIRST presentation that must re-stamp.
+//
+// **The recovery path** (step 8's second arm) is admitted only when the token
+// was burned by a Soul, the host has never held a stream, and the CSR carries
+// the key that burn bound. What must not be repeated is binding a SID to a key,
+// not presenting the token; a reply the network ate is not a second binding.
+// See docs/adr/0090-bootstrap-reply-loss-recovery.md (NIM-865).
+//
+// **`souls.status` is not written here, on either path.** It stays `pending` —
+// "token issued, Soul not yet connected", which is exactly true — and reaches
+// `connected` from the EventStream handshake ([soul.MarkConnected]), the event
+// the value is defined by.
 //
 // All errors before Vault are fail-fast with a rollback. A Vault error → tx
 // rollback + Unavailable (transient — the Soul retries). Audit is written
@@ -443,20 +466,16 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 	if len(csrPEM) == 0 {
 		return nil, status.Error(codes.InvalidArgument, "csr_pem is empty")
 	}
-	// CSR CommonName must match the requested SID (defense-in-depth, crypto).
-	// Onboarding authority is anchored on the registry fingerprint, not the CN,
-	// but checking CN BEFORE Vault SignCSR keeps us from relying solely on the
-	// operator's Vault PKI role config (allowed_domains could be wider than the
-	// SID). An invalid CN → InvalidArgument BEFORE the PKI round trip.
-	if err := validateCSRCommonName(csrPEM, sid); err != nil {
-		return nil, err
-	}
-
-	// Past this line every step costs a resource the cluster shares — a pooled
-	// database connection for the pre-check, then Vault, then a transaction —
-	// and the caller is still unauthenticated: the token is what the pre-check
-	// is about to read. The budget is therefore taken BEFORE the pool and not
-	// after, so a caller over it never reaches one (NIM-839).
+	// Past this line every step costs a resource the cluster shares — CPU for the
+	// CSR's signature check, a pooled database connection for the pre-check, then
+	// Vault, then a transaction — and the caller is still unauthenticated: the
+	// token is what the pre-check is about to read. The budget is therefore taken
+	// BEFORE any of it, so a caller over it never reaches one (NIM-839).
+	//
+	// The CSR parse used to sit above this line, as a free check. It stopped
+	// being free when NIM-865 made it verify the self-signature: that is
+	// public-key work whose cost the caller chooses, by choosing the modulus. It
+	// is one `defer release()` away from the refusal path either way.
 	release, waited, acqErr := h.acquirePreauth(ctx)
 	defer release()
 	switch {
@@ -476,22 +495,40 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 		return nil, status.Error(codes.ResourceExhausted, "bootstrap is at capacity")
 	}
 
+	// CSR CommonName must match the requested SID, and the self-signature must
+	// verify (defense-in-depth, crypto). Onboarding authority is anchored on the
+	// registry fingerprint, not the CN, but checking both BEFORE Vault SignCSR
+	// keeps us from relying solely on the operator's Vault PKI role config
+	// (allowed_domains could be wider than the SID). Either failure →
+	// InvalidArgument BEFORE the PKI round trip.
+	//
+	// The parsed CSR is kept: its SubjectPublicKeyInfo is the key the request is
+	// asking to bind, and the recovery path below is decided by comparing it
+	// against the key the registry already bound (NIM-865).
+	csr, err := parseValidatedCSR(csrPEM, sid)
+	if err != nil {
+		return nil, err
+	}
+	csrFingerprint := soulseed.FingerprintFromCSR(csr)
+
 	tokenHash := bootstraptoken.HashToken(plainToken)
 
 	// Cheap token pre-check BEFORE the Vault round trip (M3): a junk token
-	// shouldn't trigger an expensive PKI sign. This is an optimization, not
-	// the authority: the final anti-replay check is the Burn, under
-	// FOR-UPDATE WHERE-clause semantics inside the transaction (step 7). Any
-	// pre-check failure → a single PermissionDenied (anti-enum, we don't
-	// distinguish not-found/expired/used).
-	if err := h.precheckToken(ctx, tokenHash, sid); err != nil {
+	// shouldn't trigger an expensive PKI sign. This is an optimization, not the
+	// authority: the authoritative check is the WHERE clause of the Burn — or,
+	// for an already-burned token being retried by the host that burned it, of
+	// the RedeemAgain — inside the transaction below. Any pre-check failure → a
+	// single PermissionDenied (anti-enum, we don't distinguish
+	// not-found/expired/used/not-recoverable).
+	recovery, err := h.precheckToken(ctx, tokenHash, sid, csrFingerprint)
+	if err != nil {
 		return nil, err
 	}
 
 	// Vault PKI signing is a separate step BEFORE the transaction, but AFTER
 	// the token pre-check. It's a network round trip with unpredictable latency;
 	// there's no point holding a PG transaction open for it. Authoritative
-	// token validation happens inside the transaction via Burn.
+	// token validation happens inside the transaction via Burn / RedeemAgain.
 	signed, err := h.deps.VaultClient.SignCSR(ctx, h.deps.PKIMount, h.deps.PKIRole, string(csrPEM))
 	if err != nil {
 		return nil, h.mapVaultErr(err, sid)
@@ -501,39 +538,57 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 		return nil, status.Errorf(codes.Internal, "vault returned invalid certificate: %v", err)
 	}
 	fingerprint := soulseed.FingerprintFromCert(cert)
+	// Vault signed a CSR whose key is not the one that was authorized. Nothing
+	// downstream would notice — the recovery path matches the seed row on the
+	// pre-check's value — so the mismatch is caught here rather than written.
+	if fingerprint != csrFingerprint {
+		h.logger.Error("vault signed a certificate for a different public key than the CSR carried",
+			slog.String("sid", sid))
+		return nil, status.Error(codes.Internal, "vault certificate does not match the presented CSR")
+	}
 
 	var (
 		tokenID string
 		seedID  string
 	)
 	err = pgx.BeginFunc(ctx, h.deps.Pool, func(tx pgx.Tx) error {
-		tokID, burnErr := bootstraptoken.Burn(ctx, tx, tokenHash, sid, h.deps.KID)
-		if burnErr != nil {
-			return burnErr
+		// Authorize. The two paths differ only here: a first presentation burns,
+		// a recovery re-authorizes delivery to the binding that burn created.
+		// RedeemAgain carries its whole authorization in one statement — see its
+		// godoc for the five conditions and why none is evaluated in Go first.
+		var (
+			tokID   string
+			authErr error
+		)
+		if recovery {
+			tokID, authErr = bootstraptoken.RedeemAgain(ctx, tx, tokenHash, sid, h.deps.KID, csrFingerprint)
+		} else {
+			tokID, authErr = bootstraptoken.Burn(ctx, tx, tokenHash, sid, h.deps.KID)
+		}
+		if authErr != nil {
+			return authErr
 		}
 		tokenID = tokID
 
-		if supErr := soulseed.SupersedeBySID(ctx, tx, sid); supErr != nil {
-			return supErr
+		sID, seedErr := h.writeSeed(ctx, tx, sid, fingerprint, signed)
+		if seedErr != nil {
+			return seedErr
 		}
+		seedID = sID
 
-		seed := &soulseed.SoulSeed{
-			SID:          sid,
-			Fingerprint:  fingerprint,
-			SerialNumber: signed.SerialNumber,
-			ExpiresAt:    signed.NotAfter,
-			IssuedByKID:  &h.deps.KID,
-			Status:       soulseed.StatusActive,
-		}
-		if insErr := soulseed.Insert(ctx, tx, seed); insErr != nil {
-			return insErr
-		}
-		seedID = seed.SeedID
-
-		kid := h.deps.KID
-		if upErr := soul.UpdateStatus(ctx, tx, sid, soul.StatusConnected, &kid); upErr != nil {
-			return upErr
-		}
+		// The row stays `pending`, and NOT because nothing needs saying: a
+		// certificate has been signed, but no stream has ever existed and
+		// `connected` claims one does ([soul.Status]). `pending` — "token
+		// issued, Soul not yet connected" — is true here and stays true until
+		// [soul.MarkConnected] fires on the EventStream handshake. The status
+		// this handler used to write was never corrected by anything, because
+		// the Reaper's disconnect sweep cannot match a NULL `last_seen_at`
+		// (migration 043), so a host that never appeared read as `connected`
+		// forever — and `core.bootstrap.issued` treats that as "already
+		// onboarded, nothing to do" and declines to re-arm it (NIM-865).
+		//
+		// Registry membership was checked by the pre-check's own read and is
+		// enforced under the transaction by `soul_seeds_sid_fk`.
 		return nil
 	})
 	if err != nil {
@@ -555,6 +610,10 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 			"fingerprint": fingerprint,
 			"not_after":   notAfter,
 			"kid":         h.deps.KID,
+			// Why one token has more than one bootstrapped event. Without it an
+			// auditor sees a token apparently redeemed twice and no way to tell
+			// a recovery from the replay the burn is supposed to prevent.
+			"recovered_lost_reply": recovery,
 		},
 	}); writeErr != nil {
 		h.logger.Warn("audit write soul.bootstrapped failed (DB committed)",
@@ -590,6 +649,10 @@ func (h *bootstrapHandler) Bootstrap(ctx context.Context, req *keeperv1.Bootstra
 		slog.String("fingerprint", fingerprint),
 		slog.String("kid", h.deps.KID),
 		slog.String("peer", peerAddr(ctx)),
+		// The one field that separates a first onboarding from a host
+		// recovering a reply it never received. Without it the operator sees
+		// two identical lines and no reason a certificate was signed twice.
+		slog.Bool("recovered_lost_reply", recovery),
 	)
 
 	out := &keeperv1.BootstrapReply{
@@ -625,29 +688,184 @@ func (h *bootstrapHandler) applySigilAnchors(out *keeperv1.BootstrapReply) {
 	out.SigilPubkeyPem = &single
 }
 
-// precheckToken — cheap token check BEFORE Vault-sign (M3 early-reject).
-// Reads the record by token_hash and checks (sid + not burned + not expired)
-// in Go. Authority stays with Burn inside the transaction; this just filters
-// out junk without a PKI round trip.
+// errSeedKeyTaken — the presented key already has a row in `soul_seeds` that
+// this onboarding may not write to. Mapped to the same PermissionDenied as a
+// rejected token: either the key belongs to another SID, or it is one this host
+// retired, and neither is something to explain to an unauthenticated caller.
+var errSeedKeyTaken = errors.New("grpc: the presented key is already bound elsewhere")
+
+// writeSeed records the freshly signed certificate, choosing between inserting
+// a new seed and re-stamping an existing one **from the registry** — not from
+// which token path authorized the call.
 //
-// Anti-enum: any failure (no record, wrong SID, expired, already used, junk
-// hash format) → a single PermissionDenied, indistinguishable to the Soul by
-// content or timing class. A transient DB read error (not ErrTokenNotFound)
-// → Unavailable: the Soul retries, so junk still can't get through.
-func (h *bootstrapHandler) precheckToken(ctx context.Context, tokenHash, sid string) error {
+// That distinction is the whole point. `soul_seeds_fingerprint_idx` is globally
+// unique and the fingerprint is the public key, so "does this key already have
+// a row" is a fact about the key, and any path that can present a key the
+// registry has already seen has to answer it. Since NIM-865 two can: a recovery
+// re-presents the key deliberately, and so does a FRESH token redeemed by a
+// host that kept its key from an attempt whose reply was lost — which is the
+// ordinary operator recovery (`issue-token --force`, or a repeat of
+// `core.bootstrap.issued`). Deciding by path would have left that second one
+// hitting the unique index and failing as Internal with the new token burned.
+func (h *bootstrapHandler) writeSeed(ctx context.Context, tx pgx.Tx, sid, fingerprint string, signed *keepervault.SignedCertificate) (string, error) {
+	existing, err := soulseed.SelectByFingerprint(ctx, tx, fingerprint)
+	switch {
+	case errors.Is(err, soulseed.ErrSeedNotFound):
+		// A key the registry has never seen: the ordinary first onboarding, and
+		// a rotation-by-bootstrap. Supersede whatever was active, insert.
+		if supErr := soulseed.SupersedeBySID(ctx, tx, sid); supErr != nil {
+			return "", supErr
+		}
+		seed := &soulseed.SoulSeed{
+			SID:          sid,
+			Fingerprint:  fingerprint,
+			SerialNumber: signed.SerialNumber,
+			ExpiresAt:    signed.NotAfter,
+			IssuedByKID:  &h.deps.KID,
+			Status:       soulseed.StatusActive,
+		}
+		if insErr := soulseed.Insert(ctx, tx, seed); insErr != nil {
+			return "", insErr
+		}
+		return seed.SeedID, nil
+
+	case err != nil:
+		return "", err
+
+	// The next two arms do NOT implement the refusal — [soulseed.RefreshCertificate]
+	// does, by matching `sid` and `status='active'` in its own WHERE, and falling
+	// through to it would refuse both cases with the same PermissionDenied. They
+	// exist to NAME the reason in the log, because the wire answer is deliberately
+	// one undistinguished refusal and an operator otherwise has nothing to go on.
+	// Delete them and every test still passes; that is the point, not an oversight.
+	case existing.SID != sid:
+		// Another host's identity. A public key is public, so presenting one is
+		// free — what it must not buy is a certificate.
+		h.logger.Warn("bootstrap: presented key is bound to another sid",
+			slog.String("sid", sid), slog.String("bound_to", existing.SID))
+		return "", errSeedKeyTaken
+
+	case existing.Status != soulseed.StatusActive:
+		// This host's own key, but retired — superseded by a rotation, or
+		// revoked. Re-issuing against it would undo that decision.
+		h.logger.Warn("bootstrap: presented key is a retired seed of this sid",
+			slog.String("sid", sid), slog.String("status", string(existing.Status)))
+		return "", errSeedKeyTaken
+
+	default:
+		// The identity is already recorded and still current; only the
+		// certificate is missing. Re-stamp in place — the fingerprint does not
+		// move, so there is nothing to supersede and nothing to insert.
+		return soulseed.RefreshCertificate(ctx, tx, sid, fingerprint,
+			signed.SerialNumber, signed.NotAfter, &h.deps.KID)
+	}
+}
+
+// precheckToken — cheap token check BEFORE Vault-sign (M3 early-reject).
+// Reads the record by token_hash and checks (sid + not expired) in Go, then
+// decides which of the two paths the request is on. Authority stays with Burn /
+// RedeemAgain inside the transaction; this just filters out junk without a PKI
+// round trip.
+//
+// recovery reports that the token is already burned and this presentation is
+// the same host retrying after a lost reply (NIM-865). The three extra
+// conditions that admit it are re-evaluated atomically by
+// [bootstraptoken.RedeemAgain]; checking them here as well keeps a doomed
+// retry from spending a Vault signature, which is the same bargain the
+// not-burned pre-check has always made.
+//
+// Anti-enum: any failure (no record, wrong SID, expired, burned and not
+// recoverable, junk hash format) → a single PermissionDenied, indistinguishable
+// to the Soul by content or timing class. A transient DB read error (not a
+// not-found) → Unavailable: the Soul retries, so junk still can't get through.
+func (h *bootstrapHandler) precheckToken(ctx context.Context, tokenHash, sid, csrFingerprint string) (recovery bool, err error) {
 	rec, err := bootstraptoken.SelectByHash(ctx, h.deps.Pool, tokenHash)
 	if err != nil {
 		if errors.Is(err, bootstraptoken.ErrTokenNotFound) {
-			return h.rejectToken(sid)
+			return false, h.rejectToken(sid)
 		}
 		h.logger.Warn("bootstrap token pre-check read failed",
 			slog.String("sid", sid), slog.Any("error", err))
-		return status.Errorf(codes.Unavailable, "bootstrap token pre-check failed")
+		return false, status.Errorf(codes.Unavailable, "bootstrap token pre-check failed")
 	}
-	if rec.SID != sid || !rec.IsActive(time.Now().UTC()) {
-		return h.rejectToken(sid)
+	now := time.Now().UTC()
+	if rec.SID != sid || !rec.ExpiresAt.After(now) {
+		return false, h.rejectToken(sid)
 	}
-	return nil
+	if rec.UsedAt == nil {
+		return false, nil
+	}
+	ok, err := h.precheckRecovery(ctx, rec, sid, csrFingerprint)
+	if err != nil {
+		return false, err
+	}
+	if !ok {
+		return false, h.rejectToken(sid)
+	}
+	return true, nil
+}
+
+// precheckRecovery reports whether an already-burned token may be presented
+// again by the host that burned it. It answers the question the burn cannot:
+// a burn records that a certificate was PRODUCED, and the Soul's deadline can
+// expire between that and the reply arriving, leaving the token spent and the
+// host with no credential (NIM-865).
+//
+// Three conditions, each closing something specific — see
+// [bootstraptoken.RedeemAgain] for the authoritative form:
+//
+//   - the burn was a Soul's, not a marker written by force-reissue or a
+//     cascade. Those record an invalidation with no reply to lose.
+//   - the host has never held a stream. Once it has, the credential provably
+//     arrived and the token is finished, so a leaked plaintext cannot be
+//     turned against a host that is up and working.
+//   - the active seed is bound to the key being presented now. This is the
+//     one-shot property, stated where it belongs: what may not be repeated is
+//     binding the SID to a key, not presenting the token. An attacker's own
+//     CSR carries an attacker's own key and is refused here exactly as a
+//     second Burn refuses it today.
+//
+// A read error is surfaced, not swallowed into a refusal: answering "no" on an
+// unreadable registry would make a Postgres blip look to the operator like a
+// rejected token.
+func (h *bootstrapHandler) precheckRecovery(ctx context.Context, rec *bootstraptoken.Record, sid, csrFingerprint string) (bool, error) {
+	// Coalesced exactly as [bootstraptoken.redeemAgainSQL] does, so the
+	// optimization and the authority cannot disagree about what a kid-less burn
+	// means. A nil here is not a refusal of its own: `used_at` already says the
+	// token was burned, and that clause is the one that carries the decision.
+	usedByKID := ""
+	if rec.UsedByKID != nil {
+		usedByKID = *rec.UsedByKID
+	}
+	for _, marker := range bootstraptoken.SystemKIDs() {
+		if usedByKID == marker {
+			return false, nil
+		}
+	}
+
+	s, err := soul.SelectBySID(ctx, h.deps.Pool, sid)
+	if err != nil {
+		if errors.Is(err, soul.ErrSoulNotFound) {
+			return false, nil
+		}
+		h.logger.Warn("bootstrap recovery pre-check: soul read failed",
+			slog.String("sid", sid), slog.Any("error", err))
+		return false, status.Errorf(codes.Unavailable, "bootstrap token pre-check failed")
+	}
+	if s.LastSeenAt != nil {
+		return false, nil
+	}
+
+	seed, err := soulseed.SelectActiveBySID(ctx, h.deps.Pool, sid)
+	if err != nil {
+		if errors.Is(err, soulseed.ErrSeedNotFound) {
+			return false, nil
+		}
+		h.logger.Warn("bootstrap recovery pre-check: seed read failed",
+			slog.String("sid", sid), slog.Any("error", err))
+		return false, status.Errorf(codes.Unavailable, "bootstrap token pre-check failed")
+	}
+	return seed.Fingerprint == csrFingerprint, nil
 }
 
 // rejectToken — the single anti-enum response for an invalid token (whether
@@ -661,22 +879,36 @@ func (h *bootstrapHandler) rejectToken(sid string) error {
 // mapTxErr — maps a CRUD sentinel to a gRPC status:
 //   - ErrTokenInvalid       → PermissionDenied (anti-enum: no distinctions made).
 //   - ErrSeedActiveExists   → Internal (SupersedeBySID invariant violated).
-//   - ErrSoulNotFound       → FailedPrecondition (soul registry in an inconsistent state).
+//   - ErrSeedNotFound       → PermissionDenied (recovery raced the identity, see below).
+//   - ErrSeedSoulNotFound   → FailedPrecondition (soul registry in an inconsistent state).
 //   - everything else      → Internal, wrapping err.
 func (h *bootstrapHandler) mapTxErr(err error, sid string) error {
 	switch {
 	case errors.Is(err, bootstraptoken.ErrTokenInvalid):
-		// We don't distinguish "expired", "not found", "already used" — anti-enum
-		// (same response as the step-3 pre-check).
+		// We don't distinguish "expired", "not found", "already used", or a
+		// re-presentation that failed any of its conditions — anti-enum (same
+		// response as the step-3 pre-check).
 		return h.rejectToken(sid)
 	case errors.Is(err, soulseed.ErrSeedActiveExists):
 		h.logger.Error("invariant violation: active seed present after Supersede",
 			slog.String("sid", sid), slog.Any("error", err))
 		return status.Errorf(codes.Internal,
 			"internal error: active seed already present for sid=%q", sid)
-	case errors.Is(err, soul.ErrSoulNotFound):
+	case errors.Is(err, soulseed.ErrSeedNotFound):
+		// Recovery only: the (sid, fingerprint) row the pre-check saw is no
+		// longer active — rotated, revoked or superseded between the two reads.
+		// The same refusal as a rejected token, deliberately: the binding this
+		// presentation was authorized against is gone, so it has no more right
+		// to a certificate than any other stale one, and saying which of the
+		// two it was would hand a prober the distinction the whole path avoids.
+		h.logger.Warn("bootstrap recovery lost its seed between pre-check and commit",
+			slog.String("sid", sid))
+		return h.rejectToken(sid)
+	case errors.Is(err, errSeedKeyTaken):
+		return h.rejectToken(sid)
+	case errors.Is(err, soulseed.ErrSeedSoulNotFound):
 		return status.Errorf(codes.FailedPrecondition,
-			"soul %q not in registry (token Burn succeeded but UpdateStatus failed)", sid)
+			"soul %q not in registry (token burned but the seed write failed)", sid)
 	default:
 		h.logger.Error("bootstrap tx failed",
 			slog.String("sid", sid), slog.Any("error", err))
@@ -721,20 +953,44 @@ func (h *bootstrapHandler) mapVaultErr(err error, sid string) error {
 // doesn't replace it); it only keeps a cert from being onboarded under the
 // wrong CN by relying solely on a broad Vault role allowed_domains.
 func validateCSRCommonName(csrPEM []byte, sid string) error {
-	csr, err := parseCSRPEM(csrPEM)
-	if err != nil {
-		return status.Errorf(codes.InvalidArgument, "csr_pem invalid: %v", err)
-	}
-	if csr.Subject.CommonName != sid {
-		return status.Errorf(codes.InvalidArgument,
-			"csr_pem common name does not match sid %q", sid)
-	}
-	return nil
+	_, err := parseValidatedCSR(csrPEM, sid)
+	return err
 }
 
-// parseCSRPEM decodes the first CERTIFICATE REQUEST PEM block and parses it
-// into an x509.CertificateRequest. The CSR signature isn't verified (Vault
-// PKI does that during SignCSR); here we only need the Subject for CN validation.
+// parseValidatedCSR is [validateCSRCommonName] for a caller that needs the CSR
+// itself afterwards — the onboarding handler reads its SubjectPublicKeyInfo to
+// recognize a retry of an onboarding already bound to that key (NIM-865).
+// Splitting it this way keeps one copy of the CN rule: two would be a check
+// that can be tightened on one path and left open on the other.
+func parseValidatedCSR(csrPEM []byte, sid string) (*x509.CertificateRequest, error) {
+	csr, err := parseCSRPEM(csrPEM)
+	if err != nil {
+		return nil, status.Errorf(codes.InvalidArgument, "csr_pem invalid: %v", err)
+	}
+	if csr.Subject.CommonName != sid {
+		return nil, status.Errorf(codes.InvalidArgument,
+			"csr_pem common name does not match sid %q", sid)
+	}
+	return csr, nil
+}
+
+// parseCSRPEM decodes the first CERTIFICATE REQUEST PEM block, parses it into
+// an x509.CertificateRequest, and verifies its self-signature.
+//
+// **The signature check is an authorization input, not hygiene** (NIM-865). A
+// CSR's SubjectPublicKeyInfo is what the onboarding binds the SID to, and what
+// a recovery is matched on — so without this, a caller could present a public
+// key it does not hold the private half of, and the "an attacker's replay
+// carries an attacker's own key" argument the anti-replay rule rests on would
+// be untrue. Verifying proves possession, which is exactly the claim the
+// fingerprint is taken to stand for. It also keeps a CSR carrying another
+// host's key from reaching Vault at all: that used to be refused only after
+// signing, leaving a real certificate issued against a rolled-back transaction
+// and recorded in no `soul_seeds` row, hence revocable through no registry.
+//
+// Not a substitute for Vault's own validation — this is the same
+// defense-in-depth stance as the CN check, which likewise does not rely on the
+// operator's PKI role being narrow.
 func parseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 	block, _ := pem.Decode(csrPEM)
 	if block == nil {
@@ -746,6 +1002,9 @@ func parseCSRPEM(csrPEM []byte) (*x509.CertificateRequest, error) {
 	csr, err := x509.ParseCertificateRequest(block.Bytes)
 	if err != nil {
 		return nil, fmt.Errorf("x509.ParseCertificateRequest: %w", err)
+	}
+	if err := csr.CheckSignature(); err != nil {
+		return nil, fmt.Errorf("csr signature: %w", err)
 	}
 	return csr, nil
 }

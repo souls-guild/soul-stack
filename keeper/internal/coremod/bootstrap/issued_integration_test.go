@@ -19,6 +19,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulseed"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 )
 
@@ -410,5 +411,108 @@ func TestIntegration_IssuedBatch_UnknownIncarnationCannotClaimABoundHost(t *test
 		IssueBatch(ctx, []string{"bound.example.com"}, "")
 	if err == nil || !strings.Contains(err.Error(), "identity takeover") {
 		t.Fatalf("issuance without an incarnation = %v, want a takeover refusal", err)
+	}
+}
+
+// ★★ TestIntegration_IssuedBatch_PendingHostWithASeedIsNotReArmed — NIM-865.
+//
+// The defect this guards is one the NIM-865 fix itself created. Bootstrap used
+// to flip the row to `connected` the moment it signed a certificate, so a host
+// that had onboarded was never seen here as `pending`. Leaving the status
+// honest — `pending` until a stream really opens — put every freshly onboarded
+// host, and permanently every host whose Bootstrap reply was lost, into the
+// re-arm arm below.
+//
+// That is not a cosmetic misroute. Re-arming mints a FRESH bootstrap token and
+// hands the plaintext back in the run register, from where the provisioning
+// channel delivers it (cloud-init userdata, ADR-0063). Whoever reads it can
+// present it with a key of their own: the token is unburned, so it is a valid
+// FIRST presentation, and the seed write supersedes the legitimate host's
+// active seed and installs theirs. The real host's next mTLS reconnect is
+// Unauthenticated and the SID has changed hands — exactly the takeover the
+// `connected` arm refuses by name, reached through the front door.
+//
+// So the arm is chosen by whether an identity EXISTS, not by the status that
+// approximates it.
+func TestIntegration_IssuedBatch_PendingHostWithASeedIsNotReArmed(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	const sid = "onboarded-not-yet-streaming.example.com"
+
+	// A host mid-onboarding: the Bootstrap RPC committed, no stream yet.
+	if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+		SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
+	}); err != nil {
+		t.Fatalf("insert Soul: %v", err)
+	}
+	kid := "keeper-1"
+	if err := soulseed.Insert(ctx, issuedIntegrationPool, &soulseed.SoulSeed{
+		SID:          sid,
+		Fingerprint:  "3333333333333333333333333333333333333333333333333333333333333333",
+		SerialNumber: "serial-onboarded",
+		ExpiresAt:    time.Now().UTC().Add(720 * time.Hour),
+		IssuedByKID:  &kid,
+		Status:       soulseed.StatusActive,
+	}); err != nil {
+		t.Fatalf("insert seed: %v", err)
+	}
+
+	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+		IssueBatch(ctx, []string{sid}, runIncarnation)
+	if err != nil {
+		t.Fatalf("IssueBatch: %v", err)
+	}
+	if len(hosts) != 1 {
+		t.Fatalf("hosts = %d, want 1", len(hosts))
+	}
+	if !hosts[0].Onboarded {
+		t.Error("Onboarded = false — a host holding an active seed was treated as never onboarded")
+	}
+	if hosts[0].Token.Reveal() != "" {
+		t.Error("a bootstrap token was minted for a host that already holds an identity — " +
+			"redeeming it would supersede that host's seed")
+	}
+
+	// And nothing was written: no token row, and the registration untouched.
+	var tokens int
+	if err := issuedIntegrationPool.QueryRow(ctx,
+		`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1`, sid).Scan(&tokens); err != nil {
+		t.Fatalf("count tokens: %v", err)
+	}
+	if tokens != 0 {
+		t.Errorf("bootstrap_tokens rows = %d, want 0", tokens)
+	}
+	got, err := keepersoul.SelectBySID(ctx, issuedIntegrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectBySID: %v", err)
+	}
+	if got.Status != keepersoul.StatusPending {
+		t.Errorf("status = %q, want pending (untouched)", got.Status)
+	}
+}
+
+// The complement: a `pending` host with NO seed is still re-armed and still
+// gets its token. Without this, "never re-arm a pending host" would pass the
+// test above and break every genuine first onboarding.
+func TestIntegration_IssuedBatch_PendingHostWithoutASeedStillGetsAToken(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	const sid = "never-onboarded.example.com"
+
+	if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+		SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
+	}); err != nil {
+		t.Fatalf("insert Soul: %v", err)
+	}
+	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+		IssueBatch(ctx, []string{sid}, runIncarnation)
+	if err != nil {
+		t.Fatalf("IssueBatch: %v", err)
+	}
+	if len(hosts) != 1 || hosts[0].Onboarded {
+		t.Fatalf("hosts = %d, Onboarded = %t; want 1 and false", len(hosts), len(hosts) > 0 && hosts[0].Onboarded)
+	}
+	if hosts[0].Token.Reveal() == "" {
+		t.Error("no token minted for a host that has never onboarded")
 	}
 }

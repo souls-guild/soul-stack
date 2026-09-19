@@ -35,6 +35,7 @@ import (
 	"math/rand/v2"
 	"os"
 	"os/signal"
+	"path/filepath"
 	"sort"
 	"strings"
 	"syscall"
@@ -237,8 +238,21 @@ func runInit(args []string) int {
 		slog.String("kid", res.KID),
 		slog.Time("not_after", res.NotAfter),
 		slog.String("seed_dir", res.SeedDir),
+		slog.Bool("recovered_lost_reply", res.ReusedKey),
 	)
 	fmt.Fprintf(os.Stdout, "Bootstrap complete. SoulSeed written to %s\n", res.SeedDir)
+	if res.ReusedKey {
+		// Deliberately does not claim the earlier attempt reached the Keeper:
+		// the key is left behind by a refused token and by an unreachable
+		// Keeper alike, and only the server knows which. Saying "the token was
+		// already burned" here would be a guess printed as a fact.
+		fmt.Fprintln(os.Stdout, "Finished an earlier attempt: the key it had already generated was reused.")
+	}
+	if res.PendingKeyLeft != nil {
+		fmt.Fprintf(os.Stderr,
+			"warning: onboarding succeeded but the scratch key %s could not be removed: %v\n",
+			filepath.Join(res.SeedDir, soulbootstrap.PendingKeyFile), res.PendingKeyLeft)
+	}
 	return exitOK
 }
 

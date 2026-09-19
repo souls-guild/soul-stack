@@ -30,7 +30,7 @@ The module places on the VM **ONLY the token** (everything else — the soul bin
 2. ephemeral ed25519 keypair + `SshProvider.Sign(pubkey)` → `ssh.AuthMethod`s (reuses `push.NewEphemeralEd25519` + `push.AuthMethodsFromSign`). The private key **NEVER** leaves the Keeper.
 3. `push.Dial(DialConfig{Host: primary_ip, HostAuthorities: <host-CA from Vault>, …})` → `Session` (CA-signed host-cert verify — the same as push).
 4. `session.Run("install -d -m 0700 /etc/soul && umask 077 && cat > <token_path> && chmod 0400 <token_path>", tokenBytes)` — **★ token in STDIN, NOT in argv** (otherwise it leaks into `ps`/audit.log/journald on the VM itself).
-5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — **token redeem** (CSR→Bootstrap-RPC→SoulSeed; §Amendment init phase). The guard on the seed-cert = idempotency (the token is single-use); the literal `$(cat …)` is expanded by the subshell on the VM — the token is not in the keeper's argv.
+5. `session.Run("test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN=\"$(cat <token_path>)\" /usr/local/bin/soul init --config /etc/soul/soul.yml", nil)` — **token redeem** (CSR→Bootstrap-RPC→SoulSeed; §Amendment init phase). The guard on the seed-cert = idempotency (the token is single-use; since NIM-865 a same-key retry is also admitted server-side — see the amendment at the end); the literal `$(cat …)` is expanded by the subshell on the VM — the token is not in the keeper's argv.
 6. if `start_soul` — `session.Run("systemctl daemon-reload && systemctl enable soul && systemctl start soul", nil)` (parity with cloud-init runcmd; enable survives a VM reboot).
 
 **B1-strict.** A failure of any host (Authorize-deny / connect-fail / write-fail / init-fail / start-fail) → step `failed` → state is not committed → `error_locked`. There is no partial delivery.
@@ -144,7 +144,7 @@ The fix — a new step 5 of the A1 flow between token-write and activation (both
 test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat <token_path>)" /usr/local/bin/soul init --config /etc/soul/soul.yml
 ```
 
-- **Idempotency is mandatory:** the guard on the seed-cert — the token is single-use, a retry of the step after a successful redeem without a guard would fail the host. The guard path is fixed by the constant `soulinstall.SeedCertPath` + a sync-guard test against the layout constants of `soul/internal/seed` (`currentLink`/`CertFile`) and `paths.seed` of the generated soul.yml (`TestSeedCertPath_SyncWithSoulSeedLayout`).
+- **Idempotency is mandatory:** the guard on the seed-cert — the token is single-use, a retry of the step after a successful redeem without a guard would fail the host. (Since NIM-865 an unguarded retry carrying the SAME key no longer fails once the host has connected — it is refused, which is the same outcome for this step; the guard stays mandatory. See the amendment at the end.) The guard path is fixed by the constant `soulinstall.SeedCertPath` + a sync-guard test against the layout constants of `soul/internal/seed` (`currentLink`/`CertFile`) and `paths.seed` of the generated soul.yml (`TestSeedCertPath_SyncWithSoulSeedLayout`).
 - **Secret-floor preserved:** the command carries the literal unexpanded `$(cat <token_path>)`, expanded by the subshell on the VM — the token is NOT in the keeper's argv; STDIN is empty. Bit-for-bit symmetry with the self-onboard phase of cloud-init.tmpl.
 - **token-write remains:** init reads the token from the file — there is no second transfer of the secret, the `token_path` contract is additive.
 - `soul init` runs independently of `start_soul` (redeem is the essence of delivery, start is a separate option).
@@ -635,3 +635,9 @@ already listening pays nothing, so the direct transport, where sshd arrives in
 tens of seconds rather than minutes, shares it rather than naming a second
 setting. `TestProvisionTimeoutExceedsJoinWait` is unchanged and still guards it
 against the effective run timeout.
+
+## Amendment 2026-09-19 (NIM-865, [ADR-0090](0090-bootstrap-reply-loss-recovery.md)): the seed-cert guard is now honoured by the server too
+
+`test -e /var/lib/soul-stack/seed/current/cert.pem || … soul init` is called idempotent above, and the client half always was: the guard correctly distinguishes "I onboarded" from "I did not". The server half was not. The Keeper burned the token when it **signed**, so a reply lost in flight — a slow Vault PKI inside the client's deadline is enough — left the guard seeing no certificate, re-running `soul init` on every boot, and taking `PermissionDenied` forever.
+
+A retry is now recognized as a retry: `soul init` reuses the key of the unfinished attempt (`paths.seed/pending-key.pem`) and the Keeper admits a re-presentation that carries the key the burn already bound, on a host that has never held a stream. The command in step 5 is unchanged — what changed is that repeating it can now succeed. One-time still holds where it matters: the keypair a token may issue for is fixed at the first presentation, and the token dies the moment the host connects.

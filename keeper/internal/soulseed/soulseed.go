@@ -72,6 +72,19 @@ func FingerprintFromCert(cert *x509.Certificate) string {
 	return hex.EncodeToString(sum[:])
 }
 
+// FingerprintFromCSR computes the same fingerprint as [FingerprintFromCert],
+// from a certificate REQUEST — both hash the DER SubjectPublicKeyInfo, and a
+// CSR carries the identical bytes the certificate signed from it will carry.
+//
+// This is what lets an onboarding be recognized as a repeat of itself before
+// anything is signed (NIM-865): the value computed here from a presented CSR
+// equals the one already recorded for the seed, if and only if the same keypair
+// is behind both.
+func FingerprintFromCSR(csr *x509.CertificateRequest) string {
+	sum := sha256.Sum256(csr.RawSubjectPublicKeyInfo)
+	return hex.EncodeToString(sum[:])
+}
+
 // ValidFingerprintFormat checks format (64 lower-hex). Caller validates before
 // round trip; PG CHECK guards DB side.
 func ValidFingerprintFormat(fp string) bool {

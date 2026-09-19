@@ -412,6 +412,18 @@ func (h *SoulHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, s
 		expiredPrevious = expired
 	}
 
+	// Outside the `force` branch on purpose. ExpireActiveBySID only sees tokens
+	// that were never redeemed, and since NIM-865 a BURNED one is not inert
+	// either — it stays redeemable by the key it bound until the host connects.
+	// In the state this matters most, a reply lost in flight, there IS no active
+	// token, so `Insert` below does not conflict and the operator never has to
+	// pass `force` at all: gating this on it would mean the plain call reports a
+	// fresh token issued while the leaked burned one is still live.
+	if _, err := bootstraptoken.CloseRecoveryBySID(ctx, tx, sid, bootstraptoken.SystemKIDForceReissue); err != nil {
+		h.logger.Error("soul.issue-token: close recovery failed", slog.String("sid", sid), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "issue token failed")}
+	}
+
 	plain, err := bootstraptoken.Generate()
 	if err != nil {
 		h.logger.Error("soul.issue-token: generate failed", slog.String("sid", sid), slog.Any("error", err))

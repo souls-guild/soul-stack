@@ -55,9 +55,22 @@ type soulFakePool struct {
 	// commitErr — Commit error (write succeeded, commit failed). Propagated
 	// to soulFakeTx.Commit when the transaction is created.
 	commitErr error
+
+	// closeRecoveryCalled — see the Exec below.
+	closeRecoveryCalled bool
 }
 
 func (p *soulFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	// CloseRecoveryBySID (NIM-865) — `force` must disarm already-BURNED tokens
+	// too, which ExpireActiveBySID cannot see (it matches `used_at IS NULL`).
+	// Since the recovery path those stay redeemable by the key they bound until
+	// the host connects, so without this an operator reacting to a leak is told
+	// the old token was killed while it still works. It is the only Exec'd
+	// bootstrap_tokens write; its sibling carries a RETURNING.
+	if strings.Contains(sql, "UPDATE bootstrap_tokens") && !strings.Contains(sql, "RETURNING") {
+		p.closeRecoveryCalled = true
+		return pgconn.CommandTag{}, nil
+	}
 	return pgconn.CommandTag{}, errFakeUnexpected{sql: sql}
 }
 
@@ -557,6 +570,9 @@ func TestSoulIssueToken_ForceExpiresPrevious(t *testing.T) {
 	}
 	if ev.Payload["expired_previous"] != true {
 		t.Errorf("audit expired_previous = %v, want true", ev.Payload["expired_previous"])
+	}
+	if !pool.closeRecoveryCalled {
+		t.Error("force=true did not disarm already-burned tokens; a leaked burned token would stay redeemable")
 	}
 	assertNoTokenInAudit(t, rec, out.BootstrapToken)
 	assertNoTokenNamedKey(t, ev)

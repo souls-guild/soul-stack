@@ -106,6 +106,17 @@ func (h *Handler) callSoulIssueToken(ctx context.Context, claims *jwt.Claims, re
 		expiredPrevious = expired
 	}
 
+	// Outside the `force` branch, matching the REST twin in
+	// api/handlers/soul.go — see the reasoning there: after a reply lost in
+	// flight there is no ACTIVE token to conflict with, so the operator never
+	// passes `force`, and gating this on it would leave the leaked burned token
+	// live while reporting a fresh one issued.
+	if _, err := bootstraptoken.CloseRecoveryBySID(ctx, tx, a.SID, bootstraptoken.SystemKIDForceReissue); err != nil {
+		h.deps.Logger.Error("mcp: soul.issue-token close recovery failed",
+			slog.String("sid", a.SID), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "issue token failed")
+	}
+
 	plain, err := bootstraptoken.Generate()
 	if err != nil {
 		h.deps.Logger.Error("mcp: soul.issue-token generate failed",

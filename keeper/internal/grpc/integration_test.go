@@ -354,16 +354,30 @@ func TestIntegration_Bootstrap_HappyPath(t *testing.T) {
 		}
 	}
 
-	// Check the DB: soul.connected, seed.active, token.used.
+	// Check the DB: the soul stays PENDING, seed.active, token.used.
+	//
+	// `connected` is defined as "stream alive, Keeper holds lease in Redis"
+	// and no stream exists yet — signing a certificate is one network hop
+	// short of the host holding one. Bootstrap used to write it here anyway,
+	// and nothing ever corrected it for a host that never appeared, because
+	// the Reaper's disconnect sweep cannot match a NULL last_seen_at
+	// (migration 043). `connected` now comes from the EventStream handshake —
+	// see TestIntegration_EventStream_HelloHandshake (NIM-865).
 	s, err := soul.SelectBySID(ctx, integrationPool, sid)
 	if err != nil {
 		t.Fatalf("SelectBySID: %v", err)
 	}
-	if s.Status != soul.StatusConnected {
-		t.Errorf("soul.status = %v, want connected", s.Status)
+	if s.Status != soul.StatusPending {
+		t.Errorf("soul.status = %v, want pending (no stream has existed yet)", s.Status)
 	}
-	if s.LastSeenByKID == nil || *s.LastSeenByKID != "kid-test" {
-		t.Errorf("last_seen_by_kid = %v, want kid-test", s.LastSeenByKID)
+	if s.LastSeenByKID != nil {
+		t.Errorf("last_seen_by_kid = %v, want nil — it records which Keeper held the STREAM", s.LastSeenByKID)
+	}
+	// The predicate the token-recovery path is gated on: a host that has never
+	// held a stream. If bootstrap ever starts writing this, a burned token
+	// becomes unrecoverable again and NIM-865 is back.
+	if s.LastSeenAt != nil {
+		t.Errorf("last_seen_at = %v, want nil after bootstrap", s.LastSeenAt)
 	}
 	seed, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
 	if err != nil {
@@ -521,7 +535,76 @@ func TestIntegration_EventStream_HelloHandshake(t *testing.T) {
 	if reply.GetServerTime() == nil || reply.GetServerTime().AsTime().IsZero() {
 		t.Errorf("server_time empty: %v", reply.GetServerTime())
 	}
+
+	// The handshake is what makes `connected` true, and is now what writes it
+	// (NIM-865). Bootstrap above left the row `pending`; the value is earned
+	// here, by a peer that authenticated with an active seed and received a
+	// message.
+	//
+	// Polled, not read once: the server writes AFTER stream.Send returns, so a
+	// client that has already received HelloReply can legitimately win the race
+	// to the database. A single read here is a flake, not a check.
+	var s *soul.Soul
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		s, err = soul.SelectBySID(ctx, integrationPool, sid)
+		if err != nil {
+			t.Fatalf("SelectBySID: %v", err)
+		}
+		if s.Status == soul.StatusConnected || time.Now().After(deadline) {
+			break
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	if s.Status != soul.StatusConnected {
+		t.Errorf("soul.status = %v after the handshake, want connected", s.Status)
+	}
+	if s.LastSeenByKID == nil || *s.LastSeenByKID != "kid-test" {
+		t.Errorf("last_seen_by_kid = %v, want kid-test", s.LastSeenByKID)
+	}
+	// `last_seen_at` is the predicate the burned-token recovery is gated on, so
+	// a completed handshake must have closed it. Two writers uphold this today
+	// — MarkConnected and the Hello-as-app-message flush — which is why removing
+	// either one alone leaves this green; it guards the INVARIANT, not a
+	// particular writer, and it is the thing that must never regress.
+	if s.LastSeenAt == nil {
+		t.Error("last_seen_at is nil after the handshake — the recovery gate is still open on a live host")
+	}
 	_ = stream.CloseSend()
+}
+
+// TestIntegration_MarkConnected_DoesNotResurrectALifecycleStatus — a
+// reconnecting stream must not undo a lifecycle decision. `MarkConnected` is
+// deliberately narrowed to `pending`/`disconnected`: an operator who revoked a
+// host, or a cascade that destroyed one, outranks the fact that something is
+// still dialling in, and a blanket `SET status='connected'` would reverse both.
+//
+// It calls the writer directly rather than opening a stream — a revoked host
+// cannot complete the handshake anyway (the seed authenticator refuses it), so
+// driving this through gRPC would assert the interceptor, not the guard. What
+// is under test is the WHERE clause.
+func TestIntegration_MarkConnected_DoesNotResurrectALifecycleStatus(t *testing.T) {
+	resetAll(t)
+	_, sid := seedOnboardingFixtures(t)
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+
+	for _, st := range []soul.Status{soul.StatusRevoked, soul.StatusDestroyed, soul.StatusExpired} {
+		if _, err := integrationPool.Exec(ctx,
+			`UPDATE souls SET status = $2 WHERE sid = $1`, sid, string(st)); err != nil {
+			t.Fatalf("set status %s: %v", st, err)
+		}
+		if err := soul.MarkConnected(ctx, integrationPool, sid, "kid-test", time.Now().UTC()); err != nil {
+			t.Fatalf("MarkConnected(%s): %v", st, err)
+		}
+		s, err := soul.SelectBySID(ctx, integrationPool, sid)
+		if err != nil {
+			t.Fatalf("SelectBySID: %v", err)
+		}
+		if s.Status != st {
+			t.Errorf("status = %v after MarkConnected over %v, want it untouched", s.Status, st)
+		}
+	}
 }
 
 // TestIntegration_EventStream_RevokedSeedRejected — after Bootstrap, mark
@@ -688,7 +771,112 @@ func mustMakeCSRWithKeyIT(t *testing.T, cn string) (csrPEM string, keyPEM []byte
 	return csr.String(), []byte(keyBuf.String())
 }
 
+// TestIntegration_Bootstrap_TokenReuseRejected — a burned token is refused for
+// a SECOND BINDING, which is what one-time means (NIM-865). It used to refuse
+// every repeat presentation, including the one that carried the same key; that
+// is the defect, not the property — the Keeper burns when it SIGNS, and a reply
+// lost between the commit and the host is enough to strand it forever.
+//
+// The three refusals below are the whole of what anti-replay defends, and each
+// is checked against a token that is otherwise perfectly recoverable, so a
+// carve-out that widened past its conditions fails here.
 func TestIntegration_Bootstrap_TokenReuseRejected(t *testing.T) {
+	ctx, cancel := context.WithTimeout(context.Background(), 60*time.Second)
+	defer cancel()
+
+	// An attacker replaying a captured token wants a certificate for their OWN
+	// key. That is the second binding, and it stays refused.
+	t.Run("a different key", func(t *testing.T) {
+		resetAll(t)
+		plain, sid := seedOnboardingFixtures(t)
+		addr, stop := startTestServer(t)
+		defer stop()
+		client, closeClient := dialClient(t, addr)
+		defer closeClient()
+
+		if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(mustMakeCSRIT(t, sid)),
+		}); err != nil {
+			t.Fatalf("Bootstrap #1: %v", err)
+		}
+		_, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(mustMakeCSRIT(t, sid)),
+		})
+		if got := status.Code(err); got != codes.PermissionDenied {
+			t.Fatalf("Bootstrap with a fresh key = %v, want PermissionDenied", got)
+		}
+	})
+
+	// ★ Outranks the recovery itself. Once the host has appeared, the
+	// credential provably arrived and the token is finished — otherwise a
+	// plaintext still sitting in /etc/soul/token could be turned against a
+	// working host at any point inside the TTL.
+	t.Run("after the host has connected", func(t *testing.T) {
+		resetAll(t)
+		plain, sid := seedOnboardingFixtures(t)
+		addr, stop := startTestServer(t)
+		defer stop()
+		client, closeClient := dialClient(t, addr)
+		defer closeClient()
+
+		csrPEM := mustMakeCSRIT(t, sid)
+		if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+		}); err != nil {
+			t.Fatalf("Bootstrap #1: %v", err)
+		}
+		// Exactly what the EventStream handshake writes — the real writer, not a
+		// hand-rolled UPDATE that would keep passing if the two drifted apart.
+		if err := soul.MarkConnected(ctx, integrationPool, sid, "kid-test", time.Now().UTC()); err != nil {
+			t.Fatalf("MarkConnected: %v", err)
+		}
+		_, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+		})
+		if got := status.Code(err); got != codes.PermissionDenied {
+			t.Fatalf("Bootstrap after first contact = %v, want PermissionDenied", got)
+		}
+	})
+
+	// An operator who force-reissued meant it: that burn records an
+	// invalidation, not a presentation, so there is no lost reply behind it.
+	t.Run("a system-marked burn", func(t *testing.T) {
+		resetAll(t)
+		plain, sid := seedOnboardingFixtures(t)
+		addr, stop := startTestServer(t)
+		defer stop()
+		client, closeClient := dialClient(t, addr)
+		defer closeClient()
+
+		csrPEM := mustMakeCSRIT(t, sid)
+		if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+		}); err != nil {
+			t.Fatalf("Bootstrap #1: %v", err)
+		}
+		if _, err := integrationPool.Exec(ctx,
+			`UPDATE bootstrap_tokens SET used_by_kid = $2 WHERE sid = $1`,
+			sid, bootstraptoken.SystemKIDForceReissue); err != nil {
+			t.Fatalf("mark force-reissue: %v", err)
+		}
+		_, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+			Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+		})
+		if got := status.Code(err); got != codes.PermissionDenied {
+			t.Fatalf("Bootstrap over a force-reissue burn = %v, want PermissionDenied", got)
+		}
+	})
+}
+
+// TestIntegration_Bootstrap_RecoversLostReply — the defect end to end: the
+// Keeper signed and committed, the reply never reached the host, and the retry
+// completes the onboarding instead of being stranded.
+//
+// The seed row must be re-stamped IN PLACE. `soul_seeds_fingerprint_idx` is
+// globally unique, so a Supersede+Insert here would violate it — and would
+// revoke the very identity the retry is delivering, since a stream is admitted
+// only on `status='active'`.
+func TestIntegration_Bootstrap_RecoversLostReply(t *testing.T) {
 	resetAll(t)
 	plain, sid := seedOnboardingFixtures(t)
 	addr, stop := startTestServer(t)
@@ -698,22 +886,234 @@ func TestIntegration_Bootstrap_TokenReuseRejected(t *testing.T) {
 	defer closeClient()
 
 	csrPEM := mustMakeCSRIT(t, sid)
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 	defer cancel()
 
-	// First time — success.
+	// The attempt whose reply is lost. The Soul never sees this certificate;
+	// everything the Keeper committed for it stays behind.
+	lost, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap #1: %v", err)
+	}
+	before, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID before: %v", err)
+	}
+
+	// The retry `soul init` makes behind ADR-0063's seed-cert guard, carrying
+	// the key the first attempt persisted.
+	got, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap #2 (same key, never connected): %v, want success", err)
+	}
+	if !strings.Contains(string(got.GetCertificatePem()), "BEGIN CERTIFICATE") {
+		t.Fatalf("recovery cert not PEM: %q", got.GetCertificatePem())
+	}
+	if string(got.GetCertificatePem()) == string(lost.GetCertificatePem()) {
+		t.Error("recovery returned the SAME certificate — it must be freshly signed, nothing stores the lost PEM")
+	}
+
+	after, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID after: %v", err)
+	}
+	// The identity did not move: the fingerprint is the public key, and
+	// re-signing one key does not change it.
+	if after.Fingerprint != before.Fingerprint {
+		t.Errorf("fingerprint moved: %q → %q", before.Fingerprint, after.Fingerprint)
+	}
+	if after.SeedID != before.SeedID {
+		t.Errorf("seed_id = %q, want the row re-stamped in place (%q)", after.SeedID, before.SeedID)
+	}
+	if after.SerialNumber == before.SerialNumber {
+		t.Errorf("serial_number = %q unchanged — a new certificate was not recorded", after.SerialNumber)
+	}
+	// Exactly one row, and it is active: a second one would mean the recovery
+	// took the Supersede+Insert path.
+	var seedRows int
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT count(*) FROM soul_seeds WHERE sid = $1`, sid).Scan(&seedRows); err != nil {
+		t.Fatalf("count seeds: %v", err)
+	}
+	if seedRows != 1 {
+		t.Errorf("soul_seeds rows = %d, want 1", seedRows)
+	}
+	// And the registry still says what is true: no stream has ever existed.
+	s, err := soul.SelectBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectBySID: %v", err)
+	}
+	if s.Status != soul.StatusPending || s.LastSeenAt != nil {
+		t.Errorf("soul = {%v, last_seen_at=%v}, want pending with no last_seen_at", s.Status, s.LastSeenAt)
+	}
+}
+
+// TestIntegration_Bootstrap_FreshTokenWithTheKeptKey — the OTHER recovery, and
+// the one that persisting the key nearly broke.
+//
+// An operator who does not want to rely on the re-presentation window simply
+// issues a new token through `issue-token`. NOT via `core.bootstrap.issued`:
+// that path converges over a host holding an active seed rather than re-arming
+// it, because handing such a host a fresh token is a takeover primitive
+// (NIM-865, see TestIntegration_IssuedBatch_PendingHostWithASeedIsNotReArmed).
+// The host still has the key of the attempt whose reply was lost, so it
+// presents a FIRST presentation of a fresh token carrying a key the registry
+// has already recorded — and `soul_seeds_fingerprint_idx` is globally unique,
+// so a Supersede+Insert here fails the index and burns the new token for
+// nothing. The seed write therefore decides insert-vs-re-stamp from the
+// registry, not from which token path it is on.
+func TestIntegration_Bootstrap_FreshTokenWithTheKeptKey(t *testing.T) {
+	resetAll(t)
+	plain, sid := seedOnboardingFixtures(t)
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	client, closeClient := dialClient(t, addr)
+	defer closeClient()
+
+	csrPEM := mustMakeCSRIT(t, sid)
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
 	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
 		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
 	}); err != nil {
 		t.Fatalf("Bootstrap #1: %v", err)
 	}
-	// Second time — the token is burned.
-	_, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
-		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+	before, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID before: %v", err)
+	}
+
+	// The operator's fresh token for the same host.
+	fresh, err := bootstraptoken.Generate()
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, _, err := bootstraptoken.ExpireActiveBySID(ctx, integrationPool, sid,
+		bootstraptoken.SystemKIDForceReissue); err != nil {
+		t.Fatalf("ExpireActiveBySID: %v", err)
+	}
+	if _, err := bootstraptoken.Insert(ctx, integrationPool, sid, fresh.Hash(), 24*time.Hour, nil); err != nil {
+		t.Fatalf("Insert fresh token: %v", err)
+	}
+
+	// `soul init` again, still carrying the key it persisted.
+	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: fresh.Reveal(), CsrPem: []byte(csrPEM),
+	}); err != nil {
+		t.Fatalf("Bootstrap with a fresh token and the kept key: %v, want success", err)
+	}
+
+	after, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID after: %v", err)
+	}
+	if after.SeedID != before.SeedID || after.Fingerprint != before.Fingerprint {
+		t.Errorf("seed = {%q, %q}, want the same row re-stamped ({%q, %q})",
+			after.SeedID, after.Fingerprint, before.SeedID, before.Fingerprint)
+	}
+	if after.SerialNumber == before.SerialNumber {
+		t.Error("serial_number unchanged — no new certificate was recorded")
+	}
+	var seedRows int
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT count(*) FROM soul_seeds WHERE sid = $1`, sid).Scan(&seedRows); err != nil {
+		t.Fatalf("count seeds: %v", err)
+	}
+	if seedRows != 1 {
+		t.Errorf("soul_seeds rows = %d, want 1", seedRows)
+	}
+}
+
+// TestIntegration_Bootstrap_RefusesAKeyBoundToAnotherSID — a CSR carrying
+// someone else's public key. The key is public, so presenting one is free; what
+// it must not buy is a certificate, and the refusal is the ordinary
+// PermissionDenied rather than the unique-index violation this used to be.
+func TestIntegration_Bootstrap_RefusesAKeyBoundToAnotherSID(t *testing.T) {
+	resetAll(t)
+	victimPlain, victimSID := seedOnboardingFixtures(t)
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	client, closeClient := dialClient(t, addr)
+	defer closeClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	// The victim onboards normally.
+	victimCSR, victimKey := mustMakeCSRWithKeyIT(t, victimSID)
+	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: victimSID, BootstrapToken: victimPlain, CsrPem: []byte(victimCSR),
+	}); err != nil {
+		t.Fatalf("victim Bootstrap: %v", err)
+	}
+	victimSeed, err := soulseed.SelectActiveBySID(ctx, integrationPool, victimSID)
+	if err != nil {
+		t.Fatalf("victim seed: %v", err)
+	}
+
+	// A second host with a token of its own presents the victim's public key.
+	// Building that CSR needs the victim's private half, which an attacker does
+	// not have — so this is the strongest form of the attempt, and it still
+	// must not be served.
+	otherSID := "other-host.example.com"
+	if err := soul.Insert(ctx, integrationPool, &soul.Soul{SID: otherSID, Status: soul.StatusPending}); err != nil {
+		t.Fatalf("insert other soul: %v", err)
+	}
+	otherTok, err := bootstraptoken.Generate()
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, err := bootstraptoken.Insert(ctx, integrationPool, otherSID, otherTok.Hash(), 24*time.Hour, nil); err != nil {
+		t.Fatalf("insert other token: %v", err)
+	}
+	stolenCSR := mustMakeCSRForKeyIT(t, otherSID, victimKey)
+
+	_, err = client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: otherSID, BootstrapToken: otherTok.Reveal(), CsrPem: []byte(stolenCSR),
 	})
 	if got := status.Code(err); got != codes.PermissionDenied {
-		t.Fatalf("Bootstrap #2: code = %v, want PermissionDenied", got)
+		t.Fatalf("Bootstrap with another host's key = %v, want PermissionDenied", got)
 	}
+	// The victim's identity is untouched.
+	still, err := soulseed.SelectActiveBySID(ctx, integrationPool, victimSID)
+	if err != nil {
+		t.Fatalf("victim seed after: %v", err)
+	}
+	if still.SeedID != victimSeed.SeedID || still.SerialNumber != victimSeed.SerialNumber {
+		t.Errorf("victim seed moved: %+v → %+v", victimSeed, still)
+	}
+}
+
+// mustMakeCSRForKeyIT builds a CSR with the given CN over an EXISTING key,
+// which is what a retry does: the public key is what the Keeper recognizes, so
+// a test about key identity has to be able to hold the key fixed and vary
+// everything else.
+func mustMakeCSRForKeyIT(t *testing.T, cn string, keyPEM []byte) string {
+	t.Helper()
+	block, _ := pem.Decode(keyPEM)
+	if block == nil {
+		t.Fatal("key is not PEM")
+	}
+	priv, err := x509.ParsePKCS1PrivateKey(block.Bytes)
+	if err != nil {
+		t.Fatalf("ParsePKCS1PrivateKey: %v", err)
+	}
+	tmpl := &x509.CertificateRequest{Subject: pkix.Name{CommonName: cn}, DNSNames: []string{cn}}
+	der, err := x509.CreateCertificateRequest(rand.Reader, tmpl, priv)
+	if err != nil {
+		t.Fatalf("CreateCertificateRequest: %v", err)
+	}
+	var b strings.Builder
+	if err := pem.Encode(&writerAdapter{&b}, &pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}); err != nil {
+		t.Fatalf("pem.Encode: %v", err)
+	}
+	return b.String()
 }
 
 // mustMakeCSRIT — a copy of the helper from vault/integration_test.go
@@ -782,4 +1182,76 @@ func mustSelfSignedIT(t *testing.T, dir string) (certPath, keyPath string) {
 		t.Fatal(err)
 	}
 	return certPath, keyPath
+}
+
+// TestIntegration_Bootstrap_FreshTokenWithAFreshKeyRotatesTheSeed — the third
+// arm of writeSeed, and the operator remedy for a host that lost its key.
+//
+// A disk wipe leaves the registry holding an active seed the host can no longer
+// use. `issue-token --force` mints a new token, the host generates a NEW keypair
+// (no pending key survived), and that is a first presentation of a key the
+// registry has never seen: supersede the old seed, insert the new one. Without
+// this the seed-write path would be covered only where it re-stamps in place,
+// and the arm that actually rotates an identity would be guarded by nothing.
+func TestIntegration_Bootstrap_FreshTokenWithAFreshKeyRotatesTheSeed(t *testing.T) {
+	resetAll(t)
+	plain, sid := seedOnboardingFixtures(t)
+	addr, stop := startTestServer(t)
+	defer stop()
+
+	client, closeClient := dialClient(t, addr)
+	defer closeClient()
+	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+	defer cancel()
+
+	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: plain, CsrPem: []byte(mustMakeCSRIT(t, sid)),
+	}); err != nil {
+		t.Fatalf("Bootstrap #1: %v", err)
+	}
+	before, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID before: %v", err)
+	}
+
+	// `issue-token --force`, then a host with nothing left on disk.
+	fresh, err := bootstraptoken.Generate()
+	if err != nil {
+		t.Fatalf("Generate: %v", err)
+	}
+	if _, _, err := bootstraptoken.ExpireActiveBySID(ctx, integrationPool, sid,
+		bootstraptoken.SystemKIDForceReissue); err != nil {
+		t.Fatalf("ExpireActiveBySID: %v", err)
+	}
+	if _, err := bootstraptoken.Insert(ctx, integrationPool, sid, fresh.Hash(), 24*time.Hour, nil); err != nil {
+		t.Fatalf("Insert fresh token: %v", err)
+	}
+
+	if _, err := client.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: fresh.Reveal(), CsrPem: []byte(mustMakeCSRIT(t, sid)),
+	}); err != nil {
+		t.Fatalf("Bootstrap with a fresh token and a fresh key: %v, want success", err)
+	}
+
+	after, err := soulseed.SelectActiveBySID(ctx, integrationPool, sid)
+	if err != nil {
+		t.Fatalf("SelectActiveBySID after: %v", err)
+	}
+	if after.Fingerprint == before.Fingerprint {
+		t.Error("fingerprint unchanged — a new keypair did not produce a new identity")
+	}
+	if after.SeedID == before.SeedID {
+		t.Error("the same row was re-stamped; a different key must get its own row")
+	}
+	// The old row survives as history, superseded — not deleted, and not left
+	// active beside the new one (the partial unique index allows exactly one).
+	var total, active int
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT count(*), count(*) FILTER (WHERE status = 'active') FROM soul_seeds WHERE sid = $1`,
+		sid).Scan(&total, &active); err != nil {
+		t.Fatalf("count seeds: %v", err)
+	}
+	if total != 2 || active != 1 {
+		t.Errorf("soul_seeds total/active = %d/%d, want 2/1", total, active)
+	}
 }

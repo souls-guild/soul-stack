@@ -688,6 +688,16 @@ func (h *eventStreamHandler) EventStream(stream grpclib.BidiStreamingServer[keep
 	}
 	h.deps.Metrics.ObserveMessage(directionToSoul)
 
+	// The handshake completed, so `connected` is now true and this is where it
+	// is written (NIM-865). Bootstrap used to write it at the moment a
+	// certificate was SIGNED, which is one network hop short of the host
+	// holding one — and when that hop was lost, the row claimed a stream that
+	// would never exist, permanently: the Reaper's disconnect sweep matches on
+	// `last_seen_at < …` and a NULL never matches (migration 043). Reaching
+	// here means the peer authenticated with an active seed AND received a
+	// message, so the credential demonstrably arrived.
+	h.markConnected(ctx, sid)
+
 	// Connect-time broadcast of plugin trust sigils (ADR-026, S6): right
 	// after HelloReply and BEFORE the send loop starts — sent directly via
 	// stream.Send in this same goroutine, so ordering is guaranteed
@@ -1369,6 +1379,32 @@ func (h *eventStreamHandler) touchSeen(ctx context.Context, sid string) {
 		}
 	}
 	h.flushLastSeen(ctx, sid, now)
+}
+
+// markConnected moves the PG status snapshot to `connected` and stamps
+// `last_seen_at`, once per stream, right after the handshake. No-op without
+// SoulDB (dev / unit mode).
+//
+// Best-effort, and the recovery is NOT the Reaper — its lease-aware sweep
+// reconciles `connected ⇄ disconnected` and selects `pending` in neither
+// direction. What makes a missed write here recoverable is that the throttled
+// `last_seen_at` flush carries the same promotion ([soul.UpdateLastSeen]), so
+// the first app message on this stream repeats it. Until one of the two lands
+// the host reads `pending`, which the roster drops — hence best-effort, not
+// fire-and-forget: the failure is logged at Warn.
+//
+// It runs under its own background ctx for the same reason the flush does — a
+// stream cancelled at this instant should still leave the snapshot correct.
+func (h *eventStreamHandler) markConnected(ctx context.Context, sid string) {
+	if h.deps.SoulDB == nil {
+		return
+	}
+	markCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 2*time.Second)
+	defer cancel()
+	if err := soul.MarkConnected(markCtx, h.deps.SoulDB, sid, h.deps.KID, time.Now().UTC()); err != nil {
+		h.logger.Warn("eventstream: mark connected failed",
+			slog.String("sid", sid), slog.Any("error", err))
+	}
 }
 
 // flushLastSeen is a throttled `last_seen_at` snapshot to PG. No-op without

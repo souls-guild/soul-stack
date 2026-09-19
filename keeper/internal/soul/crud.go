@@ -181,6 +181,40 @@ SET status = $2,
 WHERE sid = $1
 `
 
+// markConnectedSQL — where `connected` is written (NIM-865). The value is
+// documented as "stream alive, Keeper holds lease in Redis" ([Status]), so it is
+// written where that becomes true; until then a host onboarding stays
+// `pending`, which is what `pending` already says.
+//
+// **`last_seen_at` is written here too, and deliberately.** It is the predicate
+// the burned-token recovery is gated on — a NULL means "this host has never held
+// a stream", and while it is NULL an unexpired burned token stays redeemable.
+//
+// The handshake already flushes that column by treating Hello as an app message
+// ([UpdateLastSeen] via touchSeen), so this is not the only writer and usually
+// not the first. What it adds is that the gate closes UNCONDITIONALLY and in the
+// same statement as the status: that flush is throttled per SID and its failure
+// is swallowed at Debug, so there is a narrow path — a reconnect whose previous
+// stream never ran its `forget`, or a single failed write — where the row would
+// read `connected` with `last_seen_at` still NULL, which is precisely the
+// "never onboarded" answer the recovery path would act on for a host that is up.
+// Two predicates that can disagree are worse than one, and the security-bearing
+// one should not be the one that can be skipped.
+//
+// `status IN ('pending','disconnected')` rather than an unconditional write:
+// `revoked` / `expired` / `destroyed` are lifecycle decisions an operator or a
+// cascade made, and a reconnecting stream must not undo one. The `last_seen_at`
+// write is deliberately under the same WHERE: a revoked host must not be able to
+// close its own recovery gate, and it has no business being marked seen either.
+const markConnectedSQL = `
+UPDATE souls
+SET status           = 'connected',
+    last_seen_at     = $2,
+    last_seen_by_kid = $3
+WHERE sid = $1
+  AND status IN ('pending', 'disconnected')
+`
+
 // updateCovenSQL — UPDATE of the stable Coven label set. Used by the
 // keeper-side core module `core.soul.registered` (docs/keeper/modules.md).
 // Returns the final coven set in one round trip; RETURNING avoids an extra
@@ -198,12 +232,31 @@ RETURNING coven
 // EventStream app message, but no more often than stale_after/3 (fix
 // 89b4f0a): frequent heartbeats stay in Redis, PG gets a decimated snapshot.
 //
-// status is untouched here — UpdateStatus is reserved for bootstrap/Reaper.
+// **It also completes what [markConnectedSQL] does at the handshake**, under the
+// same `pending`/`disconnected` guard. That write is best-effort, and NOTHING
+// reconciles a `pending` row: the Reaper's lease-aware sweep moves
+// `connected → disconnected` and `disconnected → connected` (migration 043) and
+// selects neither direction for `pending`, while `overlayPresence` and the
+// roster both drop the status entirely. So a single failed write at the
+// handshake would leave a live, streaming host invisible to every run for as
+// long as the stream lasts. Repeating the promotion on each flush makes it
+// self-healing, and costs nothing on a row that is already `connected`.
+//
+// **`revoked` / `destroyed` are excluded from the statement as a whole**, not
+// merely from the status arm. `last_seen_at` is no longer only a staleness
+// snapshot: it is the predicate the burned-token recovery reads as "this host
+// has never held a stream" (see [markConnectedSQL]). Stamping it for a host an
+// operator revoked would let that host close its own recovery gate, and the
+// claim in markConnectedSQL that it cannot would be false — a revoked seed is
+// refused at the interceptor, so such a row should be writing nothing here.
 const updateLastSeenSQL = `
 UPDATE souls
 SET last_seen_at     = $2,
-    last_seen_by_kid = $3
+    last_seen_by_kid = $3,
+    status           = CASE WHEN status IN ('pending', 'disconnected')
+                            THEN 'connected' ELSE status END
 WHERE sid = $1
+  AND status NOT IN ('revoked', 'destroyed')
 `
 
 // updateSoulprintSQL — UPDATE of the typed-soulprint fields (migration 015).
@@ -828,8 +881,15 @@ func SelectIncarnationMembers(ctx context.Context, db ExecQueryRower, incName st
 
 // UpdateStatus transitions a Soul to a new status and updates
 // last_seen_by_kid. kid is a pointer: nil keeps the old value (PG
-// `COALESCE`), non-nil overwrites it (typical after a `Bootstrap` RPC or
-// EventStream handshake).
+// `COALESCE`), non-nil overwrites it.
+//
+// **It has no production caller.** The onboarding RPC stopped writing a status
+// at all and the EventStream handshake uses [MarkConnected], both in NIM-865;
+// the Reaper moves statuses through its own SQL functions. Kept as the general
+// CRUD verb, and because a transition that is neither "a stream appeared" nor a
+// Reaper sweep has nowhere else to go — but it is unconstrained, so a new caller
+// must decide for itself whether `revoked`/`destroyed` should stop it, which is
+// exactly what MarkConnected encodes.
 //
 // Returns [ErrSoulNotFound] if the SID doesn't exist or UPDATE touched no
 // rows.
@@ -850,6 +910,28 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, sid string, newStatus 
 	}
 	if tag.RowsAffected() == 0 {
 		return ErrSoulNotFound
+	}
+	return nil
+}
+
+// MarkConnected records that a stream from this Soul is up, moving a
+// `pending` / `disconnected` row to `connected` and stamping `last_seen_at`.
+// Called once per EventStream, after the handshake reply has been delivered —
+// the first moment the Keeper has evidence the host holds a working credential
+// (NIM-865).
+//
+// Idempotent and lossless: a row in any other status is left alone and the
+// call reports no error, because "this stream changed nothing" is the normal
+// answer for an already-connected Soul and not a failure to report upwards.
+func MarkConnected(ctx context.Context, db ExecQueryRower, sid, kid string, at time.Time) error {
+	if !ValidSID(sid) {
+		return fmt.Errorf("soul: invalid SID %q", sid)
+	}
+	if kid == "" {
+		return fmt.Errorf("soul: empty kid")
+	}
+	if _, err := db.Exec(ctx, markConnectedSQL, sid, at.UTC(), kid); err != nil {
+		return fmt.Errorf("soul: mark connected: %w", err)
 	}
 	return nil
 }
@@ -885,6 +967,12 @@ func UpdateCoven(ctx context.Context, db ExecQueryRower, sid string, coven []str
 // The real-time value lives in the Redis heartbeat cache; PG holds a
 // snapshot needed by the Reaper (`mark_disconnected`) and the Operator API
 // (`GET /v1/souls`).
+//
+// **It also promotes `pending`/`disconnected` to `connected`** — see
+// [updateLastSeenSQL] for why the status ride-along is there and why `revoked`
+// and `destroyed` rows are skipped entirely. The name predates that; it is kept
+// because the flush is still what the call IS, and the promotion is a
+// consequence of the same fact (an app message arrived).
 //
 // Returns [ErrSoulNotFound] if the SID doesn't exist.
 func UpdateLastSeen(ctx context.Context, db ExecQueryRower, sid, kid string, at time.Time) error {

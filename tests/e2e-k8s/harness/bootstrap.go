@@ -24,9 +24,10 @@ import (
 // Why direct SQL and not POST /v1/souls/{sid}/issue-token: this specifically
 // exercises the gRPC Bootstrap flow (CSR -> Keeper.Bootstrap -> leaf cert +
 // `soul.bootstrapped` audit event); the RBAC/admin API is covered by
-// L2/L3b tests. The keeper handler itself reads `bootstrap_tokens` and
-// upgrades `souls.status pending -> connected` -- that is the behavior
-// under test.
+// L2/L3b tests. The keeper handler itself reads `bootstrap_tokens` and issues
+// the seed; `souls.status` reaches `connected` from the EventStream handshake,
+// not from this RPC (NIM-865) -- so the status assertion downstream is a real
+// test of the stream, not a restatement of what bootstrap just wrote.
 //
 // `created_by_aid = NULL` (FK to operators(aid) ON DELETE SET NULL) is a
 // valid state: keeper-bootstrap-mode starts with an empty operators

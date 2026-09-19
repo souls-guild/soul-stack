@@ -3,11 +3,13 @@
 // `soul init` (entrypoint in cmd/soul), in order:
 //
 //  1. Determines SID (explicit --sid or os.Hostname).
-//  2. Generates an RSA key + PKCS#10 CSR (CN = SID).
+//  2. Takes the RSA key of an unfinished earlier attempt, or generates one,
+//     and builds a PKCS#10 CSR (CN = SID) for it — see [PendingKeyFile].
 //  3. Connects to one of the Keeper Bootstrap endpoints
 //     (server-only TLS, `keeper.tls.ca` from soul.yml).
 //  4. Calls the unary Bootstrap RPC with (sid, plain-token, csr_pem).
-//  5. Writes (cert.pem, key.pem, ca.pem) to `paths.seed` via seed.Write.
+//  5. Writes (cert.pem, key.pem, ca.pem) to `paths.seed` via seed.Write, then
+//     drops the pending key.
 //
 // The private key never leaves the host (ADR-012(b)); the CSR carries only
 // the public key, and the token is hashed server-side.
@@ -82,11 +84,32 @@ type Result struct {
 	KID      string
 	NotAfter time.Time
 	SeedDir  string
+	// ReusedKey reports that this run picked up the key an earlier attempt left
+	// behind (see [PendingKeyFile]).
+	//
+	// It says the earlier attempt did not finish — NOT that it reached the
+	// Keeper. A key is left behind by a refused token and by a Keeper that
+	// never answered alike, and only the server can tell those apart. Do not
+	// render it as "the token was already burned".
+	ReusedKey bool
+
+	// PendingKeyLeft is non-nil when the scratch key could not be removed after
+	// a SUCCESSFUL onboarding (read-only `paths.seed`, an LSM denying unlink).
+	// Reported rather than returned as an error, because the seed is written
+	// and the token is spent by then: this is a file to clean up, not a
+	// bootstrap to retry.
+	PendingKeyLeft error
 }
 
-// Run executes the full bootstrap cycle. Not guaranteed idempotent on the
-// Keeper side: the bootstrap token is burned on the first successful RPC,
-// a repeat call returns PermissionDenied.
+// Run executes the full bootstrap cycle.
+//
+// Retrying is safe and is the supported recovery. The Keeper burns the token
+// when it signs the certificate, so a reply lost in flight leaves the token
+// spent — but a repeat presentation carrying the SAME key (which Run does,
+// via [PendingKeyFile]) is recognized as the same onboarding and completes it.
+// A repeat carrying a different key, or one made after the host has connected
+// even once, is still PermissionDenied: what may not be repeated is binding
+// the SID to a key. See docs/adr/0090-bootstrap-reply-loss-recovery.md.
 func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if strings.TrimSpace(cfg.Token) == "" {
 		return nil, errors.New("bootstrap: token is empty")
@@ -113,11 +136,18 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("bootstrap: invalid sid %q (must match %s)", sid, sidRe.String())
 	}
 
-	// Generate key+CSR before opening the network. CSR carries the public
-	// key + CN=SID; the private key stays in memory and only hits disk
-	// after a successful RPC (together with the issued cert). If bootstrap
-	// fails, we leave nothing behind on disk.
-	key, csrPEM, err := generateKeyAndCSR(sid)
+	// Key+CSR before opening the network. The CSR carries the public key +
+	// CN=SID; the private key goes to `paths.seed/pending-key.pem` first and
+	// into the seed version only on success.
+	//
+	// It is persisted, and a retry REUSES it, because the Keeper burns the
+	// bootstrap token when it signs — not when the reply lands. A reply lost to
+	// this client's deadline leaves a token that only the key that burn bound
+	// can redeem, so an attempt carrying a fresh key would be indistinguishable
+	// from a second host claiming the same SID and is refused as one. See
+	// [PendingKeyFile] for why a certificate-less key on disk is an acceptable
+	// price (NIM-865).
+	key, csrPEM, reusedKey, err := loadOrCreatePendingKey(cfg.SeedDir, sid)
 	if err != nil {
 		return nil, err
 	}
@@ -194,12 +224,22 @@ func Run(ctx context.Context, cfg Config) (*Result, error) {
 	if err := seed.Write(cfg.SeedDir, material); err != nil {
 		return nil, err
 	}
+	// Only now: the seed is on disk and the retry this key existed for can no
+	// longer be needed. Removing it before the write would reopen the window.
+	//
+	// Not fatal. The certificate is written and the token is spent, so failing
+	// here would report a failed onboarding for one that succeeded — and the
+	// operator's natural response, re-running `soul init`, would be a second
+	// presentation. Surfaced on the Result instead, for whoever prints it.
+	pendingKeyErr := clearPendingKey(cfg.SeedDir)
 
 	res := &Result{
-		SID:      sid,
-		Endpoint: successAddr,
-		KID:      reply.GetKid(),
-		SeedDir:  cfg.SeedDir,
+		SID:            sid,
+		Endpoint:       successAddr,
+		KID:            reply.GetKid(),
+		SeedDir:        cfg.SeedDir,
+		ReusedKey:      reusedKey,
+		PendingKeyLeft: pendingKeyErr,
 	}
 	if reply.GetNotAfter() != nil {
 		res.NotAfter = reply.GetNotAfter().AsTime()
@@ -256,16 +296,28 @@ func generateKeyAndCSR(sid string) (*rsa.PrivateKey, []byte, error) {
 	if err != nil {
 		return nil, nil, fmt.Errorf("bootstrap: generate rsa key: %w", err)
 	}
+	csrPEM, err := createCSR(key, sid)
+	if err != nil {
+		return nil, nil, err
+	}
+	return key, csrPEM, nil
+}
+
+// createCSR builds the PKCS#10 CSR (CN=sid) for a key that already exists —
+// the retry path, where reusing the previous attempt's key is the whole point
+// (see [PendingKeyFile]). The CSR is rebuilt rather than stored beside the key:
+// it is derived, and one stored copy that could disagree with the key is a
+// worse failure than the few milliseconds it costs to re-derive.
+func createCSR(key *rsa.PrivateKey, sid string) ([]byte, error) {
 	tmpl := x509.CertificateRequest{
 		Subject:  pkix.Name{CommonName: sid},
 		DNSNames: []string{sid},
 	}
 	der, err := x509.CreateCertificateRequest(rand.Reader, &tmpl, key)
 	if err != nil {
-		return nil, nil, fmt.Errorf("bootstrap: create CSR: %w", err)
+		return nil, fmt.Errorf("bootstrap: create CSR: %w", err)
 	}
-	csrPEM := pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der})
-	return key, csrPEM, nil
+	return pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE REQUEST", Bytes: der}), nil
 }
 
 // sigilAnchorsPEM extracts Sigil trust anchors from BootstrapReply by

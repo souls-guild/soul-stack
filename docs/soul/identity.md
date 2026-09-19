@@ -82,7 +82,7 @@ For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no 
 
 ## Soul statuses and transitions
 
-- **`pending`** — the operator issued a SoulSeed token for this SID, Soul has not arrived yet.
+- **`pending`** — the operator issued a SoulSeed token for this SID, Soul has not arrived yet. **A completed Bootstrap-RPC does not leave this state**: a signed certificate is not a host holding one, so the row stays `pending` until a stream exists (NIM-865). `last_seen_at IS NULL` on a `pending` row is therefore the fact "has never held a stream", and the burned-token recovery in [onboarding.md](onboarding.md#recovery-a-burn-commits-before-the-reply-is-known-to-have-arrived) is gated on it.
 - **`connected`** — a legacy lifecycle snapshot "last known: the stream was alive". **NOT the source of presence** (see below): online/offline is decided by the Redis SID lease, not this status.
 - **`disconnected`** — a legacy lifecycle snapshot "last known: the stream was closed/lost". Soul may return; presence (online) will then be restored via lease capture, regardless of whether the Reaper managed to reconcile the snapshot back to `connected`.
 - **`revoked`** — the operator revoked it. The certificate in `soul_seeds` is marked `revoked`, new connections from this SID are rejected at the TLS level.
@@ -97,7 +97,8 @@ For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no 
 
 **What writes `souls.status`** (a lifecycle snapshot for the Operator API's "last known", NOT presence):
 
-- **Bootstrap-RPC** (onboarding): `pending` → `connected`, records `last_seen_by_kid`. One write at onboarding, not a hot path. A reconnect of an already-onboarded Soul does **not** touch Bootstrap-RPC (onboarding is already done) — the snapshot back to `connected` is moved by the Reaper reconcile (below).
+- **The EventStream handshake**: `pending` / `disconnected` → `connected`, recording `last_seen_by_kid`. Once per stream, right after HelloReply is delivered — the first moment the Keeper has evidence the host holds a working credential (it authenticated with an active seed *and* received a message). Narrowed to those two statuses on purpose: `revoked` / `expired` / `destroyed` are decisions an operator or a cascade made, and a reconnecting stream must not reverse one.
+- **Bootstrap-RPC** writes **no status at all** (changed in NIM-865, [ADR-0090](../adr/0090-bootstrap-reply-loss-recovery.md)). It used to write `connected` at the moment a certificate was *signed*, which is one network hop short of the host having it — and nothing ever corrected the lie for a host whose reply was lost, because the Reaper's disconnect sweep matches `last_seen_at < …` and a NULL never matches. Such a row read `connected` forever, and `core.bootstrap.issued` takes that to mean "already onboarded, has a seed to authenticate with" and declines to re-arm it.
 - **Reaper `mark_disconnected`** ([keeper/reaper.md](../keeper/reaper.md)) — a **lazy reconciliation of the snapshot IN BOTH DIRECTIONS**: it marks `connected` → `disconnected` on a stale `last_seen_at` with a dead SID lease (lease-aware, it does not touch an idle Soul on a live lease) **and** `disconnected` → `connected` on a live SID lease (Soul is really online — a reconnect captured the lease, but the PG snapshot stayed `disconnected`). This is a background bringing of the PG snapshot to the fact, not a source of presence — the run does not depend on the snapshot. An ordinary reconnect does **not move the snapshot directly** (eventstream presence is not written to PG on the hot path); it is moved precisely by the Reaper reconcile based on the fact of a live lease. Without the reverse direction the snapshot would latch into `disconnected` forever after the first "drop+sweep".
 
 `last_seen_at` is a separate snapshot of "when it was last seen" (a throttled flush from the stream into PG, the real-time value in the Redis heartbeat), needed by the Operator API and the Reaper; it is also **not** a presence predicate.
@@ -119,9 +120,11 @@ NOT presence: online/offline is decided by the Redis SID lease separately (see a
    ┌─────────┐  TTL 24h        ┌─────────────────┐  Reaper: stale   ┌──────────────┐
    │ pending │ ── Reaper ──►   │   connected     │  + no lease      │ disconnected │
    └─────────┘   expired       └─────────────────┘ ──────────────►  └──────┬───────┘
-        │                              ▲          (lazy reconcile →)        │
-        │            Reaper reconcile (live lease) / Bootstrap-RPC          │
-        │                              └────────────────────────────────────┘
+        │   ▲                          ▲          (lazy reconcile →)        │
+        │   │        Reaper reconcile (live lease) / EventStream handshake  │
+        │   │                          └────────────────────────────────────┘
+        │   └── a completed Bootstrap-RPC stays HERE: a signed certificate
+        │       is not a host holding one (NIM-865)
         │                                  (← lazy reconcile)
         │  TTL 24h with                                   Reaper, max_age 30d
         │  no use                                         (if it never

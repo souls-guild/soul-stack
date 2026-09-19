@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -79,6 +80,32 @@ const supersedeBySIDSQL = `
 UPDATE soul_seeds
 SET status = 'superseded'
 WHERE sid = $1 AND status = 'active'
+`
+
+// refreshCertificateSQL re-stamps the ACTIVE seed of one SID with a freshly
+// signed certificate for the key it already holds (NIM-865,
+// docs/adr/0090-bootstrap-reply-loss-recovery.md).
+//
+// An UPDATE and not Supersede+Insert, for two independent reasons, either of
+// which alone settles it: `soul_seeds_fingerprint_idx` is GLOBALLY unique
+// (migration 009), so a second row for the same key cannot exist; and
+// superseding the row would revoke the very identity the retry is trying to
+// finish delivering — [SeedAuthenticator] admits a stream only on
+// `status='active'`.
+//
+// `fingerprint` is matched, never written: it is the identity, it did not move,
+// and requiring it in the WHERE means this statement cannot re-stamp a row
+// belonging to a different keypair however it is called.
+const refreshCertificateSQL = `
+UPDATE soul_seeds
+SET serial_number = $3,
+    issued_at     = NOW(),
+    expires_at    = $4,
+    issued_by_kid = $5
+WHERE sid         = $1
+  AND fingerprint = $2
+  AND status      = 'active'
+RETURNING seed_id
 `
 
 // revokeSQL revokes a specific seed (by seed_id). It is used by operator
@@ -257,6 +284,47 @@ func SupersedeBySID(ctx context.Context, db ExecQueryRower, sid string) error {
 		return fmt.Errorf("soulseed: supersede: %w", err)
 	}
 	return nil
+}
+
+// RefreshCertificate re-stamps the active seed of `sid` — whose key is
+// identified by `fingerprint` — with a newly signed certificate. Used by the
+// Bootstrap recovery path, where the host already holds this identity in the
+// registry but never received the certificate carrying it (NIM-865).
+//
+// It MUST run inside the same transaction as [bootstraptoken.RedeemAgain].
+//
+// Returns the seed_id, or [ErrSeedNotFound] when no active row for that
+// (sid, fingerprint) exists — which the caller must treat as a refusal and not
+// as an empty success: it means the identity moved between the pre-check and
+// here (a rotation, a revocation, a supersede), and re-issuing against it would
+// be writing a certificate for a binding the registry no longer holds.
+func RefreshCertificate(ctx context.Context, db ExecQueryRower, sid, fingerprint, serialNumber string, expiresAt time.Time, issuedByKID *string) (string, error) {
+	if sid == "" {
+		return "", fmt.Errorf("soulseed: sid is empty")
+	}
+	if !ValidFingerprintFormat(fingerprint) {
+		return "", ErrSeedInvalidFingerprint
+	}
+	if serialNumber == "" {
+		return "", fmt.Errorf("soulseed: serial_number is empty")
+	}
+	if expiresAt.IsZero() {
+		return "", fmt.Errorf("soulseed: expires_at is zero")
+	}
+	var issuedByKIDArg any
+	if issuedByKID != nil {
+		issuedByKIDArg = *issuedByKID
+	}
+	var seedID string
+	err := db.QueryRow(ctx, refreshCertificateSQL,
+		sid, fingerprint, serialNumber, expiresAt.UTC(), issuedByKIDArg).Scan(&seedID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrSeedNotFound
+		}
+		return "", fmt.Errorf("soulseed: refresh certificate: %w", err)
+	}
+	return seedID, nil
 }
 
 // orphanActiveBySIDSQL cascade-moves active seed to `orphaned` (ADR-017).

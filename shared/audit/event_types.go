@@ -194,10 +194,14 @@ const (
 
 	// EventSoulBootstrapped — a Soul completed onboarding via the `Bootstrap`
 	// gRPC RPC (docs/soul/onboarding.md): the bootstrap token was burned, the
-	// CSR signed, a SoulSeed issued and stored, and the Soul status moved
-	// `pending → connected`. `source: soul_grpc`, `archon_aid: NULL`,
-	// `correlation_id` = token_id. Payload: `{sid, token_id, seed_id,
-	// fingerprint, not_after}`.
+	// CSR signed, and a SoulSeed issued and stored. The Soul status is NOT
+	// moved — it stays `pending` until the EventStream handshake, because a
+	// signed certificate is not a host holding one (NIM-865).
+	// `source: soul_grpc`, `archon_aid: NULL`, `correlation_id` = token_id.
+	// Payload: `{sid, token_id, seed_id, fingerprint, not_after, kid,
+	// recovered_lost_reply}`. `recovered_lost_reply: true` is the second event
+	// for one token when a host completed an onboarding whose reply was lost —
+	// the reason a correlation_id can legitimately appear more than once.
 	EventSoulBootstrapped EventType = "soul.bootstrapped"
 
 	// EventSoulSeedIssued — a new SoulSeed certificate was issued (as part of

@@ -199,9 +199,13 @@ func scanRecord(row pgx.Row) (*Record, error) {
 }
 
 // Burn race-safely burns a token when a Soul presents it to the
-// `Bootstrap` RPC. MUST run inside the same transaction as
-// `soul.UpdateStatus` (pending → connected) and `soulseed.Insert` — the
-// caller (gRPC handler) is responsible for that invariant.
+// `Bootstrap` RPC for the FIRST time. MUST run inside the same transaction as
+// the seed write — the caller (gRPC handler) is responsible for that invariant.
+//
+// A later presentation of the same token is NOT this function's business: it is
+// refused here by `used_at IS NULL`, and admitted — under much narrower
+// conditions — by [RedeemAgain]. See its godoc for why the burn alone is not a
+// sufficient anti-replay primitive.
 //
 // Parameters:
 //   - tokenHash — SHA-256 hex of the plain token presented by the client.
@@ -236,6 +240,189 @@ func Burn(ctx context.Context, db ExecQueryRower, tokenHash, claimedSID, usedByK
 		return "", fmt.Errorf("bootstraptoken: burn: %w", err)
 	}
 	return tokenID, nil
+}
+
+// redeemAgainSQL re-authorizes a token that is ALREADY burned, so a host whose
+// Bootstrap reply was lost in flight can complete the onboarding the burn
+// already committed to (NIM-865, docs/adr/0090-bootstrap-reply-loss-recovery.md).
+//
+// The whole authorization is this one statement, deliberately. It reaches
+// across three tables because the conjunction below is what makes a
+// re-presentation safe, and evaluating any part of it in Go first reintroduces
+// the read-then-write window this fix exists to close. The same argument, in
+// the same words, is why [soul.reuseForProvisionSQL] carries its predicate in
+// the statement.
+//
+// Parameters:
+//
+//	$1 — token_hash of the presented plain token.
+//	$2 — sid from BootstrapRequest.
+//	$3 — kid of the Keeper instance handling the request.
+//	$4 — [SystemKIDs]: the markers that are NOT a Soul's presentation.
+//	$5 — SHA-256 of the presented CSR's SubjectPublicKeyInfo.
+//
+// The five conditions, and what each one is holding shut:
+//
+//   - `used_at IS NOT NULL` — this path is ONLY for an already-burned token. A
+//     first presentation belongs to [Burn] and must not reach here.
+//   - `expires_at > NOW()` — recovery never outlives the token's own TTL.
+//   - used_by_kid, coalesced to the empty string, differs from every marker in
+//     $4 — a token killed by an operator (force-reissue) or by a cascade was
+//     never redeemed by anyone, and must not be resurrected. The coalesce is
+//     what keeps the condition ABOVE from being dead weight: NULL <> ALL(…) is
+//     NULL, so a bare comparison would refuse an unburned token here and the
+//     used_at test could be deleted with every guard still green. Each clause
+//     now fails on its own removal, which is the only way a conjunction stays
+//     honest.
+//   - `souls.last_seen_at IS NULL` — the host has never held a stream. This is
+//     what keeps the window from becoming a hole: once the Soul has appeared,
+//     the credential demonstrably arrived and the token is finished, so a leaked
+//     plaintext cannot be turned against a working host.
+//   - the active seed's fingerprint equals $5 — the one-shot binding. The
+//     fingerprint is the SubjectPublicKeyInfo hash ([soulseed.FingerprintFromCert]),
+//     so this admits exactly the keypair the first presentation bound and refuses
+//     an attacker's own CSR, which is the whole of what anti-replay defends.
+const redeemAgainSQL = `
+UPDATE bootstrap_tokens t
+SET used_at     = NOW(),
+    used_by_kid = $3
+WHERE t.token_hash  = $1
+  AND t.sid         = $2
+  AND t.used_at     IS NOT NULL
+  AND t.expires_at  > NOW()
+  AND coalesce(t.used_by_kid, '') <> ALL($4::text[])
+  AND EXISTS (
+      SELECT 1 FROM souls s
+       WHERE s.sid = t.sid
+         AND s.last_seen_at IS NULL
+  )
+  AND EXISTS (
+      SELECT 1 FROM soul_seeds sd
+       WHERE sd.sid         = t.sid
+         AND sd.status      = 'active'
+         AND sd.fingerprint = $5
+  )
+RETURNING t.token_id
+`
+
+// RedeemAgain re-authorizes an already-burned token for the host that burned
+// it, when that host never received the reply. MUST run inside the same
+// transaction as the seed refresh — the caller (gRPC handler) owns that
+// invariant, symmetrically with [Burn].
+//
+// csrFingerprint is the SHA-256 of the presented CSR's SubjectPublicKeyInfo
+// (see [soulseed.FingerprintFromCSR]); it is compared against the seed the
+// first presentation issued, which is bound to the same value because
+// re-signing one key does not move its fingerprint.
+//
+// Returns [ErrTokenInvalid] when the statement matches nothing — for every
+// reason, undistinguished, exactly as [Burn] does. The caller maps that to the
+// same single PermissionDenied, so a probe cannot learn from this path what it
+// could not learn from a first presentation.
+func RedeemAgain(ctx context.Context, db ExecQueryRower, tokenHash, claimedSID, usedByKID, csrFingerprint string) (string, error) {
+	if !ValidHashFormat(tokenHash) {
+		return "", errInvalidHash
+	}
+	if claimedSID == "" {
+		return "", fmt.Errorf("bootstraptoken: claimedSID is empty")
+	}
+	if usedByKID == "" {
+		return "", fmt.Errorf("bootstraptoken: usedByKID is empty")
+	}
+	// A real KID reaching this argument would let a Keeper whose instance id
+	// happened to match a marker redeem what the marker forbids.
+	if isSystemKID(usedByKID) {
+		return "", fmt.Errorf("bootstraptoken: usedByKID %q is a system marker", usedByKID)
+	}
+	if !ValidHashFormat(csrFingerprint) {
+		return "", fmt.Errorf("bootstraptoken: csrFingerprint format invalid (must be 64 lower-hex chars)")
+	}
+
+	var tokenID string
+	err := db.QueryRow(ctx, redeemAgainSQL, tokenHash, claimedSID, usedByKID, SystemKIDs(), csrFingerprint).Scan(&tokenID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return "", ErrTokenInvalid
+		}
+		return "", fmt.Errorf("bootstraptoken: redeem again: %w", err)
+	}
+	return tokenID, nil
+}
+
+// closeRecoveryBySIDSQL re-marks a SID's already-BURNED but still-unexpired
+// tokens, so [RedeemAgain] refuses them (NIM-865).
+//
+// Without it an operator has no way to shut a recovery window that is already
+// open. Every existing "kill this token" statement — [expireActiveBySIDSQL],
+// [burnAllForSIDSQL] — matches `used_at IS NULL`, because before the recovery
+// path a burned token was inert by definition. It no longer is: it stays
+// redeemable by the key it bound until the host connects or the TTL runs out.
+// So `issue-token --force` on a host whose token leaked AFTER being burned
+// would have reported success and changed nothing that mattered.
+//
+// Only `used_by_kid` moves, to the marker, which is exactly the condition
+// RedeemAgain refuses on. `used_at` is left alone here because this statement
+// records no redemption — nobody presented anything, an operator revoked.
+// [redeemAgainSQL] does move it, and correctly: a recovery IS a redemption, so
+// the column keeps meaning "when this token was last redeemed" on both paths.
+// The cost of that is real and accepted in the ADR: each recovery restarts
+// `purge_used_tokens`' 90-day clock, so a replayer can keep the row alive.
+const closeRecoveryBySIDSQL = `
+UPDATE bootstrap_tokens
+SET used_by_kid = $2
+WHERE sid        = $1
+  AND used_at    IS NOT NULL
+  AND expires_at > NOW()
+  AND coalesce(used_by_kid, '') <> ALL($3::text[])
+`
+
+// CloseRecoveryBySID shuts the reply-loss recovery window on every burned,
+// unexpired token of a SID, and reports how many it closed.
+//
+// Call it wherever an operator's intent is "this host's outstanding tokens
+// must stop working" — the same places that already call [ExpireActiveBySID].
+// Those two are complements, not alternatives: that one frees the active-token
+// slot, this one disarms the burned ones it cannot see.
+func CloseRecoveryBySID(ctx context.Context, db ExecQueryRower, sid, marker string) (int64, error) {
+	if sid == "" {
+		return 0, fmt.Errorf("bootstraptoken: sid is empty")
+	}
+	if !isSystemKID(marker) {
+		return 0, fmt.Errorf("bootstraptoken: marker %q is not a system marker", marker)
+	}
+	tag, err := db.Exec(ctx, closeRecoveryBySIDSQL, sid, marker, SystemKIDs())
+	if err != nil {
+		return 0, fmt.Errorf("bootstraptoken: close recovery for sid: %w", err)
+	}
+	return tag.RowsAffected(), nil
+}
+
+// SystemKIDs returns every `used_by_kid` marker that records an invalidation
+// rather than a Soul's presentation. A token carrying one of these was never
+// redeemed by a host, so there is no lost reply to recover and
+// [RedeemAgain] must refuse it.
+//
+// Returned as a slice rather than checked with a `system-%` LIKE: a marker is
+// free to be named anything, and a prefix test would silently admit the first
+// one that isn't. Drift is caught by TestSystemKIDs_CoversEveryMarker, which
+// fails when a new `SystemKID*` constant is declared without being listed here.
+func SystemKIDs() []string {
+	return []string{
+		SystemKIDCloudDestroy,
+		SystemKIDForceReissue,
+		SystemKIDCloudReprovision,
+		SystemKIDBootstrapIssuedReissue,
+		SystemKIDSoulForget,
+	}
+}
+
+func isSystemKID(kid string) bool {
+	for _, m := range SystemKIDs() {
+		if kid == m {
+			return true
+		}
+	}
+	return false
 }
 
 // SystemKIDCloudDestroy is the special `used_by_kid` value for records
