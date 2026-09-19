@@ -138,10 +138,13 @@ along with the rule that every command named in this file is either gated on a t
 [`scripts/release-gate-allowlist.txt`](scripts/release-gate-allowlist.txt) with the
 reason it stays a human's.
 
-**Three things it does not prevent**, so that nobody reads the paragraph above as
-wider than it is:
+**Three things it did not prevent**, so that nobody reads the paragraph above as wider
+than it is. One of the three is closed now and stays on the list with its closure named,
+because a path that quietly disappears from a threat list is indistinguishable from one
+nobody checked again:
 
-- Pushing the tag ref. Not blockable from inside the repository. It leaves a tag with
+- Pushing the tag ref. Not blockable from inside the repository, and — see the box
+  below — not blockable from outside it either as things stand. It leaves a tag with
   no release, which is visible, and is re-run once the tier is green:
 
   ```sh
@@ -150,12 +153,44 @@ wider than it is:
 
 - Building `dist/pkg` by hand (steps (g)/(h) below) and attaching it to a Release made
   with `gh release create`. [`apt-publish.yml`](.github/workflows/apt-publish.yml) fires
-  on `release: published` — any release — and would mirror those `.deb`s into the R2 apt
-  pool. Closing that path needs a repository ruleset on who may publish a release, which
-  is an organisation setting rather than a file in this tree.
+  on `release: published` — any release — and would have mirrored those `.deb`s into the
+  R2 apt pool. **This one is closed in the tree** (NIM-882), by two checks that run before
+  either secret is decrypted into a job, because neither answers the other's question:
+  *did the gated pipeline create this release* (a green `release.yml` run on the tag's
+  commit, and a release authored by the pipeline) and *are these the assets it built*
+  (every `.deb` listed in the release's `checksums.txt` and matching it, with that file's
+  cosign signature verified against `release.yml` **at this tag**). The second is not
+  redundant: `gh release upload` puts a locally built `.deb` onto the pipeline's own
+  release without disturbing the first. `make check-release-gate` asserts both still sit
+  in front of the mirror, and that neither can be reduced to `… || true`.
 - `workflow_dispatch` against an arbitrary ref: a branch sitting at the tag's commit with
   `needs:` deleted publishes a full release, and the only thing that objects is the
   `check` job on that push.
+
+> ★ **The ruleset this file used to promise does not exist — do not go looking for it**
+> (NIM-882). Both earlier versions of this section, and of `release.yml` and
+> `apt-publish.yml`, said the remaining paths would be closed by "a repository ruleset on
+> who may publish a release". There is no such rule. GitHub rulesets accept exactly three
+> targets — the API rejects anything else with *"Invalid property /target: `release` is not
+> a possible value. Must be one of the following: branch, tag, push."* Releases are governed
+> by write access and nothing finer.
+>
+> What a **tag** ruleset on `v*` would buy, measured on a repository where rulesets are
+> available rather than assumed: it refuses `git push` of a new `v*` tag with `GH013 …
+> Cannot create ref due to creations being restricted`, refuses the same ref over the API,
+> and refuses `gh release create` for a `v*` tag **that does not exist yet**, because
+> creating the release has to create the ref. It does **not** refuse `gh release create` on
+> a `v*` tag that already exists — that was run under an active ruleset with an empty bypass
+> list and the release published normally. So a tag ruleset would narrow the first bullet
+> above and leave the second exactly where it was, which is why the second is closed in the
+> tree instead.
+>
+> And on this repository even that is unavailable: `souls-guild/soul-stack` is private on a
+> free plan, where rulesets and branch protection are both `403 Upgrade to GitHub Pro or
+> make this repository public`. Restricting who may create a `v*` tag therefore costs either
+> making the repository public or moving the organisation to a paid plan. Until one of those
+> happens, the first and third bullets are procedure, not enforcement — and this box is here
+> so the next person does not spend an afternoon looking for a setting that is not there.
 
 > ★ **Why this section used to read differently.** Until NIM-879 it said "required
 > step before creating a tag" and nothing executed it. The L3b tier ran in no CI job

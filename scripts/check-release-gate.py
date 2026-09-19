@@ -23,7 +23,8 @@ What is checked.
   3. Every gate target is run by a job the publisher transitively needs, by a `run:` and
      not by appearing in a `name:` or a comment.
   4. No job on that path, publisher included, carries `continue-on-error`, or an `if:`
-     that calls always()/failure()/cancelled(). Both defeat `needs:` silently and in one
+     that calls a status function — always()/failure()/cancelled() **and success()**, which
+     reads as careful and is the one that gets written. Both defeat `needs:` silently and in one
      line: a dependent's `needs:` is satisfied when a continue-on-error job FAILS, and a
      status function in the `if:` drops the implicit "all needs succeeded". An ordinary
      predicate — a ref guard, say — does not, and is refused by nothing here, because a
@@ -38,6 +39,18 @@ What is checked.
      every `scripts/…` invocation — is in $(RELEASE_GATE_TARGETS) or in
      scripts/release-gate-allowlist.txt with a reason.
   7. The allowlist has no stale entries and no contradictions.
+  8. No job in release.yml can conclude before the gate. Not about this workflow at all:
+     check-release-provenance.sh reads "no job in the run failed and one succeeded" as "the
+     gate passed", and a sibling job going green ahead of a queued gate makes that false in
+     a file that never mentions it.
+  9. The apt mirror (apt-publish.yml) sits behind BOTH release checks — the provenance one
+     and the asset one — with neither skippable by a step `if:` nor run anywhere `set -e`
+     would not see it fail: `|| true`, a pipe, a condition, `set +e`. Some of those have
+     fail-closed spellings (`if ! check; then exit 1; fi`) and are refused anyway, because
+     telling them apart means reading the branch — a refused honest step costs a rewrite, a
+     missed dishonest one costs the pool. It fires on `release: published`,
+     which release.yml's `needs:` does not reach, so this is a second gate rather than a
+     restatement of the first.
 
 What is NOT checked, and cannot be by a tool of this shape: a blocking step that names no
 command at all. RELEASING.md (c2) stamps `introduced_in` by editing two files and (d) is a
@@ -66,6 +79,39 @@ import tempfile
 RELEASE_WORKFLOW = ".github/workflows/release.yml"
 RELEASE_DOC = "RELEASING.md"
 ALLOWLIST = "scripts/release-gate-allowlist.txt"
+
+# The second publishing path (NIM-882). apt-publish.yml fires on `release: published` — any
+# release, including one a human made by hand — so `needs: live-gate` in release.yml does not
+# reach it, and .debs nothing gated would land in a public pool. The ruleset NIM-879 expected
+# to close this does not exist: GitHub rulesets target branches, tags and pushes, never
+# releases. The check is scripts/check-release-provenance.sh, and what is asserted here is
+# that the mirror still sits behind it — deleting a `needs:` is one line and reads as tidying.
+APT_WORKFLOW = ".github/workflows/apt-publish.yml"
+# Anchored on the script that writes to the bucket, not on a job key, for the same reason the
+# publisher is found by its action: a renamed job beside a decoy would otherwise pass.
+APT_PUBLISH_SCRIPT = "deploy/apt-r2/publish-apt.sh"
+# Two checks, not one, because they answer different questions: whether the gated pipeline
+# CREATED the release, and whether these are the assets it BUILT. `gh release upload` onto
+# the pipeline's own release satisfies the first and is exactly what the second refuses.
+MIRROR_CHECKS = ("scripts/check-release-provenance.sh", "scripts/verify-release-assets.sh")
+PROVENANCE_SCRIPT = MIRROR_CHECKS[0]
+
+# Forms that keep the command in the recipe and remove the only reason it was there. All
+# one line, all invisible to shell_commands(), which splits on the separators and discards
+# them — so the raw text is re-read for these.
+#
+#   cmd || true      the right arm runs precisely when cmd failed
+#   cmd | tee log    Actions' default shell is `bash -e {0}` with NO pipefail, so only the
+#                    last command's status is the step's. `|&` is the same thing.
+#   if ! cmd; then   a command in a condition is never a `set -e` trigger
+#   set +e           turns the mechanism off for the rest of the block
+#
+# `&&` is deliberately absent: `a && b` still fails when `a` does. Any `|` counts, including
+# one inside a quoted argument — a false positive there fails closed, which is the side to
+# be wrong on.
+SWALLOWED = re.compile(r"\|")
+CONDITIONAL = re.compile(r"^\s*(?:if|elif|while|until)\b|(?<![\w!])!\s")
+SET_RELAXES = re.compile(r"^\s*set\s+(?:\+[a-zA-Z]*e[a-zA-Z]*|\+o\s+errexit)\b")
 
 # The publisher is identified by the goreleaser action it uses, never by what the job is
 # called: a decoy job keyed `release` beside a renamed publisher would otherwise satisfy
@@ -217,6 +263,41 @@ class Job:
     @property
     def make_targets(self) -> set[str]:
         return set().union(*(s.make_targets for s in self.steps)) if self.steps else set()
+
+    def steps_running(self, script: str) -> list[Step]:
+        """The steps whose `run:` invokes `script` as a command — not ones that merely name it.
+
+        Same distinction `make_targets` draws: `echo scripts/x.sh` and a commented-out call
+        run nothing, and counting them is the false green.
+        """
+        return [
+            step
+            for step in self.steps
+            if any(tokens[0] == script for tokens in shell_commands("\n".join(step.runs)))
+        ]
+
+    def swallows(self, script: str) -> list[str]:
+        """Where `script` runs but its failure cannot fail the step.
+
+        `run: scripts/x.sh || true` passes steps_running() — the separator is what makes it
+        a no-op, and that is the token shell_commands() throws away. See SWALLOWED for the
+        whole list. Not covered, and said rather than implied: a failure caught by a `trap`,
+        a `set -e` disabled in a sourced file, and a wrapper script that exits 0 itself.
+        """
+        found: list[str] = []
+        for step in self.steps:
+            text = "\n".join(step.runs).replace("\\\n", " ")
+            if not any(tokens[0] == script for tokens in shell_commands(text)):
+                continue
+            for line in text.split("\n"):
+                bare = line.split("#", 1)[0]
+                if SET_RELAXES.search(bare):
+                    found.append(bare.strip())
+                if script not in bare:
+                    continue
+                if SWALLOWED.search(bare.split(script, 1)[1]) or CONDITIONAL.search(bare):
+                    found.append(bare.strip())
+        return found
 
     def publishes(self) -> bool:
         """Does this job run `goreleaser release`?
@@ -414,7 +495,7 @@ def doc_commands(doc: str) -> set[str]:
     return commands
 
 
-def needs_closure(jobs: dict[str, Job], root: str) -> tuple[set[str], list[str]]:
+def needs_closure(jobs: dict[str, Job], root: str, workflow: str = RELEASE_WORKFLOW) -> tuple[set[str], list[str]]:
     seen: set[str] = set()
     problems: list[str] = []
     stack = [root]
@@ -426,11 +507,126 @@ def needs_closure(jobs: dict[str, Job], root: str) -> tuple[set[str], list[str]]
         for dep in jobs[name].needs:
             if dep not in jobs:
                 problems.append(
-                    f"{RELEASE_WORKFLOW}: job `{name}` needs `{dep}`, which is not a job in this workflow."
+                    f"{workflow}: job `{name}` needs `{dep}`, which is not a job in this workflow."
                 )
                 continue
             stack.append(dep)
     return seen, problems
+
+
+def path_hygiene(jobs: dict[str, Job], gated: set[str], workflow: str) -> list[str]:
+    """The two one-line ways to keep a `needs:` while emptying it, on every job of a path.
+
+    `continue-on-error` satisfies a dependent's `needs:` on failure; a status function in an
+    `if:` drops the implicit "all needs succeeded". An ordinary predicate does neither and is
+    refused by nothing here — a guard that forbade every `if:` would forbid exactly the ref
+    guards this file's own prose recommends.
+    """
+    problems: list[str] = []
+    for name in sorted(gated):
+        job = jobs[name]
+        if job.continue_on_error is not False:
+            problems.append(
+                f"{workflow}: job `{name}` carries `continue-on-error: {render(job.continue_on_error)}`."
+                f" A dependent's `needs:` is satisfied when such a job fails, so every gate at or"
+                f" below it passes on red."
+            )
+        if job.if_expr is not None and STATUS_OVERRIDE.search(job.if_expr):
+            problems.append(
+                f"{workflow}: job `{name}` carries `if: {job.if_expr}`. A job with `needs:`"
+                f" runs only when they all succeeded — unless its `if:` calls a status function"
+                f" (always/failure/cancelled/success), which drops that requirement. `if: always()`"
+                f" on the publisher releases over a red gate and reads like a retry policy;"
+                f" `success() || <anything>` does the same while looking careful."
+            )
+        elif job.if_expr in BLOCK_SCALARS:
+            problems.append(
+                f"{workflow}: job `{name}` carries a block-scalar `if:`, which this script"
+                f" does not read — so whether it drops the `needs:` requirement cannot be decided"
+                f" here. Write it inline. Unreadable is treated as unsafe on this path on purpose."
+            )
+    return problems
+
+
+def check_apt_provenance(root: pathlib.Path) -> list[str]:
+    """The apt mirror runs behind both release checks, and neither can be reduced to a no-op.
+
+    Separate from the release-workflow checks above because it answers a different question.
+    Those ask "does a tag wait for the tier"; this asks "does the OTHER publishing path ask
+    where the release came from" — and a green answer there does not imply one here, which is
+    exactly how the apt pool ended up as the one outward effect nothing gated (NIM-882).
+    """
+    workflow = root / APT_WORKFLOW
+    if not workflow.is_file():
+        return [
+            f"{APT_WORKFLOW}: missing. If the apt mirror is gone, delete this check with it"
+            f" on purpose; an absent file must not read as a satisfied one."
+        ]
+    try:
+        jobs = parse_workflow(workflow.read_text())
+    except ValueError as e:
+        return [f"{APT_WORKFLOW}: {e}"]
+
+    # The YAML can keep naming a script that is gone or unrunnable, and the workflow would
+    # then fail at publish time rather than here — on the one event nobody is watching.
+    problems: list[str] = []
+    for name in MIRROR_CHECKS:
+        script = root / name
+        if not script.is_file():
+            problems.append(f"{name}: missing, and {APT_WORKFLOW} runs it to decide whether to mirror.")
+        elif not script.stat().st_mode & 0o111:
+            problems.append(f"{name}: not executable, so the step running it fails rather than judging.")
+    if problems:
+        return problems
+
+    mirrors = sorted(name for name, job in jobs.items() if job.steps_running(APT_PUBLISH_SCRIPT))
+    if len(mirrors) != 1:
+        return [
+            f"{APT_WORKFLOW}: expected exactly one job that runs `{APT_PUBLISH_SCRIPT}`, found"
+            f" {mirrors or 'none'}. This check anchors on the job that writes to the bucket, and"
+            f" it cannot assert what comes before it without knowing which job that is."
+        ]
+    mirror = mirrors[0]
+
+    gated, problems = needs_closure(jobs, mirror, APT_WORKFLOW)
+    problems += path_hygiene(jobs, gated, APT_WORKFLOW)
+
+    for check_script in MIRROR_CHECKS:
+        runners = [name for name in sorted(gated) if jobs[name].steps_running(check_script)]
+        if not runners:
+            beside = sorted(name for name in jobs if jobs[name].steps_running(check_script))
+            problems.append(
+                f"{APT_WORKFLOW}: `{mirror}` does not need any job that runs `{check_script}`"
+                + (f" — it runs in {beside}, beside the mirror rather than before it." if beside else ".")
+                + f" This workflow fires on `release: published`, which includes a release a human"
+                f" created by hand and assets a human uploaded onto one the pipeline made; without"
+                f" both checks it mirrors them into the public apt pool signed with the apt key."
+                f" There is no ruleset to fall back on — GitHub rulesets do not target releases."
+            )
+            continue
+
+        for name in runners:
+            for swallowed in jobs[name].swallows(check_script):
+                problems.append(
+                    f"{APT_WORKFLOW}: job `{name}` runs `{check_script}` where its failure cannot"
+                    f" fail the step (`{swallowed}`). The command stays in the recipe and stops"
+                    f" being a check, which is the cheapest way to pass this guard while"
+                    f" publishing anything."
+                )
+            for step in jobs[name].steps_running(check_script):
+                if step.if_expr is not None:
+                    problems.append(
+                        f"{APT_WORKFLOW}: the step running `{check_script}` in job `{name}`"
+                        f" carries `if: {step.if_expr}`. A skipped step leaves the job green, so the"
+                        f" mirror is gated only on the events that expression happens to admit."
+                    )
+                if step.continue_on_error is not False:
+                    problems.append(
+                        f"{APT_WORKFLOW}: the step running `{check_script}` in job `{name}`"
+                        f" carries `continue-on-error: {render(step.continue_on_error)}`. The job then"
+                        f" concludes success on a release the pipeline did not produce."
+                    )
+    return problems
 
 
 def parse_gate_targets(makefile: str) -> list[str]:
@@ -502,28 +698,35 @@ def check(root: pathlib.Path) -> list[str]:
 
     # The whole needs-path, publisher included: one `if:` or continue-on-error anywhere on it
     # turns `needs:` into decoration, and both are one line.
-    for name in sorted(gated):
-        job = jobs[name]
-        if job.continue_on_error is not False:
+    problems += path_hygiene(jobs, gated, RELEASE_WORKFLOW)
+
+    # No job in this workflow may conclude before the gate does, and that is a stronger rule
+    # than "the publisher waits". check-release-provenance.sh reads a run of this workflow as
+    # "the gate passed" from the fact that no job in it failed and at least one succeeded —
+    # sound only while nothing can go green ahead of the gate. Add a job that can, and a run
+    # whose gate is still queued reads as green over in apt-publish.yml, a file away from
+    # anything that mentions it. A job that NEEDS the gate is fine; a sibling is not.
+    # Every job but the gate itself must transitively NEED it. An upstream job — one the gate
+    # `needs:` — is not an exception: it is the clearest case of concluding green first.
+    gate_runners = {name for name, job in jobs.items() if job.make_targets & set(gate_targets)}
+    if gate_runners:
+        early = sorted(
+            name
+            for name in jobs
+            if name not in gate_runners and not (needs_closure(jobs, name, RELEASE_WORKFLOW)[0] & gate_runners)
+        )
+        if early:
             problems.append(
-                f"{RELEASE_WORKFLOW}: job `{name}` carries `continue-on-error: {render(job.continue_on_error)}`."
-                f" A dependent's `needs:` is satisfied when such a job fails, so every gate at or"
-                f" below it passes on red."
+                f"{RELEASE_WORKFLOW}: job(s) {early} can conclude before {sorted(gate_runners)}."
+                f" Besides running beside the release rather than behind it, this breaks an"
+                f" inference made in another file: {PROVENANCE_SCRIPT} treats 'no job in the run"
+                f" failed and one succeeded' as 'the gate passed', which holds only while nothing"
+                f" can go green ahead of the gate. Put them behind the gate with `needs:` — or,"
+                f" where the gate is what needs THEM and the edge cannot be inverted, teach that"
+                f" script to name the gate job instead of reading the whole run."
             )
-        if job.if_expr is not None and STATUS_OVERRIDE.search(job.if_expr):
-            problems.append(
-                f"{RELEASE_WORKFLOW}: job `{name}` carries `if: {job.if_expr}`. A job with `needs:`"
-                f" runs only when they all succeeded — unless its `if:` calls a status function"
-                f" (always/failure/cancelled/success), which drops that requirement. `if: always()`"
-                f" on the publisher releases over a red gate and reads like a retry policy;"
-                f" `success() || <anything>` does the same while looking careful."
-            )
-        elif job.if_expr in BLOCK_SCALARS:
-            problems.append(
-                f"{RELEASE_WORKFLOW}: job `{name}` carries a block-scalar `if:`, which this script"
-                f" does not read — so whether it drops the `needs:` requirement cannot be decided"
-                f" here. Write it inline. Unreadable is treated as unsafe on this path on purpose."
-            )
+
+    problems += check_apt_provenance(root)
 
     allow, allow_problems = parse_allowlist((root / ALLOWLIST).read_text())
     problems += allow_problems
@@ -596,6 +799,44 @@ jobs:
           args: release --clean
 """
 
+# The second publishing path, in the shape the checks about it are written against: the
+# mirror behind a provenance job, the check invoked as a command rather than named.
+SELF_TEST_APT = """\
+name: Publish apt (R2)
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  provenance:
+    name: the release came from the gated pipeline
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Require a green release run
+        env:
+          GH_TOKEN: x
+        run: scripts/check-release-provenance.sh
+
+  publish:
+    name: mirror .deb
+    runs-on: ubuntu-latest
+    needs: provenance
+    steps:
+      - name: Verify the assets
+        run: scripts/verify-release-assets.sh
+
+      - name: Publish to R2
+        run: deploy/apt-r2/publish-apt.sh
+"""
+
 SELF_TEST_DOC = (
     "### (e) gate\n\n"
     "Run `make by-hand` and make sure it is green.\n\n"
@@ -609,10 +850,15 @@ SELF_TEST_DOC = (
 # A second publishing-shaped job, appended by the cases that need one. Each is green only
 # because `publishes()` distinguishes it from a release; delete that distinction and the
 # count becomes two, which is what makes these cases mutation-tests rather than decoration.
+#
+# Each carries `needs: live-gate`, which is not incidental: a job in this workflow that is
+# NOT behind the gate is refused on its own (see the needs-path check), because the run's
+# jobs are what check-release-provenance.sh reads to decide the gate passed. So these three
+# model the shape a maintainer should write, and the case below models the one they should not.
 SECOND_JOB = {
-    "goreleaser check": "\n  validate:\n    name: config check\n    runs-on: ubuntu-latest\n    steps:\n      - uses: goreleaser/goreleaser-action@v6\n        with:\n          args: check\n",
-    "install only": "\n  tools:\n    name: install goreleaser\n    runs-on: ubuntu-latest\n    steps:\n      - uses: goreleaser/goreleaser-action@v6\n        with:\n          install-only: true\n",
-    "look-alike": "\n  fork:\n    name: a different action\n    runs-on: ubuntu-latest\n    steps:\n      - uses: my-org/goreleaser/goreleaser-action-fork@v1\n        with:\n          args: release --clean\n",
+    "goreleaser check": "\n  validate:\n    name: config check\n    needs: live-gate\n    runs-on: ubuntu-latest\n    steps:\n      - uses: goreleaser/goreleaser-action@v6\n        with:\n          args: check\n",
+    "install only": "\n  tools:\n    name: install goreleaser\n    needs: live-gate\n    runs-on: ubuntu-latest\n    steps:\n      - uses: goreleaser/goreleaser-action@v6\n        with:\n          install-only: true\n",
+    "look-alike": "\n  fork:\n    name: a different action\n    needs: live-gate\n    runs-on: ubuntu-latest\n    steps:\n      - uses: my-org/goreleaser/goreleaser-action-fork@v1\n        with:\n          args: release --clean\n",
 }
 
 SELF_TEST_ALLOW = (
@@ -631,8 +877,71 @@ def self_test() -> int:
     """
     W = "m:" + RELEASE_WORKFLOW
     D = "m:" + RELEASE_DOC
+    A = "m:" + APT_WORKFLOW
     cases: list[tuple[str, dict, str]] = [
         ("baseline", {}, ""),
+        # The apt mirror (NIM-882). Each edit is the one a tidy-up would make.
+        ("the mirror no longer waits for provenance",
+         {A: ("    needs: provenance\n", "")}, "does not need any job that runs"),
+        ("the provenance check is named but not run",
+         {A: ("        run: scripts/check-release-provenance.sh\n", "        run: echo scripts/check-release-provenance.sh\n")},
+         "does not need any job that runs"),
+        ("the provenance step is skipped on dispatch",
+         {A: ("      - name: Require a green release run\n", "      - name: Require a green release run\n        if: github.event_name != 'workflow_dispatch'\n")},
+         "carries `if:"),
+        ("the provenance step cannot fail",
+         {A: ("        env:\n          GH_TOKEN: x\n", "        continue-on-error: true\n        env:\n          GH_TOKEN: x\n")},
+         "concludes success on a release the pipeline did not produce"),
+        ("the provenance job cannot fail",
+         {A: ("    name: the release came from the gated pipeline\n", "    name: the release came from the gated pipeline\n    continue-on-error: true\n")},
+         "passes on red"),
+        ("the mirror runs whatever provenance concluded",
+         {A: ("    needs: provenance\n", "    needs: provenance\n    if: always()\n")}, "status function"),
+        ("nothing mirrors to the bucket any more",
+         {A: ("        run: deploy/apt-r2/publish-apt.sh\n", "        run: echo done\n")},
+         "expected exactly one job that runs"),
+        ("a ref guard on the mirror is allowed",
+         {A: ("    needs: provenance\n", "    needs: provenance\n    if: github.event_name == 'release'\n")}, ""),
+        ("the provenance script is gone", {PROVENANCE_SCRIPT: None}, "missing, and"),
+        ("the asset verifier is gone", {MIRROR_CHECKS[1]: None}, "verify-release-assets.sh: missing"),
+        ("the mirror does not verify the assets",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: echo skip\n")},
+         "does not need any job that runs `scripts/verify-release-assets.sh`"),
+        # The one-line defeat shell_commands() cannot see: the call stays, the failure does not.
+        ("the provenance check runs but cannot fail the step",
+         {A: ("        run: scripts/check-release-provenance.sh\n", "        run: scripts/check-release-provenance.sh || true\n")},
+         "its failure cannot fail the step"),
+        ("the asset verifier runs under set +e",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: |\n          set +e\n          scripts/verify-release-assets.sh\n")},
+         "its failure cannot fail the step"),
+        ("a pipe swallows too — the runner's bash has no pipefail",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: scripts/verify-release-assets.sh | tee verify.log\n")},
+         "its failure cannot fail the step"),
+        ("a command in an `if` condition is not a set -e trigger",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: |\n          if ! scripts/verify-release-assets.sh; then echo soft; fi\n")},
+         "its failure cannot fail the step"),
+        ("`set +ex` relaxes errexit just as `set +e` does",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: |\n          set +ex\n          scripts/verify-release-assets.sh\n")},
+         "its failure cannot fail the step"),
+        # The gate's own upstream is the clearest case of concluding green first, and the
+        # first version of this rule exempted exactly it.
+        ("a job the GATE needs concludes before the gate",
+         {W: ("  live-gate:\n    name: make live-gate-target (blocking)\n", "  prep:\n    name: prepare\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n\n  live-gate:\n    name: make live-gate-target (blocking)\n    needs: prep\n")},
+         "can conclude before"),
+        ("`&&` does not swallow the way `||` does",
+         {A: ("        run: scripts/verify-release-assets.sh\n", "        run: scripts/verify-release-assets.sh && echo mirrored\n")}, ""),
+        ("the apt workflow is gone", {APT_WORKFLOW: None}, "apt-publish.yml: missing"),
+        # A job beside the gate rather than behind it — green on its own terms, and it makes
+        # check-release-provenance.sh's "no job failed" inference unsound one file away.
+        ("a release job that is not behind the gate",
+         {W: ("  release:\n    name: goreleaser\n", "  extra:\n    name: a job beside the gate\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n\n  release:\n    name: goreleaser\n")},
+         "can conclude before ['live-gate']"),
+        ("a sibling that NEEDS the gate is fine",
+         {W: ("  release:\n    name: goreleaser\n", "  extra:\n    name: a job behind the gate\n    needs: live-gate\n    runs-on: ubuntu-latest\n    steps:\n      - run: echo hi\n\n  release:\n    name: goreleaser\n")},
+         ""),
+        # Written without a shebang, which the fixture writer takes as "leave it unexecutable" —
+        # the state a `git add` of a new script lands in by default.
+        ("the provenance script is not executable", {PROVENANCE_SCRIPT: "exit 0\n"}, "not executable"),
         ("empty RELEASE_GATE_TARGETS", {"Makefile": "RELEASE_GATE_TARGETS :=\n"}, "is empty"),
         ("the gate job is not needed", {W: ("    needs: live-gate\n", "")}, "does not need"),
         ("the publisher runs anyway", {W: ("    needs: live-gate\n", "    needs: live-gate\n    if: always()\n")}, "carries `if: always"),
@@ -728,6 +1037,8 @@ def self_test() -> int:
             files = {
                 "Makefile": SELF_TEST_MAKEFILE,
                 RELEASE_WORKFLOW: SELF_TEST_WORKFLOW,
+                APT_WORKFLOW: SELF_TEST_APT,
+                **{s: "#!/usr/bin/env bash\nexit 0\n" for s in MIRROR_CHECKS},
                 RELEASE_DOC: SELF_TEST_DOC,
                 ALLOWLIST: SELF_TEST_ALLOW,
             }
@@ -739,12 +1050,18 @@ def self_test() -> int:
                         print(f"self-test: {label}: fixture edit does not apply ({old!r})")
                         failures += 1
                     files[path] = files[path].replace(old, new, 1)
+                elif value is None:
+                    files.pop(key, None)
                 else:
                     files[key] = value
             for path, body in files.items():
                 p = rootdir / path
                 p.parent.mkdir(parents=True, exist_ok=True)
                 p.write_text(body)
+                # A shebang is the fixture's way of saying "and it is runnable"; a body
+                # without one is left 0644 so the missing-exec-bit case has a shape to be.
+                if p.suffix == ".sh" and body.startswith("#!"):
+                    p.chmod(0o755)
 
             got = check(rootdir)
             joined = " ".join(" ".join(got).split())

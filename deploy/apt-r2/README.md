@@ -29,10 +29,18 @@ deliberate, bounded trade-off:
   repository is **private** (`gh api repos/souls-guild/soul-stack -q .private` → true),
   and this text claimed the opposite until NIM-879 — but the job is short and fires only
   on a release.
-- A private repository has no untrusted fork PRs to leak secrets to, and both triggers
-  (`release: published`, `workflow_dispatch`) require write access anyway. The earlier
-  version of this bullet rested the same conclusion on the repo being public; the
-  conclusion holds, its stated reason did not.
+- Both triggers (`release: published`, `workflow_dispatch`) require write access, so no
+  fork PR reaches these secrets — and that, not the repository's visibility, is what the
+  conclusion rests on. Two earlier versions of this bullet leaned on visibility instead,
+  once on "public" and once on "private"; either way it would have to be rewritten the day
+  the repository changed, which is how you can tell it was the wrong reason both times.
+- Write access is also the *only* control on who publishes a release: GitHub rulesets
+  target branches, tags and pushes, and there is no release target to restrict (NIM-882).
+  So this workflow does not assume the release it is handed is legitimate. The `provenance`
+  job requires a green `release.yml` run on the tag's commit, a release authored by the
+  pipeline, **and** every `.deb` matching the release's cosign-signed `checksums.txt` — the
+  last because `gh release upload` adds an asset to a release the pipeline did make. All of
+  it happens in a job that holds none of these secrets; see Automation below.
 - The R2 token is **scoped to Object Read & Write on the single apt bucket** (not the
   whole account), and the signing key is a **dedicated apt key**, not a personal one.
   Blast radius is one bucket + one rotatable signing key.
@@ -93,11 +101,25 @@ a GitHub Release is **published**, and can be re-run by hand for a given tag:
 gh workflow run apt-publish.yml -R souls-guild/soul-stack -f tag=v0.1.0-beta.1
 ```
 
-It installs `apt-utils`/`rclone`, configures the R2 remote from the secrets above,
-imports the signing key, downloads the release's `*.deb` assets, and runs
-`publish-apt.sh`.
+Two jobs, and the split is the security property rather than tidiness. `provenance` holds
+no secret at all: it checks out the **default branch** (not the released ref — otherwise the
+judging scripts would come from the commit under judgement), runs
+`scripts/check-release-provenance.sh`, downloads the release assets, verifies them with
+`scripts/verify-release-assets.sh`, and hands the verified `.deb`s on as a build artifact.
+Only then does `publish` start: it installs `apt-utils`/`rclone`, collects that artifact —
+it does **not** re-read the release — and only after that configures the R2 remote from the
+secrets above, imports the signing key and runs `publish-apt.sh`. So "refused before either key was
+decrypted" is a fact about the job graph, not about the order of steps in one job.
 
 ## Manual publish (fallback)
+
+⚠️ **This path runs neither check.** The workflow above refuses a release the pipeline did
+not make and `.deb`s it did not build; a human with the R2 and GPG keys is trusted with the
+bucket directly and nothing stands between them and it. That is deliberate — it is the
+fallback for when Actions is the thing that is broken — but it means "a locally built
+package cannot reach the pool" is a statement about the workflow, not about the bucket.
+Verify by hand what the pipeline would have (`cosign verify-blob` on `checksums.txt`, then
+`sha256sum -c`) before using it for anything but a re-publish of assets already mirrored.
 
 From a machine with `rclone` (remote `r2_soul_stack_apt` configured), `gpg` (signing key
 imported) and `apt-ftparchive` (apt-utils):

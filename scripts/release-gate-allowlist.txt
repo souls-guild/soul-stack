@@ -42,9 +42,13 @@ sync-webui                      # remediation for a red (c3), not a check
 
 # --- steps (g)/(h), artifacts -------------------------------------------------
 # Superseded on a pipeline release: goreleaser builds the same set from the same nfpm
-# definitions on the tag, and syft attaches the SBOMs. These stay for local builds — and see
-# the residual path named in RELEASING.md step (e): artifacts built by hand and attached to a
-# hand-made GitHub Release are not covered by the gate, and apt-publish.yml mirrors them.
+# definitions on the tag, and syft attaches the SBOMs. These stay for local builds. Until
+# NIM-882 this paragraph went on to say that artifacts built by hand and attached to a
+# GitHub Release are mirrored by apt-publish.yml regardless — they are not, any more: the
+# mirror verifies every .deb against the cosign-signed checksums.txt of the release, so a
+# locally built package is refused THERE, whoever attached it. Not here: the manual
+# publish-apt.sh run exempted below writes to the same bucket with neither check, and
+# deploy/apt-r2/README.md says so where it documents that fallback.
 pkg          # goreleaser produces the release package set on the tag
 sbom         # syft produces the per-archive SBOMs on the tag
 build-linux  # bare cross-build, offered as an alternative to `make pkg`

@@ -1683,9 +1683,19 @@ RELEASE_GATE_TARGETS := e2e-live-gate
 # `continue-on-error` to the gate job, makes tag runs faster and greener and changes nothing
 # in the output. So does adding a `make …` line to RELEASING.md that nothing will ever run —
 # that is exactly how step (e) came to exist. Docker-free, network-free, under a second.
+#
+# The second publishing path is checked here too (NIM-882): apt-publish.yml fires on ANY
+# release, so the release-workflow gate does not reach it, and the ruleset that was supposed
+# to is not a thing GitHub offers. Two scripts ask instead — check-release-provenance.sh
+# (did the gated pipeline make this release) and verify-release-assets.sh (are these the
+# assets it built) — and BOTH self-tests run here, because a gate nobody executes is the
+# defect this whole family is about. Each drives its real script against a canned API or a
+# stubbed cosign: no network, no token, no signing key.
 check-release-gate:
 	@scripts/check-release-gate.py
 	@scripts/check-release-gate.py --self-test
+	@scripts/check-release-provenance.sh --self-test
+	@scripts/verify-release-assets.sh --self-test
 
 # check-modules-run — the guard on the per-module sweep (NIM-494). Third of the
 # same kind, one level down from check-gate: gate.sh reports on tiers,
