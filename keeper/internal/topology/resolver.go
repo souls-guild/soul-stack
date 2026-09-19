@@ -82,25 +82,62 @@ func NewResolver(pool *pgxpool.Pool, lease SoulLeaseChecker, logger *slog.Logger
 // `.traits` show exactly what an operator put on the host — the same set the RBAC
 // scope predicate resolves.
 //
-// ★ NO transport carve-out here, unlike [inventorySQL]. A `transport=ssh` host
-// is `pending` for its whole life, so this query never returns one — and that is
-// the current behaviour, kept deliberately (NIM-869): a scenario run reaches
-// hosts through [scenario.ApplyDispatcher], whose only implementation is the
-// gRPC stream, so an ssh host admitted to the roster would reach dispatch and
-// fail `soul_not_connected` where today the run simply does not see it. Binding
-// one to an incarnation is not prevented anywhere, so this is reachable, not
-// hypothetical. Whichever ticket gives the scenario path a push branch is the
-// one that gets to widen this, together with the dispatch it needs. ★ NIM-870
-// did NOT: it added the task-level `transport:` key and its precedence and left
-// the dispatcher exactly where NIM-869 left it, so that ticket is still open and
-// still unassigned (see the [push.EventHandler] doc).
+// ★ This is the AGENT half of the roster, and the `transport <> 'ssh'` clause
+// is what makes it so. The status predicate is unchanged and deliberately
+// strict: for an agent host `pending` means "a bootstrap token is issued and no
+// identity exists yet", and targeting one is meaningless whatever the dispatch
+// path can do. The push half is [rosterPushSQL], where `pending` means
+// something else entirely; the two are disjoint by this clause rather than by a
+// dedup pass, so no host can be counted twice however its row was written.
+//
+// Until NIM-880 there was no transport clause and no push half: an ssh host
+// simply never appeared, because `pending` is the only status it ever holds.
+// That was correct while [scenario.ApplyDispatcher] had exactly one
+// implementation (the gRPC stream) — admitting the host would have turned "the
+// run does not see it" into `soul_not_connected`. NIM-880 gave the dispatcher
+// its push branch, which is the condition NIM-869 attached to widening this.
+//
+// The clause also fixes the row the old predicate got wrong in the other
+// direction: an ssh host left at `status='connected'` (the agent→ssh migration
+// the registry does not write yet) used to pass this filter and reach the
+// stream dispatch it cannot answer. It now goes to the push half.
 const rosterSQL = `
 SELECT s.sid, s.coven, s.traits, s.status, s.transport,
        s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at
 FROM souls s
 JOIN incarnation_membership m ON m.sid = s.sid
 WHERE m.incarnation_name = $1
+  AND s.transport <> 'ssh'
   AND s.status NOT IN ('pending', 'revoked', 'expired', 'destroyed')
+ORDER BY s.sid ASC
+`
+
+// rosterPushSQL — the PUSH half of the scenario roster (NIM-880): the
+// `transport='ssh'` members of one incarnation.
+//
+// It differs from [rosterSQL] in exactly one predicate, and the difference is
+// the whole point: `pending` is NOT excluded, because `connected` is written by
+// the agent's Bootstrap RPC and by nothing else, so a push host holds `pending`
+// for its entire life. Excluding it by status excluded every push host there
+// will ever be. The hard-terminal statuses are excluded the same way — a
+// revoked host is revoked on either transport.
+//
+// Presence is not asked here either: [Resolver.filterAlive] exempts
+// `transport=ssh` from both of its arms, and reachability is answered by the
+// dial at dispatch time. A dead machine surfaces as that host's connect error
+// on its `apply_runs` row, not as an empty roster.
+//
+// Same column list and same ORDER BY as [rosterSQL] — one scanHost serves both,
+// and the merge in [Resolver.LoadIncarnationHosts] keeps the combined slice in
+// SID order, which is what makes a serial wave reproducible.
+const rosterPushSQL = `
+SELECT s.sid, s.coven, s.traits, s.status, s.transport,
+       s.soulprint_facts, s.soulprint_collected_at, s.soulprint_received_at
+FROM souls s
+JOIN incarnation_membership m ON m.sid = s.sid
+WHERE m.incarnation_name = $1
+  AND s.transport = 'ssh'
+  AND s.status NOT IN ('revoked', 'expired', 'destroyed')
 ORDER BY s.sid ASC
 `
 
@@ -125,11 +162,14 @@ ORDER BY sid ASC, choir_name ASC
 // role from the host's Choir Voice.
 //
 // Two-phase (ADR-006(a)):
-//   - Phase 1 (SQL, [rosterSQL]): candidates by incarnation_membership +
-//     non-terminal/non-onboarding status. Presence is NOT decided here.
+//   - Phase 1 (SQL, [rosterSQL] + [rosterPushSQL]): candidates by
+//     incarnation_membership + a per-transport status predicate. Presence is NOT
+//     decided here. The two queries are disjoint by transport and both ordered by
+//     SID; [mergeBySID] keeps the combined slice ordered.
 //   - Phase 2 (Redis, [Resolver.filterAlive]): filtering candidates without live
 //     SID-lease (presence = online ⇔ lease is alive). nil-lease (unit / single-
-//     instance dev) → fallback to SQL-presence (status='connected').
+//     instance dev) → fallback to SQL-presence (status='connected'). A
+//     `transport=ssh` candidate is exempt and always kept.
 //
 // Semantics:
 //   - Nonexistent incarnation / no online hosts → empty slice, NOT
@@ -144,13 +184,36 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 		return nil, err
 	}
 
-	rows, err := r.pool.Query(ctx, rosterSQL, incarnationName)
+	agents, err := r.queryRoster(ctx, rosterSQL, incarnationName, choirs, choirRoles)
+	if err != nil {
+		return nil, err
+	}
+	pushHosts, err := r.queryRoster(ctx, rosterPushSQL, incarnationName, choirs, choirRoles)
+	if err != nil {
+		return nil, err
+	}
+
+	hosts, err := r.filterAlive(ctx, mergeBySID(agents, pushHosts))
+	if err != nil {
+		return nil, err
+	}
+
+	warnStale(ctx, r.logger, hosts, time.Now())
+	return hosts, nil
+}
+
+// queryRoster runs one half of the phase-1 roster (see [rosterSQL] /
+// [rosterPushSQL]) and stamps each host's Choir facts onto it. Both halves
+// project the same columns and sort by SID, so one scan loop serves both and
+// the caller only has to merge.
+func (r *Resolver) queryRoster(ctx context.Context, sql, incarnationName string, choirs map[string][]string, choirRoles map[string]string) ([]*HostFacts, error) {
+	rows, err := r.pool.Query(ctx, sql, incarnationName)
 	if err != nil {
 		return nil, fmt.Errorf("topology: roster query: %w", err)
 	}
 	defer rows.Close()
 
-	var candidates []*HostFacts
+	var out []*HostFacts
 	for rows.Next() {
 		h, err := scanHost(rows)
 		if err != nil {
@@ -163,19 +226,42 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 		// so nothing downstream may substitute a default for it.
 		h.Role = choirRoles[h.SID]
 		h.Choirs = choirs[h.SID]
-		candidates = append(candidates, h)
+		out = append(out, h)
 	}
 	if err := rows.Err(); err != nil {
 		return nil, fmt.Errorf("topology: roster iter: %w", err)
 	}
+	return out, nil
+}
 
-	hosts, err := r.filterAlive(ctx, candidates)
-	if err != nil {
-		return nil, err
+// mergeBySID interleaves two already SID-sorted rosters into one. Ordering is
+// not cosmetic: a serial wave is a prefix of this slice (orchestration.md
+// §2.2.1), so a run whose hosts came back grouped by transport would roll in a
+// different order than the same run with one host retyped.
+//
+// The inputs are disjoint by construction (their queries split on `transport`),
+// so no de-duplication happens here — a SID arriving from both would be a
+// defect in those predicates, and silently collapsing it would hide it.
+func mergeBySID(a, b []*HostFacts) []*HostFacts {
+	if len(b) == 0 {
+		return a
 	}
-
-	warnStale(ctx, r.logger, hosts, time.Now())
-	return hosts, nil
+	if len(a) == 0 {
+		return b
+	}
+	out := make([]*HostFacts, 0, len(a)+len(b))
+	i, j := 0, 0
+	for i < len(a) && j < len(b) {
+		if a[i].SID <= b[j].SID {
+			out = append(out, a[i])
+			i++
+			continue
+		}
+		out = append(out, b[j])
+		j++
+	}
+	out = append(out, a[i:]...)
+	return append(out, b[j:]...)
 }
 
 // filterAlive — phase 2: presence filter of candidates by live Redis SID-lease
@@ -199,10 +285,11 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 // was not conservative, it was unconditional — no push host ever survived the
 // phase.
 //
-// Reachable only from [Resolver.LoadByInventory] today: [rosterSQL] returns no
-// ssh host at all, on purpose (see its doc). The exemption lives here rather
-// than in the push caller because presence is this function's question, and a
-// second copy of "what counts as present" is how the two answers drift.
+// Reached from both callers since NIM-880: [rosterPushSQL] admits ssh members
+// of an incarnation to the scenario roster, and [Resolver.LoadByInventory]
+// admits them by SID. The exemption lives here rather than in either caller
+// because presence is this function's question, and a second copy of "what
+// counts as present" is how the two answers drift.
 func (r *Resolver) filterAlive(ctx context.Context, candidates []*HostFacts) ([]*HostFacts, error) {
 	if len(candidates) == 0 {
 		return candidates, nil

@@ -80,4 +80,21 @@ type PushApplyRequest struct {
 	Input                map[string]any `json:"input,omitempty" doc:"input for destiny"`
 	SSHProvider          string         `json:"ssh_provider,omitempty" doc:"SshProvider name; defaults to the first registered one"`
 	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty" doc:"remove stale soul-binary/module versions in the same SSH session"`
+	// Transport is the scenario DSL's `transport:` key (ADR-0088), in the same
+	// two forms: the scalar `"ssh"`, or the one-key object
+	// `{"ssh": {"ssh_provider": …, "user": …, "port": …}}`. It is put on the
+	// synthetic apply task this run renders and read back off the rendered plan,
+	// so the precedence it gets here is the same one a scenario task gets.
+	//
+	// It is `any` because the two forms share one key — the same reason
+	// `config.Task.Transport` is. The schema is therefore untyped; the shapes are
+	// rejected at this boundary (422) rather than by the schema, because the
+	// closed enumeration of transports and their params lives in `shared/config`
+	// and a hand-written oneOf here would be a second copy of it.
+	//
+	// Omitted → the registry decides, which is every push run written before
+	// NIM-880 and every one that does not care. `"agent"` is refused: this
+	// endpoint IS the ssh transport, and naming the other one is a contradiction
+	// rather than a preference.
+	Transport any `json:"transport,omitempty" doc:"transport for the run: the scalar \"ssh\", or {\"ssh\": {ssh_provider, user, port}}. Beats souls.ssh_target and the keeper.yml push defaults."`
 }

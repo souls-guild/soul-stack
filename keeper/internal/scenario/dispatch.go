@@ -14,37 +14,6 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// dispatch executes cross-host fan-out for a run and waits for RunResult from
-// all hosts (cross-host barrier, orchestration.md §7).
-//
-// Pilot model: one apply_id per run, one sid per host → one ApplyRequest per
-// host carrying all tasks targeting it (after on/where/run_once resolution,
-// from DispatchPlan). Matches composite PK (apply_id, sid) on apply_runs and
-// the one-RunResult-per-(apply_id,sid) model in events_runresult.go.
-//
-// `serial:` (orchestration.md §2.2.1): rolling execution in waves of hosts
-// sorted by SID, size ≤width; within a wave hosts dispatch in parallel,
-// waves are strictly sequential (per-wave barrier). Since each host gets one
-// ApplyRequest (composite PK), a wave is a subset of the run's hosts, not a
-// repeat send to one host; per-task serial widths aggregate into one run-wave
-// width = minimum positive SerialWidth across tasks (narrowest window,
-// fail-closed — see effectiveSerialWidth). 0 → all hosts in one wave (legacy
-// behavior).
-//
-// Fail-stop (§2.2.1): first failed/cancelled host in a wave stops rolling —
-// later waves don't start, dispatch returns an error.
-//
-// Barrier invariant (§7): serial never splits the state commit — dispatch
-// returns only after all waves complete (or fail-stop); state commits once
-// in run(), never per-wave.
-func (r *Runner) dispatch(ctx context.Context, spec RunSpec, log *slog.Logger, tasks []*render.RenderedTask, plans []render.DispatchPlan) error {
-	// passage 0: N=1 run (no staged-render) — single Passage, behavior is
-	// bit-for-bit identical to pre-ADR-056 (one apply_runs row per host,
-	// barrier on passage 0). gate=nil: single Passage → no cross-passage
-	// requisites possible.
-	return r.dispatchPassage(ctx, spec, log, 0, tasks, plans, nil)
-}
-
 // dispatchPassage runs cross-host fan-out for ONE Passage (ADR-056 §b.2-3) and
 // waits its barrier (§b.3). tasks/plans are the subset of a single Passage
 // (run.go's stage-loop filtered by RenderedTask.Passage); passage is stamped
@@ -52,14 +21,40 @@ func (r *Runner) dispatch(ctx context.Context, spec RunSpec, log *slog.Logger, t
 // per-Passage terminal correlation — the barrier waits only on this Passage's
 // rows.
 //
+// Dispatch model: one apply_id per run, one sid per host → one ApplyRequest per
+// host per Passage, carrying all the Passage's tasks that target it (after
+// on/where/run_once resolution, from DispatchPlan). Matches the composite PK
+// (apply_id, sid, passage) on apply_runs.
+//
+// TWO BRANCHES carry that request (NIM-880). An agent host gets it over the
+// gRPC EventStream and answers asynchronously with a RunResult; a
+// `transport: ssh` host gets it over an SSH session the Keeper opens itself,
+// and its goroutine writes the terminal when the run on the host is done.
+// Everything downstream of the send is shared: one `apply_runs` row, one
+// [applysink.Sink], one barrier. hosts is the run's roster — the host's own
+// registry transport is what picks the branch, see [resolveHostDispatch].
+//
+// `serial:` (orchestration.md §2.2.1): rolling execution in waves of hosts
+// sorted by SID, size ≤width; within a wave hosts dispatch in parallel, waves
+// are strictly sequential (per-wave barrier). Since each host gets one
+// ApplyRequest, a wave is a subset of the run's hosts, not a repeat send to one
+// host; per-task serial widths aggregate into one wave width = minimum positive
+// SerialWidth across the Passage's tasks (narrowest window, fail-closed — see
+// effectiveSerialWidth). 0 → all hosts in one wave.
+//
 // Serial waves operate within EACH Passage independently: the serial (hosts)
 // and Passage (tasks) axes are orthogonal (ADR-056 §S4 amend, 2D
-// serial×passage). Wave width is derived from this Passage's plans
-// (effectiveSerialWidth over the tasksForPassage slice — per-Passage, not
-// per-run): a probe Passage without serial runs as one wave even if a later
-// Passage carries serial:N. N=1 runs call this with passage=0 — the single
-// wave(s) of one Passage, bit-for-bit.
-func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate) error {
+// serial×passage). A probe Passage without serial runs as one wave even if a
+// later Passage carries serial:N. N=1 runs call this with passage=0 — the
+// single wave(s) of one Passage, bit-for-bit.
+//
+// Fail-stop (§2.2.1): the first failed/cancelled host in a wave stops rolling —
+// later waves don't start, dispatch returns an error.
+//
+// Barrier invariant (§7): serial never splits the state commit — dispatch
+// returns only after all waves complete (or fail-stop); state commits once in
+// run(), never per-wave.
+func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts) error {
 	perHost := groupByHost(tasks, plans)
 	// Cross-passage requisite gating (ADR-056 R3): per-host resolution of
 	// onchanges/onfail links whose source is in an earlier Passage. nil gate
@@ -77,6 +72,22 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		return nil
 	}
 
+	// Per-host transport, resolved BEFORE any send: a contradiction between the
+	// task's `transport:` and the host's registry row must stop the run, not
+	// surface as a connect error halfway through a wave.
+	dispatchByHost, refusals := resolveHostDispatch(perHost, plans, hosts)
+	if len(refusals) > 0 {
+		return refusedDispatchError(refusals)
+	}
+	// Every push host's SshProvider, resolved before this Passage's first wave —
+	// a routing miss must not surface at a host's turn, with the hosts ahead of it
+	// already applied. See [Runner.resolvePushRoutes] for why the provider is a
+	// per-Passage question while "is push wired at all" is settled once per run.
+	pushRoutes, routeRefusals := r.resolvePushRoutes(ctx, dispatchByHost)
+	if len(routeRefusals) > 0 {
+		return refusedDispatchError(routeRefusals)
+	}
+
 	sids := sortedSIDs(perHost)
 	waves := splitWaves(sids, effectiveSerialWidth(plans))
 
@@ -86,7 +97,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// until timeout).
 	dispatchedTotal := 0
 	for wi, wave := range waves {
-		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, wave)
+		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, wave, dispatchByHost, pushRoutes)
 		dispatchedTotal += dispatched
 
 		// Per-wave barrier: wait for terminal status of hosts from ALL waves
@@ -137,6 +148,19 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 		// Host resolution upstream (run.go step 3) already rejects an empty
 		// roster (no_hosts). Empty shouldn't reach here; defensive check.
 		return fmt.Errorf("scenario: dispatchPlanned: empty roster for run %s", spec.ApplyID)
+	}
+	// The Acolyte claims an assignment and dispatches it over the EventStream —
+	// it has no push branch, and a planned row for a `transport: ssh` host would
+	// be claimed and then fail `soul_not_connected` (NIM-880). The refusal that
+	// an operator actually hits is upstream in run.go, BEFORE the keeper-side
+	// tasks provision anything; this one is the defence-in-depth copy, so a
+	// future caller that reaches dispatchPlanned another way still cannot write a
+	// planned row nothing will close. Giving the work-queue its own push branch
+	// is a separate slice — it needs the claim, the fencing epoch and the SSH
+	// session to agree on one owner, which the in-goroutine path does not have to
+	// solve.
+	if pushSIDs := pushHostSIDs(hosts); len(pushSIDs) > 0 {
+		return fmt.Errorf("scenario: the work-queue dispatch path (keeper.acolytes>0) cannot reach transport=ssh hosts %v - run this scenario on an instance with acolytes=0, or move those hosts off the incarnation", pushSIDs)
 	}
 
 	recipe := &applyrun.Recipe{
@@ -221,16 +245,22 @@ func serialPresent(serial any) bool {
 	}
 }
 
-// dispatchWave starts one wave: Insert(running) + SendApply for each host in
-// the wave (parallel within a wave per §2.2.1 semantics; the pilot sends
+// dispatchWave starts one wave: Insert(running) + send for each host in the
+// wave (parallel within a wave per §2.2.1 semantics; the stream branch sends
 // sequentially but without a barrier between hosts of the same wave — the
-// barrier sits between waves). Returns the number of successfully sent hosts
-// and the first Insert/Send error, if any.
+// barrier sits between waves). Returns the number of hosts that now have a
+// running `apply_runs` row the barrier will wait on, and the first Insert/send
+// error, if any.
 //
-// On a send failure the host is marked failed immediately — no RunResult
-// will arrive for it, otherwise the per-wave barrier would hang until
-// timeout; the failed row breaks the barrier normally (fail-stop).
-func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string) (int, error) {
+// On a stream send failure the host is marked failed immediately — no RunResult
+// will arrive for it, otherwise the per-wave barrier would hang until timeout;
+// the failed row breaks the barrier normally (fail-stop).
+//
+// A push host (NIM-880) counts as dispatched the moment its goroutine starts:
+// its send IS the run, so there is no send outcome to inspect here, and every
+// exit of [Runner.dispatchPushHost] writes a terminal the barrier observes —
+// which is the same contract the stream branch has with an arriving RunResult.
+func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string, dispatchByHost map[string]hostDispatch, pushRoutes map[string]pushRoute) (int, error) {
 	dispatched := 0
 	for _, sid := range wave {
 		// attempt is INTENTIONALLY left at 0: this is the old inline path
@@ -264,11 +294,32 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// goroutine, so this instance IS the renderer; the soul version is the
 			// one this host announced on the connection the apply is about to
 			// travel — the same announcement its capability set came from.
+			//
+			// A push host announced nothing and never will (NIM-880): it holds no
+			// heartbeat entry, so asking costs a Redis round-trip per host per
+			// Passage to be told "not recorded", and a transient Redis failure
+			// would log a Warn about a lookup that is meaningless on this branch.
+			// The field stays empty, which is the honest answer — what runs there
+			// is the binary this Keeper delivers, named by a keeper.yml key.
 			KeeperVersion: r.deps.KeeperVersion,
-			SoulVersion:   r.announcedSoulVersion(ctx, sid, log),
+			SoulVersion:   r.dispatchSoulVersion(ctx, sid, dispatchByHost[sid], log),
 		}); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}
+
+		// Push branch (NIM-880): the send IS the whole run, so it goes to its own
+		// goroutine and the barrier — already waiting on the row inserted above —
+		// observes the terminal that goroutine writes. Failing to START it is the
+		// one case handled inline: without a goroutine nothing writes a terminal,
+		// and the barrier would wait out the run timeout.
+		if hd := dispatchByHost[sid]; hd.isPush() {
+			if err := r.startPushHost(ctx, spec, log, passage, sid, hd, pushRoutes[sid], req, len(perHost[sid])); err != nil {
+				return dispatched, err
+			}
+			dispatched++
+			continue
+		}
+
 		// Multi-keeper guard (footgun with acolytes=0): this old path keeps
 		// run ownership in-memory in THIS instance's run-goroutine. If the
 		// target Soul's stream is held by ANOTHER Keeper instance, the
@@ -292,6 +343,16 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 		log.Info("scenario: ApplyRequest sent", slog.String("sid", sid), slog.Int("tasks", len(perHost[sid])))
 	}
 	return dispatched, nil
+}
+
+// dispatchSoulVersion is [Runner.announcedSoulVersion] with the push branch
+// carved out — see the call site for why a push host has no announcement to
+// read.
+func (r *Runner) dispatchSoulVersion(ctx context.Context, sid string, hd hostDispatch, log *slog.Logger) string {
+	if hd.isPush() {
+		return ""
+	}
+	return r.announcedSoulVersion(ctx, sid, log)
 }
 
 // warnCrossKeeperDispatch logs a loud WARN if this (old) dispatch path sends

@@ -19,6 +19,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/applysink"
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -482,6 +483,11 @@ type eventStreamHandler struct {
 	logger        *slog.Logger
 	lastSeenFlush *lastSeenFlusher
 
+	// events records a host's TaskEvent/RunResult into audit, PG and SSE. The
+	// SAME type serves the push branch of the scenario dispatcher (NIM-880) —
+	// see [applysink].
+	events *applysink.Sink
+
 	// augurSem is a global semaphore limiting parallel Augur processing
 	// across ALL streams (the handler is a single instance per server).
 	// Each AugurRequest spawns a goroutine (vault/prom/elk fetch can take
@@ -544,9 +550,21 @@ func newEventStreamHandler(deps EventStreamDeps, logger *slog.Logger) *eventStre
 	}
 
 	return &eventStreamHandler{
-		deps:           deps,
-		logger:         logger,
-		lastSeenFlush:  newLastSeenFlusher(flushInterval),
+		deps:          deps,
+		logger:        logger,
+		lastSeenFlush: newLastSeenFlusher(flushInterval),
+		// One sink, shared with the push branch of the scenario dispatcher
+		// (NIM-880): a Soul reports the same protobuf whether it reached the
+		// Keeper over this stream or was exec'd over SSH, and the trace it leaves
+		// — register, failure reason, notices, audit, SSE — must not depend on
+		// which. Source says which way it arrived.
+		events: applysink.New(applysink.Deps{
+			DB:     deps.ApplyRunDB,
+			Audit:  deps.AuditWriter,
+			Bus:    deps.ApplyBus,
+			Source: audit.SourceSoulGRPC,
+			Logger: logger,
+		}),
 		augurSem:       augurSem,
 		seedRotation:   seedRotation,
 		soulLeaseOwner: keeperredis.SoulLeaseOwner,

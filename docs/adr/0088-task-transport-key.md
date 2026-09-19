@@ -42,12 +42,9 @@ A fifth case is a refusal without being a rule: `transport: agent` inside a **pu
 
 It does not bootstrap a bare VM. The host, its address and its provider still come from the registry: `core.bootstrap.issued` writes `transport='agent'` as a literal and refuses `ssh`, and `souls.ssh_target` carries no address at all. Every item of the NIM-866 work list stands.
 
-**It has no end-to-end production path yet, and this ADR does not claim one.** Two independent reasons, both left open deliberately:
+**It had no end-to-end production path when this ADR was written, and said so. Both halves were closed by NIM-880** ([ADR-0089](0089-scenario-push-branch.md)) — the scenario dispatcher grew a push branch, and `POST /v1/push/apply` / `keeper.push.apply` carry a `transport` field. The paragraph is kept rather than deleted because it is the record of what "half a feature" looked like from the inside, and because the two bullets are still the shape of the question: *who sets this key, and by what path does the value travel*.
 
-- a scenario `apply:` task carrying `transport: ssh` is validated, rendered and carried on the dispatch plan, but `scenario.ApplyDispatcher` is implemented by `grpc.Outbound` alone — the scenario dispatcher has no push branch. Adding one is the `apply_runs`/`register:`/barrier question NIM-869 recorded as needing its own ADR;
-- `pushorch.ApplyRequest.Transport` is the input the precedence chain reads, and `POST /v1/push/apply` / the `keeper.push.apply` MCP tool do not carry it. Extending a published Operator API contract is the owner's call — NIM-869 deferred a smaller change to that surface (making `soul_path` optional) for the same reason, and this ADR does not take it silently.
-
-So the grammar, the offline refusal, the precedence and the summary are implemented and live-proven, and an operator cannot yet reach them. Closing either bullet makes the key usable. **The prose about push that misled the NIM-866 reconnaissance said a mechanism worked when it did not; this paragraph exists so the same thing cannot be said about this key.**
+**Amendment 2026-09-14 (NIM-880): the key does not move the BRANCH.** Which way a host is reached is its own `souls.transport`; a task naming the other one is refused (`transport_mismatch`), not obeyed. The three fields the key carries — `ssh_provider`, `user`, `port` — still beat `souls.ssh_target` and `keeper.yml::push.*`, which is the whole of the Level 0 decided here. What the key never claimed and now explicitly may not do is retype a host: the address, the credentials and the existence of a push target are registry facts, and a key that could invent them would be the bare-VM bootstrap this ADR rules out one paragraph above. The key therefore states the transport out loud — offline-checkable, visible to a reader of the file — and carries the overrides; the registry picks the branch, and the two must agree.
 
 **Rejected alternatives.**
 

@@ -109,7 +109,7 @@ type fakeDispatcher struct {
 	received map[string][]*keeperv1.RenderedTask
 }
 
-func (f *fakeDispatcher) SendApply(_ context.Context, sid string, _ push.Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
+func (f *fakeDispatcher) SendApply(_ context.Context, sid string, _ push.Route, req *keeperv1.ApplyRequest, _ push.EventHandler) (*keeperv1.RunResult, error) {
 	atomic.AddInt32(&f.calls, 1)
 	if f.delay > 0 {
 		time.Sleep(f.delay)

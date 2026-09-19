@@ -156,3 +156,23 @@ rather than inheriting the default, and a row written before this amendment stil
 carries `/usr/local/bin/soul` and still fails. Re-PUT those rows.  Making the
 field optional is the ergonomic follow-up NIM-869 deliberately did not take on
 its own — it is a change to a published Operator API contract.
+
+**Amendment (2026-09-14, NIM-880): a scenario run dispatches over push, and the
+scenario roster admits `transport: ssh` hosts.**
+The open question this ADR recorded — whether a push run mints an `apply_runs`
+row, and therefore whether `register:` can fill and a barrier over it can release
+— is answered in [ADR-0089](0089-scenario-push-branch.md).
+
+In short: a SCENARIO push run mints the row (the cross-host barrier polls that
+table, so it has one by construction), feeds the same event sink the EventStream
+handler does, and fills `register:` identically. A BARE `POST /v1/push/apply` run
+still writes only `push_runs` and fills nothing, because there is no scenario
+around it to read a register back and no barrier to release.
+
+Two consequences for this ADR's own text. The scenario roster is now two disjoint
+queries split on `transport` — the agent half still excludes `pending`, the push
+half does not, since `pending` is the only status a push host ever holds. And the
+provider router's Level 0 (`source: task`) is now reachable from a scenario task,
+not only from the push API; for a scenario run the routing decision is recorded on
+the run's `apply.dispatched` audit event rather than in `push_runs.summary`, which
+that run does not have.

@@ -23,22 +23,25 @@ var ErrNoRunResult = errors.New("push: NDJSON stream ended without RunResult")
 // EventHandler — callback for each intermediate TaskEvent in the NDJSON
 // stream. nil is fine: RunResult carries the run's outcome.
 //
-// ★ A push run's `register:` DOES NOT FILL, and this is the seam where that is
-// decided (verified for NIM-869). `register_data` rides on TaskEvent and
-// nothing else — RunResult has no field for it — so a push run's only copy
-// passes through here, and [SshDispatcher.SendApply] gives this callback to a
-// debug log. Persisting it is not a matter of holding onto the events either:
-// `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid)`,
-// and a push run writes `push_runs` and no row there. So a scenario task
-// executed over push would leave `register.<name>` unresolved and any barrier
-// waiting on it unreleased. Nothing reaches that state today — the scenario
-// dispatcher has no push branch ([scenario.ApplyDispatcher] is implemented
-// only by [grpc.Outbound]) — but the ticket that adds one has to decide whether
-// a push run mints an `apply_runs` row, and that decision is an ADR, not an
-// implementation detail of this callback. ★ NIM-870 did NOT decide it: that
-// ticket added the task-level `transport:` key and its precedence, and left the
-// dispatcher's push branch exactly where NIM-869 left it. The question is still
-// open and still unassigned.
+// ★ This is the seam where a push run's `register:` is decided, because
+// `register_data` rides on TaskEvent and nothing else — RunResult has no field
+// for it — so a push run's only copy passes through here.
+//
+// The answer (NIM-880, [ADR-0089]) is a property of the
+// CALLER, not of this callback, and it follows from a foreign key:
+// `apply_task_register` references `apply_runs(apply_id, sid, passage)`.
+//
+//   - A scenario task dispatched over push fills `register:` exactly as one
+//     dispatched over the stream. Its run already mints that `apply_runs` row —
+//     the cross-host barrier polls the same table — so the FK is satisfied and
+//     the handler [scenario.Runner] passes is the SAME [applysink.Sink] the
+//     EventStream handler uses. A barrier on such a register releases.
+//   - A bare `POST /v1/push/apply` run fills nothing and passes nil. It writes
+//     `push_runs`, mints no `apply_runs` row, has no scenario around it and so
+//     no `register.<name>` consumer and no barrier. Minting a row for it would
+//     invent an incarnation it does not belong to.
+//
+// [ADR-0089]: ../../../docs/adr/0089-scenario-push-branch.md
 type EventHandler func(*keeperv1.TaskEvent)
 
 // ParseStream reads the line-delimited NDJSON stdout of `soul apply`

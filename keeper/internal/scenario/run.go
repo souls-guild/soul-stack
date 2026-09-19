@@ -282,6 +282,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
+	// Push wiring, checked ONCE against the starting roster (NIM-880). Whether
+	// this Keeper has a push dispatcher at all is a property of the process, not
+	// of a Passage, so it is settled here — before the first Passage and before
+	// any keeper-side task provisions a cloud VM the run could never have applied
+	// to. The per-Passage pass keeps the same check for a host that joins at a
+	// refresh boundary.
+	if err := r.guardPushConfigured(spec.IncarnationName, spec.ScenarioName, hosts); err != nil {
+		abort(reasonPushNotConfigured, err)
+		return
+	}
+
 	// 4. Service vars (the service's own layer). render.Pipeline exposes them to
 	//    CEL as `vars.<path>` (slice E2; the root merges into `vars.*` in
 	//    NIM-414). Host-invariant by construction (ADR-0082), so the keeper
@@ -496,28 +507,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//       checker (no Redis / unit) → reject staged entirely: without a
 	//       presence source we can't confirm support, and sending N>1 blind
 	//       carries the same hang risk.
+	//
+	//       A `transport: ssh` host is EXEMPT (NIM-880) and the exemption is not
+	//       a relaxation: this gate reads a capability set a Soul announces on
+	//       Hello, and a push host opens no stream and announces nothing, so
+	//       asking would report it lacking EVERY capability and reject every run
+	//       that touched one. What runs there is the binary this Keeper delivers
+	//       from `push.soul_binary_path` on each run, so the operator's answer to
+	//       "which soul is on that host" is a keeper.yml key, not an
+	//       announcement. Same exemption, same reason, in the plan-requirements
+	//       gate below.
 	if staged {
-		sids := make([]string, len(hosts))
-		for i, h := range hosts {
-			sids[i] = h.SID
-		}
-		if r.soulCap == nil {
-			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: staged run (%d Passage) requires confirmation of host passage-capability, but the presence checker is unavailable (no Redis) - fail-closed rejection (ADR-056 §S5)",
-				spec.IncarnationName, spec.ScenarioName, passage.Count))
-			return
-		}
-		lacking, lerr := r.soulCap.SoulsLackingCapability(ctx, sids, config.CapabilityPassage)
-		if lerr != nil {
-			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: staged run host passage-capability check failed - fail-closed rejection (ADR-056 §S5): %w",
-				spec.IncarnationName, spec.ScenarioName, lerr))
-			return
-		}
-		if len(lacking) > 0 {
-			abort("soul_passage_unsupported", fmt.Errorf(
-				"scenario %s/%s: staged run (%d Passage by register dependency) requires a Passage-aware Soul, but hosts %v do not support the passage field - update the soul binary or remove the register dependency (ADR-056 §S5)",
-				spec.IncarnationName, spec.ScenarioName, passage.Count, lacking))
+		if err := r.gatePassageCapability(ctx, spec, hosts, passage.Count); err != nil {
+			abort(reasonSoulPassageUnsupported, err)
 			return
 		}
 	}
@@ -583,12 +585,26 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// empty here (P0, no chaining): host-fallback intact.
 		// NIM-37 (H1): persist the Passage 0 plan (all non-staged tasks are in
 		// it) before dispatch.
+		// The work-queue path has no push branch (NIM-880), and the refusal belongs
+		// FIRST in this branch: everything after it writes. persistRunPlan writes
+		// `apply_run_plan` rows and `dispatchKeeperTasks` provisions cloud VMs, so
+		// refusing later would leave a run that could never have been applied
+		// holding both the plan rows and the machines it had just created.
+		if pushSIDs := pushHostSIDs(hosts); len(pushSIDs) > 0 {
+			abort("dispatch_failed", fmt.Errorf(
+				"scenario %s/%s: the work-queue dispatch path (keeper.acolytes>0) cannot reach transport=ssh hosts %v - run this scenario on an instance with acolytes=0, or move those hosts off the incarnation",
+				spec.IncarnationName, spec.ScenarioName, pushSIDs))
+			return
+		}
 		r.persistRunPlan(ctx, spec, tasks, 0, sealed.Paths(), log)
 		// Soul-side compat gate (ADR-0076(i)) on the whole plan: the Acolyte path is
 		// non-staged, so the step-5 render already resolved every task's targets and
 		// one pass covers the run — before the keeper-side tasks, so a run that
 		// cannot be applied does not provision the cloud VMs it would apply to.
-		required := requiredSoulCapabilities(tasks, plans)
+		// exemptPushHosts for the same reason the staged branch applies it — kept
+		// even though the refusal above leaves no push host standing, so the two
+		// branches cannot drift if that refusal is ever narrowed.
+		required := exemptPushHosts(requiredSoulCapabilities(tasks, plans), hosts)
 		prov.observeRequired(required)
 		if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, required); err != nil {
 			abort(reasonSoulCapabilityUnsupported, err)
@@ -646,6 +662,22 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					renderIn.Hosts = grown
 					log.Info("scenario: roster re-resolved at refresh boundary - live snapshot (ADR-0061 §S3)",
 						slog.Int("passage", p), slog.Int("roster_size", len(grown)), slog.Int("prev_roster_size", prevSize))
+					// ★ Re-gate the RE-RESOLVED roster (ADR-056 §S5). The up-front gate
+					// only saw the starting roster, and a run that started all-push —
+					// where the gate has nobody to ask and is skipped — can pick up an
+					// AGENT host right here. Dispatching passage>0 to a host nobody
+					// confirmed is exactly the hang §S5 exists to prevent: a
+					// passage-blind Soul echoes 0, this Passage's barrier never sees its
+					// terminal, and the incarnation sits in `applying` until the run
+					// timeout.
+					//
+					// ⚠ This is a SECOND place a staged run can refuse after Passage 0
+					// has applied and the keeper-side tasks have provisioned. Unavoidable:
+					// the host it is about did not exist when the up-front gate ran.
+					if gerr := r.gatePassageCapability(ctx, spec, grown, passage.Count); gerr != nil {
+						abort(reasonSoulPassageUnsupported, gerr)
+						return
+					}
 				}
 
 				// Staged run, P>0: re-render with per-host register accumulated from
@@ -729,7 +761,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// iteration, so the gate still fires before ANY dispatch. Ahead of the
 			// keeper-side tasks below, not just of the host-dispatch: a Passage that
 			// cannot be applied must not provision the cloud VMs it would apply to.
-			pRequired := requiredSoulCapabilities(pTasks, pPlans)
+			// renderIn.Hosts, not the outer `hosts`: at a refresh boundary the
+			// roster is re-resolved into renderIn.Hosts (below), and these plans
+			// were rendered against THAT slice. Reading the stale one would
+			// attribute a Passage's requirements to a roster the Passage is not
+			// about.
+			pRequired := exemptPushHosts(requiredSoulCapabilities(pTasks, pPlans), renderIn.Hosts)
 			prov.observeRequired(pRequired)
 			if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, pRequired); err != nil {
 				abort(reasonSoulCapabilityUnsupported, err)
@@ -775,7 +812,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				}
 				gate = newCrossPassageGate(tasks, changed, failed)
 			}
-			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate); err != nil {
+			// renderIn.Hosts for the same reason: the plans' TargetSIDs come from
+			// that slice, so the per-host transport decision has to be built from
+			// it. After a mid-run re-resolve the outer `hosts` is a roster this
+			// Passage was not rendered against, and a grown host would look
+			// unrostered.
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts); err != nil {
 				abort("dispatch_failed", err)
 				return
 			}

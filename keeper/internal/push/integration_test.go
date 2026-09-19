@@ -86,7 +86,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 		t.Fatalf("NewSshDispatcher: %v", err)
 	}
 
-	rr, err := disp.SendApply(ctx, host.Addr, Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "integration-1"})
+	rr, err := disp.SendApply(ctx, host.Addr, Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "integration-1"}, nil)
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
@@ -98,7 +98,7 @@ func TestIntegration_LiveSSHD_DeliverApplyCleanup(t *testing.T) {
 	// match, upload should not happen (i.e. both runs return SUCCESS, and the
 	// second run is faster — but that's not assert-able without timing; at
 	// least check there's no regression).
-	rr2, err := disp.SendApply(ctx, host.Addr, Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "integration-2"})
+	rr2, err := disp.SendApply(ctx, host.Addr, Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "integration-2"}, nil)
 	if err != nil {
 		t.Fatalf("SendApply (repeat): %v", err)
 	}

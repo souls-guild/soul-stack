@@ -94,7 +94,7 @@ func TestSendApply_DeliverHappensBeforeExec(t *testing.T) {
 		},
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-1"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-1"}, nil)
 	if err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
@@ -122,7 +122,7 @@ func TestSendApply_DeliverFailAbortsExec(t *testing.T) {
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
 
-	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-2"})
+	_, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-2"}, nil)
 	if err == nil {
 		t.Fatal("expected fail-closed on delivery error")
 	}
@@ -141,7 +141,7 @@ func TestSendApply_DelivererNilSkipsDelivery_S0BC(t *testing.T) {
 		Souls:     &mockSouls{s: sshSoul()},
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
-	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-3"}); err != nil {
+	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-3"}, nil); err != nil {
 		t.Fatalf("S0-flow without Deliverer should work: %v", err)
 	}
 }
@@ -161,7 +161,7 @@ func TestSendApply_PropagatesSoulSpecToDeliverer(t *testing.T) {
 		SoulSpec:  spec,
 		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return sess, nil },
 	})
-	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-4"}); err != nil {
+	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-deliv-4"}, nil); err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
 	if deliv.deliverN != 1 {

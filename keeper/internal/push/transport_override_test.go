@@ -160,7 +160,7 @@ func TestDispatcher_RouteOverrideReachesTheDial(t *testing.T) {
 		disp := newDisp(t, &got, nil)
 		if _, err := disp.SendApply(context.Background(), "host-1.example.com",
 			Route{Provider: testProviderName, Override: override},
-			&keeperv1.ApplyRequest{ApplyId: "ap-override-1"}); err != nil {
+			&keeperv1.ApplyRequest{ApplyId: "ap-override-1"}, nil); err != nil {
 			t.Fatalf("SendApply: %v", err)
 		}
 		if got.User != "deploy" || got.Port != 2222 {

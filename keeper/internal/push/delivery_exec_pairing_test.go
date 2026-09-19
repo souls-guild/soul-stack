@@ -87,7 +87,7 @@ func TestSendApply_ExecsWhatItJustDelivered(t *testing.T) {
 	})
 
 	if _, err := disp.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName},
-		&keeperv1.ApplyRequest{ApplyId: "ap-pair"}); err != nil {
+		&keeperv1.ApplyRequest{ApplyId: "ap-pair"}, nil); err != nil {
 		t.Fatalf("SendApply: %v", err)
 	}
 

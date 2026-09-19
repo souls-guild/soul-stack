@@ -329,13 +329,20 @@ var ErrProviderUnknown = errors.New("push: SshProvider not registered")
 // (NIM-870). A zero Override leaves the registry's answer untouched, which is
 // every run that does not write the key.
 //
+// onEvent receives each intermediate TaskEvent as the stream delivers it, and
+// is the ONLY copy of one: `RunResult` has no field for register_data, so a
+// caller that passes nil has decided its run keeps no per-task record (NIM-880).
+// A bare `POST /v1/push/apply` does exactly that — it writes `push_runs` and has
+// no `register:` consumer; the scenario dispatcher passes a handler, because its
+// run has an `apply_runs` row for the accumulator to hang off.
+//
 // Returns:
 //   - (*RunResult, nil) — the run reached a RunResult (its status can be
 //     FAILED — that's a valid outcome, not a transport error).
 //   - (nil, error) — failure BEFORE a RunResult: ErrProviderUnknown, an
 //     Authorize deny, a connect/Sign failure, a cut-off before RunResult, a
 //     malformed NDJSON.
-func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error) {
+func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, req *keeperv1.ApplyRequest, onEvent EventHandler) (*keeperv1.RunResult, error) {
 	if req == nil {
 		return nil, errors.New("push: ApplyRequest is nil")
 	}
@@ -446,6 +453,9 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, 
 		log.Debug("push: TaskEvent",
 			slog.Int("task_idx", int(ev.GetTaskIdx())),
 			slog.String("status", ev.GetStatus().String()))
+		if onEvent != nil {
+			onEvent(ev)
+		}
 	})
 	if parseErr != nil {
 		if runErr != nil {

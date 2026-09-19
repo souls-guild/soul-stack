@@ -24,15 +24,16 @@ Permission: `push.apply`. MCP-tool: `keeper.push.apply`. Full model description 
 | `inventory` | `list<string>` | yes | List of SIDs (FQDN) of the target hosts. The hosts must exist in the `souls` registry with `transport: ssh`. |
 | `destiny` | `string` (git-ref form `<name>@<ref>`) | yes | Reference to Destiny — `<name>` from `default_destiny_source` ([config.md](../config.md#services--default_destiny_source--default_module_source)) + git-tag/branch. |
 | `input` | `object` | optional | Input for the destiny (see [destiny/input](../../input.md)). |
-| `ssh_provider` | `string` | optional | Name of the SshProvider from `keeper.yml → plugins.ssh_providers[].name` ([push.md → Authentication](../push.md#ssh-authentication--pluggable-provider)). Defaults to the first registered one. |
+| `ssh_provider` | `string` | optional | Name of the SshProvider from `keeper.yml → plugins.ssh_providers[].name` ([push.md → Authentication](../push.md#ssh-authentication--pluggable-provider)). Defaults to the first registered one. ⚠ **`transport.ssh.ssh_provider` BEATS this field** — it is Level 0, this is the per-job α-compat preset one level below it. Setting both is legal and silent: the run uses the transport one and reports `route_source: task`. |
 | `cleanup_stale_versions` | `bool` | optional | Remove stale versions of the `soul` binary/modules in the same SSH session ([push.md → Cleanup](../push.md#cleanup-on-the-host)). Default `false`. |
+| `transport` | `string` \| `object` | optional | The scenario DSL's [`transport:`](../../scenario/orchestration.md#225-transport--how-this-task-reaches-its-hosts) key, in the same two forms: the scalar `"ssh"`, or a one-key object `{"ssh": {"ssh_provider": …, "user": …, "port": …}}`. It beats `souls.ssh_target` and the `keeper.yml::push.*` defaults ([push.md → Transport precedence](../push.md#transport-precedence)). Omitted = the registry decides. `"agent"` is **refused (422)** — this endpoint is the ssh transport. A form or a param that does not decode is a 422, not an asynchronously failed run. |
 
 ```json
 {
   "inventory": ["redis-push-01.example.com", "redis-push-02.example.com"],
   "destiny": "redis-base@v1.4.0",
   "input": { "redis_password": "vault:secret/redis/prod#password" },
-  "ssh_provider": "vault-ssh"
+  "transport": { "ssh": { "ssh_provider": "vault-ssh", "user": "deploy", "port": 2222 } }
 }
 ```
 

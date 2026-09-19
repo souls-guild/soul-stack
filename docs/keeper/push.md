@@ -19,7 +19,7 @@ Used for:
 - **`soul_seeds` is not used for push.** Push hosts have no mTLS identity — no certificate, no private key, nothing to rotate.
 - **No daemon.** Between runs the host does nothing; no stream hangs.
 - **Audit.** Each push run is an event in Keeper's journal (what, where, by whom, result) with an RBAC filter ([rbac.md](rbac.md)).
-- **push ↔ agent migration.** A host can be in `transport: ssh` and then migrated to `transport: agent` (a Soul was installed) — the record is the same, the field changes, history is not lost. ⚠ **Design, not built:** nothing in the tree writes `souls.transport` after the row is created. Whoever builds it owes the presence rule below a second look — the agent→ssh direction can leave a host at `status='connected'`, and a `connected` ssh host passes the scenario roster's status filter and then the presence exemption, landing in a run that cannot dispatch to it.
+- **push ↔ agent migration.** A host can be in `transport: ssh` and then migrated to `transport: agent` (a Soul was installed) — the record is the same, the field changes, history is not lost. ⚠ **Design, not built:** nothing in the tree writes `souls.transport` after the row is created. The hazard it used to carry is closed: an ssh host left at `status='connected'` by an agent→ssh migration used to pass the scenario roster's agent filter and reach a stream dispatch it cannot answer. Since NIM-880 the roster splits on `transport`, so such a row goes to the push half and is dispatched correctly.
 
 ### Presence: a push host is never "online"
 
@@ -27,11 +27,11 @@ Targeting an agent host asks Redis whether it holds a live EventStream lease (`s
 
 So `topology.Resolver` exempts `transport='ssh'` from both arms, and the push inventory query excludes `pending` for agent hosts only. Reachability for a push host is answered by the dial at dispatch time and nowhere earlier — a dead machine surfaces as a per-host connect error in `push_runs.summary`, not as an empty roster.
 
-★ **The SCENARIO roster does not get this.** `LoadIncarnationHosts` still excludes `pending` outright, so an ssh host bound to an incarnation stays invisible to a scenario run — deliberately, because a scenario dispatches over the gRPC stream and has no push branch: admitting the host would turn "the run does not see it" into `soul_not_connected`. The exemption above is reachable only from the push inventory path.
+★ **The SCENARIO roster gets it too since NIM-880**, and it gets it as a SECOND query rather than as a widened predicate. `rosterSQL` is the agent half and still excludes `pending` outright — there it means "a bootstrap token is issued and no identity exists yet", and targeting such a host is meaningless whatever the dispatch path can do. `rosterPushSQL` is the push half and does not, because `pending` is the only status its hosts ever hold. The two are disjoint by a `transport` clause, so no host is counted twice. Until NIM-880 there was one predicate and no push half, deliberately: a scenario dispatched over the gRPC stream alone, and admitting an ssh host would have turned "the run does not see it" into `soul_not_connected`. See [A scenario over push](#a-scenario-over-push).
 
 ### What a push run does NOT do
 
-- **`register:` does not fill, and a barrier on it would not release.** `register_data` rides on `TaskEvent`, `RunResult` has no field for it, and `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid)` — a row a push run never writes (it writes `push_runs`). Nothing reaches this state today: the scenario dispatcher has no push branch at all. The ticket that adds one has to decide whether a push run mints an `apply_runs` row; that is an ADR.
+- **A BARE push run (`POST /v1/push/apply`) fills no `register:`, by decision.** `register_data` rides on `TaskEvent`, `RunResult` has no field for it, and `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid, passage)` — a row such a run never writes (it writes `push_runs`). Nothing is lost: there is no scenario around it to read a `register.<name>` back and no barrier to release, and minting the row would invent an incarnation the run does not belong to. ★ A SCENARIO task dispatched over push is the opposite case and fills its register exactly as a streamed one does — see [A scenario over push](#a-scenario-over-push) and [ADR-0089](../adr/0089-scenario-push-branch.md).
 - **It does not bootstrap a bare machine.** `souls.ssh_target` has no address column — `SSHTarget.Host` IS the SID — and a fresh VM's address is the provider's `primary_ip`, not yet in DNS. `core.bootstrap.issued` also writes `transport='agent'` as a literal and refuses `ssh`, so there is no scenario step that mints a push host. Minting one is a registry change, not a transport one.
 
 ## SSH authentication — pluggable provider
@@ -368,6 +368,11 @@ answers for the provider only — which is why it has no column for user or port
 The provider and the connection fields are **independent axes**: a task that named only
 a `user` keeps it even though the cluster default answered for the provider.
 
+**The task does NOT move the transport itself.** Which way a host is reached is its own
+`souls.transport`, and a task naming the other one is refused (`transport_mismatch`), not
+obeyed — see [A scenario over push](#a-scenario-over-push). The three fields above are the
+whole of what the key overrides, which is also why there is no address parameter.
+
 ★ **This is a third source of truth for those three fields, accepted knowingly — so the
 run has to say which source answered.** Each entry of `push_runs.summary.hosts[]` carries:
 
@@ -384,23 +389,129 @@ deliberately not claimed — a missing `ssh_user` means the resolver answered, a
 resolver knows whether that was the `souls.ssh_target` row or its own `root`/`22`
 default, so a label here would be a guess in the one field whose job is provenance.
 
-### ⚠ The key has no end-to-end production path yet
+### The two ways an operator reaches a push host
 
-Stated plainly because the opposite prose about push has already misled a whole
-reconnaissance once (NIM-866). As of NIM-870 **nothing in production sets a transport**:
+Both landed in NIM-880; until then the `transport:` key existed and nothing in production
+set it. Stated plainly because the opposite prose about push has misled a whole
+reconnaissance once already (NIM-866).
 
-- a scenario `apply:` task carrying `transport: ssh` is validated offline, rendered and
-  carried on the dispatch plan, but `scenario.ApplyDispatcher` is implemented by
-  `grpc.Outbound` alone — the scenario dispatcher has no push branch, and adding one is
-  the `apply_runs`/`register:`/barrier question NIM-869 recorded as needing its own ADR;
-- `pushorch.ApplyRequest.Transport` is the input the precedence chain reads, and
-  `POST /v1/push/apply` / the `keeper.push.apply` MCP tool do not carry it — extending a
-  published Operator API contract was left to the owner rather than taken silently.
+- `POST /v1/push/apply` / the `keeper.push.apply` MCP tool carry a `transport` field, in
+  the same two forms as the DSL key. It is validated at the boundary (422) by the same
+  decoder the rendered plan goes through, and `agent` is refused there — that endpoint IS
+  the ssh transport.
+- A scenario task targeting a `transport: ssh` member of an incarnation, below.
 
-So the grammar, the offline refusal, the precedence and the summary are implemented and
-covered (`TestIntegration_PushRun_LiveSSHD_TaskTransportBeatsTheRegistry` proves them on
-a real host), and an operator cannot yet reach them. Closing either bullet makes the key
-usable; both are the owner's call.
+## A scenario over push
+
+[ADR-0089](../adr/0089-scenario-push-branch.md) (NIM-880). A scenario
+run dispatches each host over the branch its `souls.transport` names: agent hosts over the
+gRPC EventStream, `transport: ssh` hosts by opening an SSH session, delivering `soul` and
+exec'ing it. Everything downstream of the send is shared — one `apply_runs` row, one event
+sink, one barrier.
+
+**`register:` fills, and a `require:` over it releases.** This was the question ADR-032 left
+open: `register_data` rides on `TaskEvent`, and `apply_task_register` has a foreign key to
+`apply_runs(apply_id, sid, passage)`, which a bare push run never writes. A scenario run
+does — the barrier polls that table — so the key is satisfied, and both branches feed the
+same `applysink.Sink`. The per-task failure reason, the run's notices, the `task.executed`
+audit events (which the changed-task rollup and the cross-passage `onchanges`/`onfail`
+gating read back) and the operator SSE frames follow for the same reason.
+
+A bare `POST /v1/push/apply` run still fills no register, deliberately: no `apply_runs`
+row, no scenario around it to read `register.<name>` back, no barrier to release.
+
+**The roster.** A `transport: ssh` member of an incarnation is now in the scenario roster.
+`pending` is the only status such a host ever holds, so the roster is two disjoint queries
+— the agent one still excludes `pending` (there it means "onboarding, no identity yet"),
+the push one does not.
+
+**Refusals, all fail-closed. Where each is raised matters, so it is stated rather
+than rounded off:**
+
+⚠ **Where each code surfaces is not uniform**, and the table's `raised` column is about
+timing, not about where an operator reads it back:
+
+- the UP-FRONT `push_not_configured` is the run's own `status_details.reason`;
+- every refusal raised from dispatch — including the per-Passage re-check of
+  `push_not_configured` — arrives as `reason: dispatch_failed`, with the code inside
+  `status_details.error`;
+- `push_transport_failed` and `soul_passage_unsupported` are not refusals: they land in
+  that host's `apply_runs.error_summary` and surface through the barrier's failure reason.
+  `soul_passage_unsupported` ALSO appears as a run `reason` when the streamed staged gate
+  aborts with it — same string, two origins.
+
+| reason | when | raised |
+|---|---|---|
+| `push_not_configured` | the run's roster holds a `transport: ssh` host and this Keeper has no push dispatcher (empty `plugins.ssh_providers[]`, no discovered SshProvider, or no `push.host_ca_ref`) | **once per run**, before the first Passage and before any keeper-side task — so a run that could never be applied does not first provision the cloud VMs it would have applied to. Re-checked per Passage for a host that joined at a refresh boundary |
+| `transport_mismatch` | the task names a transport the host's registry row does not carry, or the host is not in the run's roster | before that Passage's first wave |
+| `transport_disagreement` | two tasks of one Passage describe two different dispatches for one host — a host gets ONE ApplyRequest per Passage, so there is nothing to split. Compared on the WHOLE decision: same transport with different `ssh_provider`/`user`/`port` disagrees just as much as two different transports | before that Passage's first wave |
+| `provider_not_routed` | no router level produced an SshProvider and the task named none | before that Passage's first wave. It cannot be hoisted further: the task's `ssh_provider` is Level 0, so which provider a host gets is a property of that Passage's rendered plans |
+| `push_transport_failed` | the SSH session broke before a RunResult. A **constant**, never the error text: `error_summary` is read back unmasked and a transport error can echo the request. Written only when no per-task reason was already recorded | when the host's stream drains |
+| `soul_passage_unsupported` | a push host echoed a Passage other than the one the Keeper sent (on a `TaskEvent` or on the `RunResult`). Same caveat as the row above: written only when no per-task reason was already recorded, because that reason is the one an operator can act on | when the host's stream drains |
+
+⚠ **A staged run can therefore apply Passage 0 and then refuse Passage 1** on any
+of the FIVE checks decided per Passage — the three transport/provider ones, the
+`push_not_configured` re-check for a host that joined at a refresh boundary, and
+the ADR-056 §S5 passage gate re-run on the re-resolved roster (below). The last
+two are unavoidable: the host they are about did not exist when the up-front
+checks ran. a staged Passage's targets are placeholders
+until the Passage before it has run, so its contradictions are not knowable
+earlier. Only `push_not_configured` is settled before anything is applied.
+
+**The passage gate runs TWICE.** Once against the starting roster, and again on
+the roster every refresh boundary re-resolves (ADR-0061 §S3) — because a run that
+started all-push skips it (nobody to ask) and can pick up an AGENT host mid-run.
+Dispatching `passage > 0` to a host nobody confirmed is the hang §S5 exists to
+prevent.
+
+**Announcement gates do not apply to a push host, and one of them is replaced
+rather than dropped.** The plan-requirement gate
+([ADR-0076](../adr/0076-engine-compat-window.md)(i)) and the staged passage gate
+([ADR-056](../adr/0056-staged-render-passage.md) §S5) ask what a host announced on
+Hello; a push host announces nothing, and what runs there is the binary this Keeper
+delivers from `push.soul_binary_path`. Asking would report it lacking every capability
+and reject every run that touched one.
+
+★ The passage gate's HAZARD is real on push all the same, so the echo is checked
+instead of the announcement. With `push.soul_binary_path` unset the run execs
+whatever is already at the target's `soul_path`; a binary that echoed `passage: 0`
+under a Keeper passage of 1 would have its register and failure reason keyed on
+that echo while the terminal is keyed on the Keeper's own number — the Passage-1
+failure would land its reason in the Passage-0 row and Passage 1 would go terminal
+with a bare `failed`.
+
+The Keeper put the number in the ApplyRequest, so a disagreeing echo is a protocol
+violation: the **Keeper's number is stamped back on** before the event is stored,
+and the host then fails `soul_passage_unsupported`. Correcting rather than
+dropping is deliberate — `SendApply` is not aborted, so that request ran to
+completion on the machine, and discarding its events would leave the host changed
+with no record of what changed it.
+
+⚠ **With the in-tree agent this guard is a backstop, not the common path.**
+`soul apply` unmarshals its request with a strict `protojson.Unmarshal`, so a
+binary predating the `passage` field rejects an ApplyRequest carrying
+`passage > 0` outright; what an operator sees there is `push_transport_failed`
+(the stream ends without a RunResult), not this reason. The guard is what stands
+between a third-party or future binary that accepts the field and ignores it and
+a silently mis-filed run. A non-staged run sends passage 0, which proto3 omits
+from the wire entirely, so the common case is untouched either way.
+
+**The work-queue path refuses it.** With `keeper.acolytes > 0` an Acolyte claims a planned
+assignment and dispatches it over the stream; it has no push branch. The run is refused
+before the first planned row is written. Giving the work-queue one is separate scope — it
+needs the claim, the fencing epoch and the SSH session to agree on one owner.
+
+**Where the decision is recorded.** A scenario run has no `push_runs.summary` to write the
+transport provenance into, so it goes on the run's `apply.dispatched` audit event
+(`correlation_id = apply_id`): `transport`, `route_source`, `ssh_provider`, `ssh_user`,
+`ssh_port`, with the same presence rules as the summary keys above.
+
+⚠ The two branches time that event differently, and the difference is real: on the
+stream it is written after the request was ACCEPTED for delivery — enqueued on the
+per-SID channel, or published to whichever Keeper instance holds that Soul — while on
+push it is written before the SSH dial. Neither means "the host has it"; the push one
+means even less, so a push `apply.dispatched` with no terminal beside it is a session
+that never opened.
 
 ## See also
 

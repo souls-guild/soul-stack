@@ -398,19 +398,36 @@ with no keeper to ask:
 An unregistered name is `transport_unknown`; a map with two keys is
 `transport_multiple`; a param the transport does not take is `unknown_key`.
 
-**The task wins.** `transport.ssh.{ssh_provider,user,port}` beats `souls.ssh_target`
-and beats the cluster defaults in `keeper.yml::push.*`. ★ That knowingly makes a THIRD
-source of truth for those three fields, so a run that used the key **says so**: the
-transport the task named, the effective provider, the fields the task overrode, and the
-level that picked the provider are written into `push_runs.summary.hosts[]` — see
+**The task wins on the three fields it carries.** `transport.ssh.{ssh_provider,user,port}`
+beats `souls.ssh_target` and beats the cluster defaults in `keeper.yml::push.*`. ★ That
+knowingly makes a THIRD source of truth for those three fields, so a run that used the key
+**says so**: the transport the task named, the effective provider, the fields the task
+overrode, and the level that picked the provider are written into
+`push_runs.summary.hosts[]` for a bare push run, and into the run's `apply.dispatched`
+audit event for a scenario run dispatched over PUSH (the agent branch's
+`apply.dispatched` carries only `sid`/`apply_id`/`tasks_count`, as it always has — there
+is no third source of truth to disambiguate on a stream) — see
 [keeper/push.md](../keeper/push.md#transport-precedence). Without that an incident review
 reads a registry row the run never went to.
 
-⚠ **Nothing in production sets this key yet** — the scenario dispatcher has no push
-branch, and `POST /v1/push/apply` does not carry a transport. The grammar, the offline
-refusal and the precedence are implemented and live-tested; reaching them from an
-operator's hands is open work, recorded in
-[keeper/push.md](../keeper/push.md#-the-key-has-no-end-to-end-production-path-yet).
+**What it does NOT move is the branch.** Which way a host is reached is the host's own
+`souls.transport`, and naming the other one is a REFUSAL, not an override
+([`transport_mismatch`](../keeper/push.md#a-scenario-over-push)). The address, the
+credentials and the very existence of a push target live in the registry row — a task
+that could retype a host would be a task that bootstraps a bare VM, and it is not (see
+below). So the key states the transport out loud and carries the three overrides; the registry
+decides the branch, and the two must agree.
+
+⚠ **`soul-lint` cannot check the agreement** — it has no registry to ask. Offline it
+judges the key's SHAPE: a registered transport name, one key in the map, a known param,
+an integer port, no interpolation. That a task names `ssh` for a host whose row says
+`agent` is a REFUSAL AT DISPATCH (`transport_mismatch`), before any session opens and
+before anything is applied — loud and fail-closed, but at run time.
+
+`transport:` is therefore optional on a push host: a task with no key targeting a
+`transport: ssh` member goes over push all the same. Writing it is how a scenario says
+which hosts it is about, and how a run that targets the wrong ones stops instead of
+half-working.
 
 **Three things the key deliberately does not do.**
 

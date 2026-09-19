@@ -2,19 +2,15 @@ package grpc
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"log/slog"
 	"time"
 
 	"github.com/jackc/pgx/v5"
-	"google.golang.org/protobuf/encoding/protojson"
 
-	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
-	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // handleRunResult — handler for the [keeperv1.RunResult] payload (M2.4).
@@ -54,42 +50,10 @@ func (h *eventStreamHandler) handleRunResult(ctx context.Context, sid, sessionID
 		return
 	}
 
-	payload := map[string]any{
-		"sid":      sid,
-		"apply_id": ev.GetApplyId(),
-		"status":   ev.GetStatus().String(),
-		// passage (ADR-056 staged-render): the index of the Passage whose terminal
-		// carries this report. 0 = the only Passage (behavior as before staged-render).
-		// Per-Passage correlation/barrier is S3; here the field just goes into audit for triage.
-		"passage": ev.GetPassage(),
-	}
-	if sc := ev.GetStateChanges(); sc != nil {
-		if b, err := protojson.Marshal(sc); err != nil {
-			h.logger.Warn("eventstream: state_changes marshal failed",
-				slog.String("sid", sid),
-				slog.String("apply_id", ev.GetApplyId()),
-				slog.Any("error", err),
-			)
-		} else {
-			payload["state_changes"] = string(b)
-		}
-	}
-
-	if err := h.deps.AuditWriter.Write(ctx, &audit.Event{
-		EventType:     audit.EventRunCompleted,
-		Source:        audit.SourceSoulGRPC,
-		CorrelationID: ev.GetApplyId(),
-		Payload:       payload,
-		CreatedAt:     time.Now().UTC(),
-	}); err != nil {
-		h.logger.Warn("eventstream: audit write run.completed failed",
-			slog.String("sid", sid),
-			slog.String("apply_id", ev.GetApplyId()),
-			slog.Any("error", err),
-		)
-	}
-
-	h.publishRunResult(sid, ev)
+	// The observable half (audit + SSE) is shared with the push branch of the
+	// scenario dispatcher (NIM-880). The terminal transition below is not: only
+	// this path has a re-claim epoch to check and an incarnation to resolve.
+	h.events.RunResult(ctx, sid, ev)
 	h.correlateRunResult(ctx, sid, sessionID, ev)
 }
 
@@ -206,52 +170,6 @@ func runStatusToApplyStatus(rs keeperv1.RunStatus) applyrun.Status {
 	default:
 		return applyrun.StatusFailed
 	}
-}
-
-// publishRunResult translates RunResult into the SSE channel via applybus,
-// classifying the run status:
-//
-//   - RUN_STATUS_SUCCESS          → apply.completed
-//   - RUN_STATUS_CANCELLED        → apply.cancelled
-//   - RUN_STATUS_FAILED/ERROR_LOCKED/other → apply.failed
-//
-// ApplyBus=nil (dev without SSE) → no-op.
-func (h *eventStreamHandler) publishRunResult(sid string, ev *keeperv1.RunResult) {
-	if h.deps.ApplyBus == nil {
-		return
-	}
-	var kind applybus.EventKind
-	switch ev.GetStatus() {
-	case keeperv1.RunStatus_RUN_STATUS_SUCCESS:
-		kind = applybus.KindApplyCompleted
-	case keeperv1.RunStatus_RUN_STATUS_CANCELLED:
-		kind = applybus.KindApplyCancelled
-	default:
-		kind = applybus.KindApplyFailed
-	}
-
-	payload := map[string]any{
-		"apply_id":   ev.GetApplyId(),
-		"kind":       string(kind),
-		"sid":        sid,
-		"run_status": ev.GetStatus().String(),
-	}
-	if sc := ev.GetStateChanges(); sc != nil {
-		if b, err := protojson.Marshal(sc); err == nil {
-			var asMap map[string]any
-			if jerr := json.Unmarshal(b, &asMap); jerr == nil {
-				payload["state_changes"] = asMap
-			} else {
-				payload["state_changes"] = string(b)
-			}
-		}
-	}
-
-	h.deps.ApplyBus.Publish(applybus.Event{
-		ApplyID: ev.GetApplyId(),
-		Kind:    kind,
-		Payload: payload,
-	})
 }
 
 // commitRunState — atomically commits run results into the incarnation.

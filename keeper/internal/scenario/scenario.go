@@ -37,6 +37,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -291,6 +292,12 @@ type RunSpec struct {
 // send an `ApplyRequest` to one Soul. An interface (not *grpc.Outbound) so
 // the runner is unit-testable without standing up EventStream/StreamManager.
 //
+// It carries the AGENT half of dispatch; the `transport: ssh` half is
+// [PushApplyDispatcher] (NIM-880). The asymmetry in the signatures is the real
+// difference between them: this one hands the request to a stream and returns,
+// and the outcome arrives later as a RunResult; the push one runs the host to
+// completion before it returns.
+//
 // Implemented by [grpc.Outbound] (SendApply method, same signature).
 type ApplyDispatcher interface {
 	SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error
@@ -435,6 +442,20 @@ type Deps struct {
 	ServiceVars *servicevars.Resolver
 	Render      *render.Pipeline
 	Outbound    ApplyDispatcher
+	// PushApply carries the `transport: ssh` half of dispatch (NIM-880): the
+	// Keeper opens an SSH session to the host and execs the `soul` binary it
+	// delivers. nil → a run that targets a push host is refused
+	// ([reasonPushNotConfigured]), which is the right answer for a pull-only
+	// installation; a pure agent run is unaffected.
+	PushApply PushApplyDispatcher
+	// PushRouter resolves the SshProvider for a push host over the ADR-032
+	// levels. Only consulted when the task named none itself; nil with a
+	// non-nil PushApply means every host must carry
+	// `transport: { ssh: { ssh_provider: … } }`.
+	PushRouter PushProviderRouter
+	// PushRoutes counts routing decisions, shared with the bare push API. nil →
+	// no-op.
+	PushRoutes PushRouteObserver
 	// Destiny — source of destiny artifacts for apply:destiny
 	// (default_destiny_source + DestinyLoader). nil → apply:destiny in a
 	// scenario is rejected at render phase (ErrUnsupportedDSL).
@@ -612,6 +633,17 @@ type Runner struct {
 	// address stays `unknown keeper-side module`.
 	keeperPlugins KeeperPluginRegistry
 
+	// applyDB is Deps.DB narrowed to the surface the push branch and its
+	// [applysink.Sink] use (NIM-880) — a seam, so a unit test can drive the branch
+	// against a recorder without widening Deps.DB for the whole package.
+	//
+	// ⚠ It is NOT a nil-safety device, and must not be read as one: [NewRunner]
+	// assigns a `*pgxpool.Pool` into it, so a typed-nil pool would produce a
+	// non-nil interface here and the guard in [Runner.terminatePushHost] would
+	// not fire. What actually rules that out is NewRunner's panic on a nil
+	// Deps.DB; the guard covers the hand-built Runner a test assembles.
+	applyDB applyrun.ExecQueryRower
+
 	mu           sync.Mutex
 	active       map[string]context.CancelFunc
 	wg           sync.WaitGroup
@@ -650,6 +682,7 @@ func NewRunner(deps Deps) *Runner {
 		soulVersion:       deps.SoulVersion,
 		keeperModules:     deps.KeeperModules,
 		keeperPlugins:     deps.KeeperPlugins,
+		applyDB:           deps.DB,
 		active:            make(map[string]context.CancelFunc),
 	}
 }

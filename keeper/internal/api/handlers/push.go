@@ -121,6 +121,11 @@ type PushApplyInput struct {
 	Input                *map[string]any
 	SSHProvider          *string
 	CleanupStaleVersions *bool
+	// Transport is the raw `transport:` value (NIM-880), in the scalar or
+	// one-key-object form [config.TransportSpecOf] decodes. Not a pointer: its
+	// own nil already means "not set", and wrapping an `any` in a pointer would
+	// give two ways to say so.
+	Transport any
 }
 
 // PushApplyReply is the extracted result of [PushHandler.ApplyTyped] (handler-native).
@@ -182,9 +187,10 @@ func (h *PushHandler) ApplyTyped(ctx context.Context, claims *jwt.Claims, req Pu
 		Input:         input,
 		CleanupStale:  cleanupStale,
 		StartedByAID:  claims.Subject,
+		Transport:     req.Transport,
 	})
 	if err != nil {
-		if errors.Is(err, pushorch.ErrInvalidDestinyRef) {
+		if errors.Is(err, pushorch.ErrInvalidDestinyRef) || errors.Is(err, pushorch.ErrInvalidTransport) {
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 		}
 		h.logger.Error("push.apply: orchestrator accept failed",

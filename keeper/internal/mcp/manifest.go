@@ -2321,7 +2321,8 @@ var (
 "destiny":{"type":"string","description":"<name>@<ref>"},
 "input":{"type":"object"},
 "ssh_provider":{"type":"string"},
-"cleanup_stale_versions":{"type":"boolean"}}}`)
+"cleanup_stale_versions":{"type":"boolean"},
+"transport":{"oneOf":[{"type":"string","enum":["ssh"]},{"type":"object","additionalProperties":false,"properties":{"ssh":{"type":"object","additionalProperties":false,"properties":{"ssh_provider":{"type":"string"},"user":{"type":"string"},"port":{"type":"integer","minimum":1,"maximum":65535}}}},"required":["ssh"]}],"description":"transport for the run (ADR-0088): the scalar \"ssh\", or {\"ssh\":{ssh_provider,user,port}}. Beats souls.ssh_target and the keeper.yml push defaults. \"agent\" is refused - this tool is the ssh transport."}}}`)
 
 	schemaPushCleanupInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

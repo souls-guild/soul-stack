@@ -37,8 +37,15 @@ const orchestratorContextTimeout = 30 * time.Minute
 // (ADR-032 amendment 2026-05-27, P2 W-2/W-3 multi-provider routing; empty string
 // or unknown name → push.ErrProviderUnknown) together with the task's
 // `transport:` override (NIM-870).
+//
+// The [push.EventHandler] this orchestrator passes is nil, deliberately: a bare
+// `POST /v1/push/apply` run writes `push_runs` and mints no `apply_runs` row, so
+// there is no `apply_task_register` FK target to hang a `register:` off, no
+// scenario around it to consume one and no barrier to release (NIM-880). The
+// scenario dispatcher's push branch passes a handler for exactly the opposite
+// reasons.
 type SshDispatcher interface {
-	SendApply(ctx context.Context, sid string, route push.Route, req *keeperv1.ApplyRequest) (*keeperv1.RunResult, error)
+	SendApply(ctx context.Context, sid string, route push.Route, req *keeperv1.ApplyRequest, onEvent push.EventHandler) (*keeperv1.RunResult, error)
 }
 
 // Cleaner is a narrow interface of [push.SshDispatcher.Cleanup] for best-effort
@@ -186,6 +193,9 @@ func (r *PushRun) Apply(ctx context.Context, req ApplyRequest) (applyID string, 
 	}
 	name, ref, err := ParseDestinyRef(req.DestinyRef)
 	if err != nil {
+		return "", err
+	}
+	if err := validateTransport(req.Transport); err != nil {
 		return "", err
 	}
 
@@ -499,12 +509,14 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 // inventory is usually small; large-scale rolling is a separate slice via
 // render.DispatchPlan.SerialWidth, not used in pilot).
 //
-// ★ What comes back is a RunResult and nothing else — no per-task register.
-// A push run therefore records its outcome in `push_runs` and writes no
-// `apply_runs`/`apply_task_register` row at all, which is why the synthetic
-// scenario above carries one `apply:` task and no `register:`. See the
-// [push.EventHandler] doc for where that ends; the decision it names is still
-// open (NIM-870 added the `transport:` key, not the dispatcher's push branch).
+// ★ What is kept here is a RunResult and nothing else — no per-task register.
+// The nil [push.EventHandler] is the decision, not an omission (NIM-880): this
+// run records its outcome in `push_runs` and writes no `apply_runs` row, so
+// `apply_task_register` has no FK target, and there is no scenario around it to
+// read a `register.<name>` back or a barrier to release — which is why the
+// synthetic scenario above carries one `apply:` task and no `register:`. A
+// scenario task dispatched over push is the other case entirely and fills its
+// register exactly as a streamed one does; see [scenario.Runner.dispatchPushHost].
 //
 // sidRoute is map sid → route (P2 W-3 multi-provider routing + the NIM-870
 // task override); sidSource is the level that picked the provider, carried into
@@ -523,7 +535,7 @@ func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sid
 				ApplyId: applyID,
 				Tasks:   tasks,
 			}
-			rr, err := r.deps.Dispatcher.SendApply(ctx, sid, route, req)
+			rr, err := r.deps.Dispatcher.SendApply(ctx, sid, route, req, nil)
 			results[idx] = buildHostResult(sid, route, source, transportName, rr, err)
 			if err != nil {
 				log.Warn("pushorch: SendApply failed",
@@ -792,6 +804,52 @@ func summarize(results []hostResult) (PushRunStatus, map[string]any) {
 	default:
 		return StatusPartialFailed, summary
 	}
+}
+
+// ErrInvalidTransport — the `transport:` in the request body is not a form this
+// build can carry. A sentinel so the HTTP handler and the MCP tool both answer
+// 422 instead of accepting a run that would fail asynchronously two seconds
+// later with nothing for the caller to correlate it to.
+var ErrInvalidTransport = errors.New("pushorch: invalid transport")
+
+// validateTransport rejects, at the API boundary, every `transport:` shape a
+// push run cannot execute. It is the same decode the rendered plan goes through
+// afterwards ([transportOverrideOf]) — one decoder, called twice — so a body
+// this accepts cannot be refused later for its shape.
+//
+// Three refusals:
+//   - a form that does not decode (two keys, an unregistered name, a param
+//     block that is not a mapping);
+//   - `agent`, which this endpoint cannot carry: `POST /v1/push/apply` IS the
+//     ssh transport, and naming the other one is a contradiction rather than a
+//     preference. The same refusal a `transport: agent` scenario task gets
+//     inside a push run;
+//   - a param that does not decode (an unknown key, a non-integer port) or a
+//     port outside 1..65535 — the range the DSL validator enforces offline and
+//     the MCP tool schema declares, so this door has to enforce it too or the
+//     schema would assert a check that exists nowhere.
+//
+// A nil transport is the ordinary case and passes: the registry decides.
+func validateTransport(transport any) error {
+	if transport == nil {
+		return nil
+	}
+	name, params, ok := config.TransportSpecOf(transport)
+	if !ok {
+		return fmt.Errorf("%w: `transport` must be a transport name or a one-key mapping of one (registered: %v), got %T",
+			ErrInvalidTransport, config.TransportNames(), transport)
+	}
+	override, usable, err := push.TransportOverrideFrom(name, params)
+	if err != nil {
+		return fmt.Errorf("%w: %s", ErrInvalidTransport, err)
+	}
+	if !usable {
+		return fmt.Errorf("%w: transport %q cannot carry a push run (this endpoint is the ssh transport)", ErrInvalidTransport, name)
+	}
+	if _, present := params[config.TransportParamPort]; present && (override.Port < 1 || override.Port > 65535) {
+		return fmt.Errorf("%w: transport.ssh.%s must be in 1..65535, got %d", ErrInvalidTransport, config.TransportParamPort, override.Port)
+	}
+	return nil
 }
 
 // transportOverrideOf reads the task's `transport:` off the rendered plans

@@ -2692,6 +2692,8 @@ components:
         ssh_provider:
           description: SshProvider name; defaults to the first registered one
           type: string
+        transport:
+          description: "transport for the run: the scalar \"ssh\", or {\"ssh\": {ssh_provider, user, port}}. Beats souls.ssh_target and the keeper.yml push defaults."
       required:
         - inventory
         - destiny

@@ -382,6 +382,9 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	pushSshDispatcher *push.SshDispatcher
+	// pushRouter is the ADR-032 SshProvider resolver, shared by the push
+	// orchestrator and by the scenario dispatcher's push branch (NIM-880).
+	pushRouter *push.PGRouter
 	// sshRunProviders / sshRunHostCAs are what setupPushDispatchers resolved,
 	// shared with the keeper-side `core.ssh.run` module (NIM-849) through the
 	// accessors wired in setupCoreModules. They are shared rather than rebuilt
@@ -1939,6 +1942,19 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	d.pushCleaner = dispatcher
 	d.pushSshDispatcher = dispatcher
 
+	// The SshProvider router is built here rather than in
+	// finalizePushOrchestrator because it now has two consumers and the second
+	// one is wired earlier: the scenario runner (setupGRPCEventStream) needs it
+	// for the push branch of its dispatcher (NIM-880), and a second PGRouter
+	// instance would be a second read of the same settings snapshot with its own
+	// drift.
+	pushRouter, err := push.NewPGRouter(push.NewPGRouterReader(d.pool), newPushRouterConfigSource(d.store))
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: build push router: %v\n", err)
+		return errSetupFailed
+	}
+	d.pushRouter = pushRouter
+
 	// Hand the same providers and the same host-CA set to `core.ssh.run`
 	// (NIM-849), which was registered before this step and reads them through an
 	// accessor. push.ProviderEntry is unwrapped here so the module's surface stays
@@ -2322,10 +2338,8 @@ func (d *daemon) finalizePushOrchestrator(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	routerCfgSrc := newPushRouterConfigSource(d.store)
-	router, err := push.NewPGRouter(push.NewPGRouterReader(d.pool), routerCfgSrc)
-	if err != nil {
-		fmt.Fprintf(os.Stderr, "keeper run: build push router: %v\n", err)
+	if d.pushRouter == nil {
+		fmt.Fprintln(os.Stderr, "keeper run: push orchestrator wire-up: pushRouter is nil (programmer error in step order)")
 		return errSetupFailed
 	}
 
@@ -2337,7 +2351,7 @@ func (d *daemon) finalizePushOrchestrator(_ context.Context) error {
 		Template:        d.serviceHolder,
 		Dispatcher:      d.pushDispatcher,
 		Cleaner:         d.pushCleaner,
-		Router:          router,
+		Router:          d.pushRouter,
 		ProviderMetrics: d.pushMetrics,
 		Audit:           d.auditWriter,
 		Logger:          d.logger,
@@ -3166,12 +3180,37 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	}
 	d.topologyResolver = topology.NewResolver(d.pool, topologyLease, logger)
 
+	// The dispatcher's push branch (NIM-880). Assigned through typed locals and
+	// nil-checked pointers on purpose: a nil *push.SshDispatcher stored into an
+	// interface field is NOT a nil interface, and the branch's own
+	// "is push configured" check would then pass and call a method on nil. On a
+	// pull-only installation setupPushDispatchers leaves all three nil and a run
+	// targeting a `transport: ssh` host is refused naming the missing
+	// configuration — the same answer /v1/push/* gives.
+	var (
+		pushApply  scenario.PushApplyDispatcher
+		pushRouter scenario.PushProviderRouter
+		pushRoutes scenario.PushRouteObserver
+	)
+	if d.pushSshDispatcher != nil {
+		pushApply = d.pushSshDispatcher
+	}
+	if d.pushRouter != nil {
+		pushRouter = d.pushRouter
+	}
+	if d.pushMetrics != nil {
+		pushRoutes = d.pushMetrics
+	}
+
 	scenarioRunner := scenario.NewRunner(scenario.Deps{
 		Loader:        d.serviceLoader,
 		Topology:      d.topologyResolver,
 		ServiceVars:   d.serviceVarsResolver,
 		Render:        d.renderPipeline,
 		Outbound:      outbound,
+		PushApply:     pushApply,
+		PushRouter:    pushRouter,
+		PushRoutes:    pushRoutes,
 		Destiny:       d.destinySource,
 		KeeperModules: d.coreModules,
 		// Keeper-side PLUGIN modules (NIM-758): the fallback for an address the

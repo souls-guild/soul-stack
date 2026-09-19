@@ -31,6 +31,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -355,28 +356,26 @@ func TestIntegration_PushRun_LiveSSHD_TaskTransportBeatsTheRegistry(t *testing.T
 	}
 
 	// ★ The other direction, on the same host: a key that is WRITTEN but does
-	// not decode must FAIL the run, not quietly fall back to the registry. The
-	// registry here is the seeded-wrong one, so a fallback would dial an account
-	// sshd refuses — but the failure that matters is the refusal itself, since a
-	// registry that happened to be right would make the fallback invisible.
+	// not decode must be REFUSED, never quietly fall back to the registry the key
+	// exists to beat. Since NIM-880 the refusal happens at Apply, synchronously,
+	// so the caller gets it instead of a run row it has to poll — and no run is
+	// started at all, which is why there is no terminal to inspect here. The
+	// run-level gate behind it still stands and is covered where it lives
+	// (render.stampTransport, pushorch.transportOverrideOf), for any path that
+	// does not come through this door.
 	badID, err := runner.Apply(ctx, ApplyRequest{
 		InventorySIDs: []string{sid},
 		DestinyRef:    "push-proof@v1",
 		StartedByAID:  "archon-live",
 		Transport:     map[string]any{"ssh": nil, "agent": nil},
 	})
-	if err != nil {
-		t.Fatalf("Apply (malformed transport): %v", err)
-	}
-	badRow := awaitTerminal(ctx, t, runner, badID)
-	if badRow.Status == StatusSuccess {
-		t.Errorf("a run with an undecodable transport: reported success — it fell back to the registry the key exists to beat: %s", mustJSON(t, badRow.Summary))
-	}
-	// ★ The STATUS alone proves nothing: any loader or render failure is also
-	// non-success, so a broken fixture would keep this phase green while it
-	// claims the key was refused. The error text has to name the key.
-	if badErr, _ := badRow.Summary["error"].(string); !strings.Contains(badErr, "transport:") {
-		t.Errorf("run failed with %q, want a refusal naming transport: — the failure must be the key's, not something else's", badErr)
+	if err == nil {
+		t.Errorf("Apply accepted an undecodable transport and started run %s", badID)
+	} else if !errors.Is(err, ErrInvalidTransport) {
+		// The ERROR alone proves nothing: a broken fixture would also fail here
+		// while this phase claims the key was refused. It has to be the key's
+		// sentinel.
+		t.Errorf("Apply refused with %v, want %v — the refusal must be the key's, not something else's", err, ErrInvalidTransport)
 	}
 
 	// The visibility half: the summary has to name the source that answered,

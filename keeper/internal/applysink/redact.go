@@ -1,4 +1,4 @@
-package grpc
+package applysink
 
 import (
 	"google.golang.org/protobuf/types/known/structpb"
@@ -8,9 +8,9 @@ import (
 
 // redactSecretOutput returns rd with every top-level field named in fields
 // replaced by [audit.MaskedValue] ([ADR-0083] §8). rd is NOT mutated: the same
-// *structpb.Struct is the run's live register payload, which [accumulateRegister]
-// stores unredacted so the next task can read what this one produced. Redaction
-// applies to the OBSERVABLE copy only.
+// *structpb.Struct is the run's live register payload, which
+// [Sink.accumulateRegister] stores unredacted so the next task can read what
+// this one produced. Redaction applies to the OBSERVABLE copy only.
 //
 // So a module-declared output secret DOES reach apply_task_register in the clear,
 // where the removed `no_log:` skipped that write entirely. That is deliberate and

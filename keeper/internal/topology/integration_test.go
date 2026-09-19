@@ -767,13 +767,19 @@ func TestIntegration_LoadByInventory_SSHHostSurvivesALiveLeaseCheck(t *testing.T
 	}
 }
 
-// TestIntegration_LoadIncarnationHosts_SSHMemberStaysOutOfTheScenarioRoster —
-// the BOUNDARY of the carve-out, and the direction symmetry would erase.
-// Binding a push host to an incarnation is not prevented anywhere, and a
-// scenario run reaches its hosts over the gRPC stream: admitting one here would
-// turn "the run does not see this host" into "the run fails soul_not_connected".
-// NIM-870 widens this together with a push dispatch branch, not before.
-func TestIntegration_LoadIncarnationHosts_SSHMemberStaysOutOfTheScenarioRoster(t *testing.T) {
+// TestIntegration_LoadIncarnationHosts_SSHMemberIsInTheScenarioRoster — the
+// direction this carve-out was waiting for. Until NIM-880 an ssh member of an
+// incarnation stayed OUT, deliberately: a scenario reached its hosts over the
+// gRPC stream alone, so admitting one would have turned "the run does not see
+// this host" into "the run fails soul_not_connected". NIM-880 gave the
+// dispatcher a push branch, which was the stated condition; a push member is now
+// targetable, and the agent beside it is unaffected.
+//
+// The agent half of the roster is asserted in the SAME run, because the whole
+// change is a split into two queries: a regression that widened the agent
+// predicate instead of adding the push one would pass a test that only looked at
+// the ssh host.
+func TestIntegration_LoadIncarnationHosts_SSHMemberIsInTheScenarioRoster(t *testing.T) {
 	resetAll(t)
 	ctx := context.Background()
 
@@ -786,7 +792,31 @@ func TestIntegration_LoadIncarnationHosts_SSHMemberStaysOutOfTheScenarioRoster(t
 	if err != nil {
 		t.Fatalf("LoadIncarnationHosts: %v", err)
 	}
-	if !equalSIDs(sids(hosts), []string{"agent.example.com"}) {
-		t.Fatalf("got %v, want only the agent member", sids(hosts))
+	if !equalSIDs(sids(hosts), []string{"agent.example.com", "push.example.com"}) {
+		t.Fatalf("got %v, want both members - a pending ssh member is targetable since NIM-880", sids(hosts))
+	}
+}
+
+// TestIntegration_LoadIncarnationHosts_PendingAgentMemberStaysOut — the boundary
+// the split must not erase. `pending` means opposite things on the two
+// transports, which is why the roster is two queries and not one widened
+// predicate: for an AGENT it means a bootstrap token is issued and no identity
+// exists yet, and targeting such a host is meaningless whatever the dispatcher
+// can do.
+func TestIntegration_LoadIncarnationHosts_PendingAgentMemberStaysOut(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+
+	seedIncarnation(t, "redis-prod")
+	seedSoul(t, "onboarding.example.com", nil, soul.StatusPending)
+	seedSSHSoul(t, "push.example.com", soul.StatusPending)
+	seedMembership(t, "redis-prod", "onboarding.example.com", "push.example.com")
+
+	hosts, err := NewResolver(integrationPool, nil, nil).LoadIncarnationHosts(ctx, "redis-prod")
+	if err != nil {
+		t.Fatalf("LoadIncarnationHosts: %v", err)
+	}
+	if !equalSIDs(sids(hosts), []string{"push.example.com"}) {
+		t.Fatalf("got %v, want only the ssh member - a pending agent has no identity yet", sids(hosts))
 	}
 }

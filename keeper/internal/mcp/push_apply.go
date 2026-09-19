@@ -26,6 +26,12 @@ type pushApplyArgs struct {
 	Input                map[string]any `json:"input,omitempty"`
 	SSHProvider          string         `json:"ssh_provider,omitempty"`
 	CleanupStaleVersions bool           `json:"cleanup_stale_versions,omitempty"`
+	// Transport is the scenario DSL's `transport:` key (ADR-0088) in its raw
+	// form — the scalar `"ssh"` or the one-key object
+	// `{"ssh": {ssh_provider, user, port}}`. Decoded and refused by the
+	// orchestrator, which owns the closed transport enumeration; `any` here for
+	// the same reason `config.Task.Transport` is.
+	Transport any `json:"transport,omitempty"`
 }
 
 // callPushApply — mutating tool keeper.push.apply. Transport over
@@ -76,9 +82,10 @@ func (h *Handler) callPushApply(ctx context.Context, claims *jwt.Claims, req jso
 		Input:         a.Input,
 		CleanupStale:  a.CleanupStaleVersions,
 		StartedByAID:  claims.Subject,
+		Transport:     a.Transport,
 	})
 	if err != nil {
-		if errors.Is(err, pushorch.ErrInvalidDestinyRef) {
+		if errors.Is(err, pushorch.ErrInvalidDestinyRef) || errors.Is(err, pushorch.ErrInvalidTransport) {
 			return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
 		}
 		h.deps.Logger.Error("mcp: push.apply orchestrator accept failed",

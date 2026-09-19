@@ -134,5 +134,9 @@ func toPushApplyInput(b PushApplyRequest) handlers.PushApplyInput {
 		v := true
 		out.CleanupStaleVersions = &v
 	}
+	// Passed through in its raw JSON shape (NIM-880): the decode and the refusals
+	// belong to shared/config, which owns the closed transport enumeration, and
+	// ApplyTyped calls them. Re-shaping it here would make a second decoder.
+	out.Transport = b.Transport
 	return out
 }

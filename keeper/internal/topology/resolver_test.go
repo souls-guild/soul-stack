@@ -63,10 +63,39 @@ func (p *fakePool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 		if p.rosterErr != nil {
 			return nil, p.rosterErr
 		}
-		return &rosterRows{rows: p.rosterRows}, nil
+		return &rosterRows{rows: filterByTransportClause(sql, p.rosterRows)}, nil
 	default:
 		panic("fakePool.Query: unexpected SQL: " + sql)
 	}
+}
+
+// filterByTransportClause applies the roster query's own transport predicate to
+// the seeded rows. The scenario roster is two disjoint queries since NIM-880
+// (rosterSQL / rosterPushSQL), and a fake that ignored the clause would answer
+// both with the whole set — turning every single-host case into a duplicate and,
+// worse, making a predicate regression invisible here. inventorySQL carries no
+// such clause and is unaffected.
+func filterByTransportClause(sql string, rows []rosterRow) []rosterRow {
+	var wantSSH bool
+	switch {
+	case strings.Contains(sql, "s.transport = 'ssh'"):
+		wantSSH = true
+	case strings.Contains(sql, "s.transport <> 'ssh'"):
+		wantSSH = false
+	default:
+		return rows
+	}
+	out := make([]rosterRow, 0, len(rows))
+	for _, r := range rows {
+		transport := r.transport
+		if transport == "" {
+			transport = "agent"
+		}
+		if (transport == "ssh") == wantSSH {
+			out = append(out, r)
+		}
+	}
+	return out
 }
 
 // rosterRows iterates rosterRow by rosterRow, scan in order of rosterSQL.

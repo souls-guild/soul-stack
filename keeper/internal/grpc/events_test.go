@@ -396,27 +396,6 @@ func TestHandleTaskEvent_NoSecretOutputKeepsAudit(t *testing.T) {
 	}
 }
 
-func TestComposeTaskErrorSummary(t *testing.T) {
-	tests := []struct {
-		name string
-		idx  int
-		te   *keeperv1.TaskError
-		want string
-	}{
-		{"full", 0, &keeperv1.TaskError{Module: "core.pkg.installed", Message: "boom"}, "task 0 core.pkg.installed: boom"},
-		{"no module", 3, &keeperv1.TaskError{Message: "boom"}, "task 3: boom"},
-		{"no message", 1, &keeperv1.TaskError{Module: "core.file.present"}, "task 1 core.file.present"},
-		{"nil error", 2, nil, "task 2"},
-	}
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			if got := composeTaskErrorSummary(tt.idx, tt.te); got != tt.want {
-				t.Errorf("composeTaskErrorSummary = %q, want %q", got, tt.want)
-			}
-		})
-	}
-}
-
 func TestHandleTaskEvent_AccumulatesRegister(t *testing.T) {
 	aw := &recordingAudit{}
 	ardb := &fakeApplyRunDB{}
@@ -578,7 +557,7 @@ func TestPublishTaskExecuted_FailedOmitsRawStderr(t *testing.T) {
 	const secret = "S3cr3t-PlainText-Password"
 
 	ev, ok := collectSSE(t, bus, "01HAPPLY", func() {
-		h.publishTaskExecuted("host.example.com", &keeperv1.TaskEvent{
+		h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 			ApplyId: "01HAPPLY", TaskIdx: 0,
 			Status: keeperv1.TaskStatus_TASK_STATUS_FAILED,
 			Error: &keeperv1.TaskError{
@@ -628,7 +607,7 @@ func TestPublishTaskExecuted_OKHasNoError(t *testing.T) {
 	h := newTestHandlerWithBus(t, &recordingAudit{}, bus)
 
 	ev, ok := collectSSE(t, bus, "01HAPPLY", func() {
-		h.publishTaskExecuted("host.example.com", &keeperv1.TaskEvent{
+		h.handleTaskEvent(context.Background(), "host.example.com", "session-1", &keeperv1.TaskEvent{
 			ApplyId: "01HAPPLY", TaskIdx: 2,
 			Status: keeperv1.TaskStatus_TASK_STATUS_CHANGED,
 		})
