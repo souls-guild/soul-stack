@@ -107,8 +107,15 @@ done
 # quotes the broken template in order to describe the bug, and this script has to
 # name what it forbids. The consequence is that assertion 2 cannot police these
 # two — an allowlist entry is a hole, so keep it to these and state why.
-ALLOWED_RE='^\./(CHANGELOG\.md|scripts/check-approle-template\.sh):'
-survivors=$(grep -rnI --exclude-dir=.git 'token_ttl=' . | grep -Ev "$ALLOWED_RE" || true)
+#
+# The sweep is over TRACKED files, because the subject is what the repository
+# ships. `grep -r .` also walked ignored paths, so an untracked local scratch
+# note under .pm/ reddened this tier in one checkout while CI and every worktree
+# stayed green — a verdict about the checkout, not about the tree. `-H` is
+# required: xargs may hand grep a final batch of one file, and grep omits the
+# filename then, which would break both the allowlist and the report.
+ALLOWED_RE='^(CHANGELOG\.md|scripts/check-approle-template\.sh):'
+survivors=$(git ls-files -z | xargs -0 grep -nIH 'token_ttl=' | grep -Ev "$ALLOWED_RE" || true)
 if [ -n "$survivors" ]; then
 	echo "check-approle-template: the old role template survives:"
 	echo "$survivors"
