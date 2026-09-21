@@ -393,13 +393,17 @@ tasks:
       refresh_soulprint: false
       sid: "host-a.example.com"
 `
-	// Another keeper module with a same-named param — NOT an emitter (the carrier
-	// module is only core.soul.registered).
+	// Another module carrying a same-named param — NOT an emitter (the carrier
+	// module is only core.soul.registered). The address is a plugin one on
+	// purpose: every DECLARED module refuses a param its schema does not list
+	// (`unknown_param`), so only an address with no schema readable offline can
+	// hold the flag while not being the carrier.
 	const otherKeeperModule = `
 name: create
 tasks:
   - name: Cloud provision
-    module: core.cloud.created
+    module: fakecloud.vm.created
+    on: keeper
     params:
       refresh_soulprint: true
       profile: prod

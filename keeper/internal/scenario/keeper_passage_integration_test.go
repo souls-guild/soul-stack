@@ -92,7 +92,7 @@ func (m *capturingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Se
 
 // paramsForState returns the Params the module received at a specific state (for
 // chains where one module executes across multiple Passages under different
-// states — e.g. core.cloud.created at P0 and core.cloud.updated at P1).
+// states — e.g. core.probe.created at P0 and core.probe.delivered at P1).
 func (m *capturingKeeperModule) paramsForState(state string) map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -113,19 +113,29 @@ func (m *capturingKeeperModule) states() []string {
 
 // keeperChainServiceRepo — 2-Passage all-keeper chain (ADR-056, Slice 2):
 //
-//	#0 provision (core.cloud.created, register: provision) → Passage 0
+//	#0 provision (fakecloud.vm.created, register: provision) → Passage 0
 //	#1 deliver   (core.probe.delivered, params reads register.provision.ip) → Passage 1
 //
 // Stratify splits by Passage (deliver reads register provision in params).
 // all-keeper → no_hosts bypass. This is an end-to-end proof of keeper→keeper
 // register-chaining: deliver sees the ip emitted by provision at Passage 0.
+//
+// The provision step is a PLUGIN address carrying `on: keeper`, which is how a
+// cloud provision is spelled since NIM-761 removed `core.cloud.*` along with the
+// CloudDriver contract: the side of a plugin is declared in its stamped schema
+// document, which a scenario cannot read, so the literal is the only spelling
+// those scenarios have (see config.keeperSide). It was written as
+// `core.cloud.created` with no `on:` until NIM-863 — an address the catalog no
+// longer knows, which [render.IsKeeperTask] therefore routes at hosts, so the
+// chain aborted `no_hosts` on the empty roster before its first task.
 func keeperChainServiceRepo(t *testing.T) string {
 	t.Helper()
 	return writeServiceRepo(t, `name: create
-description: 2-passage all-keeper chain (cloud.created -> bootstrap.delivered)
+description: 2-passage all-keeper chain (vm.created -> bootstrap.delivered)
 tasks:
   - name: provision vm
-    module: core.cloud.created
+    module: fakecloud.vm.created
+    on: keeper
     register: provision
     params:
       provider: fake
@@ -284,8 +294,8 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	bootstrap := &capturingKeeperModule{output: map[string]any{"delivered": true}}
 	keepers := fakeKeeperRegistry{
-		"core.cloud": cloud,
-		"core.probe": bootstrap,
+		"fakecloud.vm": cloud,
+		"core.probe":   bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -597,7 +607,7 @@ func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 }
 
 // TestIntegration_KeeperChain_2Passage_RegisterChained — ★ END-TO-END PROOF OF THE
-// EPIC (Slice 2). 2-Passage all-keeper chain: cloud.created (Passage 0) emits
+// EPIC (Slice 2). 2-Passage all-keeper chain: vm.created (Passage 0) emits
 // register provision{ip}, bootstrap.delivered (Passage 1) reads
 // register.provision.ip in params. ASSERT: BOTH keeper-Passages executed, deliver
 // got Params.target_ip == ip from provision (register forwarded end-to-end),
@@ -612,8 +622,8 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	bootstrap := &capturingKeeperModule{output: map[string]any{"delivered": true}}
 	keepers := fakeKeeperRegistry{
-		"core.cloud": cloud,
-		"core.probe": bootstrap,
+		"fakecloud.vm": cloud,
+		"core.probe":   bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -677,7 +687,7 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 }
 
 // TestIntegration_KeeperChain_FailPassage1_ErrorLocked — ★ keeper-FAIL on Passage>0
-// (Slice 2). cloud.created (Passage 0) succeeds → Passage 0 host-dispatch (none) →
+// (Slice 2). vm.created (Passage 0) succeeds → Passage 0 host-dispatch (none) →
 // barrier 0 → bootstrap.delivered (Passage 1) FAILED. ASSERT: incarnation
 // ERROR_LOCKED, reason keeper_dispatch_failed, state NOT committed; apply_runs:
 // keeper passage 0 = success (ran before the failure), keeper passage 1 = failed;
@@ -693,8 +703,8 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	// bootstrap.delivered fails (failOnState="delivered").
 	bootstrap := &capturingKeeperModule{failOnState: "delivered"}
 	keepers := fakeKeeperRegistry{
-		"core.cloud": cloud,
-		"core.probe": bootstrap,
+		"fakecloud.vm": cloud,
+		"core.probe":   bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -853,7 +863,8 @@ func TestStratify_KeeperChain_TwoPassages(t *testing.T) {
 description: keeper chain stratify
 tasks:
   - name: provision
-    module: core.cloud.created
+    module: fakecloud.vm.created
+    on: keeper
     register: provision
     params:
       provider: fake

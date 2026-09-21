@@ -634,10 +634,16 @@ tasks: [ ... ]
 
 **A keeper-side step is not written with `on:` at all.** The side follows from the **module
 address**: the core module sets are disjoint — `core.bootstrap` / `core.cert` / `core.choir` /
-`core.cloud` / `core.soul` / `core.state` / `core.vault` are executed by the Keeper, the other
-twenty-one by a Soul on each host — so the address decides on its own, and an author writing
+`core.soul` / `core.ssh` / `core.state` / `core.vault` are executed by the Keeper, every other core
+address by a Soul on each host — so the address decides on its own, and an author writing
 `on: keeper` was telling the engine something it already knew. On a core keeper-side address the key
 is now an **error** (`on_keeper_redundant`).
+
+The keeper-side list above is the catalog in `shared/coremanifest/side.go`
+(`coremanifest.KeeperSideAddrs`), which is also what the diagnostic's own hint prints. An address
+that leaves it does not become "a module that needs `on: keeper`" — it becomes **Soul-side**, which
+is what an unknown address has always been, and a plan that relied on it being keeper-side then
+aborts `no_hosts` on the empty roster it was written to run on (NIM-863).
 
 That leaves `on:` with one meaning, the one this section is about: **which covens**. It used to carry
 two, a list of labels and a magic scalar meaning "no hosts at all", in the same key. A coven list on a
@@ -661,9 +667,15 @@ whole section exists to prevent.
 - name: Apply base config everywhere
   apply: { destiny: redis-base, input: { ... } }
 
-# Keeper-side: no `on:` — `core.cloud` is a keeper-side module, so the address routes it
+# Keeper-side core: no `on:` — `core.soul` is a keeper-side module, so the address routes it
+- name: Register the new hosts
+  module: core.soul.registered
+  params: { ... }
+
+# Keeper-side PLUGIN: `on: keeper` is required — nothing in this repo declares a plugin's side
 - name: Provision VMs
-  module: core.cloud.created
+  module: wbcloud.vm.created
+  on: keeper
   params: { ... }
 
 # Intersection of stable covens, ⊆ members

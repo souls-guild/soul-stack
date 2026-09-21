@@ -980,11 +980,20 @@ func TestLoadScenarioManifest_ChangedWhenBoolLiteral(t *testing.T) {
 // validates with no `on:` at all. Since NIM-749 that is the whole spelling: the
 // address is what routes it, and the key that used to sit here is now
 // `on_keeper_redundant` (see TestLoadScenarioManifest_SideFollowsTheModuleAddress).
+//
+// The premise is asserted rather than assumed (NIM-863): this case was written
+// against `core.cloud.created`, NIM-761 removed that module with the CloudDriver
+// contract, and the address quietly became Soul-side — leaving a green test that
+// no longer touched the branch it names.
 func TestLoadScenarioManifest_KeeperSideCoreAddressOK(t *testing.T) {
+	const addr = "core.state.set"
+	if !KeeperSideModule(addr) {
+		t.Fatalf("%s is no longer keeper-side — this case needs an address the catalog still routes to the Keeper, see coremanifest.KeeperSideAddrs", addr)
+	}
 	src := `name: x
 tasks:
-  - module: core.cloud.created
-    params: { provider: aws }
+  - module: ` + addr + `
+    params: { field: namespace, value: prod }
 `
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if diag.HasErrors(diags) {

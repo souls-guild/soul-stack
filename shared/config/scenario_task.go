@@ -1628,7 +1628,7 @@ func validateOnKeeperOnSoulModule(onKV *ast.MappingValueNode, addr, pathPrefix s
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:     "on_keeper_on_soul_module",
 		Message:  fmt.Sprintf("on: keeper on %s — that is a Soul-side module, and routing it to the keeper reaches a registry that has no such module, so the run fails at this step", addr),
-		Hint:     "drop the `on:` key: the side follows from the module address, and a keeper-side core address is one of core.bootstrap/cert/choir/cloud/soul/state/vault",
+		Hint:     "drop the `on:` key: the side follows from the module address, and a keeper-side core address is one of " + strings.Join(coremanifest.KeeperSideAddrs(), "/"),
 		YAMLPath: pathPrefix + ".on",
 	})}
 }

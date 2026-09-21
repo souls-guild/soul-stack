@@ -262,9 +262,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// requires connected hosts, empty roster → error_locked. TWO bypass CLASSES
 	// for provision-from-zero (ADR-0061 amendments):
 	//
-	//   (a) all-keeper (allKeeperTasks): ALL tasks are `on: keeper` — a
-	//       keeper-only scenario (core.cloud.created creates a VM FROM SCRATCH),
-	//       no hosts exist at start by definition.
+	//   (a) all-keeper (allKeeperTasks): ALL tasks are keeper-side — a
+	//       keeper-only scenario (a machine-provider plugin creates a VM FROM
+	//       SCRATCH), no hosts exist at start by definition.
 	//   (b) mixed with a refresh emitter (HasRefreshEmitter): the plan carries a
 	//       refresh emitter (core.soul.registered with refresh_soulprint: true)
 	//       → roster is re-resolved mid-run (ADR-0061 §S2/§S3). An empty
@@ -701,7 +701,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// Passages' keeper bucket from RegisterByHost into KeeperRegister so
 				// the active Passage's keeper task sees `register.<prev>.*` from
 				// earlier Passages' keeper tasks (e.g. core.bootstrap.delivered reads
-				// register from core.cloud.created). This channel is deliberately
+				// the register of the provision step). This channel is deliberately
 				// SEPARATE from the flat renderIn.Register (host-fallback guard,
 				// hostRegister stays on Register): a mixed-Passage host task with an
 				// empty per-host bucket must NOT read keeper-register. Consumed by
@@ -960,10 +960,17 @@ func planBuildsRoster(tasks []config.Task) bool {
 }
 
 // allKeeperTasks reports whether the scenario consists ENTIRELY of keeper-side
-// tasks (each `on: keeper`, render.IsKeeperTask). This is the FIRST bypass
-// class for the no_hosts gate in provision-from-zero (ADR-0061 amendment): an
-// all-keeper create scenario (core.cloud.created creates a VM FROM SCRATCH)
+// tasks (render.IsKeeperTask — the module's own side since NIM-749, or the
+// `on: keeper` literal on a plugin address). This is the FIRST bypass class for
+// the no_hosts gate in provision-from-zero (ADR-0061 amendment): an all-keeper
+// create scenario (a machine-provider plugin creates a VM FROM SCRATCH)
 // legitimately starts on an empty roster.
+//
+// The predicate reads the side, so a plan loses the bypass the moment one of
+// its addresses stops being keeper-side — which is how NIM-863 surfaced: a
+// fixture still named the `core.cloud.*` module NIM-761 had removed, the
+// catalog answered Soul for it, and the chain aborted `no_hosts` on the empty
+// roster it was written to run on.
 //
 // ALL, not ANY: a mixed keeper+host run does NOT pass this predicate. But the
 // SECOND bypass class covers mixed provision→role — config.HasRefreshEmitter
