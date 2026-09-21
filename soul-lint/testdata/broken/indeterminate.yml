@@ -1,0 +1,4 @@
+listen:
+  grpc:
+    addr: "0.0.0.0:8443"
+# нет ни `kid:` ни `sid:` — auto-detect должен дать config_kind_indeterminate

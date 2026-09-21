@@ -1,0 +1,278 @@
+package api
+
+// Guard tests for the generic Optional[T] (ADR-054 §Pattern, third tier). Three levels:
+//
+//   - UnmarshalJSON — the three presence branches (omitted / explicit null / value);
+//   - Schema(r) — the huma SchemaProvider gives a nullable schema of the wrapped T WITHOUT
+//     an octet-stream artifact (the key invariant of this tier against the RawBody []byte bridge);
+//   - round-trip through the REAL huma input binding (chi+huma) — presence makes it through
+//     from the request body into Optional[T] the same way it does in prod (huma calls UnmarshalJSON
+//     only when the key is physically present in the body).
+
+import (
+	"context"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
+	"reflect"
+	"strings"
+	"testing"
+
+	"github.com/danielgtaylor/huma/v2"
+	"github.com/go-chi/chi/v5"
+)
+
+// TestOptional_UnmarshalJSON_ThreeBranches — json decoding of an Optional[string] field
+// inside an object: omitted (method not called → Set=false), explicit null
+// (Set=true, Null=true, zero-value), value (Set=true, Null=false, Value=x).
+func TestOptional_UnmarshalJSON_ThreeBranches(t *testing.T) {
+	type wrap struct {
+		Field Optional[string] `json:"field"`
+	}
+
+	t.Run("omitted", func(t *testing.T) {
+		var w wrap
+		if err := json.Unmarshal([]byte(`{}`), &w); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if w.Field.Set {
+			t.Errorf("omitted: Set=%v, want false (UnmarshalJSON must not be called)", w.Field.Set)
+		}
+		if w.Field.Null {
+			t.Errorf("omitted: Null=%v, want false", w.Field.Null)
+		}
+		if w.Field.Value != "" {
+			t.Errorf("omitted: Value=%q, want zero-value", w.Field.Value)
+		}
+	})
+
+	t.Run("explicit null", func(t *testing.T) {
+		var w wrap
+		if err := json.Unmarshal([]byte(`{"field":null}`), &w); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !w.Field.Set {
+			t.Errorf("null: Set=%v, want true (key present)", w.Field.Set)
+		}
+		if !w.Field.Null {
+			t.Errorf("null: Null=%v, want true", w.Field.Null)
+		}
+		if w.Field.Value != "" {
+			t.Errorf("null: Value=%q, want zero-value", w.Field.Value)
+		}
+	})
+
+	t.Run("value", func(t *testing.T) {
+		var w wrap
+		if err := json.Unmarshal([]byte(`{"field":"coven=prod"}`), &w); err != nil {
+			t.Fatalf("unmarshal: %v", err)
+		}
+		if !w.Field.Set {
+			t.Errorf("value: Set=%v, want true", w.Field.Set)
+		}
+		if w.Field.Null {
+			t.Errorf("value: Null=%v, want false", w.Field.Null)
+		}
+		if w.Field.Value != "coven=prod" {
+			t.Errorf("value: Value=%q, want coven=prod", w.Field.Value)
+		}
+	})
+}
+
+// TestOptional_optionalToPtr — the conversion to *T for the domain presence bridge: a set
+// non-null value → a pointer to the value; omitted/null → nil (presence is carried separately by Set).
+func TestOptional_optionalToPtr(t *testing.T) {
+	if p := optionalToPtr(Optional[string]{}); p != nil {
+		t.Errorf("omitted: optionalToPtr=%v, want nil", *p)
+	}
+	if p := optionalToPtr(Optional[string]{Set: true, Null: true}); p != nil {
+		t.Errorf("null: optionalToPtr=%v, want nil", *p)
+	}
+	if p := optionalToPtr(Optional[string]{Set: true, Value: "x"}); p == nil || *p != "x" {
+		t.Errorf("value: optionalToPtr=%v, want ptr to x", p)
+	}
+}
+
+// TestOptional_Schema_NullableNoOctetStream — huma.SchemaProvider on Optional[string]
+// gives the schema of the wrapped string with Nullable:true (3.1 `type: [string, null]`), WITHOUT
+// an octet-stream. A direct assertion on the returned *huma.Schema.
+func TestOptional_Schema_NullableNoOctetStream(t *testing.T) {
+	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
+	s := Optional[string]{}.Schema(reg)
+
+	if s == nil {
+		t.Fatal("Schema(r) returned nil")
+	}
+	if s.Type != huma.TypeString {
+		t.Errorf("Schema.Type = %q, want %q (schema of wrapped T, not octet-stream/object)", s.Type, huma.TypeString)
+	}
+	if !s.Nullable {
+		t.Errorf("Schema.Nullable = %v, want true (presence-reset via null)", s.Nullable)
+	}
+	// octet-stream lives at the requestBody-MIME level (not on the schema) — its absence
+	// is guarded by the golden OpenAPI fragment (TestHumaRole_PatchPermissions_RequestBody_JSONOnly).
+	// Here we guard that the schema is a pure scalar without binary encoding (a RawBody []byte
+	// regression would give ContentEncoding:"base64"/Format:"binary", not a nullable string).
+	if s.ContentEncoding != "" {
+		t.Errorf("Schema.ContentEncoding = %q, want empty (recurrence of binary/RawBody bridge)", s.ContentEncoding)
+	}
+	if s.Format == "binary" {
+		t.Errorf("Schema.Format = %q, want non-binary (Optional[string] is a pure string)", s.Format)
+	}
+}
+
+// TestOptional_Schema_Int_Nullable — a non-string scalar: Optional[int] gives the schema
+// of integer with Nullable:true (3.1 `type: [integer, null]`), without octet-stream/binary.
+func TestOptional_Schema_Int_Nullable(t *testing.T) {
+	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
+	s := Optional[int]{}.Schema(reg)
+
+	if s == nil {
+		t.Fatal("Schema(r) returned nil")
+	}
+	if s.Type != huma.TypeInteger {
+		t.Errorf("Schema.Type = %q, want %q", s.Type, huma.TypeInteger)
+	}
+	if !s.Nullable {
+		t.Errorf("Schema.Nullable = %v, want true", s.Nullable)
+	}
+}
+
+// optStructField — a small non-scalar type for the guard test below. huma would return
+// a `$ref` for it with allowRef=true, so it's exactly the path that used to crash registration.
+type optStructField struct {
+	A string `json:"a"`
+	B int    `json:"b"`
+}
+
+// TestOptional_Schema_StructT_NoRefNoPanic — a BLOCKER guard (ADR-054 §third tier):
+// Optional[<struct>] as a request-body field. Before the fix, Schema() gave huma a `$ref` to
+// the component (allowRef=true) and set Nullable=true on top of the ref node → huma PANICKED
+// at operation REGISTRATION ("nullable is not supported for ... $ref"). The test actually
+// registers an operation with such a field (the panic was at registration, not at Schema()) and
+// checks that the schema is a pure inline nullable object (`type: [object, null]` with
+// properties), not a ref. allowRef=false closed the blocker — a regression will redden this test.
+func TestOptional_Schema_StructT_NoRefNoPanic(t *testing.T) {
+	type structBody struct {
+		Field Optional[optStructField] `json:"field" required:"false"`
+	}
+	type structInput struct {
+		Body structBody
+	}
+
+	// A direct assertion on the field's schema: inline object, nullable, WITHOUT $ref.
+	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
+	fs := Optional[optStructField]{}.Schema(reg)
+	if fs == nil {
+		t.Fatal("Schema(r) returned nil")
+	}
+	if fs.Ref != "" {
+		t.Fatalf("Schema.Ref = %q, want empty (struct-T must inline, not $ref - otherwise nullable-on-ref panic)", fs.Ref)
+	}
+	if fs.Type != huma.TypeObject {
+		t.Errorf("Schema.Type = %q, want %q (inline-object)", fs.Type, huma.TypeObject)
+	}
+	if !fs.Nullable {
+		t.Errorf("Schema.Nullable = %v, want true (nullable on a real object schema)", fs.Nullable)
+	}
+	if _, ok := fs.Properties["a"]; !ok {
+		t.Errorf("Schema.Properties does not carry inline fields of struct-T: %v", fs.Properties)
+	}
+
+	// The main guard: REGISTERING the huma operation with this field does not panic. This is
+	// exactly where huma expands the body schema and (before the fix) crashed on nullable-ref.
+	defer func() {
+		if rec := recover(); rec != nil {
+			t.Fatalf("huma.Register with an Optional[struct] field panicked: %v (regression allowRef=false -> ref+nullable)", rec)
+		}
+	}()
+	r := chi.NewRouter()
+	api := newHumaCadenceAPI(r)
+	huma.Register(api, huma.Operation{
+		OperationID: "optStructRegister",
+		Method:      http.MethodPost,
+		Path:        "/opt-struct",
+	}, func(_ context.Context, _ *structInput) (*struct{ Status int }, error) {
+		return &struct{ Status int }{Status: http.StatusNoContent}, nil
+	})
+}
+
+// TestOptional_Schema_NotInRequired — an Optional[T] field with `required:"false"` does NOT
+// end up in the body schema's required (presence is carried by the type itself, not field mandatoriness).
+func TestOptional_Schema_NotInRequired(t *testing.T) {
+	type body struct {
+		Must string           `json:"must" required:"true"`
+		Opt  Optional[string] `json:"opt" required:"false"`
+	}
+	reg := huma.NewMapRegistry("#/components/schemas/", huma.DefaultSchemaNamer)
+	s := huma.SchemaFromType(reg, reflect.TypeFor[body]())
+
+	for _, r := range s.Required {
+		if r == "opt" {
+			t.Errorf("Optional-field `opt` ended up in required %v - should be optional", s.Required)
+		}
+	}
+	var hasMust bool
+	for _, r := range s.Required {
+		if r == "must" {
+			hasMust = true
+		}
+	}
+	if !hasMust {
+		t.Errorf("required = %v, expected presence of `must` (sanity)", s.Required)
+	}
+}
+
+// TestOptional_RoundTrip_HumaInput — presence makes it through from the HTTP request BODY into
+// Optional[string] via the real huma input binding (chi+huma): omitted →
+// Set=false; explicit null → Set=true,Null=true; value → Set=true,Value=x. This
+// proves that the huma decoder calls UnmarshalJSON exactly when the key is in the body.
+func TestOptional_RoundTrip_HumaInput(t *testing.T) {
+	type optBody struct {
+		Field Optional[string] `json:"field" required:"false"`
+	}
+	type optInput struct {
+		Body optBody
+	}
+
+	cases := []struct {
+		name      string
+		body      string
+		wantSet   bool
+		wantNull  bool
+		wantValue string
+	}{
+		{"omitted", `{}`, false, false, ""},
+		{"null", `{"field":null}`, true, true, ""},
+		{"value", `{"field":"coven=prod"}`, true, false, "coven=prod"},
+	}
+
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var captured Optional[string]
+			r := chi.NewRouter()
+			api := newHumaCadenceAPI(r)
+			huma.Register(api, huma.Operation{
+				OperationID: "optRoundTrip",
+				Method:      http.MethodPost,
+				Path:        "/opt",
+			}, func(_ context.Context, in *optInput) (*struct{ Status int }, error) {
+				captured = in.Body.Field
+				return &struct{ Status int }{Status: http.StatusNoContent}, nil
+			})
+
+			rec := httptest.NewRecorder()
+			req := httptest.NewRequest(http.MethodPost, "/opt", strings.NewReader(tc.body))
+			req.Header.Set("Content-Type", "application/json")
+			r.ServeHTTP(rec, req)
+
+			if rec.Code != http.StatusNoContent {
+				t.Fatalf("status = %d, want 204; body=%s", rec.Code, rec.Body.String())
+			}
+			if captured.Set != tc.wantSet || captured.Null != tc.wantNull || captured.Value != tc.wantValue {
+				t.Errorf("Optional after huma-input = {Set:%v Null:%v Value:%q}, want {Set:%v Null:%v Value:%q}",
+					captured.Set, captured.Null, captured.Value, tc.wantSet, tc.wantNull, tc.wantValue)
+			}
+		})
+	}
+}

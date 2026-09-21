@@ -1,0 +1,411 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"strings"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
+)
+
+// incarnationCreateArgs — arguments for keeper.incarnation.create
+// (schemaIncarnationCreateInput): name + service are required, covens / input
+// are optional. covens — declared env-Coven labels (passed into the
+// incarnation, affect RBAC-scope create); input — parameters for scenario `create`.
+type incarnationCreateArgs struct {
+	ID string `json:"id"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.incarnation.label-set. Unlike Name it is never composed by a
+	// `id_template`.
+	Label   *string        `json:"label,omitempty"`
+	Service string         `json:"service"`
+	Covens  []string       `json:"covens,omitempty"`
+	Input   map[string]any `json:"input,omitempty"`
+	// CreateScenario — chooses the starting scenario (multi-create mechanism,
+	// Variant A; parity with REST `create_scenario`). Empty-choice contract
+	// (Phase 2): service offers create scenarios + empty → create_scenario_required;
+	// service has none + empty → bare incarnation (ready without a run). A
+	// non-empty name must be in the create set, otherwise validation-failed.
+	CreateScenario string `json:"create_scenario,omitempty"`
+	// Traits — operator-set trait labels for the incarnation (ADR-060 amend R1,
+	// parity with REST CreateTyped field `traits`): key → scalar|list of scalars.
+	// Extracted into column incarnation.traits (source of truth) and projected
+	// into member souls' souls.traits by the sync hook after insert.
+	Traits map[string]any `json:"traits,omitempty"`
+}
+
+// assertPreflighter — a narrow local surface of scenario.Runner for the
+// pre-flight `assert:` gate (ADR-009/ADR-027 amendment 2026-06-23, form A),
+// duck-typing over h.deps.ScenarioRunner. Declared LOCALLY (not imported from
+// handlers): mcp doesn't depend on the REST-handler layer, and *scenario.Runner
+// satisfies it too. ScenarioStarter fakes without PreflightAssert fail the
+// type-assertion, so the gate is a no-op (same as REST).
+type assertPreflighter interface {
+	PreflightAssert(ctx context.Context, spec scenario.RunSpec) error
+}
+
+// incarnationCreateOutput — output of keeper.incarnation.create
+// (schemaApplyIDOutputWithIncarnation): apply_id + echo incarnation. ApplyID
+// is `*string` (omitempty): absent when lifecycle.auto_create=false (the
+// incarnation is created ready without a run), mirroring the nullable
+// apply_id in REST IncarnationCreateReply.
+type incarnationCreateOutput struct {
+	ApplyID     *string `json:"_apply_id,omitempty"`
+	Incarnation string  `json:"incarnation"`
+}
+
+// callIncarnationCreate — mutating async tool keeper.incarnation.create.
+// Parity with REST IncarnationHandler.Create in production mode (runner+
+// services required): resolve service git coordinates → insert row
+// (status=ready) → async-launch scenario `create` → 202 + apply_id.
+//
+// MCP has no Create stub mode (REST degrades to insert-only when
+// runner==nil, for M0.6c-1 compatibility; MCP tools are rolled out on top of
+// a full runner stack): nil ScenarioRunner / ServiceRegistry → internal-error
+// "scenario runner is not configured" (mirrors REST Run/Upgrade without deps).
+//
+// RBAC — body-scoped OR-Check (parity with REST IncarnationCreateScopeSelector
+// + RequirePermissionMulti): scope = the declared covens, plus the
+// `incarnation=<name>` dimension (ADR-008 amendment 2026-07-17/NIM-124: name is
+// NOT a coven). Without this, a coven-scoped operator could bypass REST
+// protection via MCP (least-privilege: scope `coven=dev` must NOT create an
+// incarnation with covens=[prod]). bare/`*` matches any
+// (as before). audit: EventIncarnationCreated {name, service, covens,
+// apply_id}, source=mcp.
+func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.incarnation.create"
+
+	var a incarnationCreateArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest,
+				"invalid arguments: "+err.Error())
+		}
+	}
+	// `name` is optional here (ADR-0079, parity with REST CreateTyped): a create
+	// scenario carrying a `id_template` composes it from input components, and
+	// only the resolved plan knows whether there is one. A non-empty name is
+	// format-checked up front; "name is required" is deferred until after the plan.
+	if a.ID != "" && !incarnation.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'id' must match "+incarnation.IDPattern)
+	}
+	if a.Service == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'service' is required")
+	}
+	// Sanity-check the service name against the same kebab-case grammar (parity
+	// with REST): guards against garbage in the DB (a `/` would break git-resolve paths).
+	if !incarnation.ValidID(a.Service) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'service' must match "+incarnation.IDPattern)
+	}
+	// covens — declared env tags (ADR-008 amendment a): each must match
+	// CovenPattern (mirrors soul.Create / REST create). An invalid label →
+	// validation-failed before scope-check/insert.
+	for _, label := range a.Covens {
+		if !soul.ValidCoven(label) {
+			return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+				"coven label "+label+" must match "+soul.CovenPattern)
+		}
+	}
+
+	// Body-scoped RBAC BEFORE creation (fail-closed): deny → no audit, no
+	// insert, no scenario-start. Contexts come from the same
+	// handlers.IncarnationCreateContexts as REST (single source of truth), which
+	// scopes on `service=`/`coven=` when `name` is absent under a `id_template`
+	// (NIM-333) instead of admitting only unrestricted roles.
+	if err := h.checkIncarnationCreateScope(claims, a.ID, a.Service, a.Covens); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission incarnation.create")
+	}
+
+	// runner / services are required to run scenario `create`.
+	if h.deps.ScenarioRunner == nil || h.deps.ServiceRegistry == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError,
+			"scenario runner is not configured")
+	}
+
+	serviceRef, ok := h.deps.ServiceRegistry.Resolve(a.Service)
+	if !ok {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"service "+a.Service+" is not registered (manage via service.* API, ADR-029)")
+	}
+
+	// Shared resolve of the starting scenario + sync input validation +
+	// pre-flight-assert (R2: unified scenario.ResolveCreatePlan with REST
+	// CreateTyped). nil loader → stub plan (`create`, not bare, auto_create=true;
+	// in production the MCP loader is always present). preflighter is
+	// h.deps.ScenarioRunner (type-asserted to scenario.AssertPreflighter inside;
+	// a ScenarioStarter fake without the method is a no-op).
+	//
+	// createScenario — the starting scenario (multi-create mechanism);
+	// bareNoScenario — service without `create: true` (ready without a run,
+	// created_scenario=NULL); autoCreate — lifecycle.auto_create policy
+	// (default true): false → ready without a run, but created_scenario is non-empty.
+	plan, perr := scenario.ResolveCreatePlan(ctx, h.deps.ServiceLoader, h.deps.ScenarioRunner, a.ID, serviceRef, a.CreateScenario, a.Input, claims.Subject,
+		scenario.WithIncarnationLabels(a.Covens, a.Traits))
+	if perr != nil {
+		return h.createPlanToolError(req, toolName, a.ID, a.Service, perr)
+	}
+	createScenario := plan.CreateScenario
+	bareNoScenario := plan.BareNoScenario
+	autoCreate := plan.AutoCreate
+	// name — the EFFECTIVE incarnation name (ADR-0079): the operator's `name`, or
+	// the one the create scenario composed from `id_template`. Everything past
+	// this point uses it, never a.Name.
+	name := plan.EffectiveName(a.ID)
+	if name == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
+	}
+
+	// Gate (b), mirroring REST CreateTyped (NIM-333/NIM-338): the effective name and
+	// EVERY declared coven are measured against the caller's scope, all-or-nothing.
+	// Every create, named or composed, and AFTER the "name is required" check above
+	// for the same reason REST orders it that way.
+	//
+	// Gate (a) is an OR over the declared covens, so a request naming one coven the
+	// caller holds and one it does not was created carrying BOTH — handing the new
+	// incarnation to every role scoped to the coven the caller may not use.
+	if err := handlers.ScreenIncarnationCreateScope(h.deps.RBAC, claims.Subject,
+		name, a.Service, a.Covens); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"incarnation.create denied: "+name+
+				" or a declared coven is outside your scope (the request is refused whole, not trimmed)")
+	}
+
+	// Roster (NIM-371, parity with REST CreateTyped): the chosen create scenario may
+	// declare an input field as the souls it rolls onto (`source: { roster: true }`).
+	// Screened HERE — before the insert — via the SAME shared screening REST runs, so
+	// a refusal leaves no half-made incarnation behind. The bind itself waits for the
+	// row (FK) and happens below, still before the run starts.
+	roster, rosterErr := handlers.ScreenCreateRoster(ctx, h.deps.IncarnationDB, h.deps.RBAC,
+		h.deps.PurviewResolver, claims.Subject, name, a.Service, a.Covens, plan)
+	if rosterErr != nil {
+		return h.createRosterToolError(req, toolName, name, plan.RosterField, rosterErr)
+	}
+	if perr := h.rosterRejectionToolError(req, toolName, roster.Rejection); perr != nil {
+		return *perr
+	}
+
+	// Write spec.input only when input is non-empty — otherwise scenario-runner
+	// would see `"input": null` (key present) instead of "operator didn't pass
+	// input", which CEL can't distinguish (parity with REST).
+	// Trait per-incarnation (ADR-060 amend R1, parity with REST CreateTyped): the
+	// request's traits are validated and go straight into the incarnation.traits
+	// column, their source of truth since migration 088. An invalid set →
+	// validation-failed BEFORE the insert.
+	traits, err := incarnation.ValidateCreateTraits(a.Traits)
+	if err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	}
+
+	// createScenarioCol — NULL for a bare incarnation (no bootstrap scenario),
+	// otherwise a pointer to the chosen name (parity with REST). autoCreate=false
+	// does NOT make it NULL — the bootstrap scenario exists, the run is merely deferred.
+	var createScenarioCol *string
+	if !bareNoScenario {
+		createScenarioCol = &createScenario
+	}
+
+	creator := claims.Subject
+	inc := &incarnation.Incarnation{
+		ID:                 name,
+		Label:              a.Label,
+		Service:            a.Service,
+		ServiceVersion:     serviceRef.Ref,
+		StateSchemaVersion: 1,
+		State:              nil,
+		Status:             incarnation.StatusReady,
+		CreatedByAID:       &creator,
+		Covens:             a.Covens,
+		Traits:             traits,
+		CreatedScenario:    createScenarioCol,
+	}
+	if err := incarnation.Create(ctx, h.deps.IncarnationDB, inc); err != nil {
+		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
+			return h.toolError(req.ID, toolName, mcpCodeIncarnationExists,
+				"incarnation "+name+" already exists")
+		}
+		h.deps.Logger.Error("mcp: incarnation.create insert failed",
+			slog.String("name", name),
+			slog.String("service", a.Service),
+			slog.String("by_aid", claims.Subject),
+			slog.Any("error", err),
+		)
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "insert incarnation failed")
+	}
+
+	// No projection onto member hosts (NIM-281, parity with REST CreateTyped):
+	// the labels describe the incarnation and reach no host, now or later.
+
+	// Roster bind (NIM-371) — after the insert (FK) and BEFORE the run below: a run
+	// resolves its roster from `incarnation_membership` at start, so binding later
+	// would be a run into an empty roster with the hosts arriving too late. On
+	// failure the incarnation stays behind, empty and ready, and no run starts —
+	// recoverable with keeper.incarnation.bind-member (parity with REST).
+	if len(roster.SIDs) > 0 {
+		boundBy := claims.Subject
+		bound, bindErr := incarnation.AddMembersReporting(ctx, h.deps.IncarnationDB, name, roster.SIDs, &boundBy)
+		if bindErr != nil {
+			h.deps.Logger.Error("mcp: incarnation.create bind roster failed",
+				slog.String("name", name), slog.Any("error", bindErr))
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"incarnation "+name+" was created, but binding its roster failed — bind the hosts with keeper.incarnation.bind-member and run the create scenario")
+		}
+		// Same event the bind tool writes, `via: create` marking where it came from:
+		// a roster that appeared at birth and one bound a second later are the same
+		// fact about the incarnation (parity with REST bindCreateRoster).
+		h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
+			"id":             name,
+			"sids":           roster.SIDs,
+			"bound":          emptyIfNilSIDs(bound),
+			"already_member": []string{},
+			"via":            "create",
+		})
+	}
+
+	// apply_id is generated only when the bootstrap run starts (runCreate). bare
+	// (no create scenario) OR auto_create=false → the incarnation stays ready
+	// without a run, apply_id is empty (omitted in the response). runScenario
+	// isn't needed here (unlike REST incarnation_typed.go): a nil runner is
+	// rejected at entry (lines ~117-120), so MCP only reaches this point with a
+	// live ScenarioRunner.
+	runCreate := !bareNoScenario && autoCreate
+	var applyID string
+	if runCreate {
+		applyID = audit.NewULID()
+		if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: name,
+			ServiceRef:      serviceRef,
+			ScenarioName:    createScenario,
+			Input:           a.Input,
+			StartedByAID:    claims.Subject,
+		}); err != nil {
+			// Row already inserted (status=ready), the run didn't start. Log it;
+			// internal-error so the operator retries (parity with REST 500).
+			h.deps.Logger.Error("mcp: incarnation.create scenario start failed",
+				slog.String("name", name),
+				slog.String("apply_id", applyID),
+				slog.Any("error", err),
+			)
+			return h.toolError(req.ID, toolName, mcpCodeInternalError, "start scenario create failed")
+		}
+	}
+
+	// covens — coalesce nil→[] (parity with REST: the audit field is always an
+	// array, never null). apply_id in audit is null when auto_create=false.
+	auditCovens := a.Covens
+	if auditCovens == nil {
+		auditCovens = []string{}
+	}
+	var auditApplyID any
+	out := incarnationCreateOutput{Incarnation: name}
+	if applyID != "" {
+		auditApplyID = applyID
+		out.ApplyID = &applyID
+	}
+	h.writeAudit(audit.EventIncarnationCreated, claims.Subject, map[string]any{
+		"id":       name,
+		"service":  a.Service,
+		"covens":   auditCovens,
+		"apply_id": auditApplyID,
+	})
+
+	return h.toolResult(req.ID, out)
+}
+
+// createPlanToolError maps a [scenario.ResolveCreatePlan] error to the
+// jsonRPCResponse for keeper.incarnation.create (R2: shared create-plan
+// resolve with REST CreateTyped, but its own MCP mapping). Preserves the
+// verbatim detail prefixes of the original inline code (create_scenario_required
+// / create_scenario_invalid / input_invalid / validation_failed / assert_failed
+// → all map to validation-failed; assert has NO separate MCP code — parity
+// with prior behavior, unlike REST TypeAssertFailed); everything else
+// (snapshot load/parse, eval failure) → internal-error, logged.
+func (h *Handler) createPlanToolError(req jsonRPCRequest, toolName, name, service string, err error) jsonRPCResponse {
+	switch {
+	case errors.Is(err, scenario.ErrCreateScenarioRequired):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "create_scenario_required: "+err.Error())
+	case errors.Is(err, scenario.ErrCreateScenarioNotEligible):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "create_scenario_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrInputInvalid):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "input_invalid: "+err.Error())
+	case errors.Is(err, scenario.ErrValidateFailed):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "validation_failed: "+err.Error())
+	case errors.Is(err, scenario.ErrAssertFailed):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
+	// Name composition (ADR-0079, parity with REST mapCreatePlanError): operator
+	// error → validation-failed, same detail prefixes.
+	case errors.Is(err, scenario.ErrIDNotComposable):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "id_not_composable: "+err.Error())
+	case errors.Is(err, scenario.ErrComposedIDInvalid):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "composed_id_invalid: "+err.Error())
+	case errors.Is(err, config.ErrIDTemplateRender):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "id_template_failed: "+err.Error())
+	}
+	h.deps.Logger.Error("mcp: incarnation.create resolve create plan failed",
+		slog.String("name", name),
+		slog.String("service", service),
+		slog.Any("error", err),
+	)
+	return h.toolError(req.ID, toolName, mcpCodeInternalError, "resolve create plan failed")
+}
+
+// createRosterToolError maps a [handlers.ScreenCreateRoster] error onto MCP codes
+// (NIM-371). Same buckets REST uses, so the two surfaces refuse the same request for
+// the same stated reason: shape → validation-failed, the bind-member gate →
+// forbidden, anything else → internal-error, logged.
+func (h *Handler) createRosterToolError(req jsonRPCRequest, toolName, name, field string, err error) jsonRPCResponse {
+	switch {
+	case errors.Is(err, handlers.ErrCreateRosterTooLarge), errors.Is(err, handlers.ErrCreateRosterInvalidSID):
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	case errors.Is(err, handlers.ErrCreateRosterScopeExceeded):
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"incarnation.bind-member denied: input '"+field+"' declares a roster for "+name+
+				", and populating an incarnation needs bind-member over it — incarnation.create alone is not enough")
+	}
+	h.deps.Logger.Error("mcp: incarnation.create screen roster failed",
+		slog.String("name", name), slog.Any("error", err))
+	return h.toolError(req.ID, toolName, mcpCodeInternalError, "roster bind unavailable")
+}
+
+// rosterRejectionToolError maps the per-host rejection buckets of a create-carried
+// roster (NIM-371). Bucket ORDER is a security property, not cosmetics — identical to
+// REST bindRejectionProblem and to the bind tool: an operator who may not see a host
+// is told "forbidden", never that the host is disconnected. nil = clean screening.
+func (h *Handler) rosterRejectionToolError(req jsonRPCRequest, toolName string, rej *incarnation.BindRejection) *jsonRPCResponse {
+	if rej.Empty() {
+		return nil
+	}
+	var resp jsonRPCResponse
+	switch {
+	case len(rej.UnknownSIDs) > 0:
+		resp = h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"unknown SID(s) (not in the soul registry): "+strings.Join(rej.UnknownSIDs, ", "))
+	case len(rej.OutOfScope) > 0:
+		resp = h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"SID(s) outside the operator's soul scope: "+strings.Join(rej.OutOfScope, ", "))
+	default:
+		resp = h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"SID(s) not connected — only an onboarded, connected host can be bound: "+strings.Join(rej.NotConnected, ", "))
+	}
+	return &resp
+}
+
+// emptyIfNilSIDs normalizes a nil SID slice to an empty one, so an audit payload
+// carries an array rather than null (parity with the bind tool's reply shape).
+func emptyIfNilSIDs(xs []string) []string {
+	if xs == nil {
+		return []string{}
+	}
+	return xs
+}

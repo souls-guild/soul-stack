@@ -1,0 +1,12 @@
+name: ok
+input:
+  matrix:
+    type: array
+    items:
+      type: object
+      properties:
+        rows:
+          type: array
+          items: { type: integer }
+    default:
+      - rows: [1, 2, "BROKEN"]

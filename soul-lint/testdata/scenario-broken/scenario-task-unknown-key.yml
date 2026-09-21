@@ -1,0 +1,5 @@
+name: task-unknown-key
+tasks:
+  - module: core.exec.run
+    params: {}
+    no_such_key: foo

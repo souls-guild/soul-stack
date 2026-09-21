@@ -1,0 +1,197 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
+	"github.com/souls-guild/soul-stack/shared/audit"
+)
+
+// incarnationRunArgs — arguments for keeper.incarnation.run
+// (schemaIncarnationRunInput): name + scenario are required, input is optional.
+type incarnationRunArgs struct {
+	ID       string         `json:"id"`
+	Scenario string         `json:"scenario"`
+	Input    map[string]any `json:"input,omitempty"`
+}
+
+// incarnationRunOutput — output of keeper.incarnation.run classic single-run
+// (schemaIncarnationRunOutput): apply_id + echoed incarnation / scenario.
+// Mirrors REST runScenarioResponse.
+type incarnationRunOutput struct {
+	ApplyID     string `json:"_apply_id"`
+	Incarnation string `json:"incarnation"`
+	Scenario    string `json:"scenario"`
+}
+
+// callIncarnationRun — mutating async tool keeper.incarnation.run. Parity
+// with REST IncarnationHandler.Run: resolve incarnation → secondary
+// error_locked probe → resolve service → runner.Start → 202 + apply_id.
+//
+// RBAC context — {"incarnation": name} (name-bound). audit:
+// EventIncarnationScenarioStarted {name, scenario, apply_id}, source=mcp.
+func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.incarnation.run"
+
+	var a incarnationRunArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest,
+				"invalid arguments: "+err.Error())
+		}
+	}
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
+	}
+	if !incarnation.ValidID(a.ID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'id' must match "+incarnation.IDPattern)
+	}
+	if a.Scenario == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'scenario' is required")
+	}
+	if !scenario.ValidScenarioName(a.Scenario) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'scenario' must match "+scenario.ScenarioNamePattern)
+	}
+
+	// runner / services are required to start a run (parity with REST Run).
+	if h.deps.ScenarioRunner == nil || h.deps.ServiceRegistry == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError,
+			"scenario runner is not configured")
+	}
+
+	inc, err := incarnation.SelectByID(ctx, h.deps.IncarnationDB, a.ID)
+	if err != nil {
+		// Fail-closed RBAC when the incarnation is missing/failed to load
+		// (parity with REST: IncarnationScopeSelector would return a nil set →
+		// scoped deny, bare/`*` passes → handler returns 404/500). Forbidden
+		// takes priority over 404.
+		if scopeErr := h.checkIncarnationScope(claims, "run", a.ID, "", nil); scopeErr != nil {
+			return h.toolError(req.ID, toolName, mcpCodeForbidden,
+				"operator lacks required permission incarnation.run")
+		}
+		code, detail := mapIncarnationErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: incarnation.run select failed",
+				slog.String("name", a.ID),
+				slog.String("by_aid", claims.Subject),
+				slog.Any("error", err),
+			)
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
+	// RBAC OR-Check over the incarnation's coven/service scope (covens ∪
+	// {name}) — mirrors REST middleware. Checked AFTER select: the scope is
+	// built from inc.Service / inc.Covens.
+	if err := h.checkIncarnationScope(claims, "run", inc.ID, inc.Service, inc.Covens); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission incarnation.run")
+	}
+
+	// Secondary gate layer: fast rejection for error_locked before starting a
+	// run (authority is lockRun under FOR UPDATE; parity with REST).
+	if inc.Status == incarnation.StatusErrorLocked {
+		return h.toolError(req.ID, toolName, mcpCodeIncarnationLocked,
+			"incarnation "+a.ID+" is error_locked — unlock required before next run")
+	}
+
+	serviceRef, ok := h.deps.ServiceRegistry.Resolve(inc.Service)
+	if !ok {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"service "+inc.Service+" is not registered (manage via service.* API, ADR-029)")
+	}
+
+	// Sync validation of input against the scenario's `input:` schema — BEFORE
+	// enqueue (parity with REST Run, both modes). nil loader → degrades to no
+	// validation. Invalid input → validation-failed; snapshot failure → internal.
+	if h.deps.ServiceLoader != nil {
+		inputScope := scenario.DayTwoIncarnation(inc.ID, inc.Service, inc.ServiceVersion, inc.State)
+		if _, err := scenario.ValidateInput(ctx, h.deps.ServiceLoader, serviceRef, a.Scenario, a.Input, inputScope); err != nil {
+			if errors.Is(err, scenario.ErrInputInvalid) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"input_invalid: "+err.Error())
+			}
+			// A `validate:` rule that evaluated FALSE is the operator's input being
+			// refused, not a malfunction — the REST twin answers 422 for it
+			// (handlers.RunTyped) and so does the MCP create twin
+			// (callIncarnationCreate). This arm was missing, so one of the four
+			// surfaces reported a declared invariant as an internal error.
+			if errors.Is(err, scenario.ErrValidateFailed) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+					"validation_failed: "+err.Error())
+			}
+			h.deps.Logger.Error("mcp: incarnation.run input validation failed",
+				slog.String("name", a.ID),
+				slog.String("scenario", a.Scenario),
+				slog.Any("error", err),
+			)
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"validate scenario "+a.Scenario+" input failed")
+		}
+	}
+
+	// Pre-flight assert gate — parity with REST Run (ADR-009 amendment
+	// 2026-07-28, NIM-270): AFTER ValidateInput, BEFORE enqueue. On this path
+	// the incarnation exists and its roster is bound, so a topology assert can
+	// be answered synchronously instead of becoming an error_locked; a plan that
+	// builds its own roster is deferred inside PreflightAssert. Optional via
+	// type assertion, as on the create path.
+	if pf, ok := h.deps.ScenarioRunner.(assertPreflighter); ok {
+		if err := pf.PreflightAssert(ctx, scenario.RunSpec{
+			IncarnationName: a.ID,
+			ServiceRef:      serviceRef,
+			ScenarioName:    a.Scenario,
+			Input:           a.Input,
+			StartedByAID:    claims.Subject,
+		}); err != nil {
+			if errors.Is(err, scenario.ErrAssertFailed) {
+				return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "assert_failed: "+err.Error())
+			}
+			h.deps.Logger.Error("mcp: incarnation.run pre-flight assert failed",
+				slog.String("name", a.ID),
+				slog.String("scenario", a.Scenario),
+				slog.Any("error", err),
+			)
+			return h.toolError(req.ID, toolName, mcpCodeInternalError,
+				"pre-flight assert for scenario "+a.Scenario+" failed")
+		}
+	}
+
+	applyID := audit.NewULID()
+	if err := h.deps.ScenarioRunner.Start(ctx, scenario.RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: a.ID,
+		ServiceRef:      serviceRef,
+		ScenarioName:    a.Scenario,
+		Input:           a.Input,
+		StartedByAID:    claims.Subject,
+	}); err != nil {
+		h.deps.Logger.Error("mcp: incarnation.run scenario start failed",
+			slog.String("name", a.ID),
+			slog.String("scenario", a.Scenario),
+			slog.String("apply_id", applyID),
+			slog.Any("error", err),
+		)
+		return h.toolError(req.ID, toolName, mcpCodeInternalError,
+			"start scenario "+a.Scenario+" failed")
+	}
+
+	h.writeAudit(audit.EventIncarnationScenarioStarted, claims.Subject, map[string]any{
+		"id":       a.ID,
+		"scenario": a.Scenario,
+		"apply_id": applyID,
+	})
+
+	return h.toolResult(req.ID, incarnationRunOutput{
+		ApplyID:     applyID,
+		Incarnation: a.ID,
+		Scenario:    a.Scenario,
+	})
+}

@@ -1,0 +1,1145 @@
+package api
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"sync"
+	"sync/atomic"
+	"time"
+
+	"github.com/gorilla/websocket"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/console"
+	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
+	"github.com/souls-guild/soul-stack/keeper/internal/soul"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+)
+
+// `GET /v1/console` — the operator's WebSocket into interactive PTY sessions
+// (NIM-143, docs/keeper/console.md).
+//
+// This is the only WebSocket in Keeper; every other surface is HTTP/1.1 + SSE.
+// A console needs a real bidirectional channel — SSE cannot carry keystrokes
+// back, and a POST per keypress would be absurd on a terminal.
+//
+// It is NOT a huma operation, and deliberately absent from the OpenAPI spec:
+// huma models request/response bodies, while an upgrade replaces the response
+// with a raw socket. The wire contract lives in docs/keeper/console.md and is
+// mirrored by the client in `soul-stack-web/src/api/consoleProtocol.ts`.
+//
+// Auth is the standard /v1 RequireJWT chain, with the token arriving as the
+// `bearer.<jwt>` subprotocol (see middleware.RequireJWT): the browser WebSocket
+// API cannot set an Authorization header. The `soul.console` permission gates
+// the upgrade itself; the per-host `host=<sid>` scope is checked per session,
+// in-handler, because the SID arrives in the `open` frame rather than the URL.
+
+// consoleRBAC — the RBAC surface this endpoint needs: the scope-aware check for
+// the per-`open` host gate, and the revocation projection for the re-check that
+// keeps an established socket honest (NIM-844).
+//
+// Declared as one interface rather than reached by a type assertion on the
+// checker: a wiring that cannot answer "is this Archon revoked" must fail to
+// compile, not fail to notice.
+type consoleRBAC interface {
+	middleware.PermissionChecker
+	middleware.RevocationChecker
+	// ActionHolder answers "is this right held at all", with no scope context and
+	// no database read. The re-check needs it for the case where the host's
+	// Coven labels cannot be resolved: a `coven=` grant is then unjudgeable, but
+	// whether the operator holds `soul.console` in any form still has an answer.
+	middleware.ActionHolder
+}
+
+// consoleWSDeps wires the endpoint.
+type consoleWSDeps struct {
+	Hub      *console.Hub
+	Enforcer consoleRBAC
+	// SoulReader resolves the target host's Coven labels for the per-`open`
+	// scope check (NIM-650). nil → the `{host}` context alone, i.e. a
+	// `coven=`-scoped `soul.console` fails closed, which is what this endpoint
+	// did for every operator before.
+	SoulReader soul.ExecQueryRower
+	Metrics    *console.Metrics
+	Logger     *slog.Logger
+	// PlaneEnabled answers `console.enabled` as it stands right now (NIM-292).
+	// Resolved per request, not captured at wire-up, so an operator's edit takes
+	// effect without a restart. nil → on, the pre-NIM-292 behaviour.
+	PlaneEnabled func() bool
+	// WriteWait overrides the per-write budget; zero takes consoleWriteWait.
+	// Only the socket's own tests set it, to reach an expiry the production
+	// value is deliberately too generous to wait for.
+	WriteWait time.Duration
+	// ReauthInterval overrides how often the socket re-asks whether the operator
+	// may still hold it (NIM-844); zero takes
+	// [middleware.LongLivedReauthInterval]. Same reason as WriteWait: a test must
+	// reach the second check without waiting out the production interval.
+	ReauthInterval time.Duration
+}
+
+// consoleUpgrader turns the request into a socket.
+//
+// CheckOrigin returns true because the endpoint is not cookie-authenticated:
+// every request carries an explicit bearer token that a cross-origin page
+// cannot obtain, so there is no CSRF surface for an Origin check to close. The
+// buffers are sized for the traffic shape — small inbound frames (keystrokes,
+// resizes) against 32 KiB pty chunks outbound.
+//
+// EnableCompression negotiates permessage-deflate (RFC 7692) with any client
+// that offers it — the browser does so on its own, so this changes no wire
+// contract and the subprotocol stays v1. It is worth having because pty output
+// is both the only high-volume traffic here and enormously redundant, while the
+// frame carries it as base64 inside JSON: measured on real terminal output at
+// gorilla's own settings (flate level 1, no context takeover), 32 KiB of output
+// goes out as 7.1 KiB rather than 43.7 KiB. Fewer bytes per frame means the
+// writer clears the queue sooner, so a flood that used to cost chunks now fits.
+//
+// The cost is self-limiting: compression happens inside WriteMessage, and a
+// chunk dropped by backpressure never reaches the writer — so it scales with
+// what is DELIVERED, which is exactly what a slow browser already bounds. Only
+// data frames are compressed, never ping or close.
+var consoleUpgrader = websocket.Upgrader{
+	ReadBufferSize:    4 << 10,
+	WriteBufferSize:   32 << 10,
+	Subprotocols:      []string{console.Subprotocol},
+	CheckOrigin:       func(*http.Request) bool { return true },
+	EnableCompression: true,
+}
+
+// registerConsoleWS mounts the endpoint on a chi router.
+func registerConsoleWS(r interface {
+	Get(pattern string, h http.HandlerFunc)
+}, deps *consoleWSDeps) {
+	r.Get("/console", consoleWSHandler(deps))
+}
+
+// consolePlaneGate answers as if the route did not exist while the console plane
+// is switched off (NIM-292, `console.enabled: false`).
+//
+// 404 and not 403, and the difference is the point: 403 says "this cluster has a
+// console plane and you may not use it", which is a fact an operator of a
+// console-free cluster should not be able to read off the API. The body is the
+// one the catch-all writes for any unrouted /v1/ path, so the two are
+// indistinguishable.
+//
+// It runs BEFORE the RBAC middleware. The other order would answer 403 to
+// everyone without `soul.console` — leaking the plane's existence to exactly the
+// callers who are not allowed to reach it — and would make the response depend
+// on the caller's rights rather than on the cluster's configuration.
+func consolePlaneGate(enabled func() bool) func(http.Handler) http.Handler {
+	return func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if enabled != nil && !enabled() {
+				middleware.WriteNotFound(w, r, "no such endpoint")
+				return
+			}
+			next.ServeHTTP(w, r)
+		})
+	}
+}
+
+func consoleWSHandler(deps *consoleWSDeps) http.HandlerFunc {
+	return func(w http.ResponseWriter, r *http.Request) {
+		claims, ok := middleware.ClaimsFromContext(r.Context())
+		if !ok {
+			// The JWT middleware did not run — a chain misconfiguration, not a
+			// client error.
+			problem.Write(w, problem.New(problem.TypeInternalError, r.URL.Path, "console: auth chain not wired"))
+			return
+		}
+
+		// The client must offer our subprotocol: gorilla only echoes a
+		// subprotocol it was offered, and a browser closes a socket whose
+		// negotiated subprotocol is missing. Refusing before the upgrade turns
+		// a silent client-side close into a legible 400.
+		if !websocket.IsWebSocketUpgrade(r) || !offersSubprotocol(r) {
+			problem.Write(w, problem.New(problem.TypeValidationFailed, r.URL.Path,
+				"console: expected a WebSocket upgrade offering the "+console.Subprotocol+" subprotocol"))
+			return
+		}
+
+		ws, err := consoleUpgrader.Upgrade(w, r, http.Header{})
+		if err != nil {
+			// Upgrade already wrote its own HTTP error.
+			deps.Logger.Debug("console: upgrade failed", slog.Any("error", err))
+			return
+		}
+
+		c := newConsoleConn(ws, claims.Subject, deps)
+		c.run(r.Context())
+	}
+}
+
+// offersSubprotocol reports whether the client advertised our subprotocol.
+func offersSubprotocol(r *http.Request) bool {
+	for _, p := range websocket.Subprotocols(r) {
+		if p == console.Subprotocol {
+			return true
+		}
+	}
+	return false
+}
+
+// outFrame is one queued message for the socket writer.
+type outFrame struct {
+	payload []byte
+	// control marks a lifecycle frame (opened/exit/error). Control frames are
+	// never dropped — losing an `opened` strands a pane on "connecting" and
+	// losing an `exit` leaves it live forever — so room is made by discarding
+	// queued output instead, and only a queue holding nothing but control frames
+	// costs the socket.
+	control bool
+
+	// clientID, dataLen and reported charge a frame back to its session if it is
+	// displaced before it can be written: once marshalled, the payload no longer
+	// says whose it was. `reported` is the drop count this frame was already
+	// carrying — losing the frame loses that accounting too, so it has to be
+	// handed back with the rest.
+	clientID string
+	dataLen  int
+	reported uint64
+}
+
+// outQueue is the socket's send queue: a bounded FIFO the writer drains.
+//
+// A slice under a mutex rather than a channel, because a full queue has to give
+// up its OLDEST output rather than refuse the newest, and a channel cannot be
+// looked into — its head may well be a control frame, which must never be
+// dropped. Taking one frame out of the middle leaves every other frame in the
+// order it arrived, which is the whole of what a terminal needs.
+type outQueue struct {
+	mu     sync.Mutex
+	frames []outFrame
+	max    int
+	// wake carries a single edge: "there is something to write". Buffered by one
+	// so a producer never blocks and never needs the writer to be idle.
+	wake chan struct{}
+}
+
+func newOutQueue(max int) *outQueue {
+	return &outQueue{frames: make([]outFrame, 0, max), max: max, wake: make(chan struct{}, 1)}
+}
+
+// push appends a frame, making room by discarding the oldest CHUNK when the
+// queue is full. It returns whatever it displaced, and false if it could make no
+// room at all — a queue of nothing but control frames has nothing to give, and
+// what that means is the caller's to decide.
+func (q *outQueue) push(f outFrame) (evicted outFrame, ok bool) {
+	q.mu.Lock()
+	if len(q.frames) >= q.max {
+		oldest := -1
+		for i, queued := range q.frames {
+			if !queued.control {
+				oldest = i
+				break
+			}
+		}
+		if oldest < 0 {
+			q.mu.Unlock()
+			return outFrame{}, false
+		}
+		evicted = q.frames[oldest]
+		q.frames = append(q.frames[:oldest], q.frames[oldest+1:]...)
+	}
+	q.frames = append(q.frames, f)
+	q.mu.Unlock()
+	q.signal()
+	return evicted, true
+}
+
+// pop takes the oldest frame, re-arming the writer if more remain. One frame per
+// wake-up on purpose: it keeps the writer's ping and drop-flush tickers in the
+// rotation instead of starving them behind a long backlog.
+func (q *outQueue) pop() (outFrame, bool) {
+	q.mu.Lock()
+	if len(q.frames) == 0 {
+		q.mu.Unlock()
+		return outFrame{}, false
+	}
+	f := q.frames[0]
+	q.frames = append(q.frames[:0], q.frames[1:]...)
+	more := len(q.frames) > 0
+	q.mu.Unlock()
+	if more {
+		q.signal()
+	}
+	return f, true
+}
+
+func (q *outQueue) signal() {
+	select {
+	case q.wake <- struct{}{}:
+	default:
+	}
+}
+
+// consoleConn is one operator socket multiplexing N console sessions.
+//
+// Two goroutines: the HTTP handler's own (the read pump) and a writer. A
+// WebSocket permits exactly one concurrent writer, so every frame — including
+// the ones the EventStream produces from other goroutines — funnels through
+// `out`.
+type consoleConn struct {
+	ws      *websocket.Conn
+	aid     string
+	hub     *console.Hub
+	deps    *consoleWSDeps
+	logger  *slog.Logger
+	metrics *console.Metrics
+
+	// writeWait is this socket's per-write budget (consoleWriteWait unless a
+	// test compressed it).
+	writeWait time.Duration
+
+	out  *outQueue
+	done chan struct{}
+	// closeOnce guards `done`, which both pumps may close.
+	closeOnce sync.Once
+	// closeReason is why this socket is going down, recorded by whichever pump
+	// decided it. Written inside closeOnce and read only after shutdown has been
+	// called, so the Once orders it; there is no second writer to race.
+	//
+	// It exists because the reap that follows is the ONLY place the answer can
+	// be published. A socket dying on the write side cannot be told anything —
+	// the connection is unusable, so no close frame carries a code — and it
+	// takes every pty on it with it. Without this the log and the metric said
+	// "the operator's socket closed" for a stalled peer and for a closed tab
+	// alike.
+	closeReason console.CloseReason
+	// deadlineMu orders arming the read deadline against teardown slamming it.
+	// Without it a pong landing at exactly the wrong moment would re-arm a full
+	// window over the slam and re-park the read pump on a socket being torn
+	// down — the very silence this teardown exists to end.
+	deadlineMu sync.Mutex
+
+	mu sync.Mutex
+	// sessions maps the client's socket-local id to the Hub session.
+	sessions map[string]*console.Session
+	// dropped accumulates Keeper-side discarded bytes per client session,
+	// reported on the next chunk that does get through.
+	dropped map[string]*atomic.Uint64
+}
+
+func newConsoleConn(ws *websocket.Conn, aid string, deps *consoleWSDeps) *consoleConn {
+	writeWait := deps.WriteWait
+	if writeWait <= 0 {
+		writeWait = consoleWriteWait
+	}
+	return &consoleConn{
+		ws:        ws,
+		aid:       aid,
+		hub:       deps.Hub,
+		deps:      deps,
+		logger:    deps.Logger,
+		metrics:   deps.Metrics,
+		writeWait: writeWait,
+
+		out:      newOutQueue(consoleOutQueueDepth),
+		done:     make(chan struct{}),
+		sessions: make(map[string]*console.Session),
+		dropped:  make(map[string]*atomic.Uint64),
+	}
+}
+
+// Frame-plane constants: queue depth and deadlines describe THIS socket
+// implementation, so they live with it rather than in the console package,
+// which owns the operator-facing policy (session caps, idle timeout). They are
+// unexported because nothing outside reads them — the console package used to
+// carry an unreferenced copy, and NIM-255 removed it; its limits_test.go now
+// fails if one comes back.
+const (
+	consoleOutQueueDepth = 256
+	consolePongWait      = 60 * time.Second
+	consolePingPeriod    = (consolePongWait * 9) / 10
+	// consoleWriteWait bounds one socket write, and deliberately uses the SAME
+	// budget as consolePongWait. Backpressure fills the socket buffer by
+	// construction — it is the state the drop machinery exists for — so a write
+	// parks for however long the operator takes to drain, and gorilla's
+	// connection is unusable after a failed write. A shorter budget would
+	// therefore be a second, stricter liveness rule: a browser that stopped
+	// reading for ten seconds (a background tab, a GC pause, a lid half-closed)
+	// would lose every pty on the socket, while the read side went on holding
+	// that same peer to be alive. There is one peer, so there is one budget.
+	consoleWriteWait = consolePongWait
+	// consoleWriterGrace is how long teardown lets the writer finish its
+	// goodbye before taking the socket away from it. A writer parked mid-frame
+	// cannot see `done`, and every session here waits on it.
+	consoleWriterGrace    = time.Second
+	consoleMaxClientFrame = 1 << 20
+	// consoleClaimRefresh re-stamps cluster claims well inside their TTL, so a
+	// long-lived console stays routable — and so a LAPSED claim reliably means
+	// this Keeper died rather than merely being slow.
+	consoleClaimRefresh = 30 * time.Second
+	// consoleDropFlush is how often a session's accumulated drop count is
+	// pushed out on its own. Without it a gap would only surface on the NEXT
+	// chunk that fits in the queue — and a flood that ends (a `find /` that
+	// finishes) produces no next chunk, so the operator would be left looking
+	// at spliced output with no sign anything was lost.
+	consoleDropFlush = 250 * time.Millisecond
+	// consoleReauthReadBudget bounds the one database read the re-authorization
+	// loop makes per session per tick (NIM-844). It exists because
+	// [consoleConn.run] joins that goroutine before reaping the ptys: without a
+	// bound, a pool with no free connection would hold a whole socket's worth of
+	// root shells open for as long as it stayed wedged. Generous next to an
+	// indexed single-row SELECT and far inside the interval it runs on, so a
+	// healthy cluster never reaches it; a sick one converges to "keep the pane,
+	// ask again next tick" instead of to a stuck teardown.
+	consoleReauthReadBudget = 2 * time.Second
+)
+
+// run drives the socket until either side closes it, then reaps every session.
+func (c *consoleConn) run(ctx context.Context) {
+	c.metrics.IncSocketsActive()
+	// Detach from the request context: after an upgrade the request is over,
+	// and a context tied to it would cancel while the socket is alive. Server
+	// shutdown closes the listener and the socket with it.
+	ctx = context.WithoutCancel(ctx)
+
+	writerDone := make(chan struct{})
+	go func() {
+		defer close(writerDone)
+		c.writePump()
+	}()
+
+	claimsDone := make(chan struct{})
+	go func() {
+		defer close(claimsDone)
+		c.refreshClaimsLoop()
+	}()
+
+	reauthDone := make(chan struct{})
+	go func() {
+		defer close(reauthDone)
+		c.reauthorizeLoop(ctx)
+	}()
+
+	c.readPump(ctx)
+
+	// Read loop is over: stop the writer, then tear down every pty. Order
+	// matters — the sessions must die even if the writer is wedged on a peer
+	// that stopped reading.
+	//
+	// The reason offered here is the ordinary one — the peer closed its end. If
+	// the writer already gave up on a failure, it recorded that instead and this
+	// call is a no-op: the first cause is the true one.
+	c.shutdown(console.CloseSocketClosed)
+	select {
+	case <-writerDone:
+	case <-time.After(consoleWriterGrace):
+		// The writer is parked mid-frame on a peer that stopped reading, so it
+		// cannot reach the `done` case to notice any of this. Closing the socket
+		// fails that write at once; without it every pty on this socket would
+		// stay alive for the remainder of the write budget.
+		_ = c.ws.Close()
+		<-writerDone
+	}
+	<-claimsDone
+	<-reauthDone
+	_ = c.ws.Close()
+
+	sessions := c.takeAllSessions()
+	reason := c.closeReason
+	if n := c.hub.CloseAllFor(ctx, sessions, reason); n > 0 {
+		// The count belongs to THIS line and nowhere else — the writer that
+		// noticed the failure does not know how many sessions rode on the socket.
+		// A socket that ended on its own terms is routine; one that ended on a
+		// failure just killed n interactive shells the operator was using, and
+		// this is the only record of it that survives.
+		level := slog.LevelInfo
+		if socketDiedBadly(reason) {
+			level = slog.LevelWarn
+		}
+		c.logger.Log(ctx, level, "console: socket closed, sessions reaped",
+			slog.String("aid", c.aid),
+			slog.String("reason", string(reason)),
+			slog.Int("sessions", n))
+	}
+	c.metrics.DecSocketsActive()
+}
+
+// socketDiedBadly reports whether the socket ended in a failure rather than an
+// ordinary close — which decides whether the reap line is WARN or INFO.
+//
+// Two of the reasons that reach here are not failures. CloseSocketClosed is the
+// ordinary end of a console. CloseAccessRevoked is a POLICY decision (NIM-844):
+// the socket ended because Keeper decided it should, nothing malfunctioned, and
+// [consoleConn.reauthorize] has already written its own WARN naming the Archon —
+// a second one here would read as a fault and bury the real failures.
+func socketDiedBadly(reason console.CloseReason) bool {
+	switch reason {
+	case console.CloseSocketClosed, console.CloseAccessRevoked:
+		return false
+	default:
+		return true
+	}
+}
+
+// shutdown signals both pumps to stop, and unparks the read pump if it is
+// already blocked on the socket. Idempotent.
+//
+// Closing `done` alone is not enough. Both pumps spend nearly all their time
+// inside a blocking socket call rather than in their select, so a read pump
+// parked in ReadMessage would sit there for a whole consolePongWait — and if
+// the writer is the one that gave up, that leaves an OPEN socket with nobody
+// writing to it: the operator's wall freezes mid-stream, no loss report can be
+// delivered, and the root shells behind it keep running until the read deadline
+// finally fires a minute later. A deadline in the past is what makes a parked
+// syscall return, so teardown sets one.
+func (c *consoleConn) shutdown(reason console.CloseReason) {
+	c.closeOnce.Do(func() {
+		c.closeReason = reason
+		close(c.done)
+		c.deadlineMu.Lock()
+		defer c.deadlineMu.Unlock()
+		_ = c.ws.SetReadDeadline(time.Now())
+	})
+}
+
+// closing reports whether teardown has already begun.
+//
+// The write side needs it to read its own errors: teardown deliberately closes
+// the socket out from under a writer parked mid-frame, so a write failing AFTER
+// teardown says nothing about the peer — it is this Keeper's own doing, and the
+// real cause was recorded by whoever started the teardown.
+func (c *consoleConn) closing() bool {
+	select {
+	case <-c.done:
+		return true
+	default:
+		return false
+	}
+}
+
+// armReadDeadline gives the peer another window to be heard from, unless
+// teardown has already put the deadline in the past.
+func (c *consoleConn) armReadDeadline() error {
+	c.deadlineMu.Lock()
+	defer c.deadlineMu.Unlock()
+	select {
+	case <-c.done:
+		return nil
+	default:
+	}
+	return c.ws.SetReadDeadline(time.Now().Add(consolePongWait))
+}
+
+// readPump consumes client frames until the socket dies.
+func (c *consoleConn) readPump(ctx context.Context) {
+	c.ws.SetReadLimit(consoleMaxClientFrame)
+	_ = c.armReadDeadline()
+	// A pong proves the peer is alive; without this the deadline would fire on
+	// an idle-but-healthy terminal.
+	c.ws.SetPongHandler(func(string) error { return c.armReadDeadline() })
+
+	for {
+		_, raw, err := c.ws.ReadMessage()
+		if err != nil {
+			if websocket.IsUnexpectedCloseError(err, websocket.CloseNormalClosure, websocket.CloseGoingAway) {
+				c.logger.Debug("console: socket read ended",
+					slog.String("aid", c.aid), slog.Any("error", err))
+			}
+			return
+		}
+
+		frame, err := console.DecodeClientFrame(raw)
+		if err != nil {
+			// A malformed frame is the client's bug, not a reason to drop a
+			// socket that may hold healthy sessions.
+			c.sendError("", console.ErrCodeBadFrame, err.Error())
+			continue
+		}
+		c.handleFrame(ctx, frame)
+	}
+}
+
+func (c *consoleConn) handleFrame(ctx context.Context, f *console.ClientFrame) {
+	switch f.Type {
+	case console.TypeOpen:
+		c.handleOpen(ctx, f)
+	case console.TypeStdin:
+		c.handleStdin(ctx, f)
+	case console.TypeResize:
+		c.handleResize(ctx, f)
+	case console.TypeClose:
+		c.handleClose(ctx, f)
+	}
+}
+
+func (c *consoleConn) handleOpen(ctx context.Context, f *console.ClientFrame) {
+	if c.lookupSession(f.SessionID) != nil {
+		c.sendError(f.SessionID, console.ErrCodeDuplicateSession, "session_id is already open on this socket")
+		return
+	}
+
+	// Per-host scope. The socket-level `soul.console` gate already ran as chi
+	// middleware; this is the per-host half, which only becomes checkable once
+	// the target arrives in the frame: `host=<sid>` plus one context per Coven
+	// label of the host, granted if ANY ONE matches (NIM-650) — the same set
+	// [handlers.SoulSIDScopeSelector] builds for the routes where the SID is in
+	// the path.
+	//
+	// One indexed single-row SELECT per `open`. An `open` frame creates a
+	// session; keystrokes and resizes arrive as their own frame types and never
+	// reach here, so this is not on the per-character path — the socket's actual
+	// hot loop is untouched.
+	if c.deps.Enforcer != nil {
+		contexts := soul.HostContextsBySID(ctx, c.deps.SoulReader, f.SID)
+		if err := soul.AllowAnyContext(c.deps.Enforcer, c.aid, "soul", "console", contexts); err != nil {
+			c.sendError(f.SessionID, console.ErrCodeForbidden, "no console permission for this host")
+			return
+		}
+	}
+
+	sess, err := c.hub.Open(ctx, console.OpenRequest{
+		ClientID: f.SessionID,
+		SID:      f.SID,
+		AID:      c.aid,
+		Cols:     f.Cols,
+		Rows:     f.Rows,
+		Shell:    f.Shell,
+		Sink:     c,
+	})
+	if err != nil {
+		c.sendError(f.SessionID, openErrorCode(err), err.Error())
+		return
+	}
+	c.addSession(f.SessionID, sess)
+}
+
+// dispatchErrorCode distinguishes a congested queue from an absent Soul.
+//
+// Both congestion cases are the same story for the operator: the host is
+// healthy and the right move is to type again. Reporting either as
+// `soul_offline` would send them hunting for a dead agent instead. The queue is
+// the session's own console stream once it is up (NIM-188), and the pre-`opened`
+// park before that ([console.ErrSessionNotReady]); a Soul still on the
+// EventStream transport fills the per-SID outbound queue it shares with apply.
+func dispatchErrorCode(err error) string {
+	switch {
+	case errors.Is(err, keepergrpc.ErrOutboundQueueFull), errors.Is(err, console.ErrSessionNotReady):
+		return console.ErrCodeBusy
+	case errors.Is(err, console.ErrRecordingUnavailable), errors.Is(err, console.ErrRecordingCapped):
+		// Not a transport failure at all: the Hub already closed the session,
+		// because a console that stopped being recorded stops (ADR-0074(g)).
+		// Retrying the keystroke is the wrong advice, so it must not read as
+		// `soul_offline`.
+		return console.ErrCodeRecordingUnavailable
+	default:
+		return console.ErrCodeSoulOffline
+	}
+}
+
+// openErrorCode maps a Hub failure to the closed set of wire error codes.
+func openErrorCode(err error) string {
+	switch {
+	case errors.Is(err, console.ErrLimitExceeded):
+		return console.ErrCodeLimitExceeded
+	case errors.Is(err, console.ErrConsoleUnsupported):
+		return console.ErrCodeUnsupported
+	case errors.Is(err, keepergrpc.ErrOutboundQueueFull):
+		return console.ErrCodeBusy
+	case errors.Is(err, console.ErrSoulOffline):
+		return console.ErrCodeSoulOffline
+	case errors.Is(err, console.ErrDuplicateSession):
+		return console.ErrCodeDuplicateSession
+	case errors.Is(err, console.ErrRecordingUnavailable):
+		return console.ErrCodeRecordingUnavailable
+	default:
+		return console.ErrCodeInternal
+	}
+}
+
+func (c *consoleConn) handleStdin(ctx context.Context, f *console.ClientFrame) {
+	sess := c.lookupSession(f.SessionID)
+	if sess == nil {
+		// The session exited while the keystroke was in flight — benign.
+		return
+	}
+	data, err := f.DecodeData()
+	if err != nil {
+		c.sendError(f.SessionID, console.ErrCodeBadFrame, err.Error())
+		return
+	}
+	if err := c.hub.Stdin(ctx, sess, data); err != nil {
+		c.sendError(f.SessionID, dispatchErrorCode(err), err.Error())
+	}
+}
+
+func (c *consoleConn) handleResize(ctx context.Context, f *console.ClientFrame) {
+	sess := c.lookupSession(f.SessionID)
+	if sess == nil {
+		return
+	}
+	if err := c.hub.Resize(ctx, sess, f.Cols, f.Rows); err != nil {
+		c.logger.Debug("console: resize dispatch failed",
+			slog.String("session_id", sess.KeeperID), slog.Any("error", err))
+	}
+}
+
+func (c *consoleConn) handleClose(ctx context.Context, f *console.ClientFrame) {
+	sess := c.removeSession(f.SessionID)
+	if sess == nil {
+		return
+	}
+	c.hub.Close(ctx, sess, console.CloseOperatorDetached)
+}
+
+// drainQueued writes out whatever is left in the queue, stopping at the first
+// failure. Called once, from the teardown branch of [consoleConn.writePump], so
+// there is still exactly one writer on the socket.
+//
+// It is not bounded by the queue's contents, and that is worth knowing: a
+// `sendControl` after `done` refuses to enqueue, but [consoleConn.DeliverChunk]
+// does not look at `done` at all, so the EventStream goroutine can keep feeding
+// pty output while this drains. The real bound is the one teardown already
+// provides — [consoleConn.run] takes the socket away after consoleWriterGrace,
+// which fails the write in progress and returns from here.
+func (c *consoleConn) drainQueued() {
+	for {
+		f, ok := c.out.pop()
+		if !ok {
+			return
+		}
+		_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
+		if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
+			return
+		}
+	}
+}
+
+// writePump owns the socket's write side: it drains `out`, and pings to keep
+// the peer's liveness observable.
+func (c *consoleConn) writePump() {
+	ticker := time.NewTicker(consolePingPeriod)
+	drops := time.NewTicker(consoleDropFlush)
+	defer ticker.Stop()
+	defer drops.Stop()
+
+	for {
+		select {
+		case <-c.done:
+			// Anything a teardown queued on its way out goes first. Without this
+			// the frame explaining WHY the socket is closing is a coin flip: the
+			// sender pushes it and then closes `done`, and this select has no
+			// preference between the two ready cases — so roughly half the time
+			// the operator's wall went dark with no reason in it. Draining costs
+			// only what is already queued and delays nothing that matters: the
+			// sessions are reaped by [consoleConn.run], not here, and that path
+			// already takes the socket away after consoleWriterGrace if this
+			// writer parks on a peer that stopped reading (NIM-844).
+			c.drainQueued()
+			// Best-effort goodbye; a dead peer just makes this fail.
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
+			_ = c.ws.WriteMessage(websocket.CloseMessage,
+				websocket.FormatCloseMessage(websocket.CloseNormalClosure, ""))
+			return
+
+		case <-c.out.wake:
+			f, ok := c.out.pop()
+			if !ok {
+				continue
+			}
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
+			if err := c.ws.WriteMessage(websocket.TextMessage, f.payload); err != nil {
+				c.reportWriteFailure("console: operator socket write failed", err)
+				c.shutdown(console.CloseSocketWriteFailed)
+				return
+			}
+
+		case <-ticker.C:
+			_ = c.ws.SetWriteDeadline(time.Now().Add(c.writeWait))
+			if err := c.ws.WriteMessage(websocket.PingMessage, nil); err != nil {
+				// The peer is gone (a slept laptop keeps a half-open TCP
+				// connection for minutes); every pty behind it must die now,
+				// not when TCP eventually notices.
+				c.reportWriteFailure("console: operator socket keepalive write failed", err)
+				c.shutdown(console.CloseSocketUnreachable)
+				return
+			}
+
+		case <-drops.C:
+			c.flushDropped()
+		}
+	}
+}
+
+// reportWriteFailure logs a write that failed, at the level the failure earns.
+//
+// A write failing while the socket is ALREADY being torn down is this Keeper's
+// own doing: teardown closes the connection out from under a writer parked
+// mid-frame, because one blocked write must not hold every pty on the socket
+// hostage (NIM-242). That happens on the most routine event there is — an
+// operator closing a tab while output streams — so reporting it would put a
+// warning on nearly every disconnect and bury the case below.
+//
+// A write failing FIRST is the significant one. The peer vanished or fell
+// behind past the write budget, which is the same budget the pong handler holds
+// it to, so the read side had not yet called it dead. gorilla cannot recover a
+// connection after a failed write, so kill-on-disconnect reaps EVERY pty on
+// that socket — the operator's whole wall — and nothing can be sent down the
+// socket to say why. This log is the only place the answer exists.
+func (c *consoleConn) reportWriteFailure(msg string, err error) {
+	if c.closing() {
+		c.logger.Debug(msg+" during teardown",
+			slog.String("aid", c.aid), slog.Any("error", err))
+		return
+	}
+	c.logger.Warn(msg, slog.String("aid", c.aid), slog.Any("error", err))
+}
+
+// flushDropped emits a marker chunk for every session carrying discarded bytes,
+// so a gap is reported even when the flood that caused it has ended.
+//
+// The marker is an ordinary `chunk` with empty data: the client already knows
+// how to render `dropped_bytes`, and an empty payload appends nothing to the
+// terminal. Skipped while the queue is still congested — the point is to report
+// the gap once there is room, not to compete with live output.
+func (c *consoleConn) flushDropped() {
+	for _, pending := range c.takePendingDrops() {
+		payload, err := json.Marshal(console.ChunkFrame{
+			Type:         console.TypeChunk,
+			SessionID:    pending.clientID,
+			Stream:       "stdout",
+			DroppedBytes: pending.bytes,
+		})
+		if err != nil {
+			continue
+		}
+		// The marker carries the count in `reported`, not in `dataLen`: it has no
+		// output of its own, so being displaced must hand back exactly what it
+		// was going to report and nothing more.
+		if !c.enqueue(outFrame{payload: payload, clientID: pending.clientID, reported: pending.bytes}) {
+			// Nothing to give up but lifecycle frames: hand the count back and
+			// try on the next tick.
+			c.creditDropped(pending.clientID, pending.bytes)
+			return
+		}
+	}
+}
+
+// pendingDrop is one session's accumulated Keeper-side loss.
+type pendingDrop struct {
+	clientID string
+	bytes    uint64
+}
+
+// takePendingDrops atomically drains the drop counters of every live session.
+func (c *consoleConn) takePendingDrops() []pendingDrop {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	var out []pendingDrop
+	for id, ctr := range c.dropped {
+		if n := ctr.Swap(0); n > 0 {
+			out = append(out, pendingDrop{clientID: id, bytes: n})
+		}
+	}
+	return out
+}
+
+// creditDropped returns an undelivered count to a session's counter.
+func (c *consoleConn) creditDropped(clientID string, n uint64) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctr, ok := c.dropped[clientID]; ok {
+		ctr.Add(n)
+	}
+}
+
+// refreshClaimsLoop re-stamps this socket's cluster claims until teardown.
+//
+// On its own goroutine, NOT the writer's. A claim is Redis state, not a socket
+// write, and serialising it behind one would let a browser that stopped reading
+// starve the refresh past [keeperredis.ConsoleOwnerTTL] — at which point
+// SweepOrphans reads the lapsed claim as "the owning Keeper died" and reaps the
+// ptys. A slow operator would have their shells killed by the orphan sweeper.
+func (c *consoleConn) refreshClaimsLoop() {
+	claims := time.NewTicker(consoleClaimRefresh)
+	defer claims.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-claims.C:
+			c.refreshClaims()
+		}
+	}
+}
+
+// reauthorizeLoop re-asks, while the socket is up, what was decided once when it
+// opened (NIM-844, see middleware/longlived.go). A socket that outlives the
+// operator's rights is the one place the revocation perimeter has a hole by
+// construction rather than by omission.
+func (c *consoleConn) reauthorizeLoop(ctx context.Context) {
+	ticker := middleware.ReauthTicker(c.deps.ReauthInterval)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.done:
+			return
+		case <-ticker.C:
+			c.reauthorize(ctx)
+		}
+	}
+}
+
+// reauthorize drops what the operator may no longer hold.
+//
+// Two outcomes, because the two losses are not the same size. A revoked Archon
+// loses the socket: the token itself is no longer trusted, so there is nothing
+// left to keep any pane open for. An Archon narrowed out of `soul.console` for
+// one host loses that pane and keeps the others, which is exactly what the
+// narrowing says.
+//
+// The per-session check is the SAME question [consoleConn.handleOpen] asks,
+// against freshly read Coven labels — a label moving off a host narrows the scope
+// just as a permission edit does, and re-using the contexts captured at `open`
+// would miss it.
+//
+// But it is NOT the same call, and the difference is the one place this loop
+// could have made things worse than no loop at all. `soul.HostContextsBySID`
+// answers an unreadable row with the `{host}` context alone, which denies every
+// `coven=` grant — right for `open`, where the alternative is opening a pane on
+// an unverified host, and wrong here, where it would turn one exhausted pool into
+// "your permission was withdrawn" on every coven-scoped console in the fleet at
+// the same tick. Taking something away needs certainty, so this path asks the
+// form that reports the failure and KEEPS a pane it could not judge. A host whose
+// row is simply gone ([soul.ErrSoulNotFound]) is not that case: the answer is
+// known, and a pane on a host that no longer exists is not worth defending.
+//
+// Losing `soul.console` outright needs no separate branch: the per-session check
+// denies every host, so every pane goes, and the next `open` frame is refused by
+// handleOpen. A socket with no session left is harmless — it can reach nothing
+// without asking again.
+//
+// The `error` frame is best-effort, and deliberately not waited for. It is queued
+// ahead of the teardown, but the writer may take its `done` branch first (the
+// select has no preference), and making delivery certain would mean holding a
+// revoked operator's root shell open until a possibly-stalled browser drained its
+// queue. The shells going is the control; telling the operator why is a courtesy
+// that must not gate it.
+func (c *consoleConn) reauthorize(ctx context.Context) {
+	if c.deps.Enforcer == nil || c.closing() {
+		return
+	}
+	if c.deps.Enforcer.IsRevoked(c.aid) {
+		c.sendError("", console.ErrCodeForbidden, "archon "+c.aid+" has been revoked")
+		c.logger.Warn("console: socket closed, operator revoked under it",
+			slog.String("aid", c.aid))
+		c.shutdown(console.CloseAccessRevoked)
+		return
+	}
+	for _, s := range c.sessionTargets() {
+		if c.closing() {
+			// Teardown started under us: the sessions are the reaper's now, and
+			// closing one here would file it under the wrong reason.
+			return
+		}
+		// The read is bounded. The loop runs on a context detached from the
+		// request (the socket outlives it), nothing in this tree sets a
+		// statement or acquire timeout, and [consoleConn.run] waits for this
+		// goroutine before reaping — so an unbounded read here would let a
+		// wedged pool hold every pty on the socket open, on the very failure
+		// this branch exists to tolerate.
+		readCtx, cancel := context.WithTimeout(ctx, consoleReauthReadBudget)
+		contexts, err := soul.HostContextsBySIDOrError(readCtx, c.deps.SoulReader, s.sid)
+		cancel()
+		if err != nil && !errors.Is(err, soul.ErrSoulNotFound) {
+			// Unresolved covens make a `coven=` grant unjudgeable, not absent —
+			// but they say nothing about whether the right is held AT ALL, and
+			// that question needs no row: HoldsAction reads the snapshot. A
+			// deferral that skipped it would keep a pane whose permission was
+			// deleted outright for as long as the pool stayed down, which is the
+			// opposite mistake to the one this branch fixes.
+			if c.deps.Enforcer.HoldsAction(c.aid, "soul", "console") {
+				c.logger.Warn("console: host scope unreadable, session kept",
+					slog.String("aid", c.aid), slog.String("sid", s.sid), slog.Any("error", err))
+				continue
+			}
+			c.logger.Warn("console: host scope unreadable and soul.console is not held at all, session closed",
+				slog.String("aid", c.aid), slog.String("sid", s.sid), slog.Any("error", err))
+		}
+		if err := soul.AllowAnyContext(c.deps.Enforcer, c.aid, "soul", "console", contexts); err == nil {
+			continue
+		}
+		sess := c.removeSession(s.clientID)
+		if sess == nil {
+			continue // the operator closed it while we were asking
+		}
+		c.sendError(s.clientID, console.ErrCodeForbidden, "console permission for this host was withdrawn")
+		c.logger.Warn("console: session closed, host scope withdrawn under it",
+			slog.String("aid", c.aid), slog.String("sid", s.sid))
+		c.hub.Close(ctx, sess, console.CloseAccessRevoked)
+	}
+}
+
+// consoleTarget pairs a socket-local session id with the host it reaches, which
+// is all [consoleConn.reauthorize] needs and the only pair it may hold outside
+// the lock.
+type consoleTarget struct {
+	clientID string
+	sid      string
+}
+
+func (c *consoleConn) sessionTargets() []consoleTarget {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]consoleTarget, 0, len(c.sessions))
+	for clientID, sess := range c.sessions {
+		out = append(out, consoleTarget{clientID: clientID, sid: sess.SID})
+	}
+	return out
+}
+
+// refreshClaims re-stamps the cluster routing claims of this socket's sessions.
+func (c *consoleConn) refreshClaims() {
+	claims := c.sessionClaims()
+	if len(claims) == 0 {
+		return
+	}
+	c.hub.RefreshClaims(context.Background(), claims)
+}
+
+// --- console.Sink ---
+
+// DeliverChunk queues pty output, dropping it when the socket is behind.
+//
+// Called from the EventStream goroutine, so it must never block: a console that
+// could stall here would stall the apply traffic sharing that stream. Dropping
+// is the same bargain the Soul side makes — loss is possible under a flood, but
+// it is always counted and reported, so the terminal renders an explicit gap
+// instead of silently splicing a corrupted ANSI stream.
+func (c *consoleConn) DeliverChunk(sessionID string, stream keeperv1.ConsoleStream, data []byte, soulDropped uint64) {
+	counter := c.droppedCounter(sessionID)
+	pending := counter.Swap(0) + soulDropped
+
+	payload, err := json.Marshal(console.NewChunk(sessionID, stream, data, pending))
+	if err != nil {
+		c.logger.Warn("console: chunk marshal failed", slog.Any("error", err))
+		return
+	}
+
+	if !c.enqueue(outFrame{
+		payload:  payload,
+		clientID: sessionID,
+		dataLen:  len(data),
+		reported: pending,
+	}) {
+		// Nothing in the queue could be given up — it is all lifecycle frames.
+		// Put the accounting back: this chunk's bytes plus whatever we were
+		// already carrying belong to the next one that gets through.
+		counter.Add(pending + uint64(len(data)))
+		c.metrics.AddDroppedBytes(len(data))
+	}
+}
+
+// enqueue hands a frame to the writer, charging back whatever it displaced.
+//
+// A displaced chunk was already counted as delivered-or-not by nobody: it never
+// reached the socket, so both its own bytes and the drop count it was carrying
+// go back to its session, to be reported on the next chunk that does get out.
+func (c *consoleConn) enqueue(f outFrame) bool {
+	evicted, ok := c.out.push(f)
+	if !ok {
+		return false
+	}
+	if evicted.dataLen > 0 || evicted.reported > 0 {
+		c.creditDropped(evicted.clientID, uint64(evicted.dataLen)+evicted.reported)
+		c.metrics.AddDroppedBytes(evicted.dataLen)
+	}
+	return true
+}
+
+func (c *consoleConn) DeliverOpened(f console.OpenedFrame) { c.sendControl(f) }
+func (c *consoleConn) DeliverExit(f console.ExitFrame)     { c.sendControl(f) }
+func (c *consoleConn) DeliverError(f console.ErrorFrame)   { c.sendControl(f) }
+
+// sendControl queues a lifecycle frame. A full queue means the peer stopped
+// reading entirely, and a control frame cannot be dropped without stranding the
+// UI — so the socket is closed and every session behind it reaped.
+func (c *consoleConn) sendControl(frame any) {
+	payload, err := json.Marshal(frame)
+	if err != nil {
+		c.logger.Warn("console: control frame marshal failed", slog.Any("error", err))
+		return
+	}
+	select {
+	case <-c.done:
+		return
+	default:
+	}
+	if !c.enqueue(outFrame{payload: payload, control: true}) {
+		// Every frame ahead of this one is also a lifecycle frame, so there is
+		// nothing cheap left to give up. That is a peer which stopped reading
+		// entirely, not one merely behind.
+		c.logger.Warn("console: control queue full — closing socket",
+			slog.String("aid", c.aid))
+		c.shutdown(console.CloseSocketCongested)
+	}
+}
+
+func (c *consoleConn) sendError(sessionID, code, message string) {
+	c.sendControl(console.NewError(sessionID, code, message))
+}
+
+// --- session bookkeeping ---
+
+func (c *consoleConn) addSession(clientID string, sess *console.Session) {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.sessions[clientID] = sess
+	c.dropped[clientID] = &atomic.Uint64{}
+}
+
+func (c *consoleConn) lookupSession(clientID string) *console.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.sessions[clientID]
+}
+
+func (c *consoleConn) removeSession(clientID string) *console.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	sess := c.sessions[clientID]
+	delete(c.sessions, clientID)
+	delete(c.dropped, clientID)
+	return sess
+}
+
+// takeAllSessions drains the registry, so the teardown cannot race a concurrent
+// `close` frame into a double release.
+func (c *consoleConn) takeAllSessions() []*console.Session {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]*console.Session, 0, len(c.sessions))
+	for id, sess := range c.sessions {
+		out = append(out, sess)
+		delete(c.sessions, id)
+		delete(c.dropped, id)
+	}
+	return out
+}
+
+func (c *consoleConn) sessionClaims() []console.SessionClaim {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	claims := make([]console.SessionClaim, 0, len(c.sessions))
+	for _, sess := range c.sessions {
+		claims = append(claims, console.SessionClaim{SessionID: sess.KeeperID, SID: sess.SID})
+	}
+	return claims
+}
+
+// droppedCounter returns the per-session drop accumulator, tolerating a chunk
+// that arrives for a session already removed (the counter is then transient).
+func (c *consoleConn) droppedCounter(clientID string) *atomic.Uint64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if ctr, ok := c.dropped[clientID]; ok {
+		return ctr
+	}
+	return &atomic.Uint64{}
+}

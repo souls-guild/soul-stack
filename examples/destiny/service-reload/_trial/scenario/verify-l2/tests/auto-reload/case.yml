@@ -1,0 +1,40 @@
+# L2 case (docker systemd-PID1 stand, Trial ADR-023). Runs ONLY under
+# build-tag integration: `go test -tags integration -run TestL2 ./internal/trial/...`
+# (requires docker + privileged). The default harness (make test) marks it Skipped.
+#
+# Proves the daemon-reload fix in auto mode (gated by NeedDaemonReload):
+# after the unit file is rewritten (core.file.present, in-place), systemd sets
+# NeedDaemonReload=yes, core.service.restarted with daemon_reload=auto performs the reload
+# and applies the NEW definition (ExecStart=…2000). Empirically on debian-12
+# (systemd 252) the flag-flip is reliable — this is the main guard.
+name: auto-reload
+description: |
+  E2E daemon-reload (auto): unit rewritten → NeedDaemonReload=yes →
+  core.service.restarted(daemon_reload=auto) reloads → v2 applies.
+
+# systemd-PID1 stand: image from debian-12.Dockerfile (e2e-live), Entrypoint
+# /sbin/init, privileged. The image field under init: systemd is ignored (the stand
+# is built from the Dockerfile), but is required by the schema — we specify a reference tag.
+stand:
+  driver: docker
+  image:  debian:12-slim
+  mode:   push
+  init:   systemd
+
+input:
+  unit:        reload-probe
+  reload_mode: auto
+
+# restarted is always changed=true → a repeat apply is not idempotent.
+expect_idempotent: false
+
+verify:
+  # Proof: the loaded ExecStart = the NEW definition (sleep 2000).
+  - name: execstart-is-v2
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "systemctl show reload-probe -p ExecStart --value"
+    expect:
+      exit_code: 0
+      stdout_contains: "2000"

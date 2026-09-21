@@ -1,0 +1,11 @@
+# A correct scenario. It uses no named type, which is what leaves the catalog
+# unread by every per-file check.
+name: create
+description: Correct on purpose - the defect in this tree is the catalog alone
+
+tasks:
+  - name: Write the greeting file
+    module: core.file.present
+    params:
+      path: /tmp/soul-stack-hello
+      content: hello

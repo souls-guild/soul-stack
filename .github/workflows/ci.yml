@@ -1,0 +1,339 @@
+# Soul Stack CI. The gate lives in the Makefile (`make check`), the workflow only
+# reproduces the environment and runs the targets. The decision is fixed in the project
+# CLAUDE.md (CI locally in the Makefile, GH Actions is a thin wrapper).
+#
+# Portability: owner/repo is not hardcoded anywhere (the repository is temporary, it will
+# move later). module-path in go.mod is a placeholder, go.work resolves modules locally
+# from the checkout, no rename needed.
+name: CI
+
+on:
+  push:
+  pull_request:
+    branches: [main]
+
+# Cancel stale runs on the same branch/PR — saves runners. But NOT on the
+# integration targets (`main`, `release/*`), where every push is a squash-merge
+# and therefore a unit of acceptance in its own right (NIM-339).
+#
+# `cancel-in-progress: true` is written for a feature branch, where only the
+# latest commit matters and intermediate states interest nobody. A release branch
+# is the opposite case: it IS the integration target, and "the newest sha was
+# verified" does not imply "my merge was verified". With merges landing minutes
+# apart, each push killed the previous run, so a branch could show a green run
+# while the merge you care about never completed one — run 30507506031 was
+# evicted 14 s after the next push and reported `cancelled`, which sits next to
+# `failure` in `gh run list` and next to `success` in memory.
+#
+# Cost of this exception, stated: on a busy release branch runs queue instead of
+# cancelling, so the tip's verdict can arrive later and several runs occupy
+# runners at once. That is the price of every merge having its own verdict, and it
+# is affordable because release branches are not busy for long — not, as this line
+# claimed until NIM-879, because the repository is public and its minutes unmetered.
+# It is PRIVATE (`gh api repos/souls-guild/soul-stack -q .private` → true), so the
+# monthly Actions budget is real and a queue spends it. Feature branches keep the
+# eviction.
+#
+# Queueing is not enough by itself — a human can still read the wrong row. The
+# other half is `make check-ci`, which derives the sha from git instead of
+# trusting a list; see scripts/ci-status.sh.
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: ${{ github.ref != 'refs/heads/main' && !startsWith(github.ref, 'refs/heads/release/') }}
+
+permissions:
+  contents: read
+
+env:
+  # Codegen toolchain is pinned against the committed `proto/gen/go` — otherwise `check-gen`
+  # catches drift. Versions are taken from the headers of the generated code:
+  #   protoc        v7.34.1  (libprotoc 34.1)
+  #   protoc-gen-go v1.36.11
+  #   protoc-gen-go-grpc v1.6.2
+  # protoc-gen-go writes the string `protoc vX` right into the .pb.go header, so
+  # the apt version of protoc (older) would break idempotency — we install exactly 34.1.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+  # MUST track the `toolchain` line in go.work. It drifted one patch behind (1.26.4
+  # while go.work asked for 1.26.5) and that alone turned two jobs red on every push:
+  # GO-2026-5856 (crypto/tls ECH privacy leak) is "found in go1.26.4, fixed in
+  # go1.26.5", so `make check` (which contains check-vuln) and the govulncheck job
+  # both failed on a stdlib the repository had already moved off. Locally nobody saw
+  # it — a developer's toolchain honours go.work. A CI that is red for a reason the
+  # tree has already fixed teaches everyone to stop reading it, which is the whole
+  # problem NIM-238 is about.
+  GO_VERSION: "1.26.6"
+
+jobs:
+  # Main required gate. Fully reproduces `make check`:
+  # check-fmt vet build test check-gen check-openapi lint.
+  check:
+    name: check (make check)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          # Explicit version from go.work (toolchain 1.26.6). go-version-file: go.work
+          # is also supported by setup-go, but an explicit pin is clearer and doesn't depend on
+          # parsing the `toolchain` string.
+          go-version: ${{ env.GO_VERSION }}
+          # setup-go caches ~/go/pkg/mod and the build cache keyed by the go.sum hash of all
+          # go.work modules — built-in cache, no separate actions/cache needed.
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc is needed by the `check-gen` target (via `gen`). Version is pinned: otherwise
+      # the `protoc vX` header in generated code would diverge from the committed one.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      # protoc plugins — via go install of pinned versions; they land in
+      # $(go env GOPATH)/bin, which the Makefile forwards into PATH itself.
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: make check
+        run: make check
+
+  # L3a fast-loop E2E (ADR-039): testcontainers (PG+Redis+Vault) + Keeper process +
+  # soul-stub. Requires a built keeper binary (harness/stack.go spawns a sub-process,
+  # the path is read from env KEEPER_BIN — see tests/e2e/harness/stack.go). Docker is
+  # available out of the box on ubuntu-latest — testcontainers bring up dependent services.
+  #
+  # ★ DELIBERATELY NOT `needs: check`. It used to be, on the reasoning "no point running
+  # e2e if the base gate failed" — but the cost is that a red `check` ERASES the L3a
+  # signal, and GitHub renders the erasure as `skipped`. In the run log that reads as
+  # "nothing to check" rather than "not checked", which is the same silent-skip trap
+  # NIM-238 removed one level down: an absent result must never be mistakable for a
+  # passed one. It bit exactly that way on main — a one-patch Go pin turned `check` red
+  # and took the whole e2e level with it, invisibly.
+  #
+  # The two jobs are independent signals. A tree that does not compile fails e2e on its
+  # own `make build` step, which is an honest FAILURE rather than a skip; anything
+  # cheaper that `check` catches (fmt, lint, a stale snapshot) has no bearing on whether
+  # the L3a contract holds. Running both costs a runner and buys the ability to read the
+  # two answers separately. (This line used to justify the cost by the repository being
+  # public and its minutes therefore unmetered. It is PRIVATE — `gh api
+  # repos/souls-guild/soul-stack -q .private` → true, checked at NIM-879 — so the
+  # justification is the separable signal, not free minutes.)
+  e2e:
+    name: e2e (L3a fast-loop)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      # protoc + plugins: `make build` pulls in `make gen` for modules whose
+      # packages include committed .pb.go (committed, but re-gen on a fresh checkout
+      # is not performed — pure build). Not actually needed for build, but we
+      # keep the environment complete — committed code builds anyway. Steps below
+      # are kept for symmetry with the check job (in case `make gen` is added to a
+      # pre-step). If it becomes a time bottleneck, it can be removed.
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # Keeper binary is needed by the harness (sub-process spawn). Build it explicitly before e2e.
+      - name: make build (keeper + soul + soul-lint + soulctl)
+        run: make build
+
+      - name: make e2e
+        env:
+          # The harness reads KEEPER_BIN (see tests/e2e/harness/stack.go).
+          # `make build` puts the binary at keeper/bin/keeper, GITHUB_WORKSPACE is
+          # the checkout root.
+          KEEPER_BIN: ${{ github.workspace }}/keeper/bin/keeper
+        run: make e2e
+
+      # Test artifacts on failure — keeper process logs, fixture dumps, etc.
+      # The directories are created by the harness (if it writes them); if absent — upload
+      # skips the step (if-no-files-found: ignore).
+      - name: Upload e2e artifacts on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-logs
+          if-no-files-found: ignore
+          path: |
+            tests/e2e/_artifacts/
+            /tmp/keeper-*.log
+            /tmp/keeper-dev/
+
+  # Integration tests under the `integration` build tag (testcontainers-go).
+  # Docker is available on ubuntu-latest → testcontainers bring up containers themselves
+  # (postgres:16-alpine etc.). Separate job so as not to slow down the required gate.
+  #
+  # COVERAGE: runs `make test-integration` (go test -tags=integration -race
+  # -count=1) over the packages that carry integration-tagged tests — 43 today, not
+  # the ~155 of `./...`. The tag WIDENS a package set rather than narrowing it, so
+  # this job used to run the whole unit corpus under `-race` alongside its own
+  # container starts, and untagged timing-sensitive tests failed here at random
+  # while passing in `check` on the same sha (NIM-349). Those packages did not lose
+  # coverage: they run in the `check` job and, under the detector, in `race`.
+  #
+  # Tests that need NON-testcontainers
+  # infra (a pre-started Vault/Redis cluster etc.) must skip themselves on
+  # missing environment (t.Skip). If such a test hard-fails in a clean CI run —
+  # that's a signal for the test author to add a skip-guard, not a reason to fix the workflow.
+  # Job BLOCKING: integration is part of the required gate (P0-7).
+  #
+  # The earlier "6 flaky" note was wrong: these were NOT flakes but deterministic
+  # test↔contract desyncs (history tests) + a contract bug of PascalCase-wire in three
+  # list/history handlers (an untagged domain *View went straight to Body, bypassing the projection →
+  # PascalCase JSON keys instead of the snake_case schema). All six were fixed deterministically
+  # (4 stale test↔contract + 2 history) + a guard TestIntegration_ListEndpoints_
+  # SnakeCaseWire catches the whole class going forward → continue-on-error removed.
+  integration:
+    name: integration tests (testcontainers)
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: make test-integration
+        run: make test-integration
+
+  # Race detector over the UNIT corpus (`make test-race`). Blocking, and a separate
+  # job from `check` on purpose — two different claims, read separately.
+  #
+  # Why it is here and not in nightly (NIM-312). Every piece of concurrent code in
+  # this repository lives in untagged packages: the async runner and its barriers
+  # (soul/internal/runtime, ADR-0075), the console pty pumps and write budget, the
+  # applybus fan-out. `make test` runs them uninstrumented, so no gate saw them
+  # under the detector. `make test-integration` does pass `-race`, but only over
+  # packages carrying integration-tagged tests — none of the above.
+  #
+  # A `test-race` target and a nightly job for it both already existed, and between
+  # them they produced no signal at all: the workflow is `workflow_dispatch` with
+  # no schedule, and the job carried `continue-on-error: true`, so on the rare
+  # manual run a found race was advisory. That is the NIM-238 shape a third time —
+  # the machinery is present, the verdict is not. A detector that cannot fail a
+  # merge is documentation, not a gate.
+  #
+  # Cost, stated: ~3 min on a runner of its own, so it does not extend the critical
+  # path (`integration` is longer). Runner minutes are free — this repository is
+  # public. It duplicates the unit tests that `check` already ran, uninstrumented;
+  # that is the price of `make check` staying fast for a contributor, and the two
+  # runs are independent signals rather than one guarded by the other.
+  race:
+    name: race detector (unit corpus)
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e/go.sum
+
+      - name: make test-race
+        run: make test-race
+
+  # Vulnerability scanner across Go modules. Blocking: a supply-chain advisory must
+  # stop the merge (P0-7, docs/prod-readiness.md). At the time of enabling,
+  # govulncheck is clean across all modules (`make check-vuln` is green) — the gate doesn't
+  # mask existing findings. A transient vuln-DB failure is fixed by rerunning the
+  # job, not by ignoring the result.
+  govulncheck:
+    name: govulncheck
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # Every go.sum, because the corpus is every module (NIM-774) — a glob
+          # rather than a list for the same reason the corpus itself is derived.
+          cache-dependency-path: "**/go.sum"
+
+      # `make check-vuln`, not a loop written out here. This step used to carry its
+      # own copy of the module list ("stays in sync with MODULES in the Makefile"),
+      # its own skip-on-empty test — the `2>/dev/null` one that cannot tell "no
+      # packages" from "go list broke", NIM-481 — and `set -e`, which stops the sweep
+      # at the first failing module and says nothing about the rest, NIM-494. Three
+      # defects the Makefile had already fixed, kept alive by a second home for the
+      # same sweep, plus `@latest` against the Makefile's pinned version. The target
+      # installs the pinned govulncheck itself and reports every module in the tree.
+      - name: make check-vuln
+        run: make check-vuln

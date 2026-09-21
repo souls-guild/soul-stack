@@ -1,0 +1,142 @@
+name: restart
+description: >-
+  Day-2: rolling-restart DragonFly (sentinel mode — master-replica) WITHOUT changing
+  the config. REUSE of the probe→where rolling-restart idiom from redis/restart (ADR-056/008):
+  each host's actual role is VOLATILE (after a possible sentinel-failover the declared
+  role from create is already wrong), so the role is taken from a LIVE probe right before
+  targeting, not from incarnation.state.
+
+  ★ DragonFly vs redis: the data plane is rendered by the `dragonfly` destiny (not needed here —
+  restart doesn't touch the config); the LIVE runtime (role probe, health-gate) goes through the
+  redis plugin (DragonFly is redis-compatible: INFO replication / PING work — the plugin
+  needs NO changes). Daemon restart — core.service.restarted (a host-level operation on the
+  `dragonfly` systemd unit; Type=simple unit — package-deb or binary unit). The sentinel daemon
+  (redis-sentinel) is NOT restarted by this scenario: it's a separate process, rolling only touches
+  DragonFly's data plane (symmetric with redis — there only redis-server is restarted).
+
+  ★ All interactions with DragonFly go through the redis plugin (NOT raw redis-cli/
+  core.cmd.shell): role probe — redis.instance.role-probed (INFO replication); replica health-gate
+  — redis.replica.synced (a STRICT resync gate: master_link_status:up — the replica
+  has caught up with master, not just "the daemon answered PONG"); restarting master last —
+  redis.instance.pinged (master has no master_link_status; PONG = correct liveness check for master).
+
+  ★ state name — `replica-synced`/`pinged`/`role` (kebab-case): the module-address grammar
+  `<ns>.<module>.<state>` in soul-lint requires kebab in every segment (precedent: redis/restart).
+
+  Targeting — the whole incarnation (on omitted = whole incarnation, ADR-008/009): the run is
+  invoked on all Souls of the incarnation, probe sorts them into master/slave by the live INFO
+  replication response. Replicas are restarted ONE AT A TIME (block + serial:1: a wave = {restart,
+  health-gate}), master is restarted as a SEPARATE task AFTER all replicas (the rolling invariant
+  "master last"). State doesn't change — only a record in state_history.
+
+  ★ Boundary (as in redis/restart): live failover (SENTINEL FAILOVER before restarting master)
+  — a follow-up once redis gets a failover verb. For now master is restarted
+  directly (brief unavailability during restart).
+
+# Block format — docs/input.md.
+input:
+  reason:
+    type: string
+    default: "manual restart"
+
+# ── Computed scenario-vars (compute:, ADR-009 amendment) ───────────────────────
+# Run-level context (input/vars/incarnation — WITHOUT soulprint). Removes duplication
+# of the plugin's local connect address (would repeat across probe + health-gate).
+#
+# ★ DragonFly vs redis (BLOCKER fix): local plugin calls go to its OWN instance via a
+# UNIX SOCKET (compute.local_addr), NOT 127.0.0.1:port. DF with --bind=primary_ip does NOT
+# listen on loopback (dfly_main.cc) — a TCP connect to 127.0.0.1 wouldn't connect; the socket is a
+# separate UDS listener (always locally reachable). UDS isn't a network path → TLS isn't needed on
+# it (even on a TLS instance): tls/tls_ca were REMOVED from the local probe/health-gate. So the TLS
+# discriminator (tls_on/tls_port/tls_ca) is NO LONGER NEEDED for restart — it only applied to local
+# connects, which are now UDS. run_dir is a host invariant (vars destiny); the default duplicates
+# the default (scenario doesn't see destiny-vars); the service vars are incomplete on day-2, but run_dir is
+# a fixed layout fact, so the default is correct.
+compute:
+  local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
+  # ★ admin_user (default_admin redesign): the role probe + replica health-gate connect to the
+  # local DragonFly as this user (requirepass removed). Literal (day-2, outside covenant).
+  admin_user: "${ 'default_admin' }"
+
+tasks:
+  # ── Resolve this run's ACL passwords ([ADR-0083] §4) ──────────────────────────
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name) and returns the effective
+  # state with every `type: secret` property replaced by its `vault:` reference.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the tasks below read
+  # `register.<name>.effective` inside `params:` / `apply: input:`, which is
+  # passage-defining (shared/config.collectTaskReads) - a real register edge puts every
+  # consumer in a strictly later passage than these. The former construction leaned on
+  # the vault-emitter axis, which the author could not see from the file.
+
+  - name: Resolve the passwords of the service's own ACL accounts
+    module: core.state.set
+    register: system_acl_users
+    params:
+      field: system_acl_users
+      # No `password` property on any element -> secret resolution requires an EXISTING
+      # value: an account whose secret was never minted fails loudly here, rather than
+      # the live instance being handed a freshly generated one it does not know.
+      value: "${ default(incarnation.state.system_acl_users, []) }"
+
+  # Probe: each host's actual role via the redis.instance.role-probed plugin (go-redis INFO
+  # replication, no redis-cli). The actual role is volatile, taken from a live probe right
+  # before targeting (concept.md, ADR-008). Probe completeness is guaranteed by the fail-stop
+  # barrier (ADR-056 §5): a failed probe on any host → barrier → error_locked, the where-Passage
+  # doesn't start. register.self.role — the actual role ("master"/"slave"), where compares
+  # WITHOUT manual trim (the plugin returns a typed string). addr — local UNIX socket.
+  - name: Detect actual dragonfly role per host
+    module: redis.instance.role-probed
+    register: df_role
+    changed_when: false
+    params:
+      addr:     "${ compute.local_addr }"
+      # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
+      username: "${ compute.admin_user }"
+      password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+
+  # Rolling-restart replicas one host at a time (serial: 1). serial: on a block: rolls the whole
+  # block over one set of hosts before the next wave (orchestration.md §2, Variant A:
+  # a wave = {change, check health}). block.where (slave) is inherited by both children
+  # — they render ONLY on replicas, master isn't touched in this wave.
+  - name: Rolling-restart replicas one at a time
+    where: register.df_role.role == 'slave'
+    serial: 1
+    block:
+      # Restart DragonFly's data plane (the `dragonfly` systemd unit). The sentinel daemon
+      # (redis-sentinel) is NOT touched — it's a separate process.
+      - name: Restart dragonfly
+        module: core.service.restarted
+        params:
+          name: dragonfly
+      # Health-gate: wait until the restarted replica has RESYNCED with master
+      # (master_link_status:up), not just brought the daemon up. redis.replica.synced
+      # (INFO replication), NOT pinged (PONG is weak — the daemon is alive but may not have
+      # caught up with master after restart; rolling must not proceed to the next replica until
+      # the current one has caught up). Time budget and condition — retry:+until: (count × delay =
+      # budget, until: = condition).
+      - name: Wait until replica resynced with master
+        module: redis.replica.synced
+        changed_when: false
+        retry:
+          count: 12
+          delay: 5s
+          until: "register.self.synced == true"
+        failed_when: "register.self.synced != true"
+        params:
+          addr:     "${ compute.local_addr }"
+          # ★ default_admin REDESIGN: AUTH as default_admin (requirepass removed). UDS without TLS.
+          username: "${ compute.admin_user }"
+          password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+
+  # Restart master AFTER all replicas (the rolling invariant "master last"). run_once: —
+  # exactly one host (first by SID) from resolving on:+where: (orchestration.md §2). >1 "current
+  # master" per probe is normal for sentinel-multi (rare), the step runs on one deterministic host per run.
+  - name: Restart the current master last
+    module: core.service.restarted
+    where: register.df_role.role == 'master'
+    run_once: true
+    params:
+      name: dragonfly

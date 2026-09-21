@@ -1,0 +1,6 @@
+name: filter-deprecated
+filter: "role == 'master'"
+tasks:
+  - module: core.exec.run
+    params:
+      command: "true"

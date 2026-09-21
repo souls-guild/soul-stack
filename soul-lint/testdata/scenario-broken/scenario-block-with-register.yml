@@ -1,0 +1,8 @@
+name: block-with-register
+tasks:
+  - name: block does not invoke a module — register meaningless
+    register: r
+    block:
+      - module: core.exec.run
+        params:
+          command: "true"

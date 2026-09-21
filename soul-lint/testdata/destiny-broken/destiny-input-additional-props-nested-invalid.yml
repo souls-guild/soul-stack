@@ -1,0 +1,8 @@
+name: x
+input:
+  m:
+    type: object
+    properties: {}
+    additional_properties:
+      type: integer
+      pattern: "^x$"

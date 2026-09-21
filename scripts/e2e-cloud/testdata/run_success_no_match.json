@@ -1,0 +1,24 @@
+{
+  "apply_id": "01J8ZK7Q9WGF3M2N7P4R5S6NM1",
+  "scenario": "add_user",
+  "status": "success",
+  "started_at": "2026-07-06T10:00:00.000000000Z",
+  "finished_at": "2026-07-06T10:00:42.000000000Z",
+  "started_by_aid": "archon-alice",
+  "hosts": [
+    {
+      "sid": "redis-auto-1.ns.vm.example",
+      "status": "success",
+      "passage": 0,
+      "attempt": 1,
+      "cancel_requested": false
+    },
+    {
+      "sid": "redis-auto-2.ns.vm.example",
+      "status": "no_match",
+      "passage": 0,
+      "attempt": 1,
+      "cancel_requested": false
+    }
+  ]
+}

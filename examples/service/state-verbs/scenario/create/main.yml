@@ -1,0 +1,140 @@
+name: create
+description: >-
+  Runs every `core.state.<verb>` once, in an order that leaves a state a case can
+  predict exactly ([ADR-0084]). Each write lands at its own step, not in an
+  end-of-run commit, so the file reads top to bottom as the sequence of states the
+  incarnation actually passes through.
+
+input:
+  cluster_id:
+    type: string
+    required: true
+    pattern: "^[a-z][a-z0-9-]*$"
+    description: Identity of the cluster this incarnation is.
+
+  first_member:
+    type: string
+    required: true
+    pattern: "^[a-z][a-z0-9-]*$"
+    description: Name of the member recorded under its own key in the members map.
+
+tasks:
+  # set - overwrite the field. The plain capture, and the only verb the rest of
+  # the corpus uses.
+  - name: Record the cluster identity
+    module: core.state.set
+    register: cluster_id
+    params:
+      field: cluster_id
+      value: "${ input.cluster_id }"
+
+  # A field that exists only to be dropped at the end, so `unset` has something
+  # to drop that the same run put there - state accumulates within a run.
+  - name: Record the bootstrap token
+    module: core.state.set
+    params:
+      field: bootstrap_token
+      value: "seed-token"
+
+  # present - write only into an empty field. Over a field that already holds a
+  # value the proposal is discarded and the STORED value is what the register
+  # quotes. See tests/idempotent-rerun.
+  - name: Claim the topology, without overruling one already claimed
+    module: core.state.present
+    register: topology
+    params:
+      field: topology
+      value: standalone
+
+  # add into a MAP field: identity is `key:`, the key the element is stored
+  # under. `match:` here would be an error, not a fallback - it is the list
+  # spelling, and the engine picks by the field's kind.
+  #
+  # The element is built in the task's own `vars:` and referenced as a CEL cell,
+  # rather than written as a literal map under `value:`. That is a workaround for
+  # a recorded gap, not a style: `value:` is polymorphic, `sdk/schema`'s param
+  # types are a closed set with no `any`, so the manifest declares it `string` and
+  # a literal YAML map is rejected by a type check that has no business judging it
+  # ([ADR-0084] "value: is polymorphic and the SDK type system cannot say so").
+  # A CEL-wrapped cell is exempt from the literal check. Widening the SDK type set
+  # is a public-contract change and has its own ticket.
+  - name: Record the first member under its own key
+    module: core.state.add
+    vars:
+      # One CEL expression, not a YAML map with cells inside it: a `${ … }` nested
+      # inside a map var is NOT resolved and survives as its own text
+      # (docs/destiny/vars.md, "Valid value types"). node_b/node_c below are plain
+      # YAML because they interpolate nothing.
+      member: "${ {'name': input.first_member, 'role': 'primary'} }"
+    params:
+      field: members
+      key: "${ input.first_member }"
+      value: "${ vars.member }"
+      on_conflict: skip
+
+  # add into a LIST field: identity is `match:`, a predicate over `elem` (the
+  # stored element) and `value` (the one being added). on_conflict: skip is what
+  # makes a re-run a no-op rather than a second copy.
+  - name: Record node-b, once
+    module: core.state.add
+    vars:
+      node_b: { name: node-b, role: replica, weight: 1 }
+    params:
+      field: nodes
+      match: "elem.name == value.name"
+      value: "${ vars.node_b }"
+      on_conflict: skip
+
+  - name: Record node-c, once
+    module: core.state.add
+    vars:
+      node_c: { name: node-c, role: draining, weight: 0 }
+    params:
+      field: nodes
+      match: "elem.name == value.name"
+      value: "${ vars.node_c }"
+      on_conflict: skip
+
+  # modify - patch every element the predicate selects. expect: one turns "the
+  # predicate is supposed to be an identity" into a checked assertion, evaluated
+  # BEFORE the patch, so a predicate that widened does not commit.
+  - name: Give node-b its real weight
+    module: core.state.modify
+    params:
+      field: nodes
+      match: 'elem.name == "node-b"'
+      patch: { weight: 5 }
+      expect: one
+
+  # remove - drop every element the predicate selects. An OMITTED match: would
+  # not mean "all": it matches nothing and the step is a no-op, so a forgotten
+  # line cannot demolish the collection.
+  - name: Drop the draining nodes
+    module: core.state.remove
+    params:
+      field: nodes
+      match: 'elem.role == "draining"'
+
+  # append - grow a list with no identity check. Deliberately NOT idempotent:
+  # that is what an append-only log wants, and what a roster must not have.
+  - name: Note that the cluster was created
+    module: core.state.append
+    params:
+      field: events
+      value: "cluster created"
+
+  # unset - drop the field itself. Not the same as writing null: the key stops
+  # existing, which is what `state_absent` in a case asserts.
+  - name: Forget the bootstrap token
+    module: core.state.unset
+    params:
+      field: bootstrap_token
+
+  # A Soul-side step so a roster host closes success instead of no_match. It is a
+  # read-only no-op; the subject of this service is the keeper-side steps above.
+  - name: Echo on every host of the incarnation
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["state-verbs-ok"]

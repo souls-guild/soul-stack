@@ -1,0 +1,49 @@
+# tasks/account.yml — stable service account for vector + data and config directories.
+#
+# Unlike the stateless branch of the prod convention §2 (DynamicUser=yes, as in redis-exporter),
+# we keep a manual system account (stateful branch §2): Vector has a persistent disk buffer
+# (data_dir) — the read-offset queue for tracked files and sink state survives restarts and
+# belongs to a fixed uid (otherwise, after a uid change, Vector wouldn't be able to read its own
+# checkpoint). The group is created BEFORE the user (core.user -g requires an existing
+# primary group). The group name is input.group (defaults to input.user, but is
+# settable independently), so the data_dir owner isn't hard-pinned to the account name.
+
+- name: Ensure the vector system group exists
+  module: core.group.present
+  params:
+    name: "${ input.group }"
+    system: true
+
+# home is deliberately NOT set: core.user.present ALWAYS calls useradd with -M (no directory is
+# created), so the absence of `home:` means a system account without a home directory.
+- name: Ensure the vector system user exists
+  module: core.user.present
+  params:
+    name: "${ input.user }"
+    system: true
+    group: "${ input.group }"
+    shell: /usr/sbin/nologin
+
+# data_dir — Vector's persistent disk buffer (global data_dir): checkpoint offsets of
+# tracked files + the sink queue. Declarative state via core.directory.present:
+# idempotent on mode/owner/group, fixes drift. owner/group — the service account (Vector
+# reads/writes the buffer under its own uid). mode 0700: the buffer may contain unprocessed
+# log entries — access restricted to the owner only.
+- name: Ensure vector data directory exists
+  module: core.directory.present
+  params:
+    path:  "${ input.data_dir }"
+    owner: "${ input.user }"
+    group: "${ input.group }"
+    mode:  "0700"
+
+# config_dir — the configuration directory (/etc/vector). Owned by root (config is written by
+# root, read by the service account via group/other-read on the unit). mode 0755: vector.yaml
+# itself is rendered with mode 0640 (see service.yml).
+- name: Ensure vector config directory exists
+  module: core.directory.present
+  params:
+    path:  "${ vars.config_dir }"
+    owner: root
+    group: "${ input.group }"
+    mode:  "0750"

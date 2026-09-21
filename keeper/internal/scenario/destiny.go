@@ -1,0 +1,217 @@
+package scenario
+
+import (
+	"context"
+	"fmt"
+	"log/slog"
+	"strings"
+	"sync"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/shared/config"
+)
+
+// destinyNamePlaceholder — marker in `default_destiny_source`, replaced by the
+// destiny name when resolving the git URL (keeper_settings::default_destiny_source).
+const destinyNamePlaceholder = "{name}"
+
+// DestinyTemplateSource — source of the `default_destiny_source` URL template.
+// Implemented by a runtime snapshot [serviceregistry.Holder]
+// (DefaultDestinySource reads the keeper_settings scalar, ADR-029). Declared as
+// an interface so [DestinySource] can be tested without a DB (fixed template)
+// and so the template is read LAZILY (from the current snapshot on every
+// resolve) rather than fixed as a copy in the constructor — otherwise a
+// hot-reload of the scalar wouldn't reach resolution.
+type DestinyTemplateSource interface {
+	DefaultDestinySource() string
+}
+
+// fixedTemplateSource — [DestinyTemplateSource] with a constant template (tests).
+type fixedTemplateSource string
+
+func (s fixedTemplateSource) DefaultDestinySource() string { return string(s) }
+
+// DestinySource resolves the git coordinates of a destiny repo by name. ref
+// comes from `service.yml → destiny[]` by name (ADR-007: version = git ref).
+// The git URL follows a hybrid rule: a per-entry `destiny[].git` override
+// (direct URL) takes priority, otherwise the name is substituted into the
+// `default_destiny_source` template (read LAZILY from the snapshot source).
+// Safe for concurrent use.
+type DestinySource struct {
+	loader   *artifact.DestinyLoader
+	template DestinyTemplateSource
+}
+
+// NewDestinySource builds a destiny source from the loader and the
+// `default_destiny_source` URL template snapshot source. The template is read
+// lazily on every resolve (see resolveURL) — hot-reload of the keeper_settings
+// scalar is transparent. An empty template is allowed: name-only dependencies
+// then don't resolve, but destinies with a per-entry `git` override work
+// without a template.
+func NewDestinySource(loader *artifact.DestinyLoader, template DestinyTemplateSource) *DestinySource {
+	return &DestinySource{loader: loader, template: template}
+}
+
+// resolveURL derives the destiny git URL by the hybrid rule: the per-entry
+// `git` override takes priority (direct URL, no template), otherwise name is
+// substituted into the `default_destiny_source` template. `gitOverride` is the
+// `destiny[].git` value from service.yml (empty = override not set).
+func (s *DestinySource) resolveURL(name, gitOverride string) (string, error) {
+	if gitOverride != "" {
+		return gitOverride, nil
+	}
+	var template string
+	if s.template != nil {
+		template = s.template.DefaultDestinySource()
+	}
+	if template == "" {
+		return "", fmt.Errorf("scenario: default_destiny_source is not set (keeper_settings), and destiny %q did not specify a per-entry git - resolving apply:destiny is impossible", name)
+	}
+	if !strings.Contains(template, destinyNamePlaceholder) {
+		return "", fmt.Errorf("scenario: default_destiny_source %q does not contain %s - nowhere to substitute the destiny name", template, destinyNamePlaceholder)
+	}
+	return strings.ReplaceAll(template, destinyNamePlaceholder, name), nil
+}
+
+// LoadManifest materializes the destiny snapshot for one `service.yml →
+// destiny[]` entry and returns its parsed `destiny.yml`. Exported for the
+// compat-window view (ADR-0076(h)), which must read every destiny's DECLARED
+// window without running a render pass; the git URL follows the same hybrid rule
+// as resolution (per-entry `git` override → `default_destiny_source` + name).
+func (s *DestinySource) LoadManifest(ctx context.Context, dep config.DependencyRef) (*config.DestinyManifest, error) {
+	gitURL, err := s.resolveURL(dep.Name, dep.Git)
+	if err != nil {
+		return nil, err
+	}
+	manifest, _, err := s.loader.LoadManifest(ctx, artifact.DestinyRef{Name: dep.Name, Git: gitURL, Ref: dep.Ref})
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load destiny manifest %q: %w", dep.Name, err)
+	}
+	return manifest, nil
+}
+
+// resolverFor builds a per-run [render.DestinyResolver] from the destiny[]
+// dependencies of a specific service snapshot. ref/git come from
+// manifest.Destiny[] by name; a destiny not declared in service.yml::destiny[]
+// is rejected (apply:destiny can only reference a declared dependency, ADR-007).
+//
+// keeperVersion is the raw build version of THIS instance, checked against each
+// resolved destiny's declared `compat:` window (ADR-0076(f)). Empty → the gate is
+// inert (nothing to compare), which is what unit paths without a wire-up get.
+func (s *DestinySource) resolverFor(manifest *config.ServiceManifest, keeperVersion string, log *slog.Logger) *destinyResolver {
+	deps := make(map[string]config.DependencyRef, len(manifest.Destiny))
+	for _, dep := range manifest.Destiny {
+		deps[dep.Name] = dep
+	}
+	return &destinyResolver{source: s, deps: deps, keeperVersion: keeperVersion, logger: log}
+}
+
+// destinyResolver — per-run implementation of [render.DestinyResolver]: knows
+// the destiny[] dependencies of the current service snapshot (ref + optional
+// git override) and loads the destiny artifact via DestinyLoader.
+type destinyResolver struct {
+	source *DestinySource
+	deps   map[string]config.DependencyRef
+
+	// keeperVersion / logger — the engine-compat gate (ADR-0076): a destiny is a
+	// separately pinned artifact declaring its own window, so it is checked when
+	// the render phase resolves it, not upfront (resolving every declared destiny
+	// eagerly would clone repos a run never touches).
+	keeperVersion string
+	logger        *slog.Logger
+
+	// mu / resolved — the destiny contributions to the effective window, recorded
+	// as they are checked (ADR-0076(l)). Lazy resolution is exactly why they must
+	// be accumulated here: only the resolver knows which destinies a run actually
+	// touched, and the effective window is the intersection over those, not over
+	// everything service.yml declares. Guarded because a resolver instance is
+	// shared across a run's render passes.
+	mu       sync.Mutex
+	resolved []config.CompatEntity
+}
+
+// compatEntities returns the destiny contributions collected so far, in
+// resolution order. Safe on a nil receiver — a run without a destiny source
+// contributes none.
+func (r *destinyResolver) compatEntities() []config.CompatEntity {
+	if r == nil {
+		return nil
+	}
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	out := make([]config.CompatEntity, len(r.resolved))
+	copy(out, r.resolved)
+	return out
+}
+
+// recordCompat appends a destiny's contribution, deduplicated by name+ref: a
+// staged run resolves the same destiny once per Passage, and the window must be
+// counted once.
+func (r *destinyResolver) recordCompat(e config.CompatEntity) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	for _, seen := range r.resolved {
+		if seen.Name == e.Name && seen.Ref == e.Ref {
+			return
+		}
+	}
+	r.resolved = append(r.resolved, e)
+}
+
+// Resolve loads a destiny by name: ref from service.yml::destiny[], git URL by
+// the hybrid rule (per-entry git override → default_destiny_source + name).
+// Returns the parsed tasks + input schema.
+func (r *destinyResolver) Resolve(ctx context.Context, name string) (*render.ResolvedDestiny, error) {
+	dep, ok := r.deps[name]
+	if !ok {
+		return nil, fmt.Errorf("scenario: destiny %q is not declared in service.yml::destiny[] - apply:destiny refers only to a declared dependency (ADR-007)", name)
+	}
+	gitURL, err := r.source.resolveURL(name, dep.Git)
+	if err != nil {
+		return nil, err
+	}
+	destinyRef := artifact.DestinyRef{Name: name, Git: gitURL, Ref: dep.Ref}
+
+	// Engine-compat gate (ADR-0076(f)), BEFORE the task body is parsed: the window
+	// lives in `destiny.yml` exactly so a keeper that cannot parse a newer DSL body
+	// can still answer "you need keeper X" rather than choke on the body. The
+	// snapshot is materialized once and reused by sha1, so the manifest-only pass
+	// costs one small YAML parse.
+	manifest, _, err := r.source.loader.LoadManifest(ctx, destinyRef)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load destiny manifest %q: %w", name, err)
+	}
+	entity := config.CompatEntity{
+		Kind:   config.CompatEntityDestiny,
+		Name:   name,
+		Ref:    dep.Ref,
+		Window: manifest.Compat.KeeperWindow(),
+	}
+	if err := checkKeeperCompat(r.keeperVersion, entity, r.logger); err != nil {
+		return nil, err
+	}
+	r.recordCompat(entity)
+
+	art, err := r.source.loader.Load(ctx, destinyRef)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: load destiny %q: %w", name, err)
+	}
+	warnCompatFloorTooLow(entity, config.KeeperFeaturesOfDestiny(art.Manifest, art.Tasks), r.logger)
+	// .tmpl files of a destiny live in ITS OWN snapshot (art.LocalDir), not the
+	// service snapshot. Single-level resolve (destiny has no scenario-local
+	// layer): empty prefix.
+	localDir := art.LocalDir
+	templates := render.NewSnapshotTemplateReader(
+		func(rel string) ([]byte, error) { return artifact.ReadSnapshotFile(localDir, rel) },
+		"",
+	)
+	return &render.ResolvedDestiny{
+		Name:      art.Manifest.Name,
+		Tasks:     art.Tasks,
+		Input:     art.Manifest.Input,
+		Validate:  art.Manifest.Validate,
+		Vars:      art.Vars, // destiny-local vars.yml (docs/destiny/vars.md), raw
+		Templates: templates,
+	}, nil
+}

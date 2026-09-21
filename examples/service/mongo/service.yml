@@ -1,0 +1,134 @@
+description: >-
+  MongoDB following a unified-service concept (PILOT, standalone). The operator sets SIMPLE
+  typed concepts (version, memory, WiredTiger cache, users), and the create scenario
+  translates them into mongod.conf. Per-host install + render + bootstrap is done by
+  the scenario INLINE via core modules (install: version-enum + Nexus binary / distro
+  package; render mongod.conf from a scenario-local template; ADR-009 B-hybrid). LIVE mongod
+  (health-ping, createUser/dropUser, raw runCommand) goes through the `mongo` plugin
+  (go-mongo-driver — NOT core.exec+mongosh); orchestration (order/health-gate) — in scenario.
+
+  ★ PILOT SCOPE (2026-06-30): standalone ONLY (a single mongod, security.authorization
+  enabled, admin via localhost-exception). Implemented scenarios `create` + `destroy`.
+  OUT of pilot: replica-set (replSetInitiate/add_node/remove_node), sharded (mongos/config/
+  shard + Choir), keyFile (intra-cluster SCRAM authentication), rotate_tls, separate
+  add_user/remove_user scenarios (users are only provisioned by the plugin-state user from create).
+  TLS — pilot=plain (mongo TLS on port 27017 via net.tls.mode — a separate slice).
+
+# state-schema version 2 — the top of the forward-only ladder below (ADR-019;
+# NIM-735: the version is derived from migrations/, never written down).
+#   - 002_system_users: the service's OWN accounts become a declared
+#     state field (NIM-698, [ADR-0083]). Adds system_users — an array of {name} recording
+#     WHICH accounts the service provisioned for itself (default_admin); their roles stay in
+#     service vars (policy), the password is declared `type: secret` so its value lives in
+#     Vault at a DERIVED path. Default [] — migration-CEL cannot read vars (ADR-019 sandbox).
+#     Mirrors redis 015_system_acl_users / dragonfly 007_system_acl_users.
+# incarnation.state records what has been deployed, so the operator sees the installation and
+# repeated apply is idempotent. Standalone mini-schema (without replica-set/sharding/keyfile
+# — out of PILOT scope).
+#
+# BOUNDARY between the two config representations (as with redis/dragonfly):
+#   - mongo_config (opaque, additional_properties: true) — the COMPUTED RESULT of translating
+#     simple input into the mongod.conf structure (what actually goes into render). Write-model
+#     "as deployed".
+#   - named fields (memory_mb/wiredtiger_cache_gb/...) — the operator's INTENT in simple
+#     typed concepts (read-model). install and host-layout (conf_dir/data_dir)
+#     are moved into service vars (author-context, day-2 reads service vars directly).
+# BOTH are filled from a SINGLE create compute pass — there is no desync.
+state_schema:
+  # Effective MongoDB version (upstream series for binary; distro pin for package).
+  mongo_version:
+    type: string
+  # Final mongod.conf (merged default→computed→passthrough from service vars). Goes into
+  # rendering the scenario-local mongod.conf.tmpl. Structure — nested YAML mongod (net/
+  # storage/security/systemLog as subtrees).
+  mongo_config:
+    type: object
+    required: true
+    additional_properties: true
+
+  # ── Named intent fields (read-model) ────────────────────────────────
+  # Memory budget for MongoDB, MB. From input.memory_mb; unset → 0. Mongo has no
+  # maxmemory equivalent (WiredTiger manages its own cache), but the memory budget determines
+  # wiredTiger cacheSizeGB (a share of memory_mb) — read-model of operator intent.
+  memory_mb:
+    type: integer
+    min: 256
+  # Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.
+  # cacheSizeGB directive). From input.wiredtiger_cache_gb; unset → 0 (computed from memory_mb
+  # or the mongod default). read-model.
+  wiredtiger_cache_gb:
+    type: number
+    min: 0
+  # Applied kernel parameters for MongoDB (host-tuning). From vars.sysctl_settings.
+  sysctl_settings:
+    type: object
+    additional_properties:
+      type: string
+
+  # MongoDB users: TYPED array of MongoUser (types.yml, ADR-062).
+  # Populated by create from input.users (also an array of MongoUser). The password is
+  # declared `type: secret` ([ADR-0083] §1): its value lives in Vault at a path Keeper
+  # DERIVES from (service, incarnation, mongo_users, name) — no path is written anywhere in
+  # this repo — and never in state. `key: name` says which sibling property is the element's
+  # identity, i.e. the last path segment. ★ MongoDB vs redis: roles — an array of
+  # {role, db}, not a single perms string.
+  mongo_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        database: { type: string }
+        state: { type: string, enum: [present, absent], required: true }
+        password:
+          type: secret
+          key: name
+          label: "MongoDB user password"
+        roles:
+          required: true
+          type: array
+          items:
+            type: object
+            additional_properties: false
+            properties:
+              role: { type: string, required: true }
+              db:   { type: string }
+  # The service's OWN accounts (PILOT: default_admin only) — the counterpart of
+  # mongo_users, which is operator intent. Only the NAME is state: roles live in service
+  # vars (vars.system_users — policy, not a per-incarnation fact), and the password is
+  # declared `type: secret`, so its value lives in Vault at a path Keeper DERIVES from
+  # (service, incarnation, system_users, name). Written by create, read back through
+  # core.state.set's register — which is why the set is recorded rather than recomputed
+  # from vars: an operator who edits vars after create must not silently re-point an
+  # in-cluster credential.
+  system_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "MongoDB system account password"
+
+# ★ There are NO destiny dependencies: install + render mongod.conf is done by the scenario INLINE via
+# core modules (core.pkg/core.url/core.file.rendered from scenario-local templates). For
+# standalone-PILOT (the only consumer — create), extracting a separate destiny brick is not
+# justified (ADR-009: the destiny↔scenario boundary is a recommendation; inlining is allowed). Precedent —
+# monitoring/scenario/create (redis-exporter renders from scenario-local templates without destiny).
+destiny: []
+
+# Custom service modules: ONE ROW PER ARTIFACT, named by the REGISTRATION ALIAS the
+# operator gives it (docs/service/manifest.md → modules[]). The scenarios here address
+# mongo.*, so a cluster running this service registers the artifact under the alias
+# `mongo`. The artifact's own repository is also named mongo; that is a coincidence,
+# not the mechanism — the binary carries no name, the alias is the operator's. That
+# one artifact is the MAIN interface to a live MongoDB
+# (github.com/soul-stack-plugin/mongo); `instance`, `user` and the raw `command` are
+# objects inside it, and listing them was never a choice about what gets installed
+# (NIM-829) — the row installs the binary, and the binary brings all three.
+modules:
+  - { name: mongo, ref: v1.0.0 }

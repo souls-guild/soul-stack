@@ -1,0 +1,24 @@
+# tasks/main.yml — entry point of the node-exporter destiny. Just an
+# include-list: logical groups are split across sibling files, expanded
+# inline BEFORE render (docs/destiny/tasks.md §4 — within-destiny include
+# expands to a flat list).
+#
+# Pipeline overview:
+#   install.yml    — fetch tarball → extract (prepares the artifact in /tmp);
+#   account.yml    — group + user node_exporter + textfile directory
+#                    (core.directory.present);
+#   service.yml    — install the node_exporter binary (core.file.present src:) + render
+#                    hardened-unit + core.service.running + restarted (auto daemon-reload
+#                    built into core.service). The binary install step is here, not in
+#                    install.yml: its register is read by the restart onchanges, and the
+#                    per-file linter rejects cross-file onchanges;
+#   collectors.yml — hardware textfile collectors smartmon/nvme/ipmi
+#                    (when: membership in input.collectors).
+
+- include: install.yml
+
+- include: account.yml
+
+- include: service.yml
+
+- include: collectors.yml

@@ -1,0 +1,10 @@
+# state_schema in the JSON-Schema form the input dialect replaced (NIM-740):
+# `type: object` on the root, a `required:` list and a `properties:` wrapper.
+# All three are refused by name and address — read as field names they would
+# describe a schema different from the one written here.
+state_schema:
+  type: object
+  required: [namespace]
+  properties:
+    namespace:
+      type: string

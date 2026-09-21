@@ -1,0 +1,24 @@
+name: pilot-flat
+description: >
+  Flat pilot destiny (slice A): writes a marker file and logs the fact. Only
+  core modules, a flat tasks/main.yml with no internal include/block/loop. Sees
+  ONLY its own input: (destiny isolation, ADR-009) — no scenario-scope.
+
+# Destiny version — git ref (ADR-007), no version: field.
+# This destiny uses only core modules → required_modules: is not needed.
+
+input:
+  marker_file:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: "Path of the marker file (scenario passes it via apply.input)."
+  marker_payload:
+    type: string
+    required: true
+    description: Contents of the marker file.
+  marker_mode:
+    type: string
+    default: "0644"
+    pattern: "^0[0-7]{3}$"
+    description: Marker file permissions; default 0644 (demonstrates default backfilling).

@@ -1,0 +1,14 @@
+{{/*
+  SMART-collector timer. Static (vars: {}), .tmpl is required for core.file.rendered.
+  Same ConditionVirtualization=no as in .service: guards against a manual start without real hardware.
+*/}}
+[Unit]
+Description=Run SMART metrics collection every 1 minute
+ConditionVirtualization=no
+
+[Timer]
+OnBootSec=0
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

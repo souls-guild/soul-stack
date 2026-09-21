@@ -1,0 +1,91 @@
+# L0 test for create MongoDB standalone WITH operator users. Covers: loop over input.users
+# (mongo.user.present for each present one), password split (connect as default_admin, createUser
+# with the new user's password - user_password), MongoUser $type ($type-resolve roles array {role, db}
+# + default database/state), state_after.mongo_users.
+name: mongo create standalone with operator users (loop + user_password split)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  vars:
+    install_method: binary
+    binary_base_url: "https://nexus.example/mongodb"
+    binary_allow_private: true
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+    sysctl_settings:
+      vm.max_map_count: "262144"
+
+  input:
+    version: "7.0.15"
+    users:
+      - name: appuser
+        database: appdb
+        roles:
+          - { role: readWrite, db: appdb }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_users:
+      effective:
+        - { name: default_admin, password: mongoadmin-create-pass }
+    mongo_users:
+      effective:
+        - { name: appuser, password: appuser-secret-pass }
+
+assert:
+  task_present:
+    # the two keeper-side mints ([ADR-0083] §4): the service's own accounts and the
+    # operator users. Each derives its paths from (service, incarnation, field, key).
+    - module: core.state.set
+      params_subset:
+        field: system_users
+    - module: core.state.set
+      params_subset:
+        field: mongo_users
+
+    # bootstrap default_admin (localhost-exception).
+    - module: mongo.user.present
+      params_subset:
+        name: default_admin
+        username: default_admin
+
+    # * operator user appuser (loop): connect as default_admin (username/password =
+    # admin creds), createUser with appuser's password (user_password), roles from MongoUser.
+    - module: mongo.user.present
+      params_subset:
+        name: appuser
+        database: appdb
+        username: default_admin
+        password: mongoadmin-create-pass
+        user_password: appuser-secret-pass
+
+  state_after:
+    mongo_version: "7.0.15"
+    # mongo_users: array of MongoUser with defaults filled in (database/state from $type). roles - an array
+    # {role, db}. * default state=present fills in $type MongoUser (types.yml).
+    mongo_users:
+      - name: appuser
+        database: appdb
+        state: present
+        roles:
+          - { role: readWrite, db: appdb }

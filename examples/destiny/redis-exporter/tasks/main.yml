@@ -1,0 +1,7 @@
+# One apply owns one instance. The install/remove branches deliberately share only the
+# content-addressed binary; every service/config resource is keyed by instance_name.
+- include: install.yml
+  when: "input.ensure == 'present'"
+
+- include: remove.yml
+  when: "input.ensure == 'absent'"

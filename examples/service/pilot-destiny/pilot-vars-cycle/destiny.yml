@@ -1,0 +1,13 @@
+name: pilot-vars-cycle
+description: >
+  Negative pilot-destiny for the L0 var→var check (ADR-009/ADR-010 amendment
+  2026-06-24): vars.yml carries a cyclic reference a → b → c → a. Render MUST
+  abort with a var_cycle error and a trace (eager-topological layer resolution). Used
+  only by the pilot-destiny::vars-cycle scenario with expect_render_error.
+
+input:
+  marker_file:
+    type: string
+    required: true
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: "Marker-file path (apply.input)."

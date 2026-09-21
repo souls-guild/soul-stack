@@ -1,0 +1,582 @@
+# input - standard for describing input parameters
+
+This document is the **mandatory standard** for the `input:` block format in Soul Stack. Applies equally to **destiny**, **scenario** and **module manifest**. One DSL - one place of truth.
+
+> **Note for authors and AI agents.**
+> - All "parameter validation options" are documented **here**, not by location.
+> - If there is a need for a key that is not in the tables below, this is a new format entity. First propose-and-wait on [CLAUDE.md](../CLAUDE.md), then editing this file, then everything else.
+> - If there is a discrepancy between this file and the actual implementation / manifests / examples, this file takes precedence. The rest is brought to him.
+
+## Where applicable
+
+| Where | File | Block | Template link | Validated |
+|---|---|---|---|---|
+| destiny | `destiny.yml` | `input:` | `{{ input.<name> }}` | Keeper at render of the calling `apply:` + soul before apply ([destiny/input.md → Where is validated](destiny/input.md)) |
+| scenario | `scenario/<name>/main.yml` | `input:` | `{{ input.<name> }}` | Keeper at script start |
+| module schema | the module's own schema document (see ["Module schema document"](architecture.md#module-schema-document)) | `input:` inside each `state` | n/a (validated before Apply) | soul before calling the module state form |
+
+Linter ([soul-lint](soul-lint.md)) checks the schema statically in all three cases.
+
+## Resolving values in runtime
+
+The schema (`default`/`required`/`type`/`pattern`/…) describes **what** the value should be. At runtime, BEFORE the render phase (CEL/text-template), the operator-passed values are converted to **effective input** in one step:
+
+1. **Merge defaults.** For each parameter for which `default` is declared, but the value is not passed, `default` is substituted. After this step, `${ input.<name> }` always resolves for default parameters - even if the operator did not specify them.
+2. **Checking `required` / `required_when`.** Parameter with `required: true` without the passed value and without `default` - resolve error (clear: names the parameter), the run does not reach render. Parameter with `required_when: "<CEL>"` is required **conditionally** - the error is raised only if the predicate over the effective input is true AND the value is missing (see ["Conditional Required"](#conditional-required_when)). This is a runtime check of the passed values, and not a static check of the schema (the latter is done by the linter).
+3. **Validation of passed values** against schema: matches `type`, matches `enum`, matches `pattern` (for `type: string`). For `array`/`object`, validation is recursive: each array element is checked against the `items` schema, each object field is checked against `properties.<name>`, plus the presence of `required` object fields is checked (with a clear path in the error, for example `$.users[1].acl`).
+
+> **Expression values.** If the passed value is an expression (`${ … }` / `{{ … }}`), it **is not validated** against `type`-`format` / `enum` / `pattern` at its level (at any nesting depth): the final form will appear only after the render phase (CEL/text-template), it is unknown here. This is a conscious decision, not a blank - the correctness of the result of the expression remains the responsibility of the operator. For parameters with `secret: true`, the value-expression still goes through the usual vault resolution and masking in logs/traces/UI.
+
+Where it happens:
+
+- **scenario** — Keeper when starting the script (scenario-runner before render). Effective input goes into `${ input.<name> }` everywhere the run renders it — a task's `params:`, and the `params:` of a `core.state.<verb>` capture step ([ADR-0084](adr/0084-explicit-state-capture.md)), which is a task like any other.
+- **destiny / module manifest** - where the block is validated (see the table "Where it is used"). `apply: input:` destiny defaults are resolved in an isolated destiny render pass.
+
+> **Empty lines.** An empty line `""` for `type: string` without `allow_empty: true` is treated at this step as "no value passed" (see ["Empty lines"](#empty-lines)): `default` is applied or `required` error is raised.
+
+> **One source of truth merge.** This resolution is the same in production and in L0-trials (soul-trial): an L0-case can only submit mandatory input, defaults will be corrected in the same way as in production. A case that provides all values ​​explicitly should not mask the absence of a merge phase.
+
+## Reading optional-without-default input: canonical has()-guard
+
+A parameter with `required: false` and **without** `default` after the merge phase may be **missing** in the effective input (the operator did not pass a value - there is nothing to substitute). A direct link `${ input.<name> }` to such a parameter crashes in the CEL-render phase with error `no such key: <name>`, and the run does not reach the end.
+
+**Canon.** Any reading of an optional-without-default input turns into a has()-guard:
+
+```yaml
+# string: none → empty string
+version: "${ has(input.redis_version) ? input.redis_version : '' }"
+
+# object: absence -> empty object
+config:  "${ has(input.config) ? input.config : {} }"
+
+# array: missing -> empty list
+extra:   "${ has(input.extra) ? input.extra : [] }"
+```
+
+The fallback literal is selected by the `type` parameter (`''` / `{}` / `[]` / `0` / `false`) - and must match in meaning what the value consumer expects (for example, for `core.pkg` the empty `version` = "without `=version`-pin, latest").
+
+> **Short form is `default(x, y)`.** A pure value-or-default over a select-chain is written via the CEL function [`default(x, y)`](templating.md): `default(input.config, {})` ≡ `has(input.config) ? input.config : {}`, `int(default(vars.tls_port, 7379))` ≡ `int(has(vars.tls_port) ? vars.tls_port : 7379)`. Equivalent, without a greedy crash on a missing key (macro is expanded into the same has() ternary in the compile phase). Applies to optional-without-default `input.*` and optional `vars.*`. The conditional construction of map (`has(x) ? {key: x} : {}`) and calculated fallback (`has(x) ? <arithmetic> : ...`) under `default()` **do not fall under** - an explicit ternary remains there.
+
+> **Guard is needed EVERYWHERE where optional-without-default input** is read - not only in `params:`/`apply: input:` of an ordinary task, but also in the `params:` of a `core.state.<verb>` capture step ([ADR-0084](adr/0084-explicit-state-capture.md)). This is a frequent source of a hidden bug: the tasks may not read the parameter at all (or read it through a guard), while the capture writes it into `incarnation.state` directly - an unprotected reference there aborts the run at the capture's own Passage, after everything in the earlier Passages has already applied to the hosts, translating the incarnation to `error_locked`. A capture is a task, so the L0 test (soul-trial) renders it with the rest of the plan and catches such a case without a separate assertion.
+
+> **When guard is NOT needed.** The parameter with `default` or with `required: true` after the merge phase is always present in the effective input (see "Resolving values ​​in runtime") - for it `${ input.<name> }` is written directly, without a guard.
+
+## Available types
+
+`type` is the only required key for each parameter.
+
+| `type` | Description | Example of a valid value |
+|---|---|---|
+| `string` | Line. Supports regex, format, lengths. | `"hello"`, `"redis-master-01"` |
+| `integer` | Signed integer. | `42`, `-7` |
+| `number` | Number (integer or fraction). | `3.14`, `100` |
+| `boolean` | True/false. | `true`, `false` |
+| `array` | List of values. The element type is in `items`. | `[a, b, c]` |
+| `object` | A structure with named fields. Fields are in `properties`. | `{ key: value }` |
+
+## Shared keys (available on any `type`)
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `type` | string | — *(required)* | Value type. See table above. |
+| `required` | boolean | `false` | The parameter is required **unconditionally**. `false` - absence allowed. This boolean is the **only** form of requiredness in the dialect — there is no object-level list `required: [names]` at any level, and none in `state_schema` either ([ADR-0086](adr/0086-one-schema-dialect.md)). |
+| `required_when` | string | — | The parameter is required **conditionally** - when the CEL predicate over `input.*` is true. See ["Conditional Mandatory"](#conditional-required_when). |
+| `default` | (by `type`) | — | Default value if no parameter is passed. Must match `type` (linter checks). Implies `required: false`. |
+| `prefill_from_state` | string | — | The path `state.<path>` to `incarnation.state`, whose **current** value the UI substitutes as a pre-fill day-2 form. This is a UI tooltip, **not** part of the value resolver (NOT a default). See ["Pre-fill from state"](#pre-fill-from-state-prefill_from_state). |
+| `enum` | array | — | List of valid values. Any value must be included in the list. |
+| `secret` | boolean | `false` | The value is masked in logs, traces, reports and UI. For passwords, tokens, keys. |
+| `description` | string | `""` | Human-readable description. Used in UI, MCP, `soul-lint` help. |
+
+> **Hint.** `enum` is compatible with other restrictions: you can specify `type: string`, `enum: [...]`, `secret: true` at the same time. The linter will additionally check that the values ​​in `enum` match `type`.
+
+### Conditional: `required_when`
+
+`required: true` makes the parameter **always** required. Often you need something else: the parameter is required **only in one mode**. Example from the `redis` service: the number of shards `shards` makes sense only in `redis_type == 'cluster'` mode—there is no need to set it in `sentinel` mode. The unconditional `required: true` is incorrect here (it would reject a valid `sentinel` run without `shards`), and the scheme does not know how to express "mandatory subject to condition".
+
+For this - `required_when: "<CEL predicate>"`:
+
+```yaml
+input:
+  redis_type:
+    type: string
+    enum: [sentinel, cluster]
+    default: sentinel
+  shards:
+    type: integer
+    min: 3
+    required_when: "input.redis_type == 'cluster'"      # required only in cluster
+```
+
+**Semantics.** At the input stage (after merge defaults, BEFORE the render phase), the predicate is evaluated over the **effective input**. If the predicate is true AND the parameter is missing (not passed and without `default`) - a resolve error, like `required: true`, but conditional. If the predicate is false, the absence of a parameter is acceptable.
+
+**Predicate context is `input.*` only.** This is input validation, not render: `vars.*` / `soulprint.*` / `register.*` / `incarnation.*` / `vault()` / `now()` in `required_when` **not available** (the predicate must depend only on other input values of the same run). Linter (`soul-lint`) checks that the expression is a parsable CEL.
+
+**Contrast with `required: true`.** `required: true` - absolutely required (missing → always an error). `required_when: "<expr>"` is required when `<expr>` is true. There is no point in specifying both on one parameter: the unconditional requirement absorbs the conditional one (the linter does not prohibit it, but `required_when` with `required: true` is useless).
+
+> **Why not shell-guard.** Previously, the conditional requirement was written with a guard task on the host (`core.cmd.shell` with `test "${ has(input.X) }" = true || exit 1`) - an arbitrary shell for the sake of control-flow, executed on Soul. `required_when` transfers the check to the input stage of the Keeper declaratively: the operator receives an error before the start of the run, the attack-surface of an arbitrary shell does not grow.
+
+> **`required_when` (presence) vs `validate:` (ratio).** `required_when` answers "is this field required?" When you need to check the **correlation of several input fields** ("`sentinel_quorum` is not more than `1 + replicas`"), this is not about presence - for this there is a top-level section `validate:` (declarative invariants over the request; its context is `input` + `incarnation`, so it also covers a constraint on the identifier). Spec - [scenario/orchestration.md §2.5](scenario/orchestration.md).
+>
+> **`required_when` and `validate:` are artifact-agnostic.** Both work identically in **scenario**, in a **covenant fragment** and in **destiny** ([ADR-009](adr/0009-scenario-dsl.md) amendment 2026-07-26) - one validator, one grammar. Two things differ by artifact, not by grammar: `required_when` is input-only everywhere, while a `validate:` rule additionally sees whatever incarnation facts its path knows (none in the isolated destiny pass); and the enforcement point: scenario/covenant are gated pre-flight on the request path (422 `validation-failed`, before the incarnation commit), destiny is gated at **render** of the calling `apply:` task, since its input is computed by the scenario rather than typed by an operator ([destiny/input.md → Where is validated](destiny/input.md)).
+
+### Pre-fill from state: `prefill_from_state`
+
+Day-2 scenario rules an already existing incarnation. Often it is more convenient for the operator to open the form **with the current values** of the corresponding fields and correct the delta, rather than enter everything again. Example from the `redis` service: the `update_config` form for the `redis_version` field should open with the `redis_version` that is currently written in `incarnation.state`.
+
+For this - `prefill_from_state: state.<path>`:
+
+```yaml
+input:
+  redis_version:
+    type: string
+    prefill_from_state: state.redis_version          # substitute the current value from state
+  max_memory:
+    type: string
+    prefill_from_state: state.config.max_memory       # nested path - dot notation
+```
+
+**Path syntax.** Root is `state`, then ≥1 segment through dot (`state.<field>[.<field>…]`). Segments - snake_case (`[a-z][a-z0-9_]*`). Same root `state` + dot notation as [statepredicate (ADR-047)](keeper/rbac.md), but here it is a **literal path-reference to a single value**, not a CEL predicate. Linter (`soul-lint`) checks the path syntax (broken/without root `state`/with a foreign root → `input_prefill_from_state_invalid`).
+
+**How ​​it works.** The UI calls `POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill` (permission `incarnation.get`); backend reads `incarnation.state` of the specified incarnation, resolves **only** the `prefill_from_state` paths declared in the schema, and returns `{values: {field: current-value}}`. Fields whose path is not present in the current state are **omitted** (the form will open with an empty field). The client does not pass the path - the backend takes many paths strictly from the script diagram (no arbitrary reading of state through the endpoint).
+
+**Secret fields are excluded.** A field whose state path is marked `secret` (in `state_schema` of the service or as secret-input) is **excluded completely from the prefill response** - the mask pre-fill (`***`) is useless, and you cannot give the raw secret to the form.
+
+**Border with `default`.** These are two different keys with different roles - they **coexist** on the same field:
+
+| | `default` | `prefill_from_state` |
+|---|---|---|
+| When to use | when resolving values ​​(merge phase), if the parameter is not passed | when preparing day-2-form (UI) |
+| Source of value | static literal from schema | current `incarnation.state` |
+| Gets into effective input | **yes** (if the parameter is not passed) | **no** - UI tooltip only |
+
+`default` is "what to fill in if the operator is silent" (part of the effective input). `prefill_from_state` is "what to show the operator on the form as a starting point"; it is **not** included in the resolution of values ​​(`${ input.<name> }`, a capture's `params:`). Therefore, `incarnation.state` does not flow through `prefill_from_state` into effective input - this is a structural guarantee, not a convention.
+
+## Reusable named types: `types:` + `$type`
+
+It's not uncommon for the same composite type to appear in **multiple scenarios** of the same service. Example from the `redis` service: the ACL user record `{name, perms, state}` is needed in `add_user` (one object), in `update_acl` (one object) and in `create` (an array of such objects). Duplicate it inline in each `input:` - source of drift: edit `required` / `additional_properties` in one place does not reach others.
+
+For this purpose - a **named type**, declared once and reused by reference. Committed [ADR-062](adr/0062-input-types.md).
+
+### Announcement: file `service/<name>/types.yml`
+
+Section `types:` - map `<Name>` → circuit in the **same** input-DSL described in this document (`type` / `properties` / `required` / `items` / `enum` / `pattern` / `format` / ... - the entire dictionary, including nesting). No external JSON Schema.
+
+Type name - `PascalCase` (`^[A-Z][A-Za-z0-9]*$`): distinguishes a reference type from a parameter name (snake_case) both visually and in the parser.
+
+```yaml
+# service/redis/types.yml
+types:
+  AclUser:
+    type: object
+    additional_properties: false
+    properties:
+      name:  { type: string, required: true, pattern: "^[a-zA-Z0-9_-]+$" }
+      perms: { type: string, required: true }
+      state: { type: string, required: true, enum: [on, off] }
+```
+
+> **Not implemented.** The per-field `required: true` above is the decided form; the engine
+> still reads the object-level list `required: [name, perms, state]` and will refuse it as
+> `input_required_list_removed` only once **NIM-742** lands
+> ([ADR-0086](adr/0086-one-schema-dialect.md)). The list form leaves
+> the **whole** dialect — `types.yml` and nested `type: object` nodes included — not just
+> the `state_schema` root.
+
+**A shared type may declare `type: secret`.** The same type is then referenceable from both sides, and the member means one thing in each: a property with `type: secret` in a shared type is not asked for on input — the platform mints it; in `state_schema` it means a declared secret ([ADR-0083](adr/0083-declared-secret-state-fields.md), [`docs/service/manifest.md`](service/manifest.md#type-secret--a-value-that-lives-in-vault-not-in-state)).
+
+**What "not asked for on input" means, concretely** (NIM-751,
+[ADR-0086 §5](adr/0086-one-schema-dialect.md)) — three separate guarantees, because the
+form, requiredness and the submitted value are three different surfaces:
+
+- **The property is not on the form.** `GET /v1/services/{name}/scenarios` strips it from
+  the projected `input_schema` after resolving `$type`, so a UI has no field to render. A
+  field is dropped when the strip leaves it with nothing to fill: an array of minted
+  values, an object whose every property is minted, an object whose only content is a
+  minted open map. A field that keeps ordinary properties BESIDE a minted open map
+  stays and loses only the open half. The `form:` layout in the same reply is
+  filtered to match, so a section cannot label a field whose schema has gone; a `form:`
+  naming a parameter that never existed is left alone, because that is the author error
+  `form_field_unknown` reports. The `state_schema` projection is untouched: there a
+  declared secret is the point.
+- **It is never required, and takes no default.** `required: true` (and `required_when:`)
+  written on such a property inside a shared type is ignored on the input side — it is
+  refused outright when the type is reached from `state_schema` — and a `default:` on one
+  is never merged into the effective input. Neither can make an operator produce a value
+  only the platform can. The same holds one level up: a container the form drops whole (an
+  array or open map whose values are all minted) is not required either.
+- **A value supplied anyway is refused** — `input_secret_type_not_writable`, HTTP 422. The
+  message names the offending path (`$.users[0].password`) and never the value. This is a
+  refusal rather than a silent drop on purpose: a caller told "accepted" would believe the
+  password it sent is in force while the platform mints a different one. The refusal
+  reaches values under `additional_properties` as well, even though ordinary value
+  validation does not descend there — that position is checked for declared secrets and
+  for nothing else.
+
+> **Not to be confused with `secret: true`.** On a form a secret is the *modifier*
+> `secret: true` on an ordinary field — the operator types the value, it is masked, and a
+> `vault:` reference is allowed within the field's `vault_scope`. `type: secret` says the
+> opposite: the platform issues the value and it never enters state. Writing `type: secret`
+> directly in an `input:` block is refused at load (`input_type_invalid`, with the position
+> of the offending `type:` and a hint naming `secret: true`). The per-cell render seal
+> ([`docs/templating.md` §7.4](templating.md)) stays provenance-based on `secret: true`: a
+> declared secret has no cell to seal, because its value is refused at the input gate.
+
+### Link: `$type: <Name>`
+
+`$type` is placed as an **independent field** (for a single object of a declared type) or under `items:` (for an array of such elements):
+
+```yaml
+# scenario/add_user/main.yml
+input:
+  user:
+    $type: AclUser            # single object of type AclUser
+
+# scenario/create/main.yml
+input:
+  users:
+    type: array
+    items:
+      $type: AclUser          # array of elements of type AclUser
+    min_items: 1
+```
+
+`$type` - **resolution directive**: at the input stage it is replaced by the expanded type schema from `types:`. After resolution, the usual input-DSL continues to work - value validation is recursive, exactly like inline-`object` / `array`.
+
+### Nesting type→type and cycle-detection
+
+A type can refer to another type (`$type` inside a `properties` / `items` declared type). The resolver traverses the link graph and is **obliged** to catch the loop (`A → B → A`, including the self-link `A → A`) - this is an error `input_type_cycle`, not an infinite sweep. The depth of nesting is not limited by number; limitation - lack of a cycle.
+
+### Resolve - service-level
+
+The name `$type` is looked up **only** in `types:` of the same service:
+
+- **NOT** local-per-scenario - types are not declared inside `scenario/<name>/`, only in service-level `types.yml`;
+- **NOT** cross-service - cannot reference another service type.
+
+Resolution occurs at the input stage of Keeper (the same phase as merge defaults and `required`-check): `$type` is expanded into a type schema, then a regular resolve (merge → required → value-validation) occurs on the expanded schema. `$type` does not reach the render phase - this is a structural unwrapping, not a value.
+
+### DTO `GET /v1/services/{id}/scenarios` — backend-resolve + `x-type`
+
+The scenario-directory endpoint is **`GET /v1/services/{id}/scenarios`** ([`keeper/internal/api/huma_service_op.go`](../keeper/internal/api/huma_service_op.go), operation `listServiceScenarios`; [`docs/keeper/openapi.yaml`](keeper/openapi.yaml)) — there is no bare `/v1/scenarios` route. When projecting a scenario's schema into that DTO the backend **resolves `$type` BEFORE projection**: the client receives an **already expanded** inline schema (the UI builds the form in a familiar shape, without knowing about `types:`) plus the forward-compat annotation **`x-type: <Name>`** on the node where `$type` stood. The UI ignores it today; for growth, it allows a specialized widget for a named type without breaking current clients. `x-type` is a read-only DTO annotation; it is not written in the YAML source.
+
+**After the resolve, before the projection, declared secrets are stripped** — a property a
+shared type declares as `type: secret` is not in the returned `input_schema` at all (see
+"A shared type may declare `type: secret`" above). The order is what makes that possible:
+the secret only ever arrives through `$type`, so there is nothing to strip until the
+substitution has happened. The sibling endpoint `GET /v1/services/{name}/state-schema`
+resolves through the same code and **keeps** its declared secrets.
+
+### Error classes
+
+| Code | When |
+|---|---|
+| `input_type_unknown` | `$type: <Name>` refers to a type that is not present in the service's `types:`. |
+| `input_type_cycle` | Loop in type reference graph (`A→B→A`, self-reference `A→A`). |
+| `input_type_duplicate` | Duplicate name in section `types:`. |
+| `input_type_ref_conflict` | `$type` is specified **together** with the node's own shape. The checked set is closed and is exactly `{type, properties, items}` ([`shared/config/input_types.go`](../shared/config/input_types.go)) — a reference node is either `$type` or its own schema. |
+| `input_type_ref_overlay_conflict` | **`state_schema` only.** A key the reference overlays is present on **both** the reference node and the resolved type. |
+| `input_secret_type_not_writable` | A value was submitted for a property a shared type declares as `type: secret`. Not a schema diagnostic and **not a machine-readable wire code**: it is a runtime refusal at the input gate, and the name travels as text inside the 422 `input_invalid` detail (inside `shared/config` the sentinel `config.ErrSecretTypeNotWritable` is what Go callers match on; the keeper re-wraps it into `ErrInputInvalid` with `%v`, so above that layer only the text survives). Names the path, never the value. |
+
+**The overlay boundary — `$type` + `properties:` is a `state_schema` privilege.** A reference node has always been allowed to overlay a few of its own keys onto the resolved type: `description`, the field-level `required: <bool>` and `required_when` (`applyRefOverlay`, [`shared/config/input_types.go`](../shared/config/input_types.go)). In `state_schema` that overlay widens by **exactly one key — `properties`** — so a state field can reuse a shared type and add the properties that field alone carries ([ADR-0086](adr/0086-one-schema-dialect.md)).
+
+**Inside `input:` the existing rule stands unchanged.** `$type` next to `type:`, `properties:` or `items:` in a scenario's, destiny's or module's `input:` block stays `input_type_ref_conflict`. The widening does not reach here, and nothing about it makes `type:` or `items:` legal beside `$type` on either side.
+
+The merge is **add-only shallow** and **fail-closed** — the same covenant `extends:` semantics as [ADR-009](adr/0009-scenario-dsl.md): the reference may add a property the type does not declare; a property present in both is `input_type_ref_overlay_conflict`, never last-wins and never a deep merge.
+
+### MVP Limits
+
+- **`object` + `array-of-type` + nesting type→type** - supported (with mandatory cycle-detection).
+- **Scalar-alias** (for example `Port: {type: integer, min: 1, max: 65535}` and `$type: Port` on a scalar field) - **not included** in MVP. Expansion is possible later using the same form, without breaking change (separate propose-and-wait).
+- **Generics / parameterized types** - not included.
+- **Cross-service** and **local-per-scenario** type declarations are not included.
+
+## Type `string`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `pattern` | string | — | RE2-regex (Go-regexp syntax). A **complete** match is checked, not a partial one. |
+| `format` | string | — | Predefined format (see table below). Replaces regex for known types. |
+| `min_length` | integer | — | Minimum line length (in Unicode codepoints). |
+| `max_length` | integer | — | Maximum line length. |
+| `allow_empty` | boolean | `false` | Allows the empty string `""` as a valid value. By default, `""` is interpreted as "no value passed" - see below. |
+| `vault_scope` | string | — | Prefix-glob allowing the operator to pass `vault:`-ref as a field value (scoped resolve on the keeper side). Applies **only** to `secret: true`. See ["vault_scope"](#vault_scope-scoped-resolve-vault-ref-in-operator-input). |
+
+### Empty lines
+
+**Default rule.** An empty string `""` for a parameter of type `string` is treated **as no value** - equivalent to the parameter not being passed. Then the usual rules apply:
+
+- `required: true` → error (as if the value did not exist).
+- `default` is defined → `default` is used.
+- Otherwise → the parameter is considered missing.
+
+The choice was made deliberately for config management: "empty password", "empty hostname", "empty command" - almost always not an intention, but an underfilled field. Quietly taking `""` in this context is dangerous.
+
+**Opt-in: `allow_empty: true`.** If an empty string is really needed as a valid value (a rare case - remove previously-set value, "no config" marker), enable the flag explicitly:
+
+```yaml
+input:
+  note:
+    type: string
+    allow_empty: true        # "" is a valid value, not "absent"
+```
+
+With `allow_empty: true`, the empty string is passed as a normal value, and the rest of the rules apply (including `min_length` if it is specified - but `allow_empty: true` + `min_length >= 1` is considered a contradiction by the linter).
+
+### `vault_scope`: scoped-resolve `vault:`-ref in operator-input
+
+By default, the value of the secret input field is a **ready literal** (password, token), which the operator passes directly or which the script reads from Vault itself through the CEL function `${ vault(...) }` in the render phase (trusted author channel, [templating.md §2.3/§4](templating.md)). The raw `vault:` value in the operator-input itself is default-deny: otherwise the operator could force Keeper to read any path of its Vault token - including `secret/keeper/jwt-signing-key`.
+
+The `vault_scope` key opens a **restricted** channel for the field: the operator can pass `vault:<mount>/<path>[#<field>]` as a value, and Keeper will resolve it **keeper-side**, but only within the declared prefix-glob.
+
+```yaml
+input:
+  redis_password:
+    type: string
+    required: true
+    secret: true                         # required for vault_scope
+    min_length: 16
+    vault_scope: "secret/services/redis/*"   # one prefix-glob
+    description: Redis password. Can be a literal or scoped vault:-ref.
+```
+
+With this scheme the operator sends:
+
+```jsonc
+// effectively resolves to the value of the secret/services/redis/prod#password field
+{ "redis_password": "vault:secret/services/redis/prod#password" }
+```
+
+**Rules.**
+
+- **Applicability.** `vault_scope` is only valid on `type: string` + `secret: true`. On a non-secret field - schema error (`input_vault_scope_requires_secret`); on non-string - `input_key_invalid_for_type`.
+- **Form.** One prefix-glob `<mount>/<path-prefix>/*` (single trailing `*` = prefix-match) or exact logical path `<mount>/<leaf>` (without `*` = exact match). Intermediate `*` are not supported. Invalid form - schema error (`input_vault_scope_invalid`).
+- **Default-deny.** The field **without** `vault_scope`, the value of which is passed `vault:`-ref, is **resolve error**, not a literal. Only a literal or (for the author's channel) `${ vault(...) }` in the script itself.
+- **Logic for resolving one ref:** is there `vault_scope`? no → reject. Path match scope? no → reject. Path to hard deny-list? yes → reject. Otherwise, read Vault KV.
+- **Hard deny-list (insurance).** Paths under `secret/keeper/*` and `secret/internal/*` are denied **always**, of course, **even if** `vault_scope` mistakenly covers them (for example `secret/*`). Checked **after** the scope match. This system-floor cannot be disabled by the config - only added (`keeper.yml → vault.input_deny_paths`).
+- **When it resolves.** Once on the keeper side, in the input resolve phase: **merge defaults → scoped vault resolve → value validation**. `pattern`/`enum`/`min_length` are checked against the **already resolved** value, not against the `vault:...` line. The resolved value then goes to render as a regular secret (it is masked in logs/trace/UI).
+- **Audit.** Each resolution (successful and rejected) writes audit-event `input.vault_resolved` from `field` / `incarnation` / `scenario` / `aid` initiator / **logical way** Vault (path is not a secret) / `result` (`ok`/`denied`) and `reason` for refusal. The secret value is **not** included in the audit. The refusal is audited as a security signal.
+
+> **Border with the author's channel.** `vault_scope` concerns **only** operator-input values. Copyright `vault:`-refs and `${ vault(...) }` in `params:` tasks - a separate trusted channel (the author of the service), it does not require `vault_scope` and does not fall under the deny-list of this channel.
+
+### Valid values `format`
+
+| `format` | What does it validate | Example of a valid value |
+|---|---|---|
+| `hostname` | RFC 1123 hostname (no dots, no TLD) | `redis-01` |
+| `fqdn` | Fully qualified domain name | `redis-01.prod.example.local` |
+| `ipv4` | IPv4 address | `10.0.0.1` |
+| `ipv6` | IPv6 address | `2001:db8::1` |
+| `cidr` | CIDR (IP + prefix length) | `10.0.0.0/24` |
+| `email` | Email (RFC 5322 compliant) | `ops@example.com` |
+| `uri` | URI / URL | `https://example.com/path` |
+| `uuid` | UUID of any version | `550e8400-e29b-41d4-a716-446655440000` |
+| `semver` | Semantic version | `1.4.2`, `2.0.0-rc1` |
+| `duration` | Go duration syntax | `30s`, `5m`, `1h30m` |
+
+> **Hint.** If there is a suitable `format` for the value, use it instead of `pattern` - it's better readable, consistent between destiny, cheaper to review, less likely to make a regex with an error.
+
+## Type `integer` / `number`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `min` | number | — | Minimum, **inclusive**. |
+| `max` | number | — | Maximum, **inclusive**. |
+| `exclusive_min` | number | — | Minimum, **exclusive**. Do not combine with `min`. |
+| `exclusive_max` | number | — | Maximum, **exclusive**. Do not combine with `max`. |
+
+> **Hint.** For ports - `{ min: 1, max: 65535 }`. For always-positive values, `min: 0` or `exclusive_min: 0` depending on whether zero is considered valid.
+
+## Type `array`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `items` | schema | — *(required)* | The diagram of each element of the array. Recursively the same DSL. |
+| `min_items` | integer | — | Minimum number of elements. |
+| `max_items` | integer | — | Maximum number of elements. |
+| `unique` | boolean | `false` | Elements must be unique. |
+
+## `source` — where the field's values come from
+
+A field whose values are SIDs can name the **catalog** they are chosen from. The UI turns that into an autocomplete; the value itself is still validated by `format: sid` like any other string.
+
+`source` is an **object-discriminator: exactly one** variant is active. It applies to `type: string` (single choice) and to `items` of a `type: array` (multi choice, bounded by `min_items` / `max_items`).
+
+| Variant | Catalog | Asked when |
+|---|---|---|
+| `incarnation_hosts: true` | Every host of the current incarnation ([ADR-044](adr/0044-choir.md) S-T1) | The incarnation exists — an operational run |
+| `choir: <name>` | The Voices of one Choir of the current incarnation | The incarnation exists |
+| `roster: true` | Onboarded, online souls the caller may see ([ADR-081](adr/0081-roster-at-create.md)) | **Create** — there is no incarnation yet |
+
+```yaml
+input:
+  hosts:
+    type: array
+    required: true
+    min_items: 1
+    unique: true
+    items:
+      type: string
+      format: sid
+      source: { roster: true }
+```
+
+> **The catalog narrows by `connected` and nothing else.** That much is an invariant — the keeper binds no other status. It deliberately does NOT filter by the incarnation's declared covens (binding a host attaches no label at all, [NIM-281](adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited) — the filter would hide every candidate nobody had hand-tagged) nor by "belongs to no incarnation" (membership is M:N: a host legitimately serves several). What keeps other operators' hosts out of the list is the RBAC scope of `soul.list`.
+>
+> **`roster` is more than a catalog — it is a declaration.** It marks the field whose value **is the composition** of the incarnation: on `POST /v1/incarnations` Keeper binds those SIDs into `incarnation_membership` after inserting the row and **before** starting the bootstrap run. That order is load-bearing — a run resolves its roster from that relation at start and aborts `no_hosts` on an empty one, which is why a scenario cannot bind its own hosts from the inside.
+>
+> Which field carries it is up to the author; Keeper finds it by the key, not by a blessed name. **At most one field per `input:` block** may declare it (`input_roster_source_duplicate`) — the keeper binds exactly one value, so a second has no defined meaning.
+>
+> The input value is a **journal** of what the incarnation was created on (write-once, like every input). The live composition is the membership relation, edited afterwards through the Hosts tab — so the two legitimately diverge, and later runs read the relation. Do **not** mirror the roster into `spec.hosts`: that declares host ROLES ([ADR-008](adr/0008-coven-stable-tags.md)) and binds nothing.
+>
+> **Count checks belong in `validate:`.** The requiredness and shape come from the schema (`required`, `min_items`, `format: sid`); a size rule against the topology (`size(input.hosts) == int(input.shards) * (1 + int(input.replicas_per_master))`) is input-only and therefore expressible as a `validate:` rule — a 422 on the request instead of an `error_locked` from the render-time `assert`.
+
+The schema layer validates only the **structure** of `source` (known variant, value type, exactly one active); resolving the catalog and checking "value ∈ catalog" is the backend's job at form preparation.
+
+## Type `object`
+
+| Key | Type | Default | Description |
+|---|---|---|---|
+| `properties` | map | — *(required)* | Map `<name>` → schema. Describes the fields of an object (recursively). |
+| `additional_properties` | bool/schema | `true` | `true` - undescribed keys are allowed (open); `false` - prohibited (closed); schema - undescribed keys must match it. |
+
+> **There is no object-level `required:` list.** Requiredness is declared on the field, as
+> the boolean `required: true` inside `properties.<name>` — the one form the dialect has
+> ([ADR-0086](adr/0086-one-schema-dialect.md)). **Not implemented:**
+> the engine still accepts `required: [a, b]` here and will refuse it as
+> `input_required_list_removed` when **NIM-742** lands.
+
+> **Hint:** For a strict structure (no extra fields) use `additional_properties: false`. Open by default for compatibility and extensions.
+
+An object must say what is in it, through one of the two: named `properties`, or an
+`additional_properties` that describes the values when the keys are not known at
+authoring time — an opaque config bag, a map keyed by operator input. Declaring neither
+is `missing_required_field`.
+
+`additional_properties: false` does **not** count. It FORBIDS the keys `properties` did
+not name rather than describing any, so on its own it declares an object that may hold
+nothing at all — which is the shape the check exists to catch.
+
+> **This resolves ADR-0086 §14** (decided with the user 2026-09-01, candidate 1 of the
+> two the ADR recorded). Before it, a *map-shaped* field — `redis_config`,
+> `sysctl_settings`, `redis_sentinel.master_settings` — had no expressible form, and the
+> only way past the parser was an empty `properties: {}` written beside the real
+> declaration. That workaround is already in the tree, in an `input:` block:
+> [`examples/destiny/redis/destiny.yml`](../examples/destiny/redis/destiny.yml) → `users`.
+> The gap was the input dialect's, not the state block's; `state_schema` only made it
+> visible. **Do not write `properties: {}` to get a field past the parser** — it is no
+> longer needed, and the existing one should go with NIM-744.
+
+## Examples
+
+### Minimum required
+
+```yaml
+input:
+  name:
+    type: string
+    required: true
+```
+
+### With enum and default
+
+```yaml
+input:
+  action:
+    type: string
+    required: true
+    enum: [apply, restart, ping, stop]
+    description: What to do with the service.
+
+  log_level:
+    type: string
+    default: info        # implies required: false
+    enum: [debug, info, warn, error]
+```
+
+### Format and regex
+
+```yaml
+input:
+  master_host:
+    type: string
+    required: true
+    format: hostname      # RFC 1123 - no regex needed
+
+  redis_version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"   # own check, format is not suitable
+```
+
+### Numeric boundaries and secret
+
+```yaml
+input:
+  port:
+    type: integer
+    default: 6379
+    min: 1
+    max: 65535
+
+  password:
+    type: string
+    required: true
+    secret: true                # is masked in the logs
+    min_length: 16
+    description: Master-auth password for Redis.
+```
+
+### Nested object
+
+```yaml
+input:
+  cloud:
+    type: object
+    required: true                 # the object itself must be supplied
+    additional_properties: false
+    properties:
+      provider:
+        type: string
+        required: true             # …and each field carries its own requiredness
+        enum: [aws, gcp, yandex]
+      region:
+        type: string
+        required: true
+        pattern: "^[a-z0-9-]+$"
+      count:
+        type: integer
+        required: true
+        min: 1
+        max: 50
+```
+
+### Array with uniqueness and format
+
+```yaml
+input:
+  allowed_users:
+    type: array
+    items:
+      type: string
+      format: email
+    min_items: 1
+    unique: true
+```
+
+## Tips for authors
+
+- **The stricter the scheme, the less surprise in runtime.** Don't leave `type: string` without `enum` / `pattern` / `format` if not any text is actually acceptable.
+- **`secret: true` is required for sensitive fields.** Passwords, tokens, private keys, secret-URI. Without it, the value will appear in the logs if there is an error.
+- **`enum` is better than `pattern`** for a finite list of values: readable, validated by a linter, displayed in UI/MCP.
+- **`format` is better than `pattern`** for known types (`hostname`, `email`, ...): uniformity, cheaper review, fewer errors in regex.
+- **`default` implies `required: false`.** Don't write both keys - choose one meaning.
+- **`required_when` instead of shell guard** for "required in one mode". Declarative input validation instead of `core.cmd.shell` with `test ... || exit 1` (see ["Conditional Required"](#conditional-required_when)).
+- **`additional_properties: false`** is a good habit for strict APIs. Protects against typos in field names.
+- **Recursion works.** Circuits of any depth can be nested in `items` and `properties`. Don't overuse it - deeper than 2-3 levels, it's better to move the parameter into a separate one.
+
+## Hints for agents (AI/linters/code-gen)
+
+- **No new keys without editing this file.** Any new key - propose-and-wait, then updating this document, then everything else.
+- **This file is the source of truth** for any discrepancies with examples, manifests or code.
+- **Linter must catch:** use of unknown keys, incompatible type in `default`, literals in expressions outside `enum`, regex syntax, absence of `items` in `array`, absence of `properties` in `object`, unparsable CEL in `required_when`, invalid path in `prefill_from_state` (without root `state`/foreign root/broken segment), as well as named type errors: `$type` for a non-existent type (`input_type_unknown`), cycle in the type graph (`input_type_cycle`), double name in `types:` (`input_type_duplicate`), `$type` along with an inline diagram (`input_type_ref_conflict`).
+- **When generating the `input:` block** for a new destiny / scenario, first apply the most stringent restrictions (enum / format / pattern), then loosen them as needed. Never set `type: string` without at least one of {`enum`, `pattern`, `format`, `min_length`/`max_length`} if the value is actually structural (hostname, port-in-line, version, etc.).
+

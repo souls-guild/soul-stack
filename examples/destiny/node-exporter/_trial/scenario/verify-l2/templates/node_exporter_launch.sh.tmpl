@@ -1,0 +1,35 @@
+#!/bin/sh
+{{/*
+  Launch script for the node_exporter mock listener for the L2 harness (Trial, Variant A).
+  Render context (docs/templating.md §3.2): .vars.listen - listen address host:port.
+  Engine - Go text/template + sprig-allowlist, strict-mode (ADR-010).
+
+  In PROD this would be a systemd unit (see ../../../templates/node_exporter.service.tmpl)
+  launching the real node_exporter binary under the system account node_exporter.
+  In the hermetic L2 pilot (no network to fetch the binary, no systemd-PID1) the listener is a
+  minimal python HTTP server on the same port, serving node_exporter-like
+  /metrics. Demonstrates that core.file.rendered delivered a working executable
+  artifact onto a real Linux host.
+*/}}
+# listen address is baked in by the render from .vars.listen (CEL-rendered Keeper-side).
+LISTEN='{{ .vars.listen }}'
+PORT="${LISTEN##*:}"
+
+exec python3 - "$PORT" <<'PYEOF'
+import sys
+from http.server import BaseHTTPRequestHandler, HTTPServer
+
+PORT = int(sys.argv[1])
+BODY = b"# HELP node_exporter_build_info node_exporter mock build info\nnode_exporter_build_info{version=\"mock\"} 1\n"
+
+class H(BaseHTTPRequestHandler):
+    def do_GET(self):
+        self.send_response(200)
+        self.send_header("Content-Type", "text/plain")
+        self.end_headers()
+        self.wfile.write(BODY)
+    def log_message(self, *a):
+        pass
+
+HTTPServer(("127.0.0.1", PORT), H).serve_forever()
+PYEOF

@@ -1,0 +1,8 @@
+name: assert-that-non-string
+tasks:
+  - name: assert with a non-string element in that
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1"
+        - 42
+      message: "that[] must hold CEL-bool predicate strings only"

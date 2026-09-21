@@ -1,0 +1,207 @@
+# covenant.yml — a reusable shared contract for the mongo scenario sections (PILOT).
+#
+# Carries ONLY the shared contract of the THREE sections: input / compute / validate
+# (shared/config ScenarioFragment). name/tasks/create/form/extends — NOT here (covenant is
+# a contract, not an executable scenario; state capture is a TASK, so it lives in the
+# scenario body, [ADR-0084] F-B). A scenario plugs in the fragment
+# via `extends: covenant` and ADDS its own delta add-only (covenant is the BASE, the delta
+# does NOT override covenant keys, otherwise section_key_conflict). The keeper-side
+# resolver merges covenant FIRST.
+#
+# ★ PILOT (standalone): WITHOUT a provision section (deploy onto existing hosts, symmetry
+# with dragonfly PILOT). destroy — Soul-side teardown, cloud-cascade and provisioned_*
+# state fields are NOT introduced (provision default-on + dragonfly-style cascade — NEXT
+# slice).
+
+# ── Operator input contract (docs/input.md) ────────────────────────────────
+# Simple typed concepts. Translation into mongod.conf — in compute below.
+input:
+  # ── version: fixed-enum of MongoDB BINARY versions (Nexus) ────────────────────
+  # ★ Symmetry with redis: version — ENUM of fixed upstream versions from Nexus
+  # (vars.install_method=binary by default pulls EXACTLY these binaries). required
+  # (needed ALWAYS: binary is the default install method, the version determines the
+  # binary path; the package branch pins =version of the distro package of the same
+  # series). The set is the current MongoDB series.
+  version:
+    type: string
+    required: true
+    enum: ["8.0.4", "7.0.15", "6.0.19"]
+    description: >-
+      MongoDB version (fixed set of binaries from Nexus). The binary install method
+      (vars.install_method, default) pulls the mongod binary of this version from
+      Nexus; the package method pins =version of the mongodb-org distro package. The
+      list is closed — an arbitrary version is not accepted.
+
+  # memory_mb: memory budget for MongoDB. WiredTiger cacheSizeGB is computed as a share
+  # of it (vars.memory_reserve_percent). min:256 — mongod with a tiny cache is unstable.
+  # Not set → cacheSizeGB isn't written (mongod uses its own default max(0.5*(RAM-1GB), 256MB)).
+  memory_mb:
+    type: integer
+    required: false
+    min: 256
+    description: >-
+      Memory budget for MongoDB on the host, MB. WiredTiger cacheSizeGB is computed as a
+      share of it (vars.memory_reserve_percent — the remainder is reserved for the
+      OS/mongod). Not set → cacheSizeGB isn't set (mongod applies its own default).
+
+  # wiredtiger_cache_gb: EXPLICIT WiredTiger cache size, GB (overrides the value computed
+  # from memory_mb, last-wins). For operators who know exactly the cache they need. Not set →
+  # from memory_mb or the mongod default.
+  wiredtiger_cache_gb:
+    type: number
+    required: false
+    min: 0.25
+    description: >-
+      Explicit WiredTiger cache size, GB (storage.wiredTiger.engineConfig.cacheSizeGB
+      directive). Overrides the value computed from memory_mb (last-wins). Not set → from
+      memory_mb (if set) or the mongod default.
+
+  # ── operator-extra MongoDB users — a TYPED array of MongoUser (types.yml) ──
+  users:
+    type: array
+    required: false
+    items:
+      $type: MongoUser
+    description: >-
+      MongoDB users (array of MongoUser: {name, database, roles, state}). roles — an array
+      of {role, db} (exact mongo model). Reconciled by the mongo.user.present /
+      mongo.user.absent plugin actions, which the create scenario picks between per
+      element by its `state`
+      (createUser); each password is resolved keeper-side from Vault by convention
+      secret/mongo/<incarnation>/{mongo_users,system_users}/<name>#password.
+
+  # ── mongo_settings: passthrough subtrees of mongod.conf ────────────────────────
+  # Arbitrary mongod.conf sections (net/storage/systemLog/setParameter/…) on top of
+  # defaults/computed values (last-wins at the top level of subtrees). For directives not
+  # covered by the simple fields above. ★ PILOT: names/structure are NOT validated by a
+  # catalog (mongo has no config.c-like analog as redis does); a typo shows up at mongod
+  # startup, not at render. Deliberate PILOT simplification (symmetry with dragonfly
+  # df_settings).
+  mongo_settings:
+    type: object
+    required: false
+    description: >-
+      Passthrough subtrees of mongod.conf from the operator (net/storage/systemLog/
+      setParameter/…). Override defaults in the final merge (last-wins). For directives
+      not covered by the simple fields. PILOT: structure is not validated.
+    properties: {}
+    additional_properties: true
+
+# ── Declarative input invariants (validate:, INPUT-ONLY) ────────────────────
+# validate: — cross-field preconditions on INPUT (only input.*; service vars, soulprint are
+# unavailable — a structural CEL barrier). First failure → 422 validation_failed BEFORE
+# incarnation commit.
+validate:
+  # system-users guard (symmetry with redis/dragonfly default_admin): operator-extra
+  # (input.users) CANNOT take the name of the SYSTEM user (default_admin is added from
+  # vars.system_users — an operator with the same name would hijack the admin account
+  # used for in-cluster access). INPUT-ONLY (service vars isn't available in validate): the
+  # reserved-names list is hardcoded here (= vars.system_users keys). ★ PILOT: only
+  # default_admin (replica/monitoring/backup — later slices).
+  - that: "!has(input.users) || input.users.all(u, u.name != 'default_admin')"
+    message: "the MongoDB username 'default_admin' is reserved for the system admin user: pick another name — default_admin is created automatically from service vars"
+
+# ── Computed scenario-vars (compute:) ──────────────────────────────────────
+# compute: is resolved KEEPER-SIDE ONCE per run in the run-level context (input / service vars /
+# incarnation — WITHOUT soulprint, the host-invariance barrier) and is visible as
+# compute.<name> in tasks/apply.input AND in the scenario's capture steps. Removes
+# duplication of the merge() translation: declared HERE ONCE, both the body and the capture
+# reference ${ compute.mongo_config }.
+#
+# ★ CONFIG BOUNDARY: host-layout (dbPath → data_dir, path → log_dir, port → net_port),
+# authorization enabled and bindIp are set by the mongod.conf.tmpl TEMPLATE from vars, NOT
+# this compute (a single source, symmetry with redis dir/aclfile in the template). compute
+# only carries the merged APPLICATION config (net.maxIncomingConnections/storage.wiredTiger/
+# passthrough).
+compute:
+  # ── admin_user: name of the SYSTEM full-access user (default_admin) ──────────
+  # ★ default_admin REDESIGN (symmetry with redis/dragonfly 2026-06-30): SINGLE source of
+  # the admin user's name, under which the ENTIRE admin connection runs (createUser of
+  # the rest, health-runCommand, bootstrap of the first admin via localhost-exception).
+  # The body reads compute.admin_user in the plugin calls mongo.user.* / mongo.instance.pinged
+  # (username/name) and in the Vault path of its password. A literal (not from
+  # input/service vars): the system user's name is a service invariant. default_admin's
+  # password — secret/mongo/<inc>/system_users/default_admin#password.
+  admin_user: "${ 'default_admin' }"
+  # ── system_user_names: the service's OWN accounts, name list ────────────────
+  # The keys of vars.system_users: the accounts the SERVICE provisions for itself (PILOT:
+  # default_admin), as opposed to mongo_users, which is operator intent. Declared once
+  # because two places must not drift: the `core.state.set` task that mints their
+  # passwords, and the account list the service vars declare. roles are NOT part of it —
+  # those stay in service vars (policy), state records only which accounts exist.
+  system_user_names: "${ default(vars.system_users, {}).map(name, name) }"
+  # Effective MongoDB version: required enum, ONE for both install methods (binary pulls
+  # the binary of this version from Nexus; package pins =version). Declared ONCE (state +
+  # plugin + install-URL read it). required guarantees presence → bare input.version.
+  mongo_version: "${ input.version }"
+  # install: structure {method, base_url, version, allow_private} from vars.install_method +
+  # vars.binary_base_url + input.version. method always; base_url/version/allow_private when
+  # method=binary. Symmetry with redis compute.install.
+  install: >-
+    ${ (default(vars.install_method, 'binary') == 'binary')
+         ? {
+             'method':        'binary',
+             'base_url':      default(vars.binary_base_url, ''),
+             'version':       input.version,
+             'allow_private': default(vars.binary_allow_private, true)
+           }
+         : { 'method': 'package' } }
+  # Effective host-layout: conf_dir/data_dir/log_dir/net_port from service vars (author-context,
+  # host invariant). The mongod.conf.tmpl template derives dbPath/path/port from them.
+  conf_dir: "${ default(vars.conf_dir, '/etc/mongodb') }"
+  data_dir: "${ default(vars.data_dir, '/var/lib/mongodb') }"
+  log_dir:  "${ default(vars.log_dir, '/var/log/mongodb') }"
+  net_port: "${ int(default(vars.net_port, 27017)) }"
+  # wiredtiger_cache_gb: effective WiredTiger cache size, GB. An explicit
+  # input.wiredtiger_cache_gb OVERRIDES the value computed from memory_mb (a ternary —
+  # explicit takes priority); otherwise memory_mb*reserve/100 / 1024. Both absent → 0.0 (no
+  # storage.wiredTiger section → mongod default max(0.5*(RAM-1GB), 256MB)).
+  wiredtiger_cache_gb: >-
+    ${ has(input.wiredtiger_cache_gb)
+         ? double(input.wiredtiger_cache_gb)
+         : (has(input.memory_mb)
+              ? double(int(input.memory_mb) * int(default(vars.memory_reserve_percent, 50)) / 100) / 1024.0
+              : 0.0) }
+  # ── mongo_config: FULL mongod.conf object (host-invariant, rendered via toYaml) ─
+  # ★ MongoDB vs redis: mongod.conf is nested YAML (net/storage/security/systemLog —
+  # subtrees), rendered WHOLESALE via toYaml (Soul Stack's own tmpl function). Hence
+  # host-layout (dbPath/port/authorization/systemLog.path) is MERGED IN HERE (not set
+  # separately in the template — mongo can't have two `net:`/`storage:` in YAML).
+  # bindIp=0.0.0.0 is host-invariant (a common MongoDB default) → the whole mongo_config
+  # is host-invariant, there's no per-host logic in the
+  # render (unlike redis's bind primary_ip). Layers are DEEP-merged (manually per section,
+  # since CEL's merge() is a SHALLOW last-wins that would wipe out the entire net/storage
+  # subtree):
+  #   - net    = vars.mongo_config.net + {bindIp, port} (maxIncomingConnections from service vars is preserved);
+  #   - storage= vars.mongo_config.storage + {dbPath, engine} + WiredTiger cache (has-guard);
+  #   - security = {authorization: enabled} (PILOT: authorization is ALWAYS enabled — access
+  #                under default_admin, bootstrap via localhost-exception);
+  #   - systemLog = {destination file, path, logAppend} (host-layout log_dir);
+  #   - remaining subtrees of vars.mongo_config (operationProfiling/…) — as-is;
+  #   - input.mongo_settings — passthrough ON TOP (last-wins at the top level of subtrees;
+  #     an operator who sets a whole passthrough section takes it over — the typical path is
+  #     memory_mb/wiredtiger_cache_gb, not raw storage/net).
+  mongo_config: >-
+    ${ merge(
+         default(vars.mongo_config, {}),
+         {
+           'net': merge(
+             default(default(vars.mongo_config, {}).net, {}),
+             { 'bindIp': '0.0.0.0', 'port': compute.net_port }
+           ),
+           'storage': merge(
+             default(default(vars.mongo_config, {}).storage, {}),
+             { 'dbPath': compute.data_dir, 'engine': 'wiredTiger' },
+             compute.wiredtiger_cache_gb > 0.0
+               ? { 'wiredTiger': { 'engineConfig': { 'cacheSizeGB': compute.wiredtiger_cache_gb } } }
+               : {}
+           ),
+           'security': { 'authorization': 'enabled' },
+           'systemLog': {
+             'destination': 'file',
+             'path':        compute.log_dir + '/mongod.log',
+             'logAppend':   true
+           }
+         },
+         default(input.mongo_settings, {})
+       ) }

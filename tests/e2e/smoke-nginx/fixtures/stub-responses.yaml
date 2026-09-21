@@ -1,0 +1,25 @@
+# Response script for the soul-stub for smoke-nginx (ADR-039 § Part D).
+#
+# scenarios - a map keyed by scenario.name (from the service fixture
+# examples/service/smoke-nginx/scenario/<name>/main.yml).
+# apply_responses - a list of scripted RunResults: for each task from the
+# scenario the stub responds with the matching run_result (matched by task_name,
+# order-insensitive).
+#
+# All task_name values here must match the task `name:` fields in
+# examples/service/smoke-nginx/scenario/create/main.yml.
+scenarios:
+  create:
+    apply_responses:
+      - task_name: "Install nginx package"
+        run_result:
+          status: success
+          state_changes:
+            packages:
+              - nginx: installed
+      - task_name: "Start and enable nginx service"
+        run_result:
+          status: success
+          state_changes:
+            services:
+              - nginx: running

@@ -1,0 +1,789 @@
+//go:build integration
+
+// Integration matrix for the least-privilege subset check (security fix:
+// vertical privilege escalation via role.create/update/grant-operator).
+// Shares the container / resetRBAC / seedOperator / insertRole / newService
+// with integration_test.go + crud_integration_test.go (same rbac package).
+//
+// Run:
+//
+//	cd keeper && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 go test -tags=integration -race -count=1 ./internal/rbac/
+
+package rbac
+
+import (
+	"context"
+	"errors"
+	"testing"
+)
+
+// setupSuboperator sets up a caller without `*`: archon-sub holds exactly
+// role.create + role.grant-operator (via the custom granters role), plus
+// archon-alice as bootstrap-admin (`*` via cluster-admin) — so the cluster
+// isn't locked out and there's a source of "strong" rights for grant
+// scenarios.
+//
+// `role.create-root` rides along because every fixture here mints PLAIN roles
+// (NIM-201, root_role.go). That gate judges the SHAPE of the result; these tests
+// judge its CONTENT — the least-privilege floor. Handing sub the shape right
+// keeps the two separable, so a floor test fails on the floor and not on a
+// second gate standing in front of it. The gate itself is covered on its own, in
+// root_role_integration_test.go.
+func setupSuboperator(t *testing.T) (sub, alice string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-sub", &a)
+	// alice is cluster-admin (source of `*` and a second admin against self-lockout).
+	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
+		t.Fatalf("grant alice→cluster-admin: %v", err)
+	}
+	// sub gets only role.create + role.grant-operator (+ the shape right above).
+	insertRole(t, "granters", "role.create", "role.grant-operator", "role.create-root")
+	if err := GrantOperator(ctx, integrationPool, "granters", "archon-sub", &a); err != nil {
+		t.Fatalf("grant sub→granters: %v", err)
+	}
+	return "archon-sub", a
+}
+
+// grantRootMinting gives aid the right to mint a plain role through a SEPARATE,
+// UNSCOPED role.
+//
+// It cannot ride in a scoped fixture's own role: `callerPermissions` expands a
+// bare permission under its role's `default_scope`, and the gate asks for an
+// UNRESTRICTED holder ([callerHolds] via [callerUnrestrictedOn]) — so
+// `role.create-root` inside a `default_scope: coven=prod` role resolves to
+// `role.create-root on coven=prod` and never satisfies it. That is deliberate:
+// the scope grammar has no `role=` dimension, so a scoped root right could not
+// say WHICH roles it covers (root_role.go). The consequence for fixtures is that
+// the shape right has to come from somewhere unscoped, and the consequence for
+// operators is recorded as its own guard in root_role_integration_test.go.
+//
+// The caller's other rights keep their scope, so the floor assertions are
+// untouched.
+func grantRootMinting(t *testing.T, aid, grantedBy string) {
+	t.Helper()
+	insertRole(t, "root-minters", "role.create-root")
+	if err := GrantOperator(context.Background(), integrationPool, "root-minters", aid, &grantedBy); err != nil {
+		t.Fatalf("grant %s→root-minters: %v", aid, err)
+	}
+}
+
+// insertRoleScoped is insertRole + default_scope (ADR-047 S1). A direct
+// INSERT of a role fixture with a per-role scope, bypassing Service (for
+// caller fixtures whose own rights are under a default_scope).
+func insertRoleScoped(t *testing.T, name, scope string, perms ...string) {
+	t.Helper()
+	ctx := context.Background()
+	if _, err := integrationPool.Exec(ctx,
+		`INSERT INTO rbac_roles (name, builtin, default_scope) VALUES ($1, false, $2)`, name, scope); err != nil {
+		t.Fatalf("insert scoped role %q: %v", name, err)
+	}
+	for _, p := range perms {
+		if _, err := integrationPool.Exec(ctx,
+			`INSERT INTO rbac_role_permissions (role_name, permission) VALUES ($1, $2)`, name, p); err != nil {
+			t.Fatalf("insert perm %q for %q: %v", p, name, err)
+		}
+	}
+}
+
+// setupScopedCaller sets up a caller with a scoped role (default_scope=
+// coven=prod + bare incarnation.run) → its effective scope is covens[prod].
+// alice is cluster-admin (source of `*`, a second admin against
+// self-lockout).
+func setupScopedCaller(t *testing.T) (sub, alice string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-sub", &a)
+	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
+		t.Fatalf("grant alice→cluster-admin: %v", err)
+	}
+	// sub holds incarnation.run, but restricted to coven=prod via default_scope
+	// + role.create/grant-operator (so it has any right to mutate at all).
+	insertRoleScoped(t, "prod-runners", "coven=prod", "incarnation.run", "role.create", "role.grant-operator")
+	if err := GrantOperator(ctx, integrationPool, "prod-runners", "archon-sub", &a); err != nil {
+		t.Fatalf("grant sub→prod-runners: %v", err)
+	}
+	grantRootMinting(t, "archon-sub", a)
+	return "archon-sub", a
+}
+
+// ---- default_scope privilege escalation (security fix) ----
+
+// ESCALATION: caller scope=prod + bare incarnation.run creates a role with
+// `incarnation.run on coven=staging` → must be DENIED (its effective scope
+// doesn't cover staging). Before the fix, subset compared the raw bare perm
+// (covers everything) → the grant would go through.
+func TestIntegration_Subset_DefaultScope_CreateRole_Escalation_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedCaller(t)
+	s := newService(t)
+
+	err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "staging-escalation",
+		Permissions: []string{"incarnation.run on coven=staging"},
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (caller scope=prod does not cover staging)", err)
+	}
+	if roleExists(t, "staging-escalation") {
+		t.Error("role created despite the subset-check (escalation to staging)")
+	}
+}
+
+// caller scope=prod creates a role with incarnation.run on coven=prod → OK
+// (within its scope).
+func TestIntegration_Subset_DefaultScope_CreateRole_InScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedCaller(t)
+	s := newService(t)
+
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "prod-only",
+		Permissions: []string{"incarnation.run on coven=prod"},
+		CallerAID:   sub,
+	}); err != nil {
+		t.Fatalf("CreateRole (in scope=prod): %v", err)
+	}
+	if !roleExists(t, "prod-only") {
+		t.Error("role not created")
+	}
+}
+
+// caller scope=prod creates a role with default_scope=prod + bare → OK
+// (effectively the same scope: bare inherits prod on both sides).
+func TestIntegration_Subset_DefaultScope_CreateRole_SameScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedCaller(t)
+	s := newService(t)
+
+	scope := "coven=prod"
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:         "prod-runners-2",
+		Permissions:  []string{"incarnation.run"},
+		CallerAID:    sub,
+		DefaultScope: &scope,
+	}); err != nil {
+		t.Fatalf("CreateRole (default_scope=prod + bare): %v", err)
+	}
+	if !roleExists(t, "prod-runners-2") {
+		t.Error("role not created")
+	}
+}
+
+// caller scope=prod creates a role with default_scope=staging + bare →
+// DENIED (the granted side is effectively coven=staging, outside the
+// caller's scope).
+func TestIntegration_Subset_DefaultScope_CreateRole_OtherScope_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedCaller(t)
+	s := newService(t)
+
+	scope := "coven=staging"
+	err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:         "staging-runners",
+		Permissions:  []string{"incarnation.run"},
+		CallerAID:    sub,
+		DefaultScope: &scope,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (default_scope=staging outside the caller scope)", err)
+	}
+	if roleExists(t, "staging-runners") {
+		t.Error("role created despite the subset-check")
+	}
+}
+
+// cluster-admin (`*`) can grant any scope → OK (exception #1 from ADR-047).
+func TestIntegration_Subset_DefaultScope_ClusterAdmin_AnyScope_OK(t *testing.T) {
+	resetRBAC(t)
+	_, alice := setupScopedCaller(t)
+	s := newService(t)
+
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "any-scope",
+		Permissions: []string{"incarnation.run on coven=staging"},
+		CallerAID:   alice,
+	}); err != nil {
+		t.Fatalf("CreateRole (cluster-admin any scope): %v", err)
+	}
+	if !roleExists(t, "any-scope") {
+		t.Error("role not created")
+	}
+}
+
+// backcompat: caller WITHOUT default_scope (unrestricted) + bare
+// incarnation.run grants `incarnation.run on coven=staging` → OK (as before
+// the fix: an unrestricted bare perm covers any scope, existing behavior
+// isn't broken).
+func TestIntegration_Subset_DefaultScope_UnrestrictedCaller_AnyScope_OK(t *testing.T) {
+	resetRBAC(t)
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-unrestricted", &a)
+	if err := GrantOperator(context.Background(), integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
+		t.Fatalf("grant alice→cluster-admin: %v", err)
+	}
+	// A role WITHOUT default_scope (NULL) → bare perms unrestricted. That includes
+	// role.create-root, which is why this caller needs no separate source for it.
+	insertRole(t, "unrestricted-runners", "incarnation.run", "role.create", "role.create-root")
+	if err := GrantOperator(context.Background(), integrationPool, "unrestricted-runners", "archon-unrestricted", &a); err != nil {
+		t.Fatalf("grant→unrestricted-runners: %v", err)
+	}
+	s := newService(t)
+
+	unrestricted := "archon-unrestricted"
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "bc-staging",
+		Permissions: []string{"incarnation.run on coven=staging"},
+		CallerAID:   unrestricted,
+	}); err != nil {
+		t.Fatalf("CreateRole (unrestricted caller, backcompat): %v", err)
+	}
+	if !roleExists(t, "bc-staging") {
+		t.Error("role not created (backcompat broken)")
+	}
+}
+
+// ---- default_scope widening via UpdateRolePermissions (NIM-130) ----
+
+// setupScopedUpdater sets up a caller scoped to coven=prod holding bare
+// incarnation.run (effective scope covens[prod]) plus role.update. alice is
+// cluster-admin (a second admin against self-lockout). Mirrors
+// setupScopedCaller but for the update path.
+func setupScopedUpdater(t *testing.T) (sub, alice string) {
+	t.Helper()
+	ctx := context.Background()
+	seedOperator(t, "archon-alice", nil)
+	a := "archon-alice"
+	seedOperator(t, "archon-sub", &a)
+	if err := GrantOperator(ctx, integrationPool, "cluster-admin", "archon-alice", nil); err != nil {
+		t.Fatalf("grant alice→cluster-admin: %v", err)
+	}
+	insertRoleScoped(t, "prod-updaters", "coven=prod", "incarnation.run", "role.update")
+	if err := GrantOperator(ctx, integrationPool, "prod-updaters", "archon-sub", &a); err != nil {
+		t.Fatalf("grant sub→prod-updaters: %v", err)
+	}
+	grantRootMinting(t, "archon-sub", a)
+	return "archon-sub", a
+}
+
+// roleScope reads a role's raw default_scope for assertions.
+func roleScope(t *testing.T, name string) *string {
+	t.Helper()
+	scope, err := roleDefaultScope(context.Background(), integrationPool, name)
+	if err != nil {
+		t.Fatalf("roleScope %q: %v", name, err)
+	}
+	return scope
+}
+
+// ESCALATION: caller scope=prod keeps a role's permission set unchanged
+// (added=∅) but WIDENS its default_scope prod→staging. The bare permission
+// re-scopes to coven=staging, outside the caller's scope → must be DENIED and
+// the scope left untouched. Before the fix, the added-only gate saw an empty
+// delta and the widening slipped through.
+func TestIntegration_Subset_UpdateRole_WidenScope_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	staging := "coven=staging"
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &staging,
+		CallerAID:       sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (widening prod→staging)", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (rollback)", got)
+	}
+}
+
+// ESCALATION: same, but the new default_scope is nil (unrestricted). The bare
+// permission becomes unrestricted, which the scoped caller doesn't hold →
+// DENIED, scope untouched.
+func TestIntegration_Subset_UpdateRole_ClearScope_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    nil,
+		CallerAID:       sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (clearing scope to unrestricted)", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (rollback)", got)
+	}
+}
+
+// caller scope=prod re-sets the SAME scope (prod→prod) on unchanged perms →
+// OK (the resulting grant stays within the caller's scope).
+func TestIntegration_Subset_UpdateRole_SameScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	prod := "coven=prod"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &prod,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (same scope=prod): %v", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod", got)
+	}
+}
+
+// REVERSED BY NIM-214. Pulling a STAGING role into prod used to be allowed — the
+// result landed inside the caller's own scope, so the floor had nothing to say.
+// It is now refused a step earlier: a role granting `incarnation.run on
+// coven=staging` is outside this caller's reach, and reaching into it is exactly
+// the administration the ticket scopes. Re-scoping a role that IS within reach
+// still goes through — NarrowScopeIsNotGated_OK below.
+func TestIntegration_Subset_UpdateRole_ReScopeFromOutOfReach_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=staging", "incarnation.run")
+	s := newService(t)
+
+	prod := "coven=prod"
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &prod,
+		CallerAID:       sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (a staging role is not this caller's to administer)", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != "coven=staging" {
+		t.Errorf("default_scope = %v, want coven=staging (rollback)", got)
+	}
+}
+
+// REGRESSION: SetDefaultScope=false + trimming → OK. The PATCH-trim path must
+// stay byte-for-byte: the scope is untouched, and a pure removal is not
+// escalation, so neither the floor nor the root-role gate speaks.
+//
+// The trimmed permission is inside the caller's scope because NIM-214 requires it
+// to be able to administer the role at all — a separate question, asked first.
+// The pre-NIM-214 form trimmed a permission the caller did not hold; that case
+// now lives in RemoveForeign_Denied.
+func TestIntegration_Subset_UpdateRole_TrimNoScope_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run", "role.update")
+	s := newService(t)
+
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: false,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (trim, no scope change): %v", err)
+	}
+	got := rolePerms(t, "target")
+	if len(got) != 1 || got[0] != "incarnation.run" {
+		t.Errorf("permissions = %v, want [incarnation.run]", got)
+	}
+	if scope := roleScope(t, "target"); scope == nil || *scope != "coven=prod" {
+		t.Errorf("default_scope = %v, want coven=prod (untouched)", scope)
+	}
+}
+
+// The floor measures the rights GAINED (NIM-230), so a narrowing gains none and
+// is not gated by it. Pinned because the floor used to gate the WHOLE resulting
+// set whenever the scope moved, which refused narrowings that hand out nothing.
+//
+// The caller covers the role, so the NIM-214 administration gate is satisfied and
+// what this test observes is the floor alone. The pre-NIM-214 form narrowed a
+// permission the caller did NOT hold; that shape is refused now, one gate earlier
+// (ReScopeFromOutOfReach_Denied).
+func TestIntegration_Subset_UpdateRole_NarrowScopeIsNotGated_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t) // holds incarnation.run + role.update on coven=prod
+	insertRoleScoped(t, "target", "coven=prod", "incarnation.run")
+	s := newService(t)
+
+	narrower := "coven=prod AND trait.team=web"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:            "target",
+		Permissions:     []string{"incarnation.run"},
+		SetDefaultScope: true,
+		DefaultScope:    &narrower,
+		CallerAID:       sub,
+	}); err != nil {
+		t.Fatalf("narrowing a scope hands out nothing and must not be gated: %v", err)
+	}
+	if got := roleScope(t, "target"); got == nil || *got != narrower {
+		t.Errorf("default_scope = %v, want %q", got, narrower)
+	}
+}
+
+// ---- re-parenting: the case NIM-230 suspected and did not confirm ----
+
+// NIM-230 asked whether re-parenting onto a DIFFERENT role hides the same hole as
+// clearing the parent. It does not, and the reason is worth pinning rather than
+// re-derived: the ceiling is not removed, it is replaced, and
+// [Service.resolveParentCeiling] already requires the caller to hold the NEW
+// parent's whole effective set (ADR-078(h), caller-holds-parent). The child is
+// then refused anything that parent does not cover, so holding the parent covers
+// whatever the child comes out granting.
+//
+// Here the child moves from a prod-scoped parent to an unrestricted one — exactly
+// the widening the ticket suspected — and the scoped caller is refused before the
+// floor ever measures the result.
+func TestIntegration_Subset_UpdateRole_ReparentToWiderParent_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run")
+	insertRole(t, "base-wide", "incarnation.run") // no scope: the whole cluster
+	insertDerived(t, "team-child", "base-prod", "", "incarnation.run")
+	s := newService(t)
+
+	wide := "base-wide"
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    &wide,
+		CallerAID:     sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (the caller does not hold the wider parent)", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod" {
+		t.Errorf("parent_role = %v after a rejected PATCH, want base-prod", got)
+	}
+}
+
+// The other direction stays open: moving a child under a parent the caller holds
+// grants nothing new, so nothing refuses it. The guard exists because every fix in
+// this area widens refusals, and re-parenting inside one's own rights is the
+// sanctioned way to reshape a role (NIM-201) — it must not become collateral.
+func TestIntegration_Subset_UpdateRole_ReparentToNarrowerParent_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupScopedUpdater(t)
+	insertRoleScoped(t, "base-prod", "coven=prod", "incarnation.run", "soul.list")
+	insertRoleScoped(t, "base-prod-run", "coven=prod", "incarnation.run")
+	insertDerived(t, "team-child", "base-prod", "", "incarnation.run")
+	s := newService(t)
+
+	narrower := "base-prod-run"
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:          "team-child",
+		Permissions:   []string{"incarnation.run"},
+		SetParentRole: true,
+		ParentRole:    &narrower,
+		CallerAID:     sub,
+	}); err != nil {
+		t.Fatalf("re-parenting onto a role the caller holds: %v", err)
+	}
+	if got := storedParent(t, "team-child"); got == nil || *got != "base-prod-run" {
+		t.Errorf("parent_role = %v, want base-prod-run", got)
+	}
+}
+
+// ---- CreateRole subset check ----
+
+// suboperator tries to create a role with `*` → denied (escalation to cluster-admin).
+func TestIntegration_Subset_CreateRole_Wildcard_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	s := newService(t)
+
+	err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "escalation",
+		Permissions: []string{"*"},
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
+	}
+	if roleExists(t, "escalation") {
+		t.Error("role created despite the subset-check (tx not rolled back)")
+	}
+}
+
+// suboperator tries to create a role with a permission outside its set → denied.
+func TestIntegration_Subset_CreateRole_ForeignPermission_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	s := newService(t)
+
+	err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "ops",
+		Permissions: []string{"operator.create"}, // sub doesn't have this
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
+	}
+	if roleExists(t, "ops") {
+		t.Error("role created despite the subset-check")
+	}
+}
+
+// suboperator creates a role with a permission IN its own set → OK.
+func TestIntegration_Subset_CreateRole_OwnedPermission_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	s := newService(t)
+
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "more-granters",
+		Permissions: []string{"role.create"}, // sub has this
+		CallerAID:   sub,
+	}); err != nil {
+		t.Fatalf("CreateRole (permission in the set): %v", err)
+	}
+	if !roleExists(t, "more-granters") {
+		t.Error("role not created")
+	}
+}
+
+// cluster-admin creates a role with any permission → OK (subset covers everything via `*`).
+func TestIntegration_Subset_CreateRole_ClusterAdmin_OK(t *testing.T) {
+	resetRBAC(t)
+	_, alice := setupSuboperator(t)
+	s := newService(t)
+
+	if err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "powerful",
+		Permissions: []string{"*", "operator.create", "incarnation.run"},
+		CallerAID:   alice,
+	}); err != nil {
+		t.Fatalf("CreateRole (cluster-admin): %v", err)
+	}
+	if !roleExists(t, "powerful") {
+		t.Error("role not created")
+	}
+}
+
+// ---- UpdateRolePermissions subset check ----
+
+// suboperator adds a foreign permission to an existing role → denied.
+func TestIntegration_Subset_UpdateRole_AddForeign_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	insertRole(t, "target", "role.create")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:        "target",
+		Permissions: []string{"role.create", "*"}, // adds `*`
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
+	}
+	// `*` wasn't added — the tx rolled back.
+	got := rolePerms(t, "target")
+	if len(got) != 1 || got[0] != "role.create" {
+		t.Errorf("permissions = %v, want [role.create] (rollback)", got)
+	}
+}
+
+// suboperator adds its own permission → OK.
+func TestIntegration_Subset_UpdateRole_AddOwned_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	insertRole(t, "target", "role.create")
+	s := newService(t)
+
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:        "target",
+		Permissions: []string{"role.create", "role.grant-operator"}, // both held by sub
+		CallerAID:   sub,
+	}); err != nil {
+		t.Fatalf("UpdateRolePermissions (own permissions): %v", err)
+	}
+	if len(rolePerms(t, "target")) != 2 {
+		t.Errorf("permissions = %v, want 2", rolePerms(t, "target"))
+	}
+}
+
+// REVERSED BY NIM-214. A suboperator removing a FOREIGN permission is refused:
+// not because it escalates — it plainly does not, which is why the floor was
+// always silent here — but because it is administering a role whose rights it
+// could not grant. Demolition was the surface the least-privilege floor could
+// never see, and "cutting someone else's role is not escalation" left one holder
+// of `role.update` able to zero out the cluster.
+//
+// The pre-NIM-214 form of this test asserted the opposite and is what the ticket
+// set out to change; the positive counterpart is RemoveOwnedForeign_OK below.
+func TestIntegration_Subset_UpdateRole_RemoveForeign_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	insertRole(t, "target", "role.create", "operator.create")
+	s := newService(t)
+
+	err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:        "target",
+		Permissions: []string{"role.create"},
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (sub may not administer a role granting operator.create)", err)
+	}
+	if got := rolePerms(t, "target"); len(got) != 2 {
+		t.Errorf("permissions = %v, want the role left untouched (2 rows)", got)
+	}
+}
+
+// The other side of the same rule: trimming stays free once the caller COVERS the
+// role. Nothing about removal became an escalation — it simply stopped being
+// something you may do to a role that is not yours to administer.
+func TestIntegration_Subset_UpdateRole_RemoveOwnedForeign_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, alice := setupSuboperator(t)
+	insertRole(t, "covered", "role.create", "role.grant-operator")
+	if err := GrantOperator(context.Background(), integrationPool, "covered", sub, &alice); err != nil {
+		t.Fatalf("grant sub→covered: %v", err)
+	}
+	s := newService(t)
+
+	if err := s.UpdateRolePermissions(context.Background(), UpdateRolePermissionsInput{
+		Name:        "covered",
+		Permissions: []string{"role.create"},
+		CallerAID:   sub,
+	}); err != nil {
+		t.Fatalf("trimming a role the caller covers: %v", err)
+	}
+	got := rolePerms(t, "covered")
+	if len(got) != 1 || got[0] != "role.create" {
+		t.Errorf("permissions = %v, want [role.create]", got)
+	}
+}
+
+// ---- GrantOperator subset check ----
+
+// suboperator grants a role containing `*` → denied (a workaround: it would
+// bind a powerful role to itself/another and escalate).
+func TestIntegration_Subset_GrantOperator_PowerfulRole_Denied(t *testing.T) {
+	resetRBAC(t)
+	sub, alice := setupSuboperator(t)
+	seedOperator(t, "archon-victim", &alice)
+	insertRole(t, "powerful", "*")
+	s := newService(t)
+
+	err := s.GrantOperator(context.Background(), GrantOperatorInput{
+		RoleName:  "powerful",
+		AID:       "archon-victim",
+		CallerAID: &sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld", err)
+	}
+	if membershipCount(t, "powerful") != 0 {
+		t.Error("membership inserted despite the subset-check")
+	}
+}
+
+// suboperator grants a role within its own rights → OK.
+func TestIntegration_Subset_GrantOperator_WithinRights_OK(t *testing.T) {
+	resetRBAC(t)
+	sub, alice := setupSuboperator(t)
+	seedOperator(t, "archon-bob", &alice)
+	insertRole(t, "weak", "role.create") // sub has this permission
+	s := newService(t)
+
+	if err := s.GrantOperator(context.Background(), GrantOperatorInput{
+		RoleName:  "weak",
+		AID:       "archon-bob",
+		CallerAID: &sub,
+	}); err != nil {
+		t.Fatalf("GrantOperator (within permission bounds): %v", err)
+	}
+	if membershipCount(t, "weak") != 1 {
+		t.Error("membership not inserted")
+	}
+}
+
+// cluster-admin grants a role with `*` → OK.
+func TestIntegration_Subset_GrantOperator_ClusterAdmin_OK(t *testing.T) {
+	resetRBAC(t)
+	_, alice := setupSuboperator(t)
+	seedOperator(t, "archon-bob", &alice)
+	insertRole(t, "powerful", "*")
+	s := newService(t)
+
+	if err := s.GrantOperator(context.Background(), GrantOperatorInput{
+		RoleName:  "powerful",
+		AID:       "archon-bob",
+		CallerAID: &alice,
+	}); err != nil {
+		t.Fatalf("GrantOperator (cluster-admin grants a `*`-role): %v", err)
+	}
+	if membershipCount(t, "powerful") != 1 {
+		t.Error("membership not inserted")
+	}
+}
+
+// A bootstrap grant (CallerAID=nil) bypasses the subset check — keeper init
+// binds the first Archon to cluster-admin (`*`) with no caller subject.
+func TestIntegration_Subset_GrantOperator_NilCaller_BypassesCheck(t *testing.T) {
+	resetRBAC(t)
+	seedOperator(t, "archon-alice", nil)
+	s := newService(t)
+
+	if err := s.GrantOperator(context.Background(), GrantOperatorInput{
+		RoleName:  "cluster-admin",
+		AID:       "archon-alice",
+		CallerAID: nil,
+	}); err != nil {
+		t.Fatalf("GrantOperator (bootstrap nil-caller): %v", err)
+	}
+	if membershipCount(t, "cluster-admin") != 1 {
+		t.Error("bootstrap membership not inserted")
+	}
+}
+
+// A revoked caller loses its rights for the subset check: its permissions
+// aren't counted (the revoked_at IS NULL filter in callerPermissions). Here
+// sub holds role.create via granters, but once the operator is revoked, its
+// subset is empty → denied even on "its own" permission. Verifies the
+// revoked_at filter.
+func TestIntegration_Subset_RevokedCaller_HasNoPermissions(t *testing.T) {
+	resetRBAC(t)
+	sub, _ := setupSuboperator(t)
+	// Revoke sub.
+	if _, err := integrationPool.Exec(context.Background(),
+		`UPDATE operators SET revoked_at = NOW() WHERE aid = $1`, sub); err != nil {
+		t.Fatalf("revoke sub: %v", err)
+	}
+	s := newService(t)
+
+	err := s.CreateRole(context.Background(), CreateRoleInput{
+		Name:        "x",
+		Permissions: []string{"role.create"}, // sub would have this if active
+		CallerAID:   sub,
+	})
+	if !errors.Is(err, ErrPermissionNotHeld) {
+		t.Fatalf("err = %v, want ErrPermissionNotHeld (revoked caller without permissions)", err)
+	}
+}

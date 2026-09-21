@@ -1,0 +1,38 @@
+# tasks/account.yml — stable service account for node_exporter + textfile directory.
+#
+# Unlike the stateless branch of prod convention §2 (DynamicUser=yes, systemd
+# itself provides the account), we keep a manual system account (stateful branch §2):
+# the textfile directory survives restarts and is read by root collectors — a stable
+# uid owner is required. The group is created BEFORE the user (core.user -g requires
+# an existing primary group). The group name is input.group (defaults to matching
+# input.user, but can be set independently) so the primary group and directory
+# owner aren't hard-pinned to the account name.
+
+- name: Ensure the node_exporter system group exists
+  module: core.group.present
+  params:
+    name: "${ input.group }"
+    system: true
+
+# home is NOT set: core.user.present ALWAYS calls useradd with -M (no directory created),
+# so omitting `home:` means a system account with no home directory. An explicit `home: /`
+# would only set / in /etc/passwd, no directory created.
+- name: Ensure the node_exporter system user exists
+  module: core.user.present
+  params:
+    name: "${ input.user }"
+    system: true
+    group: "${ input.group }"
+    shell: /usr/sbin/nologin
+
+# textfile directory. Declarative state core.directory.present: idempotent on
+# mode/owner/group, fixes drift, supports dry-run (unlike the imperative
+# core.exec.run install -d). owner/group — the service account (oneshot collectors
+# write there as root, the main daemon reads).
+- name: Ensure textfile collector directory exists
+  module: core.directory.present
+  params:
+    path:  "${ input.textfile_dir }"
+    owner: "${ input.user }"
+    group: "${ input.group }"
+    mode:  "0755"

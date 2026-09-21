@@ -1,0 +1,15 @@
+name: include-when-dynamic-register
+description: >
+  Условный include с ДИНАМИЧЕСКИМ when: (register.*) — отвергается офлайн как
+  include_when_dynamic_unsupported. include раскрывается ДО стратификации, register
+  предыдущих задач ещё не собран, поэтому допустим только статический предикат
+  (input./essence./incarnation./vars.).
+tasks:
+  - name: probe
+    module: core.cmd.shell
+    register: probe_done
+    changed_when: false
+    params:
+      cmd: "true"
+  - include: cluster.yml
+    when: register.probe_done.changed

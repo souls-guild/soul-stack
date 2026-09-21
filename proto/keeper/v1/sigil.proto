@@ -1,0 +1,137 @@
+syntax = "proto3";
+
+package soulstack.keeper.v1;
+
+option go_package = "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1";
+
+// PluginSigil transports one Sigil trust seal (ADR-026) from Keeper to Soul over
+// EventStream (only-add in FromKeeper.oneof, slice S2b).
+//
+// Self-contained for Soul-side verify (slice S6): carries everything needed to
+// re-assemble the signed block and check the ed25519 signature with the trust
+// anchor from bootstrap (BootstrapReply.sigil_pubkey_pem):
+//
+//   - alias: the operator's registration, and the key a Soul looks the grant up by.
+//     Deliberately NOT part of the signed block;
+//   - source + ref: what was actually signed. The artifact carries no self-name
+//     (NIM-377), so where it came from is the only identity a signature can be over;
+//   - kind: how the bytes are reached (`git` / `artifact`). Signed — this decides
+//     WHERE a Soul goes for the artifact, and an unsigned answer to that would let a
+//     rewritten catalog redirect the fetch;
+//   - artifacts: the release's approved files, one per platform. The Soul picks its
+//     own row and checks the bytes against that row's sha256. This is the one real
+//     control on the spawn path;
+//   - signature: ed25519 signature of the block (source, kind, ref, schema_sha256,
+//     artifacts[]) — over the WHOLE list, so substituting one platform's digest
+//     breaks verification for all of them;
+//   - schema: canonical schema-document bytes (M1), which Soul hashes with
+//     shared/pluginhost.SchemaDigest (the S3<->S6 invariant).
+//
+// Fields 1, 2 and 6 held the pre-NIM-377 shape (namespace / name / manifest) and
+// field 4 the pre-NIM-793 single binary_sha256. All are reserved rather than reused:
+// ADR-012 forbids reusing a field number, so an old sender talking to a new receiver
+// fails to populate anything instead of landing a namespace where an alias is
+// expected, or one platform's digest where a release is.
+message PluginSigil {
+  reserved 1, 2, 4, 6;
+  reserved "namespace", "name", "binary_sha256", "manifest";
+
+  // ref: an operator-asserted version label for the grant (ADR-026 Variant C);
+  // NOT part of artifact integrity, but is included in the signed block.
+  string ref = 3;
+
+  // Raw ed25519 signature of the block (64 bytes, no base64/PEM).
+  bytes signature = 5;
+
+  // Registration alias — address level 1, chosen by the operator, and the key Soul
+  // resolves a slot by. Not signed: an alias is a local naming choice, so registering
+  // the same bytes twice must not need a second signature.
+  string alias = 7;
+
+  // Artifact source the grant is on: the module repository's remote for kind=git, the
+  // publication base URL for kind=artifact. Signed.
+  string source = 8;
+
+  // Canonical schema-document bytes (M1). The canonical form for verify is these
+  // bytes as-is — the document is byte-deterministic by construction, so there is
+  // nothing to normalize before hashing.
+  bytes schema = 9;
+
+  // Source kind: "git" or "artifact". Signed.
+  string kind = 10;
+
+  // The release's approved artifacts (NIM-793). Never empty: a grant approving no
+  // bytes cannot let anything run. A kind=git grant carries exactly one entry with an
+  // empty os/arch — that source declares no platform, so its single binary answers for
+  // every one, exactly as it did before this field existed.
+  repeated SigilArtifact artifacts = 11;
+}
+
+// SigilArtifact is one platform's approved file inside a PluginSigil (NIM-793).
+//
+// Order on the wire carries no meaning: both sides canonicalize the list (sorted by
+// os, arch, path) before hashing, so a receiver never has to trust the order a sender
+// chose.
+message SigilArtifact {
+  // GOOS / GOARCH spelling (`linux`, `amd64`). Both empty = the unplatformed entry of
+  // a kind=git grant, which matches every platform.
+  string os = 1;
+  string arch = 2;
+
+  // Path of the file RELATIVE to PluginSigil.source. Signed, which is what lets a Soul
+  // fetch without the operator's catalog: the catalog never reaches a Soul, the grant
+  // does. Empty for the unplatformed entry of a kind=git grant, whose bytes do not come
+  // from a URL.
+  string path = 3;
+
+  // SHA-256 of that file, hex lowercase (64 characters).
+  string sha256 = 4;
+}
+
+// SigilSnapshot is the FULL active set of plugin grants (replace semantics,
+// ADR-026). Rides only-add in the existing EventStream's FromKeeper.oneof.
+//
+// Soul applies it as a ReplaceAll: it REPLACES its whole local Sigil set with
+// this list, it does NOT upsert. A grant missing from the snapshot is forgotten
+// by Soul — this is how revoke/retire takes effect: after an Archon revokes a
+// grant, Keeper sends a new snapshot without it, and near-instant revoke (S6c)
+// closes access without restarting Soul. An empty sigils[] = no plugin is granted.
+message SigilSnapshot {
+  repeated PluginSigil sigils = 1;
+}
+
+// PluginFetchRequest requests a SoulModule artifact's bytes (FetchModule, epic
+// core.module.installed S2). The authority for the grant is binary_sha256
+// (content-addressed, same format as PluginSigil.binary_sha256: hex lowercase,
+// 64 characters); alias is context for Keeper's logs/audit.
+//
+// Fields 1 and 2 held namespace/name before NIM-377 and are reserved, not reused
+// (ADR-012).
+message PluginFetchRequest {
+  reserved 1, 2;
+  reserved "namespace", "name";
+
+  string binary_sha256 = 3;
+  string alias = 4;
+}
+
+// PluginChunk is one chunk of a binary's bytes in FetchModule's server-streaming
+// response. Soul verifies the assembled file's integrity against the request's
+// sha256 (S3); separate offset/checksum fields aren't needed (add only-add if
+// ever required).
+message PluginChunk {
+  bytes data = 1;
+}
+
+// SigilTrustAnchors is the FULL set of Sigil signing trust anchors (replace
+// semantics, ADR-026, R3 rotation). Rides only-add in FromKeeper.oneof.
+//
+// Soul applies it as a ReplaceAll under the same rules as SigilSnapshot: it
+// REPLACES its whole anchor set with this list (multi-anchor support for
+// zero-downtime signing-key rotation). An anchor missing from the set is
+// forgotten by Soul (retiring the old key). Each element is the SPKI PEM of a
+// Sigil signing public ed25519 key (same format as
+// BootstrapReply.sigil_pubkey_pem).
+message SigilTrustAnchors {
+  repeated string pubkey_pem = 1;
+}

@@ -1,0 +1,27 @@
+description: >-
+  Corpus exercise for the whole `core.state.<verb>` family ([ADR-0084]). Every
+  other example writes state with `set` alone, so `present`/`add`/`append`/
+  `modify`/`remove`/`unset` had Go unit tests and nothing that rendered them:
+  no soul-lint pass, no L0 fold, no example an author can copy. This service is
+  that exercise and nothing else - it deploys no software.
+
+# No migrations/ directory -> state-schema version 1 (ADR-019, NIM-735).
+#
+# The field kinds are load-bearing here, not decoration: `add` picks the identity
+# spelling from the field's kind, `key:` for an object and `match:` for an array,
+# and writing the wrong one is an error rather than a fallback. The schema is
+# what the engine reads to decide.
+state_schema:
+  cluster_id:      { type: string }
+  bootstrap_token: { type: string }
+  topology:        { type: string }
+  # The four collections the verbs operate on. A map is keyed by whatever the
+  # scenario writes, so it says so with `additional_properties` rather than
+  # enumerating keys; a list says what its elements are with `items`.
+  members:  { type: object, additional_properties: { type: object, additional_properties: true } }
+  nodes:    { type: array,  items: { type: object, additional_properties: true } }
+  node_ids: { type: object, additional_properties: { type: string } }
+  events:   { type: array,  items: { type: string } }
+
+# No dependencies: the scenario uses only core modules (ADR-015), which are not
+# listed in destiny[]/modules[] (ADR-009).

@@ -1,0 +1,88 @@
+name: Bug report
+description: Report a bug or unexpected behavior
+labels: ["bug"]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        Thanks for the report. Before filling it out, please check
+        [docs/known-limitations.md](https://github.com/souls-guild/soul-stack/blob/main/docs/known-limitations.md)
+        — some limitations are deliberately out of scope for the beta.
+
+        **Do not report security vulnerabilities here.** Disclose them privately —
+        see [SECURITY.md](https://github.com/souls-guild/soul-stack/blob/main/SECURITY.md).
+
+  - type: input
+    id: version
+    attributes:
+      label: Version
+      description: Output of `keeper version`.
+      placeholder: "v0.1.0-beta.3"
+    validations:
+      required: true
+
+  - type: dropdown
+    id: component
+    attributes:
+      label: Component
+      description: Where the bug shows up.
+      options:
+        - keeper
+        - soul
+        - soulctl
+        - soul-lint
+        - web
+        - not sure / several
+    validations:
+      required: true
+
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to reproduce
+      description: Minimal sequence that leads to the bug.
+      placeholder: |
+        1. ...
+        2. ...
+        3. ...
+    validations:
+      required: true
+
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: actual
+    attributes:
+      label: Actual behavior
+    validations:
+      required: true
+
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs / audit
+      description: >-
+        Relevant log or audit-journal excerpt.
+        DO NOT attach secrets — JWT tokens, Vault contents, private
+        SoulSeed keys, DSNs with passwords. Mask anything sensitive.
+      render: text
+    validations:
+      required: false
+
+  - type: textarea
+    id: environment
+    attributes:
+      label: Environment
+      description: Host OS (Keeper and Soul), how it was built (release binary / `make build` / Docker), Postgres / Redis / Vault versions.
+      placeholder: |
+        Keeper OS: ...
+        Soul OS: ...
+        Build: ...
+        Postgres / Redis / Vault: ...
+    validations:
+      required: true

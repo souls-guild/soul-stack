@@ -1,0 +1,39 @@
+{{/*
+  systemd drop-in hardening for redis-server (ADR-010). Context: .vars.data_dir/
+  run_dir/log_dir/conf_dir. The set is UNIFIED with redis-sentinel.service.tmpl (NIM-97);
+  guard — TestRedisServerHardening_CanonDirectives.
+
+  Drop-in (not its own unit): the distro unit redis-server.service must not be replaced (it
+  carries ExecStart/Type=notify, gets updated with the package) → hardening arrives as an
+  override in .service.d/. User/Group are NOT set (stateful redis needs a stable data-dir
+  uid; the redis:redis account is created by the package).
+
+  conf_dir in ReadWritePaths is MANDATORY: update_config → CONFIG REWRITE rewrites
+  redis.conf; without conf_dir ProtectSystem=strict keeps /etc R/O → REWRITE fails.
+  MemoryDenyWriteExecute=yes — matches the redis.io-deb 8.8.0-1rl1 reference; modules (bloom/json/
+  search/timeseries) — AOT-.so via dlopen (R+X, not W+X), jemalloc/Lua too without W+X,
+  Redis has no JIT → doesn't break (live-verified NIM-97).
+  UMask=007 — RDB/AOF/log 0660 (data closed off from others). CapabilityBoundingSet= empty —
+  stricter than the redis.io-deb reference (which keeps CAP_SYS_RESOURCE); rlimit is covered by the static
+  LimitNOFILE=65535 (redis cannot raise its own rlimit without CAP_SYS_RESOURCE). AF_UNIX in
+  RestrictAddressFamilies — redis unix socket + sd_notify Type=notify.
+*/}}
+[Service]
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }} {{ .vars.conf_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=007
+CapabilityBoundingSet=
+LimitNOFILE=65535

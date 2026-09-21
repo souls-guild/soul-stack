@@ -1,0 +1,9 @@
+name: task-multi-discriminator
+tasks:
+  - name: both module and apply
+    module: core.exec.run
+    params:
+      command: "true"
+    apply:
+      destiny: redis
+      input: {}

@@ -1,0 +1,6 @@
+name: redis
+input:
+  port:
+    required: true
+    min: 1
+    max: 65535

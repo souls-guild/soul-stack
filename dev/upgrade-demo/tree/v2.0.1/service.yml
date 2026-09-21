@@ -1,0 +1,13 @@
+description: >-
+  Demo service NIM-34 (upgrade v2, ADR-0068), tag v2.0.1. Like v2.0.0
+  (state-schema version 2 via migrations/002_schema_v2_marker/main.yml), but WITHOUT the upgrade/
+  directory. Transition v1.0.0 -> v2.0.1 = LEGACY mode: no upgrade scenario found,
+  so upgrade-paths?to=v2.0.1 returns mode=legacy + reachable=true + state_migrations
+  [001->002], and POST upgrade switches the pin + runs the migration + sets
+  status=drift (no host orchestration, the operator finishes with a plain apply).
+
+state_schema:
+  note:
+    type: string
+  schema_v2:
+    type: boolean

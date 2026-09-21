@@ -1,0 +1,1569 @@
+package api
+
+// Guard tests for the INCARNATION domain on huma (batch-2g, ADR-054). MIXED audit
+// class — we check EVERY write with the right S6 guard (mixing up the class = a
+// regression):
+//
+//   - MIDDLEWARE-AUDIT (create/run/unlock/upgrade): the event is written by the
+//     huma-audit-middleware (variant B) — guarded via assertMiddlewareAudit (audit
+//     on 2xx with a non-empty payload; empty on 4xx/403).
+//   - SELF-AUDIT (rerun-last/destroy/traits-set): the event is
+//     written by the handler ITSELF INSIDE *Typed — guarded via assertSelfAudit
+//     (event with requiredKey).
+//
+// Plus: golden byte-exact wire for every route; ChiCoexistence on the REAL
+// buildRouter (incarnation+choir, chi.Walk); 400 on out-of-range list;
+// RBAC-deny→403; read→NoAudit.
+
+import (
+	"bytes"
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"net/http"
+	"net/http/httptest"
+	"os"
+	"path/filepath"
+	"reflect"
+	"slices"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/go-chi/chi/v5"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
+	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
+	"github.com/souls-guild/soul-stack/shared/audit"
+)
+
+// === ChiCoexistence guard (REAL buildRouter, incarnation+choir, chi.Walk) ===
+
+// TestHumaIncarnation_ChiCoexistence — guard on the REACHABILITY of ALL incarnation
+// huma routes + coexistence with the choir mount on the SAME /v1/incarnations group.
+// After chi.Route("/{name}") was removed, incarnation ops carry the FULL path
+// /{name}[/...]; choir (batch-2f) is mounted at the same place. If even one
+// incarnation or choir route is shadowed (a sibling chi.Route at the /{name} node) —
+// chi.Walk won't list it (405 in prod). The test requires each route to be hit
+// exactly once (NOT chi.Match — it gives a false-true on a shadowed node).
+func TestHumaIncarnation_ChiCoexistence(t *testing.T) {
+	incH := handlers.NewIncarnationHandler(&incTestDB{}, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
+	h := buildRouter(
+		nil, // verifier
+		nil, // healthH
+		stubOperatorHandler(t),
+		incH,
+		handlers.NewSoulHandler(nil, nil, nil, nil),
+		handlers.TelemetrySpecStub(),
+		stubRoleHandler(t), stubSynodHandler(t), stubSigilHandler(t), stubSigilKeyHandler(t),
+		stubServiceHandler(t), nil, nil, stubAugurHandler(t), stubOracleHandler(t),
+		nil,                                     // pushH
+		nil,                                     // pushProviderH
+		nil,                                     // errandH
+		nil,                                     // voyageH
+		nil,                                     // cadenceH
+		nil,                                     // auditH
+		handlers.NewChoirHandler(nil, nil, nil), // choirH non-nil → choir-mount coexists
+		nil,                                     // heraldH
+		handlers.NewModuleCatalogHandler(nil, nil),
+		handlers.NewModuleFormPrepHandler(nil, nil),
+		handlers.NewPermissionCatalogHandler(nil),
+		handlers.NewEventTypeCatalogHandler(nil),
+		handlers.NewHeraldTypeCatalogHandler(nil),
+		handlers.NewMyPermissionsHandler(nil, nil),
+		nil,                                  // enforcer
+		nil,                                  // auditWriter
+		nil,                                  // metricsHTTP
+		nil,                                  // tollDegraded
+		nil,                                  // tempoLimiter
+		nil,                                  // tempoMetrics
+		nil,                                  // tempoVoyageCreateLimits
+		nil,                                  // tempoVoyagePreviewLimits
+		false,                                // webUIEnabled — /ui is out of scope for the incarnation routing test
+		nil,                                  // ldapAuth (LDAP not configured in the test)
+		nil,                                  // oidcAuth (OIDC not configured in the test)
+		nil,                                  // authToken (/auth/token exchange is not tested here)
+		AuthMethodsDeps{},                    // authMethods (/auth/methods is mounted but not verified)
+		nil,                                  // loginGuard (anti-bruteforce off in the test)
+		apimiddleware.AuthLoginLimitConfig{}, // loginLimitCfg
+		nil,                                  // soulStatsStaleFn (defaults to 90s in the test)
+		nil,                                  // clusterH (cluster-view not mounted in the test)
+		nil,                                  // runEventsDeps (ADR-068 §A3 — not tested here)
+		nil,                                  // consoleWSDeps (console WebSocket not tested here)
+		nil,                                  // consoleRecordingH (console recording playback not tested here)
+		nil,                                  // logger
+	)
+	routes, ok := h.(chi.Routes)
+	if !ok {
+		t.Fatalf("buildRouter returned %T, not chi.Routes", h)
+	}
+
+	// The full set of incarnation + choir routes on the /v1/incarnations group: each
+	// one MUST be hit EXACTLY once. Missing = shadowing (405 in prod); duplicate =
+	// a mount collision.
+	want := map[route]int{
+		{http.MethodPost, "/v1/incarnations"}:                                    0,
+		{http.MethodGet, "/v1/incarnations"}:                                     0,
+		{http.MethodGet, "/v1/incarnations/{id}"}:                                0,
+		{http.MethodGet, "/v1/incarnations/{id}/upgrade-paths"}:                  0,
+		{http.MethodGet, "/v1/incarnations/{id}/history"}:                        0,
+		{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}"}:          0,
+		{http.MethodPost, "/v1/incarnations/{id}/unlock"}:                        0,
+		{http.MethodPost, "/v1/incarnations/{id}/upgrade"}:                       0,
+		{http.MethodPost, "/v1/incarnations/{id}/rerun-last"}:                    0,
+		{http.MethodDelete, "/v1/incarnations/{id}"}:                             0,
+		{http.MethodPost, "/v1/incarnations/{id}/choirs"}:                        0,
+		{http.MethodGet, "/v1/incarnations/{id}/choirs"}:                         0,
+		{http.MethodDelete, "/v1/incarnations/{id}/choirs/{choir}"}:              0,
+		{http.MethodPost, "/v1/incarnations/{id}/choirs/{choir}/voices"}:         0,
+		{http.MethodGet, "/v1/incarnations/{id}/choirs/{choir}/voices"}:          0,
+		{http.MethodDelete, "/v1/incarnations/{id}/choirs/{choir}/voices/{sid}"}: 0,
+	}
+	// Routes that must NOT be on the PRODUCTION router. `want` above cannot
+	// express this: an untracked pattern is simply ignored by the walk, so a
+	// resurrected mount would pass unnoticed.
+	forbidden := map[route]int{
+		// PATCH .../hosts edited `incarnation.spec.hosts[]`, removed whole with
+		// the field (ADR-044 amendment 2026-07-30, NIM-330). A declared role is
+		// a Voice; POST .../choirs/{choir}/voices above is where it is written.
+		{http.MethodPatch, "/v1/incarnations/{id}/hosts"}: 0,
+		// POST .../check-drift went with the Scry circuit (NIM-446). This entry
+		// is the one that watches the PRODUCTION router:
+		// TestHumaIncarnation_CheckDriftIsGone probes the hand-built test router
+		// below, so a mount resurrected in router.go alone would leave it green.
+		{http.MethodPost, "/v1/incarnations/{id}/check-drift"}: 0,
+	}
+	if err := chi.Walk(routes, func(method, pattern string, _ http.Handler, _ ...func(http.Handler) http.Handler) error {
+		k := route{method: method, path: normalizePath(pattern)}
+		if _, tracked := want[k]; tracked {
+			want[k]++
+		}
+		if _, banned := forbidden[k]; banned {
+			forbidden[k]++
+		}
+		return nil
+	}); err != nil {
+		t.Fatalf("chi.Walk: %v", err)
+	}
+	for k, n := range want {
+		if n != 1 {
+			t.Errorf("%s seen %d times, want 1 (0 = shadowed/not mounted -> 405; >1 = duplicate)", k, n)
+		}
+	}
+	for k, n := range forbidden {
+		if n != 0 {
+			t.Errorf("%s is mounted %d times on the production router, want 0 - the endpoint is removed", k, n)
+		}
+	}
+}
+
+// === isolated huma-router (production wiring, verbatim from router.go) ===
+
+// incEnforcer — a combined RBAC stub: PermissionChecker (RequirePermissionMulti on
+// write) + ActionHolder (RequireAction on read). allow parameterizes both facets.
+type incEnforcer struct{ allow bool }
+
+func (e incEnforcer) Check(string, string, string, map[string]string) error {
+	if e.allow {
+		return nil
+	}
+	return rbac.ErrPermissionDenied
+}
+func (e incEnforcer) HoldsAction(string, string, string) bool { return e.allow }
+
+// humaIncarnationRouter mounts ALL incarnation routes via huma exactly per the
+// router.go wiring: per-route RBAC + the correct audit class (MIDDLEWARE for
+// create/run/unlock/upgrade; SELF for rerun-last/destroy/traits-set;
+// read without audit) + a huma op with the full path /{name}[/...] on the
+// /v1/incarnations group. enforcer/auditW/incH are parameterized. injectClaims
+// replaces RequireJWT.
+func humaIncarnationRouter(t *testing.T, enforcer incEnforcer, auditW audit.Writer, incH *handlers.IncarnationHandler) *chi.Mux {
+	t.Helper()
+	// Gate (b) of create re-measures the effective name and every declared coven
+	// against the caller's scope, and is fail-closed without a checker (NIM-333).
+	// Production wires it from deps.RBAC in server.go; here the router's own enforcer
+	// is the same authority, so hand it to the handler as well — otherwise these
+	// tests would exercise a half-assembled handler.
+	if incH != nil {
+		incH.SetPermissionChecker(enforcer)
+	}
+	installHumaErrorOverride()
+	r := chi.NewRouter()
+	injectClaims := func(next http.Handler) http.Handler {
+		return http.HandlerFunc(func(w http.ResponseWriter, req *http.Request) {
+			ctx := apimiddleware.InjectClaimsForTest(req.Context(), &keeperjwt.Claims{Subject: "archon-alice"})
+			next.ServeHTTP(w, req.WithContext(ctx))
+		})
+	}
+	multi := func(action string) func(http.Handler) http.Handler {
+		return apimiddleware.RequirePermissionMulti(enforcer, "incarnation", action, incNoCtxSelector)
+	}
+	r.Route("/v1", func(r chi.Router) {
+		r.Route("/incarnations", func(r chi.Router) {
+			// MIDDLEWARE-AUDIT
+			r.With(injectClaims, multi("create")).Group(func(r chi.Router) {
+				registerHumaIncarnationCreate(newHumaIncarnationAPI(r, auditW, audit.EventIncarnationCreated, nil), incH)
+			})
+			r.With(injectClaims, multi("run")).Group(func(r chi.Router) {
+				registerHumaIncarnationRun(newHumaIncarnationAPI(r, auditW, audit.EventIncarnationScenarioStarted, nil), incH)
+			})
+			r.With(injectClaims, multi("unlock")).Group(func(r chi.Router) {
+				registerHumaIncarnationUnlock(newHumaIncarnationAPI(r, auditW, audit.EventIncarnationUnlocked, nil), incH)
+			})
+			r.With(injectClaims, multi("upgrade")).Group(func(r chi.Router) {
+				registerHumaIncarnationUpgrade(newHumaIncarnationAPI(r, auditW, audit.EventIncarnationUpgradeStarted, nil), incH)
+			})
+			// SELF-AUDIT
+			r.With(injectClaims, multi("rerun-last")).Group(func(r chi.Router) {
+				registerHumaIncarnationRerunLast(newHumaCadenceAPI(r), incH)
+			})
+			r.With(injectClaims, multi("destroy")).Group(func(r chi.Router) {
+				registerHumaIncarnationDestroy(newHumaCadenceAPI(r), incH)
+			})
+			// secret reveal (NIM-74): POST self-audit + GET read, both under view-secrets.
+			r.With(injectClaims, multi("view-secrets")).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealSecret(newHumaCadenceAPI(r), incH)
+			})
+			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "view-secrets")).Group(func(r chi.Router) {
+				registerHumaIncarnationRevealableSecrets(newHumaCadenceAPI(r), incH)
+			})
+			// READ
+			r.With(injectClaims, stashRawQuery, apimiddleware.RequireAction(enforcer, "incarnation", "list")).Group(func(r chi.Router) {
+				registerHumaIncarnationList(newHumaCadenceAPI(r), incH)
+			})
+			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "get")).Group(func(r chi.Router) {
+				registerHumaIncarnationGet(newHumaCadenceAPI(r), incH)
+			})
+			r.With(injectClaims, apimiddleware.RequireAction(enforcer, "incarnation", "history")).Group(func(r chi.Router) {
+				registerHumaIncarnationHistory(newHumaCadenceAPI(r), incH)
+			})
+		})
+	})
+	return r
+}
+
+// incNoCtxSelector — a MultiSelectorExtractor without a DB context (test): an empty
+// set → RequirePermissionMulti only lets through bare/`*` roles. That's enough for
+// the allow-all test (strictAllowAll returns true on bare).
+func incNoCtxSelector(_ *http.Request) []map[string]string { return nil }
+
+func incScopeAllow() *handlers.IncarnationHandler {
+	// scoper=incTestScoper{unrestricted:true} → get/list/history see everything.
+	db := &incTestDB{
+		selectByID:    func(name string) pgx.Row { return incRow(name, "ready", "{}") },
+		soulsExisting: map[string]struct{}{"web1.example.com": {}},
+	}
+	return handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
+}
+
+// === MIDDLEWARE-AUDIT: create ===
+
+func TestHumaIncarnation_Create_WireAndMiddlewareAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil) // runner=nil → stub mode
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"redis-prod","service":"redis"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		Incarnation string  `json:"incarnation"`
+		ApplyID     *string `json:"apply_id"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if reply.Incarnation != "redis-prod" || reply.ApplyID == nil || *reply.ApplyID == "" {
+		t.Errorf("reply = %+v, want incarnation=redis-prod + apply_id", reply)
+	}
+	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationCreated, "id")
+}
+
+func TestHumaIncarnation_Create_UnknownField_400(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"x","service":"redis","bogus":1}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (unknown field); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_Create_RBACDeny_403_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"x","service":"redis"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 403 - RBAC-deny must not reach the handler")
+	}
+}
+
+// TestHumaIncarnation_RevealSecret_RBACDeny_403 — the reveal endpoint without the
+// incarnation.view-secrets right is rejected with 403 by the middleware BEFORE the
+// handler (NIM-74). No audit is written on 403 (RBAC-deny never reaches the
+// self-audit in RevealSecretTyped).
+func TestHumaIncarnation_RevealSecret_RBACDeny_403(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/secrets/reveal",
+		strings.NewReader(`{"secret_id":"user_password","key":"alice"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 403 reveal - RBAC-deny must not reach the handler")
+	}
+}
+
+// TestHumaIncarnation_RevealableSecrets_RBACDeny_403 — discovery without the
+// view-secrets right → 403 via the existence-gate RequireAction.
+func TestHumaIncarnation_RevealableSecrets_RBACDeny_403(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: false}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-prod/secrets/revealable", nil)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusForbidden {
+		t.Fatalf("status = %d, want 403; body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// === MIDDLEWARE-AUDIT: create — pre-flight assert gate (ADR-009/027 amend, form A) ===
+
+// _ — a compile-time guard: the real *scenario.Runner MUST satisfy
+// handlers.AssertPreflighter (the handler gets the pre-flighter via a type
+// assertion on the runner, whose type set isn't statically checked when it's
+// assigned to a ScenarioStarter). A drift between the Runner.PreflightAssert
+// signature and the interface is caught here at build time, instead of a silent
+// no-op pre-flight in production.
+var _ handlers.AssertPreflighter = (*scenario.Runner)(nil)
+
+// incCreateSnapshot writes a temp service snapshot with a single scenario
+// `scenario/create/main.yml` (body is its contents), marked `create: true`, and
+// returns the root. Needed by the multiple-create-scenarios mechanism (Phase 2):
+// ResolveCreateScenarios scans art.LocalDir, so the create scenario must live on
+// disk with the flag, otherwise the set is empty → a bare incarnation (the run
+// won't start). body must itself carry `create: true` (the caller controls
+// input/validate). t.TempDir cleans up automatically.
+func incCreateSnapshot(t *testing.T, body string) string {
+	t.Helper()
+	root := t.TempDir()
+	dir := filepath.Join(root, "scenario", "create")
+	if err := os.MkdirAll(dir, 0o755); err != nil {
+		t.Fatalf("mkdir %s: %v", dir, err)
+	}
+	if err := os.WriteFile(filepath.Join(dir, "main.yml"), []byte(body), 0o644); err != nil {
+		t.Fatalf("write create/main.yml: %v", err)
+	}
+	return root
+}
+
+// incPreflightLoader — a disk-aware ServiceSnapshotLoader stub: Load returns
+// LocalDir (for ResolveCreateScenarios), ReadFile reads the scenario from disk (for
+// ValidateInput). localDir is the snapshot from incCreateSnapshot with create:true.
+// pre-flight is the incPreflightStarter stub, the scenario itself is not read
+// through this loader.
+type incPreflightLoader struct{ localDir string }
+
+func (l incPreflightLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref, LocalDir: l.localDir}, nil
+}
+func (incPreflightLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
+	return statemigrate.Chain{}, nil
+}
+func (incPreflightLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
+}
+func (l incPreflightLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
+}
+
+// incPreflightStarter — a ScenarioStarter + AssertPreflighter stub: pre-flight
+// returns preflightErr (nil → passes), Start records that it was called in started.
+type incPreflightStarter struct {
+	preflightErr error
+	started      *bool
+}
+
+func (s *incPreflightStarter) Start(_ context.Context, _ scenario.RunSpec) error {
+	if s.started != nil {
+		*s.started = true
+	}
+	return nil
+}
+func (s *incPreflightStarter) StartDestroy(_ context.Context, _ scenario.RunSpec) error { return nil }
+func (s *incPreflightStarter) PreflightAssert(_ context.Context, _ scenario.RunSpec) error {
+	return s.preflightErr
+}
+
+// TestHumaIncarnation_Create_PreflightAssertFail_422 — pre-flight assert false ON
+// CREATE → 422 assert_failed, the incarnation is NOT created (insertRow is NOT
+// called), Start is NOT run, no audit is written on 4xx. The KEY invariant of
+// form A: rejection at the model stage BEFORE the commit, without the
+// error_locked fail status.
+func TestHumaIncarnation_Create_PreflightAssertFail_422(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{
+		preflightErr: scenario.ErrAssertFailed, // topology doesn't converge
+		started:      &started,
+	}
+	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"redis-cluster","service":"redis","create_scenario":"create"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 assert_failed; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "assert-failed") {
+		t.Errorf("body does not carry problem-type assert-failed: %s", rec.Body.String())
+	}
+	if inserted {
+		t.Error("INVARIANT VIOLATED: incarnation created (insertRow called) on assert-fail - must NOT be created")
+	}
+	if started {
+		t.Error("INVARIANT VIOLATED: scenario create started on assert-fail - Start must not be called")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 422 assert-fail - middleware must not write on 4xx")
+	}
+}
+
+// incValidateLoader — a disk-aware ServiceSnapshotLoader stub with a scenario
+// create/main.yml carrying a top-level validate: rule (the cross-field invariant
+// "port is required if tls is disabled") + `create: true`. Load returns LocalDir
+// (for ResolveCreateScenarios), ReadFile reads from disk (for ValidateInput).
+// localDir is the snapshot from incCreateSnapshot.
+type incValidateLoader struct{ localDir string }
+
+func (l incValidateLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref, LocalDir: l.localDir}, nil
+}
+func (incValidateLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
+	return statemigrate.Chain{}, nil
+}
+func (incValidateLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
+}
+func (l incValidateLoader) ReadFile(_ *artifact.ServiceArtifact, file string) ([]byte, error) {
+	return os.ReadFile(filepath.Join(l.localDir, filepath.FromSlash(file)))
+}
+
+// incValidateScenarioBody — the contents of scenario/create/main.yml for incValidateLoader.
+const incValidateScenarioBody = `name: create
+create: true
+input:
+  tls: { type: boolean, default: false }
+  port: { type: integer, default: 0 }
+validate:
+  - that: "input.tls || input.port > 0"
+    message: "either enable tls or set a positive port"
+tasks:
+  - name: noop
+    module: core.exec.run
+    params: { cmd: "true" }
+`
+
+// incPreflightScenarioBody — a minimal create scenario with create:true (no
+// input schema → ValidateInput passes) for incPreflightLoader.
+const incPreflightScenarioBody = "name: create\ncreate: true\ntasks:\n  - name: noop\n    module: core.exec.run\n    params: { cmd: \"true\" }\n"
+
+// TestHumaIncarnation_Create_ValidateRuleFail_422 — the top-level validate: rule
+// fails on the request path → 422 validation-failed BEFORE the commit, the
+// incarnation is NOT created, Start is NOT run, no audit is written on 4xx.
+// validate: is symmetric with the pre-flight assert (form A), but input-only and
+// via ValidateInput (DSL wave 2).
+func TestHumaIncarnation_Create_ValidateRuleFail_422(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	// input WITHOUT port and WITHOUT tls → defaults (tls=false, port=0) → rule is false.
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"redis-prod","service":"redis","create_scenario":"create"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 validation-failed; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "validation-failed") {
+		t.Errorf("body does not carry problem-type validation-failed: %s", rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), "either enable tls or set a positive port") {
+		t.Errorf("body does not carry the rule message: %s", rec.Body.String())
+	}
+	if inserted {
+		t.Error("INVARIANT VIOLATED: incarnation created on validate-fail - must NOT be created")
+	}
+	if started {
+		t.Error("INVARIANT VIOLATED: scenario create started on validate-fail - Start must not be called")
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 422 validate-fail - middleware must not write on 4xx")
+	}
+}
+
+// TestHumaIncarnation_Create_ValidateRulePass_202 — the validate: rule passes
+// (port>0) → create behaves as before: 202, the incarnation is created, Start runs.
+func TestHumaIncarnation_Create_ValidateRulePass_202(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	inserted := false
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row {
+		inserted = true
+		return staticRow2(time.Now(), time.Now())
+	}}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	loader := incValidateLoader{localDir: incCreateSnapshot(t, incValidateScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"redis-prod","service":"redis","create_scenario":"create","input":{"port":6379}}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202 (validate passes); body=%s", rec.Code, rec.Body.String())
+	}
+	if !inserted {
+		t.Error("incarnation not created on validate-pass - happy path broken")
+	}
+	if !started {
+		t.Error("Start not run on validate-pass - happy path broken")
+	}
+}
+
+// TestHumaIncarnation_Create_PreflightAssertPass_202 — pre-flight passes
+// (topology converges) → create behaves as before: 202 + apply_id, the
+// incarnation is created, Start runs. Verifies pre-flight doesn't break the
+// happy path.
+func TestHumaIncarnation_Create_PreflightAssertPass_202(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	started := false
+	db := &incTestDB{insertRow: func() pgx.Row { return staticRow2(time.Now(), time.Now()) }}
+	starter := &incPreflightStarter{preflightErr: nil, started: &started}
+	loader := incPreflightLoader{localDir: incCreateSnapshot(t, incPreflightScenarioBody)}
+	incH := handlers.NewIncarnationHandler(db, starter, nil, &incTestResolver{ok: true}, loader, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations", strings.NewReader(`{"id":"redis-prod","service":"redis","create_scenario":"create"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	if !started {
+		t.Error("Start not run on assert-pass - happy path broken")
+	}
+	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationCreated, "id")
+}
+
+// === MIDDLEWARE-AUDIT: unlock ===
+
+func TestHumaIncarnation_Unlock_WireAndMiddlewareAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{
+		selectByID:   func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
+		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "error_locked") },
+	}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock", strings.NewReader(`{"reason":"fix"}`))
+	r.ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		ID             string `json:"id"`
+		PreviousStatus string `json:"previous_status"`
+		Status         string `json:"status"`
+		UnlockedByAID  string `json:"unlocked_by_aid"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if reply.ID != "redis-prod" || reply.PreviousStatus != "error_locked" || reply.Status != "ready" || reply.UnlockedByAID != "archon-alice" {
+		t.Errorf("reply = %+v", reply)
+	}
+	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationUnlocked, "previous_status")
+}
+
+func TestHumaIncarnation_Unlock_MissingReason_422(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/unlock", strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (missing required reason); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_Unlock_NotFound_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{selectByID: func(string) pgx.Row { return errRow2{pgx.ErrNoRows} }}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/nope/unlock", strings.NewReader(`{"reason":"x"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusNotFound {
+		t.Fatalf("status = %d, want 404; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 404 unlock - write path must not write (middleware skip on 4xx)")
+	}
+}
+
+// === MIDDLEWARE-AUDIT: upgrade ===
+
+func TestHumaIncarnation_Upgrade_MiddlewareAuditClass(t *testing.T) {
+	// The 500 path (loader=nil → endpoint not configured): proves that upgrade
+	// does NOT write audit on NON-2xx (middleware-skip), and that the route is
+	// mounted/reachable.
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{selectByID: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil) // loader=nil
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade", strings.NewReader(`{"to_version":"v2"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d, want 500 (loader nil); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 500 upgrade - middleware must not write on 5xx")
+	}
+}
+
+func TestHumaIncarnation_Upgrade_MissingToVersion_422(t *testing.T) {
+	db := &incTestDB{selectByID: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
+	incH := handlers.NewIncarnationHandler(db, nil, nil, &incTestResolver{ok: true}, &incTestLoader{}, nil, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/upgrade", strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusUnprocessableEntity {
+		t.Fatalf("status = %d, want 422 (missing to_version); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// === MIDDLEWARE-AUDIT: run ===
+
+func TestHumaIncarnation_Run_WireAndMiddlewareAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{selectByID: func(name string) pgx.Row { return incRow(name, "ready", "{}") }}
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, nil, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/scenarios/converge", strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		ApplyID     string `json:"apply_id"`
+		Incarnation string `json:"incarnation"`
+		Scenario    string `json:"scenario"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if reply.ApplyID == "" || reply.Incarnation != "redis-prod" || reply.Scenario != "converge" {
+		t.Errorf("reply = %+v", reply)
+	}
+	assertMiddlewareAudit(t, auditCap, audit.EventIncarnationScenarioStarted, "scenario")
+}
+
+// === SELF-AUDIT: rerun-last ===
+
+func TestHumaIncarnation_RerunLast_SelfAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{
+		selectByID:   func(name string) pgx.Row { return incRow(name, "error_locked", "{}") },
+		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "error_locked") },
+	}
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"retry"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		ApplyID     string `json:"apply_id"`
+		Incarnation string `json:"incarnation"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if reply.ApplyID == "" || reply.Incarnation != "redis-prod" {
+		t.Errorf("reply = %+v", reply)
+	}
+	assertSelfAudit(t, auditCap, audit.EventIncarnationRerunLast, "previous_status")
+}
+
+func TestHumaIncarnation_RerunLast_NotErrorLocked_409_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{
+		selectByID:   func(name string) pgx.Row { return incRow(name, "ready", "{}") },
+		unlockSelect: func() pgx.Row { return rerunSelectRow([]byte("{}"), "ready") }, // not error_locked → ErrNotErrorLocked
+	}
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, nil, &incTestResolver{ok: true}, nil, auditCap, nil, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/rerun-last", strings.NewReader(`{"reason":"x"}`))
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusConflict {
+		t.Fatalf("status = %d, want 409; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("audit written on 409 rerun - self-audit only writes on success")
+	}
+}
+
+// === REMOVED: POST /v1/incarnations/{id}/check-drift (NIM-446) ===
+
+// TestHumaIncarnation_CheckDriftIsGone pins how the removed endpoint answers.
+// The whole Scry drift circuit was deleted (ADR-031 amendment 2026-08-05), so a
+// caller still holding the old client — the web UI before it re-vendors the
+// spec, a script, a saved curl — must get a clean routing answer: 404 (no such
+// path) or 405 (path exists, method does not).
+//
+// This is the same guard NIM-330 left behind for PATCH .../hosts, and it exists
+// because of what happened without one: the web UI went on calling that dead
+// endpoint for five weeks, green the whole time, because every front-end test
+// mocks fetch. A guard here is the only thing that answers "is this endpoint
+// actually gone" without deploying and curling.
+//
+// The failure it guards against is a 5xx. A half-removal — the huma operation
+// unmounted but the chi group left behind, or the reverse — surfaces as a nil
+// handler panic or an internal error, which reads to the caller as "the endpoint
+// is broken" rather than "the endpoint is gone". A 2xx would be worse still: it
+// would mean the route is somehow live after the domain behind it was deleted.
+func TestHumaIncarnation_CheckDriftIsGone(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/v1/incarnations/redis-prod/check-drift",
+		strings.NewReader(`{}`))
+	r.ServeHTTP(rec, req)
+
+	switch rec.Code {
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		// The two acceptable answers.
+	default:
+		t.Fatalf("POST /v1/incarnations/{id}/check-drift = %d, want 404 or 405 "+
+			"(the endpoint is removed, NIM-446); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a removed endpoint wrote audit: %v", auditEventTypes(auditCap))
+	}
+}
+
+// === SELF-AUDIT: destroy ===
+
+func TestHumaIncarnation_Destroy_MissingAllowDestroy_400(t *testing.T) {
+	// allow_destroy required boolean query — missing → 400 (huma required-param).
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (missing allow_destroy); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_Destroy_BadAllowDestroy_400(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod?allow_destroy=maybe", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (non-boolean allow_destroy); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_Destroy_ForceWireAndSelfAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	db := &incTestDB{
+		selectByID:   func(name string) pgx.Row { return incRow(name, "ready", "{}") },
+		unlockSelect: func() pgx.Row { return staticRow2Bytes([]byte("{}"), "ready") }, // Destroy FOR UPDATE select (state, status)
+		memberSIDs:   []string{"vm-1.example.com", "vm-2.example.com"},
+	}
+	var logs bytes.Buffer
+	incH := handlers.NewIncarnationHandler(db, nil, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, auditCap, nil,
+		slog.New(slog.NewJSONHandler(&logs, &slog.HandlerOptions{Level: slog.LevelWarn})))
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incH)
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodDelete, "/v1/incarnations/redis-prod?allow_destroy=true", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status = %d, want 202; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		ApplyID    string `json:"apply_id"`
+		Unreleased *struct {
+			Provider string   `json:"provider"`
+			VMIDs    []string `json:"vm_ids"`
+			SIDs     []string `json:"sids"`
+		} `json:"unreleased"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if reply.ApplyID == "" {
+		t.Errorf("reply.apply_id is empty")
+	}
+	// NIM-395: force-destroy skips teardown, so the cloud VMs the incarnation
+	// provisioned are still running when this 202 comes back. A bare apply_id
+	// reads as "done, everything cleaned up" — the operator must be told, on the
+	// response itself, what was NOT released, because the record that named
+	// those VMs is gone a moment later.
+	if reply.Unreleased == nil {
+		t.Fatalf("force-destroy replied with no `unreleased` block — 202 alone says the resources were freed; body=%s",
+			rec.Body.String())
+	}
+	if reply.Unreleased.Provider != "example-dev" {
+		t.Errorf("unreleased.provider = %q, want example-dev", reply.Unreleased.Provider)
+	}
+	if len(reply.Unreleased.VMIDs) != 2 {
+		t.Errorf("unreleased.vm_ids = %q, want the two still-running VMs", reply.Unreleased.VMIDs)
+	}
+	// The member hosts are a dimension of their own, not a restatement of the vm
+	// ids: a create that failed before the driver committed its ids leaves
+	// registered Souls and nothing else, and the membership rows naming them
+	// CASCADE away with the record.
+	if got := reply.Unreleased.SIDs; len(got) != 2 || got[0] != "vm-1.example.com" || got[1] != "vm-2.example.com" {
+		t.Errorf("unreleased.sids = %q, want the two member hosts; body=%s", got, rec.Body.String())
+	}
+	// destroy_started + destroy_completed are written by the service layer INSIDE
+	// Destroy/DeleteAfterTeardown (SELF-AUDIT) — at least destroy_started must be there.
+	if !hasAuditEvent(auditCap, audit.EventIncarnationDestroyStarted) {
+		t.Errorf("incarnation.destroy_started NOT written (SELF-AUDIT broken); events=%v", auditEventTypes(auditCap))
+	}
+	// The reply reaches exactly one reader — whoever made the call. A force-destroy
+	// run from a script, a retry loop or a UI that shows only the status code
+	// leaves the abandoned VMs named nowhere an on-call operator would look, so the
+	// same list goes to the log at WARN. It is a second channel, not a restatement:
+	// every dimension has to be in it, or the channel reports a smaller leak than
+	// the one that happened.
+	warn := logs.String()
+	for _, want := range []string{"example-dev", "i-aaa111", "i-bbb222", "vm-1.example.com", "vm-2.example.com"} {
+		if !strings.Contains(warn, want) {
+			t.Errorf("force-destroy WARN does not name %q — the only operator-facing copy that outlives the reply is short; log=%s",
+				want, warn)
+		}
+	}
+}
+
+// TestUnreleasedResourcesReply_CoversEveryDimension — GUARD: the wire type must
+// name every dimension the domain records. The archive and the audit event both
+// marshal [incarnation.UnreleasedResources] whole, while newIncarnationDestroyReply
+// copies it field by field — so a fourth kind of abandoned resource (block
+// volumes, floating ips, load balancers) added to the domain lands in the two
+// durable places and silently stops at the HTTP boundary. The operator would
+// then read a reply that says less than a record they can no longer query, which
+// is NIM-395 restated one dimension over. `make check-openapi` does not see it
+// either: the committed yaml is generated from the reply type, so it agrees with
+// whatever the reply type happens to say.
+//
+// Compared by json name, not by Go field: the name is the contract, and renaming
+// one breaks a client exactly as hard as dropping it. That each declared field is
+// also assigned a value is pinned by
+// TestHumaIncarnation_Destroy_ForceWireAndSelfAudit.
+func TestUnreleasedResourcesReply_CoversEveryDimension(t *testing.T) {
+	domain := jsonFieldNames(t, incarnation.UnreleasedResources{})
+	wire := jsonFieldNames(t, UnreleasedResourcesReply{})
+	if !slices.Equal(domain, wire) {
+		t.Errorf("UnreleasedResourcesReply names %v, the domain records %v — "+
+			"a resource the force-destroy abandoned never reaches the destroy reply",
+			wire, domain)
+	}
+}
+
+// jsonFieldNames — sorted json names of v's fields.
+func jsonFieldNames(t *testing.T, v any) []string {
+	t.Helper()
+	rt := reflect.TypeOf(v)
+	names := make([]string, 0, rt.NumField())
+	for i := 0; i < rt.NumField(); i++ {
+		name, _, _ := strings.Cut(rt.Field(i).Tag.Get("json"), ",")
+		if name == "" || name == "-" {
+			t.Fatalf("%s.%s carries no json name — it cannot reach any wire surface",
+				rt.Name(), rt.Field(i).Name)
+		}
+		names = append(names, name)
+	}
+	slices.Sort(names)
+	return names
+}
+
+// === REMOVED: PATCH /v1/incarnations/{id}/hosts (NIM-330) ===
+
+// TestHumaIncarnation_UpdateHostsIsGone pins how the removed endpoint answers.
+// `spec.hosts[]` and its editing endpoint were deleted whole (ADR-044 amendment
+// 2026-07-30), so a caller that still holds the old client — the web UI before it
+// re-vendors the spec, a script, a saved curl — must get a clean routing answer:
+// 404 (no such path) or 405 (path exists, method does not).
+//
+// The failure this guards against is a 5xx. A half-removal — the huma operation
+// unmounted but the chi group left behind, or the reverse — surfaces as a nil
+// handler panic or an internal error, which reads to the caller as "the endpoint
+// is broken" rather than "the endpoint is gone", and would send someone hunting
+// through keeper logs for a fault that does not exist. A 2xx would be worse
+// still: it would mean the route is somehow live after the domain behind it was
+// deleted.
+func TestHumaIncarnation_UpdateHostsIsGone(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	body := `{"mode":"replace","hosts":[{"sid":"web1.example.com","role":"master"}]}`
+	req := httptest.NewRequest(http.MethodPatch, "/v1/incarnations/redis-prod/hosts", strings.NewReader(body))
+	r.ServeHTTP(rec, req)
+
+	switch rec.Code {
+	case http.StatusNotFound, http.StatusMethodNotAllowed:
+		// The two acceptable answers.
+	default:
+		t.Fatalf("PATCH /v1/incarnations/{id}/hosts = %d, want 404 or 405 "+
+			"(the endpoint is removed, NIM-330); body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("a removed endpoint wrote audit: %v", auditEventTypes(auditCap))
+	}
+}
+
+// === READ: list / get / history (NoAudit + 400 list) ===
+
+func TestHumaIncarnation_List_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("read GET /v1/incarnations wrote audit (%d) - read must not write", len(auditCap.Events()))
+	}
+}
+
+func TestHumaIncarnation_List_BadLimit_400(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?limit=99999", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (CheckPageBounds out-of-range); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_List_BadLimitType_400(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations?limit=lots", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (bad int limit); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+func TestHumaIncarnation_Get_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-prod", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("read GET /{name} wrote audit - read must not write")
+	}
+}
+
+// TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario — GUARD for Phase 2
+// (handler-level, the real NULL projection of scanIncarnation through the huma
+// reply): GET on a bare incarnation (created_scenario IS NULL) → 200, no panic,
+// the created_scenario key is OMITTED from the JSON body (omitempty on an empty
+// value). Regression = NULL breaks scanIncarnation (panic on **string) OR
+// created_scenario materializes as "" on the wire (instead of being omitted).
+func TestHumaIncarnation_Get_BareIncarnation_OmitsCreatedScenario(t *testing.T) {
+	db := &incTestDB{
+		selectByID: func(name string) pgx.Row { return incRowBare(name, "ready", "{}") },
+	}
+	incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil, incTestScoper{unrestricted: true}, nil)
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-bare", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var body map[string]any
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("unmarshal: %v; body=%s", err, rec.Body.String())
+	}
+	if body["id"] != "redis-bare" {
+		t.Errorf("id = %v, want redis-bare", body["id"])
+	}
+	if v, ok := body["created_scenario"]; ok {
+		t.Errorf("bare incarnation: created_scenario present in wire (=%v), want omitted (omitempty)", v)
+	}
+}
+
+func TestHumaIncarnation_History_NoAudit(t *testing.T) {
+	auditCap := &auditCaptureWriter{}
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, auditCap, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-prod/history", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	if len(auditCap.Events()) != 0 {
+		t.Errorf("read GET /{name}/history wrote audit - read must not write")
+	}
+}
+
+func TestHumaIncarnation_History_BadLimit_400(t *testing.T) {
+	r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incScopeAllow())
+	rec := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodGet, "/v1/incarnations/redis-prod/history?limit=lots", http.NoBody)
+	r.ServeHTTP(rec, req)
+	if rec.Code != http.StatusBadRequest {
+		t.Fatalf("status = %d, want 400 (bad limit); body=%s", rec.Code, rec.Body.String())
+	}
+}
+
+// === spec-dump ===
+
+func TestHumaIncarnation_SpecYAML(t *testing.T) {
+	frag, err := HumaIncarnationSpecYAML()
+	if err != nil {
+		t.Fatalf("HumaIncarnationSpecYAML: %v", err)
+	}
+	for _, want := range []string{
+		"createIncarnation", "listIncarnations", "getIncarnation", "getIncarnationHistory",
+		"runIncarnationScenario", "unlockIncarnation", "upgradeIncarnation",
+		"rerunLastIncarnation", "destroyIncarnation",
+	} {
+		if !strings.Contains(frag, want) {
+			t.Errorf("spec does not contain op %q", want)
+		}
+	}
+	// updateIncarnationHosts is gone with `spec.hosts[]` (NIM-330). It is checked
+	// here rather than only in the committed-spec drift guard because the web UI
+	// vendors this fragment: an operation left in the contract would be re-generated
+	// into a client for an endpoint that answers 404.
+	if strings.Contains(frag, "updateIncarnationHosts") {
+		t.Error("spec still publishes op \"updateIncarnationHosts\" - the endpoint is removed (NIM-330)")
+	}
+	// Same reasoning for checkIncarnationDrift (NIM-446): the whole drift circuit
+	// is gone, and the web UI generates its client from this fragment.
+	if strings.Contains(frag, "checkIncarnationDrift") {
+		t.Error("spec still publishes op \"checkIncarnationDrift\" - the endpoint is removed (NIM-446)")
+	}
+}
+
+// === assert helpers ===
+
+// assertMiddlewareAudit — S6-MIDDLEWARE-GUARD: the huma-audit-middleware (variant B)
+// wrote exactly one want event with a non-empty payload containing requiredKey.
+// A mutation (removing SetHumaAuditPayload in the register func / removing the
+// middleware wiring) turns this test red.
+func assertMiddlewareAudit(t *testing.T, cap *auditCaptureWriter, want audit.EventType, requiredKey string) {
+	t.Helper()
+	evs := cap.Events()
+	if len(evs) != 1 {
+		t.Fatalf("middleware-audit: %d events, want 1 (event=%s)", len(evs), want)
+	}
+	ev := evs[0]
+	if ev.EventType != want {
+		t.Errorf("event_type = %q, want %q", ev.EventType, want)
+	}
+	if ev.Source != audit.SourceAPI {
+		t.Errorf("source = %q, want api", ev.Source)
+	}
+	if ev.ArchonAID != "archon-alice" {
+		t.Errorf("archon = %q, want archon-alice", ev.ArchonAID)
+	}
+	if len(ev.Payload) == 0 {
+		t.Fatalf("payload empty - SetHumaAuditPayload did not fire (S6 regression)")
+	}
+	if _, ok := ev.Payload[requiredKey]; !ok {
+		t.Errorf("payload does not contain key %q: %v", requiredKey, ev.Payload)
+	}
+}
+
+func hasAuditEvent(cap *auditCaptureWriter, want audit.EventType) bool {
+	for _, ev := range cap.Events() {
+		if ev.EventType == want {
+			return true
+		}
+	}
+	return false
+}
+
+func auditEventTypes(cap *auditCaptureWriter) []audit.EventType {
+	var out []audit.EventType
+	for _, ev := range cap.Events() {
+		out = append(out, ev.EventType)
+	}
+	return out
+}
+
+// === minimal fakes (api package) ===
+
+// incTestDB — a minimal [handlers.IncarnationDB] for huma wire tests: covers
+// insert (create), SelectByID (get/run/unlock/upgrade/destroy/history probe),
+// unlock/rerun SELECT FOR UPDATE, souls-existence (bind-member), list COUNT/SELECT.
+type incTestDB struct {
+	insertRow     func() pgx.Row
+	selectByID    func(name string) pgx.Row
+	unlockSelect  func() pgx.Row
+	soulsExisting map[string]struct{}
+	// memberSIDs answers the incarnation_membership roster query. Empty is a
+	// legitimate answer for most tests, which is exactly why the force-destroy
+	// test sets it: an unset roster and a roster the code never read look the
+	// same in the reply.
+	memberSIDs []string
+	// seenSQL records every statement the handler issued. Some behaviour is only
+	// observable in the SQL: a filter that never reaches the WHERE clause returns
+	// the same rows from a fake as one that does, so a body assertion would pass
+	// either way.
+	seenSQL []string
+	writeProbe
+}
+
+func (f *incTestDB) Exec(_ context.Context, sql string, _ ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "DELETE FROM incarnation") {
+		return pgconn.NewCommandTag("DELETE 1"), nil
+	}
+	return pgconn.CommandTag{}, nil
+}
+
+func (f *incTestDB) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	f.seenSQL = append(f.seenSQL, sql)
+	switch {
+	case strings.Contains(sql, "INSERT INTO incarnation"):
+		f.recordInsert(sql, args)
+		if f.insertRow != nil {
+			return f.insertRow()
+		}
+		return staticRow2(time.Now(), time.Now())
+	case strings.Contains(sql, "SELECT state, state_schema_version, status") && strings.Contains(sql, "FOR UPDATE"):
+		if f.unlockSelect != nil {
+			return f.unlockSelect()
+		}
+		return errRow2{pgx.ErrNoRows}
+	case strings.Contains(sql, "SELECT state, status") && strings.Contains(sql, "FOR UPDATE"):
+		if f.unlockSelect != nil {
+			return f.unlockSelect()
+		}
+		return errRow2{pgx.ErrNoRows}
+	case strings.Contains(sql, "SELECT scenario") && strings.Contains(sql, "FROM state_history"):
+		return incStaticRow{values: []any{"create", "01HFAILEDRUN00000000000000",
+			[]byte(`{"scenario_name":"create","input":{}}`)}}
+	case strings.Contains(sql, "FROM apply_runs") && strings.Contains(sql, "recipe IS NOT NULL"):
+		// No longer on the rerun path (NIM-408) — kept so an unexpected probe is
+		// visible as ErrNoRows rather than as an unexpected-SQL panic.
+		return errRow2{pgx.ErrNoRows}
+	case strings.Contains(sql, "UPDATE incarnation") && strings.Contains(sql, "RETURNING updated_at"):
+		return staticRow1Time(time.Now().UTC())
+	case strings.Contains(sql, "SELECT state") && strings.Contains(sql, "status = 'destroying'"):
+		// NIM-395: the force-destroy path reads the live state to record what it
+		// is about to abandon, before archive+DELETE. jsonb arrives as []byte,
+		// the way pgx delivers it — and with real provisioned resources in it,
+		// so the `unreleased` field is observable at the HTTP boundary rather
+		// than being an empty object that any implementation would produce.
+		// Must precede the `WHERE id = $1` case: this SQL matches that too.
+		return incStaticRow{values: []any{
+			[]byte(`{"provisioned_provider":"example-dev","provisioned_vm_ids":["i-aaa111","i-bbb222"]}`),
+		}}
+	case strings.Contains(sql, "WHERE id = $1") || strings.Contains(sql, "FROM incarnation\nWHERE id"):
+		if f.selectByID != nil {
+			return f.selectByID(args[0].(string))
+		}
+		return errRow2{pgx.ErrNoRows}
+	case strings.Contains(sql, "COUNT(*) FROM incarnation") || strings.Contains(sql, "COUNT(*) FROM state_history"):
+		return staticRow1Int(0)
+	}
+	return errRow2{errors.New("incTestDB.QueryRow: unexpected SQL: " + sql)}
+}
+
+func (f *incTestDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
+	f.seenSQL = append(f.seenSQL, sql)
+	if strings.Contains(sql, "FROM souls WHERE sid = ANY") {
+		sids, _ := args[0].([]string)
+		var found []string
+		for _, sid := range sids {
+			if _, ok := f.soulsExisting[sid]; ok {
+				found = append(found, sid)
+			}
+		}
+		return &incStringRows{values: found}, nil
+	}
+	if strings.Contains(sql, "FROM incarnation_membership") {
+		return &incStringRows{values: f.memberSIDs}, nil
+	}
+	return &incEmptyRows{}, nil
+}
+
+func (f *incTestDB) BeginTx(_ context.Context, _ pgx.TxOptions) (pgx.Tx, error) {
+	return &incTestTx{db: f}, nil
+}
+
+// incTestTx — a pgx.Tx wrapper around incTestDB (Unlock/Upgrade/Destroy/UpdateHosts
+// run under a tx). Commit/Rollback are no-ops; unused methods panic.
+type incTestTx struct{ db *incTestDB }
+
+func (t *incTestTx) Begin(ctx context.Context) (pgx.Tx, error) {
+	return t.db.BeginTx(ctx, pgx.TxOptions{})
+}
+func (t *incTestTx) Commit(_ context.Context) error   { return nil }
+func (t *incTestTx) Rollback(_ context.Context) error { return nil }
+func (t *incTestTx) CopyFrom(_ context.Context, _ pgx.Identifier, _ []string, _ pgx.CopyFromSource) (int64, error) {
+	panic("incTestTx.CopyFrom: unexpected")
+}
+func (t *incTestTx) SendBatch(_ context.Context, _ *pgx.Batch) pgx.BatchResults {
+	panic("incTestTx.SendBatch: unexpected")
+}
+func (t *incTestTx) LargeObjects() pgx.LargeObjects { panic("incTestTx.LargeObjects: unexpected") }
+func (t *incTestTx) Prepare(_ context.Context, _, _ string) (*pgconn.StatementDescription, error) {
+	panic("incTestTx.Prepare: unexpected")
+}
+func (t *incTestTx) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	return t.db.Exec(ctx, sql, args...)
+}
+func (t *incTestTx) Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error) {
+	return t.db.Query(ctx, sql, args...)
+}
+func (t *incTestTx) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return t.db.QueryRow(ctx, sql, args...)
+}
+func (t *incTestTx) Conn() *pgx.Conn { return nil }
+
+// incRow — a SelectByID row (column order matches scanIncarnation). status/state are parameterized.
+func incRow(name, status, state string) pgx.Row {
+	now := time.Now()
+	return incStaticRow{values: []any{
+		name, "redis", "v1", int(1),
+		[]byte(state), status,
+		[]byte(nil), any(nil),
+		now, now, []string(nil),
+		[]byte("{}"), // traits
+		"create",     // created_scenario (migration 089, NOT NULL DEFAULT)
+		any(nil),     // applying_apply_id (ADR-068 §A1)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
+	}}
+}
+
+// incRowBare — like incRow, but created_scenario = NULL (a bare incarnation,
+// migration 090: created without a bootstrap scenario). scanIncarnation reads the
+// created_scenario column into **string → nil.
+func incRowBare(name, status, state string) pgx.Row {
+	now := time.Now()
+	return incStaticRow{values: []any{
+		name, "redis", "v1", int(1),
+		[]byte(state), status,
+		[]byte(nil), any(nil),
+		now, now, []string(nil),
+		[]byte("{}"), // traits
+		any(nil),     // created_scenario = NULL (bare, migration 090)
+		any(nil),     // applying_apply_id (ADR-068 §A1, bare → NULL)
+		any(nil),     // label (ADR-0085): unset here, reads NULL
+	}}
+}
+
+// incStaticRow / helpers — local row stubs for the api package (parity with the handlers-test staticRow).
+type incStaticRow struct{ values []any }
+
+func (r incStaticRow) Scan(dest ...any) error {
+	for i, d := range dest {
+		switch d := d.(type) {
+		case *string:
+			*d = r.values[i].(string)
+		case *time.Time:
+			*d = r.values[i].(time.Time)
+		case *int:
+			*d = r.values[i].(int)
+		case *int64:
+			*d = r.values[i].(int64)
+		case **string:
+			if r.values[i] == nil {
+				*d = nil
+			} else {
+				s := r.values[i].(string)
+				*d = &s
+			}
+		case **time.Time:
+			if r.values[i] == nil {
+				*d = nil
+			} else {
+				tt := r.values[i].(time.Time)
+				*d = &tt
+			}
+		case *[]byte:
+			*d = r.values[i].([]byte)
+		case *[]string:
+			if r.values[i] == nil {
+				*d = nil
+			} else {
+				*d = r.values[i].([]string)
+			}
+		}
+	}
+	return nil
+}
+
+func staticRow1(s string) pgx.Row                { return incStaticRow{values: []any{s}} }
+func staticRow1Int(n int) pgx.Row                { return incStaticRow{values: []any{n}} }
+func staticRow1Time(t time.Time) pgx.Row         { return incStaticRow{values: []any{t}} }
+func staticRow2(a, b time.Time) pgx.Row          { return incStaticRow{values: []any{a, b}} }
+func staticRow2Bytes(b []byte, s string) pgx.Row { return incStaticRow{values: []any{b, s}} }
+
+// rerunSelectRow — the FOR UPDATE select for UnlockForRerun (state, status,
+// created_scenario, spec; migration 089 + B1). Distinct from staticRow2Bytes:
+// the rerun path scans FOUR columns (the 4th is spec, to pass spec.input through),
+// plain Unlock/Destroy scan two.
+func rerunSelectRow(state []byte, status string) pgx.Row {
+	return incStaticRow{values: []any{state, status, "create", []byte("{}")}}
+}
+
+type errRow2 struct{ err error }
+
+func (r errRow2) Scan(_ ...any) error { return r.err }
+
+type incEmptyRows struct{}
+
+func (r *incEmptyRows) Next() bool                                   { return false }
+func (r *incEmptyRows) Scan(_ ...any) error                          { return nil }
+func (r *incEmptyRows) Err() error                                   { return nil }
+func (r *incEmptyRows) Close()                                       {}
+func (r *incEmptyRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *incEmptyRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *incEmptyRows) Values() ([]any, error)                       { return nil, nil }
+func (r *incEmptyRows) RawValues() [][]byte                          { return nil }
+func (r *incEmptyRows) Conn() *pgx.Conn                              { return nil }
+
+type incStringRows struct {
+	values []string
+	idx    int
+}
+
+func (r *incStringRows) Next() bool {
+	if r.idx >= len(r.values) {
+		return false
+	}
+	r.idx++
+	return true
+}
+func (r *incStringRows) Scan(dest ...any) error {
+	*dest[0].(*string) = r.values[r.idx-1]
+	return nil
+}
+func (r *incStringRows) Err() error                                   { return nil }
+func (r *incStringRows) Close()                                       {}
+func (r *incStringRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *incStringRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *incStringRows) Values() ([]any, error)                       { return nil, nil }
+func (r *incStringRows) RawValues() [][]byte                          { return nil }
+func (r *incStringRows) Conn() *pgx.Conn                              { return nil }
+
+// incTestStarter — a [handlers.ScenarioStarter] + [handlers.DestroyStarter] stub (no-op).
+type incTestStarter struct{}
+
+func (incTestStarter) Start(_ context.Context, _ scenario.RunSpec) error        { return nil }
+func (incTestStarter) StartDestroy(_ context.Context, _ scenario.RunSpec) error { return nil }
+
+// incTestResolver — a [handlers.ServiceResolver] stub. ok→resolves a fake ref.
+type incTestResolver struct{ ok bool }
+
+func (r incTestResolver) Resolve(service string) (artifact.ServiceRef, bool) {
+	return artifact.ServiceRef{Name: service, Ref: "v1"}, r.ok
+}
+
+// incTestLoader — a [handlers.ServiceSnapshotLoader] stub. PrepareDestroy/HasDestroyScenario
+// go through it; Load returns art with a nil Manifest (autoCreate/autoDestroy default true).
+type incTestLoader struct{}
+
+func (incTestLoader) Load(_ context.Context, ref artifact.ServiceRef) (*artifact.ServiceArtifact, error) {
+	return &artifact.ServiceArtifact{Ref: ref}, nil
+}
+func (incTestLoader) LoadMigrationChain(_ *artifact.ServiceArtifact, _, _ int) (statemigrate.Chain, error) {
+	return statemigrate.Chain{}, nil
+}
+func (incTestLoader) ListUpgrades(_ *artifact.ServiceArtifact) ([]artifact.Scenario, error) {
+	return nil, nil
+}
+func (incTestLoader) ReadFile(_ *artifact.ServiceArtifact, _ string) ([]byte, error) {
+	return nil, nil
+}
+
+// incTestScoper — a [handlers.PurviewResolver] stub: unrestricted → get/list/history see everything.
+type incTestScoper struct{ unrestricted bool }
+
+func (s incTestScoper) ResolvePurview(_, _, _ string) rbac.Purview {
+	return rbac.Purview{Unrestricted: s.unrestricted}
+}
+
+// TestHumaIncarnation_History_IncludeTransitions — the query parameter reaches the
+// SQL, at the layer where it can fail to.
+//
+// This is the shape a unit test on HistorySelectByName cannot see. That test
+// passes a HistoryFilter it constructed itself, so it proves the predicate is
+// built correctly from the filter and says nothing about whether any caller can
+// set the filter. For a while none could: the field existed, defaulted to false,
+// and was declared on no surface — so the exclusion was unconditional and the
+// documented opt-in was unreachable. It took a live curl against a running
+// keeper to notice, because everything below the transport was green.
+//
+// The assertion is therefore on the SQL the handler ends up issuing, not on the
+// response body: the fake returns the same rows either way, and a body check
+// would pass with the parameter still going nowhere.
+func TestHumaIncarnation_History_IncludeTransitions(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		query         string
+		wantPredicate bool
+	}{
+		{"default excludes the markers", "", true},
+		{"opt-in drops the predicate", "?include_transitions=true", false},
+		{"explicit false still excludes", "?include_transitions=false", true},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &incTestDB{selectByID: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+				incTestScoper{unrestricted: true}, nil)
+			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v1/incarnations/redis-prod/history"+tc.query, http.NoBody))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+
+			var sawHistorySQL bool
+			for _, sql := range db.seenSQL {
+				if !strings.Contains(sql, "FROM state_history") {
+					continue
+				}
+				sawHistorySQL = true
+				got := strings.Contains(sql, "scenario <>")
+				if got != tc.wantPredicate {
+					t.Errorf("scenario <> predicate present = %v, want %v; SQL=%q",
+						got, tc.wantPredicate, sql)
+				}
+			}
+			if !sawHistorySQL {
+				t.Fatal("no state_history query was issued — the assertion above proved nothing")
+			}
+		})
+	}
+}
+
+// TestHumaIncarnation_History_IncludeArchived — the second opt-in, at the layer
+// where it can fail to arrive.
+//
+// Same shape and same reason as the transitions one above, and the same defect:
+// HistoryFilter.IncludeArchived was read by the query builder and set by nothing
+// at all, so the exclusion of archived snapshots was unconditional and the option
+// existed only in a signature. Retention (ADR-Q19) archives a snapshot after 365
+// days, so an operator investigating an old incarnation got "no history" rather
+// than "history past the horizon" — with no way to ask for it.
+//
+// Asserted on the SQL again, not the body: the fake returns the same rows either
+// way, so a body check passes with the parameter going nowhere. The two flags are
+// exercised together as well, because they are adjacent booleans on the same
+// filter and a transposition is exactly what the struct-valued signature exists
+// to make impossible.
+func TestHumaIncarnation_History_IncludeArchived(t *testing.T) {
+	for _, tc := range []struct {
+		name         string
+		query        string
+		wantArchived bool // `archived_at IS NULL` predicate present
+		wantMarkers  bool // `scenario <>` predicate present
+	}{
+		{"default excludes both", "", true, true},
+		{"archived opt-in only", "?include_archived=true", false, true},
+		{"transitions opt-in only", "?include_transitions=true", true, false},
+		{"both opt in", "?include_archived=true&include_transitions=true", false, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			db := &incTestDB{selectByID: func(n string) pgx.Row { return incRow(n, "ready", "{}") }}
+			incH := handlers.NewIncarnationHandler(db, &incTestStarter{}, &incTestStarter{}, &incTestResolver{ok: true}, &incTestLoader{}, nil,
+				incTestScoper{unrestricted: true}, nil)
+			r := humaIncarnationRouter(t, incEnforcer{allow: true}, nil, incH)
+
+			rec := httptest.NewRecorder()
+			r.ServeHTTP(rec, httptest.NewRequest(http.MethodGet,
+				"/v1/incarnations/redis-prod/history"+tc.query, http.NoBody))
+			if rec.Code != http.StatusOK {
+				t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+			}
+
+			var sawHistorySQL bool
+			for _, sql := range db.seenSQL {
+				if !strings.Contains(sql, "FROM state_history") {
+					continue
+				}
+				sawHistorySQL = true
+				if got := strings.Contains(sql, "archived_at IS NULL"); got != tc.wantArchived {
+					t.Errorf("archived_at predicate present = %v, want %v; SQL=%q", got, tc.wantArchived, sql)
+				}
+				if got := strings.Contains(sql, "scenario <>"); got != tc.wantMarkers {
+					t.Errorf("scenario <> predicate present = %v, want %v; SQL=%q", got, tc.wantMarkers, sql)
+				}
+			}
+			if !sawHistorySQL {
+				t.Fatal("no state_history query was issued — the assertion above proved nothing")
+			}
+		})
+	}
+}

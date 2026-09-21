@@ -1,0 +1,6 @@
+name: transport-unknown
+tasks:
+  - name: Install the agent over a transport nobody registered
+    transport: rsh
+    apply:
+      destiny: soul-install

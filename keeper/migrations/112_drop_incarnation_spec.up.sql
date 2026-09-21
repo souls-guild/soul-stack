@@ -1,0 +1,35 @@
+-- 112_drop_incarnation_spec.up.sql
+--
+-- NIM-408. `incarnation.spec` is removed.
+--
+-- The column was never a designed store. It was the create REQUEST, persisted —
+-- and every time one of its keys turned out to matter, that key was given a
+-- proper home outside it while the copy in `spec` stayed behind and started
+-- lying:
+--
+--   hosts[]        -> incarnation_membership (NIM-124), then the Voice's role
+--                     (ADR-044 / NIM-330). Key stripped by migration 108.
+--   traits         -> the incarnation.traits column (migration 088). The copy
+--                     went stale on the first day-2 PUT .../traits, and kept
+--                     being returned by GET /v1/incarnations/{name}.
+--   essence        -> nothing: the override had two readers and no writer.
+--                     Key stripped by migration 110.
+--   input          -> state_history.run (migration 111), the row that already
+--                     records the attempt it belongs to.
+--
+-- With `input` moved, nothing reads the column and nothing writes it: the create
+-- path stopped assembling a spec map, and rerun-last takes its input from the
+-- failed attempt's own history row — one source instead of two with different
+-- lifetimes.
+--
+-- BREAKING, deliberately: `spec` disappears from GET /v1/incarnations/{name},
+-- from the list endpoint and from the MCP twins. It is in the release's upgrade
+-- notes. A caller that read `spec.input` to learn "what was this created with"
+-- reads the incarnation's history instead, where the answer is per-attempt and
+-- cannot silently diverge from what actually ran — which `spec.input` did, caught
+-- live during NIM-330 on a fixture whose spec said one thing and whose recipe
+-- said another.
+--
+-- Not reversible in data (see the .down.sql).
+
+ALTER TABLE incarnation DROP COLUMN spec;

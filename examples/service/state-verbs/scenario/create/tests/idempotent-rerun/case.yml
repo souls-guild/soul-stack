@@ -1,0 +1,63 @@
+# The same plan over the state the first run left. The verbs that carry an
+# identity converge; the one that does not, grows. Both are the point.
+name: state-verbs create re-run (present keeps the stored value, add is a no-op, append is not)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [state-verbs]
+      soulprint:
+        network: { primary_ip: 10.0.0.11 }
+        os: { arch: amd64, version: "12" }
+
+  # The output of tests/all-verbs, verbatim - minus bootstrap_token, which the
+  # first run dropped and this one writes and drops again.
+  state:
+    cluster_id: alpha
+    topology: sharded
+    members:
+      m-one: { name: m-one, role: primary }
+    nodes:
+      - { name: node-b, role: replica, weight: 5 }
+    events:
+      - "cluster created"
+
+  input:
+    cluster_id: alpha
+    first_member: m-one
+
+assert:
+  # The plan is the same one - this case differs only in the state it folds onto,
+  # so it names the two verbs whose behaviour depends on what is already there.
+  task_present:
+    - module: core.state.present
+      params_subset: { field: topology, value: standalone }
+    - module: core.state.add
+      params_subset: { field: members, key: m-one, on_conflict: skip }
+
+  state_after:
+    # present over a field that ALREADY holds a value: the stored value wins and
+    # the scenario's `standalone` is discarded. This is the whole difference
+    # between present and set - a set here would have overwritten it.
+    topology: sharded
+
+    # add with on_conflict: skip found the key taken and did nothing. Had it
+    # honoured the proposal instead, role would read differently.
+    members:
+      m-one: { name: m-one, role: primary }
+
+    # add matched node-b by `match:` and skipped; node-c was added again and
+    # removed again. modify re-patched a weight that was already 5. Net: the same
+    # list the previous run left.
+    nodes:
+      - { name: node-b, role: replica, weight: 5 }
+
+    # append has no identity by design, so it does NOT converge: the second run
+    # leaves a second entry. An append-only log wants exactly this; a roster must
+    # use add instead.
+    events:
+      - "cluster created"
+      - "cluster created"
+
+  state_absent:
+    - bootstrap_token

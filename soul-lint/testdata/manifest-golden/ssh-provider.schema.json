@@ -1,0 +1,1 @@
+{"kind":"ssh_provider","protocol_version":1,"provider_kind":"vault_ssh_ca","params_schema":{"type":"object","properties":{"mount":{"type":"string"}}}}

@@ -1,0 +1,3 @@
+# sid: есть — auto-detect ведёт в soul-валидатор. Блок keeper: отсутствует,
+# должен вернуть `missing_required_field` для $.keeper.
+sid: redis-01.prod.example.com

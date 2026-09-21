@@ -1,0 +1,20 @@
+# L0 trial (Trial, ADR-023): outer='yes', inner='no' → the outer group stays
+# (outer-direct is present), the nested inner group is dropped by its own
+# inner-when:false. Confirms the cascade does NOT overreach: a false inner suppresses
+# only inner, without touching outer-direct.
+name: nested conditional-include keeps outer, drops inner when inner is no
+
+fixtures:
+  input:
+    outer: 'yes'
+    inner: 'no'
+
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+  task_absent:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

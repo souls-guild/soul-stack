@@ -1,0 +1,1590 @@
+{
+  "kind": "soul_module",
+  "protocol_version": 1,
+  "modules": [
+    {
+      "name": "archive",
+      "capabilities": [
+        "fs_write_root"
+      ],
+      "states": {
+        "extracted": {
+          "description": "Extract the archive at path into the dest directory (tar/tar.gz/tar.bz2/zip); ADR-015.",
+          "input": {
+            "dest": {
+              "type": "string",
+              "required": true,
+              "description": "Extraction directory."
+            },
+            "format": {
+              "type": "string",
+              "description": "Format (tar|tar.gz|tar.bz2|zip); omitted — auto-detect by extension."
+            },
+            "max_entries": {
+              "type": "integer",
+              "description": "Limit on the number of entries in the archive; default 100000. Zip-bomb protection."
+            },
+            "max_ratio": {
+              "type": "integer",
+              "description": "Limit on the ratio of extracted to compressed bytes (compression ratio); default 100, 0 — disabled. Zip-bomb protection for a small compressed size."
+            },
+            "max_size": {
+              "type": "string",
+              "description": "Limit on total extracted size (number of bytes or N[KiB|MiB|GiB]); default 1GiB. Zip-bomb protection."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Path to the source archive."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "bootstrap",
+      "states": {
+        "issued": {
+          "description": "Keeper-side (on:keeper). Atomically issue per-host bootstrap tokens for ready-made VM SIDs.",
+          "input": {
+            "sids": {
+              "description": "Non-empty unique list of ready-made VM FQDN/SIDs.",
+              "items": {
+                "type": "string"
+              },
+              "required": true,
+              "type": "list"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "choir",
+      "states": {
+        "absent": {
+          "description": "Keeper-side (on:keeper). The Voice with sid is absent from the run's Choir (ADR-044).",
+          "input": {
+            "choir": {
+              "type": "string",
+              "required": true,
+              "description": "Name of the Choir part within the incarnation."
+            },
+            "incarnation": {
+              "type": "string",
+              "required": true,
+              "description": "Name of the incarnation whose Choir is managed."
+            },
+            "sid": {
+              "type": "string",
+              "required": true,
+              "description": "SID (FQDN) of the Soul whose Voice is removed from the Choir.",
+              "format": "sid",
+              "source": {
+                "incarnation_hosts": true
+              }
+            }
+          }
+        },
+        "present": {
+          "description": "Keeper-side (on:keeper). The Voice with sid is present in the run's Choir (ADR-044).",
+          "input": {
+            "choir": {
+              "type": "string",
+              "required": true,
+              "description": "Name of the Choir part within the incarnation."
+            },
+            "incarnation": {
+              "type": "string",
+              "required": true,
+              "description": "Name of the incarnation whose Choir is managed."
+            },
+            "position": {
+              "type": "int",
+              "description": "Position of the Voice within the part (\u003e= 0)."
+            },
+            "role": {
+              "type": "string",
+              "description": "Free-form role label of the voice in the choir."
+            },
+            "sid": {
+              "type": "string",
+              "required": true,
+              "description": "SID (FQDN) of the Soul whose Voice is added to the Choir.",
+              "format": "sid",
+              "source": {
+                "incarnation_hosts": true
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cmd",
+      "capabilities": [
+        "exec_subprocess"
+      ],
+      "states": {
+        "shell": {
+          "description": "Run a shell string via `sh -c` (pipes/redirects/glob). TRUSTED-ONLY (ADR-015).",
+          "input": {
+            "cmd": {
+              "type": "string",
+              "required": true,
+              "description": "Shell string, executed via `sh -c`.",
+              "multiline": true,
+              "example": "systemctl daemon-reload\nsystemctl restart nginx"
+            },
+            "creates": {
+              "type": "string",
+              "description": "Idempotency: if the file exists — the step is skipped (changed=false)."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Process working directory."
+            },
+            "env": {
+              "type": "map",
+              "description": "Additional environment variables (KEY: VALUE).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exit_codes": {
+              "type": "list",
+              "description": "Exit codes accepted as success: integers and/or \"lo-hi\" ranges, e.g. [0, 1] or [0, \"2-5\"]. Defaults to [0] — any other code fails the task (NIM-687). `sh -c` reports the LAST command of a pipeline."
+            },
+            "onlyif": {
+              "type": "string",
+              "description": "Idempotency: shell command; exit≠0 → skip."
+            },
+            "unless": {
+              "type": "string",
+              "description": "Idempotency: shell command; exit=0 → skip."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "cron",
+      "capabilities": [
+        "run_as_root",
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "Job file removed.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Job name (= file name in /etc/cron.d)."
+            }
+          }
+        },
+        "present": {
+          "description": "Job file /etc/cron.d/\u003cname\u003e with the given schedule and command (ADR-015).",
+          "input": {
+            "command": {
+              "type": "string",
+              "required": true,
+              "description": "Command run on schedule."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Job name (= file name in /etc/cron.d, [A-Za-z0-9_-])."
+            },
+            "schedule": {
+              "type": "string",
+              "required": true,
+              "description": "Cron schedule (5 fields), e.g. \"0 3 * * *\"."
+            },
+            "user": {
+              "type": "string",
+              "description": "User to run as (default root)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "directory",
+      "capabilities": [
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "Directory is removed. An empty directory is always removed; a non-empty one only with recursive:true, otherwise an error (a deliberate divergence from a silent rm -rf).",
+          "input": {
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Path of the directory to remove."
+            },
+            "recursive": {
+              "type": "bool",
+              "description": "Remove a non-empty directory's contents (rm -r semantics). Default false: a non-empty directory errors."
+            }
+          }
+        },
+        "present": {
+          "description": "Directory exists with the given owner/group/mode (replacement for `core.exec.run install -d`, ADR-015).",
+          "input": {
+            "group": {
+              "type": "string",
+              "description": "Owning group (group name)."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions in octal form, e.g. \"0755\"."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner (username)."
+            },
+            "parents": {
+              "type": "bool",
+              "description": "Create intermediate directories (mkdir -p semantics). Default false."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target directory path."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "exec",
+      "capabilities": [
+        "exec_subprocess"
+      ],
+      "states": {
+        "run": {
+          "description": "Run a process with argv without a shell (ADR-015).",
+          "input": {
+            "args": {
+              "type": "list",
+              "description": "argv[1:] arguments.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "cmd": {
+              "type": "string",
+              "required": true,
+              "description": "Executable file name (argv[0], without shell).",
+              "example": "/usr/local/bin/myscript"
+            },
+            "creates": {
+              "type": "string",
+              "description": "Idempotency: if the file exists — the step is skipped (changed=false)."
+            },
+            "cwd": {
+              "type": "string",
+              "description": "Process working directory."
+            },
+            "env": {
+              "type": "map",
+              "description": "Additional environment variables (KEY: VALUE).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "exit_codes": {
+              "type": "list",
+              "description": "Exit codes accepted as success: integers and/or \"lo-hi\" ranges, e.g. [0, 1] or [0, \"2-5\"]. Defaults to [0] — any other code fails the task (NIM-687)."
+            },
+            "onlyif": {
+              "type": "string",
+              "description": "Idempotency: shell command; exit≠0 → skip."
+            },
+            "unless": {
+              "type": "string",
+              "description": "Idempotency: shell command; exit=0 → skip."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "file",
+      "capabilities": [
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "File is removed.",
+          "input": {
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Path of the file to remove."
+            }
+          }
+        },
+        "present": {
+          "description": "File exists with the given content/mode/owner/group (ADR-015).",
+          "input": {
+            "content": {
+              "type": "string",
+              "description": "File content (inline). Mutually exclusive with src; if neither is given, an empty file."
+            },
+            "group": {
+              "type": "string",
+              "description": "Owning group (group name)."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions in octal form, e.g. \"0640\"."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner (username)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target file path."
+            },
+            "src": {
+              "type": "string",
+              "description": "Absolute path of a regular file on the host, its content is copied to path (typically the result of core.archive.extracted). Sets only the content, not the source's attributes. Mutually exclusive with content."
+            }
+          }
+        },
+        "rendered": {
+          "description": "File = result of rendering a text/template template (ADR-010).",
+          "input": {
+            "group": {
+              "type": "string",
+              "description": "Owning group (group name)."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions in octal form, e.g. \"0644\"."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner (username)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target path of the rendered file."
+            },
+            "template": {
+              "type": "string",
+              "required": true,
+              "description": "Path to the .tmpl template (resolved locally, then service-level)."
+            },
+            "vars": {
+              "type": "map",
+              "description": "Render variables (visible to the template as .vars.*).",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "firewall",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess"
+      ],
+      "states": {
+        "absent": {
+          "description": "Rule removed.",
+          "input": {
+            "action": {
+              "type": "string",
+              "description": "Action allow|deny (default allow).",
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "port": {
+              "type": "int",
+              "required": true,
+              "description": "Port 1..65535."
+            },
+            "proto": {
+              "type": "string",
+              "description": "Protocol tcp|udp (default tcp).",
+              "enum": [
+                "tcp",
+                "udp"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "description": "IPv4 CIDR or a single IPv4."
+            },
+            "zone": {
+              "type": "string",
+              "description": "firewalld zone."
+            }
+          }
+        },
+        "present": {
+          "description": "Firewall rule exists (port/proto/source/action); ufw/firewalld. ADR-015/ADR-016.",
+          "input": {
+            "action": {
+              "type": "string",
+              "description": "Action allow|deny (default allow).",
+              "enum": [
+                "allow",
+                "deny"
+              ]
+            },
+            "port": {
+              "type": "int",
+              "required": true,
+              "description": "Port 1..65535."
+            },
+            "proto": {
+              "type": "string",
+              "description": "Protocol tcp|udp (default tcp).",
+              "enum": [
+                "tcp",
+                "udp"
+              ]
+            },
+            "source": {
+              "type": "string",
+              "description": "IPv4 CIDR or a single IPv4 (default any). IPv6 not supported in MVP."
+            },
+            "zone": {
+              "type": "string",
+              "description": "firewalld zone (default - default zone)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "git",
+      "capabilities": [
+        "exec_subprocess",
+        "network_outbound"
+      ],
+      "states": {
+        "cloned": {
+          "description": "Path contains a git repo (cloned if absent); ADR-015.",
+          "input": {
+            "branch": {
+              "type": "string",
+              "description": "Branch (default main)."
+            },
+            "depth": {
+              "type": "int",
+              "description": "Shallow clone depth (--depth)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target clone directory."
+            },
+            "repo": {
+              "type": "string",
+              "required": true,
+              "description": "Repository URL."
+            }
+          }
+        },
+        "pulled": {
+          "description": "Clone-if-missing + git pull --ff-only. Changed only when HEAD changes.",
+          "input": {
+            "branch": {
+              "type": "string",
+              "description": "Branch (default main)."
+            },
+            "depth": {
+              "type": "int",
+              "description": "Shallow clone depth (--depth)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target clone directory."
+            },
+            "repo": {
+              "type": "string",
+              "required": true,
+              "description": "Repository URL."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "group",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess"
+      ],
+      "states": {
+        "absent": {
+          "description": "Group is removed.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Group name."
+            }
+          }
+        },
+        "present": {
+          "description": "Group exists (present-or-create; ADR-015).",
+          "input": {
+            "gid": {
+              "type": "int",
+              "description": "Explicit gid (groupadd -g). Only takes effect on creation."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Group name."
+            },
+            "system": {
+              "type": "bool",
+              "description": "System group (groupadd -r), gid from the system range. Only on creation."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "http",
+      "capabilities": [
+        "network_outbound"
+      ],
+      "states": {
+        "probe": {
+          "description": "Read-probe of an HTTP endpoint (GET/HEAD); read-only, changed is always false. ADR-015/ADR-016, https-only.",
+          "input": {
+            "allow_http": {
+              "type": "bool",
+              "description": "Allow http:// (lift https-only); file:// remains forbidden. Does not open up SSRF (default false)."
+            },
+            "allow_private": {
+              "type": "bool",
+              "description": "Lift the SSRF-guard for internal health-checks (default false)."
+            },
+            "headers": {
+              "type": "map",
+              "description": "HTTP headers (values are secret, excluded from output).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "insecure_skip_verify": {
+              "type": "bool",
+              "description": "Disable TLS verification (self-signed / internal CA); MITM risk (default false)."
+            },
+            "method": {
+              "type": "string",
+              "description": "HTTP method GET|HEAD (default GET); mutating methods are forbidden.",
+              "default": "GET",
+              "enum": [
+                "GET",
+                "HEAD"
+              ]
+            },
+            "status_codes": {
+              "type": "list",
+              "description": "Expected response codes (list of int); defaults to 2xx.",
+              "items": {
+                "type": "int"
+              }
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Probe timeout (Soul Stack duration, e.g. \"30s\").",
+              "format": "duration"
+            },
+            "url": {
+              "type": "string",
+              "required": true,
+              "description": "Target URL (https:// only; SSRF-guard on the resolved IP)."
+            }
+          }
+        },
+        "request": {
+          "description": "One mutating HTTP API request (POST/PUT/PATCH/DELETE); success reports changed=true. ADR-015/ADR-016, https-only.",
+          "input": {
+            "allow_http": {
+              "type": "bool",
+              "description": "Allow http:// (lift https-only); file:// remains forbidden. Does not open up SSRF (default false)."
+            },
+            "allow_private": {
+              "type": "bool",
+              "description": "Lift the SSRF-guard for an explicitly trusted internal API (default false)."
+            },
+            "body": {
+              "type": "string",
+              "description": "Optional request body. The response body, not this request body, is returned in output.body."
+            },
+            "content_type": {
+              "type": "string",
+              "description": "Optional Content-Type header; when set, overrides headers[Content-Type]."
+            },
+            "headers": {
+              "type": "map",
+              "description": "HTTP headers (all values are sensitive-by-construction; output contains keys only).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "insecure_skip_verify": {
+              "type": "bool",
+              "description": "Disable TLS verification (self-signed / internal CA); MITM risk (default false)."
+            },
+            "method": {
+              "type": "string",
+              "required": true,
+              "description": "Explicit mutating HTTP method POST|PUT|PATCH|DELETE; GET/HEAD are forbidden.",
+              "enum": [
+                "POST",
+                "PUT",
+                "PATCH",
+                "DELETE"
+              ]
+            },
+            "status_codes": {
+              "type": "list",
+              "description": "Expected response codes (list of int); defaults to [200].",
+              "items": {
+                "type": "int"
+              }
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Request timeout (Soul Stack duration, e.g. \"30s\").",
+              "format": "duration"
+            },
+            "url": {
+              "type": "string",
+              "required": true,
+              "description": "Target URL (https:// only; SSRF-guard on the resolved IP)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "line",
+      "capabilities": [
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "Removes matching lines (by regexp — all; otherwise by exact line).",
+          "input": {
+            "create": {
+              "type": "bool",
+              "description": "Create the file if it doesn't exist."
+            },
+            "group": {
+              "type": "string",
+              "description": "Owner group on create (group name)."
+            },
+            "line": {
+              "type": "string",
+              "description": "Exact line to remove (either line or regexp is required)."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions on create, octal form."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner on create (username)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target file."
+            },
+            "regexp": {
+              "type": "string",
+              "description": "RE2 pattern: all matching lines are removed."
+            }
+          }
+        },
+        "present": {
+          "description": "The line is present in the file (with regexp — replaces the first matching line); ADR-015.",
+          "input": {
+            "create": {
+              "type": "bool",
+              "description": "Create the file if it doesn't exist."
+            },
+            "group": {
+              "type": "string",
+              "description": "Owner group on create (group name)."
+            },
+            "insertafter": {
+              "type": "string",
+              "description": "Literal anchor or EOF — where to insert (mutually exclusive with insertbefore)."
+            },
+            "insertbefore": {
+              "type": "string",
+              "description": "Literal anchor or BOF — where to insert (mutually exclusive with insertafter)."
+            },
+            "line": {
+              "type": "string",
+              "description": "Exact line being managed (required for present)."
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions on create, octal form, e.g. \"0644\"."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner on create (username)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target file."
+            },
+            "regexp": {
+              "type": "string",
+              "description": "RE2 pattern: the first matching line is replaced with line."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "module",
+      "capabilities": [
+        "network_outbound"
+      ],
+      "states": {
+        "installed": {
+          "description": "The SoulModule plugin from the active Sigil grant is pulled from Keeper (FetchModule), verified, and atomically installed into a catalog slot of the module cache. Idempotent by the binary's sha256 (ADR-065).",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Registration alias of the plugin - address level 1, the slot the artifact installs into (e.g. community). Not a two-level module address: since NIM-377 the artifact carries no self-name."
+            },
+            "ref": {
+              "type": "string",
+              "description": "Pin check (NOT a version selector): the active Sigil grant must be on this ref, otherwise module_not_allowed."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "mount",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess",
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "Unmounted + removed from /etc/fstab.",
+          "input": {
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Mount point (target)."
+            }
+          }
+        },
+        "mounted": {
+          "description": "Only mounted \"as is\" (without editing fstab) - runtime-mount.",
+          "input": {
+            "fstype": {
+              "type": "string",
+              "required": true,
+              "description": "Filesystem type (ext4/nfs/...)."
+            },
+            "opts": {
+              "type": "string",
+              "description": "Mount options (default \"defaults\")."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Mount point (target)."
+            },
+            "source": {
+              "type": "string",
+              "required": true,
+              "description": "Source (device/UUID/network resource)."
+            }
+          }
+        },
+        "present": {
+          "description": "Entry in /etc/fstab + mounted (ADR-015).",
+          "input": {
+            "fstype": {
+              "type": "string",
+              "required": true,
+              "description": "Filesystem type (ext4/nfs/...)."
+            },
+            "opts": {
+              "type": "string",
+              "description": "Mount options (default \"defaults\")."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Mount point (target)."
+            },
+            "source": {
+              "type": "string",
+              "required": true,
+              "description": "Source (device/UUID/network resource)."
+            }
+          }
+        },
+        "unmounted": {
+          "description": "Only unmounted (entry in fstab remains).",
+          "input": {
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Mount point (target)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "noop",
+      "states": {
+        "run": {
+          "description": "No-op. Does nothing, always succeeds with no change (changed=false). barrier anchor / placeholder; ADR-015."
+        }
+      }
+    },
+    {
+      "name": "pkg",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess"
+      ],
+      "states": {
+        "absent": {
+          "description": "Package removed.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Package name."
+            }
+          }
+        },
+        "installed": {
+          "description": "Package installed (optionally at an exact version). Idempotent (ADR-015).",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Package name."
+            },
+            "version": {
+              "type": "string",
+              "description": "Exact package version (any if omitted)."
+            }
+          }
+        },
+        "latest": {
+          "description": "Package installed and updated to the latest available version.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Package name."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "repo",
+      "capabilities": [
+        "fs_write_root"
+      ],
+      "states": {
+        "absent": {
+          "description": "Repository description removed (GPG key is not touched).",
+          "input": {
+            "dest": {
+              "type": "string",
+              "description": "Absolute path of the repo description file to remove, if it was created with a custom dest (apt/dnf/yum)."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Repository name (= description file name)."
+            }
+          }
+        },
+        "present": {
+          "description": "Package repository declared (description file + GPG key); apt/dnf/yum/apk. ADR-015/ADR-016.",
+          "input": {
+            "arch": {
+              "type": "list",
+              "description": "apt repo architectures (e.g. [amd64]) -\u003e arch= in options; apt only, [a-z0-9].",
+              "items": {
+                "type": "string"
+              }
+            },
+            "components": {
+              "type": "list",
+              "description": "apt components (e.g. [main, contrib]).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "dest": {
+              "type": "string",
+              "description": "Absolute path of the repo description file, overriding the backend default (apt /etc/apt/sources.list.d/\u003cname\u003e.list; dnf/yum /etc/yum.repos.d/\u003cname\u003e.repo). Not for apk (single repositories file)."
+            },
+            "enabled": {
+              "type": "bool",
+              "description": "Repository is enabled (default true)."
+            },
+            "gpg_check": {
+              "type": "bool",
+              "description": "Verify package signatures (default true; opt-out produces a warning)."
+            },
+            "gpg_key": {
+              "type": "string",
+              "description": "GPG key (supply-chain): apt - inline keyring, materialized under /etc/apt/keyrings/ as \u003cname\u003e.asc when armored and \u003cname\u003e.gpg otherwise, since apt picks its parser from the extension; dnf/yum - URL or path in gpgkey=. Key-by-URL for apt - via core.url.fetched (ADR-071 option B)."
+            },
+            "gpg_key_path": {
+              "type": "string",
+              "description": "Path to a GPG key already present on the host: apt -\u003e signed-by=\u003cpath\u003e, dnf/yum -\u003e gpgkey=\u003cpath\u003e. The module only references it (no copy) and guards its existence on plan/apply. Mutually exclusive with gpg_key; deliver the key first (core.url.fetched/core.file). Not for apk."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Repository name (= description file name, [A-Za-z0-9._-])."
+            },
+            "suite": {
+              "type": "string",
+              "description": "apt suite/distribution (e.g. stable)."
+            },
+            "uri": {
+              "type": "string",
+              "required": true,
+              "description": "Repository URL (http/https; http produces a mandatory warning)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "service",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess"
+      ],
+      "states": {
+        "disabled": {
+          "description": "Service autostart on system boot is off (orthogonal to the running/stopped runtime state — a disabled unit may still be running).",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        },
+        "enabled": {
+          "description": "Service autostart on system boot.",
+          "input": {
+            "daemon_reload": {
+              "type": "string",
+              "description": "systemctl daemon-reload before enable (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015).",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        },
+        "masked": {
+          "description": "The unit is masked (systemctl mask, symlink → /dev/null) — start is impossible manually or as a dependency. systemd-only; openrc/sysv is a fatal error. Apply disables the unit before masking (ADR-015).",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        },
+        "restarted": {
+          "description": "Unconditional restart (changed is always true).",
+          "input": {
+            "daemon_reload": {
+              "type": "string",
+              "description": "systemctl daemon-reload before restart (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015).",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        },
+        "running": {
+          "description": "The service is running. The optional enabled controls autostart in one step (ADR-015).",
+          "input": {
+            "daemon_reload": {
+              "type": "string",
+              "description": "systemctl daemon-reload before start (systemd): auto = on NeedDaemonReload, always = unconditionally, never = opt-out. openrc/sysv — no-op (ADR-015).",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            "enabled": {
+              "type": "bool",
+              "description": "true → additionally enable, false → disable, omitted → leave autostart untouched."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        },
+        "stopped": {
+          "description": "The service is stopped.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Service/unit name."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "soul",
+      "states": {
+        "registered": {
+          "description": "Keeper-side (on:keeper). The bind act — a Soul with sid becomes a member of the run's incarnation (incarnation_membership) and optionally carries stable Coven tags (ADR-017; ADR-008 amendment NIM-124). Onboarding barrier — ADR-061.",
+          "input": {
+            "await_min_count": {
+              "type": "int",
+              "description": "Minimum number of online hosts for the barrier to succeed. Default — the number of SIDs being registered (all)."
+            },
+            "await_online": {
+              "type": "bool",
+              "description": "Onboarding barrier (ADR-061): after registration, block waiting until the created Souls become online (Redis SID lease)."
+            },
+            "await_poll_interval": {
+              "type": "string",
+              "description": "Presence polling period (default ~2s).",
+              "format": "duration"
+            },
+            "await_timeout": {
+              "type": "string",
+              "description": "Upper bound on the barrier wait. REQUIRED when await_online: true. Ceiling — keeper.yml::max_await_timeout.",
+              "format": "duration"
+            },
+            "coven": {
+              "type": "list",
+              "description": "Optional set of stable Coven tags (kebab-case), applied to all SIDs. Membership is implicit (incarnation_membership), NOT a coven value — ADR-008 amendment NIM-124.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "mode": {
+              "type": "string",
+              "description": "append (default) | replace | remove."
+            },
+            "refresh_soulprint": {
+              "type": "bool",
+              "description": "Mid-run re-resolve of the run's roster (ADR-061; stratification/re-resolve — slices S2/S3, echo refreshed:false)."
+            },
+            "sid": {
+              "type": "string",
+              "required": true,
+              "description": "SID (FQDN) of the target Soul: a single string OR a list (via CEL `${ register.\u003cstep\u003e.hosts }`) — registering N hosts in one barrier step, ADR-061."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "sysctl",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess",
+        "fs_write_root"
+      ],
+      "states": {
+        "applied": {
+          "description": "Bulk set of kernel parameters as one deterministic drop-in in /etc/sysctl.d (sorted keys) + a targeted sysctl -p \u003cfile\u003e on change; ADR-015 amend (the module itself owns drop-in+reload+idempotency).",
+          "input": {
+            "filename": {
+              "type": "string",
+              "required": true,
+              "description": "Drop-in file name in /etc/sysctl.d (e.g. 30-redis); the .conf suffix is added automatically."
+            },
+            "ignore_failures": {
+              "type": "bool",
+              "description": "sysctl -e -p (--ignore): suppresses read-only/nonexistent keys in containers. Explicit opt-in.",
+              "default": false
+            },
+            "reload": {
+              "type": "string",
+              "description": "sysctl -p \u003cfile\u003e after writing: auto = only when the file changed, always = unconditionally, never = opt-out. reload itself does not mark changed (reuses the core.service daemon_reload dictionary).",
+              "default": "auto",
+              "enum": [
+                "auto",
+                "always",
+                "never"
+              ]
+            },
+            "settings": {
+              "type": "map",
+              "required": true,
+              "description": "Map of kernel parameter→value. Keys are sorted → drop-in content is deterministic.",
+              "items": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "present": {
+          "description": "Kernel parameter name=value (runtime via sysctl -w + persist in /etc/sysctl.d); ADR-015.",
+          "input": {
+            "filename": {
+              "type": "string",
+              "description": "Persist-file name in /etc/sysctl.d (default — name with '.'→'-' + .conf)."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "Kernel parameter name (e.g. net.ipv4.ip_forward)."
+            },
+            "value": {
+              "type": "string",
+              "required": true,
+              "description": "Desired value."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "url",
+      "capabilities": [
+        "network_outbound",
+        "fs_write_root"
+      ],
+      "states": {
+        "fetched": {
+          "description": "Download a file over https to path with checksum verification (ADR-015/ADR-016, https-only).",
+          "input": {
+            "allow_http": {
+              "type": "bool",
+              "description": "Allow http:// (downgrade risk). Does NOT open up SSRF — the dial-guard is held separately (allow_private).",
+              "default": false
+            },
+            "allow_private": {
+              "type": "bool",
+              "description": "Drop the SSRF guard: allow dialing metadata/loopback/RFC1918 (legitimate internal endpoint).",
+              "default": false
+            },
+            "checksum": {
+              "type": "string",
+              "description": "Expected hash in the form \"sha256:\u003chex\u003e\"/\"sha1:\u003chex\u003e\" (supply-chain)."
+            },
+            "group": {
+              "type": "string",
+              "description": "Owning group (group name)."
+            },
+            "headers": {
+              "type": "map",
+              "description": "HTTP request headers (values are secret, never appear in output). If-None-Match/If-Modified-Since here give conditional-GET (304 → no-op).",
+              "items": {
+                "type": "string"
+              }
+            },
+            "insecure_skip_verify": {
+              "type": "bool",
+              "description": "Skip TLS chain verification (self-signed / internal CA). MITM risk.",
+              "default": false
+            },
+            "mode": {
+              "type": "string",
+              "description": "Permissions in octal form, e.g. \"0644\"."
+            },
+            "owner": {
+              "type": "string",
+              "description": "Owner (username)."
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Target file path."
+            },
+            "timeout": {
+              "type": "string",
+              "description": "Request timeout (Soul Stack duration, e.g. \"300s\")."
+            },
+            "url": {
+              "type": "string",
+              "required": true,
+              "description": "Source (https:// only; SSRF-guard on the resolved IP)."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "user",
+      "capabilities": [
+        "run_as_root",
+        "exec_subprocess"
+      ],
+      "states": {
+        "absent": {
+          "description": "User removed.",
+          "input": {
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "User name."
+            }
+          }
+        },
+        "present": {
+          "description": "User exists (present-or-create, no reconcile of an existing user; ADR-015).",
+          "input": {
+            "group": {
+              "type": "string",
+              "description": "Primary group (useradd -g); must already exist. Only on creation."
+            },
+            "groups": {
+              "type": "list",
+              "description": "Supplementary groups (useradd -G). Applies only on creation.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "home": {
+              "type": "string",
+              "description": "Home directory (useradd -d). Applies only on creation."
+            },
+            "name": {
+              "type": "string",
+              "required": true,
+              "description": "User name."
+            },
+            "shell": {
+              "type": "string",
+              "description": "Login shell (useradd -s). Applies only on creation."
+            },
+            "system": {
+              "type": "bool",
+              "description": "System account (useradd -r) for service accounts. Only on creation."
+            },
+            "uid": {
+              "type": "int",
+              "description": "Explicit uid (useradd -u). Applies only on creation."
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "vault",
+      "states": {
+        "kv-present": {
+          "description": "Keeper-side (on:keeper). Generate-if-absent - guarantees the secret exists (generates the missing crypto/rand per policy; if present - no-op, never returns values).",
+          "input": {
+            "policy": {
+              "type": "map",
+              "description": "Step-level default policy for all targets: length (8..1024, default 32), charset (alphanumeric|hex|base64url|ascii-printable-safe) OR allowed_chars (mutually exclusive)."
+            },
+            "targets": {
+              "type": "list",
+              "required": true,
+              "description": "Non-empty list of targets {path: \u003cVault KV path without #field\u003e, field?: \u003cfield name, default password\u003e, policy?: \u003cper-target override\u003e}.",
+              "items": {
+                "type": "map"
+              }
+            }
+          }
+        },
+        "kv-read": {
+          "description": "Keeper-side (on:keeper). Explicit read of Vault KV with an audit-event (ADR-017).",
+          "input": {
+            "fields": {
+              "type": "list",
+              "description": "Which keys to extract; empty -\u003e the whole secret.",
+              "items": {
+                "type": "string"
+              }
+            },
+            "path": {
+              "type": "string",
+              "required": true,
+              "description": "Vault KV path (mount-relative)."
+            }
+          },
+          "output": {
+            "data": {
+              "description": "The extracted keys and their values.",
+              "secret": true,
+              "type": "map"
+            },
+            "fields": {
+              "description": "Names of the keys in data, sorted.",
+              "items": {
+                "type": "string"
+              },
+              "type": "list"
+            },
+            "path": {
+              "description": "Echo of the requested Vault KV path.",
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "state",
+      "states": {
+        "add": {
+          "description": "Keeper-side (on:keeper). Adds ONE element to the collection field named by field, idempotently: an element with the same identity (key or match) is not added twice (ADR-057).",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "key": {
+              "description": "Identity of the element in a MAP field: the key it is stored under, an existing entry under the same key being the conflict. Mutually exclusive with match, which is the LIST-field spelling - which of the two the engine reads is decided by the field's kind, so writing the wrong one is an error, not a fallback.",
+              "type": "string"
+            },
+            "match": {
+              "description": "Identity of the element in a LIST field: a CEL predicate over `elem` and `value` deciding whether an existing element is the same one, e.g. `elem.name == value.name`. Omitted, identity is deep equality of the whole element. Mutually exclusive with key, which is the MAP-field spelling.",
+              "type": "string"
+            },
+            "on_conflict": {
+              "description": "What to do when the element already exists: skip (default, no-op), replace (overwrite it), error (fail the run).",
+              "enum": [
+                "skip",
+                "replace",
+                "error"
+              ],
+              "type": "string"
+            },
+            "value": {
+              "description": "The element to add. A secret property of the element is written as generate_secret({'length': …, 'charset': …}).",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "append": {
+          "description": "Keeper-side (on:keeper). Appends ONE element to the list field named by field, unconditionally — no identity check. For a sequence where the same element may legitimately occur twice; use add for a set.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The element to append. A secret property of the element is written as generate_secret({'length': …, 'charset': …}).",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "modify": {
+          "description": "Keeper-side (on:keeper). Patches every element of the collection field named by field that matches match (ADR-057). Writes no value of its own, so it mints no secret.",
+          "input": {
+            "expect": {
+              "description": "How many elements the match must select: any (default), one, at_most_one. A count outside it fails the run before the commit.",
+              "enum": [
+                "any",
+                "one",
+                "at_most_one"
+              ],
+              "type": "string"
+            },
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "match": {
+              "description": "CEL predicate over `elem` selecting which elements to patch, e.g. `elem.name == 'alice'`. Omitted, it matches NOTHING and the step is a no-op - write `true` to patch every element.",
+              "type": "string"
+            },
+            "patch": {
+              "description": "Path-inside-the-element -\u003e new value. A value may be a CEL expression over `elem`, so a patch can be computed from what the element already holds.",
+              "required": true,
+              "type": "map"
+            }
+          }
+        },
+        "present": {
+          "description": "Keeper-side (on:keeper). Writes the state field named by field ONLY if it has no value yet; an existing value wins, including one written earlier in the same run. Nothing is minted for a write that is discarded.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The value to write if the field is empty. A secret property is written as generate_secret({'length': …, 'charset': …}).",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "remove": {
+          "description": "Keeper-side (on:keeper). Drops every element of the collection field named by field that matches match (ADR-057). Removes elements from inside the field; use unset to drop the field itself.",
+          "input": {
+            "expect": {
+              "description": "How many elements the match must select: any (default), one, at_most_one. A count outside it fails the run before the commit.",
+              "enum": [
+                "any",
+                "one",
+                "at_most_one"
+              ],
+              "type": "string"
+            },
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "match": {
+              "description": "CEL predicate over `elem` selecting which elements to drop, e.g. `elem.name == 'alice'`. Omitted, it matches NOTHING and the step is a no-op - a forgotten line drops nothing. Write `true` to drop every element, or use core.state.unset to drop the field itself.",
+              "type": "string"
+            }
+          }
+        },
+        "set": {
+          "description": "Keeper-side (on:keeper). Writes the state field named by field, replacing whatever it held. Returns the effective state with each declared secret property replaced by its `vault:` reference ([ADR-0084]).",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            },
+            "value": {
+              "description": "The field's whole value. A secret property is written as generate_secret({'length': …, 'charset': …}); omitting it requires the value to already exist.",
+              "required": true,
+              "type": "string"
+            }
+          }
+        },
+        "unset": {
+          "description": "Keeper-side (on:keeper). Drops the state field named by field itself, as opposed to remove, which drops elements from inside a collection.",
+          "input": {
+            "field": {
+              "description": "Top-level property name of the service state_schema to write. The Vault path of each declared secret is DERIVED from (service, incarnation, this field, the element's key) and is never authored.",
+              "required": true,
+              "type": "string"
+            }
+          }
+        }
+      }
+    },
+    {
+      "name": "ssh",
+      "states": {
+        "run": {
+          "description": "Keeper-side (on:keeper). Open an SSH session to each host and execute an ordered list of shell steps on it, feeding a value to a step's stdin (NIM-849).",
+          "input": {
+            "hosts": {
+              "description": "Per-host objects, in practice `${ register.<mint>.hosts }`. `sid` is required; `primary_ip` only for the direct transport; an entry with `onboarded: true` is skipped, not dialed.",
+              "items": {
+                "type": "map"
+              },
+              "required": true,
+              "type": "list"
+            },
+            "join_wait_timeout": {
+              "description": "Ceiling on the wait for a host to become reachable, default 15m — a Teleport join, or an sshd that has not started yet on a freshly created VM. Bounds the connect on both transports; a rejected handshake, an Authorize deny and a non-zero exit are not waits and fail at once. Integer seconds are also accepted at runtime.",
+              "format": "duration",
+              "type": "string"
+            },
+            "ssh_port": {
+              "description": "SSH port (default 22).",
+              "type": "int"
+            },
+            "ssh_provider": {
+              "description": "SshProvider name for Authorize/Sign; retained as audit metadata in Teleport mode.",
+              "required": true,
+              "type": "string"
+            },
+            "ssh_user": {
+              "description": "SSH user (default root).",
+              "type": "string"
+            },
+            "steps": {
+              "description": "Ordered steps, each `run:` (a shell command line) plus at most one stdin source: `stdin:` (a literal, the same on every host) or `stdin_from:` (the name of a host field). A `run:` holding a declared secret is REFUSED — argv is visible in ps, audit.log and journald on the host itself.",
+              "items": {
+                "type": "map"
+              },
+              "required": true,
+              "type": "list"
+            }
+          },
+          "output": {
+            "count": {
+              "description": "Hosts in the list.",
+              "type": "int"
+            },
+            "hosts": {
+              "description": "Per-host outcome `{sid, ran, skipped}`. No command output: stdout is not captured.",
+              "items": {
+                "type": "map"
+              },
+              "type": "list"
+            },
+            "skipped": {
+              "description": "Hosts that carried `onboarded: true` and were not dialed.",
+              "type": "int"
+            }
+          }
+        }
+      }
+    }
+  ]
+}

@@ -1,0 +1,205 @@
+package api
+
+// FULL-TYPED shape of the PUSH-PROVIDER domain (code-first OpenAPI source, ADR-054
+// §Pattern). ROLLOUT BATCH 2b (push-provider entirely onto huma, following the
+// role/operator references): create (WRITE+AUDIT push-provider.created), list
+// (read-with-typed-query), get (read-with-path), update (WRITE+AUDIT
+// push-provider.updated, PUT replace semantics), delete (WRITE+AUDIT
+// push-provider.deleted). The Go types are the single source of truth.
+//
+// update — a PUT with replace semantics (params fully replaces the existing set,
+// read-modify-write on the client), NOT the presence-tier Optional[T]: the params
+// field has no "omitted vs null" semantics (it is always sent whole), so Optional
+// isn't needed.
+
+import (
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+)
+
+// === POST /v1/push-providers (create) — WRITE+AUDIT push-provider.created ===
+
+// pushProviderCreateInput — huma input for POST /v1/push-providers (FULL-TYPED). Body —
+// a typed body.
+type pushProviderCreateInput struct {
+	Body PushProviderCreateRequest
+}
+
+// === PUT /v1/push-providers/{id}/label (label-set) — WRITE+AUDIT push-provider.label_changed ===
+
+type pushProviderSetLabelInput struct {
+	ID   string `path:"id" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id"`
+	Body LabelSetRequest
+}
+
+type pushProviderSetLabelOutput struct {
+	Body PushProvider
+}
+
+func pushProviderSetLabelOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setPushProviderLabel",
+		Method:        http.MethodPut,
+		Path:          "/{id}/label",
+		Summary:       "Set the Push-Provider display caption",
+		Description:   "Replaces the display caption of one Push-Provider (ADR-0085). Permission push-provider.label-set, audit push-provider.label_changed. The caption is free text - capitals and spaces are allowed and nothing validates its form; null clears it and consumers fall back to showing `name`. Unlike PUT /v1/push-providers/{id} this publishes NO invalidation: the dispatcher snapshot carries params, and a caption is not one of them. The identifier in the path is NOT touched.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// pushProviderCreateOutput — huma output for POST /v1/push-providers (FULL-TYPED).
+// Status=201; Body — the native 201 body (PushProvider). The wire shape (params
+// normalized to {}, updated_by_aid nullable, date-time RFC3339Nano without Truncate)
+// is pinned by a golden-JSON byte-exact test.
+type pushProviderCreateOutput struct {
+	Status int `json:"-"`
+	Body   PushProvider
+}
+
+// pushProviderCreateOperation — the metadata for POST /v1/push-providers. Path = "/"
+// relative to the /v1/push-providers chi group. DefaultStatus=201. Permission
+// push-provider.create + audit push-provider.created. Errors: 400 unknown/malformed,
+// 403 RBAC, 409 push-provider-exists, 422 name/sensitive-param validation, 500.
+func pushProviderCreateOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "createPushProvider",
+		Method:        http.MethodPost,
+		Path:          "/",
+		Summary:       "Create a Push Provider",
+		Description:   "Creates a Push Provider (per-provider env-payload, ADR-032 S7-2). Permission push-provider.create. 409 — name already taken. sensitive keys must be vault-refs.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusCreated,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/push-providers (list) — READ-with-typed-query (no audit) ===
+
+// pushProviderListInput — huma input for GET /v1/push-providers (FULL-TYPED typed-query).
+// id_pattern — a LIKE-prefix filter (string). offset/limit — int32 with a default; the
+// range is enforced by CheckPageBounds in ListTyped → 400 (NOT huma minimum/maximum).
+// bad-int → 400 (parseInto).
+type pushProviderListInput struct {
+	IDPattern string `query:"id_pattern" doc:"LIKE-prefix filter by id (optional)"`
+	Offset    int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit     int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+}
+
+// pushProviderListOutput — huma output for GET /v1/push-providers (FULL-TYPED). Body —
+// the native 200 envelope (PushProviderListReply: items/offset/limit/total).
+// The wire shape is pinned by a golden test.
+type pushProviderListOutput struct {
+	Body PushProviderListReply
+}
+
+// pushProviderListOperation — the metadata for GET /v1/push-providers. DefaultStatus=200.
+// READ route: audit is NOT wired. Errors: 400 (out-of-range pagination), 403 RBAC, 500.
+func pushProviderListOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listPushProviders",
+		Method:        http.MethodGet,
+		Path:          "/",
+		Summary:       "List Push Providers (paged)",
+		Description:   "Registry of Push Providers with pagination and id_pattern filter (ADR-032 S7-2). Permission push-provider.list. Read-only, no audit.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/push-providers/{id} (get) — READ-with-path (no audit) ===
+
+// pushProviderGetInput — huma input for GET /v1/push-providers/{id}. Name — path.
+// The format of name (ValidName) — domain validation in GetTyped (422).
+type pushProviderGetInput struct {
+	ID string `path:"id" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id"`
+}
+
+// pushProviderGetOutput — huma output for GET /v1/push-providers/{id} (FULL-TYPED).
+// Body — the native 200 body (PushProvider).
+type pushProviderGetOutput struct {
+	Body PushProvider
+}
+
+// pushProviderGetOperation — the metadata for GET /v1/push-providers/{id}.
+// DefaultStatus=200. READ route: audit is NOT wired. Permission push-provider.read.
+// Errors: 403, 404, 422 bad path-name, 500.
+func pushProviderGetOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "getPushProvider",
+		Method:        http.MethodGet,
+		Path:          "/{id}",
+		Summary:       "Push Provider card",
+		Description:   "Metadata of a single Push Provider by name (ADR-032 S7-2). Permission push-provider.read. Read-only, no audit.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/push-providers/{id} (update) — WRITE+AUDIT push-provider.updated ===
+
+// pushProviderUpdateInput — huma input for PUT /v1/push-providers/{id}. Name — path;
+// Body — a typed body (replace semantics for params).
+type pushProviderUpdateInput struct {
+	ID   string `path:"id" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id"`
+	Body PushProviderUpdateRequest
+}
+
+// pushProviderUpdateOutput — huma output for PUT /v1/push-providers/{id} (FULL-TYPED).
+// Status=200; Body — the native 200 body (PushProvider).
+type pushProviderUpdateOutput struct {
+	Status int `json:"-"`
+	Body   PushProvider
+}
+
+// pushProviderUpdateOperation — the metadata for PUT /v1/push-providers/{id}.
+// DefaultStatus=200. Permission push-provider.update + audit push-provider.updated.
+// Errors: 400 unknown/malformed, 403 RBAC, 404 not-found, 422 bad path-name/
+// sensitive-param, 500.
+func pushProviderUpdateOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "updatePushProvider",
+		Method:        http.MethodPut,
+		Path:          "/{id}",
+		Summary:       "Replace a Push Provider's params",
+		Description:   "Replace semantics: params fully replaces the existing set (ADR-032 S7-2). Permission push-provider.update. 404 — record absent.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === DELETE /v1/push-providers/{id} (delete) — WRITE+AUDIT push-provider.deleted ===
+
+// pushProviderDeleteInput — huma input for DELETE /v1/push-providers/{id}. Name — path.
+// No Body.
+type pushProviderDeleteInput struct {
+	ID string `path:"id" pattern:"^[a-z][a-z0-9-]{0,62}$" doc:"Push Provider id"`
+}
+
+// pushProviderNoContentOutput — huma output for the delete 204-write route. No Body
+// (legacy contract: 204 No Content). On an output with no Body huma does SetStatus(204) →
+// an empty body (wire-identical to the former WriteHeader(204)).
+type pushProviderNoContentOutput struct {
+	Status int `json:"-"`
+}
+
+// pushProviderDeleteOperation — the metadata for DELETE /v1/push-providers/{id}.
+// DefaultStatus=204. Permission push-provider.delete + audit push-provider.deleted.
+// Errors: 403, 404, 422 bad path-name, 500.
+func pushProviderDeleteOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "deletePushProvider",
+		Method:        http.MethodDelete,
+		Path:          "/{id}",
+		Summary:       "Delete a Push Provider",
+		Description:   "Deletes a Push Provider record (ADR-032 S7-2). Permission push-provider.delete. 404 — record absent.",
+		Tags:          []string{"push-provider"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}

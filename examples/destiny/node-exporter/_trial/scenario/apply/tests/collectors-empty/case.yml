@@ -1,0 +1,49 @@
+# L0 case: empty collectors list (collectors: []).
+#
+# Proves that destiny is valid without collectors: the CEL predicate `'<c>' in
+# input.collectors` on each collector step resolves to false WITHOUT a render
+# failure (an empty array is a legal `in` argument). The fact that this case
+# PASSES is proof that the harness fails if the CEL plan render fails. At L0,
+# when: is passed through into RenderedTask as a string (Soul evaluates it on
+# the host), so collector tasks remain in the plan with their index; their
+# when will be false, so no collector branch activates. We assert the install
+# core (fetch/install/unit): it doesn't depend on collectors and is always in
+# the plan.
+name: node-exporter renders with empty collectors list (no plan failure)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: []
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # The install core doesn't depend on collectors: present even with an empty list.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-amd64.tar.gz
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/node_exporter
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node_exporter.service
+
+  # ── smartmon-pkg CANNOT BE EXPRESSED in presence (see report) ─────────────────
+  # With collectors: [], collector steps are STATIC when:false skip-placeholders
+  # (`'smartmon' in input.collectors` is computable at render time from the
+  # fixture input → the task is emitted with Params==nil). taskMatches rejects
+  # Params==nil as BOTH present AND absent (skip != "invoked"). This deliberately
+  # checks that the skipped step's index slot is preserved (an empty list neither
+  # cut out nor shifted the plan): a positional property. Kept in rendered_tasks
+  # (both forms coexist): index 9 is smartmon-pkg (core is 0..8, collectors start
+  # at 9).
+  rendered_tasks:
+    - index: 9
+      module: core.pkg.installed

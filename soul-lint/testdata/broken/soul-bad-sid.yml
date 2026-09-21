@@ -1,0 +1,11 @@
+sid: "not.a.fqdn..weird"
+paths:
+  modules: /var/lib/soul-stack/modules
+  seed: /var/lib/soul-stack/seed
+keeper:
+  endpoints:
+    - host: k1.dc1.example
+      event_stream_port: 9443
+      bootstrap_port: 9442
+  tls:
+    ca: /var/lib/soul-stack/seed/ca.crt

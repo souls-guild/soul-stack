@@ -1,0 +1,108 @@
+# L0 test for the REMOVAL half of the operator-users declaration (NIM-769). Since the
+# verb moved from `params.state` into address level 3, `state: absent` on a MongoUser is
+# no longer a parameter the plugin reads — it is what routes the item into the
+# `mongo.user.absent` loop instead of the `mongo.user.present` one. This case is the
+# guard on that routing: an absent user must reach dropUser and must NOT reach
+# createUser, which under the old single-address form was a plugin-side branch no L0
+# case could see.
+name: mongo create standalone with an operator user declared absent (loop filter routes it)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  vars:
+    install_method: binary
+    binary_base_url: "https://nexus.example/mongodb"
+    binary_allow_private: true
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+    sysctl_settings:
+      vm.max_map_count: "262144"
+
+  input:
+    version: "7.0.15"
+    users:
+      - name: appuser
+        database: appdb
+        state: absent
+        roles:
+          - { role: readWrite, db: appdb }
+      - name: keepuser
+        database: appdb
+        roles:
+          - { role: read, db: appdb }
+
+mocks:
+  register:
+    system_users:
+      effective:
+        - { name: default_admin, password: mongoadmin-create-pass }
+    mongo_users:
+      effective:
+        - { name: appuser, password: appuser-secret-pass }
+        - { name: keepuser, password: keepuser-secret-pass }
+
+assert:
+  task_present:
+    # bootstrap default_admin is unaffected by the filter — it is not a loop.
+    - module: mongo.user.present
+      params_subset:
+        name: default_admin
+        username: default_admin
+
+    # keepuser has no `state` and takes the $type default `present` → the present loop.
+    - module: mongo.user.present
+      params_subset:
+        name: keepuser
+        database: appdb
+        username: default_admin
+        user_password: keepuser-secret-pass
+
+    # appuser is declared absent → the absent loop, connecting as default_admin.
+    # No user_password and no roles: dropUser reads neither and mongo.user.absent
+    # declares neither, so passing one would be refused as an unknown param.
+    - module: mongo.user.absent
+      params_subset:
+        name: appuser
+        database: appdb
+        username: default_admin
+        password: mongoadmin-create-pass
+
+  task_absent:
+    # The routing is exclusive: an absent user must not also be created.
+    - module: mongo.user.present
+      params_subset:
+        name: appuser
+    - module: mongo.user.absent
+      params_subset:
+        name: keepuser
+
+  state_after:
+    mongo_version: "7.0.15"
+    # The operator's declaration is unchanged by the re-layout: `state` is still a
+    # MongoUser field and still lands in incarnation.state. Only the plugin param went.
+    mongo_users:
+      - name: appuser
+        database: appdb
+        state: absent
+        roles:
+          - { role: readWrite, db: appdb }
+      - name: keepuser
+        database: appdb
+        state: present
+        roles:
+          - { role: read, db: appdb }

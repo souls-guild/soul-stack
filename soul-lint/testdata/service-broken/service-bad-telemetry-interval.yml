@@ -1,0 +1,4 @@
+state_schema:
+  foo: { type: string }
+telemetry:
+  interval: "3s"

@@ -1,0 +1,5 @@
+state_schema:
+  foo: { type: string }
+tasks:
+  - name: Install
+    module: core.pkg.installed

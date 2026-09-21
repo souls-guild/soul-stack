@@ -1,0 +1,88 @@
+# L0 trial for update_users: an EMPTY input.users removes ALL operator-extra users. The deployed
+# state.df_users = {alice, bob}; the operator sets input.users = [] (empty array). bulk-replace
+# replaces state.df_users ENTIRELY with an empty set:
+#   1. users.acl renders WITHOUT operator-extra (system users would be merged in from service vars —
+#      here vars.system_acl_users is not set → vars.users = {} empty);
+#   2. state_after.df_users = [] (operator-extra wiped).
+# Proves that bulk-replace lets you remove all operator-extra users with an empty array (system
+# users outside state — remain via merge-in from service vars on every render, see main.yml).
+name: update_users with empty input removes all operator-extra users
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # state v2: install/conf_dir/data_dir moved out into service vars (not state).
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+    df_users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
+  # Empty set: remove all operator-extra users.
+  input:
+    users: []
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-update-users-pass }
+    df_users:
+      effective:
+        - { name: alice, password: alice-l0-pass }
+        - { name: bob, password: bob-l0-pass }
+
+assert:
+  task_present:
+    # users.acl renders with an EMPTY set (operator-extra wiped; no system users — service vars
+    # without system_acl_users → vars.users = {}).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/users.acl
+        render_context:
+          vars:
+            users: {}
+          self:
+            sid: trial-host
+            covens: []
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+
+    # HOT-RELOAD ACL: redis.acl.reloaded over a LOCAL UNIX socket (ACL LOAD brings the instance
+    # to an empty operator set). AUTH as default_admin (requirepass removed).
+    - module: redis.acl.reloaded
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-update-users-pass
+
+  # state_after: df_users = [] (operator-extra wiped entirely).
+  state_after:
+    df_users: []

@@ -1,0 +1,57 @@
+# Official plugins catalog
+
+Plugins supplied and maintained by the Soul Stack team, as opposed to core modules (`core.*`, statically built into the `soul` binary) and third-party plugins, which since NIM-769 are documented under their own names ([redis](../redis/README.md), [mongo](../mongo/README.md)) rather than under an origin-grouping directory.
+
+> ⚠ **`official` is not a namespace.** It named these plugins' **origin**, not what they manage, and the origin-grouping level of a plugin address is **removed** ([ADR-020 amendment 2026-09-02](../../adr/0020-plugin-infrastructure.md#amendment-2026-09-02-nim-764--nim-765-a-plugin-address-is-pluginobjectaction-and-the-origin-grouping-level-is-removed), NIM-765): a plugin step is addressed `<plugin-name>.<object>.<action>`, and origin is answered by the catalog entry's `source` plus the Sigil allow-list. Every `official.*` address on this page is therefore the **old form**. There is no follow-up ticket for these artifacts — they live in the companion repo `soul-stack-plugins`, which this repository cannot edit; this directory keeps its name and groups documents, not addresses.
+
+Binari - `soul-mod-official-<name>`. They live in the companion repo [`soul-stack-plugins/`](https://github.com/souls-guild/soul-stack-plugins) (Apache 2.0, [ADR-016](../../adr/0016-parity-license.md)).
+
+## Pilot (SDK-2, 2026-05-27)
+
+The first 3 modules are pattern-fixture for the SDK-3 edition.
+
+| Module | States | Destination |
+|---|---|---|
+| [`official.postgres-user`](postgres-user/README.md) | `present` / `absent` | PostgreSQL ROLE (CREATE/ALTER/DROP) via `pgx/v5` + probe `pg_roles`. |
+| [`official.nginx-vhost`](nginx-vhost/README.md) | `present` / `absent` | nginx vhost-config: render + `nginx -t` validate + write + symlink + reload. |
+| [`official.docker-container`](docker-container/README.md) | `running` / `stopped` / `absent` | docker container via docker-CLI + drift-detect (image/env/ports/volumes/networks). |
+
+Each pilot implements Plan + `PlanReadSafe` ([ADR-031 Scry](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile)) - drift-detect on `dry_run: true` without host mutation.
+
+## Full list (planned SDK-3 edition)
+
+See [ADR-016 amendment SDK-2 (2026-05-27)](../../adr/0016-parity-license.md).
+
+## Test coverage
+
+Pattern-fixture (fixed SDK-2 for SDK-3 edition):
+
+- **L0** - in-memory fake-runner + fake stream via `grpc.ServerStreamingServer[ApplyEvent]`. Hermetic, no network/disk/docker.
+- **L1** (build-tag `integration`) - testcontainers or real-daemon. Full lifecycle.
+- **L3b** (build-tag `live`) - privileged Debian-12 + real Soul-host + plugin. On SDK-2 - skeleton `t.Skip`, waiting for Vigil-extension L3b-harness in core-repo.
+
+## Soul-third-party use
+
+⚠ The address below is the shipped `official.*` form — the old one; see the banner at the top of
+this page.
+
+```yaml
+# destiny/destiny.yml
+- module: official.postgres-user
+  state: present
+  params:
+    dsn: "${ vault('secret/keeper/pg-admin#dsn') }"
+    username: appuser
+    password: "${ vault('secret/keeper/app-credentials#pg_password') }"
+    createdb: true
+```
+
+Keeper-side vault-resolve ([ADR-010](../../adr/0010-templating.md)) substitutes real values BEFORE `ApplyRequest` - the plugin sees the resolved one.
+
+## See also
+
+- [ADR-016](../../adr/0016-parity-license.md) - parity + open core / freemium strategy.
+- [ADR-020](../../adr/0020-plugin-infrastructure.md) - plugin infrastructure (manifest/handshake/lifecycle).
+- [ADR-026](../../adr/0026-sigil.md) — Sigil (integrity of official binaries under the signature of the Archon).
+- [ADR-031](../../adr/0031-scry-drift.md#adr-031-scry--drift-detection-declarative-dry-run-reconcile) — Scry (read-safe Plan marker, default-deny on `dry_run`).
+- [Plugin author guide](https://github.com/souls-guild/soul-stack-plugins/blob/main/docs/module-author-guide.md).

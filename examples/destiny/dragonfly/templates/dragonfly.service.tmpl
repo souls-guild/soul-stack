@@ -1,0 +1,69 @@
+{{/*
+  systemd unit for DragonFly (binary install -- the only path to owning a unit:
+  the DragonFly package branch installs the distro deb dragonfly with ITS OWN
+  unit, which we don't touch; the binary branch ships THIS unit). Go text/template
+  strict (ADR-010). Context: .vars.bin_dir/conf_dir + dragonfly_user/dragonfly_group
+  + run_dir/data_dir/log_dir.
+
+  ★ Type=simple (NOT notify): DragonFly is a foreground process WITHOUT sd_notify
+  readiness (confirmed: dfly_main.cc never calls sd_notify; the official DF deb
+  unit uses Type=simple). This is DIFFERENT from redis-server (Type=notify): DF
+  does not notify systemd about READY, so systemd considers the start successful
+  right after fork+exec. The service health-gate (PING) is what actually confirms
+  "is it really ready" -- there is no systemd-notify signal for DF.
+
+  ★ HARDENING LIVES INSIDE the unit (NOT a drop-in, unlike redis). For redis,
+  hardening arrives as a drop-in on top of the DISTRO unit (which can't be
+  replaced wholesale). Here the unit is ours (binary), there is no distro DF
+  unit in this flow -> hardening goes directly into [Service], the same way the
+  OFFICIAL DragonFly deb unit does it. So there's no separate hardening.conf.tmpl
+  + drop-in task for DragonFly (one fewer artifact than the redis structure).
+
+  The hardening set comes from the official DragonFly deb unit (tools/packaging/debian/
+  dragonfly.service), adapted for a stateful service:
+    - ProtectSystem=full + ReadWritePaths for the actual write directories (data/log/run);
+    - MemoryDenyWriteExecute=true -- the official DF unit CARRIES IT (unlike redis,
+      where MDWE is dropped because of loadable modules: DF has none, so MDWE is safe);
+    - CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE -- SETGID/SETUID for
+      privilege drop, SYS_RESOURCE for raising memlock/NOFILE (DF mlocks memory);
+    - LimitNOFILE=262144 -- DF holds many connections (the unit's official default).
+
+  ExecStart=--flagfile (the official way to launch DF): all directives live in the
+  flagfile ${conf_dir}/dragonfly.conf, no arguments on the command line (besides
+  flagfile).
+*/}}
+[Unit]
+Description=DragonflyDB In-Memory Data Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+ExecStart={{ .vars.bin_dir }}/dragonfly --flagfile={{ .vars.conf_dir }}/dragonfly.conf
+PIDFile={{ .vars.run_dir }}/dragonfly.pid
+Restart=always
+TimeoutStopSec=infinity
+User={{ .vars.dragonfly_user }}
+Group={{ .vars.dragonfly_group }}
+RuntimeDirectory=dragonfly
+RuntimeDirectoryMode=0755
+LimitNOFILE=262144
+
+# systemd hardening (from the official DragonFly deb unit, stateful variant).
+NoNewPrivileges=yes
+ProtectSystem=full
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.log_dir }} {{ .vars.run_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictRealtime=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+MemoryDenyWriteExecute=true
+CapabilityBoundingSet=CAP_SETGID CAP_SETUID CAP_SYS_RESOURCE
+
+[Install]
+WantedBy=multi-user.target

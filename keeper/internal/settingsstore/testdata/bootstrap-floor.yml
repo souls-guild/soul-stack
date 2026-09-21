@@ -1,0 +1,47 @@
+# A keeper.yml reduced to the bootstrap floor of ADR-0073(b): everything that
+# cannot live in Postgres, and NOT ONE admitted overlay key. That is the point —
+# the file wins over the cluster (ADR-0073(b), amended), so a fixture that spells
+# out `reaper:` or `logging.level` would shadow the very values a delivery test
+# is trying to observe.
+#
+# It is also the direction of travel: this is roughly what a keeper.yml looks
+# like once the settings that can move have moved.
+
+kid: keeper-test-01
+
+listen:
+  grpc:
+    bootstrap:
+      addr: "0.0.0.0:9442"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+    event_stream:
+      addr: "0.0.0.0:9443"
+      tls:
+        cert: /etc/keeper/tls/server.crt
+        key:  /etc/keeper/tls/server.key
+        ca:   /etc/keeper/tls/ca.crt
+  openapi: { addr: "0.0.0.0:8080" }
+  mcp:     { addr: "0.0.0.0:8081" }
+  metrics: { addr: "0.0.0.0:9090" }
+
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 5, max: 50 }
+
+redis:
+  addr: "redis.internal:6379"
+  password_ref: vault:secret/keeper/redis
+
+vault:
+  addr: "https://vault.internal:8200"
+  auth: { method: approle, role_id: keeper-test, secret_id_file: /etc/keeper/vault-secret-id }
+  pki_mount: "pki/soulstack"
+
+auth:
+  jwt:
+    signing_key_ref: vault:secret/keeper/jwt-signing-key
+
+logging:
+  format: json

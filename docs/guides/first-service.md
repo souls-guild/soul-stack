@@ -1,0 +1,308 @@
+# Your first end-to-end service
+
+This guide is a bridge between [getting-started.md](../getting-started.md) (where you picked up one Keeper, boarded one Soul and used the ready-made `hello-world`) and exploitation. Here you **build the service yourself from scratch**: write its files, register it in Keeper, create an incarnation and see the result on the host.
+
+This is not a reference spec - it's a step-by-step tutorial. Where a complete grammar is needed (all task fields, all CEL semantics, the entire migration format) - I provide a link to the regulatory document. The guide itself is based on a **real working example**: [`examples/service/hello-world/`](../../examples/service/hello-world/). Each piece of YAML below is a file from there, not fiction.
+
+## 1. Purpose and background
+
+**What we'll build.** Minimal service `hello-world`: one operation `create`, which writes the greeting file `/tmp/soul-stack-hello` on each incarnation host, substituting the text from the operator parameter, and fixes the path to the file in `incarnation.state` (Postgres). This is enough to go through the entire chain: operator parameter → CEL render → apply on the host → state commit.
+
+**What you need before starting** (all from [getting-started.md](../getting-started.md)):
+
+- worker Keeper (`make dev-keeper`, responds to `http://127.0.0.1:8080/healthz`);
+- at least one onboarded Soul in the status `connected`, bound to coven `demo`;
+- Archon token in environment variable: `TOKEN=$(make dev-jwt)` (or `TOKEN=$(cat /tmp/keeper-dev/archon-alice.jwt)`).
+
+Checking that Soul is in place:
+
+```sh
+curl -s http://127.0.0.1:8080/v1/souls -H "Authorization: Bearer $TOKEN"
+```
+
+The response must contain a host with `status: connected` and `covens: ["demo"]`.
+
+## 2. Service-repo layout
+
+A service is a git repository of a certain form. One service = one service type (`hello-world`, `redis`, `postgres-ha`) = one repository. The service version is the git-ref (tag or branch) under which the files are committed; field `version:` in manifest **no** ([ADR-007](../adr/0007-versioning-git-ref.md)).
+
+Layout of our `hello-world` (minimum - only `service.yml` and at least one script are required):
+
+```
+hello-world/
+├── service.yml                     # manifest: state-schema version, structure incarnation.state (NO name — NIM-726)
+├── vars/
+│   └── 00-base.yaml               # baseline parameters for all incarnations (background)
+└── scenario/
+    ├── create/
+    │   ├── main.yml                # "create" operation: input + tasks
+    │   └── tests/
+    │       └── greeting-hello/case.yml   # L0 test: checks script rendering without hosts
+    └── converge/
+        └── main.yml                # desired end state, run as an ordinary scenario
+```
+
+What is specifically **not** here and why - it will be useful so as not to look for unnecessary things:
+
+- `migrations/` - the state-schema version is not stored anywhere — it is the top of the ladder. An empty `migrations/` means version 1 ([ADR-019](../adr/0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)), and version 1 is where we are.
+- `destiny[]` / `modules[]` in `service.yml` - our script uses only **core modules** (`core.file.present`), and they are always available and are not listed in the manifest ([ADR-009](../adr/0009-scenario-dsl.md)).
+- `templates/` - `.tmpl` files are needed when content is rendered by a Go template; Our content comes inline via `${ input.greeting }`.
+
+The full layout and manifest format is [docs/service/manifest.md](../service/manifest.md).
+
+## 3. `service.yml` - manifest
+
+The manifesto is short in design: only service metadata and **contract for the runtime-state structure**. There are no tasks - they live in scenarios.
+
+> **Implementation status — read before you copy.** The `state_schema` below is written in
+> the **decided** dialect, which is **not implemented yet**: `state_schema` is a map of
+> field name → schema, like `input:`, with no root `type: object` and no `properties:`
+> wrapper ([ADR-0086](../adr/0086-one-schema-dialect.md)). Today's engine refuses that form — it still
+> requires the root `type: object` (`state_schema_root_not_object`) — and the file this
+> section links to still carries the old envelope. Engine change: **NIM-742**; rewrite of
+> `examples/**`: **NIM-744**. Until those land, write the old form and treat what follows
+> as the shape you will migrate to. The normative page is
+> [docs/service/manifest.md → Format `state_schema`](../service/manifest.md#format-state_schema).
+
+[`examples/service/hello-world/service.yml`](../../examples/service/hello-world/service.yml):
+
+```yaml
+description: Minimal service with a real state change for E2E (writes a file + commits to incarnation.state)
+
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
+# Unlike noop, incarnation.state here is non-empty: scenario/create
+# writes the created file's path into the greeting_file field.
+state_schema:
+  greeting_file:
+    type: string
+
+# No dependencies: scenario uses only core modules (ADR-015),
+# which are not listed in destiny[]/modules[] (ADR-009).
+```
+
+Parsing fields:
+
+- **There is no `name`.** The manifest states no identity: you name the service when you register it (`POST /v1/services`), and that is the name Keeper resolves an incarnation against. Writing `name:` here is an error — a second copy nobody compared against the first is how a service ends up fencing the wrong Vault namespace (NIM-726).
+- **There is no state-schema version either.** The **structure** version of `incarnation.state` (not the service version — that is the git-ref) is not written in the manifest: it is the top of the `migrations/` ladder. An empty `migrations/` means version 1, which is where we are, so there is no ladder directory here at all. A breaking change to the state structure is a new ladder step, and the step's number is the new version.
+- **`description`** - one or two phrases; visible in the Keeper UI, MCP directory and `soul-lint` output.
+- **`state_schema`** - the structure of the JSONB field `incarnation.state` in Postgres, written in the **input DSL** ([docs/input.md](../input.md)) as a map `<field name>` → schema — the same shape an `input:` block has. There is no root `type: object` and no `properties:` wrapper; a **nested** object field still declares `type: object` with its own `properties:`. Here we declare a single field `greeting_file` of type string. Keeper validates state against this schema when creating an incarnation and when upgrading a schema version.
+
+Full list of manifest fields (including `destiny[]` / `modules[]` for services with dependencies) - [docs/service/manifest.md → `service.yml`](../service/manifest.md).
+
+## 4. `scenario/create/main.yml` - write the operation
+
+A script is one operation on a service (CRUD-style: `create` / `add_user` / `restart` / ...). Each `scenario/<name>/` folder is a separate operation; Keeper finds them with auto-discover; there is no need to list them in the manifest. The entry point is `main.yml` with two blocks: `input:` (input contract) and `tasks:` (steps). Writing to state is one of those steps.
+
+[`examples/service/hello-world/scenario/create/main.yml`](../../examples/service/hello-world/scenario/create/main.yml):
+
+```yaml
+name: create
+description: Creates a greeting file on each incarnation host and fixes the path to incarnation.state.
+
+input:
+  greeting:
+    type: string
+    required: true
+    description: The text that is written to the greeting file.
+
+tasks:
+  - name: Write greeting file on every host of the incarnation
+    module: core.file.present
+    params:
+      path: /tmp/soul-stack-hello
+      content: "${ input.greeting }"
+
+  - name: Record the greeting file path
+    module: core.state.set
+    params:
+      field: greeting_file
+      value: /tmp/soul-stack-hello
+```
+
+Analysis by blocks.
+
+**`input:` - script parameters.** Contract of what the operator must/can pass at startup. There is one parameter `greeting`: string, required (`required: true`). Keeper validates the passed `input` against this contract **before** the run - if the operator does not pass `greeting`, the run does not start. Full standard `input:` (types, formats, validation, reusable named types via `types:`/`$type`) - [docs/input.md](../input.md).
+
+**`tasks:` - operation steps.** Two steps. The first:
+
+- `module: core.file.present` is a core module that ensures the existence of a file with the given content (idempotent: if the file is already like this, there is no change). The behavior of the module and all its parameters are [docs/module/core/file/README.md](../module/core/file/README.md). The complete list of core modules is [ADR-015](../adr/0015-core-modules-mvp.md).
+- `params.path` - where to write; `params.content` - what to write.
+- **`content: "${ input.greeting }"`** - the template engine works here. The `${ … }` marker is a CEL interpolation: during the render phase, Keeper substitutes the value `input.greeting` into the string. That is, the file text comes from the operator parameter, and is not hardwired into the script. The border "where is CEL, where is Go template", marker `${ … }`, security model - normative in [docs/templating.md](../templating.md).
+
+**The second step - recording it in state.** `module: core.state.set` with `on: keeper` writes `incarnation.state.greeting_file = /tmp/soul-stack-hello` into Postgres. The state suffix of the address is the verb — `set` overwrites the field whole; `present`/`add`/`append`/`modify`/`remove`/`unset` are the rest ([ADR-0084](../adr/0084-explicit-state-capture.md)). Here the value is a literal; in the general case it is a CEL expression (`${ input.* }`, `${ compute.* }`, `${ register.<keeper-task>.* }`).
+
+Two things follow from a capture being a step. It runs **where you put it** — after the file task, so the path is recorded only once the file has been written on every host (the cross-host barrier still holds every host to the same point before the next step begins). And it lands **at that step**, not at an end-of-run commit: a run that dies later keeps what this step already recorded. The verbs, the ordering rules and the soul-lint diagnostics — [docs/scenario/orchestration.md → §7.1](../scenario/orchestration.md#71-the-capture-verbs).
+
+> Why is `on:` / `where:` not here. `on:` is the target of the step (on which hosts to execute). The omitted `on:` means "entire incarnation"—all **member** hosts (via the membership relation; `incarnation.id` is not a Coven). That's enough for us. Targeting by covens (`on:`) and volatile per-host predicate (`where:`) - [orchestration.md → §3–§4](../scenario/orchestration.md).
+
+### Script test (optional, but useful)
+
+Next to the script is an L0 test - it checks that the **render** gives the expected tasks, without real hosts. [`scenario/create/tests/greeting-hello/case.yml`](../../examples/service/hello-world/scenario/create/tests/greeting-hello/case.yml):
+
+```yaml
+name: create writes greeting file with input.greeting
+
+fixtures:
+  input:
+    greeting: hi
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.file.present
+      params:
+        path: /tmp/soul-stack-hello
+        content: hi
+```
+
+Meaning: "at `input.greeting=hi`, exactly one task `core.file.present` with `content: hi` will be rendered." This catches regressions in the render (for example, if someone breaks CEL interpolation). Testing levels - [docs/destiny/testing.md](../destiny/testing.md).
+
+## 5. `vars/00-base.yaml` - default parameters
+
+Service vars are the service's own default parameter values, read in CEL as `vars.*`. Every `*.yaml` directly inside `vars/` is a layer, deep-merged in lexical order — `00-base.yaml` first, because the filename carries the precedence. For conditional layers, write `vars/_stack.yaml` instead ([ADR-0082](../adr/0082-service-vars.md)).
+
+[`examples/service/hello-world/vars/00-base.yaml`](../../examples/service/hello-world/vars/00-base.yaml):
+
+```yaml
+greeting: hello from soul stack
+```
+
+In our minimal scenario, `vars.greeting` is a **substrate for the future**: `create` itself requires `input.greeting` to be mandatory, so the text comes from the operator. It shows how a service could carry default values without requiring them from the operator every time. Full spec — [`docs/service/manifest.md` → Service vars](../service/manifest.md#service-vars).
+
+> `input:` vs service vars - what's the difference. `input:` is a contract **for calling a scenario** (the operator passes it at startup; validated before execution). Service vars are the **author's defaults**, resolved from the service repo at the version the run is pinned to. They have different life cycles: input is per-run, service vars are per-service-version — and nobody overrides the latter from outside. A fleet that needs different defaults forks the service repo ([ADR-007](../adr/0007-versioning-git-ref.md)).
+
+## 6. Offline validation
+
+Before registering a service, run the static linter - it catches structural errors in the manifest and script without running Keeper:
+
+```sh
+./soul-lint/bin/soul-lint validate-service  examples/service/hello-world/service.yml
+./soul-lint/bin/soul-lint validate-scenario examples/service/hello-world/scenario/create/main.yml --service-name hello-world
+```
+
+Both should give exit 0 and `OK: <path>`. `--service-name` is what the scenario check fences Vault paths on — drop it and you get an `own_namespace_fence_unchecked` warning saying the fence did not run ([docs/soul-lint.md](../soul-lint.md)); the manifest states no name to take it from. What exactly does the linter check (JSON Schema at the root, forbidden keys, the `migrations/` ladder and its `schema.lock`) - [docs/service/manifest.md → `soul-lint validate-service`](../service/manifest.md) and [docs/soul-lint.md](../soul-lint.md). `hello-world` has no ladder and no lock, so the lock check says nothing here; it starts once the service has a migration step.
+
+**If your service uses plugin modules, add `--modules`.** The `params:` of a `core.*`
+task are checked against the declaration compiled into the linter; a plugin's schema
+ships with its artifact, so the linter has to be told where to find it — and under
+which **alias**, since the artifact carries no name of its own
+([ADR-0076(x–z)](../adr/0076-engine-compat-window.md),
+[ADR-020(p)](../adr/0020-plugin-infrastructure.md#amendment-2026-08-06-nim-377-the-schema-is-generated-from-go-the-artifact-carries-no-name)):
+
+```sh
+./soul-lint/bin/soul-lint validate-scenario \
+    examples/service/dragonfly/scenario/add_user/main.yml \
+    --modules redis=./redis/dist/schema.json \
+    --service-name dragonfly
+```
+
+The `redis` you write here is the `redis` the task writes in `redis.acl.reloaded` — the
+registration alias your operator chose, not something read off the path. The artifact
+carries no name of its own, so nothing on disk could tell the linter what to call it.
+
+`schema.json` is the sidecar `soul-mod stamp` writes next to the artifact, so this
+costs no download. `<path>` may equally be the stamped artifact itself or the `dist/`
+directory holding it. The flag is repeatable — one binding per plugin.
+
+**A binding that does not resolve is fatal (exit 2)**, because you asked for that check.
+A module you simply did not bind is a hint (`plugin_params_unchecked`), not a failure —
+see [docs/soul-lint.md](../soul-lint.md#a-broken-binding-and-an-absent-one-are-different-answers).
+
+Without the flag those tasks are **not** checked, and the linter says so per module
+rather than passing in silence:
+
+```
+main.yml:223:13: hint: [plugin_params_unchecked] params of redis.instance were not
+checked: no module manifests were supplied
+```
+
+The same check runs inside Keeper, resolving from the plugins the cluster has
+allow-listed - so a definition linted here and a definition rendered there are held
+to the same manifest. An undeclared key fails the task on the host either way
+([ADR-0076(t)](../adr/0076-engine-compat-window.md)); the point of the flag is to
+hear about it now, with a line and a column.
+
+## 7. Register the service
+
+For Keeper to resolve a service, it must be added to the service registry: git source + ref. The version is `ref` (tag or branch), not a separate field ([ADR-007](../adr/0007-versioning-git-ref.md)). In production it is `POST /v1/services`:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/v1/services \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{"name": "hello-world", "git": "https://git.internal/svc/hello-world.git", "ref": "main"}'
+```
+
+> **Dev-shortcut.** It is inconvenient to keep a git repo on a local stand. `make dev-provision` already materializes `hello-world` as a local `file://` repo and seeds the service registry - a separate `POST /v1/services` is then not needed. This is dev-only: `file://`-resolve is enabled by the `SOUL_STACK_ALLOW_FILE_REPOS=1` flag, which sets `make dev-keeper`; in production, the source is a real git-URL. More details - [getting-started.md → Step 7](../getting-started.md).
+
+When you edit your service: commit changes, set the required `ref` (move branch or set a new tag) - Keeper will pull up exactly this ref at the next resolution.
+
+## 8. Creating an incarnation
+
+Incarnation is a runtime service instance (lives in Postgres: `spec` / `state` / `status`). Creating an incarnation runs the `create` script on the target hosts. We bind to coven `demo`, where our Soul is:
+
+```sh
+curl -s -X POST http://127.0.0.1:8080/v1/incarnations \
+  -H "Authorization: Bearer $TOKEN" \
+  -H "Content-Type: application/json" \
+  -d '{
+    "name": "hello-demo",
+    "service": "hello-world",
+    "covens": ["demo"],
+    "input": { "greeting": "hello from my first service" }
+  }'
+```
+
+Reply `202 Accepted` with `apply_id` is an asynchronous operation. Endpoint contract - [keeper/operator-api/incarnations.md](../keeper/operator-api/incarnations.md).
+
+`input.greeting` here is the same parameter from `scenario/create/main.yml`; Keeper validates it against the script's `input:` contract before running.
+
+## 9. Apply and check
+
+**Incarnation status** (`applying` → `ready` on success, `error_locked` on failure on at least one host):
+
+```sh
+curl -s http://127.0.0.1:8080/v1/incarnations/hello-demo -H "Authorization: Bearer $TOKEN"
+```
+
+The same via the CLI (`soulctl` is a thin wrapper over the Operator API):
+
+```sh
+soulctl incarnation get hello-demo
+```
+
+**Result on the host** - with `status: ready`:
+
+```sh
+cat /tmp/soul-stack-hello        # → hello from my first service
+```
+
+**State and history.** In `incarnation.state.greeting_file` - the path to the created file (what the `core.state.set` step wrote). History of runs (snapshots in `state_history`):
+
+```sh
+curl -s http://127.0.0.1:8080/v1/incarnations/hello-demo/history -H "Authorization: Bearer $TOKEN"
+# or
+soulctl incarnation history hello-demo
+```
+
+### Rerun script
+
+Creating an incarnation runs `create` once. To run the script on an **existing** incarnation (the same `create` or another service operation), there is `soulctl incarnation run`:
+
+```sh
+soulctl incarnation run hello-demo create --input '{"greeting":"hi again"}' --wait
+```
+
+`--wait` polls the status until apply completes. Summary of ways to run a job (scenario / batch via Voyage / single-Errand / push) - [keeper/run-flavors.md](../keeper/run-flavors.md).
+
+## 10. What's next
+
+You've put together a single-script service. Further - as it grows:
+
+- **More operations.** Add scripts `scenario/<op>/main.yml` (`add_user`, `restart`, …) - each with its own `input:` and its own capture steps. Complete DSL grammar of tasks (loop / block / register / onchanges / retry / ...) - [docs/destiny/tasks.md](../destiny/tasks.md); orchestration delta scenario (`on:` / `where:` / `serial:` / `apply:`) - [docs/scenario/orchestration.md](../scenario/orchestration.md).
+- **Template files.** When the content is more complex than one line - Go text/template in `scenario/<name>/templates/<path>.tmpl` + module `core.file.rendered`. Templating engine spec - [docs/templating.md](../templating.md).
+- **Structural state and migrations.** When state outgrows one or two fields and changes incompatiblely, add a ladder step and re-stamp. A migration step is a directory `migrations/<NNN>_<slug>/` holding `main.yml` and its `tests/`. The number is the version the step leads to; the "from" is derived — the ladder is forward-only and goes by one. Then `soul-lint schema-stamp <service dir>` regenerates `migrations/schema.lock`, which you commit alongside — from the first step on, `validate-service` refuses a ladder with no stamp beside it, and refuses a stamp that no longer matches the schema. Migrations format (flat DSL + CEL + `foreach`, forward-only) - [docs/migrations.md](../migrations.md).
+- **Dependencies.** Reused task packages - move them to separate destinies and connect them via `destiny[]` to `service.yml` + `apply:` in the script. Custom modules - via `modules[]`. Format - [docs/service/manifest.md](../service/manifest.md).
+- **Host facts.** Targeting and values ​​for system facts - `soulprint.self.*` (OS-family, pkg_mgr, IP, ...). Scheme - [docs/soul/soulprint.md](../soul/soulprint.md).
+- **Day-2 operations** (monitoring, upgrade, cluster restoration) - section [To do](../README.md) in the documentation map and [docs/operations/](../operations/README.md).
+- **Ready samples** of more complex services - [`examples/service/`](../../examples/service/) (for example, [`dragonfly/`](../../examples/service/dragonfly/) - sentinel-mode deployment with a migration ladder and day-2 `restart`/`add_user`/`update_users`/`rotate_tls`/`destroy`).

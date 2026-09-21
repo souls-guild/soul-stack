@@ -1,0 +1,39 @@
+# Values for the bitnami/vault Helm chart (L3c-2). Dev-mode Vault with a fixed
+# root token — symmetric to L3b harness/vault.go::startVault. No persistence,
+# no TLS on the Vault listener (in-cluster traffic).
+#
+# Service name in the cluster: `vault.default.svc.cluster.local:8200`.
+# Auth: VAULT_TOKEN=roottoken (root token, passed to keeper via
+# ConfigMap::vault.token).
+#
+# The init — a technical PKI mount + KV signing-key seed — is done by the harness via
+# port-forward + direct HTTP API (symmetric to L3b vault.go::InitVaultTestSecrets).
+
+server:
+  dev:
+    enabled: true
+    devRootToken: roottoken
+
+  standalone:
+    enabled: false
+
+  ha:
+    enabled: false
+
+  dataStorage:
+    enabled: false
+
+  auditStorage:
+    enabled: false
+
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"
+
+# The Bitnami chart only needs server.dev.enabled=true: Vault starts with
+# `vault server -dev` and a listener on 0.0.0.0:8200. The chart will create
+# the Service object automatically (ClusterIP service `vault`).

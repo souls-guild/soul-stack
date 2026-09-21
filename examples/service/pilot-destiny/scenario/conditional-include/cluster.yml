@@ -1,0 +1,15 @@
+# The cluster group of conditional-include: included from main.yml under the
+# conditional `when: input.topology == 'cluster'`. On standalone the whole group
+# is dropped from the plan (render-phase group-drop), its tasks are absent —
+# indices aren't reserved.
+- name: cluster replication marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/replication.txt
+    content: "replication enabled"
+
+- name: cluster sentinel marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/sentinel.txt
+    content: "sentinel enabled"

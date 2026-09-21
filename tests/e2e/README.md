@@ -1,0 +1,279 @@
+# tests/e2e — L3a contract tier (fast-loop)
+
+L3a-level E2E testing per [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity).
+
+**Status:** the harness works. Every test spins up an isolated stand via
+testcontainers (PG / Redis / Vault), starts a **real `keeper` process**
+(a subprocess of the actual binary, not an in-process import), performs a real
+`keeper init` (bootstrapping the first Archon), and opens **live gRPC-mTLS
+streams** to soul-stubs against it. The Keeper<->protocol contract is verified
+against live infrastructure; the only thing simulated is the apply itself on the
+host: the soul-stub responds with a **scripted RunResult** instead of actually
+executing tasks.
+
+## Three E2E tiers (ADR-039)
+
+| Tier | Directory | build-tag | Soul | What it proves |
+|---|---|---|---|---|
+| **L3a** contract | `tests/e2e/` | `e2e` | soul-**stub** (scripted RunResult) | Keeper<->protocol contract: apply_runs lifecycle, dispatch routing, staged-render (probe→where), state-commit, audit/metrics — on live PG/Redis/Vault/keeper, but without a real apply on the host. |
+| **L3b** live | `tests/e2e-live/` | `e2e_live` | a **real** `soul` binary in a privileged Debian-systemd container | a real CSR handshake + a real apply on the host (apt install, systemctl, files) — see [tests/e2e-live/README.md](../e2e-live/README.md). |
+| **L3c** k8s | `tests/e2e-k8s/` | `e2e_k8s` | a real `soul` in a kind cluster | production-like deployment (weekly/pre-release). |
+
+L3a answers the question "does Keeper correctly render Destiny, route dispatch over
+live streams, aggregate RunResult, commit state and write audit/metrics." L3b answers
+the question "does the real module actually change the host correctly." Splitting by
+contract gives a fast-loop (L3a — seconds to minutes, every PR) versus a smoke-loop
+(L3b — minutes, nightly).
+
+## Running
+
+```sh
+make e2e            # builds keeper first, then runs the tier
+# by hand, when you want one test:
+cd tests/e2e && go build -C ../.. -o keeper/bin/keeper ./keeper/cmd/keeper  # or: make build
+cd tests/e2e && go test -tags=e2e -count=1 -timeout=30m -run TestX ./...
+```
+
+Pre-flight in `harness.NewStack`:
+
+- **keeper binary** is required. Source — env `KEEPER_BIN`, otherwise the default
+  build `keeper/bin/keeper` (`make build`). Without it the tier **fails** before
+  spawning testcontainers — it used to skip, and NIM-533 removed that: a tier that
+  runs nothing reported `ok` for the package, which reads as "all of it passed".
+- **the binary must be THIS tree** (NIM-490). The harness does not compile keeper,
+  it runs a file, and until NIM-490 nothing checked which code was inside it: the
+  tier reported on whatever the last `make build` left behind. On NIM-456 that cost
+  a session twice — deleted wiring stayed green, and a test "reproduced" a defect
+  the source had already fixed. Now `NewStack` asks the binary for its version
+  (stamped by `KEEPER_LDFLAGS` from `git describe`) and **fails** if it names another
+  commit, or if a keeper-side source is uncommitted and younger than the binary.
+  Remedy is always `make build`.
+  Two things this deliberately does NOT do: it ignores the repo-wide `-dirty`
+  marker (a README edit must not redden a correct binary), and it times only files
+  git reports as uncommitted (a branch switch rewrites mtimes on files that are
+  then clean). The residue is an edit built into the binary and then reverted —
+  `make e2e` closes that by building.
+
+  Both of the above are **declared bring-up failures** (`STAND-SETUP`), because
+  both answer "can this machine stand up a valid L3a stand", not "is the code
+  right". The refusal's own text is what you act on; the marker only stops ~40
+  tests' worth of red from reading as ~40 findings. Placement is guarded both
+  ways in `provenance_test.go`: below the declaration, and above `infraUp = true`
+  so the refusal lands before the containers are paid for.
+- **docker** is required for testcontainers. If docker is present but spawning
+  PG/Redis/Vault fails — the test fails explicitly (the developer requested E2E
+  intentionally, absence of docker = fail, not skip).
+
+Building and `go vet -tags=e2e ./...` always pass (a separate go module
+`tests/e2e/go.mod` — testcontainers deps don't leak into `keeper/`/`soul/`).
+
+## Harness architecture
+
+`harness.Stack` is the unit of isolation: one test = one Stack = its own PG/Redis/Vault +
+its own Keeper process + N soul-stubs. `NewStack` blocks until fully ready
+(PG healthy → Vault test-secrets → keeper init → keeper run responds to `/readyz`
+→ soul-stubs pre-auth-registered).
+
+What `NewStack` does (`harness/stack.go`):
+
+1. `startPostgres` / `startRedis` / `startVault` — testcontainers (`postgres:16-alpine`,
+   `redis:7-alpine`, `hashicorp/vault:1.15` dev-mode).
+2. `InitVaultTestSecrets` — sets up a PKI mount + JWT signing-key in Vault (symmetric
+   with prod provisioning). `IssueKeeperServerCert` — issues the server cert for
+   Keeper listeners.
+3. `buildKeeperYAML` — renders `keeper.yml` into tmpDir with resolved infra endpoints.
+4. `runKeeperInit` — `keeper init --archon=archon-test --credential-out=...`; the JWT
+   of the first Archon is read from the credential file into `Stack.JWT`.
+5. `startKeeperRun` — `keeper run` as a subprocess; stdout/stderr are forwarded to
+   `t.Log`; polls `/readyz` (60s).
+6. `RegisterSoulPreAuth` for each `Config.Souls` — inserts the SID into the `souls`
+   registry and issues an mTLS client cert (needed to later open a stream).
+
+Architectural invariants (ADR-039 Amendment 2026-05-26):
+
+- the harness does NOT import `keeper/internal/*` (Go internal rules);
+- all DB operations go through direct SQL via `pgx`;
+- all Vault operations go through direct HTTP API (`harness/vault.go`);
+- the Keeper process is a subprocess of the real binary.
+
+### soul-stub
+
+`Stack.ConnectSoulStub(t, i)` (`harness/soul_stub.go`) opens a **live
+EventStream gRPC-mTLS stream** for the i-th pre-auth Soul to Keeper. This turns
+"a row in `souls` with `status=connected`" into a real stream: on session-open, Keeper
+grabs a Redis SID-lease, and dispatch (Apply/Errand) is routed to that SID's local
+Outbound. Without an open stream, dispatch returns `ErrSoulNotConnected`
+(apply → `orphaned`). `ConnectSoulStub` waits for `HelloReply` — a guarantee that the
+lease has been grabbed and dispatch will be routed.
+
+The stub (`internal/soulstub/`) responds to `ApplyRequest` with a scripted
+`RunResult`:
+
+- `LoadApplyScript` / `SetApplyDefaultSuccess` — success responses per task / by
+  default;
+- `SetTaskRegister(taskName, data)` — per-host `register` data (`TaskEvent.RegisterData`,
+  echo pass-through) for staged-render probe→where;
+- `SetErrandStatus` — the ErrandResult branch;
+- `Messages()` — recorded FromKeeper frames (for assertions: which ApplyRequest and
+  with which `passage` arrived).
+
+### Stack helpers
+
+Drivers (`harness/stack.go`):
+
+- `CreateIncarnationOnRoster(name, serviceRef, createScenario, soulIndexes, input)` —
+  **the way to bootstrap a new incarnation onto connected soul-stubs**: seeds the
+  row, binds the roster, runs create (see "Bootstrap order" below).
+- `CreateIncarnation` / `CreateIncarnationWithApply` / `CreateIncarnationRaw` —
+  POST `/v1/incarnations` via Operator API (with polling for the transient 422
+  "service not registered" while serviceregistry.Holder warms up its snapshot).
+  `CreateIncarnationWithApply` has no current caller — it cannot bootstrap an
+  incarnation whose create run needs a roster (see below).
+- `RunScenario(inc, scenario, input)` — POST a scenario scan, returns `apply_id`.
+- `SeedIncarnationReady` — directly INSERTs a ready incarnation with a baseline
+  state (for mutating scenarios whose `create` is unavailable in L3a — cloud-spawn /
+  declared-role / probe on a not-yet-started host, e.g. redis-cluster).
+- `WaitApplySuccess` — blocks until `apply_runs.status=success` for all rows of the run.
+- `WaitIncarnationReady` — blocks until `incarnation.status=ready` (a capture standing
+  after the host work commits after those hosts report success; you must wait for
+  `ready`, not just success).
+
+Fixture helpers: `RegisterService`, `MaterializeDestinies`, `SeedSoulprint`,
+`AddMember` (roster via `incarnation_membership`, ADR-008 amendment/NIM-124),
+`SeedVaultKV`.
+
+Assertions (`harness/asserts.go`):
+
+- `AssertApplyRunsStatus(applyID, expected)`;
+- `AssertIncarnationState(name, expectedSubset)` — subset comparison of `incarnation.state`;
+- `AssertAuditEvent(eventType, expectedPayload)`;
+- `AssertMetricGE(metric, minimum)` — keeper's Prometheus endpoint.
+
+**Key invariant:** status-field values in assertions must be the real
+enum values from the Go code only (`apply_runs.status: success`, not
+`succeeded`/`done`). `TestValidApplyRunsStatus_*` guarantees that the list of valid
+values hasn't drifted from the Go enum.
+
+## Bootstrap order of an incarnation (NIM-210)
+
+A test that brings up a NEW incarnation on connected soul-stubs goes through
+`Stack.CreateIncarnationOnRoster` and never hand-rolls the order:
+
+1. seed the `incarnation` row (`status='ready'`, empty spec/state) — direct SQL;
+2. bind each soul-stub as a member (`incarnation_membership`);
+3. run the create scenario as an ordinary explicit run.
+
+Two constraints pin that order and admit no other:
+
+- **Membership cannot come first.** Since NIM-124 membership is a first-class
+  relation with FK `incarnation_membership_incarnation_fk` → `incarnation(name)`
+  (migration 099). Binding before the row exists is `SQLSTATE 23503`.
+- **The run cannot come first.** A create run resolves its roster at run start,
+  so an unbound roster aborts with `no_hosts` before dispatch (`run.go` §3).
+
+`POST /v1/incarnations` inserts the row **and** starts the create run in the same
+call (`lifecycle.auto_create`), leaving no window between them — hence the direct
+seed. The consequence to keep in mind when writing expectations: create is an
+explicit run here, so it writes `incarnation.scenario_started`, **not**
+`incarnation.created`.
+
+Identical to the L3b helper of the same name (`tests/e2e-live/harness/seed.go`),
+deliberately: one bootstrap mechanic across both tiers, so an ordering regression
+is found once rather than twice. The only tier difference is the precondition of
+step 3 — L3b waits for each member's first `SoulprintReport`, whereas an L3a
+soul-stub reports nothing: connect it with `ConnectSoulStub` (the roster counts
+connected hosts) and, for services whose render reads facts keeper-side, write
+them with `SeedSoulprint` BEFORE calling the helper.
+
+`AddMember` on its own remains correct for an incarnation that already exists
+(e.g. `lease_force_release_test.go`, which seeds a ready incarnation and runs a
+day-2 scenario); it fails fast with the order instruction if the row is missing.
+
+**Coverage note.** This path does not exercise `POST /v1/incarnations` with a
+`create_scenario` — its input validation, create-plan resolution and the
+`incarnation.created` audit event. The bare create path (POST without a starting
+scenario) stays covered by the tests that need no roster (`hello_world` / `noop` /
+`long_runner` / `coven_probe`), and the 422 surface by `CreateIncarnationRaw`; the
+auto-started create run has no L3a coverage left, since every test that exercised
+it also needs a bound roster.
+
+## Layout
+
+```
+tests/e2e/
+├── README.md                  # this file
+├── go.mod / go.sum            # separate go module (testcontainers deps isolated)
+├── harness/                   # the working L3a harness
+│   ├── stack.go               # NewStack / Cleanup / drivers (Create/Run/Wait*)
+│   ├── seed.go                # CreateIncarnationOnRoster (bootstrap order)
+│   ├── soul_stub.go           # ConnectSoulStub + LoadApplyScript
+│   ├── asserts.go             # AssertApplyRunsStatus / IncarnationState / AuditEvent / MetricGE
+│   ├── vault.go               # InitVaultTestSecrets / IssueKeeperServerCert / SeedVaultKV
+│   ├── cert.go                # RegisterSoulPreAuth + mTLS client-cert
+│   ├── config_builder.go      # buildKeeperYAML
+│   ├── git.go / destiny.go    # bare git repo per service + MaterializeDestinies
+│   ├── fixtures.go            # YAML loader for souls/soulprint
+│   ├── soul_history.go        # GET /v1/souls/{sid}/history driver
+│   ├── errand.go              # errand driver
+│   ├── oracle.go / probe.go   # Vigil/Oracle event-driven helpers
+│   └── operator.go            # HTTP client for the Operator API with JWT
+├── internal/
+│   └── soulstub/              # fake-Soul helper package (NOT a binary, ADR-004)
+├── smoke-nginx/  hello-world/  noop/  coven-probe/  long-runner/
+│   └── fixtures/ + expectations/   # per-example service fixtures
+├── staged-failover/           # WIP service for the staged-render proof (NOT examples/**)
+├── oracle_typed_portent/
+└── <name>_test.go             # one file per case
+```
+
+## What's covered (L3a tests)
+
+| Test | Souls | What it proves |
+|---|---|---|
+| `TestSmokeNginx_InstallAndStart` | 1 | pilot: `create` smoke-nginx, apply_runs lifecycle + state-commit. |
+| `TestE2EServiceHelloWorld_Create` | 1 | required `input.greeting` + `state.greeting_file` mutation. |
+| `TestE2EServiceNoop_Create` | 1 | minimal no-op `core.exec.run`, state not mutated. |
+| `TestE2EServiceCovenProbe_Create` | 1 | `core.file.present` init marker + double state mutation. |
+| `TestE2EServiceLongRunner_Create` | 1 | `core.file.present` + double state mutation. |
+| `TestE2EStagedFailover_2Passage` | 2 | **staged-render probe→where** (ADR-056): Passage 0 probes everyone, Passage 1 `where: register.role=='master'` ONLY on the master. |
+| ~~`TestE2EServiceRedis_*` / `TestE2EServiceRedisCluster_*`~~ | | **GONE (NIM-871)** — the L3a service lifecycle ran `examples/service/redis`, which left the engine. No in-tree service replaces it at this tier: the fixtures below are single-scenario smokes, not a create-plus-day-2 lifecycle. |
+| `TestE2EKeeperSideDispatch_CovenRegistered` | | keeper-side core `core.soul.registered` (`on: keeper` dispatcher). |
+| `TestE2EOracleTypedPortent_*` / `TestOracle_FileChanged_FiresScenario` / `TestL3b_VigilDecreeOracleFlow_Smoke` | | Vigil/Oracle event-driven: portent → fired scenario. |
+| `TestSoulHistory_AggregatesScenarioAndErrand` | | scenario+errand history aggregation by SID. |
+| `TestErrandDryRun_AnnouncedCapabilityPassesTheGate` | 1 | wire-up of the Errand `dry_run` capability gate (ADR-0076(i), NIM-456): the stub announces `dry_run`, so a correctly wired keeper must let the dispatch through. Catches what unit tests cannot — a nil checker in the daemon (fail-closed → every `dry_run` refused) or a checker reading a different heartbeat field than Hello writes. |
+| `TestIncarnationCreate_MissingRequiredInput_422` | | negative: sync validation of required input. |
+| `TestValidApplyRunsStatus_*` | — | guard: `apply_runs.status` enum values haven't drifted from Go. |
+
+## How to add an L3a case
+
+1. Place the service fixture in [`examples/service/<name>/`](../../examples/service/)
+   (regular service format — the harness reads it "as is" via the git-loader).
+   A WIP service for proving a specific mechanism goes next to it in
+   `tests/e2e/<name>/` (like `staged-failover/`), to keep examples clean.
+2. Create `tests/e2e/<name>_test.go` with the `//go:build e2e` tag:
+   ```go
+   func TestE2EService<Name>_Create(t *testing.T) {
+       stack := harness.NewStack(t, harness.Config{
+           ExamplePath: "examples/service/<name>",
+           Souls:       1,
+       })
+       defer stack.Cleanup()
+
+       stack.RegisterService(t, "<name>", "examples/service/<name>")
+       stub := stack.ConnectSoulStub(t, 0)
+       stub.SetApplyDefaultSuccess(true)
+
+       inc, applyID := stack.CreateIncarnationWithApply(t, "<inc>", "<name>@main", input)
+       stack.WaitApplySuccess(t, applyID, 60)
+       stack.WaitIncarnationReady(t, inc, 30)
+       stack.AssertIncarnationState(t, inc, expected)
+   }
+   ```
+3. Run `make e2e`.
+
+## Source of truth
+
+- [ADR-039](../../docs/adr/0039-e2e-testing.md#adr-039-e2e-testing--three-levels-without-a-new-dictionary-entity) — the three E2E levels.
+- [docs/testing/README.md](../../docs/testing/README.md) — index of L0/L1/L2/L3a/L3b/L3c.
+- [docs/testing/e2e.md](../../docs/testing/e2e.md) — normative spec of the fixtures/expectations format.
+- [tests/e2e-live/README.md](../e2e-live/README.md) — the L3b live tier.

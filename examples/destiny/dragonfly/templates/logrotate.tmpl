@@ -1,0 +1,28 @@
+{{/*
+  logrotate config for DragonFly log files (/etc/logrotate.d/dragonfly).
+  Go text/template strict (ADR-010). Context: .vars.log_dir (DragonFly, glog -> /var/log/
+  dragonfly).
+
+  ★ DragonFly directory ONLY (refactor "sentinel out of destiny redis"): the sentinel
+  daemon now deploys destiny `redis` (sentinel_only), and ITS logs are rotated by the
+  destiny `redis` logrotate (/var/log/redis). This block covers strictly DragonFly glog.
+  (DF logs via glog with its own rotation via --max_log_size - logrotate here cleans up
+  what accumulates.)
+
+  copytruncate: DF keeps the log file open and does not react to a log-reopen signal,
+  so rotation via copy+truncate (rather than rename+create) is the safe option without
+  a restart/HUP. daily + rotate 7: daily rotation, one week retention. compress +
+  delaycompress: compression offset by one rotation (the fresh .1 stays uncompressed for
+  quick viewing). missingok + notifempty: the log may be absent (service not started) or
+  empty - not an error.
+*/}}
+{{ .vars.log_dir }}/*.log {
+  daily
+  rotate 7
+  size 512M
+  copytruncate
+  compress
+  delaycompress
+  missingok
+  notifempty
+}

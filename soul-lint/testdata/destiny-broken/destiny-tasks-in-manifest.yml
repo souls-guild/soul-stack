@@ -1,0 +1,4 @@
+name: redis
+tasks:
+  - name: Install
+    module: core.pkg.installed

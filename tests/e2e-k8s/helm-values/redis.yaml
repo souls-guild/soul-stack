@@ -1,0 +1,21 @@
+# Values for the bitnami/redis Helm chart (L3c-2). Standalone Redis without auth and
+# without persistence: the kind cluster is disposable, RBAC isn't needed, and
+# password checks in the tests would kill port-forward and keeper.yml streams.
+#
+# Service name in the cluster: `redis-master.default.svc.cluster.local:6379`.
+
+auth:
+  enabled: false
+
+architecture: standalone
+
+master:
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: "50m"
+      memory: "128Mi"
+    limits:
+      cpu: "200m"
+      memory: "256Mi"

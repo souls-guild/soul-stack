@@ -1,0 +1,436 @@
+name: create
+# create: true — this scenario is fit as a STARTER (bootstrap of a new incarnation): selected
+# at POST /v1/incarnations (scenario.ResolveCreateScenarios reads the flag). Membership in the
+# create set is DECLARATIVE (the starter set = EXACTLY {scenario with `create: true`}).
+create: true
+description: >-
+  Deploy MongoDB in standalone mode (PILOT). The operator sets SIMPLE typed concepts
+  (version, memory, users), and the scenario TRANSLATES them into mongod.conf. Run body is
+  INLINE (standalone = sole consumer, extracting to destiny is not warranted — ADR-009
+  B-hybrid; precedent monitoring/scenario/create): install (version-enum + Nexus binary /
+  distro package) → render mongod.conf (scenario-local template, toYaml) → sysctl →
+  systemd → start → bootstrap default_admin via localhost-exception → operator users.
+
+  ** LOCALHOST-EXCEPTION BOOTSTRAP (mongo specific, analogous to redis default_admin
+  bootstrap): mongod comes up with security.authorization: enabled. The first admin
+  (default_admin) can't yet be created with auth (no user exists) — mongo allows a NO-auth
+  connection over loopback while the admin DB is empty (localhost-exception). The
+  mongo.user.present plugin action detects auth-fail and falls back to a no-auth localhost
+  connection for the first createUser (the mechanics are INSIDE the plugin — render passes
+  addr+username+password, the plugin decides the auth path BY THE FACT of live state,
+  parallel to the redis plugin that decides via INFO/CONFIG GET). After default_admin is
+  created the exception closes — operator users are created ALREADY under default_admin.
+
+  Passwords are NOT in the input contract: they live in Vault, resolved KEEPER-SIDE via CEL
+  vault() in the render phase (templating §2.3/§4) — the host receives the already-resolved
+  VALUE (ADR-012). The path is built from a trusted context (incarnation), not from input.
+
+  * PILOT: standalone (a single mongod). WITHOUT replica-set/sharded/keyFile/TLS/cloud-
+  provision. destroy — Soul-side teardown (separate scenario).
+
+# ── extends: covenant — shared section contract ───────────────────────────────────
+# The input / compute / validate sections live in covenant.yml and are inherited add-only.
+# create carries ONLY its own delta: form (presentation, not merged) and tasks (body —
+# including the state capture steps: a covenant carries no tasks, [ADR-0084] F-B).
+extends: covenant
+
+# ── Form presentation layer (form:) ──────────────────────────────────────────
+form:
+  sections:
+    - key: mongo
+      title: "MongoDB parameters"
+      description: "Version and memory"
+      fields:
+        - { name: version, label: "MongoDB version" }
+        - name: memory_mb
+          label: "Memory budget, MB"
+          placeholder: "2048"
+          hint: "Memory budget for MongoDB. WiredTiger cacheSizeGB is computed as a share of it (minus OS reserve). Not set → mongod default."
+        - name: wiredtiger_cache_gb
+          label: "WiredTiger cache, GB (explicit)"
+          hint: "Explicit WiredTiger cache size. Overrides the value computed from memory. Not set → derived from the memory budget or mongod default."
+
+    - key: users
+      title: "Users"
+      fields:
+        - { name: users, label: "MongoDB users" }
+
+    - key: advanced
+      title: "Advanced"
+      collapsed: true
+      fields:
+        - { name: mongo_settings, label: "Passthrough subtrees for mongod.conf" }
+
+# ── Run body (INLINE, standalone — no dispatcher/include) ────────────────────
+tasks:
+  # ── Mint this run's passwords ([ADR-0083] §4) ─────────────────────────────────
+  # No scenario writes a Vault path any more. A `core.state.*` write is the only
+  # read-or-write of a state field that carries declared secrets: it DERIVES the path
+  # from (service, incarnation, state field, account name), mints what is missing and
+  # returns the effective state with every `type: secret` property replaced by its
+  # `vault:` reference. The generated VALUE never leaves the keeper — not into the
+  # register, not into an audit payload, not into `incarnation.state`.
+  #
+  # ★ PASSAGE INVARIANT, now DECLARED rather than argued: the plugin tasks below read
+  # `register.<name>.effective` inside `params:`, which is passage-defining
+  # (shared/config.collectTaskReads) — a real register edge puts every consumer in a
+  # strictly later passage than these two. The former construction leaned on the
+  # vault-emitter and roster axes, neither of which the author could see from the file.
+
+  - name: Mint the password of the service's own admin account
+    module: core.state.set
+    register: system_users
+    params:
+      field: system_users
+      # compute.system_user_names is the key set of vars.system_users — the SAME source
+      # step 8 reads its roles from, so "what we mint" and "what we read" cannot drift.
+      # generate_secret() evaluates to a request, not a value: it cannot be stringified,
+      # concatenated or logged.
+      value: >-
+        ${ compute.system_user_names.map(name, {
+             'name':     name,
+             'password': generate_secret({'length': 32})
+           }) }
+
+  - name: Mint the passwords of the operator MongoDB users
+    module: core.state.set
+    register: mongo_users
+    params:
+      field: mongo_users
+      # A declared secret resolves, never rotates: an account that already holds a value
+      # keeps it, so a re-run never breaks a client. An empty input.users is the
+      # legitimate "no operator users" case and needs no `when` guard — an empty
+      # collection is a valid value here (core.vault.kv-present rejected an empty targets
+      # list, which is the only reason the old form carried one).
+      #
+      # ★ database/state are filled with default() for the same reason:
+      # $type-defaults (types.yml MongoUser) reach top-level input fields only, not the
+      # nested fields of array elements, and state_schema requires them.
+      value: >-
+        ${ default(input.users, []).map(u, {
+             'name':     u.name,
+             'database': default(u.database, 'admin'),
+             'state':    default(u.state, 'present'),
+             'roles':    u.roles,
+             'password': generate_secret({'length': 32})
+           }) }
+
+  # ── 1a. Install MongoDB — BINARY branch (Nexus tarball) ─────────────────────────
+  # Static gate (vars.install_method only → isStaticWhen) → render-phase GROUP-DROP: on a
+  # package incarnation the whole block is physically excluded from the plan. binary does NOT
+  # carry a distro package → it SETS UP the distro user/group mongodb itself + downloads the
+  # tarball + lays out mongod + its own systemd unit. arch: soulprint.self.os.arch (GOARCH) →
+  # uname-m for the Nexus URL (amd64→x86_64, arm64→aarch64, everything else as-is — mapping
+  # from redis vars.redis_arch).
+  - name: Install MongoDB from the Nexus binary tarball
+    when: "default(vars.install_method, 'binary') == 'binary'"
+    block:
+      # distro user/group mongodb (binary does NOT create them — the distro package does).
+      # Group BEFORE user. system account without a login shell (mongodb is a service).
+      # home = data_dir (stateful, stable owner across restarts).
+      - name: Ensure the mongodb group exists
+        module: core.group.present
+        params:
+          name: mongodb
+          system: true
+
+      - name: Ensure the mongodb user exists
+        module: core.user.present
+        params:
+          name: mongodb
+          group: mongodb
+          system: true
+          shell: /usr/sbin/nologin
+          home: "${ compute.data_dir }"
+
+      # Download the mongod tarball per-host from Nexus. Idempotency is native by SHA-256 of
+      # content (core.url.fetched, analogous to If-None-Match). allow_private disables the
+      # SSRF-guard for the internal Nexus (vars.binary_allow_private, default true). URL:
+      # <base_url>/<arch>/mongodb-linux-<arch>-<version>.tgz (arch — uname-m mapping).
+      - name: Fetch the MongoDB binary tarball
+        module: core.url.fetched
+        register: mongo_tarball
+        params:
+          url: "${ compute.install.base_url + '/' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '/mongodb-linux-' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '-' + compute.mongo_version + '.tgz' }"
+          path: "${ '/tmp/mongodb-' + compute.mongo_version + '.tgz' }"
+          mode: "0644"
+          allow_private: "${ compute.install.allow_private }"
+
+      # Extract the tarball (default zip-bomb guards). Inside — the directory
+      # mongodb-linux-<arch>-<version>/bin/mongod.
+      - name: Extract the MongoDB binary tarball
+        module: core.archive.extracted
+        params:
+          path: "${ '/tmp/mongodb-' + compute.mongo_version + '.tgz' }"
+          dest: "${ '/tmp/mongodb-' + compute.mongo_version }"
+
+      # Lay out the mongod binary from the extracted directory into /usr/local/bin via
+      # core.file.present with src: (a copy of a regular file's content, idempotent by
+      # sha256). register — restart on binary change (below). src carries the full path of
+      # the extracted directory mongodb-linux-<arch>-<version>/bin/mongod.
+      - name: Install the mongod binary
+        module: core.file.present
+        register: mongod_bin
+        params:
+          path: /usr/local/bin/mongod
+          src: "${ '/tmp/mongodb-' + compute.mongo_version + '/mongodb-linux-' + (soulprint.self.os.arch == 'amd64' ? 'x86_64' : (soulprint.self.os.arch == 'arm64' ? 'aarch64' : soulprint.self.os.arch)) + '-' + compute.mongo_version + '/bin/mongod' }"
+          mode: "0755"
+          owner: root
+          group: root
+
+      # Its own systemd unit mongod.service (binary does NOT carry a distro unit). register —
+      # restart when the unit changes. ExecStart=/usr/local/bin/mongod --config <conf_dir>/mongod.conf.
+      - name: Render the mongod systemd unit (binary install)
+        module: core.file.rendered
+        register: mongod_unit
+        params:
+          path: /etc/systemd/system/mongod.service
+          template: templates/mongod.service.tmpl
+          mode: "0644"
+          owner: root
+          group: root
+          vars:
+            bin_dir:     /usr/local/bin
+            conf_dir:    "${ compute.conf_dir }"
+            data_dir:    "${ compute.data_dir }"
+            log_dir:     "${ compute.log_dir }"
+            mongo_user:  mongodb
+            mongo_group: mongodb
+
+  # ── 1b. Install MongoDB — PACKAGE branch (distro package mongodb-org) ─────────────
+  # Static gate (group-drop on a binary incarnation). The distro package carries mongod + its
+  # own systemd unit + sets up the user/group mongodb. core.pkg always installs with a
+  # =version pin.
+  - name: Install MongoDB from the distribution package
+    module: core.pkg.installed
+    when: "default(vars.install_method, 'binary') != 'binary'"
+    retry: { count: 3, delay: 10s }
+    params:
+      name: mongodb-org
+      version: "${ compute.mongo_version }"
+
+  # ── 2. Configuration/data/log directories (both branches, UNCONDITIONAL) ────────────────
+  # MUST exist BEFORE rendering mongod.conf and starting. owner/group mongodb (the package or
+  # binary branch already created them — these tasks come AFTER both install blocks). mode
+  # 0750: mongodb owner reads/writes. parents:true — conf_dir/data_dir are overridable by the
+  # operator (a deep path with a nonexistent parent).
+  - name: Ensure the mongo configuration directory exists
+    module: core.directory.present
+    params:
+      path: "${ compute.conf_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  - name: Ensure the mongo data directory exists
+    module: core.directory.present
+    params:
+      path: "${ compute.data_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  - name: Ensure the mongo log directory exists
+    module: core.directory.present
+    params:
+      path: "${ compute.log_dir }"
+      owner: mongodb
+      group: mongodb
+      mode: "0750"
+      parents: true
+
+  # ── 3. Render mongod.conf (scenario-local template, toYaml) ────────────────────────
+  # The FULL merged mongod object (compute.mongo_config) is rendered ENTIRELY via toYaml
+  # (mongod.conf is nested YAML, not flat key-value like redis). owner/group mongodb, mode
+  # 0640 — only the service reads the config. register — restart when the config changes.
+  # * security.authorization: enabled is BAKED into compute.mongo_config → mongod starts with
+  # auth (access under default_admin, bootstrap via localhost-exception).
+  - name: Render mongod.conf
+    module: core.file.rendered
+    register: mongod_conf
+    params:
+      path: "${ compute.conf_dir + '/mongod.conf' }"
+      template: templates/mongod.conf.tmpl
+      mode: "0640"
+      owner: mongodb
+      group: mongodb
+      vars:
+        config: "${ compute.mongo_config }"
+
+  # ── 4. Host-tuning: sysctl (UNCONDITIONAL, MongoDB production notes) ─────────────────
+  # core.sysctl.applied builds the drop-in /etc/sysctl.d/30-mongodb.conf (sorted keys) and
+  # applies sysctl -p on change. settings — vars.sysctl_settings (a host invariant, not an
+  # operator choice: tuning for MongoDB is a recommendation, there's no flag).
+  - name: Apply mongo kernel tuning
+    module: core.sysctl.applied
+    params:
+      settings: "${ default(vars.sysctl_settings, {}) }"
+      filename: 30-mongodb
+
+  # ── 5. Start mongod (both branches) ─────────────────────────────────────────────────
+  # core.service.running: brings up mongod AFTER rendering mongod.conf + directories.
+  # daemon_reload:auto picks up a fresh binary unit. enabled:true — autostart on boot.
+  - name: Ensure mongod is running and enabled at boot
+    module: core.service.running
+    params:
+      name: mongod
+      enabled: true
+
+  # ── 6. Restart mongod on binary/unit/config change (binary branch) ───────────────
+  # A change to the systemd unit / binary / mongod.conf takes effect via a process restart.
+  # onchanges reacts to the registers of step 1a + config render. * ONLY the binary branch
+  # carries mongod_bin/mongod_unit registers; mongod_conf — both branches. A has()-guard in
+  # onchanges is NOT needed (registers are declared in THIS file — the per-file linter sees
+  # them; on the package pass the binary registers are placeholder-skip, flat-register-scope
+  # is invariant). daemon-reload is handled by core.service itself.
+  - name: Restart mongod because the binary, unit or config changed
+    module: core.service.restarted
+    when: "default(vars.install_method, 'binary') == 'binary'"
+    onchanges: [mongod_bin, mongod_unit, mongod_conf]
+    timeout: 30s
+    params:
+      name: mongod
+
+  # ── 7. Health-gate: mongod answers ping BEFORE bootstrap admin ───────────────────
+  # mongo.instance.pinged against the local mongod. * WITHOUT auth: admin DB is still empty
+  # (default_admin not created) — ping without auth passes via localhost-exception (ping
+  # itself does not require authorization). retry/until — wait for mongod to come up (start
+  # may take a few seconds). addr — loopback (plugin runs on the mongo host).
+  - name: Wait for mongod to answer ping
+    module: mongo.instance.pinged
+    retry:
+      count: 15
+      delay: 3s
+      until: "register.self.ok == true"
+    failed_when: "register.self.ok != true"
+    params:
+      addr: "${ '127.0.0.1:' + string(compute.net_port) }"
+
+  # ── 8. BOOTSTRAP default_admin via localhost-exception ─────────────────────────
+  # ** FIRST admin: mongo.user.present creates default_admin. The plugin tries a connection
+  # with auth (username=default_admin + password), but the admin DB is empty → the auth
+  # attempt fails Unauthorized → the plugin FALLS BACK to a no-auth localhost connection
+  # (localhost-exception) and creates the first admin over it. default_admin's roles — from
+  # vars.system_users (root in admin). Password —
+  # secret/mongo/<inc>/system_users/default_admin#password (vault()-in-cell, seal-masking).
+  # Idempotent: a repeat create → default_admin already exists → no-op (plugin usersInfo).
+  #
+  # roles: vars.system_users[compute.admin_user] — an array of {role, db} (mongo model).
+  # run_once is NOT needed (standalone — a single host); on a multi-host replica-set this
+  # would be run_once on the primary (NEXT slice).
+  - name: Bootstrap the default_admin user (localhost-exception)
+    module: mongo.user.present
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+      name:     "${ compute.admin_user }"
+      database: admin
+      roles:    "${ vars.system_users[compute.admin_user] }"
+
+  # ── 9. Operator users (after bootstrap default_admin) ────────────────────────────
+  # mongo.user.present / mongo.user.absent for EACH input.users. The connection is ALREADY
+  # under default_admin (auth works — admin was created by step 8, localhost-exception is
+  # closed). loop over the MongoUser array: name/database/roles from the element. Each
+  # password — secret/mongo/<inc>/{mongo_users,system_users}/<name>#password. * Gate
+  # has(input.users) — the section is optional: without operator users neither task targets
+  # anything (loop over []).
+  # Idempotent (plugin usersInfo: present+exists → no-op, absent+doesn't exist → no-op).
+  #
+  # ★ TWO tasks, where this used to be one carrying `state: ${ item.state }`. Since
+  # NIM-769 the verb is address level 3 (`mongo.user.present` / `.absent`), and an
+  # address is static — so the per-item choice moves from a plugin param into the
+  # loop's own filter. `input.users[].state` is UNCHANGED: it is still the operator's
+  # declaration, and the scenario is what translates it into an address.
+  #
+  # ⚠ One consequence, named rather than discovered: two tasks run in TASK order, so
+  # every create now precedes every drop, where one loop ran in DECLARATION order. That
+  # is identical for distinct names, and `input.users` is a list of distinct users —
+  # MongoUser.name is documented unique (types.yml) though the grammar does not enforce
+  # it. Only a list declaring the SAME name twice with different `state` reads
+  # differently: it used to end at whichever declaration came last, and now ends absent.
+  # A duplicate name is already malformed input here — the mint step above maps over the
+  # list and would carry the name twice into incarnation.state — so the fix is uniqueness
+  # on the input, not ordering on the tasks.
+  - name: Create operator MongoDB users
+    module: mongo.user.present
+    when: "has(input.users)"
+    loop:
+      items: "${ default(input.users, []).filter(u, default(u.state, 'present') == 'present') }"
+      as: item
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+      name:     "${ item.name }"
+      # * default() applied manually: the $type-default (types.yml MongoUser database)
+      # is only filled for top-level input fields (mergeInputDefaults), NOT for nested
+      # fields of array elements — so we take database via default() (pattern from
+      # dragonfly add_user default(input.user.state, ...)). roles is required (MongoUser
+      # required) → bare item.roles.
+      database: "${ default(item.database, 'admin') }"
+      roles:    "${ item.roles }"
+      # The password of the user being created — from its Vault branch (vault()-in-cell,
+      # seal-masking).
+      user_password: "${ merge(register.mongo_users.effective.map(r, { r.name: r.password }))[item.name] }"
+
+  # The removal half of the same declaration. No user_password and no roles: dropUser
+  # reads neither, and since NIM-769 `mongo.user.absent` does not DECLARE them either —
+  # passing one is refused rather than ignored.
+  - name: Remove operator MongoDB users declared absent
+    module: mongo.user.absent
+    when: "has(input.users)"
+    loop:
+      items: "${ default(input.users, []).filter(u, default(u.state, 'present') == 'absent') }"
+      as: item
+    params:
+      addr:     "${ '127.0.0.1:' + string(compute.net_port) }"
+      username: "${ compute.admin_user }"
+      password: "${ merge(register.system_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
+      name:     "${ item.name }"
+      database: "${ default(item.database, 'admin') }"
+
+  # ── incarnation.state capture ───────────────────────────────────────────────────
+  # What was deployed, recorded field by field by keeper-side steps ([ADR-0084]). The
+  # expressions read compute.*/input.*/vars.* only, so they are safe at the end of the run
+  # and carry no register edge. The VALUES stay defined once — in covenant.yml's compute —
+  # while the STEPS are local to the scenario: a covenant is a contract, not a task list
+  # (ADR-0084 F-B, decision B2). mongo_config is the same compute.mongo_config that went
+  # into the mongod.conf render, so a repeat apply and day-2 see one source of truth.
+  # system_users/mongo_users are NOT here: their capture is the minting step at the top of
+  # this body ([ADR-0083] §4).
+
+  - name: Record the deployed MongoDB version
+    module: core.state.set
+    params:
+      field: mongo_version
+      value: "${ compute.mongo_version }"
+
+  - name: Record the effective mongod config
+    module: core.state.set
+    params:
+      field: mongo_config
+      value: "${ compute.mongo_config }"
+
+  # memory_mb: operator's memory budget (int). Not set → 0.
+  - name: Record the deployed memory budget
+    module: core.state.set
+    params:
+      field: memory_mb
+      value: "${ int(default(input.memory_mb, 0)) }"
+
+  # wiredtiger_cache_gb: effective cache size (same compute that went into mongo_config).
+  - name: Record the effective WiredTiger cache size
+    module: core.state.set
+    params:
+      field: wiredtiger_cache_gb
+      value: "${ compute.wiredtiger_cache_gb }"
+
+  # sysctl_settings: applied host tuning (the same vars.sysctl_settings that goes into the render).
+  - name: Record the applied host tuning
+    module: core.state.set
+    params:
+      field: sysctl_settings
+      value: "${ default(vars.sysctl_settings, {}) }"

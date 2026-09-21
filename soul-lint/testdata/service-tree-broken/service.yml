@@ -1,0 +1,23 @@
+# A service tree that is broken in SEVERAL places at once, one place per part.
+#
+# It exists for one assertion (NIM-753): a whole-service run reports every one of
+# them. Before the mode, the service repository's own `set -e` script stopped at
+# the manifest and the scenarios below were never looked at — which is how eight
+# divergences accumulated in a real redis service behind one red line here.
+#
+# THE MANIFEST'S OWN DEFECTS are deliberately boring — the point of the fixture is
+# what they HID, not what they are. `strng` is the one-line typo that turns the
+# whole part red; `required: true` next to a `default:` is the real divergence
+# from that service (maxmemory_policy), a warning, which is exactly why it needed
+# the scenarios beside it to still be reported.
+description: Broken on purpose - the fixture for the whole-service walk
+
+state_schema:
+  greeting_file:
+    type: string
+  mode:
+    type: strng
+  port:
+    type: integer
+    required: true
+    default: 6379

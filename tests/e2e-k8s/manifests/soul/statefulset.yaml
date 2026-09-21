@@ -1,0 +1,111 @@
+# Soul StatefulSet for the L3c kind-cluster (L3c-3). Privileged systemd-PID-1
+# Debian-12 (parity with L3b debian-12.Dockerfile). StatefulSet, not Deployment -
+# stable SIDs (FQDN) are needed at the pod level; pod-0 gets hostname `soul-0`,
+# the headless Service provides DNS `soul-0.soul.default.svc.cluster.local`.
+#
+# Replicas: 1 (L3c-3 - single Soul). Multi-Soul (replicas=N) - L3c-5.
+#
+# ConfigMap soul-config (rendered soul.yml) + Secret soul-bootstrap
+# (bootstrap-token + CA-bundle) is created by the harness via client-go BEFORE kubectl apply.
+# Without them the pod fails with CreateContainerConfigError.
+#
+# Privileged + cgroupns=host + tmpfs /run - required for systemd-PID-1
+# (see the soul.Dockerfile comment). On kind with docker-desktop (macOS) and Linux CI
+# privileged pods are allowed by default; prod would need a PodSecurityPolicy
+# exception, but here this is test-only.
+
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: soul
+  labels:
+    app: soul
+spec:
+  serviceName: soul
+  replicas: 1
+  selector:
+    matchLabels:
+      app: soul
+  template:
+    metadata:
+      labels:
+        app: soul
+    spec:
+      # Subdomain=soul + serviceName=soul -> pod-DNS `soul-0.soul.default.svc.cluster.local`.
+      # This is what resolves into the SID. soul.yml writes SID=<fqdn>; the env SOUL_SID below is
+      # a hint for harness-debug, the real SID is read from cfg.SID (see soul.yml
+      # in the ConfigMap).
+      subdomain: soul
+      containers:
+        - name: soul
+          image: soul:e2e-k8s
+          imagePullPolicy: Never
+          securityContext:
+            # privileged for systemd-PID-1 + cgroup-fs hostmount.
+            privileged: true
+          # Soul doesn't open any inbound listeners inside kind for L3c-3 -
+          # all communication is outbound to keeper:9094 / keeper:9095. So
+          # `ports:` is empty. metrics:9100 will open in L3c-5 (if enabled).
+          volumeMounts:
+            - name: config
+              mountPath: /etc/soul
+              # readOnly: false - `soul init` will write SoulSeed material
+              # into /var/lib/soul-stack/seed (not /etc/soul), but the bootstrap-token
+              # and ca.pem from Secret/ConfigMap are written as files on an R-only
+              # SubPath mount. A full read-write mount of /etc/soul simplifies
+              # harness-exec (manipulating token files and soul.yml on the fly).
+              readOnly: false
+            - name: cgroup
+              mountPath: /sys/fs/cgroup
+            - name: run
+              mountPath: /run
+            - name: run-lock
+              mountPath: /run/lock
+      volumes:
+        - name: config
+          # a projected volume combines the ConfigMap (soul.yml + ca.pem) and the Secret
+          # (bootstrap-token) under one mountPath. Without projected we'd have to
+          # use two mountPaths or copy the content into one place via an
+          # initContainer - projected is simpler.
+          projected:
+            sources:
+              - configMap:
+                  name: soul-config
+                  items:
+                    - key: soul.yml
+                      path: soul.yml
+                    - key: ca.pem
+                      path: ca.pem
+              - secret:
+                  name: soul-bootstrap
+                  items:
+                    - key: bootstrap-token
+                      path: bootstrap-token
+        - name: cgroup
+          hostPath:
+            path: /sys/fs/cgroup
+            type: Directory
+        - name: run
+          emptyDir:
+            medium: Memory
+        - name: run-lock
+          emptyDir:
+            medium: Memory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: soul
+  labels:
+    app: soul
+spec:
+  # Headless - per-pod DNS resolution (`soul-0.soul.default.svc.cluster.local`),
+  # not a round-robin ClusterIP. The soul pod needs this for a stable FQDN name
+  # that matches the SID and the cert's CN.
+  clusterIP: None
+  selector:
+    app: soul
+  ports:
+    - name: placeholder
+      port: 9100
+      targetPort: 9100

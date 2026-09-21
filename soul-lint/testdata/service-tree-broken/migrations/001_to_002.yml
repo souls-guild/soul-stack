@@ -1,0 +1,10 @@
+# A populated ladder, so the walk reports `migrations_unchecked`. Its contents do
+# not matter yet: the linter has no reading of the ladder (NIM-736), and saying so
+# is the whole point of the diagnostic.
+from_version: 1
+to_version: 2
+description: Add mode
+transform:
+  - set:
+      path: mode
+      value: standalone

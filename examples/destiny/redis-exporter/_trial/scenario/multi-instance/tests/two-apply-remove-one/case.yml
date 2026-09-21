@@ -1,0 +1,66 @@
+# NIM-606 L0 guard: two applies share one binary but own distinct host resources. Removing
+# Sentinel must not stop/delete Redis. The paired Go guard inspects the rendered plan as code.
+name: two exporter instances coexist and removing Sentinel preserves Redis
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  soulprint:
+    os: { arch: amd64 }
+  input:
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    redis_password: "redis-monitoring-password-32"
+    sentinel_password: "sentinel-monitoring-password-32"
+    web_password_hash: "$2y$12$abcdefghijklmnopqrstuv"
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter-redis.service
+        mode: "0644"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter-sentinel.service
+        mode: "0644"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/default/redis_exporter-redis
+        mode: "0600"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/default/redis_exporter-sentinel
+        mode: "0600"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis_exporter/redis/web.yml
+        mode: "0600"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis_exporter/sentinel/web.yml
+        mode: "0600"
+    - module: core.service.running
+      params_subset: { name: redis_exporter-redis, enabled: true }
+    - module: core.service.running
+      params_subset: { name: redis_exporter-sentinel, enabled: true }
+    - module: core.service.stopped
+      params_subset: { name: redis_exporter-sentinel }
+    - module: core.file.absent
+      params_subset: { path: /etc/systemd/system/redis_exporter-sentinel.service }
+    - module: core.file.absent
+      params_subset: { path: /etc/default/redis_exporter-sentinel }
+    - module: core.file.absent
+      params_subset: { path: /etc/redis_exporter/sentinel/web.yml }
+
+  task_absent:
+    - module: core.service.stopped
+      params_subset: { name: redis_exporter-redis }
+    - module: core.service.disabled
+      params_subset: { name: redis_exporter-redis }
+    - module: core.file.absent
+      params_subset: { path: /etc/systemd/system/redis_exporter-redis.service }
+    - module: core.file.absent
+      params_subset: { path: /etc/default/redis_exporter-redis }
+    - module: core.file.absent
+      params_subset: { path: /etc/redis_exporter/redis/web.yml }
+    - module: core.file.absent
+      params_subset: { path: /usr/local/bin/redis_exporter }

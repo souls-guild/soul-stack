@@ -1,0 +1,9 @@
+name: transport-two-keys
+tasks:
+  - name: Two transports on one task
+    transport:
+      ssh:
+        ssh_provider: vault-bastion
+      agent: {}
+    apply:
+      destiny: soul-install

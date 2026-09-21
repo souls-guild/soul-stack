@@ -1,0 +1,37 @@
+kid: keeper-eu-west-01
+listen:
+  grpc:
+    bootstrap:    { addr: "0.0.0.0:9442", tls: { cert: /c, key: /k } }
+    event_stream: { addr: "0.0.0.0:8443", tls: { cert: /c, key: /k, ca: /a } }
+  openapi: { addr: "0.0.0.0:8080" }
+  mcp:     { addr: "0.0.0.0:8081" }
+  metrics: { addr: "0.0.0.0:9090" }
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 1, max: 5 }
+redis:
+  addr: "r:6379"
+  password_ref: vault:secret/keeper/redis
+vault:
+  addr: "https://v:8200"
+  auth: { method: token }
+  pki_mount: pki/x
+---
+kid: keeper-eu-west-02
+listen:
+  grpc:
+    bootstrap:    { addr: "0.0.0.0:9443", tls: { cert: /c, key: /k } }
+    event_stream: { addr: "0.0.0.0:8444", tls: { cert: /c, key: /k, ca: /a } }
+  openapi: { addr: "0.0.0.0:8082" }
+  mcp:     { addr: "0.0.0.0:8083" }
+  metrics: { addr: "0.0.0.0:9091" }
+postgres:
+  dsn_ref: vault:secret/keeper/postgres
+  pool: { min: 1, max: 5 }
+redis:
+  addr: "r:6379"
+  password_ref: vault:secret/keeper/redis
+vault:
+  addr: "https://v:8200"
+  auth: { method: token }
+  pki_mount: pki/x

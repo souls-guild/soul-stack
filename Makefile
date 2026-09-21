@@ -1,0 +1,2427 @@
+# Makefile for Soul Stack. POSIX-compatible targets for macOS-dev and Linux-CI.
+#
+# protoc plugins are installed via `go install` and land in $(go env GOPATH)/bin,
+# which may not be in PATH. We propagate it explicitly so `protoc --go_out`
+# finds `protoc-gen-go` and `protoc-gen-go-grpc`.
+
+SHELL := /bin/sh
+
+GOPATH_BIN := $(shell go env GOPATH)/bin
+export PATH := $(GOPATH_BIN):$(PATH)
+
+# Keeper protocols and plugin protocols.
+# Keeper lives in the shared proto/ module (ADR-011) -> one protoc invocation with
+# proto_path=proto and output=proto/gen/go/. Plugin is a separate nested
+# go.mod submodule -> a second protoc invocation, its own proto_path/output.
+KEEPER_PROTO_ROOT := proto
+KEEPER_PROTO_OUT  := proto/gen/go
+KEEPER_PROTO_FILES := $(shell find $(KEEPER_PROTO_ROOT)/keeper -name '*.proto')
+
+PLUGIN_PROTO_ROOT := proto/plugin
+PLUGIN_PROTO_OUT  := proto/plugin/gen/go
+PLUGIN_PROTO_FILES := $(shell find $(PLUGIN_PROTO_ROOT)/v1 -name '*.proto')
+
+# govulncheck - supply-chain CI gate (org security-audit recommendation before beta).
+# The binary is installed via `go install` into $(GOPATH)/bin (same pattern as protoc plugins).
+# Version is pinned - a floating version would surface as gate instability. Full path to
+# the binary (macOS-make bypasses exported PATH for plain recipe lines).
+GOVULNCHECK_VERSION := v1.3.0
+GOVULNCHECK := $(GOPATH_BIN)/govulncheck
+
+MODULES := proto proto/plugin shared sdk keeper soul soul-lint soulctl
+
+# The check-vuln corpus: EVERY go.mod in the tree, derived rather than listed
+# (NIM-774). $(MODULES) above is the eight modules the core targets build and
+# test, and using it for the supply-chain gate meant the other twelve — the
+# tests/ harnesses, the examples/module/* plugins (gone since NIM-868; the
+# derivation is why nothing here had to be edited when they left), the pluginhost
+# fixtures — were not scanned, not skipped and not named. Rationale and the orphan warning:
+# scripts/vuln-modules.sh. Overridable from the command line, which is how
+# scripts/vuln-corpus-test.sh points the real recipe at its fixtures.
+#
+# `?=` and not `:=`: recursive, so the derivation runs when check-vuln references
+# it and not on every `make help`, which would walk the tree and print the orphan
+# warning at people asking about something else. The cost of that is one run PER
+# reference, so the recipe expands it once into a shell variable.
+VULN_MODULES ?= $(shell scripts/vuln-modules.sh)
+
+# Build tags for the check-vuln sweep. NOT $(TAGGED_DIRS), and the rule is not
+# that one either: a tag is named here when it makes NON-TEST Go code visible
+# that no other configuration in this sweep reaches. Every custom tag in the tree
+# was enumerated to build this list - `e2e`, `e2e_live`, `e2e_k8s` and
+# `integration` are the four that sit on non-test files, and this names all four.
+#
+# The extremes both matter. tests/e2e keeps its entire harness behind
+# `//go:build e2e`, so an untagged scan there matches no packages at all - four
+# thousand lines answering the probe with a warning and empty stdout, which
+# modules-run.sh would read as a module with nothing in it. `keeper:smoke` is the
+# opposite: its whole content is one `smoke_test.go`, and `govulncheck -test`
+# defaults to false, so no scan under any tag would analyse that file. Scanning
+# keeper a second time under `smoke` cannot produce a different answer, which is
+# why it is absent - and NOT because it would be slow.
+#
+# The residual, because this list is hand-kept where the corpus is not: a module
+# that grows a new tag on non-test files has to be added here. If ALL of its code
+# goes behind that tag the probe refuses the module by name (scripts/vuln-scan.sh),
+# so the loud half is mechanical; a module that is only PARTLY behind a new tag
+# narrows this sweep quietly, and nothing here would say so.
+VULN_TAGS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:integration
+
+# `<dir>:<tag>` pairs whose sources only build under their own tag, vetted by
+# `vet-tags` on top of the `integration` pass over $(MODULES). The tests/ modules
+# are outside $(MODULES) (their own go.mod, no non-test packages); `keeper:smoke`
+# is one legacy ad-hoc file that would otherwise never be compiled by anything.
+# `keeper:libvirt` is the NIM-872 live lane: it needs a hypervisor to RUN, but vet
+# only compiles, and a live test nothing compiles is a live test that quietly stops
+# existing.
+TAGGED_DIRS := tests/e2e:e2e tests/e2e-live:e2e_live tests/e2e-k8s:e2e_k8s keeper:smoke keeper:libvirt
+
+# Directory for built binaries relative to the root of each module with `main`.
+# Covered by `.gitignore` (`*/bin/`).
+BIN_DIR := bin
+
+# Path to the built offline linter (used by the `lint` target).
+LINT_BIN := soul-lint/$(BIN_DIR)/soul-lint
+
+# Path to the built L0 runner (used by the `trial` target). The binary is built
+# as part of `build`, same as soul-lint.
+TRIAL_BIN := keeper/$(BIN_DIR)/soul-trial
+
+# Services EXCLUDED from the gate run of `trial` (see target). This is NOT "green
+# by default" - the list is explicit and loud: every skip prints its reason so the
+# exclusion is visible in the CI log and doesn't mask a new regression. Currently empty:
+# the sole former entry (redis-monitored) was removed along with the service during
+# the redis consolidation.
+TRIAL_SKIP :=
+
+# Build version. Defaults to git-derived: nearest tag + short hash,
+# `-dirty` suffix for uncommitted changes (`git describe`). On a bare
+# checkout without tags it falls back to a short hash (`--always`). Overridden externally:
+# `make build VERSION=v1.2.3` (this is what the release pipeline does).
+VERSION ?= $(shell git describe --tags --always --dirty 2>/dev/null || echo 0.0.0-dev)
+
+# ldflags version injection. `-X <pkg>.<var>=<value>` overwrites a package-level
+# string variable at link time - without touching the source. IMPORTANT: inside
+# the binary being built, the entrypoint package is addressed as `main`, NOT as its
+# import path - so the variable path is `main.<var>`, not the full
+# `github.com/.../cmd/<x>.<var>` (the linker silently ignores the latter - the string
+# lands in the data section but isn't bound to the symbol). Each binary is
+# built with a separate `go build ./cmd/<x>`, and each has exactly one `main` - `-X
+# main.<var>` is unambiguous. One git tag = the version of all modules (ADR-011), so
+# $(VERSION) is shared. The version variable's name differs per binary (historically):
+# `soul` -> soulVersion, `keeper` -> version, `soulctl` -> soulctlVersion.
+# `soul-lint` has no version variable (offline linter, never prints a version).
+SOUL_LDFLAGS := -X main.soulVersion=$(VERSION)
+KEEPER_LDFLAGS := -X main.version=$(VERSION)
+SOULCTL_LDFLAGS := -X main.soulctlVersion=$(VERSION)
+LEGION_LDFLAGS := -X main.legionVersion=$(VERSION)
+
+# --- Release/packaging ---
+# Root of build artifacts (SBOM, native packages). Entirely in .gitignore (dist/) -
+# build artifacts are not committed.
+DIST_DIR := dist
+SBOM_DIR := $(DIST_DIR)/sbom
+PKG_DIR  := $(DIST_DIR)/pkg
+
+# Prod-image names (docker-keeper / docker-soul targets). Local tags default to
+# `soul-stack/keeper` and `soul-stack/soul`; the operator retags them for their
+# own registry before push (`docker tag soul-stack/keeper:$(VERSION)
+# <registry>/keeper:$(VERSION)`) or builds directly against it:
+# `make docker-keeper KEEPER_IMAGE=<registry>/keeper`. The version tag is the shared
+# $(VERSION) (git describe / release-override), which also lands in the binary's
+# ldflags and the image's OCI label. soul-lint has no prod image (offline linter, not a prod runtime).
+KEEPER_IMAGE ?= soul-stack/keeper
+SOUL_IMAGE   ?= soul-stack/soul
+
+.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+
+gen: gen-openapi
+	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
+	@if [ -z "$(KEEPER_PROTO_FILES)" ]; then \
+		echo "no .proto files under $(KEEPER_PROTO_ROOT)/keeper"; \
+	else \
+		echo "protoc keeper: $(KEEPER_PROTO_FILES)"; \
+		protoc \
+			--proto_path=$(KEEPER_PROTO_ROOT) \
+			--go_out=$(KEEPER_PROTO_OUT) \
+			--go_opt=paths=source_relative \
+			--go-grpc_out=$(KEEPER_PROTO_OUT) \
+			--go-grpc_opt=paths=source_relative \
+			$(KEEPER_PROTO_FILES); \
+	fi
+	@if [ -z "$(PLUGIN_PROTO_FILES)" ]; then \
+		echo "no .proto files under $(PLUGIN_PROTO_ROOT)/v1"; \
+	else \
+		echo "protoc plugin: $(PLUGIN_PROTO_FILES)"; \
+		protoc \
+			--proto_path=$(PLUGIN_PROTO_ROOT) \
+			--go_out=$(PLUGIN_PROTO_OUT) \
+			--go_opt=paths=source_relative \
+			--go-grpc_out=$(PLUGIN_PROTO_OUT) \
+			--go-grpc_opt=paths=source_relative \
+			$(PLUGIN_PROTO_FILES); \
+	fi
+
+# gen-audit-catalog - commits shared/audit/event_types_gen.go as a DERIVED file: the list of
+# every EventType constant, which Go cannot enumerate at runtime. The huma layer turns it into
+# the OpenAPI enum of AuditEvent.type (NIM-346), so gen-openapi depends on it - the dump embeds
+# whatever the catalog held at compile time, and regenerating the spec from a stale catalog would
+# publish a set that is missing the event just added.
+# Same mechanism as gen-openapi: a generate-test writes under GEN_AUDIT_CATALOG=1 and compares
+# without it, so the drift guard runs inside the ordinary `make test`.
+gen-audit-catalog:
+	@echo "audit event-type declarations -> $(AUDIT_CATALOG_COMMITTED)"
+	@GEN_AUDIT_CATALOG=1 go test ./shared/audit/ -run TestGeneratedEventTypes_NoDrift -count=1 >/dev/null
+
+# gen-openapi - commits docs/keeper/openapi.yaml as a DERIVED huma-generated file
+# (OpenAPI 3.1, for UI-vendor + git-review). Source of truth is the huma aggregator in
+# the code (HumaFullSpecYAML); there's no hand-written openapi.yaml anymore. The write is done by
+# a generate-test in the api package under GEN_OPENAPI=1 (no separate cmd-binary).
+# `-count=1` disables the cache (the test writes a file - nothing to cache).
+gen-openapi: gen-audit-catalog
+	@echo "huma-dump -> $(OPENAPI_COMMITTED)"
+	@GEN_OPENAPI=1 go test ./keeper/internal/api/ -run TestCommittedOpenAPI_NoDrift -count=1 >/dev/null
+
+# Builds the three binaries (`keeper`, `soul`, `soul-lint`) with an explicit `-o <module>/bin/<name>`,
+# so artifacts don't land in the module root and get picked up by git.
+# Library modules (`proto`, `proto/plugin`, `shared`, `sdk`) are built without
+# `-o` via `go build ./...` to verify compilation; they don't produce
+# executables. Modules without go packages (e.g. `proto/plugin/` before
+# its first .proto appears) are skipped via `go list ./...`, otherwise
+# `go build ./...` fails with "matched no packages".
+#
+# The library sweep and the binaries are ONE recipe line with a shared rc. The
+# tempting story is that the chain is safe because the binaries LINK the four
+# library modules, so one broken library fails them all for the same reason —
+# and the go.mod files say otherwise. `soulctl` requires NONE of the four and
+# `soul-lint` requires only `shared`, so a broken `sdk` used to abandon the
+# target and leave `soulctl` unbuilt with nothing naming it, while `soul` is
+# isolated from `keeper` by ADR-011 and a keeper compile error says nothing
+# whatever about it. That is this ticket's defect one step past the modules.
+#
+# One consequence, measured and accepted: a recipe line containing $(MAKE) runs
+# even under `-n`, so `make -n build` now BUILDS instead of printing. Nothing in
+# scripts/, dev/, .github/ or this file passes -n/--dry-run/--just-print, so this
+# costs nobody anything today — but a reader who reaches for it should not be
+# surprised.
+build:
+	@rc=0; \
+	MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh build 'proto proto/plugin shared sdk' 'go build ./...' || rc=1; \
+	$(MAKE) build-keeper || { echo "build: FAILED keeper"; rc=1; }; \
+	echo "go build -o keeper/$(BIN_DIR)/soul-trial ./cmd/soul-trial in keeper"; \
+	(cd keeper && go build -o $(BIN_DIR)/soul-trial ./cmd/soul-trial) || { echo "build: FAILED soul-trial"; rc=1; }; \
+	$(MAKE) build-soul || { echo "build: FAILED soul"; rc=1; }; \
+	echo "go build -o soul-lint/$(BIN_DIR)/soul-lint ./cmd/soul-lint in soul-lint"; \
+	(cd soul-lint && go build -o $(BIN_DIR)/soul-lint ./cmd/soul-lint) || { echo "build: FAILED soul-lint"; rc=1; }; \
+	$(MAKE) build-soulctl || { echo "build: FAILED soulctl"; rc=1; }; \
+	$(MAKE) build-soul-legion || { echo "build: FAILED soul-legion"; rc=1; }; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "build: at least one module or binary failed — every FAILED line above is its own"; \
+	fi; \
+	exit $$rc
+
+# Single-binary targets, split out of `build` so the dev stand can rebuild ONE
+# binary without paying for the whole set. `dev/keeper-run.sh` and
+# `dev/souls-up.sh` go through these rather than calling `go build` themselves:
+# the version stamp then has exactly one definition ($(VERSION)), and a running
+# stand can always be asked which commit it serves (`curl /healthz` -> version,
+# ADR-0076(h)).
+#
+# Before NIM-342 both scripts built with NO -ldflags and only when the binary was
+# MISSING. A stand therefore served an arbitrarily old build that reported
+# `0.0.0-dev`, and nothing on any surface could contradict it - an observation made
+# against such a stand ("a narrowly scoped role sees everything") cost a critical
+# priority and a dedicated session before the binary turned out not to be the
+# merged code at all.
+build-keeper:
+	@echo "go build -o keeper/$(BIN_DIR)/keeper ./cmd/keeper in keeper (VERSION=$(VERSION))"
+	@cd keeper && go build -ldflags '$(KEEPER_LDFLAGS)' -o $(BIN_DIR)/keeper ./cmd/keeper
+
+build-soul:
+	@echo "go build -o soul/$(BIN_DIR)/soul ./cmd/soul in soul (VERSION=$(VERSION))"
+	@cd soul && go build -ldflags '$(SOUL_LDFLAGS)' -o $(BIN_DIR)/soul ./cmd/soul
+
+# soul-legion is a shipped artifact (ADR-004 Amendment 2026-07-26), so `build`
+# has to produce it like the rest. Its code lives in the tests/load module, which
+# is outside MODULES - a separate target keeps that seam explicit (NIM-327 tracks
+# bringing the module under the check gate).
+build-soul-legion:
+	@echo "go build -o tests/load/$(BIN_DIR)/soul-legion ./cmd/soul-legion in tests/load (VERSION=$(VERSION))"
+	@cd tests/load && go build -ldflags '$(LEGION_LDFLAGS)' -o $(BIN_DIR)/soul-legion ./cmd/soul-legion
+
+# Builds the operator's client CLI (see docs/naming-rules.md -> soulctl).
+# Cobra scaffold with no command bodies implemented yet - a separate target so it
+# can be built independently of keeper/soul (different lifecycle, no depend-infra).
+build-soulctl:
+	@echo "go build -o soulctl/$(BIN_DIR)/soulctl ./cmd/soulctl in soulctl (VERSION=$(VERSION))"
+	@cd soulctl && go build -ldflags '$(SOULCTL_LDFLAGS)' -o $(BIN_DIR)/soulctl ./cmd/soulctl
+
+# Runs through scripts/modules-run.sh, which is where the per-module loop and
+# its report now live (NIM-494). Two things change from the loop that was here:
+# a failing module no longer ends the sweep, and the run finishes with a line
+# per module saying PASS / FAIL / SKIPPED / NOT RUN. `|| exit 1` meant a failure
+# in `shared` — the third of eight — left `sdk`, `keeper`, `soul`, `soul-lint`
+# and `soulctl` untested with nothing in the output to say so, and `gate.sh`
+# then reported one failed tier and zero not run, which is true of tiers and
+# false of modules.
+#
+# Modules without go packages are skipped via `go list ./...` - same rule
+# as in `build`. At this stage `proto/plugin/` falls under the filter. A `go
+# list` that FAILS is no longer folded into that skip: the old
+# `[ -z "$$(go list ./... 2>/dev/null)" ]` could not tell "no packages here"
+# from "this module could not be enumerated at all", and the second one was
+# silently passing.
+#
+# `-count=1` disables the go-test cache. CRITICAL for the gate, not an optimization: go caches
+# a package's result by the hash of its `.go` sources (+ declared inputs), but NOT by
+# the content of arbitrary files read at runtime via `os.ReadFile` by
+# path (e.g. keeper/internal/render renders examples/destiny/*/templates/*.tmpl).
+# Without `-count=1`, editing such a .tmpl (without touching the .go test) leaves the result
+# `(cached) ok` - a broken test passes the gate silently (this is how the broken redis-render
+# slipped through in f40da00: a conf_dir/data_dir wave changed the .tmpl without touching the .go test).
+# The same trick is already in place in test-integration / gen-openapi.
+test:
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh test "$(MODULES)" 'go test -count=1 ./...'
+
+# `test-plugins` stood here until NIM-868. It swept `examples/module/*/go.mod` under
+# GOWORK=off — the community plugins, each a separate module outside go.work — and the
+# last two of them (`redis`, `vmlocal`) left for their own repositories, which is what
+# ADR-011's "examples/ — non-Go artifacts only" always asked for.
+#
+# It is DELETED rather than kept over an empty glob, and the distinction is the point:
+# modules-run.sh refuses a sweep over nothing (NIM-392's shape), so the target could not
+# have gone quietly green — but a tier that must be special-cased to survive having no
+# subject is a tier claiming coverage it does not have. The coverage itself moved intact:
+# each plugin repository runs `go test -race` over its own sources in its own `make
+# check`, on amd64 and arm64. What this tree still checks about those artifacts is their
+# schema document — see `check-plugin-schema`.
+
+# Runs tests with the race detector - a separate target so the plain `make test`
+# stays fast. CI should run both: `test` (fast, on every push) and
+# `test-race` (a separate step before merge).
+#
+# `-count=1` is load-bearing HERE for a reason that does not apply to the other
+# targets (NIM-312). Everywhere else it defeats the file-content blind spot of the
+# build cache (see `test`); for the race detector it defeats something worse. A
+# race is found by OBSERVING an interleaving, so a green sweep means "no race was
+# observed this time", not "there is no race" — the claim is only worth anything
+# per run. Cached, `go test` replays that one historical observation forever: two
+# consecutive sweeps of this target finished in 8 s reporting `(cached) ok` for all
+# 140 packages, which is a gate that cannot fail no matter what the code does.
+# That is the NIM-238 shape once more — a check that did not happen, printing the
+# words of one that passed.
+test-race:
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh test-race "$(MODULES)" 'go test -race -count=1 ./...'
+
+# Integration tests under the `integration` build tag (testcontainers-go).
+# A separate target - `make test` doesn't need docker and stays fast.
+# Files tagged `integration` are NOT built by a plain `go test ./...`, so
+# we pass `-tags=integration` explicitly here. `-count=1` disables the Go test cache
+# (the container spun up is new every time - nothing to cache).
+#
+# SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=1 used to be the point of this target: a
+# TestMain whose container failed to come up logged "docker unavailable" and returned
+# 0, so whole packages silently did not run while the target reported success (that is
+# how 4 packages "passed" in the NIM-221 run). Since NIM-238 that is the DEFAULT
+# everywhere — `-tags=integration` is taken as the statement that you want the suites —
+# so this line no longer grants anything; it is kept because callers and CI logs still
+# name it, and because a target that says what it requires is easier to read than one
+# that relies on a default. The opt-OUT is now explicit and lives in
+# keeper/internal/integrationenv: SOUL_STACK_INTEGRATION_SKIP_DOCKER=1.
+#
+# INTEGRATION_PARALLEL caps how many packages - i.e. how many container sets - start
+# at once. Unbounded, the default GOMAXPROCS-wide start swamps the docker daemon and
+# packages fail on the testcontainers reaper rather than on their own assertions.
+# It is 2 because four sweeps say so (NIM-569, NIM-723). Two sweeps at 4 lost
+# one and then three packages during container bring-up; two sweeps at 2 lost
+# none. Concurrency is the variable that moves it.
+#
+# Read the failure text before raising this. The wait strategy names the
+# published port, which invites reading it as a dead route to that port, but the
+# call that actually times out is to the daemon's own API over the unix socket:
+#
+#   check target: retries: 503 address: localhost:32890: get state:
+#   Get "http://%2Fvar%2Frun%2Fdocker.sock/v1.54/containers/<id>/json":
+#   context deadline exceeded
+#
+# The container is up and the port is mapped; what cannot answer within the 60s
+# budget is `GET /containers/<id>/json`. Five hundred retries mean the readiness
+# poll kept asking the daemon and the daemon kept not answering, which is what a
+# saturated daemon looks like and is not what a wedged forward looks like. The
+# investigation on `wip/NIM-569-investigation` read the same string the other way
+# and concluded the daemon was never the bottleneck; that reading is not
+# supported by these four sweeps.
+#
+# The cost is throughput on the tier that runs longest, paid deliberately: a tier
+# that reddens on infrastructure every sweep is one people learn to skim, and a
+# real regression rides in behind that habit.
+INTEGRATION_PARALLEL ?= 2
+SOUL_STACK_INTEGRATION_REQUIRE_DOCKER ?= 1
+
+# INTEGRATION_TIMEOUT is `go test -timeout` — the point at which a package binary
+# is killed and dumps every goroutine. It used to be left at Go's 10m default,
+# which was already thin: `internal/api` runs 347-439 s on this hardware, and
+# container bring-up is charged to the same clock. NIM-569 made bring-up retry up
+# to 3 times, so the worst legitimate package now costs ~620 s and would trip a
+# 10m ceiling — surfacing as a goroutine dump, which reads as a hang rather than
+# as what it is. Stated explicitly at 15m instead of raised silently: high enough
+# that only a genuine hang reaches it, low enough that a hang still surfaces
+# inside one sitting.
+#
+# It is a per-BINARY clock, not a budget for the sweep: `go test` passes it to
+# every package, so up to INTEGRATION_PARALLEL of them run their own 15m at once.
+# The two knobs are therefore coupled, and only one of them is calibrated: those
+# 347-439 s were measured at INTEGRATION_PARALLEL=4, contending for one docker
+# daemon. Raise the parallelism on a bigger box and the packages slow down while
+# this ceiling does not move — which is how a correct-but-slow package comes to
+# be killed and reported as a hang. Move them together.
+INTEGRATION_TIMEOUT ?= 15m
+
+# PKG narrows the run to one package while keeping every other flag identical:
+#
+#     make test-integration PKG=./internal/scenario/
+#
+# It exists because the alternative people reached for -- a bare
+# `go test -tags=integration ./internal/scenario/` -- silently drops `-race`, and
+# a green L1 then means something WEAKER locally than the same words mean in CI.
+# That is the failure mode NIM-238 is about, one level up: the check that did not
+# happen is indistinguishable from the check that passed. There is now one way to
+# run L1, and it matches CI by construction (TestIntegrationSuiteRunsUnderRace in
+# keeper/internal/integrationenv fails a full sweep that lost the flag anyway).
+PKG ?= ./...
+
+# The package set is the packages that actually carry integration-tagged tests,
+# derived from the tree by scripts/integration-packages.sh (43 today: 41 in
+# keeper, 2 in soul) rather than taken as `./...` (~155).
+#
+# The difference is not tidiness (NIM-349). `-tags=integration` WIDENS a package
+# set instead of narrowing it, so `./...` handed the whole unit corpus to a
+# command carrying `-race` — inside the one job that is also starting container
+# sets at `-p $(INTEGRATION_PARALLEL)`. Unit tests written against uninstrumented
+# timing then fail on instrumentation speed: `TestRun_CancelDuringTask` polled
+# Cancel every 5 ms and lost ~1% of the time under `-race` while staying green in
+# `make test`, on the same sha, differing only in this flag. A job that fails on a
+# coin toss is untrustworthy in both directions — red stops meaning regression,
+# and once people learn to rerun it, red stops meaning anything.
+#
+# `-race` is NOT removed anywhere; the SET is corrected. The excluded packages are
+# exactly those with no tagged file, they keep running in `test` and now under the
+# detector in `test-race`, and `vet-tags` still compiles the whole tree under the
+# tag. So this narrows what L1 RUNS without narrowing what is CHECKED — which is
+# the only reason it is allowed, given NIM-238.
+# On failure the output goes through scripts/classify-l1-failure.py, which says of
+# each failing package whether it died at the container layer or on an assertion.
+# `CLUSTERDOWN`, `connection refused` against a mapped port and "wait until ready:
+# context deadline exceeded" arrive formatted exactly like a caught regression, and
+# the two have opposite answers — rerun that package, versus fix the code. Read by
+# eye, every red run costs an hour deciding which happened, and the cheap way out of
+# that hour ("L1 is flaky, rerun it") is how a real regression gets dismissed.
+# Nothing is downgraded: the classification is a label, the exit code is still 1,
+# and a failure that survives a solitary rerun is a finding whatever its label says.
+#
+# The loop no longer stops at the first failing module. It used to `exit 1` there,
+# which hid whether the other modules were also red — and the classifier is worth
+# more with the whole picture than with the first fragment of it. bash + pipefail
+# so `| tee` cannot swallow a non-zero status.
+test-integration: SHELL := /bin/bash
+test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
+	@scripts/integration-scope.sh "$(PKG)"
+	@set -o pipefail; \
+	log="$$(mktemp -t soul-stack-l1-XXXXXX.log)"; rc=0; \
+	trap 'rm -f "$$log"' EXIT; \
+	for m in $(MODULES); do \
+		pkgs="$$(cd $$m && $(CURDIR)/scripts/integration-packages.sh $(PKG))"; \
+		if [ -z "$$pkgs" ]; then \
+			echo "skip $$m (no package under $(PKG) carries integration-tagged tests)"; \
+			continue; \
+		fi; \
+		echo "go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
+		if ! (cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
+			go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) $$pkgs 2>&1 | tee -a "$$log"); then \
+			rc=1; \
+		fi; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l1-failure.py "$$log" || true; fi; \
+	exit "$$rc"
+
+# Run one long tier DETACHED, in its own process group ([scripts/run-detached.sh]).
+#
+# `test-integration` is 12-15 minutes and `e2e-live` is longer — longer than the
+# lifetime of whatever starts them interactively. When that caller goes away it
+# tears down its process group and every child takes the SIGTERM, leaving a
+# truncated log whose last line is `Terminated` and NO exit code. Read
+# carelessly, the packages the run never reached look like packages that passed.
+#
+# The tier targets themselves are deliberately left attached: CI waits on them
+# and needs their exit status, and detaching there would report success for a run
+# nobody waited for.
+#
+#   make detached T=test-integration
+#   make detached T=e2e-live LOG=/tmp/nightly.log
+#
+# The `<log>.rc` file is the completion marker — absent means "still running or
+# killed", never "passed".
+.PHONY: detached
+detached: ## run a long tier in its own process group (T=test-integration); survives a caller teardown
+	@test -n "$(T)" || { echo "detached: set T=<target>, e.g. make detached T=test-integration"; exit 2; }
+	@scripts/run-detached.sh "$(T)" $(DETACHED_ARGS)
+
+# L3a fast-loop E2E (ADR-039): the working harness - testcontainers (PG+Redis+Vault) +
+# a real Keeper process + a soul-stub with live gRPC-mTLS. A separate go module
+# tests/e2e/ under the `e2e` build tag (testcontainers deps don't leak into the main
+# keeper/soul). NOT part of `check` (requires docker); details in tests/e2e/README.md.
+#
+# Flags, each earned rather than copied (NIM-469):
+#   -count=1  the tier is judged by whether it passes REPEATEDLY, and without
+#             this a second `make e2e` prints the first one's verdict from the
+#             test cache. A tier that cannot be re-run has no way to show that a
+#             fix to an intermittent failure worked (same trap as NIM-388).
+#   -timeout  was 10m. A full local run measures ~666s, so the budget sat BELOW
+#             the runtime: the suite was killed mid-flight and every test still
+#             queued never ran, which arrives as one panic plus a silently
+#             truncated tier. 30m matches e2e-live and leaves the timeout doing
+#             its actual job — catching a hang, not enforcing a schedule.
+#   -p 1      one test package at a time. Each L3a test owns three containers
+#             and a keeper process; overlapping packages double that and put two
+#             independent binaries in the same ephemeral port range.
+# bash + pipefail so `| tee` cannot swallow a non-zero status.
+#
+# Depends on `build` (NIM-490). The harness does not compile keeper - it runs
+# keeper/bin/keeper, whatever the last build left there - so without this the
+# tier's verdict was about an artifact rather than about the tree. On NIM-456
+# that cost a session twice: deleted wiring stayed GREEN until `make build`, and
+# a test "reproduced" a defect the source had already fixed. The dependency is
+# only half the fix, because `go test -tags=e2e` by hand skips the Makefile
+# entirely; the other half refuses to run at all on a mismatch (provenance.go).
+# KEEPER_EXPECTED_VERSION hands that check the version this build STAMPED, so
+# `make e2e VERSION=v1.2.3` keeps one definition of the version instead of two.
+e2e: SHELL := /bin/bash
+e2e: build
+	@if [ -z "$$(cd tests/e2e && go list -tags=e2e ./...)" ]; then \
+		echo "tests/e2e: the e2e package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
+	else \
+		set -o pipefail; \
+		log="$$(mktemp -t soul-stack-l3a-XXXXXX.log)"; rc=0; \
+		trap 'rm -f "$$log"' EXIT; \
+		echo "go test -tags=e2e -count=1 -p 1 ./... in tests/e2e"; \
+		(cd tests/e2e && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e -count=1 -p 1 -timeout=30m ./... 2>&1 | tee "$$log") || rc=1; \
+		if [ "$$rc" -ne 0 ]; then $(CURDIR)/scripts/classify-l3a-failure.py "$$log" || true; fi; \
+		exit "$$rc"; \
+	fi
+
+# Cross-compiles a single binary for Linux amd64 into its `bin/` with the
+# `-linux-amd64` suffix. Shared recipe for the per-component bin-targets and the
+# build-linux aggregate. $(1) - module/directory (keeper|soul|soul-lint), $(2) - the
+# cmd-package name (= binary name: keeper|soul|soul-lint), $(3) - ldflags (empty for
+# soul-lint - no version variable). CGO_ENABLED=0 - static, no dependency on libc inside
+# the container (Debian-12 compatible, but static is simpler). Doesn't touch the
+# native `make build` (macOS developers build host-arch).
+define bin-one
+	@echo "GOOS=linux GOARCH=amd64 go build -o $(1)/$(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2) in $(1) (VERSION=$(VERSION))"
+	@cd $(1) && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags '$(3)' -o $(BIN_DIR)/$(2)-linux-amd64 ./cmd/$(2)
+endef
+
+# Per-component cross-compile (linux-amd64). bin-keeper / bin-soul - artifacts for
+# L3b real-soul-container and ad-hoc runs; build-linux - the aggregate of all three.
+bin-keeper:
+	$(call bin-one,keeper,keeper,$(KEEPER_LDFLAGS))
+
+bin-soul:
+	$(call bin-one,soul,soul,$(SOUL_LDFLAGS))
+
+bin-soul-lint:
+	$(call bin-one,soul-lint,soul-lint,)
+
+# build-linux - the aggregate: keeper+soul for Linux amd64 (for L3b real-soul-container,
+# ADR-039). Not changing the set (soul-lint isn't needed in L3b) - for solo builds there's
+# bin-keeper / bin-soul / bin-soul-lint.
+build-linux: bin-keeper bin-soul
+
+# L3b smoke-loop E2E (ADR-039): a real-soul-binary in a privileged Debian-12
+# container + a Keeper process on the host. Requires docker and `make build-linux`
+# (cross-compile the linux-amd64 binary for mounting into the container). NOT part of `check`
+# (long-running - 5-15 min per test; runs nightly/on-demand).
+#
+# `-p 1` - serial (RAM-heavy: privileged containers with systemd + apt-install
+# running concurrently would kill a developer's laptop). Architect recommendation.
+#
+# `build` as well as `build-linux` (NIM-490). The two produce DIFFERENT keepers:
+# build-linux cross-compiles keeper-linux-amd64 for the soul container, while
+# the harness runs the NATIVE keeper/bin/keeper on the host (locateKeeperBinary)
+# - so this target used to rebuild everything except the binary under test. That
+# is the same false green `e2e` had, one artifact over. e2e-live-gate already
+# depended on both; it did so for its own reasons and the reasoning never
+# reached here.
+#
+# e2e-live-services for the same reason the gate does it: the tier's real subject is an
+# out-of-tree service repository, and fetching it is named and paid for up front instead of
+# discovered inside a test that has already brought up five containers (NIM-876).
+e2e-live: build build-linux plugin-sources e2e-live-services
+	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
+		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
+	else \
+		echo "go test -tags=e2e_live ./... in tests/e2e-live"; \
+		(cd tests/e2e-live && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_live -count=1 -timeout=30m -p 1 ./...) || exit 1; \
+	fi
+
+# e2e-live-gate - the MANDATORY local live gate before a batch-commit of a large
+# feature (docker). The full `make e2e-live` remains nightly/pre-release.
+#
+# FIVE TESTS, AND WHAT EACH ONE IS FOR. The count is not the point - it was the count that
+# hid the loss when NIM-871 took this gate from nine tests to three - so each is named by
+# its claim:
+#
+#   TestL3bModuleDeliveryLive_SynthesisFetchHotRegister
+#       a MODULE is delivered: ADR-065 install-synthesis -> FetchModule -> Sigil-verify ->
+#       hot-register -> a live apply through the plugin channel.
+#   TestL3bPluginChannel_CatalogAndAllow
+#       the plugin catalog and the Sigil allow flow come up at all (keeper-side, no souls).
+#   TestL3bSmokeNginxLive_InstallAndStart
+#       the wire works end to end on one host: keeper render -> ApplyRequest -> real soul
+#       Apply (core.pkg/core.file.rendered/core.service) -> RunResult -> apply_runs.
+#   TestL3bRedisServiceLive_CreateFromSouls                     (NIM-876)
+#       a SERVICE is brought to a working state: a published service repo at a pinned
+#       commit, rolled onto the roster, ending in a Redis that answers with the credential
+#       it minted for itself into Vault at a keeper-derived path.
+#   TestL3bRedisServiceLive_Day2AddUser                          (NIM-876)
+#       a SERVICE is OPERATED: a day-2 scenario reads the state the create wrote, upserts
+#       it, re-renders users.acl whole, and reaches the live ACL - while the credential an
+#       existing client already holds keeps working.
+#
+# ★ THE HOLE NIM-871 OPENED IS CLOSED, and not by putting a service back in the tree. The
+# six tests it removed (TestL3bRedisLive_Day2*) ran `examples/service/redis`; a service is
+# its own repository, so the subject is now fetched - github.com/soul-stack-services/redis
+# at the commit pinned in tests/e2e-live/harness/servicecatalog.go. Two of the six claims
+# come back that way (create, one day-2 operation) and four do not: update_config, restart,
+# destroy and rotate_tls are scenarios the published service does not have yet.
+#
+# ★ WHAT A GREEN RUN STILL DOES NOT PROVE: the published service's own `create` raises
+# MACHINES - libvirt VMs, an SSH host CA, cloud-init, a token redeemed over core.ssh.run -
+# and none of that is reachable from a docker tier whose souls are already onboarded. The
+# gate drives `create_from_souls` instead, the same rollout onto an existing roster. The
+# machine half is covered by a hand-run workstation stand and by nothing automated.
+#
+# Deps DIFFER from e2e-live: also needs the native `build` - the harness runs
+# Keeper ON THE HOST (host-arch keeper/bin/keeper, see locateKeeperBinary), not in a
+# container. The redis plugin is built by the test itself (harness.BuildRedisPlugin),
+# no need to build it in the Makefile.
+#
+# The run needs egress. The redis service installs from packages.redis.io and the nginx
+# smoke from Debian's own mirror, so this tier has never been hermetic; what IS held out is
+# the one class that was measured making this gate's verdict random - release tarballs
+# fetched through `core.url` (NIM-542, NIM-406: three runs on an unchanged slice, three
+# answers). A guard in tests/e2e-live/harness/upstreamfetch.go fails the docker-free step
+# if any live subject declares such a fetch again.
+#
+# E2E_KEEPER_HOST - the IP the soul container uses to reach Keeper on the host;
+# on WSL2 an explicit LAN IP is needed (localhost isn't visible from the container). If not set
+# externally - auto-detects the first IP via `hostname -I`.
+#
+# NIM-45 anti-false-green (the gate must either actually run, or fail honestly):
+#  - `build` - the native keeper at the harness's default path `keeper/bin/keeper`;
+#    without it `build-linux` only gives keeper-linux-amd64, and NewStack SILENTLY skips.
+#  - `-count=1` - otherwise the go-test cache returns `ok (cached)` in seconds (false-green).
+#  - guard: fails on `(cached)` in the summary, or if any gate test didn't give `--- PASS`.
+#    That grep carries a trailing ` (` on purpose: without it `--- PASS: TestFoo`
+#    is also satisfied by `--- PASS: TestFooBar (12s)`, so a skipped test could be
+#    signed off by a prefix-sharing neighbour (NIM-507).
+# SHELL=bash - for `set -o pipefail` (preserve go test's exit code through tee).
+#
+# NIM-406: on red, the log goes through scripts/classify-e2e-live-failure.py,
+# which says PER TEST whether the stand failed to come up or the test body did.
+# Those two arrive identically formatted and have opposite answers, and this is
+# a blocking pre-tag gate (RELEASING.md step e) - a blocking step whose red is
+# illegible is one people learn to rerun until green. Nothing is downgraded: the
+# recipe still exits non-zero either way.
+#
+# The transcript is a fresh file per invocation, and the recipe prints where it
+# put it. The name used to be fixed - $TMPDIR/soul-e2e-live-gate.log - which is
+# one path shared by every worktree on the machine, and this repo is worked in
+# several at once. Two gates running together then read a file the other one is
+# writing: `tee` truncates it at start, so the checks below can see a foreign
+# run's `--- PASS` lines in place of a missing one of their own, and on red the
+# classifier explains someone else's failure. Both are the NIM-406 defect -
+# a verdict that is not about this run.
+#
+# E2E_GATE_TESTS is the single source for the -run mask, the per-test `--- PASS`
+# guard and the classifier's NOT-RUN list. It used to be spelled out twice, and
+# a test present in one copy but not the other is silently ungated.
+#
+# Entries are EXACT test names, and scripts/e2e-gate-mask.sh enforces that
+# (NIM-507). Three of them used to be prefixes — `TestL3bPluginChannel` for
+# `TestL3bPluginChannel_CatalogAndAllow`. `-run` takes an unanchored regexp so
+# the gate still ran the right nine, but the other two readers take these as
+# names: the `--- PASS` loop below could be satisfied by a prefix-sharing
+# neighbour's line, and the classifier reported all three as NOT-RUN on every
+# red run. Read the script's header before editing this list.
+E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
+	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow \
+	TestL3bRedisServiceLive_CreateFromSouls TestL3bRedisServiceLive_Day2AddUser
+
+# e2e-live-services - fetches the out-of-tree service repositories this tier drives, at the
+# commits tests/e2e-live/harness/servicecatalog.go pins (NIM-876).
+#
+# A service is its own repository (NIM-871), so the subject of the two service tests is not
+# in this tree, and there are exactly two ways to get it - each with a cost the ticket asked
+# to be named rather than absorbed. Cloning per run makes a blocking pre-tag gate depend on
+# github.com being up, which is the dependency NIM-542 spent a ticket removing from this same
+# gate. Reading a checkout on disk makes the gate prove whatever happened to be in that
+# directory - a colleague's half-finished edit, a stale clone, a rebase in flight.
+#
+# So: a PINNED COMMIT in a cache. The pin is what makes the run reproducible, the cache is
+# what makes it offline after the first fill, and the extracted tree is named after the
+# commit so "which bytes did this run read" stays answerable afterwards.
+#
+# The cache lives outside the repo and outside $TMPDIR ($SOUL_STACK_E2E_SERVICE_CACHE, else
+# $XDG_CACHE_HOME/soul-stack/e2e-live/services): it must survive `git clean` and a reboot, or
+# "offline" would only mean "clones once per run". Priming is idempotent, so this is safe to
+# run at any time; it is also the deliberate way to prepare a machine that is about to go
+# offline, after which SOUL_STACK_E2E_SERVICE_OFFLINE=1 turns a missing pin into a loud error
+# instead of a silent fetch.
+#
+# Two overrides, and they are NOT interchangeable:
+#   SOUL_STACK_E2E_SERVICE_REMOTE_<ALIAS>  fetch the pinned commit from elsewhere (a local
+#       clone, an internal mirror). The pin still holds, so the verdict is unchanged.
+#   SOUL_STACK_E2E_SERVICE_DIR_<ALIAS>     run a working tree instead of the pin, for
+#       developing a service and the engine together. The gate REFUSES to start under it.
+e2e-live-services:
+	@echo "e2e-live-services: priming the L3b out-of-tree service cache"
+	@(cd tests/e2e-live && go run ./cmd/service-cache)
+
+e2e-live-gate: SHELL := /bin/bash
+e2e-live-gate: build build-linux
+	@overrides=$$(scripts/plugin-source.sh overrides) || exit 1; \
+	if [ -n "$$overrides" ]; then \
+		echo "e2e-live-gate: refusing to run - a plugin pin is overridden by a working tree:" >&2; \
+		echo "$$overrides" | sed 's/^/  /' >&2; \
+		echo "  This gate's verdict is about PINNED commits. Under SOUL_STACK_PLUGIN_DIR_* it would be" >&2; \
+		echo "  about a directory nobody can name - the same failure the service-side override is refused" >&2; \
+		echo "  for, one artifact over. Unset it, or bump the pin to a commit you have pushed." >&2; \
+		exit 1; \
+	fi
+	@$(MAKE) --no-print-directory plugin-sources \
+		|| { echo "e2e-live-gate: the pinned plugin source cache is neither warm nor fillable - the harness guards below resolve that pin, and four of the five gate tests build the artifact from it" >&2; exit 1; }
+	@echo "e2e-live-gate: harness unit-guards (docker-free) - apply bracket NIM-46, stand readiness NIM-406"
+	@(cd tests/e2e-live && go test -count=1 ./harness/) \
+		|| { echo "e2e-live-gate: FALSE-GREEN - a docker-free harness unit-guard failed" >&2; exit 1; }
+	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS) \
+		|| { echo "e2e-live-gate: the gate list does not name real tests - fix it before spending 20 minutes on a run whose verdict would be about the wrong set" >&2; exit 1; }
+	@(cd tests/e2e-live && go run ./cmd/service-cache -check-overrides) \
+		|| { echo "e2e-live-gate: refusing to run - see above. This gate's verdict is about pinned commits; under a working-tree override it would be about a directory nobody can name, which is the failure the pin exists to prevent" >&2; exit 1; }
+	@$(MAKE) --no-print-directory e2e-live-services \
+		|| { echo "e2e-live-gate: the out-of-tree service cache is neither warm nor fillable - the two service tests below would have died on it after bringing up five containers, and a cold cache would have been reported as a stand failure" >&2; exit 1; }
+	@if [ -z "$$(cd tests/e2e-live && go list -tags=e2e_live ./...)" ]; then \
+		echo "tests/e2e-live: the e2e_live package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
+	else \
+		host="$${E2E_KEEPER_HOST:-$$(hostname -I | awk '{print $$1}')}"; \
+		log=$$(mktemp "$${TMPDIR:-/tmp}/soul-e2e-live-gate.XXXXXXXX.log") || exit 1; \
+		mask=$$(scripts/e2e-gate-mask.sh mask $(E2E_GATE_TESTS)) || exit 1; \
+		echo "e2e-live-gate: transcript -> $$log"; \
+		echo "e2e-live-gate: go test -tags=e2e_live -v -count=1 -run '$$mask' . (E2E_KEEPER_HOST=$$host)"; \
+		set -o pipefail; \
+		(cd tests/e2e-live && E2E_KEEPER_HOST=$$host KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_live -v -count=1 -timeout 45m -p 1 -run "$$mask" .) 2>&1 | tee "$$log"; \
+		rc=$$?; \
+		if grep -qE '^ok[[:space:]].*\(cached\)' "$$log"; then \
+			echo "e2e-live-gate: FALSE-GREEN - '(cached)' in summary (cache not disabled, -count=1 lost)" >&2; exit 1; \
+		fi; \
+		missing=""; \
+		for tc in $(E2E_GATE_TESTS); do \
+			grep -q "^--- PASS: $$tc (" "$$log" || missing="$$missing $$tc"; \
+		done; \
+		if [ $$rc -ne 0 ] || [ -n "$$missing" ]; then \
+			scripts/classify-e2e-live-failure.py "$$log" $(E2E_GATE_TESTS) || true; \
+			if [ $$rc -eq 0 ] && [ -n "$$missing" ]; then \
+				echo "e2e-live-gate: FALSE-GREEN - go test exited 0, yet these gave no '--- PASS':$$missing" >&2; \
+			fi; \
+			exit 1; \
+		fi; \
+		echo "e2e-live-gate: OK - all gate tests actually ran (not cached, not skipped)"; \
+	fi
+
+# docker-build-keeper - builds the `keeper:e2e-k8s` image for the L3c kind cluster.
+# Reuses the `make build-linux` artifact (cross-compiled keeper-linux-amd64);
+# single-stage Dockerfile on top of the distroless runtime. PM decision: the image
+# is disposable, loaded into kind via `kind load docker-image`, NOT
+# published to a registry. Build context - repo root (the Dockerfile COPYs from
+# `keeper/bin/keeper-linux-amd64`).
+#
+# Dependency: `make build-linux` builds the linux-amd64 binary.
+docker-build-keeper: build-linux
+	@echo "docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile ."
+	@docker build -t keeper:e2e-k8s -f tests/e2e-k8s/dockerfiles/keeper.Dockerfile .
+
+# docker-keeper - the PROD image of keeper for publishing to the operator's registry. Unlike
+# docker-build-keeper (a disposable kind image, single-stage from the
+# build-linux artifact) - a multi-stage self-contained build from
+# deploy/docker/keeper.Dockerfile: pins the golang toolchain, doesn't depend on the state of
+# keeper/bin/, the version is injected into the binary (ldflags) and the OCI label
+# (--build-arg VERSION). Tag - $(KEEPER_IMAGE):$(VERSION) (versioned, not latest:
+# reproducible rollback). Build context - repo root.
+#
+# From there it's on the operator: `docker tag $(KEEPER_IMAGE):$(VERSION) <registry>/keeper:$(VERSION)`
+# -> `docker push <registry>/keeper:$(VERSION)`. Bootstrapping the first Archon and
+# prod config - deploy/README.md -> "Keeper in production".
+#
+# Requires docker in PATH (unlike build-linux/pkg). NOT part of `check`.
+docker-keeper:
+	@echo "docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/keeper.Dockerfile ."
+	@docker build -t $(KEEPER_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/keeper.Dockerfile .
+	@echo "built $(KEEPER_IMAGE):$(VERSION) - retag it for your registry and push (see deploy/README.md)"
+
+# docker-soul - the PROD image of soul (the daemon agent) for publishing to the operator's registry.
+# Symmetric with docker-keeper: a multi-stage self-contained build from
+# deploy/docker/soul.Dockerfile (distroless static-nonroot), the version is injected into the
+# binary (ldflags main.soulVersion) and the OCI label (--build-arg VERSION). Tag -
+# $(SOUL_IMAGE):$(VERSION). Build context - repo root.
+#
+# Unlike docker-build-soul (a disposable privileged systemd image for L3c
+# kind, from the build-linux artifact) - this image is self-contained and intended for the
+# registry. soul-lint has no prod image (offline linter).
+#
+# Requires docker in PATH (like docker-keeper). NOT part of `check`.
+docker-soul:
+	@echo "docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION=$(VERSION) -f deploy/docker/soul.Dockerfile ."
+	@docker build -t $(SOUL_IMAGE):$(VERSION) --build-arg VERSION='$(VERSION)' -f deploy/docker/soul.Dockerfile .
+	@echo "built $(SOUL_IMAGE):$(VERSION) - retag it for your registry and push (see deploy/README.md)"
+
+# docker-build-soul - builds the `soul:e2e-k8s` image for the L3c kind cluster
+# (L3c-3+). Privileged systemd-PID-1 Debian-12 base (parity with L3b), bakes in the
+# cross-compiled soul-linux-amd64 from the `make build-linux` artifact. Loaded
+# into kind via `kind load docker-image soul:e2e-k8s` (harness DeploySoul).
+#
+# Build context - repo root (the Dockerfile COPYs from soul/bin/ and
+# tests/e2e-k8s/manifests/soul/soul.service).
+docker-build-soul: build-linux
+	@echo "docker build -t soul:e2e-k8s -f tests/e2e-k8s/dockerfiles/soul.Dockerfile ."
+	@docker build -t soul:e2e-k8s -f tests/e2e-k8s/dockerfiles/soul.Dockerfile .
+
+# L3c k8s-loop E2E (ADR-039): kind cluster + bitnami Helm (PG/Redis/Vault) +
+# raw YAML Keeper/Soul. Requires docker and kind CLI in PATH; without them the tests
+# are skipped (see tests/e2e-k8s/harness/cluster.go::NewCluster pre-flight).
+# NOT part of `check` (long-running: kind spin-up + helm-install + image-load,
+# 5-15 min per test; runs weekly / pre-release).
+#
+# Dependency: `make docker-build-keeper` + `make docker-build-soul` build the
+# keeper:e2e-k8s / soul:e2e-k8s images that the L3c-2+ tests load into kind
+# via `kind load docker-image`.
+#
+# `-p 1` - serial (RAM-heavy: each test spins up its own kind cluster with
+# its own PG/Redis/Vault via bitnami Helm; running in parallel would kill a laptop).
+e2e-k8s: docker-build-keeper docker-build-soul
+	@if [ -z "$$(cd tests/e2e-k8s && go list -tags=e2e_k8s ./...)" ]; then \
+		echo "tests/e2e-k8s: the e2e_k8s package set is EMPTY - this tier has no tests to run."; \
+		echo "  An empty suite used to print a skip line and exit 0, which every gate above"; \
+		echo "  read as a pass (NIM-392). Run 'make check-e2e-set' - it says whether the tag"; \
+		echo "  vanished from the tree or the toolchain stopped reporting it."; \
+		exit 1; \
+	else \
+		echo "go test -tags=e2e_k8s ./... in tests/e2e-k8s"; \
+		(cd tests/e2e-k8s && KEEPER_EXPECTED_VERSION='$(VERSION)' go test -tags=e2e_k8s -timeout=30m -p 1 ./...) || exit 1; \
+	fi
+
+# --- Cloud live-E2E orchestrator (NIM-31) ---
+# e2e-cloud - runs the cloud live-E2E against the keeper's Operator API via teleport
+# (EXEC_MODE=tsh) or direct curl (EXEC_MODE=local). NOT part of `check` (requires
+# a cloud/teleport + pre-built artifacts; symmetric with e2e / e2e-live). Bring-up
+# scripts (environment-specific) live locally in $$SCRIPTS_DIR and are NOT committed to git - the runner
+# invokes them at runtime. Suite - the SUITE variable (create|create-destroy|day2). Examples:
+#   make e2e-cloud SUITE=create-destroy
+#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # print calls without network
+SUITE ?= create-destroy
+e2e-cloud:
+	@bash scripts/e2e-cloud/runbook.sh $(SUITE)
+
+# check-e2e-cloud - a docker-free guard for the orchestrator's core logic: classify/poll/
+# assert/run_scenario against a keeper_api stub on JSON fixtures (testdata/), RED/GREEN
+# mutation pairs. Part of `check` alongside the other guard steps. Requires jq (like the repo's
+# other dev scripts: dev/provision.sh etc.); a jq-less environment fails loudly with a hint.
+check-e2e-cloud:
+	@bash scripts/e2e-cloud/test/guard.sh
+
+# `go mod tidy` on a module with no go files prints "no Go files" and fails,
+# so modules with an empty `go list ./...` are skipped here too.
+tidy:
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh tidy "$(MODULES)" 'go mod tidy'
+
+# Local dev stack (docker-compose). See `docs/dev/local-setup.md`.
+# `dev/docker-compose.yml` brings up the full required stack: Postgres, Redis,
+# Vault (dev-mode), OTel collector and Jaeger.
+#
+# `dev-down` does NOT remove the volume - `postgres_data` persists across
+# `up/down` cycles. For a full reset (migration changed, DB in an
+# inconsistent state) - `make dev-reset`.
+#
+# Stand-aware (NIM-25): DEDICATED_INFRA=1 -> its own docker project (COMPOSE_PROJECT_NAME=
+# ${STACK_PREFIX} = soul-stack-<slug>) + offset ports, down/reset hit ONLY that project.
+# Lightweight mode (empty DEV_STAND or DEDICATED_INFRA=0) - shared infra, project as before.
+dev-up:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose up -d'
+
+# `dev-down` first kills the local keeper/soul dev-workflow daemons
+# (see `dev-stop`), then the docker-compose infra. Otherwise an orphan `keeper run`
+# from a previous session lingers and holds the ports (8080/8081/9090/9442/9443) -
+# a fresh start fails with `bind: address already in use`.
+dev-down: dev-stop
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down'
+
+# Kills THIS stand's daemons (DEV_STAND): keeper/web by pidfile in ${STAND_DEV_DIR}
+# (written by keeper-run/web-run), souls - by a stand-scoped pattern (--config under
+# ${STAND_DEV_DIR}/). Empty DEV_STAND = default stand only; neighboring stands are NOT
+# touched (previously: a broad pkill by name that killed every stand). NIM-25.
+dev-stop:
+	@bash -c 'set -e; . dev/stand-env.sh; stand_summary; d="$${STAND_DEV_DIR}"; kp="$$(cat "$$d/keeper.pid" 2>/dev/null || true)"; if [ -n "$$kp" ] && kill -0 "$$kp" 2>/dev/null && grep -qa keeper "/proc/$$kp/cmdline" 2>/dev/null; then kill -9 "$$kp" 2>/dev/null || true; fi; rm -f "$$d/keeper.pid"; wp="$$(cat "$$d/web.pid" 2>/dev/null || true)"; if [ -n "$$wp" ] && kill -0 "$$wp" 2>/dev/null && grep -qaE "vite|node|npm" "/proc/$$wp/cmdline" 2>/dev/null; then pkill -9 -P "$$wp" 2>/dev/null || true; kill -9 "$$wp" 2>/dev/null || true; fi; rm -f "$$d/web.pid"; pkill -f "soul run.*$$d/" 2>/dev/null || true; echo "dev-stop: stand $${STAND_SLUG:-<default>} stopped (keeper/web by pidfile, souls by stand-pattern)"'
+
+dev-reset:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; if [ "$${DEDICATED_INFRA}" = "1" ]; then export COMPOSE_PROJECT_NAME="$${STACK_PREFIX}"; fi; cd dev && docker compose down -v && docker compose up -d'
+
+# Idempotent bootstrap provisioning of secrets and TLS material for local-dev.
+# The script is safe to re-run: each step checks its own state.
+# Details - `docs/dev/local-setup.md`.
+dev-provision:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash dev/provision.sh
+
+# Full smoke cycle: bring up the stack -> provision Vault/TLS -> `keeper init` ->
+# seed the service registry. Builds the keeper binary before running (depends on the
+# Go code, so we don't shortcut via `keeper/bin/keeper`-as-is). Stand-aware
+# (DEV_STAND): init runs against the rendered ${STAND_DEV_DIR}/keeper.dev.yml, the operator's
+# JWT file is ${STAND_DEV_DIR}/archon-alice.jwt (default /tmp/keeper-dev/...). The next
+# smoke run will fail on `keeper init` (the operators registry is no longer empty) - to
+# re-run, do `make dev-reset && make dev-smoke`.
+#
+# The second `dev-provision` - AFTER `keeper init`: on a fresh DB (dev-reset) the schema
+# (service_registry / keeper_settings) doesn't exist yet, so the first provision pass
+# skips seeding it (see dev/provision.sh::seed_service_registry, step 10). `keeper init`
+# creates the schema (migrate.Apply), so the service registry is only seeded by the
+# repeated provision pass. provision is idempotent - calling it twice is safe;
+# without this step a single-pass `make dev-smoke` would leave an empty service registry
+# (config-S4 removed services[] from keeper.dev.yml - resolution now reads only the DB).
+dev-smoke:
+	@$(MAKE) dev-up
+	@$(MAKE) dev-provision
+	@$(MAKE) build-keeper
+	@VAULT_TOKEN=root bash -c '. dev/stand-env.sh >/dev/null && \
+		mkdir -p "$${STAND_DEV_DIR}" && \
+		envsubst "$${KEEPER_RENDER_WHITELIST}" < dev/keeper.dev.yml.tmpl > "$${STAND_DEV_DIR}/keeper.dev.yml" && \
+		./keeper/bin/keeper init \
+			--archon=archon-alice \
+			--config="$${STAND_DEV_DIR}/keeper.dev.yml" \
+			--credential-out="$${STAND_DEV_DIR}/archon-alice.jwt"'
+	@$(MAKE) dev-provision
+
+# Restarts keeper with the FULL dev-env (SOUL_STACK_ALLOW_FILE_REPOS=1 + writable
+# cache-dirs): without it, file:// service resolution fails (502). Kills the old
+# keeper, clears leader leases, waits for healthz 200. If there's no TLS material -
+# hints at `make dev-provision`. Script - dev/keeper-run.sh.
+dev-keeper:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash dev/keeper-run.sh
+
+# Issues an Archon JWT for ad-hoc dev API calls (without `keeper init`). The key
+# comes from the same Vault KV as keeper's (NOT hardcoded). Prints ONLY the
+# token to stdout -> `TOKEN=$$(make dev-jwt)`. Parameters - via variables:
+# `make dev-jwt AID=archon-keyset ROLES='["keyset-demo"]' TTL=3600`.
+AID ?= archon-alice
+ROLES ?= ["cluster-admin"]
+TTL ?= 43200
+dev-jwt:
+	@bash -c '. dev/stand-env.sh && stand_summary' >&2
+	@AID='$(AID)' ROLES='$(ROLES)' TTL='$(TTL)' bash dev/mint-jwt.sh
+
+# Brings the local souls back up from the DB registry: writes soul.yml for each sid
+# (if missing), onboards it if there's no seed, (re)starts `soul run`. Covens
+# in the DB are preserved (NOT re-registered). Script - dev/souls-up.sh.
+dev-souls:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash dev/souls-up.sh
+
+# Brings up the local souls as docker containers (soul-docker-1..N) for operational
+# scenarios and UI tests without a cloud (NIM-26). N - the SOULS_COUNT variable. WSL2:
+# KEEPER_HOST=host-IP (see docs/dev/local-setup.md). Script - dev/souls-docker-up.sh.
+SOULS_COUNT ?= 3
+dev-souls-docker:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash dev/souls-docker-up.sh $(SOULS_COUNT)
+
+# Tears down the docker souls: soul-docker-* containers + registry entries + dev directories.
+# Script - dev/souls-docker-down.sh.
+dev-souls-docker-down:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@bash dev/souls-docker-down.sh
+
+# Vite dev server for the web repo (companion ../soul-stack-web). `--host` is required,
+# otherwise vite only listens on [::1] and 127.0.0.1:5173 refuses connections. The web path -
+# the WEB_DIR variable. Script - dev/web-run.sh.
+WEB_DIR ?= ../soul-stack-web
+dev-web:
+	@bash -c '. dev/stand-env.sh && stand_summary'
+	@WEB_DIR='$(WEB_DIR)' bash dev/web-run.sh
+
+# Full dev-stand bring-up in one command: provision -> keeper -> souls -> web.
+# Convenient after a restart / day change (/tmp gets cleared). At the end - a summary + a
+# reminder about `make dev-jwt` for the token.
+dev-stand:
+	@$(MAKE) dev-provision
+	@$(MAKE) dev-keeper
+	@$(MAKE) dev-souls
+	@$(MAKE) dev-web
+	@bash -c 'set -e; . dev/stand-env.sh >/dev/null; \
+		echo ""; \
+		echo "=== dev-stand is up ($${STAND_SLUG:-<default>}) ==="; \
+		echo "keeper:  healthz http://127.0.0.1:$${OPENAPI_PORT}/healthz | openapi :$${OPENAPI_PORT} | mcp :$${MCP_PORT} | metrics :$${METRICS_PORT}"; \
+		echo "souls:   statuses - docker exec $${STACK_PREFIX}-postgres psql -U keeper -d $${PG_DB} -c '\''SELECT status, count(*) FROM souls GROUP BY status'\''"; \
+		echo "web:     http://127.0.0.1:$${WEB_PORT}"; \
+		echo "token:   TOKEN=\$$(make dev-jwt)   (parameters: AID=... ROLES='\''[...]'\'' TTL=...)"'
+
+# Frees a stand's slot: removes the slug row from the slot registry (idempotent -
+# no row = no-op). The slot's ports become available to the next stand again. NIM-25.
+dev-stand-free:
+	@test -n "$(DEV_STAND)" || { echo "dev-stand-free: specify DEV_STAND=<slug>"; exit 1; }
+	@DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && _stand_free_slot "$(DEV_STAND)"'
+	@echo "dev-stand-free: slug slot '$(DEV_STAND)' freed (registry updated)"
+
+# OpenAPI committed snapshot: source of truth is the huma aggregator in the code
+# (HumaFullSpecYAML, served on GET /openapi.yaml). docs/keeper/openapi.yaml is a
+# DERIVED dump (for UI-vendor + git-review), not a hand-written file. Two targets:
+#
+#   gen-openapi   - overwrites the committed file with the current huma dump (after editing
+#                   the huma domain). Defined above, next to gen.
+#   check-openapi - drift guard (CI): committed file == huma dump byte-for-byte;
+#                   a failure means "forgot make gen-openapi". Delegates to the same
+#                   generate-test (without GEN_OPENAPI it compares instead of writing).
+OPENAPI_COMMITTED := docs/keeper/openapi.yaml
+
+# The audit event-type catalog: same derived-file model one module down. It has no separate
+# check- target because its guard is an ordinary package test (TestGeneratedEventTypes_NoDrift),
+# which `make test` already runs - a second entry point would just be another way to run it.
+AUDIT_CATALOG_COMMITTED := shared/audit/event_types_gen.go
+
+check-openapi:
+	@echo "openapi drift-guard: $(OPENAPI_COMMITTED) == huma-dump"
+	@go test ./keeper/internal/api/ -run TestCommittedOpenAPI_NoDrift -count=1 >/dev/null || { \
+		echo ""; \
+		echo "openapi.yaml drift: committed $(OPENAPI_COMMITTED) diverges from the huma dump"; \
+		echo "run 'make gen-openapi' to regenerate the committed snapshot"; \
+		exit 1; \
+	}
+	@echo "openapi.yaml: committed snapshot matches the huma dump"
+
+# Plugin-template self-serve: the plugin-author template tree's source of truth lives
+# in the companion repo ../soul-stack-plugins/soul-mod-template/, and core embeds a copy
+# via soul-lint/internal/plugininit/template/ (go:embed). Drift between the trees
+# is caught the same way as openapi:
+#
+#   sync-template.sh - updates the copy from the companion (rsync --delete mirrors the whole tree).
+#   check-template   - CI guard for divergence; a failure means "forgot to sync after
+#                      editing the template in the companion".
+#
+# Companion is a SEPARATE repository: it may not exist on someone else's machine/CI. If SRC
+# is missing - the gate doesn't fail (otherwise it would break `make check` without the companion),
+# it's skipped with a warning. Drift is only caught when the companion is available alongside.
+TEMPLATE_SRC := ../soul-stack-plugins/soul-mod-template
+TEMPLATE_DST := soul-lint/internal/plugininit/template
+
+check-template:
+	@if [ ! -d "$(TEMPLATE_SRC)" ]; then \
+		echo "companion soul-stack-plugins not found, skipping template-drift check"; \
+	elif ! diff -r -q $(TEMPLATE_SRC) $(TEMPLATE_DST) >/dev/null; then \
+		echo "plugin-template drift detected:"; \
+		diff -r $(TEMPLATE_SRC) $(TEMPLATE_DST) || true; \
+		echo ""; \
+		echo "run 'scripts/sync-template.sh' to update the embedded copy"; \
+		exit 1; \
+	else \
+		echo "plugin-template: copy in sync"; \
+	fi
+
+# Embed-UI vendoring: the built UI snapshot's source of truth lives in the
+# companion repo ../soul-stack-web/dist/, and core embeds a copy via
+# keeper/internal/webui/assets/ (go:embed, served by keeper at /ui, ADR-055).
+# Drift between them is caught the same way as plugin-template:
+#
+#   sync-webui.sh - updates the copy from the companion (rsync --delete mirrors dist/,
+#                   builds the companion via `npm run build` if dist/ is missing).
+#   check-webui   - CI guard for divergence; a failure means "forgot to sync after
+#                   rebuilding the UI in the companion".
+#
+# Companion is a SEPARATE repository: it may not exist on someone else's machine/CI. If SRC
+# is missing - the gate doesn't fail (otherwise it would break `make check` without the companion),
+# it's skipped with a warning. Drift is only caught when the companion is available alongside.
+WEBUI_SRC := ../soul-stack-web/dist
+WEBUI_DST := keeper/internal/webui/assets
+
+sync-webui:
+	@bash scripts/sync-webui.sh
+
+# WEBUI_REPO is the companion checkout; WEBUI_SRC is its build output. They are
+# separate because the two absences mean different things (NIM-277).
+WEBUI_REPO := ../soul-stack-web
+
+# THREE outcomes, not two. The old form collapsed "no companion here" and
+# "companion here but not built" into one `skipping`, and the second is the
+# release-worktree case — the one place the gate was supposed to work. So the
+# rule that catches an unpaired web merge was itself skipped, silently, in
+# exactly the situation it exists for, and that is how NIM-273 reached the
+# release. Same shape as NIM-238: an unperformed check must never read like a
+# passed one.
+#
+# The companion-absent branch is no longer an unconditional zero (NIM-485). Where
+# the companion is expected to sit next to this checkout - a release worktree -
+# its absence means the byte comparison did not happen in the one place it is
+# relied on, and printing `skipping` there made "not checked" and "checked, in
+# sync" the same exit code. It now fails, with WEBUI_SKIP as the declared escape.
+#
+# CI is the deliberate exception, and not because the check does not matter there.
+# The companion is never checked out in core CI, and checking it out would not be
+# enough either: comparing bytes needs `npm run build`, so honouring this branch in
+# CI means putting a node toolchain and a vite build on the critical path of every
+# core push, to re-derive bytes that are already committed. What CI needs instead
+# is the question that needs no build - has the companion moved past the commit
+# these bytes came from - and that is check-webui-freshness, which IS binding on a
+# release branch. So neither context stays silent; they just get the check each one
+# can actually answer.
+#
+# The `|| echo unknown` fallback is deliberately the STRICT default. If the script
+# that decides the context cannot run at all, the honest answer is "cannot tell",
+# and this whole ticket is about not letting "cannot tell" wear the same exit code
+# as "checked, fine" - a fail-open default here would reintroduce that at the one
+# spot that decides whether anything is enforced. The script answers `advisory` by
+# itself for the legitimately-lenient cases (not a git checkout, a tag, a feature
+# branch), so this fallback only fires when something is actually broken.
+check-webui:
+	@ctx=$$(scripts/check-webui-freshness.sh --context 2>/dev/null || echo unknown); \
+	case "$$ctx" in required|unknown) mandatory=yes ;; *) mandatory=no ;; esac; \
+	if [ ! -d "$(WEBUI_REPO)" ]; then \
+		if [ "$$mandatory" = yes ] && [ -n "$(WEBUI_SKIP)" ]; then \
+			echo "check-webui: companion $(WEBUI_REPO) not present - skipped by WEBUI_SKIP (declared, not accidental)"; \
+		elif [ "$$mandatory" = yes ] && [ -z "$$CI" ]; then \
+			echo "check-webui: FAIL - companion $(WEBUI_REPO) is not present, and this tree is"; \
+			echo "  assembling a release. A release worktree is where the companion is supposed to"; \
+			echo "  sit alongside, and it is the one place the byte comparison is relied on: skipping"; \
+			echo "  it here is how an unpaired web merge reaches a release with a green gate."; \
+			echo "  Check the companion out next to this worktree, or state that you are skipping:"; \
+			echo "      make check WEBUI_SKIP=1"; \
+			exit 1; \
+		elif [ "$$mandatory" = yes ]; then \
+			echo "check-webui: companion $(WEBUI_REPO) not present in CI - the byte comparison is NOT"; \
+			echo "  performed here. On this branch the binding check is check-webui-freshness, which"; \
+			echo "  answers the staleness question without needing the companion built."; \
+		else \
+			echo "check-webui: companion $(WEBUI_REPO) not present - skipping (expected off a release branch and in third-party clones)"; \
+		fi; \
+	elif [ ! -d "$(WEBUI_SRC)" ]; then \
+		if [ -n "$(WEBUI_SKIP)" ]; then \
+			echo "check-webui: $(WEBUI_SRC) is not built - skipped by WEBUI_SKIP (declared, not accidental)"; \
+		else \
+			echo "check-webui: FAIL - companion IS present but $(WEBUI_SRC) is not built."; \
+			echo "  This is the release-worktree case, and it is the one the drift guard exists for:"; \
+			echo "  an unpaired web merge is invisible until the bundle is compared against a real build."; \
+			echo "  Build it (cd $(WEBUI_REPO) && npm run build), or state that you are skipping:"; \
+			echo "      make check WEBUI_SKIP=1"; \
+			exit 1; \
+		fi; \
+	elif ! diff -r -q $(WEBUI_SRC) $(WEBUI_DST) >/dev/null; then \
+		echo "embed-UI drift detected:"; \
+		diff -r $(WEBUI_SRC) $(WEBUI_DST) || true; \
+		echo ""; \
+		echo "run 'make sync-webui' (or 'scripts/sync-webui.sh') to update the embedded copy"; \
+		exit 1; \
+	else \
+		echo "embed-UI: copy in sync"; \
+		$(MAKE) --no-print-directory check-webui-provenance; \
+	fi
+
+# Even a byte-identical bundle can be stale: `diff` only says the copy matches
+# the build sitting in dist/, and dist/ is whatever was built last -- possibly
+# from an older commit than the branch the release is assembling. The recorded
+# SHA answers the question diff cannot: WHICH companion commit these bytes came
+# from. Advisory, not fatal: the companion may legitimately sit on another
+# branch, and a hard failure there would be the permanently-red gate that
+# teaches everyone to stop reading it.
+# check-webui-embed — the embedded bundle matches the fingerprint recorded when it
+# was vendored. Runs in `check`, so CI runs it: no companion needed, no docker, no
+# token (NIM-341).
+#
+# What it is for. `check-webui` compares the mirror against the companion's build
+# and therefore cannot run in CI at all — the companion is never checked out
+# there, so it takes its skip branch on every push. That left the whole class
+# (NIM-273: web merged, bundle not re-synced, keeper served a stale UI) resting on
+# a reviewer noticing that WEBUI_SOURCE's commit= did not move. This check is what
+# makes that signal mean something: if the bundle can change WITHOUT the
+# provenance changing, then "the SHA did not move" no longer implies "the bundle
+# did not change", and the reviewer is reading a line that guarantees nothing.
+#
+# What it does NOT catch, stated so nobody mistakes its scope: a companion that
+# moved on while core was never re-synced at all. No commit here touches assets in
+# that scenario, so nothing inside this repository can see it. That was the open
+# half of NIM-341, parked on "the companion is private and needs an org token";
+# the companion is public now, so check-webui-freshness below answers it by asking
+# the remote for one ref (NIM-485). Keep the two apart when reading a red gate:
+# this one says the bundle was edited outside the script, that one says the bundle
+# was never re-vendored.
+check-webui-embed:
+	@rec=$$(sed -n 's/^assets_sha256=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
+	if [ ! -d keeper/internal/webui/assets ]; then \
+		echo "check-webui-embed: no embedded bundle directory - nothing to verify"; \
+		exit 0; \
+	fi; \
+	act=$$(cd keeper/internal/webui/assets && find . -type f -print0 | sort -z | xargs -0 sha256sum | sha256sum | cut -d' ' -f1); \
+	if [ -z "$$rec" ]; then \
+		echo "check-webui-embed: FAIL - the embedded bundle carries no fingerprint."; \
+		echo "  keeper/internal/webui/WEBUI_SOURCE has no assets_sha256= line, so nothing"; \
+		echo "  ties the served bytes to the companion commit recorded next to them."; \
+		echo "  Re-vendor through the script, which writes both: make sync-webui"; \
+		exit 1; \
+	fi; \
+	if [ "$$rec" != "$$act" ]; then \
+		echo "check-webui-embed: FAIL - the embedded bundle does not match its own provenance."; \
+		echo "  recorded assets_sha256 = $$rec"; \
+		echo "  actual   assets_sha256 = $$act"; \
+		echo "  The bundle in keeper/internal/webui/assets/ changed without going through"; \
+		echo "  scripts/sync-webui.sh, so the commit= line next to it now describes different"; \
+		echo "  bytes than the ones keeper serves. Re-vendor: make sync-webui"; \
+		exit 1; \
+	fi; \
+	echo "check-webui-embed: embedded bundle matches its recorded fingerprint ($$(echo $$rec | cut -c1-12))"
+
+check-webui-provenance:
+	@rec=$$(sed -n 's/^commit=//p' keeper/internal/webui/WEBUI_SOURCE 2>/dev/null); \
+	if [ -z "$$rec" ]; then \
+		echo "check-webui: no provenance recorded yet (keeper/internal/webui/WEBUI_SOURCE) - run 'make sync-webui'"; \
+	else \
+		head=$$(git -C $(WEBUI_REPO) rev-parse HEAD 2>/dev/null); \
+		if [ "$$rec" = "$$head" ]; then \
+			echo "check-webui: bundle provenance matches companion HEAD ($$rec)"; \
+		else \
+			echo "check-webui: NOTE - bundle was vendored from $$rec, companion HEAD is $$head."; \
+			echo "  Not a failure (the companion may be on another branch), but if the UI changed"; \
+			echo "  on the release branch and this SHA did not move, the embedded bundle is stale."; \
+		fi; \
+	fi
+
+# check-webui-freshness — has the companion moved past the commit the embedded
+# bundle was vendored from? Needs neither the companion checked out nor built: it
+# asks the remote for a single ref. Binding on release/* and hotfix/* and on a
+# checkout detached at a bare sha, advisory elsewhere; the script owns that
+# rule and check-webui asks it rather than keeping a second copy. Rationale, scope
+# and the deliberate non-answers are in the script header — including why it
+# compares commits and not "did anything bundle-relevant change" (no path list can
+# separate build config from test config in the companion's vite.config.ts, and a
+# list is the NIM-547 failure mode), and which trees it declines to judge at all.
+#
+# One of the two tiers of `make check` that need the network (the other is
+# check-vuln, which pulls the vulnerability database). Offline, say so:
+# WEBUI_FRESHNESS_SKIP=1 — a declared skip, unlike an accidental one, is visible.
+check-webui-freshness:
+	@scripts/check-webui-freshness.sh
+
+# The freshness check is a gate, so it gets a gate's guard: a check whose two
+# failure modes are "silently lenient" and "red for everyone" cannot be trusted
+# because it passed once by hand. Same shape as check-gate / check-ci-status —
+# a real local bare repository stands in for the companion, so the resolver, the
+# branch detection and the URL derivation are exercised rather than stubbed.
+check-webui-freshness-guard:
+	@scripts/check-webui-freshness-test.sh
+
+# keeper.dev.yml: the committed copy (dev/keeper.dev.yml) - golden, read by dev-smoke
+# and docs; keeper-run/dev-smoke render the config from keeper.dev.yml.tmpl. check-stand-template
+# keeps them in sync: rendering the template with an EMPTY DEV_STAND (default stand) must be
+# byte-for-byte identical to the committed file. A mismatch means a .tmpl edit wasn't ported to committed. NIM-25.
+STAND_TMPL := dev/keeper.dev.yml.tmpl
+STAND_GOLDEN := dev/keeper.dev.yml
+
+check-stand-template:
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-stand-template: envsubst not found (gettext package)"; exit 1; }
+	@out=$$(mktemp); \
+	DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${KEEPER_RENDER_WHITELIST}" < $(STAND_TMPL)' > "$$out"; \
+	if diff -q $(STAND_GOLDEN) "$$out" >/dev/null; then \
+		echo "keeper.dev.yml: committed matches the .tmpl render (default stand)"; \
+		rm -f "$$out"; \
+	else \
+		echo "keeper.dev.yml drift: .tmpl and committed keeper.dev.yml diverged:"; \
+		diff $(STAND_GOLDEN) "$$out" || true; \
+		rm -f "$$out"; \
+		echo ""; \
+		echo "rebuild committed: bash -c '. dev/stand-env.sh && envsubst \"\$$KEEPER_RENDER_WHITELIST\" < $(STAND_TMPL)' > $(STAND_GOLDEN)"; \
+		exit 1; \
+	fi
+
+# soul.dev.yml: the committed copy (dev/soul.dev.yml) - golden; keeper-run/souls-up render the
+# soul config from soul.dev.yml.tmpl. check-soul-template keeps them in sync: rendering with an
+# EMPTY DEV_STAND (default stand) must be byte-for-byte identical to the committed file. Symmetric with
+# check-stand-template, whitelist SOUL_RENDER_WHITELIST - from dev/stand-env.sh. NIM-25.
+# While dev/soul.dev.yml.tmpl isn't merged yet (soul.dev-developer zone) - the target quietly
+# skips, so it doesn't break `make check` before the merge (same as check-template/check-webui without a companion).
+SOUL_TMPL := dev/soul.dev.yml.tmpl
+SOUL_GOLDEN := dev/soul.dev.yml
+
+check-soul-template:
+	@command -v envsubst >/dev/null 2>&1 || { echo "check-soul-template: envsubst not found (gettext package)"; exit 1; }
+	@if [ ! -f "$(SOUL_TMPL)" ]; then \
+		echo "check-soul-template: $(SOUL_TMPL) is missing (soul.dev zone not merged) - skipping"; \
+	else \
+		out=$$(mktemp); \
+		DEV_STAND='' bash -c '. dev/stand-env.sh >/dev/null && envsubst "$${SOUL_RENDER_WHITELIST}" < $(SOUL_TMPL)' > "$$out"; \
+		if diff -q "$(SOUL_GOLDEN)" "$$out" >/dev/null; then \
+			echo "soul.dev.yml: committed matches the .tmpl render (default stand)"; \
+			rm -f "$$out"; \
+		else \
+			echo "soul.dev.yml drift: .tmpl and committed $(SOUL_GOLDEN) diverged:"; \
+			diff "$(SOUL_GOLDEN)" "$$out" || true; \
+			rm -f "$$out"; \
+			echo ""; \
+			echo "rebuild committed via envsubst SOUL_RENDER_WHITELIST < $(SOUL_TMPL) > $(SOUL_GOLDEN)"; \
+			exit 1; \
+		fi; \
+	fi
+
+# check-dev-stand-build - keeps a dev stand falsifiable (NIM-342, NIM-516). Three properties:
+#
+#   1. no script in dev/ builds keeper or soul itself - both go through
+#      `make build-keeper` / `make build-soul`, so the $(VERSION) stamp cannot be
+#      dropped and the build cannot go back to being conditional on the binary
+#      being absent;
+#   2. keeper-run.sh holds the answering /healthz to the version it just built - a
+#      foreign keeper on the port is reported as such instead of as "ready";
+#   3. dev/stamp-artifact.go compiles. provision.sh `go run`s it to append the schema
+#      trailer to the redis artifact, and it sits outside the workspace
+#      modules (dev/ has no go.mod), so no other tier builds it and no other tier
+#      gofmts it. Without this, an SDK change breaks stand provisioning and the gate
+#      stays green until somebody tries to raise a stand - which is exactly the shape
+#      of NIM-516.
+#
+# A grep guard rather than a Go test: the subject is shell under dev/, which no test
+# binary loads. It catches the actual regression - a "simplification" back to a bare
+# `go build`, or the served-version comparison being deleted. What it cannot catch is
+# the scripts still working; that is what `make dev-keeper` on a live stand shows.
+#
+# Why it is worth a gate at all: before this, a stand served an arbitrarily old
+# binary reporting `0.0.0-dev`, so an observation made against it could be neither
+# confirmed nor refuted. One such observation ("a narrowly scoped role sees
+# everything") cost a critical priority and a dedicated session.
+check-dev-stand-build:
+	@bad=$$(find dev -name '*.sh' -print0 | xargs -0 grep -lE 'go build.*(cmd/keeper|cmd/soul([^-]|$$))' 2>/dev/null || true); \
+	if [ -n "$$bad" ]; then \
+		echo "check-dev-stand-build: a dev script builds keeper/soul directly: $$bad"; \
+		echo "  use 'make -C \"\$$REPO_ROOT\" build-keeper' / 'build-soul' instead - a bare go build"; \
+		echo "  drops the -ldflags stamp and the stand then reports version 0.0.0-dev (NIM-342)."; \
+		exit 1; \
+	fi
+	@for m in build-keeper BUILT_VERSION 'FOREIGN keeper holds this port'; do \
+		grep -qF "$$m" dev/keeper-run.sh || { \
+			echo "check-dev-stand-build: dev/keeper-run.sh lost the marker \"$$m\"."; \
+			echo "  the script must rebuild through 'make build-keeper', read the version back out of"; \
+			echo "  the artifact, and refuse when /healthz reports a different one (NIM-342)."; \
+			exit 1; \
+		}; \
+	done
+	@grep -qF 'build-soul' dev/souls-up.sh || { \
+		echo "check-dev-stand-build: dev/souls-up.sh no longer rebuilds through 'make build-soul' (NIM-342)."; \
+		exit 1; \
+	}
+	@grep -qF 'FOREIGN keeper holds this port' dev/upgrade-demo/ui-stand.sh || { \
+		echo "check-dev-stand-build: dev/upgrade-demo/ui-stand.sh lost the served-version check."; \
+		echo "  the demo keeper runs on its OWN port (:8090) next to the default stand, so the"; \
+		echo "  foreign-binary risk is per-port, not only on :8080 (NIM-342)."; \
+		exit 1; \
+	}
+	@out=$$(gofmt -l dev 2>&1); \
+	if [ -n "$$out" ]; then \
+		echo "check-dev-stand-build: gofmt: $$out"; \
+		echo "  dev/ is outside \$$(MODULES), so check-fmt does not see it. run 'gofmt -w' on the listed files."; \
+		exit 1; \
+	fi
+	@out=$$(go build -o /dev/null dev/stamp-artifact.go 2>&1) || { \
+		echo "check-dev-stand-build: dev/stamp-artifact.go does not build:"; \
+		echo "$$out"; \
+		echo "  dev/provision.sh 'go run's it to stamp the schema trailer into the redis"; \
+		echo "  artifact, so a broken build here means no fresh dev stand comes up (NIM-516)."; \
+		exit 1; \
+	}
+	@echo "dev stand build: keeper/soul are rebuilt through the Makefile, keeper-run verifies the served version, dev/stamp-artifact.go builds"
+
+# --- Release/packaging ---
+# These targets are additive: NOT part of `check` (require external tooling that may
+# not be installed in the dev environment). Artifacts are written to dist/ (gitignored).
+
+# CycloneDX SBOM for the three release binaries via cyclonedx-gomod (go-tool), `app`
+# mode - the SBOM of exactly what's linked into the binary (more accurate for prod-readiness
+# than the whole module's graph). One file per binary in dist/sbom/. The tool isn't
+# in PATH automatically; if not found - we print a go install hint and exit with an error
+# (not silently). `-licenses` pulls in dependency licenses, `-json` -
+# machine-readable CycloneDX, `-main` points at the main package inside the module.
+#
+# Why `app` and not `mod`: the repo is a go.work. `mod` mode with an active workspace builds
+# the root module's SBOM for ANY module (component.name is always the first module), and with
+# GOWORK=off modules with local cross-module dependencies (keeper/soul/shared)
+# don't resolve (go pulls a pseudo-version from the network). `app` mode understands the workspace
+# and resolves local replaces correctly. The SBOM of the three binaries covers the graph of all
+# library modules (proto/sdk/shared) transitively.
+SBOM_APPS := keeper:./cmd/keeper soul:./cmd/soul soul-lint:./cmd/soul-lint
+
+sbom:
+	@if ! command -v cyclonedx-gomod >/dev/null 2>&1; then \
+		echo "cyclonedx-gomod not found in PATH."; \
+		echo "install: go install github.com/CycloneDX/cyclonedx-gomod/cmd/cyclonedx-gomod@latest"; \
+		exit 1; \
+	fi
+	@mkdir -p $(SBOM_DIR)
+	@for spec in $(SBOM_APPS); do \
+		mod="$${spec%%:*}"; main="$${spec##*:}"; \
+		out="$(SBOM_DIR)/$$mod.cdx.json"; \
+		echo "cyclonedx-gomod app -main $$main ./$$mod -> $$out"; \
+		cyclonedx-gomod app -licenses -json -main "$$main" -output "$$out" "./$$mod" || exit 1; \
+	done
+	@echo "sbom: CycloneDX SBOM written to $(SBOM_DIR)/"
+
+# Native packages, built by goreleaser from the SAME nfpms: section a release uses
+# (.goreleaser.yaml). This target used to drive nfpm against a parallel set of
+# configs under deploy/nfpm/, which meant two descriptions of the same packages:
+# they drifted (`make pkg` produced 3 of the 7 shipped packages, and the
+# soul-stack-soul-lint -> soul-stack-lint rename had to be applied in both places
+# by hand). One source of truth removes that class of bug outright - a new or
+# renamed package appears here for free.
+#
+# Consequences of delegating, accepted deliberately:
+#   - needs `goreleaser`, not `nfpm`, in PATH (both are external, both via go install).
+#   - builds the whole shipped matrix - 7 packages x amd64/arm64 x deb/rpm/apk -
+#     rather than one architecture, so there is no PKG_ARCH knob any more.
+#   - no per-component variant: goreleaser cannot emit a single nfpm package, and
+#     keeping a second set of configs just for that is the very drift this removes.
+#   - `--clean` wipes $(DIST_DIR) first, so a previously generated $(SBOM_DIR)
+#     goes with it; re-run `make sbom` if you need both.
+# --skip: everything that is not a native package (archives, images, signing, SBOM,
+# and the brew/aur/winget publishers). --snapshot builds off an untagged tree.
+pkg:
+	@if ! command -v goreleaser >/dev/null 2>&1; then \
+		echo "goreleaser not found in PATH."; \
+		echo "install: go install github.com/goreleaser/goreleaser/v2@latest"; \
+		exit 1; \
+	fi
+	@echo "goreleaser snapshot: native packages only (VERSION=$(VERSION))"
+	@goreleaser release --snapshot --clean \
+		--skip=archive,docker,sign,sbom,homebrew,aur,winget || exit 1
+	@mkdir -p $(PKG_DIR)
+	@find $(DIST_DIR) -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) \
+		-exec mv -t $(PKG_DIR)/ {} +
+	@echo "pkg: $$(find $(PKG_DIR) -maxdepth 1 -type f \( -name '*.deb' -o -name '*.rpm' -o -name '*.apk' \) | wc -l) package(s) written to $(PKG_DIR)/"
+
+# Image signing (cosign) - DOCUMENTED STUB. Real signing requires a registry +
+# OIDC/keyless-identity (or a private key), which a local repo without
+# CI/publishing doesn't have. See docs/deploy README, "Image Signing" section.
+sign:
+	@echo "make sign: image signing deferred (post-publish)."
+	@echo "Requires a registry + cosign keyless-identity (OIDC) or a private key."
+	@echo "Details and plan - the \"Image Signing (cosign)\" section in deploy/README.md."
+	@exit 0
+
+# The single local CI gate. Order: cheap static checks -> build ->
+# tests (workspace + community plugins) -> drift checks -> supply-chain scan ->
+# lint the examples/ corpus -> L0 trials (soul-trial).
+# `test-integration` is NOT part of this - it requires docker (see the comment on
+# `test`); run it separately. `vet-tags` is the docker-free half of it: it compiles
+# the tag-guarded sets (integration/e2e/...) without running them, so they cannot
+# rot out of sight between docker runs (NIM-207). Release/packaging targets
+# (sbom/pkg/sign) are NOT part of this - external tooling.
+# `check-vuln` requires access to vuln.go.dev - offline
+# it's skipped via SKIP_VULNCHECK=1 (see the target), in CI it runs for real.
+# `trial` - L0-render over the examples/service/ corpus (catches broken case.yml
+# assertions).
+#
+# `test-plugins` stood here until NIM-868 and is GONE, not disabled: it swept the
+# `examples/module/*/go.mod` plugins under GOWORK=off, and the last two left for their own
+# repositories. The coverage did not evaporate — each plugin repo runs `go test -race` in
+# its own `make check`, on two architectures — but it is no longer this gate's to claim,
+# which is why the tier is deleted rather than kept green over an empty glob.
+# GATE_CHECK_TIERS / GATE_L1_TIERS — the gate's tiers, in the order they run.
+#
+# These are a LIST, not a prerequisite chain, and that is the whole point
+# (NIM-373). As prerequisites, the first red tier stopped every tier behind it
+# and left no record that they had not run: three times in one release a gate
+# that stopped after five of nineteen tiers was reported as "the gate was run".
+# scripts/gate.sh runs each one, records PASS / FAIL / NOT RUN, and returns
+# non-zero if anything is not PASS.
+#
+# `tier@build` declares the one causal dependency worth keeping: if compilation
+# fails, the tiers that RUN the compiled code say nothing the build failure has
+# not already said, so they are reported NOT RUN rather than run for a wall of
+# identical errors. Everything else is independent and now behaves that way —
+# an embedded-bundle drift tells you nothing about whether L1 passes, and it
+# must no longer be able to prevent L1 from answering.
+#
+# ★ The order is the order `check` has always had, deliberately. Moving the
+# static tiers in front of the tests looks like an improvement and is a trade:
+# their failures would then be the ones silencing the tests, and the blind spot
+# would move rather than close. With the chain gone the order no longer decides
+# what runs at all, so there is nothing to buy by changing it. `vet` and
+# `vet-tags` keep their place ahead of `build` and are NOT marked: they compile
+# the tree themselves, so on a broken build they report the same root cause
+# first-hand instead of being skipped for it.
+GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build \
+	check-integration-set check-e2e-set check-gen check-openapi@build check-template check-stand-template \
+	check-soul-template check-dev-stand-build check-webui check-webui-embed \
+	check-webui-freshness check-webui-freshness-guard check-doc-links \
+	check-approle-template check-makefile-recipes \
+	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-gate-slot \
+	check-ci-status check-release-gate check-modules-run check-vuln-corpus check-plugin-schema
+GATE_L1_TIERS := test-race@build test-integration@build e2e@build
+
+# GATE_SLOTS — how many gates may run at once ON THIS MACHINE, and therefore how
+# much of it each one gets (NIM-801). Up to eight ticket sessions run in parallel
+# here; they never conflict over files (own worktree, own branch) and always
+# conflict over CPU. Three concurrent gates measured load average 25–33 on 24
+# cores and reddened a wall-clock assertion in consolerunner that is not allowed
+# to be loosened — a phantom red in a session that changed nothing near it.
+#
+# scripts/gate-slot.sh holds the slot AND divides the machine by this number
+# (GOMAXPROCS and `go -p`). Both halves matter: the semaphore alone would bound
+# how many gates oversubscribe the box, not whether they do.
+#
+# GATE_SLOTS=1 is the strict serialisation, if 2 turns out to be too many.
+GATE_SLOTS ?= 2
+
+check:
+	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check $(GATE_CHECK_TIERS)
+	@echo "check: all docker-free checks passed"
+	@echo "check: NOT RUN — L1 integration, L3a e2e, L3b live. This gate is docker-free BY"
+	@echo "check:   DESIGN (a contributor without docker must be able to run it), so a green"
+	@echo "check:   result here is silent about every defect those tiers catch. It is not a"
+	@echo "check:   weaker version of CI — it is a different, smaller claim."
+	@echo "check: NOT RUN — the RACE DETECTOR. \`test\` runs the unit corpus uninstrumented,"
+	@echo "check:   so this gate is also silent about every data race in it, and that is where"
+	@echo "check:   the concurrent code lives (async runner + barriers, console pumps, applybus"
+	@echo "check:   fan-out). Docker-free, so it IS runnable here:   make test-race"
+	@echo "check: NOTE — docker-free is not network-free. check-webui-freshness asks the"
+	@echo "check:   companion for one branch tip (NIM-485), which adds a few seconds warm — but"
+	@echo "check:   ~30s per candidate URL that has to time out, and an ssh-shaped remote derives two,"
+	@echo "check:   so a minute or more on a checkout with several. Offline:  WEBUI_FRESHNESS_SKIP=1"
+	@echo "check:   Say what CI says:   make check-all"
+	@echo "check:   or one tier:        make test-race  |  make test-integration  |  make e2e"
+
+# check-all — the composite whose green result means what a green CI run means.
+#
+# Why it exists (NIM-316). `make check` and CI were two different assertions
+# that both ended in the word "passed", and neither implied the other: check is
+# docker-free and skips L1/L3a entirely, while CI runs both (with `-race`), and
+# neither of them ran the detector over the unit corpus at all (NIM-312).
+# "Everything is green locally" therefore referred to something narrower than
+# anyone reading it assumed — which is how a rotted L1 suite and four L3a tests
+# failing since ADR-029 stayed invisible for a release (NIM-221, NIM-317).
+#
+# The fix is not a note in the docs: it is one command that covers the same
+# ground, plus `check` stating out loud what it left out. L3b stays outside on
+# purpose — ci.yml does not run it on a push either. Where it DOES run is a tag:
+# release.yml's `live-gate` job blocks goreleaser on `make e2e-live-gate` (NIM-879).
+# See docs/testing/README.md.
+#
+# One honest difference from CI, stated here because it bites on the first run:
+# CI gives each tier its own runner, this target gives them one docker daemon, and
+# it starts L3a right after ~300 container-starting L1 packages. A failure at
+# container startup ("wait until ready: context deadline exceeded", "connection
+# refused" against a mapped port, a Vault mount that never answered) is that
+# contention, not a regression — rerun the affected package in isolation before
+# believing it. Only a failure that survives the rerun is a finding. Do not
+# "fix" it by loosening a readiness wait: that trades a loud infra flake for a
+# quiet one.
+#
+# Which of the two you got is no longer left to the reader: on failure
+# `test-integration` labels every failing package REGRESSION / INFRA / UNCLEAR
+# and prints the `PKG=` line to rerun the suspect one alone (NIM-349).
+# check-ci — "has CI verified THIS commit?", asked about a sha derived from git
+# rather than read off a branch listing (NIM-339). REF= to ask about another ref.
+#
+# Separate from check-all on purpose: check-all runs tiers locally and works
+# offline, this one is a network question about the remote's verdict. The two
+# answer different things and a green one does not substitute for the other.
+check-ci:
+	@REF="$(REF)"; scripts/ci-status.sh $${REF:-HEAD}
+
+# check-integration-set — the L1 package set is real, cross-checked against the
+# tree (NIM-349). Docker-free, so it lives in `check`: the failure it guards
+# against is a green, fast, empty L1, and that must be caught by the gate everyone
+# runs rather than by the job that would be reporting the lie. Details and the
+# second derivation: scripts/check-integration-set.sh.
+#
+# It also self-tests the L1 failure classifier. That guard exists because the
+# classifier is the one piece of this work `make test` cannot see — it is not Go —
+# and its first version mislabelled two container failures as REGRESSION with
+# nothing going red. Pinned fixtures, one per verdict, taken from real failures.
+check-integration-set:
+	@scripts/check-integration-set.sh
+	@scripts/classify-l1-failure.py --self-test
+
+# check-e2e-set — the same guard check-integration-set gives L1, for the tiers
+# that never had one (NIM-392). `make e2e` took its package list from `go list
+# -tags=e2e` and, on an empty answer, printed a skip and exited 0: a lost L3a and
+# a tree with no e2e tests were the same observation. Docker-free on purpose —
+# the failure it guards against is a green, fast, empty suite, and that has to be
+# caught by the gate everyone runs rather than by the job that would be doing the
+# lying. Details and the second derivation: scripts/check-e2e-set.sh.
+#
+# It also carries the two docker-free guards the e2e-live tier owns (NIM-406),
+# because `test` iterates $(MODULES) and that list has no tests/* in it — so
+# without this line the only thing running them is `e2e-live-gate`, i.e. the
+# 20-minute job they exist to keep honest:
+#   - tests/e2e-live/harness untagged tests: the stand's readiness properties,
+#     pinned so deleting a mapped-port wait is loud instead of silent;
+#   - the e2e-live failure classifier's self-test, which is not Go and so is
+#     invisible to `make test` — the same reason check-integration-set carries
+#     the L1 one;
+#   - that $(E2E_GATE_TESTS) names tests that exist (NIM-507). check-e2e-set.sh
+#     above counts PACKAGES, which stays green while the list inside the one
+#     package names nothing real — the gate would then run a set nobody checked
+#     and label the rest NOT-RUN forever.
+#
+# L3a gets the same two things, for the same reasons (NIM-469):
+#   - scripts/classify-l3a-failure.py's self-test. Same argument as its L1 and
+#     e2e-live twins: the classifier is not Go, so `make test` never sees it,
+#     and a label that silently goes wrong is worse than no label — it sends
+#     someone hunting a defect that does not exist. Pinned fixtures, one per
+#     family, taken from real L3a failure shapes.
+#   - tests/e2e/harness's own guards. Ordinary Go tests behind the e2e tag that
+#     touch no docker — AST and pure functions over the harness sources — and
+#     they hold the properties the stands' readiness rests on: that each
+#     container is waited on through its mapped port rather than a log line,
+#     that the budgets are stated rather than inherited, and that every place
+#     raising the stands bounds them by the derived one. Those are what made
+#     L3a green alone and red in company, so they belong in the gate everyone
+#     runs and not only in the tier that needs a docker daemon to say anything
+#     at all. They cost ~0.05s. The package is its own module, hence the
+#     subshell.
+check-e2e-set:
+	@scripts/check-e2e-set.sh
+	@scripts/e2e-gate-mask.sh verify $(E2E_GATE_TESTS)
+	@scripts/classify-e2e-live-failure.py --self-test
+	@echo "go test -count=1 ./harness/ in tests/e2e-live (docker-free stand-readiness guards)"
+	@(cd tests/e2e-live && go test -count=1 ./harness/)
+	@scripts/classify-l3a-failure.py --self-test
+	@echo "go test -tags=e2e -count=1 ./harness/... in tests/e2e (docker-free stand-readiness guards)"
+	@(cd tests/e2e && go test -tags=e2e -count=1 ./harness/...)
+	@echo "go test -count=1 ./harness/ in tests/e2e-k8s (docker-free image-provenance guards, NIM-490)"
+	@(cd tests/e2e-k8s && go test -count=1 ./harness/)
+
+# check-gate — the gate's guard on itself (NIM-373). scripts/gate.sh is what
+# decides whether a tier ran and what it said, so a regression there misreports
+# every other tier at once, and it would misreport them in the quiet direction:
+# an early exit restored by accident looks like a gate that finished. The guard
+# runs gate.sh against a throwaway Makefile of fake tiers and asserts all three
+# outcomes, including that the dependent of a failed tier leaves no trace in the
+# output. Docker-free, about a second.
+check-gate:
+	@scripts/gate-test.sh
+
+# check-gate-slot — the guard on the gate's slot semaphore (NIM-801). Same reason
+# check-gate exists, one layer out: gate-slot.sh decides whether two gates share
+# this machine or fight over it, and both ways of breaking it are silent. A lock
+# that stopped locking leaves every gate green here and reddens a wall-clock test
+# in someone else's session days later; a CPU budget that stopped being exported
+# does the same while the locking still looks intact. So the halves are asserted
+# apart: the arithmetic against a pinned core count, the exclusion by actually
+# running two gates at once and watching the second one wait.
+#
+# Docker-free, ~4s (three of the cases hold a slot against a 3s timeout).
+check-gate-slot:
+	@scripts/gate-slot-test.sh
+
+# check-ci-status — the guard on check-ci's report (NIM-393). Same reason
+# check-gate exists, one tool over: ci-status.sh is what answers "has CI verified
+# THIS sha", so a regression there is invisible by construction — it misreports
+# the very thing you would use to notice. It took best-outcome-per-workflow,
+# which is right for an evicted attempt and wrong for a failed one: a red attempt
+# followed by a green rerun printed VERIFIED with no trace of the red.
+#
+# The guard runs ci-status.sh against a `gh` stub serving pinned fixtures from
+# the real API, applying the script's own jq filters — so trimming a filter goes
+# red here rather than silently un-reporting. Docker-free and network-free (it
+# has to be: a test whose subject is "the report omits nothing" cannot depend on
+# which runs GitHub still retains), about a second.
+check-ci-status:
+	@scripts/ci-status-test.sh
+
+# RELEASE_GATE_TARGETS — the targets a tag is BLOCKED on, as opposed to the
+# ones RELEASING.md merely asks a human to run (NIM-879).
+#
+# The distinction had no representation anywhere, and that is the whole defect. Step (e)
+# of RELEASING.md called `make e2e-live-gate` blocking, in bold, for months; the tier ran
+# in no CI job that had ever executed, so it was red on the release tip from migration 118 until
+# somebody ran it by hand at NIM-876. Five steps of that procedure are marked blocking and
+# not one of them was enforced by anything — a class, not an oversight.
+#
+# A target listed here must be run by a job that release.yml's PUBLISHING job needs — the
+# one that runs goreleaser, found by that rather than by its key, so that renaming it or
+# putting a decoy beside it is loud rather than quiet. A red tier then means a
+# tag that produces nothing from that workflow. Every OTHER command named in RELEASING.md —
+# `make …` and `scripts/…` alike — must appear in scripts/release-gate-allowlist.txt with
+# the reason it stays a human's. check-release-gate below holds both halves.
+RELEASE_GATE_TARGETS := e2e-live-gate
+
+# check-release-gate — the guard on the release procedure's own enforcement (NIM-879).
+# Same family as check-gate / check-ci-status / check-modules-run / check-vuln-corpus, one
+# level further out: those guard the reporters, this guards whether the blocking steps run
+# at all.
+#
+# The regression is invisible in the direction that matters, which is why it needs a guard
+# rather than a review: dropping `needs: live-gate` from release.yml, or adding
+# `continue-on-error` to the gate job, makes tag runs faster and greener and changes nothing
+# in the output. So does adding a `make …` line to RELEASING.md that nothing will ever run —
+# that is exactly how step (e) came to exist. Docker-free, network-free, under a second.
+#
+# The second publishing path is checked here too (NIM-882): apt-publish.yml fires on ANY
+# release, so the release-workflow gate does not reach it, and the ruleset that was supposed
+# to is not a thing GitHub offers. Two scripts ask instead — check-release-provenance.sh
+# (did the gated pipeline make this release) and verify-release-assets.sh (are these the
+# assets it built) — and BOTH self-tests run here, because a gate nobody executes is the
+# defect this whole family is about. Each drives its real script against a canned API or a
+# stubbed cosign: no network, no token, no signing key.
+check-release-gate:
+	@scripts/check-release-gate.py
+	@scripts/check-release-gate.py --self-test
+	@scripts/check-release-provenance.sh --self-test
+	@scripts/verify-release-assets.sh --self-test
+
+# check-modules-run — the guard on the per-module sweep (NIM-494). Third of the
+# same kind, one level down from check-gate: gate.sh reports on tiers,
+# modules-run.sh reports on the eight modules INSIDE a tier, and until this
+# ticket that inner loop was `|| exit 1` — a failure in `shared` left `sdk`,
+# `keeper`, `soul`, `soul-lint` and `soulctl` untested with nothing in the output
+# naming them, while the tier above printed one honest `FAIL test`.
+#
+# It has to be guarded for the reason the other two are: the regression is
+# invisible in the direction that matters. A restored early exit does not crash
+# or print an error — the sweep just ends sooner and still prints a summary, and
+# a summary is the most complete-looking thing in the log. So the guard runs
+# modules-run.sh over throwaway directories and asserts which module markers
+# reached the output, not merely what the exit code was. Go-free and
+# docker-free, about two seconds.
+check-modules-run:
+	@scripts/modules-run-test.sh
+
+# check-vuln-corpus — the guard on WHAT check-vuln scans (NIM-774). Fourth of the
+# same kind, and the outermost: gate.sh reports on tiers, modules-run.sh on the
+# modules inside a tier, check-modules-run on that reporter — and none of them can
+# see a module that was never in the list. `check-vuln` swept eight of the twenty
+# go.mod files in the tree and ended with "clean across all modules", and the
+# twelve it never opened produced no row, no skip and no name. Ten of them were
+# red the first time anybody scanned them.
+#
+# The regression is invisible in the direction that matters, as it is for the other
+# three: narrowing a corpus makes a gate faster and greener, and nothing in the
+# output changes shape. So this runs the REAL recipe over fixture modules with a
+# stub scanner and asserts that a module carrying no `toolchain` line is scanned
+# rather than skipped, and that one that cannot be enumerated is a FAIL rather than
+# a quiet SKIPPED. Go-free apart from `go list` over a stdlib-only fixture,
+# docker-free, offline, about two seconds.
+check-vuln-corpus:
+	@scripts/vuln-corpus-test.sh
+
+# check-plugin-schema — the bundled artifacts' `schema.json` is GENERATED, and this is
+# what makes that checkable (NIM-525, extended to mongo by NIM-769).
+#
+# The document is the module contract: soul-lint validates the whole corpus against
+# the committed copy, keeper reads the trailer at `plugin.allow`, and the module form
+# in the UI is built from it. All three trust the document over the code they cannot
+# see, so a copy edited by hand — or simply left behind after a `module.Def` changed —
+# is a contract the binary does not implement, and nothing downstream can tell.
+#
+# It runs the AUTHOR's path, end to end and offline: build the artifact, `soul-mod
+# stamp` it (which derives the document by running the artifact's own `schema`
+# subcommand, writes the trailer and publishes the bytes beside it), `soul-mod verify`
+# the result, then diff against what the repository committed. The plugin's own
+# manifest_test.go asserts the same equality from inside the package; this asserts it
+# through the tool a plugin author actually runs, which is the half that was untested.
+#
+# GOWORK=off for the artifact (a plugin is its own module, outside the workspace, ADR-016);
+# GOWORK= for soul-mod (it lives in the sdk module and resolves through the workspace).
+#
+# ★ NIM-868 MOVED THE SUBJECT, NOT THE CHECK. The sources are no longer in this tree —
+# `redis` and `vmlocal` were the last two Go modules under `examples/`, and they left for
+# one repository each. What stayed is `examples/module/redis/schema.json`, VENDORED, and
+# this target is what keeps that copy honest: it builds the artifact from the PINNED
+# COMMIT (scripts/plugin-source.sh) and refuses if what the real `soul-mod stamp` derives
+# there is not byte-identical to the copy here.
+#
+# So this is the freshness gate for the vendored document, and it is the reason the
+# document could be vendored at all. Without it, `LINT_MODULES_REDIS` would be pointing
+# soul-lint at a file whose only claim to being the module's contract is that somebody
+# copied it once — which is the check-webui-embed failure mode (a bundle compared against
+# a fingerprint IT wrote, so a stale one matches its own record perfectly).
+#
+# ⚠ The corpus is what the catalog carries AND what this tree vendors, intersected: only
+# `redis` is vendored here, because only `redis` has scenarios in this tree to lint. The
+# empty case is a FAILURE, not a quiet pass — a gate sweeping nothing is the NIM-392 shape.
+PLUGIN_SCHEMA_VENDORED ?= redis
+check-plugin-schema:
+	@if [ -z "$(strip $(PLUGIN_SCHEMA_VENDORED))" ]; then \
+		echo "check-plugin-schema: the vendored-document list is EMPTY, so this gate would sweep" >&2; \
+		echo "  nothing and report green. If no document is vendored here any more, delete the" >&2; \
+		echo "  tier rather than letting it pass on an empty list (NIM-392)." >&2; \
+		exit 1; \
+	fi
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
+	for alias in $(PLUGIN_SCHEMA_VENDORED); do \
+		vendored="examples/module/$$alias/schema.json"; \
+		if [ ! -f "$$vendored" ]; then \
+			echo "check-plugin-schema: $$vendored is missing — it is the document this gate exists to hold to the pin." >&2; \
+			exit 1; \
+		fi; \
+		src=$$(scripts/plugin-source.sh dir "$$alias") || exit 1; \
+		( cd "$$src" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+		"$$tmp/soul-mod" verify "$$tmp/artifact" >/dev/null || exit 1; \
+		if ! cmp -s "$$tmp/schema.json" "$$vendored"; then \
+			echo "check-plugin-schema: $$vendored is NOT what the pinned $$alias artifact publishes." >&2; \
+			echo "  The document is generated from module.Def values, never hand-edited. Either the" >&2; \
+			echo "  vendored copy is stale, or the pin is behind a change in the plugin repository:" >&2; \
+			echo "    make plugin-schema-vendor            # re-vendor from the CURRENT pin" >&2; \
+			echo "    scripts/plugin-source.sh             # bump the pin first if the change is newer" >&2; \
+			echo "  The pinned tree that disagrees is $$src" >&2; \
+			exit 1; \
+		fi; \
+		echo "check-plugin-schema: $$vendored is what \`soul-mod stamp\` derives at the pinned $$alias commit, and verify is green"; \
+	done
+
+# plugin-schema-vendor — re-vendor the document from the pinned commit. The remedy
+# `check-plugin-schema` names, so that a red gate has a command behind it rather than a
+# description of one (a remedy nobody can run is how a gate stops being read).
+plugin-schema-vendor:
+	@tmp=$$(mktemp -d); trap 'rm -rf "$$tmp"' EXIT; \
+	GOWORK= go build -o "$$tmp/soul-mod" ./sdk/cmd/soul-mod || exit 1; \
+	for alias in $(PLUGIN_SCHEMA_VENDORED); do \
+		src=$$(scripts/plugin-source.sh dir "$$alias") || exit 1; \
+		( cd "$$src" && GOWORK=off go build -o "$$tmp/artifact" . ) || exit 1; \
+		"$$tmp/soul-mod" stamp "$$tmp/artifact" >/dev/null || exit 1; \
+		cp "$$tmp/schema.json" "examples/module/$$alias/schema.json"; \
+		echo "plugin-schema-vendor: examples/module/$$alias/schema.json re-vendored from $$src"; \
+	done
+
+# plugin-sources — fill the pinned-plugin cache up front. The deliberate way to prepare a
+# machine that is about to go offline; after it, SOUL_STACK_PLUGIN_OFFLINE=1 turns a
+# missing pin into a loud error instead of a silent fetch.
+plugin-sources:
+	@scripts/plugin-source.sh prime
+
+check-all:
+	@GATE_SLOTS='$(GATE_SLOTS)' scripts/gate-slot.sh scripts/gate.sh check-all $(GATE_CHECK_TIERS) $(GATE_L1_TIERS)
+	@echo "check-all: docker-free gate + unit -race + L1 (integration, -race) + L3a (e2e) all passed"
+	@echo "check-all: this is the same claim a green CI run makes. L3b live is still NOT run:"
+	@echo "check-all:   make e2e-live-gate   (the five that block a tag; run before a batch commit)"
+	@echo "check-all:   make e2e-live        (full tier; dispatched from nightly.yml, which has no schedule)"
+	@echo "check-all: a container-startup failure here is contention (one docker daemon,"
+	@echo "check-all:   two tiers back to back), not a regression — rerun that package alone."
+
+# gofmt formatting across all modules. `gofmt -l` only prints files that
+# differ from the canonical format; a non-empty list is a gate failure.
+# Scoped by module roots (gofmt recurses into directories itself), we aggregate
+# the output of a single `gofmt -l` and fail if anything was found.
+#
+# $(MODULES) is not the whole tree: the e2e harnesses under tests/ and the Go
+# module examples under examples/ are their own modules and were outside this
+# gate, so unformatted code there passed `make check` and was found later by a
+# reader. They are added explicitly (NIM-729, which edited an e2e harness and
+# got a green gate over a formatting break). Both trees are gofmt-clean as of
+# this change, so widening the scope reddens nothing that was already green.
+check-fmt:
+	@out=$$(gofmt -l $(MODULES) tests examples 2>/dev/null); \
+	if [ -n "$$out" ]; then \
+		echo "gofmt: the following files are not formatted:"; \
+		echo "$$out"; \
+		echo ""; \
+		echo "run 'gofmt -w' on listed files"; \
+		exit 1; \
+	fi; \
+	echo "gofmt: all files are formatted"
+
+# `go vet ./...` for each module. The same skip-empty-module pattern as in
+# `test`/`build` (`go list ./...` empty -> a module with no go packages, skip),
+# otherwise `go vet ./...` fails with "matched no packages".
+vet:
+	@MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh vet "$(MODULES)" 'go vet ./...'
+
+# `go vet` under the build tags a plain `go vet ./...` never builds. Tag-guarded
+# files sit outside the default build, so a signature change on the other side of
+# the fence rots them silently: by NIM-207 the whole `integration` set of
+# `soul/cmd/soul` had been unbuildable for several tickets (`reconnectLoop` grew
+# from 12 to 14 params across NIM-142/144/157 and nothing updated the call), and
+# `keeper/internal/redis` the same way after `NewClient` took a password
+# resolver. Neither failed an assert -- they failed to compile, so the suites
+# could not run at all while the gate stayed green.
+#
+# vet compiles without running anything, so this stays docker-free and belongs in
+# `check` (unlike `test-integration` / `e2e`, which need containers and are
+# opt-in). One tag per pass: tags are not mutually compatible, and a combined
+# `-tags=a,b` would build files that were never meant to coexist.
+# The tagged directories are not $(MODULES) and each carries its own tag, so
+# they stay a loop here rather than going through modules-run.sh — the tag
+# mapping lives in TAGGED_DIRS and duplicating it into a command string would
+# give it a second home to drift from.
+#
+# Both halves are ONE recipe line, joined by a shared rc, and that is the whole
+# point: make runs each recipe line in its own shell and abandons the target on
+# the first nonzero exit. Split across two lines, a red module in the sweep above
+# meant the four tagged directories were never vetted and were never named —
+# this ticket's own defect surviving inside its fix, with `gate.sh` showing one
+# honest `FAIL vet-tags` over it. "Which of the tagged sets is broken" is the
+# question this target answers, and it cannot answer it from a shell make
+# already walked away from.
+vet-tags:
+	@rc=0; \
+	MODULES_SKIP_NOTE='no Go packages here yet (nothing generated)' \
+		scripts/modules-run.sh vet-tags "$(MODULES)" 'go vet -tags=integration ./...' || rc=1; \
+	for spec in $(TAGGED_DIRS); do \
+		d=$${spec%%:*}; tag=$${spec##*:}; \
+		echo "go vet -tags=$$tag ./... in $$d"; \
+		(cd $$d && go vet -tags=$$tag ./...) || { echo "vet-tags: FAILED in $$d (-tags=$$tag)"; rc=1; }; \
+	done; \
+	if [ "$$rc" -ne 0 ]; then \
+		echo "vet-tags: at least one module or tagged directory failed — every FAILED line above is its own"; \
+	fi; \
+	exit $$rc
+
+# Checks protogen idempotency (gen-drift): runs `make gen` and
+# checks whether the committed generated Go changed. Scopes the diff to exactly the two
+# generated-code directories - the gate shouldn't fail on unrelated working-tree
+# changes. A non-empty diff means either "forgot to commit `make gen`" or
+# "protogen isn't idempotent" (then it's a question for the toolchain/protoc-plugin versions).
+check-gen:
+	@$(MAKE) gen
+	@if ! git diff --exit-code -- $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT); then \
+		echo ""; \
+		echo "gen-drift: generated Go differs from committed"; \
+		echo "commit the result of 'make gen' (or protogen isn't idempotent)"; \
+		exit 1; \
+	fi
+	@echo "check-gen: protogen is idempotent"
+
+# Checks the integrity of internal doc links (markdown [..](file.md#anchor) across
+# all *.md, including CLAUDE.md and examples/, + docs/...#anchor in Go comments).
+# The target file must exist, the anchor is generated as a GitHub slug from the heading.
+# PRE-EXISTING broken links (truncated Go anchors, stale slugs) are tracked in
+# scripts/doc-links-allowlist.txt and cleared out in batches during the ADR migration to docs/adr/.
+check-doc-links:
+	@python3 scripts/check-doc-links.py
+
+# check-approle-template - the Vault AppRole role template we ship to operators
+# must issue a PERIODIC token (NIM-429). Grouped with the doc checks rather than
+# with check-template/check-stand-template: those compare a rendered artifact
+# against its source, this one asserts on doc CONTENT, because no artifact is
+# rendered from it - the only executor of that snippet is a human copying it out
+# of the docs. Rationale in full: scripts/check-approle-template.sh.
+check-approle-template:
+	@scripts/check-approle-template.sh
+
+# check-makefile-recipes - every `bash -c` recipe in THIS file must pass one intact,
+# fully quoted script (NIM-615). `dev-stop` closed its outer string on an inner `'...'`
+# pattern and silently became a `bash | node | npm` pipeline: it killed nothing, took
+# `dev-down` with it, and survived two and a half weeks because a Makefile recipe is the
+# one kind of code here that no gate compiles, lints or runs. Rationale and the limits of
+# what a scanner can see: scripts/check-makefile-recipes.py.
+#
+# Two layers, because they fail differently. The scanner covers every `bash -c`
+# recipe but only their quoting; the second line RUNS the one that broke, which is
+# the only way to catch a recipe that parses and then dies at runtime. It stays
+# docker-free (stand-env.sh only computes paths and ports), and it is safe to run
+# from the gate: `DEV_STAND_SLOT` short-circuits slot allocation before the
+# registry lock, so no shared slot is taken, and a throwaway slug points every path
+# in the recipe (pidfiles, the `pkill` pattern) at a stand directory that does not
+# exist. It signals nothing, removes nothing, and cannot touch another stand.
+check-makefile-recipes:
+	@python3 scripts/check-makefile-recipes.py
+	@DEV_STAND=check-recipes DEV_STAND_SLOT=1 $(MAKE) --no-print-directory dev-stop
+	@echo "check-makefile-recipes: dev-stop ran to completion on an empty stand"
+
+# govulncheck - the supply-chain CI gate across EVERY Go module in the tree (security
+# audit, pre-beta).
+# Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
+# code/dependency call graph - not just "present in go.sum". The skip-empty-module
+# pattern of vet/test is here in a NARROWER form: those targets skip a module whose
+# `go list ./...` is empty, and an empty package list also means "every file is behind
+# a tag nobody named". A module is skipped here only when it holds no Go file at all
+# (proto/plugin before `make gen`); Go that no build configuration reaches is a
+# failure, not a skip. See the probe in scripts/vuln-scan.sh.
+#
+# The corpus is $(VULN_MODULES) — every go.mod, derived — and not $(MODULES), which is
+# eight of twenty (NIM-774). The eight were the ones that happen to be built and tested
+# by the core targets; the supply-chain question is not about them, it is about every
+# line of Go this repository publishes or executes. What the old corpus omitted was not
+# marginal: ten of the twelve missing modules were red the first time they were scanned
+# - eight on stdlib advisories their own `go 1.26.4` line asked for, two on a reachable
+# tar-traversal in moby/go-archive - and none of it was visible from a gate that ended
+# in "clean across all modules".
+#
+# Each module is scanned the way it is built - inside the workspace if go.work lists it,
+# standalone with GOWORK=off if it does not, under its $(VULN_TAGS) tag where one is
+# needed to reach its non-test code. That decision is per-module, so the command is a
+# script: scripts/vuln-scan.sh, which also prints which of the two it did. MODULES_PROBE_FAIL is
+# left at `fail` on purpose - the retired `test-plugins` could downgrade an unresolvable
+# module to a SKIPPED row, because a plugin it could not build is a plugin it did not test,
+# but here the same row would read "we could not scan it" and count towards a green gate.
+#
+# The binary - `go install` into $(GOPATH)/bin (the protoc-plugins pattern). If not
+# found - installs the pinned version (idempotent).
+#
+# Offline-graceful: govulncheck pulls the vuln DB (vuln.go.dev). Without network the run
+# is impossible - `SKIP_VULNCHECK=1` skips the gate with a warning (a dev machine without
+# access isn't blocked). In CI the variable is NOT set -> the gate actually runs and
+# must be green. Not silently-skip-by-default: skipping only via an explicit
+# opt-out, otherwise a supply-chain regression would go unnoticed.
+# The whole recipe is ONE shell invocation (`if ...; then ...; fi` on one logical
+# line): otherwise `exit 0` in the first recipe line would only end its own sub-shell,
+# and the target's following lines would still run (make runs each line in its
+# own separate shell). The SKIP branch must skip the entire scan.
+check-vuln:
+	@if [ -n "$(SKIP_VULNCHECK)" ]; then \
+		echo "check-vuln: SKIP_VULNCHECK is set - supply-chain scan skipped (offline opt-out)"; \
+	else \
+		if [ ! -x "$(GOVULNCHECK)" ]; then \
+			echo "govulncheck not found - go install @$(GOVULNCHECK_VERSION)"; \
+			go install golang.org/x/vuln/cmd/govulncheck@$(GOVULNCHECK_VERSION) || exit 1; \
+		fi; \
+		mods="$(VULN_MODULES)"; count=$$(set -f; set -- $$mods; echo $$#); \
+		VULN_ROOT="$(CURDIR)" VULN_TAGS="$(VULN_TAGS)" GOVULNCHECK="$(GOVULNCHECK)" \
+		MODULES_PROBE="$(CURDIR)/scripts/vuln-scan.sh --probe" \
+		MODULES_SKIP_NOTE='no Go file in this module at all (nothing generated yet)' \
+			scripts/modules-run.sh check-vuln "$$mods" "$(CURDIR)/scripts/vuln-scan.sh" || exit 1; \
+		echo "check-vuln: govulncheck reached nothing it calls in the $$count modules of the corpus above."; \
+		echo "check-vuln:   The table is the corpus - every go.mod in the tree - and it says per module"; \
+		echo "check-vuln:   what was scanned, how, and what it answered. A module missing from it is a"; \
+		echo "check-vuln:   bug in this gate; a SKIPPED row is a module with no Go file in it at all."; \
+		echo "check-vuln: NOT SCANNED, and no run of this target can say anything about either:"; \
+		echo "check-vuln:   * every \`_test.go\` in every module - \`govulncheck -test\` defaults to false."; \
+		echo "check-vuln:   * files built for another GOOS (\`darwin\`, \`!linux\`) - a scan sees one platform,"; \
+		echo "check-vuln:     this host's. Named because a scan nobody ran is not a scan that found nothing."; \
+	fi
+
+# Offline validation of the examples/ corpus with the soul-lint linter. The binary is built
+# as part of `build` (dependency). Categories: destiny / service / manifest /
+# scenario. validate-scenario takes a path to scenario/<name>/main.yml
+# (the scenario's entry point; secondary files are resolved via include: from main.yml).
+# An empty category (no files under the glob) is skipped without error. Any
+# non-zero exit from soul-lint on a committed example fails the gate.
+#
+# The `--modules` bindings feed `validate-scenario` (NIM-228): with them, a plugin
+# module's `params:` are checked against its schema document by the same four checks
+# that `core.*` already gets. Without them the linter can only say
+# `plugin_params_unchecked` and move on — which is what this corpus did for every
+# `redis` step, even though the module's own document sits in the SAME tree
+# (NIM-294). The corpus is the one place where both halves are present, so leaving the
+# flag off meant validating it without the check it exists to demonstrate.
+#
+# The flag takes `<alias>=<path>` since NIM-377, not a directory to walk. The artifact
+# carries no self-name — no `namespace:`, no `name:` — so address level 1 is the
+# registration alias an operator picks, and nothing in the bytes can tell the linter
+# what a task will call it. It has to be stated.
+#
+# The binding is PER SERVICE, and that is not a convenience: one alias names one host
+# slot holding one artifact (keeper/internal/pluginhost/slot.go), so no single keeper
+# serves two, and `--modules X=A --modules X=B` is refused outright. One binding per
+# lint run is exact, because no scenario in the corpus addresses both artifacts.
+#
+# The redis artifact registers as `redis` since NIM-766 and mongo as `mongo` since
+# NIM-769 — one alias each, one module per OBJECT it manages. The origin-grouping level
+# `community` is gone from both, so the two aliases differ by SUBJECT now, which is
+# what makes the collision above moot rather than the rule that avoided it.
+LINT_MODULES_REDIS ?= examples/module/redis
+
+# Services whose plugin has LEFT this tree, and whose scenarios are therefore not
+# scenario-linted here at all (NIM-825).
+#
+# ⚠ This is a real loss, decided deliberately. `mongo` now lives in its own
+# repository (github.com/soul-stack-plugin/mongo) per ADR-011 — "examples/ —
+# non-Go artifacts only … separate repos" — so `--modules=mongo=<path>` has nothing
+# in this checkout to point at. The alternatives were a relative path into a sibling
+# checkout (breaks a clean CI clone of this repo alone) or vendoring the plugin's
+# schema.json here behind a freshness gate (the check-webui-freshness shape). Taking
+# the corpus off the lint was chosen instead, and the cost is exactly what the
+# FALSE-GREEN guard below exists to prevent: NOTHING checks the `params:` of the
+# `mongo.*` steps in examples/service/mongo now. `validate-service` still runs on it,
+# and the plugin's own repository gates its schema document; what is gone is the one
+# place where BOTH halves were present at once.
+#
+# The same line will be needed for `redis` when the redis artifact follows (NIM-825).
+# ⚠ This value is interpolated as a shell `case` PATTERN, so a second service is
+# `mongo|redis`, NOT `mongo redis` — the space form is a syntax error, not a two-element
+# list, and it would take the whole lint target down rather than skip anything.
+LINT_SCENARIO_SKIP ?= mongo
+
+# What the recipes interpolate. An EMPTY override — `make lint LINT_SCENARIO_SKIP=`, the
+# obvious way to ask for "skip nothing, lint the mongo corpus too" — expands the case arm
+# to a bare `)`, a syntax error that takes the target down instead of linting more. Falls
+# back to a pattern no service directory can be named.
+LINT_SCENARIO_SKIP_PAT := $(or $(strip $(LINT_SCENARIO_SKIP)),@@none@@)
+
+lint: build
+	@for f in examples/destiny/*/destiny.yml; do \
+		[ -e "$$f" ] || continue; \
+		echo "validate-destiny $$f --modules=redis=$(LINT_MODULES_REDIS)"; \
+		out=$$($(LINT_BIN) validate-destiny "$$f" "--modules=redis=$(LINT_MODULES_REDIS)" 2>&1); rc=$$?; \
+		echo "$$out"; \
+		[ $$rc -eq 0 ] || exit 1; \
+		if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+			echo "lint: FALSE-GREEN in $$f — a plugin module in its tasks/ has no --modules binding," >&2; \
+			echo "      so its params were NOT checked (NIM-294, reached destinies in NIM-783)." >&2; \
+			echo "      Bind it above and re-run." >&2; \
+			exit 1; \
+		fi; \
+		if echo "$$out" | grep -qF destiny_tasks_unchecked; then \
+			echo "lint: FALSE-GREEN in $$f — its tasks/main.yml was never opened (NIM-783), so the" >&2; \
+			echo "      corpus destiny is only half linted. A destiny in examples/ has its task" >&2; \
+			echo "      tree beside it; fix the layout rather than the check." >&2; \
+			exit 1; \
+		fi; \
+	done
+	@for f in examples/service/*/service.yml; do \
+		[ -e "$$f" ] || continue; \
+		echo "validate-service $$f"; \
+		$(LINT_BIN) validate-service "$$f" || exit 1; \
+	done
+	@for d in $(STAMP_TREES); do \
+		case "$$d" in examples/*) continue;; esac; \
+		echo "validate-service $$d/service.yml (stamped tree outside examples/)"; \
+		$(LINT_BIN) validate-service "$$d/service.yml" || exit 1; \
+	done
+	@for f in examples/module/*/schema.json; do \
+		[ -e "$$f" ] || continue; \
+		echo "validate-manifest $$f"; \
+		$(LINT_BIN) validate-manifest "$$f" || exit 1; \
+	done
+	@for f in examples/service/*/scenario/*/main.yml; do \
+		[ -e "$$f" ] || continue; \
+		case "$$(basename $$(dirname "$$f"))" in \
+			_*|.*) echo "skip validate-scenario $$f (shared include bodies, not a scenario)"; continue;; \
+		esac; \
+		svc=$$(echo "$$f" | cut -d/ -f3); \
+		case "$$svc" in \
+			$(LINT_SCENARIO_SKIP_PAT)) echo "skip validate-scenario $$f ($$svc's plugin left this tree, NIM-825)"; continue;; \
+		esac; \
+		case "$$svc" in \
+			*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
+		esac; \
+		echo "validate-scenario $$f $$mods --service-name=$$svc"; \
+		out=$$($(LINT_BIN) validate-scenario "$$f" "$$mods" "--service-name=$$svc" 2>&1); rc=$$?; \
+		echo "$$out"; \
+		[ $$rc -eq 0 ] || exit 1; \
+		if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+			echo "lint: FALSE-GREEN in $$f — a plugin module in the corpus has no --modules binding," >&2; \
+			echo "      so its params were NOT checked (NIM-294). Bind it above and re-run." >&2; \
+			exit 1; \
+		fi; \
+		if echo "$$out" | grep -qF own_namespace_fence_unchecked; then \
+			echo "lint: FALSE-GREEN in $$f — the own-namespace Vault fence did NOT run (NIM-726)," >&2; \
+			echo "      so a task writing under the service's own prefix would lint clean and be" >&2; \
+			echo "      refused at render. --service-name reached soul-lint empty; fix it above." >&2; \
+			exit 1; \
+		fi; \
+	done
+	@echo "lint: examples/ corpus is valid"
+
+# Re-stamp the migrations/schema.lock of every bundled tree that has a ladder
+# (NIM-737). Run it after editing a bundled service's state_schema: `lint` above is
+# what tells you it is needed, because a stale lock is an error there.
+#
+# `lint` walks `examples/service/*` by its own charter, so the two `dev/upgrade-demo`
+# trees are validated by a second loop keyed on THIS list. Otherwise they would be
+# the one thing worse than an unstamped tree: a stamped one whose stamp nothing ever
+# compares, going stale in silence while looking like a checked artifact.
+#
+# It is NOT called `schema-stamp`, and this is not the target a service repository
+# has. There, `make schema-stamp` stamps the ONE service the repository is, and
+# `make validate` checks it; here the subject is a corpus of bundled examples, and a
+# core-repo target of the same name would read as the author-facing one. The command
+# underneath is the same either way: `soul-lint schema-stamp <service dir>`.
+#
+# Only trees with at least one ladder step are listed. A service still at version 1
+# is not stamped and does not need to be: the lock is required once a ladder has a
+# rung, and adopting it earlier is the service author's call, not the corpus's.
+STAMP_TREES := examples/service/mongo examples/service/dragonfly \
+	dev/upgrade-demo/tree/v2.0.0 dev/upgrade-demo/tree/v2.0.1
+
+stamp-examples: build
+	@for d in $(STAMP_TREES); do \
+		$(LINT_BIN) schema-stamp "$$d" || exit 1; \
+	done
+
+# L0 trials (soul-trial, ADR-023): render-only, hermetic. Run recursively over
+# EVERY corpus directory examples/service/<svc> AND examples/destiny/<svc> with at
+# least one tests/<case>/case.yml (soul-trial itself searches for case.yml recursively, including
+# under _trial/scenario/.../tests/). The soul-trial binary is built as part of `build`
+# (dependency). These cases used to live OUTSIDE the gate (`make lint` = soul-lint schema
+# only, `make test` = go test) - so broken assertions (e.g. off-by-5 indices for
+# add_node after a sentinel slice) stayed green. Now the gate actually runs
+# L0. Before 2026-06-26 only examples/service/ was covered - the destiny corpus (node-exporter
+# and others with _trial cases) fell outside the gate; now it's covered.
+#
+# The L2 harness (stand-based, requires a running stand) skips itself - we don't
+# pull it into the gate; the gate's value is L0 render invariants.
+#
+# The skip list ($(TRIAL_SKIP)) is printed LOUDLY per directory: the exclusion is visible in the
+# log, doesn't mask a regression. A directory without case.yml is silently skipped (nothing to run).
+#
+# `--modules` binds the corpus's own plugin schema documents, the same bindings and the
+# same variables `lint` uses (soul-trial grew the flag in NIM-790, spelled and parsed
+# exactly as soul-lint's). It is what makes an L0 PASS mean something over a plugin
+# step: before it, a case rendered `redis.acl.present` with params NOBODY had checked
+# and printed PASS, which is indistinguishable from checked-and-clean. The corpus is
+# the one place both halves are present, so leaving the flag off would run L0 without
+# the check it demonstrates.
+#
+# And the run is failed on a leftover `plugin_params_unchecked`, mirroring the guard
+# `lint` has carried since NIM-294: a green trial over a module nobody bound is the
+# false green this ticket removed, and it would grow back the day a corpus service
+# starts addressing an alias that is not bound above.
+trial: build
+	@for root in examples/service examples/destiny; do \
+		for svc in "$$root"/*/; do \
+			[ -d "$$svc" ] || continue; \
+			name=$$(basename "$$svc"); \
+			skip=""; \
+			for s in $(TRIAL_SKIP); do [ "$$s" = "$$name" ] && skip=1; done; \
+			if [ -n "$$skip" ]; then \
+				echo "SKIP trial $$name (in TRIAL_SKIP - pre-existing L0-drift, see the Makefile comment)"; \
+				continue; \
+			fi; \
+			if ! find "$$svc" -name case.yml | grep -q .; then \
+				continue; \
+			fi; \
+			case "$$name" in \
+				$(LINT_SCENARIO_SKIP_PAT)) \
+					echo "SKIP trial $$name ($$name's plugin left this tree, NIM-825 — a run here would be" ; \
+					echo "     FALSE-GREEN: its params would go unchecked and the PASS would cover less" ; \
+					echo "     than it looks)"; \
+					continue;; \
+			esac; \
+			case "$$name" in \
+				*)     mods="--modules=redis=$(LINT_MODULES_REDIS)";; \
+			esac; \
+			echo "soul-trial run $$svc $$mods"; \
+			out=$$($(TRIAL_BIN) run "$$svc" "$$mods" 2>&1); rc=$$?; \
+			echo "$$out"; \
+			[ $$rc -eq 0 ] || exit 1; \
+			if echo "$$out" | grep -F plugin_params_unchecked | grep -qv 'is a reserved name'; then \
+				echo "trial: FALSE-GREEN in $$svc — a plugin module in this corpus has no --modules" >&2; \
+				echo "      binding, so its params were NOT checked and the PASS above covers less" >&2; \
+				echo "      than it looks (NIM-790). Bind it above and re-run." >&2; \
+				exit 1; \
+			fi; \
+		done; \
+	done
+	@echo "trial: L0 trials of the examples/service/ + examples/destiny/ corpus passed"
+
+# --- Load testing (soul-legion) ---
+# One-button run of the soul-legion load generator against the local dev stand.
+# soul-legion is a shipped binary (ADR-004 Amendment 2026-07-26); it carries no
+# localhost defaults of its own, so every endpoint below is passed explicitly.
+# Still outside MODULES -- `make check` doesn't lint/vet it yet.
+# Full plan/methodology/measured numbers -- docs/testing/load-testing.md.
+#
+# Precondition: a running dev stand (keeper event-stream :9443 / metrics :9090 /
+# openapi :8080 + dev-PKI). The healthz-guard below checks this before build/mint and
+# suggests `make dev-stand` (or `make dev-keeper`) if unavailable.
+#
+# Load profile is set via ENV variables (defaults below). Examples:
+#   make stress                          # 1000 connections (axis A), cleanup
+#   make stress COUNT=500 API=1 VOYAGE=1 # + axis B (API) + axis C (single Voyage)
+#   make stress WRITE=1                  # + write axis: create->delete cycles (write+audit path)
+#   make stress COUNT=2000 RAMP=500 DURATION=60s
+#   make stress COUNT=10000 VOYAGE=1 VOYAGE_CONCURRENCY=100 VOYAGE_POLL=600s
+#                                        # disambiguating Voyage-cliff: explicit concurrency + long poll
+#   make stress COUNT=25000 ISSUE_CONCURRENCY=128
+#                                        # large N: raise cert-minting parallelism in the setup phase
+#
+# Axis A (streams) always runs. Axes B/C/write are optional (API=1 / VOYAGE=1 /
+# WRITE=1) and require admin-JWT -- it's minted by the same mechanism as `make dev-jwt`
+# (dev/mint-jwt.sh, key from Vault), and passed into --jwt. Without them the token isn't
+# needed (not minted).
+COUNT         ?= 1000
+RAMP          ?= 250
+RAMP_INTERVAL ?= 300ms
+DURATION      ?= 30s
+COVEN         ?= legion
+API           ?= 0
+VOYAGE        ?= 0
+# Write axis (write+audit path): create->delete cycles of safe self-cleaning
+# entities (synod/role/push-provider/herald). Requires admin-JWT (like axes B/C).
+WRITE          ?= 0
+WRITE_DURATION ?= 15s
+API_DURATION  ?= 15s
+# Axis C tuning (disambiguating experiment for Voyage-cliff): VOYAGE_CONCURRENCY empty/0
+# -> concurrency field is NOT sent (keeper default=1, sequential); >0 -> top-level
+# voyage.concurrency in the create body. VOYAGE_POLL -- terminal-wait budget.
+VOYAGE_CONCURRENCY ?=
+VOYAGE_POLL        ?= 120s
+# Vault-issue parallelism in the setup phase (cert minting). On large N (25k/50k)
+# raise it to ~96-128 so the setup phase doesn't drag. Matches the default of the flag
+# --issue-concurrency (32); ENV only overrides, we don't touch the flag default.
+ISSUE_CONCURRENCY  ?= 32
+
+# Dev-stand endpoints (checked against dev/keeper.dev.yml: event_stream :9443 /
+# openapi :8080 / metrics :9090) and dev-PKI/infra (provision.sh / docker-compose).
+KEEPER_ENDPOINT ?= 127.0.0.1:9443
+OPENAPI         ?= http://127.0.0.1:8080
+METRICS         ?= http://127.0.0.1:9090
+PG              ?= postgres://keeper:keeper@localhost:5434/keeper?sslmode=disable
+VAULT           ?= http://127.0.0.1:8200
+VAULT_TOKEN     ?= root
+# The dev Keeper cert is issued for "localhost", while KEEPER_ENDPOINT dials
+# 127.0.0.1 -- pass SNI explicitly so verification still matches.
+SERVER_NAME     ?= localhost
+# root CA of the Keeper server cert -- same path as listen.event_stream.tls.ca in
+# dev/keeper.dev.yml (Vault PKI root, CN=soul-stack).
+STRESS_CA       ?= /tmp/keeper-dev/tls/vault-ca.crt
+# Health of the keeper API listener (same /healthz that dev/keeper-run.sh waits for).
+STRESS_HEALTHZ  ?= http://127.0.0.1:8080/healthz
+
+# stress -- build soul-legion -> (if API/VOYAGE) mint admin-JWT -> run ->
+# clean up (--cleanup). load-test -- alias.
+stress:
+	@code="$$(curl -s -o /dev/null -w '%{http_code}' '$(STRESS_HEALTHZ)' 2>/dev/null || true)"; \
+	if [ "$$code" != "200" ]; then \
+		echo "stress: dev stand unreachable ($(STRESS_HEALTHZ) -> $$code, expected 200)."; \
+		echo "  bring up the stand: 'make dev-stand' (full) or 'make dev-keeper' (keeper only)."; \
+		exit 1; \
+	fi
+	@if [ ! -s "$(STRESS_CA)" ]; then \
+		echo "stress: no dev-CA ($(STRESS_CA)) -- run 'make dev-provision' and retry."; \
+		exit 1; \
+	fi
+	@$(MAKE) build-soul-legion
+	@JWT=""; \
+	if [ "$(API)" = "1" ] || [ "$(VOYAGE)" = "1" ] || [ "$(WRITE)" = "1" ]; then \
+		echo "stress: minting admin-JWT (make dev-jwt mechanism) for axes B/C/write"; \
+		JWT="$$(AID='$(AID)' ROLES='$(ROLES)' TTL='$(TTL)' bash dev/mint-jwt.sh)" \
+			|| { echo "stress: failed to issue JWT (is Vault up? 'make dev-up' + 'make dev-provision')"; exit 1; }; \
+	fi; \
+	echo "stress: running soul-legion (count=$(COUNT) ramp=$(RAMP)/$(RAMP_INTERVAL) duration=$(DURATION) coven=$(COVEN) api=$(API) voyage=$(VOYAGE) write=$(WRITE))"; \
+	./tests/load/bin/soul-legion \
+		--keeper-endpoint='$(KEEPER_ENDPOINT)' \
+		--server-name='$(SERVER_NAME)' \
+		--metrics='$(METRICS)' \
+		--openapi='$(OPENAPI)' \
+		--pg='$(PG)' \
+		--vault='$(VAULT)' \
+		--vault-token='$(VAULT_TOKEN)' \
+		--ca='$(STRESS_CA)' \
+		--coven='$(COVEN)' \
+		--count=$(COUNT) \
+		--issue-concurrency=$(ISSUE_CONCURRENCY) \
+		--ramp=$(RAMP) \
+		--ramp-interval='$(RAMP_INTERVAL)' \
+		--duration='$(DURATION)' \
+		--api=$(if $(filter 1,$(API)),true,false) \
+		--api-duration='$(API_DURATION)' \
+		--voyage=$(if $(filter 1,$(VOYAGE)),true,false) \
+		--voyage-concurrency=$(if $(VOYAGE_CONCURRENCY),$(VOYAGE_CONCURRENCY),0) \
+		--voyage-poll-timeout='$(VOYAGE_POLL)' \
+		--write=$(if $(filter 1,$(WRITE)),true,false) \
+		--write-duration='$(WRITE_DURATION)' \
+		--jwt="$$JWT" \
+		--cleanup=true
+
+load-test: stress
+
+# Target cheat sheet. Dev-stack details -- `docs/dev/local-setup.md`.
+help:
+	@echo "Build and tests:"
+	@echo "  gen               protoc keeper+plugin + gen-openapi → committed gen"
+	@echo "  gen-openapi       huma-dump -> committed docs/keeper/openapi.yaml (derived, for UI)"
+	@echo "  gen-audit-catalog audit EventType constants -> committed shared/audit/event_types_gen.go"
+	@echo "  build             build keeper / soul-trial / soul / soul-lint / soulctl"
+	@echo "  build-soulctl     build only soulctl (operator client CLI)"
+	@echo "  test              go test ./... across all modules (no docker)"
+	@echo "  plugin-sources    fill the pinned out-of-tree plugin cache (run before going offline)"
+	@echo "  plugin-schema-vendor  re-vendor examples/module/*/schema.json from the pinned commit"
+	@echo "  test-race         go test -race -count=1 ./... — the unit corpus under the detector (no docker)"
+	@echo "  test-integration  go test -tags=integration -race over the tagged packages only (needs docker)"
+	@echo "  e2e               L3a E2E pilot (tests/e2e, -tags=e2e, needs docker for the imp-slice)"
+	@echo "  build-linux       cross-compile keeper+soul for Linux amd64 (aggregate of bin-keeper+bin-soul)"
+	@echo "  bin-keeper        cross-compile only keeper (linux-amd64) -> keeper/bin/keeper-linux-amd64"
+	@echo "  bin-soul          cross-compile only soul (linux-amd64) -> soul/bin/soul-linux-amd64"
+	@echo "  bin-soul-lint     cross-compile only soul-lint (linux-amd64) -> soul-lint/bin/soul-lint-linux-amd64"
+	@echo "  e2e-live          L3b smoke-loop (tests/e2e-live, -tags=e2e_live, privileged docker, nightly)"
+	@echo "  e2e-live-services   prime the L3b out-of-tree service cache (run before going offline)"
+	@echo "  e2e-k8s           L3c k8s-loop (tests/e2e-k8s, -tags=e2e_k8s, kind + bitnami Helm, weekly)"
+	@echo "  docker-build-keeper  build the keeper:e2e-k8s image (for L3c kind load docker-image)"
+	@echo "  docker-build-soul    build the soul:e2e-k8s image (privileged systemd Debian-12 for L3c-3+)"
+	@echo "  detached          run a long tier in its own process group (T=test-integration)"
+	@echo "                    — survives a caller teardown; <log>.rc appears only on completion"
+	@echo "  tidy              go mod tidy across all modules"
+	@echo ""
+	@echo "Checks/gate:"
+	@echo "  check             docker-free local gate (fmt+vet+build+test+openapi+gen+lint+trial)"
+	@echo "  check-all         check + test-race + test-integration (L1) + e2e (L3a) = what a green CI run means"
+	@echo "                    — both take one of GATE_SLOTS=$(GATE_SLOTS) machine-wide slots and 1/N of the cores;"
+	@echo "                      GATE_SLOTS=1 serialises strictly, and waiting for a slot is printed"
+	@echo "  check-gate-slot   guard: the slot semaphore locks, and the CPU budget reaches the tiers"
+	@echo "  check-ci          has CI verified THIS sha? (derives it from git; REF= for another)"
+	@echo "  check-integration-set  the L1 package set matches the tree (guards a green, empty L1)"
+	@echo "  check-webui-embed embedded UI bundle matches its recorded fingerprint (no companion needed)"
+	@echo "  check-webui-freshness  is the embedded UI still at the companion's branch tip? (binding on release/* and hotfix/*; needs network)"
+	@echo "  check-fmt         gofmt -l across all modules (fails on unformatted)"
+	@echo "  vet               go vet ./... across all modules"
+	@echo "  vet-tags          go vet under the build tags (integration/e2e/...) - compile-only, no docker"
+	@echo "  check-gen         protogen idempotency (gen-drift in proto/gen/go)"
+	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
+	@echo "  check-approle-template  shipped Vault AppRole role template issues a periodic token"
+	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
+	@echo "  check-vuln        govulncheck supply-chain across EVERY go.mod in the tree (offline: SKIP_VULNCHECK=1)"
+	@echo "  check-vuln-corpus guard: check-vuln scans the whole tree, and never skips what it cannot scan"
+	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"
+	@echo "  check-plugin-schema  each bundled artifact's schema.json is what \`soul-mod stamp\` derives (NIM-525)"
+	@echo "  trial             soul-trial L0 trials over the examples/service/ corpus (render invariants)"
+	@echo "  stamp-examples    re-write migrations/schema.lock in every bundled tree that has a ladder"
+	@echo ""
+	@echo "Local dev stack:"
+	@echo "  dev-up            docker compose up -d (PG / Vault / Redis)"
+	@echo "  dev-stop          stop the local keeper/soul daemons of the dev workflow"
+	@echo "  dev-down          dev-stop + docker compose down (data persists)"
+	@echo "  dev-reset         docker compose down -v && up -d (full DB reset)"
+	@echo "  dev-provision     idempotent bootstrap: Vault KV/PKI + TLS + git repo of artifacts"
+	@echo "  dev-smoke         dev-up -> dev-provision -> keeper init -> dev-provision (registry seed)"
+	@echo "  dev-keeper        restart keeper with a full dev-env (file:// resolve) + waits for healthz"
+	@echo "  dev-jwt           issue an Archon-JWT from a Vault key (AID/ROLES/TTL); token to stdout"
+	@echo "  dev-souls         re-raise local souls per the DB registry"
+	@echo "  dev-web           vite dev server for the web repo (--host; WEB_DIR=<path>)"
+	@echo "  dev-stand         full stand bring-up: provision -> keeper -> souls -> web"
+	@echo "  dev-stand-free    free up a stand slot (DEV_STAND=<slug>): remove the row from the registry"
+	@echo "  (all dev-* are stand-aware: DEV_STAND=<slug> -- a second+ stand alongside; DEDICATED_INFRA=1 -- its own docker project)"
+	@echo ""
+	@echo "Load testing (soul-legion, needs a running stand):"
+	@echo "  stress            one-button load: build+mint-JWT+gon+cleanup (ENV: COUNT/RAMP/API/VOYAGE/WRITE/WRITE_DURATION/VOYAGE_CONCURRENCY/VOYAGE_POLL/ISSUE_CONCURRENCY/...)"
+	@echo "  load-test         alias for stress"
+	@echo ""
+	@echo "OpenAPI:"
+	@echo "  gen-openapi       regenerate committed openapi.yaml from the huma aggregator"
+	@echo "  check-openapi     CI guard on drift between committed openapi.yaml and huma-dump"
+	@echo "  gen-audit-catalog regenerate the audit event-type catalog feeding the AuditEvent.type enum"
+	@echo "  check-template    CI guard on drift of the embedded plugin template (skip without companion)"
+	@echo "  sync-webui        vendor dist/ from companion soul-stack-web -> keeper/internal/webui/assets/"
+	@echo "  check-webui       CI guard on drift of the embedded UI (needs the companion; fails on release/*)"
+	@echo "  check-webui-freshness-guard  guard tests for check-webui-freshness (throwaway repos; no companion, no network beyond loopback)"
+	@echo "  check-stand-template  CI guard on drift keeper.dev.yml.tmpl <-> committed keeper.dev.yml"
+	@echo "  check-soul-template   CI guard on drift soul.dev.yml.tmpl <-> committed soul.dev.yml (skip without .tmpl)"
+	@echo ""
+	@echo "Release/packaging (additive, NOT part of check):"
+	@echo "  docker-keeper     PROD image of keeper (multi-stage distroless) -> \$$(KEEPER_IMAGE):\$$(VERSION); push to your own registry"
+	@echo "  docker-soul       PROD image of soul (multi-stage distroless) -> \$$(SOUL_IMAGE):\$$(VERSION); push to your own registry"
+	@echo "  sbom              CycloneDX SBOM over go modules (cyclonedx-gomod) -> dist/sbom/"
+	@echo "  pkg               native deb/rpm/apk for the whole shipped set (goreleaser) -> dist/pkg/"
+	@echo "  sign              image signing (cosign) -- deferred, documented-stub"

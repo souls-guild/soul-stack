@@ -1,0 +1,22 @@
+name: compute-unknown-name
+description: compute.<name> where the namespace exists and the name does not (NIM-619)
+compute:
+  node_count: ${ 1 + 2 }
+  # A forward reference: entries resolve in declaration order, so this one reads a
+  # name that has no value yet.
+  region_tag: ${ "r-" + string(compute.node_count) + compute.suffix }
+  suffix: -prod
+tasks:
+  # The namespace is in scope here — what is wrong is the spelling.
+  - name: Use the computed count
+    module: core.exec.run
+    params:
+      cmd: echo ${ compute.node_cont }
+
+  # Keeper-side reads compute just like the Soul side (NIM-619 variant B), so the
+  # same misspelling is caught in the same way and for the same reason.
+  - name: Register the seed
+    module: core.soul.registered
+    params:
+      sid: node-${ compute.nod_count }.example.com
+      await_online: false

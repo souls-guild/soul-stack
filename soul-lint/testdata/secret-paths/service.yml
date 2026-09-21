@@ -1,0 +1,47 @@
+# Fixture for `soul-lint list-secret-paths` (NIM-743).
+#
+# Shaped after demo-service-redis: two collections whose element password is a declared
+# secret addressed by a sibling `name`, plus a scalar secret for the whole incarnation.
+# The three cover both declaration forms the command has to print — the acceptance run
+# against the real service repository is manual and separate.
+#
+# No Vault path is written here, and none may be: the platform derives it from
+# (service, incarnation, state field, key) and an authored copy would be a second
+# source of truth (ADR-0083 §1). This file is the input the command derives FROM.
+description: A service declaring secrets in both supported shapes.
+
+state_schema:
+  namespace:
+    type: string
+    required: true
+
+  # Scalar: one secret per incarnation, no addressing property.
+  admin_password:
+    type: secret
+    label: "Administrator password"
+
+  # Collection: one secret per element, addressed by the sibling `name`.
+  redis_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        perms: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis user password"
+
+  system_acl_users:
+    type: array
+    items:
+      type: object
+      additional_properties: false
+      properties:
+        name: { type: string, required: true }
+        password:
+          type: secret
+          key: name
+          label: "Redis system account password"

@@ -1,0 +1,11 @@
+# [ADR-0084] removed `state_changes:` from the grammar. A scenario still
+# carrying one must be REJECTED, not ignored: silently dropping it would stop
+# the writes it describes with nothing saying so.
+name: state-changes-removed
+state_changes:
+  sets:
+    redis_version: "${ input.version }"
+tasks:
+  - module: core.exec.run
+    params:
+      command: "true"

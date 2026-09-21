@@ -1,0 +1,4 @@
+state_schema:
+  arr:
+    type: array
+    items: "scalar"

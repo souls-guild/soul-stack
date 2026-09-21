@@ -1,0 +1,23 @@
+name: converge
+description: |
+  Reconcile scenario for the noop service. Declares the DESIRED final state -
+  for a smoke check, the mere fact that the marker file
+  /var/lib/soul-stack/noop-converged exists. Run it like any other operational
+  scenario: core.file.present is idempotent, so a converged host reports no
+  change and an unconverged one is fixed in place.
+
+  It was also the dry-run target of the Scry drift check until NIM-446 removed
+  that circuit; the name `converge` is now an ordinary scenario name with no
+  special handling in keeper. This copy is also what the L3a Vigil/Oracle e2e
+  fires as its reactor action, so it must stay runnable.
+
+tasks:
+  # Convergence marker: the file must exist with fixed content. On a clean
+  # system it does not exist yet -> the task reports changed=true and creates
+  # it; on a converged host -> changed=false.
+  - name: Ensure converged marker file
+    module: core.file.present
+    params:
+      path: /var/lib/soul-stack/noop-converged
+      content: "noop converged\n"
+      mode: "0644"

@@ -1,0 +1,8 @@
+name: transport-interpolated
+tasks:
+  - name: An interpolated provider, which nothing resolves
+    transport:
+      ssh:
+        ssh_provider: "${ vars.ssh_provider }"
+    apply:
+      destiny: soul-install

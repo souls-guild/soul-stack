@@ -1,0 +1,72 @@
+name: create
+description: >-
+  Binds the declared roster of already-onboarded Souls to this incarnation
+  (keeper-side core.soul.registered, ADR-017) and then guards its size with a
+  topology assert. The order is the point: before the bind there is no roster to
+  measure, because membership FKs the incarnation row (ADR-008 amendment
+  2026-07-17 / NIM-124) and this run's own request inserted it.
+
+# `create: true` — the scenario is in the create set (multi-create), so
+# POST /v1/incarnations can start it as the bootstrap run.
+create: true
+
+input:
+  # SIDs of the already-onboarded Souls to bind. On E2E these are the SIDs of
+  # the connected soul-stubs (FQDN), so the list is known to the operator but
+  # not yet to the incarnation.
+  roster_sids:
+    type: array
+    required: true
+    items:
+      type: string
+    description: SIDs bound to this incarnation by the keeper-side step.
+
+  # The topology the operator declares. The guard below compares the roster the
+  # bind actually produced against this number, so a typo in roster_sids aborts
+  # the run instead of silently deploying onto the wrong host count.
+  expect_hosts:
+    type: integer
+    required: true
+    min: 1
+    description: Number of hosts the declared topology must end up with.
+
+tasks:
+  # ── 1. Bind the roster (keeper-side) ────────────────────────────────────────
+  # `refresh_soulprint: true` makes this a passage boundary (ADR-0061 §S2/§S3):
+  # the runner re-resolves the roster before the next Passage, so the guard and
+  # the deploy below see the hosts this step just bound. It is also the reason
+  # the run may legitimately start on an empty roster — the refresh-emitter
+  # bypass of the no_hosts gate (run.go §3).
+  - name: Bind the declared roster and wait for it online
+    module: core.soul.registered
+    register: bound
+    params:
+      sid:               "${ input.roster_sids }"
+      await_online:      true
+      await_timeout:     "2m"
+      refresh_soulprint: true
+
+  # ── 2. Topology guard (keeper-side, render-time) ────────────────────────────
+  # DELIBERATELY UNGATED: no `when:` excusing it from any path. The roster is
+  # empty at pre-flight and full at render, and the guard must survive that
+  # without the author having to hand-write a gate (NIM-235). `assert` and not
+  # `validate` — the predicate reads soulprint.hosts (the roster), while the
+  # validate context is input-only.
+  #
+  # that[] and message must be SCALAR strings (not folded `>-`/`|`): soul-lint
+  # requires *ast.StringNode, and a block scalar is a type_mismatch.
+  - name: Guard the bound roster matches the declared topology
+    assert:
+      that:
+        - "size(soulprint.hosts) == int(input.expect_hosts)"
+      message: "the bound roster host count must equal expect_hosts - bind exactly as many Souls as the declared topology has nodes"
+
+  # ── 3. Soul-side step on the bound hosts ────────────────────────────────────
+  # Read-only no-op: gives every roster host a real task, so the run closes
+  # success on the hosts the bind produced rather than no_match.
+  - name: Echo on every host of the incarnation
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["create-roster-guard-ok"]

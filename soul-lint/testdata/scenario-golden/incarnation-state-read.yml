@@ -1,0 +1,11 @@
+name: state-read
+description: incarnation.state.<path> — read-only снимок incarnation.state в scenario CEL (ADR-009/010)
+tasks:
+  # Каноническая форма чтения state в scenario: предикат + apply.input.
+  - name: apply on hosts that already hold users
+    where: "size(incarnation.state.redis_users) > 0"
+    apply:
+      destiny: redis
+      input:
+        action:  update_acls
+        current: "${ incarnation.state.redis_users }"

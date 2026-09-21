@@ -1,0 +1,14 @@
+description: >-
+  E2E foundation for keeper-side module dispatch (ADR-017). The service runs
+  a single step at the keeper-side address `core.soul.registered`; the address
+  is what routes it (NIM-747) and the task declares nothing. The step executes
+  on the keeper instance itself (not on the host), attaching the given SID to
+  a set of Coven labels in the `souls` registry. Proves that keeper-side dispatch
+  works end-to-end.
+
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
+# incarnation.state structure is empty: the keeper step writes to the souls registry, not to
+# incarnation.state.
+state_schema: {}
+# No dependencies: the scenario uses only core modules (ADR-015),
+# which are not listed in destiny[]/modules[] (ADR-009).

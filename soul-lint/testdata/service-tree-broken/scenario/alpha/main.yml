@@ -1,0 +1,13 @@
+# The FIRST scenario, alphabetically, and the one the walk reaches after the
+# broken manifest. Its defect is unrelated to the manifest's and to beta's: a
+# per-host predicate reading a register that no task in this scenario ever emits,
+# so the step silently targets nobody.
+name: alpha
+description: Broken on purpose - a predicate over a register nothing emits
+
+tasks:
+  - name: Restart on the hosts the probe picked
+    module: core.service.restarted
+    where: register.redis_role.stdout == 'master'
+    params:
+      name: redis

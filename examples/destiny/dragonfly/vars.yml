@@ -1,0 +1,138 @@
+# vars.yml - dragonfly destiny locals (docs/destiny/vars.md): invariants, IDENTICAL across
+# all incarnations and NOT overridable from outside (not input - this is contract vs internals).
+# Single source of truth; tasks pull them via ${ vars.* }.
+#
+# Resolved ONCE per destiny pass (per-host) before tasks. A var-to-var reference within a
+# layer is allowed (eager-topological, vars.md): vars.<other> resolves to another file-var of
+# the same layer (root_group -> root_owner), a cycle/missing ref -> render error, declaration
+# order doesn't matter. The file is committed to the destiny git repo - no secrets here
+# (passwords/PEM come through input via secret/vault()).
+#
+# * DragonFly vs Redis (a separate destiny - a copy of the redis structure with
+# config/unit/install swapped). Key differences are baked in RIGHT HERE (names/paths), and
+# tasks and templates read them:
+#   - config = FLAGFILE (--flag=value, absl), NOT redis.conf. Template dragonfly.flags.tmpl.
+#   - the binary is a SINGLE dragonfly (there's no dragonfly-cli: DF doesn't ship one).
+#     REPLICAOF/PING are done via redis-cli from the distro package redis-tools (see install.yml).
+#   - NO modules (cluster is OUT, redis .so modules don't apply to DF) -> the redis_modules
+#     table and the Redis 8+ version-guard are ABSENT HERE.
+#   - sentinel is NOT HERE (the "sentinel out of destiny redis" refactor): the sentinel daemon
+#     is fully deployed by destiny `redis` (sentinel_only) via a separate scenario apply ->
+#     sentinel-vars (daemon user/group/service/port/directories) were REMOVED from THIS destiny.
+#
+# -- vars BOUNDARY (invariant) vs input (operator-overridable) ---------------------
+# vars (HERE) - what is IDENTICAL across all incarnations and pointless/not allowed to change:
+#   - service identity: the dragonfly_service_name systemd unit name - the contract with the
+#     DF binary unit (the sentinel unit is no longer declared here - it's carried by
+#     destiny `redis`);
+#   - file-mode/owner invariants; layout directories tied to systemd/the package
+#     (systemd_dir, tls-dir is derived from conf_dir).
+# input (destiny.yml input:) - what makes sense to override per-incarnation:
+#   - conf_dir/data_dir: the operator may want to deploy config/data under their own
+#     storage layout. Default input = vars value (dragonfly_conf_dir/dragonfly_data_dir) - back-compat.
+
+# system user and group for the dragonfly service. The binary branch of install.yml creates
+# them explicitly (core.group.present/core.user.present). (The official DF deb sets up the
+# `dfly` user; in binary installs we use the self-descriptive `dragonfly` - we have no
+# distro-deb naming contract to follow.)
+dragonfly_user:  dragonfly
+dragonfly_group: dragonfly
+
+# -- systemd service name (directive A: service name lives in vars, EVERYWHERE) ----------------
+# INVARIANT (vars, not input): the unit name is the contract between the binary unit and
+# core.service running/restart. NOTE: this is the SERVICE name (systemd), NOT the package
+# name and NOT the binary name (/usr/local/bin/dragonfly) - those tokens are NOT from these vars.
+dragonfly_service_name: dragonfly
+
+# -- Default port (directive "hardcoded port -> var") ----------------------------
+# INVARIANT (vars, not input): the well-known DragonFly port (6379, redis-compatible). The
+# flagfile prints `--port=6379`. * DragonFly vs redis: TLS is layered on this SAME primary
+# port (flag --tls; DF has no separate tls port and no "TLS-only" via `--port=0`). This is a
+# brick default, not operator input.
+dragonfly_port: 6379
+
+# -- Base host-layout paths (directive B) --------------------------------------
+# data_dir/conf_dir are additionally EXPOSED in input (destiny.yml) - the operator may want a
+# different location for their storage layout; the vars values here are the defaults that
+# input.default refers to. Tasks don't read these raw vars directly, but the effective
+# _eff-vars below (input->default resolution).
+
+# dragonfly conf-dir: dragonfly.conf, users.acl, sentinel.conf, tls/. DEFAULT for
+# input.conf_dir. /etc/dragonfly - the official DF layout (the deb puts the flagfile there too).
+dragonfly_conf_dir: /etc/dragonfly
+
+# dragonfly data-dir (DF's snapshot dir). DEFAULT for input.data_dir. /var/lib/dragonfly -
+# the official DF layout (deb dragonfly.conf: --dir=/var/lib/dragonfly).
+dragonfly_data_dir: /var/lib/dragonfly
+
+# -- Effective conf/data paths (input->default resolution, ONCE) ----------------------
+# var->input CEL (eager-topological, vars.md): the default(input.X, default) resolution goes
+# HERE; tasks read the ready-made ${ vars.dragonfly_conf_dir_eff } instead of repeating the
+# inline default across files. The _eff suffix separates "the effective path (input or
+# default)" from the raw default (which input.default refers to).
+dragonfly_conf_dir_eff: "${ default(input.conf_dir, vars.dragonfly_conf_dir) }"
+dragonfly_data_dir_eff: "${ default(input.data_dir, vars.dragonfly_data_dir) }"
+
+# Install directory for the dragonfly binary (binary branch). INVARIANT (vars, not input):
+# a fixed layout directory /usr/local/bin (precedent: node-exporter/redis binary). Binary-
+# branch tasks build the path as ${ vars.dragonfly_bin_dir }/dragonfly.
+dragonfly_bin_dir: /usr/local/bin
+
+# -- Binary-install tarball paths (directive "one place for a path") ------------------
+# The temp tarball path and the unpacked upstream-install directory path are built from the
+# upstream version (input.install.version) in ONE place instead of being duplicated inline.
+#
+# * render-safety on the DEAD package pass: with install.method=package the binary block is
+# static-skip, BUT file-vars are resolved per-host BEFORE the skip projection (eager, before
+# tasks) - a bare input.install.version would blow up with "no such key: install". The version
+# is normalized via a has() chain to '' (the value isn't used on the package pass - tasks
+# skip; on the binary pass validate guarantees the presence of install.version).
+#
+# * The DF tarball is named WITHOUT a version: dragonfly-<arch>.tar.gz (arch = x86_64/aarch64,
+# the official releases asset). The version is NOT in the file name - but we DO bake the
+# version into the unpacked directory PATH (so several versions don't clobber each other in
+# /tmp). The binary name INSIDE the archive is dragonfly-<arch> (src path in
+# core.file.present, see install.yml).
+dragonfly_install_ver: "${ has(input.install) && has(input.install.version) ? input.install.version : '' }"
+dragonfly_src_dir:     "${ '/tmp/dragonfly-' + vars.dragonfly_install_ver }"
+
+# systemd drop-in directory (override on top of the unit). INVARIANT (tied to the service
+# name + systemd layout). Tasks build the path from vars.<service>_service_name.
+systemd_dir: /etc/systemd/system
+
+# -- System run-/log directories (directive "hardcoded path -> var") ----------------
+# INVARIANT (vars, not input): system directories for runtime state (pidfile) and logs.
+# Tied to the package/systemd host layout (not an operator storage choice like conf_dir/
+# data_dir) -> not operator-overridable.
+
+# dragonfly run directory: pidfile (dragonfly.pid). The unit's RuntimeDirectory=dragonfly
+# creates exactly /var/run/dragonfly (the official DF deb layout).
+run_dir: /var/run/dragonfly
+
+# dragonfly log directory: DF logs via glog into --log_dir (official deb
+# dragonfly.conf: --log_dir=/var/log/dragonfly). NOT redis-style `logfile <path>` -
+# glog names the files itself. The logrotate glob *.log covers them.
+log_dir: /var/log/dragonfly
+
+# -- file-mode/owner invariants (extracted: used by >2 tasks) --------------
+# One-off modes used by <=2 tasks (0750 tls-dir, 0755 drop-in-dir) STAY as literals:
+# they aren't a shared destiny invariant (vars.md - don't spawn a var for a single task).
+
+# mode of dragonfly configs holding secrets (requirepass/password hashes): dragonfly.conf,
+# users.acl, sentinel.conf, sentinel-users.acl. 0640 service owner/group - only it can read them.
+dragonfly_secret_file_mode: "0640"
+
+# mode of systemd units and drop-ins (root-owned, world-readable per the systemd standard):
+# dragonfly/redis-sentinel/disable-thp .service, logrotate.d.
+unit_file_mode: "0644"
+
+# mode of TLS PEM material (cert/key/CA): 0600 service owner - only it reads the private
+# key and certificates.
+dragonfly_pem_mode: "0600"
+
+# owner of root-owned artifacts (systemd units/drop-ins/logrotate.d): literal root.
+root_owner: root
+
+# group of root-owned artifacts. var->var on root_owner: owner and group coincide, so
+# group is expressed via owner - a single source of truth (resolves to "root").
+root_group: "${ vars.root_owner }"

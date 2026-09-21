@@ -1,0 +1,41 @@
+name: verify_roster
+description: >-
+  Day-2 counterpart of `create`: the same topology guard over a roster that is
+  already bound. Nothing here builds a roster — no keeper-side bind, no refresh
+  emitter — so the roster at request time IS the roster this run will use, and
+  the guard can be answered before anything mutates (ADR-009 amendment
+  2026-07-28 / NIM-270).
+
+# No `create: true` — this is an ordinary run on an existing incarnation,
+# reached through POST /v1/incarnations/{name}/scenarios/verify_roster.
+
+input:
+  # The topology the operator asserts the bound roster already has. A mismatch
+  # is the operator's own mistake and is answered synchronously with 422
+  # assert-failed, not with an error_locked they then have to unlock.
+  expect_hosts:
+    type: integer
+    required: true
+    min: 1
+    description: Number of hosts the bound roster must have.
+
+tasks:
+  # Ungated roster guard, same shape as create's. The difference is entirely in
+  # WHERE it can be answered: here the incarnation exists and its members are
+  # bound, so pre-flight evaluates it; on the create path there is no row yet
+  # and it is deferred to render (NIM-235).
+  #
+  # that[] and message must be SCALAR strings (not folded `>-`): soul-lint
+  # requires *ast.StringNode, and a block scalar is a type_mismatch.
+  - name: Guard the bound roster matches the declared topology
+    assert:
+      that:
+        - "size(soulprint.hosts) == int(input.expect_hosts)"
+      message: "the bound roster host count must equal expect_hosts - bind or unbind Souls until the roster matches the topology you declared"
+
+  - name: Echo on every host of the incarnation
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["verify-roster-ok"]

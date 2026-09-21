@@ -1,0 +1,9 @@
+# Conditional include INSIDE the block (main.yml, `when: input.topology ==
+# 'cluster'`). On standalone the whole group is physically absent from the plan
+# (render-phase group-drop) — no placeholder, no reserved index — while the rest
+# of the block renders normally.
+- name: cluster wiring marker
+  module: core.file.present
+  params:
+    path:    /etc/pilot/cluster.txt
+    content: "cluster wiring"

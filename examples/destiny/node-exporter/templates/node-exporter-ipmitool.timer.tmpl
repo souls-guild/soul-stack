@@ -1,0 +1,15 @@
+{{/*
+  IPMI collector timer. Static (vars: {}), .tmpl is required for core.file.rendered.
+  Same ConditionPathExists=/dev/ipmi0 as in .service: guards against a manual start without
+  a BMC device.
+*/}}
+[Unit]
+Description=Run IPMI metrics collection every 1 minute
+ConditionPathExists=/dev/ipmi0
+
+[Timer]
+OnBootSec=0
+OnUnitActiveSec=1min
+
+[Install]
+WantedBy=timers.target

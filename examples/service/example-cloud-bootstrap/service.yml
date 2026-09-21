@@ -1,0 +1,30 @@
+description: >-
+  Minimal demo service for onboarding ready-made VMs (ADR-063): the keeper mints
+  one bootstrap token per SID, installs the agent on each host over SSH, then
+  blocks until every Soul is online.
+
+  What the example shows — the `existing-vm` scenario:
+    1. core.bootstrap.issued  — one token per FQDN/SID, atomically.
+    2. core.ssh.run           — the keeper-side transport to a host that has no
+                                agent yet. The engine opens the session and
+                                enforces the secret floor (the token goes to
+                                STDIN; a secret written into `run:` is refused);
+                                WHAT gets installed is authored in this file's
+                                scenario, because installation is site-specific
+                                and that is what NIM-834 took out of the engine.
+    3. core.soul.registered   — await_online, the blocking onboarding barrier.
+
+  The install commands here are the ones the ADR-063 requirements demand: redeem
+  the token with `soul init` behind the seed-cert guard (a token is single-use),
+  never put it in argv, and activate with `daemon-reload && enable && start`.
+  Fork this service and rewrite step 2 for your own platform — that step is the
+  example's real subject.
+
+  The service does NOT create the VMs. Creating one is the job of a cloud
+  plugin, which since NIM-761 is an ordinary `side: keeper` SoulModule with its
+  own module address and its own params — there is no `core.cloud` step and no
+  CloudDriver contract to demonstrate here. The sibling `create` /
+  `create-inline` scenarios, which drove that contract, went with it.
+
+state_schema:
+  sids: { type: array, items: { type: string, format: fqdn } }

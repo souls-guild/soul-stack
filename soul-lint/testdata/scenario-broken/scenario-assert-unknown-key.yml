@@ -1,0 +1,8 @@
+name: assert-unknown-key
+tasks:
+  - name: assert with an unknown key in assert section
+    assert:
+      that:
+        - "size(soulprint.hosts) == 1"
+      message: "needs exactly one host"
+      severity: warning

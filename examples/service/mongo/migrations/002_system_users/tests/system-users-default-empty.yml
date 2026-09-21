@@ -1,0 +1,27 @@
+name: system-users-default-empty
+description: >
+  A v1 incarnation created before the service's own accounts were declared state -- there is
+  no system_users field. The migration ADDS it as an empty array: the account set is a
+  service-vars fact and migration-CEL cannot read vars. mongo_users (operator intent) passes
+  through bit-for-bit, password-free as always.
+
+state_before:
+  mongo_version: "7.0.14"
+  mongo_users:
+    - name: "app"
+      database: "admin"
+      state: "present"
+      roles:
+        - { role: "readWrite", db: "appdb" }
+  memory_mb: 2048
+
+state_after:
+  mongo_version: "7.0.14"
+  mongo_users:
+    - name: "app"
+      database: "admin"
+      state: "present"
+      roles:
+        - { role: "readWrite", db: "appdb" }
+  system_users: []
+  memory_mb: 2048

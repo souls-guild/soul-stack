@@ -1,0 +1,18 @@
+# L0 trial (ADR-023): outer='yes', inner='yes' -> both groups remain.
+# Positive edge of the matrix: conjunctive include-when inner is true on both
+# operands, both tasks render the normal way (not a placeholder).
+name: nested conditional-include keeps both when outer and inner are yes
+
+fixtures:
+  input:
+    outer: 'yes'
+    inner: 'yes'
+
+assert:
+  task_present:
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/outer.txt
+    - module: core.file.present
+      params_subset:
+        path: /etc/pilot/inner.txt

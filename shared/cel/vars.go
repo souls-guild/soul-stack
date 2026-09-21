@@ -1,0 +1,288 @@
+package cel
+
+import (
+	"context"
+	"sort"
+)
+
+// Vars — context variables passed into a CEL evaluation. A typed form of activation:
+// the caller fills meaningful fields rather than a raw map[string]any. All fields are
+// optional; nil becomes an empty map, so accessing a missing context gives the normal
+// CEL result (no such key), not a panic.
+//
+// Field values are plain Go data (map[string]any, slices, scalars) obtained from
+// YAML/Postgres. CEL reads them through the cel-go adapter.
+//
+// Pilot scope ([ADR-010]):
+//
+//   - Input        — the input: block of the scenario/destiny (input.<path>).
+//
+//   - Register     — results of register: from previous steps
+//     (register.<name>.<path>, register.self.*).
+//
+//   - Incarnation  — incarnation fields (name, service_version, spec.*).
+//
+//   - SoulprintSelf — stable facts of the current host; in CEL available as
+//     soulprint.self.<path> ([soulprint.md], canonical form).
+//
+//   - SoulprintHosts — the list of run hosts with stable facts; in CEL available
+//     as soulprint.hosts (+ .where(<predicate>)). Scenario-only: filled only in the
+//     render's scenario pass. nil/empty ⇒ soulprint.hosts is an empty list (and in
+//     the destiny pass accessing it is an isolation error, see [Vars.allowHosts]).
+//     [orchestration.md §4.1].
+//
+//   - Vars         — the whole `vars.*` namespace (ADR-0082), one flat map built
+//     by render from, outermost first: the SERVICE's own vars (`<service>/vars/`,
+//     host-invariant), the destiny's `vars.yml`, a `block:`'s and the task's own
+//     `vars:` (destiny/tasks.md §9). Task-level values are CEL-resolved before
+//     params/where. In CEL available as `vars.<key>` (expression keys) and
+//     `${ vars.<key> }` (strings). nil/empty ⇒ accessing `vars.<key>` gives the
+//     normal no-such-key.
+//
+//     There is no separate `essence` root: it was distinguished from `vars` by
+//     being overridable from outside, and `incarnation.spec.essence` is gone.
+//
+// Loop — `loop:` iteration variables (destiny/tasks.md §7): the name from `as:`
+// (default `item`) → the current element, optionally the name from `index_as:` →
+// index/key. Names are arbitrary (author-chosen), so with a non-empty Loop
+// [Engine.EvalExpression]/[Engine.EvalInterpolation] compile the expression against a
+// child env with those names (see [Engine.loopEnv]); they resolve as the bare form
+// `<as>.*` in expression keys / `${ <as>.* }` in strings ([ADR-010]). nil/empty Loop
+// → ordinary evaluation without loop variables.
+//
+// [ADR-010]: docs/adr/0010-templating.md
+// [soulprint.md]: docs/soul/soulprint.md
+type Vars struct {
+	Input          map[string]any
+	Register       map[string]any
+	Incarnation    map[string]any
+	SoulprintSelf  map[string]any
+	SoulprintHosts []map[string]any
+	Vars           map[string]any
+	Loop           map[string]any
+
+	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
+	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
+	// soulprint), available in CEL as `compute.<name>` in every context that IS that
+	// run-level context — a task's params/where/vars and apply.input, on the Soul
+	// side and under `on: keeper` alike (host-invariant by construction). nil/empty ⇒
+	// `compute.<name>` gives the normal no-such-key. NOT passed into the destiny pass
+	// (isolation: destiny sees the result only via apply.input). Which contexts are
+	// out of scope, and why: [ComputeScope].
+	//
+	// A nil Compute means "this run has no compute: block", NOT "this context has
+	// no compute namespace" — the second is [ComputeScope]'s job. Conflating them
+	// is exactly what NIM-619 was.
+	Compute map[string]any
+
+	// ComputeScope — does the `compute` namespace exist in this context at all
+	// (scope.go)? The zero value says yes, and a missing name is then an ordinary
+	// no-such-key. A context that does not have the namespace must say so: it turns
+	// `compute.<name>` into a compile-time [ErrOutOfScope] that names the namespace
+	// and the context, instead of an eval error naming a key that was never the
+	// problem — and instead of `has(compute.x)` quietly evaluating false.
+	//
+	// Independent of Compute on purpose: a run whose `compute:` block is empty still
+	// has the namespace wherever it is in scope.
+	ComputeScope ComputeScope
+
+	// State — the root of incarnation.state in migration mode ([NewMigration],
+	// [ADR-019]): in CEL available as `state.<path>` (mutated over the course of
+	// migration operations). Used ONLY by an Engine built via [NewMigration]; in an
+	// ordinary (scenario/destiny) Engine this field is ignored (the activation does
+	// not read it). nil ⇒ empty map (accessing `state.<key>` gives the normal
+	// no-such-key).
+	State map[string]any
+
+	// Ctx — request-scoped context for the CEL vault() function (ReadKV
+	// cancel/timeout). Used only when the Engine is built with a KVReader (New +
+	// WithVault) and the expression calls vault(); otherwise ignored. nil ⇒
+	// context.Background() (vault() without cancellation — acceptable for offline
+	// soul-lint/Trial modes).
+	Ctx context.Context
+
+	// AllowHosts permits soulprint.hosts/soulprint.where(...) in the expression. true
+	// — the scenario pass (host accessor is visible); false (zero-value) — the
+	// destiny pass and other contexts without run hosts: accessing soulprint.hosts →
+	// isolation error ([orchestration.md §4.1]). Part of the compile-cache key (the
+	// compile outcome depends on the flag).
+	AllowHosts bool
+
+	// RegisterHosts — the run's register buckets INVERTED by name: name → {SID →
+	// payload}. In CEL available as `register.hosts.<name>` and ONLY when
+	// [Vars.AllowRegisterHosts] is set (NIM-711, [ADR-0084] amendment). It is the
+	// one route a per-host value has into `incarnation.state`: a keeper-side
+	// `core.state.<verb>` capture reads the whole SID-keyed map in a single
+	// expression, because a keeper task binds no soulprint and no host.
+	//
+	// The synthetic keeper bucket ([render.KeeperTargetSID]) is NOT a host and is
+	// excluded by the producer; a name a host never registered is simply absent
+	// (normal no-such-key). nil/empty ⇒ `register.hosts` is an empty map.
+	RegisterHosts map[string]any
+
+	// AllowRegisterHosts permits `register.hosts.<name>` in the expression. true —
+	// a keeper-side task ([dispatch.go] keeperVars, the only producer); false
+	// (zero-value) — EVERY other context: host tasks in the scenario pass, the
+	// destiny pass, flow-control, migration. Fail-closed by construction: a context
+	// that does not opt in gets a compile-time isolation error, not a silent empty
+	// map. Part of the compile-cache key (the compile outcome depends on the flag),
+	// like [Vars.AllowHosts].
+	//
+	// Deliberately NOT folded into AllowHosts: that flag is TRUE for host tasks in
+	// the scenario pass, which is exactly where register.hosts must be unavailable.
+	AllowRegisterHosts bool
+}
+
+// registerHostsKey is the field under which [Vars.RegisterHosts] is exposed inside
+// the `register` root, where it OVERWRITES a same-named entry of [Vars.Register].
+// Reserved as a register name at parse time (register_name_reserved,
+// [scenario_task.go]): a register called `hosts` is unreadable from either side —
+// here the accessor wins, and on a host task [guardRegisterHosts] refuses the
+// expression outright, since the cut-off is syntactic.
+const registerHostsKey = "hosts"
+
+// activation builds the map for cel.NewActivation. soulprint is wrapped in
+// {"self": …, "hosts": […]} so the canonical form soulprint.self.<path> and the
+// scenario accessor soulprint.hosts resolve, while a bare soulprint.<path> yields a
+// missing key (caught separately by the validator — [soulprint.md]). vars —
+// task-level `vars:` ([Vars.Vars]): nil ⇒ empty map (accessing `vars.<key>` gives
+// the normal no-such-key). Values are already computed by render BEFORE the
+// activation is built (vars: resolve before params/where).
+//
+// soulprint.hosts — list(map(string,dyn)); nil SoulprintHosts ⇒ empty list (access
+// in the destiny pass is cut off at compile, [Vars.AllowHosts]).
+//
+// compute is always placed here when the mode is not migration — a context that
+// does NOT have the namespace is cut off earlier, at compile ([Vars.ComputeScope],
+// scope.go), so nothing reaches eval with a `compute` reference it may not read.
+// Substituting an empty map for an absent namespace is what made the absence look
+// like a missing key (NIM-619); the empty map that remains here means only "the
+// run has no compute: entries".
+//
+// Loop variables are placed at the top level of the activation under their own names
+// (the bare form `<as>.*`). Iteration names do not conflict with the fixed context:
+// the config validator forbids `as:`/`index_as:` matching reserved names
+// ([scenario_task.go]).
+func (v Vars) activation(migration bool) map[string]any {
+	var act map[string]any
+	if migration {
+		// migration mode ([NewMigration]): only `state` is declared. Other context
+		// names are NOT placed in the activation — they aren't declared in the env
+		// ([migrationVars]) either, so access to them is cut off at compile.
+		act = map[string]any{"state": orEmpty(v.State)}
+	} else {
+		act = map[string]any{
+			"input":       orEmpty(v.Input),
+			"register":    v.registerRoot(),
+			"incarnation": v.incarnationRoot(),
+			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
+			"vars":        orEmpty(v.Vars),
+			"compute":     orEmpty(v.Compute),
+		}
+	}
+	for name, val := range v.Loop {
+		act[name] = val
+	}
+	return act
+}
+
+// incarnationRoot builds the `incarnation` activation root, and is the ONE place
+// the [ADR-0085] compatibility window lives at run time: it puts the retired
+// `name` key beside `id` so a service repository still writing
+// `${ incarnation.name }` keeps evaluating while its scenarios are migrated.
+//
+// Here rather than at each of the four callers that fill [Vars.Incarnation]
+// (render's three contexts, the service-vars stack) because every CEL evaluation
+// on either side of the wire funnels through this activation — including the
+// Soul-side flow-control sandbox, which rebuilds Vars from the `flow_context` it
+// received. One statement of the window, and no context can be forgotten.
+//
+// The alias is added ONLY when `id` is actually present, and into a COPY: an
+// incarnation-free context (push, trial) must keep answering `incarnation.name`
+// with the ordinary no-such-key rather than an empty string, and the caller's map
+// is not the activation's to write into. A map that already carries `name` — a
+// caller mid-migration — is left exactly as it is.
+//
+// Removing this function closes the window; that is its own ticket.
+//
+// [ADR-0085]: docs/adr/0085-entity-id-and-label.md
+func (v Vars) incarnationRoot() map[string]any {
+	return IncarnationRoot(v.Incarnation)
+}
+
+// IncarnationRoot is [Vars.incarnationRoot] for a caller that builds the
+// `incarnation` root for an environment OUTSIDE this package — the pre-flight
+// `validate:` context (shared/config), which declares its own narrow env and
+// therefore never passes through [Vars.activation].
+//
+// It is exported rather than restated there for the reason the window has one
+// statement at all: a second copy is a context that can be forgotten when the
+// window closes, and the failure mode is a `no such key` at evaluation with no
+// static catcher on either side.
+func IncarnationRoot(m map[string]any) map[string]any {
+	id, ok := m[incarnationIDKey]
+	if !ok {
+		return orEmpty(m)
+	}
+	if _, taken := m[legacyIncarnationIDKey]; taken {
+		return m
+	}
+	out := make(map[string]any, len(m)+1)
+	for k, val := range m {
+		out[k] = val
+	}
+	out[legacyIncarnationIDKey] = id
+	return out
+}
+
+// registerRoot builds the `register` activation root. Without
+// [Vars.AllowRegisterHosts] it is [Vars.Register] unchanged (hot path, no copy).
+// With it, a COPY carrying the extra `hosts` field — a copy because Register is the
+// run's live bucket owned by the caller, and the activation must not write into it.
+//
+// `hosts` is placed even when RegisterHosts is empty: `register.hosts.<name>` for a
+// name nobody registered must fail as `no such key: <name>` (the author's actual
+// mistake), not as `no such key: hosts` (which reads as "the accessor does not
+// exist here").
+func (v Vars) registerRoot() map[string]any {
+	if !v.AllowRegisterHosts {
+		return orEmpty(v.Register)
+	}
+	out := make(map[string]any, len(v.Register)+1)
+	for k, val := range v.Register {
+		out[k] = val
+	}
+	out[registerHostsKey] = orEmpty(v.RegisterHosts)
+	return out
+}
+
+// loopNames returns the sorted list of loop-variable names (the key of the child env
+// and its cache). Empty Loop → nil.
+func (v Vars) loopNames() []string {
+	if len(v.Loop) == 0 {
+		return nil
+	}
+	names := make([]string, 0, len(v.Loop))
+	for name := range v.Loop {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+func orEmpty(m map[string]any) map[string]any {
+	if m == nil {
+		return map[string]any{}
+	}
+	return m
+}
+
+// orEmptyHosts converts []map[string]any to []any for the cel adapter (list elements
+// are dyn). nil ⇒ empty list (soulprint.hosts with no hosts).
+func orEmptyHosts(hosts []map[string]any) []any {
+	out := make([]any, len(hosts))
+	for i, h := range hosts {
+		out[i] = h
+	}
+	return out
+}

@@ -1,0 +1,18 @@
+# serial + staged (2D serial×passage, ADR-056 §S4 amend, S-2D1). Probe роли в
+# Passage 0 (БЕЗ serial) → rolling serial:1 действие в Passage 1 (читает
+# register.role, зависит от probe). Раньше отвергалось `serial_staged_unsupported`;
+# теперь это ВАЛИДНЫЙ сценарий — линт даёт passage_plan HINT, не ошибку.
+name: serial-staged
+tasks:
+  - name: Probe role per host
+    module: core.cmd.shell
+    register: role
+    changed_when: false
+    params:
+      cmd: "redis-cli role | head -1"
+  - name: Rolling action on replicas, gated by probe
+    module: core.service.restarted
+    where: register.role.stdout == 'slave'
+    serial: 1
+    params:
+      name: redis-server

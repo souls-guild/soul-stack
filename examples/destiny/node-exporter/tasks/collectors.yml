@@ -1,0 +1,261 @@
+# tasks/collectors.yml — textfile hardware collectors (smartmon / nvme / ipmi).
+#
+# Each collector step carries when: membership in input.collectors (bare CEL,
+# top-level expression key — without ${…}). systemd Condition in .service/.timer
+# additionally prevents a collector from starting where the hardware is absent.
+#
+# There are NO explicit daemon-reload steps: core.service.running of the timer
+# (daemon_reload: auto, default) re-reads systemd itself when the .timer file
+# changes before start. udev-reload (ipmi) stays — that's udevadm, not systemctl.
+#
+# Reactive timer restart: running above only starts a stopped .timer and does
+# a daemon-reload, but does NOT restart an ALREADY RUNNING timer. So a change
+# to the collector's .service or .timer (OnCalendar schedule, sandbox directives,
+# paths from input) must reactively restart the timer — otherwise the old
+# schedule/environment stays alive until a manual restart. Symmetry with the
+# main unit (tasks/service.yml: core.service.restarted onchanges:
+# [node_exporter_unit, node_exporter_bin]): each collector gets its own
+# restarted onchanges:[<c>_unit, <c>_timer].
+
+# ── smartmon collector (disk SMART metrics) ─────────────────────────────────
+- name: Install smartmontools for smartmon collector
+  module: core.pkg.installed
+  when: "'smartmon' in input.collectors"
+  params:
+    name: smartmontools
+
+# The collector script is static (no Go variables), but is deployed via
+# core.file.rendered: the .tmpl extension is mandatory for rendered, vars is
+# empty — text/template strict returns the body as-is. The alternative
+# (inline-content in core.file.present) would require embedding the whole
+# bash script in YAML — less readable.
+- name: Deploy smartmon collector script
+  module: core.file.rendered
+  when: "'smartmon' in input.collectors"
+  params:
+    path: "${ input.bin_dir + '/smartmon.sh' }"
+    template: templates/smartmon.sh.tmpl
+    mode: "0755"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Render smartmon collector unit
+  module: core.file.rendered
+  register: smartmon_unit
+  when: "'smartmon' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-smartmon.service
+    template: templates/node-exporter-smartmon.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      bin_dir:      "${ input.bin_dir }"
+      textfile_dir: "${ input.textfile_dir }"
+
+- name: Render smartmon collector timer
+  module: core.file.rendered
+  register: smartmon_timer
+  when: "'smartmon' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-smartmon.timer
+    template: templates/node-exporter-smartmon.timer.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Ensure smartmon timer is running and enabled
+  module: core.service.running
+  when: "'smartmon' in input.collectors"
+  params:
+    name: node-exporter-smartmon.timer
+    enabled: true
+
+# Restart the timer reactively on a change to its .service (smartmon_unit) OR
+# .timer (smartmon_timer): running above does not restart an already running
+# timer, so the new schedule/sandbox is picked up only by this step. daemon-reload
+# before restarting core.service happens automatically (daemon_reload: auto).
+- name: Restart smartmon timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'smartmon' in input.collectors"
+  onchanges: [smartmon_unit, smartmon_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-smartmon.timer
+
+- name: Remove legacy smartmon cron job
+  module: core.file.absent
+  when: "'smartmon' in input.collectors"
+  params:
+    path: /etc/cron.d/node_exporter_smartmon
+
+# ── nvme collector (NVMe SMART metrics) ──────────────────────────────────────
+- name: Install nvme-cli for nvme collector
+  module: core.pkg.installed
+  when: "'nvme' in input.collectors"
+  params:
+    name: nvme-cli
+
+# nvme_metrics.sh parses nvme-cli JSON via jq (~16 calls) — a separate
+# dependency, installed the same way as smartmontools/ipmitool for their
+# collectors.
+- name: Install jq for nvme collector
+  module: core.pkg.installed
+  when: "'nvme' in input.collectors"
+  params:
+    name: jq
+
+- name: Deploy nvme collector script
+  module: core.file.rendered
+  when: "'nvme' in input.collectors"
+  params:
+    path: "${ input.bin_dir + '/nvme_metrics.sh' }"
+    template: templates/nvme_metrics.sh.tmpl
+    mode: "0755"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Render nvme collector unit
+  module: core.file.rendered
+  register: nvme_unit
+  when: "'nvme' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-nvme.service
+    template: templates/node-exporter-nvme.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      bin_dir:      "${ input.bin_dir }"
+      textfile_dir: "${ input.textfile_dir }"
+
+- name: Render nvme collector timer
+  module: core.file.rendered
+  register: nvme_timer
+  when: "'nvme' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-nvme.timer
+    template: templates/node-exporter-nvme.timer.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Ensure nvme timer is running and enabled
+  module: core.service.running
+  when: "'nvme' in input.collectors"
+  params:
+    name: node-exporter-nvme.timer
+    enabled: true
+
+- name: Restart nvme timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'nvme' in input.collectors"
+  onchanges: [nvme_unit, nvme_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-nvme.timer
+
+- name: Remove legacy nvme cron job
+  module: core.file.absent
+  when: "'nvme' in input.collectors"
+  params:
+    path: /etc/cron.d/node_exporter_nvme
+
+# ── ipmi collector (IPMI sensors) ────────────────────────────────────────────
+# In addition to the script/timer, ipmi requires a udev rule (grants the
+# node_exporter group access to /dev/ipmi*) + a udev re-read on rule change.
+- name: Install ipmitool for ipmi collector
+  module: core.pkg.installed
+  when: "'ipmi' in input.collectors"
+  params:
+    name: ipmitool
+
+- name: Deploy ipmi collector script
+  module: core.file.rendered
+  when: "'ipmi' in input.collectors"
+  params:
+    # ipmitool — an awk script in textfile_dir; mode 0755 (parity with the
+    # smartmon/nvme scripts: executable, no group-write).
+    path: "${ input.textfile_dir + '/ipmitool' }"
+    template: templates/ipmitool.tmpl
+    mode: "0755"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Deploy ipmi udev rule
+  module: core.file.rendered
+  register: ipmi_udev_rule
+  when: "'ipmi' in input.collectors"
+  params:
+    path: /lib/udev/rules.d/52-ipmi.rules
+    template: templates/52-ipmi.rules.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      user: "${ input.user }"
+
+# The udev rule is re-read via udevadm (NOT systemctl) — this is udev, not
+# systemd, core.service auto-reload doesn't apply here. onchanges on the rule:
+# reload only on its change (idempotent). argv without a shell doesn't work —
+# we need && between the two udevadm calls, hence sh -c.
+- name: Reload udev rules for ipmi
+  module: core.exec.run
+  when: "'ipmi' in input.collectors"
+  onchanges: [ipmi_udev_rule]
+  params:
+    cmd: sh
+    args:
+      - "-c"
+      - "udevadm control --reload-rules && udevadm trigger"
+
+- name: Render ipmi collector unit
+  module: core.file.rendered
+  register: ipmi_unit
+  when: "'ipmi' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-ipmitool.service
+    template: templates/node-exporter-ipmitool.service.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars:
+      textfile_dir: "${ input.textfile_dir }"
+
+- name: Render ipmi collector timer
+  module: core.file.rendered
+  register: ipmi_timer
+  when: "'ipmi' in input.collectors"
+  params:
+    path: /etc/systemd/system/node-exporter-ipmitool.timer
+    template: templates/node-exporter-ipmitool.timer.tmpl
+    mode: "0644"
+    owner: root
+    group: root
+    vars: {}
+
+- name: Ensure ipmi timer is running and enabled
+  module: core.service.running
+  when: "'ipmi' in input.collectors"
+  params:
+    name: node-exporter-ipmitool.timer
+    enabled: true
+
+- name: Restart ipmi timer because its unit or timer changed
+  module: core.service.restarted
+  when: "'ipmi' in input.collectors"
+  onchanges: [ipmi_unit, ipmi_timer]
+  timeout: 30s
+  params:
+    name: node-exporter-ipmitool.timer
+
+- name: Remove legacy ipmi cron job
+  module: core.file.absent
+  when: "'ipmi' in input.collectors"
+  params:
+    path: /etc/cron.d/node_exporter_ipmitool

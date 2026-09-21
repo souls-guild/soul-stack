@@ -1,0 +1,185 @@
+name: node-exporter
+description: >-
+  Install Prometheus node_exporter from a GitHub release tarball and run it as a
+  hardened systemd service under a stable system account (node_exporter), with
+  optional textfile collectors (smartmon / nvme / ipmi) shipped as privileged
+  oneshot timers.
+
+# Destiny version — git ref (ADR-007). There is no top-level `version:` field. The task list
+# is in tasks/main.yml. Only core modules → required_modules: not needed.
+#
+# Stable node_exporter service account (NOT DynamicUser — the textfile directory must
+# survive a restart and be accessible to root collectors), hardware textfile collectors run as
+# separate oneshot timers under a strict systemd sandbox.
+#
+# arch is NOT in input: the tarball architecture is read directly from soulprint.self.os.arch
+# (available in destiny-CEL). soulprint reports amd64/arm64 (proto soulprint.proto),
+# no mapping needed.
+
+input:
+  # REQUIRED with no default: the artifact version is a deliberate operator choice, not "whatever".
+  version:
+    type: string
+    required: true
+    format: semver
+    description: node_exporter version (GitHub Releases prometheus/node_exporter).
+
+  # https-only (core.url rejects http:// on Validate without allow_http). The full tarball
+  # URL is built by CEL in tasks/main.yml from base_url + version + arch.
+  base_url:
+    type: string
+    default: "https://github.com/prometheus/node_exporter/releases/download"
+    pattern: "^https://[A-Za-z0-9._/:-]+$"
+    description: >-
+      Root URL for node_exporter release downloads. Defaults to GitHub Releases;
+      override for an internal mirror/nexus-proxy.
+
+  # SSRF-guard opt-out for private-resolve base_url — same pattern as redis destiny.yml install.allow_private.
+  allow_private:
+    type: boolean
+    default: false
+    description: >-
+      Disable the core.url SSRF guard for the tarball fetch (allow dialing RFC1918/
+      loopback — legitimate for an internal Nexus). Needed when base_url resolves to a
+      private address. Default false — guard stays on (github-public back-compat).
+
+  # Caller usually passes an address bound to the internal network (see _trial/scenario).
+  listen:
+    type: string
+    default: ":9100"
+    pattern: "^[A-Za-z0-9._-]*:[0-9]{1,5}$"
+    description: node_exporter listen address (--web.listen-address). Defaults to :9100.
+
+  # systemd Condition in the units prevents a collector from starting without the hardware
+  # (smartmon — ConditionVirtualization=no, nvme — /dev/nvme*, ipmi — /dev/ipmi0), so installing
+  # the collector is safe even where the hardware is absent.
+  collectors:
+    type: array
+    default: [smartmon, nvme, ipmi]
+    items:
+      type: string
+      enum: [smartmon, nvme, ipmi]
+    description: >-
+      Hardware textfile collectors to install (smartmon|nvme|ipmi). Each one is a
+      package + script + oneshot .timer; a systemd Condition prevents it from starting
+      without the hardware.
+
+  # ── Passthrough constants for the role (prod convention §1): pulled into input with
+  #    defaults so the operator can override without editing destiny. ─────────
+
+  bin_dir:
+    type: string
+    default: /usr/local/bin
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: Directory where the node_exporter binary and collector scripts are laid out.
+
+  user:
+    type: string
+    default: node_exporter
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      System service account for node_exporter. A stable uid is needed because
+      the textfile directory survives restarts (prod convention §2, stateful branch).
+
+  group:
+    type: string
+    default: node_exporter
+    pattern: "^[a-z_][a-z0-9_-]*$"
+    description: >-
+      Primary group of the node_exporter service account and owner of the textfile
+      directory. Set independently of user (defaults to the same name as the account).
+
+  textfile_dir:
+    type: string
+    default: /var/lib/node_exporter
+    pattern: "^/[A-Za-z0-9._/-]+$"
+    description: >-
+      Textfile metrics directory (--collector.textfile.directory). node_exporter
+      reads .prom files from it; oneshot collectors write there.
+
+  # ── Production node_exporter daemon parameters (based on a production role + node_exporter --help).
+  #    All OPTIONAL with defaults; empty/0 → the flag is NOT added to ExecStart
+  #    (conditional rendering in templates/node_exporter.service.tmpl). Web-config-TLS
+  #    is deliberately NOT included — a separate concern. ──────────────────────────────
+
+  # Render: 0 → flag omitted (Go picks it by CPU count); >0 → --runtime.gomaxprocs=N.
+  gomaxprocs:
+    type: integer
+    default: 0
+    min: 0
+    description: >-
+      Daemon GOMAXPROCS (--runtime.gomaxprocs). 0 — leave unset (Go picks it by
+      CPU count); >0 — pin the goroutine scheduler limit (pinned to 4).
+
+  # Selectively disable noisy/expensive collectors without turning off everything else.
+  disabled_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      pattern: "^[a-z0-9_]+$"
+    description: >-
+      Collectors to disable (--no-collector.<name> per element). Names without the
+      collector. prefix (e.g. mdadm, arp). Disables noisy/expensive collectors.
+
+  enabled_collectors:
+    type: array
+    default: []
+    items:
+      type: string
+      pattern: "^[a-z0-9_]+$"
+    description: >-
+      Collectors to explicitly enable (--collector.<name> per element). Names without the
+      collector. prefix (e.g. systemd, processes) — disabled-by-default.
+
+  # Format B1: map of collector name → {key: value} (map<string, map<string, string>>).
+  # Rendered by a double range over SORTED keys (deterministic ExecStart). Runtime
+  # validation does not descend into the map (MVP); the schema describes the shape for the form.
+  collector_options:
+    type: object
+    default: {}
+    required: false
+    description: >-
+      Sub-options for node_exporter collectors (collector name → {key: value}), rendered into
+      --collector.<name>.<key>=<value>. Do NOT duplicate fs_mount_points_exclude/netdev_device_exclude
+      here (a repeated flag breaks startup).
+    properties: {}
+    additional_properties:
+      type: object
+      properties: {}
+      additional_properties:
+        type: string
+
+  # Non-empty default → the flag is ALWAYS rendered into ExecStart (unlike fs/netdev-exclude).
+  web_telemetry_path:
+    type: string
+    default: "/metrics"
+    pattern: "^/.*"
+    description: HTTP metrics endpoint path (--web.telemetry-path). Defaults to /metrics.
+
+  log_level:
+    type: string
+    default: info
+    enum: [debug, info, warn, error]
+    description: node_exporter log level (--log.level). Defaults to info.
+
+  log_format:
+    type: string
+    default: logfmt
+    enum: [logfmt, json]
+    description: node_exporter log format (--log.format). Defaults to logfmt.
+
+  # Empty → flag omitted (node_exporter falls back to its built-in default regex).
+  fs_mount_points_exclude:
+    type: string
+    default: ""
+    description: >-
+      Regex of mount points to exclude from the filesystem collector
+      (--collector.filesystem.mount-points-exclude). Empty — leave unset.
+
+  netdev_device_exclude:
+    type: string
+    default: ""
+    description: >-
+      Regex of network interfaces to exclude from the netdev collector
+      (--collector.netdev.device-exclude). Empty — leave unset.

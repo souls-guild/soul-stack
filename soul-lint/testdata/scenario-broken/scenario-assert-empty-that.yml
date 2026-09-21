@@ -1,0 +1,6 @@
+name: assert-empty-that
+tasks:
+  - name: assert with empty that is invalid
+    assert:
+      that: []
+      message: "needs at least one predicate"

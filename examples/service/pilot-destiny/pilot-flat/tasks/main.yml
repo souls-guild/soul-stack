@@ -1,0 +1,15 @@
+# pilot-flat - entry point for destiny. Demonstrates within-destiny include
+# (slice B, destiny/tasks.md §4): the second task is extracted into a neighboring record.yml
+# and connected via include: - expanded into a flat list BEFORE render. End-to-end
+# indices of the final plan (0 = marker, 1 = record) are preserved.
+# All references are input.* destiny only (scenario-scope is unavailable, ADR-009).
+
+- name: Lay down the marker file
+  module: core.file.present
+  params:
+    path:    "${ input.marker_file }"
+    content: "${ input.marker_payload }"
+    mode:    "${ input.marker_mode }"
+
+# within-destiny include: a neighbor in the same tasks/ folder, expanded inline.
+- include: record.yml

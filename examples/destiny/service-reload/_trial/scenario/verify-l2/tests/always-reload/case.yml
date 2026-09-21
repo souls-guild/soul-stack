@@ -1,0 +1,34 @@
+# L2 case (docker systemd-PID1 stand, Trial ADR-023). Build-tag integration.
+#
+# Proves the reload→new-definition path is DETERMINISTIC, regardless of the
+# NeedDaemonReload flag: daemon_reload=always does an unconditional daemon-reload
+# before restart. If the fix works — the NEW definition is applied (ExecStart=…2000).
+# Complements auto-reload (for env artifacts with flag-flip); this flag itself
+# is not involved.
+name: always-reload
+description: |
+  E2E daemon-reload (always): core.service.restarted(daemon_reload=always) does an
+  unconditional reload → v2 applies regardless of NeedDaemonReload.
+
+stand:
+  driver: docker
+  image:  debian:12-slim
+  mode:   push
+  init:   systemd
+
+input:
+  unit:        reload-probe
+  reload_mode: always
+
+# restarted is always changed=true → a repeat apply is not idempotent.
+expect_idempotent: false
+
+verify:
+  - name: execstart-is-v2
+    apply:
+      module: core.cmd.shell
+      params:
+        cmd: "systemctl show reload-probe -p ExecStart --value"
+    expect:
+      exit_code: 0
+      stdout_contains: "2000"

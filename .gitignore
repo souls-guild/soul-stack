@@ -1,0 +1,63 @@
+# PM workspace
+.pm/
+
+# Serena LSP project config (tool-specific, local)
+.serena/
+
+# Nimbalyst GUI local data (tool-specific, local)
+nimbalyst-local/
+
+# Claude Code runtime artifacts (scheduled task lockfile)
+.claude/scheduled_tasks.lock
+.claude/worktrees/
+
+# Go build artefacts
+*.exe
+*.exe~
+*.dll
+*.so
+*.dylib
+*.test
+*.out
+*.prof
+coverage.txt
+coverage.html
+
+# Directory of built binaries inside each module with `main` (see Makefile, BIN_DIR).
+*/bin/
+
+# Directory of temporary binaries soul-trial / soul-lint (keeper/.bin, soul-lint/.bin) -
+# `*/bin/` doesn't cover it (.bin != bin).
+*/.bin/
+
+# Directory of release artifacts (SBOM, deb/rpm) - see Makefile, DIST_DIR (make sbom/pkg).
+dist/
+
+# Defensive: stray binaries in module roots with main (if someone runs `go build .` outside the Makefile).
+/keeper/keeper
+/soul/soul
+/soul-lint/soul-lint
+/soulctl/soulctl
+
+# Vendor / dependency directories are not used in this repo
+vendor/
+
+# Python bytecode cache (from scripts/check-doc-links.py)
+__pycache__/
+
+# Editor / IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+.DS_Store
+
+# compiled example plugin binaries (ADR-011: examples = non-Go only).
+# Convention: the binary sits at examples/module/<plugin>/<plugin> (name == directory).
+# ENUMERATED, one line per module, and it has to be: since NIM-851 dropped the
+# `soul-mod-`/`soul-cloud-` prefixes the binary name equals its directory name, and
+# gitignore has no backreference to say so. A glob wide enough to catch the binary
+# (`examples/module/*/*`) would hide the plugin SOURCES too.
+/examples/module/redis/redis
+/examples/module/redis-failover/redis-failover
+/examples/module/vmlocal/vmlocal

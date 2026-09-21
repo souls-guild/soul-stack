@@ -1,0 +1,7 @@
+# The deprecated `<alias>.<module>` form of a `modules[]` entry (NIM-829). It is a
+# WARNING, not an error, until 2026-12-01: the exit code stays 0 and the manifest still
+# applies. `service-golden/redis-ha.yml` beside this one carries the canonical form.
+state_schema:
+  foo: { type: string }
+modules:
+  - { name: acme.redis-failover, ref: v1.2.0 }

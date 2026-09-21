@@ -1,0 +1,207 @@
+# Mirror the release .deb assets into the Cloudflare R2 apt repo (NIM-174). Runs on a
+# GitHub-hosted runner because there is no self-hosted machine to keep online; the job is
+# short and rare, so the metered minutes of a PRIVATE repository are not an argument
+# against it. (This header claimed the repository was public until NIM-879 checked:
+# `gh api repos/souls-guild/soul-stack -q .private` → true.)
+#
+# The R2 write key and the apt signing key live in repo secrets. What keeps them out of
+# reach is that BOTH triggers below require write access — `release: published` and
+# `workflow_dispatch`, neither of which a fork PR can raise. Not the repository's
+# visibility: this header rested the same conclusion on "private" and, before NIM-879, on
+# "public", and a reason that survives its own negation was never the reason (NIM-882).
+# The R2 token is scoped to write only the apt bucket, and the GPG key is a dedicated
+# apt-signing key (not a personal key) — a bounded, rotatable blast radius.
+#
+# ★ THIS FIRES ON ANY RELEASE, SO IT ASKS WHERE THE RELEASE CAME FROM (NIM-879, NIM-882).
+# `release: published` includes one a human creates by hand with `gh release create` from
+# locally built artifacts, and release.yml's `live-gate` blocks goreleaser, not this
+# workflow — which made the one publishing path with a durable outward effect (packages in
+# the apt pool) the one path nothing checked. NIM-879 expected a repository ruleset on who
+# may publish a release to close it; NIM-882 found there is no such ruleset to configure —
+# GitHub rulesets target branches, tags and pushes, never releases (RELEASING.md step (e)).
+#
+# So the checks are here instead, both ahead of every secret, and they are two because they
+# answer two questions. `provenance` asks whether the gated pipeline CREATED this release;
+# `verify-release-assets.sh` asks whether these are the assets it BUILT, against the release's
+# own cosign-signed checksums.txt. `gh release upload evil.deb <the pipeline's release>`
+# answers the first yes and is exactly what the second refuses. Each script states what it
+# asks; scripts/check-release-gate.py asserts on every push that `publish` still needs both
+# and that neither has become `… || true`, since either edit is one line and silent in the
+# direction that matters.
+name: Publish apt (R2)
+
+on:
+  release:
+    types: [published]
+  # Manual (re-)publish for an already-released tag.
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: "Release tag to mirror (e.g. v0.1.0-beta.1)"
+        required: true
+
+permissions:
+  contents: read # download the release .deb assets
+
+# One publish at a time; a newer run waits rather than racing the bucket.
+concurrency:
+  group: apt-publish
+  cancel-in-progress: false
+
+jobs:
+  # Ahead of `publish` and therefore ahead of every secret this workflow carries: the R2
+  # write key and the apt signing key are only decrypted into a job that runs, and a refusal
+  # here means neither ever was.
+  provenance:
+    name: the release came from the gated pipeline
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      actions: read # list release.yml's runs and their jobs
+    steps:
+      # ★ PINNED TO THE DEFAULT BRANCH: an unpinned checkout takes `github.sha`, which on
+      # `release: published` is the release's own tag — the judging script fetched from the
+      # commit under judgement, so `gh release create` on a tree where
+      # check-release-provenance.sh is `exit 0` would gate itself green. `workflow_dispatch`
+      # is the same shape, its ref being the caller's choice too.
+      #
+      # ★★ WHAT THIS DOES NOT REACH, because the first version of this comment got it wrong
+      # and the mistake is worth keeping visible: the workflow FILE is not pinned and cannot
+      # be. GitHub reads it from the tagged commit for a `release` event (GITHUB_SHA is "last
+      # commit in the tagged release", and the "must be on the default branch" note the docs
+      # attach to other events is absent for this one). So whoever can push a tag can delete
+      # these jobs for their own run — the pin keeps the SCRIPTS honest when the workflow is,
+      # nothing more. That residual is the `workflow_dispatch`-on-an-arbitrary-ref path of
+      # RELEASING.md step (e) wearing different clothes, and it is closed by a tag ruleset,
+      # not from inside this repository.
+      - name: Checkout the default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      # `actions/checkout` does not fail on an empty `ref:` — it falls back to
+      # `github.context.ref`, i.e. exactly the ref being judged. Nothing above would say so.
+      - name: Confirm the checkout is the default branch
+        env:
+          GH_TOKEN: ${{ github.token }}
+          DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+        run: |
+          set -euo pipefail
+          test -n "$DEFAULT_BRANCH" || { echo "default_branch resolved empty"; exit 1; }
+          want="$(gh api "repos/$GITHUB_REPOSITORY/commits/$DEFAULT_BRANCH" --jq '.sha')"
+          got="$(git rev-parse HEAD)"
+          test "$want" = "$got" ||
+            { echo "checked out $got, but $DEFAULT_BRANCH is $want — the judging scripts are not the default branch's"; exit 1; }
+
+      # Through `env:` rather than inline in the `run:` body. Both sources are text an
+      # operator chooses — a tag name, a dispatch input — and inline `${{ … }}` would splice
+      # it into the shell before bash ever sees a quote. The shape check is not decoration
+      # either: this value reaches a `gh api …/git/ref/tags/$TAG` path, where `../` walks to
+      # a different endpoint.
+      - name: Resolve release tag
+        id: tag
+        env:
+          RELEASE_TAG: ${{ github.event.release.tag_name }}
+          INPUT_TAG: ${{ inputs.tag }}
+        run: |
+          set -euo pipefail
+          tag="${RELEASE_TAG:-$INPUT_TAG}"
+          case "$tag" in
+            v[0-9]*) ;;
+            *) echo "refusing tag '$tag': this pipeline releases v<semver> tags only"; exit 1 ;;
+          esac
+          case "$tag" in
+            */*|*..*|*' '*) echo "refusing tag '$tag': path-shaped"; exit 1 ;;
+          esac
+          # Delimiter form: a newline in the value would otherwise write further output keys.
+          { echo "tag<<EOF"; echo "$tag"; echo "EOF"; } >> "$GITHUB_OUTPUT"
+
+      - name: Require a green release.yml run and a pipeline-made release
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: scripts/check-release-provenance.sh
+
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Download the release assets
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ steps.tag.outputs.tag }}
+        run: |
+          set -euo pipefail
+          rm -rf dist/pkg && mkdir -p dist/pkg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" -p '*.deb' -D dist/pkg
+          gh release download "$TAG" -R "$GITHUB_REPOSITORY" \
+            -p 'checksums.txt' -p 'checksums.txt.sig' -p 'checksums.txt.pem' -D dist/pkg
+
+      # The step above established that the pipeline CREATED this release; this establishes
+      # that these .debs are the bytes it produced — a distinction `gh release upload
+      # evil.deb <the bot's release>` makes expensive.
+      - name: Verify the .deb assets against the signed checksums
+        env:
+          TAG: ${{ steps.tag.outputs.tag }}
+          DEB_DIR: dist/pkg
+        run: scripts/verify-release-assets.sh
+
+      # ★ The verified tree crosses to `publish` as an artifact rather than being fetched
+      # again there. Both reasons matter: it keeps every check in a job that holds no secret
+      # — so "refused before the R2 key was decrypted" is a fact about the job graph rather
+      # than about step order, which nothing would have asserted — and it removes the window
+      # between verifying an asset and downloading it a second time to publish.
+      - name: Hand the verified packages to the mirror
+        uses: actions/upload-artifact@v7
+        with:
+          name: verified-debs
+          path: dist/pkg/*.deb
+          retention-days: 1
+          if-no-files-found: error
+
+  publish:
+    name: mirror .deb → R2 apt pool
+    runs-on: ubuntu-latest
+    needs: provenance
+    permissions:
+      contents: read
+    steps:
+      # Pinned for the same reason as above: this checkout supplies publish-apt.sh, which
+      # must not come from the ref being published.
+      - name: Checkout the default branch
+        uses: actions/checkout@v7
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+
+      - name: Install tooling (apt-utils, rclone, gnupg)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq apt-utils rclone gnupg
+
+      # Exactly the bytes `provenance` verified. Nothing here re-reads the release.
+      - name: Collect the verified packages
+        uses: actions/download-artifact@v7
+        with:
+          name: verified-debs
+          path: dist/pkg
+
+      - name: Configure rclone remote for R2
+        env:
+          R2_ACCESS_KEY_ID: ${{ secrets.R2_ACCESS_KEY_ID }}
+          R2_SECRET_ACCESS_KEY: ${{ secrets.R2_SECRET_ACCESS_KEY }}
+          R2_ACCOUNT_ID: ${{ vars.R2_ACCOUNT_ID }}
+        run: |
+          rclone config create r2_soul_stack_apt s3 \
+            provider=Cloudflare \
+            access_key_id="$R2_ACCESS_KEY_ID" \
+            secret_access_key="$R2_SECRET_ACCESS_KEY" \
+            endpoint="https://${R2_ACCOUNT_ID}.r2.cloudflarestorage.com" \
+            --non-interactive >/dev/null
+
+      - name: Import apt signing key
+        env:
+          APT_GPG_PRIVATE_KEY: ${{ secrets.APT_GPG_PRIVATE_KEY }}
+        run: printf '%s' "$APT_GPG_PRIVATE_KEY" | gpg --batch --import
+
+      - name: Publish to R2
+        env:
+          APT_GPG_KEY_ID: ${{ vars.APT_GPG_KEY_ID }}
+          RCLONE_REMOTE: ${{ vars.RCLONE_REMOTE }}
+        run: deploy/apt-r2/publish-apt.sh

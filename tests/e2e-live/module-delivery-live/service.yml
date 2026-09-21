@@ -1,0 +1,20 @@
+description: >-
+  NIM-32 S2 live gate for SoulModule plugin delivery (ADR-065 S5, live guarantee
+  for NIM-8). The service DECLARES redis in modules[] and does NOT
+  contain an explicit install step anywhere. create provisions redis with
+  core modules without a plugin consumer (negative: no synthesis in the
+  create plan); the operational-scenario verify_live calls redis.command.run
+  — keeper auto-synthesizes core.module.installed from this manifest
+  declaration BEFORE the consumer, and Soul in ONE run does
+  fetch→verify→atomic-rename→hot-register and immediately executes the consumer.
+
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
+state_schema: {}
+# modules[] — an explicit manifest declaration of the dependency (ADR-065(e) amendment):
+# keeper synthesizes core.module.installed {name: redis, ref} before the first
+# consumer of redis.* in the plan. The entry names the ARTIFACT by its registration
+# alias, which is what params.name carries (NIM-524, NIM-829). There is NO consumer in
+# create → no synthesis in the create plan; the consumer is only in the
+# operational-scenario verify_live.
+modules:
+  - { name: redis, ref: v1.0.0 }

@@ -1,0 +1,14 @@
+name: redis-exporter rejects credentials embedded in redis_addr userinfo
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  soulprint:
+    os: { arch: amd64 }
+  input:
+    instance_name: redis
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    redis_password: "root-only-password-still-required"
+    redis_addr: redis://monitoring:argv-secret@127.0.0.1:6379
+    dependency_unit: redis-server.service
+
+expect_render_error: "does not match pattern"

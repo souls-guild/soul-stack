@@ -1,0 +1,5 @@
+name: x
+input:
+  s:
+    type: string
+    required: "blabla"

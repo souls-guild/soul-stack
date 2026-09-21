@@ -1,0 +1,132 @@
+package api
+
+// FULL-TYPED reveal of incarnation secrets (NIM-74, code-first OpenAPI source). Two
+// routes under the incarnation.view-secrets right:
+//   - POST /v1/incarnations/{id}/secrets/reveal — plaintext reveal (SELF-AUDIT
+//     incarnation.secret_revealed inside RevealSecretTyped; newHumaCadenceAPI,
+//     without middleware wiring);
+//   - GET /v1/incarnations/{id}/secrets/revealable — discovery (READ, no audit).
+// The Go types are the single source of truth for the schema.
+
+import (
+	"context"
+	"net/http"
+
+	"github.com/danielgtaylor/huma/v2"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+)
+
+// --- POST .../secrets/reveal (SELF-AUDIT incarnation.secret_revealed) ---
+
+// incRevealSecretInput — huma input for POST .../secrets/reveal. Name — path; body —
+// {secret_id, key}. The client does NOT set the service version (taken from
+// inc.ServiceVersion).
+type incRevealSecretInput struct {
+	ID   string `path:"id" doc:"incarnation id"`
+	Body IncarnationRevealSecretRequest
+}
+
+// incRevealSecretOutput — huma-output POST .../secrets/reveal.
+type incRevealSecretOutput struct {
+	Body IncarnationRevealSecretReply
+}
+
+// incRevealSecretOperation — metadata for POST .../secrets/reveal.
+// DefaultStatus=200. Permission incarnation.view-secrets (RBAC gate — middleware
+// before the handler). Errors: 403 no right, 404 out of scope | no secret_id | key
+// not in state | no value, 422 invalid name/secret_id/key, 500.
+func incRevealSecretOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "incarnationRevealSecret",
+		Method:        http.MethodPost,
+		Path:          "/{id}/secrets/reveal",
+		Summary:       "Reveal plaintext of an incarnation secret",
+		Description:   "Resolves the plaintext of a secret the service declared as type: secret in its state_schema, from Vault at the derived path. Permission incarnation.view-secrets (removes the mask, strictly more privileged than incarnation.get). key must be present in the current-state collection, and must be empty for a scalar secret. Audit incarnation.secret_revealed (without the value). Out of scope -> 404.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// registerHumaIncarnationRevealSecret mounts POST .../secrets/reveal (SELF-AUDIT:
+// the handler writes incarnation.secret_revealed inside RevealSecretTyped). incH nil
+// → no-op.
+func registerHumaIncarnationRevealSecret(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incRevealSecretOperation(), func(ctx context.Context, in *incRevealSecretInput) (*incRevealSecretOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, incMissingClaims()
+		}
+		res, err := incH.RevealSecretTyped(ctx, claims, in.ID, in.Body.SecretID, in.Body.Key)
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		return &incRevealSecretOutput{Body: IncarnationRevealSecretReply{Value: res.Value}}, nil
+	})
+}
+
+// --- GET .../secrets/revealable (READ, no audit) ---
+
+// incRevealableSecretsInput — huma-input GET .../secrets/revealable.
+type incRevealableSecretsInput struct {
+	ID string `path:"id" doc:"incarnation id"`
+}
+
+// incRevealableSecretsOutput — huma-output GET .../secrets/revealable.
+type incRevealableSecretsOutput struct {
+	Body IncarnationRevealableSecretsReply
+}
+
+// incRevealableSecretsOperation — metadata for GET .../secrets/revealable.
+// DefaultStatus=200. READ (no audit). Permission incarnation.view-secrets
+// (existence gate). Errors: 403, 404 out of scope, 422 invalid name, 500.
+func incRevealableSecretsOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "incarnationRevealableSecrets",
+		Method:        http.MethodGet,
+		Path:          "/{id}/secrets/revealable",
+		Summary:       "List revealable secrets of an incarnation",
+		Description:   "Discovery of the secrets the service declared as type: secret in its state_schema + the keys present in the current state. Read-only, no audit. Permission incarnation.view-secrets (existence-gate). Out of scope -> 404.",
+		Tags:          []string{"incarnation"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// registerHumaIncarnationRevealableSecrets mounts GET .../secrets/revealable
+// (READ, no audit). incH nil → no-op.
+func registerHumaIncarnationRevealableSecrets(humaAPI huma.API, incH *handlers.IncarnationHandler) {
+	if incH == nil {
+		return
+	}
+	huma.Register(humaAPI, incRevealableSecretsOperation(), func(ctx context.Context, in *incRevealableSecretsInput) (*incRevealableSecretsOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, incMissingClaims()
+		}
+		res, err := incH.RevealableSecretsTyped(ctx, claims, in.ID)
+		if err != nil {
+			return nil, incProblem(err)
+		}
+		items := make([]IncarnationRevealableSecretItem, 0, len(res.Items))
+		for _, it := range res.Items {
+			keys := it.Keys
+			if keys == nil {
+				keys = []string{}
+			}
+			items = append(items, IncarnationRevealableSecretItem{
+				SecretID:   it.SecretID,
+				Label:      it.Label,
+				StatePath:  it.StatePath,
+				Collection: it.Collection,
+				Keys:       keys,
+			})
+		}
+		return &incRevealableSecretsOutput{Body: IncarnationRevealableSecretsReply{Items: items}}, nil
+	})
+}

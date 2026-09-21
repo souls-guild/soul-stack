@@ -1,0 +1,80 @@
+# systemd unit for Keeper (ADR-004) - the central node of Soul Stack.
+#
+# Installed from the soul-stack-keeper package (deb/rpm) - user soul-stack,
+# postinstall creates /etc/keeper and /var/lib/soul-stack-keeper. Manual steps
+# for the operator after installation:
+#   install -m0640 keeper.yml /etc/keeper/keeper.yml
+#   keeper init --archon=<aid>            # bootstrap the first Archon (ADR-013)
+#   systemctl enable --now keeper
+#
+# Manual installation without a package (for reference):
+#   useradd --system --no-create-home --shell /usr/sbin/nologin soul-stack   # once per host
+#   install -m0755 keeper/bin/keeper /usr/local/bin/keeper
+#   install -d -o soul-stack -g soul-stack /etc/keeper /var/lib/soul-stack-keeper
+#   install -m0640 keeper.yml /etc/keeper/keeper.yml
+#   install -m0644 deploy/systemd/keeper.service /etc/systemd/system/keeper.service
+#   install -m0644 deploy/systemd/keeper.env     /etc/keeper/keeper.env
+#   systemctl daemon-reload && systemctl enable --now keeper
+
+[Unit]
+Description=Soul Stack Keeper
+Documentation=https://github.com/souls-guild/soul-stack
+# Keeper listens on gRPC/HTTP and talks to Postgres/Redis - needs the network up.
+After=network-online.target
+Wants=network-online.target
+# Restart rate limit - [Unit], not [Service]: systemd ignores these keys in
+# [Service] ("Unknown key name ... ignoring"), which left the limiter dead.
+StartLimitIntervalSec=60s
+StartLimitBurst=5
+
+[Service]
+# Type=notify: `systemctl start keeper` returns once the operator API socket is
+# bound and serving (the last listener to come up), so units ordered after keeper
+# do not race its startup. `systemctl status` then shows the live STATUS= line
+# with the address and the number of connected Souls.
+Type=notify
+NotifyAccess=main
+User=soul-stack
+Group=soul-stack
+
+# Config path is factored out into EnvironmentFile - the operator changes it without touching the unit.
+EnvironmentFile=/etc/keeper/keeper.env
+ExecStart=/usr/bin/keeper run --config=${KEEPER_CONFIG}
+# Config hot-reload (ADR-021(b)): `systemctl reload keeper` re-reads keeper.yml
+# in place, without dropping Soul sessions.
+ExecReload=/bin/kill -HUP $MAINPID
+
+# Daemon crash - restart; avoid looping on a broken config (StartLimit, [Unit]).
+Restart=on-failure
+RestartSec=5s
+# Watchdog: keeper pings WATCHDOG=1 every WatchdogSec/2. The ping proves the
+# process still schedules goroutines; it is deliberately NOT a Postgres/Redis
+# health check, so a storage outage does not restart the whole cluster. Drop this
+# line to opt out.
+WatchdogSec=60s
+# Bounds ONE startup step, not the whole sequence: keeper extends the start job
+# (EXTEND_TIMEOUT_USEC) after each step, so a cold Vault/PG/plugin-cache start may
+# take as long as it needs while a genuinely stuck step still fails the unit.
+TimeoutStartSec=120s
+
+# --- hardening (security first) ---
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+PrivateDevices=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+RestrictNamespaces=true
+LockPersonality=true
+MemoryDenyWriteExecute=true
+# The only writable path - keeper's runtime root (plugins/services/
+# destiny/plugin-src caches; see keeper main.go defaults). Must match the directory
+# created by postinstall owned by soul-stack, otherwise strict-hardening
+# will block the write and the daemon will crash.
+ReadWritePaths=/var/lib/soul-stack-keeper
+
+[Install]
+WantedBy=multi-user.target

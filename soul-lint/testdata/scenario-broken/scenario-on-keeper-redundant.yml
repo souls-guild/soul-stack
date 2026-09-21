@@ -1,0 +1,12 @@
+# NIM-747: the side follows from the module address, so restating it in `on:` is
+# refused. `core.state` is keeper-side and exists nowhere else -- the key tells
+# the engine what it already knows, and it overloads `on:`, whose one meaning is
+# "which covens".
+name: on-keeper-redundant
+tasks:
+  - name: Record the namespace
+    module: core.state.set
+    on: keeper
+    params:
+      field: namespace
+      value: prod

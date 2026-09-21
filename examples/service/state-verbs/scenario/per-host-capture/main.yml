@@ -1,0 +1,39 @@
+name: per-host-capture
+description: >-
+  Routes a value that exists only PER HOST into `incarnation.state` (NIM-711,
+  amendment to [ADR-0084]). A probe registers on every host of the incarnation;
+  one keeper-side capture then reads `register.hosts.<name>` - the whole
+  {SID -> payload} map for that register - and writes it as a single field.
+
+  Why an accessor and not `register.<name>`: the capture is a keeper task. It
+  binds no soulprint, targets no host and reads only the keeper register bucket
+  ([ADR-056] slice 2), so `register.node_id` there is not "some host's value" -
+  it is nothing at all. `register.hosts.node_id` is the one root that carries the
+  per-host set across that boundary, and it exists ONLY in a keeper-side task.
+
+tasks:
+  # The probe. `on:` omitted = every host of the incarnation, so the register
+  # lands in a bucket per SID. This is an ordinary Soul-side step - nothing about
+  # it is special to the accessor; the accessor reads what any probe leaves.
+  - name: Probe the node id on every host
+    module: core.exec.run
+    register: node_id
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["node-id"]
+
+  # ONE capture writes the whole per-host set. The dependency edge is on
+  # `node_id`, not on `hosts`, so the stratifier puts this step in a LATER
+  # Passage than the probe and the map is populated by the time it renders
+  # (ADR-056; a same-Passage capture would read an empty map).
+  #
+  # The cell is one `${ … }` covering the whole value, so it resolves to a native
+  # map rather than being stringified ([ADR-010]) - and a CEL-wrapped cell is
+  # exempt from the `string` literal check the SDK param type would otherwise
+  # apply (same workaround as `value: "${ vars.member }"` in scenario/create).
+  - name: Record every host's node id
+    module: core.state.set
+    params:
+      field: node_ids
+      value: "${ register.hosts.node_id }"

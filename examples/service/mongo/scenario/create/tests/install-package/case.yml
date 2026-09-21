@@ -1,0 +1,74 @@
+# L0 test for create MongoDB standalone — PACKAGE method (distro package mongodb-org).
+# Covers: the package branch (core.pkg.installed mongodb-org =version-pin) + group-drop of the
+# binary branch (no url.fetched/mongod binary/binary unit). The package carries its own systemd unit.
+name: mongo create standalone via distribution package (mongodb-org)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [mongo]
+      soulprint:
+        network: { primary_ip: 10.0.0.7 }
+        os: { arch: amd64, version: "12" }
+
+  vars:
+    install_method: package
+    conf_dir: /etc/mongodb
+    data_dir: /var/lib/mongodb
+    log_dir:  /var/log/mongodb
+    net_port: 27017
+    memory_reserve_percent: 50
+    system_users:
+      default_admin:
+        - { role: root, db: admin }
+    mongo_config:
+      net:
+        maxIncomingConnections: 65536
+
+  input:
+    version: "6.0.19"
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_users:
+      effective:
+        - { name: default_admin, password: mongoadmin-create-pass }
+    mongo_users:
+      effective: []
+
+assert:
+  task_present:
+    # PACKAGE branch: distro package mongodb-org with =version-pin.
+    - module: core.pkg.installed
+      params_subset:
+        name: mongodb-org
+        version: "6.0.19"
+    # render mongod.conf + start + bootstrap — common to both branches.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/mongodb/mongod.conf
+    - module: mongo.user.present
+      params_subset:
+        name: default_admin
+
+  task_absent:
+    # BINARY branch group-drop on the package incarnation: binary/tarball/binary unit are NOT touched.
+    - module: core.url.fetched
+    - module: core.file.present
+      params_subset:
+        path: /usr/local/bin/mongod
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/mongod.service
+    # * Restarting mongod (binary-only onchanges) is absent on the package incarnation.
+    - module: core.service.restarted
+      params_subset:
+        name: mongod
+
+  state_after:
+    mongo_version: "6.0.19"

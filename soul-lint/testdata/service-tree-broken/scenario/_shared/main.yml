@@ -1,0 +1,9 @@
+# NOT a scenario: a leading `_` marks a directory of shared include bodies, the
+# same convention `make lint` follows over the examples corpus. This file is a
+# bare task list with no scenario `name:` — checking it as a scenario would invent
+# an error about a correct file, so the walk must skip the directory entirely.
+- name: A shared body, included from elsewhere
+  module: core.file.present
+  params:
+    path: /tmp/shared
+    content: shared

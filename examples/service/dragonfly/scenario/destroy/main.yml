@@ -1,0 +1,153 @@
+name: destroy
+description: >-
+  Teardown DragonFly: remove from EVERY host of the incarnation what create installed — systemd
+  services + config artifacts — BEFORE deleting the incarnation. Lifecycle scenario (NOT runnable from
+  the Run form — a terminal flow DELETE /v1/incarnations/{name}, like create is bootstrap): keeper
+  treats the name `destroy` as a lifecycle phase (scenario.LifecycleScenarioNames),
+  runs in TerminalDestroy mode.
+
+  ★ SOUL-SIDE teardown only. The VM is not ours to delete: NIM-761 removed the CloudDriver
+  contract, so there is no engine-side cloud step, and a VM created by a cloud plugin is
+  torn down through that plugin's own module address rather than from here. What is left is
+  the half that always applied to an incarnation rolled onto EXISTING hosts: stop the
+  services and remove our /etc artifacts. Every step is idempotent and UNCONDITIONAL (no
+  when gate) and runs on the live hosts.
+
+  ★ TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
+  packages):
+    - services dragonfly + redis-sentinel + disable-thp are STOPPED (core.service.stopped,
+      idempotent — no service → no-op). redis-sentinel is brought up by destiny `redis` (sentinel
+      from the redis plane, refactor) — but the systemd unit name is the same, stopping it stays valid;
+    - DragonFly is REMOVED by ITS install method (vars.install_method, static gate → group-drop):
+      the binary branch removes /usr/local/bin/dragonfly + its own unit file; the package branch removes
+      the distro deb dragonfly (core.pkg.absent — the package cleanly takes its systemd unit with it, no separate
+      daemon-reload needed);
+    - OUR DragonFly config artifacts in ${conf_dir} and /etc (users.acl, dragonfly.conf, TLS PEM,
+      logrotate/sysctl drop-in, disable-thp unit) are REMOVED — they're always ours, safe in both
+      branches;
+    - ★ SENTINEL ARTIFACTS (sentinel.conf/sentinel-users.acl/redis-sentinel unit, the
+      redis-server package) are NOT removed HERE — they're deployed by destiny `redis` (sentinel_only) in
+      ITS conf_dir (/etc/redis), not /etc/dragonfly. Full sentinel teardown is a separate slice
+      (apply destiny `redis` teardown / explicit /etc/redis paths). Not critical for PILOT: the
+      redis-sentinel unit is stopped (above), an orphaned config is harmless on a host being deleted;
+    - data_dir (DragonFly snapshot data), the redis-tools package (redis-cli — general purpose,
+      installed UNCONDITIONALLY), the distro dragonfly user — are NOT TOUCHED (deleting data is destructive
+      and irreversible; removing shared packages would affect neighboring services). This is a deliberate MVP
+      boundary — extending the "depth" (purging data, removing packages) is a separate decision.
+
+  ★ there is no state capture on purpose: destroy is terminal — the incarnation is being deleted
+  (auto_destroy), clearing state is pointless (it goes away with the incarnation). Mirror of create,
+  where state is POPULATED; here we don't touch it.
+
+  Targeting — the whole incarnation (on omitted, ADR-008/009): teardown runs on EVERY host of the
+  incarnation (Soul-side, not keeper — host operations over systemd/files).
+
+# ── Operator input contract ────────────────────────────────────────────────
+# Empty: destroy takes no operator input. What to remove is the install method and conf_dir
+# from service vars (install_method/conf_dir for Soul-side teardown), not an operator choice
+# at teardown time. The operator only initiates the deletion
+# (DELETE /v1/incarnations/{name}).
+input: {}
+
+tasks:
+  # ── SOUL-SIDE teardown (the older DragonFly profile, always active) ────────────
+  # ── 1. Stop the DragonFly services (idempotent) ───────────────────────────
+  # core.service.stopped brings the unit to "not running": no service (already removed
+  # or never installed) means no-op. Stop BEFORE removing files/package, since pulling
+  # the config out from under a running daemon is a race. Three units: dragonfly (data
+  # plane), redis-sentinel (the sentinel daemon, deployed by destiny `redis`, though the
+  # unit name is the same), disable-thp (oneshot THP, RemainAfterExit; stop clears the
+  # active marker).
+  - name: Stop the dragonfly service
+    module: core.service.stopped
+    params:
+      name: dragonfly
+
+  - name: Stop the redis-sentinel service
+    module: core.service.stopped
+    params:
+      name: redis-sentinel
+
+  - name: Stop the disable-thp service
+    module: core.service.stopped
+    params:
+      name: disable-thp
+
+  # ── 2a. Remove DragonFly: BINARY branch (upstream-tarball install) ────────────
+  # Gate is static (vars.install_method only → isStaticWhen) → render-phase GROUP-DROP:
+  # on a package incarnation these tasks are physically excluded from the plan. ★ v1→v2:
+  # the install method was MOVED out of state into service vars (install is no longer in
+  # state), so the gate reads vars.install_method (the same source as compute.install
+  # in create). binary create put the binary in /usr/local/bin and ITS OWN unit in
+  # /etc/systemd/system: both are ours, remove them.
+  - name: Remove the dragonfly binary (binary install)
+    module: core.file.absent
+    when: "default(vars.install_method, 'package') == 'binary'"
+    params:
+      path: /usr/local/bin/dragonfly
+
+  - name: Remove the dragonfly systemd unit (binary install)
+    module: core.file.absent
+    when: "default(vars.install_method, 'package') == 'binary'"
+    params:
+      path: /etc/systemd/system/dragonfly.service
+
+  # ── 2b. Remove DragonFly: PACKAGE branch (distro deb dragonfly) ───────────────
+  # Gate is static (group-drop on binary incarnations). package create installed the
+  # distro deb dragonfly with its own systemd unit; remove it via the PACKAGE
+  # (core.pkg.absent) so the package cleanly takes its unit with it (no separate
+  # daemon-reload needed, since apt/dpkg reconciles systemd itself). ★ v1→v2: install
+  # method from vars.install_method (package is the default): "method != binary".
+  - name: Remove the dragonfly distribution package (package install)
+    module: core.pkg.absent
+    when: "default(vars.install_method, 'package') != 'binary'"
+    params:
+      name: dragonfly
+
+  # ── 3. Remove OUR DragonFly config artifacts (both branches, always ours) ───────
+  # ${conf_dir} files (users.acl, dragonfly.conf, TLS PEM) + /etc drop-ins (logrotate,
+  # sysctl, disable-thp unit). conf_dir from service vars (default /etc/dragonfly).
+  # core.file.absent is idempotent (no file → no-op). Remove the TLS PEM unconditionally:
+  # on a plaintext incarnation these files don't exist → no-op (no need to gate it).
+  # ★ sentinel.conf/sentinel-users.acl are NOT REMOVED HERE: they're deployed by destiny
+  # `redis` (sentinel_only) in /etc/redis, not /etc/dragonfly (the "sentinel out of redis"
+  # refactor); their teardown is a separate slice (see the header).
+  - name: Remove the dragonfly users.acl
+    module: core.file.absent
+    params:
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/users.acl' }"
+
+  - name: Remove the dragonfly.conf flagfile
+    module: core.file.absent
+    params:
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/dragonfly.conf' }"
+
+  - name: Remove the TLS server certificate
+    module: core.file.absent
+    params:
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.crt' }"
+
+  - name: Remove the TLS server private key
+    module: core.file.absent
+    params:
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/dragonfly.key' }"
+
+  - name: Remove the TLS CA certificate
+    module: core.file.absent
+    params:
+      path: "${ default(vars.conf_dir, '/etc/dragonfly') + '/tls/ca.crt' }"
+
+  - name: Remove the dragonfly logrotate config
+    module: core.file.absent
+    params:
+      path: /etc/logrotate.d/dragonfly
+
+  - name: Remove the dragonfly sysctl drop-in
+    module: core.file.absent
+    params:
+      path: /etc/sysctl.d/30-dragonfly.conf
+
+  - name: Remove the disable-thp systemd unit
+    module: core.file.absent
+    params:
+      path: /etc/systemd/system/disable-thp.service

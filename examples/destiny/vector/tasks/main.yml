@@ -1,0 +1,19 @@
+# tasks/main.yml - entry point for destiny vector. Only an include list: logical
+# groups are split across neighboring files, expanded inline BEFORE render (docs/destiny/
+# tasks.md §4 - within-destiny include expands into a flat list).
+#
+# Pipeline overview (clone of node-exporter):
+#   install.yml - fetch Vector tarball -> extract (prepare the artifact in /tmp);
+#   account.yml - group + user vector + data_dir (persistent buffer) + config_dir
+#                 (core.directory.present);
+#   service.yml - install the vector binary (core.file.present src:) + render vector.yaml
+#                 (sources/sinks) + render hardened-unit + core.service.running +
+#                 restarted onchanges on config/unit/binary. The binary install step is here,
+#                 not in install.yml: its register is read by the restart onchanges, and the
+#                 per-file linter rejects cross-file onchanges.
+
+- include: install.yml
+
+- include: account.yml
+
+- include: service.yml

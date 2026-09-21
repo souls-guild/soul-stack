@@ -1,0 +1,2228 @@
+package incarnation
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"regexp"
+	"strconv"
+	"strings"
+	"time"
+
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
+	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	"github.com/souls-guild/soul-stack/keeper/internal/registrylabel"
+	"github.com/souls-guild/soul-stack/keeper/internal/statemigrate"
+	"github.com/souls-guild/soul-stack/shared/audit"
+)
+
+// Sentinel errors of the CRUD layer. The handler side maps:
+//   - ErrIncarnationAlreadyExists → 409 incarnation-already-exists.
+//   - ErrIncarnationNotFound      → 404 not-found.
+//   - ErrIncarnationNotLocked     → 409 incarnation-locked (unlock is possible
+//     from error_locked / migration_failed / destroy_failed; applying/ready/
+//     destroying → rejected).
+//   - ErrIncarnationBusy          → 409 (upgrade rejected: a run is in
+//     progress, status=applying).
+//   - ErrIncarnationLocked        → 409 (upgrade rejected: status is
+//     error_locked / migration_failed — unlock required).
+//   - ErrDowngradeUnsupported     → 409 (target schema version below current;
+//     ADR-019 forward-only).
+//   - ErrSchemaVersionMismatch    → 409 (current schema version didn't match
+//     the chain: someone upgraded between resolve and FOR UPDATE).
+var (
+	ErrIncarnationAlreadyExists = errors.New("incarnation: id already exists")
+	ErrIncarnationNotFound      = errors.New("incarnation: id not found")
+	ErrIncarnationNotLocked     = errors.New("incarnation: not in unlockable status")
+	// ErrIncarnationNotErrorLocked — status is not error_locked: rerun-last is
+	// allowed only from error_locked (architecture.md → "Atomicity and
+	// error_locked"; migration_failed/destroy_failed/etc. need a plain unlock +
+	// manual run). Narrower than [ErrIncarnationNotLocked], which covers all
+	// three blocking statuses.
+	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
+	// ErrRerunInputUnavailable — rerun-last cannot recover the failed day-2
+	// run's input: the last state_history snapshot points to an apply_run whose
+	// recipe (`apply_runs.recipe`) is NULL. Causes: the run failed before
+	// dispatch (render_failed/no_hosts/preflight, recipe-less terminal row from
+	// ensureTerminalApplyRun); the legacy dispatchWave path (Insert(running)
+	// carries no recipe); or the apply_run row was purged by Reaper retention
+	// (purge_apply_runs). Fail-closed: rerunning without the saved input would
+	// apply defaults or fail input validation, so instead we reject — operator
+	// does a plain unlock and runs the scenario manually with explicit input.
+	// Since NIM-408 there is no create/day-2 fork here: every path reads the same
+	// state_history.run snapshot, so the create path hits this sentinel too when
+	// the attempt has none. Handler maps to 409.
+	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last has no run snapshot to replay (the attempt failed before dispatch, or predates the snapshot) — pass the input to run with, or unlock and start the scenario yourself")
+	ErrIncarnationBusy       = errors.New("incarnation: run in progress (applying)")
+	ErrIncarnationLocked     = errors.New("incarnation: locked — unlock required before upgrade")
+	ErrDowngradeUnsupported  = errors.New("incarnation: schema downgrade unsupported (forward-only, ADR-019)")
+	ErrSchemaVersionMismatch = errors.New("incarnation: current schema version does not match migration chain")
+	// ErrAlreadyFinalized — single-winner state-commit (ADR-027(j), W1): the
+	// incarnation row exists but is no longer in a working run status
+	// (applying/destroying) — another handler won finalization (RunResult vs.
+	// recovery takeover). Not an error: caller (commitSuccess/lockIncarnation)
+	// treats it as a no-op (logs "already finalized by another"), same as
+	// [DeleteAfterTeardown] treats RowsAffected==0 for DELETE.
+	ErrAlreadyFinalized = errors.New("incarnation: already finalized by another committer")
+	// ErrOrphanLockNotReleased — releasing an orphaned applying-lock was a
+	// no-op: the incarnation is no longer applying, or the orphan apply_id
+	// doesn't belong to it. Not a consistency error — caller (voyageorch
+	// recovery seam, ADR-027(k)) treats it as "nothing to release" and
+	// continues the re-run without releasing.
+	ErrOrphanLockNotReleased = errors.New("incarnation: orphan applying-lock not released (no-op)")
+)
+
+const (
+	pgErrCodeUniqueViolation     = "23505"
+	pgErrCodeForeignKeyViolation = "23503"
+	pgErrCodeCheckViolation      = "23514"
+)
+
+// ExecQueryRower — narrow pgxpool.Pool subset needed by CRUD. Mirrors
+// [operator.ExecQueryRower]: unit tests use a fake (no PG needed),
+// production passes a real pool/Conn/Tx.
+type ExecQueryRower interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+}
+
+// Compile-time check.
+var (
+	_ ExecQueryRower = (*pgx.Conn)(nil)
+	_ ExecQueryRower = (*pgxpool.Pool)(nil)
+	_ ExecQueryRower = (pgx.Tx)(nil)
+)
+
+// insertSQL — INSERT with RETURNING to get server-side created_at/updated_at
+// (DEFAULT NOW()) in one round trip.
+const insertSQL = `
+INSERT INTO incarnation (
+    id, service, service_version, state_schema_version,
+    state, status, status_details, created_by_aid, covens, traits,
+    created_scenario, label
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+RETURNING created_at, updated_at
+`
+
+// updateLabelSQL replaces the display caption of one row ([ADR-0085]).
+//
+// It sets `label` and NOTHING else — not the PK, which is segment 3 of every
+// derived secret path, the RBAC `incarnation=` scope value and the CEL root, and
+// which has no rename operation anywhere; and deliberately not `updated_at`
+// either. That stamp records changes to the incarnation's SUBSTANCE (its state,
+// its status, its traits), and the operator UI sorts and triages by it: a
+// caption edit would push a quiet incarnation to the top of a list of things
+// that just changed. Who changed the caption and when is in the audit trail,
+// under `incarnation.label_changed`.
+//
+// No row lock and no status gate: unlike every other write on this table, this
+// one cannot conflict with a run. It touches a column no run reads, so it is
+// safe while the incarnation is `applying` or `error_locked` — an operator
+// fixing a caption is not blocked by a stuck run, and does not disturb one.
+const updateLabelSQL = `
+UPDATE incarnation AS x
+SET label = $2
+FROM incarnation AS old
+WHERE x.id = $1 AND old.id = x.id
+RETURNING old.label
+`
+
+// selectByNameSQL — SELECT all columns by PK.
+const selectByNameSQL = `
+SELECT id, service, service_version, state_schema_version,
+       state, status, status_details, created_by_aid,
+       created_at, updated_at, covens, traits,
+       created_scenario,
+       applying_apply_id,
+       label
+FROM incarnation
+WHERE id = $1
+`
+
+// StateOp — comparison operator for a state predicate ([StateEq]). Closed
+// set; anything else → [ErrInvalidStateOp].
+type StateOp string
+
+const (
+	StateOpEq  StateOp = "eq" // equality (text, jsonb ->> = $n)
+	StateOpNe  StateOp = "ne" // inequality
+	StateOpGt  StateOp = "gt" // greater-than (numeric cast ::numeric)
+	StateOpGte StateOp = "gte"
+	StateOpLt  StateOp = "lt"
+	StateOpLte StateOp = "lte"
+)
+
+// numericStateOps — operators requiring a numeric comparison (both sides
+// cast to ::numeric). The rest (eq/ne) compare jsonb ->> as text.
+var numericStateOps = map[StateOp]string{
+	StateOpGt:  ">",
+	StateOpGte: ">=",
+	StateOpLt:  "<",
+	StateOpLte: "<=",
+}
+
+// textStateOps — text-comparison operators over jsonb ->>.
+var textStateOps = map[StateOp]string{
+	StateOpEq: "=",
+	StateOpNe: "<>",
+}
+
+// StateEq — predicate over a `state` jsonb-column field (phase 1, jsonb
+// pushdown). Path is the state object's top-level key (e.g. `redis_version`),
+// validated against the [statePathPattern] whitelist — never concatenated as
+// a SQL identifier unchecked. Value always goes as a bind param ($n), never
+// into SQL text. MVP: top-level keys only (no nested a.b.c path); key
+// existence isn't checked against the service's state_schema — a missing key
+// yields `state->>'x' = $n` → NULL → empty result, a valid "nothing found".
+type StateEq struct {
+	Path  string
+	Op    StateOp
+	Value string
+}
+
+// SortDir — sort direction for [ListFilter.SortBy].
+type SortDir string
+
+const (
+	SortAsc  SortDir = "asc"
+	SortDesc SortDir = "desc"
+)
+
+// sortableColumns — base columns allowed in [ListFilter.SortBy] (closed
+// whitelist; state fields use a separate `state.` prefix). Maps logical
+// name → SQL expression (currently 1:1, in case they diverge later).
+var sortableColumns = map[string]string{
+	"created_at": "created_at",
+	"id":         "id",
+	"status":     "status",
+	"service":    "service",
+}
+
+// statePathPrefix — sort-field prefix meaning "sort by jsonb state field"
+// (`sort=state.redis_version`).
+const statePathPrefix = "state."
+
+// statePathPattern — format whitelist for a jsonb path key: lowercase,
+// digits, underscore, first char a letter. Closes SQL injection via
+// identifier — anything not matching → [ErrInvalidStatePath]. Key existence
+// against state_schema isn't checked (see [StateEq]).
+var statePathPattern = regexp.MustCompile(`^[a-z][a-z0-9_]*$`)
+
+// Sentinel errors for filter/sort validation. Handler maps all to 422.
+var (
+	ErrInvalidStatePath  = errors.New("incarnation: invalid state path (must match [a-z][a-z0-9_]*)")
+	ErrInvalidStateOp    = errors.New("incarnation: invalid state predicate operator")
+	ErrInvalidStateValue = errors.New("incarnation: invalid state predicate value (numeric operator requires a number)")
+	ErrInvalidSortField  = errors.New("incarnation: invalid sort field")
+	ErrInvalidSortDir    = errors.New("incarnation: invalid sort direction")
+)
+
+// ListFilter — filters for [SelectAll]. Empty fields mean "don't filter".
+//
+//   - Coven — exact any-of match against `incarnation.covens[]` (declared
+//     env tags, ADR-008 amendment a); same predicate as `soul.ListFilter.Coven`
+//     (souls.coven[]). Here it's an incarnation env tag (`prod`/`staging`),
+//     not a host Coven label.
+//   - StatePredicates — filters over `state` jsonb-column fields (jsonb
+//     pushdown, phase 1), AND-combined with the base filters and each other.
+//     Each predicate's Path is validated against [statePathPattern].
+//   - SortBy/SortDir — sorting. SortBy is a base column from [sortableColumns]
+//     or `state.<field>` (jsonb ->>); empty → legacy `created_at DESC, name
+//     ASC`. SortDir defaults to asc. `name ASC` tie-break is always appended
+//     (stable pagination).
+type ListFilter struct {
+	Service         string
+	Status          Status
+	Coven           string
+	StatePredicates []StateEq
+	SortBy          string
+	SortDir         SortDir
+}
+
+// ListScope — RBAC scope visibility boundary (`GET /v1/incarnations`,
+// ADR-047 S3b-3), separate from user-facing [ListFilter]: filter is what the
+// operator asked to see (query params), scope is what they're allowed to see
+// (from JWT, resolved by the handler via [rbac.Purview]). Both intersect with
+// AND in WHERE (filter narrows inside scope, never the other way).
+//
+// Scope dimensions (Covens + StateNames) combine with OR ("anything I can
+// access"): an incarnation is visible if it's in a scope coven, OR its state
+// satisfies a scope state-predicate.
+//
+//   - Covens — `covens[] && ARRAY[Covens]`, the operator-attached tags and
+//     nothing else. The incarnation's NAME is not among them (NIM-124,
+//     re-affirmed by NIM-281): scope by an incarnation's own identity is the
+//     `incarnation=<name>` dimension, never `coven=<name>`.
+//   - StateNames — names of incarnations whose state already satisfied the
+//     scope's state-CEL predicates (StateExprs, ADR-047 S2c), resolved before
+//     SQL via keeper/internal/statepredicate (no duplicate CEL engine), then
+//     pushed down as `name = ANY(StateNames)` (keeps total/offset coherent,
+//     no Go post-filter drift).
+//
+// There is deliberately no flat TRAIT dimension. It existed (a `traits->>$key =
+// $value` arm per pair) and was removed with NIM-522: `->>` over a list value
+// yields the list's own rendered text, so that arm matched a container's text
+// and missed every element inside it — the opposite of the rule the boolean
+// scope enforces. A second rendering of one boundary is what NIM-401/NIM-521
+// were, so trait narrowing has exactly one road: [rbac.TraitScopeSQL], reached
+// through the Scope closure below.
+//
+// Fail-closed semantics (ADR-047): an empty scope (Covens and StateNames both
+// empty) with !Unrestricted yields an always-false predicate — no incarnations,
+// not the whole list. Unrestricted=true drops the scope filter entirely. The
+// handler never passes an empty scope here (it short-circuits before hitting the
+// DB), but the defensive branch below preserves fail-closed regardless.
+type ListScope struct {
+	Covens       []string
+	StateNames   []string
+	Unrestricted bool
+
+	// Scope — NIM-128 boolean-scope predicate renderer. When non-nil it FULLY
+	// supersedes the flat Covens/StateNames dimensions: the RBAC boundary is an
+	// arbitrary AND/OR expression (rendered by the API handler via
+	// rbac.PurviewSQL) that a flat value-list can't express. Carried as a
+	// placeholder-relative closure ([ScopeSQLFunc]) so this package stays free of
+	// an rbac import. Unrestricted still short-circuits before this is consulted;
+	// the flat fields remain only for the legacy state-CEL adapter ([StateLister]).
+	// Every scope an operator's Purview produces — for the incarnation list and
+	// for the global-runs view alike — arrives through this closure, so a caller
+	// reading the flat fields is not reading what production hands the store.
+	Scope ScopeSQLFunc
+}
+
+// ScopeSQLFunc renders the RBAC boolean-scope predicate over the incarnation
+// table columns starting at placeholder $startIdx. It returns the SQL fragment
+// (already handling Unrestricted→TRUE and empty/deny→FALSE), its positional args
+// (in placeholder order), and the next free index. Supplied by the API handler
+// wrapping [rbac.PurviewSQL], keeping the incarnation package independent of the
+// rbac package.
+type ScopeSQLFunc func(startIdx int) (sql string, args []any, next int)
+
+// Create inserts a new incarnation. status is set by the caller (handler
+// passes [StatusReady]; the scenario runner sets applying while a run is in
+// progress).
+//
+// Pre-conditions:
+//   - inc.Name matches [IDPattern];
+//   - inc.Service / inc.ServiceVersion are non-empty;
+//   - inc.Status is one of the valid statuses.
+//
+// Returns:
+//   - [ErrIncarnationAlreadyExists] on UNIQUE violation on PK.
+//   - wrapped fmt.Errorf on FK violation (`created_by_aid` references a
+//     nonexistent AID) and CHECK violation (status/name format).
+func Create(ctx context.Context, db ExecQueryRower, inc *Incarnation) error {
+	if inc == nil {
+		return fmt.Errorf("incarnation: nil incarnation")
+	}
+	if !ValidID(inc.ID) {
+		return fmt.Errorf("incarnation: invalid id %q (must match %s)", inc.ID, IDPattern)
+	}
+	if inc.Service == "" {
+		return fmt.Errorf("incarnation: service is empty")
+	}
+	if inc.ServiceVersion == "" {
+		return fmt.Errorf("incarnation: service_version is empty")
+	}
+	if !ValidStatus(inc.Status) {
+		return fmt.Errorf("incarnation: invalid status %q", inc.Status)
+	}
+	if inc.StateSchemaVersion <= 0 {
+		// 1 is the canonical starting version (ADR-019); 0/negative is a caller
+		// bug.
+		return fmt.Errorf("incarnation: state_schema_version must be > 0, got %d", inc.StateSchemaVersion)
+	}
+
+	stateBytes, err := marshalJSONB(inc.State)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state: %w", err)
+	}
+	var statusDetailsArg any
+	if inc.StatusDetails != nil {
+		b, err := json.Marshal(inc.StatusDetails)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal status_details: %w", err)
+		}
+		statusDetailsArg = b
+	}
+	var createdByAID any
+	if inc.CreatedByAID != nil {
+		createdByAID = *inc.CreatedByAID
+	}
+
+	// covens — NOT NULL DEFAULT '{}': nil-slice encode as empty array
+	// (pgx would otherwise pass NULL → violation NOT NULL).
+	covens := inc.Covens
+	if covens == nil {
+		covens = []string{}
+	}
+
+	// traits — NOT NULL DEFAULT '{}'::jsonb (ADR-060 amend, R1): nil/empty map →
+	// `{}` ([]byte), same as marshalTraitPayload in bulk-write. pgx-codec-auto for
+	// jsonb deliberately not used — consistent with Spec/State and souls.traits.
+	traitsBytes, err := marshalJSONB(inc.Traits)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal traits: %w", err)
+	}
+
+	// created_scenario — name of the startup scenario (multi-create mechanism,
+	// migrations 089+090). NULLABLE: nil-pointer from caller = bare incarnation
+	// (created without bootstrap scenario) → NULL in DB. No normalization ""→'create'
+	// — bare and explicit 'create' differ at type level (*string).
+	var createdScenario any
+	if inc.CreatedScenario != nil {
+		createdScenario = *inc.CreatedScenario
+	}
+
+	// The label is canonicalised, never validated: free text is the point
+	// ([ADR-0085]). Blank collapses to NULL so "absent" has one spelling.
+	inc.Label = registrylabel.Normalize(inc.Label)
+	var label any
+	if inc.Label != nil {
+		label = *inc.Label
+	}
+
+	row := db.QueryRow(ctx, insertSQL,
+		inc.ID,
+		inc.Service,
+		inc.ServiceVersion,
+		inc.StateSchemaVersion,
+		stateBytes,
+		string(inc.Status),
+		statusDetailsArg,
+		createdByAID,
+		covens,
+		traitsBytes,
+		createdScenario,
+		label,
+	)
+	if err := row.Scan(&inc.CreatedAt, &inc.UpdatedAt); err != nil {
+		return mapInsertError(err)
+	}
+	return nil
+}
+
+func mapInsertError(err error) error {
+	var pgErr *pgconn.PgError
+	if errors.As(err, &pgErr) {
+		switch pgErr.Code {
+		case pgErrCodeUniqueViolation:
+			return fmt.Errorf("%w (constraint %s): %w",
+				ErrIncarnationAlreadyExists, pgErr.ConstraintName, err)
+		case pgErrCodeForeignKeyViolation:
+			return fmt.Errorf("incarnation: FK violation on %s: %w", pgErr.ConstraintName, err)
+		case pgErrCodeCheckViolation:
+			return fmt.Errorf("incarnation: CHECK violation on %s: %w", pgErr.ConstraintName, err)
+		}
+	}
+	return fmt.Errorf("incarnation: insert: %w", err)
+}
+
+// UpdateLabel replaces the display caption of one incarnation and returns the caption
+// the row held BEFORE the write ([ADR-0085]). [ErrIncarnationNotFound] when the row is absent.
+//
+// label==nil (or blank, which [registrylabel.Normalize] collapses to nil) clears
+// the caption back to NULL, and the consumer falls back to showing the name. The
+// value is stored as given otherwise: capitals, spaces and punctuation are what
+// the field is for, so there is no format check to fail.
+//
+// The previous value comes back from the SAME statement rather than from a read
+// before it: the audit event records `{old_label, new_label}` (parity with
+// `incarnation.traits_changed`, which carries old and new keys), and a separate
+// read would let a concurrent edit make that pair describe a transition that
+// never happened.
+//
+// The name argument addresses the row; it is never written. Nothing derived moves
+// as a result of this call — see the package doc of
+// keeper/internal/registrylabel.
+func UpdateLabel(ctx context.Context, db ExecQueryRower, id string, label *string) (*string, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q (must match %s)", id, IDPattern)
+	}
+	var v any
+	if n := registrylabel.Normalize(label); n != nil {
+		v = *n
+	}
+	var previous *string
+	if err := db.QueryRow(ctx, updateLabelSQL, id, v).Scan(&previous); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncarnationNotFound
+		}
+		return nil, fmt.Errorf("incarnation: update label: %w", err)
+	}
+	return previous, nil
+}
+
+// SelectByID reads incarnation by PK. [ErrIncarnationNotFound] on
+// pgx.ErrNoRows.
+func SelectByID(ctx context.Context, db ExecQueryRower, id string) (*Incarnation, error) {
+	row := db.QueryRow(ctx, selectByNameSQL, id)
+	return scanIncarnation(row)
+}
+
+func scanIncarnation(row pgx.Row) (*Incarnation, error) {
+	var (
+		inc                Incarnation
+		statusStr          string
+		stateBytes         []byte
+		statusDetailsBytes []byte
+		createdByAID       *string
+		traitsBytes        []byte
+	)
+	err := row.Scan(
+		&inc.ID,
+		&inc.Service,
+		&inc.ServiceVersion,
+		&inc.StateSchemaVersion,
+		&stateBytes,
+		&statusStr,
+		&statusDetailsBytes,
+		&createdByAID,
+		&inc.CreatedAt,
+		&inc.UpdatedAt,
+		&inc.Covens,
+		&traitsBytes,
+		&inc.CreatedScenario,
+		&inc.ApplyingApplyID, // ADR-068 §A1: non-null while applying, null on terminal
+		&inc.Label,
+	)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncarnationNotFound
+		}
+		return nil, fmt.Errorf("incarnation: scan: %w", err)
+	}
+	inc.Status = Status(statusStr)
+	inc.CreatedByAID = createdByAID
+	if inc.State, err = unmarshalJSONB(stateBytes); err != nil {
+		return nil, fmt.Errorf("incarnation: unmarshal state: %w", err)
+	}
+	// traits jsonb (ADR-060 amend, R1): `{}` (NOT NULL DEFAULT) → empty map, not
+	// nil (read/projection path doesn't distinguish "no column" / "no tags").
+	// The raw bytes are kept alongside for scope evaluation (NIM-521) — the
+	// decoded map has already lost the number token the SQL half compares.
+	if inc.Traits, err = unmarshalJSONB(traitsBytes); err != nil {
+		return nil, fmt.Errorf("incarnation: unmarshal traits: %w", err)
+	}
+	inc.TraitsRaw = traitsBytes
+	if len(statusDetailsBytes) > 0 {
+		if err := json.Unmarshal(statusDetailsBytes, &inc.StatusDetails); err != nil {
+			return nil, fmt.Errorf("incarnation: unmarshal status_details: %w", err)
+		}
+	}
+	return &inc, nil
+}
+
+// SelectAll returns a page of incarnations with applied filter and
+// total count of items matching the filter (without offset/limit).
+//
+// Sorting is controlled by [ListFilter.SortBy]/[SortDir]; by default (empty
+// SortBy) — legacy order `created_at DESC, name ASC` (latest first; tie-break
+// by name, otherwise pagination unstable at same timestamp). Tie-break
+// `name ASC` always appended.
+//
+// State filters ([ListFilter.StatePredicates]) and sort by `state.<field>`
+// validated before any DB query ([ErrInvalidStatePath]/[ErrInvalidStateOp]/
+// [ErrInvalidSortField]/[ErrInvalidSortDir]): injection via jsonb path
+// doesn't reach PG, values go as bind params.
+//
+// Total and items obtained by two separate queries outside a common
+// transaction — total at this endpoint is **eventually consistent**: new
+// incarnation appearing between COUNT and SELECT will give total one
+// greater than actual items on current page. Deliberate choice: explicit
+// transaction (REPEATABLE READ) for consistent count costs more than
+// acceptable pagination drift in UI.
+func SelectAll(ctx context.Context, db ExecQueryRower, filter ListFilter, scope ListScope, offset, limit int) ([]*Incarnation, int, error) {
+	if offset < 0 {
+		return nil, 0, fmt.Errorf("incarnation: offset must be >= 0, got %d", offset)
+	}
+	if limit < 1 {
+		return nil, 0, fmt.Errorf("incarnation: limit must be >= 1, got %d", limit)
+	}
+
+	whereSQL, args, err := buildListWhere(filter, scope)
+	if err != nil {
+		return nil, 0, err
+	}
+	orderSQL, err := buildListOrderBy(filter)
+	if err != nil {
+		return nil, 0, err
+	}
+
+	// Total without offset/limit.
+	countSQL := "SELECT COUNT(*) FROM incarnation" + whereSQL
+	var total int
+	if err := db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("incarnation: count: %w", err)
+	}
+
+	// Items with offset/limit, appended to the same args.
+	listSQL := `SELECT id, service, service_version, state_schema_version,
+       state, status, status_details, created_by_aid,
+       created_at, updated_at, covens, traits,
+       created_scenario,
+       applying_apply_id,
+       label
+FROM incarnation` + whereSQL + orderSQL +
+		fmt.Sprintf(" OFFSET $%d LIMIT $%d", len(args)+1, len(args)+2)
+	listArgs := append(append([]any{}, args...), offset, limit)
+
+	rows, err := db.Query(ctx, listSQL, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("incarnation: list query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*Incarnation
+	for rows.Next() {
+		inc, err := scanIncarnation(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, inc)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("incarnation: list iter: %w", err)
+	}
+	return out, total, nil
+}
+
+// buildListWhere builds WHERE-clause and args from non-empty filter fields.
+// Returns empty string and nil-args if no filters. State predicates
+// validated (path-whitelist + closed operator set + numeric value for
+// numeric operators); invalid →
+// [ErrInvalidStatePath]/[ErrInvalidStateOp]/[ErrInvalidStateValue] without
+// DB access.
+func buildListWhere(f ListFilter, scope ListScope) (string, []any, error) {
+	var (
+		clauses []string
+		args    []any
+	)
+	if f.Service != "" {
+		args = append(args, f.Service)
+		clauses = append(clauses, fmt.Sprintf("service = $%d", len(args)))
+	}
+	if f.Status != "" {
+		args = append(args, string(f.Status))
+		clauses = append(clauses, fmt.Sprintf("status = $%d", len(args)))
+	}
+	if f.Coven != "" {
+		args = append(args, f.Coven)
+		clauses = append(clauses, fmt.Sprintf("$%d = ANY(covens)", len(args)))
+	}
+	for _, p := range f.StatePredicates {
+		if !statePathPattern.MatchString(p.Path) {
+			return "", nil, fmt.Errorf("%w: %q", ErrInvalidStatePath, p.Path)
+		}
+		// For numeric operators value goes to SQL as `$n::numeric`.
+		// Non-numeric value (e.g., typo `gt:abc`) would cause PG cast error
+		// 22P02 → 500; catch here before DB query (handler maps
+		// ErrInvalidStateValue to 422). eq/ne are text, numeric validation
+		// doesn't apply to them.
+		if _, numeric := numericStateOps[p.Op]; numeric {
+			if _, err := strconv.ParseFloat(p.Value, 64); err != nil {
+				return "", nil, fmt.Errorf("%w: %q for operator %q", ErrInvalidStateValue, p.Value, p.Op)
+			}
+		}
+		args = append(args, p.Value)
+		placeholder := fmt.Sprintf("$%d", len(args))
+		clause, err := stateClause(p.Path, p.Op, placeholder)
+		if err != nil {
+			return "", nil, err
+		}
+		clauses = append(clauses, clause)
+	}
+
+	// RBAC scope predicate (ADR-047 S3b-3): AND with user filter.
+	clauses, args = appendScopeClause(clauses, args, scope)
+
+	if len(clauses) == 0 {
+		return "", nil, nil
+	}
+	where := " WHERE " + clauses[0]
+	for _, c := range clauses[1:] {
+		where += " AND " + c
+	}
+	return where, args, nil
+}
+
+// appendScopeClause adds RBAC scope predicate (`GET /v1/incarnations`,
+// ADR-047 S3b-3 + trait amendment) as single AND-clause to user filter.
+// Within scope, dimensions (covens ∪ state-names) combined with OR — single
+// parenthesized block to avoid leaking through neighboring filter AND-clauses:
+//
+//		(covens && ARRAY[$c] OR name = ANY($s))
+//
+//	  - covens: scope-coven matches the incarnation by covens[]-intersection
+//	    ONLY. Name equality is deliberately absent (NIM-124/NIM-281): a name is
+//	    an identity, not a label, and `incarnation=<name>` is the dimension that
+//	    asks for it.
+//	  - state-names: pre-resolved names of incarnations whose state satisfied
+//	    state-CEL scope (StateExprs) — come as set, matched via `name = ANY`.
+//
+// There is no trait arm here — see [ListScope]. Trait narrowing renders through
+// [rbac.TraitScopeSQL] and reaches this function only inside the Scope closure.
+//
+// Unrestricted — no restriction (scope removed). fail-closed: empty scope (no
+// coven and no state-names) with !Unrestricted gives `FALSE` — zero
+// incarnations (not full list). Symmetric with [soul.appendScopeClause].
+func appendScopeClause(clauses []string, args []any, scope ListScope) ([]string, []any) {
+	cond, args := ScopeCondition(args, scope)
+	if cond == "" {
+		return clauses, args
+	}
+	return append(clauses, cond), args
+}
+
+// ScopeCondition — reusable SQL form of scope predicate [ListScope]. The columns
+// it reads are whatever [ListScope.Scope] renders (rbac.PurviewSQL over the
+// incarnation row: covens, name, service, traits) plus, for the legacy state-CEL
+// adapter only, the flat Covens/StateNames fields. Exported for embedding
+// in other queries as subquery `... IN (SELECT id FROM incarnation
+// WHERE <cond>)` (global read-view of runs, applyrun) — single source of
+// scope semantics with [SelectAll]. Placeholder numbering continues from
+// passed args. Unrestricted → empty condition; empty scope → `FALSE` (fail-closed).
+func ScopeCondition(args []any, scope ListScope) (string, []any) {
+	if scope.Unrestricted {
+		return "", args
+	}
+
+	// NIM-128 boolean scope: the handler-supplied renderer fully supersedes the
+	// flat dimensions. It already emits TRUE/FALSE for unrestricted/empty, so its
+	// result is used verbatim (placeholders continue from the passed args).
+	if scope.Scope != nil {
+		sql, extra, _ := scope.Scope(len(args) + 1)
+		return sql, append(args, extra...)
+	}
+
+	var dims []string
+	if len(scope.Covens) > 0 {
+		args = append(args, scope.Covens)
+		pos := len(args)
+		// Intersection of covens[] alone — the name is not a coven (NIM-281).
+		dims = append(dims, fmt.Sprintf("covens && $%d", pos))
+	}
+	if len(scope.StateNames) > 0 {
+		args = append(args, scope.StateNames)
+		dims = append(dims, fmt.Sprintf("id = ANY($%d)", len(args)))
+	}
+	if len(dims) == 0 {
+		// fail-closed: scope introduced (not Unrestricted) but empty by dimensions —
+		// zero visible incarnations. Deterministic FALSE, not "full list".
+		return "FALSE", args
+	}
+
+	scopeClause := dims[0]
+	for _, d := range dims[1:] {
+		scopeClause += " OR " + d
+	}
+	return "(" + scopeClause + ")", args
+}
+
+// stateClause builds single jsonb-pushdown predicate. Path already passed
+// [statePathPattern] (safe as identifier), placeholder is bind ($n).
+// Text operators — `state->>'path' OP $n`; numeric — both operands
+// cast to ::numeric (`(state->>'path')::numeric OP $n::numeric`).
+func stateClause(path string, op StateOp, placeholder string) (string, error) {
+	if sqlOp, ok := textStateOps[op]; ok {
+		return fmt.Sprintf("state->>'%s' %s %s", path, sqlOp, placeholder), nil
+	}
+	if sqlOp, ok := numericStateOps[op]; ok {
+		return fmt.Sprintf("(state->>'%s')::numeric %s %s::numeric", path, sqlOp, placeholder), nil
+	}
+	return "", fmt.Errorf("%w: %q", ErrInvalidStateOp, op)
+}
+
+// buildListOrderBy builds ORDER BY-clause from [ListFilter.SortBy]/[SortDir].
+// Empty SortBy → legacy `created_at DESC, name ASC`. Otherwise: base column
+// from [sortableColumns] or `state.<field>` (jsonb >>, path-whitelist), with
+// direction from SortDir (default asc) and mandatory tie-break `name ASC`.
+func buildListOrderBy(f ListFilter) (string, error) {
+	if f.SortBy == "" {
+		return " ORDER BY created_at DESC, id ASC", nil
+	}
+
+	dir, err := sortDirSQL(f.SortDir)
+	if err != nil {
+		return "", err
+	}
+
+	var expr string
+	if strings.HasPrefix(f.SortBy, statePathPrefix) {
+		path := strings.TrimPrefix(f.SortBy, statePathPrefix)
+		if !statePathPattern.MatchString(path) {
+			return "", fmt.Errorf("%w: %q", ErrInvalidStatePath, path)
+		}
+		expr = fmt.Sprintf("state->>'%s'", path)
+	} else {
+		col, ok := sortableColumns[f.SortBy]
+		if !ok {
+			return "", fmt.Errorf("%w: %q", ErrInvalidSortField, f.SortBy)
+		}
+		expr = col
+	}
+	return fmt.Sprintf(" ORDER BY %s %s, id ASC", expr, dir), nil
+}
+
+// sortDirSQL validates sort direction. Empty → ASC (default).
+func sortDirSQL(d SortDir) (string, error) {
+	switch d {
+	case "", SortAsc:
+		return "ASC", nil
+	case SortDesc:
+		return "DESC", nil
+	}
+	return "", fmt.Errorf("%w: %q", ErrInvalidSortDir, d)
+}
+
+// finalizableStatuses — working (non-terminal) run statuses from which
+// single-winner final commit ([UpdateStateFromRun], ADR-027(j) W1) is allowed:
+//   - applying   — normal run (lockRun transitioned here on start);
+//   - destroying — teardown scenario `destroy` (incarnation stays in
+//     destroying throughout run, S-D1/S-D2b; final write — only
+//     failure transition to destroy_failed via lockIncarnation).
+//
+// Any other (terminal or already-seized) status → row won by another
+// committer: final UPDATE gives RowsAffected==0 → [ErrAlreadyFinalized].
+var finalizableStatuses = map[Status]struct{}{
+	StatusApplying:   {},
+	StatusDestroying: {},
+}
+
+// UpdateStateFromRun — atomic commit of run result `RunResult`
+// (ADR-009, M2.4) with single-winner state-commit (ADR-027(j), W1). Within single
+// transaction:
+//
+//  1. INSERT to `state_history` transition snapshot (state_before/_after,
+//     scenario, apply_id).
+//  2. Single-winner UPDATE incarnation.state + status + status_details +
+//     updated_at = NOW() with guard `WHERE id=$1 AND status IN
+//     ('applying','destroying')` + RETURNING. Only one handler wins
+//     the row: in race of recovery takeover vs original RunResult no double
+//     commit terminal happens (symmetric with single-winner DELETE in
+//     [DeleteAfterTeardown]). Guard replaces former SELECT … FOR UPDATE —
+//     atomic CAS-UPDATE serializes concurrent commits itself.
+//
+// When status = `error_locked` state doesn't change (caller typically passes
+// stateAfter == stateBefore = current state); state_history still
+// written (capture the fact of failed run itself).
+//
+// `apply_id` — ULID of run (RunResult.apply_id); goes to both state_history
+// and audit via caller. Audit write itself done by event handler one level
+// up (after commit, so DB consistency doesn't depend on audit).
+//
+// `changedByAID` = nil — Soul initiates run without Archon identity
+// (`source: soul_grpc`, see ADR-022). Non-nil allowed for future
+// case when run triggered via Operator API and AID known.
+//
+// `engineCompat` — the engine provenance stamp of this transition
+// ([EngineCompat], ADR-0076(l), migration 103). Written verbatim to the
+// state_history row; on the incarnation it goes through COALESCE, so a caller
+// with nothing to stamp (a failed run locking the row, a path that never
+// rendered) leaves the last successful stamp standing rather than relabelling
+// state it did not produce. nil = don't stamp.
+//
+// Returns:
+//   - [ErrIncarnationNotFound]  — no row with this name at all.
+//   - [ErrAlreadyFinalized]     — row exists but status no longer applying/
+//     destroying: another committer won finalization (no-op, NOT panic —
+//     caller logs and continues). Transaction rolls back (caller
+//     via pgx.BeginFunc), orphaned state_history snapshot doesn't remain.
+//
+// RunOutcome — what an attempt WAS and what became of it, stamped into the
+// state_history row that already records the attempt (NIM-408, migration 111).
+//
+// Snapshot is a marshalled `applyrun.Recipe`: the operator's input AS-IS plus the
+// git coordinates of the code it rendered with. Bytes rather than the struct
+// because `applyrun`'s in-package tests import this package, so importing it back
+// is a cycle in the test binary; the caller marshals, which it is positioned to do
+// — it holds the RunSpec the recipe is built from.
+//
+// A nil Snapshot means "this attempt is not replayable from history" and is a
+// legitimate state, not an omission: the rerun-transition marker rows write no
+// snapshot, and rows predating the migration have none. rerun-last answers that
+// with a 422 asking for the input rather than a dead end.
+//
+// A nil *RunOutcome writes all four columns as NULL — the shape every caller
+// outside a run terminal uses.
+type RunOutcome struct {
+	Snapshot     []byte
+	Status       string
+	FinishedAt   time.Time
+	ErrorSummary string
+}
+
+func UpdateStateFromRun(
+	ctx context.Context,
+	tx ExecQueryRower,
+	id, scenario, applyID string,
+	stateBefore, stateAfter map[string]any,
+	status Status,
+	statusDetails map[string]any,
+	changedByAID *string,
+	historyID string,
+	engineCompat *EngineCompat,
+	outcome *RunOutcome,
+) error {
+	if !ValidID(id) {
+		return fmt.Errorf("incarnation: invalid id %q", id)
+	}
+	if !ValidStatus(status) {
+		return fmt.Errorf("incarnation: invalid status %q", status)
+	}
+	if applyID == "" {
+		return fmt.Errorf("incarnation: empty apply_id")
+	}
+	if historyID == "" {
+		return fmt.Errorf("incarnation: empty history_id")
+	}
+
+	stateBeforeBytes, err := marshalJSONB(stateBefore)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state_before: %w", err)
+	}
+	stateAfterBytes, err := marshalJSONB(stateAfter)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state_after: %w", err)
+	}
+	var statusDetailsArg any
+	if statusDetails != nil {
+		b, err := json.Marshal(statusDetails)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal status_details: %w", err)
+		}
+		statusDetailsArg = b
+	}
+	var changedByArg any
+	if changedByAID != nil {
+		changedByArg = *changedByAID
+	}
+	// Engine provenance (ADR-0076(l)): nil / empty stamp → NULL, so "not
+	// recorded" never reads as an engine contract of zeroes.
+	var engineCompatArg any
+	if !engineCompat.IsZero() {
+		b, err := json.Marshal(engineCompat)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal engine_compat: %w", err)
+		}
+		engineCompatArg = b
+	}
+
+	// The attempt's replayable snapshot and its outcome (NIM-408). All four are
+	// NULL without an outcome — including on the marker rows rerun-last writes,
+	// which record a transition rather than an attempt.
+	var (
+		runArg          any
+		runStatusArg    any
+		finishedAtArg   any
+		errorSummaryArg any
+	)
+	if outcome != nil {
+		if len(outcome.Snapshot) > 0 {
+			runArg = outcome.Snapshot
+		}
+		if outcome.Status != "" {
+			runStatusArg = outcome.Status
+		}
+		if !outcome.FinishedAt.IsZero() {
+			finishedAtArg = outcome.FinishedAt
+		}
+		if outcome.ErrorSummary != "" {
+			errorSummaryArg = outcome.ErrorSummary
+		}
+	}
+
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id, engine_compat,
+    run, run_status, finished_at, error_summary
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		historyID, id, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
+		engineCompatArg,
+		runArg, runStatusArg, finishedAtArg, errorSummaryArg,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert state_history: %w", err)
+	}
+
+	// Single-winner guard: commit succeeds ONLY if row still in working run status
+	// (applying / destroying). RETURNING name returns row to winner; empty result
+	// (pgx.ErrNoRows) = row doesn't exist OR status already changed — disambiguate
+	// via status probe below (MarkDispatched pattern). Run terminal clears applying-flag
+	// AND zeroes its epoch (ADR-027 amend (m-S1)): applying_apply_id/applying_attempt/
+	// applying_by_kid/applying_since → NULL atomically with status change.
+	// This single success/fail/abort/RunResult-terminal point of run (commitSuccess /
+	// lockIncarnation / correlateRunResult call UpdateStateFromRun) — cleanup here
+	// covers all exits from applying, leaving row without "stale" epoch (else next
+	// run/Reaper sees stale applying_since from previous owner). destroying carries no
+	// epoch (lockRun writes epoch for applying only), but unconditional zeroing is
+	// harmless and maintains invariant "non-applying ⇒ epoch NULL".
+	const updateSQL = `
+UPDATE incarnation
+SET state             = $2,
+    status            = $3,
+    status_details    = $4,
+    engine_compat     = COALESCE($5, engine_compat),
+    applying_apply_id = NULL,
+    applying_attempt  = NULL,
+    applying_by_kid   = NULL,
+    applying_since    = NULL,
+    updated_at        = NOW()
+WHERE id = $1 AND status IN ('applying', 'destroying')
+RETURNING id
+`
+	var returnedName string
+	err = tx.QueryRow(ctx, updateSQL, id, stateAfterBytes, string(status), statusDetailsArg, engineCompatArg).Scan(&returnedName)
+	if err == nil {
+		return nil
+	}
+	if !errors.Is(err, pgx.ErrNoRows) {
+		return fmt.Errorf("incarnation: update state: %w", err)
+	}
+
+	// 0 rows: either row doesn't exist at all, or status already terminal/seized.
+	// Status probe disambiguates not-found (caller contract preserved) and
+	// already-finalized (single-winner no-op, someone won the row first).
+	const probeStatusSQL = `SELECT status FROM incarnation WHERE id = $1`
+	var statusStr string
+	if perr := tx.QueryRow(ctx, probeStatusSQL, id).Scan(&statusStr); perr != nil {
+		if errors.Is(perr, pgx.ErrNoRows) {
+			return ErrIncarnationNotFound
+		}
+		return fmt.Errorf("incarnation: update state probe: %w", perr)
+	}
+	if _, ok := finalizableStatuses[Status(statusStr)]; ok {
+		// Status still working, but UPDATE touched no rows — only possible reason:
+		// read race within single tx (theoretically unreachable under snapshot tx).
+		// Return not-found semantics as defensive default, not silent no-op.
+		return ErrIncarnationNotFound
+	}
+	return fmt.Errorf("%w (status=%s)", ErrAlreadyFinalized, statusStr)
+}
+
+// TxBeginner — narrow subset of [pgxpool.Pool] needed for transactional
+// operations (FOR UPDATE → check → mutate → commit in single atomic block).
+// Real `*pgxpool.Pool` satisfies automatically; unit tests provide
+// fake returning fake-tx.
+type TxBeginner interface {
+	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
+}
+
+var _ TxBeginner = (*pgxpool.Pool)(nil)
+
+// UnlockResult — result of [Unlock]: status before block removal (for reply / audit) and
+// identifier of recorded state_history snapshot.
+//
+// Scenario filled ONLY by [UnlockForRerun] (for [Unlock] — ""): name
+// of scenario caller reruns via runner.Start. This is the last
+// failed scenario of incarnation (latest state_history snapshot) — bootstrap
+// scenario on create path (== incarnation.created_scenario) OR day-2 scenario
+// (add_user / update_acl / …). Replaces former hardcode "rerun only
+// created_scenario": rerun-last reruns the actually failed operation.
+//
+// Input filled ONLY by [UnlockForRerun] (for [Unlock] — nil): input of failed
+// run, read from that attempt's own state_history.run snapshot under the same
+// FOR UPDATE (NIM-408; invariant A: vault-ref as strings, secrets not revealed).
+// One source for create and day-2 alike. Caller passes it to RunSpec.Input — rerun-last
+// recovers failure with SAME input values (version/shards/user/…),
+// not defaults. nil = scenario without input.
+type UnlockResult struct {
+	PreviousStatus Status
+	HistoryID      string
+	Scenario       string
+	Input          map[string]any
+	// FromUpgrade — the failed run was an upgrade scenario
+	// (`run.from_upgrade`, ADR-0068): rerun-last must rerun it from
+	// `upgrade/<slug>/`, not `scenario/<slug>/`. Caller passes it to
+	// RunSpec.FromUpgrade.
+	FromUpgrade bool
+	// ServiceRefGit / ServiceRefRef — the git coordinates the failed attempt
+	// RENDERED WITH, read from its history snapshot (NIM-408).
+	//
+	// Empty means the snapshot carried none and the caller falls back to the
+	// incarnation's current pin. That fallback is what the whole rerun path did
+	// before this: `serviceRef.Ref = inc.ServiceVersion`. It is wrong whenever an
+	// upgrade has moved the pin since the failure — the rerun then replays the
+	// attempt with code it never ran — so it is a fallback, not the rule.
+	ServiceRefGit string
+	ServiceRefRef string
+}
+
+// RerunServiceRef chooses the git coordinates a rerun renders with: the ones the
+// FAILED ATTEMPT used, if its history snapshot carried them, and otherwise the
+// incarnation's current pin.
+//
+// The distinction is the point of NIM-408. An upgrade moves the pin
+// (`UPDATE incarnation SET service_version = …`), so a rerun that took the
+// current one would replay a failure against code that never produced it — the
+// operator asks "run that again" and gets something else, silently. The fallback
+// stays for rows written before the snapshot existed, and for terminals recorded
+// without a RunSpec in hand; it is the old behaviour, kept as the answer of last
+// resort rather than the rule.
+//
+// Only a ref that is fully specified is honoured: a snapshot missing either half
+// would otherwise splice a stale ref onto a current URL, or the reverse.
+func RerunServiceRef(current artifact.ServiceRef, res *UnlockResult) artifact.ServiceRef {
+	if res == nil || res.ServiceRefGit == "" || res.ServiceRefRef == "" {
+		return current
+	}
+	pinned := current
+	pinned.Git = res.ServiceRefGit
+	pinned.Ref = res.ServiceRefRef
+	return pinned
+}
+
+// ServiceRefFromRunSnapshot reads the git coordinates an attempt ran with out of
+// its `state_history.run` snapshot.
+//
+// It decodes through the SAME type the writer marshals rather than reaching into
+// the object by hand-spelled key. [artifact.ServiceRef] declares no json tags, so
+// its wire spelling is an accident of the Go field names, and a map lookup for
+// "Git" is a literal copy of that accident. Give the struct tags later, or write
+// a snapshot through a different marshaller, and the lookup misses in silence —
+// the rerun then falls back to the incarnation's CURRENT pin, which is precisely
+// the substitution the snapshot exists to prevent. It cost a red test to find
+// once already, from a fixture that spelled the keys in lower case.
+//
+// A zero value means "no usable ref in this snapshot"; the caller falls back
+// (see [RerunServiceRef]). Malformed json is the same answer as absent — the
+// caller has already decided what an unreadable snapshot means.
+func ServiceRefFromRunSnapshot(raw []byte) artifact.ServiceRef {
+	var envelope struct {
+		ServiceRef artifact.ServiceRef `json:"service_ref"`
+	}
+	if err := json.Unmarshal(raw, &envelope); err != nil {
+		return artifact.ServiceRef{}
+	}
+	return envelope.ServiceRef
+}
+
+// InputFromRunSnapshot extracts the `input` key from a decoded state_history.run
+// snapshot ([UnlockForRerun]). It used to serve a second caller reading
+// incarnation.spec on the create path; NIM-408 removed that column, leaving the
+// run snapshot as the only source rerun-last reads.
+//
+// Not the only place the input is STORED — `apply_runs` still carries it in
+// both `recipe` and `input` (see applyrun.insertPlannedSQL). The snapshot is the
+// only copy that outlives the retention purge, which is why it is the one read
+// here; see the comment on the read itself for the two-lifetime problem it fixed.
+// Missing key / non-object form → nil without error (jsonb freeform).
+func InputFromRunSnapshot(run map[string]any) map[string]any {
+	if run == nil {
+		return nil
+	}
+	raw, ok := run["input"]
+	if !ok {
+		return nil
+	}
+	m, ok := raw.(map[string]any)
+	if !ok {
+		return nil
+	}
+	return m
+}
+
+// unlockScenarioLabel — value for `state_history.scenario` on unlock transition.
+// Unlock — not a scenario run, but state_history requires non-null scenario;
+// capture the fact of manual block removal under this label.
+const unlockScenarioLabel = "unlock"
+
+// Unlock removes blocking status (ADR-009 / ADR-019): transitions
+// incarnation error_locked → ready, migration_failed → ready OR
+// destroy_failed → ready and writes snapshot-row to state_history (state does NOT
+// change — last known-good preserved; unlock doesn't roll back or complete
+// hosts, operator takes responsibility for consistency, architecture.md →
+// "Atomicity and error_locked").
+//
+// migration_failed removed as safely as error_locked: migration
+// is atomic in single tx, on failure rollback leaves pre-reform
+// (consistent) state, so unlock returns incarnation to working
+// state without risk of half-applied migration (ADR-019, atomicity).
+//
+// destroy_failed (S-D2a) removed same way: teardown works with hosts,
+// not jsonb-state, so on failed teardown state remains
+// last known-good — unlock returns incarnation to ready without risk
+// of state-graph divergence. Operator thereby rejects destroy and takes
+// instance back to work (alternatives — retry destroy / force-remove —
+// appear in S-D2b/S-D3).
+//
+// Atomicity: single transaction SELECT … FOR UPDATE → status check →
+// INSERT state_history → UPDATE status. FOR UPDATE serializes unlock
+// relative to concurrent scenario-runner (its lockRun locks same
+// row).
+//
+// Returns:
+//   - [ErrIncarnationNotFound] — name doesn't exist (404).
+//   - [ErrIncarnationNotLocked] — status not error_locked, not migration_failed
+//     and not destroy_failed (409): can't unlock ready/applying/destroying.
+//
+// reason written to audit-payload by caller (state_history schema MVP doesn't
+// carry metadata columns); previous_status returned in [UnlockResult].
+func Unlock(ctx context.Context, pool TxBeginner, id, reason, unlockedByAID, historyID string) (*UnlockResult, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
+	}
+	if reason == "" {
+		return nil, fmt.Errorf("incarnation: unlock reason is empty")
+	}
+	if historyID == "" {
+		return nil, fmt.Errorf("incarnation: empty history_id")
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: begin unlock tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const selectForUpdateSQL = `
+SELECT state, status
+FROM incarnation
+WHERE id = $1
+FOR UPDATE
+`
+	var (
+		stateBytes []byte
+		statusStr  string
+	)
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncarnationNotFound
+		}
+		return nil, fmt.Errorf("incarnation: unlock select: %w", err)
+	}
+	previous := Status(statusStr)
+	if previous != StatusErrorLocked && previous != StatusMigrationFailed && previous != StatusDestroyFailed {
+		return nil, ErrIncarnationNotLocked
+	}
+
+	var changedByArg any
+	if unlockedByAID != "" {
+		changedByArg = unlockedByAID
+	}
+
+	// state_before == state_after: unlock doesn't change state (ADR-009).
+	// apply_id = history_id ($1): unlock not tied to apply run (schema
+	// requires NOT NULL, no FK to apply_runs) — substitute history_id as
+	// unique non-null marker.
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $1)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		historyID, id, unlockScenarioLabel, stateBytes, changedByArg,
+	); err != nil {
+		return nil, fmt.Errorf("incarnation: insert unlock state_history: %w", err)
+	}
+
+	// status → ready, status_details reset (block removed).
+	const updateSQL = `
+UPDATE incarnation
+SET status = $2, status_details = NULL, updated_at = NOW()
+WHERE id = $1
+`
+	if _, err := tx.Exec(ctx, updateSQL, id, string(StatusReady)); err != nil {
+		return nil, fmt.Errorf("incarnation: unlock update: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("incarnation: commit unlock tx: %w", err)
+	}
+	return &UnlockResult{PreviousStatus: previous, HistoryID: historyID}, nil
+}
+
+// orphanReleaseScenarioLabel — value for `state_history.scenario` on orphan lock release
+// transition (ADR-027(k) recovery seam). Separate label from unlockScenarioLabel: this
+// is NOT manual operator-unlock, but automatic reconciliation of dangling lock by
+// reclaimed Voyage owner — history trace should differ for triage.
+const orphanReleaseScenarioLabel = "voyage-orphan-release"
+
+// ReleaseApplyingOrphan atomically releases an orphaned applying-lock from an incarnation
+// remaining from a scenario-run of a dead Keeper-owner Voyage (recovery seam,
+// ADR-027(k) / ADR-043). A reclaimed VoyageWorker calls this BEFORE re-spawning
+// per-incarnation scenario-run: without release, lockRun rejects re-run
+// (incarnation already applying), and Voyage would hang forever.
+//
+// Release = applying → ready (state NOT touched — last known-good preserved,
+// symmetric to [Unlock]; orphan-run of dead owner didn't reach state-commit,
+// so last-good = pre-run state). status_details are reset.
+//
+// orphanApplyID — apply_id of the orphaned run (back-link from voyage_targets
+// of this Voyage from the previous attempt — caller already proved apply_id↔
+// incarnation↔voyage binding by retrieving it from voyage_targets[name]). Caller
+// (voyageorch) must perform fencing-checks (reclaimed-attempt +
+// VerifyOwnership) BEFORE calling; here — FENCING-1 (protection against alien live-lock) +
+// single-winner CAS under one FOR UPDATE:
+//
+//   - FENCING-1 (no-live-rival): release lock ONLY if incarnation HAS NO
+//     active (non-terminal) apply_run with apply_id ≠ orphanApplyID. Alien
+//     live run (direct run / other Voyage, started between crash and
+//     reclaim) holds active apply_runs-row with its own apply_id → its presence
+//     blocks release ([ErrOrphanLockNotReleased]). Protection against releasing alien
+//     live-lock. IMPORTANT: check does NOT require that apply_run orphanApplyID
+//     exists — orphanApplyID row may not exist at all: deleted by
+//     retention-purge `purge_apply_runs` (migration 021, removes TERMINAL
+//     apply_runs older than 30d) OR previous owner crashed BEFORE Insert(apply_runs)
+//     (lockRun already committed applying, apply_run not yet inserted). incarnation-
+//     lock — unclaimed flag (no owner/attempt/lease) — remains in both
+//     cases; binding to orphan given by voyage_targets back-link on caller side,
+//     not by apply_run presence. (NB: reaper-rule reclaim_apply_runs does NOT delete
+//     orphaned row — it does claimed→planned reset of stale plans, not touching
+//     dispatched/running/terminal; source of "row doesn't exist"
+//     here — exactly purge-retention or pre-Insert-crash.)
+//   - SINGLE-WINNER: guard `status='applying'` (CAS). If honest RunResult
+//     of previous owner / concurrent finalization already moved row out of applying —
+//     UPDATE gives RowsAffected==0 → [ErrOrphanLockNotReleased] (no-op, race
+//     closed, we do NOT overwrite alien terminal).
+//
+// Atomicity: single transaction SELECT … FOR UPDATE → checks → INSERT
+// state_history → CAS-UPDATE. FOR UPDATE serializes release relative to
+// concurrent scenario-runner (its lockRun locks the same row).
+//
+// Returns:
+//   - nil                        — lock released (applying → ready), re-run can
+//     start.
+//   - [ErrIncarnationNotFound]   — name doesn't exist (incarnation deleted between
+//     reclaim and release).
+//   - [ErrOrphanLockNotReleased] — nothing to release (not applying / orphan apply_id
+//     not ours): caller continues re-run without release.
+func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, id, orphanApplyID, historyID string) error {
+	if !ValidID(id) {
+		return fmt.Errorf("incarnation: invalid id %q", id)
+	}
+	if orphanApplyID == "" {
+		return fmt.Errorf("incarnation: empty orphan apply_id")
+	}
+	if historyID == "" {
+		return fmt.Errorf("incarnation: empty history_id")
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("incarnation: begin orphan-release tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const selectForUpdateSQL = `
+SELECT state, status
+FROM incarnation
+WHERE id = $1
+FOR UPDATE
+`
+	var (
+		stateBytes []byte
+		statusStr  string
+	)
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return ErrIncarnationNotFound
+		}
+		return fmt.Errorf("incarnation: orphan-release select: %w", err)
+	}
+	// SINGLE-WINNER fast-path: not in applying — nothing to release (honest RunResult
+	// of previous owner / concurrent finalization already won the row). FOR UPDATE
+	// already serialized us — status is authoritative in this tx.
+	if Status(statusStr) != StatusApplying {
+		return ErrOrphanLockNotReleased
+	}
+
+	// FENCING-1 (no-live-rival): incarnation MUST NOT have active
+	// (non-terminal) apply_run of alien run (apply_id ≠ orphanApplyID).
+	// If exists — between crash and reclaim a live run started (direct run /
+	// other Voyage), its applying-lock is NOT our orphan → do NOT release. Terminal
+	// statuses (success/failed/cancelled/orphaned/no_match) are not held by live run —
+	// ignore. Missing orphanApplyID row is acceptable: deleted by
+	// retention-purge purge_apply_runs (terminal >30d) OR previous owner
+	// crashed BEFORE Insert(apply_runs); lock — unclaimed flag — remains.
+	const liveRivalSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM apply_runs
+    WHERE incarnation_name = $1
+      AND apply_id <> $2
+      AND status NOT IN ('success', 'failed', 'cancelled', 'orphaned', 'no_match')
+)
+`
+	var hasRival bool
+	if err := tx.QueryRow(ctx, liveRivalSQL, id, orphanApplyID).Scan(&hasRival); err != nil {
+		return fmt.Errorf("incarnation: orphan-release live-rival check: %w", err)
+	}
+	if hasRival {
+		return ErrOrphanLockNotReleased
+	}
+
+	// state_before == state_after: releasing orphan-lock does not change state (orphan-
+	// run didn't reach commit — state remains pre-run last-good).
+	// apply_id = orphanApplyID: transition snapshot correlates with orphaned
+	// run (schema requires non-null apply_id).
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, NULL, $5)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		historyID, id, orphanReleaseScenarioLabel, stateBytes, orphanApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert orphan-release state_history: %w", err)
+	}
+
+	// SINGLE-WINNER CAS: applying → ready. RowsAffected==0 is impossible under
+	// FOR UPDATE+early status check (we already saw applying in this tx), but
+	// keep guard as explicit transition invariant. Epoch of applying-flag (ADR-027
+	// amend (m-S1)) is zeroed together with release of applying — symmetric to
+	// UpdateStateFromRun terminal: after orphan-lock release row must not carry
+	// dead owner's epoch (otherwise Reaper would see stale applying_by_kid on
+	// already-released row). Covers both release paths — Voyage (l) and standalone (m).
+	const updateSQL = `
+UPDATE incarnation
+SET status            = $2,
+    status_details    = NULL,
+    applying_apply_id = NULL,
+    applying_attempt  = NULL,
+    applying_by_kid   = NULL,
+    applying_since    = NULL,
+    updated_at        = NOW()
+WHERE id = $1 AND status = 'applying'
+`
+	tag, err := tx.Exec(ctx, updateSQL, id, string(StatusReady))
+	if err != nil {
+		return fmt.Errorf("incarnation: orphan-release update: %w", err)
+	}
+	if tag.RowsAffected() == 0 {
+		return ErrOrphanLockNotReleased
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return fmt.Errorf("incarnation: commit orphan-release tx: %w", err)
+	}
+	return nil
+}
+
+// rerunLastScenarioLabel — value for `state_history.scenario` on unlock portion
+// of rerun-last. By unlock-transition convention (state_history requires non-null
+// scenario): capture the fact of error_locked release under this label, separate
+// from unlockScenarioLabel — rerun releases block AND restarts the last failed
+// scenario, its trace in history differs from normal manual unlock.
+const rerunLastScenarioLabel = "rerun-last"
+
+// ErrRerunInputNotNeeded — rerun-last was given an input, but the failed attempt
+// carries a replayable snapshot of its own. Refused rather than ignored: the
+// snapshot is what "rerun that" means, and silently preferring the caller's input
+// would turn a retry into a different run under the same name. The caller answers
+// 422; the incarnation is left locked, unchanged.
+var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not needed, the attempt is replayable")
+
+// UnlockForRerun — unlock portion of rerun-last (architecture.md → "Atomicity and
+// error_locked"). Atomically releases error_locked and transitions incarnation
+// error_locked → applying BYPASSING ready: window where concurrent run could slip
+// into freed ready does not occur (transition under single FOR UPDATE). State NOT
+// touched — last known-good preserved (snapshot in state_history, state_before == state_after,
+// symmetric to [Unlock]).
+//
+// Admission STRICTLY from error_locked: migration_failed / destroy_failed / ready /
+// applying / destroying → [ErrIncarnationNotErrorLocked] (for them — normal
+// unlock + manual run).
+//
+// Scope=last-failed: restarts LAST FAILED scenario of incarnation (last
+// state_history snapshot: run.go::abort → lockIncarnation →
+// UpdateStateFromRun writes failed scenario name and its apply_id). This can be
+// bootstrap creator (`create`/`create_cluster`/…) OR day-2-scenario
+// (add_user / update_acl / …) — both restarted identically.
+//
+// Recovery of failed run's input (so restart proceeds with SAME
+// values, not defaults):
+//   - one path for both create and day-2 (NIM-408): input from the failed
+//     attempt's own state_history.run snapshot, read under the same FOR UPDATE
+//     (invariant A — vault-ref as strings, secrets not revealed). No snapshot →
+//     fail-closed [ErrRerunInputUnavailable] (reasons and semantics — see
+//     sentinel), transaction NOT committed.
+//
+// Caller (handler / MCP-tool) AFTER successful commit starts
+// [UnlockResult.Scenario] via runner.Start with same applyID passed here:
+// status already applying, lockRun of starting run locks same row and sees
+// applying as valid start status. Passing applyID here needed for write to
+// state_history.apply_id — unlock-transition snapshot correlates with run being started.
+//
+// Atomicity: single transaction SELECT … FOR UPDATE → gate error_locked →
+// last-failed probe → (day-2) recipe probe → INSERT state_history →
+// UPDATE status=applying → commit. FOR UPDATE serializes rerun relative to
+// concurrent scenario-runner (its lockRun locks same row).
+//
+// Returns:
+//   - [ErrIncarnationNotFound]       — name doesn't exist (404).
+//   - [ErrIncarnationNotErrorLocked] — status not error_locked (409).
+//   - [ErrRerunInputUnavailable]     — day-2-path but failed run's input
+//     unavailable (recipe IS NULL: early abort without recipe / legacy / apply_run
+//     purged — full list at sentinel) (409).
+//
+// reason written to audit-payload by caller (state_history-schema MVP doesn't carry
+// metadata-columns); previous_status returned in [UnlockResult].
+func UnlockForRerun(ctx context.Context, pool TxBeginner, id, reason, rerunByAID, historyID, applyID string) (*UnlockResult, error) {
+	return UnlockForRerunWithInput(ctx, pool, id, reason, rerunByAID, historyID, applyID, nil)
+}
+
+// UnlockForRerunWithInput is [UnlockForRerun] with an operator-supplied input for
+// the case where the failed attempt carries no replayable snapshot.
+//
+// It is a RECOVERY path, not an override, and the difference is ENFORCED: when the
+// history row does carry a snapshot, a supplied input is [ErrRerunInputNotNeeded]
+// — refused before the transaction commits, not silently discarded. "Rerun that"
+// and "run this instead" are different requests, and the second has its own
+// endpoint; an input that quietly replaced a recorded one would make rerun-last a
+// way to run something else under the name of a retry.
+//
+// The recovery exists because before NIM-408 a day-2 rerun became impossible once
+// `apply_runs.recipe` was purged at 30 days, with nothing the operator could do.
+//
+// Note what it cannot recover: the service ref the attempt used. Without a
+// snapshot there is no record of it, so the caller falls back to the incarnation's
+// current pin — the pre-NIM-408 behaviour, and the reason this path is a last
+// resort rather than an equal one.
+func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, id, reason, rerunByAID, historyID, applyID string, fallbackInput map[string]any) (*UnlockResult, error) {
+	if !ValidID(id) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", id)
+	}
+	if reason == "" {
+		return nil, fmt.Errorf("incarnation: rerun-last reason is empty")
+	}
+	if historyID == "" {
+		return nil, fmt.Errorf("incarnation: empty history_id")
+	}
+	if applyID == "" {
+		return nil, fmt.Errorf("incarnation: empty apply_id")
+	}
+
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: begin rerun-last tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	// State and status only. `created_scenario` and `spec` are no longer read
+	// here: the create-vs-day-2 branch they served is gone, because the failed
+	// attempt's input now comes from its own history row whichever path produced
+	// it (NIM-408).
+	const selectForUpdateSQL = `
+SELECT state, status
+FROM incarnation
+WHERE id = $1
+FOR UPDATE
+`
+	var (
+		stateBytes []byte
+		statusStr  string
+	)
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncarnationNotFound
+		}
+		return nil, fmt.Errorf("incarnation: rerun-last select: %w", err)
+	}
+	previous := Status(statusStr)
+	if previous != StatusErrorLocked {
+		return nil, ErrIncarnationNotErrorLocked
+	}
+
+	// Scope=last-failed: restart LAST FAILED scenario of incarnation.
+	// Last state_history snapshot carries failed scenario name AND apply_id of that
+	// run (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
+	// authoritative correlation with recipe (day-2 input), more precise than matching by
+	// scenario name. Same FOR UPDATE-tx: read serialized relative to
+	// concurrent scenario-runner.
+	// The last row that records an ATTEMPT. The rerun-transition markers this
+	// function writes itself are excluded: they record a status change, carry no
+	// snapshot and name no scenario anybody can run, so a second rerun would
+	// otherwise read one and try to start a scenario called "rerun-last".
+	const lastRunSQL = `
+SELECT scenario, apply_id, run
+FROM state_history
+WHERE incarnation_name = $1 AND scenario <> $2
+ORDER BY history_id DESC
+LIMIT 1
+`
+	var (
+		lastScenario string
+		lastApplyID  string
+		lastRun      []byte
+	)
+	if err := tx.QueryRow(ctx, lastRunSQL, id, rerunLastScenarioLabel).Scan(&lastScenario, &lastApplyID, &lastRun); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			// error_locked without single snapshot — unachievable normally (lockIncarnation
+			// always writes state_history on failure). Fail-closed: without trace of failed
+			// run nothing to restart.
+			return nil, ErrRerunInputUnavailable
+		}
+		return nil, fmt.Errorf("incarnation: rerun-last last-run probe: %w", err)
+	}
+
+	// The failed attempt's replayable snapshot, from the history row that already
+	// pointed at it (NIM-408). ONE source: before this, the create path read
+	// `incarnation.spec.input` and the day-2 path read `apply_runs.recipe` by
+	// apply_id, and the two have different lifetimes — spec was forever, recipe is
+	// purged at 30 days — so a day-2 rerun died in ErrRerunInputUnavailable with no
+	// way back. History is kept for a year and is read in this same transaction.
+	//
+	// A row with no snapshot is not an error here: it is an attempt that cannot be
+	// replayed from history (a terminal recorded without a RunSpec, or a row
+	// predating the migration). The caller answers that by asking the operator for
+	// the input rather than refusing outright.
+	var (
+		rerunInput  map[string]any
+		fromUpgrade bool
+		refGit      string
+		refRef      string
+	)
+	if len(lastRun) == 0 {
+		// The attempt is on record but not replayable from it: a terminal
+		// committed without a RunSpec in hand (the RunResult path closes runs
+		// started by another goroutine, possibly on another Keeper), or a row
+		// written before the snapshot column existed.
+		//
+		// Fail-closed unless the operator supplied the input themselves —
+		// rerunning on defaults would silently do something they did not ask for,
+		// while rerunning on what they just typed is exactly what they asked for.
+		if len(fallbackInput) == 0 {
+			return nil, ErrRerunInputUnavailable
+		}
+		rerunInput = fallbackInput
+	} else {
+		if len(fallbackInput) > 0 {
+			// The attempt IS replayable. Refuse rather than choose for the
+			// operator — and refuse here, inside the transaction and before any
+			// Exec, so the refusal leaves the incarnation locked exactly as it was.
+			return nil, ErrRerunInputNotNeeded
+		}
+		run, uerr := unmarshalJSONB(lastRun)
+		if uerr != nil {
+			// Malformed snapshot jsonb — inconsistent with how it is written
+			// (json.Marshal). Fail-closed rather than silently rerunning on
+			// defaults.
+			return nil, ErrRerunInputUnavailable
+		}
+		rerunInput = InputFromRunSnapshot(run)
+		fromUpgrade, _ = run["from_upgrade"].(bool)
+		attemptRef := ServiceRefFromRunSnapshot(lastRun)
+		refGit, refRef = attemptRef.Git, attemptRef.Ref
+	}
+
+	var changedByArg any
+	if rerunByAID != "" {
+		changedByArg = rerunByAID
+	}
+
+	// state_before == state_after: rerun does not change state (last known-good).
+	// apply_id = $6: unlock-transition snapshot correlates with run being started
+	// (same applyID used by runner.Start in caller).
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $6)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		historyID, id, rerunLastScenarioLabel, stateBytes, changedByArg, applyID,
+	); err != nil {
+		return nil, fmt.Errorf("incarnation: insert rerun-last state_history: %w", err)
+	}
+
+	// status → applying (BYPASSING ready), status_details reset (block released).
+	// Concurrent run can't slip through: ready never materializes, and
+	// FOR UPDATE holds row until commit.
+	const updateSQL = `
+UPDATE incarnation
+SET status = $2, status_details = NULL, updated_at = NOW()
+WHERE id = $1
+`
+	if _, err := tx.Exec(ctx, updateSQL, id, string(StatusApplying)); err != nil {
+		return nil, fmt.Errorf("incarnation: rerun-last update: %w", err)
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("incarnation: commit rerun-last tx: %w", err)
+	}
+
+	return &UnlockResult{
+		PreviousStatus: previous,
+		HistoryID:      historyID,
+		Scenario:       lastScenario,
+		Input:          rerunInput,
+		FromUpgrade:    fromUpgrade,
+		ServiceRefGit:  refGit,
+		ServiceRefRef:  refRef,
+	}, nil
+}
+
+// migrationScenarioLabel — value for `state_history.scenario` on state_schema-
+// migration step (docs/migrations.md §Atomicity: scenario="migration").
+// Migration — not scenario run through Soul, but state_history requires non-null
+// scenario; capture each chain step under this label.
+const migrationScenarioLabel = "migration"
+
+// upgradeDriftScenarioLabel — value for `state_history.scenario` on upgrade's
+// final transition to drift (ADR-031, amendment to upgrade behavior). Upgrade
+// changes only incarnation.state + version in single PG-tx — hosts remain on
+// OLD deployment, actual state diverges from new state. Separate label
+// (not `migration`, under which migration steps go) captures REASON
+// of transition to drift in history — "new version awaits deployment on hosts".
+// Symmetric to other transition-labels (unlock / rerun-last /
+// voyage-orphan-release).
+const upgradeDriftScenarioLabel = "upgrade-pending-apply"
+
+// UpgradeInput — input to [UpgradeStateSchema]. Caller (Slice 2) resolves
+// TargetSchemaVer from service.yml of target snapshot, collects Chain via
+// [artifact.ServiceLoader.LoadMigrationChain], and generates ApplyID (ULID of single
+// upgrade operation, common to all chain steps).
+type UpgradeInput struct {
+	ID               string
+	TargetServiceVer string                 // git-ref of target service version (ADR-007)
+	TargetSchemaVer  int                    // state_schema_version from service.yml snapshot
+	Chain            statemigrate.Chain     // chain current→target (empty = no-op ref-bump)
+	Evaluator        statemigrate.Evaluator // migration-CEL ([statemigrate.NewEvaluator])
+	ApplyID          string                 // ULID of upgrade operation (M, common to migration chain)
+	ChangedByAID     *string                // Archon initiator (nil — no identity)
+
+	// UpgradeSlug — name of found upgrade-scenario for from→to transition (ADR-0068
+	// §5). Filled by [PrepareUpgrade] (scan upgrade/ of target snapshot); empty →
+	// legacy (drift + host deployment manual).
+	UpgradeSlug string
+	// RunApplyID — ULID of Runner-run of upgrade-scenario (R), SEPARATE from ApplyID
+	// of migration (M). Found-mode (applying + linkage-snapshot under R) enabled ONLY
+	// when BOTH UpgradeSlug AND RunApplyID non-empty: R — caller's commit to auto-start.
+	// Caller without auto-start (MCP) leaves empty → legacy-drift, to not
+	// reserve applying without run (else incarnation would hang). ADR-0068 §5/B.
+	RunApplyID string
+	// TargetRef — git-coordinates of target version (Ref=to_version), resolved
+	// by [PrepareUpgrade]. For runner.Start(ServiceRef) auto-start of upgrade-scenario.
+	TargetRef artifact.ServiceRef
+}
+
+// UpgradeResult — result of [UpgradeStateSchema]: schema before/after and count
+// of applied migration steps (0 for no-op ref-bump).
+type UpgradeResult struct {
+	FromSchemaVer int
+	ToSchemaVer   int
+	Steps         int
+}
+
+// UpgradeStateSchema atomically applies state_schema-migration to incarnation
+// (ADR-019, docs/migrations.md §Atomicity). Same transactional pattern as
+// [Unlock] / scenario.lockRun: single tx FOR UPDATE → status gate → sanity
+// against chain → in-memory [statemigrate.Apply] → per-step INSERT state_history
+// → UPDATE incarnation → commit.
+//
+// Upgrade allowed ONLY from ready:
+//   - applying        → [ErrIncarnationBusy] (run in progress);
+//   - error_locked    → [ErrIncarnationLocked] (unlock needed);
+//   - migration_failed → [ErrIncarnationLocked] (unlock needed).
+//
+// Sanity against chain (protection from resolve↔FOR UPDATE race):
+//   - current schema-version must equal chain[0].FromVersion;
+//   - TargetSchemaVer must equal chain[last].ToVersion;
+//     else [ErrSchemaVersionMismatch] (someone upgraded between resolve and
+//     row lock).
+//   - TargetSchemaVer < current → [ErrDowngradeUnsupported] (forward-only).
+//
+// No-op (empty Chain — ref changed but schema_version same): [Apply]
+// returns FinalState = state copy and empty Steps; still writes single
+// zero-diff state_history-record (symmetric to unlock) and UPDATE service_version.
+//
+// On successful upgrade incarnation transitions to status=drift, NOT ready (ADR-031,
+// amendment to upgrade behavior): DB-state updated, but hosts remain on old
+// deployment — actual state diverges from new state, operator needs signal
+// to "deploy new version". drift informational, not blocking (ADR-031(d));
+// remediation — normal apply (drift→ready). Transition captured by separate
+// zero-diff history-record with reason ([writeUpgradeDriftHistory]). Also
+// applies to no-op ref-bump (git-ref change without migration can also change
+// deployment — e.g., templates/packages of same schema-version).
+//
+// On error in [Apply] / any write tx is rolled back; then SEPARATE
+// background-tx marks incarnation status=migration_failed with masked
+// status_details (pattern from scenario.lockIncarnation; migration failure →
+// migration_failed, NOT error_locked, ADR-019). Error in such marking
+// wrapped in return, but primary cause preserved via %w.
+//
+// Returns [ErrIncarnationNotFound] if row doesn't exist.
+func UpgradeStateSchema(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeResult, error) {
+	if !ValidID(in.ID) {
+		return nil, fmt.Errorf("incarnation: invalid id %q", in.ID)
+	}
+	if in.TargetServiceVer == "" {
+		return nil, fmt.Errorf("incarnation: empty target service_version")
+	}
+	if in.TargetSchemaVer <= 0 {
+		return nil, fmt.Errorf("incarnation: target state_schema_version must be > 0, got %d", in.TargetSchemaVer)
+	}
+	if in.Evaluator == nil {
+		return nil, fmt.Errorf("incarnation: nil evaluator")
+	}
+	if in.ApplyID == "" {
+		return nil, fmt.Errorf("incarnation: empty apply_id")
+	}
+
+	res, err := upgradeTx(ctx, pool, in)
+	if err == nil {
+		return res, nil
+	}
+	// Sentinel rejections (gate / sanity / not-found) — NOT migration_failed:
+	// state untouched, incarnation remains in original status.
+	if isUpgradeRejection(err) {
+		return nil, err
+	}
+	// Apply / write failure inside tx (rollback already done) → mark
+	// migration_failed with separate background-tx.
+	markErr := markMigrationFailed(pool, in, err)
+	if markErr != nil {
+		return nil, fmt.Errorf("incarnation: upgrade failed (%w); marking migration_failed failed: %v", err, markErr)
+	}
+	return nil, err
+}
+
+// isUpgradeRejection — true for sentinel rejections that do NOT transition
+// incarnation to migration_failed (state unchanged, status preserved).
+func isUpgradeRejection(err error) bool {
+	return errors.Is(err, ErrIncarnationNotFound) ||
+		errors.Is(err, ErrIncarnationBusy) ||
+		errors.Is(err, ErrIncarnationLocked) ||
+		errors.Is(err, ErrDowngradeUnsupported) ||
+		errors.Is(err, ErrSchemaVersionMismatch)
+}
+
+// upgradeTx performs all upgrade-logic in single PG-transaction. Separated from
+// [UpgradeStateSchema] so failure-handling (migration_failed) lives outside,
+// after guaranteed rollback (defer Rollback in this function).
+func upgradeTx(ctx context.Context, pool TxBeginner, in UpgradeInput) (*UpgradeResult, error) {
+	tx, err := pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: begin upgrade tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	const selectForUpdateSQL = `
+SELECT state, state_schema_version, status
+FROM incarnation
+WHERE id = $1
+FOR UPDATE
+`
+	var (
+		stateBytes []byte
+		currentVer int
+		statusStr  string
+	)
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, in.ID).Scan(&stateBytes, &currentVer, &statusStr); err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, ErrIncarnationNotFound
+		}
+		return nil, fmt.Errorf("incarnation: upgrade select: %w", err)
+	}
+
+	switch Status(statusStr) {
+	case StatusReady, StatusDrift:
+		// ready — normal path; drift (ADR-031(d)) — informational status,
+		// upgrade does NOT block it (same as normal apply). After upgrade-tx
+		// status — back to drift (hosts await new version deployment, see
+		// final UPDATE), not ready: DB-state change not yet deployed to hosts.
+	case StatusApplying:
+		return nil, ErrIncarnationBusy
+	case StatusErrorLocked, StatusMigrationFailed:
+		return nil, ErrIncarnationLocked
+	default:
+		return nil, fmt.Errorf("incarnation: upgrade from unknown status %q", statusStr)
+	}
+
+	if in.TargetSchemaVer < currentVer {
+		return nil, ErrDowngradeUnsupported
+	}
+
+	// Sanity against chain (only for non-empty chain): protection from race
+	// between resolve(service.yml snapshot) ↔ FOR UPDATE — someone could have upgraded
+	// row between these points.
+	if len(in.Chain) > 0 {
+		if in.Chain[0].FromVersion != currentVer || in.Chain[len(in.Chain)-1].ToVersion != in.TargetSchemaVer {
+			return nil, ErrSchemaVersionMismatch
+		}
+	} else if in.TargetSchemaVer != currentVer {
+		// Empty chain must be ref-bump without schema-version change.
+		return nil, ErrSchemaVersionMismatch
+	}
+
+	currentState, err := unmarshalJSONB(stateBytes)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: upgrade unmarshal state: %w", err)
+	}
+
+	applyRes, err := statemigrate.Apply(ctx, currentState, in.Chain, in.Evaluator)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: migration %q: %w", in.ID, err)
+	}
+
+	if err := writeMigrationHistory(ctx, tx, in, currentState, applyRes); err != nil {
+		return nil, err
+	}
+
+	finalBytes, err := marshalJSONB(applyRes.FinalState)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: marshal migrated state: %w", err)
+	}
+
+	// found-branch (ADR-0068 §5/B): both slug AND R non-empty (R = caller's commit to
+	// auto-start; without R can't reserve applying — incarnation would hang without
+	// run, so caller without auto-start, e.g. MCP, goes legacy).
+	found := in.UpgradeSlug != "" && in.RunApplyID != ""
+
+	// legacy → drift (ADR-031: hosts behind DB-state, remediation = manual apply),
+	// also no-op ref-bump; found → applying (ADR-0068: control goes to
+	// Runner of upgrade-scenario auto-start, mirror of UnlockForRerun;
+	// applying_apply_id=R filled by lockRun on FromLocked). status — controlled
+	// constant (not user input), no Sprintf injection; legacy-text
+	// byte-for-byte same (regression tests on literal 'drift'). Gate above allows
+	// UPDATE only from ready/drift — both validly transition to both drift and applying.
+	finalStatus := StatusDrift
+	if found {
+		finalStatus = StatusApplying
+	}
+	updateSQL := fmt.Sprintf(`
+UPDATE incarnation
+SET state                = $2,
+    state_schema_version = $3,
+    service_version      = $4,
+    status               = '%s',
+    status_details       = NULL,
+    updated_at           = NOW()
+WHERE id = $1
+`, finalStatus)
+	if _, err := tx.Exec(ctx, updateSQL, in.ID, finalBytes, in.TargetSchemaVer, in.TargetServiceVer); err != nil {
+		return nil, fmt.Errorf("incarnation: upgrade update: %w", err)
+	}
+
+	// Zero-diff transition-record (state_before == state_after = post-migration
+	// state): legacy → drift-transition under M (label upgrade-pending-apply);
+	// found → linkage-snapshot under R with scenario=slug (mirror of
+	// UnlockForRerun-snapshot — links auto-start run with this upgrade).
+	if found {
+		if err := writeUpgradeRunHistory(ctx, tx, in, applyRes.FinalState); err != nil {
+			return nil, err
+		}
+	} else if err := writeUpgradeDriftHistory(ctx, tx, in, applyRes.FinalState); err != nil {
+		return nil, err
+	}
+
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("incarnation: commit upgrade tx: %w", err)
+	}
+
+	return &UpgradeResult{
+		FromSchemaVer: currentVer,
+		ToSchemaVer:   in.TargetSchemaVer,
+		Steps:         len(applyRes.Steps),
+	}, nil
+}
+
+// writeUpgradeDriftHistory writes zero-diff snapshot of incarnation transition to drift
+// following upgrade completion (state_before == state_after = post-migration final state).
+// scenario label [upgradeDriftScenarioLabel] captures the transition reason (hosts await
+// new version deployment); common ApplyID links it to step-snapshots of this upgrade.
+func writeUpgradeDriftHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
+	stateBytes, err := marshalJSONB(finalState)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state (drift-transition history): %w", err)
+	}
+	var changedByArg any
+	if in.ChangedByAID != nil {
+		changedByArg = *in.ChangedByAID
+	}
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $6)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		audit.NewULID(), in.ID, upgradeDriftScenarioLabel, stateBytes, changedByArg, in.ApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert drift-transition state_history: %w", err)
+	}
+	return nil
+}
+
+// writeUpgradeRunHistory writes zero-diff linkage-snapshot of control handoff to
+// upgrade-scenario auto-start (found-branch ADR-0068 §5/B): apply_id = R
+// ([UpgradeInput.RunApplyID]), scenario = discovered slug, state_before ==
+// state_after = post-migration final state. Mirror of UnlockForRerun-snapshot
+// (applying + zero-diff under run's apply_id) — links R to this upgrade in history,
+// separate from M-labels of the migration itself.
+func writeUpgradeRunHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, finalState map[string]any) error {
+	stateBytes, err := marshalJSONB(finalState)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal state (upgrade-run history): %w", err)
+	}
+	var changedByArg any
+	if in.ChangedByAID != nil {
+		changedByArg = *in.ChangedByAID
+	}
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $4, $5, $6)
+`
+	if _, err := tx.Exec(ctx, historyInsertSQL,
+		audit.NewULID(), in.ID, in.UpgradeSlug, stateBytes, changedByArg, in.RunApplyID,
+	); err != nil {
+		return fmt.Errorf("incarnation: insert upgrade-run state_history: %w", err)
+	}
+	return nil
+}
+
+// writeMigrationHistory writes per-step snapshot of the chain to state_history.
+// One common ApplyID per upgrade, distinct history_id (ULID) per step. For no-op
+// (empty chain), writes one zero-diff record (state_before == state_after),
+// symmetric to unlock — captures the fact of the ref-bump itself.
+func writeMigrationHistory(ctx context.Context, tx ExecQueryRower, in UpgradeInput, before map[string]any, res statemigrate.Result) error {
+	const historyInsertSQL = `
+INSERT INTO state_history (
+    history_id, incarnation_name, scenario, state_before, state_after,
+    changed_by_aid, apply_id
+) VALUES ($1, $2, $3, $4, $5, $6, $7)
+`
+	var changedByArg any
+	if in.ChangedByAID != nil {
+		changedByArg = *in.ChangedByAID
+	}
+
+	if len(res.Steps) == 0 {
+		// No-op ref-bump: zero-diff snapshot (state unchanged).
+		stateBytes, err := marshalJSONB(before)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal state (no-op history): %w", err)
+		}
+		if _, err := tx.Exec(ctx, historyInsertSQL,
+			audit.NewULID(), in.ID, migrationScenarioLabel, stateBytes, stateBytes, changedByArg, in.ApplyID,
+		); err != nil {
+			return fmt.Errorf("incarnation: insert migration state_history (no-op): %w", err)
+		}
+		return nil
+	}
+
+	for i := range res.Steps {
+		beforeBytes, err := marshalJSONB(res.Steps[i].StateBefore)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal step state_before: %w", err)
+		}
+		afterBytes, err := marshalJSONB(res.Steps[i].StateAfter)
+		if err != nil {
+			return fmt.Errorf("incarnation: marshal step state_after: %w", err)
+		}
+		if _, err := tx.Exec(ctx, historyInsertSQL,
+			audit.NewULID(), in.ID, migrationScenarioLabel, beforeBytes, afterBytes, changedByArg, in.ApplyID,
+		); err != nil {
+			return fmt.Errorf("incarnation: insert migration state_history (step %d): %w", i, err)
+		}
+	}
+	return nil
+}
+
+// markMigrationFailed marks incarnation status=migration_failed after
+// migration failure. Separate background-tx (pattern from scenario.lockIncarnation):
+// original ctx may have been cancelled, but recording failure must happen regardless.
+// status_details masked via [audit.MaskSecrets] (migration-CEL has no vault,
+// but cause may carry vault-refs from old state in transit — defense in depth,
+// status_details read outbound without masking).
+func markMigrationFailed(pool TxBeginner, in UpgradeInput, cause error) error {
+	wctx := context.Background()
+	details := audit.MaskSecrets(map[string]any{
+		"reason":   "migration_failed",
+		"apply_id": in.ApplyID,
+		"error":    cause.Error(),
+	})
+	detailsBytes, err := json.Marshal(details)
+	if err != nil {
+		return fmt.Errorf("incarnation: marshal migration_failed details: %w", err)
+	}
+
+	tx, err := pool.BeginTx(wctx, pgx.TxOptions{})
+	if err != nil {
+		return fmt.Errorf("incarnation: begin migration_failed tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(wctx) }()
+
+	const updateSQL = `
+UPDATE incarnation
+SET status = 'migration_failed', status_details = $2, updated_at = NOW()
+WHERE id = $1
+`
+	if _, err := tx.Exec(wctx, updateSQL, in.ID, detailsBytes); err != nil {
+		return fmt.Errorf("incarnation: migration_failed update: %w", err)
+	}
+	if err := tx.Commit(wctx); err != nil {
+		return fmt.Errorf("incarnation: commit migration_failed tx: %w", err)
+	}
+	return nil
+}
+
+// HistoryFilter — filters for [HistorySelectByName]. Empty fields mean "don't filter".
+// ApplyID — ULID of specific run; typically matches 0 or 1 row (one state_history-snapshot
+// per apply), but contract doesn't forbid multiple on future extension.
+//
+// IncludeArchived — flag to include soft-deleted snapshots (ADR-Q19 retention,
+// `state_history.archived_at` column). Default false: history registry returns only
+// active snapshots (`archived_at IS NULL`) — typical Operator API / MCP scenario.
+// When true, returns all records (including those marked by Reaper `archive_state_history` rule)
+// — needed to investigate "where did snapshot N days ago go".
+//
+// IncludeTransitions — include the rerun-transition markers. Default false, and
+// that is a READ-side change made in NIM-408 rather than a contract change: those
+// rows are written when a rerun STARTS, carry `state_before == state_after` and
+// never gain an outcome, so in the feed they are indistinguishable from a run that
+// happened and changed nothing — which is also what a FAILED run looks like. A
+// client cannot tell the three apart, and the entry shape deliberately does not
+// grow a status field to let it. True is for someone asking "when was this
+// unlocked", which the audit log answers better.
+type HistoryFilter struct {
+	ApplyID            string
+	IncludeArchived    bool
+	IncludeTransitions bool
+}
+
+// HistorySelectByName returns a page of `state_history` records for a specific
+// incarnation in reverse chronological order + total count (without offset/limit).
+// When `filter.ApplyID` is non-empty, result is additionally filtered by `apply_id`.
+//
+// By default (filter.IncludeArchived = false), only active snapshots are returned
+// (`archived_at IS NULL`, ADR-Q19 retention). Total is also counted over active set —
+// Operator API pagination doesn't "jump" through soft-deleted gaps.
+//
+// Also by default, the rerun-transition markers are excluded (see
+// HistoryFilter.IncludeTransitions): they record a status change rather than an
+// attempt, and in a feed of state changes they read as a run that changed nothing.
+// The count follows the same predicate, so pagination stays exact.
+//
+// Return ([], 0, nil) for non-existent incarnation — no need to check existence
+// with separate query: caller (handler) should first call [SelectByID] to return 404,
+// or accept empty history as valid for an existing incarnation.
+func HistorySelectByName(ctx context.Context, db ExecQueryRower, id string, filter HistoryFilter, offset, limit int) ([]*HistoryEntry, int, error) {
+	if offset < 0 {
+		return nil, 0, fmt.Errorf("incarnation: history offset must be >= 0, got %d", offset)
+	}
+	if limit < 1 {
+		return nil, 0, fmt.Errorf("incarnation: history limit must be >= 1, got %d", limit)
+	}
+
+	args := []any{id}
+	where := "WHERE incarnation_name = $1"
+	if !filter.IncludeArchived {
+		where += " AND archived_at IS NULL"
+	}
+	if !filter.IncludeTransitions {
+		args = append(args, rerunLastScenarioLabel)
+		where += fmt.Sprintf(" AND scenario <> $%d", len(args))
+	}
+	if filter.ApplyID != "" {
+		args = append(args, filter.ApplyID)
+		where += fmt.Sprintf(" AND apply_id = $%d", len(args))
+	}
+
+	countSQL := "SELECT COUNT(*) FROM state_history " + where
+	var total int
+	if err := db.QueryRow(ctx, countSQL, args...).Scan(&total); err != nil {
+		return nil, 0, fmt.Errorf("incarnation: history count: %w", err)
+	}
+
+	listSQL := `SELECT history_id, scenario, state_before, state_after,
+       changed_by_aid, apply_id, at
+FROM state_history
+` + where +
+		fmt.Sprintf(`
+ORDER BY at DESC, history_id ASC
+OFFSET $%d LIMIT $%d`, len(args)+1, len(args)+2)
+	listArgs := append(append([]any{}, args...), offset, limit)
+
+	rows, err := db.Query(ctx, listSQL, listArgs...)
+	if err != nil {
+		return nil, 0, fmt.Errorf("incarnation: history list query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []*HistoryEntry
+	for rows.Next() {
+		entry, err := scanHistoryEntry(rows)
+		if err != nil {
+			return nil, 0, err
+		}
+		out = append(out, entry)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, 0, fmt.Errorf("incarnation: history list iter: %w", err)
+	}
+	return out, total, nil
+}
+
+func scanHistoryEntry(row pgx.Row) (*HistoryEntry, error) {
+	var (
+		entry            HistoryEntry
+		stateBeforeBytes []byte
+		stateAfterBytes  []byte
+		changedByAID     *string
+	)
+	err := row.Scan(
+		&entry.HistoryID,
+		&entry.Scenario,
+		&stateBeforeBytes,
+		&stateAfterBytes,
+		&changedByAID,
+		&entry.ApplyID,
+		&entry.At,
+	)
+	if err != nil {
+		return nil, fmt.Errorf("incarnation: history scan: %w", err)
+	}
+	entry.ChangedByAID = changedByAID
+	if entry.StateBefore, err = unmarshalJSONB(stateBeforeBytes); err != nil {
+		return nil, fmt.Errorf("incarnation: history unmarshal state_before: %w", err)
+	}
+	if entry.StateAfter, err = unmarshalJSONB(stateAfterBytes); err != nil {
+		return nil, fmt.Errorf("incarnation: history unmarshal state_after: %w", err)
+	}
+	return &entry, nil
+}
+
+// ValidStatus — closed enum check for status. Mirrors CHECK
+// incarnation_status_valid from migration (005 + 031 + 036 + 047) to reject
+// invalid status in Go before round-trip to DB. Exported for list-filter in handler layer.
+func ValidStatus(s Status) bool {
+	switch s {
+	case StatusReady, StatusApplying, StatusErrorLocked, StatusMigrationFailed,
+		StatusDestroying, StatusDestroyFailed, StatusDrift:
+		return true
+	}
+	return false
+}
+
+// marshalJSONB serializes map to bytes for JSONB column. nil → `{}`,
+// symmetric with shared/audit and operator.marshalMetadata.
+func marshalJSONB(m map[string]any) ([]byte, error) {
+	if m == nil {
+		return []byte("{}"), nil
+	}
+	return json.Marshal(m)
+}
+
+// unmarshalJSONB parses JSONB bytes into map. Empty bytes / `null` → nil-map.
+func unmarshalJSONB(b []byte) (map[string]any, error) {
+	if len(b) == 0 {
+		return nil, nil
+	}
+	var m map[string]any
+	if err := json.Unmarshal(b, &m); err != nil {
+		return nil, err
+	}
+	return m, nil
+}

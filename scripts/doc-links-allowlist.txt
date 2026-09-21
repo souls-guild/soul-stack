@@ -1,0 +1,4 @@
+# Allowlist of broken markdown/Go doc links outside the scope of the ADR migration.
+# Format: <source-file>:<link-as-in-source>
+# Do not add anything new here - fix the link at the source.
+# Empty since 2026-06-10: all legacy entries were resolved, links fixed at the source.

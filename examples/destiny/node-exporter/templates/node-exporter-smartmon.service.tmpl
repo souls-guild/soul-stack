@@ -1,0 +1,43 @@
+{{/*
+  oneshot collector of SMART disk metrics for node_exporter. Go text/template strict
+  (ADR-010). .vars.bin_dir (smartmon.sh script), .vars.textfile_dir (.prom output).
+
+  ★ User=root: smartctl requires direct access to block devices (RAW IO). The systemd
+  sandbox is strict (spec, collectors section): write only to the textfile directory, no
+  network, devices closed + a targeted DeviceAllow, capabilities narrowed to
+  CAP_SYS_RAWIO/CAP_SYS_ADMIN.
+
+  ConditionVirtualization=no - on a VM there are no physical disks, the collector does
+  not start (the same Condition is in .timer).
+*/}}
+[Unit]
+Description=Collect SMART metrics for node_exporter
+ConditionVirtualization=no
+
+[Service]
+Type=oneshot
+User=root
+ExecStart=/usr/bin/env bash -c 'set -euo pipefail; tmp="$(mktemp {{ .vars.textfile_dir }}/smart_metrics.prom.XXXXXX)"; "{{ .vars.bin_dir }}/smartmon.sh" > "$tmp"; mv "$tmp" "{{ .vars.textfile_dir }}/smart_metrics.prom"'
+
+# systemd hardening for the privileged oneshot (spec, collectors section).
+ReadWritePaths={{ .vars.textfile_dir }}
+ProtectSystem=strict
+ProtectHome=yes
+PrivateTmp=yes
+PrivateNetwork=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+LockPersonality=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+RestrictNamespaces=yes
+RestrictAddressFamilies=AF_UNIX
+NoNewPrivileges=yes
+ProtectProc=invisible
+PrivateDevices=no
+DevicePolicy=closed
+DeviceAllow=block-* r
+CapabilityBoundingSet=CAP_SYS_RAWIO CAP_SYS_ADMIN

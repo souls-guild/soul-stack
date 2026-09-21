@@ -1,0 +1,4 @@
+name: x
+input:
+  with.dot:
+    type: string

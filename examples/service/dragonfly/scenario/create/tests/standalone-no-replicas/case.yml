@@ -1,0 +1,136 @@
+# L0 test for DragonFly create WITHOUT replicas (replicas_per_master=0 → exactly 1 host, size-
+# guard 1 == 1+0; standalone-equivalent: one master + sentinel daemon monitors itself).
+#
+# quorum is AUTO in apply = size(soulprint.hosts)/2+1 = 1/2+1 = 1. In state quorum=0 (the capture
+# doesn't see soulprint.hosts - auto happens in apply). master_name comes from service vars - default master.
+#
+# Covers: replicas_per_master=0 size-guard boundary (standalone-equivalent); auto-quorum;
+# default master_name (service vars); single-host roster; DragonFly flagfile-render (vars in
+# render_context dragonfly.conf).
+#
+# ★ REFACTOR "sentinel from destiny redis": sentinel daemon issues a SECOND apply:destiny:redis
+#   (sentinel_only). The presence matcher sees the redis-destiny sentinel plane (install
+#   redis-server + sentinel.conf /etc/redis) and does NOT see dragonfly-sentinel tasks.
+name: dragonfly create standalone, no replicas, auto quorum
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  hosts:
+    - sid: node-solo.example.com
+      covens: [dragonfly]
+      soulprint:
+        network: { primary_ip: 10.0.0.9 }
+        os: { arch: amd64 }
+  vars:
+    sentinel_master_name: master
+    memory_reserve_percent: 75
+    df_config:
+      maxmemory:        "256mb"
+      maxclients:       10000
+    system_acl_users:
+      default_admin: "~* &* +@all"
+      replica:    "+psync +replconf +ping"
+      monitoring: "-@all +@connection +client +ping +info +config|get +cluster|info +slowlog +latency +memory +select +command|count +command|docs"
+      sentinel:   "allchannels +multi +slaveof +ping +exec +subscribe +config|rewrite +role +publish +info +client|setname +client|kill +script|kill"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +info +cluster|info"
+    system_acl_users_sentinel:
+      default_admin: "allchannels allkeys +@all"
+      monitoring: "-@all +@connection -command +client -hello +info -auth +sentinel|masters +sentinel|replicas +sentinel|slaves +sentinel|sentinels +sentinel|ckquorum"
+      sentinel:   "allchannels -@all +auth +client|getname +client|id +client|setname +command +hello +ping +sentinel|is-master-down-by-addr +publish +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+      haproxy:    "-@all +auth +client|getname +client|id +client|setname +command +hello +ping +role +sentinel|get-master-addr-by-name +sentinel|master +sentinel|myid +sentinel|replicas +sentinel|sentinels"
+    # Mandatory tarball checksums of the exporter/agent destinies (their input:
+    # declares sha256 required). L0 downloads nothing — an all-zero placeholder
+    # satisfying the sha256:<64 hex> pattern, same as monitoring-exporters/case.yml.
+    redis_exporter_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+    vector_sha256: "sha256:0000000000000000000000000000000000000000000000000000000000000000"
+  input:
+    version: "1.39.0"
+    replicas_per_master: 0
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-create-pass }
+        - { name: haproxy, password: haproxy-sys-secret-pass }
+        - { name: monitoring, password: monitoring-sys-secret-pass }
+        - { name: replica, password: replica-sys-secret-pass }
+        - { name: sentinel, password: sentinel-sys-secret-pass }
+    df_users:
+      effective: []
+
+assert:
+  task_present:
+    # REPLICAOF: addr - the LOCAL UNIX socket; master_addr = the single host (which is also the
+    # master, primary_ip:6379). On real standalone INFO role=master → plugin no-op.
+    - module: redis.replica.present
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        master_addr: "10.0.0.9:6379"
+        username: default_admin
+        password: dfadmin-create-pass
+
+    # SENTINEL MONITOR: monitor.ip - the single host; auto-quorum = 1.
+    # redis_version - the sentinel DAEMON version (vars.sentinel_redis_version, default 7.2.4),
+    # NOT df_version (1.39.0). Gates version-aware sentinel features of the plugin.
+    - module: redis.sentinel.monitored
+      params_subset:
+        addr: "127.0.0.1:26379"
+        master_name: master
+        # ★ CONNECTION-AUTH to the sentinel daemon :26379 as default_admin (built-in default off).
+        # auth_pass/auth_user - monitoring the DF master as default_admin. Guard against NOAUTH.
+        username: default_admin
+        password: dfadmin-create-pass
+        auth_user: default_admin
+        auth_pass: dfadmin-create-pass
+        redis_version: "7.2.4"
+        monitor:
+          ip: 10.0.0.9
+          port: 6379
+          quorum: 1
+
+    # ── SENTINEL PLANE via destiny `redis` (sentinel_only, SECOND apply) ──
+    # install redis-server (distro pin R4, carries redis-sentinel) + sentinel.conf in /etc/redis.
+    - module: core.pkg.installed
+      params_subset:
+        name: redis-server
+        version: "5:7.0.15-1~deb12u7"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+
+  task_absent:
+    # DUPLICATE REMOVED: dragonfly-destiny no longer renders /etc/dragonfly/sentinel.conf.
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/sentinel.conf
+    - module: core.soul.registered
+
+  state_after:
+    df_version: "1.39.0"
+    df_users: []
+    df_hosts: []
+    df_sentinel:
+      master_name: master
+      quorum: 0
+      down_after_ms: 5000
+      failover_timeout_ms: 60000
+    replicas: 0
+    sentinel_quorum: 0
+
+  # The three cloud-provision fields are ABSENT, not empty. They are a leftover of the
+  # removed provisioning path (NIM-761) that the migration ladder still carries, so an
+  # incarnation created today never has them written (ADR-0084 F-B).
+  state_absent:
+    - provisioned_vm_ids
+    - provisioned_sids
+    - provisioned_provider

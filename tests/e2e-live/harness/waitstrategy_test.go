@@ -1,0 +1,523 @@
+package harness
+
+import (
+	"go/ast"
+	"go/parser"
+	"go/token"
+	"os"
+	"path/filepath"
+	"reflect"
+	"runtime"
+	"strings"
+	"testing"
+	"time"
+
+	"github.com/testcontainers/testcontainers-go/wait"
+)
+
+// The guard for the readiness properties in waitstrategy.go.
+//
+// It exists because the postgres half of NIM-406 was not a subtle bug: the
+// container's entire wait was testcontainers.WithWaitStrategy(ForLog×2), with no
+// host-port check anywhere under it, and nothing went red. The suite kept passing
+// on an idle machine for as long as anyone looked at it, and the cost came due
+// months later as four unreproducible gate failures that read like regressions.
+//
+// So the properties are pinned where breaking them is loud. Docker-free on
+// purpose — this has to be checkable by the gate everyone runs, not by the
+// 20-minute one that would be reporting the lie.
+
+// stands enumerates the dependency containers Stack raises for itself, so a
+// fourth cannot be added with a log-only wait and go unnoticed: the table is the
+// checklist. Keep it in step with Stack.start* in stack.go.
+//
+// It is deliberately not "every container the harness starts". The soul
+// container (container.go) is out of scope by construction rather than by
+// oversight: it declares no ExposedPorts and nothing ever dials it from the
+// host — the harness talks to it with docker exec, and soul→keeper is outbound —
+// so wait.ForExec on an in-container signal is the property that fits it. These
+// three are the ones reached through a mapped port, which is the hop that fails.
+var stands = []struct {
+	name     string
+	port     string
+	strategy func() wait.Strategy
+}{
+	{"postgres", postgresContainerPort, postgresWaitStrategy},
+	{"redis", redisContainerPort, redisWaitStrategy},
+	{"vault", vaultContainerPort, vaultWaitStrategy},
+}
+
+// flatten returns every strategy in the tree, walking into wait.ForAll sets.
+func flatten(s wait.Strategy) []wait.Strategy {
+	multi, ok := s.(*wait.MultiStrategy)
+	if !ok {
+		return []wait.Strategy{s}
+	}
+	var out []wait.Strategy
+	for _, inner := range multi.Strategies {
+		out = append(out, flatten(inner)...)
+	}
+	return out
+}
+
+// TestStandWaitsForItsMappedPort — every stand waits for docker to actually
+// serve its port on the host.
+//
+// The check is deliberately not "a *HostPortStrategy is present". That type also
+// comes out of wait.ForMappedPort, which waits only for the mapping to EXIST and
+// never dials — and a strategy that waits for a port to be allocated while
+// nothing accepts on it is precisely the failure this guards. The same object
+// can also have the dial switched off after the fact with SkipExternalCheck().
+// HostPortStrategy.String() reports which checks it actually does, so the
+// assertion is on the check rather than on the type or on which constructor
+// happened to make it.
+func TestStandWaitsForItsMappedPort(t *testing.T) {
+	for _, stand := range stands {
+		t.Run(stand.name, func(t *testing.T) {
+			var found *wait.HostPortStrategy
+			for _, s := range flatten(stand.strategy()) {
+				hp, ok := s.(*wait.HostPortStrategy)
+				if ok && hp.Port == stand.port {
+					found = hp
+					break
+				}
+			}
+			if found == nil {
+				t.Fatalf("%s waits for no host-port check on %s.\n"+
+					"Its readiness is then a signal from INSIDE the container, and the "+
+					"harness dials the port from the host — the gap NIM-406 was four "+
+					"gate failures of. Add wait.ForListeningPort(%q) to the set.",
+					stand.name, stand.port, stand.port)
+			}
+			// " to be listening" (both checks) and " to be accessible externally"
+			// (external only) are the two descriptions that include the host dial;
+			// " to be listening internally" and " to be mapped" are the two that
+			// do not.
+			if desc := found.String(); !strings.HasSuffix(desc, " to be listening") &&
+				!strings.HasSuffix(desc, " to be accessible externally") {
+				t.Fatalf("%s has a host-port strategy that never dials the port from the "+
+					"host: %q.\nThat waits for the mapping to exist, which happens before "+
+					"anything accepts on it — the same gap as having no port check at all.",
+					stand.name, desc)
+			}
+		})
+	}
+}
+
+// TestStandReadinessBudgetIsExplicit — no stand check inherits a library
+// default.
+//
+// The redis half of NIM-406 was a 10-second budget that nobody in this repo
+// chose: the module default had to cover docker-daemon round-trips under load
+// and could not, and because it was inherited rather than written down, its
+// existence was not obvious from any file here. A check with no timeout of its
+// own silently takes testcontainers' 60 s, which is the same failure with a
+// different number.
+func TestStandReadinessBudgetIsExplicit(t *testing.T) {
+	for _, stand := range stands {
+		t.Run(stand.name, func(t *testing.T) {
+			for _, s := range flatten(stand.strategy()) {
+				timeouter, ok := s.(wait.StrategyTimeout)
+				if !ok {
+					t.Fatalf("%s: strategy %T cannot carry a timeout", stand.name, s)
+				}
+				got := timeouter.Timeout()
+				if got == nil {
+					t.Fatalf("%s: strategy %q has no timeout of its own and inherits "+
+						"testcontainers' default. Give it standReadyTimeout so the budget "+
+						"is one number this repo chose.", stand.name, s)
+				}
+				if *got != standReadyTimeout {
+					t.Errorf("%s: strategy %q has timeout %v, want standReadyTimeout (%v). "+
+						"Per-stand budgets are what let the shortest one expire first.",
+						stand.name, s, *got, standReadyTimeout)
+				}
+			}
+		})
+	}
+}
+
+// TestStandBudgetIsSharedNotSummed — the whole set is bounded, not just its
+// parts.
+//
+// wait.MultiStrategy runs its checks sequentially, so a set of two 2-minute
+// checks with no deadline of its own bounds one container at 4 minutes. Every
+// number in waitstrategy.go — and standBringUpTimeout, which is derived from
+// them — assumes 2. Dropping .WithDeadline() leaves both guards above green
+// because the leaves keep their timeouts, which is exactly why this one exists
+// separately.
+func TestStandBudgetIsSharedNotSummed(t *testing.T) {
+	for _, stand := range stands {
+		t.Run(stand.name, func(t *testing.T) {
+			got := wholeSetDeadline(t, stand.strategy())
+			if got != standReadyTimeout {
+				t.Errorf("%s bounds its whole check set at %v, want standReadyTimeout (%v). "+
+					"Its checks run one after another, so this is the number that decides "+
+					"how long the container really gets.", stand.name, got, standReadyTimeout)
+			}
+		})
+	}
+}
+
+// wholeSetDeadline reads the deadline a MultiStrategy applies to the whole set.
+//
+// It has to use reflection. The field is unexported, and MultiStrategy.Timeout()
+// does NOT return it — that reports the separate `timeout` field, which these
+// strategies never set, so it reads nil here and says nothing. There is no
+// public way to ask.
+//
+// If a testcontainers upgrade renames or removes the field this fails loudly,
+// and that is the right outcome rather than an annoyance: the arithmetic in
+// waitstrategy.go is an assumption about how this library spends a budget, and
+// an upgrade is precisely when the assumption needs re-checking.
+func wholeSetDeadline(t *testing.T, s wait.Strategy) time.Duration {
+	t.Helper()
+	multi, ok := s.(*wait.MultiStrategy)
+	if !ok {
+		t.Fatalf("strategy is %T, not a *wait.MultiStrategy — nothing bounds the set as a whole", s)
+	}
+	f := reflect.ValueOf(multi).Elem().FieldByName("deadline")
+	if !f.IsValid() {
+		t.Fatalf("wait.MultiStrategy has no `deadline` field any more. The budgets in " +
+			"waitstrategy.go assume the set is bounded as a whole; re-read wait/all.go " +
+			"and re-derive them before deleting this check.")
+	}
+	if f.IsNil() {
+		t.Fatalf("the check set carries no deadline, so its checks each get their own " +
+			"budget in turn. Add .WithDeadline(standReadyTimeout) to the wait.ForAll.")
+	}
+	return time.Duration(f.Elem().Int())
+}
+
+// TestStandBringUpBoundCoversItsParts — the outer ctx is not smaller than the
+// sum of the budgets inside it.
+//
+// This is NIM-406's own shape, and the first cut of NIM-406's fix walked into
+// it: per-container budgets raised to 2 min summed to 6, inside a 5 min ctx in
+// NewStack that nobody had compared them against. The smaller bound wins in
+// silence, and the container last in line pays for the ones before it.
+func TestStandBringUpBoundCoversItsParts(t *testing.T) {
+	if len(stands) != standCount {
+		t.Fatalf("standCount is %d but the table lists %d stands. standBringUpTimeout is "+
+			"computed from standCount, so a stand added here without moving it gets its "+
+			"budget from whatever the others left.", standCount, len(stands))
+	}
+	if min := standCount * standReadyTimeout; standBringUpTimeout < min {
+		t.Fatalf("standBringUpTimeout is %v, under the %v its own contents can ask for "+
+			"(%d × %v). The stands come up in sequence, so the last one silently gets the "+
+			"remainder instead of its own budget, and fails as a parent-context deadline "+
+			"without naming itself.", standBringUpTimeout, min, standCount, standReadyTimeout)
+	}
+}
+
+// TestStandBringUpBoundIsTheOneApplied — the derived budget is the one NewStack
+// hands the containers.
+//
+// TestStandBringUpBoundCoversItsParts checks the arithmetic of a constant. It
+// says nothing about whether anyone uses it, and that gap is not theoretical:
+// NIM-406's original defect WAS a literal at the application site — a flat
+// `5 * time.Minute` ctx that no file mentioning the per-container budgets ever
+// referred to. Restoring that literal is a one-line edit that leaves every other
+// guard in this file green, which makes those guards decorative for the one
+// mistake they were written about.
+//
+// The declaring file is excluded so that the constant's own definition cannot
+// satisfy this, the same way TestStandStrategiesAreWiredIn excludes the home of
+// each constructor.
+func TestStandBringUpBoundIsTheOneApplied(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	applied := false
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			if filepath.Base(path) == "waitstrategy.go" {
+				continue
+			}
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok || len(call.Args) != 2 {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "WithTimeout" {
+					return true
+				}
+				if pkg, ok := sel.X.(*ast.Ident); !ok || pkg.Name != "context" {
+					return true
+				}
+				if arg, ok := call.Args[1].(*ast.Ident); ok && arg.Name == "standBringUpTimeout" {
+					applied = true
+				}
+				return true
+			})
+		}
+	}
+	if !applied {
+		t.Fatalf("no context.WithTimeout(_, standBringUpTimeout) outside waitstrategy.go. " +
+			"The stands' shared ctx is then some other number, and every budget derived " +
+			"from standReadyTimeout is bounded by a figure nothing here compares them " +
+			"against — the outer-bound trap NIM-406 is a case of, one level up.")
+	}
+}
+
+// TestNoBareWaitStrategyOption — the stands' deadlines are not silently replaced
+// by the library's 60 s.
+//
+// testcontainers.WithWaitStrategy(s...) is WithWaitStrategyAndDeadline(60s, s...)
+// verbatim (options.go), and WithAdditionalWaitStrategy is the same. Either one
+// re-wraps the strategy in a fresh wait.ForAll with a 60-second deadline, which
+// overrides the .WithDeadline(standReadyTimeout) the constructors set. So the
+// edit that undoes half of NIM-406 is deleting one word: postgres and redis go
+// back to an effective 60 s, TestStandBudgetIsSharedNotSummed keeps passing
+// because it inspects the CONSTRUCTOR rather than what the container received,
+// and nothing else notices either.
+//
+// stack.go warns about this in prose. NIM-406 is about prose not holding.
+func TestNoBareWaitStrategyOption(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	banned := map[string]bool{"WithWaitStrategy": true, "WithAdditionalWaitStrategy": true}
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			base := filepath.Base(path)
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || !banned[sel.Sel.Name] {
+					return true
+				}
+				t.Errorf("%s:%d: %s() takes the library's hard-coded 60 s deadline and wraps "+
+					"the strategy in it, discarding the standReadyTimeout (%v) the constructor "+
+					"set. Use %sAndDeadline(standReadyTimeout, …), or set ContainerRequest."+
+					"WaitingFor directly.",
+					base, fset.Position(call.Pos()).Line, sel.Sel.Name, standReadyTimeout, sel.Sel.Name)
+				return true
+			})
+		}
+	}
+}
+
+// The soul container's readiness (NIM-542).
+//
+// The note on `stands` above says the soul container is out of that table by
+// construction: nothing dials it from the host, so wait.ForExec on an in-container
+// signal is the property that fits it. That reasoning was right and incomplete —
+// it settled WHICH signal to read and never asked whether the reading was honest.
+// It was not: the check accepted exit code 1, and systemctl returns 1 both for
+// `degraded` (up, and fine here) and for a bus it could not reach (not up at
+// all). So the container was declared ready mid-boot, and the first thing to run
+// in it paid for that. Same family as NIM-406, one hop along: readiness that
+// reports ready before the thing is.
+
+// systemdStates — every state `systemctl is-system-running` can print, plus the
+// two non-states it prints instead when it cannot ask.
+//
+// Written out rather than reduced to one good and one bad case, because the bug
+// was a category error about this exact list: `degraded` and the bus failure are
+// indistinguishable by exit code and opposite in meaning, and a fix that merely
+// stopped accepting 1 would have traded a flaky gate for one that stalls 60 s per
+// container on any image with a failed unit.
+var systemdStates = []struct {
+	out   string
+	ready bool
+	note  string
+}{
+	{"running\n", true, "boot finished, every unit happy"},
+	{"degraded\n", true, "boot finished with failed units — the steady state of this image"},
+	{"initializing\n", false, "still before basic.target"},
+	{"starting\n", false, "still booting"},
+	{"maintenance\n", false, "emergency/rescue — no unit is going to start"},
+	{"stopping\n", false, "shutting down, not coming up"},
+	{"offline\n", false, "systemd is not the init of this container"},
+	{"unknown\n", false, "systemctl could not determine the state"},
+	{"Failed to connect to bus: No such file or directory\n", false,
+		"verbatim from the failing gate run: systemd is up but its bus is not, exit code 1"},
+	{"", false, "no output at all — an exec that produced nothing is not evidence of readiness"},
+}
+
+// TestSoulReadinessIsJudgedByWhatSystemdSaid — the predicate separates the two
+// states that mean "booted" from the eight that do not.
+func TestSoulReadinessIsJudgedByWhatSystemdSaid(t *testing.T) {
+	for _, s := range systemdStates {
+		if got := systemdFinishedBooting(s.out); got != s.ready {
+			t.Errorf("systemdFinishedBooting(%q) = %v, want %v — %s", s.out, got, s.ready, s.note)
+		}
+	}
+	// Multiplexed stdout+stderr arrive in one reader with no ordering guarantee,
+	// so the state can be preceded or followed by unrelated output. Rejecting a
+	// ready container over a stray warning costs a 60-second stall it never
+	// explains.
+	if !systemdFinishedBooting("Warning: something on stderr\nrunning\n") {
+		t.Error("a warning next to the state made a booted system read as not booted; " +
+			"the match has to be per line, not on the whole body")
+	}
+	if systemdFinishedBooting("the system is not running and never was\n") {
+		t.Error("a sentence merely CONTAINING the word matched; the line must equal the state, " +
+			"or any prose mentioning it reads as ready")
+	}
+}
+
+// TestSoulWaitStrategyConsultsTheState — the strategy the container receives
+// actually applies that predicate.
+//
+// Separate from the test above because the failure they catch is different, and
+// the second one is invisible to the first: deleting `.WithResponseMatcher(…)`
+// from the constructor leaves systemdFinishedBooting correct, tested and green,
+// and unused. testcontainers' default response matcher returns true for every
+// body (wait/exec.go, NewExecStrategy), so the exit code becomes the whole check
+// again and the bug is back with its guard still passing.
+func TestSoulWaitStrategyConsultsTheState(t *testing.T) {
+	exec, ok := soulWaitStrategy().(*wait.ExecStrategy)
+	if !ok {
+		t.Fatalf("soulWaitStrategy is %T, not a *wait.ExecStrategy — this guard reads its "+
+			"matchers directly and cannot see through another type", soulWaitStrategy())
+	}
+	if exec.ResponseMatcher == nil {
+		t.Fatal("the strategy has no response matcher, so readiness is decided by the exit " +
+			"code alone — which returns 1 for `degraded` and 1 for a bus it never reached")
+	}
+	for _, s := range systemdStates {
+		if got := exec.ResponseMatcher(strings.NewReader(s.out)); got != s.ready {
+			t.Errorf("the wired-in matcher read %q as ready=%v, want %v — %s", s.out, got, s.ready, s.note)
+		}
+	}
+	// The exit code is not the check, but it can still throw away a ready
+	// container: `degraded` exits 1, and this image is expected to be degraded.
+	if exec.ExitCodeMatcher == nil || !exec.ExitCodeMatcher(1) {
+		t.Error("exit code 1 is rejected before the output is ever read. That is `degraded` — " +
+			"the normal outcome for an image whose unit symlinks the Dockerfile deletes — and " +
+			"the container would wait out its whole budget and fail as a timeout")
+	}
+}
+
+// TestSoulWaitStrategyIsWiredIn — the soul container gets that strategy, and no
+// file quietly builds its own.
+//
+// Both halves are needed and neither implies the other. Dropping the call and
+// spelling wait.ForExec out again inside the ContainerRequest is a two-line edit
+// that leaves both tests above green while the container waits on the original
+// exit-code check; and a second wait.ForExec elsewhere in the package is a
+// readiness check nothing in this file has ever looked at.
+func TestSoulWaitStrategyIsWiredIn(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	const home = "waitstrategy.go"
+	calledOutsideHome := false
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			base := filepath.Base(path)
+			ast.Inspect(file, func(n ast.Node) bool {
+				call, ok := n.(*ast.CallExpr)
+				if !ok {
+					return true
+				}
+				if id, ok := call.Fun.(*ast.Ident); ok && id.Name == "soulWaitStrategy" && base != home {
+					calledOutsideHome = true
+				}
+				sel, ok := call.Fun.(*ast.SelectorExpr)
+				if !ok || sel.Sel.Name != "ForExec" || base == home {
+					return true
+				}
+				if pkg, ok := sel.X.(*ast.Ident); ok && pkg.Name == "wait" {
+					t.Errorf("%s:%d: builds its own wait.ForExec instead of calling soulWaitStrategy(). "+
+						"Readiness is then whatever this call spells out, and every check in this file "+
+						"is guarding a constructor that container does not use.",
+						base, fset.Position(call.Pos()).Line)
+				}
+				return true
+			})
+		}
+	}
+	if !calledOutsideHome {
+		t.Fatalf("nothing outside %s calls soulWaitStrategy. The soul container is then waiting "+
+			"on whatever its ContainerRequest spells out inline — which is where the exit-code "+
+			"check this replaced used to live.", home)
+	}
+}
+
+// TestStandStrategiesAreWiredIn — the strategies guarded above are the ones the
+// containers actually get.
+//
+// Everything else in this file tests the constructors. None of it notices if
+// startVault stops calling vaultWaitStrategy() and inlines wait.ForLog("Root
+// Token:") again — the constructor would still be correct, still be guarded, and
+// no longer be used. A guard that can be stepped around by deleting one call is
+// decorative.
+//
+// The names come from the table via runtime rather than being written out, so a
+// rename cannot leave this checking for a function nobody has; and the call site
+// must be in a file other than the one declaring it, which is the difference
+// between "wired into a container" and "wrapped by another helper here".
+func TestStandStrategiesAreWiredIn(t *testing.T) {
+	fset := token.NewFileSet()
+	pkgs, err := parser.ParseDir(fset, ".", func(fi os.FileInfo) bool {
+		return !strings.HasSuffix(fi.Name(), "_test.go")
+	}, 0)
+	if err != nil {
+		t.Fatalf("parse harness sources: %v", err)
+	}
+
+	// Build-tagged files parse fine — go/parser does not evaluate constraints —
+	// so stack.go is in here even though this test binary is built without
+	// e2e_live.
+	declaredIn := map[string]string{}
+	calledIn := map[string][]string{}
+	for _, pkg := range pkgs {
+		for path, file := range pkg.Files {
+			name := filepath.Base(path)
+			ast.Inspect(file, func(n ast.Node) bool {
+				switch node := n.(type) {
+				case *ast.FuncDecl:
+					if node.Recv == nil {
+						declaredIn[node.Name.Name] = name
+					}
+				case *ast.CallExpr:
+					if id, ok := node.Fun.(*ast.Ident); ok {
+						calledIn[id.Name] = append(calledIn[id.Name], name)
+					}
+				}
+				return true
+			})
+		}
+	}
+
+	for _, stand := range stands {
+		full := runtime.FuncForPC(reflect.ValueOf(stand.strategy).Pointer()).Name()
+		fn := full[strings.LastIndex(full, ".")+1:]
+		t.Run(stand.name, func(t *testing.T) {
+			home, ok := declaredIn[fn]
+			if !ok {
+				t.Fatalf("%s: no declaration of %s found in the package sources", stand.name, fn)
+			}
+			for _, site := range calledIn[fn] {
+				if site != home {
+					return
+				}
+			}
+			t.Fatalf("%s: nothing outside %s calls %s. The stand is then waiting on "+
+				"whatever its start function spells out inline, and every check in this "+
+				"file is guarding a function no container receives.", stand.name, home, fn)
+		})
+	}
+}

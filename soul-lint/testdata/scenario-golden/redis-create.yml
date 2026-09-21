@@ -1,0 +1,92 @@
+name: create
+description: Initial bootstrap of Redis HA cluster onto an existing roster
+
+# Типизированный вход сценария. Формат блока — docs/input.md.
+input:
+  redis_version:
+    type: string
+    pattern: "^[0-9]+\\.[0-9]+\\.[0-9]+$"
+
+  redis_users:
+    type: object
+    required: true
+    properties: {}
+    additional_properties:
+      type: object
+      properties:
+        acl: { type: string, required: true }
+        state: { type: string, enum: [on, off], required: true }
+
+  redis_config:
+    type: object
+    properties: {}
+    additional_properties: { type: string }
+
+  # Адреса хостов кластера. На create probe невозможен (redis ещё не запущен),
+  # топология приходит явным входом оператора и фиксируется в incarnation.state.
+  redis_hosts:
+    type: array
+    items: { type: string }
+
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    pattern: "^vault:.*"
+
+  role_distribution:
+    type: array
+    items:
+      type: object
+      properties:
+        index: { type: string }
+        role:  { type: string, enum: [primary, replica] }
+
+tasks:
+  # Ставим Redis на все хосты этого кластера
+  - include: install.yml
+
+  # Настраиваем репликацию на репликах
+  - include: replication.yml
+
+  # Создаём пользователей из input. На create probe невозможен (redis ещё не
+  # запущен) — declared-топология и адрес master берутся из soulprint.hosts и
+  # пробрасываются в destiny через apply: input: (orchestration.md §4.1,
+  # bootstrap-таргетинг). Шаг идёт широко по incarnation; destiny применяет
+  # users на declared-master по master_addr, на репликах — idempotent no-op
+  # (реплики подхватят через replication). Per-role step-таргетинг отдельным
+  # ключом не вводится (pattern пилота create/replication.yml).
+  - name: Ensure redis users on the cluster
+    apply:
+      destiny: redis
+      input:
+        action:      ensure_users
+        users:       "${ input.redis_users }"
+        master_addr: "${ soulprint.hosts.where(\"role == 'primary'\").first.network.primary_ip }"
+
+  # What the scenario writes into incarnation.state, one explicit step per field
+  # ([ADR-0084]). The capture runs where the value becomes known, not at the end
+  # of the run.
+  - name: Record the cluster topology and settings
+    module: core.state.set
+    params:
+      field: redis_version
+      value: "${ input.redis_version }"
+
+  - name: Record the ACL users
+    module: core.state.set
+    params:
+      field: redis_users
+      value: "${ input.redis_users }"
+
+  - name: Record the effective redis.conf overrides
+    module: core.state.set
+    params:
+      field: redis_config
+      value: "${ input.redis_config }"
+
+  - name: Record the cluster hosts
+    module: core.state.set
+    params:
+      field: redis_hosts
+      value: "${ input.redis_hosts }"

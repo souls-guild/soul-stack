@@ -1,0 +1,52 @@
+{{/*
+  systemd unit for redis-sentinel (sentinel mode). Unlike redis-server (whose unit is shipped
+  by the distro package), the sentinel daemon is managed by its OWN unit - the package doesn't always ship
+  redis-sentinel.service for the right config. A full unit, not a drop-in. Go text/template strict
+  (ADR-010). Context: .vars.sentinel_bin/cli_bin (/usr/bin for package installs, /usr/local/bin for
+  binary installs), conf_dir/sentinel_port, redis_user/redis_group, data_dir/log_dir/run_dir (RW paths
+  for hardening). This way one template serves both install branches.
+
+  Type=notify + supervised systemd (sentinel.conf).
+*/}}
+[Unit]
+Description=Redis Sentinel
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart={{ .vars.sentinel_bin }}/redis-sentinel {{ .vars.conf_dir }}/sentinel.conf --supervised systemd
+ExecStop={{ .vars.cli_bin }}/redis-cli -p {{ .vars.sentinel_port }} shutdown nosave
+Restart=always
+User={{ .vars.redis_user }}
+Group={{ .vars.redis_group }}
+RuntimeDirectory=redis
+RuntimeDirectoryMode=0755
+
+# systemd-hardening UNIFIED with the redis-server drop-in (NIM-97; guard —
+# TestSentinelUnit_HardeningParity). conf_dir in ReadWritePaths is REQUIRED:
+# redis-sentinel rewrites sentinel.conf at runtime (persisting topology —
+# master/replicas/epoch/known-sentinels). MDWE=yes/UMask=007/LimitNOFILE/AF_UNIX —
+# rationale in hardening.conf.tmpl (AF_UNIX is critical: Type=notify sd_notify goes
+# over a unix socket).
+NoNewPrivileges=yes
+ProtectSystem=strict
+ReadWritePaths={{ .vars.data_dir }} {{ .vars.run_dir }} {{ .vars.log_dir }} {{ .vars.conf_dir }}
+ProtectHome=yes
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectControlGroups=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+UMask=007
+CapabilityBoundingSet=
+LimitNOFILE=65535
+
+[Install]
+WantedBy=multi-user.target

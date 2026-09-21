@@ -1,0 +1,35 @@
+name: redis-exporter supports rediss target and isolated TLS web credentials
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  soulprint:
+    os: { arch: amd64 }
+  input:
+    instance_name: redis-tls
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    redis_password: "rediss-monitoring-password-32"
+    redis_user: monitoring
+    redis_addr: rediss://127.0.0.1:6379
+    dependency_unit: redis-server.service
+    listen: "127.0.0.1:9123"
+    basic_auth_username: prometheus
+    basic_auth_password_hash: "$2y$12$abcdefghijklmnopqrstuv"
+    tls_cert_file: /etc/redis-exporter/tls/server.crt
+    tls_key_file: /etc/redis-exporter/tls/server.key
+
+assert:
+  task_present:
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/redis_exporter-redis-tls.service
+        mode: "0644"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/default/redis_exporter-redis-tls
+        mode: "0600"
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/redis_exporter/redis-tls/web.yml
+        mode: "0600"
+    - module: core.service.running
+      params_subset: { name: redis_exporter-redis-tls, enabled: true }

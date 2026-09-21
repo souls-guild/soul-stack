@@ -1,0 +1,365 @@
+package config
+
+import (
+	"fmt"
+	"strings"
+
+	"github.com/goccy/go-yaml/ast"
+
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
+	"github.com/souls-guild/soul-stack/shared/diag"
+	"github.com/souls-guild/soul-stack/shared/plugin"
+)
+
+// validateModuleParams — the static-check phase of a task's `params:` against the
+// module's declared input (docs/soul/modules.md → "Core modules and manifest").
+//
+// This pass covers only modules the binary carries COMPILED IN: `shared/coremanifest`
+// is available at the moment a task is decoded, which is what lets the check run here.
+// A plugin's contract arrives with the caller instead, so it is checked by the post-pass
+// in module_params_plugin.go against whatever the caller could resolve — keeper's Sigil
+// grants, or the schema documents `soul-lint --modules <alias>=<path>` was handed.
+//
+// What the structural check over plugin.InputParamDef catches:
+//   - unknown param (`command` instead of `cmd` for core.exec) → unknown_param;
+//   - missing required param (`cmd`/`path`) → missing_required_param;
+//   - wrong literal type (string where a list was expected) → param_type_mismatch;
+//   - unknown module state (`core.exec.runn`) → module_state_unknown.
+//
+// What it does NOT catch (known limitation, see observations): enum, numeric bounds,
+// nested object/array schemas — absent from the plugin.InputParamDef DSL. Full
+// unification of config.InputSchema↔plugin.InputParamDef is deferred.
+//
+// moduleKV/paramsKV — AST nodes of the `module:`/`params:` keys (for line/col and
+// value checks). paramsKV may be nil (the `params:`-required validator already raised
+// its diagnostic above).
+func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	sn, ok := moduleKV.Value.(*ast.StringNode)
+	if !ok {
+		return nil // module: format already validated by validateModuleField.
+	}
+	ns, mod, state, ok := splitModuleAddress(sn.Value)
+	if !ok || ns != "core" {
+		// A reModuleAddress mismatch already yields module_format_invalid; there is no
+		// schema here for a custom namespace.
+		return nil
+	}
+
+	reg := coremanifest.Default()
+	def, ok := reg.State("core."+mod, state)
+	if !ok {
+		// Either module core.<mod> is absent from the registry, or the state is
+		// unknown. If the module itself is missing (new core, no manifest yet) — stay
+		// quiet (not an author error). If the module exists but the state doesn't — error.
+		if _, hasMod := reg.Lookup("core." + mod); !hasMod {
+			return nil
+		}
+		tok := sn.GetToken()
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "module_state_unknown",
+			Message:  fmt.Sprintf("core.%s has no state %q", mod, state),
+			Hint:     "see the module's schema states for valid states",
+			YAMLPath: pathPrefix + ".module",
+		})}
+	}
+
+	// params: absent — the required check must still run (no params means no required
+	// was passed). Position is taken from module:.
+	var paramsNode *ast.MappingNode
+	if paramsKV != nil {
+		if mm, isMap := paramsKV.Value.(*ast.MappingNode); isMap {
+			paramsNode = mm
+		}
+	}
+
+	var out []diag.Diagnostic
+	out = append(out, checkUnknownAndType(def, paramsNode, pathPrefix)...)
+	out = append(out, checkRequired(def, paramsNode, moduleKV, pathPrefix)...)
+	// Keyed on the BASE ADDRESS, through the same constant the synthesizer matches on.
+	// `name` is a param of nine core states; only this one takes a registration alias.
+	if "core."+mod+"."+state == moduleInstalledAddr {
+		out = append(out, checkInstallAliasParam(paramsNode, pathPrefix)...)
+	}
+	return out
+}
+
+// checkInstallAliasParam — `core.module.installed` takes a REGISTRATION ALIAS in
+// `params.name`: address level 1 alone, the name of the slot the artifact installs
+// into. The Soul rejects anything else before it does any work
+// (soul/internal/coremod/module: reAlias), so without this the author learns on a
+// host, from a `failed` event, that the value they wrote can never work anywhere.
+//
+// The predicate is [plugin.ValidAlias] rather than a local "has no dot" test: this is
+// the same rule the Soul applies and the same rule a registration is accepted under,
+// and a check that agrees with the runtime only on the case somebody remembered is
+// how the two ends drift (NIM-524 was exactly that drift, one level up).
+//
+// A FORM check only. Whether the alias is reserved, granted, or registered at all is
+// decided elsewhere — at registration on the Keeper, and by the allow-check on the
+// host — and none of it is knowable from the definition alone.
+func checkInstallAliasParam(paramsNode *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+	if paramsNode == nil {
+		return nil
+	}
+	for _, kv := range paramsNode.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil || tok.Value != "name" {
+			continue
+		}
+		var v string
+		switch kv.Value.(type) {
+		case *ast.StringNode, *ast.LiteralNode:
+			// Read through scalarText, the same accessor checkParamType uses: a block
+			// scalar carries a string the Soul will judge, so a check that only saw
+			// the plain form would be silent on a value it must reject.
+			//
+			// Read RAW. Trimming would make this looser than the runtime — `reAlias`
+			// runs on the untrimmed param — and a padded value is doubly lost: refused
+			// on the host, and no match for the takeover key either, so a second
+			// install is synthesized beside the operator's step.
+			v = scalarText(kv.Value)
+		case *ast.NullNode:
+			// `name:` with nothing after it. Nobody else offline speaks for this:
+			// checkParamType returns nil for a null and checkRequired counts the key
+			// as present, so without this arm the author learns on a host.
+			v = ""
+		default:
+			return nil // param_type_mismatch already spoke.
+		}
+		// A `${…}` cell resolves at render; what it renders to is not knowable here
+		// (ADR-010). The predicate is the takeover half's, verbatim.
+		if containsCELCell(v) || plugin.ValidAlias(v) {
+			return nil
+		}
+		hint := "the alias is " + plugin.AliasPattern + " - lowercase kebab-case, starting with a letter"
+		// Only when level 1 is itself a legal alias: `Redis.instance` or a padded
+		// `" redis.instance"` would otherwise be answered with `name: Redis` /
+		// `name:  redis`, and an author copying the hint earns a second error.
+		// A hint that teaches a value the runtime refuses is this ticket's own defect
+		// in prose form.
+		// `alias != v` is the dotted test, spelled out since NIM-829 made ModuleAlias
+		// answer for a bare name too: on a bare value the alias IS the value, and a
+		// hint saying "write `name: <the thing you already wrote>`" is no hint.
+		if alias, ok := ModuleAlias(v); ok && alias != v && plugin.ValidAlias(alias) {
+			// The documented trap: `modules[].name` is `<alias>.<module>` and the
+			// pre-NIM-377 spelling was `<namespace>.<name>`, so the two-level form is
+			// what an author reaches for. Name the alias they meant.
+			hint = fmt.Sprintf("the step installs an artifact into the slot %q, and level 2 addresses a module inside it - write `name: %s` (ADR-065(c), NIM-524)", alias, alias)
+		}
+		vtok := kv.Value.GetToken()
+		line, col := 0, 0
+		if vtok != nil {
+			line, col = vtok.Position.Line, vtok.Position.Column
+		}
+		return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "module_install_name_not_an_alias",
+			Message:  fmt.Sprintf("%s takes a registration alias in `name`, got %q", moduleInstalledAddr, v),
+			Hint:     hint,
+			YAMLPath: pathPrefix + ".params.name",
+		})}
+	}
+	return nil
+}
+
+// checkUnknownAndType — for each present param key: known? + type.
+func checkUnknownAndType(def plugin.StateDef, paramsNode *ast.MappingNode, pathPrefix string) []diag.Diagnostic {
+	if paramsNode == nil {
+		return nil
+	}
+	var out []diag.Diagnostic
+	for _, kv := range paramsNode.Values {
+		tok := kv.Key.GetToken()
+		if tok == nil {
+			continue
+		}
+		name := tok.Value
+		p, known := def.Input[name]
+		if !known {
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:     "unknown_param",
+				Message:  fmt.Sprintf("unknown param %q for this module state", name),
+				Hint:     "see the module's schema states.<state>.input for accepted params",
+				YAMLPath: pathPrefix + ".params." + name,
+			}))
+			continue
+		}
+		// ADR-0076 deprecation policy: the author's primary surface. A warning,
+		// never an error — the param is still honored for the whole declared
+		// window, and the point is to reach the author before removal, not to
+		// break the definition that already works.
+		if p.Deprecated != nil {
+			out = append(out, diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+				Code:     "deprecated_param",
+				Message:  p.Deprecated.Notice(name),
+				Hint:     "migrate before removed_in - after that release the param is rejected as unknown_param",
+				YAMLPath: pathPrefix + ".params." + name,
+			}))
+		}
+		out = append(out, checkParamType(p, name, kv.Value, pathPrefix)...)
+	}
+	return out
+}
+
+// checkParamType — structural check of a literal's type against the schema. A value
+// wrapped entirely in `${ … }` (a CEL expression) is skipped: its runtime type is
+// statically unknown (ADR-010, non-string CEL result).
+func checkParamType(p plugin.InputParamDef, name string, value ast.Node, pathPrefix string) []diag.Diagnostic {
+	if p.Type == "" {
+		return nil
+	}
+	if isCELWrapped(strings.TrimSpace(scalarText(value))) {
+		return nil
+	}
+	if _, isNull := value.(*ast.NullNode); isNull {
+		return nil // null = "not set", equivalent to a missing key.
+	}
+	if astMatchesType(string(p.Type), value) {
+		return nil
+	}
+	tok := value.GetToken()
+	line, col := 0, 0
+	if tok != nil {
+		line, col = tok.Position.Line, tok.Position.Column
+	}
+	return []diag.Diagnostic{diagAt(line, col, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:     "param_type_mismatch",
+		Message:  fmt.Sprintf("param %q must be %s", name, canonicalType(string(p.Type))),
+		YAMLPath: pathPrefix + ".params." + name,
+	})}
+}
+
+// checkRequired — every required param from the schema must be present in params.
+func checkRequired(def plugin.StateDef, paramsNode *ast.MappingNode, moduleKV *ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	present := map[string]bool{}
+	if paramsNode != nil {
+		for _, kv := range paramsNode.Values {
+			if tok := kv.Key.GetToken(); tok != nil {
+				present[tok.Value] = true
+			}
+		}
+	}
+	var out []diag.Diagnostic
+	// Deterministic diagnostic order: by param name.
+	for _, name := range sortedRequired(def) {
+		if present[name] {
+			continue
+		}
+		tok := moduleKV.Key.GetToken()
+		line, col := 0, 0
+		if tok != nil {
+			line, col = tok.Position.Line, tok.Position.Column
+		}
+		out = append(out, diagAt(line, col, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:     "missing_required_param",
+			Message:  fmt.Sprintf("required param %q is missing", name),
+			YAMLPath: pathPrefix + ".params." + name,
+		}))
+	}
+	return out
+}
+
+func sortedRequired(def plugin.StateDef) []string {
+	var req []string
+	for name, p := range def.Input {
+		if p.Required {
+			req = append(req, name)
+		}
+	}
+	// Small size (a few) — simple insertion sort, no import sort.
+	for i := 1; i < len(req); i++ {
+		for j := i; j > 0 && req[j-1] > req[j]; j-- {
+			req[j-1], req[j] = req[j], req[j-1]
+		}
+	}
+	return req
+}
+
+// astMatchesType — whether the AST node matches the declared type. Numeric synonyms
+// (int/integer/number) and list/array, map/object are normalized.
+func astMatchesType(declared string, value ast.Node) bool {
+	switch canonicalType(declared) {
+	case "string":
+		// A block scalar (folded `>` / literal `|`) is parsed by goccy as a
+		// LiteralNode, not a StringNode — but it's the same string. Without this
+		// branch, multi-line string params (typical core.cmd.shell with `cmd: >`)
+		// were falsely rejected as param_type_mismatch.
+		switch value.(type) {
+		case *ast.StringNode, *ast.LiteralNode:
+			return true
+		}
+		return false
+	case "int":
+		_, ok := value.(*ast.IntegerNode)
+		return ok
+	case "number":
+		// number accepts both int and float.
+		if _, ok := value.(*ast.IntegerNode); ok {
+			return true
+		}
+		_, ok := value.(*ast.FloatNode)
+		return ok
+	case "bool":
+		_, ok := value.(*ast.BoolNode)
+		return ok
+	case "list":
+		_, ok := value.(*ast.SequenceNode)
+		return ok
+	case "map":
+		_, ok := value.(*ast.MappingNode)
+		return ok
+	default:
+		// Unknown type in the schema is not our concern (the manifest validator
+		// catches input_type_unknown); skip the type check.
+		return true
+	}
+}
+
+// scalarText returns the text of a scalar node, "" for anything else. A block
+// scalar (folded `>` / literal `|`) is parsed by goccy as a LiteralNode wrapping a
+// StringNode, so testing only for StringNode misses it — and a `${ … }` expression
+// long enough to need folding is exactly where an author reaches for one. Missing
+// it made the CEL exemption depend on how the expression was WRAPPED, so the same
+// expression passed on one line and failed as param_type_mismatch on three.
+func scalarText(value ast.Node) string {
+	switch n := value.(type) {
+	case *ast.StringNode:
+		return n.Value
+	case *ast.LiteralNode:
+		if n.Value != nil {
+			return n.Value.Value
+		}
+	}
+	return ""
+}
+
+// canonicalType maps docs/input.md synonyms to the canonical plugin-DSL names.
+func canonicalType(t string) string {
+	switch t {
+	case "integer":
+		return "int"
+	case "boolean":
+		return "bool"
+	case "array":
+		return "list"
+	case "object":
+		return "map"
+	default:
+		return t
+	}
+}
+
+// splitModuleAddress splits `<ns>.<module>.<state>` into parts. Returns ok=false if
+// there are not exactly three segments.
+func splitModuleAddress(addr string) (ns, mod, state string, ok bool) {
+	parts := strings.Split(addr, ".")
+	if len(parts) != 3 {
+		return "", "", "", false
+	}
+	return parts[0], parts[1], parts[2], true
+}

@@ -1,0 +1,33 @@
+{{/*
+  systemd unit for redis-server for a binary install (install.method=binary). The
+  distro package ships its own redis-server.service; with an upstream tarball there
+  is none -> install.yml renders THIS full unit. Go text/template strict (ADR-010).
+  Context: .vars.bin_dir/conf_dir + redis_user/redis_group.
+
+  ★ File name is redis-server.service (NOT redis.service): this way the server.yml
+  hardening drop-in (redis-server.service.d/hardening.conf) lands on top of THIS
+  unit, and core.service restart works in BOTH install branches without branching.
+
+  Type=notify + supervised systemd (symmetric with the distro unit).
+
+  HARDENING is NOT duplicated here: ProtectSystem/ReadWritePaths/Capability... arrive
+  via a separate drop-in (hardening.conf.tmpl, server.yml) -- a single source of truth
+  shared by both branches. Here -- only the base launch + User/Group/RuntimeDirectory.
+*/}}
+[Unit]
+Description=Redis In-Memory Data Store
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=notify
+ExecStart={{ .vars.bin_dir }}/redis-server {{ .vars.conf_dir }}/redis.conf --supervised systemd
+ExecStop={{ .vars.bin_dir }}/redis-cli shutdown nosave
+Restart=always
+User={{ .vars.redis_user }}
+Group={{ .vars.redis_group }}
+RuntimeDirectory=redis
+RuntimeDirectoryMode=0755
+
+[Install]
+WantedBy=multi-user.target

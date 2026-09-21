@@ -1,0 +1,5 @@
+state_schema:
+  foo: { type: string }
+scenarios:
+  - create
+  - restart

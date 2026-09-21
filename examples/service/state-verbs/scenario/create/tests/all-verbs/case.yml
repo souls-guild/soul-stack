@@ -1,0 +1,75 @@
+# L0 for the whole verb family, from an empty state. The subject is the FOLD:
+# the harness applies the plan's capture steps with the production engine
+# ([stateop.Merge]), so this case fails if a verb means one thing in the trial
+# and another in the run.
+name: state-verbs create from an empty state (set/present/add/append/modify/remove/unset)
+
+fixtures:
+  hosts:
+    - sid: node-solo.example.com
+      covens: [state-verbs]
+      soulprint:
+        network: { primary_ip: 10.0.0.11 }
+        os: { arch: amd64, version: "12" }
+
+  # Empty base state: every field below is written by the run, not inherited.
+  state: {}
+
+  input:
+    cluster_id: alpha
+    first_member: m-one
+
+assert:
+  # One entry per verb: the fold below is only as good as the plan it folds, and
+  # a verb that stopped being rendered would otherwise just quietly stop writing.
+  task_present:
+    - module: core.state.set
+      params_subset: { field: cluster_id, value: alpha }
+    - module: core.state.set
+      params_subset: { field: bootstrap_token }
+    - module: core.state.present
+      params_subset: { field: topology, value: standalone }
+
+    # The element arrives as a MAP, not as the string the manifest declares
+    # `value:` to be - the CEL cell resolved. This is what pins the workaround.
+    - module: core.state.add
+      params_subset:
+        field: members
+        key: m-one
+        value: { name: m-one, role: primary }
+    - module: core.state.add
+      params_subset:
+        field: nodes
+        value: { name: node-b, role: replica, weight: 1 }
+    - module: core.state.modify
+      params_subset: { field: nodes, patch: { weight: 5 }, expect: one }
+    - module: core.state.remove
+      params_subset: { field: nodes }
+    - module: core.state.append
+      params_subset: { field: events, value: "cluster created" }
+    - module: core.state.unset
+      params_subset: { field: bootstrap_token }
+
+  state_after:
+    cluster_id: alpha
+
+    # present over an EMPTY field: the proposal wins.
+    topology: standalone
+
+    # add into a map: stored under the key, not appended anywhere.
+    members:
+      m-one: { name: m-one, role: primary }
+
+    # node-b survives with the weight `modify` patched in; node-c was added and
+    # then dropped by `remove`, so the list is the shape both verbs agreed on.
+    nodes:
+      - { name: node-b, role: replica, weight: 5 }
+
+    events:
+      - "cluster created"
+
+  # The other half of a subset check: naming no field says nothing about a
+  # removal, so the drop is asserted explicitly. `unset` drops the KEY - a field
+  # left present but null would be reported here rather than counted as gone.
+  state_absent:
+    - bootstrap_token

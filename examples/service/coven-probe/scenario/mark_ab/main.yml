@@ -1,0 +1,31 @@
+name: mark_ab
+description: >-
+  Targets TWO covens (on: [cluster-a, cluster-b]). Validation: apply_runs exactly
+  for 6 hosts (cluster-a + cluster-b), cluster-c is clean.
+
+tasks:
+  - name: Install redis on cluster-a and cluster-b
+    on: ["cluster-a", "cluster-b"]
+    module: core.pkg.installed
+    params:
+      name: redis
+
+  - name: Write coven marker on cluster-a and cluster-b
+    on: ["cluster-a", "cluster-b"]
+    module: core.file.present
+    params:
+      path: /tmp/coven-marker-ab.txt
+      mode: "0644"
+      content: "marked-by mark_ab target=cluster-a,cluster-b\n"
+
+  - name: Record the marker file this scenario writes
+    module: core.state.set
+    params:
+      field: marker_file
+      value: /tmp/coven-marker-ab.txt
+
+  - name: Record which coven scenario ran last
+    module: core.state.set
+    params:
+      field: last_target
+      value: "cluster-a+cluster-b"

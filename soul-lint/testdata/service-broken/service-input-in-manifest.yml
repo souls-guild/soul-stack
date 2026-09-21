@@ -1,0 +1,6 @@
+state_schema:
+  foo: { type: string }
+input:
+  user:
+    type: string
+    required: true

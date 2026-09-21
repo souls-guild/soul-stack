@@ -1,0 +1,19 @@
+name: verify_live
+description: >-
+  Operational scenario: a single consumer task for redis.command.run (PING).
+  Keeper synthesizes core.module.installed (install redis) BEFORE it from
+  the manifest's modules[] declaration (ADR-065(e)); Soul in THIS run
+  fetch->verify->atomic-rename->hot-registers the plugin and RIGHT THERE runs the
+  consumer (without restarting the daemon, ADR-065(d)).
+
+tasks:
+  # Consumer of redis.* -> triggers auto-synthesis of the install step before it.
+  # register+failed_when: task success means Redis answered PONG (Output.result,
+  # impl.go). changed=false by default (probe semantics of command-state).
+  - name: Ping redis through the redis plugin
+    module: redis.command.run
+    register: ping
+    failed_when: "register.self.result != 'PONG'"
+    params:
+      addr: "127.0.0.1:6379"
+      args: ["PING"]

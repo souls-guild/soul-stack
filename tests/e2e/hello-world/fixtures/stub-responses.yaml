@@ -1,0 +1,14 @@
+# Response script for the soul-stub for hello-world::create.
+#
+# scenario/create/main.yml contains a single core.file.present task, writing
+# /tmp/soul-stack-hello with the content of input.greeting.
+scenarios:
+  create:
+    apply_responses:
+      - task_name: "Write greeting file on every host of the incarnation"
+        run_result:
+          status: success
+          state_changes:
+            files:
+              - path: /tmp/soul-stack-hello
+                state: present

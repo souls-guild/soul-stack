@@ -1,0 +1,5 @@
+name: task-when-not-string
+tasks:
+  - when: 42
+    module: core.exec.run
+    params: {}

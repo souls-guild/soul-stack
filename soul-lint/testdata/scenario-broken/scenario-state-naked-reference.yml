@@ -1,0 +1,9 @@
+name: bad-state-naked
+description: bare state.<path> in scenario CEL (forgot incarnation. prefix)
+tasks:
+  # state.* в scenario не объявлен (migration-only) — каноника: incarnation.state.*
+  - name: read state in apply input
+    apply:
+      destiny: redis
+      input:
+        current: "${ state.redis_users }"

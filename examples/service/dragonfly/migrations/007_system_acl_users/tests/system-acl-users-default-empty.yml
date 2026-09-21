@@ -1,0 +1,29 @@
+name: system-acl-users-default-empty
+description: >
+  A v6 incarnation created before the service's own accounts were declared state -- there is
+  no system_acl_users field. The migration ADDS it as an empty array: the account set is a
+  service-vars fact and migration-CEL cannot read vars. df_users (operator intent) passes
+  through bit-for-bit, password-free as always.
+
+state_before:
+  df_version: "1.19.2"
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  replicas: 1
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+
+state_after:
+  df_version: "1.19.2"
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  system_acl_users: []
+  replicas: 1
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""

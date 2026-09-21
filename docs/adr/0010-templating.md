@@ -1,0 +1,223 @@
+# ADR-010. Templating engine: CEL for YAML expressions, Go text/template for files
+
+- **Context.** Soul Stack uses expressions in two fundamentally different contexts: predicates and interpolation in YAML (scenario, destiny, keeper.yml, migrations, essence pipeline) and rendering config files on the host. [ADR-003](0003-destiny-format.md#adr-003-destiny-format--yaml-with-a-typed-schema-cuejson-schema) reserved "a safe templating engine as a separate phase", but did not pick a specific engine. The Open Q "Templating engine for Destiny and scenarios" blocked the implementation of scenario and destiny simultaneously (recorded in [scenario/orchestration.md §8](../scenario/orchestration.md#8-open-questions-extensions-do-not-close-silently) — it raised the scope from one layer to both).
+- **Decision.** Two engines with a strict per-file boundary:
+  - **CEL** (google/cel-go) — all YAML expressions. Top-level expression keys (`where:`, `when:`, `changed_when:`, `failed_when:`, `until:`) — the whole string = CEL without a wrapper. Interpolation in string contexts — the `${ … }` marker.
+  - **Go text/template** + sprig (allowlist) — rendering files in `templates/<path>.tmpl`, executed by the new core module `core.file.rendered`.
+
+  The boundary is strict by file: `.yml` — CEL, `.tmpl` — text/template. One file — one engine. This is not an overlap but a sequential handoff of data through the `vars` of the `core.file.rendered` step.
+
+  The full normative specification (CEL functions, sprig allowlist, security model, processing phases, escaping, diagnostics) — [docs/templating.md](../templating.md).
+- **Rationale.** CEL was designed by Google as a **sandbox by design**: no syscalls, no files, no network, no arbitrary execution. This closes the class of risks that afflict Jinja2/Starlark when used as a configuration DSL. CEL type-checking provides the basis for static checking in `soul-lint` on top of schemas from `input:`/manifest/module output schemas. Go text/template is native to Go, has a small surface, and is battle-tested in k8s/helm. sprig via a **whitelist** (rather than a denylist) keeps the attack surface fixed even when sprig is upgraded. Separating "CEL for logic, text/template for files" rules out SSTI via data with three simultaneous barriers: strict-mode, an allowlist without `exec`, and an isolated render context.
+- **Consequences.**
+  - `soul-lint` gains static checking of expressions against schemas (CEL AST + types from `input:`/module output schemas/essence schemas). Unresolved types (`soulprint.*` until open Q #6) — `dyn`, the node loses static checking but does not fail.
+  - The template file extension changes from `.j2` to `.tmpl` (historical examples are rewritten as a separate pilot+batch).
+  - The `render(<path>)` function (jinja-style) is replaced by an explicit `core.file.rendered` step — a new core module (see [naming-rules.md](../naming-rules.md)), a parallel to `core.file.present` / `core.file.absent` with the same state-shape semantics.
+  - `soulprint.hosts.where(<predicate>)` / `soulprint.where(<predicate>)` — a **compile-time rewrite of a static literal predicate into a native CEL filter comprehension**, not runtime execution of a string and not a user CEL macro. The whole expression is parsed into an AST, calls `.where("<pred>")` on `soulprint.hosts`/`soulprint.where(...)` are rewritten into `soulprint.hosts.filter(<iter>, <pred>)` (predicate fields are qualified by the element field, the outer context stays as-is), and the tree is compiled once. Security/contract consequences: the predicate **must** be a string literal (dynamic concatenation is rejected at validation), `.where` is allowed only on `soulprint.hosts`/`soulprint.where(...)` (generic `.where` is forbidden), the first element is `[0]` (`.first` is not introduced). `soulprint.hosts` / `soulprint.where(...)` are **scenario-only** accessors (cross-host run topology): in the destiny pass, referencing them is an isolation error (topology reaches destiny only via `apply: input:`). **`soulprint.self.*`** (the stable self-fact of the target host) is **available in the destiny pass as well** (see Amendment 2026-06-18): the isolation boundary runs along self vs topology, not along "the entire soulprint". Normative — [templating.md §2.3/§7.1](../templating.md#23-registered-cel-functions-starting-minimum), [scenario/orchestration.md §4.1](../scenario/orchestration.md#41-soulprinthosts---list-of-run-hosts-scenario-only-accessor).
+  - Jinja filters (`| int`, `| length`) are rewritten into CEL functions (`int(…)`, `size(…)`); Jinja blocks (`{% for %}` / `{% if %}`) — only in `.tmpl` via text/template.
+  - The interpolation marker in YAML is `${ … }` (not `{{ … }}`), to visually separate CEL-in-YAML from text/template-in-files and rule out copy-paste errors between the engines.
+  - The Open Q "Templating engine for Destiny and scenarios" is closed; item 1 "The templating engine now blocks scenario as well" in [scenario/orchestration.md §8](../scenario/orchestration.md#8-open-questions-extensions-do-not-close-silently) is **removed** (the question is closed by this ADR).
+- **Trade-offs.**
+  - Two engines instead of one — two vocabularies for the scenario author. Mitigated by a clear "expression vs file render" boundary and a single rule "file extension → engine".
+  - CEL is less expressive than Jinja2: no loops, no assignments, no arbitrary functions. This is a **deliberate restriction** — security matters more. Loops over the run's host list are implemented via a task's `loop:` key + CEL expressions over `soulprint.hosts`, not via a template `for`.
+  - The `${ … }` marker instead of the familiar `{{ … }}` requires rewriting existing examples. The compensation is a visual separation of the engines at the syntax level.
+
+**Amendment 2026-06-18 (the destiny-pass CEL env additionally registers read-only `soulprint.self.*`).** Jointly with [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) (amendment of the same date). **The destiny-pass CEL env additionally registers read-only `soulprint.self.*`** (the stable `SoulprintFacts` layer [ADR-018](0018-soulprint-typed.md#adr-018-soulprint-typed-schema-mvp): `os.*` incl. `arch`, `kernel`/`cpu`/`memory`/`network`, the root `sid`/`hostname`, registry projections `covens`/`choirs`/`role`); `soulprint.hosts`/`soulprint.where` remain scenario-only (an isolation error in destiny). Symmetry with the `.tmpl` render_context [ADR-012(d)](0012-keeper-soul-grpc.md#adr-012-keepersoul-grpc-contract-one-eventstream-with-oneof-keeper-side-render-forward-compat-only-add) (`soulprint.self.<path>` in CEL `.yml` ≡ `.self.<path>` in `.tmpl`). `apply: input:` remains a valid channel (it is not removed). Isolation boundary: self-facts of the target host — yes; run topology — no. Rationale and full text — in [ADR-009 Amendment 2026-06-18](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation). Normative edits — [`docs/templating.md §3.2/§7`](../templating.md).
+
+**Amendment 2026-06-22 (CEL primitive `merge(m, m...) -> map`, SHALLOW last-wins).** Introduces the pure CEL function **`merge(map, map, ...) -> map`**: returns a new map into which the arguments are merged sequentially left to right by **top-level** key — **SHALLOW** (nested maps are NOT merged deeply: the right argument **wholly replaces** the value of a matching top-level key), **last-wins** (the right one overrides the left one). Pure (no I/O/secrets/crypto/eval-time state — symmetric with `glob()`/stdlib). A non-map argument → error. Registered in the **Keeper env (full, `shared/cel.New`)** and the **Soul flow-control env (`shared/cel.NewFlowControl`)**; in **migration CEL (`shared/cel.NewMigration`, [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) it is NOT registered** (a hermetic sandbox with minimal surface area — extending it requires a separate ADR, like `glob()`). **Motivation:** translating "simple typed operator input → detailed configuration" (a general primitive, not redis-specific): base CEL has no `map + map` operator, and the engine boundary does not allow a sprig merge in `.yml`. A slot for merging the author's preset config with the passthrough `input` map at render time. **Result type** — `map(dyn, dyn)` (like the other nodes until the type model [§2.4](../templating.md#24-type-model) is settled). **Security (BLOCKER, security):** `merge` preserves top-level keys without renaming, so a merged map with a vault value is masked by the output layer (`shared/audit.MaskSecrets`: by the sensitive name of the destination key and by the vault-ref marker) **identically** to a direct `${ vault(...) }` — the secret does not leak into logs/OTel/RunResult.
+
+An addition of the same date (additive, no breaking change): `merge()` **additionally accepts a single `list(map)` argument** — the overload **`merge(list(map)) -> map`** (a separate signature by argument type, not conflicting with the varargs `merge(m, m...)`: cel-go selects the overload by type). The semantics are the same SHALLOW last-wins, but flattening the list of maps **left to right** (a later list element beats an earlier one). An empty list → an empty map; a non-map element → a clear error. This closes the case where the collection comes from a CEL comprehension `.map(...)` (yielding a **list** of maps), but it needs to be passed into the template as a **map** "name→object" for **determinism of line order** (Go text/template range over a map sorts keys, over a list preserves the possibly non-deterministic Go-map iteration order; see the normative rule in [`docs/templating.md §6`](../templating.md#6-data-transfer-between-engines-pipeline)). Normative edits — [`docs/templating.md §2.3` (the CEL functions table), `§5`, `§6`](../templating.md).
+
+**Amendment 2026-06-23 (CEL primitive `default(x, y)` — value-or-default).** Introduces **`default(x, y)`**: if `x` is present/available — return `x`, otherwise `y`. It shortens the canonical has() guard ([`docs/input.md`](../input.md#reading-optional-without-default-input-canonical-has-guard)): `has(essence.tls_enable) ? essence.tls_enable : false` → `default(essence.tls_enable, false)`.
+
+- **Mechanism — a custom macro (compile-time AST rewrite), like `vault()`** (`parser.NewGlobalMacro`, `shared/cel/default.go` ≡ `vault.go`). CEL evaluates arguments **eagerly**, so `default(essence.tls_enable, false)`, were it an ordinary function, would fail with "no such key" on a missing key **before** the call. The macro sees the AST of the first argument **before** eval and rewrites it into the checked form **`has(x) ? x : y`** (for a select chain) — the same eagerness-bypass technique as `vault()`. This is a compile-time rewrite, not runtime execution of a string.
+- **Restriction: `x` must be a select chain or an identifier** (`essence.tls_enable`, `input.shards`, `a.b.c`, or a root `input`/`essence`/…). `has()` in CEL applies **only** to field access (select), therefore: a **Select** `x` expands into `has(x) ? x : y`; a **bare root identifier** (`input`/`essence`/…) is always present in the activation (`shared/cel.Vars.activation` binds roots as an empty map, not "absent") → expands into `x` itself (the fallback is unreachable — this is the correct degenerate semantics). An **expression** argument (`default(size(x), 0)`, `default(a+b, 0)`, index access `default(a['k'], 0)`) is **rejected by the macro with a clear compile error** (`*common.Error`): this is exactly the correct semantics — default over a variable/field, not over a computation (for the latter the author has the ternary).
+- **Pure** (no I/O/secrets/crypto/eval-time state — symmetric with `merge()`/`glob()`/stdlib). Env: registered in the **Keeper env (full, `shared/cel.New`)** and the **Soul flow-control env (`shared/cel.NewFlowControl`)**; in **migration CEL (`shared/cel.NewMigration`, [ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) it is NOT registered** (a hermetic sandbox with minimal surface area, symmetric with `merge()`/`glob()`).
+- **Security (masking invariant):** `default(x, y)` is syntactic sugar over `has(x) ? x : y`; it **does not rename the destination key**. Therefore a secret substituted via `default(essence.x, vault('…#password'))`, or a `default(...)` result assigned to a key with a sensitive name (`password`/`secret`/`token`/`tls_key`/…), is masked by the output layer (`shared/audit.MaskSecrets`) **identically** to a direct substitution; non-secret values pass through without over-masking. `default` neither widens nor narrows the masking boundary (symmetric with `merge()`).
+
+Normative edits — [`docs/templating.md §2.3` (the CEL functions table), `§7.1`](../templating.md), [`docs/input.md`](../input.md#reading-optional-without-default-input-canonical-has-guard).
+
+**Amendment 2026-06-20 (read-only `incarnation.state.<path>` in scenario-render CEL — Variant A).** Jointly with [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) (amendment of the same date). Scenario-render CEL gains a new sub-accessor **`incarnation.state.<path>`** — a **read-only snapshot** of `incarnation.state` at the moment the run's row lock is taken (`stateBefore` under `FOR UPDATE`). The canonical form is **with the `incarnation.` prefix**: a bare `state.<path>` in scenario/destiny is **forbidden** (`soul-lint` `state_naked_reference`, hint "use `incarnation.state.*`"), symmetric with the ban on a bare `soulprint.<path>` without `.self`. CEL **only reads** the snapshot — there is no path to mutate `incarnation.state` via CEL (mutation is exclusively via a state write, ⚠ **which since [ADR-0084](0084-explicit-state-capture.md) is a `core.state.<verb>` keeper-side task, not a post-barrier `state_changes` commit**). ⚠ **Retargeted by [ADR-0084](0084-explicit-state-capture.md): the snapshot is invariant WITHIN a Passage and is RE-READ at each Passage boundary, so a capture in Passage N is visible to `incarnation.state.*` from Passage N+1 on** (`keeper/internal/scenario/run.go`, the gather step). What follows was true while the only write was the end-of-run commit. **The snapshot is invariant across all Passages** of the staged render ([ADR-056](0056-staged-render-passage.md)): it is captured once, is identical on every Passage, and does **NOT** accumulate (unlike `register`, gathered by barriers). It is available in `params:`/`where:`/`apply: input:`/`vars:` and in the `state_changes` context; in push/L0-trial without state — the normal no-such-key (backward-compat). **Destiny isolation is NOT broken**: `incarnation.state` is NOT materialized in the destiny pass (destiny receives state only via `apply: input:`). **`state` remains bare+mutable exclusively in migration CEL** ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) — Variant A did not leak into the migration env (there only `state` is declared, `incarnation` is undeclared). Rationale and decisions — in [ADR-009 Amendment 2026-06-20](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation).
+
+**Amendment 2026-06-24 (masking invariant: 3 declarative layers + regex last-resort with an alarm; the `seal`/sealed-paths mechanism).** Secret masking on output ([§7.4 templating.md](../templating.md#74-secret-masking)) is formalized as **three declarative layers + a regex last-resort**, combined by OR (AUGMENT; any that fires → the value is masked):
+
+1. **schema** (declarative, primary) — a field is masked if its path is declared `secret: true` in the active source schema (`input_schema` / `state_schema` / manifest `InputParamDef.Secret`). On the read path (`GET /v1/incarnations/...` spec/state/history) Keeper materializes the service's secret schema (`state_schema` + the input schema of the `create` scenario) and masks by the declared paths (`audit.MaskSecretsWithSchema`), recursively through `properties`/`items` and **nested** `properties` under `additionalProperties`. **Limitation (TODO):** `secret: true` on the `additionalProperties` node ITSELF is **NOT covered** by the read-path schema layer (`SecretPathSet.IsSecret` does not substitute the `.*` segment) — it degrades to the vault+regex layers.
+2. **vault provenance** — a string value contains `vault:<mount>/` → masked (by content, not by name).
+3. **`seal` / sealed-paths** (render-time provenance/taint, the central new mechanism) — during the render phase Keeper marks a `params` cell's path **sealed** when its CEL expression reads a secret source (`input.<secret>` of the pass's active input schema / `vault(...)` / transitively sealed `vars`/`compute`). Detection is an **AST walk** of the expression (not a single-ident match): a ternary/concatenation `literal + ${ secret }` → whole-cell/whole-value taint. The set of sealed paths (in-memory, the current run, WITHOUT PG/proto — Soul does not log `params`) is delivered to the run's write points (`status_details`/`error_summary`/logs) for provenance-based masking (`audit.MaskSecretsSealed`). Names in code: `cel.SealSources`/`cel.Engine.DetectSealed`, `render.SealedSet`, `audit.MaskSecretsSealed`/`audit.SealHooks` (see [naming-rules.md → seal/sealed-paths](../naming-rules.md#domain-entities)).
+
+**`regex` (`sensitiveKeyRe` by key name) is NOT removed** — it is kept as the last line of defense (last-resort) for the sensitive-by-name class without a schema (internal `bootstrap_token`/`jwt`/credentials). When a secret is caught by **only** regex (schema/vault/seal were silent on this path) — the metric **`keeper_mask_regex_fallback_total`** is incremented + a warn log: a signal of a declarative gap (full removal of regex is a separate slice after the structured replacement of this class). CEL processes sealed values normally (the real value goes into `ApplyRequest.params`), the taint only marks the path for the output layer — the wire contract does not change (the forward-compat of ADR-012(d) is preserved). The metaphor is "sealed paths". Normative — [`docs/templating.md §7.4`](../templating.md#74-secret-masking).
+
+**Amendment 2026-06-24 (var → var within the `vars.*` layer — eager topological CEL-AST resolve).** Jointly with [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) (amendment of the same date, full text and rationale there). An interpolated `vars.*` value (file-level `vars.yml` or task-level `vars:`) **may** reference another variable **of the same layer** via `${ vars.<other> }`. Reference extraction is the new `shared/cel.Engine.VarRefs(raw) ([]string, error)`: a mirror of `DetectSealed` (`scanInterpolation` → per-block `parseNoMacro` → `PostOrderVisit` → `selectBaseField` where base=="vars"), an **AST walk, not regex** — `vars.x` in literal text outside `${ … }` or in a string CEL literal (`"vars.x"`) does not count as a reference. The layer is resolved eager-topologically (`keeper/internal/render.resolveVarLayer`, a mirror of `resolveCompute`): dependency graph → topological sort (Kahn) → resolve in order accumulating into `base.Vars`; **declaration order is irrelevant**. A cycle → `ErrVarCycle` with a trace, a non-existent reference → `ErrVarUnknownRef` (eager — even for an unused var), the index form `vars['k']` → `ErrVarIndexForm` (deterministically; the key name must be statically known from the AST, symmetric with the "string literal of the `.where` predicate" above). **Isolation is NOT weakened:** var→var is strictly within a layer (file↔task is forbidden — an inter-layer boundary), the restricted env is not extended (ONLY the `vars` key is added to the activation, `register.*`/`soulprint.hosts` in a var value is still an error). **migration CEL** ([ADR-019](0019-state-migration-dsl.md#adr-019-state_schema-migration-dsl)) **is not affected** — `vars` remains undeclared in the migration env. Normative — [`docs/destiny/vars.md`](../destiny/vars.md).
+
+**Amendment 2026-06-26 (Variant B: `render_context` root += CONDITIONAL `input`; seal S-1).** The root of the `core.file.rendered` text/template context ([§3.2 templating.md](../templating.md#32-render-context)) is extended from `{ vars, self, role, essence }` to **`{ vars, self, role, essence }` + CONDITIONALLY `input`**: the `input` key = the pass's resolved operator input (host-invariant) is added **only when the template actually reads `.input.*`**. The template reads `.input.<name>` **directly** — the redundant passthrough `params.vars` for each input field is removed (`.vars.*` remains the channel for DERIVED, CEL-computed values). **★Conditional injection (AST detection).** Before the per-host loop, Keeper reads the `.tmpl` once and determines a reference to the root `.input` via **parsing text/template + walking the parse AST** (`tmpl.Engine.UsesRootField` — not a string search: mentioning `.input` in the template body's literal text/comment does **not** count as a reference; a reference is only a `FieldNode` whose first identifier is `input` inside an action/range/if/with/pipeline argument/nested `define`). If there is a reference → the `input` key is put into `render_context` (`buildRenderContext`, source — `cel.Vars.Input`); otherwise it is **not put in**, and `render_context` stays `{ vars, self, role, essence }` as before Variant B (templates on `.vars` alone — e.g. redis — do not get a bloated context, their deep-equal fixtures are stable, and secrets do not land in `render_context.input`). Soul passes the root to the engine unchanged (proto does not change — it travels inside `RenderedTask.params.render_context`, A1). **★Security — seal S-1.** By removing the passthrough, we lose the seal provenance of secrets from raw params (previously `${ input.secret }` was physically in `params.vars` → `collectSealed`/`DetectSealed` caught it by AST). Provenance is restored **declaratively**: for the `core.file.rendered` step, **when `input` is actually injected** (the same AST gate), Keeper marks the sealed path `render_context.input.<name>` for each input field declared `secret: true` (or with `vault_scope`) in the pass's active schema (`render.sealRenderContextInput`, source — `secretInputNames`). The gate keeps the seal set in sync with the real composition of `render_context` — a vars-only template does not breed dead sealed paths onto a non-existent cell. Masking (`audit.MaskSecretsSealed`) hides `render_context.input.<secret>` in the observable channels (status_details/error/logs); the wire value is real. **Limitation (open, security):** in the **destiny pass** (`apply: destiny`) the destiny input schema in the pilot is **not propagated** into the seal source, so secret fields of the destiny input that reach `render_context.input` are **not sealed** by S-1 — for them the vault provenance (if the value is a `vault:`-ref) + the regex last-resort remain. The practical consequence of the pilot: conditional injection + the node-exporter destiny (without secrets in input) are safe; **a destiny template using `.input.<secret>` is NOT supported yet** (until a separate slice propagates the destiny input schema into the seal source). Closing it is a separate slice. Normative — [`docs/templating.md §3.2/§7.4`](../templating.md#32-render-context), [`docs/module/core/file`](../module/core/file/README.md).
+
+**Amendment 2026-08-03 (NIM-410, [ADR-0082](0082-service-vars.md)): the CEL root `essence.*` merges into `vars.*`, and `render_context` loses its `essence` key.** A service's default parameters move from `essence/` into `vars/` and are read as `vars.*` — one flat namespace whose rungs are, outermost first, the service's `vars/*.yaml`, the scenario's `vars:`, a `block:`'s and a task's. The `essence` root is removed from the CEL env (`shared/cel.Vars`), not renamed alongside it; the same values arrive under `vars`. Two knock-on effects belong to this ADR specifically:
+
+- **`core.file.rendered`'s `render_context` root becomes `{ vars, self, role }`** (§3.2), plus the CONDITIONAL `input` of the 2026-06-26 amendment. The `essence` key is dropped, and the service layer reaches a template through `.vars.*` like every other var. In practice this costs nothing at the seam: **no `.tmpl` in `examples/` reads `.essence`** — the key was assembled into every render context and consumed by none. The masking invariant, the seal mechanism and the `injectInput` gate are untouched.
+- **`default(x, y)`'s "select chain or identifier" restriction** is untouched — it constrains the AST NODE KIND, not the root's name, so the set of legal anchors is whatever the env declares. That set loses `essence` and keeps `input` / `vars` / `incarnation` / `register` / `soulprint` / `compute`. `default(essence.tls_enable, false)` becomes `default(vars.tls_enable, false)`, and the macro's own docstring examples move with it.
+
+`soul-lint`'s static checking of expressions against schemas (the "essence schemas" of the Consequences above) now types the same values as service vars. A new WARNING `vars_shadows_service_var` is to report a scenario or task var taking over a service var's name (NIM-416; not built yet) — the one thing a merged namespace can lose silently.
+
+## Amendment 2026-08-19 (NIM-698, [ADR-0083](0083-declared-secret-state-fields.md)): `generate_secret()` returns a request, not a value
+
+A new CEL function **`generate_secret({"length": 32, "charset": "alphanumeric"})`** returns an opaque **`SecretRequest`** marker rather than a string. No plaintext exists at render time, so none can leak through a register, a log line or a diff; the value is minted and written by a `core.state.<verb>` capture step ([ADR-0083](0083-declared-secret-state-fields.md) §4, [ADR-0084](0084-explicit-state-capture.md)). The argument is a **map** because CEL has no keyword arguments and no `=` token at all — `generate_secret(length=32)` does not lex. Registered as a plain function, **not** a macro — `vault()` needs one only to inject its hidden resolver argument, and a request carries nothing hidden. The seal detector deliberately does **not** key on it: a request holds no secret material, and sealing is whole-cell, so keying on it would mask a failed task's entire inventory out of its own diagnostics.
+
+`${ vault(...) }` itself survives, but **only outside the service's own namespace**: a path under `<mount>/<service>/` is refused — at load when it is written out, and on the evaluated path when it is assembled from variables — because that namespace is now derived rather than authored ([ADR-0083](0083-declared-secret-state-fields.md) §7).
+
+## Amendment 2026-09-01 (NIM-741, [One schema dialect](0086-one-schema-dialect.md)): all three key literals of the §7.4 masking walk are wrong after the move, and the failure is fail-OPEN
+
+`state_schema` stops being JSON Schema and is written in the same dialect as `input:` — a map
+`<field name>` → schema, no `type: object` / `properties:` wrapper at the root, and a snake_case
+vocabulary. That reaches the masking invariant of the 2026-06-24 amendment above, at **layer 1
+(schema)**, whose text says the read path recurses *"through `properties`/`items` and **nested**
+`properties` under `additionalProperties`"*. Against a `state_schema` in the new dialect all three
+literals are wrong at once:
+
+- **`properties` at the root is gone** — the root IS the field map, so nothing descends into it;
+- **`additionalProperties` is now spelled `additional_properties`**, so the map branch never matches;
+- **`items` survives**, but only inside a subtree the walk no longer reaches from the root.
+
+⚠ **The consequence is not an error, it is silence.** The walk is
+`keeper/internal/incarnation.CollectStateSchemaSecrets`, which hardcodes those three strings
+(`keeper/internal/incarnation/secret_schema.go:82`, `:89`, `:92`). Run unmigrated against a
+new-dialect schema it returns an **empty** `SecretPathSet` — which is byte-identical to the honest
+answer *"this service declares no secrets"*. Nothing distinguishes the two, and the read path is
+built to tolerate exactly this: `keeper/internal/api/handlers/incarnation_secret_schema.go:26-29`
+records that assembly is best-effort and a failure degrades to `audit.MaskSecrets` — vault
+provenance plus the regex last resort — with the GET deliberately not failing ("observability, not
+contract"). So a state field declared `secret: true` stops being masked on
+`GET /v1/incarnations/...` spec/state/history with **no error raised anywhere**, and what is left
+holding it is layer 2 (only if the value happens to carry a `vault:` marker) and the
+`sensitiveKeyRe` alarm fallback (only if the field's NAME happens to look sensitive). A value that
+is neither — the case layer 1 exists for — is printed in the clear.
+
+**A third reader keys on the same root `properties`, and it is worth recording that it fails the
+OTHER way.** `stateop.schemaFieldType` (`keeper/internal/stateop/ops.go:489-504`) also reads
+`schema["properties"]` at the root and returns `""` under the new dialect. Its blast radius is
+narrower than the walk's, in both directions: `collectionKind` (`:466-487`) consults the schema
+**only when the field is absent from state** — a value already present is authoritative by its Go
+type — but where it is consulted the answer is `collKindUnknown`, and `applyAddOp` then refuses the
+operation (`:428`, *"field %q is not a collection (map/list) and the type can't be inferred from
+schema"*). So the first `add` into a not-yet-materialized collection **fails closed and loudly**,
+with a message that blames the schema's content rather than its dialect. Loud is the tolerable
+half; the misleading message is not, and it is on NIM-742 either way. ⚠ **But the same reader has
+one caller that does fail OPEN, and it is `append`, not `add`.** `applyAppendOp`
+(`ops.go:343-357`) guards its `nil` branch with `if schemaFieldType(schema, op.Field) == "object"`
+(`:351`), and the function's own comment states that this is the lookup's whole purpose — it
+*"exists only to REJECT a map field — append has no meaning there, and silently coercing one would
+lose data"* (`:340-342`). Under the new dialect the guard never fires, `:354` executes
+`out[op.Field] = []any{op.Value}`, and a **list** is materialized where the schema declares a map:
+wrong shape in `incarnation.state`, no diagnostic. That is the only silent state-corruption path in
+the verb engine, and `ops.go:351` moves in the same commit as the walk. ⚠ Its declared twin is
+**not** a second live copy: `trial.collectionKind` / `trial.schemaFieldType`
+(`keeper/internal/trial/diff.go:28-58`, commented *"★ logic identical to stateop.*"*) are **dead
+code** — nothing in the `trial` package calls them. So the L0 harness neither reproduces this
+defect nor catches it; what it has is a stale duplicate that will read as coverage to the next
+person who greps for it.
+
+**Therefore the walk migrates in the same commit as the parser (NIM-742), not after it.** A
+declarative masking layer that fails open is worse than one that is absent, because
+`keeper_mask_regex_fallback_total` is the only signal and it fires only when regex *catches*
+something. The 2026-06-24 limitation carries over unchanged under the new spelling: `secret: true`
+on the `additional_properties` node **itself** is still not covered by the schema layer
+(`SecretPathSet.IsSecret` does not substitute the `.*` segment) and still degrades to vault+regex.
+The other two sources of layer 1 do **not** move — `input_schema` was already written in this
+dialect, and the manifest `InputParamDef.Secret` is a different code path (the spec half of
+`secretSchemaForIncarnation`, keyed `input.<name>`). ⚠ And the loss is **not** limited to
+`secret: true`: `isSecretNode` (`secret_schema.go:116-122`) matches `type: secret` as well, so the
+defensive entry [ADR-0083](0083-declared-secret-state-fields.md) §1 put in this walk on purpose —
+inert while nothing writes there, present so a value arriving by another route (an old snapshot, a
+migration, a bug) is masked rather than printed — is dropped by the same empty set.
+**Design only, not implemented** — NIM-742 (engine + this walk), NIM-743
+(`soul-lint list-secret-paths`), NIM-744 (`examples/` and the downstream redis service).
+
+## Amendment 2026-09-05 (NIM-811 / NIM-812): the §7.4 seal's two declared-but-absent sources are now populated
+
+The seal's transitive clause — *"`vars.<x>`/`compute.<x>` whose value is itself sealed"* — has been
+in this ADR and in `cel.SealSources` since 2026-06-24 and was implemented by **nothing**:
+`SealedVars`/`SealedCompute` were declared, read by `readsSecretSelect`, and never written outside
+tests. Both were always empty, so `readsSecretSelect` answered false for every `vars.*` and every
+`compute.*` read. The consequence was not a corner: hoisting `${ vault(…) }` or `${ input.<secret> }`
+into a `vars:` entry to remove a repetition — a refactor that looks purely cosmetic — silently
+removed the masking, and the rendered plaintext then reached `apply_run_plan.params`, a durable
+jsonb column served by a read API. The same value written **without** the hop was sealed and masked,
+which is why the gap survived: nothing about the two spellings looks different to an author.
+
+Both sources are now derived at render, before any params walk:
+
+- **`compute:`** — run-level, so once per run, over the RAW block in declaration order (entry *i*
+  may read *j<i*), mirroring `resolveCompute`'s own order.
+- **`vars:`** — from the **RAW** `vars:` text, never from the resolved value. Task vars resolve per
+  task **per host**, while the seal collection deliberately runs once per task because a cell's
+  provenance is host-invariant; deriving the mark from a resolved value would make the seal
+  host-variant and the walk it feeds host-invariant. All layers of the flat `vars.*` namespace
+  ([ADR-0082](0082-service-vars.md)) participate — a destiny's `vars.yml` locals and a task's own
+  `vars:`. The service layer below them is exempt **structurally**, not by omission: its engine
+  (`cel.NewServiceVars`) declares neither `input` nor `vault()`, so a service var has no secret
+  source to read. The lower layer is carried down whole, **shadowed names included** — because of
+  the ones it does not shadow: a `vars.yml` local no task var redeclares is still `vars.<x>` in that
+  task's params, and its mark exists nowhere else. For a shadowed name that over-seals, and it is
+  left rather than subtracted: a shadow cannot carry the lower value today (`resolveTaskVars` hands
+  the task layer only the SERVICE layer as its `lower`, so `pw: "${ vars.pw }-suffix"` derives from a
+  layer with no secret source, or is `ErrVarCycle` when `pw` is only a file var), and the seal should
+  not be what has to notice if that relaxes.
+
+And the **destiny pass** now carries the destiny's own `input:` schema onto the synthetic manifest
+`renderApplyDestiny` builds, which closes the "Limitation (open, security)" of the 2026-06-26
+amendment above (S-1) **and** the plain AST provenance beside it: `${ input.<secret> }` written
+inside a destiny is sealed like any other secret read, and a destiny template reading
+`.input.<secret>` is supported. The schema is the destiny's OWN and never the caller's — the
+caller's names do not exist inside a destiny ([ADR-009](0009-scenario-dsl.md) V2 isolation), and
+`apply: input:` is the only channel across, which is precisely why this was the shape the DSL
+steered a credential through.
+
+A **`loop:` bind** is the third hop and the one that changed the shape of the mechanism
+(NIM-822 / NIM-823). It could not be served the way the other two were: a loop variable is bound at
+the top level of the activation under a name the author chooses (`loop.as:`, default `item`), so it
+is not a fixed root and no fifth field on `SealSources` could name it. Its taint is decided from the
+RAW `items:` expression — once per task, matching a collection that is already iteration- and
+host-invariant — and marks the binding WHOLE, so `${ <as>.<field> }`, a nested read below it, and a
+bare `${ <as> }` are all sealed. `index_as:` is deliberately never marked: it binds a position, and
+sealing it would mask every `${ i }` in the run for nothing.
+
+### The list of seal sources was the defect, not its four entries
+
+Three hops found unsealed in one review is not three oversights. `SealSources` carried one map per
+fixed root and `readsSecretSelect` was a `switch` over root names with `return false` at the bottom,
+so **a kind of binding nobody had named was silently unsealed by default** — the worst default a
+taint system can hold, and the reason each hop had to be discovered by someone reading the code
+rather than by anything failing.
+
+The vocabulary is not actually open-ended: every name an expression can read enters scope in exactly
+one function, `Vars.activation`. So a seal source is an **address in the activation** — a whole
+binding, or one field under it — and `SealSources` is now that address set. A new kind of binding is
+representable with no change to the detector at all; the detector can no longer be the part that is
+out of date.
+
+What no shape removes is somebody having to *compute* that a binding holds a secret. That obligation
+is now in one table, `activationRoots`, classifying every fixed root as `sealedByField` or
+`neverSecret` **with its reason**, and a test compares that table against what `activation()` really
+builds, in both modes and both directions. Adding a root without classifying it fails; deleting a
+root without dropping its row fails. That is the part that makes "why won't there be a fourth hop"
+answerable at all — not the three entries added here.
+
+Two consequences worth recording, both found by the reshape rather than reported:
+
+- a bare **whole-binding read** (`${ item }`) reaches no `Select` node, so the detector visited
+  nothing for it; the `Ident` case exists now.
+- `incarnation.state` is a **fourth open hop** ([NIM-826]), and the table is what found it. The row
+  was first written `neverSecret` on the ground that a declared state secret rides as a `vault:`
+  reference — true of `type: secret`, false of the orthogonal `secret: true` on a state property,
+  which means the opposite: *this value lives in state, mask it on the way out*
+  ([ADR-0083](0083-declared-secret-state-fields.md) §1, both markers stay). So
+  `${ incarnation.state.<field> }` reads plaintext and is unsealed. The row now says
+  `unsealedGap` and cites the ticket.
+
+  This is the mechanism behaving as intended rather than an embarrassment to it: the previous shape
+  had nowhere such a claim would ever be written down, so it could never be found wrong. A
+  completeness table earns its keep only if a reason that does not hold can be read and refuted, and
+  a third classification exists precisely so a gap cannot be dressed as a decision.
+
+**This closes the producer end only.** Masking is a contract between the seal that marks a path and
+the masker that honours it; a mark the masker drops is worth as much as no mark. Impl — NIM-811,
+NIM-812, NIM-822, NIM-823; the consumer end is NIM-810.

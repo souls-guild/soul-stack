@@ -1,0 +1,154 @@
+package api
+
+// HUMA-NATIVE wire-DTO of the ORACLE domain (vigils + decrees; handler-native T5d-2c).
+// Reply/output Body of huma oracle operations — native Go structs in package api, no legacy generator.
+// Handler (handlers/oracle.go) returns domain results with flat fields;
+// register-func (huma_oracle.go) projects them directly INTO THESE types (newVigilView /
+// newDecreeView / newVigilListReply / newDecreeListReply) — no more legacy-generator → native
+// converters.
+//
+// INVARIANTS (★ wire byte-exact + ★ schema name is stable): the EXPORTED-struct name =
+// the contract (VigilView / DecreeView / VigilListReply / DecreeListReply) → huma
+// DefaultSchemaNamer yields the same schema; the shape (json tags/omitempty/json.RawMessage
+// nil→`null`/time.Time wire/FIELD-ORDER under oapi byte-order) is byte-for-byte the same —
+// golden byte-exact pins it in huma_oracle_reply_test.go. params/action_input —
+// json.RawMessage byte-passthrough (ADR-051 category D).
+//
+// ENVELOPE. VigilListReply/DecreeListReply are NOT a generic alias PagedResponse[X] but
+// concrete reply types; the Items element field → native ([]VigilView/[]DecreeView),
+// the items/offset/limit/total shape 1:1.
+
+// OUTPUT NAME-PATTERN (documentation-only, NOT runtime validation): huma does NOT validate
+// the response body (empirically 200, not 500). name ← oracle.IDPattern (kebab, Vigil/Decree);
+// on_beacon — FK to a Vigil name by the same oracle.IDPattern; incarnation_name ←
+// oracle.IncarnationPattern (same const as INPUT decree.create incarnation_name). Format
+// for client codegen; the pattern does not affect json.Marshal (golden byte-exact intact). Output types
+// are not shared with the request Body (create — separate *Request) → no input-422 risk. coven is NOT
+// tagged: outside this batch's coven scope (Soul*/Incarnation* View), a separate domain.
+
+import (
+	"encoding/json"
+	"time"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+)
+
+// === top-level reply-DTO (shape 1:1 with the former legacy generator) ===
+
+// VigilView — native projection of a vigils registry record. subject — the nested
+// four-dimension object ([Subject], NIM-280); created_by_aid — *string WITH omitempty
+// (nil → key omitted); params — json.RawMessage WITHOUT omitempty (nil → `null`);
+// created_at/updated_at — nanosecond time-wire.
+type VigilView struct {
+	Check        string    `json:"check"`
+	CreatedAt    time.Time `json:"created_at"`
+	CreatedByAID *string   `json:"created_by_aid,omitempty"`
+	Enabled      bool      `json:"enabled"`
+	Interval     string    `json:"interval"`
+	// Label — the display caption (ADR-0085), mutable via
+	// PUT /v1/vigils/{id}/label. Absent → the consumer shows `name`.
+	Label     *string         `json:"label,omitempty"`
+	ID        string          `json:"id" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.IDPattern
+	Params    json.RawMessage `json:"params"`
+	Subject   Subject         `json:"subject"`
+	UpdatedAt time.Time       `json:"updated_at"`
+}
+
+// DecreeView — native projection of a decrees registry record. subject — WHO may fire the
+// rule (the nested four-dimension object, [Subject]); incarnation_name — the opposite end,
+// WHAT the reaction acts on. created_by_aid/where — WITH omitempty (nil → key omitted);
+// action_input — json.RawMessage WITHOUT omitempty (nil → `null`); created_at/updated_at —
+// nanosecond time-wire.
+type DecreeView struct {
+	ActionInput     json.RawMessage `json:"action_input"`
+	ActionScenario  string          `json:"action_scenario"`
+	Cooldown        string          `json:"cooldown"`
+	CreatedAt       time.Time       `json:"created_at"`
+	CreatedByAID    *string         `json:"created_by_aid,omitempty"`
+	Enabled         bool            `json:"enabled"`
+	IncarnationName string          `json:"incarnation_name" pattern:"^[a-z0-9][a-z0-9-]{0,62}$"` // ← oracle.IncarnationPattern
+	// Label — the display caption (ADR-0085), mutable via
+	// PUT /v1/decrees/{id}/label. Absent → the consumer shows `name`.
+	Label     *string   `json:"label,omitempty"`
+	ID        string    `json:"id" pattern:"^[a-z0-9-]{1,63}$"`        // ← oracle.IDPattern
+	OnBeacon  string    `json:"on_beacon" pattern:"^[a-z0-9-]{1,63}$"` // ← oracle.IDPattern (FK to a Vigil name)
+	Subject   Subject   `json:"subject"`
+	UpdatedAt time.Time `json:"updated_at"`
+	Where     *string   `json:"where,omitempty"`
+}
+
+// === envelope reply-DTO (element field → native, shape 1:1) ===
+
+// VigilListReply — native 200-envelope GET /v1/vigils (shape 1:1 with the former VigilListReply).
+// items — []VigilView (native element); offset/limit/total — int32.
+type VigilListReply struct {
+	Items  []VigilView `json:"items"`
+	Limit  int32       `json:"limit"`
+	Offset int32       `json:"offset"`
+	Total  int32       `json:"total"`
+}
+
+// DecreeListReply — native 200-envelope GET /v1/decrees (shape 1:1 with the former DecreeListReply).
+type DecreeListReply struct {
+	Items  []DecreeView `json:"items"`
+	Limit  int32        `json:"limit"`
+	Offset int32        `json:"offset"`
+	Total  int32        `json:"total"`
+}
+
+// === projection of domain handler results → native wire-DTO ===
+
+// newVigilView projects the domain handlers.VigilView (flat fields) into a native VigilView.
+func newVigilView(v handlers.VigilView) VigilView {
+	return VigilView{
+		Check:        v.Check,
+		CreatedAt:    v.CreatedAt,
+		CreatedByAID: v.CreatedByAID,
+		Enabled:      v.Enabled,
+		Interval:     v.Interval,
+		Label:        v.Label,
+		ID:           v.ID,
+		Params:       v.Params,
+		Subject:      newSubject(v.Subject),
+		UpdatedAt:    v.UpdatedAt,
+	}
+}
+
+// newDecreeView projects the domain handlers.DecreeView into a native DecreeView.
+func newDecreeView(d handlers.DecreeView) DecreeView {
+	return DecreeView{
+		ActionInput:     d.ActionInput,
+		ActionScenario:  d.ActionScenario,
+		Cooldown:        d.Cooldown,
+		CreatedAt:       d.CreatedAt,
+		CreatedByAID:    d.CreatedByAID,
+		Enabled:         d.Enabled,
+		IncarnationName: d.IncarnationName,
+		Label:           d.Label,
+		ID:              d.ID,
+		OnBeacon:        d.OnBeacon,
+		Subject:         newSubject(d.Subject),
+		UpdatedAt:       d.UpdatedAt,
+		Where:           d.Where,
+	}
+}
+
+// newVigilListReply projects the domain handlers.VigilListPage into a native envelope
+// VigilListReply (items non-nil [], offset/limit/total int32).
+func newVigilListReply(p handlers.VigilListPage) VigilListReply {
+	items := make([]VigilView, 0, len(p.Items))
+	for _, v := range p.Items {
+		items = append(items, newVigilView(v))
+	}
+	return VigilListReply{Items: items, Limit: int32(p.Limit), Offset: int32(p.Offset), Total: int32(p.Total)}
+}
+
+// newDecreeListReply projects the domain handlers.DecreeListPage into a native envelope
+// DecreeListReply.
+func newDecreeListReply(p handlers.DecreeListPage) DecreeListReply {
+	items := make([]DecreeView, 0, len(p.Items))
+	for _, d := range p.Items {
+		items = append(items, newDecreeView(d))
+	}
+	return DecreeListReply{Items: items, Limit: int32(p.Limit), Offset: int32(p.Offset), Total: int32(p.Total)}
+}

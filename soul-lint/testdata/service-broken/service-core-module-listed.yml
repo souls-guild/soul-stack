@@ -1,0 +1,3 @@
+state_schema: {}
+modules:
+  - { name: core.haproxy, ref: v1 }

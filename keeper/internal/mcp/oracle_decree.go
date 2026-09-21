@@ -1,0 +1,282 @@
+package mcp
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"log/slog"
+	"time"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/oracle"
+	"github.com/souls-guild/soul-stack/shared/audit"
+)
+
+// callOracleDecreeSetLabel — keeper.oracle.decree.label-set, the MCP mirror of
+// PUT /v1/decrees/{id}/label (ADR-0085). Cooldown state and the circuit
+// breaker are keyed on the name and do not move.
+func (h *Handler) callOracleDecreeSetLabel(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	return callLabelSet(h, ctx, claims, req, args, labelSetSpec[decreeView]{
+		tool:          "keeper.oracle.decree.label-set",
+		resource:      "decree",
+		configured:    h.deps.OracleSvc != nil,
+		notConfigured: oracleNotConfigured,
+		validID:       oracle.ValidID,
+		idPattern:     oracle.IDPattern,
+		set: func(ctx context.Context, id string, label *string) (decreeView, *string, error) {
+			d, previous, err := h.deps.OracleSvc.SetDecreeLabel(ctx, id, label)
+			if err != nil {
+				return decreeView{}, nil, err
+			}
+			return toDecreeView(d), previous, nil
+		},
+		isNotFound: func(err error) bool { return errors.Is(err, oracle.ErrDecreeNotFound) },
+		notFoundf:  func(id string) string { return "decree " + id + " not found" },
+		failMsg:    "set decree label failed",
+		event:      audit.EventDecreeLabelChanged,
+	})
+}
+
+// decreeView — output projection of a Decree for oracle-tools (schemaDecreeView).
+// 1:1 with REST decreeResponse / [oracle.Decree].
+type decreeView struct {
+	ID string `json:"id"`
+	// Label — display caption (ADR-0085); absent → a consumer shows `name`.
+	Label           *string         `json:"label,omitempty"`
+	OnBeacon        string          `json:"on_beacon"`
+	WhereCEL        *string         `json:"where,omitempty"`
+	Subject         subjectPayload  `json:"subject"`
+	IncarnationName string          `json:"incarnation_name"`
+	ActionScenario  string          `json:"action_scenario"`
+	ActionInput     json.RawMessage `json:"action_input"`
+	Cooldown        string          `json:"cooldown"`
+	Enabled         bool            `json:"enabled"`
+	CreatedByAID    *string         `json:"created_by_aid,omitempty"`
+	CreatedAt       string          `json:"created_at"`
+	UpdatedAt       string          `json:"updated_at"`
+}
+
+func toDecreeView(d *oracle.Decree) decreeView {
+	input := d.ActionInput
+	if len(input) == 0 {
+		input = json.RawMessage("{}")
+	}
+	return decreeView{
+		ID:              d.ID,
+		Label:           d.Label,
+		OnBeacon:        d.OnBeacon,
+		WhereCEL:        d.WhereCEL,
+		Subject:         toSubjectPayload(d.Subject()),
+		IncarnationName: d.IncarnationName,
+		ActionScenario:  d.ActionScenario,
+		ActionInput:     input,
+		Cooldown:        d.Cooldown,
+		Enabled:         d.Enabled,
+		CreatedByAID:    d.CreatedByAID,
+		CreatedAt:       d.CreatedAt.UTC().Format(time.RFC3339),
+		UpdatedAt:       d.UpdatedAt.UTC().Format(time.RFC3339),
+	}
+}
+
+// decreeCreateArgs — arguments for keeper.oracle.decree.create. subject carries
+// exactly one of the four dimensions ([subjectPayload]); where is an optional CEL
+// predicate (compile-checked in Service); enabled is optional (omitted → true).
+type decreeCreateArgs struct {
+	ID string `json:"id"`
+	// Label — optional display caption (ADR-0085), free text; changed afterwards
+	// by keeper.oracle.decree.label-set.
+	Label           *string         `json:"label"`
+	OnBeacon        string          `json:"on_beacon"`
+	WhereCEL        *string         `json:"where"`
+	Subject         subjectPayload  `json:"subject"`
+	IncarnationName string          `json:"incarnation_name"`
+	ActionScenario  string          `json:"action_scenario"`
+	ActionInput     json.RawMessage `json:"action_input"`
+	Cooldown        string          `json:"cooldown"`
+	Enabled         *bool           `json:"enabled"`
+}
+
+// callOracleDecreeCreate — mutating-tool keeper.oracle.decree.create.
+// Transport over [oracle.Service.CreateDecree]: all validation (name /
+// on_beacon / incarnation_name / action_scenario / XOR-subject / where-CEL
+// compile-check / cooldown) lives in Service; the tool maps sentinels to
+// MCP codes and writes the decree.created audit event.
+//
+// RBAC — decree.create has no selector (rbac.md §Oracle: NoSelector).
+func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.oracle.decree.create"
+
+	if h.deps.OracleSvc == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, oracleNotConfigured)
+	}
+
+	// RBAC BEFORE unmarshal/validation (least-disclosure): an unauthorized
+	// operator gets no validation feedback about the body. nil context —
+	// the permission doesn't depend on the request body.
+	if err := h.deps.RBAC.Check(claims.Subject, "decree", "create", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission decree.create")
+	}
+
+	var a decreeCreateArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
+		}
+	}
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
+	}
+
+	enabled := true
+	if a.Enabled != nil {
+		enabled = *a.Enabled
+	}
+
+	callerAID := claims.Subject
+	d, err := h.deps.OracleSvc.CreateDecree(ctx, oracle.CreateDecreeInput{
+		ID:              a.ID,
+		Label:           a.Label,
+		OnBeacon:        a.OnBeacon,
+		WhereCEL:        a.WhereCEL,
+		Subject:         a.Subject.selector(),
+		IncarnationName: a.IncarnationName,
+		ActionScenario:  a.ActionScenario,
+		ActionInput:     a.ActionInput,
+		Cooldown:        a.Cooldown,
+		Enabled:         enabled,
+		CallerAID:       &callerAID,
+	})
+	if err != nil {
+		code, detail := mapOracleErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: oracle.decree.create failed",
+				slog.String("id", a.ID), slog.String("by_aid", callerAID), slog.Any("error", err))
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
+	// Audit mirrors the REST handler: payload {name, on_beacon, incarnation,
+	// action_scenario, subject, created_by_aid}. where-CEL and action_input
+	// are NOT put in the payload (action_input may carry a vault-ref in transit).
+	h.writeAudit(audit.EventDecreeCreated, callerAID, map[string]any{
+		"id":              d.ID,
+		"label":           d.Label,
+		"on_beacon":       d.OnBeacon,
+		"incarnation":     d.IncarnationName,
+		"action_scenario": d.ActionScenario,
+		"subject":         d.Subject().String(),
+		"created_by_aid":  callerAID,
+	})
+
+	return h.toolResult(req.ID, toDecreeView(d))
+}
+
+// decreeListOutput — output of keeper.oracle.decree.list: registry of
+// Decrees under `decrees` (parity with REST GET /v1/decrees items).
+type decreeListOutput struct {
+	Decrees []decreeView `json:"decrees"`
+	Total   int          `json:"total"`
+}
+
+// decreeListArgs — arguments for keeper.oracle.decree.list (optional offset/limit).
+type decreeListArgs struct {
+	Offset *int `json:"offset"`
+	Limit  *int `json:"limit"`
+}
+
+// callOracleDecreeList — read-tool keeper.oracle.decree.list (read-only, not
+// audited). RBAC — decree.list has no selector.
+func (h *Handler) callOracleDecreeList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.oracle.decree.list"
+
+	if h.deps.OracleSvc == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, oracleNotConfigured)
+	}
+
+	if err := h.deps.RBAC.Check(claims.Subject, "decree", "list", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission decree.list")
+	}
+
+	var a decreeListArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
+		}
+	}
+	offset, limit := 0, listDefaultLimit
+	if a.Offset != nil {
+		offset = *a.Offset
+	}
+	if a.Limit != nil {
+		limit = *a.Limit
+	}
+	// Upper bound on limit (security-fix, parity with omen.list): an
+	// unbounded limit is a DoS vector (one request could materialize the
+	// entire registry).
+	if offset < 0 || limit < 1 || limit > listMaxLimit {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"offset must be >= 0 and limit must be between 1 and 1000")
+	}
+
+	decrees, total, err := h.deps.OracleSvc.ListDecrees(ctx, offset, limit)
+	if err != nil {
+		h.deps.Logger.Error("mcp: oracle.decree.list failed",
+			slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, "internal error")
+	}
+
+	out := decreeListOutput{Decrees: make([]decreeView, 0, len(decrees)), Total: total}
+	for _, d := range decrees {
+		out.Decrees = append(out.Decrees, toDecreeView(d))
+	}
+	return h.toolResult(req.ID, out)
+}
+
+// decreeDeleteArgs — arguments for keeper.oracle.decree.delete.
+type decreeDeleteArgs struct {
+	ID string `json:"id"`
+}
+
+// callOracleDecreeDelete — mutating-tool keeper.oracle.decree.delete.
+// Cascades cleanup of cooldown-state (oracle_fires). RBAC — decree.delete
+// has no selector.
+func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.oracle.decree.delete"
+
+	if h.deps.OracleSvc == nil {
+		return h.toolError(req.ID, toolName, mcpCodeInternalError, oracleNotConfigured)
+	}
+
+	if err := h.deps.RBAC.Check(claims.Subject, "decree", "delete", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission decree.delete")
+	}
+
+	var a decreeDeleteArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest, "invalid arguments: "+err.Error())
+		}
+	}
+	if a.ID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'id' is required")
+	}
+
+	if err := h.deps.OracleSvc.DeleteDecree(ctx, a.ID); err != nil {
+		code, detail := mapOracleErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: oracle.decree.delete failed",
+				slog.String("id", a.ID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
+	h.writeAudit(audit.EventDecreeDeleted, claims.Subject, map[string]any{
+		"id": a.ID,
+	})
+
+	// REST returns 204 No Content; MCP equivalent is an empty output object.
+	return h.toolResult(req.ID, struct{}{})
+}

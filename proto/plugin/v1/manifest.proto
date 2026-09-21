@@ -1,0 +1,135 @@
+syntax = "proto3";
+
+package soulstack.plugin.v1;
+
+import "google/protobuf/struct.proto";
+
+import "v1/common.proto";
+
+option go_package = "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1;pluginv1";
+
+// ⚠ THIS FILE IS A HAND-SYNCED DEAD DOCUMENT (NIM-772).
+//
+// `Manifest` and its `*Spec` sub-messages have zero non-test Go references: nothing
+// parses them, nothing emits them, and no wire path carries them. The live contract is
+// the schema document in `sdk/schema` (re-exported at `shared/plugin/document.go`,
+// enforced in `sdk/schema/validate.go`), generated from Go `module.Def` values since
+// NIM-377 — there is no `manifest.yaml` to parse any more. Adding or removing a kind is
+// an `sdk/` change; the contribution here is only that a retired number stays
+// `reserved` (ADR-020(c) — a number is never reused).
+//
+// It is kept, and kept honest, because plugin authors pull `proto/plugin/` as its own Go
+// module (ADR-011) and read it as a contract. Recorded in
+// docs/naming-rules.md → Plugin manifest.
+//
+// Manifest — the root document a plugin used to ship as `manifest.yaml` (ADR-020(a, e),
+// docs/keeper/plugins.md → Manifest).
+message Manifest {
+  // Plugin type discriminator (ADR-020(e)). Closed enum, see common.proto.
+  Kind kind = 1;
+
+  // Plugin protocol version, matching `proto/plugin/vN/` (ADR-020(c)).
+  // Duplicated in the handshake string; cross-checked inside the plugin and
+  // against the host's SupportedProtocolVersions. MVP — 1.
+  // This is an API compat flag, not an artifact version (exception to
+  // ADR-007).
+  int32 protocol_version = 2;
+
+  // 3 was `string namespace`, the plugin's collection (`acme` / `community`), removed
+  // with the mechanism itself (NIM-377): an artifact carries no namespace and no name of
+  // its own, and address level 1 is the alias the operator wrote in
+  // `keeper.yml::plugins.*[].name` (ADR-020(p)). The origin-grouping level it spelled is
+  // separately removed by the ADR-020 amendment of 2026-09-02 (NIM-764 / NIM-765) —
+  // origin is answerable from the catalog entry's `source`, not from an address.
+  // Reserved rather than deleted: an already-built third-party plugin may still put it on
+  // the wire, and reusing 3 would decode that field as something else (ADR-020(c)).
+  reserved 3;
+  reserved "namespace";
+
+  // Plugin name. ⚠ Dead by the same NIM-377 removal as `namespace` above — the artifact
+  // publishes only its modules, and what an operator addresses is the registration
+  // alias. Kept only because retiring a second number is its own decision; nothing
+  // reads it.
+  // Regex: `^[a-z][a-z0-9-]{0,62}$`.
+  string name = 4;
+
+  // Closed enum of capabilities (ADR-020(f), see common.proto).
+  repeated Capability required_capabilities = 5;
+
+  // Strict contract of touched resources (ADR-020(g), see common.proto).
+  repeated SideEffect side_effects = 6;
+
+  // Kind-specific block; shape depends on `kind:`.
+  // The manifest parser validates that kind matches the populated oneof
+  // variant.
+  // 8 was CloudDriverSpec cloud_driver, removed with the CloudDriver contract
+  // (NIM-761): a cloud plugin is an ordinary soul_module executing `side: keeper`.
+  reserved 8;
+  reserved "cloud_driver";
+
+  oneof spec {
+    SoulModuleSpec soul_module = 7;
+    SshProviderSpec ssh_provider = 9;
+    SoulBeaconSpec soul_beacon = 11;
+  }
+
+  // SHA-256 fingerprint of the plugin binary: lowercase hex, exactly 64
+  // characters. Optional (empty until signed by Sigil, ADR-026(e)) — a
+  // proto3 scalar; empty string means "unset," no presence distinction
+  // needed.
+  // Type is string (hex), not bytes — consistent with plugin_sigils.sha256
+  // (TEXT CHECK hex64) and computeFileDigest (hex.EncodeToString lowercase).
+  string binary_sha256 = 10;
+}
+
+// SoulModuleSpec — kind-specific spec for `kind: soul_module`
+// (docs/keeper/plugins.md → spec for kind: soul_module).
+message SoulModuleSpec {
+  // Map of the module's supported states. Key is <state-name>,
+  // regex `^[a-z][a-z0-9-]{0,30}$` (`installed` / `running` / `restarted` / …).
+  // Destiny step addressing is <alias>.<object>.<action> — the registration alias, the
+  // object the module manages, and the state it is left in (`haproxy.instance.running`).
+  // ADR-020 amendment 2026-09-02 (NIM-764 / NIM-765).
+  map<string, StateDef> states = 1;
+}
+
+// StateDef — a single module state within SoulModuleSpec.states.
+message StateDef {
+  // Input schema in the Soul Stack input DSL (docs/input.md).
+  // Uses `Struct` because the input DSL is its own DSL with no fixed proto
+  // schema.
+  // `soul-lint` validates each destiny task's params against this schema.
+  google.protobuf.Struct input = 1;
+
+  // Human-readable description for documentation / UI.
+  string description = 2;
+}
+
+// SshProviderSpec — kind-specific spec for `kind: ssh_provider`
+// (docs/keeper/plugins.md → spec for kind: ssh_provider).
+message SshProviderSpec {
+  // SSH provider type: a convention for disambiguation
+  // (`vault_ssh_ca` / `static_key` / `teleport` / …).
+  // Affects UI/documentation but not the Sign/Authorize contract.
+  string provider_kind = 1;
+
+  // JSON Schema for provider params (e.g. `vault_mount` for `vault_ssh_ca`).
+  // Optional, default `{}`.
+  google.protobuf.Struct params_schema = 2;
+}
+
+// SoulBeaconSpec — kind-specific spec for `kind: soul_beacon`
+// (ADR-030 V5-2, docs/keeper/plugins.md → spec for kind: soul_beacon).
+//
+// Beacon is read-only by construction (observes, never mutates the host).
+// No states-map like SoulModule is needed here: a beacon has one operation
+// type (Check); "state" semantics live at the scheduler level
+// (edge-triggered last-state). A Vigil is addressed in `VigilDef.check` by the
+// bare registration alias — ONE level, because a beacon artifact declares no
+// modules and serves a single endpoint (NIM-770).
+message SoulBeaconSpec {
+  // JSON Schema for Vigil params (draft 2020-12). Used by the operator when
+  // creating a Vigil via OpenAPI/MCP for validation; runtime checks go
+  // through SoulBeacon.Validate.
+  google.protobuf.Struct params_schema = 1;
+}

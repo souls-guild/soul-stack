@@ -1,0 +1,14 @@
+name: redis-exporter rejects whitespace-prefixed managed flags in extra_args
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  soulprint:
+    os: { arch: amd64 }
+  input:
+    instance_name: redis
+    sha256: "sha256:2222222222222222222222222222222222222222222222222222222222222222"
+    redis_password: "root-only-password-still-required"
+    dependency_unit: redis-server.service
+    extra_args: [" --redis.password=argv-secret"]
+
+expect_render_error: "does not match pattern"

@@ -1,0 +1,16 @@
+name: register-cycle
+tasks:
+  - name: Probe A reads register of B
+    module: core.cmd.shell
+    register: probe_a
+    changed_when: false
+    where: register.probe_b.stdout == 'x'
+    params:
+      cmd: "true"
+  - name: Probe B reads register of A
+    module: core.cmd.shell
+    register: probe_b
+    changed_when: false
+    where: register.probe_a.stdout == 'y'
+    params:
+      cmd: "true"

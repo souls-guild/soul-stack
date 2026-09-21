@@ -1,0 +1,181 @@
+// Package {{.NamePackage}} implements the `{{.Name}}` module.
+//
+// A module declares itself as a [module.Def] value NEXT TO ITS CODE — there is no
+// manifest.yaml, in this repo or in the slot. The schema document an operator
+// approves and `soul-lint` reads is generated from the value below by
+// `soul-mod stamp` (see the Makefile), so the declaration and the implementation
+// cannot drift apart: they are the same file.
+//
+// Plugin contract: pluginv1.SoulModule (Validate / Plan / Apply).
+// [module.BaseModule] supplies no-op defaults; authors override Apply at
+// minimum, and optionally Plan (drift detection, ADR-031 Scry — requires the
+// PlanReadSafe marker).
+package {{.NamePackage}}
+
+import (
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"github.com/souls-guild/soul-stack/sdk/module"
+	"google.golang.org/grpc"
+)
+
+// Module is the declaration: what this module does, what it touches, the states
+// it serves, and the implementation that serves them.
+//
+// Name is address level 2 — the `{{.Name}}` in `<alias>.{{.Name}}.present`.
+// Level 1 is the alias an operator chooses at registration and is deliberately
+// absent from the artifact.
+//
+// Capabilities and SideEffects are DISCLOSURE shown to the operator before
+// approval, not confinement: nothing sandboxes the process at spawn. The control
+// that does bite is the approved sha256 — the host refuses to exec an artifact
+// whose digest differs (ADR-020(g), ADR-026(c) as corrected by NIM-377). Declare
+// them honestly; an operator reads them to decide.
+var Module = module.Def{
+	Name:        "{{.Name}}",
+	Description: "{{.Description}}",
+
+	// TODO: declare what this module really needs and really touches. The
+	// capability set is closed: RunAsRoot / NetworkOutbound / NetworkInbound /
+	// VaultAccess / FSWriteRoot / ExecSubprocess.
+	Capabilities: []module.Capability{},
+	SideEffects:  []module.SideEffect{},
+
+	Impl: &{{.NamePascal}}Module{},
+
+	States: map[string]module.State{
+		"present": {
+			Description: "the resource exists with the requested parameters",
+			Input: module.Input{
+				"name": {
+					Type:        module.String,
+					Required:    true,
+					Description: "Resource name",
+				},
+
+				// The fields below are a live tour of the input DSL (ADR-045):
+				// the backend builds this module's form in the UI from them.
+				// Delete what you do not need and put your own params here.
+
+				// Enum — a closed set. The UI renders a dropdown and the
+				// validator rejects anything outside the list.
+				"mode": {
+					Type:        module.String,
+					Enum:        []any{"strict", "relaxed"},
+					Default:     "strict",
+					Description: "Application mode (closed set: strict|relaxed)",
+				},
+
+				// Pattern — regex validation of a free-form string.
+				"owner": {
+					Type:        module.String,
+					Pattern:     `^[a-z_][a-z0-9_-]*$`,
+					Description: "Resource owner (unix-username-like)",
+				},
+
+				// Format + Source — a cluster-aware picker. `sid` gives FQDN
+				// validation; the source names the catalog the values come from
+				// (all SIDs of the incarnation, or one Choir part of it:
+				// `Source: &module.InputSource{Choir: "writers"}`).
+				"target_host": {
+					Type:        module.String,
+					Format:      "sid",
+					Source:      &module.InputSource{IncarnationHosts: true},
+					Description: "SID (FQDN) of the target host",
+				},
+
+				// Items — the ELEMENT type for a list, the VALUE type for a map.
+				"ports": {
+					Type:        module.List,
+					Items:       &module.Param{Type: module.Int},
+					Description: "Ports (typed list[int])",
+				},
+				"labels": {
+					Type:        module.Map,
+					Items:       &module.Param{Type: module.String},
+					Description: "Arbitrary labels (KEY: VALUE)",
+				},
+
+				// Multiline + Example — UI hints (a textarea and a placeholder),
+				// not checked by the validator.
+				"script": {
+					Type:        module.String,
+					Multiline:   true,
+					Example:     "set -euo pipefail\necho hello",
+					Description: "Apply script (multiline)",
+				},
+
+				// A secret arrives as a vault ref, and the pattern is what
+				// enforces that. `^vault:.*` is the ONLY pattern a secret may
+				// declare; without it the bundle fails validation.
+				"password": {
+					Type:        module.String,
+					Secret:      true,
+					Pattern:     `^vault:.*`,
+					Description: "Vault ref for the password (vault:secret/<path>#<key>)",
+				},
+			},
+		},
+		"absent": {
+			Description: "the resource is absent",
+			Input: module.Input{
+				"name": {
+					Type:        module.String,
+					Required:    true,
+					Description: "Resource name",
+				},
+			},
+		},
+	},
+}
+
+// {{.NamePascal}}Module is the running module — the value whose Apply the host
+// calls when a task names `<alias>.{{.Name}}.<state>`.
+type {{.NamePascal}}Module struct {
+	module.BaseModule
+}
+
+// Apply applies the requested state to the resource.
+//
+// Contract: idempotent. Steps:
+//  1. Read req.GetParams() against the state's Input declared above.
+//  2. Read the resource's current state (resource-specific API).
+//  3. If desired == current — no-op: a final ApplyEvent with Changed=false.
+//  4. Otherwise apply the change and send a final ApplyEvent with Changed=true.
+//  5. On failure — a final ApplyEvent with Failed=true, or return an error.
+func (m *{{.NamePascal}}Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	switch req.GetState() {
+	case "present":
+		// TODO: implement. Send a final event with Changed set honestly —
+		// `changed` is what the engine reports and what onchanges: fires on.
+		return stream.Send(&pluginv1.ApplyEvent{Message: "TODO: present"})
+	case "absent":
+		// TODO: implement.
+		return stream.Send(&pluginv1.ApplyEvent{Message: "TODO: absent"})
+	}
+	// A state the declaration does not carry must fail rather than fall through:
+	// which state runs decides what happens to the host.
+	return sendFailed(stream, "unknown state: "+req.GetState())
+}
+
+// sendFailed reports a hard failure as a final ApplyEvent.
+func sendFailed(stream grpc.ServerStreamingServer[pluginv1.ApplyEvent], msg string) error {
+	return stream.Send(&pluginv1.ApplyEvent{Message: msg, Failed: true})
+}
+
+// Plan is a pure-read dry-run (optional). Uncomment if the module can read state
+// without mutating the host. ADR-031 Scry: the host calls Plan instead of Apply
+// for dry_run tasks; without a PlanReadSafe marker the host applies default-deny
+// (drift is left undetermined — an explicit refusal, not a false "no drift").
+//
+// PlanReadSafe contract: EXACTLY ONE final PlanEvent with a machine-readable
+// `changed` before returning without an error. Returning nil with no event is
+// treated by the host as a FAILED plan.no_result.
+//
+// func (m *{{.NamePascal}}Module) Plan(req *pluginv1.PlanRequest, stream grpc.ServerStreamingServer[pluginv1.PlanEvent]) error {
+//     // TODO: read current state, compute changed, emit the final PlanEvent.
+//     return nil
+// }
+//
+// // PlanReadSafe DECLARES that Plan is safe for dry_run (reads, does not
+// // mutate). Implement it ONLY after writing a pure-read Plan.
+// func (m *{{.NamePascal}}Module) PlanReadSafe() {}

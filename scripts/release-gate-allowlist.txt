@@ -1,0 +1,60 @@
+# Commands RELEASING.md names that are NOT enforced by the release pipeline, each with the
+# reason they are not. scripts/check-release-gate.py requires every command in RELEASING.md
+# — `make …` and `scripts/…` alike — to be either in $(RELEASE_GATE_TARGETS) or here.
+#
+# The point of this file is that the gap is a list rather than a habit (NIM-879). `make
+# e2e-live-gate` was a blocking release step for months with nothing running it, and nothing
+# anywhere said so — the procedure asserted it and that was the whole mechanism. An entry
+# here is a step a human still performs; adding one is cheap and deliberate, and forgetting
+# to add one is red.
+#
+# ★ TWO BLOCKING STEPS CANNOT APPEAR IN THIS FILE AT ALL, and they are the remainder of the
+# class. RELEASING.md (c2) stamps `introduced_in` by editing shared/config/introduced.go and
+# shared/coremanifest/*.yaml, and (d) is a documentation-currency audit. Neither names a
+# command, so neither is reachable by a checker of this shape and neither is gated. They are
+# written here because this is the only place their absence can be read.
+#
+# Format:  <command>  # <reason>      — the reason is required, and is read by people.
+
+# --- step (b), the green gate ------------------------------------------------
+# Composites and a question about the remote. Not enforced HERE because the ground is
+# covered earlier: ci.yml runs `check`, `e2e`, `test-integration` and `test-race` as
+# blocking jobs on every push, so a red one is visible long before a tag exists.
+check-all          # local composite; the tiers it runs are blocking ci.yml jobs on every push
+check-ci           # asks the remote for its verdict on a sha; meaningless asked from inside the remote
+check              # the required `check` job in ci.yml runs it on every push
+test               # no ci.yml job of its own — it runs as the `test@build` tier inside `make check`
+test-race          # own blocking ci.yml job (NIM-312)
+test-integration   # own blocking ci.yml job
+check-release-gate # this guard itself; a tier of `make check`, so it runs on every push, not on a tag
+
+# --- step (c3), the embedded UI ----------------------------------------------
+# ★ PARTLY ENFORCED, AND THE UNENFORCED HALF IS THE ONE THE STEP IS FOR. The check is a
+# GATE_CHECK_TIERS tier, so ci.yml's `check` job runs it on every push and it is BINDING on
+# `release/*` and `hotfix/*`, where Actions sets GITHUB_REF_NAME itself. What nothing runs
+# is the tag-time re-check the step asks for: a tag is cut from `main`, where the check is
+# advisory by design, so step (c3) tells a human to export GITHUB_REF_NAME by hand and rerun
+# it — and any other spelling comes out advisory and exits 0, which reads exactly like a
+# pass. Moving that half behind the release pipeline is its own ticket.
+check-webui-freshness           # the tag-time re-check from main is a human's; the branch-time one is a `check` tier
+scripts/check-webui-freshness.sh # the `--context` probe of the same step
+sync-webui                      # remediation for a red (c3), not a check
+
+# --- steps (g)/(h), artifacts -------------------------------------------------
+# Superseded on a pipeline release: goreleaser builds the same set from the same nfpm
+# definitions on the tag, and syft attaches the SBOMs. These stay for local builds. Until
+# NIM-882 this paragraph went on to say that artifacts built by hand and attached to a
+# GitHub Release are mirrored by apt-publish.yml regardless — they are not, any more: the
+# mirror verifies every .deb against the cosign-signed checksums.txt of the release, so a
+# locally built package is refused THERE, whoever attached it. Not here: the manual
+# publish-apt.sh run exempted below writes to the same bucket with neither check, and
+# deploy/apt-r2/README.md says so where it documents that fallback.
+pkg          # goreleaser produces the release package set on the tag
+sbom         # syft produces the per-archive SBOMs on the tag
+build-linux  # bare cross-build, offered as an alternative to `make pkg`
+deploy/apt-r2/publish-apt.sh  # run BY apt-publish.yml on `release: published`, and by hand as its fallback
+
+# --- tiers and tools named in prose, not release steps ------------------------
+e2e-live            # the BROAD live tier; the five that block a release are e2e-live-gate
+e2e-k8s             # L3c, declared on-demand and never a release step
+scripts/install.sh  # the curl-installer end users run; not a step of cutting a release

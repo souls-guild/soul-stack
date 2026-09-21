@@ -1,0 +1,7 @@
+name: async-on-keeper
+tasks:
+  - name: Register the provisioned VMs on the keeper
+    module: core.soul.registered
+    async: true
+    params:
+      sid: a.example.com

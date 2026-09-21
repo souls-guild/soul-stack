@@ -1,0 +1,92 @@
+# Augur - MCP-tools for Omen / Rite registries
+
+Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.augur.omen.*` / `keeper.augur.rite.*` (registries of external systems and grants of the Augur broker, [ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api/augur.md](../operator-api/augur.md).
+
+### Augur (7)
+
+Augur registries - Omen (external system) and Rite (grant) ([ADR-025](../../adr/0025-augur.md), [augur.md](../augur.md)). 4-segment tool-name `keeper.augur.<resource>.<action>` ↔ 2-segment permission `<resource>.<action>` (`omen.create` / `rite.list` / …, selector - NoSelector). Business logic (validation `name`/`source_type`/`auth_ref`, exactly-one-of subject, allow-shape by `source_type`, token fields only for vault-delegate) lives in `augur.Service`; tool - transport. Tools are only available when the registry is connected; when disabled, the call returns `internal-error` ("augur registry is not configured"). **Live-fetch from Soul (`AugurRequest`) is NOT controlled by these tools** - this is a machine gRPC request, not an operator operation ([rbac.md §Augur](../rbac.md)).
+
+#### `keeper.augur.omen.create`
+
+Creates Omen in `omens`: external system (`vault`/`prometheus`/`elk`) + `endpoint` + `auth_ref` (vault-ref on master-cred, **not** the secret itself - [augur.md §4.1](../augur.md)). Permission: `omen.create`. Endpoint: [`POST /v1/augur/omens`](../operator-api/augur.md). Async: no.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `id` | `string` | yes | Omen's id (kebab-case `^[a-z0-9-]{1,63}$`, immutable). |
+| `source_type` | `string` | yes | `vault` / `prometheus` / `elk`. |
+| `endpoint` | `string` | yes | External system URL (not secret). |
+| `auth_ref` | `string` | yes | vault-ref `vault:<mount>/<path>` on master-credential. |
+
+**Output:** `OmenView` — `{id, source_type, endpoint, auth_ref, created_by_aid?, created_at}`.
+
+Errors: `omen-already-exists` (`name` busy), `validation-failed` (broken `name`/`source_type`/`endpoint`/`auth_ref`). Audit: `omen.created` (payload `{id, source_type, endpoint, auth_ref, created_by_aid}` - secret values ​​are NOT included).
+
+#### `keeper.augur.omen.list`
+
+Enumeration of Omens (sort `created_at` DESC, `name` ASC). Permission: `omen.list`. Endpoint: [`GET /v1/augur/omens`](../operator-api/augur.md). Async: no.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `offset` | `integer` | no | Pagination offset (≥ 0). |
+| `limit` | `integer` | no | Page size (≥ 1). |
+
+**Output:** `{omens: array<OmenView>, total}`.
+
+#### `keeper.augur.omen.label-set`
+
+Replaces the Omen's **display caption** ([ADR-0085](../../adr/0085-entity-id-and-label.md)). The caption is free text - capitals and spaces allowed, nothing validates its form; `null` (or an omitted `label`) clears it and consumers fall back to showing `name`. `name` addresses the row and is NOT changed. This is the registry's only mutation: `endpoint` and `auth_ref` stay immutable so the Rites granted against an Omen cannot silently follow it to a different external system, and the caption is not the `rites.omen` FK. Permission: `omen.label-set`. Endpoint: [`PUT /v1/augur/omens/{id}/label`](../operator-api/augur.md). Async: no.
+
+**Input** (`required: id`): `{id (^[a-z0-9-]{1,63}$), label? (string|null)}`. **Output:** `Omen` - the row as it now reads. Errors: `not-found`.
+
+#### `keeper.augur.omen.delete`
+
+Removes Omen by name; cascade removes associated Rites (`ON DELETE CASCADE`). Permission: `omen.delete`. Endpoint: [`DELETE /v1/augur/omens/{id}`](../operator-api/augur.md). Async: no.
+
+**Input:** `{name}`.
+
+**Output:** empty object (REST equivalent - 204 No Content).
+
+Errors: `not-found` (no entry). Audit: `omen.revoked` (payload `{name}`).
+
+#### `keeper.augur.rite.create`
+
+Creates Rite (grant): `subject` × `omen` → `allow`-list + `delegate` + opt. `token_ttl`/`token_num_uses` (vault-delegate only). Permission: `rite.create`. Endpoint: [`POST /v1/augur/rites`](../operator-api/augur.md). Async: no.
+
+**Input:**
+
+| Field | Type | Required | Meaning |
+|---|---|---|---|
+| `omen` | `string` | yes | Omen, which grant refers to. |
+| `subject` | `object` | yes | Which hosts the grant covers - exactly one of `sid` / `incarnation` / `coven` / `trait` (see below). |
+| `allow` | `object` | yes | Allow-list; form by `source_type` Omen (vault `{paths?,policies?}` / prometheus `{queries}` / elk `{indices}`). |
+| `delegate` | `boolean` | no | `false` - broker; `true` - delegation. |
+| `token_ttl` | `string` | no | TTL of minted scoped token; vault-delegate only. |
+| `token_num_uses` | `integer` | no | Token usage limit; vault-delegate only. |
+
+`subject` is the same nested object as on a [Vigil / Decree](oracle.md) ([NIM-280](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-280-a-rules-subject-reads-both-levels--targeting-only)): `sid: [...]` grants named hosts; `incarnation: {service, name}` grants every host on that roster; `coven: [...]` and `trait: {key, value}` grant a host carrying the label **and** every member of an incarnation carrying it. Zero or two dimensions, or half a pair, is `validation-failed`; an empty array counts as absent. ⚠ Because a Rite hands out a secret, that second level matters: labelling an incarnation `prod` widens every `coven: ["prod"]` Rite to its members with no Rite edited - prefer `incarnation` or `sid` where that is not wanted. ★ The widening is targeting only; an Archon's RBAC scope is never affected. Details: [operator-api/augur.md → Subject](../operator-api/augur.md#subject).
+
+**Output:** `RiteView` — `{id, omen, subject, allow, delegate, token_ttl?, token_num_uses?, created_by_aid?, created_at}`; `subject` carries only the dimension the Rite was written with.
+
+Errors: `not-found` (Omen does not exist), `validation-failed` (subject with zero / two dimensions or half a pair / broken `allow` / token field). Audit: `rite.created` (payload `{id, omen, subject, delegate, created_by_aid}` - `allow`-list is NOT included).
+
+#### `keeper.augur.rite.list`
+
+Enumeration of Rites of one Omen (filter `omen` is required; sort `created_at` DESC, `id` ASC). Permission: `rite.list`. Endpoint: [`GET /v1/augur/rites`](../operator-api/augur.md). Async: no.
+
+**Input:** `{omen}` (required).
+
+**Output:** `{rites: array<RiteView>}`.
+
+#### `keeper.augur.rite.delete`
+
+Removes Rite by surrogate `id`. Permission: `rite.delete`. Endpoint: [`DELETE /v1/augur/rites/{id}`](../operator-api/augur.md). Async: no.
+
+**Input:** `{id}` (positive integer).
+
+**Output:** empty object (REST equivalent - 204 No Content).
+
+Errors: `not-found` (no entry). Audit: `rite.revoked` (payload `{id}`).

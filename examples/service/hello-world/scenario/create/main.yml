@@ -1,0 +1,23 @@
+name: create
+description: Creates a greeting file on every host of the incarnation and records the path in incarnation.state.
+
+# The operator passes the greeting text when starting the scenario (vars.greeting —
+# a fallback, but on pilot input.greeting is required).
+input:
+  greeting:
+    type: string
+    required: true
+    description: Text written to the greeting file.
+
+tasks:
+  - name: Write greeting file on every host of the incarnation
+    module: core.file.present
+    params:
+      path: /tmp/soul-stack-hello
+      content: "${ input.greeting }"
+
+  - name: Record the greeting file path
+    module: core.state.set
+    params:
+      field: greeting_file
+      value: /tmp/soul-stack-hello

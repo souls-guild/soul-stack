@@ -1,0 +1,58 @@
+# L0 case: a single collector (collectors: ["smartmon"]).
+#
+# Proves that a single-item list is valid and passed through to destiny: the
+# plan renders without failing, smartmon tasks are present. At L0 the when:
+# of each collector step is a string evaluated by the Soul; here we assert
+# that the smartmon branch's when: literally carries `'smartmon' in input.collectors`,
+# while nvme/ipmi have their own predicates (Soul evaluates them false on this
+# list). Exact assertion of when: via rendered_tasks isn't available
+# (ExpectedTask doesn't assert when:), so the case fixes the module composition
+# of the plan: install core + smartmon/nvme/ipmi tasks are all present
+# (when: resolves them on the host).
+name: node-exporter renders with single collector (smartmon only)
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon]
+  soulprint:
+    os:
+      arch: amd64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # The only core.url.fetched in the plan.
+    - module: core.url.fetched
+    # smartmon branch is ACTIVE (collectors=[smartmon]) -> tasks actually render
+    # (Params!=nil), presence matches them. Duplicates disambiguated by name/path.
+    - module: core.pkg.installed
+      params_subset:
+        name: smartmontools
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/systemd/system/node-exporter-smartmon.service
+    - module: core.service.running
+      params_subset:
+        name: node-exporter-smartmon.timer
+        enabled: true
+    # smartmon is active -> its reactive timer restart also renders (Params!=nil).
+    - module: core.service.restarted
+      params_subset:
+        name: node-exporter-smartmon.timer
+
+  # -- nvme/ipmi-pkg are NOT EXPRESSIBLE in presence (see report) ----------------
+  # nvme/ipmi not in the list -> their steps are STATIC-when:false skip-placeholders
+  # (Params==nil): taskMatches does NOT match them as present or absent. The case
+  # deliberately fixes that their index slots are preserved (a single-item list
+  # didn't cut the plan) - a positional property. Left in rendered_tasks (forms
+  # coexist): nvme-cli at index 16, ipmitool at 24 (collector layout smartmon 9..
+  # nvme 16.. ipmi 24..; +1 restarted step on smartmon shifted nvme/ipmi by 1
+  # vs the previous 15/22).
+  rendered_tasks:
+    - index: 16
+      module: core.pkg.installed
+    - index: 24
+      module: core.pkg.installed

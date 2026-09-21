@@ -1,0 +1,22 @@
+# Values for the bitnami/postgresql Helm chart (L3c-2). Ephemeral PG for a kind
+# cluster: no PVC (kind nodes have no storage-class by default), single replica,
+# a fixed password/database for reproducibility.
+#
+# Service name in the cluster: `postgres-postgresql.default.svc.cluster.local:5432`
+# (bitnami standard: `<release>-postgresql`, see fullnameOverride/nameOverride
+# optionally).
+
+auth:
+  postgresPassword: testpass
+  database: keeper_test
+
+primary:
+  persistence:
+    enabled: false
+  resources:
+    requests:
+      cpu: "100m"
+      memory: "256Mi"
+    limits:
+      cpu: "500m"
+      memory: "512Mi"

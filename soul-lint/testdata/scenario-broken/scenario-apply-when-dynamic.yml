@@ -1,0 +1,14 @@
+name: apply-when-dynamic
+tasks:
+  - name: Probe whether the cluster needs the redis destiny
+    module: core.exec.run
+    register: probe
+    params:
+      cmd: "redis-cli ping"
+
+  - name: Apply the redis destiny only when the probe changed
+    apply:
+      destiny: redis
+      input:
+        action: apply
+    when: register.probe.changed

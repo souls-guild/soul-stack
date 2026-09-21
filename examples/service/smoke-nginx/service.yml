@@ -1,0 +1,18 @@
+description: >-
+  Minimal service for the L3a E2E pilot (ADR-039): one scenario "create",
+  two core tasks (install package + start service). Used by the
+  tests/e2e/ harness for the apply_runs lifecycle + audit + metrics contract test.
+
+# No migrations/ directory → state-schema version 1 (ADR-019, NIM-735).
+# the scenario's state-changes record the installed package and the active service in
+# incarnation.state for post-apply asserts.
+state_schema:
+  nginx_package:
+    type: string
+    description: Name of the installed package (literal nginx).
+  nginx_service:
+    type: string
+    description: Name of the running systemd unit (literal nginx).
+
+# No dependencies: the scenario uses only core modules (ADR-015) —
+# not listed in destiny[]/modules[] (ADR-009).

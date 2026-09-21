@@ -1,0 +1,33 @@
+// {{.BinaryName}} is the entry point for the {{.Name}} module bundle.
+//
+// The host launches the artifact with the module's name as argv[1]
+// (`{{.BinaryName}} {{.Name}}`) and speaks the gRPC-stdio handshake over the
+// resulting process (ADR-020). `{{.BinaryName}} schema` prints the artifact's
+// schema document, which is what `soul-mod stamp` puts inside the binary and
+// beside it in dist/schema.json.
+//
+// The artifact declares NO name of its own. Address level 1 — the `{{.Namespace}}`
+// an operator would write in `{{.Namespace}}.{{.Name}}.present` — is the alias
+// they pick when registering this artifact, so the same bytes can be registered
+// twice under two names without colliding.
+package main
+
+import (
+	"{{.GoModulePath}}/internal/{{.NamePackage}}"
+	"github.com/souls-guild/soul-stack/sdk/module"
+)
+
+// bundle is everything this artifact serves. Add a Def per module as the bundle
+// grows — one artifact per subject, one approval and one signature covering it.
+var bundle = module.Bundle{
+	// The engine window this artifact was written against (ADR-0076). Widen it
+	// only after testing against the wider range.
+	Compat: module.Compat{Keeper: ">=0.9.0 <2.0.0"},
+	Modules: []module.Def{
+		{{.NamePackage}}.Module,
+	},
+}
+
+func main() {
+	module.ServeBundle(bundle)
+}

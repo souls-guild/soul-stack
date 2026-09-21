@@ -1,0 +1,39 @@
+# L0 trial (Trial, ADR-023): within-block include over the full prod path.
+#
+# config.ExpandIncludes splices acl.yml and cluster.yml among the block's
+# children (and nested.yml through acl.yml's own block), then render merges the
+# block's `when:` into every child. Asserting `when:` on each task is the point:
+# it proves a spliced task is inheritance-equivalent to the hand-written sibling
+# beside it, at every nesting level.
+name: within-block include splices and inherits the block when
+
+fixtures:
+  input:
+    manage_acl: true
+    topology: cluster
+
+assert:
+  task_present:
+    # Spliced by the within-block include.
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/acl.txt
+
+    # block -> include -> block -> include: the deepest leaf inherits too.
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/acl-nested.txt
+
+    # The conditional include inside the same block, kept on cluster.
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/cluster.txt
+
+    # The hand-written sibling — the reference the spliced tasks must match.
+    - module: core.file.present
+      when: "input.manage_acl"
+      params_subset:
+        path: /etc/pilot/block-local.txt

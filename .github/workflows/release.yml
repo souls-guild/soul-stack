@@ -1,0 +1,251 @@
+# Release Soul Stack via GoReleaser (NIM-135). One tag = one logical version of
+# all modules (RELEASING.md / ADR-011). GoReleaser reproduces on the runner what
+# the Makefile does by hand — cross-compile keeper/soul/soul-lint/soulctl for
+# linux amd64+arm64, package (deb/rpm/brew/tar.gz), push GHCR images, sign every
+# artifact with cosign keyless, and attach a syft SBOM. Config: .goreleaser.yaml.
+#
+# GH-MINUTE SAVINGS (2k/month limit): runs EXCLUSIVELY on push of a `v*` tag —
+# releases are rare. Regular pushes/PRs are ci.yml's job. One tag = one run.
+#
+# THE LIVE GATE RUNS HERE, AND goreleaser IS BEHIND IT (NIM-879). RELEASING.md
+# step (e) called `make e2e-live-gate` blocking for months while nothing ran it:
+# the tier was in no CI job that had ever executed, so it stayed red on the release
+# tip from migration 118 onward and only a hand-run at NIM-876 found out. A blocking step
+# that only a human performs is not a gate, it is the appearance of one — the same
+# shape as the `t.Skip` in the single e2e push test (NIM-869), and the same cost:
+# a month of decisions taken against a green nobody produced.
+#
+# So the enforcement is the pipeline, not the procedure. `live-gate` runs the tier
+# against the tagged sha and `release` declares `needs: live-gate`, which means a
+# tag whose live tier is red — or never ran — produces nothing from THIS workflow:
+# no GitHub Release, no GHCR image, no cosign signature, no deb/rpm/brew/AUR/winget.
+#
+# Three things it did not prevent, named rather than absorbed. The middle one is closed now
+# (NIM-882) and stays on the list with its closure named: a path that quietly leaves a threat
+# list is indistinguishable from one nobody re-checked.
+#   - pushing the tag ref. Not blockable from a file; it leaves a tag with no release,
+#     which is visible, and `gh workflow run release.yml --ref <tag>` re-runs the whole
+#     thing once the tier is green.
+#   - a human building `dist/pkg` by hand (RELEASING.md steps (g)/(h)) and attaching it
+#     to a Release created with `gh release create`. apt-publish.yml fires on
+#     `release: published` and would have mirrored those .debs into the R2 apt pool, so
+#     "no package anywhere" would be false. CLOSED by NIM-882, in apt-publish.yml rather
+#     than here: its mirror waits on a green run of THIS workflow on the tag's commit, a
+#     release the pipeline authored, and every .deb matching the cosign-verified
+#     checksums.txt — the last one because `gh release upload` adds an asset to a release
+#     the pipeline DID make. The ruleset this comment used to promise is not a thing:
+#     GitHub rulesets target branches, tags and pushes, never releases (RELEASING.md step
+#     (e) carries the measurement).
+#     ★ Note what that costs HERE: no job may be added to this workflow that can conclude
+#     before `live-gate`, because apt-publish reads "no job in the run failed" as "the gate
+#     passed". check-release-gate.py refuses one, naming this line.
+#   - `workflow_dispatch` against an arbitrary ref: a branch at the tag's commit with
+#     `needs:` deleted publishes a full release, and the only thing that objects is the
+#     `check` job on that push.
+#
+# Deliberately absent: `continue-on-error`, and any input that skips the gate. Both
+# would satisfy `needs:` on a failure, which is the exact substitution this job
+# exists to refuse. scripts/check-release-gate.py asserts their absence on every
+# push, because removing them here is silent in the direction that matters.
+name: Release
+
+on:
+  push:
+    tags:
+      - "v*"
+  # Manual (re-)run for an already-pushed tag. Moving an existing tag does not re-fire
+  # the push trigger, so this is the supported way to build a release for a tag: dispatch
+  # against the tag ref, e.g. `gh workflow run release.yml --ref v0.1.0-beta.1`.
+  # This said "and tag deletion is blocked by a ruleset" until NIM-882 asked the API: no
+  # ruleset exists on this repository and none can, since it is private on a free plan
+  # (403 on both reading and writing /rulesets). Deleting and re-pushing a tag is possible
+  # today; the dispatch is still the right move, but nothing stops the other one.
+  workflow_dispatch:
+
+# Least-privilege, scoped to what GoReleaser needs on a tag:
+#   contents: write  — create the GitHub Release + upload assets
+#   packages: write  — push images to GHCR
+#   id-token: write  — OIDC token for cosign keyless (Fulcio/Rekor)
+permissions:
+  contents: write
+  packages: write
+  id-token: write
+
+env:
+  # Go toolchain from go.work, synced with ci.yml.
+  GO_VERSION: "1.26.6"
+  # protoc and its plugins, synced with ci.yml — `make build` pulls in `make gen`.
+  PROTOC_VERSION: "34.1"
+  PROTOC_GEN_GO_VERSION: "v1.36.11"
+  PROTOC_GEN_GO_GRPC_VERSION: "v1.6.2"
+
+jobs:
+  # L3b live gate on the tagged sha — RELEASING.md step (e), now enforced (NIM-879).
+  #
+  # `make e2e-live-gate` and not `make e2e-live`, deliberately. The full tier runs
+  # more tests; the gate is the only one that cannot report a green it did not earn.
+  # It refuses on a `(cached)` summary, on any of the five named tests giving no
+  # `--- PASS`, on an empty package set, and on a working-tree service override —
+  # and NIM-871 is what that list is made of: a tier went from nine tests to three
+  # and the count was the only thing that noticed. For a step whose whole job is to
+  # block a release, "cannot lie" outranks "covers more".
+  #
+  # ubuntu-latest is enough, and that is measured rather than assumed: this tier had
+  # never run on a hosted runner at all, so NIM-879 pushed the job on a branch first
+  # and it came back with all five `--- PASS` in 227s of test time, ~10 minutes wall
+  # (run 34871024617). What it needs is docker with privileged containers and systemd
+  # as PID 1 (tests/e2e-live/harness/container.go), not a hypervisor. The libvirt half —
+  # VMs, cloud-init, the agent installed over SSH — is the machine half of a create,
+  # which this docker tier cannot host and which the Makefile already declares
+  # uncovered. A self-hosted runner is the answer to THAT, not to this.
+  live-gate:
+    name: e2e-live-gate (L3b live, blocking)
+    runs-on: ubuntu-latest
+    # The tier's own `go test` budget is 45m; the rest is the docker build of the
+    # soul image, the service cache fetch and two builds.
+    timeout-minutes: 90
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # VERSION comes from `git describe`, and the tier asserts the keeper
+          # binary reports it (KEEPER_EXPECTED_VERSION). A shallow clone has no
+          # tag to describe, so the assertion would be about `dev`.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+            tests/e2e-live/go.sum
+
+      - name: Install protoc ${{ env.PROTOC_VERSION }}
+        run: |
+          set -euo pipefail
+          ZIP="protoc-${PROTOC_VERSION}-linux-x86_64.zip"
+          URL="https://github.com/protocolbuffers/protobuf/releases/download/v${PROTOC_VERSION}/${ZIP}"
+          curl -fsSL -o /tmp/protoc.zip "$URL"
+          sudo unzip -o -q /tmp/protoc.zip -d /usr/local
+          protoc --version
+
+      - name: Install protoc-gen-go plugins
+        run: |
+          set -euo pipefail
+          go install google.golang.org/protobuf/cmd/protoc-gen-go@${PROTOC_GEN_GO_VERSION}
+          go install google.golang.org/grpc/cmd/protoc-gen-go-grpc@${PROTOC_GEN_GO_GRPC_VERSION}
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      # The recipe writes its transcript to `mktemp` under TMPDIR and prints the path;
+      # pinning TMPDIR here is what lets the upload step below name it, and on a red
+      # gate that transcript is the finding. It is set on THIS step and not on the job:
+      # as a job-level env it also reaches `Setup Go`, whose `go env` runs before
+      # anything has created the directory and dies on it.
+      - name: make e2e-live-gate
+        env:
+          TMPDIR: ${{ github.workspace }}/.e2e-live-gate-tmp
+        run: |
+          set -euo pipefail
+          mkdir -p "$TMPDIR"
+          make e2e-live-gate
+
+      - name: Upload the gate transcript on failure
+        if: failure()
+        uses: actions/upload-artifact@v7
+        with:
+          name: e2e-live-gate-transcript
+          if-no-files-found: ignore
+          path: |
+            ${{ github.workspace }}/.e2e-live-gate-tmp/soul-e2e-live-gate.*.log
+
+  release:
+    name: goreleaser + GHCR + cosign + SBOM
+    runs-on: ubuntu-latest
+    # The gate above is what makes RELEASING.md step (e) a gate rather than a
+    # reminder: no green live tier on this sha, no release artifacts at all.
+    needs: live-gate
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+        with:
+          # Full history + tags: GoReleaser derives the version from the tag and
+          # generates the changelog from the commit range. Shallow clones break both.
+          fetch-depth: 0
+
+      - name: Setup Go
+        uses: actions/setup-go@v7
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          # Cache every module's go.sum (go.work multi-module workspace).
+          cache-dependency-path: |
+            keeper/go.sum
+            proto/go.sum
+            proto/plugin/go.sum
+            sdk/go.sum
+            shared/go.sum
+            soul/go.sum
+            soul-lint/go.sum
+            soulctl/go.sum
+
+      # Multi-arch (arm64) image builds need qemu + buildx.
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v3
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      # Push target for the GHCR images. GITHUB_TOKEN has packages:write here.
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # cosign for keyless signing (blobs + images); syft for the SBOM.
+      - name: Install cosign
+        uses: sigstore/cosign-installer@v3
+
+      - name: Install syft
+        uses: anchore/sbom-action/download-syft@v0
+
+      # Single GoReleaser run drives builds → packages → images → sign → SBOM →
+      # GitHub Release. Keyless cosign uses the job's OIDC id-token (no secret key).
+      - name: Run GoReleaser
+        uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: "~> v2"
+          args: release --clean
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          # Write access to souls-guild/homebrew-tap for the brew formula. On a
+          # pre-release tag GoReleaser skips the tap upload (skip_upload: auto),
+          # so this may be unset for betas without failing the run.
+          HOMEBREW_TAP_GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_GITHUB_TOKEN }}
+          # Opens the winget PR against microsoft/winget-pkgs from our fork. Must
+          # be a classic PAT with `public_repo` — a fine-grained token cannot open
+          # a PR outside its owner's account. Unset on pre-release tags is fine:
+          # skip_upload: auto keeps the pipe from publishing them.
+          WINGET_GITHUB_TOKEN: ${{ secrets.WINGET_GITHUB_TOKEN }}
+          # Passphrase-less SSH private key for aur.archlinux.org — GoReleaser
+          # pushes the `soul-stack-bin` PKGBUILD there. If the secret is unset
+          # the AUR block skips its upload rather than failing the tag (see
+          # `skip_upload` in .goreleaser.yaml), so the rest of the release still
+          # goes out.
+          AUR_KEY: ${{ secrets.AUR_KEY }}
+          # Enables cosign keyless (Fulcio/Rekor via the OIDC token above).
+          COSIGN_EXPERIMENTAL: "1"
+
+# The apt repo on Cloudflare R2 is published by a SEPARATE workflow, not this one:
+# .github/workflows/apt-publish.yml fires on `release: published` and mirrors the .deb
+# assets into the R2 apt pool via deploy/apt-r2/publish-apt.sh (it needs R2 + GPG
+# secrets, which release CI does not carry). See deploy/apt-r2/README.md.

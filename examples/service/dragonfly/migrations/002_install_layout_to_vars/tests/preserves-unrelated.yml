@@ -1,0 +1,52 @@
+name: preserves-unrelated
+description: >
+  Incarnation without install/conf_dir/data_dir (e.g. default paths, host-layout not
+  overridden). delete is a no-op along all three paths -> the rest of the state
+  (df_config/df_users/df_sentinel/tls/topology/sysctl_settings) passes through
+  bit-for-bit, delete does NOT create extra keys.
+
+state_before:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  df_sentinel:
+    master_name: "master"
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  sysctl_settings:
+    vm.swappiness: "1"
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0
+
+state_after:
+  df_version: "1.39.0"
+  df_config:
+    maxmemory: "512mb"
+    maxclients: 10000
+  df_users:
+    - { name: "app", perms: "~* +@all", state: "on" }
+  df_sentinel:
+    master_name: "master"
+    quorum: 0
+    down_after_ms: 5000
+    failover_timeout_ms: 60000
+  tls:
+    enable: false
+    cert_ref: ""
+    key_ref: ""
+    ca_ref: ""
+  sysctl_settings:
+    vm.swappiness: "1"
+  memory_mb: 1024
+  replicas: 1
+  sentinel_quorum: 0

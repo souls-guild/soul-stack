@@ -1,0 +1,73 @@
+#cloud-config
+{{- if .SelfOnboard }}
+# Soul Stack - cloud-init userdata (ADR-017(h) amendment, self-onboard "Variant T").
+# ★ Per-VM bootstrap tokens are BAKED into userdata (map FQDN->token below): the
+# VM picks its own token by hostname and onboards (soul init) in a single
+# cloud-init cycle, without a claim-callback and without keeper.push. TEST
+# STAND: userdata is stored by the provider in plaintext metadata - a
+# deliberate tradeoff. TODO(prod): late-binding claim.
+{{- else }}
+# Soul Stack - cloud-init userdata (ADR-017(h) amendment 2026-05-27, B-flat).
+# The per-VM bootstrap token is NOT stored here - it is delivered by a
+# separate scenario step (typically keeper.push via an SSH provider). See
+# docs/keeper/cloud.md.
+{{- end }}
+{{- if .SoulVersion }}
+# soul-version: {{ .SoulVersion }}
+{{- end }}
+
+write_files:
+  - path: /etc/soul/tls/keeper-ca.pem
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{ .TLSCAPemIndented }}
+  - path: /etc/soul/soul.yml
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{ .SoulConfigYAMLIndented }}
+  - path: /etc/systemd/system/soul.service
+    owner: root:root
+    permissions: '0644'
+    content: |
+{{ .SystemdUnitIndented }}
+{{- if .SelfOnboard }}
+  # Map FQDN->bootstrap-token (self-onboard). Format `<fqdn> <token>` one per
+  # line; soul init below picks its own line by $(hostname -f). Permissions
+  # 0600 (secrets).
+  - path: /etc/soul/self-onboard-tokens
+    owner: root:root
+    permissions: '0600'
+    content: |
+{{ .SelfOnboardTokensIndented }}
+{{- end }}
+
+runcmd:
+  - install -d -m 0755 /etc/soul /var/lib/soul-stack /var/lib/soul-stack/modules /var/lib/soul-stack/seed
+{{- if .UseSystemCA }}
+  # soul_binary_ca=system: curl trusts the system trust-store (for artifact
+  # hosts with a public CA, e.g. Nexus behind GlobalSign). This weakens ONLY
+  # the cert verification of the artifact host - the keeper-CA-pin of the
+  # Bootstrap channel and the SHA256-verify of the binary are unaffected.
+  - curl --fail --show-error --silent --output /usr/local/bin/soul {{ .SoulBinaryURL }}
+{{- else }}
+  # soul_binary_ca=keeper (default): curl is pinned to the keeper-CA when
+  # downloading the binary.
+  - curl --fail --show-error --silent --cacert /etc/soul/tls/keeper-ca.pem --output /usr/local/bin/soul {{ .SoulBinaryURL }}
+{{- end }}
+  - chmod 0755 /usr/local/bin/soul
+{{- if .SelfOnboard }}
+  # self-onboard: pick our own token by hostname (not hardcoded) and run
+  # bootstrap (soul init) BEFORE starting the daemon. ★ The token is passed
+  # via env SOUL_BOOTSTRAP_TOKEN, NOT via argv --token= - argv is visible in
+  # ps/journald on the VM itself. init is one-shot (generates key+CSR ->
+  # Bootstrap-RPC -> SoulSeed); after it, soul.service brings up the
+  # already-onboarded daemon. If init fails, soul.service still starts and
+  # will keep retrying, but without a seed it will never join (diagnose via
+  # journald).
+  - SOUL_BOOTSTRAP_TOKEN="$(awk -v h="$(hostname -f)" '$1==h {print $2}' /etc/soul/self-onboard-tokens)" /usr/local/bin/soul init --config /etc/soul/soul.yml
+{{- end }}
+  - systemctl daemon-reload
+  - systemctl enable soul.service
+  - systemctl start soul.service

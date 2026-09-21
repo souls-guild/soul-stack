@@ -1,0 +1,4 @@
+state_schema:
+  foo: { type: string }
+destiny:
+  - { name: x, ref: "" }

@@ -1,0 +1,290 @@
+# ADR-0074. Interactive console — live PTY sessions on a managed host
+
+- **Context.** The operator can already make a host do something: an [Errand](0033-errand.md) runs one named module on one Soul, and a [Voyage](0043-voyage.md) fans that out over many. What none of them can do is let a human **sit at the machine** — `top` redrawing, `vim` editing, a `cd` that persists to the next command, a `^C` reaching the foreground job. Those need a real tty: programs test `isatty` and switch to full-screen, line editing and job control, so the difference is not cosmetic and cannot be reached by streaming an exec's output.
+
+  Every existing execution path is the wrong shape for it. An Errand is a **request/response**: one module call with declared params, answered by a single final blob capped at 64 KiB, with a known end. A console is the opposite — a bidirectional byte stream of unknown length and unknown duration, where the payload is whatever the operator types. The two differ in the security question they raise, not only in their plumbing: an Errand can be checked against a module allow-list **before** it runs, while a console's commands are not knowable in advance, and the shell inherits the Soul daemon's user — typically **root**. Reusing `errand.run` for it would mean the most privileged action in the system inherits the gate written for the least.
+
+  Nothing in the wire contract blocked this. [ADR-012](0012-keeper-soul-grpc.md) already gives a long-lived bidi `EventStream` per Soul, so keystrokes have a path down and output a path up without a new RPC. What was missing was the pty itself, an operator-facing transport that can carry bytes **back** (the whole `/v1` surface is HTTP + SSE, and SSE is one-directional), and — the reason this ADR exists rather than a design note — an explicit statement of what authorizes a live root shell, how long it may live, and what record it leaves.
+
+- **Decision.**
+
+  - **(a) A console is a first-class execution mode, not a flavour of Errand.** It gets its own runner on the Soul side (`soul/internal/runtime/consolerunner`, never `errandrunner`), its own session manager on the Keeper side (`keeper/internal/console`), its own right, and its own audit events. The boundary is the shape of the interaction: **request/response with a declared module → Errand; an open-ended interactive byte stream → console.** Anything that can be expressed as the former should stay the former, because only the former can be authorized by what it is about to do. The Soul half is specified in [soul/console.md](../soul/console.md); the Keeper session manager and the browser frame contract in [keeper/console.md](../keeper/console.md).
+
+  - **(b) Transport — only-add on the existing stream; exactly one new transport, and it is browser↔Keeper.** No new RPC. The control and data plane ride the existing `EventStream` `oneof payload` as only-add members ([ADR-012(c)](0012-keeper-soul-grpc.md)) defined in `proto/keeper/v1/console.proto`: `ConsoleOpen`/`ConsoleStdin`/`ConsoleResize`/`ConsoleClose` on `FromKeeper` (**13-16**), `ConsoleOpened`/`ConsoleChunk`/`ConsoleExit` on `FromSoul` (**11-13**). Field numbers are frozen and pinned by a descriptor guard test; a new console message takes the next free number and none is ever renumbered or reused.
+
+    > **Superseded in part by the amendment of 2026-07-27 (NIM-188)** — the Keeper↔Soul half now has its own RPC. The messages, their field numbers and the browser↔Keeper half are unchanged; see the amendment at the end of this ADR.
+
+    The one genuinely new transport is the operator's **WebSocket `GET /v1/console`** — the only WebSocket in Keeper. It is justified by need, not preference: SSE cannot carry keystrokes back and a POST per keypress is not a terminal. It is deliberately **absent from the OpenAPI spec** (an upgrade replaces the response with a raw socket, so a `GET` returning 101 would describe a contract no generated client can call); the frame contract lives in [keeper/console.md](../keeper/console.md) and a guard pins the exemption so no *other* route drifts out of the spec unnoticed. Auth arrives in the `bearer.<jwt>` subprotocol rather than a query parameter — the browser `WebSocket` constructor cannot set headers, and the subprotocol keeps the token out of access logs, `Referer` and history.
+
+    **Session ids are per-plane and never cross.** The browser mints its own id so it can correlate `open` with `opened` without a round trip (unique within one socket); Keeper mints a ULID for the Soul side, where uniqueness must hold per EventStream, or two operators would collide on "pane-1" against the same host. Translating between them is the session manager's job.
+
+  - **(c) The right is `soul.console`, and it is strictly stronger than `errand.run`.** Registered in the closed catalog (`keeper/internal/rbac/catalog.go`, [rbac.md §Console](../keeper/rbac.md)). The two rights are **independent in both directions**: `errand.run` never implies `soul.console` (a module allow-list says nothing about an arbitrary shell) and `soul.console` never implies `errand.run`. Selectors are the existing `host=<sid>` / `coven=<coven-tag>`; bare is unrestricted.
+
+    **No new selector keys.** Per-host consoles reuse `host=`, per-environment consoles reuse `coven=`; RBAC selector keys stay `{service, coven, incarnation, host}` and any narrowing beyond them goes through the existing Purview dimensions ([ADR-047 §S4](0047-purview.md)) — the same discipline the Voyage command path was held to.
+
+    **The check happens twice, and the two gates ask different questions**, because the target host is not in the URL:
+
+    | Gate | Where | Question | Refusal |
+    |---|---|---|---|
+    | existence (`HoldsAction`) | before the WebSocket upgrade | May this Archon open consoles **at all**? | HTTP 403, before a socket exists. |
+    | scope-aware (`Check` + `host=<sid>`) | in-handler, per `open` frame | May they open one on **this** host? | A session-scoped `error{forbidden}`; the socket's other panes stay live. |
+
+    The upgrade gate **must be the existence-gate, not a scope-aware `Check` with a nil context** ([ADR-047 §g G1](0047-purview.md)): an absent scope dimension fails closed, so `Check(aid, soul, console, nil)` denies precisely the `host=`-scoped roles the feature exists to serve, and the operator would be refused the socket before ever naming a host. Pinned by a guard test (`TestEnforcer_ConsoleSocketGateIsExistenceOnly`). The per-pane denial must likewise not tear down the socket, since one socket multiplexes many panes.
+
+    **Consequence, recorded deliberately:** `soul.*` covers `soul.console`, as a resource wildcard covers every action of its resource — so roles already holding `soul.*` (or `*`) gain shell access when this lands. This is the same widening `incarnation.*` took when `incarnation.view-secrets` was added ([ADR-0070](0070-secret-reveal-path.md)), and it is why an operator who must not hand out shells enumerates actions instead of using the wildcard. Named in the release notes, not silently absorbed.
+
+  - **(d) Two ceilings, because host policy and operator policy are different questions.** The **host** has the last word on whether an interactive shell may run on it at all, whatever Keeper-side RBAC permits — `console:` in `soul.yml` (`enabled`, `max_sessions` default **8**, `rate_limit_kbps`, `kill_grace`, `shell`). A host cannot answer "how many terminals may this Archon hold", since a wall over 30 hosts is one session on each; that is **operator** policy in `console:` of `keeper.yml` (`max_sessions_per_archon` default **30**, `max_sessions_global` default **256** per instance, `idle_timeout` default **30m**). Neither side is authoritative over the other's question, and a refusal from either is a terminal for that session only.
+
+    Flow-control tuning (chunk size, queue depths, ping interval) stays a code constant on both sides: it has no operator-visible policy meaning, and exposing it would invite tuning that breaks the invariants in (e).
+
+  - **(e) Two invariants are non-negotiable: a console never outlives its authorization, and lost output is always visible.**
+
+    **Kill-on-disconnect** holds on both halves — a pty never outlives the EventStream that authorized it (Keeper gone, failback swap, daemon shutdown → every pty killed and reaped before the session returns), and a session never outlives the operator socket that opened it. An orphaned interactive root shell is the worst failure this component can produce, so teardown escalates rather than trusting one signal: SIGHUP to the shell's group, hang up the pty master, then sweep the **terminal session** — an interactive shell turns job control on and puts each job in its own process group, so a group-only kill would orphan the `top` the operator left running. Liveness is ping/pong, not TCP: a slept laptop holds a half-open connection for many minutes, and every pty behind it.
+
+    **Backpressure drops, never buffers, and always accounts.** Console frames arrive on goroutines the apply cycle shares, so a console that could block would stall `TaskEvent`/`RunResult` for that host; both sides therefore use bounded queues where chunks are dropped under flood and lifecycle frames (`opened`/`exit`/`error`) never are. The dropped byte count is reported to the operator in `dropped_bytes` and exported as a metric on each side, so the terminal renders an explicit gap instead of silently splicing a corrupted ANSI stream — a screen that never existed is worse than a visibly incomplete one.
+
+    > **Amended 2026-07-27 (NIM-188).** The premise "console frames arrive on goroutines the apply cycle shares" no longer holds Soul→Keeper once a session has its own stream, and the drop goes with it: see the amendment. The rule stands unchanged for the browser↔Keeper half and for any session still on the EventStream carrier.
+
+  - **(f) Audit records the fact of a session independently of its content.** `console.opened` / `console.closed` carry `archon_aid`, the target `sid` and the session id as `correlation_id`. **Who opened a shell where** must be in the audit log even where recording is unavailable or off — it is the one fact that survives every degradation of the recording path, and it is cheap. Recording is a separate, richer artifact (g), not a substitute for this.
+
+  - **(g) Session recording is mandatory before the console is on by default.** A console is the only operator action whose effect cannot be reconstructed from its request, so an audit line saying a shell was opened, with no record of what was typed, is not an adequate trail for a production system.
+
+    The enforceable form of "mandatory": **the console plane is opt-in and off unless explicitly configured**, and it stays opt-in until recording lands (NIM-145). When it does, recording is **on for every session and not disableable per-session** — an operator must not be able to choose an unrecorded shell, or the control is decorative. A future policy switch may decide *where* recordings go and how long they are kept; it may not decide *whether* a session is recorded.
+
+    > **Landed 2026-07-27 (NIM-145).** Recording is implemented as specified; the amendment at the end of this ADR records what "mandatory" turned into in code — the interception point, the format and store, the masking bound, and what fail-closed does at each point it can act.
+
+  - **(h) An approval-gate on opening a console is REJECTED for this release, and the rejection is bounded.** The proposal — a second control beyond the right, requiring another Archon to approve opening a console in a production Coven (the shape of Teleport's moderated sessions and AWS SSM session approval) — is sound in motive: recording is **detective**, and a live root shell arguably deserves a **preventive** control. It is rejected here for reasons that are structural, not merely scheduling:
+
+    1. **There is nothing to attach "production" to.** A [Coven](0008-coven-stable-tags.md) is a stable label on `souls.coven[]` — there is no `covens` table, no coven entity, no environment classification anywhere in the model. A gate on "prod covens" would first have to invent coven-level metadata and an authority for who sets it, which is a larger decision than the gate itself and would be made here as a side effect.
+    2. **The mechanism it would reuse does not exist yet.** The approval workflow (NIM-113) is a draft plan with no code; designing a console gate against an unbuilt approval engine would fix its contract before its own ADR is written.
+    3. **A preventive control already exists and is being mistaken for absent.** It is the scope of the right itself: an operator who must not open consoles in production simply does not hold `soul.console on coven=prod`. Obtaining it means a role grant, which is a **second human**, is subject to the least-privilege subset check (a grantor cannot grant wider than they hold, [`subset.go`](../../keeper/internal/rbac/subset.go)) and is audited. That is a two-person control at grant time rather than at open time — coarser and longer-lived than per-session approval, but not nothing.
+
+    **What is conceded:** the existing control is coarse. A standing `soul.console on coven=prod` is a standing key, and revoking it is a deliberate act nobody performs by default. So the rejection is bounded by a **re-open condition** rather than closed: this decision is revisited as an amendment when *either* Coven classification gains a home (an environment/criticality dimension with an owner) *or* NIM-113 ships an approval engine — whichever comes first. Until then the honest position is that the console's controls are the right, its scope, the recording, and the caps — and that this is a **detective-leaning** posture, stated rather than implied.
+
+    Two cheaper preventive measures are noted as candidates for that amendment and deliberately **not** built here: a mandatory `reason` on open (the precedent exists — `incarnation.rerun-last`), and a [Herald](0052-herald-notifications.md) notification on `console.opened` so a team sees a production shell in real time rather than in a later audit query. Both are additive and neither needs coven classification.
+
+- **Rejected.**
+  - **Reusing `errand.run`** — the gate for a declared module call cannot honestly authorize an arbitrary shell (a).
+  - **A new RPC for the console** — the bidi `EventStream` already carries both directions; a second stream per host would double the connection budget for no contract benefit (b). **Reversed 2026-07-27 (NIM-188):** the benefit turned out not to be about the contract but about contention, and the cost turned out not to be connections — see the amendment.
+  - **A `console` selector key** (e.g. `console-host=`) — the intersection reuses existing Purview dimensions, and RBAC selector keys stay closed at four ([ADR-047 §S4](0047-purview.md)) (c).
+  - **A separate resource family (`console.open`)** to escape the `soul.*` wildcard — it would hide the right from the resource it acts on, and the wildcard consequence is a known, precedented property of the catalog rather than a defect to route around (c).
+  - **Documenting the WebSocket in OpenAPI** — an upgrade has no response body to model; a fake `GET` returning 101 would describe a contract no generated client can honour (b).
+  - **Buffering console output under flood** — unbounded memory in Keeper, and a delayed screen is a lie about the current state of the machine; dropping with a visible counter is the honest failure (e).
+  - **Resuming a session across a reconnect** — the pty is killed with its stream by (e); offering resume would mean either keeping an orphaned shell alive or silently opening a *new* one under an old id.
+
+- **Deferred.** A liveness probe for the owner side when the stream holder restarts mid-session; the approval-gate under the re-open condition in (h); the operator UI that renders a replay (the API it renders is NIM-148, below — the browser half is tracked separately). *Session recording and its retention policy are no longer deferred — NIM-145, see the amendment below.* *The MCP surface for command execution is no longer deferred — NIM-147, see the amendment.* *Aligning the `errand.run`-gated routes with `soul.console` is no longer deferred — NIM-197, see the amendment.* *Reading a recording back is no longer deferred — NIM-148, see the last amendment.*
+
+- **Impl.** NIM-142 (proto contract + Soul pty runner) · NIM-143 (Keeper WS, session manager, backpressure, cross-instance routing) · **NIM-144 (this ADR + the `soul.console` right)** · NIM-145 (recording, the amendment below) · NIM-146 (web terminal wall) · NIM-147 (MCP `keeper.soul.run-command`, the surface amendment below) · NIM-188 (the transport amendment below) · NIM-196 (the cross-instance ownership check, below) · NIM-197 (the Errand-path gate) · **NIM-148 (playback, the last amendment below)**.
+
+**Amends [ADR-033](0033-errand.md)** (an interactive console is explicitly outside Errand, not a variant of it) and **extends [ADR-012(c)](0012-keeper-soul-grpc.md)** (a fourth only-add family on the existing stream).
+
+---
+
+## Amendment 2026-07-27 (NIM-188) — the Keeper↔Soul console gets its own RPC
+
+**What changed.** `service Keeper` gains a fifth RPC, `ConsoleStream(stream ConsoleFromSoul) returns (stream ConsoleToSoul)`. A Soul dials **one stream per console session**, on the same mTLS connection and the same listener as `EventStream`. Everything the session sends and receives afterwards rides that stream. This reverses "no new RPC" in (b) and the matching Rejected entry; it changes nothing about the messages, the field numbers, the browser↔Keeper WebSocket, the session-id translation, the right, or the caps.
+
+**Why the original reasoning did not survive contact.** (b) weighed a new RPC as a **contract** question and found no benefit. The cost that actually mattered is **contention**, and it is invisible at contract level:
+
+- Soul→Keeper, every `FromSoul` goes through one write mutex on the bidi stream. Interactive output and a run's `TaskEvent`/`RunResult` therefore take turns, and the console had to **drop** its output specifically to avoid holding that mutex — the loss in (e) was a symptom of the shared transport, not an inherent property of consoles.
+- Keeper→Soul, keystrokes share the 10-slot per-SID outbound queue with apply dispatch. A large paste could fill it and fail a run's `ApplyRequest` with `ErrOutboundQueueFull` — the same bug pointing the other way.
+
+The stated cost — "would double the connection budget" — was wrong on its own terms: it is the same TCP connection and the same mTLS handshake, one more HTTP/2 stream, and only while a console is actually open. The precedent was already in the tree: `FetchModule` ([ADR-065(a)](0065-core-module-installed.md)) took a separate stream on this connection for exactly this reason.
+
+**The shape.**
+
+- **`ConsoleOpen` still rides `EventStream`.** Only a client may open a gRPC stream, so the Soul has to be told to dial before it can. It is also what keeps a close ordered behind its open: both travel the one stream the Soul reads serially.
+- **Attach and ack.** The Soul's first frame is `ConsoleAttach{session_id}`; Keeper registers the stream under that id and answers `ConsoleAttached`. The ack is load-bearing: without a positive signal, a Soul cannot distinguish "this Keeper has no such RPC" from "the answer has not arrived yet", and would have to guess which carrier to use.
+- **The session id is a route, not a credential.** Keeper hands a stream the session's frames only when the SID that dialed it is the SID that owns the session — free from the peer cert ([ADR-012(i)](0012-keeper-soul-grpc.md)). The same check now guards the EventStream carrier, closing a gap where a Soul could name another host's session id. Attaching creates nothing: `soul.console` is checked at the operator's socket before a session is minted (c), and this RPC has no path to that.
+- **Both carriers live.** A Soul that does not announce `console_stream` is served over `EventStream` exactly as before, and a Soul that does falls back when the Keeper it reached answers `Unimplemented`. The choice is settled once per session, before the first frame — mixing carriers mid-session would mean two independent HTTP/2 streams with no ordering between them, and reordered keystrokes are worse than refused ones. For the same reason Keeper holds input typed before `ConsoleOpened` and releases it, in order, when that frame proves which carrier the session is on.
+- **A console still cannot outlive its authorization** (e). The dedicated stream is a child of the connection the EventStream runs on: when that stream ends, the console streams of that SID are closed with it. A console stream dying on its own is likewise terminal — Keeper synthesizes the `ConsoleExit` the operator would otherwise never see, and the Soul kills the pty.
+
+**Backpressure, revised.** On a session's own stream the queue **blocks instead of dropping**: with no shared write mutex and a private HTTP/2 flow-control window, a slow reader throttles the pty at the source, which is what a terminal over a slow line has always done. `dropped_bytes` therefore reads 0 there — the field stays (only-add) and keeps its meaning for the EventStream carrier and for the browser↔Keeper half, where dropping remains correct and remains accounted.
+
+**What is NOT claimed.** This buys isolation, not fairness: two console sessions on one host still share the connection-level flow-control window, and a Keeper instance still serves them from one process. The per-SID cap on console streams (16) bounds a misbehaving Soul, not a busy one.
+
+## Amendment 2026-07-27 (NIM-196) — the ownership check crosses instances
+
+**What changed.** The routing claim `console:owner:<session_id>` now records `<kid>|<sid>` rather than `<kid>`, and the instance republishing an upstream frame refuses it when the claimed SID is not the SID the frame authenticated as.
+
+**Why.** "The session id is a route, not a credential" was enforced only where a SID exists. It does not on the cross-instance path: the two connections of a console land independently (socket by load balancer, EventStream by SoulLease), so in a cluster of N they are on different instances about (N−1)/N of the time — the normal case, not an edge. The receiving instance has nothing to check with, because the pub/sub message is a bare `FromSoul`. A Soul authenticated as one host could therefore name any session id it learned and have forged output rendered in that operator's pane, or end the session with a terminal frame. Preconditions are steep (a valid seed cert, a leaked 26-character session ULID, a victim on another instance) and the reverse direction was never open — keystrokes are addressed by the session's SID — so this is defence-in-depth. It is worth 30 lines anyway: a console is the most privileged thing an operator does, and forging its output attacks precisely what the feature is for.
+
+**Where the check goes, and why not the obvious place.** On the **publisher**, which holds the authenticated SID; the claim carries the binding it checks against. Putting the SID in the pub/sub envelope is the obvious fix and the wrong one — a new instance would publish what an old one cannot parse, breaking every cross-instance console for the length of a rolling upgrade. The claim is written and read one version at a time, so it can change shape freely. This closes the boundary completely: the trust boundary is Soul↔Keeper, the publisher sits on it, and instances trust each other by construction (any of them can already publish to `console:<kid>`).
+
+**Compatibility is self-closing.** A claim with no SID reads as "host unknown" and routes as before, so a mixed-version cluster keeps working; once every instance writes the new form the check is live. No flag: the claim TTL is 90 s, so the window shuts a minute and a half after the last old instance restarts.
+
+**A refused frame is dropped, not reported as an orphan** — reporting one would send a `ConsoleClose` for the named session, which is the reap the forgery was reaching for. Its route is not cached either, so it cannot seed the orphan sweep.
+
+**Impl** — NIM-196.
+
+## Amendment 2026-07-27 (NIM-147) — the non-interactive console: MCP `keeper.soul.run-command`
+
+Closes the "MCP surface for command execution" line of **Deferred** (which mis-numbered it NIM-146 — that is the web terminal wall; recording is NIM-145). An agent needs the same thing an operator does — run this on that host — but cannot use a terminal: a pty merges stdout and stderr onto one fd, echoes what was typed, wraps everything in ANSI and reports only the *shell's* exit status. So the MCP surface is **request/response**, and the tool is **`keeper.soul.run-command`** (`{sid, command, cwd?, env?, timeout_seconds?}` → `{errand_id, status, exit_code, stdout, stderr, *_truncated, duration_ms}`).
+
+- **The right is `soul.console`, selector `host=<sid>` — not `errand.run`, and no new lighter right.** Dropping the tty removes the echo, not the privilege: the command line is still arbitrary, still unknowable before it runs, still executed as the Soul daemon's user (typically root). Decision (c) applies unchanged, and the check is the same scope-aware `Check(aid, soul, console, {host: sid})` the WebSocket runs per `open` frame — the SID is an argument here, so the two-gate split of (c) does not arise: there is no upgrade to guard and nothing to fail closed on. `soul.*` covers it, per the recorded consequence in (c).
+- **Transport is the Errand stack, module pinned to `core.cmd.shell`.** This is a deliberate split between *what authorizes* and *what carries*: the [Errand](0033-errand.md) path already provides split channels, an integer exit code, the 64 KiB cap with truncation flags, async escalation past the 30 s server-cap, and the `errand.*` audit chain — all of which a console cannot express. The module is **not an argument**: a caller who could name it would be holding `keeper.soul.errand.run` under the wrong right, so the tool takes a command line and nothing else (an unknown argument is a malformed request).
+- **Audit — `console.command`, beside the transport's own trail.** Payload `{sid, status}`, `correlation_id` = the errand id, `source: mcp`. `errand.invoked` says a module ran; this says an **arbitrary command** ran and that `soul.console` authorized it — a distinction that only exists because two different rights can now reach a shell, and the audit log is where that question gets answered. The command line itself is not in the payload, exactly as `console.opened` holds no keystrokes.
+- **Masking is applied on this boundary too** (`errand.MaskAndCapBytes`, [ADR-010 §7.4](0010-templating.md)), not inherited from the transport: an agent reply is an observable channel like a log line. The bound is stated rather than implied — on a free-form byte stream only the content layer (vault provenance) can fire, since there is no key for the name layer to read and a credential the command prints in plaintext is indistinguishable from any other text. Recognizing it would require knowing what the command was going to do, which is the property (a) says a console does not have.
+
+**Known gap, closed by the last amendment below (NIM-197).** `core.cmd.shell` and `core.exec.run` are on the Errand runner's hardcoded allow-list, so `keeper.soul.errand.run`, `POST /v1/souls/{sid}/exec` and a `kind=command` [Voyage](0043-voyage.md) reached an arbitrary shell under `errand.run` alone. That predated this amendment and qualified the claim in (a) that an Errand "can be checked against a module allow-list before it runs" — true of the *module*, not of the command line it carries.
+
+## Amendment 2026-07-27 (NIM-145) — what "mandatory" turned into
+
+Closes the recording half of **(g)** and the "recording retention policy" line of **Deferred**. Nothing in the decision changes; this records the four choices (g) left open, each of which had a wrong answer that would have made the control decorative.
+
+**Enforced by construction, not by default.** `console.NewHub` refuses to build without a `Recorder`, and `keeper.yml` has no `console.recording.enabled` key — its absence is pinned by a guard test, so adding one is an amendment to this ADR rather than a config change. This matters more than it looks: "on by default" is one refactor away from "off in this deployment", while "the type cannot be constructed" is not. The same recorder serves the MCP `run-command` surface, so the two things holding `soul.console` cannot record differently.
+
+**One interception point: the Hub.** Below it the carrier varies — a session's own `ConsoleStream` RPC or the shared `EventStream` (NIM-188), local or bridged across instances (NIM-196) — and all of it converges on `Hub.Deliver`/`DeliverLocal` on the instance holding the operator's socket, the only place that sees both directions of one session. Recording at the carrier would have meant two implementations of the same guarantee, and the one that drifts is the one nobody is watching.
+
+Two consequences follow from the position, and both are properties rather than accidents:
+
+- The recording holds **more than the operator saw** — a chunk is recorded before the socket gets the chance to drop it under backpressure (e). Output the *Soul* dropped never reaches Keeper at all, so its reported count is written into the cast as a gap marker; a replay shows the hole instead of splicing two screens into one that never existed.
+- The order is **record → deliver** in both directions. An operator never sees a byte that is not in the record, and a keystroke that could not be recorded never reaches the shell.
+
+**Format is asciicast v2, store is Postgres.** The artifact exists to be watched, and asciicast already replays — `asciinema play`, `agg`, and the xterm.js the operator UI is built on — where a bespoke timestamped log would have needed a player written for it. Codes: `o` output, `i` input, `r` resize, `m` a dropped-bytes marker. stdout and stderr are **not** separated: a tty merges them onto one fd before Keeper sees either, so splitting them in a replay would show a screen that never existed.
+
+Postgres rather than a file on the Keeper's disk, because Keeper is stateless (ADR-002/ADR-005): the instance that held the socket is rarely the instance that later serves the playback, so a local file is a recording exactly one machine can read, and only until it is replaced. `console_recordings` + `console_recording_parts` (migration 104); the body is appended in parts because the writer appends while the session is live. `console.opened` / `console.closed` / `console.command` carry `recording_id`, keeping the audit log the index and the recording the artifact hanging off it — (f) unchanged.
+
+**Retention is enforced, not merely recorded.** `ttl_at` is baked into the row from `console.recording.retention` (default 90d) and swept by the Reaper rule `purge_old_console_recordings`, the shape `purge_old_errands` already had. A mandatory recorder with no purge is a disk-growth bug with an audit story attached: no operator action stops this table growing, because no operator action stops the recording. Baking the TTL in also makes retention non-retroactive — lowering it must not silently delete recordings kept under the old policy.
+
+**Masking, and the honest bound.** A recording is an observable channel like a log line, so vault references are masked in it ([ADR-010 §7.4](0010-templating.md)) — **the reference only**, not the line containing it. Whole-value masking is right for a payload field that *is* the secret and wrong here: blanking a chunk because a vault path appeared in it destroys the record the masking exists to make safe to keep.
+
+The part that is not obvious: **masking has to survive chunking**. A pty echoes keystrokes one byte at a time, so an operator typing `vault:secret/db` produces fifteen chunks and not one of them matches the pattern — per-chunk masking would mask *nothing*, precisely where an operator is most likely to type a credential path. The recorder therefore holds back any tail that could still grow into a reference and masks across the boundary, bounded at 4 KiB so a stream that merely contains the literal `vault:` cannot be held in memory forever.
+
+The bound is the same one the NIM-147 amendment states, and it is worth restating rather than implying: on a free-form byte stream **only the content layer can fire**. There is no key for the name layer to read, and a credential a command prints in plaintext is indistinguishable from any other text — recognizing it would require knowing what the command was going to do, which is the property (a) says a console does not have. What this closes is the recording becoming a hole in masking that already existed; what it does not close is a secret nothing anywhere can recognize.
+
+**Fail-closed at each point where it can act**, because a guarantee that holds only until the store hiccups is not one:
+
+| When | What happens |
+|---|---|
+| The recording cannot start | The session is refused and **no `ConsoleOpen` is dispatched** — no pty is created. Wire code `recording_unavailable`. |
+| The store breaks mid-session | The session is closed and the pty killed. Delivered as a callback rather than a check on the next keystroke, so an idle shell sitting at a prompt is closed too — that is the case that would otherwise run unrecorded for the length of the idle timeout. |
+| The per-session cap is reached | The session is closed and the recording marked `truncated`. Default 256 MiB, sized so that hitting it means a runaway rather than a long shift. |
+| `run-command` cannot be recorded | The command is **not dispatched**; if its OUTPUT cannot be recorded, the output is not returned. The command ran either way and the audit event still says so, but handing a caller what a root shell printed with no record of it is the disclosure this is about. Unlike a session, a command cannot be closed after the fact — before the dispatch is the only moment fail-closed has. |
+
+**What is NOT claimed.** Persistence is asynchronous behind a bounded queue (32 KiB or 2 s), so a Keeper instance that dies takes up to one flush window of its live sessions with it; such a recording has a NULL `finished_at`, which reads as "the writer never got to say goodbye" rather than as an empty session. What cannot happen is a session that keeps running unrecorded. Playback in the operator UI is NIM-148; until it lands a recording is read with `SELECT body FROM console_recording_parts WHERE recording_id = $1 ORDER BY seq` behind `console_recordings.cast_header`.
+
+**Impl** — NIM-145.
+
+## Amendment 2026-07-28 (NIM-197) — the Errand path answers to `soul.console` too
+
+Closes the known gap above. The premise of (a) — that an Errand can be authorized by what it is about to do — holds only for modules whose params *are* the declaration. `core.cmd.shell` and `core.exec.run` take a command line, so under `errand.run` alone the least-privileged gate in the system reached the most privileged action: the exact inversion (a) rejects. The hole predates NIM-147 and made `soul.console` a half-control, since an agent holding `errand.run` walked around it in one call.
+
+- **`errand.run` stays necessary and stops being sufficient.** When the requested module is verb-shell, the caller must ALSO hold `soul.console`, checked with the same selector the choke-point already resolved for `errand.run`. The two rights remain independent in both directions per (c) — this is a conjunction on one code path, not an implication: `soul.console` alone still does not open the Errand path, and `keeper.soul.run-command` still does not need `errand.run`.
+- **One source for "which modules are a command line".** The list lived only on the Soul, in the runner's allow-list; the Keeper, which now has to gate on it, did not know it. It moved to [`shared/coremanifest`](../../shared/coremanifest/verbshell.go) (`IsVerbShell`), which both sides import without importing each other (ADR-011). A gate reading its own copy of the list would go quiet the moment the two diverged — the failure mode would be a gate that looks enforced and is not.
+- **Five choke-points, one decision.** `POST /v1/souls/{sid}/exec` (`host=<sid>`) · MCP `keeper.soul.errand.run` (`host=<sid>`) · `kind=command` [Voyage](0043-voyage.md) (`host=<sid>` on **every** resolved host, all-or-nothing — trimming the batch would run a different request than the one submitted; preview shares that resolver and so refuses identically, keeping its existing promise to reject wherever create would) · a `kind=command` [Cadence](0046-cadence.md) recipe on create/PATCH (a bare check, mirroring the bare `errand.run` there: a recipe's target is declarative and has no host to scope against yet) · and the **Cadence spawn**, where the hosts finally exist and the creator is re-checked per host.
+- **Voyage cancel is NOT gated.** Cancelling is de-escalation; requiring the stronger right to stop a running shell batch would make the emergency brake harder to reach than the accelerator. `errand.run` remains the right to cancel a command Voyage.
+- **A deprecation window, not a flag day** — `console.errand_shell_gate: warn | enforce` in keeper.yml, default `warn` for one minor. In `warn` the call proceeds and the would-be denial is recorded; `enforce` denies. The window exists for one surface in particular: every other choke-point answers an operator who is watching an HTTP status, but a Cadence recipe written under the old rule would simply stop producing runs, on a timer, with nobody looking. Deliberately **not** a SettingsStore key — ADR-0073 admission rule (j.2) keeps security gates out of an overlay that falls back to the *more permissive* value after a Postgres outage.
+- **Enforcement on the spawn path is a recorded skip, never an error.** An error in `processOne` rolls back the whole tick and stalls every other due schedule, so a refusal advances `next_run_at` (as an overlap skip does) and writes **`cadence.skipped_forbidden`** `{cadence_id, scheduled_for, reason, module}`. A separate event type rather than `skipped_overlap` with another reason: an overlap skip is normal scheduling, this one is a schedule that has stopped and needs a person.
+- **Inventory before the flip.** `keeper_rbac_shell_errand_legacy_roles` counts roles granting `errand.run` without `soul.console` — the grants `enforce` will break — recomputed on every RBAC snapshot rebuild, with the names in a WARN line when the set changes. It is scope-agnostic, so it is a floor: a role holding both rights with a *narrower* console scope is not listed. The exact live answer is `keeper_rbac_shell_errand_gate_total{result="would_deny"}`, which is the real check on real targets. A cluster that keeps both at zero for a release is a cluster the flip cannot break.
+- **What this does not touch.** A scenario task naming `core.cmd.shell` is unaffected: it is declarative Destiny under `incarnation.run`, reviewed as code, not an ad-hoc command line ([ADR-033](0033-errand.md) governs ad-hoc exec only). The Soul-side allow-list is unchanged in behaviour — it still decides whether an Errand may call a module at all; this decides who may ask.
+
+## Amendment 2026-07-28 (NIM-148) — reading a recording back
+
+Closes the playback line of **Deferred**. NIM-145 made every session recorded and left the artifact reachable only by hand, with a `SELECT` written into the amendment above. This is that read, given a surface — and the whole of the decision is about **who may run it**, because the artifact is the session's content and nothing else about it changed.
+
+**The right is `soul.console`, with the same selectors, and no auditor-grade right is minted.** A recording is, verbatim, what an operator typed into a shell running as the Soul daemon's user and what it printed back. It is the live session moved in time, so the boundary that decides who may WATCH it has to be the boundary that decided who may OPEN one — resolved for the same `soul, console` pair, against the same `host=` / `coven=` dimensions. Anything weaker would make the stronger control decorative: an operator refused `soul.console on host=db-01` today could read every session anyone ever held on db-01 yesterday, which is most of what the refusal was for. This is the reasoning of the NIM-147 amendment applied one more time — dropping the tty removed the interactivity, not the privilege; dropping the live-ness does the same.
+
+*Conceded, and left open deliberately:* this denies a **pure auditor** — someone who should read the trail without ever holding a shell — any access at all, because the only right that opens the recording also opens a console. Minting a read-only `soul.console-recording` right is the obvious fix and is **not** taken here: it is a new entry in a closed catalog and a new answer to "what is the weakest thing that may see a root session", which belongs in its own decision rather than as a side effect of building the read path. Until then the honest position is that playback is for the people who already hold the console, and an auditor is given the right with its scope narrowed to the hosts they investigate. Revisited under the same re-open condition as (h).
+
+**The check splits exactly as (c) splits it, for exactly the reason (c) gives.** A listing names no host, so the route gate can only ask the existence question (`RequireAction`) and the scope question is answered where a SID exists. Using a scope-aware `Check` at the route would fail closed on the absent host dimension and deny precisely the `host=`-scoped roles the feature serves ([ADR-047 §g G1](0047-purview.md)) — the bug NIM-144 hit on the WebSocket, and the reason a guard test pins the gate's shape on all three routes. It is `ResolvePurview` and never `Check` past that point: `Check` accepts a context map and looks like it honours it, but a role's `default_scope` sits outside the permission it matches, so a bare `soul.console` passes it for any host.
+
+- **The list narrows in SQL, not in Go** — the purview is pushed into the query (the souls-list pattern), so offset pagination and the total stay exact and a `total` never advertises a row the caller cannot open.
+- **Out of scope is the SAME 404 an unknown id gets.** A 403 would confirm that a recording with that id exists, turning the route into an oracle for which hosts have been consoled into and by whom — which is the metadata the recording exists to protect.
+- **The host is joined LEFT.** A recording carries `sid` but not `coven`, so coven- and trait-scoped operators need the `souls` row. An INNER join would make removing a host remove its evidence — for everyone, unrestricted operators included — so the join is LEFT and the **host** dimension reads the recording's own `sid`. The consequence is stated rather than accidental: after the host is gone a `host=`-scoped operator still matches, a `coven=`-scoped one no longer can (nothing left to prove membership with), and an unrestricted one still sees it.
+
+**Read-only by construction, not by convention.** The store is split in two — the `Recorder` the Hub holds can only write, the `Reader` the API holds can only read. One type with six methods would work identically today and would put a write path behind an operator-facing route, which is the shape this feature can least afford.
+
+**Nothing is masked on read, and nothing is un-masked.** Masking ran once, at record time, carried across chunk boundaries because a pty echoes a byte at a time (NIM-145). The cast is served byte-for-byte from `console_recording_parts`: there is no plaintext left to recover, and a second masking pass would be a second implementation of one guarantee — the one that drifts. Pinned end-to-end by a guard that types a vault reference one byte at a time through the real recorder and reads it back through the real handler.
+
+**Format and transport.** `GET /v1/console/recordings` (paged, filters `sid` / `archon_aid` / `kind` / time window), `GET …/{recording_id}` (metadata, geometry lifted out of the header so a UI can size a player without fetching a body), and `GET …/{recording_id}/cast` — the asciicast v2 file itself, `application/x-asciicast`, streamed rather than buffered (a recording runs to the 256 MiB cap, and buffering one per concurrent viewer is the memory failure that cap exists to bound) and sent as an `attachment` so a browser hands it to a player instead of interpreting it in the API's origin. All three are in the OpenAPI spec: unlike the WebSocket, an ordinary `GET` with a body is something a generated client can call.
+
+**Audit — `console.recording-read`, on the cast route only.** The asymmetry is the point: the list and metadata routes say a session happened, which `console.opened` already said, and auditing every UI page load would bury the event that matters. The cast route says someone read back what was typed into a root shell, so its payload carries `recorded_archon_aid` — reading your own session is routine, reading another operator's is what an investigation asks about. It is written **before the first byte leaves**, mirroring the record-before-deliver rule of the recording itself, and it is best-effort in the same sense `console.opened` is: a failed audit write is logged, not turned into a refusal, because the audit path is not the control that makes this safe — the right and its scope are.
+
+**No MCP twin, deliberately.** Every other read surface here has one; this one would hand an agent bulk access to the raw content of other operators' shells, and an agent cannot watch a replay — the value of asciicast is the timing, which flattens to a wall of ANSI in a tool result. `keeper.soul.run-command` already gives an agent the thing it actually needs (run this, get the output), under this same right and with its own recording. If a use case for machine-readable playback appears it takes its own amendment.
+
+**What is NOT claimed.** Playback shows what Keeper recorded, which is a superset of what the operator saw (a chunk is recorded before backpressure can drop it) and a subset of what the host produced (output the Soul dropped never arrived, and appears as a gap marker). A recording with a NULL `finished_at` replays to where the writer stopped. None of that is new here — it is the recording's shape (NIM-145), and the read path neither hides nor repairs it.
+
+**Impl** — NIM-148. The browser player over this API is web-side work and is not part of this amendment.
+
+## Amendment 2026-07-29 (NIM-254) — a full queue gives up its oldest output, not its newest
+
+**What changed.** The socket's send queue no longer refuses an arriving chunk when it is full. It discards the **oldest queued chunk** and takes the new one. Lifecycle frames are still never discarded, and a queue holding nothing but lifecycle frames still closes the socket — but that is now the only case that does, where before any congestion at the moment a control frame arrived was enough.
+
+**Why.** (e) promised that loss under a flood is counted and reported, and it is. What it did not say is *which* loss, and refusing the newest turns out to be the wrong end. A terminal is worth reading because it is current: an operator pinned to a screen the host produced minutes ago, while the newest output — the only part they were waiting for — is thrown away, has a session that is complete and useless. This is what a terminal over a slow line has always done, and it is the same bargain the dedicated stream already makes at the other end (NIM-188 amendment).
+
+Nothing is hidden by it. The recording is written **before** the socket is offered the chunk, so playback still holds everything the host produced; the gap the operator saw is reported to the operator, and the audit trail is unaffected.
+
+**Measured, not assumed.** On `release/R5` with permessage-deflate already in place (NIM-274), a client that stops reading must drain a full queue before a gap can be reported to it. That drain is 22.4 MB of wire on output that does not compress — a `cat` of a binary, a base64 blob — which is 13.5 s on a 10 Mbit/s link and 67 s on a mobile one, and compression buys nothing there (×1.0). On ordinary varied terminal output it is 4.0 MB, 3.2 s and 16 s. The marker was never in the wrong *place* — it sits exactly where the gap is — so giving it a privileged path would have announced a gap ahead of the output preceding it, which for a terminal that renders in order is worse. The queue's staleness was the whole of the problem.
+
+**A control frame now displaces output rather than the socket.** `opened`/`exit`/`error` cannot be dropped: losing an `opened` strands a pane on "connecting", losing an `exit` leaves a terminal live forever. Before this, a full queue at the moment one arrived closed the whole socket and reaped every session behind it — a flood on one pane killing an operator's entire wall. Stale output is cheaper than that by any measure, so the control frame takes its place.
+
+**Cost.** The queue stops being a channel and becomes a bounded slice under a mutex: a channel cannot be looked into, and its head may be a control frame. Removing one frame from the middle leaves every other frame in arrival order, which is the whole of what a terminal needs. The writer still takes one frame per wake-up, so its ping and drop-flush tickers keep their turn instead of starving behind a backlog.
+
+**Impl** — NIM-254. Guards: the newest chunk always reaches the operator under a sustained flood; a congested queue delivers `exit` instead of killing the socket.
+
+## Amendment 2026-07-30 (NIM-292) — Keeper can switch the console plane off
+
+Until now the only real off switch was per host: `console: {enabled: false}` in
+`soul.yml`. The `console:` block in `keeper.yml` was operator **envelope** only
+(sessions per Archon, per instance, idle timeout, recording cap), and its absence
+meant built-in defaults rather than "off" — so a cluster that must never carry
+consoles had two things to lean on, RBAC discipline and a file edit on every
+host, and neither is one statement. The first fails to a single administrator
+holding `*` (which, per the `soul.*` widening recorded above, is easier to hold
+by accident than to hold deliberately); the second is N files.
+
+**`console.enabled` joins `keeper.yml`, defaulting to `true`.** A file written
+before this key resolves exactly as it did.
+
+**It switches off BOTH halves of the plane, and that is the substance of the
+amendment.** `soul.console` is one privilege reached two ways — the interactive
+`GET /v1/console` and the non-interactive MCP `keeper.soul.run-command` (NIM-147
+above) — and they are wired through different objects: the WebSocket through the
+Hub, the tool through the Errand transport and the shared recorder. A switch that
+nil'd the Hub alone would have left an agent running arbitrary command lines as
+root on a cluster whose operator had just declared it carries no consoles. That
+is the failure this amendment exists to avoid, and it is why the switch is
+defined against the PRIVILEGE rather than against the Hub.
+
+**Off means 404, not 403, and the MCP tool is absent rather than refusing.** A
+403 states that the cluster has a console plane the caller may not use; a cluster
+that has declared it has none should not be answering that question at all. The
+route gate therefore runs **ahead** of the RBAC gate, so the answer depends on
+the cluster's configuration and not on the caller's rights, and its body is the
+one an unrouted path produces.
+
+**Sessions already open are closed** (`console_plane_disabled`). Gating the route
+stops the next console; without the drain an operator would switch the plane off,
+watch `/v1/console` answer 404, and still have live root shells behind it.
+
+**Recording playback is deliberately outside the switch.** `GET
+/v1/console/recordings…` stays mounted and readable. A recording is evidence, and
+turning consoles off is a decision about new sessions — not a way to take last
+week's root shells away from an auditor. This was already the wiring (the
+playback routes never consulted the Hub); the amendment makes it a stated
+property rather than an implementation detail.
+
+**The key is also served from the SettingsStore overlay**, so the plane can be
+switched cluster-wide from the API and the UI. That is an admission of a security
+gate into a fail-soft overlay and is recorded, with its cost, in
+[ADR-0073](0073-keeper-runtime-config-pg.md) — briefly: the fail-soft failure
+mode cannot occur here because the plane needs the same Postgres that recording
+needs, and the file outranks the cluster row, so pinning `enabled: false` in
+`keeper.yml` is the form of the guarantee that no `setting.update` can reverse.
+Admitting the key required giving the whole block a live apply path: the Hub and
+the recorder now resolve their envelopes per open, per sweep and per session
+rather than once at construction.
+
+**Two things this does NOT do, stated so they are not assumed.** It does not
+close the Errand path — `core.cmd.shell` / `core.exec.run` through an Errand, a
+Voyage or a Cadence has its own gate (`errand_shell_gate`, NIM-197 above) and is
+untouched, so "no console plane here" is not "no root shells here". And it does
+not fix the asymmetry on the host side: `console: {enabled: false}` in `soul.yml`
+gates interactive `ConsoleOpen` only, so a host carrying that flag still executes
+`keeper.soul.run-command`. The Keeper-side switch is the one that covers both
+halves; making the host-side flag do the same is tracked separately.
+
+`console.recording.retention` and `console.errand_shell_gate` stay file-only —
+the first for want of a live apply path, the second because it is NIM-197's key
+on NIM-197's clock. Impl — NIM-292.

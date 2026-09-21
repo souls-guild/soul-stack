@@ -1,0 +1,64 @@
+name: multi-instance
+description: L0 guard wrapper for Redis + Sentinel exporters on one Soul.
+
+input:
+  sha256:
+    type: string
+    required: true
+    pattern: "^sha256:[0-9a-f]{64}$"
+  redis_password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+  sentinel_password:
+    type: string
+    required: true
+    secret: true
+    min_length: 16
+  web_password_hash:
+    type: string
+    required: true
+    secret: true
+
+tasks:
+  - name: Apply Redis exporter instance
+    apply:
+      destiny: redis-exporter
+      input:
+        instance_name: redis
+        sha256: "${ input.sha256 }"
+        arch: amd64
+        listen: ":9121"
+        redis_addr: unix:///var/run/redis/redis-server.sock
+        dependency_unit: redis-server.service
+        redis_user: monitoring
+        redis_password: "${ input.redis_password }"
+        basic_auth_username: prometheus
+        basic_auth_password_hash: "${ input.web_password_hash }"
+
+  - name: Apply Sentinel exporter instance
+    apply:
+      destiny: redis-exporter
+      input:
+        instance_name: sentinel
+        sha256: "${ input.sha256 }"
+        arch: amd64
+        listen: ":9122"
+        redis_addr: redis://127.0.0.1:26379
+        dependency_unit: redis-sentinel.service
+        redis_user: monitoring
+        redis_password: "${ input.sentinel_password }"
+        basic_auth_username: prometheus
+        basic_auth_password_hash: "${ input.web_password_hash }"
+
+  - name: Remove only Sentinel exporter instance
+    apply:
+      destiny: redis-exporter
+      input:
+        instance_name: sentinel
+        ensure: absent
+        sha256: "${ input.sha256 }"
+        arch: amd64
+        dependency_unit: redis-sentinel.service
+        redis_password: "${ input.sentinel_password }"

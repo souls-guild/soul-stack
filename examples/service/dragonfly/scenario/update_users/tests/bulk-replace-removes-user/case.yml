@@ -1,0 +1,95 @@
+# ★★ CENTRAL guard update_users: BULK-REPLACE removes a user dropped from the set.
+# Deployed state.df_users = {alice, bob}; the operator sets a NEW full set input.users =
+# {alice (with CHANGED perms)} - bob is NOT in the set. update_users replaces state.df_users ENTIRELY:
+#   1. users.acl renders with alice (new perms) - WITHOUT bob (removed from ACL);
+#   2. state_after.df_users = [alice] (bob dropped out - bulk-replace, not upsert).
+# Regression "update_users merges/upserts instead of replace" = bob would remain → assert fails.
+# Render-only, hermetic. ACL LOAD goes through a LOCAL UNIX socket. vars.system_acl_users
+# is NOT set → system defaults get topped up ({}) → vars.users carries ONLY operator-extra (a clean
+# bulk-replace assert).
+name: update_users bulk-replaces the set and drops a user absent from input (plaintext)
+
+fixtures:
+  default_destiny_source: "file://../../destiny/{name}"
+  soulprint:
+    network: { primary_ip: 10.0.0.5 }
+    os: { arch: amd64 }
+
+  # Deployed incarnation.state (v2: install/conf_dir/data_dir moved out to service vars): operator-
+  # extra alice + bob.
+  state:
+    df_version: "1.39.0"
+    tls:
+      enable:   false
+      cert_ref: ""
+      key_ref:  ""
+      ca_ref:   ""
+    df_config:
+      maxmemory:        "256mb"
+    df_users:
+      - { name: alice, perms: "~* +@all", state: "on" }
+      - { name: bob, perms: "~app:* +@read", state: "on" }
+
+    # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
+    # NAME; each password is a `type: secret` property living in Vault under a derived
+    # path. The day-2 `core.state.set` task resolves THIS list into the register.
+    system_acl_users:
+      - { name: default_admin }
+
+  # New full set: only alice (with NEW perms). bob is removed.
+  input:
+    users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }
+
+mocks:
+  # ★ [ADR-0083] §4: the passwords are the register result of the keeper-side
+  # `core.state.set` task, which L0 renders but does not execute. Seeding the
+  # register here is the consumer's post-resolution view -- the plaintext a Soul-side
+  # task sees after the pipeline resolved each `vault:` reference. No case authors a
+  # Vault path any more; the path is derived from (service, incarnation, field, key).
+  register:
+    system_acl_users:
+      effective:
+        - { name: default_admin, password: dfadmin-update-users-pass }
+    df_users:
+      effective:
+        - { name: alice, password: alice-user-secret-pass }
+        - { name: bob, password: bob-l0-pass }
+
+assert:
+  task_present:
+    # 1. users.acl carries ONLY alice with NEW perms - bob is absent (bulk-replace).
+    - module: core.file.rendered
+      params_subset:
+        path: /etc/dragonfly/users.acl
+        render_context:
+          vars:
+            users:
+              alice:
+                perms: "~app:* +@read +@write"
+                state: "on"
+                password: alice-user-secret-pass
+          self:
+            sid: trial-host
+            covens: []
+            choirs: []
+            traits: {}
+            role: ""
+            network:
+              primary_ip: 10.0.0.5
+            os:
+              arch: amd64
+          role: ""
+
+    # 2. HOT-RELOAD ACL: redis.acl.reloaded to the live instance through a LOCAL UNIX socket.
+    #    AUTH as default_admin (requirepass removed).
+    - module: redis.acl.reloaded
+      params_subset:
+        addr: "unix:/var/run/dragonfly/dragonfly.sock"
+        username: default_admin
+        password: dfadmin-update-users-pass
+
+  # state_after: df_users = NEW set ENTIRELY (only alice, bob dropped out - bulk-replace).
+  state_after:
+    df_users:
+      - { name: alice, perms: "~app:* +@read +@write", state: "on" }

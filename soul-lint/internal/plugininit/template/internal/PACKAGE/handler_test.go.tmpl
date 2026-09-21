@@ -1,0 +1,75 @@
+// L0 unit skeleton: mocks the pluginv1 stream server + sanity-checks Apply.
+// Full L0/L1/L3b tests live in tests/ and docs/module-author-guide.md.
+package {{.NamePackage}}
+
+import (
+	"context"
+	"testing"
+
+	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
+	"google.golang.org/grpc"
+	"google.golang.org/grpc/metadata"
+)
+
+// fakeApplyStream is a minimal stream-server stub for unit-testing Apply.
+// Implements grpc.ServerStreamingServer[pluginv1.ApplyEvent] via no-op
+// gRPC metadata and a buffer of sent events.
+type fakeApplyStream struct {
+	grpc.ServerStream
+	ctx    context.Context
+	events []*pluginv1.ApplyEvent
+}
+
+func (f *fakeApplyStream) Context() context.Context     { return f.ctx }
+func (f *fakeApplyStream) SetHeader(metadata.MD) error  { return nil }
+func (f *fakeApplyStream) SendHeader(metadata.MD) error { return nil }
+func (f *fakeApplyStream) SetTrailer(metadata.MD)       {}
+func (f *fakeApplyStream) Send(e *pluginv1.ApplyEvent) error {
+	f.events = append(f.events, e)
+	return nil
+}
+
+func TestApply_DeclaredStatesAreServed(t *testing.T) {
+	for _, state := range []string{"present", "absent"} {
+		m := &{{.NamePascal}}Module{}
+		stream := &fakeApplyStream{ctx: context.Background()}
+		if err := m.Apply(&pluginv1.ApplyRequest{State: state}, stream); err != nil {
+			t.Fatalf("Apply(%s): unexpected error: %v", state, err)
+		}
+		// TODO: once Apply is implemented, assert the correct state_change here.
+		_ = stream.events
+	}
+}
+
+// A state the declaration does not carry must be refused, never quietly treated
+// as one of the ones it does: which state runs decides what happens to the host.
+func TestApply_UndeclaredStateIsRefused(t *testing.T) {
+	m := &{{.NamePascal}}Module{}
+	stream := &fakeApplyStream{ctx: context.Background()}
+
+	if err := m.Apply(&pluginv1.ApplyRequest{State: "presnet"}, stream); err != nil {
+		t.Fatalf("Apply: unexpected transport error: %v", err)
+	}
+	if len(stream.events) == 0 || !stream.events[len(stream.events)-1].GetFailed() {
+		t.Errorf("an unknown state was accepted: %v", stream.events)
+	}
+}
+
+// Every state the module declares must be one Apply actually serves. The schema
+// document is generated from Module, so a state declared and not handled is a
+// promise the artifact's own disclosure makes and the code does not keep.
+func TestDeclaredStatesMatchApply(t *testing.T) {
+	for state := range Module.States {
+		m := &{{.NamePascal}}Module{}
+		stream := &fakeApplyStream{ctx: context.Background()}
+		if err := m.Apply(&pluginv1.ApplyRequest{State: state}, stream); err != nil {
+			t.Errorf("declared state %q: Apply returned %v", state, err)
+			continue
+		}
+		for _, e := range stream.events {
+			if e.GetFailed() {
+				t.Errorf("declared state %q is not served by Apply: %v", state, e)
+			}
+		}
+	}
+}

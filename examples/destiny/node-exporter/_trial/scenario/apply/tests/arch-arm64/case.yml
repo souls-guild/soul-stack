@@ -1,0 +1,32 @@
+# L0 case: arm64 host.
+#
+# soulprint.self.os.arch=arm64 -> destiny takes arch DIRECTLY from soulprint
+# (apply:input does not pass it) -> CEL builds the url with `linux-arm64.tar.gz` (not
+# amd64). Proves that arch resolves in destiny-CEL from soulprint and lands in
+# the URL/unpack path. Assert - on the url of the core.url.fetched step (index 0): segment
+# linux-arm64.
+name: node-exporter renders arm64 download url from soulprint arch
+
+fixtures:
+  default_destiny_source: "file://../../{name}"
+  input:
+    version: "1.11.1"
+    collectors: [smartmon, nvme, ipmi]
+  soulprint:
+    os:
+      arch: arm64
+    network:
+      primary_ip: "10.0.0.5"
+
+assert:
+  task_present:
+    # Only core.url.fetched in the plan.
+    - module: core.url.fetched
+      params_subset:
+        url: https://github.com/prometheus/node_exporter/releases/download/v1.11.1/node_exporter-1.11.1.linux-arm64.tar.gz
+        path: /tmp/node_exporter-1.11.1.tar.gz
+    # install step unpacks the arm64 directory in unless/cmd (via arch).
+    - module: core.archive.extracted
+      params_subset:
+        path: /tmp/node_exporter-1.11.1.tar.gz
+        dest: /tmp/node_exporter-1.11.1
