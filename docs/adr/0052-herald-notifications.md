@@ -281,7 +281,7 @@ The T4a/T4b foundation extends the §k contract by three points (the success-bra
 
 ## Amendment (2026-07-01, "channel-types — 6 new channel types across two transport classes"; recorded retrospectively 2026-07-03)
 
-**User decision 2026-07-01** ("6 Herald types OK"; design — architect; implemented, merge `f3739d03`, migration 091). Retiring the NIM-18 debt — recorded retrospectively.
+**User decision 2026-07-01** ("6 Herald types OK"; design — architect; implemented, migration 091). Retiring the NIM-18 debt — recorded retrospectively.
 
 ### (n) Extending the `heralds.type` enum — six new types on top of the MVP `webhook`.
 

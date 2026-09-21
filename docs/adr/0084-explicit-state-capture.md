@@ -713,11 +713,11 @@ The key-by-key answer for a keeper-side task — including `loop:`, `require:` a
 
 ## Dependency this ticket did not record — now paid by NIM-698
 
-**`compute.*` was unreachable from a keeper-side task on `ab9e547d`.** `keeperVars`
+**`compute.*` was unreachable from a keeper-side task as of NIM-694 (2026-08-18).** `keeperVars`
 (`keeper/internal/render/dispatch.go`) bound `{Input, Register, Incarnation, Vars, Ctx}` — no
 `Compute`. Twenty-one ops read `compute.*` and had no translation until that changed.
 
-**Resolved in `f7fd3b4d`.** NIM-698 needed the same binding for its own §4 mint task and added
+**Resolved in NIM-698 (2026-08-22).** That ticket needed the same binding for its own §4 mint task and added
 `Compute: in.Compute` to `keeperVars`, with a comment naming the exact failure this ticket
 predicted: *"Omitting it here made an author's `compute.x` in a keeper task's params fail at eval
 with a bare `no such key: x` while soul-lint accepted the file."* The `compute.*` family is now

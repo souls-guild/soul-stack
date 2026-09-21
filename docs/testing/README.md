@@ -632,7 +632,8 @@ This used to be what the examples corpus was FOR: e2e ran against `examples/serv
 a green gate guaranteed the documented example still worked. That guarantee had one hard
 prerequisite — **a subject a live test drives must install from PUBLIC sources only**.
 Point one at an internal mirror and the gate stops being runnable, the red goes unnoticed,
-and the subject rots invisibly (exactly what happened between `22130c2b` and NIM-208, when
+and the subject rots invisibly (exactly what happened between the `v0.1.0-beta.1` public beta
+and NIM-208, when
 the redis service pointed at an internal Nexus placeholder and nobody could run it). The
 rule did not go away with the corpus — it moved onto the pinned service, where it is
 enforced by whoever bumps the pin, and by `make e2e-live-gate` refusing a commit it cannot
