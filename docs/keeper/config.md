@@ -550,7 +550,7 @@ plugin_runtime:
   enable_tls: false
 ```
 
-Lifecycle host process for plugins running on the Keeper side (`cloud_driver`, `ssh_provider`): handshake and shutdown timeouts, whitelist capabilities and resource conflict policy, optional TLS on the plugin socket. Full lifecycle semantics, handshake string format, plugin launch diagram - [plugins.md → Lifecycle](plugins.md#lifecycle); regulatory decision - [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md).
+Lifecycle host process for plugins running on the Keeper side (`soul_module` declaring `side: keeper`, `ssh_provider`; `cloud_driver` left the enum in NIM-761): handshake and shutdown timeouts, whitelist capabilities and resource conflict policy, optional TLS on the plugin socket. Full lifecycle semantics, handshake string format, plugin launch diagram - [plugins.md → Lifecycle](plugins.md#lifecycle); regulatory decision - [ADR-020(d/f/g/h)](../adr/0020-plugin-infrastructure.md).
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
@@ -985,7 +985,7 @@ audit:
   retention_days: 365
 ```
 
-General audit-pipeline normalization - [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention): storage (Postgres table `audit_log`, see [storage.md](storage.md)), schema (`audit_id` / `created_at` / `event_type` / `source` / `archon_aid` / `correlation_id` / `payload`, write-path (HTTP-middleware / MCP-handler / Reaper / hot-reload / `keeper.cloud` / `keeper.push` / bootstrap / Soul gRPC forwarded), retention (via Reaper rule `purge_audit_old`, see [reaper.md](reaper.md)). Event-types directory - [naming-rules.md → Audit-events](../naming-rules.md#audit-events).
+General audit-pipeline normalization - [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention): storage (Postgres table `audit_log`, see [storage.md](storage.md)), schema (`audit_id` / `created_at` / `event_type` / `source` / `archon_aid` / `correlation_id` / `payload`, write-path (HTTP-middleware / MCP-handler / Reaper / hot-reload / `keeper.push` / bootstrap / Soul gRPC forwarded), retention (via Reaper rule `purge_audit_old`, see [reaper.md](reaper.md)). Event-types directory - [naming-rules.md → Audit-events](../naming-rules.md#audit-events).
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|

@@ -199,7 +199,7 @@ an applier that adds `onchanges: [df_config]` over that destiny does **not** con
 
 An `assert:` is evaluated at **two points from one source** (`render.evalAssertTask`): a **pre-flight** gate on the request path, and **render** as a fail-safe ([ADR-009](../adr/0009-scenario-dsl.md) amendment 2026-06-23, form A). Which point answers a given assert is **not a property of the assert alone** — it depends on what the predicate reads and on how the run was started. The difference is not cosmetic: pre-flight answers **422 with nothing mutated**, render answers **`error_locked`**, which the operator must then `unlock` before anything else can run.
 
-Two facts decide it. A roster only exists once the incarnation row does (membership FKs it, [ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), and some plans **create their own roster mid-run** (`core.cloud.provisioned` → `core.soul.registered` with `refresh_soulprint`), so the hosts such an assert is about do not exist at request time under any design.
+Two facts decide it. A roster only exists once the incarnation row does (membership FKs it, [ADR-008 amendment / NIM-124](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), and some plans **create their own roster mid-run** (a machine-provider plugin step → `core.soul.registered` with `refresh_soulprint`), so the hosts such an assert is about do not exist at request time under any design.
 
 | The predicate reads | How the run started | Answered at | A failure looks like |
 |---|---|---|---|
@@ -480,7 +480,7 @@ tasks:
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
 
-**`on: keeper` reads it too.** A keeper-side task's `params:` (and its task-level `vars:`) resolve in the same run-level soulprint-free context `compute:` itself is resolved in, one phase later — so `compute.<name>` is readable there, with the same value every other reader sees. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 relies on it: the `core.state.<verb>` capture step that mints a state field's declared secrets derives the account set from the same compute var the destiny passage is handed, instead of restating the expression.
+**A keeper-side task reads it too.** Its `params:` (and its task-level `vars:`) resolve in the same run-level soulprint-free context `compute:` itself is resolved in, one phase later — so `compute.<name>` is readable there, with the same value every other reader sees. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 relies on it: the `core.state.<verb>` capture step that mints a state field's declared secrets derives the account set from the same compute var the destiny passage is handed, instead of restating the expression.
 
 **Isolation from destiny ([ADR-009](../adr/0009-scenario-dsl.md) V2).** `compute:` - **scenario-entity**: inside the isolated destiny-passage (`apply: { destiny: … }`) it **does not leak**. Destiny only sees the **result** - what the scenario passed through `apply: input:`. Inside destiny `compute.<name>` is rejected as out-of-scope (see the table below). `vars.*` resolves inside a destiny too, but to the destiny's OWN `vars.yml`, not the scenario's ([ADR-0082](../adr/0082-service-vars.md)) — the name survives the boundary, the meaning does not.
 
@@ -489,7 +489,7 @@ tasks:
 | Context | `compute.<name>` |
 |---|---|
 | A Soul-side task: `params:` / `where:` / task `vars:` / `apply: input:` | **in scope** |
-| An `on: keeper` task — its `params:` and its own `vars:` | **in scope** |
+| A keeper-side task — its `params:` and its own `vars:` | **in scope** |
 | A `core.state.<verb>` capture — every param the render interpolates | **in scope** |
 | A later `compute[i]` referring to an earlier `compute[j]`, j<i | **in scope** |
 | `loop.items:` / `loop.when:` — the host-invariant loop axis | out of scope |
@@ -907,7 +907,8 @@ target), not the commit axis. `incarnation.state` is still committed **one
 times** after the last Passage; re-resolving the roster inside the run does not split it up.
 
 A typical case is a single create scenario "provision → onboarding → role":
-`core.cloud.provisioned` (`on: keeper`) creates N VM → `core.soul.registered`
+a machine-provider plugin step (`<alias>.vm.created`, `on: keeper` — the only
+spelling a plugin's side has) creates N VM → `core.soul.registered`
 (`await_online: true`, `refresh_soulprint: true`) registers their SID and blocks
 waits for onboarding → the next Passage applies the role to already-online hosts via
 the omitted `on:` / `soulprint.hosts`. Onboarding barrier and list-SID - on
@@ -1160,10 +1161,10 @@ only to make the author restate what the address already said.
   params: { field: namespace, value: "${ input.namespace }" }
 ```
 
-**This rule reverses when [ADR-0087](../adr/0087-task-side-derived-from-module-address.md) lands:**
-the side becomes derived from the address, so writing `on: keeper` on a capture becomes the error
-(`on_keeper_redundant`) and `state_capture_not_on_keeper` is retired. That ADR is accepted and **not
-implemented** — the paragraph above is the engine that ships today.
+**That rule reversed with [ADR-0087](../adr/0087-task-side-derived-from-module-address.md)**
+(shipped in NIM-747/NIM-749, see §"The side is the module's, not the task's"): the side is derived
+from the address, so writing `on: keeper` on a capture is now the error (`on_keeper_redundant`) and
+`state_capture_not_on_keeper` is retired. The form above — no `on:` at all — is what ships.
 
 The **cross-host barrier is unchanged** and still unconditional:
 
@@ -1229,7 +1230,7 @@ for a later step to see what a capture produced — see "Reading state while wri
 #### CEL context of a capture
 
 `value:` / `patch:` / `match:` / `key:` are ordinary task params, so they render in the ordinary
-`params:` CEL environment of an `on: keeper` task ([ADR-010](../adr/0010-templating.md), marker
+`params:` CEL environment of a keeper-side task ([ADR-010](../adr/0010-templating.md), marker
 `${ … }`); a literal without `${ … }` is taken as-is, and a cell that is exactly one `${…}` keeps
 its native type.
 
@@ -1357,7 +1358,7 @@ because a capture routinely arrives through an include and the per-file task rul
 
 > **There is no `foreach`.** [ADR-057](../adr/0057-state-changes-crud-verbs.md)'s structural
 > `foreach` was a render-time expander of the removed block and does not become a module state:
-> iteration over a step is the DSL's own `loop:`. ⚠ **But `loop:` does not reach an `on: keeper`
+> iteration over a step is the DSL's own `loop:`. ⚠ **But `loop:` does not reach a keeper-side
 > task today** — `renderKeeperTask` rejects it alongside `apply:` and `async:`, a pilot restriction
 > older than this change. Until that lifts, a capture over a runtime-sized collection has to be
 > written out one task per element. See
@@ -1449,7 +1450,7 @@ value reaches `incarnation.state` is the explicit accessor below.
 #### `register.hosts.<name>` — one register across every host
 
 `register.hosts.<name>` is the map **{SID → payload}** for register `<name>` across the hosts that
-produced it, and it is readable **only from an `on: keeper` task**. One capture writes the whole
+produced it, and it is readable **only from a keeper-side task**. One capture writes the whole
 per-host set in one expression:
 
 ```yaml
@@ -1477,7 +1478,7 @@ the probe ([ADR-056](../adr/0056-staged-render-passage.md), `render.Stratify`), 
 `register.<name>` would. Working example and its L0 case:
 [`examples/service/state-verbs/scenario/per-host-capture/`](../../examples/service/state-verbs/scenario/per-host-capture/main.yml).
 
-*Only from `on: keeper`.* Anywhere else — a host task, the destiny pass, `when:`/`changed_when:`/
+*Only from a keeper-side task.* Anywhere else — a host task, the destiny pass, `when:`/`changed_when:`/
 `until:`, a migration — it is a **compile error**, not an empty map: a host task reading
 `register.<name>` is deliberately reading its OWN value
 ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §5), and a silent empty map would make

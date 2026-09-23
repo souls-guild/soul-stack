@@ -531,7 +531,7 @@ was the **declared role** — and that has been an attribute of a Choir Voice si
 **Where a declared role is set now.** Two paths, both already existing:
 
 - **In a scenario, at deploy time** — the keeper-side core module
-  [`core.choir.present`](../modules.md) (`on: keeper`), which is what makes the
+  [`core.choir.present`](../modules.md) (keeper-side by its address), which is what makes the
   removal lossless on the bootstrap-`create` path the old field existed to serve:
 
   ```yaml

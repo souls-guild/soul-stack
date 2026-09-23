@@ -192,7 +192,7 @@ These fields are available without explicitly passing them in `vars:` — this i
 - **User-collectors** (`/etc/soul/soulprint.d/*` collectors — open Q №22). Requires separate decisions on the collector format, sandbox, launch rights, output validation. Closed by a separate ADR when a concrete scenario appears.
 - **`uptime` / `timezone`** — will be added post-MVP only-add (field 8/9 in `SoulprintFacts`).
 - **`virtualization`** (KVM / Hyper-V / WSL / container) — post-MVP.
-- **`cloud_provider`** (aws / gcp / azure detection via metadata) — post-MVP, overlaps with CloudDriver plugins.
+- **`cloud_provider`** (aws / gcp / azure detection via metadata) — post-MVP, overlaps with what a machine-provider plugin already knows (a CloudDriver, before NIM-761 removed the contract).
 - **`disks`** (mount points / FS / size) — post-MVP.
 - **`bios`** (vendor / version / virtualization-extensions) — post-MVP.
 - **`cpu.cores`** (physical, without HT), **`cpu.freq_mhz`**, **`cpu.cache_kb`** — post-MVP only-add.

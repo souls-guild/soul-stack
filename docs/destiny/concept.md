@@ -33,7 +33,7 @@ operator ──► incarnation.spec   (what is declared)
 | Layer | Who | What does |
 |---|---|---|
 | **Service** | `service.yml` + `scenario/<name>/main.yml` in the service git repo | Service type (Redis HA), set of operations (`create`, `add_user`, `restart`, …). Glues destiny to different hosts through the `tasks:` scenario, reads/writes `incarnation.state` to the database. |
-| **Scenario** | `scenario/<name>/main.yml` | A specific operation on a service. May mix `on: keeper` (cloud-create, vault-resolve) and `on: [coven, …]` / omitted `on:` (Souls execution); volatile per-host filter - `where:`. See [scenario/orchestration.md](../scenario/orchestration.md). |
+| **Scenario** | `scenario/<name>/main.yml` | A specific operation on a service. May mix keeper-side steps (a `core.state.<verb>` capture, `core.vault.kv-read`, a machine-provider plugin carrying `on: keeper`) and Soul-side ones targeted with `on: [coven, …]` / omitted `on:`; on a CORE address the side comes from the address and `on:` is refused; volatile per-host filter - `where:`. See [scenario/orchestration.md](../scenario/orchestration.md). |
 | **Destiny** | `destiny-<name>/destiny.yml` + `tasks/main.yml` | Atomic declaration "how to bring the host into state X". Doesn't know about the database, about cluster topology, about other Souls. Accepts values via `input:`. |
 | **Module** | `core.pkg.installed`, `haproxy.instance.reloaded`, … | Implementation of one "verb" (install the package, start the service, render the file). See [architecture.md → "Module model"](../architecture.md). |
 

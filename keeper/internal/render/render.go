@@ -251,10 +251,10 @@ type RenderInput struct {
 	// KeeperRegister — flat register bucket for keeper-side tasks of PREVIOUS
 	// Passages (keeper→keeper register-chaining, staged-render, ADR-056). A
 	// keeper task in the active Passage sees `register.<prev>.*` of keeper tasks
-	// from past Passages (e.g. core.bootstrap.delivered reads the register of
-	// core.cloud.created). The stage-loop (run.go) pours
-	// keeperRegisterBucket(RegisterByHost) in here before the per-passage render
-	// of the active Passage. nil/empty (P0, N=1, non-staged, host-only Passage) →
+	// from past Passages (e.g. core.bootstrap.issued reads the register of the
+	// machine-provider plugin step that created the VMs). The stage-loop
+	// (run.go) pours keeperRegisterBucket(RegisterByHost) in here before the
+	// per-passage render of the active Passage. nil/empty (P0, N=1, non-staged, host-only Passage) →
 	// keeperVars degrades to the flat Register (backward-compat: trial/push/
 	// others that only set Register see register the same way, bit-for-bit).
 	//

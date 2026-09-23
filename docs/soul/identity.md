@@ -47,7 +47,7 @@ For push hosts (`transport: ssh`) records in `bootstrap_tokens` are **not create
 
 **Invariant:** `UNIQUE (sid) WHERE used_at IS NULL` — a Soul can have only one unused token at a time.
 
-**Cascade on cloud-destroy ([ADR-017](../adr/0017-keeper-side-core.md)):** if a SID is deleted via `core.cloud.provisioned destroyed`, the not-yet-used tokens of this SID are marked `used_at = NOW()`, `used_by_kid = 'system-cloud-destroy'` (a special marker, **not** a real KID and **not** an AID; it protects the anti-replay invariant).
+**Cascade on cloud-destroy ([ADR-017](../adr/0017-keeper-side-core.md)):** ⛔ **no code path reaches this today** — the cascade hung off `core.cloud.provisioned destroyed`, removed with the CloudDriver contract in NIM-761, and no machine-provider plugin has replaced it. The shape is recorded because the columns and the marker are still in the schema: a SID deleted that way had its not-yet-used tokens marked `used_at = NOW()`, `used_by_kid = 'system-cloud-destroy'` (a special marker, **not** a real KID and **not** an AID; it protects the anti-replay invariant).
 
 The lifecycle (issue → delivery → CSR → burn) and the presentation SQL transaction are in [onboarding.md](onboarding.md).
 
@@ -76,7 +76,7 @@ A separate table: one SID — many seeds (the rotation history). One active at a
 - `superseded` — replaced by a rotation, a new seed is already active.
 - `expired` — moved by the Reaper / Vault PKI after `not_after`.
 - `revoked` — the operator revoked it (security incident, compromise). Audit semantics: "the operator made a decision".
-- `orphaned` — the host was cascade-deleted from `core.cloud.provisioned destroyed` ([ADR-017](../adr/0017-keeper-side-core.md)). Audit semantics: "the VM lifecycle ended". The cascade applies only to `active` seeds; `revoked` is NOT overwritten (precedence revoked > orphaned).
+- `orphaned` — the host was cascade-deleted from the cloud-destroy leaf ([ADR-017](../adr/0017-keeper-side-core.md)). Audit semantics: "the VM lifecycle ended". ⛔ Nothing writes this status since NIM-761 removed `core.cloud.provisioned destroyed`; existing rows keep their meaning. The cascade applies only to `active` seeds; `revoked` is NOT overwritten (precedence revoked > orphaned).
 
 For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no mTLS identity, see [concept.md → Two transports](concept.md).
 
@@ -87,7 +87,7 @@ For push hosts (`transport: ssh`) `soul_seeds` is **not used** — they have no 
 - **`disconnected`** — a legacy lifecycle snapshot "last known: the stream was closed/lost". Soul may return; presence (online) will then be restored via lease capture, regardless of whether the Reaper managed to reconcile the snapshot back to `connected`.
 - **`revoked`** — the operator revoked it. The certificate in `soul_seeds` is marked `revoked`, new connections from this SID are rejected at the TLS level.
 - **`expired`** — the Reaper moved `pending` after the bootstrap-token TTL (Soul never arrived).
-- **`destroyed`** — a terminal state ([ADR-017](../adr/0017-keeper-side-core.md) cascade): the host was physically deleted via `core.cloud.provisioned destroyed`. There are no outgoing transitions — the record remains as a forensic object and **is not part of** the default set `purge_souls.statuses` ([keeper/reaper.md](../keeper/reaper.md)). The operator may delete it manually.
+- **`destroyed`** — a terminal state ([ADR-017](../adr/0017-keeper-side-core.md) cascade): the host was physically deleted by the cloud-destroy leaf. ⛔ Nothing writes it since NIM-761 removed `core.cloud.provisioned destroyed`; existing rows keep their meaning. There are no outgoing transitions — the record remains as a forensic object and **is not part of** the default set `purge_souls.statuses` ([keeper/reaper.md](../keeper/reaper.md)). The operator may delete it manually.
 
 ### Presence (online/offline) = the Redis SID lease, not souls.status
 

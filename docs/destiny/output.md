@@ -96,8 +96,9 @@ Scenario `output:` block **no**: a scenario writes its result to `incarnation.st
 > **`register:` as the source of a capture's `value:`.** A `core.state.<verb>` step
 > reads `register.<task>.<field>` like any other keeper task
 > ([scenario/orchestration.md §7.1](../scenario/orchestration.md#71-the-capture-verbs)).
-> Being an `on: keeper` task it sees the **keeper** register bucket — the registers of
-> keeper-side tasks of previous Passages (`core.cloud.created`, `core.vault.kv-read`, an
+> Being a keeper-side task it sees the **keeper** register bucket — the registers of
+> keeper-side tasks of previous Passages (`core.vault.kv-read`, a machine-provider
+> plugin step carrying `on: keeper`, an
 > earlier capture's own `register:`). A host probe's `register.<task>.stdout` is **not**
 > reachable from a capture; the retired `state_changes:` block folded the per-host register
 > map after the barrier and could read one. For a per-host fact use `soulprint.hosts`, or

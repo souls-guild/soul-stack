@@ -5,14 +5,16 @@ set of real stable Coven tags in the keeper registry (tables `souls` +
 `incarnation_membership` + coven). Membership is set **implicitly** from the run's
 incarnation and lives in `incarnation_membership`, **not** in `souls.coven[]`
 ([ADR-008 amendment 2026-07-17](../../../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)).
-**Keeper-side**, dispatcher `on: keeper` - step
+**Keeper-side** - step
 is executed on Keeper itself, not on the host (unlike Soul-side core like
-`core.pkg`/`core.file`). Launch without `on: keeper` - scenario validation error.
+`core.pkg`/`core.file`). The side comes from the ADDRESS since NIM-747, so the task
+does not restate it: writing `on: keeper` on this address is refused as redundant
+(`on_keeper_redundant`).
 Implementation - [`keeper/internal/coremod/soul/registered.go`](../../../../keeper/internal/coremod/soul/registered.go).
 
 If there is no entry in `souls` for this `sid` yet, the module creates it under
 `status: pending` (new host added by the script - host branch `add_replica`
-or after cloud-create via `core.cloud.provisioned`). Bootstrap tokens /
+or after a machine-provider plugin created it). Bootstrap tokens /
 SoulSeed module **doesn't** write out
 is an onboarding competency.
 
@@ -50,7 +52,7 @@ Accepts a **string OR list of SIDs** and optionally carries an **onboarding barr
 
 ## list-SID
 
-`sid` accepts a **string OR a list of strings** ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)). The target case is that one create-scenario creates N VMs via `core.cloud.provisioned` (their `sid` come as a list in `register.<provision>.hosts`), and this step registers them and (with `await_online`) waits for onboarding with one barrier. The `coven` passed applies to each SID; `await_online`-barrier aggregates presence over the entire set (general `await_min_count`).
+`sid` accepts a **string OR a list of strings** ([ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md)). The target case is that one create-scenario creates N VMs through a machine-provider plugin (`<alias>.vm.created` with `on: keeper`; their `sid` come as a list in `register.<provision>.hosts`), and this step registers them and (with `await_online`) waits for onboarding with one barrier. The `coven` passed applies to each SID; `await_online`-barrier aggregates presence over the entire set (general `await_min_count`).
 
 A single string remains valid (normalized to a list of one element). **Input output form:** single `sid` → `sid` by string (historical form), list → array.
 
@@ -86,7 +88,7 @@ the resulting set is the same as the current one (`sameSet`, order-independent c
 ## Security
 
 - **Keeper-side, not Soul-side - `root`/capability semantics are not applicable.** Step
-is executed in the Keeper process (`on: keeper` dispatcher), and not by the `soul` agent on
+is executed in the Keeper process (routed by its address), and not by the `soul` agent on
 host. The module does not have a manifest with `required_capabilities`
 ([`soul` module](../../../../shared/coremanifest/mod_soul.go) declares only
 states/input) is a keeper-internal operation on Postgres, not a host plugin.
@@ -138,7 +140,7 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 ```yaml
 # Register the new Soul as a member of the incarnation. Membership is set
 # implicitly from the run's incarnation; coven carries only real stable tags
-# (optional). on: keeper is required - this is a keeper-side step.
+# (optional). No `on:` - the address says this is a keeper-side step.
 - name: Bind new replica to the incarnation
   module: core.soul.registered
   params:
@@ -148,12 +150,12 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 
 ```yaml
 # Register the list of created VMs and blockingly wait for them to be onboarded in one step
-# (ADR-061). on: keeper is required.
+# (ADR-061). No `on:` - the address says the side.
 - name: Register provisioned shards and await onboarding
   module: core.soul.registered
   register: shards
   params:
-    sid:           "${ register.provision.hosts }"   # list of SIDs from cloud-provision
+    sid:           "${ register.provision.hosts }"   # list of SIDs from the provision step
     # coven: optional stable tags; membership is set implicitly
     await_online:  true
     await_timeout: 10m                                # ≤ keeper.yml::max_await_timeout
@@ -164,8 +166,8 @@ The `online`/`pending`/`satisfied` fields are only present with `await_online: t
 ## See also
 
 - [README.md](../../README.md) - directory of core modules.
-- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec for Keeper-side core modules (`on: keeper` manager).
-- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
+- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec for Keeper-side core modules (routed by address).
+- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, the coven filter. It no longer picks the side: that comes from the module address (NIM-747).
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
 - [ADR-017](../../../adr/0017-keeper-side-core.md) — Keeper-side core modules.
 - [ADR-061](../../../adr/0061-onboarding-await-and-midrun-reresolve.md) - onboarding barrier `await_online` (amendment 2026-07-02: + facts-wait at `refresh_soulprint`), list-SID, `refresh_soulprint` re-resolve roster (S2/S3 implemented).

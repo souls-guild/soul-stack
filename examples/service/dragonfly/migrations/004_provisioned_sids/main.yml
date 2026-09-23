@@ -9,7 +9,7 @@ description: >-
       (an anti-replay violation).
 
   Why keep this alongside provisioned_vm_ids: vm_ids is the provider-side identifier
-  (for core.cloud.destroyed), sids is the Keeper-side identity of the Soul (for
+  (for core.cloud.destroyed, removed in NIM-761), sids is the Keeper-side identity of the Soul (for
   cascade-destroy of the souls/seeds/tokens registries). These are different keys
   for different subsystems - both are needed.
 

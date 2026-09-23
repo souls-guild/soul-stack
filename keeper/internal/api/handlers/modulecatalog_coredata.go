@@ -34,12 +34,18 @@ type coreModuleDoc struct {
 	ErrandSafeStates []string
 }
 
-// coreModuleDocs — the table of 18 soul-side core modules of the MVP (ADR-015) +
-// keeper-side core (core.soul/core.vault per ADR-017, core.choir per
-// ADR-044). Matches soul/internal/coremod.Default (18) and
-// keeper/internal/coremod.Default (core.choir is registered conditionally — when
-// Deps.ChoirStore is present, but is always published in the catalog). Order is
-// alphabetical by Name for deterministic output.
+// coreModuleDocs — the hand-written catalog served by GET /v1/modules for the
+// `core.*` namespace. Keeper-side entries are published unconditionally even where
+// the registry registers them conditionally (core.choir needs Deps.ChoirStore).
+// Order is alphabetical by Name for deterministic output.
+//
+// ⚠ It does NOT match the two registries: 22 entries against their 28. Missing are
+// core.directory / core.noop / core.module on the Soul side and core.cert /
+// core.ssh / core.state on the keeper side, so an operator asking the platform what
+// exists is not told about them. The test beside this file compares len(resp) with
+// len(coreModuleDocs), i.e. the table against itself, which is why nothing caught
+// it. Tracked as NIM-890 with the derived guard that would have; do not add an entry
+// here without adding that guard, or the next omission is as silent as these.
 var coreModuleDocs = []coreModuleDoc{
 	// --- soul-side (ADR-015) ---
 	{
@@ -141,8 +147,8 @@ var coreModuleDocs = []coreModuleDoc{
 	// author address = `<Name>.<state>` (core.soul.registered, core.vault.kv-read).
 	{
 		Name:        "core.bootstrap",
-		Description: "Issue one-time tokens for ready-made VM SIDs and deliver/redeem them over SSH or Teleport (keeper-side).",
-		States:      []string{"issued", "delivered"},
+		Description: "Issue one-time tokens for ready-made VM SIDs (keeper-side). Installing the agent and redeeming the token is site-specific since NIM-834 removed the `delivered` state.",
+		States:      []string{"issued"},
 	},
 	{
 		Name:        "core.choir",

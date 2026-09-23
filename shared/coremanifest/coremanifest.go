@@ -25,8 +25,12 @@
 // substitutes after the render phases, ADR-010/ADR-012). Otherwise the linter would
 // reject valid author-written destiny.
 //
-// Keeper-side core (`core.soul`/`core.bootstrap`/`core.vault`/`core.choir`/`core.state`, ADR-017/ADR-044/ADR-063/ADR-0083)
-// are declared here by the same mechanism: a new `mod_<name>.go` + a line in [coreModules].
+// Keeper-side core (`core.soul`/`core.bootstrap`/`core.ssh`/`core.vault`/`core.choir`/`core.state`,
+// ADR-017/ADR-044/ADR-063/ADR-0083/NIM-849) are declared here by the same mechanism: a new
+// `mod_<name>.go` + a line in [coreModules]. Six of the seven, not all of them: `core.cert`
+// is dispatched by the Keeper but ships no schema document, so its params go unchecked
+// offline — see the note on [keeperSideCore] in side.go for why the SIDE catalog is a list
+// of addresses rather than a projection of these declarations.
 package coremanifest
 
 import (

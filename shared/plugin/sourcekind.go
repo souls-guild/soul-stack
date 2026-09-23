@@ -2,11 +2,11 @@ package plugin
 
 // Source kinds — HOW an artifact's bytes are reached (NIM-793).
 //
-// This is a different axis from [Document.Kind] (soul_module / cloud_driver /
-// ssh_provider), which says WHAT an artifact is. The two share the word `kind`
-// because the catalog entry and the schema document each call their own dimension
-// that, and neither spelling is ours to change; in Go they are told apart by name
-// (SourceKind* against Kind*).
+// This is a different axis from [Document.Kind] (soul_module / ssh_provider /
+// soul_beacon — `cloud_driver` left the enum with NIM-761), which says WHAT an
+// artifact is. The two share the word `kind` because the catalog entry and the
+// schema document each call their own dimension that, and neither spelling is
+// ours to change; in Go they are told apart by name (SourceKind* against Kind*).
 //
 // The source kind is signed into the Sigil block, so it is not a hint a catalog can
 // change after an approval: it decides where a Soul goes for the bytes, and an

@@ -41,7 +41,7 @@ tasks:
   #
   # A host already onboarded before this run carries no `bootstrap_token` key at
   # all and is skipped by the step itself — `when:` could not do it, since a
-  # predicate reading `register.*` on an `on: keeper` task is silently ignored.
+  # predicate reading `register.*` on a keeper-side task is silently ignored.
   - name: Install soul and redeem the token
     module: core.ssh.run
     register: install

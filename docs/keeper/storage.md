@@ -53,7 +53,7 @@ CREATE INDEX idx_audit_correlation  ON audit_log (correlation_id)         WHERE 
 
 Partitioning by `created_at` (for example, a BRIN index or PG declarative partitioning by months) is a post-MVP extension as volume grows; not breaking (the Reaper rule `purge_audit_old` then replaces the batch DELETE with DROP PARTITION).
 
-All of Keeper's write-path initiators (the Operator API HTTP middleware, the MCP handler, Reaper, the hot-reload pipeline, `keeper.cloud`, `keeper.push`, bootstrap, the Soul gRPC event forwarder) write through the common helper `shared/audit` — which also handles secret masking ([operator-api.md → Secret masking](operator-api.md)) and the optional OTel dual-write (`keeper.yml → audit.otel_export`). Reading for `GET /v1/audit` (a separate Operator API extension task) — a standard SQL query with an RBAC filter.
+All of Keeper's write-path initiators (the Operator API HTTP middleware, the MCP handler, Reaper, the hot-reload pipeline, `keeper.push`, bootstrap, the Soul gRPC event forwarder) write through the common helper `shared/audit` — which also handles secret masking ([operator-api.md → Secret masking](operator-api.md)) and the optional OTel dual-write (`keeper.yml → audit.otel_export`). Reading for `GET /v1/audit` (a separate Operator API extension task) — a standard SQL query with an RBAC filter.
 
 ### `plugin_sigils` table
 

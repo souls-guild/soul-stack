@@ -1,17 +1,19 @@
 # core.vault
 
 Keeper-side core module for working with Vault KV secrets. One module (base-name
-`core.vault`, Registry key) with dispatching by **state** (pattern
-`core.cloud` / `core.choir`): author-address of the task - base + state.
+`core.vault`, Registry key) with dispatching by **state** (the same pattern as
+`core.choir` / `core.state`): author-address of the task - base + state.
 
 | Author address | State | Destination |
 |---|---|---|
 | `core.vault.kv-read` | `kv-read` (verb) | Explicit reading of a secret from Vault KV with an audit-event entry. |
 | `core.vault.kv-present` | `kv-present` | Generate-if-absent: guarantee the existence of secrets by generating the missing ones with a crypto-random value according to password-policy. |
 
-**Keeper-side**, dispatcher `on: keeper` - both states are executed on the Keeper itself,
-not on the host (unlike Soul-side core). Starting without `on: keeper` is an error
-validation scenario. Implementation - [`kvread.go`](../../../../keeper/internal/coremod/vault/kvread.go)
+**Keeper-side** - both states are executed on the Keeper itself,
+not on the host (unlike Soul-side core). The side comes from the ADDRESS since
+NIM-747, so the task does not restate it: writing `on: keeper` on either address is
+refused as redundant (`on_keeper_redundant`).
+Implementation - [`kvread.go`](../../../../keeper/internal/coremod/vault/kvread.go)
 (base module + `kv-read`), [`kvpresent.go`](../../../../keeper/internal/coremod/vault/kvpresent.go)
 (`kv-present`), [`policy.go`](../../../../keeper/internal/coremod/vault/policy.go)
 (the params form of the policy). The **grammar** itself - alphabets, length bounds,
@@ -82,7 +84,7 @@ Plus standard `.changed` (always `false`) / `.failed` DSL cores.
 
 ```yaml
 # Explicit reading of the secret on the keeper side for the sake of audit-event vault.kv-read.
-# on: keeper is required - this is a keeper-side core. fields optional: without it
+# No `on:` - the address says this is a keeper-side core. fields optional: without it
 # the entire payload will be returned.
 - name: Read the shared DB credentials from Vault (audit-tracked)
   module: core.vault.kv-read
@@ -205,7 +207,7 @@ missing value, including substring, in the entire output and payload tree).
 `math/rand`); the symbol index is chosen uniformly (`rand.Int` - rejection
 sampling, without modulo-skew).
 - **Keeper-side, not Soul-side - `root`/capability semantics are not applicable.** Generation
-is in process of Keeper (`on: keeper`); manifest with `required_capabilities`
+is in process of Keeper (routed by its address); manifest with `required_capabilities`
 there is no module (keeper-internal operation, not host plugin). Running scenario with this
 step is controlled by the RBAC operator ([rbac.md](../../../keeper/rbac.md)).
 - **Requires Vault-auth Keeper.** Reading and writing are performed by the client
@@ -234,7 +236,7 @@ service's own namespace, where nothing derives a path for you:
 
 ```yaml
 # A credential shared by several services: no single service owns the path, so no
-# state_schema derives it. on: keeper is required. policy is a real YAML map (not a
+# state_schema derives it. No `on:` - the address says the side. policy is a real YAML map (not a
 # CEL string), and `targets` is a one-liner CEL-${…} when it is computed.
 - name: Ensure the shared metrics-scrape credential exists
   module: core.vault.kv-present
@@ -266,8 +268,8 @@ service's own namespace, where nothing derives a path for you:
 ## See also
 
 - [README.md](../../README.md) - directory of core modules.
-- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec for Keeper-side core modules (`on: keeper` manager).
-- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
+- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec for Keeper-side core modules (routed by address).
+- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, the coven filter. It no longer picks the side: that comes from the module address (NIM-747).
 - [templating.md](../../../templating.md) - vault-resolve phase and implicit `${ vault(...) }` in CEL.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.
 - [ADR-0083](../../../adr/0083-declared-secret-state-fields.md) - declared secret state fields; §7 fences the service's own Vault namespace against both states of this module, §4 introduces the keeper-side state write that replaces `kv-present` for a service's own secrets.

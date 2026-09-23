@@ -88,11 +88,10 @@ const keeperOnLiteral = "keeper"
 // executes locally on the keeper instance via the scenario-runner.
 //
 // The side follows from the MODULE, not from the task (NIM-747): the core module
-// sets are disjoint — `core.state`/`core.soul`/`core.vault`/
-// `core.choir`/`core.bootstrap`/`core.cert` on this side, the other twenty-one on
-// the Soul side — so the address alone decides, and an author restating it in
-// `on:` was telling the engine what it already knew. `on:` is back to its one
-// meaning, "which covens".
+// sets are disjoint — the seven of coremanifest.KeeperSideAddrs() on this side,
+// the other twenty-one on the Soul side — so the address alone decides, and an
+// author restating it in `on:` was telling the engine what it already knew. `on:`
+// is back to its one meaning, "which covens".
 //
 // Delegates to [config.IsKeeperSideTask] so this routing and soul-lint's offline
 // judgement come out of one rule and one catalog. The `on: keeper` literal still

@@ -30,7 +30,7 @@ Related documents (intentionally not duplicated here):
 - [soul/modules.md](../soul/modules.md) - host side of the modules: where are they located,
 how they are cached, cleanup; manifest custom modules and `spec.states`.
 - [keeper/modules.md](../keeper/modules.md) - specification of Keeper-side core modules
-(dispatcher `on: keeper`).
+(routed by their address; a task does not carry `on:`).
 - [naming-rules.md → Destiny Modules](../naming-rules.md) - dictionary
 names and a summary table of all core modules.
 
@@ -43,17 +43,18 @@ and dispatched within the implementation. Verb-forms (`run`, `shell`, `probe`, `
 `extracted`) - the same mechanism, just without the declarative semantics "lead to
 condition."
 
-Soul-side / Keeper-side dispatcher - scenario-key `on:`
-([scenario/orchestration.md §3](../scenario/orchestration.md#3-step-target---on)):
-Soul-side core are used on hosts (`on:` omitted or coven tags), Keeper-side
-core - `on: keeper` only.
+The Soul-side / Keeper-side split of this catalog **is** the routing rule
+([ADR-0087](../adr/0087-task-side-derived-from-module-address.md), shipped in
+NIM-747/NIM-749): the two registries below share no base name, so the module address
+alone decides the side. `on:` is back to its one meaning — which covens — and the
+linter refuses `on: keeper` on a core address as redundant
+([scenario/orchestration.md §3](../scenario/orchestration.md#3-step-target---on)).
 
-The Soul-side / Keeper-side split of this catalog is exactly what the routing
-derivation of [ADR-0087](../adr/0087-task-side-derived-from-module-address.md)
-reads: the two registries below share no base name, so the module address alone
-decides the side and `on: keeper` on a core address becomes redundant. That ADR is
-accepted and **not implemented**, so the dispatcher described above is still the
-one that ships.
+★ The derivation reads a **catalog**, not a naming pattern, so an address the catalog
+does not know is routed **Soul-side** — that is the honest answer for a plugin, whose
+side is declared in its own schema document. A core address that has been *removed*
+therefore does not error; it silently changes side. `on: keeper` stays as the only
+spelling a keeper-side **plugin** address has.
 
 ## Soul-side core modules
 
@@ -81,17 +82,28 @@ Statically built into the `soul` binary. Apply the same in pull (daemon) and pus
 | [`core.firewall`](core/firewall/README.md) | `present` / `absent` | One firewall rule (ufw/firewalld). |
 | [`core.http`](core/http/README.md) | `probe` / `request` (verbs) | Read-only GET/HEAD probe (`changed=false`) and explicit POST/PUT/PATCH/DELETE API mutation (`changed=true` on expected status). |
 | [`core.augur`](core/augur/README.md) | `fetch` (verb) | Read-probe of live access to an external system (Vault/Prometheus/ELK) via the Augur broker ([ADR-025](../adr/0025-augur.md), `changed=false`). |
+| [`core.noop`](core/noop/README.md) | `run` (verb) | No-op barrier anchor ([ADR-015](../adr/0015-core-modules-mvp.md), `changed=false`) — a task to hang `require:` / `onchanges:` on. |
+| `core.module` (author-address `core.module.installed`) | `installed` | SoulModule plugin delivery to the host: allow-check → `FetchModule` → Sigil-verify → atomic install ([ADR-065](../adr/0065-core-module-installed.md), host side in [soul/modules.md](../soul/modules.md)). |
 
 ## Keeper-side core modules
 
-Dispatcher `on: keeper` - executed on the Keeper side, not on the host. Specka -
+Executed on the Keeper side, not on the host — and said by the ADDRESS, not by a key:
+`on: keeper` on any row below is `on_keeper_redundant`. Spec -
 [keeper/modules.md](../keeper/modules.md).
+
+Conditional registration is the norm here: a keeper-side module whose dependency is
+absent is not registered at all, and a step addressing it fails `unknown keeper-side
+module` rather than running degraded (`keeper/internal/coremod.Default`).
 
 | Module | States | Destination |
 |---|---|---|
 | [`core.soul.registered`](core/soul/README.md) | `registered` | Linking SID to coven tags of the souls registry. |
 | [`core.choir`](core/choir/README.md) | `present` / `absent` | Voice membership (SID) in the Choir incarnation (ADR-044). |
 | [`core.vault`](core/vault/README.md) (author-addresses `core.vault.kv-read` / `core.vault.kv-present`) | `kv-read` (verb) / `kv-present` | `kv-read` — reading the secret from Vault KV (v1/v2, auto-detect) on the keeper side; `kv-present` — generate-if-absent (generate the missing secret using password-policy, [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). |
+| [`core.bootstrap.issued`](core/bootstrap/README.md) | `issued` | One-time bootstrap capabilities for a list of ready-made VM FQDN/SIDs ([ADR-063](../adr/0063-bootstrap-token-delivery.md); `delivered` was removed by NIM-834). |
+| [`core.ssh.run`](core/ssh/README.md) | `run` (verb) | Agentless command transport — the only way to execute anything on a host that has no Soul yet (NIM-849, [keeper/modules.md](../keeper/modules.md#coresshrun)). |
+| `core.state` (author-addresses `core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset`) | one state per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb | The write point of a service state field, captured at step time ([ADR-0084](../adr/0084-explicit-state-capture.md); the declared-secret rule is [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4). Spec — [keeper/modules.md](../keeper/modules.md#corestateverb). |
+| `core.cert` (author-addresses `core.cert.registered` / `core.cert.issued`) | `registered` / `issued` | Warrant issue and registration (NIM-99). The one keeper-side address with no schema document, so its params go unchecked offline — see the note in `shared/coremanifest/side.go`. Spec — [keeper/modules.md](../keeper/modules.md#corecertregistered--corecertissued). |
 
 ## core-beacon
 
@@ -133,25 +145,37 @@ in an address:
 > own gate (`make check`). `redis` is still in this tree; see the ADR-011
 > amendment for why it did not follow the others.
 
-The catalog is complete. What we think (the source of truth is the registry in the code,
-`soul/internal/coremod/registry.go` and `keeper/internal/coremod/registry.go`):
+The catalog is complete. The source of truth is the two registries in the code —
+`soul/internal/coremod.Default` and `keeper/internal/coremod.Default` — and the count
+is stated here once, against them:
 
-- **19 Soul-side core** - 18 by [ADR-015](../adr/0015-core-modules-mvp.md)
-(12 original MVPs + post-MVP `url` / `line` / `repo` / `firewall` / `http`,
-accepted based on real requests, + `directory` split out of `core.file` by
-[Amendment 2026-07-17](../adr/0015-core-modules-mvp.md)) + `augur` by
-[ADR-025](../adr/0025-augur.md) (read-probe via Augur broker). Table "Soul-side
-core modules" above.
-- **5 Keeper-side core** - `core.soul` / `core.cloud` / `core.vault` by
-[ADR-017](../adr/0017-keeper-side-core.md)
-  + `core.choir` by [ADR-044](../adr/0044-choir.md) (registered if available
-`Deps.ChoirStore`). `core.vault` - one module with two states (`kv-read` +
-`kv-present`, generate-if-absent by [ADR-017 amend 2026-06-28](../adr/0017-keeper-side-core.md)). `core.state` (`core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset` - one state per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb, the write point of a service state field; registered when `Deps.Vault` is present. [ADR-0083](../adr/0083-declared-secret-state-fields.md) §4 for the declared-secret rule, [ADR-0084](../adr/0084-explicit-state-capture.md) for the verbs and the step-time capture).
-"Keeper-side core modules" table above.
+**21 Soul-side + 7 Keeper-side = 28 apply modules.** The two tables above list exactly
+those; `core.beacon` is in neither count (Vigil body, read-only observer — not an apply
+module, see the "core-beacon" section).
 
-Total **23 apply modules** (19 + 4). In `docs/module/core/` - **24 directories**: these
-23 modules plus `core-beacon` (Vigil body, read-only observer - not apply module,
-removed from tables, see "core-beacon" section).
+- **21 Soul-side.** 18 by [ADR-015](../adr/0015-core-modules-mvp.md) (12 original MVPs +
+post-MVP `url` / `line` / `repo` / `firewall` / `http`, accepted on real requests, +
+`directory` split out of `core.file` by [Amendment 2026-07-17](../adr/0015-core-modules-mvp.md)),
+plus `augur` by [ADR-025](../adr/0025-augur.md), `noop` (barrier anchor, ADR-015) and
+`module` by [ADR-065](../adr/0065-core-module-installed.md).
+- **7 Keeper-side.** `core.soul` and `core.vault` by [ADR-017](../adr/0017-keeper-side-core.md),
+`core.choir` by [ADR-044](../adr/0044-choir.md), `core.bootstrap` by [ADR-063](../adr/0063-bootstrap-token-delivery.md),
+`core.cert` (NIM-99), `core.ssh` (NIM-849) and `core.state` by [ADR-0084](../adr/0084-explicit-state-capture.md).
+All but the first two are registered conditionally on their dependency.
+`core.cloud` is **not** among them: NIM-761 removed it together with the CloudDriver
+contract, and a VM is created by an ordinary `side: keeper` SoulModule plugin with its
+own address ([known-limitations.md](../known-limitations.md)).
+
+The Keeper-side table's seven base addresses are exactly what
+`shared/coremanifest.KeeperSideAddrs()` returns — the list the linter and the render
+pipeline route by, so a row that disagrees with it is a bug in the row.
+
+`docs/module/core/` holds **26 directories** — 25 of these modules plus `core-beacon`.
+Three modules have no per-module page yet and are documented where their spec lives:
+`core.module` in [ADR-065](../adr/0065-core-module-installed.md) and
+[service/manifest.md → `modules[]`](../service/manifest.md) (the host-side cache layout is in
+[soul/modules.md](../soul/modules.md)); `core.state` and `core.cert` in
+[keeper/modules.md](../keeper/modules.md).
 
 Standards (pilot) - [`core/pkg/README.md`](core/pkg/README.md) and
 [`core/file/README.md`](core/file/README.md). All links in the tables above lead to

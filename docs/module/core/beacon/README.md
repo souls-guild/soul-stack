@@ -351,7 +351,7 @@ hook on interface `Beacon` - deferred.
 
 In addition to the built-in `core.beacon.*`, the operator can add his own beacon plugins
 ([ADR-030 V5-2](../../../adr/0030-vigil-oracle.md)).
-4th kind in plugin-infra (parity with `soul_module` / `cloud_driver` / `ssh_provider`):
+4th kind in plugin-infra, as decided (parity with `soul_module` / `cloud_driver` / `ssh_provider`; ⛔ `cloud_driver` left the enum in NIM-761, so the live set is three):
 
 - binary `soul-beacon-<name>`, manifest [`kind: soul_beacon`](../../../keeper/plugins.md);
 - SDK - [`sdk/beacon`](../../../../sdk/beacon/beacon.go), `Beacon` interface with two RPCs:

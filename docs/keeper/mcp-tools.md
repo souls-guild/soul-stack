@@ -155,9 +155,9 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `service-already-exists` | `name` Service is busy in the registry `service_registry` (`keeper.service.register`). |
 | `service-not-registered` | `service` is missing from `keeper.yml → services[]`. |
 | `omen-already-exists` | `name` Omen is busy in the registry `omens` (`keeper.augur.omen.create`). |
-| `provider-already-exists` | `name` Provider is busy in the registry `providers` (`keeper.provider.create`). |
-| `profile-already-exists` | `name` Profile - I am busy in the registry `profiles` (`keeper.profile.create`). |
-| `provider-has-profiles` | The removal of the Provider is blocked - it is referenced by the Profile (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
+| `provider-already-exists` ⛔ | ⛔ **Gone with the Provider registry in NIM-761.** `name` Provider is busy in the registry `providers` (`keeper.provider.create`). |
+| `profile-already-exists` ⛔ | ⛔ **Gone with the Profile registry in NIM-761.** `name` Profile is busy in the registry `profiles` (`keeper.profile.create`). |
+| `provider-has-profiles` ⛔ | ⛔ **Gone with both registries in NIM-761.** The removal of the Provider is blocked - it is referenced by the Profile (`keeper.provider.delete`; FK `ON DELETE RESTRICT`). |
 | `errand-not-cancellable` | Errand is already in terminal status - there is nothing to cancel (`keeper.errand.cancel`, ADR-033 slice E5). |
 | `soul-capability-unsupported` | The target Soul is connected, but its announced capability set does not cover the request (REST `409`, [ADR-0076(i)](../adr/0076-engine-compat-window.md)). Sole user: `dry_run` on `keeper.soul.errand.run`, refused before dispatch because a binary that ignores the flag applies for real. Also covers "support could not be confirmed"; the message says which. |
 | `teardown-unavailable` | `keeper.soul.forget` stopped BEFORE deleting anything because the cluster-wide teardown notice could not be published (REST `503`, `TypeTeardownUnavailable`). Its own code rather than `internal-error` precisely because the two demand opposite reactions: this one is **retryable and changed nothing**, `internal-error` is a defect the caller cannot act on. Retry once Redis is reachable. |

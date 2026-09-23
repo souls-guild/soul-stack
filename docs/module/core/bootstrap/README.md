@@ -8,8 +8,9 @@ The second state, `core.bootstrap.delivered`, was **removed in NIM-834** —
 
 ## `core.bootstrap.issued`
 
-Issues one-time bootstrap tokens for ready-made VMs without invoking a
-CloudDriver. Input:
+Issues one-time bootstrap tokens for ready-made VMs. It creates no machines —
+that is a machine-provider plugin's job, and was a CloudDriver's before NIM-761
+removed the contract. Input:
 
 ```yaml
 - name: Issue ready-made VM tokens
@@ -47,7 +48,7 @@ token is issued for it either way. What differs is whose host it is:
   scenario run — means *unknown*, never *no owner*, and can claim only unbound
   rows.
 
-Ownership is the same predicate `core.cloud.created` used for its own
+Ownership is the same predicate the removed `core.cloud.created` used for its own
 pass-through (`keepersoul.OwnedByRun`, [ADR-063 amendment
 2026-09-04](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780)).
 Issuance still never rotates the identity of an onboarded Soul.

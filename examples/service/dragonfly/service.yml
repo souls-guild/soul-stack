@@ -24,15 +24,18 @@ description: >-
 #   - 003_cloud_provision_read_model: cloud-provision read-model (ADR-061,
 #     Option A - create raises the VM in the same run; user decision 2026-07-01,
 #     DragonFly cloud-provision modeled on redis). Adds provisioned_vm_ids (array
-#     string - provider-vm-id of created VMs, day-2 teardown reads them for core.cloud.destroyed)
-#     and provisioned_provider (string - the cloud-Provider name). Mirrors redis 007_cloud_provision_read_model. Default
-#     for incarnations without provision (deploy on existing hosts): provisioned_vm_ids=[] and
-#     provisioned_provider='' (not provisioned by our service).
+#     string - provider-vm-id of created VMs, day-2 teardown read them for the cloud-destroy
+#     leaf, `core.cloud.destroyed` — removed in NIM-761, nothing reads them today)
+#     and provisioned_provider (string - the cloud-Provider name). Mirrors redis 007_cloud_provision_read_model.
+#     ⛔ Both are DEAD since NIM-761 (see the state_schema block below): nothing writes them,
+#     and on an incarnation created today all three provisioned_* fields are ABSENT, not
+#     empty - the '[]' / '' defaults this step described needed a create that wrote them.
 #   - 004_provisioned_sids: cascade-destroy read-model (addition to v3).
 #     Adds provisioned_sids (array string - SID/FQDN of VMs created by our run; day-2
-#     cascade-teardown finishes off orphaned souls/seeds/tokens - the Reaper does NOT tear down pending-VM-
-#     souls itself, without sids they would remain orphaned, anti-replay violated). Alongside provisioned_vm_ids: vm_ids -
-#     provider-id (for core.cloud.destroyed), sids - the Keeper-side Soul identity (for cascade).
+#     cascade-teardown finished off orphaned souls/seeds/tokens - the Reaper does NOT tear down pending-VM-
+#     souls itself, without sids they would have remained orphaned, anti-replay violated). Alongside provisioned_vm_ids: vm_ids -
+#     provider-id (for the removed core.cloud.destroyed), sids - the Keeper-side Soul identity (for that cascade).
+#     ⛔ The cascade went with core.cloud.destroyed in NIM-761; this field is dead too.
 #     Mirrors redis 008_provisioned_sids.
 #   - 005_monitoring_read_model: mandatory data-plane monitoring
 #     (Slice II, ADR-024). state is AUGMENTED WITH the monitoring read-model (node_exporter version/listen).
@@ -201,26 +204,28 @@ state_schema:
       failover_timeout_ms: { type: integer }
 
   # ── cloud-provision read-model (v2->v4, ADR-061, Option A) ──────────────────
-  # FACT that "these hosts were raised by our create run via cloud-create". Populated by
-  # create ONLY when input.provision.enabled (provider/vm_ids/sids from the register
-  # core.cloud.created); otherwise [] / '' (hosts not provisioned by the service - declared
-  # roster). day-2 teardown reads provisioned_vm_ids for core.cloud.destroyed.
-  # provider - the cloud-Provider name in the registry (for the same destroy call). Mirrors
-  # redis service.yml provisioned_* (user decision 2026-07-01).
+  # ⛔ ALL THREE ARE DEAD FIELDS. Nothing writes them and nothing reads them.
+  #
+  # They were the FACT that "these hosts were raised by our create run via cloud-create":
+  # written by `create` when input.provision.enabled, from the register of a
+  # `core.cloud.created` step, and read by day-2 teardown for `core.cloud.destroyed` -
+  # vm_ids as the provider-side id, provider as its registry name, sids as the
+  # Keeper-side Soul identity for the cascade over souls / seeds / bootstrap tokens.
+  #
+  # NIM-761 removed `core.cloud` with the CloudDriver contract, and `create` lost its
+  # provision body with it (README, "Cloud-provision — removed (NIM-761)"); the cascade
+  # went with `core.cloud.destroyed`. Three of the five `scenario/create/tests/*/case.yml`
+  # assert all three `state_absent` - create-sentinel-tls, create-sentinel-1master-1replica
+  # and standalone-no-replicas. They survive here only because the ladder is forward-only.
+  #
+  # A service that provisions through a machine-provider PLUGIN would keep the same three
+  # shapes and fill them from that step's own register instead.
   provisioned_vm_ids:
     type: array
     items:
       type: string
   provisioned_provider:
     type: string
-  # provisioned_sids (v4): SID (FQDN) of every VM raised by this create run. DIFFERS
-  # from provisioned_vm_ids: vm_ids - provider-side id (for core.cloud.destroyed), sids -
-  # the Keeper-side Soul identity. day-2 teardown (cascade destroy) reads sids to
-  # finish off orphaned souls (->destroyed) / seeds (->orphaned) / bootstrap tokens
-  # (->burned): the Reaper does NOT tear down pending-VM-souls itself (mark_disconnected only
-  # goes connected->disconnected), without sids the records would remain (anti-replay violation).
-  # Populated with the same guard+shape as provisioned_vm_ids (input.provision.enabled ->
-  # register.provision.hosts.map(h, h.sid)); otherwise [].
   provisioned_sids:
     type: array
     items:

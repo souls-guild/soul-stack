@@ -19,7 +19,7 @@ The document is the single source of truth for top-level architecture. If the so
 - [Incarnation — runtime service instance](#incarnation--runtime-service-instance)
 - [Targeting and host communication](#targeting-and-host-communication)
 - [Versioning and migration state_schema](#versioning-and-state_schema-migrations)
-- [Cloud integration via `keeper.cloud`](#cloud-integration-via-keepercloud)
+- [Cloud integration via `keeper.cloud`](#cloud-integration-via-keepercloud) ⛔ history (NIM-761)
 - [Reaper](#reaper)
 - [Delivery of SoulSeed token to host](#delivery-of-soulseed-token-to-the-host)
 - [End-to-end installation scenario](#end-to-end-installation-scenario)
@@ -109,7 +109,7 @@ Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). 
 
 ### [ADR-015. Core MVP modules: exact list](adr/0015-core-modules-mvp.md)
 
-Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 18 Soul-side core modules (`core.pkg`/`core.file`/`core.directory`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read` — ⚠ `core.cloud` is **slated for removal**, NIM-757 epic, see the ADR-017 stub below); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP). Amendment 2026-07-17: `core.file.directory` split out into the standalone `core.directory` (`present`/`absent`, hard rename); `core.service` gains `disabled`/`masked`.
+Moved to [`docs/adr/0015-core-modules-mvp.md`](adr/0015-core-modules-mvp.md). 18 Soul-side core modules (`core.pkg`/`core.file`/`core.directory`/`core.service`/`core.user`/`core.group`/`core.exec`/`core.cmd`/`core.cron`/`core.mount`/`core.git`/`core.archive`/`core.sysctl`/`core.url`/`core.line`/`core.repo`/`core.firewall`/`core.http`) + 3 Keeper-side (`core.soul.registered`/`core.cloud.provisioned`/`core.vault.kv-read` — ⛔ `core.cloud` was **removed** in NIM-761 on 2026-09-04, see the ADR-017 stub below; the live catalog is [module/README.md](module/README.md#catalog-status)); `core.template`/`core.copy` are NOT deliberately highlighted; `core.line`/`core.repo`/`core.firewall`/`core.http` accepted post-facto (in-place/read-probe MVP). Amendment 2026-07-17: `core.file.directory` split out into the standalone `core.directory` (`present`/`absent`, hard rename); `core.service` gains `disabled`/`masked`.
 
 ### [ADR-016. Parity strategy and Soul Stack license](adr/0016-parity-license.md)
 
@@ -117,7 +117,7 @@ Moved to [`docs/adr/0016-parity-license.md`](adr/0016-parity-license.md). Licens
 
 ### [ADR-017. Keeper-side core modules expanded: `core.cloud.provisioned`, `core.vault.kv-read`](adr/0017-keeper-side-core.md)
 
-Moved to [`docs/adr/0017-keeper-side-core.md`](adr/0017-keeper-side-core.md). Two keeper-side core modules (`on: keeper`): `core.cloud.provisioned` (`created`/`destroyed` via `CloudDriver` plugin, cascade with destroy) replaces the "destiny `cloud-provision`" pattern; `core.vault.kv-read` (`read`) - explicit audit-accurate reading of Vault KV during rendering. Amendments: cloud credentials-flow (Variant A) + 6 implemented providers + cloud-init bootstrap. **Amendment 2026-09-01 (NIM-757): the separate CloudDriver contract is removed — every cloud driver is an ordinary SoulModule plugin declaring `side: keeper`** ([ADR-017 amendment](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)). Credentials stay Variant A but arrive as **ordinary step params**, so no cloud-specific credentials channel remains in keeper at all. `core.cloud` and all three of its states (`created` / `destroyed` / **`resized`**) go, together with the Provider and Profile registries, 8 RBAC permissions, 7 audit events, 10 MCP tools, 10 Operator-API operations and the six `soul-cloud-*` examples; the 2026-08-17 NIM-668 amendment is **annulled**. Order is forced — **NIM-758** (keeper learns to execute a keeper-side plugin) → **NIM-760** (the cloud driver moves, verified live) → **NIM-761** (removal) → **NIM-762** (web UI); removal first would leave the platform unable to create a machine at all. Design only, not implemented.
+Moved to [`docs/adr/0017-keeper-side-core.md`](adr/0017-keeper-side-core.md). Two keeper-side core modules (`on: keeper`): `core.cloud.provisioned` (`created`/`destroyed` via `CloudDriver` plugin, cascade with destroy) replaces the "destiny `cloud-provision`" pattern; `core.vault.kv-read` (`read`) - explicit audit-accurate reading of Vault KV during rendering. Amendments: cloud credentials-flow (Variant A) + 6 implemented providers + cloud-init bootstrap. **Amendment 2026-09-01 (NIM-757): the separate CloudDriver contract is removed — every cloud driver is an ordinary SoulModule plugin declaring `side: keeper`** ([ADR-017 amendment](adr/0017-keeper-side-core.md#amendment-2026-09-01-nim-757-the-clouddriver-contract-is-removed--a-cloud-driver-is-an-ordinary-plugin)). Credentials stay Variant A but arrive as **ordinary step params**, so no cloud-specific credentials channel remains in keeper at all. `core.cloud` and all three of its states (`created` / `destroyed` / **`resized`**) go, together with the Provider and Profile registries, 8 RBAC permissions, 7 audit events, 10 MCP tools, 10 Operator-API operations and the six `soul-cloud-*` examples; the 2026-08-17 NIM-668 amendment is **annulled**. Order is forced — **NIM-758** (keeper learns to execute a keeper-side plugin) → **NIM-760** (the cloud driver moves, verified live) → **NIM-761** (removal) → **NIM-762** (web UI); removal first would leave the platform unable to create a machine at all. **Landed: NIM-761 on 2026-09-04** — `core.cloud` is gone from the catalog, so the address is now an ordinary unknown one and `coremanifest.SideOf` answers **Soul** for it (which is why a leftover in a scenario aborts `no_hosts` instead of erroring — NIM-863).
 
 ### [ADR-018. Soulprint typed MVP scheme](adr/0018-soulprint-typed.md)
 
@@ -308,7 +308,7 @@ This section applies to both **pull** and **push** transports. This is a single 
 
 ### Structure
 
-- **Core modules** - statically built into the `soul` binary. Cover the vast majority of Destiny: the exact list is fixed [ADR-015](#adr-015-core-mvp-modules-exact-list) – 18 Soul-side (`pkg`/`file`/`directory`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`; `directory` split from `file` per Amendment 2026-07-17, `service` also gains `disabled`/`masked`) + 3 Keeper-sides (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
+- **Core modules** - statically built into the binary. The design is fixed by [ADR-015](#adr-015-core-mvp-modules-exact-list) (Soul-side) and [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read) (Keeper-side); the count and the exact list are **not restated here** — read them from [module/README.md → Catalog status](module/README.md#catalog-status), which derives both from the two registries. Every copy of that list in the tree had drifted at least once by NIM-884, which is why there is one. `core.cloud` is not on it ([known-limitations.md](known-limitations.md)). They work always, everywhere, and do not require additional delivery. By addressing, all built-in modules live in namespace `core`. Files from templates are rendered by `core.file.rendered` (see [ADR-010](#adr-010-template-engine-cel-for-yaml-expressions-go-texttemplate-for-files)) - a separate module `core.template` is NOT allocated.
 - **Custom modules** - executable artifacts under `/var/lib/soul-stack/modules/<alias>/`, one executable per slot. The `soul` binary runs one as a sub-process over the stdio protocol (see below), naming the module it wants as a **subcommand**; one artifact serves several modules. By addressing they live under their registration alias (`redis`, `acme`, …).
 
 > **Soul-side vs Keeper-side core modules.** The vast majority of core modules (`pkg`, `file`, `service`, `user`, `exec`, `template`, …) are **Soul-side**: executed on the host `soul`-binary. Some of the core modules are **Keeper-side**: they operate on the keeper's registries (Postgres souls+coven, Redis cache, logs) and are executed on the keeper itself. The first Keeper-side core is `core.soul.registered` (SID binding to coven tags of the souls registry; full specification is [`docs/keeper/modules.md`](keeper/modules.md)). **The side is decided by the ADDRESS** — the two core registries are disjoint — and [ADR-0087](adr/0087-task-side-derived-from-module-address.md) makes the routing derive from it, retiring `on: keeper` on a core address; implemented in NIM-749, so `on:` now means only "which covens" ([`docs/scenario/orchestration.md §3`](scenario/orchestration.md)). The addressing (`<namespace>.<module>.<state>`) and the SoulModule contract are the same for both parties.
@@ -511,7 +511,7 @@ Moved to [`docs/adr/0060-traits.md`](adr/0060-traits.md). **Trait** - operator-s
 
 ### [ADR-061. Single-run provision→onboarding→role: onboarding-await + mid-run re-resolve roster](adr/0061-onboarding-await-and-midrun-reresolve.md)
 
-Moved to [`docs/adr/0061-onboarding-await-and-midrun-reresolve.md`](adr/0061-onboarding-await-and-midrun-reresolve.md). **One create-scenario** deploys an N-shard cluster from "nothing": provision N VM (`core.cloud.provisioned`, `on: keeper`, [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read)) → waiting for onboarding of created Souls → mid-run roster growth → applying redis role to already online hosts. Closes the blocker "`soulprint.hosts` - snapshot at the start, mid-run does not grow; `refresh_soulprint` is ignored; there is no onboarding barrier." Two abilities on existing `core.soul.registered` (**NOT** new module - user decision: barrier adjacent to registration; separate `core.soul.online` rejected as an extra entity). **(1) onboarding-await:** new input flags `await_online` (bool) / `await_timeout` (duration, required-when `await_online`) / `await_min_count` (int, opt, default = number of registered SIDs) / `await_poll_interval` (duration, opt, ~2s) - after register+coven the step blockingly polls the **Redis SID-lease** (`keeper/internal/redis/SoulsStreamAlive`, source of truth online - NOT PG `souls.status`, [ADR-006](#adr-006-cache-and-coordination---redis)) to `await_min_count`/timeout; **B1-strict** (online < min to timeout → step `failed` → fail-stop → `incarnation.state` not committed → `error_locked`); output `register.<name>` added `online[]`/`pending[]`/`satisfied`; ceiling `keeper.yml::max_await_timeout` (DoS-guard, fail-closed - exceeding → `failed`, not silent cutting). **list-SID:** `params.sid` accepts a string OR a list (the barrier aggregates presence across all SIDs in one step). **(2) mid-run re-resolve:** flag `refresh_soulprint` has been revived (was a stub `refreshed: false`) - after the success of the scenario-runner step, the incarnation roster will be re-solved before the NEXT Passage; **monotonous growth** (+hosts only, deleting mid-run is prohibited). The stability roster invariant is weakened: "stable within the Passage" (not the entire run). barrier/state-commit-invariant [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) **NOT** weakened (state is committed once after the last Passage). **Stratify:** `refresh_soulprint: true` makes the task a passage-defining boundary ([ADR-056](adr/0056-staged-render-passage.md), symmetrical to the probe-emitter) - consumers `soulprint.hosts`/`on: [incarnation.name]`/`soulprint.self.*` leave for Passage strictly AFTER. **HA:** provision scenarios are recommended to be run via Voyage ([ADR-043](adr/0043-voyage.md), recovery closed); standalone staged-recovery of a long barrier - open. **S1 (`await_online`) implemented; S2 (Stratify-border) / S3 (actual re-resolve in run.go) - the contract is fixed, implementation is in separate slices.** **Amends [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-056](adr/0056-staged-render-passage.md) / [ADR-006](#adr-006-cache-and-coordination---redis) / [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read).**
+Moved to [`docs/adr/0061-onboarding-await-and-midrun-reresolve.md`](adr/0061-onboarding-await-and-midrun-reresolve.md). **One create-scenario** deploys an N-shard cluster from "nothing": provision N VM (a machine-provider plugin address with `on: keeper`; the ADR wrote this as `core.cloud.provisioned`, removed with the CloudDriver contract in NIM-761) → waiting for onboarding of created Souls → mid-run roster growth → applying redis role to already online hosts. Closes the blocker "`soulprint.hosts` - snapshot at the start, mid-run does not grow; `refresh_soulprint` is ignored; there is no onboarding barrier." Two abilities on existing `core.soul.registered` (**NOT** new module - user decision: barrier adjacent to registration; separate `core.soul.online` rejected as an extra entity). **(1) onboarding-await:** new input flags `await_online` (bool) / `await_timeout` (duration, required-when `await_online`) / `await_min_count` (int, opt, default = number of registered SIDs) / `await_poll_interval` (duration, opt, ~2s) - after register+coven the step blockingly polls the **Redis SID-lease** (`keeper/internal/redis/SoulsStreamAlive`, source of truth online - NOT PG `souls.status`, [ADR-006](#adr-006-cache-and-coordination---redis)) to `await_min_count`/timeout; **B1-strict** (online < min to timeout → step `failed` → fail-stop → `incarnation.state` not committed → `error_locked`); output `register.<name>` added `online[]`/`pending[]`/`satisfied`; ceiling `keeper.yml::max_await_timeout` (DoS-guard, fail-closed - exceeding → `failed`, not silent cutting). **list-SID:** `params.sid` accepts a string OR a list (the barrier aggregates presence across all SIDs in one step). **(2) mid-run re-resolve:** flag `refresh_soulprint` has been revived (was a stub `refreshed: false`) - after the success of the scenario-runner step, the incarnation roster will be re-solved before the NEXT Passage; **monotonous growth** (+hosts only, deleting mid-run is prohibited). The stability roster invariant is weakened: "stable within the Passage" (not the entire run). barrier/state-commit-invariant [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) **NOT** weakened (state is committed once after the last Passage). **Stratify:** `refresh_soulprint: true` makes the task a passage-defining boundary ([ADR-056](adr/0056-staged-render-passage.md), symmetrical to the probe-emitter) - consumers `soulprint.hosts`/`on: [incarnation.name]`/`soulprint.self.*` leave for Passage strictly AFTER. **HA:** provision scenarios are recommended to be run via Voyage ([ADR-043](adr/0043-voyage.md), recovery closed); standalone staged-recovery of a long barrier - open. **S1 (`await_online`) implemented; S2 (Stratify-border) / S3 (actual re-resolve in run.go) - the contract is fixed, implementation is in separate slices.** **Amends [ADR-009 §7](#adr-009-scenario---a-complete-dsl-of-destiny-tasks-border-with-destiny---recommendation) / [ADR-056](adr/0056-staged-render-passage.md) / [ADR-006](#adr-006-cache-and-coordination---redis) / [ADR-017](#adr-017-keeper-side-core-modules-expanded-corecloudprovisioned-corevaultkv-read).**
 
 ### [ADR-062. Named input types - reusable named input schemes via `types:` + `$type`](adr/0062-input-types.md)
 
@@ -633,7 +633,7 @@ Moved to [`docs/adr/0086-one-schema-dialect.md`](adr/0086-one-schema-dialect.md)
 | Contract | Who is the host | Who is the plugin | Destination |
 |---|---|---|---|
 | **`SoulModule`** | `soul`-binary | one executable in the alias-named slot | Implements Destiny steps: `Validate` / `Plan` / `Apply` (see Module Model). |
-| **`CloudDriver`** ⚠ | `keeper` | `soul-cloud-<provider>` | Creates/deletes/polls VMs in the cloud: `Schema` / `Validate` / `Create` / `Destroy` / `Resize` / `Status` / `List`. **Slated for removal (NIM-757 epic, not implemented).** A cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper` — see the [ADR-020 amendment 2026-09-01](adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it). The contract, the six drivers and this row describe what ships today. |
+| **`CloudDriver`** ⚠ | `keeper` | `soul-cloud-<provider>` | Creates/deletes/polls VMs in the cloud: `Schema` / `Validate` / `Create` / `Destroy` / `Resize` / `Status` / `List`. ⛔ **REMOVED in NIM-761 (2026-09-04).** A cloud driver becomes an ordinary SoulModule plugin declaring `side: keeper` — see the [ADR-020 amendment 2026-09-01](adr/0020-plugin-infrastructure.md#amendment-2026-09-01-nim-757-cloud_driver-is-removed-and-side-keeper-is-what-replaces-it). Neither the contract nor the six drivers ship; this row is the record of a retired one. |
 | **`SshProvider`** | `keeper` | `soul-ssh-<provider>` | Provides SSH credentials for `keeper.push`: `Sign` / `Authorize` (Vault SSH CA, static-key, Teleport - all fit into this contract). |
 
 ### Benefits of a single infrastructure
@@ -647,7 +647,7 @@ Moved to [`docs/adr/0086-one-schema-dialect.md`](adr/0086-one-schema-dialect.md)
 
 Plugin registries (`soul_modules`, `ssh_providers`) live in `keeper.yml` - Keeper resolves sources at startup, checks out `ref:`, pulls binaries into artifact-cache. The plugin version is always git ref (tag or branch), without semver-range, see [ADR-007](#adr-007-versioning-of-artifacts-is-done-through-git-ref-not-through-a-field-in-the-manifest).
 
-The format of the block `plugins:` with all keys is in [`docs/keeper/config.md`](keeper/config.md). Contracts `CloudDriver` and `SshProvider` on the part of Keeper - in [`docs/keeper/plugins.md`](keeper/plugins.md). `SoulModule` (host = `soul`) - in [`docs/soul/modules.md`](soul/modules.md).
+The format of the block `plugins:` with all keys is in [`docs/keeper/config.md`](keeper/config.md). The keeper-side contracts - a `side: keeper` SoulModule and `SshProvider` (⛔ the separate `CloudDriver` contract was removed in NIM-761) - in [`docs/keeper/plugins.md`](keeper/plugins.md). `SoulModule` (host = `soul`) - in [`docs/soul/modules.md`](soul/modules.md).
 
 ## Soul Stack artifacts: what's in git, what's in the database
 
@@ -658,8 +658,8 @@ A clear boundary between **code** (static, versioned with git tags, reviewed via
 | **Service** | Definition (service type) | git, separate repo for the service | git tag → registry in master |
 | **Destiny** | Definition (atomic brick) | git, separate repo on destiny | git tag → transitively via service.yml |
 | **Module** (a SoulModule artifact, or a `soul-ssh-*` provider) | Definition + binary | git sources + artifact-cache in master | release in git → master pulls binary |
-| **Profile** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
-| **Provider** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. **Registry slated for removal (NIM-757 epic, not implemented)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
+| **Profile** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. ⛔ **Registry REMOVED in NIM-761 (2026-09-04)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
+| **Provider** ⚠ | Runtime config | **Postgres** | API/MCP CRUD. ⛔ **Registry REMOVED in NIM-761 (2026-09-04)** — see ["Cloud integration via `keeper.cloud`"](#cloud-integration-via-keepercloud). |
 | **Coven** | Runtime state | **Postgres** | API/MCP, or synchronized from incarnation |
 | **Incarnation** | Runtime state (spec + state + status) | **Postgres** | API/MCP CRUD |
 | **Soul** | Runtime state | **Postgres** | bootstrap via CSR, lifecycle via scenario |
@@ -784,8 +784,9 @@ state_schema:
 # No semver-range - exact ref and nothing more.
 destiny:
   - { name: redis, ref: v1.0.0 }      # mode-agnostic brick: install + render redis.conf
-  # cloud-create is NOT a destiny dependency: this is a scenario step `core.cloud.provisioned`
-  # (on: keeper, CloudDriver plugin), see ADR-017.
+  # cloud-create is NOT a destiny dependency: it is a scenario step addressing a machine
+  # provider PLUGIN (`<alias>.vm.created`, `on: keeper`) — NIM-761 removed `core.cloud`
+  # and the CloudDriver contract with it, see known-limitations.md.
 
 modules:                              # custom modules
   # One artifact, one alias, one entry per OBJECT it manages (NIM-766). They collapse
@@ -848,23 +849,26 @@ input:
     required: true
     secret: true
     pattern: "^vault:.*"              # a link to Vault is required
-  spawn:                              # optional: for cloud-create
-    type: object
+  spawn:                              # optional: for cloud-create. The provider is not a
+    type: object                      # field here — it is the plugin the step addresses.
     properties:
-      provider: { type: string }
-      profile:  { type: string }
-      count:    { type: integer, min: 3, max: 6 }
+      profile: { type: string }
+      count:   { type: integer, min: 3, max: 6 }
 
 # Steps - the module address decides the side; on: selects covens ([coven,...] / omitted)
 tasks:
+  # A machine-provider PLUGIN, not a core module: NIM-761 removed `core.cloud` with the
+  # CloudDriver contract. `democloud` is the alias the operator registered it under, and
+  # `on: keeper` is the ONLY spelling of a plugin's side — that side lives in the plugin's
+  # schema document, which a scenario cannot read. On a CORE address the key is redundant
+  # and the linter refuses it.
   - name: provision
     when: input.spawn != null
-    module: core.cloud.provisioned    # keeper-side core (ADR-017) — the address routes it
-    state: created
+    module: democloud.vm.created
+    on: keeper
     params:
-      provider: "${ input.spawn.provider }"
-      profile:  "${ input.spawn.profile }"
-      count:    "${ input.spawn.count }"
+      profile: "${ input.spawn.profile }"
+      count:   "${ input.spawn.count }"
 
   - name: install-redis
     # on: omitted = the whole incarnation (all member hosts)
@@ -1101,10 +1105,12 @@ Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
 - name: Apply base config everywhere
   apply: { destiny: redis-base, input: { ... } }
 
-# Local task on the keeper itself (cloud-create, vault-resolve, http-call)
+# Local task on the keeper itself. On a CORE address the side comes from the address
+# and `on:` is refused as redundant; on a PLUGIN address `on: keeper` is the only
+# spelling there is — which is what a machine provider is since NIM-761.
 - name: Provision VMs
-  module: core.cloud.provisioned
-  state: created
+  module: democloud.vm.created
+  on: keeper
   params: { ... }
 
 # Intersection (AND) of stable covens, always ⊆ members
@@ -1326,7 +1332,7 @@ Divided into those closed in previous rounds (we don't save them for history - s
 2. **Operator client - CLI form.** Primary interface - OpenAPI and MCP (ADR-004), CLI is acceptable as a thin wrapper. Open: will it be (separate binary / `keeper` subcommand in client mode / only third-party tools on top of the API), and whether it is necessary to supply an official CLI as part of the release.
 3. ~~**SSH-2. SSH providers for `keeper.push`.**~~ **Closed [ADR-020 amendment (2026-05-26)](#adr-020-plugin-infrastructure-manifest-handshake-lifecycle-format):** MVP set - 3 providers, all committed and working: `soul-ssh-static` (`4f95ef6`), `soul-ssh-vault` (`3642520`, Vault SSH CA), `soul-ssh-teleport` (`af27678`, `SignReply.proxy_jump` field 4). Solutions for three general mechanics are fixed: credentials-flow - Option B for CA providers (the plugin itself in Vault via `vault_access`; diverges from cloud-Variant A deliberately - `ssh/sign` is an operation, not KV-read); key-ownership - Keeper-ephemeral (the private does not leave Keeper, security-first); params-delivery - env-convention per-plugin (`SOUL_SSH_*_PARAMS`). Open - **dispatcher `proxy_jump` support** (Teleport-via-bastion): the pilot is applicable to hosts with direct SSH accessibility, a separate slice is in progress.
 5. **Sub-questions of the module model.** The model itself is fixed. Open inside:
-   - ~~exact set of core modules in MVP~~ **closed ADR-015**: 17 Soul-side (`pkg`/`file`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`) + 3 Keeper-side (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are ADR-017);
+   - ~~exact set of core modules in MVP~~ **closed ADR-015**: 17 Soul-side (`pkg`/`file`/`service`/`user`/`group`/`exec`/`cmd`/`cron`/`mount`/`git`/`archive`/`sysctl`/`url`/`line`/`repo`/`firewall`/`http`) + 3 Keeper-side (`soul.registered`/`cloud.provisioned`/`vault.kv-read`, the last two are ADR-017) — ⛔ that is the MVP set **as closed**, not the catalog today: `core.cloud` was removed in NIM-761, and the live list is [module/README.md → Catalog status](module/README.md#catalog-status);
    - ~~where the module registry lives in Keeper - Postgres `bytea` / separate artifact store (S3-compatible) / keeper file system~~ **closed [ADR-065](adr/0065-core-module-installed.md):** no new storage - PG `plugin_sigils` = permissions (authority sha256), keeper FS cache = bytes(git-directory-resolve `plugins.soul_modules[]`), git = origin(ADR-007); delivery to Soul - server-streaming RPC `FetchModule` + core module `core.module.installed`; S3-artifact-store - post-GA extension behind the fetch abstraction. ⚠ **The question stays CLOSED; its answer is extended, not re-opened, by the [ADR-065 amendment 2026-09-04](adr/0065-core-module-installed.md#amendment-2026-09-04-nim-794-the-fetch-step-goes-to-the-source-and-fetchmodule-stays-as-the-egress-free-path) (NIM-794, not implemented).** Where the registry lives is unchanged — still PG grants + keeper FS cache + git, still no new storage. What changes is **delivery**: a host that can reach the artifact source pulls the bytes **from the source** (`source_kind: artifact`, `base_url` + an explicit `artifacts[]`), and that becomes the primary path; **`FetchModule` is retained, not deprecated**, as the path for hosts without egress. `core.module.installed` is the step in both. ⚠ The "no new storage" half now holds only on the condition that the keeper FS cache carries **N artifacts per slot** — one per platform the grant covers — or `FetchModule` cannot serve the very hosts it is retained for;
    - ~~format and location of the module manifest - separate `manifest.yaml` next to the binary vs the first gRPC method `Manifest()`~~ **closed ADR-020(a):** static `manifest.yaml` in the root of the plugin repo and next to the binary; RPC `Manifest()` is not included in MVP;
    - ~~exact stdio-handshake protocol version and format (probably like `hashicorp/go-plugin`)~~ **closed ADR-020(b/c):** JSON on one line with magic prefix field `"soul_stack":"plugin-v1"`; `protocol_version` is duplicated in manifest and handshake; correspondence `protocol_version: N` ↔ `proto/plugin/vN/`. Full spec - [`docs/keeper/plugins.md`](keeper/plugins.md);

@@ -17,7 +17,7 @@ tasks:
     params:
       cmd: echo ${ compute.node_count }
 
-  # In scope on the keeper side too (NIM-619): `on: keeper` renders in the very
+  # In scope on the keeper side too (NIM-619): a keeper-side task renders in the very
   # run-level context compute was resolved in. Alongside it, two things that only
   # LOOK like the namespace — a literal coven label containing the word and an
   # input field whose name starts with it. A rule built on a regex would flag both

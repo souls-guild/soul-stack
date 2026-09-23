@@ -45,7 +45,7 @@ By [ADR-004](../adr/0004-binaries.md#adr-004-binary-layout--keeper-soul-soul-lin
 - **OpenAPI + MCP facade** - gRPC-Gateway/connect-go on top of the same kernel, MCP server.
 - **Module `keeper.push`** - SSH delivery of Destiny to hosts without a Soul agent. Not a separate binary, see [push.md](push.md).
 - **Reaper / Reaper** - background cleaning of the database, leader via Redis-lease, see [reaper.md](reaper.md).
-- **Plugin-host for CloudDriver and SshProvider** - sub-process by gRPC-stdio, see [plugins.md](plugins.md).
+- **Plugin-host for keeper-side plugins** - a `side: keeper` SoulModule (a machine provider is one) or an SshProvider, each a sub-process over gRPC-stdio; the separate CloudDriver contract was removed in NIM-761. See [plugins.md](plugins.md).
 - **Integrations out of the box** - Vault, OTel, Prometheus metrics, RBAC, log rotation, hot-reload config ([requirements.md](../requirements.md)).
 
 The `keeper` binary **does not include**: agent server code, implementation of Destiny core modules (this is `soul`), offline linter (this is `soul-lint`).
@@ -55,7 +55,7 @@ The `keeper` binary **does not include**: agent server code, implementation of D
 - [storage.md](storage.md) - where the registries and cache live.
 - [push.md](push.md) - module `keeper.push`.
 - [reaper.md](reaper.md) - background database cleaning.
-- [plugins.md](plugins.md) - CloudDriver and SshProvider.
+- [plugins.md](plugins.md) - keeper-side SoulModule and SshProvider.
 - [rbac.md](rbac.md) — RBAC.
 - [config.md](config.md) - format `keeper.yml`.
 - [`../soul/`](../soul/README.md) - `soul`-binary (neighboring component).

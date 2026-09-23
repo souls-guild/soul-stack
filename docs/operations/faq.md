@@ -249,11 +249,11 @@ See [`upgrade.md` → Rolling upgrade Keeper](upgrade.md#rolling-upgrade-keeper)
 1. Verify entry in `plugin_sigils`:
    ```sql
    SELECT namespace, name, ref, sha256, revoked_at FROM plugin_sigils
-   WHERE namespace = 'cloud' AND name = 'soul-cloud-aws' AND revoked_at IS NULL;
+   WHERE namespace = 'redis' AND name = 'redis' AND revoked_at IS NULL;
    ```
 2. Verify SHA-256 of the actual binary:
    ```sh
-   sha256sum /var/lib/soul-stack-keeper/plugins/cloud/soul-cloud-aws/<commit_sha>/soul-cloud-aws
+   sha256sum /var/lib/soul-stack-keeper/plugins/<alias>/<commit_sha>/<binary>
    ```
 3. If there is a match, verify the trust-anchor set on Soul (re-broadcast may not have reached). See [`docs/observability.md` → keeper_sigil_anchors_last_delivered](../observability.md).
 4. If the plugin has been updated and the SHA has changed, you need to explicitly allow the new one via the Operator API (`plugin.allow`).

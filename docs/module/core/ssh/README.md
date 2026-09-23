@@ -65,7 +65,7 @@ is rendered **once for the whole run**, not once per host — `keeperVars` binds
 roster, and the render pass's seal is required to be host-invariant
 (`TestRender_SealedSetDoesNotMoveWithTheRoster`) — so a per-host value has no
 expression that could reach a params cell. `loop:` is not an escape either: it is
-not supported on `on: keeper` at all.
+not supported on a keeper-side task at all.
 
 Naming the field is the better shape regardless: the per-host secret never enters
 the task's params, so keeping it out of the command line is constructive rather
@@ -120,7 +120,7 @@ flag: demanding a dial address for the one host the step is about to skip is wha
 used to fail the step over it.
 
 The skip lives inside the module because a scenario cannot express it: `when:` on
-an `on: keeper` task is only half-evaluated — a static predicate works, one
+a keeper-side task is only half-evaluated — a static predicate works, one
 reading `register.*` is silently ignored.
 
 ### Transport

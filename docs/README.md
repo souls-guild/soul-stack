@@ -92,19 +92,20 @@ Reference: exact formats, behavior, parameters. The source of truth is here (and
 |---|---|
 | [module/](module/README.md) | Index folder **per-module directory**: for each implemented core module - canonical name, states, parameters, idempotency, side-effects, example task. Documents behavior by code (not design - design in [ADR-015](adr/0015-core-modules-mvp.md) / [ADR-017](adr/0017-keeper-side-core.md)). |
 
-Implemented modules in [module/core/](module/core/) - **23 directories** (each with its own `README.md`), and not all "modules" in the same sense:
+Implemented modules in [module/core/](module/core/) - **26 directories** (each with its own `README.md`), and not all "modules" in the same sense:
 
-- **18 Soul-side core** (apply on hosts): `pkg`, `file`, `service`, `user`, `group`, `exec`, `cmd`, `cron`, `mount`, `git`, `archive`, `sysctl`, `url`, `line`, `repo`, `firewall`, `http` (17 per [ADR-015](adr/0015-core-modules-mvp.md): 12 original MVP + post-MVP `url`/`line`/`repo`/`firewall`/`http`) + `augur` ([ADR-025](adr/0025-augur.md), read-probe via broker).
-- **7 Keeper-side core** (routed by the module address, NIM-749 — the task carries no `on:` key): `soul`, `cloud`, `vault` ([ADR-017](adr/0017-keeper-side-core.md)), `choir` ([ADR-044](adr/0044-choir.md)), `bootstrap` ([ADR-063](adr/0063-bootstrap-token-delivery.md)), `state` ([ADR-0084](adr/0084-explicit-state-capture.md)) and `cert`.
+- **21 Soul-side core** (apply on hosts): `pkg`, `file`, `directory`, `service`, `user`, `group`, `exec`, `cmd`, `cron`, `mount`, `git`, `archive`, `sysctl`, `url`, `line`, `repo`, `firewall`, `http` (18 per [ADR-015](adr/0015-core-modules-mvp.md) after the 2026-07-17 `directory` split) + `augur` ([ADR-025](adr/0025-augur.md), read-probe via broker), `noop` (barrier anchor) and `module` ([ADR-065](adr/0065-core-module-installed.md), plugin delivery).
+- **7 Keeper-side core** (routed by the module address, NIM-747/NIM-749 — the task carries no `on:` key): `soul`, `vault` ([ADR-017](adr/0017-keeper-side-core.md)), `choir` ([ADR-044](adr/0044-choir.md)), `bootstrap` ([ADR-063](adr/0063-bootstrap-token-delivery.md)), `state` ([ADR-0084](adr/0084-explicit-state-capture.md)), `cert` and `ssh`. ⛔ `cloud` was removed in NIM-761 with the CloudDriver contract.
 - **1 `beacon`** - Vigil body ([ADR-030](adr/0030-vigil-oracle.md)), read-only observer, not apply-module.
+- Three modules have no directory of their own yet — `module`, `state` and `cert`; their spec lives in [ADR-065](adr/0065-core-module-installed.md) + [service/manifest.md](service/manifest.md) for `module` (the host-cache half is in [soul/modules.md](soul/modules.md)), and in [keeper/modules.md](keeper/modules.md) for the other two.
 
-The exact summary of "what we think" and the source of truth (registry in the code) is [module/README.md → Directory status](module/README.md).
+The count is stated once, against the two registries, in [module/README.md → Catalog status](module/README.md#catalog-status); this list is a pointer, not a second source.
 
 ### Binary and RBAC configs
 
 | Document | What is it / for whom |
 |---|---|
-| [keeper/](keeper/README.md) | Keeper-side index folder: Postgres + Redis, push, Reaper, plugins (Cloud / SSH), cloud integration, `keeper.yml` format. |
+| [keeper/](keeper/README.md) | Keeper-side index folder: Postgres + Redis, push, Reaper, keeper-side plugins (`side: keeper` SoulModule / SshProvider), `keeper.yml` format. ⛔ There is no `keeper.cloud` and no CloudDriver contract since NIM-761. |
 | [keeper/console.md](keeper/console.md) | **Interactive console plane**: the WebSocket `/v1/console` (the only one in Keeper), the session manager over the Keeper↔Soul EventStream, backpressure, kill-on-disconnect, cross-Keeper routing, operator session caps. Soul half — [soul/console.md](soul/console.md). |
 | [keeper/rbac.md](keeper/rbac.md) | RBAC: roles and permissions, unified application to OpenAPI / MCP / push, bootstrap of the first Archon. |
 | [soul/](soul/README.md) | Soul-side index folder: identity, bootstrap token onboarding, connection algorithm, `soul.yml` format, module cache on the host. |

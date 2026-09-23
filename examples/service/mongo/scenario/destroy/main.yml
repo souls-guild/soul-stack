@@ -9,7 +9,8 @@ description: >-
   * PILOT (symmetry with dragonfly/destroy): create does NOT provision a VM (deploy onto existing hosts,
   no provisioned_* in state) → cloud-teardown has NOTHING to remove, no keeper-registry cascade needed
   (the hosts aren't ours, they remain Souls). So teardown is Soul-side: stop mongod + remove
-  our /etc artifacts. cloud-provision (default-on + cascade following the redis pattern) — NEXT slice.
+  our /etc artifacts. cloud-provision is NOT a next slice: NIM-761 removed the engine-side cloud step, so a VM
+  # is torn down through a machine-provider plugin's own module address, not from here.
 
   * TEARDOWN BOUNDARY (conservative MVP — remove "systemd + files", NOT data/general-purpose
   packages):

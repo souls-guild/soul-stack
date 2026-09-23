@@ -29,8 +29,9 @@ state_schema:
 destiny:
   - { name: redis,                    ref: v2.0.0 }
   - { name: redis-replication-config, ref: v1.0.0 }
-  # cloud-provision удалён: после ADR-017 это core-модуль core.cloud.provisioned,
-  # не custom destiny. Core-модули в required_modules не перечисляются (ADR-009).
+  # cloud-provision is not a destiny dependency: ADR-017 made it a keeper-side step, and
+  # since NIM-761 removed core.cloud it is a machine-provider PLUGIN address. Neither core
+  # modules nor that step belong in this list (ADR-009).
 
 # Custom-модули, нужные сервису: одна строка на АРТЕФАКТ, имя — алиас регистрации
 # (NIM-829). Двухуровневая форма — в service-golden/module-two-level-deprecated.yml.

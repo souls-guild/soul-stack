@@ -2,9 +2,11 @@
 
 Editing Voice's membership in the Choir incarnation (ADR-044): declared entity -
 "SID is the Voice of the specified Choir of this incarnation" (declared part
-choir). **Keeper-side**, dispatcher `on: keeper` - the step is executed on the actual
+choir). **Keeper-side** - the step is executed on the actual
 Keeper, not on the host (unlike Soul-side core like `core.pkg`/`core.file`).
-Launch without `on: keeper` - scenario validation error. Implementation -
+The side comes from the ADDRESS since NIM-747, so the task does not restate it:
+writing `on: keeper` on this address is refused as redundant
+(`on_keeper_redundant`). Implementation -
 [`keeper/internal/coremod/choir/member.go`](../../../../keeper/internal/coremod/choir/member.go).
 
 Author form of task address - `core.choir.present` / `core.choir.absent`
@@ -64,7 +66,7 @@ Voice, not the creation of the Choir itself or the incarnation.
 ## Security
 
 - **Keeper-side, not Soul-side - `root`/capability semantics are not applicable.** Step
-is executed in the Keeper process (`on: keeper` dispatcher), and not by the `soul` agent
+is executed in the Keeper process (routed by its address), and not by the `soul` agent
 on the host. The module does not have a manifest with `required_capabilities` - this is
 keeper-internal operation on Postgres, not a host plugin.
 - **Edit membership is a privileged Keeper operation.** Launch access
@@ -125,7 +127,7 @@ above): the new Voice is visible to subsequent runs.
 
 ```yaml
 # Add a host to the Choir 'replicas' incarnations (present default).
-# on: keeper is required - this is a keeper-side step.
+# No `on:` - the address says this is a keeper-side step.
 - name: Add the new replica to the replicas choir
   module: core.choir.present
   params:
@@ -153,7 +155,7 @@ above): the new Voice is visible to subsequent runs.
 ## See also
 
 - [README.md](../../README.md) - directory of core modules.
-- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec of Keeper-side core modules (dispatcher `on: keeper`, parsing `base`+`state`).
-- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, step manager between the Soul side and the Keeper side.
+- [keeper/modules.md](../../../keeper/modules.md) - regulatory spec of Keeper-side core modules (routed by address, parsing `base`+`state`).
+- [scenario/orchestration.md §3](../../../scenario/orchestration.md#3-step-target---on) - `on:`, the coven filter. It no longer picks the side: that comes from the module address (NIM-747).
 - [soul/soulprint.md](../../../soul/soulprint.md) - registry projection `soulprint.self.choirs` / `soulprint.hosts[].choirs`.
 - [naming-rules.md → Destiny Modules](../../../naming-rules.md) - a dictionary of names.

@@ -10,9 +10,10 @@ import (
 // the top-level name (Namespace+"."+Name), value is the expected states. Guards
 // against "forgot to add the module to coreModules" and against state-set regressions.
 //
-// Keeper-side core (`core.soul`/`core.vault`/`core.choir`) are declared
+// Keeper-side core (`core.soul`/`core.bootstrap`/`core.ssh`/`core.vault`/`core.choir`/
+// `core.state` — six of the seven, `core.cert` ships no schema document) are declared
 // via the same mechanism; state names are aligned with the actual dispatch of the
-// keeper-side coremods (StateCreated/StateDestroyed, StateRead, present/absent).
+// keeper-side coremods (StateRead, present/absent, the ADR-057 verbs).
 var expectedModules = map[string][]string{
 	"core.exec":      {"run"},
 	"core.file":      {"present", "absent", "rendered"},
@@ -34,7 +35,7 @@ var expectedModules = map[string][]string{
 	"core.http":      {"probe", "request"},
 	"core.noop":      {"run"},                   // no-op/barrier anchor (ADR-015)
 	"core.module":    {"installed"},             // SoulModule plugin delivery (ADR-065)
-	"core.soul":      {"registered"},            // keeper-side (on: keeper)
+	"core.soul":      {"registered"},            // keeper-side (routed by address)
 	"core.bootstrap": {"issued"},                // keeper-side ready-made VM token minting (delivery removed, NIM-834)
 	"core.ssh":       {"run"},                   // keeper-side agentless command transport (NIM-849)
 	"core.vault":     {"kv-read", "kv-present"}, // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)

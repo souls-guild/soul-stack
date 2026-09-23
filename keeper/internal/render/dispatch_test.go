@@ -161,6 +161,11 @@ func join(s []string) string {
 // keeper-side — where the keeper now really executes it (NIM-758), and where the
 // literal stays the only spelling: a plugin's side is declared in its schema
 // document, which the render pipeline does not read and a scenario cannot.
+//
+// The "keeper-side core, on: keeper" case must name an address that is STILL in
+// coremanifest.KeeperSideAddrs(). It named `core.cloud.created` until NIM-884, and
+// once NIM-761 took that module out of the catalog the case silently became a second
+// copy of "plugin address, on: keeper" — green, and covering nothing.
 func TestIsKeeperTask_SideFollowsTheModuleAddress(t *testing.T) {
 	mod := func(addr string) *config.ModuleTask {
 		return &config.ModuleTask{Module: addr, Params: map[string]any{}}
@@ -170,7 +175,7 @@ func TestIsKeeperTask_SideFollowsTheModuleAddress(t *testing.T) {
 		want bool
 	}{
 		"keeper-side core, no on:":        {config.Task{Module: mod("core.state.set")}, true},
-		"keeper-side core, on: keeper":    {config.Task{On: "keeper", Module: mod("core.cloud.created")}, true},
+		"keeper-side core, on: keeper":    {config.Task{On: "keeper", Module: mod("core.soul.registered")}, true},
 		"soul-side core, no on:":          {config.Task{Module: mod("core.pkg.present")}, false},
 		"soul-side core, on: a coven":     {config.Task{On: []any{"primary"}, Module: mod("core.exec.run")}, false},
 		"plugin address, on: keeper":      {config.Task{On: "keeper", Module: mod("democloud.vm.created")}, true},

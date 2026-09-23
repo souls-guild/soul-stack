@@ -111,7 +111,9 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 
-	// core: all 21 (18 soul-side + 3 keeper-side) are present.
+	// Every table entry is served, plus the one plugin. This compares the table
+	// against itself and so cannot catch a module MISSING from the table — six are
+	// (NIM-890); the derived guard belongs to that ticket.
 	if len(resp.Items) != len(coreModuleDocs)+1 {
 		t.Fatalf("expected %d entries (core + 1 plugin), got %d", len(coreModuleDocs)+1, len(resp.Items))
 	}

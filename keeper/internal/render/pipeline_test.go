@@ -948,13 +948,14 @@ func TestRender_OnKeeper_ComputeReadable(t *testing.T) {
 }
 
 // TestRender_OnKeeper_StateReadable — a keeper-side task reads incarnation.state.<path>
-// in params: pre-run snapshot (RenderInput.State), symmetric with Soul-side. Unblocks
-// core.cloud.destroyed (on: keeper) reading incarnation.state.provisioned_*.
+// in params: pre-run snapshot (RenderInput.State), symmetric with Soul-side. Unblocks a
+// machine-provider plugin's destroy step (on: keeper) reading
+// incarnation.state.provisioned_*.
 func TestRender_OnKeeper_StateReadable(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
 		Tasks: []config.Task{
-			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.cloud.provisioned", Params: map[string]any{
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "democloud.vm.destroyed", Params: map[string]any{
 				"vm_id": "${ incarnation.state.provisioned_vm_id }",
 			}}},
 		},
@@ -986,7 +987,7 @@ func TestRender_OnKeeper_StateNilNoSuchKey(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "k",
 		Tasks: []config.Task{
-			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "core.cloud.provisioned", Params: map[string]any{
+			{Name: "t", On: "keeper", Module: &config.ModuleTask{Module: "democloud.vm.destroyed", Params: map[string]any{
 				"vm_id": "${ incarnation.state.provisioned_vm_id }",
 			}}},
 		},

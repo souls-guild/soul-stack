@@ -81,7 +81,7 @@ For GA, these three classes must be blocking (with preliminary stabilization by 
 - **Push: Teleport `proxy_jump`** - not completed (narrow push profile - [known-limitations.md → Push](known-limitations.md#push-agentless-via-ssh---narrow-profile)).
 - **SoulBeacon live-loop e2e** + UI `/oracle/fires` - backend `GET /v1/oracle/fires` not implemented, stub page ([known-limitations.md → /oracle/fires](known-limitations.md#ui-oraclefires---stub)).
 - **DR**: work on `restore` for staging + CLI commands `keeper --check-config` / `conclave-evict` / `issue-token` (not in `soulctl` now - [soulctl/](../soulctl/README.md)).
-- **Cloud-CRUD → explicit known-limitation** (post-GA): 6 CloudDriver plugins are available, but not REST `/v1/providers` - operationally unavailable ([known-limitations.md → Cloud-provisioning](known-limitations.md#cloud-provisioning---not-in-beta)).
+- **Cloud-CRUD → explicit known-limitation** (post-GA): ⛔ superseded by NIM-761 — the 6 CloudDriver plugins and the contract they implemented are gone, and no machine-provider plugin ships in this repo, so there is nothing to expose over REST at all ([known-limitations.md → Cloud-provisioning](known-limitations.md#cloud-provisioning---not-in-beta)).
 - **Coverage-report** in CI (coverage visibility; hard gate - P2).
 
 ---

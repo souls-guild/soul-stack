@@ -1,14 +1,27 @@
 // Package coremod wires keeper-side core modules (ADR-017,
 // docs/keeper/modules.md) into a single Registry.
 //
-// Modules (Registry key = base name, author form = base + state in address):
+// Modules (Registry key = base name, author form = base + state in address) —
+// the seven of shared/coremanifest.KeeperSideAddrs(), which is the catalog the
+// linter and the render pipeline route by:
 // `core.soul` (`core.soul.registered`, docs/keeper/modules.md),
 // `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)), `core.state`
 // (`core.state.*`, [ADR-0083] §4 — the write of a service state field
-// carrying declared secrets, registered when Deps.Vault is present) and `core.choir`
+// carrying declared secrets, registered when Deps.Vault AND Deps.StateStore are
+// both present), `core.choir`
 // (`core.choir.present`/`core.choir.absent`, ADR-044 — membership changes in
-// Choir of incarnation, registered when Deps.ChoirStore is present). All
-// execute on keeper instance, scenario-runner dispatcher is `on: keeper`.
+// Choir of incarnation, registered when Deps.ChoirStore is present),
+// `core.cert` (`core.cert.registered`/`core.cert.issued`, NIM-99),
+// `core.bootstrap` (`core.bootstrap.issued`, ADR-063) and `core.ssh`
+// (`core.ssh.run`, NIM-849 — agentless command transport). All execute on the
+// keeper instance, and the scenario-runner routes them by ADDRESS (NIM-747):
+// `on: keeper` on any of the seven is refused as `on_keeper_redundant`.
+//
+// Only `core.soul` and `core.vault` are unconditional; the rest are registered
+// when their dependency is present, and a step addressing an unregistered one
+// fails "unknown keeper-side module" rather than running degraded. The catalog,
+// by contrast, is complete and static — which is why side.go holds it and not
+// this file, and why side_catalog_guard_test.go holds the two against each other.
 //
 // Symmetrically soul/internal/coremod (Soul-side, ADR-015): same interface
 // sdk/module.SoulModule, same Registry pattern. Difference is where step runs
@@ -151,7 +164,8 @@ type AuditWriter interface {
 }
 
 // Default builds Registry with keeper-side core modules: unconditionally
-// core.soul / core.vault, plus core.choir if Deps.ChoirStore present. Caller
+// core.soul / core.vault, then core.state, core.choir, core.cert,
+// core.bootstrap and core.ssh each when its dependency below is set. Caller
 // provides real deps (PG-pool via soul.NewPGStore, vault-client from
 // keeper/internal/vault, choir.NewPGStore).
 func Default(d Deps) *Registry {

@@ -172,6 +172,17 @@ and `core.bootstrap`.
 Until NIM-749 / NIM-750 land, `on: keeper` remains required and everything above describes the
 engine that ships.
 
+★ **All three claims in the paragraph above have since been overtaken (noted under NIM-884; the
+text stays as the record of what was decided).** NIM-747/NIM-749 landed, so the side is derived and
+`on: keeper` on a core address is refused as redundant. `core.cert` is in the SIDE catalog
+(`side.go`) — though still not in `coreModules`, so its params remain unchecked offline, which is
+the distinction the paragraph above conflated.
+And the seven bases are **not** the seven listed: `core.cloud` left in NIM-761 and `core.ssh`
+arrived in NIM-849, so the catalog is `core.bootstrap` / `core.cert` / `core.choir` / `core.soul` /
+`core.ssh` / `core.state` / `core.vault`. Read it from `coremanifest.KeeperSideAddrs()`, never from
+a list in a document — an address the catalog does not know does not error, it routes Soul-side
+(NIM-863).
+
 ## Amendment 2026-09-01 (NIM-757): the CloudDriver contract is removed — a cloud driver is an ordinary plugin
 
 ★ **Implemented (NIM-761, 2026-09-04).** The contract, the Provider and Profile registries with
