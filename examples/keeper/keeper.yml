@@ -94,6 +94,27 @@ plugins:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: v0.1.0 }
 
+# Credentials for private git sources — every repository Keeper itself clones:
+# the service repository, the destiny artifacts under default_destiny_source,
+# the ref listing behind the Upgrade modal, and a `kind: git` plugin source
+# (NIM-898). Optional and additive: a host this block
+# does not name resolves the way it always did (ssh-agent for ssh, nothing for
+# https), so an installation with only public sources omits it entirely.
+#
+# Each secret has two sources — a vault-ref or a local file — with a fixed
+# priority: `*_ref` first, `*_file` second. Both may be set. Inline plaintext is
+# not among the sources: a `*_ref` must be a vault-ref, a `*_file` is a PATH.
+git:
+  credentials:
+    - host: gitlab.example.com
+      # SSH. known_hosts is REQUIRED alongside a key — there is no
+      # ignore-host-key escape, symmetric with the push subsystem.
+      key_ref:         vault:secret/keeper/git#ssh_key
+      known_hosts_ref: vault:secret/keeper/git#known_hosts
+      # HTTPS. Sent as the basic-auth password, so the token stays out of
+      # `services.git`, which the registry, the API and the audit trail keep.
+      token_ref:       vault:secret/keeper/git#token
+
 # Plugin lifecycle and capabilities (ADR-020)
 plugin_runtime:
   socket_dir: /var/run/soul-stack-keeper/plugins

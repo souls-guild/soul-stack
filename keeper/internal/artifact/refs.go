@@ -68,19 +68,21 @@ func (f RefsListerFunc) ListRefs(ctx context.Context, gitURL string) ([]GitRef, 
 //   - Result: all tags first, then all branches (separate blocks; the UI
 //     usually groups them visually).
 //
-// Auth: SSH via ssh-agent (see [authFor]; Vault auth is post-MVP). The scheme
+// Auth: see [authFor] — a configured `git.credentials[]` entry, else the
+// ssh-agent for an ssh URL. Pass [WithGitCredentials] to reach a private
+// remote; without it the listing is as unauthenticated as it was. The scheme
 // is validated via [validateGitScheme] (`file://` only under the env flag).
 // git/network errors are returned to the caller as-is — the handler above
 // maps them to 502 Bad Gateway (the external git source is unreachable /
 // failed).
-func ListRefs(ctx context.Context, gitURL string) ([]GitRef, error) {
+func ListRefs(ctx context.Context, gitURL string, opts ...Option) ([]GitRef, error) {
 	if gitURL == "" {
 		return nil, fmt.Errorf("artifact: git URL is empty")
 	}
 	if err := validateGitScheme(gitURL); err != nil {
 		return nil, err
 	}
-	auth, err := authFor(gitURL)
+	auth, err := authFor(gitURL, applyOptions(opts).creds)
 	if err != nil {
 		return nil, err
 	}

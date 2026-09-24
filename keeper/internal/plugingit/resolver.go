@@ -49,6 +49,7 @@ import (
 	"path/filepath"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/gitauth"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginhost"
 	"github.com/souls-guild/soul-stack/keeper/internal/pluginsource"
 	"github.com/souls-guild/soul-stack/sdk/schema"
@@ -152,6 +153,18 @@ type Resolver struct {
 	maxArtifactSize int64
 	maxCloneSize    int64
 	logger          *slog.Logger
+	creds           *gitauth.Store
+}
+
+// Option configures a [Resolver] beyond its positional parameters.
+type Option func(*Resolver)
+
+// WithGitCredentials wires the resolved `keeper.yml::git.credentials[]` store
+// (NIM-898) so a `kind: git` plugin can come from a private source. Omitted or
+// nil, plugin git auth stays what it was: the ssh-agent for an ssh source,
+// nothing for https.
+func WithGitCredentials(creds *gitauth.Store) Option {
+	return func(r *Resolver) { r.creds = creds }
 }
 
 // NewResolver constructs resolver. gitTimeout <= 0 → [DefaultGitTimeout].
@@ -159,7 +172,7 @@ type Resolver struct {
 // / [config.DefaultPluginMaxCloneSizeMB] (resolve symmetric to Resolved* config methods).
 // logger nil → slog.Default(). Git operations — go-git (pure-Go, no
 // system `git` fork).
-func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifactSize, maxCloneSize int64, logger *slog.Logger) *Resolver {
+func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifactSize, maxCloneSize int64, logger *slog.Logger, opts ...Option) *Resolver {
 	if gitTimeout <= 0 {
 		gitTimeout = DefaultGitTimeout
 	}
@@ -172,7 +185,7 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 	if logger == nil {
 		logger = slog.Default()
 	}
-	return &Resolver{
+	r := &Resolver{
 		cacheRoot:       cacheRoot,
 		workRoot:        workRoot,
 		gitTimeout:      gitTimeout,
@@ -180,6 +193,12 @@ func NewResolver(cacheRoot, workRoot string, gitTimeout time.Duration, maxArtifa
 		maxCloneSize:    maxCloneSize,
 		logger:          logger,
 	}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(r)
+		}
+	}
+	return r
 }
 
 // bytesPerMiB — multiplier MiB→bytes, local copy of [config.bytesPerMiB]
@@ -354,7 +373,7 @@ func (r *Resolver) prepareCheckout(ctx context.Context, workdir, source, ref str
 		return "", fmt.Errorf("plugingit: mkdir work root %q: %w", r.workRoot, err)
 	}
 
-	auth, err := authFor(source)
+	auth, err := authFor(source, r.creds)
 	if err != nil {
 		return "", fmt.Errorf("%w: %v", ErrSourceUnavailable, err)
 	}

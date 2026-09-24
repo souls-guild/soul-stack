@@ -6,6 +6,8 @@ import (
 	"log/slog"
 	"os"
 	"sync"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/gitauth"
 )
 
 // snapshotter — the shared git→snapshot machinery reused by [ServiceLoader]
@@ -20,18 +22,47 @@ import (
 type snapshotter struct {
 	cacheRoot string
 	logger    *slog.Logger
+	creds     *gitauth.Store
 
 	mu    sync.Mutex
 	locks map[string]*sync.Mutex
 }
 
-func newSnapshotter(cacheRoot string, logger *slog.Logger) snapshotter {
+// Option configures the git-side of a loader or of [ListRefs]. Variadic
+// because the credentials are the only thing either has ever needed beyond a
+// cache root and a logger, and every other caller in the tree — the whole test
+// corpus among them — wants none.
+type Option func(*loaderOptions)
+
+type loaderOptions struct {
+	creds *gitauth.Store
+}
+
+// WithGitCredentials wires the resolved `keeper.yml::git.credentials[]` store
+// (NIM-898). Omitted or nil, git auth stays what it was: the ssh-agent for an
+// ssh URL, nothing for https.
+func WithGitCredentials(creds *gitauth.Store) Option {
+	return func(o *loaderOptions) { o.creds = creds }
+}
+
+func applyOptions(opts []Option) loaderOptions {
+	var o loaderOptions
+	for _, opt := range opts {
+		if opt != nil {
+			opt(&o)
+		}
+	}
+	return o
+}
+
+func newSnapshotter(cacheRoot string, logger *slog.Logger, opts ...Option) snapshotter {
 	if logger == nil {
 		logger = slog.Default()
 	}
 	return snapshotter{
 		cacheRoot: cacheRoot,
 		logger:    logger,
+		creds:     applyOptions(opts).creds,
 		locks:     make(map[string]*sync.Mutex),
 	}
 }
@@ -75,7 +106,7 @@ func (s *snapshotter) snapshot(ctx context.Context, name, gitURL, ref, kind stri
 		return "", "", derr
 	}
 
-	auth, aerr := authFor(gitURL)
+	auth, aerr := authFor(gitURL, s.creds)
 	if aerr != nil {
 		return "", "", aerr
 	}

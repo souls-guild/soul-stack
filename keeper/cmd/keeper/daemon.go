@@ -53,6 +53,7 @@ import (
 	coremodssh "github.com/souls-guild/soul-stack/keeper/internal/coremod/ssh"
 	coremodstate "github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
+	"github.com/souls-guild/soul-stack/keeper/internal/gitauth"
 	keepergrpc "github.com/souls-guild/soul-stack/keeper/internal/grpc"
 	"github.com/souls-guild/soul-stack/keeper/internal/herald"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -145,6 +146,11 @@ type daemon struct {
 
 	// --- vault ---
 	vc *keepervault.Client
+
+	// gitCreds — the resolved `git.credentials[]` store (NIM-898), nil when the
+	// block is absent. Handed to every git-fetching consumer: the service and
+	// destiny loaders, the refs lister, the plugin git resolver.
+	gitCreds *gitauth.Store
 
 	// --- storage ---
 	pool *pgxpool.Pool
@@ -695,6 +701,25 @@ func (d *daemon) setupVault(ctx context.Context) error {
 	return nil
 }
 
+// setupGitCredentials resolves `keeper.yml::git.credentials[]` into the store
+// the artifact loaders and the plugin git resolver take (NIM-898).
+//
+// It runs right after setupVault and before every consumer, because the whole
+// block is `*_ref` / `*_file` sources that need the Vault client and must fail
+// the START: a keeper that came up with an unreadable key would report it at
+// the first clone of some service, pointing at the repository rather than at
+// the config line. Nothing here is hot-reloadable, symmetric with
+// `push.host_ca_refs[]`.
+func (d *daemon) setupGitCredentials(ctx context.Context) error {
+	creds, err := gitauth.Load(ctx, d.vc, d.cfg.Git)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: git credentials: %v\n", err)
+		return errSetupFailed
+	}
+	d.gitCreds = creds
+	return nil
+}
+
 // setupStorage — PG pool + Ping + ResolveDSN + Apply migrations. pool
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
@@ -908,7 +933,9 @@ func (d *daemon) setupServiceRegistry(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.serviceRefs = serviceregistry.NewRefsCache(
-		artifact.RefsListerFunc(artifact.ListRefs),
+		artifact.RefsListerFunc(func(ctx context.Context, gitURL string) ([]artifact.GitRef, error) {
+			return artifact.ListRefs(ctx, gitURL, artifact.WithGitCredentials(d.gitCreds))
+		}),
 		0, // Keeper daemon runtime wiring note.
 	)
 
@@ -1063,7 +1090,8 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	// one produced the slot.
 	gitResolver := plugingit.NewResolver(cacheRoot, pluginWorkRoot(cfg.Plugins),
 		cfg.Plugins.ResolvedFetchTimeout(),
-		cfg.Plugins.ResolvedMaxArtifactSize(), cfg.Plugins.ResolvedMaxCloneSize(), logger)
+		cfg.Plugins.ResolvedMaxArtifactSize(), cfg.Plugins.ResolvedMaxCloneSize(), logger,
+		plugingit.WithGitCredentials(d.gitCreds))
 	artifactResolver := pluginartifact.NewResolver(cacheRoot,
 		cfg.Plugins.ResolvedFetchTimeout(), cfg.Plugins.ResolvedMaxArtifactSize(), nil, logger)
 	sourceCatalog, err := pluginsource.NewCatalog(logger,
@@ -1550,7 +1578,8 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
-	d.serviceLoader = artifact.NewServiceLoader(serviceCacheRoot(cfg), logger)
+	d.serviceLoader = artifact.NewServiceLoader(serviceCacheRoot(cfg), logger,
+		artifact.WithGitCredentials(d.gitCreds))
 
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -1672,7 +1701,8 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 	// Source of destiny artifacts for apply:destiny (ADR-009): git-URL —
 	// default_destiny_source + {name} (read LAZILY from serviceHolder, so the
 	// scalar hot-reload takes effect), ref — service.yml::destiny[].
-	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger)
+	destinyLoader := artifact.NewDestinyLoader(destinyCacheRoot(cfg), logger,
+		artifact.WithGitCredentials(d.gitCreds))
 	d.destinySource = scenario.NewDestinySource(destinyLoader, d.serviceHolder)
 
 	// TTL cache of the engine-compat window for `GET /v1/services/{id}/compat`
@@ -1739,7 +1769,8 @@ func (d *daemon) setupScenarioDeps(_ context.Context) error {
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (d *daemon) setupPushOrchestrator(_ context.Context) error {
-	d.pushDestinyLoader = artifact.NewDestinyLoader(destinyCacheRoot(d.cfg), d.logger)
+	d.pushDestinyLoader = artifact.NewDestinyLoader(destinyCacheRoot(d.cfg), d.logger,
+		artifact.WithGitCredentials(d.gitCreds))
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.

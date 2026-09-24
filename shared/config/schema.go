@@ -197,6 +197,10 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 		out = append(out, validatePush(root, c.Push)...)
 	}
 
+	if c.Git != nil {
+		out = append(out, validateGit(root, c.Git)...)
+	}
+
 	out = append(out, validateLogging(root, "$.logging", c.Logging.Level, c.Logging.Format, c.Logging.File, c.Logging.Rotation)...)
 
 	if c.PluginRuntime != nil {
@@ -1149,6 +1153,188 @@ func validatePushHostCARefs(root *ast.MappingNode, refs []KeeperPushCARef) []dia
 		}
 	}
 	return out
+}
+
+// reGitCredentialHostName — a DNS name in `git.credentials[].host` (NIM-898):
+// labels separated by dots, case-insensitive (the lookup lowercases both
+// sides), underscores allowed because internal zones really do serve them and
+// `url.Hostname()` hands them back unchanged.
+//
+// What it exists to reject is a value that is not a bare host: a scheme, a
+// `user@`, a port or a path. The lookup compares against `url.Hostname()`,
+// which carries none of those, so an entry spelled with one would silently
+// match nothing while reading as configured.
+var reGitCredentialHostName = regexp.MustCompile(`^(?i:[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?(\.[a-z0-9_]([a-z0-9_-]*[a-z0-9_])?)*)$`)
+
+// validGitCredentialHost reports whether host is a bare hostname or an IP
+// literal. An IPv6 literal is checked with [net.ParseIP] rather than a regex —
+// it contains colons, so the "no port" rule cannot be a simple colon ban, and
+// ParseIP is the exact test for the one shape that may carry them.
+func validGitCredentialHost(host string) bool {
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		inner, closed := strings.CutSuffix(inner, "]")
+		return closed && net.ParseIP(inner) != nil
+	}
+	if strings.ContainsRune(host, ':') {
+		// Either an unbracketed IPv6 literal, which ParseIP accepts, or a
+		// `host:port`, which it does not.
+		return net.ParseIP(host) != nil
+	}
+	return reGitCredentialHostName.MatchString(host)
+}
+
+// canonicalGitCredentialHost is the form two entries are compared as duplicates
+// in. It must agree key-for-key with the lookup's own normalization
+// (gitauth.CanonicalHost): brackets off, DNS names lowercased, and an IP
+// literal put through [net.ParseIP] rather than compared as text —
+// `fd00:0:0:0:0:0:0:1` and `fd00::1` are one address, and two entries spelling
+// it differently would escape the duplicate check while colliding at lookup.
+//
+// The two normalizations are separate code because ADR-011 forbids
+// shared/config from importing the keeper packages — the same reason
+// [isVaultRef] restates keeper-vault's ParseRef.
+func canonicalGitCredentialHost(host string) string {
+	if inner, ok := strings.CutPrefix(host, "["); ok {
+		if trimmed, closed := strings.CutSuffix(inner, "]"); closed {
+			host = trimmed
+		}
+	}
+	if ip := net.ParseIP(host); ip != nil {
+		return ip.String()
+	}
+	return strings.ToLower(host)
+}
+
+// validateGit checks the `git.credentials[]` block (NIM-898):
+//
+//   - `host` is required, a bare host (a DNS name or an IP literal, in any
+//     case), and unique in the set after the same normalization the lookup
+//     keys on;
+//   - every `*_ref` is a vault-ref — inline plaintext key material is a
+//     security-policy violation, symmetric with `push.host_ca_refs[].ref` and
+//     `sigil.signing_key_ref`;
+//   - every `*_file` is an absolute path (resolved on the keeper node);
+//   - an entry carrying an ssh key must carry a `known_hosts_*` source too;
+//   - an entry carrying neither an ssh key nor an https token configures
+//     nothing and is rejected rather than silently ignored.
+//
+// Existence and readability of the `*_file` paths is NOT checked here: that is
+// a runtime boundary (the file may appear between validation and start, and
+// checking it in the schema turns offline `soul-lint` into false positives),
+// and the fail-fast lives in gitauth.Load at daemon start.
+func validateGit(root *ast.MappingNode, g *KeeperGit) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	seenHosts := make(map[string]int, len(g.Credentials))
+	for i, c := range g.Credentials {
+		yp := fmt.Sprintf("$.git.credentials[%d]", i)
+		switch {
+		case c.Host == "":
+			// Anchored on the entry, not on `.host`: the key is absent by
+			// construction here, and a path naming an absent key resolves to
+			// nothing, shipping the diagnostic with line 0.
+			out = append(out, atPath(root, yp, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "missing_required_field",
+				Message: fmt.Sprintf("git.credentials[%d].host is required", i),
+				Hint:    "the bare hostname of the git source, e.g. gitlab.example.com",
+			}))
+		case !validGitCredentialHost(c.Host):
+			out = append(out, atPath(root, yp+".host", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "git_credential_host_invalid",
+				Message: fmt.Sprintf("git.credentials[%d].host = %q is not a bare host", i, c.Host),
+				Hint:    "a hostname or IP literal and nothing else: no scheme, no user@, no port, no path — e.g. gitlab.example.com",
+			}))
+		default:
+			canonical := canonicalGitCredentialHost(c.Host)
+			if prev, dup := seenHosts[canonical]; dup {
+				out = append(out, atPath(root, yp+".host", diag.Diagnostic{
+					Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+					Code:    "duplicate_git_credential_host",
+					Message: fmt.Sprintf("git.credentials[%d].host duplicates git.credentials[%d].host (%q)", i, prev, c.Host),
+					Hint:    "one entry per host; merge the ssh and https fields into a single entry (the comparison ignores case)",
+				}))
+			} else {
+				seenHosts[canonical] = i
+			}
+		}
+
+		out = append(out, checkGitCredentialRef(root, yp+".key_ref", c.KeyRef,
+			"the private key lives in Vault; use e.g. vault:secret/keeper/git#ssh_key")...)
+		out = append(out, checkGitCredentialRef(root, yp+".known_hosts_ref", c.KnownHostsRef,
+			"use e.g. vault:secret/keeper/git#known_hosts")...)
+		out = append(out, checkGitCredentialRef(root, yp+".token_ref", c.TokenRef,
+			"the https token lives in Vault; use e.g. vault:secret/keeper/git#token")...)
+
+		out = append(out, checkAbsolutePath(root, yp+".key_file", c.KeyFile,
+			"the path is resolved on the keeper node; use e.g. /etc/keeper/git/id_ed25519")...)
+		out = append(out, checkAbsolutePath(root, yp+".known_hosts_file", c.KnownHostsFile,
+			"the path is resolved on the keeper node; use e.g. /etc/keeper/git/known_hosts")...)
+		out = append(out, checkAbsolutePath(root, yp+".token_file", c.TokenFile,
+			"the path is resolved on the keeper node; use e.g. /etc/keeper/git/token")...)
+
+		hasKey := c.KeyRef != "" || c.KeyFile != ""
+		hasKnownHosts := c.KnownHostsRef != "" || c.KnownHostsFile != ""
+		hasToken := c.TokenRef != "" || c.TokenFile != ""
+		// Both diagnostics below are anchored on a key that IS written: a path
+		// naming an absent key resolves to nothing, and the diagnostic then
+		// ships with line 0 and points the operator at the top of the file.
+		if hasKey && !hasKnownHosts {
+			out = append(out, atPath(root, presentPath(yp, c.KeyRef != "", ".key_ref", ".key_file"), diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "git_known_hosts_required",
+				Message: fmt.Sprintf("git.credentials[%d] configures an ssh key without known_hosts_ref / known_hosts_file", i),
+				Hint:    "host verification is not optional; pin the host keys explicitly (there is no ignore-host-key escape, same as push)",
+			}))
+		}
+		if hasKnownHosts && !hasKey {
+			// known_hosts is read only alongside a key, so on its own it is
+			// config that is never opened and never diagnosed — and the way it
+			// gets there is a key_* line lost from a template, which otherwise
+			// shows up only as every ssh clone quietly using the agent instead.
+			out = append(out, atPath(root, presentPath(yp, c.KnownHostsRef != "", ".known_hosts_ref", ".known_hosts_file"), diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "git_known_hosts_without_key",
+				Message: fmt.Sprintf("git.credentials[%d] sets known_hosts_ref / known_hosts_file with no ssh key to use it", i),
+				Hint:    "add key_ref / key_file, or drop the known_hosts_* line — https needs no known_hosts",
+			}))
+		}
+		if !hasKey && !hasToken {
+			out = append(out, atPath(root, yp, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+				Code:    "git_credential_empty",
+				Message: fmt.Sprintf("git.credentials[%d] carries no credential: set key_ref/key_file (ssh) or token_ref/token_file (https)", i),
+				Hint:    "an entry that configures nothing would read as configured and still fall back to the ssh-agent",
+			}))
+		}
+	}
+	return out
+}
+
+// presentPath picks the suffix naming whichever of a two-source pair the
+// operator actually wrote, so a diagnostic about the pair anchors on a key the
+// document contains and carries a real line.
+func presentPath(base string, firstIsSet bool, first, second string) string {
+	if firstIsSet {
+		return base + first
+	}
+	return base + second
+}
+
+// checkGitCredentialRef rejects a non-vault-ref in a `git.credentials[].*_ref`
+// field. Split out because the three fields differ only in their hint, and the
+// rejected VALUE must not reach the message (see vault_ref_diag.go: a keeper
+// diagnostic lands in the append-only `audit_log`).
+func checkGitCredentialRef(root *ast.MappingNode, yamlPath, ref, hint string) []diag.Diagnostic {
+	if ref == "" || isVaultRef(ref) {
+		return nil
+	}
+	return []diag.Diagnostic{atPath(root, yamlPath, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+		Code:    "vault_ref_invalid",
+		Message: vaultRefMessage(fieldFromYAMLPath(yamlPath), vaultRefFormMount),
+		Hint:    hint,
+	})}
 }
 
 // validateSigil checks the `sigil` block (ADR-026, the Sigil seal of trust).

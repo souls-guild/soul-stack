@@ -33,9 +33,9 @@ type ServiceLoader struct {
 }
 
 // NewServiceLoader creates a loader with cache root cacheRoot. If logger is nil,
-// slog.Default is used.
-func NewServiceLoader(cacheRoot string, logger *slog.Logger) *ServiceLoader {
-	return &ServiceLoader{snap: newSnapshotter(cacheRoot, logger)}
+// slog.Default is used. See [WithGitCredentials] for private git sources.
+func NewServiceLoader(cacheRoot string, logger *slog.Logger, opts ...Option) *ServiceLoader {
+	return &ServiceLoader{snap: newSnapshotter(cacheRoot, logger, opts...)}
 }
 
 // Load materializes an immutable snapshot of the service at the commit that ref

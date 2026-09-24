@@ -958,6 +958,57 @@ push:
 
 > **Migration to S7.** S7-1 moved `targets[]` to `souls.ssh_target jsonb` (canonical), S7-2 - `providers[]` to PG-table `push_providers`, S7-3 - `host_ca_ref` (singular) to `host_ca_refs[]` (multi-CA), S7-4 - opt-in auto-import of inline blocks when Keeper starts (flags `auto_import_legacy_*`). All legacy fields will remain under 1-release WARN deprecation window, then (S8) `unknown_key` hard-cut. Before closing the window, it is permissible to mix legacy with canonical (PG has priority).
 
+## `git`
+
+**Credentials for private git sources** (NIM-898) — every repository Keeper itself clones: the service repository (`services.git`), the destiny artifacts under `default_destiny_source`, the ref listing behind `GET /v1/services/{id}/refs`, and a `kind: git` plugin source (`plugins.*[].source`). Before this block, Keeper knew exactly one method, the ssh-agent, so a private `https://` remote could only be reached by writing the token into the URL — and that URL is kept in the registry, returned by `GET /v1/services`, rendered in the UI and copied verbatim into the `service.register` audit payload, which is append-only and retained for 365 days.
+
+Optional and **additive**. The resolution order is:
+
+1. the `git.credentials[]` entry whose `host` matches the URL's hostname;
+2. otherwise the **ssh-agent**, for an `ssh://` or scp-form URL — the pre-existing behaviour;
+3. otherwise no credentials at all, for `https://` and `file://` — also the pre-existing behaviour.
+
+A source on a host the block does not name therefore resolves exactly as it did before, and so does one whose entry carries nothing for its scheme (an ssh URL on a token-only entry falls through to the agent). Configuring the block cannot make credentials mandatory for anything it does not mention.
+
+```yaml
+git:
+  credentials:
+    - host: gitlab.example.com        # bare hostname: no scheme, no user@, no port, no path
+      # SSH — priority key_ref → key_file
+      key_ref:  vault:secret/keeper/git#ssh_key
+      key_file: /etc/keeper/git/id_ed25519
+      # host verification, REQUIRED whenever an ssh key is set
+      known_hosts_ref:  vault:secret/keeper/git#known_hosts
+      known_hosts_file: /etc/keeper/git/known_hosts
+      # HTTPS — so the token does not live in the URL
+      token_ref:  vault:secret/keeper/git#token
+      token_file: /etc/keeper/git/token
+    - host: code.internal             # https only; no known_hosts needed
+      token_file: /etc/keeper/git/code-internal-token
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `git.credentials[].host` | `string` (bare host) | — | Mandatory. A hostname or an IP literal (an IPv6 one may be written `fd00::1` or `[fd00::1]`), compared case-insensitively against the URL's hostname; the **port is not part of the key** (a forge's credentials do not change with the port it answers on). A value carrying a scheme, `user@`, a port or a path is rejected (`git_credential_host_invalid`) — it would match nothing while looking configured. Duplicates are rejected after the same normalization (`duplicate_git_credential_host`), so two entries differing only in case are an error and not a silent winner. |
+| `git.credentials[].key_ref` | `vault-ref` | — | The PEM private key, Vault KV field `ssh_key` by default and overridable with `#<field>` (`vault:secret/keeper/git#deploy_key`). Plaintext inline key material is rejected (`vault_ref_invalid`), symmetric with `push.host_ca_refs[].ref` / `sigil.signing_key_ref`. |
+| `git.credentials[].key_file` | `path` (absolute) | — | The PEM private key on the keeper node, used when `key_ref` is empty. A **path**, never the key itself. Passphrase-protected keys are not supported: there is nowhere to put the passphrase that is not this same file. |
+| `git.credentials[].known_hosts_ref` | `vault-ref` | — | The OpenSSH `known_hosts` content, Vault KV field `known_hosts` by default. |
+| `git.credentials[].known_hosts_file` | `path` (absolute) | — | An OpenSSH `known_hosts` file on the keeper node, used when `known_hosts_ref` is empty. |
+| `git.credentials[].token_ref` | `vault-ref` | — | The https token, Vault KV field `token` by default. Sent as the HTTP basic-auth **password**, so it never reaches `services.git`. |
+| `git.credentials[].token_file` | `path` (absolute) | — | A file holding the https token, used when `token_ref` is empty. Surrounding whitespace is stripped; a source holding only whitespace is rejected at load. |
+
+> **An entry must configure something.** One that names a host and sets neither an ssh key nor an https token is rejected (`git_credential_empty`): it reads as "this host is handled" and is not — the lookup would find nothing for either scheme and fall through to the agent.
+
+> **An ssh entry must pin host keys, and only an ssh entry may.** Setting `key_ref`/`key_file` without either `known_hosts_*` source is rejected at load (`git_known_hosts_required`). There is no ignore-host-key escape, symmetric with the push subsystem's ban on `InsecureIgnoreHostKey`: go-git's own fallback would search the keeper's `~/.ssh/known_hosts` and `/etc/ssh/ssh_known_hosts`, which is trust nobody wrote down. The converse is rejected too (`git_known_hosts_without_key`): known_hosts is read only alongside a key, so on its own it is config that is never opened — and the way it gets there is a `key_*` line lost from a template, which otherwise shows up only as every ssh clone on that host quietly using the agent. An https-only entry needs neither — TLS verifies the host there.
+>
+> A `known_hosts` source with **no line to read** — one left holding only comments and blanks — is rejected at load as well. The reader accepts it silently and returns a database that refuses every host, so the failure would otherwise arrive as a key error on the first clone, hours later and pointing at the repository. That is a floor and not a guarantee: a file that parses but pins the wrong host still fails at connect, because what go-git dials is not known until it dials it.
+>
+> The host-key **algorithms** advertised at the handshake are derived from the same `known_hosts`. go-git only does that derivation for the callback it installs itself, so with a configured credential it is this block that supplies them; without that, a host pinned by its ed25519 key alone (what `ssh-keyscan -t ed25519` gives) would negotiate the server's ECDSA key and fail as `knownhosts: key mismatch`.
+
+> **The basic-auth username.** Both GitLab and GitHub authenticate a token sent as the password and ignore the username, so `oauth2` is used when the URL names none. A URL that does carry one (`https://ci-bot@gitlab.example.com/org/repo.git`) wins — which lets an operator record a non-secret account name in `services.git` while the token stays in this block.
+
+> **Resolved once, at start.** The whole block is read when the daemon comes up, symmetric with `push.host_ca_refs[]`: an unreadable file, a missing Vault field or a malformed key aborts startup with the host named, rather than surfacing hours later on the first clone of some service. A SIGHUP does **not** re-read it.
+
 ## `rbac`
 
 **Moved to the database (ADR-028).** The RBAC directory (roles, operator bindings, permissions) is no longer part of the config contract - it lives in Postgres (`rbac_roles` / `rbac_role_permissions` / `rbac_role_operators`), managed via the `role.*` API/MCP. The key `rbac:` in `keeper.yml` is **not accepted**: the parser rejects it with error `unknown_key`.
@@ -1075,6 +1126,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `logging.level` | yes | — | In-memory variable. |
 | `logging.format` / `logging.file` / `logging.rotation.*` | — | yes | Re-init log writer / file handles. |
 | `plugins.*` | — | yes | Read once by the startup phases: the git resolver is built with `cache_root` / `work_root` / `fetch_timeout` and both size ceilings baked in, and the `ssh_providers[]` / `soul_modules[]` catalog is resolved into slots there. Nothing re-runs those phases, so a plugin added to the catalog appears only after a restart. |
+| `git.credentials[]` | — | yes | Resolved once at start (`setupGitCredentials`, after the Vault client and before every consumer) into the store the loaders and the plugin git resolver are built with. Nothing re-reads it, so a changed key or a new host entry applies only after a restart — symmetric with `push.host_ca_refs[]`. |
 | `reaper.enabled` / `dry_run` / `batch_size` / `rules.*` | yes | — | In-memory loop, next iteration sees new things. |
 | `reaper.interval` | yes | — | Next iteration with a new interval. |
 | `reaper.lock_ttl` | — | yes | Redis-lease TTL is set upon acquire. |
@@ -1242,6 +1294,15 @@ plugins:
   ssh_providers:
     - { name: vault-ssh, source: "git@github.com:soul-stack-ecosystem/soul-ssh-vault.git", ref: v1.0.0 }
     - { name: static,    source: "git@github.com:soul-stack-ecosystem/soul-ssh-static.git", ref: main }
+
+# Optional: without it a private git source is reachable only through an
+# ssh-agent, and a private https one not at all.
+git:
+  credentials:
+    - host: gitlab.example.com
+      key_ref:         vault:secret/keeper/git#ssh_key
+      known_hosts_ref: vault:secret/keeper/git#known_hosts
+      token_ref:       vault:secret/keeper/git#token
 
 plugin_runtime:
   socket_dir: /var/run/soul-stack-keeper/plugins

@@ -59,9 +59,10 @@ type DestinyLoader struct {
 	snap snapshotter
 }
 
-// NewDestinyLoader creates a destiny loader with cache root cacheRoot.
-func NewDestinyLoader(cacheRoot string, logger *slog.Logger) *DestinyLoader {
-	return &DestinyLoader{snap: newSnapshotter(cacheRoot, logger)}
+// NewDestinyLoader creates a destiny loader with cache root cacheRoot. See
+// [WithGitCredentials] for private git sources.
+func NewDestinyLoader(cacheRoot string, logger *slog.Logger, opts ...Option) *DestinyLoader {
+	return &DestinyLoader{snap: newSnapshotter(cacheRoot, logger, opts...)}
 }
 
 // Load materializes an immutable destiny snapshot at the commit ref resolves

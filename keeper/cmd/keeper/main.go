@@ -397,6 +397,10 @@ func runDaemon(args []string) int {
 	steps := []func(context.Context) error{
 		d.setupObservabilityEarly,
 		d.setupVault,
+		// After setupVault (the block is vault-refs) and before every consumer
+		// of it — the service registry's refs lister, the plugin catalog, the
+		// scenario loaders.
+		d.setupGitCredentials,
 		d.setupStorage,
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.

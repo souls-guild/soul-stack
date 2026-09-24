@@ -10,8 +10,10 @@
 // `.git` — it's a clean tree of the service's files.
 //
 // Transport is pure Go (go-git): supports `file://` (local-dev + tests),
-// `https://`, and `ssh://`/scp form (auth via SSH-agent, Vault auth is
-// post-MVP). Zone per architect-recon slice .a.
+// `https://`, and `ssh://`/scp form. Auth comes from a matching
+// `keeper.yml::git.credentials[]` entry (see [WithGitCredentials] and
+// keeper/internal/gitauth), falling back to the SSH-agent for ssh and to
+// nothing for https. Zone per architect-recon slice .a.
 package artifact
 
 import "github.com/souls-guild/soul-stack/shared/config"

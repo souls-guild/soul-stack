@@ -4,15 +4,15 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"net/url"
 	"os"
-	"strings"
 
 	git "github.com/go-git/go-git/v5"
 	"github.com/go-git/go-git/v5/config"
 	"github.com/go-git/go-git/v5/plumbing"
 	"github.com/go-git/go-git/v5/plumbing/transport"
 	gitssh "github.com/go-git/go-git/v5/plumbing/transport/ssh"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/gitauth"
 )
 
 // Git layer of resolver — pure-Go via go-git. System `git` binary is NOT forked:
@@ -131,46 +131,21 @@ func checkout(repo *git.Repository, sha1 string) error {
 	return nil
 }
 
-// authFor selects auth method by URL scheme. SSH (`ssh://` or scp form
-// `user@host:path`) — via SSH-agent (PM-decision, symmetric with artifact/git.go;
-// Vault-auth post-MVP). `file://`/`https://` auth not required (MVP).
-func authFor(gitURL string) (transport.AuthMethod, error) {
-	if !isSSHURL(gitURL) {
+// authFor selects the auth method by URL scheme, preferring a configured
+// credential (`keeper.yml::git.credentials[]`, NIM-898) over the SSH-agent.
+// Symmetric with artifact/git.go, down to the fallback order: a matching entry
+// wins, an unmatched SSH URL still goes to the agent, `file://`/`https://`
+// still need no auth.
+func authFor(gitURL string, creds *gitauth.Store) (transport.AuthMethod, error) {
+	if auth, matched := creds.Lookup(gitURL); matched {
+		return auth, nil
+	}
+	if !gitauth.IsSSHURL(gitURL) {
 		return nil, nil
 	}
-	auth, err := gitssh.NewSSHAgentAuth(sshUser(gitURL))
+	auth, err := gitssh.NewSSHAgentAuth(gitauth.SSHUser(gitURL))
 	if err != nil {
 		return nil, fmt.Errorf("plugingit: SSH-agent auth for %s: %w", gitURL, err)
 	}
 	return auth, nil
-}
-
-// isSSHURL recognizes ssh scheme and scp-like form `git@host:org/repo.git`.
-func isSSHURL(gitURL string) bool {
-	if strings.HasPrefix(gitURL, "ssh://") {
-		return true
-	}
-	if strings.Contains(gitURL, "://") {
-		return false
-	}
-	// scp form: `user@host:path`, colon after host, no scheme.
-	at := strings.Index(gitURL, "@")
-	colon := strings.Index(gitURL, ":")
-	return at >= 0 && colon > at
-}
-
-// sshUser extracts username from ssh-URL; defaults to `git`.
-func sshUser(gitURL string) string {
-	if strings.HasPrefix(gitURL, "ssh://") {
-		if u, err := url.Parse(gitURL); err == nil && u.User != nil {
-			if name := u.User.Username(); name != "" {
-				return name
-			}
-		}
-		return "git"
-	}
-	if at := strings.Index(gitURL, "@"); at > 0 {
-		return gitURL[:at]
-	}
-	return "git"
 }

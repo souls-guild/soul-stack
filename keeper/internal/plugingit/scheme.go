@@ -4,6 +4,8 @@ import (
 	"fmt"
 	"os"
 	"strings"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/gitauth"
 )
 
 // allowFileReposEnv — env flag permitting `file://` plugin sources
@@ -30,7 +32,7 @@ func validateGitScheme(source string) error {
 		}
 		return fmt.Errorf("%w: file:// forbidden in prod (set %s=1 for dev/test): %q",
 			ErrSourceUnavailable, allowFileReposEnv, source)
-	case !strings.Contains(source, "://") && isSSHURL(source):
+	case !strings.Contains(source, "://") && gitauth.IsSSHURL(source):
 		// scp-like form `git@host:org/repo.git` (SSH without explicit scheme).
 		return nil
 	default:

@@ -84,6 +84,13 @@ type KeeperConfig struct {
 	// not start — `/v1/push/*` and `keeper.push.apply` return "not configured".
 	Push *KeeperPush `yaml:"push,omitempty"`
 
+	// Git holds the credentials Keeper presents to private git sources — every
+	// repository it clones itself: the service repository, the destiny
+	// artifacts, the ref listing, and a `kind: git` plugin. Optional: without
+	// the block the resolution stays what it was before NIM-898 (ssh-agent for
+	// ssh, no credentials for https). See [KeeperGit].
+	Git *KeeperGit `yaml:"git,omitempty"`
+
 	// SigilAnchorsReloadInterval is the TTL-fallback re-read period for the set
 	// of Sigil signing trust-anchor keys (ADR-026(h), R3 known-gap). The
 	// `sigil:anchors-changed` channel (Redis pub/sub) is best-effort: a missed
@@ -1103,7 +1110,8 @@ type KeeperSecretIngest struct {
 //   - `role_id` is NOT a secret (a role identifier), acceptable in the clear
 //     right in keeper.yml.
 //   - `secret_id` is a secret, its plaintext is NOT stored in the main config.
-//     The source is one of (priority top to bottom):
+//     The source is exactly one of the two below — setting both is rejected as
+//     `vault_auth_conflicting_secret_source`, NOT resolved by precedence:
 //   - `secret_id_file` — a path to a mode-restricted file (recommended
 //     0400/0600), contents = secret_id (trailing newline stripped);
 //   - `secret_id_env` — the name of an env var with secret_id (dev/CI/secret
@@ -2139,4 +2147,79 @@ type KeeperCloudInit struct {
 type KeeperPushProvider struct {
 	Name   string         `yaml:"name"   json:"name"`
 	Params map[string]any `yaml:"params" json:"params"`
+}
+
+// KeeperGit is the `git:` block — the credentials Keeper presents to private
+// git sources (NIM-898). Before it, `authFor` knew exactly one method,
+// ssh-agent, so a private https remote could only be reached by writing the
+// token into the URL — and `services.git` is stored in the registry and copied
+// verbatim into the `service.register` audit payload, `GET /v1/services` and
+// the UI.
+//
+// Optional and additive: an empty block, or a source whose host matches no
+// entry, resolves exactly as it did before (ssh-agent for ssh, nil for https).
+//
+// Resolved ONCE at daemon start, symmetric with `push.host_ca_refs[]`: a
+// SIGHUP does not re-read it.
+type KeeperGit struct {
+	Credentials []KeeperGitCredential `yaml:"credentials,omitempty" json:"credentials,omitempty"`
+}
+
+// KeeperGitCredential is one host's git credentials. The key is the HOST and
+// not the service, because `authFor` sees nothing but the URL, and a
+// credential belongs to the forge rather than to whatever is hosted on it.
+//
+// Every secret has two sources: a vault-ref or a local file. The pattern of
+// naming a secret's source instead of writing it down is the one
+// [KeeperVaultAuth.SecretIDFile] established, but that is as far as the
+// parallel goes — `secret_id`'s pair is `_file`/`_env` with no vault-ref among
+// them by necessity (it is the credential Vault itself is opened with), and it
+// is mutually exclusive where this one is a priority, `*_ref` first. The
+// priority is deliberate: a host credential is routinely mirrored into a file
+// for a stand while Vault stays canonical, and making that spelling an error
+// would mean editing the block to move between them. Inline plaintext is not
+// among the sources: the `*_ref` fields must be
+// vault-refs (symmetric with `auth.jwt.signing_key_ref` /
+// `push.host_ca_refs[].ref`) and the `*_file` fields are PATHS, so no key
+// material is ever spelled in keeper.yml.
+//
+// Which secret is used follows the URL scheme, the same fork `authFor` already
+// makes: ssh takes `key_*` + `known_hosts_*`, https takes `token_*`. An entry
+// may carry only one side — an ssh-only entry leaves an https URL on that host
+// resolving to nil, and vice versa.
+//
+// An ssh entry without a `known_hosts_*` source is rejected in the schema
+// phase rather than defaulted: go-git's fallback would search
+// `~/.ssh/known_hosts` and `/etc/ssh/ssh_known_hosts` in the keeper's own
+// filesystem, which is trust the operator did not write down. This is the
+// symmetry of the push subsystem's ban on `InsecureIgnoreHostKey`.
+type KeeperGitCredential struct {
+	// Host is the bare hostname the git URL must resolve to, compared
+	// case-insensitively against `url.Hostname()`. A port is not part of the
+	// key: a forge's credentials do not change with the port it answers on.
+	Host string `yaml:"host" json:"host"`
+
+	// KeyRef is a vault-ref to the PEM private key; the Vault KV field
+	// defaults to `ssh_key` and is overridable with the `#<field>` suffix.
+	KeyRef string `yaml:"key_ref,omitempty" json:"key_ref,omitempty"`
+	// KeyFile is an absolute path to the PEM private key, used when KeyRef is
+	// empty. A passphrase-protected key is not supported — there is nowhere to
+	// put the passphrase that is not this same file.
+	KeyFile string `yaml:"key_file,omitempty" json:"key_file,omitempty"`
+
+	// KnownHostsRef is a vault-ref to the known_hosts content (default Vault KV
+	// field `known_hosts`). Mandatory for an ssh entry together with
+	// KnownHostsFile — one of the two must be set.
+	KnownHostsRef string `yaml:"known_hosts_ref,omitempty" json:"known_hosts_ref,omitempty"`
+	// KnownHostsFile is an absolute path to an OpenSSH known_hosts file, used
+	// when KnownHostsRef is empty.
+	KnownHostsFile string `yaml:"known_hosts_file,omitempty" json:"known_hosts_file,omitempty"`
+
+	// TokenRef is a vault-ref to the https token (default Vault KV field
+	// `token`), sent as the HTTP basic-auth password so it stays out of the
+	// URL the registry keeps.
+	TokenRef string `yaml:"token_ref,omitempty" json:"token_ref,omitempty"`
+	// TokenFile is an absolute path to a file holding the https token, used
+	// when TokenRef is empty. A trailing newline is stripped.
+	TokenFile string `yaml:"token_file,omitempty" json:"token_file,omitempty"`
 }

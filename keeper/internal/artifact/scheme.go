@@ -44,7 +44,8 @@ func validateGitScheme(gitURL string) error {
 }
 
 // isSCPForm recognizes the scp-like form `user@host:path` (a colon after `@`,
-// no scheme) — the same rule isSSHURL in git.go uses.
+// no scheme) — the same rule [gitauth.IsSSHURL] applies once the scheme has
+// been ruled out.
 func isSCPForm(gitURL string) bool {
 	at := strings.Index(gitURL, "@")
 	colon := strings.Index(gitURL, ":")
