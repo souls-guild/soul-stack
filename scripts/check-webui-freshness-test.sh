@@ -95,6 +95,18 @@ git -C "${tmp}/remote/alpha-web.git" update-ref refs/heads/release/TEST "${C2}"
 # reached the companion, so the name has to be the fixture's decision and not the
 # environment's; `-f` keeps that true where the default already is `main`.
 git -C "${tmp}/remote/core-web.git" branch -f main "${C1}"
+# A companion that ANSWERS and carries no branch at all. Used by the propagation
+# case at the bottom, which needs a red whose wording it can assert on without
+# that wording depending on the real tree.
+#
+# It exists because the propagation case used to point at core-web.git and pass by
+# accident: that case runs the REAL check against this repository, so the branch it
+# falls back to is whatever `WEBUI_SOURCE` happens to record. While that was
+# `release/R5` the fixture had no such branch and the check said "has no branch";
+# re-vendoring from `main` (2026-09-23) made the fallback land on a branch the
+# fixture DOES carry, the check got one step further, and the assertion failed on a
+# different message. The case was never about which branch is vendored.
+git init -q --bare "${tmp}/remote/empty-web.git"
 
 # --- core fixture ------------------------------------------------------------
 case_n=0
@@ -1028,7 +1040,7 @@ assert_eq yes "$(contains 'detached HEAD')" "naming where an empty branch= comes
 it "make check-webui-freshness propagates a red rather than swallowing it"
 out="$(env -u MAKEFLAGS -u MFLAGS -u MAKELEVEL -u WEBUI_FRESHNESS_SKIP \
 	GITHUB_REF_NAME=release/NO-SUCH-BRANCH-ANYWHERE \
-	WEBUI_REMOTE_URL="${tmp}/remote/core-web.git" \
+	WEBUI_REMOTE_URL="${tmp}/remote/empty-web.git" \
 	make --no-print-directory check-webui-freshness 2>&1)"
 rc=$?
 # Non-zero, not `1`: GNU make reports a failed recipe as its own exit 2. The
