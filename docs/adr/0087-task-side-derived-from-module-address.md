@@ -1,5 +1,7 @@
 ## ADR-0087. A task's side is derived from its module address, not declared by `on:`
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 **Status:** accepted, **implemented** for the core-address rule (NIM-749) and for the plugin
 executor (NIM-758); **NIM-750** — sweeping the now-redundant `on: keeper` out of the service
 repositories — is outstanding (epic NIM-747; this ADR is NIM-748)

@@ -1,5 +1,7 @@
 ## ADR-0082. Service vars replace Essence — one `vars` namespace, `incarnation.spec.essence` removed
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 **Status:** active
 **Amends:** [ADR-008](0008-coven-stable-tags.md) (essence is role-agnostic; the assembly order `default → os → coven → incarnation.spec`), [ADR-009](0009-scenario-dsl.md) (the scenario template context and its reserved names), [ADR-010](0010-templating.md) (the CEL roots and the `core.file.rendered` context), [ADR-012](0012-keeper-soul-grpc.md) (the `flow_context` key set carried to Soul)
 **Implemented by:** NIM-412 · NIM-413 · NIM-414 · NIM-415 · NIM-416, with the column drop in NIM-408

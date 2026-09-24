@@ -1,5 +1,7 @@
 # ADR-017. Keeper-side core modules extended: `core.cloud.provisioned`, `core.vault.kv-read`
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 - **Context.** The precedent of keeper-side core (`core.soul.registered`, [`docs/keeper/modules.md`](../keeper/modules.md)) demonstrated a pattern: the module executes on the keeper instance (dispatcher `on: keeper`), operates on Postgres/Redis registries, has the same `<namespace>.<module>.<state>` contract as Soul-side core. In the existing examples (`service.yml`, [Service — structure and manifest](../architecture.md#service---structure-and-manifest)) a destiny `cloud-provision` with `on: keeper` figures. This is a semantic drift: a destiny is a package of tasks for a Soul, not a keeper-side operation. Similarly, the "vault-resolve phase" in [ADR-010](0010-templating.md#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files) is currently implicit — it is worth formalizing it as an explicit module step, so that audit/RBAC/OTel work uniformly.
 - **Decision.** Two new keeper-side core modules are introduced:
 

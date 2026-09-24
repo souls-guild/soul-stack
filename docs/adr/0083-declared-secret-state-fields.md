@@ -1,5 +1,7 @@
 ## ADR-0083. A secret is a declared state field — the author never writes a Vault path
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 **Status:** accepted, implementing (NIM-698)
 **Amends:** [ADR-070](0070-secret-reveal-path.md) (`revealable_secrets` is absorbed — reveal derives its path instead of reading an authored template), [ADR-064](0064-secret-write-path.md) (the deterministic-path convention extends from operator input to state fields), [ADR-009](0009-scenario-dsl.md) (`state_schema` gains a field-level secret declaration), [ADR-010](0010-templating.md) (a new CEL function `generate_secret` and type `SecretRequest`; `vault()` is fenced out of the service's own namespace), [ADR-017](0017-keeper-side-core.md) (a new keeper-side module `core.state`, addressed `core.state.set` after [ADR-0084](0084-explicit-state-capture.md)), [ADR-056](0056-staged-render-passage.md) (keeper-side register becomes readable by Soul-side consumers), [ADR-012](0012-keeper-soul-grpc.md) (per-field `secret: true` on module output retires `no_log`)
 **Implemented by:** NIM-698

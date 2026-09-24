@@ -1,5 +1,7 @@
 # ADR-009. Scenario — the full destiny task DSL; the boundary with destiny is a recommendation
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 - **Context.** Initially an isolation invariant was in force: a scenario could only `apply: { destiny: … }` (plus `target`/orchestration), but **not** `module:` directly — all the "work" had to live in an isolated, versionable, molecule-testable destiny. In practice this forced creating a separate destiny repo for the sake of a one-or-two-step inline operation (role probe, one-off command, diagnostics) that is never reused. The invariant hindered even read-only steps (probe), without which the volatile role from [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only) cannot be implemented.
 - **Decision.**
   - **The "scenario without `module:`" invariant is fully lifted** (not only for read-only). Scenario receives **the entire destiny task DSL core** from [`docs/destiny/tasks.md`](../destiny/tasks.md): `module:` (including mutating modules), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `async:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:` — plus an orchestration layer on top (`on:`/`where:` targeting, `apply: { destiny: … }`, `state_changes`).

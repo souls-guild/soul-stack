@@ -1,5 +1,7 @@
 # ADR-0068. Upgrading incarnations to a new service version — `upgrade/` directory + upgrade-paths API
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 > **Status: accepted (implemented — NIM-34, merged to canon 2026-07-05).** Design approved by the user (2026-07-03). Extends the existing `POST /v1/incarnations/{id}/upgrade` (today — pin change + state migrations [ADR-019](0019-state-migration-dsl.md) → `drift`) with optional orchestration of the transition on hosts. **Amends [ADR-019](0019-state-migration-dsl.md)** (upgrade gains a second phase — a host-side upgrade scenario) **/ [ADR-009](0009-scenario-dsl.md)** (a second auto-discovery channel for scenarios: the `upgrade/` directory). Related: [ADR-007](0007-versioning-git-ref.md) (version = git-ref), [ADR-057](0057-state-changes-crud-verbs.md) (day-2 truth = `incarnation.state`), [ADR-065](0065-core-module-installed.md) (symmetry `create: true` / self-describing manifest), [ADR-043](0043-voyage.md) (bulk upgrade — future work). Impl — ticket NIM-34.
 
 ## Context

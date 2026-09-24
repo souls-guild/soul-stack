@@ -1,5 +1,7 @@
 # ADR — Soul Stack Architecture Decision Index
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 The ADR (Architecture Decision Records) catalog. The source of truth for high-level architecture is [`docs/architecture.md`](../architecture.md); ADRs are gradually being split out of it into separate files (one ADR = one file, `NNNN-<slug>.md`). Not all of them have been split out yet — for the ones that haven't, the link points to an anchor inside `architecture.md`.
 
 Statuses: **active** — a decision in effect; **amended** — in effect, but supplemented by Amendment block(s); **superseded** — replaced by a newer ADR.

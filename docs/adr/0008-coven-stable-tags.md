@@ -1,5 +1,7 @@
 # ADR-008. Coven — Stable Logical Tags Only
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 - **Context.** Originally Coven was used both for stable grouping (cluster / project / environment / datacenter) and for the host's role: `incarnation.name` became the root tag, and sub-roles followed the convention `{incarnation.name}-{role}` (`…-master`, `…-replica`). The role (who is currently master in Redis HA) is **volatile**: it changes on failover at any moment, without Keeper's involvement. Tying a volatile role to a Coven tag would mean the tag either goes stale (targeting `…-master` hits the former master) or requires a freshness mechanism / a role collector / volatile Soulprint facts — an extra moving part on the critical path of destructive operations.
 - **Decision.**
   - **Coven — stable logical tags only:** cluster, project, environment, datacenter, hardware type. Whatever does not change on its own while the service runs.

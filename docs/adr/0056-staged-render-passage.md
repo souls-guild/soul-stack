@@ -1,5 +1,7 @@
 # ADR-056. Staged-render — scenario run as N ordered Passages (probe->where actually works)
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 > **Status: active.** User decision (Variant A-full, N-stage; name of the new run phase — **Passage**) + architect design. The canon is fixed docs-first BEFORE code; implementation — separate slices S1-S5 (see §Slice map). This ADR **amends [ADR-009](0009-scenario-dsl.md), [ADR-012](0012-keeper-soul-grpc.md), [ADR-027](0027-apply-work-queue.md)** (see §Relation to ADR) and closes [open Q #24](../architecture.md#open-questions) (per-task granularity of `serial:` / per-task dispatch).
 >
 > **Implementation progress.** S1-S5 implemented (proto `passage`/`plan_index`, migrations 078/079/081, stratification, stage-loop, Soul forward-compat, soul-lint). Amendments to S1 (register correlation, R1 onchanges/onfail remap) implemented; **R3 (cross-passage onchanges/onfail keeper-side gating) implemented — R2-reject removed** (see the "Amendment to S1 (onchanges/onfail-gating)" block below). The **global-vs-local-task_idx class closed 6/6**. Open limit — **onfail cross-passage FIRES unreachable under the current fail-stop barrier** (mechanism implemented+unit-proven, activates under continue-on-partial-failure semantics; future follow-up).

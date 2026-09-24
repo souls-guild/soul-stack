@@ -1,5 +1,7 @@
 ## ADR-0084. Explicit state capture — `core.state.<verb>` replaces end-of-run `state_changes`
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 **Status:** accepted, implemented (NIM-699); amended 2026-08-26 (NIM-711)
 **Amends:** [ADR-0083](0083-declared-secret-state-fields.md) §4 (the module's address becomes `core.state.set`, the secret rule stops being the verb's, and the record no longer reaches Postgres through an end-of-run commit), [ADR-057](0057-state-changes-crud-verbs.md) (the CRUD verbs move from a scenario section to a module address, and gain `present`/`append`/`unset`), [ADR-009](0009-scenario-dsl.md) (the `state_changes:` section leaves the scenario grammar), [ADR-017](0017-keeper-side-core.md) (`core.state` gains six more states)
 **Implemented by:** NIM-699; amendment 2026-08-26 — NIM-711

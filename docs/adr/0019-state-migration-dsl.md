@@ -1,5 +1,7 @@
 # ADR-019. State_schema migration DSL
 
+> ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
+
 - **Context.** [ADR-009](0009-scenario-dsl.md#adr-009-scenario--the-full-destiny-task-dsl-the-boundary-with-destiny-is-a-recommendation) mentions a "flat DSL: `rename`/`set`/`delete`/`move`" as the format of `migrations/<NNN>_to_<MMM>.yml`. But the previous redis-service migration-file example used `{% for %}` (a Jinja2 style from the era before ADR-010) — which **doesn't fit into a flat DSL**. This example was deliberately left untouched during the mass migration under ADR-010 (marked "out of scope, open Q No. 18"). Real state_schema-migration scenarios include collection transforms, computations from old fields, structure splits/merges — a flat DSL isn't enough.
 - **Decision.**
 
