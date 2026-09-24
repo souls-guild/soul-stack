@@ -284,15 +284,15 @@ type RunTasksReply struct {
 // reflect.Type.Name() directly) — aligned to the committed hand-written spec (T4b pilot).
 //
 // `id` lost `required:"true"` with ADR-0079: a create scenario declaring
-// `id_template` composes it server-side from input components, and whether it does
+// `id.template` composes it server-side from input components, and whether it does
 // is only known once the service snapshot resolves — past the schema layer.
 // The domain still rejects an omitted id when nothing composes one (422
 // "field 'id' is required"), so the contract did not loosen, it moved one layer in.
 type IncarnationCreateRequest struct {
-	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares id_template (ADR-0079) — then it is composed server-side from input components."`
+	ID string `json:"id,omitempty" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"new instance id (kebab-case, immutable); omit when the create scenario declares id.template (ADR-0079) — then it is composed server-side from input components."`
 	// label is the optional display caption (ADR-0085): free text, changed later
 	// by PUT /v1/incarnations/{id}/label. Unlike `id` it is never composed by
-	// an id_template — a template composes an identifier, and a caption is not one.
+	// an id.template — a template composes an identifier, and a caption is not one.
 	Label   *string        `json:"label,omitempty" doc:"Display caption: free text, may carry capitals and spaces (ADR-0085). Omitted means consumers show the name instead. Never used to derive a Vault path, an RBAC scope, a snapshot directory or a CEL root - in particular incarnation.label does not resolve in CEL"`
 	Service string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
 	Covens  []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags (ADR-008 amendment a)"`
@@ -400,7 +400,7 @@ type IncarnationRevealableSecretsReply struct {
 // preview exactly as it matches on the create.
 type IncarnationResolveIDRequest struct {
 	Service        string         `json:"service" required:"true" pattern:"^[a-z0-9][a-z0-9-]{0,62}$" doc:"service name from registry (ADR-029)"`
-	CreateScenario string         `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"chosen create scenario, whose id_template composes the id"`
+	CreateScenario string         `json:"create_scenario,omitempty" pattern:"^[a-z][a-z0-9_]*$" doc:"chosen create scenario, whose id.template composes the id"`
 	Input          map[string]any `json:"input,omitempty" doc:"the create input so far — partial is expected, this is a live preview"`
 	Covens         []string       `json:"covens,omitempty" pattern:"^[a-z][a-z0-9]*(-[a-z0-9]+)*$" maxLength:"63" doc:"declared environment tags of the intended create — scope parity with POST /v1/incarnations, not part of the composition"`
 }
@@ -408,7 +408,7 @@ type IncarnationResolveIDRequest struct {
 // IncarnationResolveIDReply — the native 200 body of the resolve. The struct name
 // = the contract schema name.
 //
-// `composes: false` says the chosen scenario declares no id_template: the
+// `composes: false` says the chosen scenario declares no id.template: the
 // operator types the id and the form keeps its id field. Every other field is
 // then zero.
 //
@@ -426,7 +426,7 @@ type IncarnationResolveIDRequest struct {
 // incarnation — they still learn the name is taken, they just do not get a report
 // on someone else's estate.
 type IncarnationResolveIDReply struct {
-	Composes       bool   `json:"composes" doc:"the chosen create scenario composes the id from id_template (ADR-0079); false → the operator names the incarnation"`
+	Composes       bool   `json:"composes" doc:"the chosen create scenario composes the id from id.template (ADR-0079); false → the operator names the incarnation"`
 	ComposedID     string `json:"composed_id" doc:"the id a create with this input would produce; carries the offending value when invalid"`
 	Length         int    `json:"length" doc:"character count of composed_id"`
 	MaxLength      int    `json:"max_length" doc:"the incarnation id ceiling — server-sourced so the form does not restate it"`

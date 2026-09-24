@@ -17,7 +17,7 @@ package config
 //   - day-2: the incarnation row is loaded, so `incarnation.*` reads it;
 //   - create: the incarnation does not exist yet. Only the identity the request
 //     itself carries is knowable — and when the scenario composes its id from
-//     `input:` (`id_template`, ADR-0079) not even that, because the id is composed
+//     `input:` (`id.template`, ADR-0079) not even that, because the id is composed
 //     from the very input this gate is still resolving.
 //
 // Substituting an empty map for the absent half is the failure this exists to
@@ -78,7 +78,7 @@ const (
 	IncarnationRequested
 
 	// IncarnationComposed — the create path of a scenario that composes its own id
-	// from `input:` (`id_template`, ADR-0079). Not even the identifier is knowable
+	// from `input:` (`id.template`, ADR-0079). Not even the identifier is knowable
 	// here: it is a function of the input this gate is still resolving and is
 	// composed after it returns.
 	IncarnationComposed
@@ -117,7 +117,7 @@ func (s IncarnationScope) hint() string {
 	case IncarnationRequested:
 		return "on create only the identifier exists; a rule about the incarnation's state or history belongs on a day-2 scenario, and a topology or roster question belongs in assert:"
 	case IncarnationComposed:
-		return "the id here IS the input it is composed from -- write the rule over the input.* components that feed id_template"
+		return "the id here IS the input it is composed from -- write the rule over the input.* components that feed id.template"
 	default:
 		return "check input.* instead, or move the rule to a scenario whose path has the fact"
 	}
@@ -168,7 +168,7 @@ func RequestedIncarnation(id string) ValidateContext {
 }
 
 // ComposedIncarnation is the create-path context of a scenario carrying
-// `id_template` (ADR-0079): the id is composed from the resolved input AFTER this
+// `id.template` (ADR-0079): the id is composed from the resolved input AFTER this
 // gate, so nothing about the incarnation is knowable yet.
 func ComposedIncarnation() ValidateContext {
 	return ValidateContext{scope: IncarnationComposed}

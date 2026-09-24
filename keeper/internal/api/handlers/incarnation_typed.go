@@ -64,7 +64,7 @@ type IncarnationCreateRequestInput struct {
 	ID string
 	// Label — optional display caption (ADR-0085): free text, changed afterwards
 	// by PUT /v1/incarnations/{id}/label. nil/blank → NULL, and the consumer
-	// shows Name. Unlike Name it is NOT composed by a `id_template`: a template
+	// shows Name. Unlike Name it is NOT composed by a `id.template`: a template
 	// composes an identifier, and a caption is not one.
 	Label   *string
 	Service string
@@ -103,7 +103,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	covens := req.Covens
 	input := req.Input
 	// `name` is optional at this point (ADR-0079): a create scenario with a
-	// `id_template` composes it from input components, and only the resolved plan
+	// `id.template` composes it from input components, and only the resolved plan
 	// knows whether there is one. A NON-EMPTY name is still format-checked up front
 	// (garbage never reaches the plan); "name is required" moves below, after the
 	// plan resolves and the composed name is known.
@@ -141,7 +141,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	// bareNoScenario).
 	createScenario := scenario.CreateScenarioName
 	// name — the EFFECTIVE incarnation name: the operator's `name`, or the one the
-	// create scenario composed from `id_template` (ADR-0079). Everything past the
+	// create scenario composed from `id.template` (ADR-0079). Everything past the
 	// plan resolve (insert / traits sync / bootstrap run / audit / reply) uses it,
 	// never req.Name.
 	name := req.ID
@@ -247,7 +247,7 @@ func (h *IncarnationHandler) CreateTyped(ctx context.Context, claims *jwt.Claims
 	if err := incarnation.Create(ctx, h.db, inc); err != nil {
 		if errors.Is(err, incarnation.ErrIncarnationAlreadyExists) {
 			// Name the holder when the caller may see it (NIM-331). Under a
-			// `id_template` the operator did not type this name — they typed the
+			// `id.template` the operator did not type this name — they typed the
 			// components it was composed from — so a bare "already exists" points at
 			// a string they have never seen and leaves them nothing to change. The
 			// lookup is best-effort: a failure here must not turn a correct 409 into

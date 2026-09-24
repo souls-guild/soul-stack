@@ -1,11 +1,9 @@
 package config
 
-// The create-scenario key `id_template` (ADR-0079, renamed by [ADR-0085]): the
-// incarnation id is COMPOSED server-side from `input:` components instead of
-// being free text typed by the operator
-// (`{name}-{project}-{subproject}-redis-{service_type}`). The pre-[ADR-0085]
-// spelling `name_template:` is still read for a compatibility window and is
-// folded into the same field before any rule here sees it
+// The create-scenario block `id:` (ADR-0079, renamed by [ADR-0085], given a block by
+// NIM-899): the incarnation id is COMPOSED server-side from `input:` components
+// instead of being free text typed by the operator. The scalar spelling
+// `id_template:` is folded into the same block before any rule here sees it
 // (id_template_window.go).
 //
 // [ADR-0085]: ../../docs/adr/0085-entity-id-and-label.md
@@ -38,18 +36,46 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// IncarnationIDMaxLen mirrors the length ceiling of the keeper-side
-// `incarnation.IDPattern` (`^[a-z0-9][a-z0-9-]{0,62}$`) — shared/ cannot import
-// keeper/internal, so the bound is restated here the same way the huma reply
-// schemas restate the pattern. Used ONLY by the static lint ("the literal skeleton
-// alone can never fit"); the authoritative check runs keeper-side on the composed
-// id, where the full pattern lives.
+// IncarnationIDMaxLen mirrors the ceiling of the keeper-side `incarnation.IDPattern`
+// (`^[a-z0-9][a-z0-9-]{0,62}$`): shared/ cannot import keeper/internal, so the bound
+// is restated here. A scenario may narrow it with `id.max_length` and never widen it.
 const IncarnationIDMaxLen = 63
+
+// IDSpec is the create-scenario `id:` block. The zero value means the scenario
+// composes nothing and the operator names the incarnation.
+type IDSpec struct {
+	// Template is the `${ … }` template over input only.
+	Template string `yaml:"template,omitempty"`
+
+	// MaxLength bounds the COMPOSED id in characters. An ABSOLUTE number, not a
+	// reserve off [IncarnationIDMaxLen]: the reason a service is bounded below the
+	// platform lies outside it, so the number is the service's to state (ADR-0079
+	// amendment (ii)). 0 = unset; a value outside 1..63 is a lint error and reads as
+	// unset at runtime, because refusing every create over a typo in a bound is worse.
+	MaxLength int `yaml:"max_length,omitempty"`
+}
+
+// Ceiling is the bound a composed id must satisfy, never above the platform's.
+func (s IDSpec) Ceiling() int {
+	if s.MaxLength >= 1 && s.MaxLength <= IncarnationIDMaxLen {
+		return s.MaxLength
+	}
+	return IncarnationIDMaxLen
+}
+
+// CeilingPhrase names the bound and its SOURCE: which of the two it is decides
+// whether the reader opens the scenario or nothing.
+func (s IDSpec) CeilingPhrase() string {
+	if n := s.Ceiling(); n != IncarnationIDMaxLen {
+		return fmt.Sprintf("the %d-character ceiling id.max_length sets", n)
+	}
+	return fmt.Sprintf("the %d-character incarnation id ceiling", IncarnationIDMaxLen)
+}
 
 // ErrIDTemplateRender marks a runtime failure of [RenderIDTemplate]: a block
 // did not compile/evaluate, or its result is a list/map that cannot be part of
 // an id. Callers map it to 422 (the offending values came from operator input).
-var ErrIDTemplateRender = errors.New("config: id_template render failed")
+var ErrIDTemplateRender = errors.New("config: id.template render failed")
 
 // ErrIDTemplateIndexForm — the template reaches input in index form
 // (`input['k']` / `input[expr]`) instead of the canonical select form
@@ -57,7 +83,7 @@ var ErrIDTemplateRender = errors.New("config: id_template render failed")
 // ([IDTemplateInputRefs], soul-lint) needs the component name statically known
 // from the AST, and a dynamic index does not guarantee that. Mirrors
 // shared/cel.ErrVarIndexForm for `vars`.
-var ErrIDTemplateIndexForm = errors.New("config: id_template must address components as ${input.<name>}, not input[...]")
+var ErrIDTemplateIndexForm = errors.New("config: id.template must address components as ${input.<name>}, not input[...]")
 
 // RenderIDTemplate composes an incarnation id from tmpl over the RESOLVED
 // input (post default-merge, see [ResolveInputContract]). Literal text passes
@@ -275,7 +301,7 @@ func noMacroParserInstance() (*parser.Parser, error) {
 	return noMacroParser, noMacroParserErr
 }
 
-// validateIDTemplate is the schema-time check of `id_template:` against the
+// validateIDTemplate is the schema-time check of the `id:` block against the
 // scenario's own `input:` — the non-extends path (see the covenant gate in
 // [schemaValidateScenario]). A thin wrapper over
 // [validateIDTemplateAgainstInputKeys].
@@ -284,40 +310,29 @@ func validateIDTemplate(root *ast.MappingNode, m *ScenarioManifest, key string) 
 	for name := range m.Input {
 		inputKeys[name] = true
 	}
-	return validateIDTemplateAgainstInputKeys(root, m.IDTemplate, m.Create, inputKeys, key)
+	return validateIDTemplateAgainstInputKeys(root, m.ID, m.Create, inputKeys, key)
 }
 
-// validateIDTemplateAgainstInputKeys is the CORE `id_template` check with a
-// PARAMETERIZED source of input names (the scenario's own `input:` before a
-// covenant merge, or the MERGED effective input after one — mirrors the `form:`
-// split):
+// validateIDTemplateAgainstInputKeys is the CORE `id:` check. inputKeys is
+// PARAMETERIZED — the scenario's own `input:` before a covenant merge, the MERGED one
+// after (mirrors the `form:` split).
 //
-//   - empty template → empty_value (drop the key for a free-text id);
-//   - a block that does not compile input-only, or index form → ERROR
-//     id_template_invalid;
-//   - `${input.X}` with X not declared in input → ERROR id_template_input_unknown
-//     (a create would fail at runtime for every operator — the exact class the
-//     linter exists to catch);
-//   - the literal skeleton alone exceeding the 63-char id ceiling → ERROR
-//     id_template_too_long (no input can rescue it);
-//   - no `${ … }` block at all → WARNING id_template_constant (every incarnation
-//     of the service would collide on the same id);
-//   - the scenario is not a create starter → WARNING id_template_ignored (the key
-//     is only read on the create path).
+// Rules: empty_value, id_template_invalid, id_template_input_unknown,
+// id_template_too_long (against the EFFECTIVE ceiling, so a declared `max_length`
+// sharpens it), id_max_length_over_ceiling, id_max_length_invalid, and the warnings
+// id_template_constant / id_template_ignored.
 //
-// key is the spelling the file wrote — `id_template`, or `name_template` inside
-// the [ADR-0085] compatibility window. Every message and every address is built
-// from it, so a scenario still on the old key is never told to fix a key that is
-// not in it. The CODES do not move with the spelling: a code names the rule, and
-// one rule reporting under two codes would make a report unsearchable.
-func validateIDTemplateAgainstInputKeys(root *ast.MappingNode, tmpl string, create *bool, inputKeys map[string]bool, key string) []diag.Diagnostic {
+// key is the spelling the FILE wrote, so a scenario on the scalar is never told to fix
+// a key it does not have. The codes do not move with the spelling.
+func validateIDTemplateAgainstInputKeys(root *ast.MappingNode, spec IDSpec, create *bool, inputKeys map[string]bool, key string) []diag.Diagnostic {
 	pathPrefix := "$." + key
+	tmpl := spec.Template
 	if tmpl == "" {
-		return []diag.Diagnostic{atPath(root, pathPrefix, diag.Diagnostic{
+		return []diag.Diagnostic{atIDPath(root, pathPrefix, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:    "empty_value",
-			Message: key + " must be a non-empty template over input.* (drop the key to keep a free-text id)",
-			Hint:    `e.g. ` + key + `: "${input.name}-${input.project}-redis-${input.service_type}"`,
+			Message: key + " must be a non-empty template over input.* (drop the id: block to keep a free-text id)",
+			Hint:    idTemplateExample(key),
 		})}
 	}
 
@@ -367,12 +382,13 @@ func validateIDTemplateAgainstInputKeys(root *ast.MappingNode, tmpl string, crea
 			Hint:    "reference at least one component, e.g. ${input.name}",
 		}))
 	}
-	if literal > IncarnationIDMaxLen {
+	out = append(out, validateIDMaxLength(root, spec)...)
+	if literal > spec.Ceiling() {
 		out = append(out, atPath(root, pathPrefix, diag.Diagnostic{
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code: "id_template_too_long",
-			Message: fmt.Sprintf("literal part of %s is %d characters, over the %d-character incarnation id ceiling — no input can make it fit",
-				key, literal, IncarnationIDMaxLen),
+			Message: fmt.Sprintf("literal part of %s is %d characters, over %s — no input can make it fit",
+				key, literal, spec.CeilingPhrase()),
 			Hint: "shorten the fixed text between the components",
 		}))
 	}
@@ -396,6 +412,64 @@ func validateIDTemplateAgainstInputKeys(root *ast.MappingNode, tmpl string, crea
 			Message: fmt.Sprintf("%s references input.%s, which is not declared in input:", key, ref),
 			Hint:    "declare the component in input:, or fix the reference",
 		}))
+	}
+	return out
+}
+
+// idTemplateExample renders the hint as pastable YAML. The written spelling decides
+// the SHAPE: under the block the template is a nested key, so `id.template: "…"` would
+// name a key that does not exist.
+func idTemplateExample(key string) string {
+	const tmpl = `"${input.name}-${input.project}-redis-${input.service_type}"`
+	if key == idBlockTemplateKey {
+		return "e.g. " + idBlockKey + ":\n  template: " + tmpl
+	}
+	return "e.g. " + key + ": " + tmpl
+}
+
+// idMaxLengthPath — only the `id:` block can carry a ceiling, so the path is fixed.
+const idMaxLengthPath = "$." + idBlockKey + ".max_length"
+
+// validateIDMaxLength checks a WRITTEN `id.max_length`. Presence comes from the AST,
+// not the decoded number: a decoded 0 cannot be told from an absent key, and 0 is the
+// value worth reporting — the runtime reads it as "no ceiling", the author meant the
+// opposite.
+func validateIDMaxLength(root *ast.MappingNode, spec IDSpec) []diag.Diagnostic {
+	if _, _, written := lookupPath(root, idMaxLengthPath); !written {
+		return nil
+	}
+	switch {
+	case spec.MaxLength < 1:
+		return []diag.Diagnostic{atPath(root, idMaxLengthPath, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code: "id_max_length_invalid",
+			Message: fmt.Sprintf("id.max_length is %d, which bounds no id — a ceiling must be at least 1",
+				spec.MaxLength),
+			Hint: fmt.Sprintf("set the number this service's id must fit, or drop the key to take the %d-character platform ceiling",
+				IncarnationIDMaxLen),
+		})}
+	case spec.MaxLength > IncarnationIDMaxLen:
+		return []diag.Diagnostic{atPath(root, idMaxLengthPath, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code: "id_max_length_over_ceiling",
+			Message: fmt.Sprintf("id.max_length is %d, over the %d-character incarnation id ceiling — a bound above the grammar's own narrows nothing while reading as though it did",
+				spec.MaxLength, IncarnationIDMaxLen),
+			Hint: fmt.Sprintf("lower it to %d or below, or drop the key to take the platform ceiling",
+				IncarnationIDMaxLen),
+		})}
+	}
+	return nil
+}
+
+// atIDPath is [atPath] with a fallback to the `id:` key when the file never wrote the
+// leaf — an author cannot open a line that is not there.
+func atIDPath(root *ast.MappingNode, path string, d diag.Diagnostic) diag.Diagnostic {
+	out := atPath(root, path, d)
+	if out.Line != 0 {
+		return out
+	}
+	if line, col, ok := lookupPath(root, "$."+idBlockKey); ok {
+		out.Line, out.Column = line, col
 	}
 	return out
 }

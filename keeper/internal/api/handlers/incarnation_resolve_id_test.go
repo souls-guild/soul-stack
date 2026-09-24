@@ -12,6 +12,7 @@ import (
 	"errors"
 	"net/http"
 	"testing"
+	"unicode/utf8"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -44,6 +45,16 @@ func resolveName(t *testing.T, h *IncarnationHandler, req ResolveIDRequest) (Res
 	t.Helper()
 	claims := &jwt.Claims{Subject: "archon-alice"}
 	return h.ResolveIDTyped(context.Background(), claims, req, h.GetInScopeFor(claims, "get"))
+}
+
+// newBoundedResolveHandler is [newResolveHandler] over a scenario declaring
+// `id.max_length`.
+func newBoundedResolveHandler(t *testing.T, max int) *IncarnationHandler {
+	t.Helper()
+	loader := &fakeLoader{localDir: boundedIDSnapshot(t, max)}
+	h := NewIncarnationHandler(notFoundDB(), nil, nil, &fakeResolver{ok: true}, loader, nil, unrestrictedScoper(), nil)
+	h.SetPermissionChecker(allowAllChecker{})
+	return h
 }
 
 // notFoundDB — nothing holds any name.
@@ -240,5 +251,69 @@ func TestIncarnation_Create_DuplicateNamesHolderInScope(t *testing.T) {
 				t.Errorf("Detail = %q, want it to end with %q", p.Detail, tc.want)
 			}
 		})
+	}
+}
+
+// TestResolveName_CeilingIsTheScenariosOwn — the form's counter divides by this field,
+// so a reply of 63 while the create refuses at 40 lets an operator type into a refusal.
+// Three ceilings that must not collapse into one constant: the scenario's own, the
+// platform's when none is declared, and the platform's again when nothing composes.
+//
+// MUTATE: `preview.MaxLength` → `config.IncarnationIDMaxLen` in ResolveIDTyped.
+func TestResolveName_CeilingIsTheScenariosOwn(t *testing.T) {
+	bounded, err := resolveName(t, newBoundedResolveHandler(t, 40), ResolveIDRequest{
+		Service: "redis", CreateScenario: "create", Input: resolveInput(),
+	})
+	if err != nil {
+		t.Fatalf("ResolveIDTyped: %v", err)
+	}
+	if bounded.MaxLength != 40 {
+		t.Errorf("MaxLength = %d, want the scenario's declared 40", bounded.MaxLength)
+	}
+	if bounded.Length != len(composedName) || !bounded.Valid {
+		t.Errorf("a %d-character id under a ceiling of 40 must still be valid, got %+v", len(composedName), bounded)
+	}
+
+	// Nothing composes: no create scenario is registered at all (stub mode), which is
+	// the branch that returns the zero result. The typed id field still has 63 on it.
+	stub := NewIncarnationHandler(notFoundDB(), nil, nil, nil, nil, nil, unrestrictedScoper(), nil)
+	stub.SetPermissionChecker(allowAllChecker{})
+	none, err := resolveName(t, stub, ResolveIDRequest{Service: "redis", Input: resolveInput()})
+	if err != nil {
+		t.Fatalf("ResolveIDTyped (stub mode): %v", err)
+	}
+	if none.Composes {
+		t.Error("stub mode composes nothing")
+	}
+	if none.MaxLength != 63 {
+		t.Errorf("MaxLength = %d with nothing composing, want the platform 63 for a typed id", none.MaxLength)
+	}
+}
+
+// TestResolveName_LengthIsCharactersNotBytes — `length` and `max_length` travel in one
+// payload and the form divides one by the other, so they must share a unit. The id here
+// is deliberately INVALID: that is the state the counter exists for.
+//
+// MUTATE: `utf8.RuneCountInString` → `len` in ResolveIDTyped.
+func TestResolveName_LengthIsCharactersNotBytes(t *testing.T) {
+	h := newResolveHandler(t, notFoundDB(), unrestrictedScoper(), allowAllChecker{})
+
+	const cyrillic = "кэш" // 3 characters, 6 bytes
+	res, err := resolveName(t, h, ResolveIDRequest{
+		Service: "redis", CreateScenario: "create",
+		Input: map[string]any{"name": cyrillic, "project": "billing", "subproject": "inv"},
+	})
+	if err != nil {
+		t.Fatalf("ResolveIDTyped: %v", err)
+	}
+	if res.Valid {
+		t.Fatal("a non-ASCII component cannot compose a legal incarnation id")
+	}
+	want := utf8.RuneCountInString(res.ID)
+	if res.Length != want {
+		t.Errorf("Length = %d, want %d characters (len would say %d bytes)", res.Length, want, len(res.ID))
+	}
+	if res.Length == len(res.ID) {
+		t.Fatalf("the fixture stopped distinguishing the two units — ID = %q", res.ID)
 	}
 }

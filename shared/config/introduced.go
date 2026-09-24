@@ -105,16 +105,17 @@ const (
 	// invariant instead of refusing it.
 	FeatureTaskRequire = "task.require"
 
-	// FeatureScenarioIDTemplate — the create-scenario key `id_template`
-	// (ADR-0079, NIM-177; `name_template` before [ADR-0085]): the incarnation id is
-	// composed server-side from `input:` instead of being taken as free text. The
-	// first SCENARIO-level grammar to carry a floor — until it, a scenario's own
-	// manifest contributed none, only its task list did. A keeper that predates it
-	// does not compose anything: it expects the identifier in the request, so a
-	// definition relying on the template cannot be created there at all.
+	// FeatureScenarioIDTemplate — the create-scenario `id:` block (ADR-0079,
+	// NIM-177; the scalar `id_template:` until NIM-899, `name_template:` before
+	// [ADR-0085]): the incarnation id is composed server-side from `input:` instead
+	// of being taken as free text. The first SCENARIO-level grammar to carry a floor
+	// — until it, a scenario's own manifest contributed none, only its task list did.
+	// A keeper that predates it does not compose anything: it expects the identifier
+	// in the request, so a definition relying on the template cannot be created there
+	// at all.
 	//
-	// ONE feature id for both spellings: the two are one grammar, and a keeper old
-	// enough to refuse one refuses the other for the same reason.
+	// ONE feature id for every spelling: the floor is the COMPOSITION, not the shape
+	// of the key.
 	FeatureScenarioIDTemplate = "scenario.id_template"
 
 	// FeatureTaskBlockInclude — an `include:` nested inside `block:` (NIM-169).
@@ -203,7 +204,7 @@ func KeeperFeaturesOfService(m *ServiceManifest) []KeeperFeature {
 // Added because the scenario manifest contributed NO floor anywhere (NIM-354):
 // both callers — soul-lint's scenario path and keeper's render path — walked
 // only `scn.Tasks`, so a scenario-level key was invisible to the cross-check.
-// `id_template` is the first such key; the collector exists so the next one
+// `id.template` is the first such key; the collector exists so the next one
 // has somewhere to go. The reported path is the spelling the file wrote, so a
 // scenario inside the [ADR-0085] compatibility window is cited at a key it has.
 func KeeperFeaturesOfScenario(m *ScenarioManifest) []KeeperFeature {
@@ -211,15 +212,15 @@ func KeeperFeaturesOfScenario(m *ScenarioManifest) []KeeperFeature {
 		return nil
 	}
 	var out []KeeperFeature
-	if m.IDTemplate != "" {
-		// The address is the key the file wrote. Equality is what says the fold
-		// ran: normalizeIDTemplate copies the legacy value across only when the
-		// canonical key is absent, so two DIFFERENT values mean the file declared
-		// both — already an `id_template_conflict` error, and the canonical key is
-		// the one to cite there, exactly as writtenIDTemplateKey decides it.
-		where := "$." + idTemplateKey
-		if m.LegacyNameTemplate != "" && m.LegacyNameTemplate == m.IDTemplate {
-			where = "$." + nameTemplateKey
+	if m.ID.Template != "" {
+		// Equality is what says the fold RAN: normalizeIDTemplate copies the legacy
+		// value across only when the canonical key is absent. Both spellings carrying
+		// the same value is indistinguishable from that and cites the legacy key —
+		// left as is, since such a manifest is an `id_template_conflict` ERROR and no
+		// window is derived from it.
+		where := "$." + idBlockTemplateKey
+		if m.LegacyIDTemplate != "" && m.LegacyIDTemplate == m.ID.Template {
+			where = "$." + idTemplateKey
 		}
 		if f, ok := dslFeatureUse(FeatureScenarioIDTemplate, where); ok {
 			out = append(out, f)

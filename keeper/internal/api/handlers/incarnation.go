@@ -439,7 +439,7 @@ func IncarnationCovenContexts(name, service string, covens []string) []map[strin
 // IncarnationCreateContexts is the create-path builder: the same contexts, except
 // an absent name is expected rather than a failure (NIM-333).
 //
-// Under `id_template` (ADR-0079) the name is composed server-side from the
+// Under `id.template` (ADR-0079) the name is composed server-side from the
 // resolved input, so at gate time — before the handler runs — it does not exist.
 // The strict builder answered nil, [middleware.RequirePermissionMulti] turned that
 // into one empty context, and an empty context matches only a permission with no
@@ -571,7 +571,7 @@ func IncarnationScopeSelector(reader IncarnationContextReader) middleware.MultiS
 // before insert); an invalid label simply won't match any correct permission
 // (scoped → deny), bare/`*` — pass, the handler returns 422.
 //
-// An ABSENT `name` is not a failure (NIM-333): under `id_template` the name does
+// An ABSENT `name` is not a failure (NIM-333): under `id.template` the name does
 // not exist yet, and the gate scopes on `service=` and `coven=` instead of
 // admitting only unrestricted roles — see [IncarnationCreateContexts].
 func IncarnationCreateScopeSelector(r *http.Request) []map[string]string {

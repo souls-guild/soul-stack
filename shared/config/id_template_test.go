@@ -117,7 +117,8 @@ func scenarioWithIDTemplate(t *testing.T, body string) []diag.Diagnostic {
 func TestIDTemplate_UnknownInputRef(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: "${input.name}-${input.nope}"
+id:
+  template: "${input.name}-${input.nope}"
 input:
   name:
     type: string
@@ -132,11 +133,14 @@ tasks: []
 }
 
 // TestIDTemplate_DeclaredRefsClean — the same template with every component
-// declared produces no id_template diagnostics at all.
+// declared, and a bound inside the platform ceiling, produces no id diagnostics at
+// all.
 func TestIDTemplate_DeclaredRefsClean(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: "${input.name}-${input.project}-redis-${input.service_type}"
+id:
+  template: "${input.name}-${input.project}-redis-${input.service_type}"
+  max_length: 50
 input:
   name:
     type: string
@@ -147,18 +151,19 @@ input:
 tasks: []
 `)
 	for _, d := range diags {
-		if strings.HasPrefix(d.Code, "id_template") {
-			t.Fatalf("unexpected diagnostic on a valid template: %+v", d)
+		if strings.HasPrefix(d.Code, "id_template") || strings.HasPrefix(d.Code, "id_max_length") {
+			t.Fatalf("unexpected diagnostic on a valid id: block: %+v", d)
 		}
 	}
 }
 
 // TestIDTemplate_LiteralSkeletonTooLong — literal text alone over the 63-char
-// ceiling can never produce a valid name, whatever the operator types.
+// platform ceiling can never produce a valid id, whatever the operator types.
 func TestIDTemplate_LiteralSkeletonTooLong(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: "`+strings.Repeat("a", 70)+`-${input.name}"
+id:
+  template: "`+strings.Repeat("a", 70)+`-${input.name}"
 input:
   name:
     type: string
@@ -169,12 +174,108 @@ tasks: []
 	}
 }
 
+// TestIDTemplate_LiteralSkeletonOverServiceCeiling is what declaring the bound BUYS
+// statically: a 45-character skeleton is inside the platform's 63 and cannot fit a
+// service capping at 40. The same template WITHOUT the bound must stay silent, or the
+// rule is firing on the skeleton rather than on the ceiling.
+func TestIDTemplate_LiteralSkeletonOverServiceCeiling(t *testing.T) {
+	const skeleton = "-redis-" + "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa" // 45 literal chars
+	bounded := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}`+skeleton+`"
+  max_length: 40
+input:
+  name:
+    type: string
+tasks: []
+`)
+	if !hasCode(bounded, "id_template_too_long") {
+		t.Fatalf("a 45-character skeleton under max_length: 40 was accepted; diags=%v", bounded)
+	}
+
+	unbounded := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}`+skeleton+`"
+input:
+  name:
+    type: string
+tasks: []
+`)
+	if hasCode(unbounded, "id_template_too_long") {
+		t.Fatalf("the same skeleton is inside the platform ceiling and must pass without a bound; diags=%v", unbounded)
+	}
+}
+
+// TestIDTemplate_MaxLengthOverPlatformCeiling — a bound wider than the grammar narrows
+// nothing while reading as though it did. An ERROR rather than a silent clamp: a
+// clamped number in a file gets read as true.
+func TestIDTemplate_MaxLengthOverPlatformCeiling(t *testing.T) {
+	diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}-redis"
+  max_length: 70
+input:
+  name:
+    type: string
+tasks: []
+`)
+	if !hasCode(diags, "id_max_length_over_ceiling") {
+		t.Fatalf("expected id_max_length_over_ceiling; diags=%v", diags)
+	}
+	for _, d := range diags {
+		if d.Code == "id_max_length_over_ceiling" && d.YAMLPath != "$.id.max_length" {
+			t.Errorf("address = %q, want $.id.max_length", d.YAMLPath)
+		}
+	}
+}
+
+// TestIDTemplate_MaxLengthNonPositive — 0 is why the rule reads the AST: in the decoded
+// struct it is indistinguishable from an absent key.
+func TestIDTemplate_MaxLengthNonPositive(t *testing.T) {
+	for _, value := range []string{"0", "-1"} {
+		diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}-redis"
+  max_length: `+value+`
+input:
+  name:
+    type: string
+tasks: []
+`)
+		if !hasCode(diags, "id_max_length_invalid") {
+			t.Fatalf("max_length: %s was accepted; diags=%v", value, diags)
+		}
+	}
+}
+
+func TestIDTemplate_MaxLengthAbsentIsSilent(t *testing.T) {
+	diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}-redis"
+input:
+  name:
+    type: string
+tasks: []
+`)
+	for _, d := range diags {
+		if strings.HasPrefix(d.Code, "id_max_length") {
+			t.Fatalf("unexpected bound diagnostic with no bound written: %+v", d)
+		}
+	}
+}
+
 // TestIDTemplate_OutsideSandboxRejected — a template referencing a name outside
 // `input` is caught at lint time, not at create time.
 func TestIDTemplate_OutsideSandboxRejected(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: "${vars.cluster}-${input.name}"
+id:
+  template: "${vars.cluster}-${input.name}"
 input:
   name:
     type: string
@@ -190,7 +291,8 @@ tasks: []
 // nothing, it just does nothing).
 func TestIDTemplate_NotACreateScenario(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: add_user
-id_template: "${input.name}"
+id:
+  template: "${input.name}"
 input:
   name:
     type: string
@@ -200,16 +302,17 @@ tasks: []
 		t.Fatalf("expected id_template_ignored WARNING; diags=%v", diags)
 	}
 	if diag.HasErrors(diags) {
-		t.Fatalf("id_template on a non-create scenario must not be an ERROR; diags=%v", diags)
+		t.Fatalf("an id: block on a non-create scenario must not be an ERROR; diags=%v", diags)
 	}
 }
 
-// TestIDTemplate_ConstantWarns — a template with no block composes the same name
+// TestIDTemplate_ConstantWarns — a template with no block composes the same id
 // for every incarnation, so the second create always collides.
 func TestIDTemplate_ConstantWarns(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: "always-the-same"
+id:
+  template: "always-the-same"
 tasks: []
 `)
 	if !hasWarn(diags, "id_template_constant") {
@@ -222,7 +325,8 @@ tasks: []
 func TestIDTemplate_Empty(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
-id_template: ""
+id:
+  template: ""
 tasks: []
 `)
 	if !hasCode(diags, "empty_value") {
@@ -230,8 +334,32 @@ tasks: []
 	}
 }
 
+// TestIDTemplate_BlockWithoutTemplate — a ceiling on nothing, addressed at the `id:`
+// key because the leaf it is about is not in the file.
+func TestIDTemplate_BlockWithoutTemplate(t *testing.T) {
+	diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  max_length: 40
+tasks: []
+`)
+	var found bool
+	for _, d := range diags {
+		if d.Code != "empty_value" {
+			continue
+		}
+		found = true
+		if d.Line != 3 {
+			t.Errorf("Line = %d, want 3 (the `id:` key) — the leaf is absent, so the block is the address", d.Line)
+		}
+	}
+	if !found {
+		t.Fatalf("an id: block with no template was accepted; diags=%v", diags)
+	}
+}
+
 // TestIDTemplate_AbsentIsSilent — the whole feature is opt-in: a scenario
-// without the key produces no id_template diagnostics whatsoever.
+// without the key produces no id diagnostics whatsoever.
 func TestIDTemplate_AbsentIsSilent(t *testing.T) {
 	diags := scenarioWithIDTemplate(t, `name: create
 create: true
@@ -241,8 +369,110 @@ input:
 tasks: []
 `)
 	for _, d := range diags {
-		if strings.HasPrefix(d.Code, "id_template") {
-			t.Fatalf("a scenario without id_template must produce no id_template diagnostics: %+v", d)
+		if strings.HasPrefix(d.Code, "id_template") || strings.HasPrefix(d.Code, "id_max_length") {
+			t.Fatalf("a scenario without an id: block must produce no id diagnostics: %+v", d)
 		}
+	}
+}
+
+// TestIDSpec_Ceiling — both wrong directions resolve to the platform ceiling: a
+// negative bound read literally would refuse every id, one above 63 would claim room
+// the grammar does not have.
+func TestIDSpec_Ceiling(t *testing.T) {
+	for _, tc := range []struct {
+		max  int
+		want int
+	}{
+		{0, IncarnationIDMaxLen},
+		{-1, IncarnationIDMaxLen},
+		{IncarnationIDMaxLen + 1, IncarnationIDMaxLen},
+		{IncarnationIDMaxLen, IncarnationIDMaxLen},
+		{1, 1},
+		{50, 50},
+	} {
+		if got := (IDSpec{MaxLength: tc.max}).Ceiling(); got != tc.want {
+			t.Errorf("IDSpec{MaxLength: %d}.Ceiling() = %d, want %d", tc.max, got, tc.want)
+		}
+	}
+}
+
+func TestIDSpec_CeilingPhrase(t *testing.T) {
+	service := (IDSpec{MaxLength: 50}).CeilingPhrase()
+	if !strings.Contains(service, "50") || !strings.Contains(service, "id.max_length") {
+		t.Errorf("phrase = %q, want the number and the key that set it", service)
+	}
+	platform := (IDSpec{}).CeilingPhrase()
+	if !strings.Contains(platform, "63") || strings.Contains(platform, "id.max_length") {
+		t.Errorf("phrase = %q, want the platform ceiling and no key to go change", platform)
+	}
+}
+
+// TestIDTemplate_HintIsPastableYAML — the hint is read by someone who has just
+// mistyped this construct, so it has to parse. Under the block the template is a
+// NESTED key.
+func TestIDTemplate_HintIsPastableYAML(t *testing.T) {
+	for _, tc := range []struct{ body, want string }{
+		{"name: create\ncreate: true\nid:\n  template: \"\"\ntasks: []\n", "id:\n  template: "},
+		{"name: create\ncreate: true\nid_template: \"\"\ntasks: []\n", "id_template: "},
+	} {
+		var hint string
+		for _, d := range scenarioWithIDTemplate(t, tc.body) {
+			if d.Code == "empty_value" {
+				hint = d.Hint
+			}
+		}
+		if !strings.Contains(hint, tc.want) {
+			t.Errorf("hint = %q, want the %q shape", hint, tc.want)
+		}
+	}
+}
+
+// TestIDTemplate_ScalarIDIsATypeError is the migration's likeliest slip — renaming
+// `id_template:` to `id:` and leaving the value. Read as "block absent" it would
+// silently stop composing an id the file plainly declares.
+func TestIDTemplate_ScalarIDIsATypeError(t *testing.T) {
+	diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id: "${input.name}-redis"
+input:
+  name:
+    type: string
+tasks: []
+`)
+	if !hasCode(diags, "type_mismatch") {
+		t.Fatalf("a scalar id: was accepted as a block; diags=%v", diags)
+	}
+	for _, d := range diags {
+		if d.Code == "type_mismatch" && d.Line != 3 {
+			t.Errorf("Line = %d, want 3 (the id: key)", d.Line)
+		}
+	}
+}
+
+// TestIDTemplate_UnknownSubKeyIsRefused — `max_lenght:` would parse, mean nothing and
+// leave the id bounded only by the platform. The reflect walker covers this because of
+// the field's TYPE, which is not written down anywhere.
+func TestIDTemplate_UnknownSubKeyIsRefused(t *testing.T) {
+	diags := scenarioWithIDTemplate(t, `name: create
+create: true
+id:
+  template: "${input.name}-redis"
+  max_lenght: 40
+input:
+  name:
+    type: string
+tasks: []
+`)
+	var found bool
+	for _, d := range diags {
+		if d.Code == "unknown_key" && d.YAMLPath == "$.id.max_lenght" {
+			found = true
+			if d.Line != 5 {
+				t.Errorf("Line = %d, want 5", d.Line)
+			}
+		}
+	}
+	if !found {
+		t.Fatalf("a typo'd sub-key of id: was silently ignored; diags=%v", diags)
 	}
 }

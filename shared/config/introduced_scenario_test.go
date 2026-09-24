@@ -7,7 +7,7 @@ import "testing"
 //
 // A missing row is not a missing warning — it is a `compat:` window that passes
 // the check while promising a keeper that cannot render the definition. A
-// service pinning `min: 0.1.0` beside an `id_template` create-scenario lints
+// service pinning `min: 0.1.0` beside an `id.template` create-scenario lints
 // clean today, and the keeper it names does not compose the id at all: it
 // expects the identifier in the request. That surfaces on somebody else's cluster during
 // an upgrade rather than on the author's lint, which is the exact failure mode
@@ -19,14 +19,14 @@ import "testing"
 // stamp, or the stamp freezes them as "these were always here".
 
 // A scenario's own manifest grammar contributed no floor anywhere: soul-lint's
-// scenario path and keeper's run path both walk only the TASK list. id_template
+// scenario path and keeper's run path both walk only the TASK list. The `id:` block
 // is the first scenario-level key that needs one.
 func TestKeeperFeaturesOfScenario_IDTemplate(t *testing.T) {
 	if got := KeeperFeaturesOfScenario(&ScenarioManifest{}); len(got) != 0 {
-		t.Fatalf("used = %+v, want nothing for a scenario without id_template", got)
+		t.Fatalf("used = %+v, want nothing for a scenario without an id: block", got)
 	}
 
-	got := KeeperFeaturesOfScenario(&ScenarioManifest{IDTemplate: "${ input.cluster }-${ input.shard }"})
+	got := KeeperFeaturesOfScenario(&ScenarioManifest{ID: IDSpec{Template: "${ input.cluster }-${ input.shard }"}})
 	found := false
 	for _, f := range got {
 		if f.ID == FeatureScenarioIDTemplate {

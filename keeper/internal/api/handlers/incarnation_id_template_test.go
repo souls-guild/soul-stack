@@ -2,7 +2,7 @@ package handlers
 
 // Guard tests for server-side incarnation-name composition (ADR-0079, NIM-177) at
 // the REST handler layer: POST /v1/incarnations against a create scenario that
-// declares `name_template`. The scenario package covers the composition itself;
+// declares an `id:` block. The scenario package covers the composition itself;
 // here the seam that matters is the HANDLER — that the composed name is what gets
 // inserted, run, audited and echoed, and that nothing still reads req.Name.
 
@@ -10,6 +10,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"errors"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"os"
@@ -25,6 +26,18 @@ import (
 // root for fakeLoader.localDir.
 func nameTemplateSnapshot(t *testing.T) string {
 	t.Helper()
+	return idSnapshot(t, "")
+}
+
+// boundedIDSnapshot is [nameTemplateSnapshot] with `id.max_length` declared — the
+// shape of a service whose composed id has a ceiling below the platform's.
+func boundedIDSnapshot(t *testing.T, max int) string {
+	t.Helper()
+	return idSnapshot(t, fmt.Sprintf("  max_length: %d\n", max))
+}
+
+func idSnapshot(t *testing.T, bound string) string {
+	t.Helper()
 	root := t.TempDir()
 	dir := filepath.Join(root, "scenario", "create")
 	if err := os.MkdirAll(dir, 0o755); err != nil {
@@ -32,8 +45,9 @@ func nameTemplateSnapshot(t *testing.T) string {
 	}
 	yaml := `name: create
 create: true
-name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
-input:
+id:
+  template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+` + bound + `input:
   name:
     type: string
     required: true

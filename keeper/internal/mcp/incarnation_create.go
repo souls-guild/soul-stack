@@ -24,7 +24,7 @@ type incarnationCreateArgs struct {
 	ID string `json:"id"`
 	// Label — optional display caption (ADR-0085), free text; changed afterwards
 	// by keeper.incarnation.label-set. Unlike Name it is never composed by a
-	// `id_template`.
+	// `id.template`.
 	Label   *string        `json:"label,omitempty"`
 	Service string         `json:"service"`
 	Covens  []string       `json:"covens,omitempty"`
@@ -91,7 +91,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		}
 	}
 	// `name` is optional here (ADR-0079, parity with REST CreateTyped): a create
-	// scenario carrying a `id_template` composes it from input components, and
+	// scenario carrying a `id.template` composes it from input components, and
 	// only the resolved plan knows whether there is one. A non-empty name is
 	// format-checked up front; "name is required" is deferred until after the plan.
 	if a.ID != "" && !incarnation.ValidID(a.ID) {
@@ -120,7 +120,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	// Body-scoped RBAC BEFORE creation (fail-closed): deny → no audit, no
 	// insert, no scenario-start. Contexts come from the same
 	// handlers.IncarnationCreateContexts as REST (single source of truth), which
-	// scopes on `service=`/`coven=` when `name` is absent under a `id_template`
+	// scopes on `service=`/`coven=` when `name` is absent under a `id.template`
 	// (NIM-333) instead of admitting only unrestricted roles.
 	if err := h.checkIncarnationCreateScope(claims, a.ID, a.Service, a.Covens); err != nil {
 		return h.toolError(req.ID, toolName, mcpCodeForbidden,
@@ -159,7 +159,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 	bareNoScenario := plan.BareNoScenario
 	autoCreate := plan.AutoCreate
 	// name — the EFFECTIVE incarnation name (ADR-0079): the operator's `name`, or
-	// the one the create scenario composed from `id_template`. Everything past
+	// the one the create scenario composed from `id.template`. Everything past
 	// this point uses it, never a.Name.
 	name := plan.EffectiveName(a.ID)
 	if name == "" {

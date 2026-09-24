@@ -239,7 +239,7 @@ var writeRoutesNoAudit = map[route]string{
 	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
 
 	// POST /v1/incarnations/resolve-id — the name a create WOULD compose from the
-	// chosen scenario's name_template, plus whether it is free (NIM-331). POST by HTTP
+	// chosen scenario's id.template, plus whether it is free (NIM-331). POST by HTTP
 	// method (the input it composes over is an arbitrary nested object, which does not
 	// fit a query string and has no business in access logs), but a read-only resolve by
 	// semantics — creates nothing, stores nothing. It also fires on every keystroke of

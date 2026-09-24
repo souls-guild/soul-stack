@@ -1,6 +1,6 @@
-# ADR-079. Composed incarnation id — `id_template` in the create scenario
+# ADR-079. Composed incarnation id — the `id:` block in the create scenario
 
-- **Status.** Active, amended 2026-07-30 and 2026-09-04. Backend landed by NIM-177 (schema key,
+- **Status.** Active, amended 2026-07-30, 2026-09-04 and 2026-09-24. Backend landed by NIM-177 (schema key,
   soul-lint checks, server-side composition shared by REST and MCP). The
   **2026-07-30 amendment** (NIM-333) resolves the RBAC limitation this ADR had
   deliberately deferred: a scoped operator could not create a templated incarnation
@@ -265,3 +265,123 @@ environments is flow-control, evaluated on the host, where a stale
 `soul-lint` is the only static catcher on either side of the wire
 ([ADR-0085](0085-entity-id-and-label.md) §"The stale CEL root is a runtime failure,
 not a compile error").
+
+
+## Amendment 2026-09-24 (NIM-899): the key is the block `id:`, and it carries the bounds of the composed id
+
+The scalar became a block — `id: {template, max_length}` — because a composed id needs a
+**ceiling** as much as it needs a formula, and a scalar key has nowhere to put one.
+
+**What the scalar could not express.** A service can bound its own inputs: the WB redis
+service caps `uniq_name` at 30 characters. It cannot bound the id, because the id's length
+also depends on `namespace`, which nothing above caps, and on the literal text between the
+components. The only thing that caught an overrun was a hand-written render-time `assert:`
+in one service, and it was wrong in three ways at once: it is rewritten in every service
+that needs it; it fires **at render**, after the incarnation row is already committed,
+where the remedy is a destroy and a re-create; and it asserts on a **derived** string (a
+machine name) rather than on the id, because "my id must fit in 50" was not sayable.
+
+- **(i) `max_length:` is checked on the REQUEST, by the same code the preview calls.**
+  [`scenario.ComposeID`](../../keeper/internal/scenario/create_scenarios.go) measures the
+  composed string against the effective ceiling before `incarnation.Create`, so the answer
+  is a **422 `composed_id_invalid`** naming the id, its length and *whose* ceiling was hit.
+  That last part is not decoration: it decides which file the reader opens, since
+  `id.max_length` is theirs to change and the platform's 63 is not. The live preview
+  (`POST /v1/incarnations/resolve-id`) reports the same number in `max_length`, so the
+  form's character counter divides by what the create will actually enforce rather than by
+  a copy of 63 kept client-side — the precise drift this key exists to remove.
+
+  **It is consulted ONLY where an id is composed, which is the create path.** An incarnation
+  created before a bound existed — or before this key did, under the platform's 63 — re-runs
+  its scenarios with an id nothing static ever measured. A service whose real limit is a
+  derived string therefore keeps asserting on that string at render, and the two are not
+  duplicates: the block moves the check earlier for every id composed from now on, and the
+  assert remains the only catcher for the ones that were not. That is why the WB redis
+  service keeps its machine-name assert unchanged by this amendment.
+
+- **(ii) The ceiling is an ABSOLUTE number, not a reserve, and deriving it is the
+  SERVICE's work.** `reserve: 9` subtracted from the platform's 63 would have yielded 54,
+  and the number a real service needs is nothing like that: the WB redis service is bounded
+  by its cloud refusing a machine name over 50, and a machine name is the id plus a suffix
+  its provisioning plugin appends (`<id>-<tail>`, a five-character tail: id + 6). The
+  arithmetic lands on 44, so the reserve form would have passed a 45-character id
+  **silently**.
+
+  That derivation is the whole argument for an absolute number. It is arithmetic over a
+  limit living outside the platform, in a plugin and a cloud API the engine cannot see, and
+  it differs per topology — a clustered machine name carries a group prefix and number as
+  well (id + 7 + prefix + digits, so 41 at 3–9 shards and 40 at 10–99). A single static
+  bound must therefore be the LOOSEST of the topologies or it rejects legal configurations,
+  and the remainder stays with a render-time assert that can see the input those summands
+  come from. A reserve computed from 63 could express none of this, and it would have hidden
+  the arithmetic in the engine instead of writing it down in the service that owns the
+  constraint. The engine supplies only the invariant that a bound can never widen:
+  `Ceiling()` is `min(max_length, 63)`, because the grammar stops at 63 whatever a manifest
+  says.
+
+  > ⚠ **`max_length` ships with NO declaring service, and that is worth stating rather than
+  > leaving to be discovered.** The case above is redis's, and it dissolved while this ticket
+  > was in flight: the machine name derives from a `name` PARAMETER the service chooses, not
+  > from the id, so once that parameter stops carrying the namespace the machine-name limit
+  > becomes a limit on ONE input field — which `input:` has always been able to cap. redis
+  > therefore declares `id: {template}` and no ceiling, and nothing else in any repository
+  > declares one either.
+  >
+  > It ships anyway, for one reason and not the other. **Not** because a key might be useful
+  > later — that is the argument this ADR refuses in (v) below. Because the bound is BUILT,
+  > tested and gated, and a schema key costs in the carrying rather than in the having:
+  > removing it now is work whose only product is a smaller engine, while keeping it costs
+  > an author one line of documentation saying "you probably do not need this". The first
+  > service whose id feeds something it does not control then needs no engine change.
+  >
+  > The asymmetry with `min_length` is deliberate and is exactly that: `min_length` was never
+  > built and no case for it was even imaginable, so it never reached the point where removal
+  > costs more than retention.
+
+- **(iii) A block rather than sibling scalars (`id_max_length:`), because the parameters
+  keep arriving.** The next one is `pattern:` — the grammar it would narrow already exists
+  (`^[a-z0-9][a-z0-9-]{0,62}$`) and redis already needs a narrower one, which is why the
+  render-time assert above is not deleted by this amendment but **trimmed** to what remains
+  about the machine: two grammar edges the platform permits and the cloud does not, and a
+  length budget whose summands (`shards`, a group prefix) arrive in the input and cannot be
+  a static number. A block also puts the bound next to the template it bounds, which is the
+  only place an author reads the two together.
+
+- **(iv) `id_template_too_long` sharpens instead of gaining a sibling.** The static rule
+  already compared the template's literal skeleton against a ceiling; it now compares it
+  against the **effective** one. A 45-character skeleton under `max_length: 40` is reported
+  offline, where before there was only 63 to compare with and the linter stayed silent. Two
+  new ERRORs guard the bound itself — `id_max_length_over_ceiling` (above 63: narrows
+  nothing while reading as though it did) and `id_max_length_invalid` (below 1: bounds no
+  id at all, and `0` is indistinguishable from *unset* in the decoded struct, so the rule
+  reads the AST). An `id:` block with no `template:` is `empty_value`: a ceiling on nothing.
+  Both bound rules are refusals rather than silent clamps — the number is in the file to be
+  read by a human, and a clamped one would be read as true. At **runtime** an out-of-range
+  bound falls back to the platform ceiling instead: refusing every create over a typo in a
+  bound is worse than enforcing the bound that applies anyway.
+
+- **(v) `min_length` was specified and is NOT built.** It was in the ticket for symmetry,
+  and no motivating case turned up on review: the platform grammar admits a one-character
+  id, nothing downstream needs a floor, and the components that feed an id already carry
+  their own `min_length`. An unused key in a schema is worse than an absent one — it has to
+  be documented, linted, guarded and explained — and adding it later is purely additive,
+  since *absent* already means *no floor*. So it is left out, deliberately and on the
+  record.
+
+**Two windows, and only one of them is still open.** The scalar `id_template:` is read for
+a compatibility window and folded into `id.template` once, at the top of
+`schemaValidateScenario`, so nothing downstream learns which spelling the file used; it
+warns `id_template_legacy_spelling` with a line and the replacement, and carries **no**
+bound — a scalar has nowhere to put one, so such a scenario gets the platform ceiling and
+nothing narrower. Declaring both spellings is `id_template_conflict`, unchanged in form
+from the previous window. The pre-[ADR-0085](0085-entity-id-and-label.md)
+`name_template:` **is no longer read at all**: its window had zero users — no occurrence in
+any service repository or in `examples/` — and keeping it open beside the block would have
+left three spellings of one key and a reader for the third. It answers `unknown_key` with
+the replacement in the hint.
+
+Everything else in this ADR is untouched: the input-only sandbox, composition before the
+insert on the shared `ResolveCreatePlan` path, the refusal to truncate, write-once identity,
+and the post-merge gate under `extends:` — which is also where the bound rules run, because
+that gate is all-or-nothing per scenario and the services writing this key are exactly the
+ones that use `extends:`.

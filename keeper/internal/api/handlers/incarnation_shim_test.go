@@ -53,7 +53,7 @@ func incCreate(h *IncarnationHandler, r *http.Request) *httptest.ResponseRecorde
 	// and this shim deliberately bypasses the router — so the request it stands for
 	// has already passed the route's RBAC. Default the checker to unrestricted so
 	// these tests keep testing what they are named after; a test about SCOPE wires
-	// its own first (see postCreate in incarnation_name_template_test.go) and this
+	// its own first (see postCreate in incarnation_id_template_test.go) and this
 	// leaves it alone.
 	if h.permChecker == nil {
 		h.SetPermissionChecker(allowAllChecker{})

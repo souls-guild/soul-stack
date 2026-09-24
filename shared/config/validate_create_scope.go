@@ -7,7 +7,7 @@ package config
 // on EVERY `POST /v1/incarnations` — a rule that can never run, reported once per
 // request instead of once at authoring time, with nothing static pointing at the
 // line. The manifest already carries the deciding facts (`create:` and
-// `id_template:`), which is what makes the check possible here at all; this is the
+// `id:`), which is what makes the check possible here at all; this is the
 // same move NIM-272 made for a roster-reading `assert:`.
 //
 // It reports through the RUNTIME stance ([ValidateContext.guard]) rather than a
@@ -37,7 +37,7 @@ const createScopePlaceholderID = "id"
 // validateCreateScopeRules checks a create scenario's `validate:` rules against the
 // stance a create request will actually arrive with:
 //
-//   - `id_template:` set — the id is composed from `input:` AFTER the gate, so NO
+//   - `id.template:` set — the id is composed from `input:` AFTER the gate, so NO
 //     incarnation fact is knowable and any `incarnation.*` reference is refused;
 //   - otherwise — the operator supplies the id, so `incarnation.id` / `.name` are
 //     readable and nothing else is.
@@ -55,7 +55,7 @@ func validateCreateScopeRules(root *ast.MappingNode, m *ScenarioManifest, rules 
 	}
 
 	inc := RequestedIncarnation(createScopePlaceholderID)
-	if m.IDTemplate != "" {
+	if m.ID.Template != "" {
 		inc = inc.WithComposedID()
 	}
 
@@ -82,7 +82,7 @@ func validateCreateScopeRules(root *ast.MappingNode, m *ScenarioManifest, rules 
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "validate_rule_out_of_scope",
 			Message:  fmt.Sprintf("validate[%d] cannot run on the create path: %v", i, err),
-			Hint:     "on create the incarnation does not exist yet; move a rule that needs its state or history to a day-2 scenario, and express a constraint on the identifier over incarnation.id (or, when id_template composes it, over the input.* components it composes from)",
+			Hint:     "on create the incarnation does not exist yet; move a rule that needs its state or history to a day-2 scenario, and express a constraint on the identifier over incarnation.id (or, when id.template composes it, over the input.* components it composes from)",
 			YAMLPath: fmt.Sprintf("$.validate[%d].that", i),
 		}))
 	}

@@ -7,6 +7,63 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **The create-scenario key `id_template:` becomes the block `id: {template, max_length}`
+  (NIM-899, [ADR-0079](docs/adr/0079-incarnation-name-template.md) amendment 2026-09-24).**
+  A composed id needs a ceiling as much as it needs a formula, and a scalar key had nowhere
+  to put one. A service can bound its own inputs — redis caps `uniq_name` at 30 — but not
+  the id, whose length also depends on an uncapped `namespace` and on the literal text
+  between the components. The only thing that caught an overrun was a hand-written
+  render-time `assert:` in one service: rewritten per service, firing after the incarnation
+  row was already committed, and asserting on a *derived* string because "my id must fit in
+  50" was not sayable.
+  - **`max_length` is checked on the REQUEST**, by the same `scenario.ComposeID` the live
+    preview calls, so the answer is a 422 `composed_id_invalid` naming the id, its length
+    and **whose** ceiling was hit — which decides whether the reader opens the scenario or
+    nothing. `POST /v1/incarnations/resolve-id` reports the same number in `max_length`, so
+    the create form's character counter divides by what the create enforces instead of a
+    client-side copy of 63. **The web needs no change**: that field already existed and the
+    counter already used it.
+  - **An absolute number, not a reserve, and the service derives it.** `reserve: 9` from
+    the platform's 63 would have yielded 54, while the redis arithmetic lands on **44**: its
+    cloud refuses a machine name over 50, and a machine name is the id plus the suffix its
+    provisioning plugin appends (`<id>-<tail>` with a five-character tail, so id + 6). The
+    reserve form would have passed a 45-character id silently. It also could not have
+    expressed that the bound differs per topology — clustered machine names carry a group
+    prefix and number as well (id + 7 + prefix + digits: 41 at 3–9 shards, 40 at 10–99) — so
+    a single static bound is the LOOSEST topology's and the remainder stays with the
+    render-time assert, which can see the input those summands come from. The engine supplies
+    only the invariant that a bound cannot widen: `Ceiling() = min(max_length, 63)`.
+  - **`max_length` ships with NO declaring service, and that is recorded rather than left to
+    be discovered.** The redis case dissolved while the ticket was in flight: the machine name
+    derives from a `name` PARAMETER the service chooses, not from the id, so once that
+    parameter stops carrying the namespace the machine-name limit becomes a cap on one input
+    field — which `input:` has always been able to express. `wb/service/redis` therefore
+    declares `id: {template}` and no ceiling, and nothing else in any repository declares one.
+    It ships because the bound is built, tested and gated and a schema key costs in the
+    carrying rather than the having — **not** because it might be useful later, which is the
+    argument that kept `min_length` out.
+  - **soul-lint:** `id_template_too_long` now measures the literal skeleton against the
+    **effective** ceiling, so a 45-character skeleton under `max_length: 40` is reported
+    offline where before only 63 was available to compare with. New ERRORs
+    `id_max_length_over_ceiling` (above 63 — narrows nothing while reading as though it
+    did) and `id_max_length_invalid` (below 1 — read off the AST, because a decoded `0`
+    cannot be told from an absent key and `0` is the value worth reporting); `empty_value`
+    for an `id:` block carrying a ceiling and no `template:`. At runtime an out-of-range
+    bound falls back to the platform ceiling — refusing every create over a typo in a bound
+    is worse than enforcing the bound that applies anyway.
+  - **`min_length` was specified and is deliberately NOT built.** It was in the ticket for
+    symmetry and no motivating case survived review; adding it later is purely additive,
+    since an absent key already means no floor.
+  - **Compatibility.** The scalar `id_template:` is read for a window, folded into
+    `id.template` once at the top of `schemaValidateScenario`, and warns
+    `id_template_legacy_spelling` with a line and the replacement; it carries no bound, so
+    such a scenario gets the platform ceiling and nothing narrower. Both spellings in one
+    file stays `id_template_conflict`. **`name_template:` is no longer read at all** — the
+    pre-[ADR-0085](docs/adr/0085-entity-id-and-label.md) spelling had zero occurrences in
+    every service repository and in `examples/`, and keeping it open beside the block would
+    have left three spellings of one key. The CEL-root half of that window
+    (`incarnation.name`) is untouched.
+
 - **`redis` and `vmlocal` leave `examples/` for their own repositories (NIM-868).** They
   were the last two Go modules under a directory [ADR-011](docs/adr/0011-go-layout.md)
   reserves for non-Go artifacts, and each reached the core through a relative `replace` —

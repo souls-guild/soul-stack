@@ -41,14 +41,13 @@ var ErrInputInvalid = errors.New("scenario: input invalid")
 // config.EvalValidateRules).
 var ErrValidateFailed = errors.New("scenario: validate rule failed")
 
-// InputGate is what the pre-flight input pass of [ValidateInput] produced beyond
-// "it is valid": the EFFECTIVE input (defaults merged, vault-refs still unresolved
-// strings) and the scenario's `id_template` (empty when the scenario does not
-// compose ids, ADR-0079). Both are read by [ResolveCreatePlan] to compose the
-// incarnation id from input components without a second snapshot load/parse.
+// InputGate is what the pre-flight pass of [ValidateInput] produced beyond "it is
+// valid": the EFFECTIVE input (defaults merged, vault-refs still strings) and the
+// scenario's `id:` block. [ResolveCreatePlan] reads both without a second snapshot
+// load.
 type InputGate struct {
-	Merged     map[string]any
-	IDTemplate string
+	Merged map[string]any
+	ID     config.IDSpec
 	// RosterField is the `input:` field the scenario declares as its roster
 	// (`source: { roster: true }`, NIM-371), empty when it declares none. Read by
 	// [ResolveCreatePlan] to hand the create path the SIDs it must bind into
@@ -111,7 +110,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	// resolving, and it is composed after the gate returns (ResolveCreatePlan).
 	// Only the manifest says so, so the withdrawal happens here rather than at the
 	// call site, which has not read it.
-	if scn.IDTemplate != "" {
+	if scn.ID.Template != "" {
 		inc = inc.WithComposedID()
 	}
 
@@ -139,7 +138,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 	}
 	return InputGate{
 		Merged:      merged,
-		IDTemplate:  scn.IDTemplate,
+		ID:          scn.ID,
 		RosterField: config.RosterInputField(scn.Input),
 	}, nil
 }
@@ -150,7 +149,7 @@ func ValidateInput(ctx context.Context, loader InputScenarioLoader, ref artifact
 // same as before the extraction ("validate input" / "preview name").
 //
 // Extracted from [ValidateInput] for [PreviewID]: the live name preview must
-// read the SAME effective `input:` schema and the SAME `id_template` the create
+// read the SAME effective `input:` schema and the SAME `id:` block the create
 // path validates against. A second load path here is exactly how the preview would
 // start composing over a different contract than the create — the divergence class
 // this whole feature exists to avoid.

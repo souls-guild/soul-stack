@@ -1635,7 +1635,7 @@ func TestIncarnationCreateScopeSelector_FromBody(t *testing.T) {
 	}
 }
 
-// An absent `name` — the shape a `name_template` create sends (ADR-0079) — scopes
+// An absent `name` — the shape an `id:`-block create sends (ADR-0079) — scopes
 // on the dimensions that ARE present instead of collapsing to the empty context.
 //
 // This assertion was deliberately inverted by NIM-333. It used to demand nil, and

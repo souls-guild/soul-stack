@@ -1466,7 +1466,7 @@ components:
           pattern: ^[a-z][a-z0-9_]*$
           type: string
         id:
-          description: new instance id (kebab-case, immutable); omit when the create scenario declares id_template (ADR-0079) — then it is composed server-side from input components.
+          description: new instance id (kebab-case, immutable); omit when the create scenario declares id.template (ADR-0079) — then it is composed server-side from input components.
           pattern: ^[a-z0-9][a-z0-9-]{0,62}$
           type: string
         input:
@@ -1747,7 +1747,7 @@ components:
           description: the id a create with this input would produce; carries the offending value when invalid
           type: string
         composes:
-          description: the chosen create scenario composes the id from id_template (ADR-0079); false → the operator names the incarnation
+          description: the chosen create scenario composes the id from id.template (ADR-0079); false → the operator names the incarnation
           type: boolean
         invalid_reason:
           description: why the id could not be composed or was rejected, in operator terms
@@ -1787,7 +1787,7 @@ components:
             - array
             - "null"
         create_scenario:
-          description: chosen create scenario, whose id_template composes the id
+          description: chosen create scenario, whose id.template composes the id
           pattern: ^[a-z][a-z0-9_]*$
           type: string
         input:
@@ -8026,7 +8026,7 @@ paths:
         - incarnation
   /v1/incarnations/resolve-id:
     post:
-      description: "Live preview for the create form: composes the incarnation id from the chosen create scenario's id_template over the input so far, reports its length against the ceiling, and whether the id is free. Composition runs server-side — the same code the create runs — so the previewed id cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed id is measured against the caller's scope, and the occupying service is named only to a caller who may see it."
+      description: "Live preview for the create form: composes the incarnation id from the chosen create scenario's id.template over the input so far, reports its length against the ceiling, and whether the id is free. Composition runs server-side — the same code the create runs — so the previewed id cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed id is measured against the caller's scope, and the occupying service is named only to a caller who may see it."
       operationId: resolveIncarnationID
       requestBody:
         content:

@@ -62,33 +62,21 @@ type ScenarioManifest struct {
 	// with artifact.StateSchemaMigration.From). ADR-0068.
 	FromVersions []string `yaml:"from,omitempty"`
 
-	// IDTemplate composes the incarnation id from `input:` components at create
-	// time instead of taking it as free text (`id_template`, ADR-0079 as amended by
-	// [ADR-0085]). A `${ … }` template over input only (id_template.go);
-	// empty/absent = the operator names the incarnation (unchanged behavior). Read
-	// ONLY on the create path — the keeper renders it over the resolved input BEFORE
-	// inserting the row, so the components that feed an id are write-once identity:
-	// a later run with different values does NOT rename anything.
-	//
-	// Filled from [ScenarioManifest.LegacyNameTemplate] when only the old spelling
-	// is present ([ScenarioManifest.normalizeIDTemplate]) — every reader past the
-	// load sees one field and never has to know which spelling the file used.
-	IDTemplate string `yaml:"id_template,omitempty"`
+	// ID composes the incarnation id from `input:` components and bounds the result
+	// (`id:`, ADR-0079 as amended by [ADR-0085] and NIM-899; see [IDSpec]). Zero value
+	// = the operator names the incarnation. Read ONLY on the create path, BEFORE the
+	// row is inserted, so the components feeding an id are write-once identity: a
+	// later run with different values renames nothing.
+	ID IDSpec `yaml:"id,omitempty"`
 
-	// LegacyNameTemplate is the pre-[ADR-0085] spelling of [ScenarioManifest.IDTemplate],
-	// kept for the compatibility window that ticket opens: a service repository
-	// still on `name_template:` loads and runs, and soul-lint warns with the line
-	// and the replacement. Both spellings in one file is an error, not a merge
-	// (`id_template_conflict`) — the two would silently disagree. Removing this
-	// field closes the window and is its own ticket.
-	//
-	// Never read as a TEMPLATE past [ScenarioManifest.normalizeIDTemplate]: it
-	// exists so the deprecation can be reported, not so a second template can be
-	// composed. It is still read as EVIDENCE of which spelling the file used —
-	// [KeeperFeaturesOfScenario] cites the key that is actually in the file.
+	// LegacyIDTemplate is the scalar `id_template:`, read for the NIM-899 window and
+	// folded into [ScenarioManifest.ID] by [ScenarioManifest.normalizeIDTemplate].
+	// Never read as a template past that fold — only as EVIDENCE of which spelling the
+	// file used ([KeeperFeaturesOfScenario] cites the key that is actually there).
+	// Removing this field closes the window and is its own ticket.
 	//
 	// [ADR-0085]: ../../docs/adr/0085-entity-id-and-label.md
-	LegacyNameTemplate string `yaml:"name_template,omitempty"`
+	LegacyIDTemplate string `yaml:"id_template,omitempty"`
 
 	// Form is the optional presentation layer for the `input:` form (form_layout.go):
 	// how the UI groups/labels input fields into sections. nil = absent (UI renders
@@ -311,6 +299,9 @@ var deprecatedScenarioKeys = map[string]string{
 	// end-of-run block that could only ever run after every host was already
 	// configured.
 	"state_changes": "state_changes: removed ([ADR-0084]); write each field with a `core.state.<verb>` task (module: core.state.set / present / add / append / modify / remove / unset) placed where the value becomes known -- the address routes it keeper-side, so it carries no on: key",
+	// Its window closed with NIM-899 rather than surviving beside the block: zero
+	// occurrences anywhere, so keeping it open left three spellings of one key.
+	"name_template": "name_template: removed (ADR-0085, window closed by NIM-899); a registry entity's identifier is spelled id, and the key composing one is the `id:` block — write `id:` with `template:` under it, and `max_length:` beside it when the composed id has a ceiling below 63",
 }
 
 // deprecatedTaskKeys — deprecated task-level keys (inside a `tasks[]` element or
@@ -333,9 +324,8 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 
 	topKeys := topLevelKeys(root)
 
-	// 0) `name_template:` → `id_template:` ([ADR-0085] compatibility window). Folded
-	// FIRST, so every later check — here, in the semantic phase, and post-merge in
-	// the covenant resolver — reads one field whichever spelling the file used.
+	// 0) The scalar `id_template:` folds into `id:` FIRST, so every later check —
+	// here and post-merge in the covenant resolver — reads one block.
 	out = append(out, m.normalizeIDTemplate(root)...)
 
 	// 1) Deprecated top-level keys → `unknown_key` with a meaningful hint.
@@ -426,13 +416,10 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 		out = append(out, validateFormLayout(root, m, "$.form")...)
 	}
 
-	// 5c) `id_template:` — server-side id composition from input components
-	// (ADR-0079). Under the SAME covenant gate as `form:`: the cross-check
-	// "every ${input.X} is declared" is correct only against the EFFECTIVE input,
-	// which for an extends scenario exists only post-merge (checked there by the
-	// same core, config.ResolveScenarioCovenant). The path is the spelling the file
-	// actually used, so the diagnostic points at a key that is in the file.
-	if (topKeys[idTemplateKey] || topKeys[nameTemplateKey]) && m.Extends == "" {
+	// 5c) `id:` (ADR-0079). Under the SAME covenant gate as `form:`: "every ${input.X}
+	// is declared" is correct only against the EFFECTIVE input, which under extends
+	// exists post-merge (config.ResolveScenarioCovenant).
+	if (topKeys[idBlockKey] || topKeys[idTemplateKey]) && m.Extends == "" {
 		out = append(out, validateIDTemplate(root, m, m.writtenIDTemplateKey(topKeys))...)
 	}
 
@@ -454,7 +441,7 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// incarnation fact that does not exist yet ([validateCreateScopeRules],
 	// NIM-833). ERROR, unlike the assert twin above: an assert deferred to render
 	// still runs, this rule can never run at all. Under the same covenant gate as
-	// `form:`/`id_template:` — an extends scenario's EFFECTIVE rule list exists only
+	// `form:`/`id:` — an extends scenario's EFFECTIVE rule list exists only
 	// post-merge, and is checked there by the same core.
 	if m.Extends == "" {
 		out = append(out, validateCreateScopeRules(root, m, m.Validate)...)

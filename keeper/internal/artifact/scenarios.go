@@ -64,7 +64,7 @@ type Scenario struct {
 	// (scenario.IsRunnableScenario); ListScenarios itself does not populate it.
 	Runnable bool `json:"runnable"`
 	// ComposesID marks "this create scenario composes the incarnation id
-	// itself" — the manifest carries `id_template` (ADR-0079), so the server
+	// itself" — the manifest carries `id.template` (ADR-0079), so the server
 	// builds the id from `input:` and REFUSES a request that also sends one
 	// (scenario.ErrIDNotComposable → 422 id_not_composable).
 	//
@@ -204,15 +204,16 @@ type scenarioYAML struct {
 	// (see loadScenario). soul-lint (config-validator) does strict type validation;
 	// here is best-effort projection for UI — invalid type remains nil → false.
 	Create *bool `yaml:"create"`
-	// IDTemplate is the top-level `id_template:` (ADR-0079, renamed by ADR-0085).
-	// Read only to decide [Scenario.ComposesID]; the string itself never leaves
-	// this struct.
-	IDTemplate string `yaml:"id_template"`
-	// LegacyIDTemplate is the pre-ADR-0085 spelling `name_template:`, read for the
-	// same compatibility window config.ScenarioManifest keeps open. This is a
-	// best-effort UI projection, not the validator: a scenario declaring BOTH is a
-	// config error reported there, and here the canonical key simply wins.
-	LegacyIDTemplate string `yaml:"name_template"`
+	// ID is the top-level `id:` block. Read only to decide [Scenario.ComposesID];
+	// neither the template nor the bound leaves this struct — the form learns the
+	// ceiling from the resolve endpoint, and a copy here would be a second number to
+	// keep in step.
+	ID *scenarioIDYAML `yaml:"id"`
+	// LegacyIDTemplate is the scalar spelling `id_template:`, read for the same
+	// compatibility window config.ScenarioManifest keeps open. This is a best-effort
+	// UI projection, not the validator: a scenario declaring BOTH is a config error
+	// reported there, and here the canonical key simply wins.
+	LegacyIDTemplate string `yaml:"id_template"`
 	// FromVersions is the top-level `from:` of upgrade manifest (ADR-0068).
 	// Projected to Scenario.FromVersions only on upgrade path ([ListUpgrades]);
 	// for scenario/ there is no key → nil. soul-lint (config-validator) does
@@ -224,11 +225,20 @@ type scenarioYAML struct {
 	Form *scenarioFormYAML `yaml:"form"`
 }
 
+// scenarioIDYAML is the `id:` block as the listing reads it: presence of a template is
+// all [Scenario.ComposesID] answers.
+type scenarioIDYAML struct {
+	Template string `yaml:"template"`
+}
+
 // composesID reports whether the manifest declares an id template under EITHER
-// spelling — `id_template:`, or `name_template:` inside the ADR-0085
+// spelling — `id.template:`, or the scalar `id_template:` inside the NIM-899
 // compatibility window. Presence, not content.
 func (r scenarioYAML) composesID() bool {
-	return strings.TrimSpace(r.IDTemplate) != "" || strings.TrimSpace(r.LegacyIDTemplate) != ""
+	if r.ID != nil && strings.TrimSpace(r.ID.Template) != "" {
+		return true
+	}
+	return strings.TrimSpace(r.LegacyIDTemplate) != ""
 }
 
 // scenarioFormYAML, scenarioFormSectionYAML, and scenarioFormFieldYAML are YAML

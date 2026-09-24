@@ -22,7 +22,7 @@ import (
 //     whatever `prod` overlay the service declares (ADR-0082), so the caller has
 //     written into a scope it does not hold. This is not specific to templating and
 //     predates it: named create has always had it.
-//   - **`incarnation=` is unanswerable before composition.** Under `id_template`
+//   - **`incarnation=` is unanswerable before composition.** Under `id.template`
 //     (ADR-0079) the name is composed server-side from the resolved input, so at
 //     gate (a) it does not exist. Answering nil there is what made templated create
 //     the privilege of an unrestricted role, which is the defect NIM-333 opened on.
@@ -128,7 +128,7 @@ var ErrCreateRosterScopeExceeded = errors.New("handlers: incarnation create rost
 func createScopeDetail(name, composedName string, covens []string) string {
 	if composedName != "" {
 		return "incarnation.create denied: composed name " + composedName +
-			" or a declared coven is outside your scope — adjust the input components feeding id_template, or the declared covens"
+			" or a declared coven is outside your scope — adjust the input components feeding id.template, or the declared covens"
 	}
 	if len(covens) > 0 {
 		return "incarnation.create denied: " + name +

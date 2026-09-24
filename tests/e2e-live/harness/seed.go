@@ -92,7 +92,7 @@ const soulprintBootstrapWaitSec = 60
 // incarnation.service_version for readability only (the run path resolves the
 // service ref from the registry, incarnation_typed.go::RunTyped). createScenario
 // must carry `create: true`; scenarios that compose their own name via
-// id_template (ADR-0079) are NOT usable here — the name is fixed by the seed.
+// id.template (ADR-0079) are NOT usable here — the name is fixed by the seed.
 func (s *Stack) CreateIncarnationOnRoster(t *testing.T, name, serviceRef, createScenario string, soulIndexes []int, input map[string]any) (string, string) {
 	t.Helper()
 	if len(soulIndexes) == 0 {
