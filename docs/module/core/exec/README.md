@@ -24,7 +24,7 @@ answer rather than an error — `grep` exiting 1 — are declared per task.
 | `cmd` | string | required | Name/path of the executable file (argv[0]). Runs directly, without `sh -c`. |
 | `args` | list&lt;string&gt; | optional | Command arguments (argv[1:]). Each element is transmitted as a separate token, without shell parsing. |
 | `cwd` | string | optional | The working directory of the process. |
-| `env` | map&lt;string,string&gt; | optional | Process environment variables (`KEY=VALUE`). |
+| `env` | map&lt;string,string&gt; | optional | Process environment (`KEY=VALUE`). **Set, it REPLACES the environment — it does not extend it** (`os/exec.Cmd.Env` semantics, [`util.RunOptions`](../../../../soul/internal/coremod/util/exec.go): `Env != nil` = full replace). So a command given even one variable runs with no `PATH`, no `HOME` and no proxy settings: pass an absolute `cmd`, and pass through anything else the command needs. Omitted, the process inherits the agent's environment. |
 | `creates` | string | optional | Guard: if the file at this path **exists** - skip (`changed=false`, `reason: creates`). |
 | `unless` | string | optional | Guard: execute `sh -c "<unless>"`; if its exit **= 0** - skip (`reason: unless`). |
 | `onlyif` | string | optional | Guard: execute `sh -c "<onlyif>"`; if its exit **≠ 0** - skip (`reason: onlyif`). |

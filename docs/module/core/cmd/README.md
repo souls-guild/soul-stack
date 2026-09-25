@@ -24,7 +24,7 @@ needed - use `core.exec`.
 |---|---|---|---|
 | `cmd` | string | required | Shell string. Executed as `sh -c "<cmd>"`; pipes, redirects, glob, substitutions work. |
 | `cwd` | string | optional | The working directory of the process is `sh`. |
-| `env` | map&lt;string,string&gt; | optional | Process environment variables (`KEY=VALUE`). |
+| `env` | map&lt;string,string&gt; | optional | Process environment (`KEY=VALUE`). **Set, it REPLACES the environment — it does not extend it** (`os/exec.Cmd.Env` semantics, [`util.RunOptions`](../../../../soul/internal/coremod/util/exec.go): `Env != nil` = full replace). It bites harder here than on [`core.exec`](../exec/README.md): the command runs through `sh -c`, so with `PATH` gone every bare utility name in it stops resolving. Omitted, the process inherits the agent's environment. |
 | `creates` | string | optional | Guard: if the file at this path **exists** - skip (`changed=false`, `reason: creates`). |
 | `unless` | string | optional | Guard: execute `sh -c "<unless>"`; if its exit **= 0** - skip (`reason: unless`). |
 | `onlyif` | string | optional | Guard: execute `sh -c "<onlyif>"`; if its exit **≠ 0** - skip (`reason: onlyif`). |
