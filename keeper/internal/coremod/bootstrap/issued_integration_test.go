@@ -5,6 +5,7 @@ package bootstrap_test
 import (
 	"context"
 	"errors"
+	"fmt"
 	"log"
 	"os"
 	"strings"
@@ -107,7 +108,7 @@ func TestIntegration_IssuedBatch_CreateReissueAndExpiry(t *testing.T) {
 	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
 	sids := []string{"vm1.example.com", "vm2.example.com"}
 
-	first, err := issuer.IssueBatch(ctx, sids, runIncarnation)
+	first, err := issuer.IssueBatch(ctx, sids, runIncarnation, false)
 	if err != nil {
 		t.Fatalf("first IssueBatch: %v", err)
 	}
@@ -142,7 +143,9 @@ WHERE sid='vm1.example.com' AND used_at IS NULL`); err != nil {
 		t.Fatalf("expire fixture token: %v", err)
 	}
 
-	second, err := issuer.IssueBatch(ctx, sids, runIncarnation)
+	// `reissue: true` is what this test is about: vm2's token is still active, and
+	// under the default it would be kept rather than replaced (NIM-900).
+	second, err := issuer.IssueBatch(ctx, sids, runIncarnation, true)
 	if err != nil {
 		t.Fatalf("second IssueBatch: %v", err)
 	}
@@ -176,7 +179,7 @@ func TestIntegration_IssuedBatch_ConnectedRefusalRollsBackWholeBatch(t *testing.
 	ctx := context.Background()
 	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
 	sids := []string{"good.example.com", "onboarded.example.com"}
-	first, err := issuer.IssueBatch(ctx, sids, runIncarnation)
+	first, err := issuer.IssueBatch(ctx, sids, runIncarnation, false)
 	if err != nil {
 		t.Fatalf("seed IssueBatch: %v", err)
 	}
@@ -191,7 +194,10 @@ func TestIntegration_IssuedBatch_ConnectedRefusalRollsBackWholeBatch(t *testing.
 	seedIssuedIncarnation(t, "someone-else")
 	seedIssuedMembership(t, "someone-else", "onboarded.example.com")
 
-	_, err = issuer.IssueBatch(ctx, sids, runIncarnation)
+	// `reissue: true`, so the good SID really is written before the refusal lands:
+	// under the default its active token would be kept and the rollback assertion
+	// below would have nothing to prove.
+	_, err = issuer.IssueBatch(ctx, sids, runIncarnation, true)
 	if err == nil || !strings.Contains(err.Error(), "onboarded.example.com") || !strings.Contains(err.Error(), "identity takeover") {
 		t.Fatalf("connected IssueBatch error = %v", err)
 	}
@@ -237,7 +243,7 @@ func TestIntegration_IssuedBatch_StatusAndTransportFailClosed(t *testing.T) {
 				seedIssuedMembership(t, "someone-else", s.SID)
 			}
 			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-				IssueBatch(ctx, []string{s.SID}, runIncarnation)
+				IssueBatch(ctx, []string{s.SID}, runIncarnation, false)
 			if err == nil {
 				t.Fatal("IssueBatch succeeded across fail-closed boundary")
 			}
@@ -261,7 +267,7 @@ func TestIntegration_IssuedBatch_ExpiredSoulRearmed(t *testing.T) {
 		t.Fatalf("insert expired Soul: %v", err)
 	}
 	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{s.SID}, runIncarnation)
+		IssueBatch(ctx, []string{s.SID}, runIncarnation, false)
 	if err != nil {
 		t.Fatalf("IssueBatch expired Soul: %v", err)
 	}
@@ -289,7 +295,7 @@ func TestIntegration_IssuedBatch_ErrorTypeKeepsSID(t *testing.T) {
 	seedIssuedIncarnation(t, "someone-else")
 	seedIssuedMembership(t, "someone-else", "connected.example.com")
 	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{"connected.example.com"}, runIncarnation)
+		IssueBatch(ctx, []string{"connected.example.com"}, runIncarnation, false)
 	var sidErr *coremodbootstrap.SIDIssueError
 	if !errors.As(err, &sidErr) || sidErr.SID != "connected.example.com" {
 		t.Fatalf("error = %v, want SIDIssueError", err)
@@ -346,7 +352,7 @@ func TestIntegration_IssuedBatch_OnboardedHostOfThisRunIsConverged(t *testing.T)
 
 			// The mixed batch is the point: the run must go on for the host that
 			// still needs a token, not merely stop failing on the one that does not.
-			hosts, err := issuer.IssueBatch(ctx, []string{live, fresh}, tc.caller)
+			hosts, err := issuer.IssueBatch(ctx, []string{live, fresh}, tc.caller, false)
 			if err != nil {
 				t.Fatalf("repeat create over an onboarded host failed: %v — a re-run past onboarding must converge, not refuse", err)
 			}
@@ -408,7 +414,7 @@ func TestIntegration_IssuedBatch_UnknownIncarnationCannotClaimABoundHost(t *test
 	seedIssuedMembership(t, runIncarnation, "bound.example.com")
 
 	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{"bound.example.com"}, "")
+		IssueBatch(ctx, []string{"bound.example.com"}, "", false)
 	if err == nil || !strings.Contains(err.Error(), "identity takeover") {
 		t.Fatalf("issuance without an incarnation = %v, want a takeover refusal", err)
 	}
@@ -434,85 +440,366 @@ func TestIntegration_IssuedBatch_UnknownIncarnationCannotClaimABoundHost(t *test
 //
 // So the arm is chosen by whether an identity EXISTS, not by the status that
 // approximates it.
+//
+// ★ Run under BOTH values of `reissue` (NIM-900). The flag decides what happens to
+// a TOKEN; it must not reach the identity guard, or `reissue: true` would become
+// the takeover primitive this test exists to refuse — and that is exactly why the
+// parameter is not named `force` like the operator endpoint's, which has no second
+// guard to promise anything about.
 func TestIntegration_IssuedBatch_PendingHostWithASeedIsNotReArmed(t *testing.T) {
+	for _, reissue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reissue=%t", reissue), func(t *testing.T) {
+			resetIssuedIntegration(t)
+			ctx := context.Background()
+			const sid = "onboarded-not-yet-streaming.example.com"
+
+			// A host mid-onboarding: the Bootstrap RPC committed, no stream yet.
+			if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+				SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
+			}); err != nil {
+				t.Fatalf("insert Soul: %v", err)
+			}
+			kid := "keeper-1"
+			if err := soulseed.Insert(ctx, issuedIntegrationPool, &soulseed.SoulSeed{
+				SID:          sid,
+				Fingerprint:  "3333333333333333333333333333333333333333333333333333333333333333",
+				SerialNumber: "serial-onboarded",
+				ExpiresAt:    time.Now().UTC().Add(720 * time.Hour),
+				IssuedByKID:  &kid,
+				Status:       soulseed.StatusActive,
+			}); err != nil {
+				t.Fatalf("insert seed: %v", err)
+			}
+
+			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
+			if err != nil {
+				t.Fatalf("IssueBatch: %v", err)
+			}
+			if len(hosts) != 1 {
+				t.Fatalf("hosts = %d, want 1", len(hosts))
+			}
+			if !hosts[0].Onboarded {
+				t.Error("Onboarded = false — a host holding an active seed was treated as never onboarded")
+			}
+			if hosts[0].TokenHeld {
+				t.Error("TokenHeld = true — this host has an IDENTITY, not an outstanding token; " +
+					"the two flags are different facts and a reader branching on the wrong one would dial it")
+			}
+			if hosts[0].Token.Reveal() != "" {
+				t.Error("a bootstrap token was minted for a host that already holds an identity — " +
+					"redeeming it would supersede that host's seed")
+			}
+
+			// And nothing was written: no token row, and the registration untouched.
+			var tokens int
+			if err := issuedIntegrationPool.QueryRow(ctx,
+				`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1`, sid).Scan(&tokens); err != nil {
+				t.Fatalf("count tokens: %v", err)
+			}
+			if tokens != 0 {
+				t.Errorf("bootstrap_tokens rows = %d, want 0", tokens)
+			}
+			got, err := keepersoul.SelectBySID(ctx, issuedIntegrationPool, sid)
+			if err != nil {
+				t.Fatalf("SelectBySID: %v", err)
+			}
+			if got.Status != keepersoul.StatusPending {
+				t.Errorf("status = %q, want pending (untouched)", got.Status)
+			}
+		})
+	}
+}
+
+// The other half of the identity guard, also under both values: a host held by
+// ANOTHER incarnation is refused whatever `reissue` says. `reissue: true` reads
+// like "do it anyway" and must not be one — a caller repeating `create` onto a
+// foreign SID is the case the refusal is named after.
+func TestIntegration_IssuedBatch_ForeignHostIsRefusedUnderEitherReissue(t *testing.T) {
+	for _, reissue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reissue=%t", reissue), func(t *testing.T) {
+			resetIssuedIntegration(t)
+			ctx := context.Background()
+			const sid = "foreign.example.com"
+			if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+				SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected,
+			}); err != nil {
+				t.Fatalf("insert Soul: %v", err)
+			}
+			seedIssuedIncarnation(t, "someone-else")
+			seedIssuedMembership(t, "someone-else", sid)
+
+			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
+			if err == nil || !strings.Contains(err.Error(), "identity takeover") {
+				t.Fatalf("IssueBatch = %v, want a takeover refusal", err)
+			}
+			var tokens int
+			if qerr := issuedIntegrationPool.QueryRow(ctx,
+				`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1`, sid).Scan(&tokens); qerr != nil {
+				t.Fatalf("count tokens: %v", qerr)
+			}
+			if tokens != 0 {
+				t.Errorf("refused SID got %d token rows", tokens)
+			}
+		})
+	}
+}
+
+// ★★ NIM-900. The subject: with `reissue: false`, a host holding an ACTIVE
+// (unused, unexpired) token is left completely alone and reported by the flag.
+//
+// Verified against `bootstrap_tokens` rather than against the return value,
+// because the return value is what a wrong implementation would still get right:
+// issuing anyway and then not reporting the new token would look identical from
+// the caller's side while having killed a capability that may already be on the
+// machine. The plaintext of the surviving token is unrecoverable — only its
+// SHA-256 is on file — so an unnecessary reissue cannot be undone by running
+// again.
+func TestIntegration_IssuedBatch_ActiveTokenIsKeptWhenReissueIsOff(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	const sid = "onboarded-not-yet-streaming.example.com"
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	const sid = "holding.example.com"
 
-	// A host mid-onboarding: the Bootstrap RPC committed, no stream yet.
-	if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
-		SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
-	}); err != nil {
-		t.Fatalf("insert Soul: %v", err)
-	}
-	kid := "keeper-1"
-	if err := soulseed.Insert(ctx, issuedIntegrationPool, &soulseed.SoulSeed{
-		SID:          sid,
-		Fingerprint:  "3333333333333333333333333333333333333333333333333333333333333333",
-		SerialNumber: "serial-onboarded",
-		ExpiresAt:    time.Now().UTC().Add(720 * time.Hour),
-		IssuedByKID:  &kid,
-		Status:       soulseed.StatusActive,
-	}); err != nil {
-		t.Fatalf("insert seed: %v", err)
-	}
-
-	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{sid}, runIncarnation)
+	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
 	if err != nil {
-		t.Fatalf("IssueBatch: %v", err)
+		t.Fatalf("first IssueBatch: %v", err)
 	}
-	if len(hosts) != 1 {
-		t.Fatalf("hosts = %d, want 1", len(hosts))
+	var (
+		tokenIDBefore   string
+		hashBefore      string
+		expiresBefore   time.Time
+		requestedBefore time.Time
+	)
+	if err := issuedIntegrationPool.QueryRow(ctx, `
+SELECT t.token_id, t.token_hash, t.expires_at, s.requested_at
+FROM bootstrap_tokens t JOIN souls s USING (sid)
+WHERE t.sid = $1`, sid).Scan(&tokenIDBefore, &hashBefore, &expiresBefore, &requestedBefore); err != nil {
+		t.Fatalf("read seeded token: %v", err)
 	}
-	if !hosts[0].Onboarded {
-		t.Error("Onboarded = false — a host holding an active seed was treated as never onboarded")
-	}
-	if hosts[0].Token.Reveal() != "" {
-		t.Error("a bootstrap token was minted for a host that already holds an identity — " +
-			"redeeming it would supersede that host's seed")
+	if hashBefore != first[0].Token.Hash() {
+		t.Fatalf("seeded token hash mismatch")
 	}
 
-	// And nothing was written: no token row, and the registration untouched.
-	var tokens int
+	second, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
+	if err != nil {
+		t.Fatalf("repeat IssueBatch: %v", err)
+	}
+	if len(second) != 1 || !second[0].TokenHeld {
+		t.Fatalf("hosts = %+v, want one entry flagged TokenHeld", second)
+	}
+	if second[0].Token.Reveal() != "" || !second[0].ExpiresAt.IsZero() || second[0].Created || second[0].Reissued {
+		t.Errorf("held host carries issuance data (token=%t expires=%t created=%t reissued=%t), want none",
+			second[0].Token.Reveal() != "", !second[0].ExpiresAt.IsZero(), second[0].Created, second[0].Reissued)
+	}
+
+	// One row, the SAME row, still redeemable, and never re-marked.
+	var (
+		rows          int
+		tokenIDAfter  string
+		hashAfter     string
+		expiresAfter  time.Time
+		usedAt        *time.Time
+		usedByKID     *string
+		requestedAfte time.Time
+		status        string
+	)
 	if err := issuedIntegrationPool.QueryRow(ctx,
-		`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1`, sid).Scan(&tokens); err != nil {
+		`SELECT count(*) FROM bootstrap_tokens WHERE sid = $1`, sid).Scan(&rows); err != nil {
 		t.Fatalf("count tokens: %v", err)
 	}
-	if tokens != 0 {
-		t.Errorf("bootstrap_tokens rows = %d, want 0", tokens)
+	if rows != 1 {
+		t.Fatalf("bootstrap_tokens rows = %d, want 1 — a second row means a token was minted after all", rows)
 	}
-	got, err := keepersoul.SelectBySID(ctx, issuedIntegrationPool, sid)
+	if err := issuedIntegrationPool.QueryRow(ctx, `
+SELECT t.token_id, t.token_hash, t.expires_at, t.used_at, t.used_by_kid, s.requested_at, s.status
+FROM bootstrap_tokens t JOIN souls s USING (sid)
+WHERE t.sid = $1`, sid).
+		Scan(&tokenIDAfter, &hashAfter, &expiresAfter, &usedAt, &usedByKID, &requestedAfte, &status); err != nil {
+		t.Fatalf("re-read token: %v", err)
+	}
+	if tokenIDAfter != tokenIDBefore || hashAfter != hashBefore || !expiresAfter.Equal(expiresBefore) {
+		t.Errorf("the surviving token was rewritten: token_id %q→%q, hash changed %t, expiry moved %t",
+			tokenIDBefore, tokenIDAfter, hashAfter != hashBefore, !expiresAfter.Equal(expiresBefore))
+	}
+	if usedAt != nil || usedByKID != nil {
+		t.Errorf("the surviving token was invalidated: used_at=%v used_by_kid=%v", usedAt, usedByKID)
+	}
+	// Not re-armed either. `refreshPendingSoulSQL` sets `last_seen_at = NULL`, which
+	// the reply-loss recovery reads as "never held a stream" (NIM-865), so running
+	// it over a host nothing was issued for moves a predicate for no reason.
+	if !requestedAfte.Equal(requestedBefore) || status != string(keepersoul.StatusPending) {
+		t.Errorf("the Soul row was touched: requested_at moved %t, status = %q",
+			!requestedAfte.Equal(requestedBefore), status)
+	}
+}
+
+// The complement, and the one the wb-redis `create` repeat runs on: `reissue: true`
+// over the same host invalidates the held token under the module's own marker and
+// hands back a fresh one.
+func TestIntegration_IssuedBatch_ActiveTokenIsReplacedWhenReissueIsOn(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	const sid = "replacing.example.com"
+
+	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
 	if err != nil {
-		t.Fatalf("SelectBySID: %v", err)
+		t.Fatalf("first IssueBatch: %v", err)
 	}
-	if got.Status != keepersoul.StatusPending {
-		t.Errorf("status = %q, want pending (untouched)", got.Status)
+
+	second, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, true)
+	if err != nil {
+		t.Fatalf("reissuing IssueBatch: %v", err)
+	}
+	if len(second) != 1 || second[0].TokenHeld {
+		t.Fatalf("hosts = %+v, want one entry that is NOT token-held", second)
+	}
+	if !second[0].Reissued || second[0].Token.Reveal() == "" {
+		t.Errorf("reissued/token = %t/%t, want true/true", second[0].Reissued, second[0].Token.Reveal() != "")
+	}
+	if second[0].Token.Hash() == first[0].Token.Hash() {
+		t.Error("the same token came back — `reissue: true` must mint a new secret, not re-return the old one")
+	}
+	var active, marked int
+	if err := issuedIntegrationPool.QueryRow(ctx, `
+SELECT count(*) FILTER (WHERE used_at IS NULL),
+       count(*) FILTER (WHERE token_hash = $2 AND used_by_kid = $3)
+FROM bootstrap_tokens WHERE sid = $1`,
+		sid, first[0].Token.Hash(), bootstraptoken.SystemKIDBootstrapIssuedReissue).Scan(&active, &marked); err != nil {
+		t.Fatalf("token counters: %v", err)
+	}
+	if active != 1 || marked != 1 {
+		t.Errorf("active/marked-as-reissued = %d/%d, want 1/1", active, marked)
+	}
+}
+
+// ★ An EXPIRED unused token is not "active", so issuance goes ahead even with the
+// flag off. Both halves of `used_at IS NULL AND expires_at > NOW()` are needed for
+// this: the wider predicate every "kill this token" statement uses would have
+// counted this row as held, and the host would be stuck holding a token nothing
+// can redeem — [bootstraptoken.Burn] requires an unexpired row — with no way to
+// get a usable one short of `reissue: true`.
+func TestIntegration_IssuedBatch_ExpiredUnusedTokenIsNotHeld(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	const sid = "stale.example.com"
+
+	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
+	if err != nil {
+		t.Fatalf("first IssueBatch: %v", err)
+	}
+	if _, err := issuedIntegrationPool.Exec(ctx, `
+UPDATE bootstrap_tokens
+SET created_at = NOW() - INTERVAL '2 hours', expires_at = NOW() - INTERVAL '1 hour'
+WHERE sid = $1 AND used_at IS NULL`, sid); err != nil {
+		t.Fatalf("expire fixture token: %v", err)
+	}
+
+	second, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
+	if err != nil {
+		t.Fatalf("repeat over an expired token: %v", err)
+	}
+	if len(second) != 1 || second[0].TokenHeld {
+		t.Fatalf("hosts = %+v, want a normal issuance — an expired token is not a capability", second)
+	}
+	if second[0].Token.Reveal() == "" || second[0].Token.Hash() == first[0].Token.Hash() {
+		t.Error("no fresh token minted over an expired one")
+	}
+	if !second[0].ExpiresAt.After(time.Now()) {
+		t.Error("the replacement token is already expired")
+	}
+}
+
+// A used (burned) token is not held either: the capability is spent. Without this,
+// "the SID has a token row" would keep every host that onboarded and was then
+// forgotten from ever being re-armed with the flag off.
+func TestIntegration_IssuedBatch_BurnedTokenIsNotHeld(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	const sid = "burned.example.com"
+
+	if _, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false); err != nil {
+		t.Fatalf("first IssueBatch: %v", err)
+	}
+	if _, err := issuedIntegrationPool.Exec(ctx, `
+UPDATE bootstrap_tokens SET used_at = NOW(), used_by_kid = 'keeper-1'
+WHERE sid = $1 AND used_at IS NULL`, sid); err != nil {
+		t.Fatalf("burn fixture token: %v", err)
+	}
+
+	second, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
+	if err != nil {
+		t.Fatalf("repeat over a burned token: %v", err)
+	}
+	if len(second) != 1 || second[0].TokenHeld || second[0].Token.Reveal() == "" {
+		t.Fatalf("hosts = %+v, want a normal issuance over a spent token", second)
+	}
+}
+
+// A batch mixes the shapes, and each host is decided on its own state. A single
+// held host must not suppress the issuance its neighbours need — that is the
+// `create` repeat where one machine was minted for and the next one was not.
+func TestIntegration_IssuedBatch_MixedBatchDecidesPerHost(t *testing.T) {
+	resetIssuedIntegration(t)
+	ctx := context.Background()
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	const held, fresh = "held.example.com", "fresh.example.com"
+
+	if _, err := issuer.IssueBatch(ctx, []string{held}, runIncarnation, false); err != nil {
+		t.Fatalf("seed IssueBatch: %v", err)
+	}
+	hosts, err := issuer.IssueBatch(ctx, []string{held, fresh}, runIncarnation, false)
+	if err != nil {
+		t.Fatalf("mixed IssueBatch: %v", err)
+	}
+	if len(hosts) != 2 || hosts[0].SID != held || hosts[1].SID != fresh {
+		t.Fatalf("hosts = %+v, want both requested SIDs in order", hosts)
+	}
+	if !hosts[0].TokenHeld || hosts[0].Token.Reveal() != "" {
+		t.Errorf("held host = TokenHeld:%t token:%t, want true/false", hosts[0].TokenHeld, hosts[0].Token.Reveal() != "")
+	}
+	if hosts[1].TokenHeld || !hosts[1].Created || hosts[1].Token.Reveal() == "" {
+		t.Errorf("fresh host = TokenHeld:%t created:%t token:%t, want false/true/true",
+			hosts[1].TokenHeld, hosts[1].Created, hosts[1].Token.Reveal() != "")
 	}
 }
 
 // The complement: a `pending` host with NO seed is still re-armed and still
 // gets its token. Without this, "never re-arm a pending host" would pass the
 // test above and break every genuine first onboarding.
+//
+// ★ Under BOTH values of `reissue` (NIM-900): a host with no active token to keep
+// is issued to either way, and `false` is not a refusal. An implementation that
+// short-circuited on "the flag is off" rather than on "there is something to keep"
+// would break every first onboarding and pass every other test here.
 func TestIntegration_IssuedBatch_PendingHostWithoutASeedStillGetsAToken(t *testing.T) {
-	resetIssuedIntegration(t)
-	ctx := context.Background()
-	const sid = "never-onboarded.example.com"
+	for _, reissue := range []bool{false, true} {
+		t.Run(fmt.Sprintf("reissue=%t", reissue), func(t *testing.T) {
+			resetIssuedIntegration(t)
+			ctx := context.Background()
+			const sid = "never-onboarded.example.com"
 
-	if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
-		SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
-	}); err != nil {
-		t.Fatalf("insert Soul: %v", err)
-	}
-	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
-		IssueBatch(ctx, []string{sid}, runIncarnation)
-	if err != nil {
-		t.Fatalf("IssueBatch: %v", err)
-	}
-	if len(hosts) != 1 || hosts[0].Onboarded {
-		t.Fatalf("hosts = %d, Onboarded = %t; want 1 and false", len(hosts), len(hosts) > 0 && hosts[0].Onboarded)
-	}
-	if hosts[0].Token.Reveal() == "" {
-		t.Error("no token minted for a host that has never onboarded")
+			if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
+				SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusPending,
+			}); err != nil {
+				t.Fatalf("insert Soul: %v", err)
+			}
+			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
+			if err != nil {
+				t.Fatalf("IssueBatch: %v", err)
+			}
+			if len(hosts) != 1 || hosts[0].Onboarded || hosts[0].TokenHeld {
+				t.Fatalf("hosts = %d, Onboarded = %t, TokenHeld = %t; want 1/false/false",
+					len(hosts), len(hosts) > 0 && hosts[0].Onboarded, len(hosts) > 0 && hosts[0].TokenHeld)
+			}
+			if hosts[0].Token.Reveal() == "" {
+				t.Error("no token minted for a host that has never onboarded")
+			}
+		})
 	}
 }

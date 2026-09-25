@@ -414,7 +414,10 @@ const (
 	// `core.bootstrap.issued` atomically prepared pending agent Souls and fresh
 	// one-time tokens for a batch of ready-made VMs. `source:
 	// keeper_internal`, `archon_aid: NULL`. Payload: `{action: "issued",
-	// count, created, reissued, sids}` — WITHOUT plaintext tokens or hashes.
+	// count, created, reissued, skipped, held, sids}` — WITHOUT plaintext
+	// tokens or hashes. `skipped` counts hosts that already held an identity
+	// (NIM-780), `held` those whose active token `reissue: false` left alone
+	// (NIM-900); `sids` answers for every requested host either way.
 	EventBootstrapIssued EventType = "bootstrap.issued"
 
 	// EventSSHRun — the keeper-side core module `core.ssh.run` opened an SSH

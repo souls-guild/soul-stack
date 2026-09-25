@@ -46,7 +46,7 @@ func (fakeSoulStore) SoulsWithSoulprint(_ context.Context, _ []string) (map[stri
 
 type fakeBootstrapIssuer struct{}
 
-func (fakeBootstrapIssuer) IssueBatch(_ context.Context, sids []string, _ string) ([]coremodbootstrap.IssuedHost, error) {
+func (fakeBootstrapIssuer) IssueBatch(_ context.Context, sids []string, _ string, _ bool) ([]coremodbootstrap.IssuedHost, error) {
 	out := make([]coremodbootstrap.IssuedHost, 0, len(sids))
 	for _, sid := range sids {
 		tok, err := bootstraptoken.Generate()

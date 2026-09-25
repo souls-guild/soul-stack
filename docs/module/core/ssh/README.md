@@ -123,6 +123,46 @@ The skip lives inside the module because a scenario cannot express it: `when:` o
 a keeper-side task is only half-evaluated — a static predicate works, one
 reading `register.*` is silently ignored.
 
+### `token_held` is the other tokenless entry, and it is REFUSED
+
+`core.bootstrap.issued` emits a **third** entry shape, `{sid, token_held: true}`
+(NIM-900): a host whose active, never-presented token `reissue: false` left in
+place. Like `onboarded` it carries no `bootstrap_token` key, and unlike
+`onboarded` it is **not** skipped — the step refuses it by name, before the
+connect:
+
+```
+param "hosts"[0]: host "vm-1.example.com" carries token_held — it holds a bootstrap
+token this run cannot read back (only its SHA-256 is stored), so there is nothing to
+deliver to it; mint with `reissue: true` to replace that token, or drop the host
+from the list
+```
+
+The two absences mean opposite things. An `onboarded` host needs nothing from this
+step. A `token_held` host still has to be installed; what is missing is the
+plaintext, which is unrecoverable. Skipping it would report a clean run over a
+machine that never onboards, and the barrier downstream would then hang to the run
+timeout with nothing naming the cause.
+
+★ The refusal is explicit rather than left to fail further in. Before it, what
+happened to a held host was decided by two things, and **neither was the
+transport**: (a) whether a dial address was available — `direct` needs
+`primary_ip`, `teleport` never does — and (b) whether any step read the token
+through `stdin_from: bootstrap_token`.
+
+| condition | what used to happen |
+|---|---|
+| not (a) | refused during param parsing, before any dial. The one clean stop, and it reached only `direct` with no address |
+| (a) and (b) | the host was **dialed** and every step *before* that one **executed**, then it failed. The dial is outside the step loop and the stdin source is resolved inside it; in the wb-redis install list `stdin_from` is step 6 of 8, so five commands ran on a machine handed nothing |
+| (a) and not (b) | nothing stopped it: every command ran and the step reported **success** — on either transport |
+
+So the old behaviour was not "fails, just later": a partial install and a false
+success, each reachable on both transports. An entry carrying both flags is refused
+too — issuance cannot emit that pair, so a producer that did is not one whose
+intent can be guessed.
+
+The remedy belongs to the mint, not here — this step cannot conjure a token.
+
 ### Transport
 
 `keeper.yml::push.transport`, **not** a scenario param: which way a Keeper

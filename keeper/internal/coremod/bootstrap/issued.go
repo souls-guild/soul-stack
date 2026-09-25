@@ -97,10 +97,17 @@ func maskErr(err error) string {
 // stays wrapped until applyIssued deliberately places it in the current run's
 // register output. It must never be formatted into errors, logs or audit data.
 //
-// Onboarded marks the one entry that legitimately carries no token: a host of
-// this run that was already up when issuance ran, passed through untouched
-// instead of refused (NIM-780). Token and ExpiresAt are then zero, and every
-// reader must branch on the flag before reaching for them.
+// TWO of the three shapes an entry takes legitimately carry no token, and they
+// are different facts about the host (NIM-900):
+//
+//   - Onboarded — a host of this run that already holds an identity and needs no
+//     capability at all, passed through untouched instead of refused (NIM-780);
+//   - TokenHeld — a host that holds an ACTIVE, never-presented token which
+//     `reissue: false` deliberately left alone. There is nothing to hand back:
+//     the plaintext is unrecoverable, Postgres stores only its SHA-256.
+//
+// Token and ExpiresAt are zero under either flag, the two are mutually
+// exclusive, and every reader must branch before reaching for them.
 type IssuedHost struct {
 	SID       string
 	Token     bootstraptoken.PlainToken
@@ -108,6 +115,7 @@ type IssuedHost struct {
 	Created   bool
 	Reissued  bool
 	Onboarded bool
+	TokenHeld bool
 }
 
 // Issuer atomically prepares the entire SID batch. A failure for any SID must
@@ -115,8 +123,14 @@ type IssuedHost struct {
 // leave a silently usable partial group. incarnationName is the run's
 // incarnation ("" when unknown); it decides whether an already onboarded SID is
 // this run's own host to converge over or somebody else's identity to refuse.
+//
+// reissue decides only what happens to a host holding an active, unpresented
+// token: false leaves it and reports [IssuedHost.TokenHeld], true invalidates it
+// and mints a fresh one. It does NOT relax the onboarding guard — a host with an
+// active seed is judged the same way under either value, which is why the flag is
+// not called `force` like its endpoint counterpart (see the module doc).
 type Issuer interface {
-	IssueBatch(ctx context.Context, sids []string, incarnationName string) ([]IssuedHost, error)
+	IssueBatch(ctx context.Context, sids []string, incarnationName string, reissue bool) ([]IssuedHost, error)
 }
 
 // SIDIssueError identifies the host that made a batch fail without carrying
@@ -131,47 +145,62 @@ func (e *SIDIssueError) Error() string { return fmt.Sprintf("sid %q: %v", e.SID,
 func (e *SIDIssueError) Unwrap() error { return e.Err }
 
 func validateIssued(req *pluginv1.ValidateRequest) *pluginv1.ValidateReply {
-	_, err := parseIssuedSIDs(req.Params)
+	_, err := parseIssuedParams(req.Params)
 	if err != nil {
 		return &pluginv1.ValidateReply{Ok: false, Errors: []string{err.Error()}}
 	}
 	return &pluginv1.ValidateReply{Ok: true}
 }
 
-// parseIssuedSIDs validates the public input contract before any mutation:
-// non-empty, unique canonical FQDN/SID values, excluding synthetic runner SIDs.
-func parseIssuedSIDs(params *structpb.Struct) ([]string, error) {
+// issuedParams is the step's whole input.
+type issuedParams struct {
+	SIDs []string
+	// Reissue defaults to false, so the destructive half of the step — killing a
+	// capability the operator may already have delivered — is the one that has to
+	// be asked for.
+	Reissue bool
+}
+
+// parseIssuedParams validates the public input contract before any mutation:
+// non-empty, unique canonical FQDN/SID values excluding synthetic runner SIDs,
+// and a `reissue` that is a bool if it is present at all.
+func parseIssuedParams(params *structpb.Struct) (issuedParams, error) {
 	sids, err := util.StringSliceParam(params, "sids")
 	if err != nil {
-		return nil, err
+		return issuedParams{}, err
 	}
 	if len(sids) == 0 {
-		return nil, fmt.Errorf("param %q: empty list (no ready-made VMs to onboard)", "sids")
+		return issuedParams{}, fmt.Errorf("param %q: empty list (no ready-made VMs to onboard)", "sids")
 	}
 	seen := make(map[string]int, len(sids))
 	for i, sid := range sids {
 		if !keepersoul.ValidSID(sid) || keepersoul.IsReservedSID(sid) {
-			return nil, fmt.Errorf("param %q[%d]: invalid sid %q", "sids", i, sid)
+			return issuedParams{}, fmt.Errorf("param %q[%d]: invalid sid %q", "sids", i, sid)
 		}
 		if first, dup := seen[sid]; dup {
-			return nil, fmt.Errorf("param %q[%d]: duplicate sid %q (first at index %d)", "sids", i, sid, first)
+			return issuedParams{}, fmt.Errorf("param %q[%d]: duplicate sid %q (first at index %d)", "sids", i, sid, first)
 		}
 		seen[sid] = i
 	}
-	return sids, nil
+	reissue, _, err := util.OptBoolParam(params, "reissue")
+	if err != nil {
+		return issuedParams{}, err
+	}
+	return issuedParams{SIDs: sids, Reissue: reissue}, nil
 }
 
 func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	ctx := stream.Context()
-	sids, err := parseIssuedSIDs(req.Params)
+	p, err := parseIssuedParams(req.Params)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
 	}
+	sids := p.SIDs
 	if m.Issuer == nil {
 		return util.SendFailed(stream, "bootstrap issued: issuer not configured (wire the Keeper Postgres pool)")
 	}
 
-	issued, err := m.Issuer.IssueBatch(ctx, sids, util.IncarnationFrom(ctx))
+	issued, err := m.Issuer.IssueBatch(ctx, sids, util.IncarnationFrom(ctx), p.Reissue)
 	if err != nil {
 		return util.SendFailed(stream, "bootstrap issued: "+maskErr(err))
 	}
@@ -181,12 +210,38 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 
 	hosts := make([]any, 0, len(issued))
 	auditSIDs := make([]any, 0, len(issued))
-	created, reissued, skipped := 0, 0, 0
+	// minted counts the entries that actually carry a fresh token, and it is what
+	// `changed` is decided on. `created`/`reissued` cannot answer that question:
+	// re-arming an `expired` Soul mints a token with neither flag set — the row
+	// already existed and there was no unused token to invalidate — so a run that
+	// handed out capabilities would report itself unchanged.
+	created, reissued, skipped, held, minted := 0, 0, 0, 0, 0
 	for idx, h := range issued {
 		if h.SID != sids[idx] {
 			return util.SendFailed(stream, fmt.Sprintf("bootstrap issued: issuer returned sid %q at index %d, want %q", h.SID, idx, sids[idx]))
 		}
 		auditSIDs = append(auditSIDs, h.SID)
+		// The two tokenless shapes are different facts — "needs no capability" and
+		// "holds one that cannot be re-read" — so an entry claiming both tells the
+		// reader nothing and would have to be collapsed into one of them silently.
+		if h.Onboarded && h.TokenHeld {
+			return util.SendFailed(stream, fmt.Sprintf("bootstrap issued: issuer returned sid %q as onboarded AND token-held", h.SID))
+		}
+		if h.TokenHeld {
+			// `reissue: false` over a host holding an active, never-presented token
+			// (NIM-900): the token is untouched, so nothing was written and there is
+			// no plaintext to return — Postgres keeps only its SHA-256. The flag is
+			// the whole answer, and it is the THIRD shape an entry takes.
+			if h.Token.Reveal() != "" || !h.ExpiresAt.IsZero() || h.Created || h.Reissued {
+				return util.SendFailed(stream, fmt.Sprintf("bootstrap issued: issuer returned sid %q as token-held AND with issuance data", h.SID))
+			}
+			held++
+			hosts = append(hosts, map[string]any{
+				"sid":        h.SID,
+				"token_held": true,
+			})
+			continue
+		}
 		if h.Onboarded {
 			// Already onboarded host of this run (NIM-780): the SID keeps its slot
 			// so the list still answers for every requested host in order, and the
@@ -229,6 +284,7 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 			"reissued":        h.Reissued,
 		}
 		hosts = append(hosts, entry)
+		minted++
 		if h.Created {
 			created++
 		}
@@ -247,6 +303,7 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 				"created":  float64(created),
 				"reissued": float64(reissued),
 				"skipped":  float64(skipped),
+				"held":     float64(held),
 				"sids":     auditSIDs,
 			},
 		}
@@ -256,15 +313,21 @@ func (m *Module) applyIssued(req *pluginv1.ApplyRequest, stream grpc.ServerStrea
 	}
 
 	// bootstrap_token is intentionally revealed only here, in the ephemeral
-	// register output consumed by core.bootstrap.delivered. All observable
-	// copies of task output pass through audit.MaskSecrets, whose token-key rule
-	// redacts it; the token is never copied into incarnation.state or audit.
-	return util.SendFinal(stream, true, map[string]any{
+	// register output consumed by the install step. All observable copies of task
+	// output pass through audit.MaskSecrets, whose token-key rule redacts it; the
+	// token is never copied into incarnation.state or audit.
+	//
+	// `changed` was the constant `true` until NIM-900, so a run over a fleet that
+	// was already up — every host skipped, not one token issued — reported itself
+	// as having changed something, and `onchanges:` downstream of it fired on
+	// every repeat.
+	return util.SendFinal(stream, minted > 0, map[string]any{
 		"action":   StateIssued,
 		"hosts":    hosts,
 		"count":    float64(len(issued)),
 		"created":  float64(created),
 		"reissued": float64(reissued),
 		"skipped":  float64(skipped),
+		"held":     float64(held),
 	})
 }

@@ -39,7 +39,10 @@
 //     is not dialed, and the `primary_ip` requirement of the direct transport is
 //     settled AFTER the flag rather than before it — demanding a dial address
 //     for the one host the step is about to skip is what used to fail the step
-//     over it.
+//     over it. ★ `onboarded` is the ONLY entry shape skipped: a `token_held`
+//     host (NIM-900) also carries no `bootstrap_token` but still needs
+//     installing, so it is REFUSED by name in [hostFromStruct] rather than
+//     passed over.
 //
 // B1-strict: a failure on any host fails the step, so the run goes to
 // error_locked rather than committing state over a group that is only partly up.
@@ -691,6 +694,50 @@ func hostFromStruct(s *structpb.Struct, idx int, requirePrimaryIP bool) (hostInp
 	onboarded, _, err := util.OptBoolParam(s, "onboarded")
 	if err != nil {
 		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
+	}
+	tokenHeld, _, err := util.OptBoolParam(s, "token_held")
+	if err != nil {
+		return hostInput{}, fmt.Errorf("param %q[%d].%w", "hosts", idx, err)
+	}
+	// ★ Refused BY NAME, and refused rather than skipped (NIM-900). `onboarded` and
+	// `token_held` both mean "this entry carries no bootstrap_token", and the step
+	// must do opposite things with them: a converged host needs nothing, a held host
+	// still needs installing and the plaintext it holds cannot be re-read (Postgres
+	// keeps only the SHA-256). Skipping it would report a clean run over a machine
+	// that never onboards, and the barrier downstream would then hang to the run
+	// timeout with nothing naming the cause.
+	//
+	// Checked HERE rather than left to fail further in. Before this, what happened to
+	// a held host was decided by two things, and NEITHER of them was the transport:
+	//
+	//	(a) was a dial address available?  `direct` needs `primary_ip`; `teleport` never does.
+	//	(b) did any step read the token through `stdin_from: bootstrap_token`?
+	//
+	//   - not (a) — refused by the `primary_ip` requirement below, in this function,
+	//     before anything is dialed. The one clean stop, and it reached only `direct`
+	//     with no address;
+	//   - (a) and (b) — the host was DIALED, a session opened, and every step BEFORE
+	//     that one EXECUTED, because the dial is outside [Module.runHost]'s loop and
+	//     [step.stdinFor] is resolved inside it. In the wb-redis install list
+	//     `stdin_from` is step 6 of 8, so five commands — directories, the CA,
+	//     soul.yml, the unit, the binary — ran on a machine handed nothing;
+	//   - (a) and not (b) — nothing stopped it at all: every command ran and the step
+	//     reported success, on EITHER transport.
+	//
+	// So the old behaviour was not "fails, just later": a partial install and a false
+	// success, each reachable on both transports. The refusal also names the flag
+	// instead of a symptom, and points at the MINT, since this step cannot conjure a
+	// token.
+	//
+	// Before the `onboarded` early-return on purpose: an entry claiming both flags
+	// is contradictory, and `core.bootstrap.issued` refuses to emit one, so seeing
+	// the pair here means a foreign producer built it and skipping would be a guess.
+	if tokenHeld {
+		return hostInput{}, fmt.Errorf(
+			"param %q[%d]: host %q carries token_held — it holds a bootstrap token this run cannot read back "+
+				"(only its SHA-256 is stored), so there is nothing to deliver to it; "+
+				"mint with `reissue: true` to replace that token, or drop the host from the list",
+			"hosts", idx, sid)
 	}
 	fields := make(map[string]string, len(s.GetFields()))
 	for k, v := range s.GetFields() {

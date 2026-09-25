@@ -88,8 +88,11 @@ WHERE sid = $1
 //
 // Reissue semantics:
 //   - absent SID: create pending/agent + issue;
-//   - pending/expired agent SID: refresh pending requested_at, invalidate any
-//     unused token (expired or not), then issue a fresh default-TTL token;
+//   - pending/expired agent SID holding an ACTIVE (unused, unexpired) token, with
+//     reissue false: nothing is written at all, [IssuedHost.TokenHeld] (NIM-900);
+//   - pending/expired agent SID otherwise: refresh pending requested_at,
+//     invalidate any unused token (expired or not), then issue a fresh
+//     default-TTL token;
 //   - connected/disconnected agent SID that is this run's own: passed through
 //     untouched and tokenless, [IssuedHost.Onboarded] (NIM-780);
 //   - connected/disconnected held by another incarnation, revoked/destroyed, or
@@ -99,9 +102,13 @@ WHERE sid = $1
 // what separates the last two cases, so "" (unknown) leaves only unbound rows
 // eligible for pass-through — see [keepersoul.OwnedByRun].
 //
+// reissue reaches only the second case. The onboarding guard is decided before
+// it and is not relaxed by it: a host holding an identity is judged identically
+// under either value.
+//
 // Any failure rolls back the entire batch. Plain tokens are returned only after
 // Commit succeeds and are never stored in Postgres (only SHA-256 hashes are).
-func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationName string) ([]IssuedHost, error) {
+func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationName string, reissue bool) ([]IssuedHost, error) {
 	if i == nil || i.Pool == nil {
 		return nil, fmt.Errorf("bootstrap issuer: postgres pool is nil")
 	}
@@ -125,7 +132,7 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationNam
 
 	out := make([]IssuedHost, 0, len(sids))
 	for _, sid := range sids {
-		host, err := i.issueOne(ctx, tx, sid, incarnationName)
+		host, err := i.issueOne(ctx, tx, sid, incarnationName, reissue)
 		if err != nil {
 			return nil, &SIDIssueError{SID: sid, Err: err}
 		}
@@ -139,7 +146,7 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationNam
 	return out, nil
 }
 
-func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName string) (IssuedHost, error) {
+func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName string, reissue bool) (IssuedHost, error) {
 	if !keepersoul.ValidSID(sid) || keepersoul.IsReservedSID(sid) {
 		return IssuedHost{}, fmt.Errorf("invalid sid")
 	}
@@ -181,6 +188,23 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 
 	switch effective {
 	case keepersoul.StatusPending, keepersoul.StatusExpired:
+		// Idempotence, and it has to come before every write below (NIM-900). With
+		// `reissue: false` a host already holding a redeemable token is left exactly
+		// as it is — not re-armed, not re-marked, not re-minted — and reported by the
+		// flag. Issuing anyway would have killed a capability the operator may have
+		// already put on the machine, and it is not recoverable afterwards: only the
+		// SHA-256 is on file, so a second run cannot hand back the plaintext the
+		// first one did. The read is under the Soul's row lock taken above, so a
+		// concurrent Bootstrap cannot burn the token between the answer and the act.
+		if !reissue {
+			held, herr := bootstraptoken.HasActiveBySID(ctx, tx, sid)
+			if herr != nil {
+				return IssuedHost{}, herr
+			}
+			if held {
+				return IssuedHost{SID: sid, TokenHeld: true}, nil
+			}
+		}
 		// A fresh token gets a fresh pending window too. This also re-arms an
 		// explicitly expired-but-never-onboarded record without touching identity.
 		if _, err := tx.Exec(ctx, refreshPendingSoulSQL, sid); err != nil {

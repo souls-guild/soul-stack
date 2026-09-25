@@ -113,6 +113,8 @@ Issues a new bootstrap token for the existing Soul with `transport: agent` (oper
 - **Without `force`** with an already active (not burned, not expired) token - `409 bootstrap-token-active`: a new token is not issued so as not to produce parallel valid tokens.
 - **With `?force=true`** - the current active token is marked used (`used_at = now()`, not `expires_at`: otherwise the line would continue to hold the partial-unique slot `WHERE used_at IS NULL` and the reissue would hit 409), a new one is issued.
 
+★ **The same operation exists on the scenario side as `reissue: true` on [`core.bootstrap.issued`](../modules.md#corebootstrapissued)** (NIM-900), and the two names are deliberately different. The module's follows its own output - it already reports `reissued` and marks the killed row `system-bootstrap-issued-reissue`. `force` was not reused there because the module has a **second** guard this endpoint does not: a host holding an active seed is either converged over or refused as `identity takeover`, and the flag does not lift that. A name promising "do it anyway" would promise the wrong thing. The other difference is what happens when the flag is off: this endpoint answers `409` and the module reports the host as `{sid, token_held: true}` and carries on with the rest of the batch - an operator asking about one host wants to be told, a run over a fleet must not stop over a host that is already fine.
+
 For Soul with `transport: ssh` - `422 validation-failed` (ssh host does not have bootstrap phase / SoulSeed).
 
 **Query:**

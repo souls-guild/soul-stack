@@ -20,6 +20,14 @@ tasks:
     register: bootstrap
     params:
       sids: "${ input.sids }"
+      # The install step below needs a plaintext token on EVERY run, a repeat
+      # included, and the default is `false` (NIM-900). A host holding a token
+      # from an attempt that died between minting and installing would otherwise
+      # come back as `{sid, token_held: true}` — no `bootstrap_token` key at all,
+      # because the plaintext is unrecoverable — and `stdin_from:` would fail on
+      # it. Leaving this off is right for a scenario that only reads which hosts
+      # need onboarding; this one hands the token over.
+      reissue: true
 
   # ── Installing the host: the engine's transport, THIS service's policy. ────
   #

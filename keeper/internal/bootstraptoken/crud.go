@@ -547,6 +547,46 @@ func ExpireActiveBySID(ctx context.Context, db ExecQueryRower, sid, usedByKID st
 	return tokenID, true, nil
 }
 
+// hasActiveBySIDSQL asks whether a SID holds a token that can still be redeemed:
+// unused AND unexpired. Both halves are load-bearing and neither is implied by
+// the schema.
+//
+// `used_at IS NULL` alone is what every "kill this token" statement here matches
+// ([expireActiveBySIDSQL], [burnAllForSIDSQL]) and what the partial unique index
+// `bootstrap_tokens_active_by_sid_idx` holds the slot on — so it admits an
+// expired-but-never-presented row, which [Burn] refuses and no host can ever
+// turn into a seed. Treating that row as "the host has a token" would leave the
+// host permanently unonboardable with nothing to point at, which is the shape
+// the `expires_at > NOW()` clause exists to exclude.
+const hasActiveBySIDSQL = `
+SELECT EXISTS (
+    SELECT 1 FROM bootstrap_tokens
+     WHERE sid        = $1
+       AND used_at    IS NULL
+       AND expires_at > NOW()
+)
+`
+
+// HasActiveBySID reports whether the SID holds a token a host could still
+// redeem — the predicate [Burn] authorizes on, not the wider one the active-slot
+// index enforces.
+//
+// It is the read half of the `?force=true` / `reissue:` decision: with the flag
+// off, a caller must be able to tell "this host is already holding a capability
+// nobody can re-read" from "there is nothing here". Call it inside the same
+// transaction as the issuance it gates, under the Soul's row lock, or the answer
+// can go stale before it is acted on.
+func HasActiveBySID(ctx context.Context, db ExecQueryRower, sid string) (bool, error) {
+	if sid == "" {
+		return false, fmt.Errorf("bootstraptoken: sid is empty")
+	}
+	var held bool
+	if err := db.QueryRow(ctx, hasActiveBySIDSQL, sid).Scan(&held); err != nil {
+		return false, fmt.Errorf("bootstraptoken: check active token for sid: %w", err)
+	}
+	return held, nil
+}
+
 // DeleteByTokenID deletes a record by PK. Used by the Reaper for the
 // `purge_used_tokens` rule (see ADR-022 / docs/keeper/reaper.md).
 //

@@ -641,3 +641,104 @@ against the effective run timeout.
 `test -e /var/lib/soul-stack/seed/current/cert.pem || … soul init` is called idempotent above, and the client half always was: the guard correctly distinguishes "I onboarded" from "I did not". The server half was not. The Keeper burned the token when it **signed**, so a reply lost in flight — a slow Vault PKI inside the client's deadline is enough — left the guard seeing no certificate, re-running `soul init` on every boot, and taking `PermissionDenied` forever.
 
 A retry is now recognized as a retry: `soul init` reuses the key of the unfinished attempt (`paths.seed/pending-key.pem`) and the Keeper admits a re-presentation that carries the key the burn already bound, on a host that has never held a stream. The command in step 5 is unchanged — what changed is that repeating it can now succeed. One-time still holds where it matters: the keypair a token may issue for is fixed at the first presentation, and the token dies the moment the host connects.
+
+## Amendment 2026-09-24 — issuance is idempotent by default: `reissue` (NIM-900)
+
+Two defects with one cause: the step had no way to say "leave what is already
+there", so it always wrote, and it always claimed to have written.
+
+**The pinned flag.** `changed` was the literal `true`. A run over a fleet that was
+entirely up — every host converged over by the
+[2026-09-04 amendment](#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780),
+not one token issued — reported itself as having changed something, and every
+`onchanges:` behind it fired on every repeat. `changed` is now true exactly when
+the step issued or reissued at least one token.
+
+★ Counted as "a token came back in this entry", not as `created + reissued > 0`:
+re-arming an `expired` Soul mints a fresh token with **neither** flag set — the row
+already existed, and there was no unused token to invalidate — so the arithmetic
+shorthand would have reported a run that handed out capabilities as unchanged.
+
+**The unconditional reissue.** A `pending`/`expired` host holding an active,
+never-presented token had its token killed and replaced on every repeat. **Decision:
+a new parameter `reissue`, default `false`.** With it off, such a host is left
+completely alone — no token write, no `requested_at` refresh, no recovery re-mark —
+and reported as the third entry shape, `{sid, token_held: true}`.
+
+- **The default is off because the destructive direction is unrecoverable.** The
+  plaintext dies the moment it is issued; Postgres keeps only the SHA-256. A step
+  that reissues unasked destroys a capability that may already be on the machine,
+  and no further run can hand the old one back. The other direction costs a
+  parameter.
+- **"Active" is `used_at IS NULL AND expires_at > NOW()`** — [`Burn`](../../keeper/internal/bootstraptoken/crud.go)'s
+  own predicate, not the wider `used_at IS NULL` that every "kill this token"
+  statement and the active-slot partial index use. Both halves are load-bearing: an
+  expired unused token cannot be redeemed by anyone, so counting it as held would
+  leave the host holding a dead capability with no way to get a live one under the
+  default.
+- **The flag does not reach the identity arm.** A host with an active seed is
+  converged over or refused as `identity takeover` identically under either value.
+- **`reissue`, not `force`, and not `renew`.** The module already names this
+  operation: output `reissued`, `IssuedHost.Reissued`, marker
+  `system-bootstrap-issued-reissue`. `renew` would be a third word and the wrong
+  one — nothing is prolonged, the old secret dies and a different one is born.
+  `force` is [`?force=true` on `POST /v1/souls/{sid}/issue-token`](../keeper/operator-api/souls.md#post-v1soulssidissue-token--reissue-bootstrap-token),
+  the same operation, but that endpoint has no second guard; a name promising "do
+  it anyway" would promise the identity arm too. Both docs carry the
+  cross-reference, because one operation under two names is a trap for whoever
+  finds only one of them.
+- **Re-registering a host that holds an identity is still not this flag's job.** It
+  is `soul.forget` (`DELETE /v1/souls/{sid}`, NIM-386): the row goes, the seed
+  allowlist cascades with it, and ordinary issuance then works as for a new host.
+  Forget reports what the cascade took — roster memberships, Choir Voices — and
+  hiding that behind a flag on issuance would make it invisible.
+
+**★ `hosts[]` now has THREE shapes, and that is a contract change for every
+consumer.** Beside the issued entry there are `{sid, onboarded: true}` and
+`{sid, token_held: true}`, and on both the `bootstrap_token` key is ABSENT rather
+than empty — reading an absent key in CEL is an error, and it lands on the repeat
+run, which is the run the branch exists for. This trap already fired once on
+`onboarded` (NIM-780). Output and audit gain `held`, symmetric with `skipped`.
+
+A `token_held` entry reaching `core.ssh.run` is **refused by name, before the
+connect**, deliberately: there is no plaintext to deliver, and skipping the host
+would report success over a machine that never onboards. The step's skip therefore
+stays keyed on `onboarded` alone.
+
+★ That refusal is explicit rather than left to happen, and the two review passes
+that got this wrong in opposite directions are the argument for it. What used to
+happen to a held host was decided by two conditions, and **neither of them was the
+transport** — which is how the first account of it came out transport-shaped and
+wrong:
+
+- **(a)** was a dial address available? `direct` needs `primary_ip`; `teleport`
+  never does.
+- **(b)** did any step read the token through `stdin_from: bootstrap_token`?
+
+Which gives three outcomes, not three paths:
+
+- **not (a)** — refused during param parsing, before any dial. The one clean stop,
+  and it reached only `direct` with no address.
+- **(a) and (b)** — the host was **dialed** and every step *before* that one
+  **executed**. The dial is outside `runHost`'s loop and the stdin source is
+  resolved inside it; in the wb-redis install list `stdin_from` is step 6 of 8, so
+  five commands — directories, the CA, `soul.yml`, the unit, the binary — ran on a
+  machine that had been handed nothing.
+- **(a) and not (b)** — nothing stopped it: every command ran and the step reported
+  **success**, `ran: true`. On either transport.
+
+So the old behaviour was not "fails, just later": a partial install and a false
+success, each reachable on both transports. An entry carrying both flags is refused
+too — issuance cannot emit that pair, so a producer that did is not one whose
+intent can be guessed. The outcomes that did fire also named the symptom rather
+than the cause; the refusal names the flag and points at the mint, which is where
+the remedy is.
+
+⚠ **The guarantee is `core.ssh.run`'s, not the flag's.** A site's own keeper-side
+install module gets no such refusal for free and must branch on `token_held`
+itself — which is the general obligation the third entry shape creates, restated
+for the one consumer that discharges it in the engine.
+
+A scenario whose repeat path must deliver a token declares `reissue: true` — which
+is what `wb/service/redis`'s `create` does, since its repeat-after-failure path was
+built on the old unconditional behaviour.

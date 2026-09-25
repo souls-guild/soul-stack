@@ -564,6 +564,126 @@ func TestApply_ConvergedHostIsSkippedNotDialed(t *testing.T) {
 	}
 }
 
+// ★★ GUARD (NIM-900). `onboarded` is the ONLY entry shape this step skips, and a
+// `{sid, token_held: true}` host is deliberately NOT one of them even though it
+// also carries no `bootstrap_token`.
+//
+// The two absences mean opposite things. An `onboarded` host needs nothing from
+// this step — it already holds an identity. A `token_held` host still has to be
+// installed; what is missing is the plaintext, which `reissue: false` left in
+// Postgres as a SHA-256 and nobody can read back. Skipping it would report a clean
+// run over a machine that never onboards, and the barrier downstream would then
+// hang to the run timeout with no failure naming the cause.
+//
+// ★ The refusal is BY NAME, in hostFromStruct, and pre-fix what happened to a held
+// host was decided by two things — NEITHER of them the transport:
+//
+//	(a) was a dial address available?  `direct` needs `primary_ip`; `teleport` never does.
+//	(b) did any step read the token through `stdin_from: bootstrap_token`?
+//
+// Not (a) → refused during param parsing, before any dial. The one clean stop, and
+// it reached only `direct` with no address. (a) and (b) → the host was DIALED and
+// every step AHEAD of that one EXECUTED, then it failed: the dial is outside
+// runHost's step loop and `stdinFor` is resolved inside it. (a) and not (b) →
+// nothing failed at all and the step reported SUCCESS, `ran: true`, on either
+// transport. So the old behaviour was not "fails, just later": a partial install on
+// two paths and a false success on two more.
+//
+// A scenario whose repeat path must deliver a token asks the MINT for one
+// (`reissue: true`); it is not this step's decision to make, and the message says
+// so rather than naming a symptom.
+//
+// Mutation, measured. Neutralise the `if tokenHeld` arm and all six redden, each for
+// its own reason, and the reasons are the point:
+//
+//	1 — still fails (`primary_ip: missing`); reddens ONLY on the message assertions.
+//	2, 3 — still fail (`stdin_from … carries no such string field`), and ALSO trip
+//	       the `dialed != 0` assertion, because the failure is past the connect.
+//	4, 5 — report success, `ran: true`. The hole, once per transport.
+//	6 — reports success, `skipped: true`. Silently passed over.
+//
+// Move the arm below the `onboarded` early-return and sub-case 6 alone reddens.
+// Turn it into a skip (`onboarded = onboarded || tokenHeld`) and all six redden on
+// mustFail's "step succeeded".
+func TestApply_TokenHeldHostIsNotSkipped(t *testing.T) {
+	cases := []struct {
+		name     string
+		host     map[string]any
+		steps    []any
+		teleport bool
+	}{
+		// What issuance itself emits: the sid and the flag, nothing else.
+		{name: "as issuance emits it", host: map[string]any{"sid": "vm-1.example.com", "token_held": true}},
+		// With an address stitched in from another register, the way a service joining
+		// the minting and creation rosters produces it.
+		{name: "with a dial address from another register", host: map[string]any{
+			"sid": "vm-1.example.com", "primary_ip": "10.0.0.2", "token_held": true,
+		}},
+		// `teleport` dials by SID, so the `primary_ip` requirement never fires and
+		// cannot be what refuses this one. It still carries the default step list, so
+		// pre-fix it was refused — after a dial, like sub-case 2, of which it is the
+		// second-transport twin rather than a case that could not be refused at all.
+		{
+			name:     "teleport, where no dial address is required",
+			host:     map[string]any{"sid": "vm-1.example.com", "token_held": true},
+			teleport: true,
+		},
+		// ★ The two that were NOT refused pre-fix. Nothing about the transport decides
+		// it: what mattered was (a) that a dial address was available and (b) that no
+		// step read the token. `teleport` supplies (a) by never needing an address…
+		{
+			name:     "teleport and steps that need no per-host secret",
+			host:     map[string]any{"sid": "vm-1.example.com", "token_held": true},
+			steps:    []any{map[string]any{"run": "systemctl daemon-reload"}},
+			teleport: true,
+		},
+		// …and `direct` supplies it with an address from another register. Both ran the
+		// whole list and reported success over a host handed nothing, so a guard that
+		// only covered the teleport spelling would leave half the hole open.
+		{
+			name:  "direct with an address and steps that need no per-host secret",
+			host:  map[string]any{"sid": "vm-1.example.com", "primary_ip": "10.0.0.2", "token_held": true},
+			steps: []any{map[string]any{"run": "systemctl daemon-reload"}},
+		},
+		// Contradictory: both flags. Refused rather than skipped — issuance cannot emit
+		// this pair, so a producer that did is not one whose intent can be guessed.
+		{name: "onboarded and token_held together", host: map[string]any{
+			"sid": "vm-1.example.com", "onboarded": true, "token_held": true,
+		}},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			h := newHarness(t, 0)
+			if tc.teleport {
+				h.mod.Transport = TransportTeleport
+			}
+			steps := tc.steps
+			if steps == nil {
+				steps = writeTokenSteps()
+			}
+			st := apply(t, h.mod, params(t, map[string]any{
+				"ssh_provider": "vault-ssh",
+				"hosts":        []any{tc.host},
+				"steps":        steps,
+			}))
+			msg := mustFail(t, st)
+			// The refusal names the flag, the host, and where the remedy is — not the
+			// symptom it used to name.
+			for _, want := range []string{"token_held", "vm-1.example.com", "reissue: true"} {
+				if !strings.Contains(msg, want) {
+					t.Errorf("refusal = %q, want it to name %q", msg, want)
+				}
+			}
+			if len(*h.dialed) != 0 {
+				t.Errorf("dialed %d host(s) — a host with nothing to deliver must be refused before the connect", len(*h.dialed))
+			}
+			if st.Last().GetOutput() != nil {
+				t.Error("a failed step exposed output — a held host must not be reported as a clean skip")
+			}
+		})
+	}
+}
+
 // ★ The `primary_ip` requirement of the direct transport is settled AFTER the
 // flag, not before it. Issuance emits `{sid, onboarded: true}` and nothing else,
 // so demanding a dial address would fail the step over the one host it was about
