@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sort"
+	"unicode/utf8"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -29,22 +30,22 @@ var ErrCreateScenarioNotEligible = errors.New("scenario: chosen create_scenario 
 var ErrCreateScenarioRequired = errors.New("scenario: create_scenario is required (service offers create scenarios)")
 
 // ErrIDNotComposable: the chosen create scenario composes the incarnation name
-// from `id_template` (ADR-0079), but the request also carried an explicit
+// from `id.template` (ADR-0079), but the request also carried an explicit
 // `name`. Rejected rather than silently ignored or silently overridden: with a
 // template the name is a function of the input components, and letting a request
 // field disagree with the row that gets inserted would make the RBAC
 // `incarnation=<name>` dimension checked on the request a different name than the
 // one created. Handler → 422.
-var ErrIDNotComposable = errors.New("scenario: create_scenario composes the incarnation id from id_template; the request must not carry `id`")
+var ErrIDNotComposable = errors.New("scenario: create_scenario composes the incarnation id from id.template; the request must not carry `id`")
 
-// ErrComposedIDInvalid: the name assembled from `id_template` does not match
+// ErrComposedIDInvalid: the name assembled from `id.template` does not match
 // the incarnation name grammar — most often it overflows the 63-character ceiling
 // once the operator's components are substituted. Deliberately NOT truncated: a
 // silently shortened name is a different identity (the name is the immutable
 // primary key). Handler → 422 with the offending name and its length, so the
 // operator shortens a component. Distinct sentinel from
 // [config.ErrIDTemplateRender] (there the template itself misfired).
-var ErrComposedIDInvalid = errors.New("scenario: id composed from id_template is not a valid incarnation id")
+var ErrComposedIDInvalid = errors.New("scenario: id composed from id.template is not a valid incarnation id")
 
 // CreateScenarioLoader is the narrow [artifact.ServiceLoader] surface needed
 // to resolve the create set: materialize the service-ref snapshot (its
@@ -195,7 +196,7 @@ type AssertPreflighter interface {
 //     true): false → incarnation ready with no run, but created_scenario is
 //     non-empty (run deferred, not bare).
 //   - ComposedID is the incarnation name assembled from the chosen scenario's
-//     `id_template` over the resolved input (ADR-0079). Empty when the scenario
+//     `id.template` over the resolved input (ADR-0079). Empty when the scenario
 //     declares no template — then the operator-supplied `name` stands, exactly as
 //     before. Non-empty, it is already validated against the incarnation name
 //     grammar and is THE name: the caller inserts it, targets the bootstrap run at
@@ -221,7 +222,7 @@ type CreatePlan struct {
 }
 
 // EffectiveName is the name the incarnation is created under: the composed name
-// when the create scenario declares a `id_template`, otherwise the
+// when the create scenario declares a `id.template`, otherwise the
 // operator-supplied requested name. Single source for both callers so REST and MCP
 // cannot drift on which name wins.
 func (p CreatePlan) EffectiveName(requested string) string {
@@ -247,14 +248,14 @@ func (p CreatePlan) EffectiveName(requested string) string {
 //  2. loader != nil → [ValidateCreateScenarioChoice] (chosen in set / required /
 //     bare). On bare, return immediately (no ValidateInput/lifecycle — no run).
 //  3. non-bare → [ValidateInput] (required/type/validate against the CHOSEN
-//     scenario's `input:` schema) + name composition from `id_template` over the
+//     scenario's `input:` schema) + name composition from `id.template` over the
 //     resolved input (ADR-0079, [composeIncarnationID]) + lifecycle.auto_create
 //     from the snapshot.
 //  4. !bare && autoCreate → [AssertPreflighter.PreflightAssert] (no-op unless
 //     preflighter implements the interface, as with a ScenarioStarter fake) — on
 //     the COMPOSED name when there is one.
 //
-// incarnationName is the name the operator REQUESTED; with a `id_template` it
+// incarnationName is the name the operator REQUESTED; with a `id.template` it
 // must be empty and the effective name comes back in [CreatePlan.ComposedID]
 // (see [CreatePlan.EffectiveName]).
 //
@@ -297,7 +298,7 @@ func ResolveCreatePlan(
 		if !isBare {
 			// The create path answers for the identity the request carried and
 			// nothing else — the incarnation does not exist yet. A scenario with
-			// `id_template` carries not even that, and ValidateInput withdraws it
+			// `id.template` carries not even that, and ValidateInput withdraws it
 			// there (only the manifest knows).
 			gate, err := ValidateInput(ctx, loader, serviceRef, chosen, input,
 				config.RequestedIncarnation(incarnationName))
@@ -308,8 +309,8 @@ func ResolveCreatePlan(
 			// template renders over the EFFECTIVE input, defaults merged) and before
 			// the pre-flight assert, so the assert and the bootstrap run already see
 			// the final name.
-			if gate.IDTemplate != "" {
-				composed, cerr := composeIncarnationID(gate.IDTemplate, gate.Merged, incarnationName)
+			if gate.ID.Template != "" {
+				composed, cerr := composeIncarnationID(gate.ID, gate.Merged, incarnationName)
 				if cerr != nil {
 					return CreatePlan{}, cerr
 				}
@@ -399,53 +400,54 @@ func rosterSIDsFromInput(v any) []string {
 	}
 }
 
-// composeIncarnationID renders `id_template` over the resolved input and
-// validates the result against the incarnation name grammar (ADR-0079).
-//
-// requested is the `name` the operator sent: with a template it MUST be empty
-// ([ErrIDNotComposable]) — the name is derived, not negotiated. Past that guard
-// the work is [ComposeID]'s, so the create path and the preview path compose
-// through the SAME code.
-func composeIncarnationID(template string, merged map[string]any, requested string) (string, error) {
+// composeIncarnationID is [ComposeID] behind one guard: requested MUST be empty
+// ([ErrIDNotComposable]) — the id is derived, not negotiated.
+func composeIncarnationID(spec config.IDSpec, merged map[string]any, requested string) (string, error) {
 	if requested != "" {
-		return "", fmt.Errorf("%w (composed from %q)", ErrIDNotComposable, template)
+		return "", fmt.Errorf("%w (composed from %q)", ErrIDNotComposable, spec.Template)
 	}
-	return ComposeID(template, merged)
+	return ComposeID(spec, merged)
 }
 
-// ComposeID renders `id_template` over the resolved input and checks the
-// result against the incarnation name grammar (ADR-0079). It is the ONLY place
-// either surface composes a name: the create path reaches it through
-// [composeIncarnationID], the preview endpoint calls it directly. A second
-// implementation — client-side CEL above all — would compose a DIFFERENT string
-// from the same input, and under an immutable primary key that is a silently
-// different identity, not a cosmetic mismatch.
+// ComposeID renders `id.template` over the resolved input and checks the result
+// against the scenario's bounds and the incarnation id grammar (ADR-0079). The ONLY
+// place either surface composes an id — a second implementation, client-side CEL above
+// all, would compose a DIFFERENT string from the same input, and under an immutable
+// primary key that is a different identity rather than a cosmetic mismatch. It is also
+// the AUTHORITATIVE check of `id.max_length`, on the request path, before the insert.
 //
-// The composed string comes back on BOTH outcomes. On failure it is what the
-// template actually produced, so a caller showing a live preview can display the
-// offending value and its length instead of an empty box; callers acting on the
-// name must branch on err, not on the string being non-empty. (The render itself
-// failing — an unset component, a list-valued block — yields "" plus
-// [config.ErrIDTemplateRender]: there is no string to show.)
+// The composed string comes back on BOTH outcomes so a preview can show the offending
+// value; callers acting on it branch on err, not on emptiness.
 //
-// The length ceiling is where this realistically fails: four components plus the
-// template's literal text overrun 63 characters easily. The error names the
-// composed string and its length so the operator knows WHICH way to shorten,
-// instead of getting a truncated name that silently becomes a different identity.
-func ComposeID(template string, merged map[string]any) (string, error) {
-	composed, err := config.RenderIDTemplate(template, merged)
+// THE GRAMMAR IS THE GATE, LENGTH ONLY EVER AN EXPLANATION, and length is counted in
+// CHARACTERS: judging length first answers "too long" for a forbidden character, and
+// `len` (bytes) would also push such a violation past the 63 gate — `namespace`
+// declares no `pattern:` and 26 Cyrillic letters are 52 bytes.
+func ComposeID(spec config.IDSpec, merged map[string]any) (string, error) {
+	composed, err := config.RenderIDTemplate(spec.Template, merged)
 	if err != nil {
 		return "", err
 	}
-	if incarnation.ValidID(composed) {
-		return composed, nil
+	length := utf8.RuneCountInString(composed)
+	if !incarnation.ValidID(composed) {
+		if length > config.IncarnationIDMaxLen {
+			// The GUARD is the grammar's own 63 — that is what makes "too long" the
+			// right attribution for a string the pattern rejected. The PHRASE is the
+			// scenario's, because a string over 63 is over its narrower bound too, and
+			// the number the operator has to fit is the binding one: telling them 63
+			// while the preview beside it says 44 is the drift `id.max_length` exists
+			// to remove. With no bound declared the two are the same sentence.
+			return composed, fmt.Errorf("%w: %q is %d characters, over %s — shorten the input components feeding id.template",
+				ErrComposedIDInvalid, composed, length, spec.CeilingPhrase())
+		}
+		return composed, fmt.Errorf("%w: %q does not match %s — check the input components feeding id.template",
+			ErrComposedIDInvalid, composed, incarnation.IDPattern)
 	}
-	if len(composed) > config.IncarnationIDMaxLen {
-		return composed, fmt.Errorf("%w: %q is %d characters, the ceiling is %d — shorten the input components feeding id_template",
-			ErrComposedIDInvalid, composed, len(composed), config.IncarnationIDMaxLen)
+	if length > spec.Ceiling() {
+		return composed, fmt.Errorf("%w: %q is %d characters, over %s — shorten the input components feeding id.template",
+			ErrComposedIDInvalid, composed, length, spec.CeilingPhrase())
 	}
-	return composed, fmt.Errorf("%w: %q does not match %s — check the input components feeding id_template",
-		ErrComposedIDInvalid, composed, incarnation.IDPattern)
+	return composed, nil
 }
 
 // sortedNames returns a deterministic sorted name list for the

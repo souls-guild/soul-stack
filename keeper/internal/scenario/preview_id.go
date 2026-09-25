@@ -1,7 +1,7 @@
 package scenario
 
 // Live preview of the incarnation id a create scenario COMPOSES from its
-// `id_template` (ADR-0079). The create form calls it as the operator types the
+// `id:` block (ADR-0079). The create form calls it as the operator types the
 // `input:` components, so the id is on screen before the request that would make
 // it permanent — the id is the immutable primary key, and a wrong one costs a
 // destroy and a re-create.
@@ -34,15 +34,13 @@ import (
 
 // IDPreview is what [PreviewID] resolved for one (scenario, input) pair.
 //
-//   - Composes=false: the scenario declares no `id_template` — the operator
-//     names the incarnation themselves and there is nothing to preview. Every
-//     other field is zero.
-//   - Valid=true: ID is the identifier a create with this input would produce.
-//   - Valid=false: the id could not be composed, or was composed into something
-//     the grammar rejects. Reason says which, in the operator's terms. ID still
-//     carries the offending string when there IS one (over-long, bad character),
-//     so the form can show it and its length instead of a blank box; it is empty
-//     only when the render itself failed and there is no string to show.
+//   - Composes=false: no `id.template` — nothing to preview, every field zero EXCEPT
+//     MaxLength, which still bounds the field the operator types into.
+//   - Valid=false: Reason says why, in the operator's terms. ID still carries the
+//     offending string when there is one, so the form shows it instead of a blank box;
+//     empty only when the render itself failed.
+//   - MaxLength is the ceiling ID was measured against, so the form counts against what
+//     the create enforces rather than a client-side copy of 63.
 //
 // The template TEXT is deliberately NOT a field: the operator is shown the
 // resulting id, not the formula (NIM-340), and a client holding the expression
@@ -52,10 +50,11 @@ import (
 // A failed preview is a NORMAL state, not an error: the operator has not finished
 // typing. Callers surface it, they do not reject on it.
 type IDPreview struct {
-	Composes bool
-	ID       string
-	Valid    bool
-	Reason   string
+	Composes  bool
+	ID        string
+	MaxLength int
+	Valid     bool
+	Reason    string
 }
 
 // PreviewID composes the id scenario scenarioName of service ref would give an
@@ -75,16 +74,17 @@ func PreviewID(ctx context.Context, loader InputScenarioLoader, ref artifact.Ser
 	if err != nil {
 		return IDPreview{}, err
 	}
-	if scn.IDTemplate == "" {
+	if scn.ID.Template == "" {
 		// No template — a free-text id. Not an error and not an empty preview:
-		// the form needs this answer to keep showing its id field.
-		return IDPreview{}, nil
+		// the form needs this answer to keep showing its id field, and that field
+		// has the platform ceiling on it whether or not anything composes.
+		return IDPreview{MaxLength: config.IncarnationIDMaxLen}, nil
 	}
 
-	out := IDPreview{Composes: true}
+	out := IDPreview{Composes: true, MaxLength: scn.ID.Ceiling()}
 	merged := config.MergeInputDefaults(scn.Input, provided)
 
-	composed, cerr := ComposeID(scn.IDTemplate, merged)
+	composed, cerr := ComposeID(scn.ID, merged)
 	out.ID = composed
 	if cerr == nil {
 		out.Valid = true
@@ -98,7 +98,7 @@ func PreviewID(ctx context.Context, loader InputScenarioLoader, ref artifact.Ser
 //
 // The sentinel prefixes are stripped: they exist so callers can branch with
 // errors.Is, and this string is read by an operator in a form, where
-// "scenario: id composed from id_template is not a valid incarnation id:"
+// "scenario: id composed from id.template is not a valid incarnation id:"
 // in front of the actual sentence is noise they have to read past.
 //
 // A render failure is the common one, and its cel-go tail ("no such key: project")

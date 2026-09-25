@@ -46,7 +46,7 @@ func incResolveIDOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/resolve-id",
 		Summary:       "Resolve the id a create would compose",
-		Description:   "Live preview for the create form: composes the incarnation id from the chosen create scenario's id_template over the input so far, reports its length against the ceiling, and whether the id is free. Composition runs server-side — the same code the create runs — so the previewed id cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed id is measured against the caller's scope, and the occupying service is named only to a caller who may see it.",
+		Description:   "Live preview for the create form: composes the incarnation id from the chosen create scenario's id.template over the input so far, reports its length against the ceiling, and whether the id is free. Composition runs server-side — the same code the create runs — so the previewed id cannot differ from the created one. Creates nothing. Permission incarnation.create; the composed id is measured against the caller's scope, and the occupying service is named only to a caller who may see it.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},

@@ -52,7 +52,7 @@ func TestPreviewName_AgreesWithCreate(t *testing.T) {
 				t.Fatalf("PreviewID: %v", err)
 			}
 			if !preview.Composes {
-				t.Fatalf("scenario declares name_template — preview must report Composes")
+				t.Fatalf("scenario declares id.template — preview must report Composes")
 			}
 			if !preview.Valid {
 				t.Fatalf("preview invalid for input the create accepts: %s", preview.Reason)
@@ -79,7 +79,8 @@ func scalarNameTemplateSnapshot(t *testing.T) *fakeCreateLoader {
 	root := t.TempDir()
 	writeScenarioFile(t, root, "create", `name: create
 create: true
-name_template: "${input.name}-${input.shards}-tls${input.tls}"
+id:
+  template: "${input.name}-${input.shards}-tls${input.tls}"
 input:
   name:
     type: string
@@ -142,7 +143,7 @@ func TestPreviewName_OverCeilingShowsTheOffendingName(t *testing.T) {
 	}
 }
 
-// TestPreviewName_NoTemplateIsNotAnError — a scenario without `name_template`
+// TestPreviewName_NoTemplateIsNotAnError — a scenario without an `id:` block
 // keeps the free-text name field. The form asks the same endpoint either way, so
 // "this one does not compose" has to be an answer rather than a failure.
 func TestPreviewName_NoTemplateIsNotAnError(t *testing.T) {
@@ -161,6 +162,6 @@ tasks: []
 		t.Fatalf("PreviewID: %v", err)
 	}
 	if preview.Composes || preview.ID != "" {
-		t.Fatalf("a scenario without name_template composes nothing, got %+v", preview)
+		t.Fatalf("a scenario without an id: block composes nothing, got %+v", preview)
 	}
 }

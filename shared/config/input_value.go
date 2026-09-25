@@ -223,7 +223,7 @@ func resolveInputVaultRefs(schema InputSchemaMap, merged map[string]any, resolve
 // plus defaults for what is missing — WITHOUT the required and value-validation
 // phases that [ResolveInputValues] runs after it.
 //
-// It exists for one caller: the live preview of a `name_template`-composed
+// It exists for one caller: the live preview of an `id.template`-composed
 // incarnation name (ADR-0079). A preview runs while the operator is still typing,
 // so a half-filled input is its NORMAL state and the required-gate would reject
 // every keystroke before a name could be composed. Merge is also the only phase

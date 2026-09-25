@@ -302,6 +302,19 @@ spellings a service repository writes — the CEL root and the scenario key — 
   (`id_template_conflict`): two templates composing one id is a mistake whichever value a
   loader picked.
 
+> ⛔ **The KEY half of this window is closed (2026-09-24, NIM-899).** `name_template:` is no
+> longer read at all — it answers `unknown_key` with the replacement in the hint. It closed
+> early because it had **zero users**: no occurrence in any service repository or in
+> `examples/`. What forced the timing is that
+> [ADR-0079](0079-incarnation-name-template.md)'s amendment turned the key into a block
+> (`id: {template, max_length}`), which opened a *second* window on the same key; leaving
+> this one open would have left three spellings of one key and a reader for the third. The
+> machinery described above is unchanged and now serves `id_template:` → `id.template`.
+>
+> **The CEL-root half — `incarnation.name` → `incarnation.id` — is still open** and is the
+> load-bearing one, for the reason the next section gives: a stale root fails at
+> EVALUATION, on the host, mid-run. Nothing in NIM-899 touches it.
+
 `incarnation_name_legacy_root` covers all three surfaces that carry the root, because a
 catcher that covered one would report a fraction of the sites while looking green:
 

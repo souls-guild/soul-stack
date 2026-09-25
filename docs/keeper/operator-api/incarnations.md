@@ -621,7 +621,7 @@ Binds already-onboarded, **connected** Souls to the incarnation's roster (`incar
 
 **The operator flow it enables:**
 
-1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring `id_template` ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
+1. `POST /v1/incarnations` — the row is created. With `lifecycle.auto_create: false` (or a service offering no create scenario) no run starts, and the response carries no `apply_id`; a scenario declaring an `id:` block ([ADR-0079](../../adr/0079-incarnation-name-template.md)) still composes the name server-side, which the reply echoes in `incarnation`.
 2. `POST /v1/incarnations/{id}/members` — the roster is bound.
 3. `POST /v1/incarnations/{id}/scenarios/{scenario}` — the create scenario runs against a roster that now exists.
 

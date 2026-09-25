@@ -10,7 +10,7 @@ package config
 // effective `input`) is correct only over the MERGED input, and the effective input
 // exists only post-merge (needs the FS). So the covenant scenario's form is checked
 // HERE, after MergeCovenant, with the same core [validateFormAgainstInputKeys] the
-// non-extends path runs in the semantic phase. `id_template` (ADR-0079) is gated
+// non-extends path runs in the semantic phase. `id.template` (ADR-0079) is gated
 // identically — its `${input.X}` references resolve against the same effective input.
 
 import (
@@ -166,28 +166,26 @@ func resolveCovenantValidateScopeDiags(m *ScenarioManifest, doc *Document, scena
 	return out
 }
 
-// resolveCovenantIDTemplateDiags runs the covenant scenario's post-merge
-// `id_template` check (ADR-0079) — same motive and same core as
-// [resolveCovenantFormDiags]: `${input.X}` must resolve against the MERGED input,
-// otherwise a component declared in the covenant would yield a false
-// id_template_input_unknown.
+// resolveCovenantIDTemplateDiags runs the post-merge `id:` check — same motive and
+// core as [resolveCovenantFormDiags].
 //
-// Reads whichever spelling the file wrote ([ADR-0085] compatibility window); the
-// fold into IDTemplate has already run in the schema phase.
+// The BOUND checks ride along although they need no merged input: the gate is
+// all-or-nothing per scenario, so splitting them out would leave an `extends` scenario
+// — which is what the services writing this key are — with no static check at all.
 func resolveCovenantIDTemplateDiags(m *ScenarioManifest, doc *Document, scenarioPath string) []diag.Diagnostic {
 	root := rootMapping(doc)
 	if root == nil {
 		return nil
 	}
 	topKeys := topLevelKeys(root)
-	if !topKeys[idTemplateKey] && !topKeys[nameTemplateKey] {
+	if !topKeys[idBlockKey] && !topKeys[idTemplateKey] {
 		return nil
 	}
 	inputKeys := make(map[string]bool, len(m.Input))
 	for k := range m.Input {
 		inputKeys[k] = true
 	}
-	out := validateIDTemplateAgainstInputKeys(root, m.IDTemplate, m.Create, inputKeys, m.writtenIDTemplateKey(topKeys))
+	out := validateIDTemplateAgainstInputKeys(root, m.ID, m.Create, inputKeys, m.writtenIDTemplateKey(topKeys))
 	for i := range out {
 		if out[i].File == "" {
 			out[i].File = scenarioPath

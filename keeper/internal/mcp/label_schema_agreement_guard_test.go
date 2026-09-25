@@ -266,7 +266,7 @@ func TestIDRenamedToolSchemasDecodeIntoTheirArgsStruct(t *testing.T) {
 			}
 			// The schema must OFFER `id`, not necessarily require it:
 			// `keeper.incarnation.create` deliberately leaves the identifier
-			// optional because a `name_template` scenario composes it server-side
+			// optional because a scenario with an `id:` block composes it server-side
 			// ([ADR-0079]), and demanding it here would assert the opposite of
 			// what that design decided.
 			if !hasProperty(shape, "id") {

@@ -176,8 +176,8 @@ func TestValidateScope_ComposedIDWithdrawsTheIdentifier(t *testing.T) {
 	if scopeErr == nil {
 		t.Fatal("incarnation.id passed under the composed-id stance — the id is not composed until after this gate")
 	}
-	if !strings.Contains(scopeErr.Error(), "id_template") {
-		t.Errorf("the refusal must point at the input components that feed id_template, got: %v", scopeErr)
+	if !strings.Contains(scopeErr.Error(), "id.template") {
+		t.Errorf("the refusal must point at the input components that feed id.template, got: %v", scopeErr)
 	}
 
 	// WithComposedID is the withdrawal ValidateInput applies once it has read the

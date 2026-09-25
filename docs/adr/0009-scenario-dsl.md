@@ -557,7 +557,7 @@ it resolves inside the run, which is later than this point by construction.
 
 **The create/day-2 difference is expressed, not smoothed over.** On day-2 the row is loaded and a
 rule reads it. On create the incarnation does not exist yet: only the identity the request itself
-carries is knowable, and for a scenario with `id_template:` not even that, since the id is composed
+carries is knowable, and for a scenario with an `id:` block not even that, since the id is composed
 from the very input the gate is still resolving. Each path declares what it knows
 (`config.ValidateContext`), and a rule reaching outside that set is **refused at compile**:
 
@@ -565,7 +565,7 @@ from the very input the gate is still resolving. Each path declares what it know
 |---|---|
 | day-2 run | `id` (+ the `name` window alias), `service`, `service_version`, `state` — a subset of the run's own namespace |
 | create, operator-supplied id | `id` / `name` |
-| create, `id_template:` scenario | nothing |
+| create, `id:`-block scenario | nothing |
 | isolated destiny pass, L0 trial case | nothing |
 
 Refusing rather than substituting an empty map is the whole point, and the reason is the one NIM-619

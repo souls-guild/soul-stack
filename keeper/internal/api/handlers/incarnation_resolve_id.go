@@ -3,7 +3,7 @@ package handlers
 // Resolve of the incarnation id a create WOULD compose (`POST /v1/incarnations/
 // resolve-id`, NIM-331). Creates nothing, writes nothing, audits nothing.
 //
-// Under `id_template` (ADR-0079) the id is composed server-side from the
+// Under `id:` (ADR-0079) the id is composed server-side from the
 // operator's `input:` components, and POST /v1/incarnations must NOT carry an
 // `id`. The operator therefore never sees it until the create succeeds or
 // refuses — and the id is the immutable primary key with no rename, so a wrong
@@ -35,6 +35,7 @@ import (
 	"context"
 	"errors"
 	"log/slog"
+	"unicode/utf8"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
@@ -61,11 +62,14 @@ type ResolveIDRequest struct {
 // ResolveIDResult — NATIVE result of the resolve (handler-native; the api package
 // projects it into the reply DTO).
 //
-// Composes=false means the chosen scenario declares no `id_template` (or the
+// Composes=false means the chosen scenario declares no `id.template` (or the
 // service offers no create scenario at all): the operator types the id, and the
-// remaining fields are zero. That is an ANSWER, not a degraded state — the form
-// asks the same endpoint either way and needs it to decide whether to show an id
-// field or a preview.
+// remaining fields are zero apart from MaxLength, which bounds that field too. That
+// is an ANSWER, not a degraded state — the form asks the same endpoint either way
+// and needs it to decide whether to show an id field or a preview.
+//
+// MaxLength is the ceiling the id was MEASURED against, not a constant: a form
+// counting against 63 would promise space the create refuses.
 //
 // Valid=false is the ordinary state of a live preview: the operator has not
 // finished typing. InvalidReason then says why in their terms, and ID still
@@ -141,10 +145,12 @@ func (h *IncarnationHandler) ResolveIDTyped(ctx context.Context, claims *jwt.Cla
 	}
 
 	out := ResolveIDResult{
-		Composes:      preview.Composes,
-		ID:            preview.ID,
-		Length:        len(preview.ID),
-		MaxLength:     config.IncarnationIDMaxLen,
+		Composes: preview.Composes,
+		ID:       preview.ID,
+		// Characters — the unit MaxLength and [scenario.ComposeID] use. `len` would put
+		// a byte count beside a rune ceiling in one payload.
+		Length:        utf8.RuneCountInString(preview.ID),
+		MaxLength:     preview.MaxLength,
 		Valid:         preview.Valid,
 		InvalidReason: preview.Reason,
 	}
@@ -211,7 +217,7 @@ func (h *IncarnationHandler) idOccupant(ctx context.Context, name string, inScop
 
 // takenIDDetail phrases the create's 409 so a composed id is actionable.
 //
-// Under `id_template` the operator never typed the id in the refusal: they
+// Under `id:` the operator never typed the id in the refusal: they
 // typed four components, and "cache-billing-invoices-redis-cache already exists"
 // names a string they have not seen before and gives no hint which component to
 // change — or whether the collision is even theirs. Naming the holding service

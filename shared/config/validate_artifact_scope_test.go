@@ -135,7 +135,7 @@ func TestValidate_CreateScenarioCannotReadWhatDoesNotExistYet(t *testing.T) {
 // fragment cannot be checked on its own: the same rule is correct for every day-2
 // scenario that extends it and fatal for every create scenario that does. Only the
 // merged manifest says which this one is, so the check runs post-merge, like the
-// `form:` and `id_template:` ones beside it.
+// `form:` and `id:` ones beside it.
 func TestValidate_InheritedRuleIsJudgedAgainstTheScenarioThatInheritsIt(t *testing.T) {
 	root := t.TempDir()
 	fragment := "input:\n  port: { type: integer, default: 1 }\n" +

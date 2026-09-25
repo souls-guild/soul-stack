@@ -109,7 +109,7 @@ func TestValidateInput_CreateRuleOverStateRefuses(t *testing.T) {
 }
 
 // TestValidateInput_ComposedIDScenarioRefusesTheIdentifier — a create scenario
-// carrying `id_template` (ADR-0079) has no id yet at this gate: it is composed from
+// carrying `id.template` (ADR-0079) has no id yet at this gate: it is composed from
 // the very input being resolved, after the gate returns. The caller cannot know
 // that; only the manifest does, so ValidateInput withdraws the identity itself.
 func TestValidateInput_ComposedIDScenarioRefusesTheIdentifier(t *testing.T) {
@@ -126,7 +126,7 @@ func TestValidateInput_ComposedIDScenarioRefusesTheIdentifier(t *testing.T) {
 	}
 
 	// The runtime guard is the second line, for the scenario the offline rule does
-	// not judge: `id_template` without `create: true` (soul-lint warns
+	// not judge: `id.template` without `create: true` (soul-lint warns
 	// id_template_ignored, and the key is only read on the create path anyway).
 	//
 	// Both stances a create request can actually produce are exercised. The one
@@ -139,8 +139,8 @@ func TestValidateInput_ComposedIDScenarioRefusesTheIdentifier(t *testing.T) {
 		if !errors.Is(err, config.ErrIncarnationNotInScope) {
 			t.Fatalf("id=%q: want config.ErrIncarnationNotInScope, got: %v", sent, err)
 		}
-		if !strings.Contains(err.Error(), "id_template") {
-			t.Errorf("id=%q: the refusal must send the author to the input components that feed id_template: %v", sent, err)
+		if !strings.Contains(err.Error(), "id.template") {
+			t.Errorf("id=%q: the refusal must send the author to the input components that feed id.template: %v", sent, err)
 		}
 	}
 }

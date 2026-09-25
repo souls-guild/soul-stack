@@ -6,7 +6,7 @@ import (
 	"testing"
 )
 
-// A create scenario that carries `id_template` composes the incarnation id
+// A create scenario that carries `id.template` composes the incarnation id
 // server-side and REFUSES a request that also carries an `id`
 // (scenario.ErrIDNotComposable → 422). Nothing in the scenario descriptor said
 // so, so a client had no way to know: it asked for an id it must not send, and
@@ -18,11 +18,11 @@ import (
 
 func TestListScenarios_ComposesIDFollowsTheTemplate(t *testing.T) {
 	root := t.TempDir()
-	writeScenario(t, root, "create", "name: create\ncreate: true\nid_template: \"${ input.cluster }-${ input.shard }\"\ninput:\n  cluster: {type: string}\n  shard: {type: string}\ntasks: []\n")
-	// The retired spelling still declares the same thing for the length of the
-	// ADR-0085 window — the listing must not tell a form there is nothing to
+	writeScenario(t, root, "create", "name: create\ncreate: true\nid:\n  template: \"${ input.cluster }-${ input.shard }\"\ninput:\n  cluster: {type: string}\n  shard: {type: string}\ntasks: []\n")
+	// The scalar spelling still declares the same thing for the length of the
+	// NIM-899 window — the listing must not tell a form there is nothing to
 	// compose just because the file has not been migrated yet.
-	writeScenario(t, root, "create_legacy", "name: create_legacy\ncreate: true\nname_template: \"${ input.cluster }\"\ninput:\n  cluster: {type: string}\ntasks: []\n")
+	writeScenario(t, root, "create_legacy", "name: create_legacy\ncreate: true\nid_template: \"${ input.cluster }\"\ninput:\n  cluster: {type: string}\ntasks: []\n")
 	writeScenario(t, root, "create_named", "name: create_named\ncreate: true\ninput:\n  size: {type: int}\ntasks: []\n")
 
 	got, err := ListScenarios(root, nil)
@@ -35,10 +35,10 @@ func TestListScenarios_ComposesIDFollowsTheTemplate(t *testing.T) {
 	}
 
 	if !by["create"].ComposesID {
-		t.Error("a scenario declaring id_template did not report that it composes the id — the form will keep asking for one the backend refuses")
+		t.Error("a scenario declaring id.template did not report that it composes the id — the form will keep asking for one the backend refuses")
 	}
 	if !by["create_legacy"].ComposesID {
-		t.Error("a scenario still on name_template did not report that it composes the id — the compatibility window reaches the descriptor too")
+		t.Error("a scenario still on the scalar id_template did not report that it composes the id — the compatibility window reaches the descriptor too")
 	}
 	if by["create_named"].ComposesID {
 		t.Error("a scenario without a template reported composing one — the form would stop asking for an id that is still required")
@@ -50,7 +50,7 @@ func TestListScenarios_ComposesIDFollowsTheTemplate(t *testing.T) {
 func TestScenario_JSONCarriesTheFlagAndNotTheTemplate(t *testing.T) {
 	root := t.TempDir()
 	const secretish = "${ input.cluster }-${ input.shard }"
-	writeScenario(t, root, "create", "name: create\ncreate: true\nid_template: \""+secretish+"\"\ninput:\n  cluster: {type: string}\ntasks: []\n")
+	writeScenario(t, root, "create", "name: create\ncreate: true\nid:\n  template: \""+secretish+"\"\n  max_length: 40\ninput:\n  cluster: {type: string}\ntasks: []\n")
 
 	got, err := ListScenarios(root, nil)
 	if err != nil {
@@ -64,8 +64,19 @@ func TestScenario_JSONCarriesTheFlagAndNotTheTemplate(t *testing.T) {
 	if !strings.Contains(body, `"composes_id":true`) {
 		t.Errorf("reply does not carry composes_id: %s", body)
 	}
-	if strings.Contains(body, "input.cluster }-") || strings.Contains(body, "id_template") {
+	// The template's own TEXT, and the JSON key that would carry it. A bare
+	// `"template"` substring would also match nothing in this fixture and pass for the
+	// wrong reason, so the assertion names the two things that could actually leak.
+	if strings.Contains(body, secretish) || strings.Contains(body, `"template"`) {
 		t.Errorf("the template leaked into the reply; the operator is shown the composed ID, never the formula: %s", body)
+	}
+	// Nor does the BOUND. The form learns the ceiling from the resolve endpoint,
+	// which measures the composed id against it and answers with both — a copy here
+	// would be a second number to keep in step for no new answer. The KEY is what is
+	// asserted on: the number 40 appears in no other field of this fixture, so matching
+	// on it would pass whether or not the bound is projected.
+	if strings.Contains(body, "max_length") {
+		t.Errorf("the declared ceiling leaked into the listing: %s", body)
 	}
 }
 

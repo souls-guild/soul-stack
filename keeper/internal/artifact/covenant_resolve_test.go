@@ -456,7 +456,7 @@ input:
 	}
 }
 
-// id_template referencing a component declared in the COVENANT must resolve
+// id.template referencing a component declared in the COVENANT must resolve
 // post-merge (ADR-0079): checked in the semantic phase it would report a false
 // id_template_input_unknown, since m.Input then holds only the local delta. Same
 // gate as `form:`.
@@ -506,5 +506,65 @@ tasks: []
 	_, diags := loadResolved(t, root, "create")
 	if !hasCode(diags, "id_template_input_unknown") {
 		t.Fatalf("expected id_template_input_unknown, got %v", diagCodes(diags))
+	}
+}
+
+// TestResolveCovenant_IDBoundsCheckedPostMerge is the production shape nothing else
+// covers: the `id:` BLOCK on a scenario that `extends:`. The gate is all-or-nothing per
+// scenario, so the bound rules ride to the covenant resolver or run nowhere — and the
+// services writing this key are exactly the ones using `extends:`.
+func TestResolveCovenant_IDBoundsCheckedPostMerge(t *testing.T) {
+	scenarioWith := func(t *testing.T, bound string) []diag.Diagnostic {
+		t.Helper()
+		root := t.TempDir()
+		writeCovenant(t, root, "base", "input:\n  project:\n    type: string\n")
+		writeScenario(t, root, "create", `name: create
+create: true
+extends: base
+id:
+  template: "${input.name}-${input.project}"
+`+bound+`input:
+  name:
+    type: string
+tasks: []
+`)
+		_, diags := loadResolved(t, root, "create")
+		return diags
+	}
+
+	over := scenarioWith(t, "  max_length: 70\n")
+	if !hasCode(over, "id_max_length_over_ceiling") {
+		t.Fatalf("a bound above 63 was accepted on the extends path: %v", diagCodes(over))
+	}
+
+	legal := scenarioWith(t, "  max_length: 40\n")
+	for _, d := range legal {
+		if d.Code == "id_max_length_over_ceiling" || d.Code == "id_max_length_invalid" ||
+			d.Code == "id_template_too_long" || d.Code == "id_template_input_unknown" {
+			t.Fatalf("unexpected diagnostic on a legal bounded extends scenario: %+v", d)
+		}
+	}
+}
+
+// TestResolveCovenant_IDTooLongAgainstTheServiceCeiling — 30 literal characters are
+// well inside 63 and impossible under a declared 20, so a green result would mean the
+// bound is being compared against 63 post-merge.
+func TestResolveCovenant_IDTooLongAgainstTheServiceCeiling(t *testing.T) {
+	root := t.TempDir()
+	writeCovenant(t, root, "base", "input:\n  project:\n    type: string\n")
+	writeScenario(t, root, "create", `name: create
+create: true
+extends: base
+id:
+  template: "${input.name}-aaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-${input.project}"
+  max_length: 20
+input:
+  name:
+    type: string
+tasks: []
+`)
+	_, diags := loadResolved(t, root, "create")
+	if !hasCode(diags, "id_template_too_long") {
+		t.Fatalf("the literal skeleton was not measured against the declared ceiling post-merge: %v", diagCodes(diags))
 	}
 }

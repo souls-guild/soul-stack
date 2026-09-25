@@ -16,7 +16,8 @@ import (
 // two suites compose the same name from the same input.
 const nameTemplateYAML = `name: create
 create: true
-name_template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
+id:
+  template: "${input.name}-${input.project}-${input.subproject}-redis-${input.service_type}"
 input:
   name:
     type: string
@@ -100,7 +101,7 @@ func TestToolsCall_IncarnationCreate_ExplicitNameWithTemplate(t *testing.T) {
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.create",
 		`{"id":"my-own","service":"redis","create_scenario":"create","input":{"name":"cache","project":"billing","subproject":"inv"}}`)
 	if resp.Error == nil {
-		t.Fatalf("expected an error when both name and name_template are present")
+		t.Fatalf("expected an error when both name and id.template are present")
 	}
 	if !strings.Contains(resp.Error.Message, "id_not_composable") {
 		t.Errorf("message = %q, want the id_not_composable prefix", resp.Error.Message)
