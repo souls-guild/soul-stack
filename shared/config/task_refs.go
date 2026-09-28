@@ -63,8 +63,10 @@ import (
 // covered by textual extraction: string-literal contents are stripped (as in the
 // shared/cel guards), then the regex `register.<name>` collects names (see
 // ExtractRegisterRefs). Dynamic access (`register["..."]`) and `register.self` (the
-// current task) are deliberately not flagged. A full CEL-AST parse is unnecessary —
-// the reference form is fixed by the grammar (`register.<name>`).
+// current task) are deliberately not flagged HERE. A full CEL-AST parse is unnecessary —
+// the reference form is fixed by the grammar (`register.<name>`), and since NIM-909 the
+// dynamic form is refused when the expression compiles (shared/cel), so this extractor
+// is not the place that has to see it.
 //
 // tasksSeq — the `tasks:` AST node (scenario) or the root sequence (destiny).
 // A nil node → nil (an empty/invalid list is already diagnosed above).
@@ -364,6 +366,11 @@ func checkRefList(kind string, value ast.Node, known map[string]bool, taskPath s
 // form — there is no dot, the regex does not match (a safe skip); the same holds for
 // `register.hosts["x"]`, which therefore declares no Passage edge and fails loudly at
 // render ("no such key") rather than reading a stale value.
+//
+// Since NIM-909 that skip is the reason the form does not reach here at all: an index
+// choosing a register's NAME is refused when the expression compiles (shared/cel,
+// guardRegisterNameByIndex) and offline as `register_index_form`. This extractor is
+// unchanged — it is the definition of the form the refusal points at.
 //
 // The optional `hosts.` hop covers the keeper-side per-host root
 // `register.hosts.<name>` (NIM-711): the DEPENDENCY is still `<name>` — the same

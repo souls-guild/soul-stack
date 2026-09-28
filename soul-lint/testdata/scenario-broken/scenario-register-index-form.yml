@@ -1,0 +1,24 @@
+name: register-index-form
+tasks:
+  - name: Probe the role
+    module: core.exec.run
+    register: probe
+    params:
+      cmd: redis-cli role
+
+  # The register's NAME behind an index: reference extraction is dot-form, so nothing
+  # here declares the dependency on the probe above -- the run is not ordered by it
+  # and the value is not there when this renders (NIM-909).
+  - name: Act on the probed role
+    module: core.exec.run
+    where: register["probe"].stdout == "master"
+    params:
+      cmd: echo ${ register["probe"].stdout }
+
+  # Naming the register and indexing INTO its payload is the correct form and is not
+  # reported: the dependency is declared, the index is a key of the value.
+  - name: Act on a payload key
+    module: core.exec.run
+    where: register.probe["stdout"] == "master"
+    params:
+      cmd: echo ${ register.probe["stdout"] }

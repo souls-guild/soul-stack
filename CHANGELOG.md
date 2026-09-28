@@ -7,6 +7,47 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A register's NAME is a dot-select — `register["probe"]` is refused at compile
+  (NIM-909, [ADR-010](docs/adr/0010-templating.md) amendment 2026-09-28).** The same rule
+  `vars['k']` has had since 2026-06-24, one root over: the name must be statically known
+  from the AST. It is what reference extraction reads, and all of it is dot-form —
+  `config.ExtractRegisterRefs` derives the Passage count from it
+  ([ADR-056](docs/adr/0056-staged-render-passage.md)), the cross-reference validator checks
+  the producer exists from it, `soul-lint` reports a typo from it. Behind an index there is
+  no name for any of the three: the run is not ordered by the dependency, nothing checks
+  it, and the author hears nothing until the cell evaluates — `no such key: probe`, naming
+  neither the rule nor the fix.
+  - **Two halves, one AST walk.** `shared/cel.Engine.compile` refuses with `ErrUnsupported`
+    naming the fix; `soul-lint` reports **`register_index_form`** with the YAML path to
+    edit, through the same Engine (`InterpolationIndexesRegisterName`) and after the same
+    `.where(...)` rewrite. That rewrite is load-bearing and was missing in the first cut: a
+    `soulprint.hosts.where("register['probe'] …")` predicate is a string LITERAL to an AST
+    walk until `rewriteHostsWhere` inlines it, so the run refused it while the linter said
+    nothing — on the one spelling that hides a register reference from every other reader
+    as well. A bracket in an ordinary string literal, or in the literal text around a
+    `${ … }` block, is an index to neither half.
+  - **The rule is narrow: an index INTO a register is untouched.** `register.<name>["key"]`
+    reaches into the register's own payload and `register.hosts.<name>["<sid>"]` indexes the
+    per-host map by SID (NIM-711) — both name the register first, so both declare their
+    edge. A blanket "no index under `register`" was the first shape of this rule and it was
+    wrong for both of those.
+  - **What it did varied by key, which is the argument for one spelling.** In a
+    render-time key it raised at render — unless an unrelated `where: register.X` had
+    pushed the producer into an earlier Passage, in which case it **resolved** out of the
+    accumulated register context: it worked or failed by a property of another task. In
+    `when:` the blindness flipped a classification — `config.IsStaticPredicate` found no
+    reference, Keeper judged the predicate host-invariant and evaluated it itself against
+    a deliberately empty register map, so the **whole run** failed at render before
+    dispatch. In `changed_when:`/`failed_when:` it reached the Soul and resolved while the
+    producer shared the Passage, and when it stopped it walked past FC-5
+    (`cross_passage_when_unsupported`, also dot-form) and died on `no such key` — the
+    silent failure FC-5 exists to close. `retry.until:` is outside FC-5 by design, so
+    there the rule tidies rather than repairs.
+  - **One spelling that resolved is removed:** `register["hosts"].<name>` on a keeper
+    task, where `AllowRegisterHosts` passes and the `hosts` key is in the activation. It
+    is the one refusal whose fix is the longer `register.hosts.<name>`, and the error
+    message names it. No scenario in the tree used any index form.
+
 - **The create-scenario key `id_template:` becomes the block `id: {template, max_length}`
   (NIM-899, [ADR-0079](docs/adr/0079-incarnation-name-template.md) amendment 2026-09-24).**
   A composed id needs a ceiling as much as it needs a formula, and a scalar key had nowhere

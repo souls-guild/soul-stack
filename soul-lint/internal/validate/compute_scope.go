@@ -2,7 +2,8 @@ package validate
 
 // Offline compute checks (NIM-619). Two rules share one walk over the scenario,
 // because both answer the same question — "will this `compute.<name>` resolve?" —
-// and differ only in why the answer is no:
+// and differ only in why the answer is no (a third, unrelated rule rides the same
+// walk — see register_index.go for why it lives here):
 //
 //   - compute_out_of_scope: the context has no `compute` namespace at all;
 //   - compute_unknown_name: the context HAS it, but the scenario declares no entry
@@ -188,10 +189,11 @@ func (c *computeChecker) tasks(tasks []config.Task, prefix string) {
 // in scope (render.resolveCompute accumulates), so a reference to a later name is
 // a forward reference that fails at run time with the very "no such key" this
 // ticket is about.
+//
+// The name rule's own precondition (declared != nil) is [computeChecker.check]'s, not
+// this walk's: with an unresolved covenant the block is still walked, because the
+// register rule riding along does not depend on the declared set.
 func (c *computeChecker) computeBlock(block config.ComputeBlock) {
-	if c.declared == nil {
-		return
-	}
 	for i, cv := range block {
 		s, ok := cv.Value.(string)
 		if !ok {
@@ -268,6 +270,9 @@ func (c *computeChecker) check(where, raw string, whole bool, scope cel.ComputeS
 	if raw == "" {
 		return
 	}
+	// A second rule rides this walk — the indexed register name (register_index.go).
+	// Scope-independent, so it runs before the compute branch and on every cell.
+	c.registerIndex(where, raw, whole, scope)
 	if scope != cel.ComputeAvailable {
 		refs := c.eng.InterpolationReferencesCompute(raw)
 		if whole {

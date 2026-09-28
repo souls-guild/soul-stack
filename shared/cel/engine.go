@@ -432,6 +432,17 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 		return nil, &ErrCompile{Expr: expr, Err: issues.Err()}
 	}
 
+	// AFTER env.Compile, unlike the two gates above, and that order is the rule
+	// (NIM-909): this engine declares no `register` root in migration mode
+	// ([NewMigration], [ADR-019]) or in the service-vars mode ([NewServiceVars]), and
+	// there the honest answer is cel-go's own "undeclared reference to 'register'" —
+	// telling that author to "write register.<name>" would be advice they must not
+	// take. Keys on no flag and needs no cache tag: the verdict is a function of the
+	// text alone, and a refused expression never reaches the cache.
+	if err := e.guardRegisterNameByIndex(expr, compiled); err != nil {
+		return nil, err
+	}
+
 	prg, err = env.Program(ast)
 	if err != nil {
 		return nil, &ErrCompile{Expr: expr, Err: err}

@@ -489,6 +489,7 @@ All three blocks refer to `register:` names of other tasks. `register:` therefor
 - **Applies to:** module task.
 - **Semantics:** the name of the variable into which the task result is saved. The value contains at least the field `.changed` (bool - whether the task changed the state of the host) and `.failed` (bool - whether the task crashed). Fields from the module (`.stdout`, `.exit_code`, ...) are from its `output:`.
 - **Access:** `${ register.<name>.* }` in string interpolation; in top-level expression-keys (`when:`/`changed_when:`/`failed_when:`/`until:`/`where:`) is the bare form of `register.<name>.*` (see [`docs/templating.md`](../templating.md)). In subsequent tasks (the order is not broken).
+- **The name is a dot-select, not an index.** `register["probe"]` (and `register.hosts["probe"]`) is refused at compile and reported offline as `register_index_form`: the name is what reference extraction reads to order the run and to check the producer exists, and behind an index there is no name to read. Indexing INTO a register is unaffected — `register.probe["sha256"]` names the register first.
 - **Uniqueness:** Destiny `register:` must be unique within a single run.
 
 ### `id:`

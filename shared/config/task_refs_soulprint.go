@@ -34,7 +34,11 @@ import (
 // want to descend into it (there `role`/`covens` are __host fields, not soulprint.self.*).
 //
 // Dynamic access `soulprint["self"]["x"]` is not covered by the form (no dotted
-// notation) — a safe skip, symmetric to the register case.
+// notation) — a safe skip here. ⚠ No longer symmetric to the register case: NIM-909
+// refuses an indexed register NAME at compile, because a register name carries a
+// dependency (Passage order, existence, the `async:` join) that a soulprint path does
+// not. Whether the soulprint spelling deserves the same treatment is untouched and
+// undecided.
 
 // reSoulprintCELRef extracts the first/second segment from `soulprint.<top>(.<sub>)?`.
 // Left boundary is start-of-string or a non-id/dot char; `soulprint` must be the root

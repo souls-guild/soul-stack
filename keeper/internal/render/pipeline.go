@@ -1278,8 +1278,11 @@ func flowControlEngine() (*cel.Engine, error) {
 // has a register ref) — stays Soul-side.
 //
 // Bracket form register["x"] is not detected (ExtractRegisterRefs is dot-form
-// only, mirroring checkPredicateRefs in the config validator); latent in
-// practice, a probe register is always written in dot form.
+// only, mirroring checkPredicateRefs in the config validator), so such a when: is
+// classified STATIC and evaluated below against an empty register map — the run
+// fails at render. It still arrives here; since NIM-909 it cannot survive
+// evaluation, because choosing a register's name by index is refused when the
+// predicate compiles (shared/cel), here and on the Soul side alike.
 func isStaticWhen(when string) bool {
 	return config.IsStaticPredicate(when)
 }

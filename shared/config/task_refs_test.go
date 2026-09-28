@@ -626,7 +626,9 @@ func TestTaskRefs_CELRetryUntilLoopWhere_Unknown(t *testing.T) {
 }
 
 func TestTaskRefs_CELDynamicAccess_NotFlagged(t *testing.T) {
-	// register["..."] is dynamic access, not matched by the form, not flagged.
+	// register["..."] is dynamic access, not matched by the form, not flagged HERE.
+	// It is refused a layer up since NIM-909 (shared/cel.guardRegisterNameByIndex,
+	// offline `register_index_form`) — precisely because this extractor cannot see it.
 	src := `
 - name: probe
   module: core.exec.run

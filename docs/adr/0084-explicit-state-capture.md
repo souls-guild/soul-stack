@@ -440,7 +440,10 @@ decide the isolation for the other.
 
 A register named `hosts` is unreadable from **either** side. The accessor is injected at a fixed
 field of the `register` root and wins there, so inside a keeper task `register.hosts` is the
-SID-keyed map, not the author's payload; on a host task the same expression is refused at compile as
+SID-keyed map, not the author's payload (⚠ **amendment 2026-09-28 / NIM-909:** written as
+`register["hosts"].<name>` that read USED to resolve on a keeper task and is now refused at
+compile — the index spelling leaves no `register.hosts.<name>` in the text for reference
+extraction, so it declares no Passage edge; the accessor itself is unchanged); on a host task the same expression is refused at compile as
 the keeper-only accessor, because that cut-off is syntactic and does not consult what the run
 registered. Two different failures, one confusing and one misleading, and neither names the line
 that chose the name. Refusing the name at parse replaces both with a diagnostic that does. The check
