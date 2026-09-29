@@ -308,7 +308,7 @@ func TestRender_OnIncarnationName(t *testing.T) {
 	}
 }
 
-// TestRender_HostVariantParams_Error — host-dependent params in pilot → error.
+// pipelineStubKV — vault stub for the pipeline tests below.
 // pipelineStubKV — hermetic KVReader for pipeline tests of CEL vault().
 // Implements both render.KVReader (vault-resolve) and cel.KVReader (CEL vault()).
 type pipelineStubKV struct {
@@ -435,7 +435,12 @@ func TestRender_CELVaultMissingSecret_ActionablePath(t *testing.T) {
 	}
 }
 
-func TestRender_HostVariantParams_Error(t *testing.T) {
+// ★ NIM-908 turned this from a refusal into a dispatch. It was
+// TestRender_HostVariantParams_Error: a task reading `soulprint.self` in params on
+// a two-host roster failed the render, because one RenderedTask carried one params
+// struct for the whole roster (open Q #25). Each host now gets its own struct and
+// the wire carries it (ParamsBySID → ToProtoTasksForHost).
+func TestRender_HostVariantParams_DispatchedPerHost(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "hostvar",
 		Tasks: []config.Task{
@@ -454,9 +459,22 @@ func TestRender_HostVariantParams_Error(t *testing.T) {
 			host("b", []string{"svc"}, map[string]any{"hostname": "b"}),
 		},
 	}
-	_, _, err := p.Render(context.Background(), in)
-	if err == nil {
-		t.Fatal("Render: expected an error for host-variant params, got nil")
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected one task, got %d", len(tasks))
+	}
+	want := map[string]string{"a": "echo a", "b": "echo b"}
+	for sid, cmd := range want {
+		st, ok := tasks[0].ParamsBySID[sid]
+		if !ok {
+			t.Fatalf("no per-host params for %s: %v", sid, tasks[0].ParamsBySID)
+		}
+		if got := st.GetFields()["cmd"].GetStringValue(); got != cmd {
+			t.Errorf("%s: cmd = %q, want %q", sid, got, cmd)
+		}
 	}
 }
 
@@ -692,11 +710,14 @@ func TestRender_RenderedWithFlowControlHostInvariantVars_OK(t *testing.T) {
 
 // TestRender_HostVariantVarsNoFlowControl_FailsOnParams — a task WITHOUT a
 // flow-control predicate, but with host-variant vars leaking into params
-// (`args: [${ vars.x }]`, vars.x from soulprint.self). The hasFlowControl gate is false
-// → the new flow_context check is NOT active; the error comes from paramsHostInvariant
-// (host-dependent params), not the second guard. Verifies the gate didn't
-// intercept an unrelated error — the message is about params, not flow_context.
-func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
+// (`args: [${ vars.x }]`, vars.x from soulprint.self). The hasFlowControl gate is
+// false → the flow_context check is NOT active.
+//
+// ★ NIM-908: the params half is no longer a refusal either — such a task is
+// dispatched per host. What this still pins is that the flow_context guard does not
+// fire in its place: a task with no predicate must render, not fail with someone
+// else's error.
+func TestRender_HostVariantVarsNoFlowControl_DispatchedPerHost(t *testing.T) {
 	manifest := &config.ScenarioManifest{
 		Name: "novars-flowcontrol",
 		Tasks: []config.Task{
@@ -716,15 +737,20 @@ func TestRender_HostVariantVarsNoFlowControl_FailsOnParams(t *testing.T) {
 			host("b.example.com", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
 		},
 	}
-	_, _, err := p.Render(context.Background(), in)
-	if err == nil {
-		t.Fatal("Render: expected an error for host-dependent params, got nil")
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: a task with host-variant vars and NO predicate must render, not fail: %v", err)
 	}
-	if !strings.Contains(err.Error(), "host-dependent params") {
-		t.Errorf("error is not from paramsHostInvariant (did the gate catch someone else's?): %q", err.Error())
-	}
-	if strings.Contains(err.Error(), "flow_context") {
-		t.Errorf("the second circuit fired incorrectly without a flow-control predicate: %q", err.Error())
+	want := map[string]string{"a.example.com": "debian", "b.example.com": "rhel"}
+	for sid, family := range want {
+		st, ok := tasks[0].ParamsBySID[sid]
+		if !ok {
+			t.Fatalf("no per-host params for %s", sid)
+		}
+		args := st.GetFields()["args"].GetListValue().GetValues()
+		if len(args) != 1 || args[0].GetStringValue() != family {
+			t.Errorf("%s: args = %v, want [%q]", sid, args, family)
+		}
 	}
 }
 

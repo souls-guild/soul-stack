@@ -131,6 +131,39 @@ type Vars struct {
 	// Deliberately NOT folded into AllowHosts: that flag is TRUE for host tasks in
 	// the scenario pass, which is exactly where register.hosts must be unavailable.
 	AllowRegisterHosts bool
+
+	// HostScope — does this context stand on a HOST at all (host_scope.go)? The zero
+	// value says yes, and then `soulprint.self` is that host's facts. A context that
+	// decides once per run must say so: it turns a per-host reference into a
+	// compile-time [ErrHostOutOfScope] naming the reference and the context, instead
+	// of the bare no-such-key those contexts answer with today — and instead of
+	// [HostVariantInputs] quietly resolving to the first host's rendering.
+	HostScope HostScope
+
+	// HostVariantInputs — the `input:` names that render PER HOST in this run
+	// (NIM-908): the ones whose `apply: input:` value REACHES `soulprint.self` or
+	// `register` — directly, or through the applier's own `vars:`, which the producer
+	// closes transitively. That hop is not a refinement: an input written
+	// `${ vars.addr }` over `vars: {addr: "${ soulprint.self… }"}` names no per-host
+	// root in its own text and is per-host all the same. Sorted and deduplicated by
+	// the producer. Read ONLY when
+	// [Vars.HostScope] is host-free, where naming one is [ErrHostOutOfScope]; a
+	// host-bound context resolves every name against its own host and needs no list.
+	//
+	// The classification is from the apply.input TEXT, never from what the values
+	// turned out to be: a set derived from values would differ between rosters, so
+	// the same scenario would be accepted against one fleet and refused against
+	// another with nothing in the file to explain it.
+	HostVariantInputs []string
+
+	// HostVariantVars — the `vars.*` names that resolve PER HOST in this run
+	// (NIM-908): a destiny's own `vars.yml` resolves per host, so a local reading
+	// `soulprint.self` or a per-host `input.<name>` is per-host itself. Same
+	// treatment as [Vars.HostVariantInputs] and for the same reason — the reference
+	// that reaches a host-free context says only `vars.<name>` and looks like any
+	// other. Sorted and deduplicated by the producer; read only when
+	// [Vars.HostScope] is host-free.
+	HostVariantVars []string
 }
 
 // registerHostsKey is the field under which [Vars.RegisterHosts] is exposed inside

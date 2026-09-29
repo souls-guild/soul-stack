@@ -192,9 +192,13 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 // pass (in.destinyIsolated==false). In the destiny pass the host accessor is
 // cut off: AllowHosts=false → referencing soulprint.hosts is a compile-time
 // isolation error.
+//
+// Input comes through [inputForHost] rather than straight off in.Input: in a
+// destiny pass `apply: input:` is resolved per host (NIM-908), so this is the one
+// place a destiny task's `${ input.<name> }` picks up THIS host's rendering.
 func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars {
 	return cel.Vars{
-		Input:          in.Input,
+		Input:          inputForHost(in, host),
 		Register:       hostRegister(in, host),
 		Incarnation:    incarnationVars(in, hostCount),
 		SoulprintSelf:  soulprintSelfMap(host),
@@ -204,7 +208,62 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
 		ComputeScope:   hostComputeScope(in),
+		// A host IS bound here, so a per-host root means what it says and the
+		// NIM-908 guard has nothing to refuse. Stated rather than left to the zero
+		// value: host_scope_guard_test.go requires every cel.Vars literal in this
+		// package to answer the question out loud.
+		HostScope: cel.HostBound,
 	}
+}
+
+// inputForHost selects the `input:` map for a specific host.
+//
+// Scenario pass (InputByHost nil) → in.Input, the operator's run input, which has
+// no host axis: every caller outside a destiny is bit-for-bit unchanged.
+//
+// Destiny pass → this host's rendering of `apply: input:` ([Pipeline.resolveApplyInput]).
+// The fallback to in.Input on a SID the map does not carry is deliberate and is
+// reached only for a host outside the applier's own targeted set — Input then holds
+// the host-invariant names, so the read either succeeds with a value that is the
+// same everywhere or fails as an ordinary no-such-key. It never silently yields
+// another host's value, which is the whole of NIM-908.
+func inputForHost(in RenderInput, host *topology.HostFacts) map[string]any {
+	if in.InputByHost == nil {
+		return in.Input
+	}
+	var sid string
+	if host != nil {
+		sid = host.SID
+	}
+	if byHost, ok := in.InputByHost[sid]; ok {
+		return byHost
+	}
+	// ★ The SYNTHETIC host of an emptied roster. A task whose `where:` filtered out
+	// every host still renders — the RenderedTask must exist for the plan, with an
+	// empty DispatchPlan the orchestrator skips — and renderTaskIter renders it
+	// against `&topology.HostFacts{}`, whose SID is "". That key is in InputByHost
+	// only when the APPLIER itself had no targets; when the applier had hosts and a
+	// destiny task's own `where:` emptied the set, it is not.
+	//
+	// Falling through to Input would hand that render the host-invariant subset,
+	// which by construction omits every per-host name — so `${ input.master_addr }`
+	// in the params of a task that dispatches to NOBODY failed the whole run with a
+	// no-such-key. Measured; it is the one case where NIM-908 made a green render
+	// red, and nothing is applied anywhere either way.
+	//
+	// The first host by SID answers it, deterministically. This is the substitution
+	// this ticket exists to remove, and it is admissible in exactly this place for
+	// exactly one reason: the values are rendered into a task no host will receive.
+	if sid == "" && len(in.InputByHost) > 0 {
+		first := ""
+		for key := range in.InputByHost {
+			if first == "" || key < first {
+				first = key
+			}
+		}
+		return in.InputByHost[first]
+	}
+	return in.Input
 }
 
 // hostComputeScope: the scenario pass HAS the compute namespace (that is its
@@ -345,7 +404,12 @@ func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, para
 		"role": host.Role,
 	}
 	if injectInput {
-		rc["input"] = orEmptyMap(in.Input)
+		// Per-host, like `self` above: render_context is materialized per SID
+		// (RenderContextBySID) and overlaid on dispatch (ToProtoTasksForHost), so
+		// this is the one wire channel that can carry a per-host destiny input all
+		// the way to a `.tmpl` — `{{ .input.master_addr }}` resolves to the address
+		// of the host receiving the file, not the roster's first (NIM-908).
+		rc["input"] = orEmptyMap(inputForHost(in, host))
 	}
 	return rc
 }

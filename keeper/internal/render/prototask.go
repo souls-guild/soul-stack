@@ -1,9 +1,13 @@
 package render
 
 import (
+	"sort"
+
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // ToProtoTasks converts a render plan ([]*RenderedTask) into the
@@ -40,17 +44,41 @@ import (
 // (Index==localPos for all) → remap=identity, bit-for-bit behavior.
 //
 // A thin wrapper over [ToProtoTasksForHost] with an empty sid (golden path:
-// params pass through as-is, render_context of the first-by-SID host). Called
-// where per-host render_context materialization isn't needed or possible
-// (trial L2 single-host, push fan-out as one proto slice, converter tests).
+// params pass through as-is, render_context of the first-by-SID host).
+//
+// ★ PRECONDITION since NIM-908: the plan must be single-host or host-invariant.
+// With an empty sid this converter CANNOT express a per-host value — it answers
+// with [RenderedTask.Params] and [RenderedTask.RenderContextBySID] is not consulted
+// — so a plan carrying [RenderedTask.ParamsBySID] would be flattened onto the first
+// host by SID for everyone, which is the defect NIM-908 removes. Callers are held
+// to it: pushorch converts per SID inside its fan-out, and trial L2 refuses such a
+// plan outright (it has one stand and cannot honour it). A new caller is caught by
+// TestProtoTasks_EveryMultiHostDispatchPathPassesASID.
 func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
 	return ToProtoTasksForHost(tasks, "")
 }
 
+// PlanIsPerHost reports whether any task of the plan renders different params on
+// different hosts, i.e. whether the plan can only be dispatched through
+// [ToProtoTasksForHost] with a real SID.
+//
+// Exported for the consumers that must REFUSE such a plan rather than flatten it:
+// trial L2, which applies one ApplyRequest to a single stand. A caller that can
+// dispatch per host does not need to ask — it simply passes its SID.
+func PlanIsPerHost(tasks []*RenderedTask) bool {
+	for _, t := range tasks {
+		if t != nil && len(t.ParamsBySID) > 0 {
+			return true
+		}
+	}
+	return false
+}
+
 // ToProtoTasksForHost is the main render→proto converter for a specific host.
-// Identical to the golden path, but for self-variant core.file.rendered it
-// overlays per-host render_context (RenderedTask.RenderContextBySID[sid]) onto
-// Params: otherwise every host would get the first-by-SID host's
+// Identical to the golden path, but it answers with THIS host's params where they
+// differ from the plan's golden-path struct — [RenderedTask.ParamsBySID] whole
+// (NIM-908), or the narrower per-host render_context overlay
+// (RenderedTask.RenderContextBySID[sid]) onto Params: otherwise every host would get the first-by-SID host's
 // render_context, and a self-variant template (`{{ .self.network.primary_ip }}`)
 // would render with the first host's facts (CORE bug, partial closure of open
 // Q #25). sid=="" OR no SID key OR host-invariant render_context (nil map —
@@ -117,7 +145,17 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 // stay unchanged (other Fields' values are shared read-only — sufficient for
 // wire marshaling).
 func paramsForHost(t *RenderedTask, sid string) *structpb.Struct {
-	if sid == "" || t.RenderContextBySID == nil {
+	if sid == "" {
+		return t.Params
+	}
+	// The WHOLE-struct case first (NIM-908): a per-host struct was rendered in this
+	// host's own environment, so it already carries this host's render_context — the
+	// single-key overlay below would only put the same value back. Returned directly,
+	// and it is not mutated: the same *RenderedTask dispatches to every SID.
+	if st, ok := t.ParamsBySID[sid]; ok && st != nil {
+		return st
+	}
+	if t.RenderContextBySID == nil {
 		return t.Params
 	}
 	rc, ok := t.RenderContextBySID[sid]
@@ -173,5 +211,96 @@ func remapRequisites(globalIdx []int, globalToLocal map[int]int32) []int32 {
 			out[i] = outOfRangeRequisite
 		}
 	}
+	return out
+}
+
+// PerHostParamValue is what the run-plan view shows in place of a params cell whose
+// value differs between hosts (NIM-908). It is a DISPLAY marker, not a mask: the
+// value is not secret, it is plural, and there is one column to show it in.
+const PerHostParamValue = "<per-host>"
+
+// PlanParamsForDisplay is a task's params as the operator-facing run plan should
+// show them: the golden-path struct, with every cell that differs between hosts
+// replaced by [PerHostParamValue].
+//
+// The plan row (`apply_run_plan`, one row per task) and `GET …/runs/{id}/tasks`
+// carry ONE params map per task beside per-host RESULTS. Before NIM-908 that was
+// always honest, because params were host-invariant or the render refused. Now a
+// task can legitimately render nine different values, and showing the first host's
+// as if it were everyone's is the same silent substitution this ticket removed from
+// the run itself — in the one place an operator goes to see what ran.
+//
+// Deliberately NOT a schema change: the differing cells are marked, the rest stay
+// visible, and no API field moves. Showing the real per-host values needs a per-host
+// params column in the reply, which is a companion-UI change and its own ticket.
+//
+// nil task / nil Params → nil. No ParamsBySID → the map unchanged (golden path).
+func PlanParamsForDisplay(t *RenderedTask) map[string]any {
+	return MarkPerHostCells(t, PlanParamsBase(t))
+}
+
+// PlanParamsBase is the golden-path params map the display starts from.
+func PlanParamsBase(t *RenderedTask) map[string]any {
+	if t == nil || t.Params == nil {
+		return nil
+	}
+	return t.Params.AsMap()
+}
+
+// MarkPerHostCells replaces every cell of m that differs between hosts with
+// [PerHostParamValue].
+//
+// ★ Split from [PlanParamsBase] so the caller can MASK first and mark second. The
+// order matters for a channel nobody would miss until it was needed: the run-plan
+// masker has a regex last resort that raises an ALARM when it finds something
+// secret-shaped at a path the seal did not cover ([audit.SealOpts.RegexFallback]).
+// Substituting the marker first would delete the value before that layer ever saw
+// it — no leak, but the alarm that says "the seal missed a cell" would stop firing
+// for exactly the cells this ticket made plural.
+//
+// A cell the masker already replaced is left alone: the seal's verdict outranks a
+// display marker, and "masked" is the more important thing for a reader to see.
+func MarkPerHostCells(t *RenderedTask, m map[string]any) map[string]any {
+	if t == nil || m == nil || len(t.ParamsBySID) == 0 {
+		return m
+	}
+	for key, val := range m {
+		if s, isStr := val.(string); isStr && s == audit.MaskedValue {
+			continue
+		}
+		if paramCellVaries(t, key) {
+			m[key] = PerHostParamValue
+		}
+	}
+	return m
+}
+
+// paramCellVaries reports whether one top-level params key holds different values on
+// different hosts. Top-level only: the marker replaces a whole cell, because a
+// half-marked nested map reads as data rather than as a notice.
+func paramCellVaries(t *RenderedTask, key string) bool {
+	// seen, not `first != nil`: a key ABSENT on the first host by SID and present on
+	// another is variance, and a nil-vs-nil comparison would read it as agreement.
+	var first *structpb.Value
+	seen := false
+	for _, sid := range sortedParamSIDs(t.ParamsBySID) {
+		v := t.ParamsBySID[sid].GetFields()[key]
+		if !seen {
+			first, seen = v, true
+			continue
+		}
+		if !proto.Equal(first, v) {
+			return true
+		}
+	}
+	return false
+}
+
+func sortedParamSIDs(byHost map[string]*structpb.Struct) []string {
+	out := make([]string, 0, len(byHost))
+	for sid := range byHost {
+		out = append(out, sid)
+	}
+	sort.Strings(out)
 	return out
 }

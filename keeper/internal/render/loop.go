@@ -254,6 +254,14 @@ func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
 		// compute is not in the loop axis (NIM-619): declared, so a reference names
 		// the namespace and this context instead of a key that isn't the problem.
 		ComputeScope: cel.ComputeOutOfScopeLoopAxis,
+		// No host is bound here, and since NIM-908 that is said rather than left to
+		// an empty soulprint map: `soulprint.self` in items/when is refused by name,
+		// and so is an `input.<name>` the destiny renders per host — the loop expands
+		// into tasks every targeted host runs, so an iteration set built from one
+		// host's value would be that host's set imposed on all of them.
+		HostScope:         cel.HostFreeLoopAxis,
+		HostVariantInputs: in.hostVariantInputs,
+		HostVariantVars:   in.hostVariantVars,
 	}
 }
 

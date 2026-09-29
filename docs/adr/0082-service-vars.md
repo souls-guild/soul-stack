@@ -230,11 +230,18 @@ documented draft offered are deliberately absent:
 **What an author uses instead, and what they must not reach for.** Host-dependent behaviour
 belongs where the render is already per-host: `where:` on a task (targeting, the answer to
 "do this only on cache hosts"), a task's own `vars:`/`params:` reading `soulprint.self.*`, and
-`core.file.rendered` templates, whose `render_context` is built per host. **Not
-`apply: input:`** — that one resolves on `targeted[0]` (`destiny.go`), so a destiny receives
-ONE set of values for its whole roster, and a `soulprint.self.*` in it silently means the
-first host by SID. That predates this ADR and is unchanged by it; it is stated here because
-it is the boundary that decides the paragraph below.
+`core.file.rendered` templates, whose `render_context` is built per host. **And, since
+[NIM-908](0009-scenario-dsl.md#amendment-2026-09-28-nim-908-apply-input-renders-per-host),
+`apply: input:` as well** — it renders per host now. Until 2026-09-28 it resolved on
+`targeted[0]` (`destiny.go`), so a destiny received ONE set of values for its whole roster and a
+`soulprint.self.*` in it silently meant the first host by SID; that was true when this ADR was
+written and is the sentence NIM-908 retired. The paragraph below is unaffected either way: what
+it rests on is that a SERVICE's `vars/` layer resolves once per run, which NIM-908 did not
+touch: a `soulprint.self` in a `vars/_stack.yaml` step is still refused outright, and NIM-908's
+classification deliberately does not walk this layer at all. It DOES walk the applier's own
+task-level `vars:`, which is a different layer and can be per-host — a `${ vars.addr }` in
+`apply: input:` over `vars: {addr: "${ soulprint.self… }"}` is classified per-host, and a
+service var forwarded the same way is not.
 
 **Per-host service vars were considered and deferred, with a measured reason.** Making the
 layer resolve per host is mechanically straightforward — the plumbing for a per-host map

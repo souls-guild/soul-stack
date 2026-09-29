@@ -370,13 +370,14 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 // host tasks in the scenario pass.
 //
 // The cache key includes the env discriminator (the loop names), allowHosts,
-// allowRegisterHosts and computeScope: a program compiled against a child loop-env
-// is incompatible with the base (different declared-variable set); either host flag
-// changes the outcome for the same text (rewrite/accept vs isolation error); and
-// computeScope decides whether a `compute` reference is admissible at all
-// ([ComputeScope.cacheTag] — the key must carry it, the cache is consulted before
-// any guard). Empty loopNames — the base env.
-func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope) (cel.Program, error) {
+// allowRegisterHosts, computeScope and the host stance: a program compiled against a
+// child loop-env is incompatible with the base (different declared-variable set);
+// either host flag changes the outcome for the same text (rewrite/accept vs
+// isolation error); computeScope decides whether a `compute` reference is admissible
+// at all; and the stance decides whether a per-host reference is ([ComputeScope.cacheTag] /
+// [hostStance.cacheTag] — the key must carry both, the cache is consulted before any
+// guard). Empty loopNames — the base env.
+func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (cel.Program, error) {
 	// flow-control mode ([NewFlowControl]) forces cross-host isolation:
 	// soulprint.hosts/soulprint.where and register.hosts are unavailable regardless
 	// of the Vars flags (cross-host, keeper-side — the Soul has neither). Guards
@@ -400,6 +401,9 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 		cacheKey = "\x04" + cacheKey
 	}
 	cacheKey = computeScope.cacheTag() + cacheKey
+	// \x05…\x06, disjoint from the bytes above: the stance carries the per-host input
+	// NAMES, so its tag is variable-length and needs a terminator of its own.
+	cacheKey = stance.cacheTag() + cacheKey
 
 	e.mu.RLock()
 	prg, ok := e.cache[cacheKey]
@@ -440,6 +444,15 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 	// take. Keys on no flag and needs no cache tag: the verdict is a function of the
 	// text alone, and a refused expression never reaches the cache.
 	if err := e.guardRegisterNameByIndex(expr, compiled); err != nil {
+		return nil, err
+	}
+
+	// Same placement and the same reason (NIM-908): neither `soulprint` nor `input`
+	// is declared in migration mode or in the service-vars mode, and there cel-go's
+	// own undeclared-reference error is the honest one. Unlike the register-index
+	// guard this one DOES key the cache (see [hostStance.cacheTag]) — its verdict is
+	// a function of the text AND the context, so a cache hit would bypass it.
+	if err := e.guardHostScope(expr, compiled, stance, loopNames); err != nil {
 		return nil, err
 	}
 

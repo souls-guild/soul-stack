@@ -7,6 +7,104 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A task's `params:` are dispatched PER HOST — open Q #25 closed for params (NIM-908,
+  [ADR-draft per-host-params-dispatch](docs/adr/draft-per-host-params-dispatch.md)).** Params
+  were host-invariant by construction: one `RenderedTask` carried one params struct for the
+  whole roster, and a task that rendered differently on two hosts was refused with
+  `host-dependent params` — "per-host ApplyRequest is an orchestrator-layer concern". That
+  deferral had gone stale. The orchestrator layer is already per-host: the scenario dispatcher
+  groups by host, `claim.go` does the same, and push's fan-out builds one `ApplyRequest` per
+  SID. What was missing was a converter that knew which host it was building for.
+  - **`RenderedTask.ParamsBySID`**, mirroring the existing `RenderContextBySID`, selected by
+    `ToProtoTasksForHost(tasks, sid)`. **No protocol change** — no proto field is added, moved
+    or reused, and Soul needs to know nothing: it applies the params it is handed, and is now
+    handed its own.
+  - **Nil unless it changes an answer** (multi-host AND at least two hosts differing), so one
+    host or a host-invariant task is bit-for-bit unchanged. **Complete when it is not nil** —
+    an entry for every targeted host, because a partial map sends the omitted hosts back to the
+    first host by SID, which is the defect itself.
+  - **Two call sites had to be fixed to make it safe, and one was live.** `pushorch`'s fan-out
+    converted ONCE outside its per-SID loop and handed every host the same slice — the same
+    silent substitution, one layer down; it now converts per SID. Trial L2 applies one
+    `ApplyRequest` to one stand and REFUSES a per-host plan rather than flattening it. A new
+    AST guard test holds every future caller of the sid-less `ToProtoTasks` to that
+    precondition.
+  - **What still refuses, deliberately:** flow control
+    (`when:`/`changed_when:`/`failed_when:`/`until:`) is not rendered by Keeper at all — it
+    reaches Soul as text and is evaluated against one `flow_context` per task, so per-host flow
+    control is a separate decision with a separate blast radius and open Q #25 stays open for
+    it; and any context with no roster (`on: keeper`, the loop axis, `on: [covens]`,
+    `compute:`, a capture's `match:`) refuses a per-host root outright.
+  - **The operator-facing plan row is marked, not flattened:** `apply_run_plan` and
+    `GET …/runs/{id}/tasks` carry one params map per task, so a cell that differs between hosts
+    shows `<per-host>` instead of the first host's value. Display only — no schema change, no
+    companion-UI release.
+  - **The seal is unaffected, verified rather than assumed:** it marks PATHS, from the author's
+    raw `${ … }` text, once per task and before the per-host loop, so per-host values under one
+    path are all covered and the sealed set cannot move with the roster. A mutation that moves
+    the collection onto the rendered struct is killed by the non-vacuity assertion.
+  - **Corpus price: zero, established before merging.** The one candidate found was ours:
+    treating the whole `register` root as per-host classified WB redis's `config` — built from
+    `register.system_acl_users`, a **keeper-side** register with one value per run — as
+    host-variant, which turned a working static `when:` in the redis destiny into a refusal.
+    The classification is per NAME as a result: keeper-side registers are host-invariant, every
+    other name is the host's own bucket, and an unknown producer is fail-closed per-host.
+
+- **`apply: input:` renders PER HOST (NIM-908,
+  [ADR-009](docs/adr/0009-scenario-dsl.md) amendment 2026-09-28, mechanism in
+  [ADR-010](docs/adr/0010-templating.md)).** It used to render **once**, in the environment
+  of the roster's first host by SID, and hand the result to every host — while that
+  environment offers the per-host roots and refused neither, so
+  `master_addr: "${ soulprint.self.network.primary_ip }"` gave nine hosts the **first**
+  one's address, silently, with the run green. Each targeted host now gets its own
+  environment, its own values and its own pass through the destiny's `input:` contract
+  (`required_when`/`validate:` are predicates over the values, so a rule can hold for one
+  host and fail for another — failures name the SID).
+  - **Where the value actually arrives.** A destiny's `vars.yml` and a destiny task's
+    `where:` were already per host and now see this host's input; `core.file.rendered`
+    carries it all the way to a `.tmpl`, because `render_context` is materialized per SID
+    and overlaid when a given host's `ApplyRequest` is built. That is the one channel the
+    wire has.
+  - **An ordinary module param gets this host's value too**, because the same change
+    dispatches params per host (`RenderedTask.ParamsBySID`, selected by
+    `ToProtoTasksForHost(tasks, sid)`) — open Q #25 closed for params, see the entry below.
+    The old `host-dependent params` refusal is gone; nothing that used to run stops running.
+    FLOW CONTROL is the exception and still refuses: `when:`/`changed_when:`/`failed_when:`/
+    `until:` are not rendered by Keeper at all, so a host-variant predicate on a multi-host
+    target is still a loud render error.
+  - **The backstop, required whatever the above delivered.** Making the input per-host moves
+    the same defect one level down, so a context with no host cannot read a per-host name at
+    all: `RenderInput.Input` on a destiny pass carries only the host-INVARIANT names, the
+    full per-host map lives beside it, and a reference from `loop.items:`/`loop.when:`,
+    `on: [covens]`, an `on: keeper` task, `compute:`, a capture's `match:`, a static `when:`
+    or an include's `when:` is refused at compile **by name**. The same stance
+    (`cel.HostScope`) refuses `soulprint.self` in those contexts, which until now answered
+    with a bare `no such key: sid` — a sentence about a field that is spelled correctly and
+    exists everywhere else, identical for any field.
+  - **Classification is from the apply.input TEXT, never the values:** a name is per-host iff
+    its value reaches `soulprint.self` or `register` — directly, or through the applier's own
+    `vars:`, closed transitively. That hop is the hole the first cut of this change shipped
+    with: `vars: {addr: "${ soulprint.self… }"}` + `input: {master_addr: "${ vars.addr }"}`
+    names no per-host root in the input's own text, and a scan of `apply: input:` alone read it
+    as invariant. The SERVICE vars layer is not walked — it resolves once per run and is
+    host-invariant by construction, and walking it would misclassify the forwarding
+    `apply: input:` exists for. A value-derived set would move with
+    the roster — nine hosts sharing an address would classify as invariant and the tenth
+    would flip the scenario from accepted to refused, with nothing in the file to explain
+    it. `soulprint.hosts` is not counted (the run's roster, identical everywhere);
+    `register` counts per NAME — a keeper-side register is one value for the whole run,
+    every other name is the host's own bucket, an unknown producer is fail-closed.
+  - **Cost:** N renders instead of one — ~0.17 ms at one host against ~0.69 ms at nine
+    (four inputs), i.e. ~0.065 ms per extra host, re-measurable with
+    `BenchmarkApplyInput_ResolveByRoster` rather than quoted. `vault()` does not scale
+    with the roster: the resolution memo is per-PASS and this loop runs inside one, so a
+    sealed input is one `ReadKV` whether the roster is one host or nine.
+  - **Not covered:** `soul-lint` reports neither half, so both are caught at render. The
+    per-host-input half is not offline work — it needs the caller's `apply: input:` resolved
+    against the callee destiny, which soul-lint's per-artifact entry points do not do — and
+    shipping only the `soulprint.self` half would teach an author to trust a linter that
+    answers half the question.
+
 - **A register's NAME is a dot-select — `register["probe"]` is refused at compile
   (NIM-909, [ADR-010](docs/adr/0010-templating.md) amendment 2026-09-28).** The same rule
   `vars['k']` has had since 2026-06-24, one root over: the name must be statically known

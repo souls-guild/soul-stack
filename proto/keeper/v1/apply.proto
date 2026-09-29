@@ -93,7 +93,8 @@ message RenderedTask {
   // Keeper builds it in the CEL phase, Soul reads it as DATA (not code): binds
   // soulprint.self <- flow_context.self, the rest becomes top-level activation
   // variables. Varies per host (self is per-host), so it's excluded from the
-  // per-host params host-invariance check.
+  // ONE snapshot per task, unlike params since NIM-908 (see params_by_sid in the
+  // render layer): a host-variant flow-control predicate is refused at render.
   //
   // The three operator-supplied sections are NARROWED to what THIS task's four
   // predicates (when/changed_when/failed_when/until) name, per section, from the

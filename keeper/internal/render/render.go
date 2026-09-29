@@ -195,6 +195,47 @@ type RenderInput struct {
 	// host SID; a synthetic empty host (where: filtered out everyone) → key "".
 	DestinyVarsResolved map[string]map[string]any
 
+	// InputByHost — the destiny pass's `apply: input:` resolved PER HOST (NIM-908):
+	// sid → name→value, each already through the destiny's full `input:` contract.
+	// Filled ONCE per destiny pass ([Pipeline.resolveApplyInput]) and selected by
+	// [inputForHost] wherever a host is bound. Key is the host SID; a synthetic
+	// empty host (where: filtered out everyone) → key "", exactly as
+	// DestinyVarsResolved above.
+	//
+	// nil on a scenario pass, where `input:` is the operator's run input and has no
+	// host axis at all. That nil is what makes [inputForHost] fall through to Input
+	// and every non-destiny caller bit-for-bit unchanged.
+	//
+	// ★ Input is NOT this map's first entry. It carries only the HOST-INVARIANT
+	// names, so a context with no host (the loop axis, `on:`) reads a value that is
+	// the same for everyone or nothing at all — never the first host's. Reaching for
+	// a per-host name from there is refused by [hostVariantInputs] below, not
+	// answered from Input.
+	InputByHost map[string]map[string]any
+
+	// hostVariantInputs — the destiny input names in InputByHost that actually
+	// render per host, sorted: the ones whose `apply: input:` value REACHES
+	// `soulprint.self` or `register`, directly or through the applier's own `vars:`
+	// ([hostVariantVarNames] closes that transitively — dropping it restores the hole
+	// the first cut of NIM-908 shipped with). Threaded into every host-free CEL context as
+	// [cel.Vars.HostVariantInputs], where naming one is a compile-time refusal.
+	//
+	// Unexported, like destinyIsolated: an external caller (scenario-runner, trial,
+	// push) always starts a scenario pass, where the set is empty by construction.
+	// Empty set ⇒ the guard is inert and every context behaves exactly as before, so
+	// a scenario whose apply.input is host-invariant — which is nearly all of them —
+	// sees no change from NIM-908 at all.
+	hostVariantInputs []string
+
+	// hostVariantVars — the DESTINY's own `vars.yml` names that resolve per host,
+	// sorted: a local reading `soulprint.self` or a per-host `input.<name>`
+	// ([hostVariantDestinyVars]). The mirror of hostVariantInputs one layer down, and
+	// it is separate because the reference that reaches a host-free context says only
+	// `vars.<name>` — nothing about it looks per-host.
+	//
+	// Unexported and nil on a scenario pass for the same reason as the field above.
+	hostVariantVars []string
+
 	// Compute — resolved scenario-level `compute:` variables (ADR-009 amendment
 	// 2026-06-23): name→value, computed ONCE per run in the run-level context
 	// (input/register/incarnation/vars — WITHOUT soulprint, a structural
@@ -433,8 +474,9 @@ type RenderedTask struct {
 	// self }. Same as what's built for rendering params (hostVars), MINUS
 	// soulprint.hosts and loop. Soul reads it as DATA (binds soulprint.self ←
 	// flow_context.self), doesn't do external lookups. Host-variant (self
-	// per-host) — excluded from the per-host params host-invariance check (see
-	// paramsHostInvariant). → proto keeperv1.RenderedTask.FlowContext.
+	// per-host) — but ONE snapshot per task, unlike params since NIM-908 (see
+	// [RenderedTask.ParamsBySID]), which is why a host-variant flow-control
+	// predicate is still refused. → proto keeperv1.RenderedTask.FlowContext.
 	FlowContext *structpb.Struct
 
 	// OnChangesIdx — indices of source tasks for the DSL core `onchanges:`
@@ -535,13 +577,40 @@ type RenderedTask struct {
 	// ToProtoTasksForHost(tasks, sid), when assembling the ApplyRequest for a
 	// specific SID, overlays its variant on top of Params (single-key overlay of
 	// render_context). nil / empty map / missing SID key → render_context comes
-	// from Params (golden-path). ALL OTHER params stay under the host-invariance
-	// check (paramsHostInvariant) — fail-closed for ordinary host-variant params
-	// targets.
+	// from Params (golden-path).
 	//
-	// Partial closure of open Q #25 (render_context.self ONLY); full per-host
-	// dispatch of arbitrary params (Variant B) is deferred to a separate ADR.
+	// Since NIM-908 this is the NARROW case of [RenderedTask.ParamsBySID] below,
+	// which carries a whole per-host params struct. Both are kept: a task whose
+	// only host variance is `render_context.self` — a self-reading `.tmpl` over
+	// otherwise identical params — still takes the cheaper single-key overlay, and
+	// that is the overwhelmingly common shape.
 	RenderContextBySID map[string]*structpb.Struct
+
+	// ParamsBySID — the WHOLE params struct per SID, for a task whose rendered
+	// params genuinely differ between hosts (NIM-908, closing open Q #25). sid →
+	// params; populated ONLY when the roster has more than one host AND at least
+	// two of them rendered different params, so the golden path (one host, or
+	// host-invariant params) keeps a nil map and is bit-for-bit unchanged.
+	//
+	// When populated it carries an entry for EVERY targeted host, not only the
+	// ones that differ: a partially-filled map would send the hosts it omits back
+	// to Params, which is the first host by SID — the exact silent substitution
+	// this ticket exists to remove.
+	//
+	// Params still holds the first-by-SID host's struct, and that is the
+	// golden-path contract every existing reader depends on ([maskRunPlanParams],
+	// [maskKeeperTaskMessage], the plan row, the trial comparators). A reader that
+	// needs THIS host's values asks [paramsForHost].
+	//
+	// ★ The wire was always per-host; the render was not. Each SID gets its own
+	// ApplyRequest (scenario/dispatch.go groupByHost, scenario/claim.go, and
+	// pushorch's fanOut), so a per-host params struct needs no new proto field and
+	// no protocol change — only a converter that is handed the SID.
+	// [ToProtoTasks], the sid=="" wrapper, CANNOT express this: it is for a
+	// single-host or host-invariant plan, and the two callers that use it are
+	// held to that (trial L2 refuses a plan carrying this map; push converts per
+	// SID). The invariant is asserted by TestProtoTasks_EveryMultiHostDispatchPathPassesASID.
+	ParamsBySID map[string]*structpb.Struct
 }
 
 // RenderedOp — one `core.state.<verb>` capture after the Keeper-side CEL render

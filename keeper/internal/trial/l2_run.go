@@ -274,13 +274,18 @@ func RunL2Case(ctx context.Context, c *L2Case, caseFile string, opts Options) (R
 		return res, err
 	}
 
+	if fail := l2PerHostPlanRefusal(rc.tasks); fail != "" {
+		res.Failures = append(res.Failures, fail)
+		res.Pass = false
+		return res, nil
+	}
+
 	stand, err := StartL2Stand(ctx, c.Stand)
 	if err != nil {
 		return res, err
 	}
 	defer func() { _ = stand.Close(ctx) }()
 
-	// 2. Plan → ApplyRequest → stand.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: "trial-l2-" + sanitizeID(c.Name),
 		Tasks:   render.ToProtoTasks(rc.tasks),

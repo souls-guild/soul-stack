@@ -160,6 +160,57 @@ func (e *Engine) PredicateReads(expr string, roots []string) map[string]RootRead
 	return out
 }
 
+// InterpolationReads is [Engine.PredicateReads] over an INTERPOLATED string — a
+// `params:` value, a `vars:` value, an `on:` element, an `apply: input:` value — as
+// opposed to a bare predicate. Every `${ … }` block is scanned and the results are
+// unioned per root: Fields accumulate, Whole is true if ANY block reads the root
+// whole.
+//
+// A string with no blocks reads nothing (a literal cell), which is the one case
+// where "nothing" is the honest answer rather than the fail-closed one.
+//
+// ★ Each block is scanned AFTER [Engine.rewriteHostsWhere] inlines it. A
+// `soulprint.hosts.where("<predicate>")` argument is a string LITERAL, and no AST
+// walk sees a root inside a literal — so `soulprint.hosts.where("sid ==
+// soulprint.self.sid")` would report reading `soulprint.hosts` and nothing else,
+// while at eval it reads this host's `self`. A block the rewrite refuses is scanned
+// raw: it will not compile either way, and reporting "reads nothing" for text that
+// is about to fail is how a caller narrowing on this answer gets it wrong in the
+// permissive direction.
+func (e *Engine) InterpolationReads(raw string, roots []string) map[string]RootReads {
+	out := make(map[string]RootReads, len(roots))
+	for _, root := range roots {
+		out[root] = RootReads{Fields: map[string]bool{}}
+	}
+	segs, err := e.scanInterpolation(raw)
+	if err != nil {
+		// Unscannable text (an unbalanced marker) fails at render with a message that
+		// has a position; claiming it reads nothing would let a caller act on it first.
+		for _, root := range roots {
+			out[root] = RootReads{Fields: map[string]bool{}, Whole: true}
+		}
+		return out
+	}
+	for _, s := range segs {
+		if !s.expr {
+			continue
+		}
+		text := s.text
+		if rewritten, rerr := e.rewriteHostsWhere(text, true); rerr == nil {
+			text = rewritten
+		}
+		for root, r := range e.PredicateReads(text, roots) {
+			merged := out[root]
+			merged.Whole = merged.Whole || r.Whole
+			for field := range r.Fields {
+				merged.Fields[field] = true
+			}
+			out[root] = merged
+		}
+	}
+	return out
+}
+
 // isVarsIndex — a node of the form `vars[<expr>]` (CEL index operator `_[_]` over
 // the bare identifier `vars`). cel-go represents `a[b]` as a global call with
 // FunctionName == operators.Index and two arguments; the first argument is

@@ -267,7 +267,8 @@ func (r *PushRun) ListRows(ctx context.Context, filter ListFilter, offset, limit
 //  3. assemble synthetic ScenarioManifest + pushDestinyResolver, run through
 //     render.Pipeline.Render (destinyIsolated by design — register/state/
 //     soulprint.hosts are unavailable);
-//  4. ToProtoTasks + ApplyRequest for each targeted SID;
+//  4. ToProtoTasksForHost + ApplyRequest for each targeted SID (per SID since
+//     NIM-908 — a push destiny's params can be host-variant);
 //  5. per-host SendApply via SshDispatcher (concurrent, see fanOut);
 //  6. assemble summary {hosts: [{sid, status, error?}], total, success_count,
 //     fail_count} + terminal state (success/partial_failed/failed);
@@ -356,8 +357,6 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		return
 	}
 
-	protoTasks := render.ToProtoTasks(tasks)
-
 	// The task's `transport:` (NIM-870), read off the rendered plan. A param that
 	// did not decode fails the RUN rather than falling back to the registry: the
 	// key exists in order to beat the registry, so answering from the registry
@@ -389,7 +388,7 @@ func (r *PushRun) executeAsync(ctx context.Context, applyID, name, ref string, r
 		dispatchTargets = append(dispatchTargets, sid)
 	}
 
-	hostResults := r.fanOut(ctx, applyID, dispatchTargets, sidRoute, sidSource, transportName, protoTasks, log)
+	hostResults := r.fanOut(ctx, applyID, dispatchTargets, sidRoute, sidSource, transportName, tasks, log)
 	// Merge: routing failures (no dispatch) + dispatch results.
 	if len(routingResults) > 0 {
 		for sid, hr := range routingResults {
@@ -522,7 +521,13 @@ func (r *PushRun) resolveProviders(ctx context.Context, target []string, req App
 // task override); sidSource is the level that picked the provider, carried into
 // the summary. A SID without an entry is an invariant violation (resolveProviders
 // already filtered such), defensive guard inside.
-func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sidRoute map[string]push.Route, sidSource map[string]push.RouteSource, transportName string, tasks []*keeperv1.RenderedTask, log *slog.Logger) []hostResult {
+// fanOut dispatches the rendered plan to every target SID concurrently.
+//
+// It takes the RENDER-side plan, not a converted proto slice: since NIM-908 a task's
+// params can differ per host ([render.RenderedTask.ParamsBySID]), and the conversion
+// is what selects this host's struct. Converting once outside the loop would have
+// been the defect this ticket removes, one layer below where it was found.
+func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sidRoute map[string]push.Route, sidSource map[string]push.RouteSource, transportName string, tasks []*render.RenderedTask, log *slog.Logger) []hostResult {
 	results := make([]hostResult, len(sids))
 	var wg sync.WaitGroup
 	for i, sid := range sids {
@@ -531,9 +536,14 @@ func (r *PushRun) fanOut(ctx context.Context, applyID string, sids []string, sid
 		source := sidSource[sid]
 		go func(idx int, sid string, route push.Route, source push.RouteSource) {
 			defer wg.Done()
+			// Per SID, not the shared slice (NIM-908): a push destiny renders with
+			// `soulprint.self` in scope, so its params can legitimately differ
+			// between hosts, and one converted slice would hand every host the
+			// first-by-SID host's values. The conversion is cheap and the fan-out
+			// is already per host — the only thing that was missing was the SID.
 			req := &keeperv1.ApplyRequest{
 				ApplyId: applyID,
-				Tasks:   tasks,
+				Tasks:   render.ToProtoTasksForHost(tasks, sid),
 			}
 			rr, err := r.deps.Dispatcher.SendApply(ctx, sid, route, req, nil)
 			results[idx] = buildHostResult(sid, route, source, transportName, rr, err)

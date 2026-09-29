@@ -80,11 +80,13 @@ func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *
 // RenderedTask↔DispatchPlan↔TaskEvent.task_idx). Without apply:destiny the
 // index matches the position in scenario.tasks[].
 //
-// CEL-rendered params are per-host (soulprint.self of the host). In pilot,
-// params must be host-invariant: a task producing different params on
-// different targeted hosts is host-dependent render, which the "one
-// RenderedTask per task" contract can't express (per-host ApplyRequest is an
-// orchestrator-layer concern) → error.
+// CEL-rendered params are per-host (soulprint.self of the host), and a task whose
+// params DIFFER between hosts is dispatched per host since NIM-908: the struct goes
+// into [RenderedTask.ParamsBySID] and [ToProtoTasksForHost] puts this host's copy in
+// this host's ApplyRequest. That used to be refused as "host-dependent params" on
+// the grounds that a per-host ApplyRequest was an orchestrator-layer concern; the
+// orchestrator had become per-host in the meantime. FLOW CONTROL is the half that
+// still refuses — Soul evaluates it against one flow_context per task.
 func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTask, _ []DispatchPlan, err error) {
 	if in.Scenario == nil {
 		return nil, nil, fmt.Errorf("render: scenario manifest is nil")
@@ -424,15 +426,15 @@ func (p *Pipeline) renderTask(ctx context.Context, in RenderInput, task config.T
 
 // renderTaskIter renders params for a single module task (or a single
 // `loop:` iteration) per host (after vault-resolve + CEL) and builds a
-// RenderedTask. params are rendered per host and checked for host-invariance
-// (pilot restriction, see Render).
+// RenderedTask. Params that differ between hosts are DISPATCHED per host since
+// NIM-908 ([RenderedTask.ParamsBySID], open Q #25 closed for params); they used to
+// be refused.
 //
 // loopVars holds the current iteration's variables (`<as>`/`<index_as>`);
-// nil for a task without loop:. Host-invariance is checked per-iteration: for
-// fixed loopVars, params must match across all targeted hosts. Across the
-// iteration axis, loop legitimately produces different params (caller
-// renderLoopTask calls renderTaskIter with different loopVars per iteration)
-// — that's not an invariant violation.
+// nil for a task without loop:. The per-host decision is taken per ITERATION: each
+// expanded iteration is its own RenderedTask and gets its own ParamsBySID over the
+// same roster. Across the iteration axis params legitimately differ (renderLoopTask
+// calls this with different loopVars per iteration) — a separate axis entirely.
 //
 // Empty targeted (where: filtered everyone out) still produces a task in the
 // list (with an empty DispatchPlan); params render in a context without
@@ -579,6 +581,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	fcReads := taskFlowContextReads(p.cel, task)
 
 	var firstSID string
+	// sid → this host's rendered params, filled for every host and reduced to
+	// rt.ParamsBySID after the loop (materializePerHostParams).
+	paramsBySID := make(map[string]*structpb.Struct, len(renderHosts))
 	for hi, h := range renderHosts {
 		vars := hostLoopVars(in, h, len(targeted), loopVars)
 		vars, err = resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
@@ -596,7 +601,8 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// host-variant (self per host) — excluded from the host-invariance
 		// check below; rt.Params carries the first host's value.
 		//
-		// Partial fix for open Q #25 (render_context.self only): each host's
+		// Open Q #25's Option A (render_context.self only; Option B — the whole
+		// params struct — is [RenderedTask.ParamsBySID], NIM-908): each host's
 		// render_context is materialized into rt.RenderContextBySID[SID].
 		// Without this, every host would get the first host's render_context
 		// (one *RenderedTask is dispatched to all — groupByHost/claim),
@@ -605,8 +611,10 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// ToProtoTasksForHost overlays the per-host variant onto Params when
 		// building a given SID's ApplyRequest. The map is only populated for
 		// multi-host (N=1: first host's render_context == the only one, no
-		// overlay needed, behavior unchanged). Full per-host dispatch
-		// (Variant B) is a separate ADR.
+		// overlay needed, behavior unchanged). It remains the NARROW case beside
+		// [RenderedTask.ParamsBySID] (NIM-908), which carries a whole per-host
+		// struct: a task whose only variance is a self-reading `.tmpl` takes the
+		// cheaper single-key overlay, and that is the common shape.
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
@@ -643,9 +651,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// flow_context (ADR-012(d)): per-host snapshot {input,vars,
 		// incarnation,self} for Soul-side flow-control predicates. Built from
 		// the same vars as params (minus soulprint.hosts/loop, see
-		// buildFlowContext). Host-variant (self per host) — like
-		// render_context, excluded from the host-invariance check; rt carries
-		// the first host's value (golden path).
+		// buildFlowContext). One snapshot per RenderedTask — unlike params, this
+		// channel was NOT made per-host by NIM-908 — so rt carries the first
+		// host's and a host-variant predicate is refused below.
 		//
 		// For hi>0, fc is rebuilt only to surface build errors (validating
 		// this host's snapshot); the wire value rt.FlowContext comes from the
@@ -657,16 +665,17 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
 		}
 
+		// Every host's struct is kept, and the decision about them is taken AFTER
+		// the loop (materializePerHostParams): a task whose host 2 differs and
+		// whose host 3 matches host 1 still needs an entry for host 3, or that
+		// host falls back to Params — the first by SID — which is the silent
+		// substitution NIM-908 removes. Deciding per iteration cannot see that.
+		paramsBySID[h.SID] = st
 		if hi == 0 {
 			rt.Params = st
 			rt.FlowContext = fc
 			firstSID = h.SID
 			continue
-		}
-		if !paramsHostInvariant(rt.Params, st) {
-			return nil, fmt.Errorf(
-				"render: task %q gives host-dependent params (%s vs %s) - host variance of params is outside pilot scope (per-host ApplyRequest is an orchestrator-layer concern)",
-				task.Name, firstSID, h.SID)
 		}
 		// Second fail-closed layer: host-variant flow_context (vars derived
 		// from soulprint.self, leaking into flow_context.vars). The predicate
@@ -678,9 +687,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		//
 		// GATE: this check only runs when at least one flow-control predicate
 		// is non-empty. Without a predicate, Soul never reads flow_context —
-		// its variance doesn't matter; a legitimate task with host-variant
-		// vars-in-params (no when) should fail on paramsHostInvariant above,
-		// not here.
+		// its variance doesn't matter; a task with host-variant vars-in-params
+		// and no predicate is now DISPATCHED per host (ParamsBySID) rather than
+		// refused, which is what NIM-908 changed and what this gate does not.
 		//
 		// SUBJECT: the snapshots diffed here are the NARROWED ones (NIM-813) —
 		// both sides came through the same taskFlowContextReads. So a
@@ -691,15 +700,24 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// shipped nor read cannot be. The over-approximation it drops was never
 		// protecting anything the predicate could see.
 		//
-		// Both layers (text regex + snapshot diff) are a temporary
-		// fail-closed measure until per-host dispatch (open Q #25) lands;
-		// they'll be removed together when it does.
+		// ★ Both layers SURVIVE NIM-908, which closed open Q #25 for params. They
+		// were described as temporary "until per-host dispatch lands", and that
+		// description was about the wrong channel: flow_context is evaluated by
+		// SOUL, against predicates Keeper ships verbatim, and one RenderedTask
+		// carries one flow_context whatever ParamsBySID does. Per-host FLOW
+		// CONTROL is a separate decision with its own blast radius (a predicate
+		// deciding differently per host changes what `changed_when:` means for the
+		// run's result), and NIM-908 deliberately did not take it. Until it is
+		// taken, a host-variant predicate stays refused — loudly, which is the
+		// backstop the ticket asks for wherever dispatch does not reach.
 		if hasFlowControl(task) && !flowContextHostInvariant(rt.FlowContext, fc) {
 			return nil, fmt.Errorf(
 				"render: task %q: host-variant flow_context (vars derived from soulprint.self) on a multi-host target (%s vs %s) - fail-closed; per-host dispatch is deferred (separate ADR)",
 				task.Name, firstSID, h.SID)
 		}
 	}
+
+	rt.ParamsBySID = materializePerHostParams(rt.Params, paramsBySID)
 
 	// core.file.rendered: after the CEL phase, replace params.template (a
 	// path) with the literal template_content (Keeper reads the .tmpl,
@@ -742,6 +760,15 @@ func (p *Pipeline) staticWhenSkips(
 ) (*structpb.Struct, error) {
 	if !isStaticWhen(task.When) {
 		return nil, nil
+	}
+
+	// The decision below is taken ONCE, on firstFC — the roster's first host by SID.
+	// That is sound for a predicate over run-level values and is exactly the NIM-908
+	// defect for one over a destiny input that renders per host: eight hosts would
+	// be gated on the ninth's value with nothing to show it. Inert unless this pass
+	// actually has such an input.
+	if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, in.hostVariantVars); err != nil {
+		return nil, fmt.Errorf("render: task %q: static-when: %w", task.Name, err)
 	}
 
 	// The skip placeholder still ships flow_context (Soul re-evaluates the same
@@ -796,6 +823,12 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	// don't silently keep.
 	if !isStaticWhen(when) {
 		return false, fmt.Errorf("render: include-when %q is not static (register/soulprint) - group-drop requires a static predicate (ADR-009 amendment)", when)
+	}
+	// An include group is spliced into the plan or dropped from it for EVERY host,
+	// so a per-host destiny input cannot decide it (NIM-908) — and the evaluation
+	// below would quietly take the roster's first host's value if it tried.
+	if err := p.cel.GuardHostFreePredicate(when, cel.HostFreeIncludeWhen, in.hostVariantInputs, in.hostVariantVars); err != nil {
+		return false, err
 	}
 	host := &topology.HostFacts{}
 	if len(in.Hosts) > 0 {
@@ -1343,6 +1376,13 @@ func flowControlVarsFromStruct(flowCtx *structpb.Struct, register map[string]any
 		// compile error from cel-go itself — already unambiguous, already naming the
 		// namespace. Overriding it would replace that with our message for no gain.
 		ComputeScope: cel.ComputeAvailable,
+		// HostScope stays HostBound, and here that IS a claim: SoulprintSelf above is
+		// a real host's facts. This shape is what Soul binds on the receiving host,
+		// and Keeper uses it for a static when: only to fail bit-for-bit the way Soul
+		// would (ADR-012(d)). The keeper-side "decided once for everyone" hazard is
+		// refused at the decision site instead — see [Pipeline.staticWhenSkips],
+		// which is the caller that has a roster to be wrong about.
+		HostScope: cel.HostBound,
 	}
 }
 
@@ -1393,7 +1433,11 @@ func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFa
 	return nil
 }
 
-// paramsHostInvariant diffs two hosts' params for host-invariance,
+// paramsHostInvariant diffs two hosts' params. Since NIM-908 it is a DETECTOR for
+// [materializePerHostParams], not a refusal: a difference means the task is
+// dispatched per host, not that the render fails.
+//
+// It diffs two hosts' params,
 // EXCLUDING the per-host-by-design core.file.rendered keys: template_content
 // (injected once after the loop by injectTemplateContent) and
 // render_context (per-host by construction — carries a specific host's
@@ -1403,6 +1447,44 @@ func guardFlowControlHostInvariant(task config.Task, targeted []*topology.HostFa
 // render_context, materialized in RenderedTask.RenderContextBySID and
 // overlaid per-SID by ToProtoTasksForHost) — self-dependent OTHER params are
 // not.
+// materializePerHostParams reduces the per-host structs collected by
+// [Pipeline.renderTaskIter] into [RenderedTask.ParamsBySID] (NIM-908, closing open
+// Q #25 for params): nil when every host rendered the same params, and otherwise a
+// map carrying an entry for EVERY host.
+//
+// Nil on the golden path is the whole point — one host, or a task whose params do
+// not read anything per-host, keeps the single struct and every existing reader is
+// bit-for-bit unchanged. The map is only built when it changes an answer.
+//
+// All-or-nothing is the other half. Filling only the hosts that differ would send
+// the rest back to [RenderedTask.Params], which is the first host by SID: a host
+// whose params happen to equal host 1's would be served host 1's struct, which is
+// correct today and stops being correct the moment anything upstream of it moves.
+// The map is either absent or complete.
+//
+// first is compared against, rather than each pair against each other: equality here
+// is transitive (proto struct equality), so one representative decides.
+func materializePerHostParams(first *structpb.Struct, byHost map[string]*structpb.Struct) map[string]*structpb.Struct {
+	if len(byHost) <= 1 {
+		return nil
+	}
+	varies := false
+	for _, st := range byHost {
+		if !paramsHostInvariant(first, st) {
+			varies = true
+			break
+		}
+	}
+	if !varies {
+		return nil
+	}
+	out := make(map[string]*structpb.Struct, len(byHost))
+	for sid, st := range byHost {
+		out[sid] = st
+	}
+	return out
+}
+
 func paramsHostInvariant(a, b *structpb.Struct) bool {
 	return proto.Equal(stripPerHostKeys(a), stripPerHostKeys(b))
 }
@@ -1548,6 +1630,13 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 		// cross-host value from choosing which template file gets read.
 		kv := keeperVars(in)
 		kv.RegisterHosts, kv.AllowRegisterHosts = nil, false
+		// The stance is this site's, not the keeper context's it borrowed. A destiny
+		// pass DOES reach here with a non-empty per-host input set, and a
+		// `${ input.<per-host> }` in a template path must be refused — Keeper reads
+		// one file per task — but with HostFreeKeeper the message would name "an
+		// on: keeper task" and point the author at soulprint.hosts / register.hosts,
+		// neither of which exists in a destiny.
+		kv.HostScope = cel.HostFreeTemplatePath
 		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, kv)
 		if err != nil {
 			return "", false, fmt.Errorf("resolving template path: %w", err)
@@ -1699,12 +1788,13 @@ func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (State
 			Ctx:          ctx,
 			Loop:         map[string]any{"elem": elem, "value": value},
 			ComputeScope: cel.ComputeOutOfScopeStateMatch,
+			HostScope:    cel.HostFreeStateMatch,
 		}
 		return evalBoolExpr(p.cel, "core.state.add.match", predicate, vars)
 	}
 
 	opEval := func(expr string, binds map[string]any, boolOut bool) (any, error) {
-		vars := cel.Vars{Ctx: ctx, Loop: binds, ComputeScope: cel.ComputeOutOfScopeStateMatch}
+		vars := cel.Vars{Ctx: ctx, Loop: binds, ComputeScope: cel.ComputeOutOfScopeStateMatch, HostScope: cel.HostFreeStateMatch}
 		if boolOut {
 			return evalBoolExpr(p.cel, "core.state.match", expr, vars)
 		}

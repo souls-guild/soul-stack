@@ -240,3 +240,58 @@ Extends the 2026-06-24 rule above from `vars` to `register` on the same ground �
 **It removes one spelling that resolved: `register["hosts"].<name>` on a keeper task.** With `Vars.AllowRegisterHosts` set, `guardRegisterHosts` passes and the `hosts` key is in the activation, so that form evaluated. It is refused now for the same reason as the rest — the text holds no `register.hosts.<name>` for the extractor — and it is the one refusal whose fix is the LONGER spelling, which the error message names explicitly. (In the flow-control keys nothing that reached a host is removed; see the list above.)
 
 **What this does NOT do.** It does not make the index form work and it adds no Passage edge for it. It does not widen `register.hosts`, which stays keeper-side only (`Vars.AllowRegisterHosts`, fail-closed). It does not fire in an engine that declares no `register` root — the gate sits AFTER `env.Compile`, so migration CEL ([ADR-019](0019-state-migration-dsl.md), where `register.*` is forbidden outright) and the service-vars engine still answer with cel-go's undeclared-reference error rather than advice their author must not take. And it does not close the offline half's two blind spots, which are the compute rules' as well: a destiny's `tasks/` file and tasks spliced in by `include:` are caught by the compile-time refusal at run time, not by `soul-lint`. On a HOST task the two halves name different rules for `register.hosts["probe"]` — `soul-lint` reports `register_index_form`, the run reports the `register.hosts` isolation error, because that gate runs first and has no offline twin; both refuse. Normative — [`docs/templating.md §2.3`](../templating.md), [`docs/destiny/tasks.md`](../destiny/tasks.md), [`docs/soul-lint.md`](../soul-lint.md).
+
+## Amendment 2026-09-28 (NIM-908): a context says whether it stands on a HOST — `cel.HostScope`
+
+The third stance on a `cel.Vars` after [`AllowHosts`](#adr-010-templating-engine-cel-for-yaml-expressions-go-texttemplate-for-files)
+and `ComputeScope`, and the same shape as the second for the same reason: one env (`contextVars`)
+serves contexts that bind a host and contexts that decide once per run, so non-declaration cannot
+tell them apart and each has to say which it is. The guard runs at COMPILE — before eval, before
+any `vault()` side effect, on every reference position and on branches an eval-time sentinel would
+never reach.
+
+**What it refuses, in a context that declares itself host-free:**
+
+- `soulprint.self.<path>`. Before this those contexts simply omitted `Vars.SoulprintSelf` and the
+  activation substituted an empty map, so `soulprint.self.sid` in an `on: keeper` task came back
+  as `no such key: sid` — a sentence about a field that is spelled correctly and exists everywhere
+  else, identical for any field. Exactly the NIM-619 shape, one root over.
+- `input.<name>` for a name the run renders per host ([ADR-009 amendment 2026-09-28](0009-scenario-dsl.md)).
+  Here the value is real and belongs to somebody else, which is why nothing in the referencing text
+  gives it away.
+
+`soulprint.hosts` is NOT refused: it is the run's roster, the same list on every host, and it is
+the one way a host-free context legitimately reaches host facts. The guard keys on the `self`
+**selection**, not on the `soulprint` identifier.
+
+**Fail-closed on shapes the AST holds no name for** — `size(input)`, `input[k]`, `size(soulprint)`
+reach the whole namespace, which includes the per-host name, and the walk cannot prove otherwise.
+
+**It runs AFTER `env.Compile`**, the rule [NIM-909](#amendment-2026-09-28-nim-909-a-registers-name-is-a-dot-select--the-index-form-is-refused-at-compile)
+settled one amendment above: `NewMigration` and `NewServiceVars` declare neither root, and there
+cel-go's own undeclared-reference error is the honest one. It also runs **after
+`rewriteHostsWhere`**, the other half of that lesson: a `soulprint.hosts.where("sid !=
+soulprint.self.sid")` predicate is a string LITERAL until the rewrite inlines it, so a walk over
+the author's text would see `soulprint.hosts` and nothing else while the eval reads this host's
+`self`. The same rewrite is why the NIM-908 classification of `apply: input:` goes through
+`Engine.InterpolationReads` rather than a raw scan.
+
+**Unlike `ComputeScope.cacheTag`, the stance's cache tag carries the per-host input NAMES**, not
+just a marker byte. Both halves are load-bearing: without any tag a program compiled in a
+host-bound context would be served from the cache in a host-free one (the lookup precedes every
+guard); without the names, one run's variant set would answer for another's, and an `Engine`
+outlives a run.
+
+**Two keeper-side decision points carry a stance no `Vars` literal does** — a static `when:`
+(`render.staticWhenSkips`) and a conditional include's `when:` (`render.evalIncludeWhen`). Both
+are evaluated in the Soul-side flow-control sandbox against a `flow_context`, an engine that knows
+nothing of `apply: input:`; both are decided ONCE, on the roster's first host, for every host. The
+refusal is raised at the decision site through `Engine.GuardHostFreePredicate`, which shares the
+stance's own words with the compile-time guard so the two cannot describe the same context
+differently.
+
+`keeper/internal/render` carries a guard test (`host_scope_guard_test.go`) asserting that EVERY
+`cel.Vars` literal in the package declares a stance, with the expected source text and not merely
+"was it set" — the zero value is `HostBound`, so a new context would inherit host-boundness in
+silence, which is how `apply: input:` inherited `targeted[0]` for as long as it did. No offline
+twin: `soul-lint` reports neither half, and the reason is in the ADR-009 amendment.

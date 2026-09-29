@@ -15,10 +15,16 @@ import (
 // ★ Isolation barrier #2 (compute is host-invariant): the resolve context is
 // run-level only (input/register/incarnation/vars + state from
 // incarnationVars) — no soulprint.self or soulprint.hosts (AllowHosts=false).
-// A soulprint.* reference in a compute expression hits CEL no-such-key (a
-// structural barrier, not a text guard): compute is host-independent by
-// construction, so the same value safely feeds both apply.input (resolved on
-// targeted[0]) and keeper-side tasks (per-run, not per-host) without drift.
+// Since NIM-908 a `soulprint.self` reference here is refused by NAME
+// ([cel.HostFreeCompute]) instead of hitting the no-such-key the omitted map used
+// to produce: compute is host-independent by construction, which is exactly why
+// the same value can feed a per-host task and an `on: keeper` one without drift.
+//
+// ★ That invariance is the namespace's own, and it stopped being a claim about
+// `apply: input:` in NIM-908. apply.input renders PER HOST now
+// ([Pipeline.resolveApplyInput]); a compute value reaching it is still the same on
+// every host, but the sentence that used to stand here — "apply.input is resolved
+// on targeted[0]" — described the defect, not a guarantee.
 //
 // Resolved once: an already-computed in.Compute (from a caller or previous
 // pass) is returned as-is — idempotent across repeated calls in staged
@@ -50,6 +56,14 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 		// here even on the first entry — where a reference is a genuine no-such-key
 		// (a forward reference), not an absent namespace.
 		ComputeScope: cel.ComputeAvailable,
+		// Host-invariance is the property this namespace rests on, so the barrier
+		// says so out loud since NIM-908 rather than relying on an omitted soulprint
+		// map. HostVariantInputs is in.hostVariantInputs for symmetry with the other
+		// host-free builders and is empty in practice: resolveCompute runs on the
+		// scenario pass only, and the destiny pass has no compute: block of its own.
+		HostScope:         cel.HostFreeCompute,
+		HostVariantInputs: in.hostVariantInputs,
+		HostVariantVars:   in.hostVariantVars,
 	}
 	for _, cv := range block {
 		s, ok := cv.Value.(string)

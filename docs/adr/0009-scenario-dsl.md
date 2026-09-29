@@ -600,3 +600,91 @@ through `incarnation.*` — there the id *is* its input components, and the rule
 create however the id arrives, is NIM-832 and is not decided here. The L0 trial harness has no
 incarnation either, so a create scenario's identifier rule has no offline test surface beyond
 `expect_render_error`; giving a case one is its own ticket.
+
+## Amendment 2026-09-28 (NIM-908): `apply: input:` renders PER HOST
+
+`apply: input:` used to render **once**, in the environment of the roster's first host by SID
+(`render.resolveApplyInput`, `host = targeted[0]`), and the result was handed to every host of
+the destiny's roster. That environment offers the per-host roots — `soulprint.self.*` and
+`register.*` — and refused neither, so
+
+```yaml
+- name: Roll out to nine hosts
+  apply:
+    destiny: redis
+    input:
+      master_addr: "${ soulprint.self.network.primary_ip }"
+```
+
+gave all nine hosts the **first** host's address, silently, with the run green. It renders per
+host now: each targeted host gets its own environment, its own values, and its own pass through
+the destiny's full `input:` contract (defaults, `required_when`, value validation and
+`validate:` — those are predicates over the values, so a rule can hold for one host and fail for
+another; failures name the SID).
+
+**Where the per-host value actually arrives, and where it cannot.** The wire carries ONE
+`RenderedTask` per task for the whole roster, so this is not, and does not pretend to be,
+per-host dispatch:
+
+- a destiny's `vars.yml` — already per host, and now over this host's input;
+- a destiny task's `where:` — per host, so the predicate finally narrows rather than comparing
+  every host against the first one's value;
+- `core.file.rendered` — `render_context` is materialized per SID
+  (`RenderedTask.RenderContextBySID`) and overlaid when a specific host's `ApplyRequest` is
+  built (`ToProtoTasksForHost`), so `{{ .input.master_addr }}` resolves to the address of the
+  host receiving the file. This is the one channel that carries a per-host value to a host;
+- **an ordinary module param — YES, since the same change.** Params were host-invariant by
+  construction, and a per-host input reaching one was refused (`host-dependent params`). That
+  refusal is gone: a task's params are dispatched per host
+  ([ADR-draft per-host-params-dispatch](draft-per-host-params-dispatch.md),
+  `RenderedTask.ParamsBySID`), which closes the params half of open Q #25. Nothing that used to
+  run stops running — that direction of the change removes a refusal rather than adding one.
+- **flow control — still NO.** `when:`/`changed_when:`/`failed_when:`/`until:` are not rendered
+  by Keeper; they reach Soul as text and are evaluated against one `flow_context` per task, so a
+  host-variant predicate on a multi-host target stays refused. Open Q #25 stays open for it.
+
+**The backstop, which is required whatever the above delivers.** Making the input per-host moves
+the same defect one level down: a context that has no host would read `input.<per-host-name>` and
+quietly get the first host's rendering. So `RenderInput.Input` on a destiny pass carries only the
+**host-invariant** names, the full per-host map lives beside it (`InputByHost`, selected by
+`inputForHost`), and a host-free context naming a per-host input is refused by name at compile —
+[ADR-010 amendment 2026-09-28](0010-templating.md), `cel.HostScope`. Five such contexts exist
+(`loop.items:`/`loop.when:`, `on: [covens]`, an `on: keeper` task, `compute:`, a capture's
+`match:`) plus two keeper-side decision points that never meet that env (a static `when:`, a
+conditional include's `when:`).
+
+**Classification is from the TEXT, not the values.** A name is per-host iff its `apply: input:`
+value reaches `soulprint.self` or `register` — directly, or through the applier's own `vars:`,
+which is closed transitively (`hostVariantVarNames`). That hop is not a refinement, it is the
+hole the first cut of this change shipped with: an applier writing
+`vars: {addr: "${ soulprint.self… }"}` and `input: {master_addr: "${ vars.addr }"}` names no
+per-host root in the input's own text, so a scan of `apply: input:` alone read it as invariant
+and handed the first host's address to every host-free context — the defect, one hop over,
+measured on this tree. The SERVICE vars layer is deliberately not walked: it resolves once per
+run and is host-invariant by construction ([ADR-0082](0082-service-vars.md)), and walking it
+would misclassify the forwarding `apply: input:` exists for. A set derived from what the values
+turned out to be would depend on the roster — nine hosts that happen to share an address would classify as
+invariant and the tenth would flip the scenario from accepted to refused, with nothing in the
+file to explain it. `soulprint.hosts` is deliberately not counted: it is the run's roster, the
+same list on every host. `register` counts per NAME: a register produced by a KEEPER-side task of the same
+scenario is one value for the whole run, every other name is the host's own bucket, and a name
+whose producer the manifest does not show is fail-closed per-host. The whole-root rule was the
+first cut and it was measured wrong — see the per-host-params ADR's corpus note.
+
+**Cost.** N renders of `apply.input` instead of one, and re-measurable rather than quoted —
+`BenchmarkApplyInput_ResolveByRoster` takes the roster as its axis. On 2026-09-28, four inputs:
+~0.17 ms at one host against ~0.69 ms at nine, i.e. ~0.065 ms per extra host. `vault()` does not
+scale with it — the resolution memo is per-PASS and this loop runs inside one, so a sealed input
+is one `ReadKV` whether the roster is one host or nine.
+
+**What this does NOT do.** It does not make FLOW CONTROL per host (open Q #25 stays open there).
+It does not change the seal: provenance is derived from expression text, not from values, so the
+sealed set stays host-invariant across N renders — guarded by
+`TestApplyInput_SealedSetDoesNotMoveWithTheRoster` beside the existing
+`TestRender_SealedSetDoesNotMoveWithTheRoster`. And it has **no offline twin**: `soul-lint` says
+nothing about either half, so both are caught at render. The per-host-input half is not offline
+work at all — it needs the caller's `apply: input:` resolved against the callee destiny, which
+soul-lint's per-artifact entry points do not do — and shipping only the `soulprint.self` half
+would teach an author to trust a linter that answers half the question. Amends
+[ADR-0082](0082-service-vars.md), whose "`apply: input:` resolves on `targeted[0]`" is now
+history.

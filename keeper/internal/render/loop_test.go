@@ -457,10 +457,15 @@ func TestRenderLoop_WithSerial(t *testing.T) {
 	}
 }
 
-// TestRenderLoop_PerIterationHostInvariant — host-dependent params WITHIN an
-// iteration (different hosts yield different results) → host-invariance
-// error; the check applies per iteration.
-func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
+// TestRenderLoop_PerIterationDispatchedPerHost — host-dependent params WITHIN an
+// iteration (different hosts yield different results).
+//
+// ★ NIM-908 turned this from a refusal into a dispatch, and the per-ITERATION
+// property is what still matters: each expanded iteration is its own RenderedTask,
+// so each gets its own ParamsBySID over the same roster. The loop axis itself stays
+// host-invariant — `items:` may not read a per-host root — which is why there is one
+// iteration here and two hosts inside it, not the other way round.
+func TestRenderLoop_PerIterationDispatchedPerHost(t *testing.T) {
 	// params depends on both the loop variable and the host's soulprint: on
 	// different hosts, one iteration yields different params — a host-invariance
 	// violation.
@@ -478,9 +483,22 @@ func TestRenderLoop_PerIterationHostInvariant(t *testing.T) {
 			host("rh", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
 		},
 	}
-	_, _, err := p.Render(context.Background(), in)
-	if err == nil {
-		t.Fatal("expected an error for host invariance for host-dependent params in an iteration")
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("expected one iteration, got %d", len(tasks))
+	}
+	want := map[string]string{"deb": "do a on debian", "rh": "do a on rhel"}
+	for sid, cmd := range want {
+		st, ok := tasks[0].ParamsBySID[sid]
+		if !ok {
+			t.Fatalf("no per-host params for %s", sid)
+		}
+		if got := st.GetFields()["cmd"].GetStringValue(); got != cmd {
+			t.Errorf("%s: cmd = %q, want %q", sid, got, cmd)
+		}
 	}
 }
 

@@ -235,6 +235,22 @@ func keeperVars(in RenderInput) cel.Vars {
 		// loop, in a soulprint-free run-level context — the same one a keeper task
 		// renders in. Nothing about it is per-host, so there is no drift to import.
 		ComputeScope: cel.ComputeAvailable,
+		// The keeper is not a host (NIM-908): `soulprint.self` here used to answer
+		// `no such key: sid` off the empty map the activation substitutes, which
+		// reads as a typo in a field that is spelled correctly. register.hosts.<name>
+		// above is the accessor that DOES answer per-host questions from this side,
+		// and the refusal names it.
+		HostScope: cel.HostFreeKeeper,
+		// LOAD-BEARING, not symmetry. A keeper TASK is reached only from the scenario
+		// loop, where the set is empty — but [Pipeline.resolveTemplateUsesInput]
+		// borrows this context to resolve a `core.file.rendered` template PATH, and
+		// that call happens inside a destiny pass too, where the set is not. It is
+		// what refuses `${ input.<per-host> }` as a path: Keeper reads one file per
+		// task, before the per-host loop. That site overrides the stance to
+		// [cel.HostFreeTemplatePath] so the diagnostic names the path, not a keeper
+		// task.
+		HostVariantInputs: in.hostVariantInputs,
+		HostVariantVars:   in.hostVariantVars,
 	}
 }
 
@@ -258,6 +274,11 @@ func resolveCovenList(engine *cel.Engine, in RenderInput, items []any) ([]string
 		},
 		Ctx:          in.Ctx,
 		ComputeScope: cel.ComputeOutOfScopeCovenList,
+		// `on:` chooses the roster, so it cannot read it (NIM-908) — neither through
+		// `soulprint.self` nor through a destiny input rendered per host.
+		HostScope:         cel.HostFreeCovenList,
+		HostVariantInputs: in.hostVariantInputs,
+		HostVariantVars:   in.hostVariantVars,
 	}
 
 	out := make([]string, 0, len(items))

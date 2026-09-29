@@ -158,8 +158,27 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 		content = string(data)
 	}
 
-	fields[paramTemplateContent] = structpb.NewStringValue(content)
-	delete(fields, paramTemplate)
+	setTemplateContent(fields, content)
+	// ★ And on EVERY per-host struct (NIM-908). The substitution mutates a struct in
+	// place, and rt.Params is only the first host's; a task with per-host params
+	// ([RenderedTask.ParamsBySID]) would otherwise ship `template:` — a path Soul
+	// cannot read — to every host but that one, and `core.file.rendered` fails its
+	// param validation there. The template PATH is host-invariant (pilot contract,
+	// resolveTemplateUsesInput reads it once before the per-host loop), so one
+	// content serves them all. rt.Params may be the same pointer as one of these;
+	// applying it twice is a no-op.
+	for _, st := range rt.ParamsBySID {
+		if st != nil {
+			setTemplateContent(st.GetFields(), content)
+		}
+	}
 	rt.RawTemplate = content
 	return nil
+}
+
+// setTemplateContent replaces the `template:` path with the literal
+// `template_content:` Keeper read for it, in one params struct.
+func setTemplateContent(fields map[string]*structpb.Value, content string) {
+	fields[paramTemplateContent] = structpb.NewStringValue(content)
+	delete(fields, paramTemplate)
 }

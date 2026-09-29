@@ -119,3 +119,37 @@ Per-field **`secret: true` on module output** — a plugin-protocol capability o
 What may not be repeated is **binding a SID to a public key**, not presenting the token. A repeat presentation is admitted only when it carries the key the first one bound, on a host that has never held a stream, for a burn a Soul actually made. An attacker's replay carries an attacker's key and is refused exactly as a second burn refuses it; once the host appears, the token is finished for good.
 
 **No wire change** — the property is derived from the CSR that `BootstrapRequest` already carries (its SubjectPublicKeyInfo hashes to the seed fingerprint, which is why re-signing one key does not move the identity). Two behaviours changed underneath: the Soul persists its key between attempts, and the Bootstrap RPC no longer writes `souls.status` — `connected` is written by the EventStream handshake, which is the event **(f)**'s mTLS listener actually witnesses.
+
+## Amendment 2026-09-29 (NIM-908): one `RenderedTask`, N params structs — and no proto change
+
+Since [NIM-908](draft-per-host-params-dispatch.md) a task's `params:` may differ
+between the hosts of one run, and each host's `ApplyRequest` carries its own
+(`render.RenderedTask.ParamsBySID`, selected by `ToProtoTasksForHost(tasks, sid)`).
+
+**This amends nothing on the wire, and that is the point.** No field is added, moved
+or reused, so the only-add rule above is not engaged, and a Soul needs no release: it
+renders nothing, applies the params it was handed, and is now handed its own. What
+changed is on the Keeper side of §(d) — the sentence "Keeper renders once and
+dispatches the result" was always true per REQUEST and is now visibly true per HOST.
+Each SID already had its own `ApplyRequest` (`scenario/dispatch.go` groups by host,
+`scenario/claim.go` does the same, `pushorch`'s fan-out builds one per SID); the
+missing piece was a converter that knew which host it was building for.
+
+**Two sentences of this ADR are retired by it:**
+
+- flow_context "is host-variant (`self` per-host), excluded from the per-host check of
+  params host-invariance" — there is no such check any more. flow_context is still ONE
+  snapshot per `RenderedTask`, which is why a host-variant flow-control predicate is
+  still refused at render; that is now the reason rather than a side note.
+- "the full per-host dispatch of self-dependent templates (a separate `ApplyRequest`
+  per host) is a deferred orchestrator layer" — it is not deferred and it is not a
+  separate `ApplyRequest`: the per-host request already existed, and `render_context`
+  (Option A) and now the whole params struct (Option B) both ride it. Open question
+  #25 is CLOSED for params and stays open for flow control only.
+
+**Host invariance is no longer required of step params.** What must still hold for one
+`RenderedTask` is the flow-control channel: `when:`/`changed_when:`/`failed_when:`/
+`until:` travel as text and are evaluated by Soul against the single `flow_context`
+this message carries. Per-host flow control is a separate decision — a predicate
+deciding differently per host changes what `changed_when:` means for the run's
+aggregate result — and NIM-908 deliberately did not take it.

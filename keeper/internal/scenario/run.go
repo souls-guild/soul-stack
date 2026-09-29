@@ -1655,11 +1655,20 @@ const (
 // coarse form of what the seal already does per cell and from the schema rather
 // than from the author: a params cell that read a secret source is masked here
 // whether or not anyone remembered to mark the task.
+//
+// Masking is unaffected by per-host params: the seal marks PATHS, not values, so a
+// cell sealed on one host is sealed on all of them whatever each host rendered
+// there. What NIM-908 changes here is display, not redaction.
 func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []byte {
 	if t == nil || t.Params == nil {
 		return nil
 	}
-	m := t.Params.AsMap()
+	// Per-host cells are marked rather than shown (NIM-908): the plan row carries ONE
+	// params map beside per-host results, and a task whose params differ between
+	// hosts would otherwise display the first host's as if it were everyone's — the
+	// substitution this ticket removed from the run, reappearing in the view an
+	// operator uses to check what ran.
+	m := render.PlanParamsBase(t)
 	delete(m, paramTemplateContent)
 	delete(m, paramRenderContext)
 	if len(m) == 0 {
@@ -1670,7 +1679,11 @@ func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []by
 		RegexFallback: audit.DefaultSealHooks.RegexFallback,
 		Logger:        audit.DefaultSealHooks.Logger,
 	})
-	b, err := json.Marshal(masked)
+	// Mark per-host cells AFTER masking: the regex last resort inside
+	// MaskSecretsSealed raises an alarm on a secret-shaped value at an unsealed path,
+	// and substituting the marker first would delete the value before that layer saw
+	// it. A cell the masker already replaced is left masked.
+	b, err := json.Marshal(render.MarkPerHostCells(t, masked))
 	if err != nil {
 		return nil
 	}
