@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"log/slog"
 	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"sync"
@@ -13,6 +14,22 @@ import (
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
+
+func TestMain(m *testing.M) {
+	// These tests drive the developer's interactive $SHELL under a pty, and such a shell
+	// appends every typed line to the real HISTFILE (oh-my-zsh sets share_history, so the
+	// flush happens per command). Redirect it, or a test run rewrites ~/.zsh_history.
+	dir, err := os.MkdirTemp("", "consolerunner-hist")
+	if err != nil {
+		panic(err)
+	}
+	if err := os.Setenv("HISTFILE", filepath.Join(dir, "history")); err != nil {
+		panic(err)
+	}
+	code := m.Run()
+	os.RemoveAll(dir)
+	os.Exit(code)
+}
 
 // recordingSink captures everything a session sends, standing in for a live
 // EventStream. Concurrency-safe because each session sends from its own
