@@ -10,6 +10,8 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 |---|---|
 | [concept.md](concept.md) | What is a scenario in the new model, the boundary with destiny (a recommendation, not a wall), declared role vs actual role, role-agnostic service vars. |
 | [orchestration.md](orchestration.md) | **Normative specification** orchestration layer: `on:`/`where:`-targeting, probe-idiom, two-level resource resolution, script tests, barrier/state-commit invariant. DSL task core - delegated to [destiny/tasks.md](../destiny/tasks.md). |
+| [settings.md](settings.md) | **Design, not implemented** (draft ADR NIM-907): the scenario's `settings:` block — what a host's failure kills (`on_failure`), how many failed hosts a run tolerates, how a block rolls under `serial:` (`serial_scope`), and the three timeouts (`soul_timeout`, `task_timeout`, `scenario_timeout`). |
+| [predicate-rendering.md](predicate-rendering.md) | **Design, not implemented** (draft ADR NIM-907): how the Keeper renders `changed_when:` / `failed_when:` / `until:` so the Soul receives a predicate reading only `register.self` (and, inside a group rolled as one, the group's own registers) — the equivalence the rewrite owes and the traps its differential test must cover. |
 | [ADR-043 §7/§8](../adr/0043-voyage.md) | State-commit policy for a batch scenario run: **per-incarnation state-commit** (batch = N incarnations by Legs, B1). Successor to the removed Tide per-Surge state-commit. | Semantics of database commit for Voyage `kind=scenario`. |
 
 ## Related Documents
@@ -26,4 +28,4 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 - [`docs/input.md`](../input.md) - **general** format standard for `input:` (applies to destiny, scenario and module manifest).
 - [`docs/templating.md`](../templating.md) — template engine spec (ADR-010): CEL for all scenario expressions (`where:`/`when:`/`changed_when:`/`failed_when:`/`until:`, `params:`, `apply: input:`, `on:`-literals), marker `${ … }`, border with Go text/template, footguns `soulprint.where(...)` vs `soulprint.hosts.where(...)`.
 - [`docs/soul-lint.md`](../soul-lint.md) - static checks (including backlog for scenario specifics).
-- [`examples/service/dragonfly/`](../../examples/service/dragonfly/) - working example of a service repo with layout `scenario/` (create + day-2 `add_user`/`update_users`/`restart`/`rotate_tls`/`destroy`).
+- [`examples/service/dragonfly/`](../../examples/service/dragonfly/) - working example of a service repo with layout `scenario/` (create + the advanced scenarios `add_user`/`update_users`/`restart`/`rotate_tls`/`destroy`).

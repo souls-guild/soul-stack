@@ -1,5 +1,10 @@
 ## ADR-0084. Explicit state capture — `core.state.<verb>` replaces end-of-run `state_changes`
 
+> **Pending amendment (NIM-907, design accepted 2026-10-02, not implemented).**
+> [ADR-draft. Scenario dispatch is linear](draft-scenario-linear-barrier.md) runs a capture where it
+> is written, after the host steps before it, and makes the per-Passage state refresh per step. Until linear dispatch is enabled (its S3,
+> item 7), the text below describes the code.
+
 > ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
 
 **Status:** accepted, implemented (NIM-699); amended 2026-08-26 (NIM-711)

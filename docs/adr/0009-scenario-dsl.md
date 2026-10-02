@@ -1,5 +1,11 @@
 # ADR-009. Scenario — the full destiny task DSL; the boundary with destiny is a recommendation
 
+> **Pending amendment (NIM-907, design accepted 2026-10-02, not implemented).**
+> [ADR-draft. Scenario dispatch is linear](draft-scenario-linear-barrier.md) makes scenario dispatch
+> linear, a barrier after every step, and adds the scenario `settings:` block
+> ([settings.md](../scenario/settings.md)). Until linear dispatch is enabled (its S3,
+> item 7), the text below describes the code.
+
 > ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
 
 - **Context.** Initially an isolation invariant was in force: a scenario could only `apply: { destiny: … }` (plus `target`/orchestration), but **not** `module:` directly — all the "work" had to live in an isolated, versionable, molecule-testable destiny. In practice this forced creating a separate destiny repo for the sake of a one-or-two-step inline operation (role probe, one-off command, diagnostics) that is never reused. The invariant hindered even read-only steps (probe), without which the volatile role from [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only) cannot be implemented.

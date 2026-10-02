@@ -1,5 +1,10 @@
 # ADR-056. Staged-render — scenario run as N ordered Passages (probe->where actually works)
 
+> **To be superseded (NIM-907, design accepted 2026-10-02, not implemented).**
+> [ADR-draft. Scenario dispatch is linear](draft-scenario-linear-barrier.md) replaces the derived
+> Passage plan with a barrier after every step. Until linear dispatch is enabled (its S3,
+> item 7), the text below describes the code.
+
 > ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
 
 > **Status: active.** User decision (Variant A-full, N-stage; name of the new run phase — **Passage**) + architect design. The canon is fixed docs-first BEFORE code; implementation — separate slices S1-S5 (see §Slice map). This ADR **amends [ADR-009](0009-scenario-dsl.md), [ADR-012](0012-keeper-soul-grpc.md), [ADR-027](0027-apply-work-queue.md)** (see §Relation to ADR) and closes [open Q #24](../architecture.md#open-questions) (per-task granularity of `serial:` / per-task dispatch).
