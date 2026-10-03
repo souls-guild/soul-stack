@@ -63,7 +63,7 @@ require (
 	github.com/prometheus/procfs v0.20.1 // indirect
 	golang.org/x/sys v0.47.0 // indirect
 	google.golang.org/grpc v1.83.2
-	google.golang.org/protobuf v1.36.11
+	google.golang.org/protobuf v1.36.12
 )
 
 replace github.com/souls-guild/soul-stack/proto/plugin => ../proto/plugin
