@@ -418,7 +418,8 @@ with `action: diagnose` is rejected as unsupported.
     items: "${ input.users }"       # array or object
     as: user                        # variable name in iteration; default: item
   params:
-    command: "redis-cli ACL SETUSER ${ user.name } ${ user.acl }"
+    cmd: redis-cli
+    args: "${ ['ACL', 'SETUSER', user.name] + user.rules }"   # user.rules: a list of ACL rules, one argv element each
 ```
 
 ### Fields `loop:`
@@ -540,12 +541,12 @@ All three blocks refer to `register:` names of other tasks. `register:` therefor
 - name: Apply migration
   module: core.exec.run
   register: migration
-  params: { command: "redis-migrate up" }
+  params: { cmd: redis-migrate, args: [up] }
 
 - name: Rollback migration on failure
   module: core.exec.run
   onfail: [migration]
-  params: { command: "redis-migrate down" }
+  params: { cmd: redis-migrate, args: [down] }
 ```
 
 #### `onfail:` changes the fail-stop run (rescue semantics)
@@ -574,13 +575,13 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 - name: Send report once metrics are ready
   module: core.exec.run
   require: [collect_cpu, collect_memory]
-  params: { command: "report-send.sh" }
+  params: { cmd: report-send.sh }
 
 # Global barrier - wait for all async tasks
 - name: Final consistency check
   module: core.exec.run
   require: all
-  params: { command: "check-cluster-state.sh" }
+  params: { cmd: check-cluster-state.sh }
 ```
 
 > **Border with onchanges/onfail.** `require:` - about **order** (wait). `onchanges:`/`onfail:` - about **condition** (to fulfill or not). They can be combined: `require: [migration]` + `onfail: [migration]` = "wait for migration, execute only if it fails."
@@ -624,7 +625,8 @@ Pattern solution - the author's `has()`-guard on each call to optional-input in 
   when: register.role.stdout == 'master'        # NOT static → params are always rendered
   module: core.exec.run
   params:
-    command: "redis-cli CONFIG SET maxmemory ${ has(input.maxmemory) ? input.maxmemory : '256mb' }"
+    cmd: redis-cli
+    args: [CONFIG, SET, maxmemory, "${ has(input.maxmemory) ? input.maxmemory : '256mb' }"]
 ```
 
 Here `${ has(input.maxmemory) ? input.maxmemory : '256mb' }` substitutes default when `maxmemory` is not passed to `input:` - render does not crash, and on non-master hosts the task will still be skipped to `when:`.
@@ -881,7 +883,8 @@ The exact template engine is fixed [ADR-010](../adr/0010-templating.md): CEL for
     items: "${ input.users }"
     as: user
   params:
-    command: "redis-cli ACL SETUSER ${ user.name } ${ user.acl }"
+    cmd: redis-cli
+    args: "${ ['ACL', 'SETUSER', user.name] + user.rules }"   # user.rules: a list of ACL rules, one argv element each
 ```
 
 ## 12. Open Q

@@ -717,11 +717,11 @@ the step was conditional and the step wrote state every time.
 ```yaml
 # probe: who is the actual master now (see §5 - probe idiom)
 - name: Detect actual redis role per host
-  module: core.exec.run                                        # on: omitted = all member hosts
+  module: core.cmd.shell                                       # on: omitted = all member hosts
   register: redis_role
   changed_when: false                                          # probe state does not change
   params:
-    command: "redis-cli role | head -1"
+    cmd: "redis-cli role | head -1"                            # a pipeline -> shell, not argv
 
 # the next step targets the register of the previous probe, per-host
 - name: Restart only the current replicas
@@ -797,7 +797,8 @@ Example of shared but separate use:
   where: register.redis_role.stdout == 'slave'   # KEY: replicas only (on: omitted = all members)
   module: core.exec.run
   params:
-    command: "redis-cli replicaof ${ soulprint.hosts[0].network.primary_ip } 6379"   # FUNCTION: host data (all members = soulprint.hosts)
+    cmd: redis-cli
+    args: [replicaof, "${ soulprint.hosts[0].network.primary_ip }", "6379"]   # FUNCTION: host data (all members = soulprint.hosts)
 ```
 
 > `soulprint.where(<predicate>)` accepts a CEL predicate **static string literal** ([templating.md §2.3](../templating.md)); keyword style (`coven=...`) is not used. Inside the predicate, the element fields (`covens`/`os.*`/`sid`) and the external context (`incarnation.*`, etc.) are available. **All members of the run** are simply `soulprint.hosts` (the accessor is already incarnation-scoped) — there is **no** "by incarnation coven" predicate: `incarnation.id` is not a Coven and never appears in `covens`, so `soulprint.where("incarnation.id in covens")` is removed ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)). A stable-coven filter "by literal coven X" is `soulprint.where("'<X>' in covens")` — **without** dynamic string concatenation (`"'" + some_var + "' in covens"` - prohibited, the predicate is expanded in the compile phase, see [templating.md §2.3](../templating.md)). Deep nesting of quotes is a well-known footgun, see [templating.md §8](../templating.md): the recommendation is to place such expressions in the `vars:` step.
@@ -971,12 +972,12 @@ Example (primary discovery before point reconfiguration of replicas):
 
 ```yaml
 - name: Detect actual redis primary address on existing hosts
-  module: core.exec.run                            # on: omitted = all member hosts
+  module: core.cmd.shell                           # on: omitted = all member hosts
   where: "!(soulprint.self.sid in input.replicas)"
   register: master_addr
   changed_when: false
   params:
-    command: "[ \"$(redis-cli role | head -1)\" = master ] && redis-cli config get bind | awk 'NR==2{print $1}' || true"
+    cmd: "[ \"$(redis-cli role | head -1)\" = master ] && redis-cli config get bind | awk 'NR==2{print $1}' || true"
 
 - name: Point new replicas at the actual primary
   where: soulprint.self.sid in input.replicas      # on: omitted = all members
@@ -997,7 +998,7 @@ Example (primary discovery before point reconfiguration of replicas):
 
 ## 5. Probe idiom and error handling
 
-**Probe is a regular scenario step, not a special construct.** Probe = `module: core.exec.run` (or other read-only module) + `register:` + `changed_when: false`. No separate type of task, no special "fail-closed for target" invariant, no new attribute.
+**Probe is a regular scenario step, not a special construct.** Probe = a command step (`core.exec.run` for a plain program, `core.cmd.shell` for a pipeline like the one below) or another read-only module + `register:` + `changed_when: false`. No separate type of task, no special "fail-closed for target" invariant, no new attribute.
 
 ```yaml
 - name: Detect actual redis role per host
@@ -1011,8 +1012,10 @@ Example (primary discovery before point reconfiguration of replicas):
 **A probe that exits non-zero fails its host by default.** The probe step is no different from the usual one: without `failed_when:` the host's status is whatever the module reported, and the verb modules judge that by their `exit_codes` param, which defaults to `[0]` ([destiny/tasks.md](../destiny/tasks.md), `failed_when:`). For a probe that answers by exit code — `grep -q`, `test`, `systemctl is-active` — the accepted codes belong on the task:
 
 ```yaml
+module: core.exec.run
 params:
-  cmd: "systemctl is-active redis-server"
+  cmd: systemctl
+  args: [is-active, redis-server]
   exit_codes: [0, 3]                                           # 3 = inactive, still an answer
 ```
 

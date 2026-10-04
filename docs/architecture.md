@@ -1131,14 +1131,14 @@ Scenario step target - key **`on:`**, resolved by Postgres (stable layer):
 
 ### `where:` - volatile role via probe + register
 
-The volatile role (who is now master) is not stored anywhere stably. The scenario puts a **probe step** (`module: core.exec.run` + `register:` + `changed_when: false` + `failed_when:` for completeness), then targets the next step with the key **`where:`** - a volatile predicate on `register:` of this probe, per-host:
+The volatile role (who is now master) is not stored anywhere stably. The scenario puts a **probe step** (a command step - `core.exec.run` for a plain program, `core.cmd.shell` for a pipeline like the one below - plus `register:` and `changed_when: false`), then targets the next step with the key **`where:`** - a volatile predicate on `register:` of this probe, per-host:
 
 ```yaml
 - name: Detect actual redis role per host
-  module: core.exec.run                # on: omitted = all member hosts
+  module: core.cmd.shell               # on: omitted = all member hosts
   register: redis_role
   changed_when: false
-  params: { command: "redis-cli role | head -1" }
+  params: { cmd: "redis-cli role | head -1" }
 
 - name: Restart only the current replicas
   where: register.redis_role.stdout == 'slave'   # on: omitted = all members

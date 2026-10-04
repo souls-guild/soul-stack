@@ -283,12 +283,12 @@ Example (runtime operation, master is determined by a live probe):
 
 ```yaml
 - name: probe actual redis role
-  module: core.exec.run                       # on: omitted = all member hosts
+  module: core.cmd.shell                      # on: omitted = all member hosts
   register: redis_role
   changed_when: false
   failed_when: size(register.redis_role) < size(soulprint.hosts)
   params:
-    command: "redis-cli role | head -1"
+    cmd: "redis-cli role | head -1"
 
 - name: capture master address
   where: register.redis_role.stdout == 'master'   # on: omitted = all members
@@ -296,7 +296,8 @@ Example (runtime operation, master is determined by a live probe):
   register: master_addr
   changed_when: false
   params:
-    command: "hostname -i"
+    cmd: hostname
+    args: [-i]
 
 - name: render redis.conf on each host
   where: register.redis_role.stdout == 'slave'    # on: omitted = all members
