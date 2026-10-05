@@ -1957,11 +1957,12 @@ type KeeperPush struct {
 	ClusterDefaultProvider string `yaml:"cluster_default_provider,omitempty" json:"cluster_default_provider,omitempty"`
 
 	// Transport is how the Keeper reaches a host that has no agent on it yet —
-	// the keeper-side `core.ssh.run` module (NIM-849): `direct` (default,
+	// the keeper-side `core.ssh` module, `run` (NIM-849) and `apply` (NIM-905): `direct` (default,
 	// [push.Dial] by IP with Authorize/Sign and a CA-signed host-cert) or
 	// `teleport` (by-name through the Teleport proxy, host-verify from the
-	// identity file). It never affected the Destiny push run, which is always
-	// generic.
+	// identity file). It does not affect the registry's push run (`POST
+	// /v1/push/apply`, a scenario's push branch), which dials the way that branch
+	// always has.
 	//
 	// ★ A property of the INSTALLATION, deliberately not a scenario param: a task
 	// that could pick a transport would be a task that has to know the site's
@@ -1988,7 +1989,8 @@ type KeeperPush struct {
 	// Empty disables delivery: the dispatcher then execs whatever is already at
 	// the target's `soul_path`. That is the pre-delivery pilot behaviour and it
 	// is kept as a value rather than an error because `core.ssh.run` shares this
-	// wiring and must not lose its daemon over an unset push key. Until NIM-869
+	// wiring and must not lose its daemon over an unset push key. `core.ssh.apply`
+	// (NIM-905) refuses on it instead: a host it reaches has no agent of its own. Until NIM-869
 	// this key did not exist at all, so the dispatcher was wired WITH a Deliverer
 	// and WITHOUT a spec, and every push run died at delivery.
 	//

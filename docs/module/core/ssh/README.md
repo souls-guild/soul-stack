@@ -1,9 +1,11 @@
 # `core.ssh`
 
-The Keeper's transport to a host that has no agent on it yet. One public state,
-`core.ssh.run`; the task is routed by its module address and carries no `on:`
-key ([ADR-063 amendment 2026-09-12](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849),
-NIM-849).
+The Keeper's transport to a host that has no agent on it yet. Two public states:
+`core.ssh.run` executes shell steps
+([ADR-063 amendment 2026-09-12](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849),
+NIM-849), and [`core.ssh.apply`](#coresshapply) applies a destiny
+([ADR draft](../../../adr/draft-ssh-apply-unregistered-hosts.md), NIM-905). Both are
+routed by their module address and carry no `on:` key.
 
 It exists because `core.exec.run` and `core.file.present` are Soul-side and a
 freshly created VM has no Soul: without it the engine can mint a bootstrap token
@@ -200,7 +202,8 @@ waits, and only the connect (NIM-872,
 | Bastion itself unreachable | retried | retried |
 | Bastion declines on policy (`administratively prohibited`) | **fails at once** | retried |
 | "node offline or does not exist" from the proxy | — | retried |
-| SSH handshake rejected (host cert not from our CA, key refused) | **fails at once** | retried |
+| Host key refused (host cert not from our CA; on teleport, a key the identity's CA did not sign, or an identity with no SSH CA at all) | **fails at once** | **fails at once** (NIM-905) |
+| Any other SSH handshake rejection (our key refused) | **fails at once** | retried |
 | `Authorize` deny, `Sign` failure | **fails at once** (both are upstream of the retry) | not called |
 | A step exiting non-zero | **fails at once** | fails at once |
 
@@ -209,10 +212,17 @@ because it has two sub-paths: our own socket, where `net.Dialer` reports every
 connect failure as a `*net.OpError` with `Op == "dial"`; and — when the
 SshProvider returns `proxy_jump` on its `SignReply` — the bastion's direct-tcpip
 channel, where the same absent sshd is an `*ssh.OpenChannelError` with
-`Reason == ConnectionFailed`. `teleport` retries everything, because the proxy
-answers for an unenrolled node with an ordinary error string that carries nothing
-to classify, and its transport, user-auth and host-verify all happen behind that
-one call.
+`Reason == ConnectionFailed`. `teleport` retries everything else, because the
+proxy answers for an unenrolled node with an ordinary error string that carries
+nothing to classify, and its transport, user-auth and host-verify all happen
+behind that one call.
+
+**A refused host key is the exception on both** (NIM-905). The host-key callback
+is wrapped so its refusal is a typed `push.HostKeyError`, and the wait stops on it
+whatever the transport: a key that was refused is refused again, and fifteen
+minutes of retries would only turn the refusal into a timeout. A Teleport identity
+file that carries no SSH CA can verify no host at all; the Keeper refuses to start
+with one, and an identity reissued without one fails each step at once.
 
 **Two consequences worth planning for.**
 
@@ -253,7 +263,7 @@ Hosts are processed sequentially, sessions are closed on both paths.
 `changed` is true when at least one host ran; a step whose every host was skipped
 reports `changed: false`, because nothing happened.
 
-Audit event `ssh.run` (`source: keeper_internal`): `{action, ssh_provider,
+Audit event `ssh.run` (`source: keeper_internal`): `{action: run, ssh_provider,
 transport, count, skipped, steps, sids}` — counts and addressing. The command
 text is **not** included: it is the site's own policy and the module cannot vouch
 for what an author put in one.
@@ -269,6 +279,98 @@ The canonical description of what an installed host must end up with — paths,
 permissions, `soul.yml`, the systemd unit — is
 [`keeper/internal/soulinstall`](../../../../keeper/internal/soulinstall), which
 describes an outcome and not a procedure.
+
+## `core.ssh.apply`
+
+Applies a **destiny** to each host of a list over SSH: the agent binary is
+delivered, and `soul apply` runs the destiny the Keeper rendered for that host
+([ADR draft](../../../adr/draft-ssh-apply-unregistered-hosts.md), NIM-905). The list
+says who the hosts are — the registry is neither read nor written, so a machine
+created seconds ago, with no `souls` row or only the `pending` one
+`core.bootstrap.issued` writes, is reached the same way.
+
+```yaml
+- name: Install the agent on the new VMs
+  module: core.ssh.apply
+  params:
+    hosts: "${ register.mint.hosts }"
+    ssh_provider: teleport
+    destiny: soul
+    input:
+      keeper_host: "${ vars.keeper_endpoint_host }"
+      keeper_ca: "${ vault(vars.keeper_ca_path + '#ca') }"
+      binary_url: "${ vars.soul_binary_url }"
+      binary_sha256: "${ 'sha256:' + vars.soul_binary_sha256 }"
+    input_from:
+      bootstrap_token: bootstrap_token
+```
+
+### Parameters
+
+`hosts`, `ssh_provider`, `ssh_user`, `ssh_port` and `join_wait_timeout` are
+[`core.ssh.run`'s](#parameters), with the same parsing: `sid` required per entry,
+`primary_ip` on `direct` only, `onboarded: true` skipped and not dialed,
+`token_held: true` refused by name. A SID listed twice is refused before any dial —
+hosts run at once, and two installs on one machine would redeem one token twice.
+
+| Parameter | Type | Req. | Semantics |
+|---|---|---|---|
+| `destiny` | string | required | A destiny declared in the service's `service.yml destiny[]`, resolved at its ref exactly as `apply: destiny:` resolves it. An undeclared name gets `apply:`'s refusal. |
+| `input` | map | — | The destiny's input, the same for every host. |
+| `input_from` | map of string | — | Per-host input: destiny input name → the name of a top-level string field of the host entry. This is how each host gets ITS OWN bootstrap token. A host that will be dialed and lacks the field is refused before any host is dialed; a name also set in `input` is refused. |
+
+### What happens, in order
+
+1. **Every host is rendered before any is dialed.** The destiny is rendered per
+   host by the run's own render pipeline, with the run's incarnation, so the vault
+   fence keyed on the service stays on. A listed host has **no Soulprint**:
+   `soulprint.self` holds only its `sid`, and a destiny reading `soulprint.self.os.*`
+   fails the render. Values reach the destiny **by reference** — a value that
+   contains `${ … }` arrives as that text and is never evaluated on the Keeper.
+   A missing field or a render error fails the step with nothing executed anywhere.
+2. **All hosts run at once.** Each is dialed the way `core.ssh.run` dials it
+   (`keeper.yml::push.transport`, the join wait), the agent from
+   `keeper.yml::push.soul_binary_path` is delivered to
+   `/var/lib/soul-stack/bin/soul` with SHA-256 dedup, and that file runs `soul apply`
+   with the rendered tasks on stdin — the same executor the registry's push branch
+   runs. Delivery is **mandatory**: with `push.soul_binary_path` unset the step is
+   refused by name before any dial.
+3. **Every host runs to its end**; if any failed, the step fails and names each
+   failed host with its failed task and the agent's reason, every secret value the
+   module knows masked.
+
+The host needs no seed and no identity: `soul apply` loads `soul.yml` only if one
+exists. Its **plugin** modules fail closed there (no trust anchor, no Sigil),
+and module delivery over push is not built, so the destiny must use core modules.
+
+### Output and audit
+
+The register carries `hosts[] = {sid, ran, skipped, changed}` + `count` +
+`skipped` + `changed`, and nothing the destiny printed.
+
+Audit event `ssh.run` with `action: apply` and `correlation_id` = the run's
+apply_id: `{destiny: <name>@<ref>, ssh_provider, transport, count, skipped, sids,
+hosts[]}`, where each host carries its `status` (`success`/`failed`, or
+`skipped: true`), a masked `error` when it failed, and its destiny tasks as
+`{task, module, status}` — never params or output. A host that failed before the agent
+answered (an `Authorize` deny, the join wait, a failed delivery) carries no tasks; a task
+after a failed one is `skipped`, and `not_run` marks one the agent never reported. With
+every entry skipped nothing was rendered, and the destiny is named without its ref. It is
+written after every host has finished, failed or not, on a context detached from the run's
+so a run cut off by its timeout still leaves the record. A step refused before any host is
+dialed — for example a duplicate SID, a `token_held` entry, a missing `input_from` field, a
+render error, no delivery, no host CAs or an unknown provider — writes none; its refusal is the record. A filter on `type=ssh.run` returns both
+states; tell them apart by `action`.
+
+### Bounds
+
+- The step is bounded by the join wait per host and the run's ceiling — 5 min, or
+  `max_await_timeout` + 10 min when the plan carries a `refresh_soulprint: true`
+  emitter. A chain that installs agents needs that emitter on its
+  `core.soul.registered`, and the slowest host's install has to fit.
+- The inner run's task events are not stored per host; the audit record carries
+  the task list and the step's message the failure.
+- `/var/lib/soul-stack/bin/soul` is left on the host.
 
 ## See also
 

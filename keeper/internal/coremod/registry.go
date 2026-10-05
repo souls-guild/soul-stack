@@ -13,7 +13,7 @@
 // Choir of incarnation, registered when Deps.ChoirStore is present),
 // `core.cert` (`core.cert.registered`/`core.cert.issued`, NIM-99),
 // `core.bootstrap` (`core.bootstrap.issued`, ADR-063) and `core.ssh`
-// (`core.ssh.run`, NIM-849 — agentless command transport). All execute on the
+// (`core.ssh.run` NIM-849 / `core.ssh.apply` NIM-905 — agentless transport). All execute on the
 // keeper instance, and the scenario-runner routes them by ADDRESS (NIM-747):
 // `on: keeper` on any of the seven is refused as `on_keeper_redundant`.
 //
@@ -125,7 +125,7 @@ type Deps struct {
 	// keeper-side module" — the same "not configured" signal as choir and cert.
 	BootstrapIssuer bootstrap.Issuer
 
-	// SSHDial opens the SSH session for `core.ssh.run` and is that module's whole
+	// SSHDial opens the SSH session for `core.ssh` (`run` and `apply`) and is that module's whole
 	// registration gate: without a dialer there is no transport, and a step with
 	// that address must answer "unknown keeper-side module" like any other
 	// unconfigured keeper-side core. Prod is push.Dial (direct) or
@@ -146,6 +146,15 @@ type Deps struct {
 	// double the plugin processes. nil in teleport mode, where neither is used.
 	SSHProviders func() map[string]coremodssh.SshProviderHost
 	SSHHostCAs   func() []push.NamedHostKeyAuthority
+
+	// SSHDeliverer / SSHSoulSpec / SSHDeliveryErr are `push.DeliveryFromConfig`
+	// over keeper.yml::push, resolved once at startup: what `core.ssh.apply`
+	// puts on a host before it execs `soul apply` there. A nil deliverer refuses
+	// that state by name, with SSHDeliveryErr as the reason when the operator set
+	// a path that could not be opened.
+	SSHDeliverer   push.Deliverer
+	SSHSoulSpec    push.SoulSpec
+	SSHDeliveryErr error
 
 	// Audit is single audit-writer for keeper-side modules (vault/bootstrap/cert
 	// write audit events; soul/choir do not). nil allowed (modules skip write and
@@ -214,7 +223,7 @@ func Default(d Deps) *Registry {
 			Audit:  d.Audit,
 		}
 	}
-	// `core.ssh.run` (NIM-849) is registered when there is a dialer, which is the
+	// `core.ssh` (`run` NIM-849, `apply` NIM-905) is registered when there is a dialer, which is the
 	// whole of its transport. It is the engine's only way to execute anything on
 	// a host that has no agent yet — `core.exec.run` and `core.file.present` are
 	// Soul-side, and a bare VM has no Soul — so a build without it mints tokens
@@ -223,11 +232,14 @@ func Default(d Deps) *Registry {
 	// not here: they are spawned and loaded after this runs.
 	if d.SSHDial != nil {
 		mods[coremodssh.Name] = &coremodssh.Module{
-			Transport: d.SSHTransport,
-			Providers: d.SSHProviders,
-			HostCAs:   d.SSHHostCAs,
-			Dial:      d.SSHDial,
-			Audit:     d.Audit,
+			Transport:   d.SSHTransport,
+			Providers:   d.SSHProviders,
+			HostCAs:     d.SSHHostCAs,
+			Dial:        d.SSHDial,
+			Deliverer:   d.SSHDeliverer,
+			SoulSpec:    d.SSHSoulSpec,
+			DeliveryErr: d.SSHDeliveryErr,
+			Audit:       d.Audit,
 		}
 	}
 	return NewRegistry(mods)

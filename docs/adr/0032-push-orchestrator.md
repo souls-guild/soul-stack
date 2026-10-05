@@ -176,3 +176,13 @@ provider router's Level 0 (`source: task`) is now reachable from a scenario task
 not only from the push API; for a scenario run the routing decision is recorded on
 the run's `apply.dispatched` audit event rather than in `push_runs.summary`, which
 that run does not have.
+
+**Amendment (2026-10-05, NIM-905): the executor serves a second addressing.** The
+half of `SendApply` that does not care how a host was reached — deliver the agent,
+exec `soul apply` with the `ApplyRequest` on stdin, parse the NDJSON — is
+`push.ApplyOverSession`, and `core.ssh.apply` runs it too, against hosts a list
+names rather than the registry routes. The registry branch is unchanged but for one
+text: a host certificate the Vault CAs did not sign is now a typed `push.HostKeyError`,
+and its connect error reads `host key not verified: <host:port>: …`. Anything added to
+the executor is added to both. See
+[ADR draft — core.ssh.apply](draft-ssh-apply-unregistered-hosts.md).

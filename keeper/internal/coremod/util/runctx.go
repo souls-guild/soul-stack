@@ -4,6 +4,7 @@ import (
 	"context"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -121,7 +122,9 @@ func RunScopeFrom(ctx context.Context) (RunScope, bool) {
 // keeper-side core module. Same channel and same reasoning as
 // [incarnationKey]: ApplyRequest carries params, not their provenance.
 //
-// The consumer is a module that must REFUSE a secret rather than mask it.
+// Two consumers. `core.ssh.apply` masks with it: the values at sealed cells of
+// its own params are replaced in its message and audit record (NIM-905). And a
+// module that must REFUSE a secret rather than mask it:
 // `core.ssh.run` will not put a secret in a command line, because argv is
 // visible in `ps`, in `audit.log` and in journald on the host itself — and the
 // seal is the only record of which cell holds one. Masking downstream is the
@@ -188,4 +191,45 @@ func WithStateOpEvaluators(ctx context.Context, e StateOpEvaluators) context.Con
 func StateOpEvaluatorsFrom(ctx context.Context) (StateOpEvaluators, bool) {
 	e, ok := ctx.Value(stateOpEvaluatorsKey{}).(StateOpEvaluators)
 	return e, ok
+}
+
+// RenderedDestiny is a destiny rendered for one host outside the run's roster:
+// what `core.ssh.apply` sends to `soul apply` there.
+type RenderedDestiny struct {
+	// Ref is the destiny's git ref, as the run's service declares it.
+	Ref string
+	// Tasks is the ApplyRequest body for this host; a TaskEvent's task_idx is a
+	// position in it.
+	Tasks []*keeperv1.RenderedTask
+	// Secrets are the values the render knows to be secret — sealed params and
+	// the destiny's `secret: true` inputs — so a message can be masked.
+	Secrets []string
+}
+
+// DestinyRenderFunc renders destiny `name` for the host `sid`, which is not in
+// the run's roster, with `input` as the destiny's input. It renders the way an
+// `apply:` of the same run would: the run's destiny resolver, the run's
+// incarnation, the run's vault fence.
+type DestinyRenderFunc func(ctx context.Context, name, sid string, input map[string]any) (*RenderedDestiny, error)
+
+// destinyRendererKey carries the run's destiny render into a keeper-side core
+// module. Same channel and same reasoning as [stateOpEvaluatorsKey]: rendering
+// needs the run's resolver, incarnation and render pipeline, and ApplyRequest
+// carries none of them.
+type destinyRendererKey struct{}
+
+// WithDestinyRenderer returns ctx carrying the run's destiny render. nil is a
+// no-op.
+func WithDestinyRenderer(ctx context.Context, f DestinyRenderFunc) context.Context {
+	if f == nil {
+		return ctx
+	}
+	return context.WithValue(ctx, destinyRendererKey{}, f)
+}
+
+// DestinyRendererFrom returns the run's destiny render, or nil outside a
+// scenario run. A module that needs it must refuse on nil.
+func DestinyRendererFrom(ctx context.Context) DestinyRenderFunc {
+	f, _ := ctx.Value(destinyRendererKey{}).(DestinyRenderFunc)
+	return f
 }

@@ -259,6 +259,28 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **`core.ssh.apply` — a destiny applied over SSH to hosts a list names, not the registry (NIM-905,
+  [ADR-draft ssh-apply-unregistered-hosts](docs/adr/draft-ssh-apply-unregistered-hosts.md)).** A bare
+  VM could not be given a destiny: the push branch is picked by the host's own `souls.transport`,
+  and a fresh machine has no row that routes it. The new state on the keeper-side `core.ssh`
+  takes `hosts:` as `core.ssh.run` does, delivers the agent from `keeper.yml::push.soul_binary_path`
+  (mandatory — refused by name when unset) and runs `soul apply` with the destiny the Keeper
+  rendered for each host, through the executor the registry's push branch uses
+  (`push.ApplyOverSession`). `destiny:` resolves through `service.yml destiny[]` like `apply:`,
+  `input:` is the same for every host and `input_from:` hands each host its own field (its
+  bootstrap token). The registry is neither read nor written. Every host is rendered before any is
+  dialed; hosts run in parallel and every one runs to its end; a SID listed twice is refused. Audit
+  `ssh.run` with `action: apply` records each host's tasks and status, never params or output.
+  - **A refused host key is never waited on, on teleport too.** The join wait used to retry every
+    teleport error, so a host key the identity's CA did not sign reached the scenario as a join
+    timeout. A refusal is now a typed `push.HostKeyError` on both transports; `core.ssh.run` gets
+    it as well, and on the registry branch the connect error reads `host key not verified: …`.
+    `core.ssh.run` also refuses an `ssh_port` outside 1..65535 at the step now, where only
+    `Validate` did — a rendered port is not checkable offline.
+  - **⚠ A Teleport identity file with no SSH CA now stops the Keeper at start** (and fails each
+    dial at once if reissued that way). It could verify no host before either — every dial failed
+    at the handshake.
+
 - **The live gate has a SERVICE as its subject again, and it is not in this tree**
   (NIM-876). `make e2e-live-gate` — the blocking pre-tag step
   ([RELEASING.md](RELEASING.md) step e) — goes from three tests to five, and the two added

@@ -1,7 +1,8 @@
-// Package ssh implements the keeper-side core module `core.ssh.run`: it opens
-// an SSH session to each host of a list and executes an ordered list of shell
-// steps on it, feeding a value to a step's stdin when the step asks for one
-// (NIM-849, ADR-063 amendment 2026-09-12).
+// Package ssh implements the keeper-side core module `core.ssh`. Its state
+// `core.ssh.run` (this file) opens an SSH session to each host of a list and
+// executes an ordered list of shell steps on it, feeding a value to a step's
+// stdin when the step asks for one (NIM-849, ADR-063 amendment 2026-09-12);
+// `core.ssh.apply` (apply.go, NIM-905) applies a destiny over the same dial.
 //
 // ★ It is a TRANSPORT and nothing else. It knows how to reach a host that has
 // no agent on it yet and how to run a command there without leaking a secret
@@ -88,11 +89,11 @@ import (
 )
 
 // Name is the base module name without the state suffix (Registry key). The
-// author form is `core.ssh.run`; the state arrives in
+// author forms are `core.ssh.run` and `core.ssh.apply`; the state arrives in
 // pluginv1.ApplyRequest.state and is checked in Validate and Apply.
 const Name = "core.ssh"
 
-// StateRun is the only state this module has.
+// StateRun executes shell steps on each host (this file).
 const StateRun = "run"
 
 // Defaults for the optional connection parameters.
@@ -193,13 +194,22 @@ type Module struct {
 	RetryBase   time.Duration
 	RetryJitter time.Duration
 
+	// Deliverer / SoulSpec put the agent on the host before `core.ssh.apply`
+	// execs it — resolved once at registration from keeper.yml::push. A nil
+	// Deliverer refuses that state: a host with no agent has nothing to run
+	// `soul apply` with. DeliveryErr is why it is nil when the operator did set
+	// a path, so the refusal can say so. `core.ssh.run` uses none of them.
+	Deliverer   push.Deliverer
+	SoulSpec    push.SoulSpec
+	DeliveryErr error
+
 	// Audit writes the `ssh.run` event. nil → skipped.
 	Audit AuditWriter
 }
 
 // unknownState is the refusal shared by Validate and Apply.
 func unknownState(state string) string {
-	return fmt.Sprintf("unknown state %q (want %q)", state, StateRun)
+	return fmt.Sprintf("unknown state %q (want %q or %q)", state, StateRun, StateApply)
 }
 
 func (m *Module) teleport() bool { return m.Transport == TransportTeleport }
@@ -220,10 +230,17 @@ func (m *Module) retryBackoff() (base, jitter time.Duration) {
 // seal, and offline a `run:` cell is still the uninterpolated `${ … }` text.
 // The guards live in Apply, before the first connect.
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	if req.State != StateRun {
+	var errs []string
+	switch req.State {
+	case StateRun:
+		if _, err := parseSteps(req.Params); err != nil {
+			errs = append(errs, err.Error())
+		}
+	case StateApply:
+		errs = append(errs, validateApplyParams(req.Params)...)
+	default:
 		return &pluginv1.ValidateReply{Ok: false, Errors: []string{unknownState(req.State)}}, nil
 	}
-	var errs []string
 	if _, err := util.StringParam(req.Params, "ssh_provider"); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -232,9 +249,8 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 	if _, ok := req.Params.GetFields()["hosts"]; !ok {
 		errs = append(errs, "param \"hosts\": missing")
 	}
-	if _, err := parseSteps(req.Params); err != nil {
-		errs = append(errs, err.Error())
-	}
+	// Each connection param on its own, so an author with two bad ones sees both
+	// in one lint pass — parseConn stops at the first.
 	if _, err := util.OptStringParam(req.Params, "ssh_user"); err != nil {
 		errs = append(errs, err.Error())
 	}
@@ -254,10 +270,67 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 }
 
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	if req.State != StateRun {
+	switch req.State {
+	case StateRun:
+		return m.applyRun(req, stream)
+	case StateApply:
+		return m.applyDestiny(req, stream)
+	default:
 		return util.SendFailed(stream, unknownState(req.State))
 	}
-	return m.applyRun(req, stream)
+}
+
+// parseConn reads the optional connection params both states share, with their
+// defaults applied.
+func parseConn(params *structpb.Struct) (user string, port int, joinWait time.Duration, err error) {
+	user, err = util.OptStringParam(params, "ssh_user")
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if user == "" {
+		user = defaultSSHUser
+	}
+	n, hasPort, err := util.OptIntParam(params, "ssh_port")
+	if err != nil {
+		return "", 0, 0, err
+	}
+	port = defaultSSHPort
+	if hasPort {
+		if n < 1 || n > 65535 {
+			return "", 0, 0, errors.New("param \"ssh_port\": must be in 1..65535")
+		}
+		port = int(n)
+	}
+	joinWait, hasJoinWait, err := parseJoinWait(params)
+	if err != nil {
+		return "", 0, 0, err
+	}
+	if !hasJoinWait {
+		joinWait = defaultJoinWaitTimeout
+	}
+	return user, port, joinWait, nil
+}
+
+// directAuth resolves what the direct transport needs before it may dial: the
+// host CAs (empty is a refusal, never a blind connect) and the named provider.
+// The teleport transport needs neither and gets (nil, nil, "").
+func (m *Module) directAuth(op, providerName string) (SshProviderHost, []push.NamedHostKeyAuthority, string) {
+	if m.teleport() {
+		return nil, nil, ""
+	}
+	var hostCAs []push.NamedHostKeyAuthority
+	if m.HostCAs != nil {
+		hostCAs = m.HostCAs()
+	}
+	if len(hostCAs) == 0 {
+		return nil, nil, op + ": host CAs not configured (set keeper.yml::push.host_ca_refs[] — CA-signed host-cert verify is required)"
+	}
+	providers := m.resolveProviders()
+	p, ok := providers[providerName]
+	if !ok || p == nil {
+		return nil, nil, fmt.Sprintf("%s: ssh_provider %q not registered (known: %v)", op, providerName, providerNames(providers))
+	}
+	return p, hostCAs, ""
 }
 
 func (m *Module) applyRun(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
@@ -286,49 +359,18 @@ func (m *Module) applyRun(req *pluginv1.ApplyRequest, stream grpc.ServerStreamin
 		return util.SendFailed(stream, err.Error())
 	}
 
-	sshUser, err := util.OptStringParam(req.Params, "ssh_user")
+	sshUser, sshPort, joinWait, err := parseConn(req.Params)
 	if err != nil {
 		return util.SendFailed(stream, err.Error())
-	}
-	if sshUser == "" {
-		sshUser = defaultSSHUser
-	}
-	sshPort, hasPort, err := util.OptIntParam(req.Params, "ssh_port")
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
-	}
-	if !hasPort {
-		sshPort = defaultSSHPort
-	}
-	joinWait, hasJoinWait, err := parseJoinWait(req.Params)
-	if err != nil {
-		return util.SendFailed(stream, err.Error())
-	}
-	if !hasJoinWait {
-		joinWait = defaultJoinWaitTimeout
 	}
 
 	// Configuration preconditions — an explicit refusal instead of a nil panic.
 	if m.Dial == nil {
 		return util.SendFailed(stream, "ssh run: dialer not configured (wire push.Dial / push.NewTeleportDialer in main)")
 	}
-	var (
-		prov    SshProviderHost
-		hostCAs []push.NamedHostKeyAuthority
-	)
-	if !m.teleport() {
-		if m.HostCAs != nil {
-			hostCAs = m.HostCAs()
-		}
-		if len(hostCAs) == 0 {
-			return util.SendFailed(stream, "ssh run: host CAs not configured (set keeper.yml::push.host_ca_refs[] — CA-signed host-cert verify is required)")
-		}
-		providers := m.resolveProviders()
-		p, ok := providers[providerName]
-		if !ok || p == nil {
-			return util.SendFailed(stream, fmt.Sprintf("ssh run: ssh_provider %q not registered (known: %v)", providerName, providerNames(providers)))
-		}
-		prov = p
+	prov, hostCAs, refusal := m.directAuth("ssh run", providerName)
+	if refusal != "" {
+		return util.SendFailed(stream, refusal)
 	}
 
 	results := make([]any, 0, len(hosts))
@@ -344,7 +386,7 @@ func (m *Module) applyRun(req *pluginv1.ApplyRequest, stream grpc.ServerStreamin
 			results = append(results, map[string]any{"sid": h.sid, "ran": false, "skipped": true})
 			continue
 		}
-		if err := m.runHost(ctx, prov, hostCAs, h, sshUser, int(sshPort), steps, joinWait); err != nil {
+		if err := m.runHost(ctx, prov, hostCAs, h, sshUser, sshPort, steps, joinWait); err != nil {
 			// B1-strict. maskErr is the last barrier against a vault ref or a
 			// token reaching status_details through the error text.
 			return util.SendFailed(stream, fmt.Sprintf("ssh run on %q (%s): %s", h.sid, h.connectTarget(m.teleport()), maskErr(err)))
@@ -494,7 +536,8 @@ type joinRetry struct {
 }
 
 var (
-	// teleportJoinRetry retries every Dial error. In this mode the proxy answers
+	// teleportJoinRetry retries every Dial error but a refused host key, which
+	// dialWithJoinRetry stops on for both transports. In this mode the proxy answers
 	// for a node that has not enrolled yet with an ordinary error string ("node
 	// offline or does not exist") that carries no shape a classifier could read,
 	// and the transport, user-auth and host-verify a direct dial could fail on
@@ -553,7 +596,10 @@ func (m *Module) dialWithJoinRetry(ctx context.Context, cfg push.DialConfig, joi
 		}
 		lastErr = err
 
-		if !r.retryable(err) {
+		// A host whose key was refused, or which nothing can verify, will be
+		// refused again: on teleport `retryable` is true for every error, so this
+		// is what keeps a rejected key from turning into a join timeout (NIM-905).
+		if push.IsHostKeyError(err) || !r.retryable(err) {
 			return nil, err
 		}
 		if ctx.Err() != nil {

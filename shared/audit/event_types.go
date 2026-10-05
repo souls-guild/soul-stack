@@ -420,15 +420,25 @@ const (
 	// (NIM-900); `sids` answers for every requested host either way.
 	EventBootstrapIssued EventType = "bootstrap.issued"
 
-	// EventSSHRun — the keeper-side core module `core.ssh.run` opened an SSH
-	// session to a batch of hosts and executed the step list on each
-	// (ADR-063 amendment 2026-09-12). A Keeper reaching into hosts without an
-	// agent is a security signal in its own right, which `task.executed` does
-	// not name. `source: keeper_internal`, `archon_aid: NULL`. Payload:
-	// `{action: "run", ssh_provider, transport, count, skipped, steps, sids}` —
-	// counts and addressing only. The command strings are NOT included: they are
-	// the site's own policy and the module cannot vouch for what an author put
-	// in one.
+	// EventSSHRun — the keeper-side core module `core.ssh` opened SSH sessions
+	// to a batch of hosts and executed something on each (ADR-063 amendment
+	// 2026-09-12). A Keeper reaching into hosts without an agent is a security
+	// signal in its own right, which `task.executed` does not name.
+	// `source: keeper_internal`, `archon_aid: NULL`. The payload's `action` says
+	// which state ran — the one event type covers both, so filter on it:
+	//   - `run` (`core.ssh.run`): `{action, ssh_provider, transport, count,
+	//     skipped, steps, sids}` — counts and addressing only. The command strings
+	//     are NOT included: they are the site's own policy and the module cannot
+	//     vouch for what an author put in one;
+	//   - `apply` (`core.ssh.apply`, NIM-905): `{action, destiny, ssh_provider,
+	//     transport, count, skipped, sids, hosts}` with `correlation_id` = the
+	//     run's apply_id; `hosts[]` carries each host's status, its masked error
+	//     and its destiny tasks as `{task, module, status}` — never params or
+	//     output, which is where a token would be. Written after every host has
+	//     finished, failed or not; a step refused before any host is dialed
+	//     (for example a duplicate SID, a token_held entry, a missing input_from
+	//     field, a render error, no delivery, no host CAs or an unknown provider)
+	//     writes none.
 	EventSSHRun EventType = "ssh.run"
 
 	// EventApplyDispatched — Keeper sent an `ApplyRequest` to a Soul over the

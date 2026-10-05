@@ -15,6 +15,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
+	coremodutil "github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -377,6 +378,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		destinyRes = r.deps.Destiny.resolverFor(art.Manifest, r.deps.KeeperVersion, log)
 		renderIn.Destiny = destinyRes
 	}
+	// `core.ssh.apply` renders its destiny for hosts outside the roster with this
+	// run's resolver and incarnation, at the step (NIM-905); keeper dispatch
+	// derives the module context from this ctx.
+	ctx = coremodutil.WithDestinyRenderer(ctx, r.listedHostDestinyRenderer(destinyRes, renderIn.Incarnation, renderIn.Modules, renderIn.SecretStateFields))
 
 	// Engine provenance (ADR-0076(l)): from here on the run accumulates what it
 	// is being executed BY — this instance's version, the windows every entity it

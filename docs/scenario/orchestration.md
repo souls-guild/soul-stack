@@ -440,7 +440,7 @@ half-working.
   destiny**. A keeper task never leaves the Keeper, so there is no host at the far end; a
   destiny is rendered per host and shipped whole to the ONE transport the scenario task
   that applies it chose, so a second name there has nothing to act on. A keeper-side
-  module that dials hosts itself — `core.ssh.run` — takes its own `ssh_provider`/
+  module that dials hosts itself — `core.ssh.run`, `core.ssh.apply` — takes its own `ssh_provider`/
   `hosts` params, and its direct/teleport mode stays `keeper.yml::push.transport`.
 - **It is not interpolated** (`transport_interpolation_unsupported`). The key is
   decided once per task, before the hosts are resolved, so there is no per-host env

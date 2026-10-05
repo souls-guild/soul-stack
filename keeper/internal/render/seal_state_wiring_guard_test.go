@@ -51,6 +51,12 @@ var secretStateFieldsStance = map[string]struct {
 		reason: "a push run is not tied to an incarnation — State is nil, so `incarnation.state.<x>` is " +
 			"a no-such-key and there is no manifest to ask either",
 	},
+	"scenario.renderListedHostDestiny": {
+		want: "secretStateFields",
+		reason: "core.ssh.apply's render for a host outside the roster (NIM-905) collects a seal to mask " +
+			"its messages; it carries the run's own answer as renderApplyDestiny does — State is nil, a " +
+			"destiny reads no incarnation.state, so it addresses nothing until State is forwarded",
+	},
 	"trial.renderCase": {
 		reason: "State comes from the case's own fixtures and Sealed is nil: a trial's output is the " +
 			"operator's dry-run, not a durable run-plan row",

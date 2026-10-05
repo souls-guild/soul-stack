@@ -32,7 +32,7 @@ So `topology.Resolver` exempts `transport='ssh'` from both arms, and the push in
 ### What a push run does NOT do
 
 - **A BARE push run (`POST /v1/push/apply`) fills no `register:`, by decision.** `register_data` rides on `TaskEvent`, `RunResult` has no field for it, and `apply_task_register` carries a foreign key to `apply_runs(apply_id, sid, passage)` — a row such a run never writes (it writes `push_runs`). Nothing is lost: there is no scenario around it to read a `register.<name>` back and no barrier to release, and minting the row would invent an incarnation the run does not belong to. ★ A SCENARIO task dispatched over push is the opposite case and fills its register exactly as a streamed one does — see [A scenario over push](#a-scenario-over-push) and [ADR-0089](../adr/0089-scenario-push-branch.md).
-- **It does not bootstrap a bare machine.** `souls.ssh_target` has no address column — `SSHTarget.Host` IS the SID — and a fresh VM's address is the provider's `primary_ip`, not yet in DNS. `core.bootstrap.issued` also writes `transport='agent'` as a literal and refuses `ssh`, so there is no scenario step that mints a push host. Minting one is a registry change, not a transport one.
+- **It does not bootstrap a bare machine.** `souls.ssh_target` has no address column — `SSHTarget.Host` IS the SID — and a fresh VM's address is the provider's `primary_ip`, not yet in DNS. `core.bootstrap.issued` also writes `transport='agent'` as a literal and refuses `ssh`, so there is no scenario step that mints a push host. Minting one is a registry change, not a transport one. A destiny for a machine like that is applied by [`core.ssh.apply`](modules.md#coresshapply) (NIM-905), which takes its hosts from a list and runs this same executor without consulting the registry.
 
 ## SSH authentication — pluggable provider
 
@@ -75,8 +75,8 @@ It is an operator-facing contract of the host filesystem, so moving it is a PM d
 `push.soul_binary_path` in `keeper.yml` is the absolute path, **on the keeper node**, of the `soul` binary to deliver. There is no default: keeper and soul are separate artifacts (ADR-004) and only the operator knows where the matching build sits.
 
 - set and readable → delivery is on;
-- set and unreadable → the daemon refuses to start, naming the path;
-- **omitted → delivery is OFF**, and the run execs whatever is already at the target's `soul_path`. On a bare host that is `exit 127`, which is the honest outcome; it is a configuration rather than an error because the same wiring serves `core.ssh.run`, and a pull-only installation must not lose its daemon over an unset push key. The daemon logs a WARN at start.
+- set and unreadable → the daemon refuses to start, naming the path — when it builds the push dispatcher at all. A Keeper that builds no dispatcher (no `ssh_providers`, no SshProvider plugin discovered, or no `host_ca_refs` — the usual teleport-only setup) starts, and `core.ssh.apply` refuses its steps with that error (NIM-905);
+- **omitted → delivery is OFF**, and the run execs whatever is already at the target's `soul_path`. On a bare host that is `exit 127`, which is the honest outcome; it is a configuration rather than an error because the same wiring serves `core.ssh.run`, and a pull-only installation must not lose its daemon over an unset push key. The daemon logs a WARN at start. `core.ssh.apply` refuses by name instead: a host it reaches has no agent of its own.
 
 ### Algorithm of each push run
 

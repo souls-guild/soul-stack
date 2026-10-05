@@ -408,12 +408,22 @@ func TestTeleportSession_ProxyClientOwnership(t *testing.T) {
 
 // writeValidIdentityFile assembles a minimally-valid Teleport identity file
 // (ed25519 priv + a self-signed SSH user cert + a self-signed X.509 TLS cert
-// under the same key) and returns its path. Enough for both
-// creds.TLSConfig() and creds.SSHClientConfig() to come up without a live
-// Teleport network (known_hosts is omitted so ProxyClientSSHConfig doesn't
-// require a CA). Not valid for a real connection — it's only for checking
+// under the same key + one SSH host CA in known_hosts) and returns its path.
+// Enough for creds.TLSConfig() and creds.SSHClientConfig() to come up without a
+// live Teleport network. Not valid for a real connection — it's only for checking
 // preflight parsing.
+//
+// ★ The host CA is what makes it valid: without `known_hosts` the identity yields
+// no host-key callback, and the preflight refuses it (NIM-905). Do not drop the CA
+// to make a test pass — that is the identity the refusal exists for.
 func writeValidIdentityFile(t *testing.T) string {
+	t.Helper()
+	return writeIdentityFile(t, true)
+}
+
+// writeIdentityFile is [writeValidIdentityFile] with the host CA optional, so the
+// refusal of an identity without one can be tested against the same fixture.
+func writeIdentityFile(t *testing.T, withHostCA bool) string {
 	t.Helper()
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
@@ -465,6 +475,18 @@ func writeValidIdentityFile(t *testing.T) string {
 	idf := &identityfile.IdentityFile{
 		PrivateKey: privPEM,
 		Certs:      identityfile.Certs{SSH: sshCertPEM, TLS: tlsCertPEM},
+	}
+	if withHostCA {
+		caPub, _, err := ed25519.GenerateKey(rand.Reader)
+		if err != nil {
+			t.Fatalf("ed25519 host CA keygen: %v", err)
+		}
+		caSSH, err := ssh.NewPublicKey(caPub)
+		if err != nil {
+			t.Fatalf("host CA public key: %v", err)
+		}
+		line := "@cert-authority * " + strings.TrimSpace(string(ssh.MarshalAuthorizedKey(caSSH)))
+		idf.CACerts.SSH = [][]byte{[]byte(line)}
 	}
 	path := filepath.Join(t.TempDir(), "identity")
 	if err := identityfile.Write(idf, path); err != nil {

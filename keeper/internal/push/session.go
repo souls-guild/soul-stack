@@ -148,7 +148,7 @@ func hostCertCallback(cas []NamedHostKeyAuthority, onMatch func(caName string)) 
 			return false
 		},
 	}
-	return checker.CheckHostKey
+	return tagHostKeyCallback(checker.CheckHostKey)
 }
 
 // bytesEqual compares marshaled keys without caring about constant-time (this

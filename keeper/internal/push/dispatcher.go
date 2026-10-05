@@ -435,21 +435,7 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, 
 		}
 	}()
 
-	if d.deps.Deliverer != nil {
-		if err := d.deps.Deliverer.Deliver(ctx, sess, d.deps.SoulSpec); err != nil {
-			return nil, fmt.Errorf("push: artifact delivery %s: %w", sid, err)
-		}
-	}
-
-	stdin, err := protojson.Marshal(req)
-	if err != nil {
-		return nil, fmt.Errorf("push: marshal ApplyRequest %s: %w", sid, err)
-	}
-
-	cmd := soulApplyCommand(target.SoulPath)
-	stdout, runErr := sess.Run(ctx, cmd, stdin)
-
-	rr, parseErr := ParseStream(strings.NewReader(stdout), func(ev *keeperv1.TaskEvent) {
+	rr, err := ApplyOverSession(ctx, sess, d.deps.Deliverer, d.deps.SoulSpec, target.SoulPath, sid, req, func(ev *keeperv1.TaskEvent) {
 		log.Debug("push: TaskEvent",
 			slog.Int("task_idx", int(ev.GetTaskIdx())),
 			slog.String("status", ev.GetStatus().String()))
@@ -457,14 +443,46 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, 
 			onEvent(ev)
 		}
 	})
-	if parseErr != nil {
-		if runErr != nil {
-			return nil, fmt.Errorf("push: run %s without RunResult (exit: %v): %w", sid, runErr, parseErr)
-		}
-		return nil, fmt.Errorf("push: run %s: %w", sid, parseErr)
+	if err != nil {
+		return nil, err
 	}
 
 	log.Info("push: run finished", slog.String("status", rr.GetStatus().String()))
+	return rr, nil
+}
+
+// ApplyOverSession is the half of a push run that does not care how the host was
+// reached: deliver the agent (deliverer nil = delivery off), exec `soul apply` at
+// soulPath with req on stdin, and parse its NDJSON into the RunResult, handing
+// every TaskEvent to onEvent. target names the host in error texts.
+//
+// Two addressings share it (NIM-905): [SshDispatcher.SendApply], which resolves the
+// host through the registry, and `core.ssh.apply`, which takes it from a list and
+// dials it the way `core.ssh.run` does. Anything added here is added to both.
+func ApplyOverSession(ctx context.Context, sess Session, deliverer Deliverer, spec SoulSpec, soulPath, target string, req *keeperv1.ApplyRequest, onEvent EventHandler) (*keeperv1.RunResult, error) {
+	if req == nil {
+		return nil, errors.New("push: ApplyRequest is nil")
+	}
+	if deliverer != nil {
+		if err := deliverer.Deliver(ctx, sess, spec); err != nil {
+			return nil, fmt.Errorf("push: artifact delivery %s: %w", target, err)
+		}
+	}
+
+	stdin, err := protojson.Marshal(req)
+	if err != nil {
+		return nil, fmt.Errorf("push: marshal ApplyRequest %s: %w", target, err)
+	}
+
+	stdout, runErr := sess.Run(ctx, soulApplyCommand(soulPath), stdin)
+
+	rr, parseErr := ParseStream(strings.NewReader(stdout), onEvent)
+	if parseErr != nil {
+		if runErr != nil {
+			return nil, fmt.Errorf("push: run %s without RunResult (exit: %v): %w", target, runErr, parseErr)
+		}
+		return nil, fmt.Errorf("push: run %s: %w", target, parseErr)
+	}
 	return rr, nil
 }
 

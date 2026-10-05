@@ -1,6 +1,6 @@
 # ADR-0089. The scenario dispatcher's push branch, and what `register:` does on it
 
-**Status:** active (NIM-880)
+**Status:** amended (NIM-880; amended 2026-10-05 by NIM-905)
 **Supersedes nothing. Amends:** [ADR-032](0032-push-orchestrator.md) (roster, dispatch), [ADR-0088](0088-task-transport-key.md) (the key now has a production path)
 
 ## Context
@@ -202,6 +202,11 @@ a schema asserting a check that exists nowhere is worse than no schema.
 - **Still not solved, and still separate scope:** bootstrapping a bare VM. `souls.ssh_target`
   carries no address column and `core.bootstrap.issued` writes `transport='agent'` as a
   literal. Nothing here changes that, and `transport:` must not be read as solving it.
+  *Amended 2026-10-05 (NIM-905):* applying a destiny to a bare VM is solved outside this
+  branch, by `core.ssh.apply`, which takes its hosts from a list and never consults
+  `souls` — [ADR draft](draft-ssh-apply-unregistered-hosts.md). This branch and the
+  `transport:` key are unchanged by it but for one text: a refused host key now reads
+  `host key not verified: …` ([ADR-032](0032-push-orchestrator.md)'s 2026-10-05 amendment).
 - **Still not solved:** module delivery over push (ADR-004 says all registered modules
   transfer; `ShaDeliverer`'s flat layout would not be found by the Soul's alias-slot walk),
   and the work-queue push branch above.

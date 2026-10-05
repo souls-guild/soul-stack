@@ -402,7 +402,7 @@ func validateTransportOnKeeper(present map[string]*ast.MappingValueNode, pathPre
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:     "transport_on_keeper_invalid",
 		Message:  fmt.Sprintf("transport: on a keeper-side task (%s) names a way to reach a host, and a keeper task never leaves the Keeper", keeperSideBecause(addr)),
-		Hint:     "drop the key; a keeper-side module that dials hosts (core.ssh.run) takes its own ssh_provider/hosts params",
+		Hint:     "drop the key; a keeper-side module that dials hosts (core.ssh.run, core.ssh.apply) takes its own ssh_provider/hosts params",
 		YAMLPath: pathPrefix + ".transport",
 	})}
 }

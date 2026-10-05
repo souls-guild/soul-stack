@@ -23,10 +23,12 @@ import (
 //     documented way to say that ([Deps.Deliverer]); pairing a non-nil
 //     Deliverer with an empty spec is the bug, not a configuration.
 //   - path set and readable → (ShaDeliverer, spec, nil).
-//   - path set and NOT readable → an error, and the daemon refuses to start.
-//     The operator asked for delivery and it cannot happen; starting anyway
-//     means a daemon that fails every push run at the same point it did before
-//     this key existed.
+//   - path set and NOT readable → an error. The operator asked for delivery and
+//     it cannot happen. The push dispatcher's wire-up refuses to start on it —
+//     starting anyway would fail every push run at the point it did before this
+//     key existed. `core.ssh.apply` (NIM-905) reads it on a Keeper that may have
+//     no dispatcher at all, so there the error is kept and the step refuses
+//     with it, rather than stopping a daemon that started before.
 //
 // [SoulSpec.Modules] stays empty: see the note on that field.
 func DeliveryFromConfig(cfg *config.KeeperPush) (Deliverer, SoulSpec, error) {

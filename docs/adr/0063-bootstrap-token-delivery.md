@@ -1,6 +1,6 @@
 # ADR-063. core.bootstrap.issued / delivered — keeper-side bootstrap tokens and delivery
 
-> **Status: active for `issued` and for `core.ssh.run`; `delivered` is REMOVED (amendment 2026-09-09, NIM-834).** Everything below the header describing `core.bootstrap.delivered` — design A1, its parameters, its transports, install mode — is **history**: the module is gone, and WHAT to install on a host is the site's own job. What it guaranteed is not history. Read the last two amendments first, in order: [2026-09-09](#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) restates the guarantees as **requirements on whoever installs the host**, and [2026-09-12](#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849) brings the **transport** back as `core.ssh.run` — the engine executes the site's commands on an agentless host and enforces the secret floor, without owning the policy. Read the rest for the reasoning behind each requirement, which is where the live runs that paid for them are recorded.
+> **Status: active for `issued`, `core.ssh.run` and `core.ssh.apply` (amendment 2026-10-05, NIM-905); `delivered` is REMOVED (amendment 2026-09-09, NIM-834).** Everything below the header describing `core.bootstrap.delivered` — design A1, its parameters, its transports, install mode — is **history**: the module is gone, and WHAT to install on a host is the site's own job. What it guaranteed is not history. Read the last two amendments first, in order: [2026-09-09](#amendment-2026-09-09--delivered-is-removed-installing-a-host-is-site-specific-nim-834) restates the guarantees as **requirements on whoever installs the host**, and [2026-09-12](#amendment-2026-09-12--the-transport-comes-back-without-the-policy-nim-849) brings the **transport** back as `core.ssh.run` — the engine executes the site's commands on an agentless host and enforces the secret floor, without owning the policy. Read the rest for the reasoning behind each requirement, which is where the live runs that paid for them are recorded.
 >
 > architect's design (A1 "thin delivery"), public names `core.bootstrap.delivered` and `core.bootstrap.issued` confirmed by the user. The canon is fixed docs-first BEFORE code; this ADR **amends [ADR-017](0017-keeper-side-core.md), [ADR-061](0061-onboarding-await-and-midrun-reresolve.md), [ADR-015](0015-core-modules-mvp.md)**.
 >
@@ -742,3 +742,20 @@ for the one consumer that discharges it in the engine.
 A scenario whose repeat path must deliver a token declares `reissue: true` — which
 is what `wb/service/redis`'s `create` does, since its repeat-after-failure path was
 built on the old unconditional behaviour.
+
+## Amendment 2026-10-05 — the chain gains a destiny form, and a refused host key is not a wait (NIM-905)
+
+The ready-made VM chain has a second middle step: `core.ssh.apply` applies an install
+**destiny** — the `soul` destiny, with `input_from: {bootstrap_token: bootstrap_token}`
+handing each host its own token — where `core.ssh.run` runs the site's shell. The
+requirements of the 2026-09-09 amendment bind whoever writes either; the `soul`
+destiny meets them as a destiny (`env:` instead of argv, the seed-cert guard as
+`creates:`). Decision, scope and bounds:
+[ADR draft — core.ssh.apply](draft-ssh-apply-unregistered-hosts.md).
+
+Two changes reach `core.ssh.run` because the dial is shared. On teleport the join
+wait retried every error, so a host key the identity's CA did not sign reached the
+scenario as "node not reachable via Teleport within join_wait_timeout"; a refused host key is now
+a typed error on both transports and is never retried. And a Teleport identity file
+with no SSH CA, which can verify no host, stops the Keeper at start and fails each
+dial at once if it is reissued that way.

@@ -106,7 +106,7 @@ type TeleportDialerConfig struct {
 // ★ The [DialConfig] fields Auth / HostAuthorities / ProxyJump /
 // ProxyHostAuthority are IGNORED in teleport mode: all authentication and
 // host-verify come from the identity file, not from SignReply/Vault-host-CA.
-// The caller (core.bootstrap.delivered on the teleport branch) doesn't even
+// The caller (`core.ssh` on the teleport transport) doesn't even
 // fill them in — it skips Authorize/Sign/ephemeral. Only [DialConfig.Host]
 // (= SID, node-name), [DialConfig.Port], [DialConfig.User], and
 // [DialConfig.Timeout] are used.
@@ -131,7 +131,7 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 	// (TLSConfig() AND SSHClientConfig() both come up). Without this, a
 	// missing/broken file would only surface on the first Dial (too late —
 	// on every VM in the run); caught at keeper startup →
-	// fail-closed via buildBootstrapTeleportDialer → errSetupFailed.
+	// fail-closed via buildSSHTeleportDialer → errSetupFailed.
 	//
 	// ★ The loaded creds are NOT cached for the Dial calls themselves:
 	// identity expires (~8-12h), the operator reissues the file, and Dial
@@ -144,14 +144,15 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 	if _, err := preflight.TLSConfig(); err != nil {
 		return nil, fmt.Errorf("push: NewTeleportDialer: identity %q: TLS-config: %w", cfg.IdentityFile, err)
 	}
-	if _, err := preflight.SSHClientConfig(); err != nil {
+	preflightSSH, err := preflight.SSHClientConfig()
+	if err != nil {
 		return nil, fmt.Errorf("push: NewTeleportDialer: identity %q: SSH-client-config: %w", cfg.IdentityFile, err)
 	}
 
 	// With UseSystemTrust (non-alpn branch), the proxy-cert ServerName = the
 	// host from ProxyAddr (no port). Resolved once at startup: a broken
 	// proxy_addr (no `:port`) is a constructor error via
-	// buildBootstrapTeleportDialer → errSetupFailed, not a late Dial failure.
+	// buildSSHTeleportDialer → errSetupFailed, not a late Dial failure.
 	var proxyHost string
 	if cfg.UseSystemTrust {
 		h, _, err := net.SplitHostPort(cfg.ProxyAddr)
@@ -159,6 +160,12 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 			return nil, fmt.Errorf("push: NewTeleportDialer: proxy_addr %q: %w", cfg.ProxyAddr, err)
 		}
 		proxyHost = h
+	}
+
+	// Every dial through this identity would be refused at the handshake, so the
+	// daemon stops here rather than letting each step wait out its join budget.
+	if preflightSSH.HostKeyCallback == nil {
+		return nil, fmt.Errorf("push: NewTeleportDialer: identity %q: %w", cfg.IdentityFile, errNoHostKeyCallback)
 	}
 
 	return func(ctx context.Context, dialCfg DialConfig) (Session, error) {
@@ -189,6 +196,12 @@ func NewTeleportDialer(cfg TeleportDialerConfig) (Dialer, error) {
 		sshConfig, err := creds.SSHClientConfig()
 		if err != nil {
 			return nil, fmt.Errorf("push: teleport identity %q: SSH-client-config: %w", cfg.IdentityFile, err)
+		}
+		// Before the proxy is asked anything: a reissued identity without an SSH
+		// CA must fail this dial at once, not after DialHost errors for a node
+		// that has not joined yet have been retried.
+		if sshConfig.HostKeyCallback == nil {
+			return nil, fmt.Errorf("push: teleport identity %q: %w", cfg.IdentityFile, &HostKeyError{Err: errNoHostKeyCallback})
 		}
 
 		proxyClient, err := proxy.NewClient(ctx, buildProxyClientConfig(cfg, tlsConfig, sshConfig, dialCfg.Timeout))
@@ -351,10 +364,27 @@ func (s *teleportSession) Close() error {
 // host-verify come from proxyClient.SSHConfig(user) — the same identity as
 // the proxy client's.
 func newTeleportSSHClient(ctx context.Context, conn net.Conn, addr, user string, proxyClient *proxy.Client) (*ssh.Client, error) {
-	sshClientConfig := proxyClient.SSHConfig(user)
+	sshClientConfig, err := tagTeleportHostKey(proxyClient.SSHConfig(user))
+	if err != nil {
+		return nil, fmt.Errorf("push: teleport SSH handshake with %s: %w", addr, err)
+	}
 	sshConn, chans, reqs, err := apissh.NewClientConn(ctx, conn, addr, sshClientConfig)
 	if err != nil {
 		return nil, fmt.Errorf("push: teleport SSH handshake with %s: %w", addr, err)
 	}
 	return ssh.NewClient(sshConn, chans, reqs), nil
+}
+
+// tagTeleportHostKey makes the identity's host-key refusal a [HostKeyError].
+//
+// The nil branch is the second check, not the first: the dial closure already
+// refuses an identity without an SSH CA before the proxy is asked anything. It
+// stays because this is the config the handshake actually uses, and a path that
+// reached it with no callback must not pass nil to the SSH library.
+func tagTeleportHostKey(cfg apissh.ClientConfig) (apissh.ClientConfig, error) {
+	if cfg.HostKeyCallback == nil {
+		return cfg, &HostKeyError{Err: errNoHostKeyCallback}
+	}
+	cfg.HostKeyCallback = tagHostKeyCallback(cfg.HostKeyCallback)
+	return cfg, nil
 }

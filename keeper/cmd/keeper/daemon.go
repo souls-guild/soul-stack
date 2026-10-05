@@ -392,7 +392,7 @@ type daemon struct {
 	// orchestrator and by the scenario dispatcher's push branch (NIM-880).
 	pushRouter *push.PGRouter
 	// sshRunProviders / sshRunHostCAs are what setupPushDispatchers resolved,
-	// shared with the keeper-side `core.ssh.run` module (NIM-849) through the
+	// shared with the keeper-side `core.ssh` module (NIM-849, NIM-905) through the
 	// accessors wired in setupCoreModules. They are shared rather than rebuilt
 	// because rebuilding means spawning every SshProvider plugin a second time,
 	// and re-reading the host-CAs from Vault at a second moment would let the two
@@ -1149,7 +1149,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			slog.Int("count", len(names)),
 			slog.Any("modules", names))
 	}
-	// `core.ssh.run` transport (NIM-849): which way this Keeper reaches a host
+	// `core.ssh` transport (NIM-849, NIM-905): which way this Keeper reaches a host
 	// with no agent on it yet. teleport needs a dialer built from the identity
 	// file, and a malformed one must stop the daemon here rather than surface as a
 	// failed step mid-run; direct is push.Dial, whose credentials
@@ -1159,14 +1159,23 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	if cfg.Push != nil && cfg.Push.Transport == config.PushTransportTeleport {
 		td, terr := buildSSHTeleportDialer(cfg.Push)
 		if terr != nil {
-			fmt.Fprintf(os.Stderr, "keeper run: build core.ssh.run teleport dialer: %v\n", terr)
+			fmt.Fprintf(os.Stderr, "keeper run: build core.ssh teleport dialer: %v\n", terr)
 			return errSetupFailed
 		}
 		sshDial = td
 		sshTransport = config.PushTransportTeleport
-		logger.Info("keeper run: core.ssh.run transport = teleport (by-name)",
+		logger.Info("keeper run: core.ssh transport = teleport (by-name)",
 			slog.String("proxy_addr", cfg.Push.Teleport.ProxyAddr),
 			slog.String("cluster", cfg.Push.Teleport.Cluster))
+	}
+	// `core.ssh.apply` (NIM-905) delivers the agent itself, so it reads the same
+	// keeper.yml::push.soul_binary_path the push dispatcher does — here, because
+	// the dispatcher is built only when SshProvider plugins and host CAs exist,
+	// and a teleport-only Keeper has neither. An unreadable path does not stop the
+	// daemon from here: the step refuses with the error instead.
+	sshDeliverer, sshSoulSpec, sshDeliveryErr := push.DeliveryFromConfig(cfg.Push)
+	if sshDeliveryErr != nil {
+		logger.Warn("keeper run: core.ssh.apply has no agent to deliver", slog.Any("error", sshDeliveryErr))
 	}
 
 	coreReg := coremod.Default(coremod.Deps{
@@ -1220,17 +1229,20 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			return ""
 		},
 		BootstrapIssuer: coremodbootstrap.NewIssuerPG(d.pool, bootstraptoken.DefaultTokenTTL),
-		// `core.ssh.run` (NIM-849). Providers and host-CAs are ACCESSORS, not
+		// `core.ssh` (NIM-849, NIM-905). Providers and host-CAs are ACCESSORS, not
 		// values: setupPushDispatchers spawns the SshProvider plugins and loads the
 		// Vault host-CAs after this step, and spawning a second copy of every
 		// provider here in order to hold them now would double the plugin
 		// processes. A direct-transport step in a build where that never ran is
 		// refused by name ("ssh_provider %q not registered"), which says more than
 		// "unknown keeper-side module" would.
-		SSHDial:      sshDial,
-		SSHTransport: sshTransport,
-		SSHProviders: func() map[string]coremodssh.SshProviderHost { return d.sshRunProviders },
-		SSHHostCAs:   func() []push.NamedHostKeyAuthority { return d.sshRunHostCAs },
+		SSHDial:        sshDial,
+		SSHTransport:   sshTransport,
+		SSHProviders:   func() map[string]coremodssh.SshProviderHost { return d.sshRunProviders },
+		SSHHostCAs:     func() []push.NamedHostKeyAuthority { return d.sshRunHostCAs },
+		SSHDeliverer:   sshDeliverer,
+		SSHSoulSpec:    sshSoulSpec,
+		SSHDeliveryErr: sshDeliveryErr,
 	})
 	logger.Info("keeper run: core modules registered",
 		slog.Int("count", len(coreReg.Names())))
@@ -1241,7 +1253,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 	return nil
 }
 
-// buildSSHTeleportDialer builds the by-name Teleport dialer for `core.ssh.run`
+// buildSSHTeleportDialer builds the by-name Teleport dialer for `core.ssh`
 // from `keeper.yml::push.teleport`. The constructor does its preflight on the
 // identity file, so a bad path or an expired identity stops the daemon here
 // rather than surfacing minutes into a run as a failed step.
@@ -1986,8 +1998,8 @@ func (d *daemon) setupPushDispatchers(ctx context.Context) error {
 	}
 	d.pushRouter = pushRouter
 
-	// Hand the same providers and the same host-CA set to `core.ssh.run`
-	// (NIM-849), which was registered before this step and reads them through an
+	// Hand the same providers and the same host-CA set to `core.ssh` (NIM-849,
+	// NIM-905), which was registered before this step and reads them through an
 	// accessor. push.ProviderEntry is unwrapped here so the module's surface stays
 	// the two-method push.SshProvider it actually calls.
 	d.sshRunHostCAs = hostAuthorities

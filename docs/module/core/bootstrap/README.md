@@ -132,7 +132,7 @@ that was repeated to repair it. Writing an empty token in place of a flag
 satisfies the letter and breaks the same thing: the consumer then treats a host
 that has an identity — or a live capability — as one still waiting for one.
 
-A `token_held` entry reaching [`core.ssh.run`](../ssh/README.md#token_held-is-the-other-tokenless-entry-and-it-is-refused)
+A `token_held` entry reaching [`core.ssh.run`](../ssh/README.md#token_held-is-the-other-tokenless-entry-and-it-is-refused) or [`core.ssh.apply`](../ssh/README.md#coresshapply)
 is **refused by name, before the connect**, and that is the honest outcome rather
 than a gap: there is no plaintext to hand over, and skipping the host silently
 would report success over a machine that never onboards. A scenario whose repeat
