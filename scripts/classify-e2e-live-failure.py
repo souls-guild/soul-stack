@@ -479,8 +479,8 @@ def check_report_renders_the_join() -> str:
 
 # Fixtures for --self-test. Every failure text below is real: the three
 # transport errors are the ones quoted in NIM-406, one per container, each from
-# a different hole in a different wait strategy. Only the test names were
-# changed since (NIM-893 took a banned term out of them); no verdict reads a name.
+# a different hole in a different wait strategy. Some of the test names are
+# not the originals; no verdict reads a name.
 #
 # They exist because this logic is the one piece of the ticket `make test`
 # cannot see — it is not Go — and a classifier that is quietly wrong is strictly
