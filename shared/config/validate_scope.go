@@ -452,79 +452,114 @@ func incarnationFieldRefs(expr string) (incRefHit, error) {
 	return out, nil
 }
 
-// ValidateRuleInputRefs reads the `input.<name>` components a `validate:` predicate
-// names, plus a dynamic flag for a reference whose name is NOT in the source
-// (`input[k]`, or the bare namespace handed to `size()`).
+// InputRef is one read a `validate:` predicate makes of the `input` namespace: the
+// steps under `input` that the source spells out, ending at the OUTERMOST node of the
+// chain. `input.creds.user` is one read of `[creds user]`, not also a read of `creds`
+// — a container read whole and a container passed through on the way to one member
+// are different answers to "what can this predicate see" (NIM-853). An empty ref is
+// the bare namespace.
+type InputRef []InputRefStep
+
+// InputRefStep is one step of an [InputRef]: a key the source names — `.name` and
+// `["name"]` are the same read in CEL — or an Element, which is any index that is not
+// a string literal (`[0]`, `[k]`).
+type InputRefStep struct {
+	Key     string
+	Element bool
+}
+
+// ValidateRuleInputRefs reads every [InputRef] a `validate:` predicate makes, at full
+// depth.
 //
 // Exported for the PUBLISHING side (keeper/internal/artifact), which has to answer
-// "does this rule's text name a field that was stripped from the published schema".
-// AST-based, so `input.password` inside a CEL string constant is not a reference
-// and the word in a `message:` is prose — the same reason [IDTemplateInputRefs] is.
+// "can this rule's text see a field that was stripped from the published schema" —
+// and a strip that removes `creds.password` while keeping `creds` is only visible
+// against the full path. AST-based, so `input.password` inside a CEL string constant
+// is not a reference and the word in a `message:` is prose — the same reason
+// [IDTemplateInputRefs] is.
 //
-// A predicate that does not parse reports dynamic: the caller's decision is
-// fail-closed, and "I could not read this" must not come back as "it names
-// nothing".
-func ValidateRuleInputRefs(expr string) (names []string, dynamic bool) {
+// readable is false when the evaluator would not compile the predicate, or the walk
+// cannot run: the caller's decision is fail-closed, and "I could not read this" must
+// not come back as "it names nothing". Parsing alone is not enough —
+// `input.creds{password: 'x'}` parses as a message literal with no `input` in it,
+// and only the compile refuses it.
+func ValidateRuleInputRefs(expr string) (refs []InputRef, readable bool) {
+	env, err := validateRuleEnv()
+	if err != nil {
+		return nil, false
+	}
+	// Not [compileValidateRule]: its program cache never evicts, and the listing
+	// reads rules from any branch or tag a caller names.
+	if _, iss := env.Compile(expr); iss != nil && iss.Err() != nil {
+		return nil, false
+	}
 	p, err := noMacroParserInstance()
 	if err != nil {
-		return nil, true
+		return nil, false
 	}
 	parsed, iss := p.Parse(common.NewTextSource(expr))
 	if iss != nil && len(iss.GetErrors()) > 0 {
-		return nil, true
+		return nil, false
 	}
 
-	idents := map[int64]bool{}
-	paired := map[int64]bool{}
-	seen := map[string]bool{}
+	chains := map[int64]InputRef{}
+	extended := map[int64]bool{}
+	var order []int64
 
 	celast.PostOrderVisit(parsed.Expr(), celast.NewExprVisitor(func(n celast.Expr) {
+		var base celast.Expr
+		var step InputRefStep
 		switch n.Kind() {
 		case celast.IdentKind:
-			if n.AsIdent() == inputRootName {
-				idents[n.ID()] = true
+			if isInputRootIdent(n.AsIdent()) {
+				chains[n.ID()] = InputRef{}
+				order = append(order, n.ID())
 			}
+			return
 		case celast.SelectKind:
 			sel := n.AsSelect()
-			op := sel.Operand()
-			if op == nil || op.Kind() != celast.IdentKind || op.AsIdent() != inputRootName {
-				return
-			}
-			paired[op.ID()] = true
-			if !seen[sel.FieldName()] {
-				seen[sel.FieldName()] = true
-				names = append(names, sel.FieldName())
-			}
+			base, step = sel.Operand(), InputRefStep{Key: sel.FieldName()}
 		case celast.CallKind:
 			c := n.AsCall()
-			if c.IsMemberFunction() || c.FunctionName() != indexOperator {
+			if c.IsMemberFunction() || c.FunctionName() != indexOperator || len(c.Args()) != 2 {
 				return
 			}
-			args := c.Args()
-			if len(args) != 2 || args[0].Kind() != celast.IdentKind || args[0].AsIdent() != inputRootName {
-				return
-			}
-			if args[1].Kind() != celast.LiteralKind {
-				return // input[expr] — the name is not in the source
-			}
-			key, isStr := args[1].AsLiteral().Value().(string)
-			if !isStr {
-				return
-			}
-			paired[args[0].ID()] = true
-			if !seen[key] {
-				seen[key] = true
-				names = append(names, key)
-			}
+			base, step = c.Args()[0], inputIndexStep(c.Args()[1])
+		default:
+			return
 		}
+		parent, isChain := chains[base.ID()]
+		if !isChain {
+			return
+		}
+		extended[base.ID()] = true
+		ref := make(InputRef, len(parent), len(parent)+1)
+		copy(ref, parent)
+		chains[n.ID()] = append(ref, step)
+		order = append(order, n.ID())
 	}))
 
-	for id := range idents {
-		if !paired[id] {
-			return names, true
+	for _, id := range order {
+		if !extended[id] {
+			refs = append(refs, chains[id])
 		}
 	}
-	return names, false
+	return refs, true
+}
+
+// isInputRootIdent — `.input` is the root-scoped spelling of the same variable, and
+// the evaluator resolves it as `input`.
+func isInputRootIdent(name string) bool {
+	return name == inputRootName || name == "."+inputRootName
+}
+
+func inputIndexStep(index celast.Expr) InputRefStep {
+	if index.Kind() == celast.LiteralKind {
+		if key, isStr := index.AsLiteral().Value().(string); isStr {
+			return InputRefStep{Key: key}
+		}
+	}
+	return InputRefStep{Element: true}
 }
 
 // inputRootName is the CEL identifier of the input namespace.

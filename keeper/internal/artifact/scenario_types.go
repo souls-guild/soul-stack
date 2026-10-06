@@ -4,6 +4,7 @@ import (
 	"errors"
 	"io/fs"
 	"log/slog"
+	"reflect"
 
 	yaml "gopkg.in/yaml.v3"
 
@@ -373,34 +374,35 @@ func dropStrippedFormFields(form *ScenarioForm, before, after map[string]any) *S
 // stripped from `input_schema` for being a declared secret. "Not on the form" has
 // to be true of all three halves or it is not true.
 //
-// A rule whose input references cannot be read statically (`input[k]`, a bare
-// `input` in `size()`, unparseable text) is dropped too: the question is whether it
-// mentions a stripped name, and "I could not tell" is not an answer to publish on.
-// The rule still RUNS — this drops it from the published contract, not from the
-// gate.
+// Unlike a `form:` field, a predicate addresses a path of any depth, and the strip
+// is recursive: an object losing one minted member keeps its name. So each read is
+// walked down both schemas at full depth (NIM-853) — comparing top-level names
+// published `input.creds.password != 'changeme'` because `creds` survived.
+//
+// A read that ends on a node the strip took something from is dropped as well:
+// `input.creds == {'password': 'changeme'}`, `'password' in input.creds` and
+// `input.creds.all(k, k != 'password')` name the member without a path to it, and
+// "I could not tell" is not an answer to publish on. The bare namespace and
+// `input[k]` are the same case at the root, and a rule the evaluator would not
+// compile is dropped without a walk. None of this applies when the two schemas
+// compare equal: then every rule is published as written. The rule still RUNS —
+// this drops it from the published contract, not from the gate.
 func dropStrippedValidateRules(rules []ScenarioValidateRule, before, after map[string]any) []ScenarioValidateRule {
-	if len(rules) == 0 {
+	if len(rules) == 0 || reflect.DeepEqual(before, after) {
 		return rules
 	}
-	stripped := make(map[string]bool)
-	for name := range before {
-		if _, kept := after[name]; !kept {
-			stripped[name] = true
-		}
-	}
-	if len(stripped) == 0 {
-		return rules
-	}
+	beforeRoot := map[string]any{"properties": before}
+	afterRoot := map[string]any{"properties": after}
 
 	out := make([]ScenarioValidateRule, 0, len(rules))
 	for _, r := range rules {
-		names, dynamic := config.ValidateRuleInputRefs(r.That)
-		if dynamic {
+		refs, readable := config.ValidateRuleInputRefs(r.That)
+		if !readable {
 			continue
 		}
 		leaks := false
-		for _, n := range names {
-			if stripped[n] {
+		for _, ref := range refs {
+			if readReachesStripped(ref, beforeRoot, afterRoot) {
 				leaks = true
 				break
 			}
@@ -411,6 +413,54 @@ func dropStrippedValidateRules(rules []ScenarioValidateRule, before, after map[s
 	}
 	if len(out) == 0 {
 		return nil
+	}
+	return out
+}
+
+// readReachesStripped reports whether a read along steps, starting at schema node
+// before and its stripped twin after, can see anything [stripFormSecrets] removed.
+// The strip only ever deletes, so a subtree that lost something never compares
+// equal. The converse can fail — a NaN in a schema is unequal to itself — and that
+// can only drop a rule, never publish one.
+func readReachesStripped(steps []config.InputRefStep, before, after any) bool {
+	if reflect.DeepEqual(before, after) {
+		return false
+	}
+	if after == nil || len(steps) == 0 {
+		return true
+	}
+	b, _ := before.(map[string]any)
+	a, _ := after.(map[string]any)
+	for _, next := range stepTargets(steps[0], b, a) {
+		if readReachesStripped(steps[1:], next[0], next[1]) {
+			return true
+		}
+	}
+	return false
+}
+
+// stepTargets lists the (before, after) child pairs one step can land on. A key the
+// node declares lands on that property, not on the open half; any other key lands on
+// the open half. An Element lands on `items`, or on an object, where the source did not
+// name the key, on every member and the open half alike. `items` is offered to a
+// key as well: CEL refuses that read at runtime, and the walk does not need to know
+// which.
+func stepTargets(step config.InputRefStep, b, a map[string]any) [][2]any {
+	var out [][2]any
+	if items, ok := b["items"]; ok {
+		out = append(out, [2]any{items, a["items"]})
+	}
+	bp, _ := b["properties"].(map[string]any)
+	ap, _ := a["properties"].(map[string]any)
+	if step.Element {
+		for name, child := range bp {
+			out = append(out, [2]any{child, ap[name]})
+		}
+	} else if child, declared := bp[step.Key]; declared {
+		return append(out, [2]any{child, ap[step.Key]})
+	}
+	if open, ok := b["additional_properties"].(map[string]any); ok {
+		out = append(out, [2]any{open, a["additional_properties"]})
 	}
 	return out
 }

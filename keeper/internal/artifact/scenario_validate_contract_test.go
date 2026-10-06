@@ -16,9 +16,13 @@ package artifact
 //     validateRulesYAML — MalformedRuleDoesNotTakeTheFormWithIt.
 //  3. drop the covenant-first append in mergeCovenantSectionsRaw —
 //     ValidateFromCovenantIsPublished.
+//  4. compare top-level names in dropStrippedValidateRules again, or have
+//     readReachesStripped publish a read that ends on a partly stripped container —
+//     NestedStrippedSecretDoesNotLeakThroughRuleText.
 
 import (
 	"encoding/json"
+	"fmt"
 	"strings"
 	"testing"
 )
@@ -134,6 +138,8 @@ input:
 validate:
   - that: "input.admin_password != 'changeme'"
     message: "the default password is not allowed"
+  - that: ".input.admin_password != 'changeme'"
+    message: "the root-scoped spelling of the same read (NIM-853)"
   - that: "int(input.replicas) <= 5"
     message: "at most five replicas"
 tasks: []
@@ -156,6 +162,142 @@ tasks: []
 	// not a blanket refusal to publish once a secret exists.
 	if len(sc.Validate) != 1 || !strings.Contains(sc.Validate[0].That, "replicas") {
 		t.Errorf("validate = %+v, want only the non-secret rule", sc.Validate)
+	}
+}
+
+// nestedSecretTypes and nestedSecretInput put a minted member at every depth the
+// strip reaches without removing the container that holds it: a property, an array
+// element's property, and an object's open half.
+const nestedSecretTypes = `types:
+  MintedToken:
+    type: secret
+  AclUser:
+    type: object
+    properties:
+      name: { type: string }
+      minted_pw: { $type: MintedToken }
+`
+
+const nestedSecretInput = `input:
+  creds:
+    type: object
+    properties:
+      user: { type: string }
+      minted_pw: { $type: MintedToken }
+  users:
+    type: array
+    items: { $type: AclUser }
+  tokens:
+    type: object
+    properties:
+      label: { type: string }
+    additional_properties: { $type: MintedToken }
+  replicas: { type: integer, default: 1 }
+`
+
+// nestedSecretControls read only what survived the strip, through the same
+// containers, so a fix that drops every rule touching them is not mistaken for one
+// that drops the leaking rule.
+var nestedSecretControls = []string{
+	`input.creds.user != ''`,
+	`input.creds["user"] != ''`,
+	`input.users[0].name != ''`,
+	`input.tokens.label != ''`,
+	`int(input.replicas) <= 5`,
+}
+
+// TestListScenarios_NestedStrippedSecretDoesNotLeakThroughRuleText — NIM-853. A
+// minted member nested inside a container that survives the strip must not come back
+// through the rule text: not its name, not the literal compared to it. The read is
+// asserted on the serialized reply, which is what a `service.list` caller receives.
+func TestListScenarios_NestedStrippedSecretDoesNotLeakThroughRuleText(t *testing.T) {
+	const literal = "hunter2-literal"
+	leaking := map[string]string{
+		"dotted":            `input.creds.minted_pw != 'hunter2-literal'`,
+		"indexed":           `input.creds["minted_pw"] != 'hunter2-literal'`,
+		"mixed spelling":    `input["creds"].minted_pw != 'hunter2-literal'`,
+		"root-scoped ident": `.input.creds.minted_pw != 'hunter2-literal'`,
+		"has":               `has(input.creds.minted_pw)`,
+		"whole map literal": `input.creds != {'user': 'admin', 'minted_pw': 'hunter2-literal'}`,
+		"in":                `!('minted_pw' in input.creds)`,
+		"key comprehension": `input.creds.all(k, k != 'minted_pw')`,
+		"dynamic key":       `input.creds[input.creds.user] != 'hunter2-literal'`,
+		"element position":  `input.users[0].minted_pw != 'hunter2-literal'`,
+		"element bind":      `input.users.all(u, u.minted_pw != 'hunter2-literal')`,
+		"open half":         `input.tokens.anything != 'hunter2-literal'`,
+		"bare root":         `input != {'creds': {'minted_pw': 'hunter2-literal'}}`,
+		"unparseable":       `input.creds.minted_pw != 'hunter2-literal' &&`,
+		"message literal":   `input.creds{minted_pw: 'hunter2-literal'} != null`,
+	}
+
+	for name, rule := range leaking {
+		t.Run(name, func(t *testing.T) {
+			root := t.TempDir()
+			writeTypesCatalog(t, root, nestedSecretTypes)
+			var b strings.Builder
+			b.WriteString("name: create\n" + nestedSecretInput + "validate:\n")
+			fmt.Fprintf(&b, "  - that: %q\n    message: leaking\n", rule)
+			for _, c := range nestedSecretControls {
+				fmt.Fprintf(&b, "  - that: %q\n    message: control\n", c)
+			}
+			b.WriteString("tasks: []\n")
+			writeScenario(t, root, "create", b.String())
+
+			got, err := ListScenarios(root, discardLogger())
+			if err != nil {
+				t.Fatalf("ListScenarios: %v", err)
+			}
+			reply, err := json.Marshal(got)
+			if err != nil {
+				t.Fatalf("Marshal: %v", err)
+			}
+			if !strings.Contains(string(reply), `"user"`) {
+				t.Fatalf("precondition: the container holding the secret did not survive the strip: %s", reply)
+			}
+			for _, secret := range []string{literal, "minted_pw"} {
+				if strings.Contains(string(reply), secret) {
+					t.Errorf("%q reached the published reply through rule %q:\n%s", secret, rule, reply)
+				}
+			}
+
+			published := map[string]bool{}
+			for _, r := range got[0].Validate {
+				published[r.That] = true
+			}
+			for _, c := range nestedSecretControls {
+				if !published[c] {
+					t.Errorf("control %q was dropped — it reads only what survived the strip", c)
+				}
+			}
+		})
+	}
+}
+
+// TestListScenarios_RulesPublishWhenNothingIsStripped — a scenario with no minted
+// field publishes every rule, including the ones whose reads cannot be followed: the
+// drop exists for what the strip removed, and nothing was.
+func TestListScenarios_RulesPublishWhenNothingIsStripped(t *testing.T) {
+	root := t.TempDir()
+	writeScenario(t, root, "create", `name: create
+input:
+  creds:
+    type: object
+    properties:
+      user: { type: string }
+validate:
+  - that: "size(input) > 0"
+    message: "bare root"
+  - that: "input.creds[input.creds.user] != ''"
+    message: "dynamic key"
+tasks: []
+`)
+
+	got, err := ListScenarios(root, discardLogger())
+	if err != nil {
+		t.Fatalf("ListScenarios: %v", err)
+	}
+	if len(got[0].Validate) != 2 {
+		t.Errorf("validate = %+v, want both rules", got[0].Validate)
 	}
 }
 
