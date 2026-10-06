@@ -759,3 +759,106 @@ scenario as "node not reachable via Teleport within join_wait_timeout"; a refuse
 a typed error on both transports and is never retried. And a Teleport identity file
 with no SSH CA, which can verify no host, stops the Keeper at start and fails each
 dial at once if it is reissued that way.
+
+## Amendment 2026-10-06 — converge only over an identity an agent holds now (NIM-886)
+
+**Problem, found on a live run.** The [2026-09-04 amendment](#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780)
+passes a host of this run that already holds an identity through as
+`onboarded: true`. "Holds an identity" is read from the registry — status
+`connected`/`disconnected`, or `pending`/`expired` with an active seed
+([ADR-0090](0090-bootstrap-reply-loss-recovery.md), "What implementation and review added", item 2) — and the registry
+cannot tell a machine whose agent is stopped from one **re-created under the same
+SID**: both are a row holding an identity with no stream. On the remote stand a
+VM was re-created under its old name; issuance passed it through, the install
+step skipped it and reported success, and fifteen minutes later the onboarding
+barrier failed, naming the last presence poll — `redis.SoulsStreamAlive: pipeline
+EXEC: context deadline exceeded`, which was the barrier's own deadline cutting
+that poll, over a healthy Redis.
+
+The cloud path no longer meets this by itself: `wbcloud` draws a fresh random
+tail for every machine it creates, a replacement included (NIM-894), so a
+re-created machine gets a new SID. A ready-made host reinstalled under its old
+FQDN, and any provider that reuses names, still does.
+
+**Decision.** The pass-through needs a second fact: **an agent is connected with
+that identity right now** — the Redis presence lease, the source the onboarding
+barrier already polls ([ADR-061](0061-onboarding-await-and-midrun-reresolve.md)),
+not `souls.status`. A host of this run that holds an identity with no agent
+behind it is **refused**:
+
+- **at issuance, not at the barrier** — in seconds, before any install runs;
+- **every such host that reaches the check at once**, in batch order, each with
+  its status and last stream, so a group re-created under its old names is
+  repaired in one pass (a host refused for another reason first — takeover,
+  `revoked`, `destroyed`, `transport=ssh` — stops the batch before the check);
+- **rolling the whole batch back**, like every other refusal of this step;
+- **naming both ways out and the trap between them**, because only the operator
+  knows which machine is standing there: `DELETE /v1/souls/{sid}` (`soul.forget`)
+  for a re-created machine, bringing the agent up for the same one. Forgetting a
+  host whose disk still holds its seed leaves it unable to onboard — the install's
+  seed guard skips `soul init` and the agent presents a seed the Keeper no longer
+  has — so the refusal says so. A host whose Bootstrap reply was lost holds no
+  certificate; for it the third way out is `soul init` again — with the token it
+  was given, inside that token's TTL (the ADR-0090 re-presentation), or with a
+  fresh one from `POST /v1/souls/{sid}/issue-token`, which the kept key redeems in
+  place — and then bringing its agent up, documented with the module.
+
+Unchanged: ownership is decided first, so a host of another incarnation is still
+refused as an identity takeover whatever its presence; no token is minted over an
+active seed; `reissue` reaches neither question. The lease is read only when the
+batch holds an identity, once for the whole batch, before COMMIT, and within 5
+seconds — the batch holds FOR UPDATE on its Soul rows meanwhile. A lease that
+cannot be read refuses the step, and so does a Keeper with no presence source —
+passing the host through would be the guess this amendment removes.
+
+**Rejected:**
+
+- *Re-arm the host automatically* — revoke the old seed and mint a token when no
+  agent is connected, or when the scenario declares the machine new. It reverses
+  ADR-0090 "What implementation and review added", item 2 (a token over an active
+  seed is a takeover primitive) and hands
+  a run the power to retire an identity, which today belongs to the operator
+  (`soul.forget`) and to the Reaper's opt-in `purge_souls` after `max_age`. With
+  fresh names on the cloud path the remaining cases are rare and operator-driven.
+- *Destroying the machine forgets the Soul* — a keeper-side step in a `destroy`
+  scenario. The observed case had no such scenario to run (a force-destroy skips
+  teardown by definition, NIM-395; the WB redis service has no `destroy`, NIM-924),
+  and a machine lost outside any scenario would still leave its record.
+
+**Cost.** A repeat run that lands while an agent is restarting is refused, where
+before it would have waited at the barrier for the agent to return; so is one
+that lands between a host's Bootstrap and its first stream. The remedy is to
+repeat the run.
+
+**The barrier says what it knows.** Independently of the above, an onboarding
+barrier that times out now names, per SID still not online, what the registry
+holds about its stream: none on record, a last stream before the wait began, or
+one during it. A poll the end of the wait merely caught in flight is no longer
+reported as the source's error when an earlier error is held or an earlier poll
+answered; a source that hung through the end for a second or more with no error
+held is reported as hung, and the reported error is otherwise the last one the
+source really returned. A presence source that never answered still fails the
+step on the barrier's own timeout. A run that ends while the barrier waits — its
+deadline can be the shorter one, as a plan without `refresh_soulprint` keeps the
+5-minute default — gets the same shortfall message saying the run ended, not a
+timeout that never elapsed.
+
+**Not closed here:** the presence lease can outlive a machine killed without
+closing its connection by a few minutes, because the EventStream server sets no
+keepalive and the Keeper learns of the dead stream only from TCP (NIM-962). A
+machine re-created under the same SID inside that window is still passed
+through.
+
+Guards: `TestIntegration_IssuedBatch_IdentityWithoutAgent*`,
+`TestIntegration_IssuedBatch_UnreadablePresenceRefusesTheBatch`,
+`TestIntegration_IssuedBatch_HangingPresenceIsGivenUpOn`,
+`TestIntegration_IssuedBatch_NoPresenceSource`,
+`TestApplyIssued_NoAgentRefusalReachesTheOperatorWhole`,
+`TestAwait_OwnDeadlineIsNotReportedAsTheCause`,
+`TestAwait_RealPresenceFailureIsStillReported`,
+`TestAwait_PresenceThatNeverAnsweredIsStillNamed`,
+`TestAwait_RunEndingIsNotReportedAsATimeout`,
+`TestAwait_SourceHungThroughTheDeadlineIsNamed`,
+`TestAwait_FirstRealPresenceErrorIsKept`,
+`TestAwait_PresenceAnswerSurvivesAnExcusedFactsPoll`,
+`TestAwait_TimeoutNamesWhatTheRegistryKnowsPerHost`.

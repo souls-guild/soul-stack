@@ -50,6 +50,10 @@ tasks:
   # A host already onboarded before this run carries no `bootstrap_token` key at
   # all and is skipped by the step itself — `when:` could not do it, since a
   # predicate reading `register.*` on a keeper-side task is silently ignored.
+  # "Onboarded" means its agent is connected now: a VM reinstalled under its old
+  # FQDN has a record but no agent, and the mint step above refuses it by name
+  # (forget it with `DELETE /v1/souls/{sid}`, then repeat) rather than letting
+  # this step skip it (NIM-886).
   - name: Install soul and redeem the token
     module: core.ssh.run
     register: install

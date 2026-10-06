@@ -112,7 +112,12 @@ here.
 ### The `onboarded` branch
 
 An entry flagged `onboarded: true` is a host of this run that was already up when
-the minting step ran (NIM-189, NIM-780). It carries **no** `bootstrap_token` key
+the minting step ran (NIM-189, NIM-780) — since NIM-886 `core.bootstrap.issued`
+emits it only for a host whose agent was connected at that moment, and refuses a
+host that holds an identity with no agent behind it, so a machine re-created under
+an old SID no longer reaches this skip — once its predecessor's stream is gone,
+which for a machine killed without closing its connection can take minutes
+(NIM-962). It carries **no** `bootstrap_token` key
 — absent, not empty — and no address either, since issuance knows no IPs. Such a
 host is **skipped, not dialed**, reported as `{sid, ran: false, skipped: true}`
 and counted in `skipped`; `count` keeps its meaning of every host in the roster.

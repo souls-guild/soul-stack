@@ -100,8 +100,9 @@ func maskErr(err error) string {
 // TWO of the three shapes an entry takes legitimately carry no token, and they
 // are different facts about the host (NIM-900):
 //
-//   - Onboarded — a host of this run that already holds an identity and needs no
-//     capability at all, passed through untouched instead of refused (NIM-780);
+//   - Onboarded — a host of this run that already holds an identity, with an
+//     agent connected under it right now, and so needs no capability at all:
+//     passed through untouched instead of refused (NIM-780, NIM-886);
 //   - TokenHeld — a host that holds an ACTIVE, never-presented token which
 //     `reissue: false` deliberately left alone. There is nothing to hand back:
 //     the plaintext is unrecoverable, Postgres stores only its SHA-256.
@@ -116,6 +117,10 @@ type IssuedHost struct {
 	Reissued  bool
 	Onboarded bool
 	TokenHeld bool
+
+	// registered is what the registry held for an Onboarded host, kept for the
+	// presence check that decides whether it is really passed through.
+	registered NoAgentHost
 }
 
 // Issuer atomically prepares the entire SID batch. A failure for any SID must

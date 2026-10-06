@@ -1228,7 +1228,7 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			}
 			return ""
 		},
-		BootstrapIssuer: coremodbootstrap.NewIssuerPG(d.pool, bootstraptoken.DefaultTokenTTL),
+		BootstrapIssuer: coremodbootstrap.NewIssuerPG(d.pool, lazySoulPresence{d: d}, bootstraptoken.DefaultTokenTTL),
 		// `core.ssh` (NIM-849, NIM-905). Providers and host-CAs are ACCESSORS, not
 		// values: setupPushDispatchers spawns the SshProvider plugins and loads the
 		// Vault host-CAs after this step, and spawning a second copy of every
@@ -5400,7 +5400,7 @@ type lazySoulPresence struct{ d *daemon }
 
 func (p lazySoulPresence) SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error) {
 	if p.d.redisClient == nil {
-		return nil, errors.New("presence unavailable: Redis not configured (await_online barrier requires SID-lease)")
+		return nil, errors.New("presence unavailable: Redis not configured (the SID-lease lives there)")
 	}
 	return keeperredis.SoulsStreamAlive(ctx, p.d.redisClient, sids)
 }

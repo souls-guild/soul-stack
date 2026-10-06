@@ -41,7 +41,8 @@ usable without an output.
 |---|---|---|
 | no active token — never had one, expired, or already redeemed | issue, **changed** | issue, **changed** |
 | holds an active, never-presented token | keep it, report `{sid, token_held: true}`, **unchanged** | invalidate it and issue a new one, **changed** |
-| holds an identity (active seed), host of this run | pass through as `{sid, onboarded: true}`, **unchanged** | same — the flag does not reach this arm |
+| holds an identity (active seed), host of this run, **its agent is connected now** | pass through as `{sid, onboarded: true}`, **unchanged** | same — the flag does not reach this arm |
+| holds an identity, host of this run, **no agent connected** | refused, `no agent is connected with it` (NIM-886) | same — the flag does not reach this arm |
 | holds an identity, another incarnation's | refused, `identity takeover` | same — the flag does not reach this arm |
 
 **Active** means `used_at IS NULL AND expires_at > NOW()`. An expired unused token
@@ -69,26 +70,115 @@ endpoint does not, the identity arm that refuses `identity takeover`, and the fl
 does not lift it. Re-registering a host that already holds an identity is
 [`soul.forget`](../../../keeper/operator-api/souls.md), not a flag on issuance.
 
-### An already onboarded host (NIM-780)
+### An already onboarded host (NIM-780, NIM-886)
 
-`connected` and `disconnected` both mean the host already owns an identity, so no
-token is issued for it either way. What differs is whose host it is:
+A host is taken to hold an identity when its status is `connected` or
+`disconnected`, or when it is `pending` or `expired` with an **active seed** — the
+state between Bootstrap and its first stream (NIM-865). `revoked` and `destroyed`
+are refused before any of this, whatever seed is on file. No token is ever issued
+for a host holding an identity. What happens instead depends on two questions,
+asked in this order:
 
-- **This run's own** — a member of the run's incarnation, or of no incarnation
-  yet — is **converged over**: passed through untouched, with no token and no
-  write, reported as `{sid, onboarded: true}`. This is the repair path for a
-  `create` that succeeded at onboarding and failed later (rollout, cluster
-  assembly): the cloud plugin idempotently returns the same machines and the same
-  SIDs, and issuance must not stand in the way of finishing the run.
-- **Another incarnation's** is an identity takeover and is refused fail-closed,
-  rolling the whole batch back. An unknown incarnation — a call made outside a
-  scenario run — means *unknown*, never *no owner*, and can claim only unbound
-  rows.
+1. **Whose host is it?** Another incarnation's is an identity takeover and is
+   refused fail-closed, rolling the whole batch back. An unknown incarnation — a
+   call made outside a scenario run — means *unknown*, never *no owner*, and can
+   claim only unbound rows. This run's own — a member of the run's incarnation,
+   or of no incarnation yet — goes on to the second question.
+2. **Is an agent connected with that identity right now?** Yes: the host is
+   **converged over** — passed through untouched, with no token and no write,
+   reported as `{sid, onboarded: true}`. No: the step is **refused** (below).
+
+Converging is the repair path for a `create` that succeeded at onboarding and
+failed later (rollout, cluster assembly): the machine provider idempotently returns
+the same machines and the same SIDs, their agents are up, and issuance must not
+stand in the way of finishing the run.
 
 Ownership is the same predicate the removed `core.cloud.created` used for its own
 pass-through (`keepersoul.OwnedByRun`, [ADR-063 amendment
 2026-09-04](../../../adr/0063-bootstrap-token-delivery.md#amendment-2026-09-04--issuance-converges-over-a-host-this-run-already-onboarded-nim-780)).
 Issuance still never rotates the identity of an onboarded Soul.
+
+### An identity with no agent behind it is refused (NIM-886)
+
+The registry cannot tell these machines apart: one whose agent is stopped or
+cannot reach the Keeper, and one that was **re-created under the same SID** — a
+ready-made host reinstalled under its old FQDN, a provider that reuses names. All
+are a row holding an identity with no stream. Passing the re-created one through
+as `onboarded` used to make the install step skip it and report success, and the
+run then failed at the onboarding barrier after the whole `await_timeout`, blaming
+the last presence poll. Only a live stream proves the identity is still held, so
+without one the step stops at once:
+
+```
+bootstrap issued: 2 host(s) hold an identity in the registry but no agent is connected
+with it: "redis-a-s1-k3f9q.example.com" (status disconnected, last stream on record
+2026-09-12T10:01:22Z), "redis-a-s1-z7c1d.example.com" (status pending, no stream on
+record). If a machine was re-created under the same SID it cannot use that identity:
+forget the record (DELETE /v1/souls/{sid}) and repeat the run. If it is the same
+machine, bring its agent up and repeat — forgetting a host whose disk still holds its
+seed leaves it unable to onboard
+```
+
+**Which way out is the operator's call**, because only the operator knows which
+machine is standing there, and the wrong one costs:
+
+| the machine behind the SID | what to do |
+|---|---|
+| re-created — its disk holds no seed | [`DELETE /v1/souls/{sid}`](../../../keeper/operator-api/souls.md) (`soul.forget`), then repeat: the SID is minted for like a new one |
+| the same machine, agent stopped or unable to reach the Keeper | bring the agent up (start the unit, fix its reach to the EventStream port), then repeat |
+| the same machine, `no stream on record` because its Bootstrap reply was lost (it holds no certificate) | run `soul init` on it again with the token it was given — the reply-loss re-presentation of [ADR-0090](../../../adr/0090-bootstrap-reply-loss-recovery.md), within that token's TTL; the plaintext is on the host only if the install kept it (the example installs write `/etc/soul/token`). Past the TTL or without it, [`POST /v1/souls/{sid}/issue-token`](../../../keeper/operator-api/souls.md#post-v1soulssidissue-token--reissue-bootstrap-token) mints a fresh one that the key `soul init` kept redeems in place, with no membership lost. Then bring the agent up — the install stopped at the failed `soul init`, before its unit was started — and repeat |
+
+⚠ **Never forget a host whose disk still holds its seed.** The seed guard every
+install carries ([ADR-063 amendment 2026-09-09](../../../adr/0063-bootstrap-token-delivery.md#-requirements-on-whoever-installs-the-host),
+`test -e …/seed/current/cert.pem || soul init`) then skips `soul init`,
+the agent presents a seed the Keeper no longer has, and the host cannot onboard
+until its seed directory is cleared, or `soul init` is run on it by hand. Forgetting also takes the host's
+incarnation memberships and Choir Voices with it: a repeated `create` binds the
+membership again through `core.soul.registered`, but a declared role returns only
+if that scenario runs `core.choir.present`.
+
+Issuance never retires an identity itself. Today that is an operator act
+(`soul.forget`), or the Reaper's opt-in `purge_souls` once a `disconnected` row is
+older than its `max_age`.
+
+- **Every such host that reaches the check is named at once**, in batch order, so a
+  group re-created under its old names is repaired in one pass. A host refused
+  for another reason first — an identity takeover, `revoked`, `destroyed`,
+  `transport=ssh` — stops the batch before the check, and is what the step names.
+- **The whole batch rolls back**, like every other refusal: no host of it — not
+  even a fresh one — got a token.
+- **"Connected" is the presence lease** in Redis, the source the onboarding barrier
+  polls, not `souls.status`. It is read once per batch and only when the batch holds
+  an identity at all. ⚠ The lease can outlive a machine killed without closing its
+  connection by a few minutes — the Keeper notices the dead stream only when TCP
+  does (NIM-962) — so a machine re-created under the
+  same SID inside that window is still passed through. A lease that cannot be read within 5 seconds refuses the step
+  (`check agent presence: …`) rather than guess, and so does a Keeper with no
+  presence source.
+- **The cost:** a repeat run that lands while a host's agent is restarting is
+  refused, even though the agent would be back in seconds; before NIM-886 that host
+  was waited for at the barrier until its agent returned. So is one that lands
+  between a host's Bootstrap and its first stream. Repeat the run.
+
+### How a repeated run behaves
+
+One incarnation's life, three machines, and what the steps of the ready-made
+chain — issue → install → [`core.soul.registered`](../soul/README.md) barrier — do
+each time:
+
+| situation | what happens |
+|---|---|
+| first run | no records yet: three tokens, three installs, three agents online |
+| the run failed after onboarding (rollout, cluster assembly) and is repeated | the same three SIDs, agents connected: passed through as `onboarded`, the install skips them, the barrier passes at the first poll, the run goes on |
+| the group grows from three to five | three pass through as above; the two new SIDs get tokens and installs |
+| a machine was lost and the provider replaces it under a **new** name (`wbcloud` draws a fresh one since NIM-894) | a new SID with no record: token, install, online. The lost machine's record stays behind; targeting skips it for want of a lease, and it goes only by `soul.forget` or, where enabled, the Reaper's `purge_souls` |
+| a host's agent is stopped and the run is repeated | **refused at issuance**, naming the host — bring the agent up, repeat |
+| a machine is re-created under its **old** SID (ready-made host reinstalled, a provider that reuses names) | **refused at issuance**, naming the host — `DELETE /v1/souls/{sid}`, repeat: token, install, online |
+| tokens were issued but an install never brought its agent up | the barrier fails after `await_timeout` — or when the run ends first — and says per host what the registry holds: [no stream on record, a last stream before the wait, or one during it](../soul/README.md#onboarding-barrier-await_online). An install step that itself fails (`soul init` refused) fails the run there instead, naming the host |
+| …and that run is repeated | a host whose Bootstrap never completed holds no identity and is minted for again (`reissue: true`); one whose Bootstrap completed — certificate delivered, or the reply lost — is **refused at issuance**, `no stream on record`, and the table above says which way out |
+
+The first four rows are unchanged by NIM-886. Every red outcome after them says
+what it is.
 
 Output in `register.bootstrap`:
 
@@ -123,7 +213,7 @@ key in CEL is an *error*:
 | shape | means | keys |
 |---|---|---|
 | issued | a fresh token was minted for this host | `sid`, `bootstrap_token`, `expires_at`, `created`, `reissued` |
-| `onboarded: true` | the host already holds an identity and needs no token (NIM-780) | `sid`, `onboarded` |
+| `onboarded: true` | the host already holds an identity, its agent is connected, and it needs no token (NIM-780, NIM-886) | `sid`, `onboarded` |
 | `token_held: true` | the host holds an active token `reissue: false` left alone (NIM-900) | `sid`, `token_held` |
 
 **Anything that re-maps `hosts` must branch on both flags before reaching for the

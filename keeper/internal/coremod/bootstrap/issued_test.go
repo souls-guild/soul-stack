@@ -169,6 +169,40 @@ func TestApplyIssued_HostFailureIsDiagnosableAndHasNoPartialOutput(t *testing.T)
 	}
 }
 
+// ★ NIM-886. The refusal of an identity no agent is connected with reaches the
+// operator whole: which hosts, what the registry holds for each, and the command
+// that repairs a re-created machine. It passes the secret mask on the way out,
+// and a mask that ate the SID, the timestamp or the path would leave the step red
+// with no way to act on it — the cost the refusal exists to remove.
+func TestApplyIssued_NoAgentRefusalReachesTheOperatorWhole(t *testing.T) {
+	seenAt := time.Date(2026, 9, 12, 10, 1, 22, 0, time.UTC)
+	issuer := &fakeIssuer{err: &coremodbootstrap.NoAgentError{Hosts: []coremodbootstrap.NoAgentHost{
+		{SID: "redis-a-s1-k3f9q.example.com", Status: "disconnected", LastSeenAt: &seenAt},
+		{SID: "redis-a-s1-z7c1d.example.com", Status: "pending"},
+	}}}
+	m := &coremodbootstrap.Module{Issuer: issuer, Audit: &fakeAudit{}}
+	stream := internaltest.NewApplyStream()
+	if err := m.Apply(issuedReq(t, "redis-a-s1-k3f9q.example.com", "redis-a-s1-z7c1d.example.com"), stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	last := stream.Last()
+	if last == nil || !last.GetFailed() {
+		t.Fatalf("final flags = present:%t failed:%t, want failed", last != nil, last != nil && last.GetFailed())
+	}
+	for _, want := range []string{
+		`"redis-a-s1-k3f9q.example.com" (status disconnected, last stream on record 2026-09-12T10:01:22Z)`,
+		`"redis-a-s1-z7c1d.example.com" (status pending, no stream on record)`,
+		"DELETE /v1/souls/{sid}",
+	} {
+		if !strings.Contains(last.GetMessage(), want) {
+			t.Errorf("refusal lacks %q:\n%s", want, last.GetMessage())
+		}
+	}
+	if last.GetOutput() != nil {
+		t.Fatal("refused issuance exposed output")
+	}
+}
+
 func TestApplyIssued_RejectsIncompleteIssuerResultWithoutLoggingToken(t *testing.T) {
 	tok, err := bootstraptoken.Generate()
 	if err != nil {

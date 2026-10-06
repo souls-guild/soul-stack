@@ -70,6 +70,22 @@ func runIssuedIntegration(m *testing.M) int {
 	return m.Run()
 }
 
+// agentsOnline is the presence lease as a set: the SIDs listed have an agent
+// holding a live stream, every other SID has none.
+type agentsOnline map[string]struct{}
+
+func (a agentsOnline) SoulsStreamAlive(_ context.Context, sids []string) (map[string]struct{}, error) {
+	out := map[string]struct{}{}
+	for _, sid := range sids {
+		if _, ok := a[sid]; ok {
+			out[sid] = struct{}{}
+		}
+	}
+	return out, nil
+}
+
+var noAgents = agentsOnline{}
+
 // runIncarnation is the incarnation of the run under test. Ownership is what
 // separates a converged pass-through from an identity takeover (NIM-780), so
 // every issuance below names one instead of relying on the "" default.
@@ -105,7 +121,7 @@ func seedIssuedMembership(t *testing.T, incarnation, sid string) {
 func TestIntegration_IssuedBatch_CreateReissueAndExpiry(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	sids := []string{"vm1.example.com", "vm2.example.com"}
 
 	first, err := issuer.IssueBatch(ctx, sids, runIncarnation, false)
@@ -177,7 +193,7 @@ FROM bootstrap_tokens WHERE sid=$1`, h.SID, bootstraptoken.SystemKIDBootstrapIss
 func TestIntegration_IssuedBatch_ConnectedRefusalRollsBackWholeBatch(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	sids := []string{"good.example.com", "onboarded.example.com"}
 	first, err := issuer.IssueBatch(ctx, sids, runIncarnation, false)
 	if err != nil {
@@ -242,10 +258,17 @@ func TestIntegration_IssuedBatch_StatusAndTransportFailClosed(t *testing.T) {
 				seedIssuedIncarnation(t, "someone-else")
 				seedIssuedMembership(t, "someone-else", s.SID)
 			}
-			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+			// The agent is reported connected, so the only refusal left to reach is
+			// the boundary under test — NIM-886's no-agent refusal must not stand in
+			// for an ownership check that regressed.
+			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, agentsOnline{s.SID: {}}, time.Hour).
 				IssueBatch(ctx, []string{s.SID}, runIncarnation, false)
 			if err == nil {
 				t.Fatal("IssueBatch succeeded across fail-closed boundary")
+			}
+			var noAgent *coremodbootstrap.NoAgentError
+			if errors.As(err, &noAgent) {
+				t.Fatalf("refused for having no agent, not at the boundary under test: %v", err)
 			}
 			var count int
 			if qerr := issuedIntegrationPool.QueryRow(ctx,
@@ -266,7 +289,7 @@ func TestIntegration_IssuedBatch_ExpiredSoulRearmed(t *testing.T) {
 	if err := keepersoul.Insert(ctx, issuedIntegrationPool, s); err != nil {
 		t.Fatalf("insert expired Soul: %v", err)
 	}
-	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+	hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour).
 		IssueBatch(ctx, []string{s.SID}, runIncarnation, false)
 	if err != nil {
 		t.Fatalf("IssueBatch expired Soul: %v", err)
@@ -294,7 +317,7 @@ func TestIntegration_IssuedBatch_ErrorTypeKeepsSID(t *testing.T) {
 	}
 	seedIssuedIncarnation(t, "someone-else")
 	seedIssuedMembership(t, "someone-else", "connected.example.com")
-	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour).
 		IssueBatch(ctx, []string{"connected.example.com"}, runIncarnation, false)
 	var sidErr *coremodbootstrap.SIDIssueError
 	if !errors.As(err, &sidErr) || sidErr.SID != "connected.example.com" {
@@ -333,9 +356,9 @@ func TestIntegration_IssuedBatch_OnboardedHostOfThisRunIsConverged(t *testing.T)
 			resetIssuedIntegration(t)
 			ctx := context.Background()
 			seedIssuedIncarnation(t, runIncarnation)
-			issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
-
 			const live, fresh = "live.example.com", "fresh.example.com"
+			issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, agentsOnline{live: {}}, time.Hour)
+
 			if err := keepersoul.Insert(ctx, issuedIntegrationPool, &keepersoul.Soul{
 				SID: live, Transport: keepersoul.TransportAgent, Status: tc.state,
 			}); err != nil {
@@ -413,7 +436,7 @@ func TestIntegration_IssuedBatch_UnknownIncarnationCannotClaimABoundHost(t *test
 	}
 	seedIssuedMembership(t, runIncarnation, "bound.example.com")
 
-	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+	_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour).
 		IssueBatch(ctx, []string{"bound.example.com"}, "", false)
 	if err == nil || !strings.Contains(err.Error(), "identity takeover") {
 		t.Fatalf("issuance without an incarnation = %v, want a takeover refusal", err)
@@ -471,7 +494,9 @@ func TestIntegration_IssuedBatch_PendingHostWithASeedIsNotReArmed(t *testing.T) 
 				t.Fatalf("insert seed: %v", err)
 			}
 
-			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+			// The agent is connected: the subject here is the arm, not the
+			// presence check behind it (TestIntegration_IssuedBatch_IdentityWithoutAgent*).
+			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, agentsOnline{sid: {}}, time.Hour).
 				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
 			if err != nil {
 				t.Fatalf("IssueBatch: %v", err)
@@ -529,7 +554,7 @@ func TestIntegration_IssuedBatch_ForeignHostIsRefusedUnderEitherReissue(t *testi
 			seedIssuedIncarnation(t, "someone-else")
 			seedIssuedMembership(t, "someone-else", sid)
 
-			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+			_, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour).
 				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
 			if err == nil || !strings.Contains(err.Error(), "identity takeover") {
 				t.Fatalf("IssueBatch = %v, want a takeover refusal", err)
@@ -559,7 +584,7 @@ func TestIntegration_IssuedBatch_ForeignHostIsRefusedUnderEitherReissue(t *testi
 func TestIntegration_IssuedBatch_ActiveTokenIsKeptWhenReissueIsOff(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	const sid = "holding.example.com"
 
 	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
@@ -641,7 +666,7 @@ WHERE t.sid = $1`, sid).
 func TestIntegration_IssuedBatch_ActiveTokenIsReplacedWhenReissueIsOn(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	const sid = "replacing.example.com"
 
 	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
@@ -684,7 +709,7 @@ FROM bootstrap_tokens WHERE sid = $1`,
 func TestIntegration_IssuedBatch_ExpiredUnusedTokenIsNotHeld(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	const sid = "stale.example.com"
 
 	first, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false)
@@ -719,7 +744,7 @@ WHERE sid = $1 AND used_at IS NULL`, sid); err != nil {
 func TestIntegration_IssuedBatch_BurnedTokenIsNotHeld(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	const sid = "burned.example.com"
 
 	if _, err := issuer.IssueBatch(ctx, []string{sid}, runIncarnation, false); err != nil {
@@ -746,7 +771,7 @@ WHERE sid = $1 AND used_at IS NULL`, sid); err != nil {
 func TestIntegration_IssuedBatch_MixedBatchDecidesPerHost(t *testing.T) {
 	resetIssuedIntegration(t)
 	ctx := context.Background()
-	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour)
+	issuer := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour)
 	const held, fresh = "held.example.com", "fresh.example.com"
 
 	if _, err := issuer.IssueBatch(ctx, []string{held}, runIncarnation, false); err != nil {
@@ -788,7 +813,7 @@ func TestIntegration_IssuedBatch_PendingHostWithoutASeedStillGetsAToken(t *testi
 			}); err != nil {
 				t.Fatalf("insert Soul: %v", err)
 			}
-			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, time.Hour).
+			hosts, err := coremodbootstrap.NewIssuerPG(issuedIntegrationPool, noAgents, time.Hour).
 				IssueBatch(ctx, []string{sid}, runIncarnation, reissue)
 			if err != nil {
 				t.Fatalf("IssueBatch: %v", err)
