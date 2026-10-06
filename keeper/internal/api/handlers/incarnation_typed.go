@@ -390,9 +390,9 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 	}
 
 	if h.loader != nil {
-		// Day-2: the row is loaded, so a `validate:` rule may read the same
+		// An advanced scenario: the row is loaded, so a `validate:` rule may read the same
 		// incarnation facts the run will (NIM-833).
-		inputScope := scenario.DayTwoIncarnation(inc.ID, inc.Service, inc.ServiceVersion, inc.State)
+		inputScope := scenario.RunPathIncarnation(inc.ID, inc.Service, inc.ServiceVersion, inc.State)
 		if _, err := scenario.ValidateInput(ctx, h.loader, serviceRef, scenarioName, input, inputScope); err != nil {
 			if errors.Is(err, scenario.ErrInputInvalid) {
 				return zero, incProblem(problem.TypeValidationFailed, "input_invalid: "+err.Error())
@@ -737,7 +737,7 @@ func (h *IncarnationHandler) RerunLastTyped(ctx context.Context, claims *jwt.Cla
 	// The input is handed down unconditionally; UnlockForRerunWithInput decides
 	// what it means. It is used ONLY when the attempt carries no replayable
 	// snapshot — the recovery this endpoint gained in NIM-408, which turned a dead
-	// end (a day-2 rerun became impossible once the recipe was purged at 30 days)
+	// end (an advanced-scenario rerun became impossible once the recipe was purged at 30 days)
 	// into a request the operator can complete. With a snapshot present the input
 	// is REFUSED, not preferred: see ErrRerunInputNotNeeded.
 	res, err := incarnation.UnlockForRerunWithInput(ctx, h.db, name, reason, claims.Subject, applyID, applyID, fallbackInput)

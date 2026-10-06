@@ -17,8 +17,8 @@
 #   onchanges-restart against it here (unlike redis-server.yml). At-create the initial start
 #   (core.service.running) comes up with the final flagfile/ACL/cert already in place — a
 #   separate restart isn't needed. dragonfly.conf/users.acl/TLS PEM DELIBERATELY do NOT restart
-#   (hot-reload day-2 — NEXT slice): rendering puts desired state on disk, activation is a
-#   day-2 step.
+#   (hot-reload in the advanced scenarios — NEXT slice): rendering puts desired state on disk, activation is a
+#   step of an advanced scenario.
 #
 # The PARTIAL inner-gate tls.enable (only the PEM tasks, not the whole file) stays in-block
 # (nested TLS block below): an include-when would drop the whole file, not a subset of tasks.
@@ -50,7 +50,7 @@
         mode: "0750"
 
     # Server certificate. mode 0600 owner dragonfly. content = vault(ref) IN THE CELL →
-    # sealed by the vault layer. register — restart on rotation (day-2, NEXT slice).
+    # sealed by the vault layer. register — restart on rotation (an advanced scenario, NEXT slice).
     - name: Render the TLS server certificate
       module: core.file.present
       register: dragonfly_tls_cert
@@ -86,7 +86,7 @@
         group: "${ vars.dragonfly_group }"
 
 # users.acl from the passed MAP of ACL users name→{perms,state,password} (--aclfile in the
-# flagfile). register for day-2 (restart on change — NEXT slice). owner/group
+# flagfile). register for the advanced scenarios (restart on change — NEXT slice). owner/group
 # dragonfly, mode 0640 — the file holds password hashes, only the service reads it. The template
 # ranges the MAP (Go sorts keys → determinism) and hashes the password (sha256). DF
 # accepts the redis-format aclfile with `#<sha256hex>` (acl/user.cc SetPasswordHash is_hashed).
@@ -102,7 +102,7 @@
     vars:
       users: "${ default(input.users, {}) }"
 
-# dragonfly.conf (FLAGFILE) from the merged config. register for day-2. owner/group dragonfly,
+# dragonfly.conf (FLAGFILE) from the merged config. register for the advanced scenarios. owner/group dragonfly,
 # mode 0640 — the flagfile carries masterauth/password hashes, only the service reads it. The template prints
 # base --flags + ranges the merged config (see dragonfly.flags.tmpl). * default_admin REDESIGN:
 # vars.password REMOVED (requirepass removed from the flagfile) — authentication is under the ACL user
@@ -128,7 +128,7 @@
 
 # core.service dragonfly running. At-create the initial start comes up with the final
 # flagfile/ACL/cert (the render above is already on disk) — there is no separate restart (DF hardening lives in
-# the unit itself, there is no drop-in-restart case; config/acl/tls hot-reload is day-2, NEXT slice).
+# the unit itself, there is no drop-in-restart case; config/acl/tls hot-reload is an advanced scenario, NEXT slice).
 # deploy_dragonfly=false does NOT keep the service — the whole file is group-dropped.
 - name: Ensure DragonFly is running and enabled at boot
   module: core.service.running

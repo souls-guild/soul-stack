@@ -54,7 +54,7 @@ func TestAssertReachability(t *testing.T) {
 
 		// Not a create starter: the scenario is only ever reached as an
 		// explicit run, where the gate DOES answer the roster assert (NIM-270).
-		{"day2-roster-assert", scenarioWithAssert(false, "", rosterPredicate), false},
+		{"advanced-roster-assert", scenarioWithAssert(false, "", rosterPredicate), false},
 
 		// The roster read hidden in the `when:` gate rather than the predicate —
 		// the gate decision is roster-dependent, so the whole assert defers.

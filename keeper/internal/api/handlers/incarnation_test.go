@@ -75,7 +75,7 @@ type fakeIncDB struct {
 	// Rerun-last path: the last-run probe in UnlockForRerun
 	// `SELECT scenario, apply_id, run FROM state_history ... ORDER BY history_id DESC LIMIT 1`.
 	// nil → a default create row with a snapshot. ONE source since NIM-408: the
-	// create-vs-day-2 branch and its apply_runs.recipe probe are gone.
+	// create-vs-advanced-scenario branch and its apply_runs.recipe probe are gone.
 	lastScenarioRow func(name string) pgx.Row
 
 	// Upgrade path: SELECT FOR UPDATE (state, state_schema_version, status).
@@ -1977,13 +1977,13 @@ func makeIncStatusRowBare(name, status string) pgx.Row {
 	}}
 }
 
-// TestIncarnation_Run_BareIncarnation_Day2_202 — GUARD Phase 2: a bare incarnation
-// (created_scenario IS NULL) runs an ORDINARY operational scenario (day-2) via
+// TestIncarnation_Run_BareIncarnation_Advanced_202 — GUARD Phase 2: a bare incarnation
+// (created_scenario IS NULL) runs an ORDINARY advanced scenario via
 // RunTyped normally — 202, the run starts. RunTyped resolves the incarnation by
-// SelectByID and does NOT read created_scenario for a day-2 run (it is needed only for
-// rerun-last on the create path). Regress = the day-2 path starts requiring created_scenario non-NULL
-// (or panics on the NULL projection) → bare incarnations lose day-2 operations.
-func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
+// SelectByID and does NOT read created_scenario for an advanced-scenario run (it is needed only for
+// rerun-last on the create path). Regress = the advanced-scenario path starts requiring created_scenario non-NULL
+// (or panics on the NULL projection) → bare incarnations lose their advanced scenarios.
+func TestIncarnation_Run_BareIncarnation_Advanced_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(name string) pgx.Row { return makeIncStatusRowBare(name, "ready") },
 	}
@@ -1997,10 +1997,10 @@ func TestIncarnation_Run_BareIncarnation_Day2_202(t *testing.T) {
 	rec := incRun(h, req)
 
 	if rec.Code != http.StatusAccepted {
-		t.Fatalf("Code = %d, want 202 (bare day-2 run), body=%s", rec.Code, rec.Body.String())
+		t.Fatalf("Code = %d, want 202 (bare advanced-scenario run), body=%s", rec.Code, rec.Body.String())
 	}
 	if starter.calls != 1 {
-		t.Fatalf("starter.calls = %d, want 1 (a bare incarnation allows a day-2 operational scenario)", starter.calls)
+		t.Fatalf("starter.calls = %d, want 1 (a bare incarnation allows an advanced scenario)", starter.calls)
 	}
 	if starter.gotSpec.ScenarioName != "add_user" {
 		t.Errorf("RunSpec.ScenarioName = %q, want add_user", starter.gotSpec.ScenarioName)

@@ -83,7 +83,7 @@ func TestValidate_DestinyStaysInputOnly(t *testing.T) {
 // runtime it is a 5xx on every POST /v1/incarnations, once per request, with
 // nothing static naming the line.
 //
-// FAIL-CLOSED and deliberately so: a `create: true` scenario may also be run day-2,
+// FAIL-CLOSED and deliberately so: a `create: true` scenario may also be run as an advanced scenario,
 // where the rule would work. It is refused anyway, because create is a declared path
 // of that scenario and the rule hard-fails there.
 func TestValidate_CreateScenarioCannotReadWhatDoesNotExistYet(t *testing.T) {
@@ -124,15 +124,15 @@ func TestValidate_CreateScenarioCannotReadWhatDoesNotExistYet(t *testing.T) {
 		t.Error("a composing create scenario was allowed to read the id it has not composed yet")
 	}
 
-	// A day-2 scenario is untouched: its path answers for the full set.
+	// An advanced scenario is untouched: its path answers for the full set.
 	if _, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", rule(false, "", `incarnation.state.tier == 'gold'`), ValidateOptions{}); hasCode(diags, "validate_rule_out_of_scope") {
 		dump(t, diags)
-		t.Error("a day-2 scenario was judged against the create path")
+		t.Error("an advanced scenario was judged against the create path")
 	}
 }
 
 // TestValidate_InheritedRuleIsJudgedAgainstTheScenarioThatInheritsIt — a covenant
-// fragment cannot be checked on its own: the same rule is correct for every day-2
+// fragment cannot be checked on its own: the same rule is correct for every advanced
 // scenario that extends it and fatal for every create scenario that does. Only the
 // merged manifest says which this one is, so the check runs post-merge, like the
 // `form:` and `id:` ones beside it.
@@ -150,7 +150,7 @@ func TestValidate_InheritedRuleIsJudgedAgainstTheScenarioThatInheritsIt(t *testi
 		refused bool
 	}{
 		{"create", "name: x\ncreate: true\nextends: covenant\ntasks: []\n", true},
-		{"day-2", "name: x\nextends: covenant\ntasks: []\n", false},
+		{"advanced", "name: x\nextends: covenant\ntasks: []\n", false},
 	} {
 		m, doc, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(tc.src), ValidateOptions{})
 		if err != nil || diag.HasErrors(diags) {

@@ -2,7 +2,7 @@ package api
 
 // FULL-TYPED shape of the INCARNATION form-prefill route (code-first OpenAPI source,
 // ADR-054 §Pattern). POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill
-// — day-2 pre-fill of the scenario's UI form with the current incarnation.state values
+// — advanced-scenario pre-fill of the scenario's UI form with the current incarnation.state values
 // (docs/input.md → "Pre-fill from state"). A resolve (not a mutation), no body: audit is NOT
 // wired. RBAC incarnation.get + scope predicate (ADR-047) — on the group.
 // Go types — the single source of truth for the schema.

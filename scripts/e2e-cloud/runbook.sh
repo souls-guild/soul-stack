@@ -7,7 +7,7 @@
 # Bring-up scripts (environment-specific) live locally in $SCRIPTS_DIR and are NOT committed to git -
 # the runner invokes them at runtime. Credentials come only from env/VM, NEVER from ~/.zsh_acme.
 #
-# Usage: [ENV...] runbook.sh <create|create-destroy|day2>
+# Usage: [ENV...] runbook.sh <create|create-destroy|operations>
 #   DRY_RUN=1 - print the call sequence + a report skeleton without network access.
 #   Full parameter list - docs/testing (docs-writer) and delegation NIM-31.
 
@@ -63,7 +63,7 @@ export EXEC_MODE KEEPER_API FQDN_SUFFIX TSH_NODE TELEPORT_HOME REMOTE_JWT REMOTE
 . "${SELF_DIR}/lib/report.sh"
 . "${SELF_DIR}/lib/preflight.sh"
 . "${SELF_DIR}/lib/bringup.sh"
-. "${SELF_DIR}/suites/day2.sh"
+. "${SELF_DIR}/suites/operations.sh"
 . "${SELF_DIR}/suites/create.sh"
 . "${SELF_DIR}/suites/create-destroy.sh"
 
@@ -81,9 +81,9 @@ fi
 case "$SUITE" in
 create) suite_create; rc=$? ;;
 create-destroy) suite_create_destroy; rc=$? ;;
-day2) suite_day2; rc=$? ;;
+operations) suite_operations; rc=$? ;;
 *)
-	_e2e_log "unknown suite: ${SUITE} (create|create-destroy|day2)"
+	_e2e_log "unknown suite: ${SUITE} (create|create-destroy|operations)"
 	report_summary "FAIL (bad suite)" 2
 	exit 2
 	;;

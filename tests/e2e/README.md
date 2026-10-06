@@ -186,8 +186,8 @@ connected hosts) and, for services whose render reads facts keeper-side, write
 them with `SeedSoulprint` BEFORE calling the helper.
 
 `AddMember` on its own remains correct for an incarnation that already exists
-(e.g. `lease_force_release_test.go`, which seeds a ready incarnation and runs a
-day-2 scenario); it fails fast with the order instruction if the row is missing.
+(e.g. `lease_force_release_test.go`, which seeds a ready incarnation and runs an
+advanced scenario); it fails fast with the order instruction if the row is missing.
 
 **Coverage note.** This path does not exercise `POST /v1/incarnations` with a
 `create_scenario` — its input validation, create-plan resolution and the
@@ -236,7 +236,7 @@ tests/e2e/
 | `TestE2EServiceCovenProbe_Create` | 1 | `core.file.present` init marker + double state mutation. |
 | `TestE2EServiceLongRunner_Create` | 1 | `core.file.present` + double state mutation. |
 | `TestE2EStagedFailover_2Passage` | 2 | **staged-render probe→where** (ADR-056): Passage 0 probes everyone, Passage 1 `where: register.role=='master'` ONLY on the master. |
-| ~~`TestE2EServiceRedis_*` / `TestE2EServiceRedisCluster_*`~~ | | **GONE (NIM-871)** — the L3a service lifecycle ran `examples/service/redis`, which left the engine. No in-tree service replaces it at this tier: the fixtures below are single-scenario smokes, not a create-plus-day-2 lifecycle. |
+| ~~`TestE2EServiceRedis_*` / `TestE2EServiceRedisCluster_*`~~ | | **GONE (NIM-871)** — the L3a service lifecycle ran `examples/service/redis`, which left the engine. No in-tree service replaces it at this tier: the fixtures below are single-scenario smokes, not a create-plus-advanced-scenario lifecycle. |
 | `TestE2EKeeperSideDispatch_CovenRegistered` | | keeper-side core `core.soul.registered` (`on: keeper` dispatcher). |
 | `TestE2EOracleTypedPortent_*` / `TestOracle_FileChanged_FiresScenario` / `TestL3b_VigilDecreeOracleFlow_Smoke` | | Vigil/Oracle event-driven: portent → fired scenario. |
 | `TestSoulHistory_AggregatesScenarioAndErrand` | | scenario+errand history aggregation by SID. |

@@ -44,15 +44,15 @@ const (
 	guardIncState = "replicas"
 )
 
-// guardDayTwoFields mirrors what the keeper's day-2 builder answers for
-// (scenario.dayTwoFields). Restated here because this package must not import the
+// guardLoadedFields mirrors what the keeper's advanced-scenario builder answers for
+// (scenario.runPathFields). Restated here because this package must not import the
 // keeper; the two are pinned to each other by
 // keeper/internal/scenario/validate_scope_guard_test.go, which exercises the real
 // builder end to end.
-var guardDayTwoFields = []string{"id", "name", "service", "service_version", "state"}
+var guardLoadedFields = []string{"id", "name", "service", "service_version", "state"}
 
-func dayTwoContext() ValidateContext {
-	return LoadedIncarnation(guardDayTwoFields, map[string]any{
+func loadedContext() ValidateContext {
+	return LoadedIncarnation(guardLoadedFields, map[string]any{
 		"id":              guardIncID,
 		"name":            guardIncID, // the ADR-0085 window alias, as the keeper builds it
 		"service":         "redis",
@@ -79,21 +79,21 @@ func evalGuard(t *testing.T, that string, inc ValidateContext) (fail *ValidateRu
 	return f, nil
 }
 
-// TestValidateScope_DayTwoReadsTheRow — the day-2 path answers for the loaded row,
+// TestValidateScope_LoadedReadsTheRow — the advanced-scenario path answers for the loaded row,
 // under both spellings of the identifier.
-func TestValidateScope_DayTwoReadsTheRow(t *testing.T) {
+func TestValidateScope_LoadedReadsTheRow(t *testing.T) {
 	for _, that := range []string{
 		`incarnation.id.startsWith("redis-")`,
 		`incarnation.name == "` + guardIncID + `"`,
 		`incarnation.service == "redis"`,
 		`incarnation.state.` + guardIncState + ` > 0`,
 	} {
-		fail, scopeErr := evalGuard(t, that, dayTwoContext())
+		fail, scopeErr := evalGuard(t, that, loadedContext())
 		if scopeErr != nil {
-			t.Errorf("day-2 rule %q was refused as out of scope: %v", that, scopeErr)
+			t.Errorf("advanced-scenario rule %q was refused as out of scope: %v", that, scopeErr)
 		}
 		if fail != nil {
-			t.Errorf("day-2 rule %q evaluated false: %v", that, fail)
+			t.Errorf("advanced-scenario rule %q evaluated false: %v", that, fail)
 		}
 	}
 }
@@ -185,8 +185,8 @@ func TestValidateScope_ComposedIDWithdrawsTheIdentifier(t *testing.T) {
 	if got := RequestedIncarnation(guardIncID).WithComposedID().Scope(); got != IncarnationComposed {
 		t.Errorf("WithComposedID on a requested stance = %v, want IncarnationComposed", got)
 	}
-	if got := dayTwoContext().WithComposedID().Scope(); got != IncarnationLoaded {
-		t.Errorf("WithComposedID must leave a day-2 stance alone, got %v", got)
+	if got := loadedContext().WithComposedID().Scope(); got != IncarnationLoaded {
+		t.Errorf("WithComposedID must leave an advanced-scenario stance alone, got %v", got)
 	}
 }
 
@@ -202,11 +202,11 @@ func TestValidateScope_EmptyRequestedIDIsNotAFact(t *testing.T) {
 		t.Error("a rule over incarnation.id passed with no id in the request")
 	}
 	if got := LoadedIncarnation(nil, nil).Scope(); got != IncarnationAbsent {
-		t.Errorf("LoadedIncarnation(nil, nil) = %v, want IncarnationAbsent — a day-2 stance answering for nothing is the false-green shape", got)
+		t.Errorf("LoadedIncarnation(nil, nil) = %v, want IncarnationAbsent — an advanced-scenario stance answering for nothing is the false-green shape", got)
 	}
 }
 
-// TestValidateScope_AnsweredForIsNotWhatTheRowCarries — the day-2 path answers for
+// TestValidateScope_AnsweredForIsNotWhatTheRowCarries — the advanced-scenario path answers for
 // `state` on EVERY request, so an incarnation whose state column is NULL gives the
 // ordinary no-such-key the run gives, not "this path does not have that fact".
 //
@@ -214,7 +214,7 @@ func TestValidateScope_EmptyRequestedIDIsNotAFact(t *testing.T) {
 // broken for one incarnation and fine for its sibling — a diagnosis that depends on
 // data, about a file.
 func TestValidateScope_AnsweredForIsNotWhatTheRowCarries(t *testing.T) {
-	empty := LoadedIncarnation(guardDayTwoFields, map[string]any{
+	empty := LoadedIncarnation(guardLoadedFields, map[string]any{
 		"id": guardIncID, "name": guardIncID, "service": "redis", "service_version": "v1.2.3",
 		// no "state" — the column is NULL
 	})
@@ -256,16 +256,16 @@ func TestValidateScope_ZeroContextIsInputOnly(t *testing.T) {
 	}
 }
 
-// TestValidateScope_LoadedRefusesAFieldItDoesNotCarry — inside the day-2 stance
+// TestValidateScope_LoadedRefusesAFieldItDoesNotCarry — inside the advanced-scenario stance
 // the guard still applies: `host_count` is in the RUN's incarnation namespace and
 // not in this one (it is a roster question, and the roster is not read on the
 // request path). Refusing beats a no-such-key here for the same reason it does on
 // create — the author is told which context lacks the fact, not just that a lookup
 // missed.
 func TestValidateScope_LoadedRefusesAFieldItDoesNotCarry(t *testing.T) {
-	_, scopeErr := evalGuard(t, `incarnation.host_count > 1`, dayTwoContext())
+	_, scopeErr := evalGuard(t, `incarnation.host_count > 1`, loadedContext())
 	if scopeErr == nil {
-		t.Fatal("incarnation.host_count passed the day-2 gate, which does not read the roster")
+		t.Fatal("incarnation.host_count passed the advanced-scenario gate, which does not read the roster")
 	}
 	if !strings.Contains(scopeErr.Error(), "host_count") {
 		t.Errorf("the refusal must name the field, got: %v", scopeErr)
@@ -299,7 +299,7 @@ func TestValidateScope_GuardIsIndependentOfOperatorInput(t *testing.T) {
 // "a reference" would refuse a rule that reads only input.
 func TestValidateScope_ShadowingComprehensionVariableIsRefused(t *testing.T) {
 	const that = `[1, 2].all(incarnation, incarnation > 0)`
-	_, scopeErr := evalGuard(t, that, dayTwoContext())
+	_, scopeErr := evalGuard(t, that, loadedContext())
 	if scopeErr == nil {
 		t.Fatal("a comprehension variable named `incarnation` was read as the namespace and let through")
 	}
@@ -308,7 +308,7 @@ func TestValidateScope_ShadowingComprehensionVariableIsRefused(t *testing.T) {
 	}
 
 	// An ordinary comprehension is untouched — the check is about the NAME.
-	fail, scopeErr := evalGuard(t, `[1, 2].all(n, n > 0)`, dayTwoContext())
+	fail, scopeErr := evalGuard(t, `[1, 2].all(n, n > 0)`, loadedContext())
 	if scopeErr != nil || fail != nil {
 		t.Errorf("an ordinary comprehension was disturbed (fail=%v, err=%v)", fail, scopeErr)
 	}

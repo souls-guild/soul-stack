@@ -548,7 +548,7 @@ Two rules follow:
 ## Docker-souls (isolated fleet)
 
 Host fleet (`make dev-souls`) raises souls as processes on the host - they all share
-FS, packages and services of the developer's machine. For **day-2 scenarios** (installation
+FS, packages and services of the developer's machine. For **advanced scenarios** (installation
 packages, `core.service.*`, editing files) and UI tests without the cloud need isolation:
 each soul is its own privileged Debian-12 systemd container with a separate FS.
 

@@ -93,7 +93,7 @@ type InputScenarioLoader interface {
 // invariants — `that` rules are written assuming correct types (input.port > 0 is
 // meaningless if port isn't a number).
 //
-// inc is the caller's stance: [DayTwoIncarnation] on the run path,
+// inc is the caller's stance: [RunPathIncarnation] on the run path,
 // config.RequestedIncarnation on create. A rule reading a fact the stance does not
 // carry is refused rather than evaluated against an empty namespace — the failure
 // is wrapped in config.ErrValidateRuleEval, so the handler reports it as a

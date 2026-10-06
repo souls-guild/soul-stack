@@ -328,6 +328,6 @@
 # The binary branch's registers (redis_server_bin/redis_server_links/redis_server_unit) remain
 # declared (capturing the fetch/links/unit result), but no longer have an onchanges consumer.
 #
-# ★ The day-2 binary-upgrade restart is moved to an upgrade scenario/manual — TEMPORARILY, see
+# ★ The binary-upgrade restart after create is moved to an upgrade scenario/manual — TEMPORARILY, see
 # the architect audit 2026-06-29: upgrading the binary on a LIVE instance does NOT auto-restart
-# (core.service.running sees active → no-op) until there's a day-2 upgrade scenario.
+# (core.service.running sees active → no-op) until there's an upgrade scenario.

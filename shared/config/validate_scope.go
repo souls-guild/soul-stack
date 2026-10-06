@@ -14,7 +14,7 @@ package config
 // The two request paths know different things, and that difference is the whole
 // reason this file exists:
 //
-//   - day-2: the incarnation row is loaded, so `incarnation.*` reads it;
+//   - an advanced scenario: the incarnation row is loaded, so `incarnation.*` reads it;
 //   - create: the incarnation does not exist yet. Only the identity the request
 //     itself carries is knowable — and when the scenario composes its id from
 //     `input:` (`id.template`, ADR-0079) not even that, because the id is composed
@@ -83,7 +83,7 @@ const (
 	// composed after it returns.
 	IncarnationComposed
 
-	// IncarnationLoaded — day-2: the incarnation row is loaded and `validate:`
+	// IncarnationLoaded — an advanced scenario: the incarnation row is loaded and `validate:`
 	// reads the same facts the run will.
 	IncarnationLoaded
 )
@@ -101,7 +101,7 @@ func (s IncarnationScope) contextName() string {
 	case IncarnationComposed:
 		return "the create path of a scenario that composes its own id from input:"
 	case IncarnationLoaded:
-		return "the day-2 pre-flight gate"
+		return "the pre-flight gate of an advanced scenario"
 	default:
 		return "a context with no incarnation"
 	}
@@ -115,7 +115,7 @@ func (s IncarnationScope) hint() string {
 	case IncarnationOutOfScopeTrial:
 		return "an L0 case has no incarnation behind it; a rule that needs one can only be exercised against a real create or run"
 	case IncarnationRequested:
-		return "on create only the identifier exists; a rule about the incarnation's state or history belongs on a day-2 scenario, and a topology or roster question belongs in assert:"
+		return "on create only the identifier exists; a rule about the incarnation's state or history belongs on an advanced scenario, and a topology or roster question belongs in assert:"
 	case IncarnationComposed:
 		return "the id here IS the input it is composed from -- write the rule over the input.* components that feed id.template"
 	default:
@@ -132,7 +132,7 @@ func (s IncarnationScope) hint() string {
 // what the namespace CONTAINS is a property of one row. Deriving the first from the
 // second made `incarnation.state.x` refuse for an incarnation whose state column is
 // NULL and pass for its sibling — the same scenario, diagnosed as broken on one
-// request and fine on the next. Now `state` is in scope on every day-2 request, and
+// request and fine on the next. Now `state` is in scope on every advanced-scenario request, and
 // an empty state answers the ordinary no-such-key the RUN would answer, which is
 // the honest report of an empty row.
 //
@@ -174,7 +174,7 @@ func ComposedIncarnation() ValidateContext {
 	return ValidateContext{scope: IncarnationComposed}
 }
 
-// LoadedIncarnation is the day-2 context. known is what this path ANSWERS FOR —
+// LoadedIncarnation is the advanced-scenario context. known is what this path ANSWERS FOR —
 // fixed, the same for every request — and fields is what THIS row carries, which
 // may be a strict subset (a NULL column). A name in fields but not in known is
 // dropped from the namespace rather than left silently readable, so the two can
@@ -183,8 +183,8 @@ func ComposedIncarnation() ValidateContext {
 // The keeper-side builder keeps known a SUBSET of what the run's `incarnation.*`
 // carries, so a rule that passes pre-flight cannot read a field the run then lacks.
 //
-// An empty known set degrades to the zero value: a day-2 stance answering for
-// nothing is the false-green shape, not a day-2 stance.
+// An empty known set degrades to the zero value: an advanced-scenario stance answering for
+// nothing is the false-green shape, not an advanced-scenario stance.
 func LoadedIncarnation(known []string, fields map[string]any) ValidateContext {
 	if len(known) == 0 {
 		return ValidateContext{}
@@ -227,7 +227,7 @@ func OutOfScopeIncarnation(s IncarnationScope) ValidateContext {
 // this a no-op on every request an operator actually sends, and the composed hint —
 // the one that says the id IS the input it is composed from — was unreachable.
 //
-// A day-2 stance is returned unchanged: the row exists there whatever the manifest
+// An advanced-scenario stance is returned unchanged: the row exists there whatever the manifest
 // says about composing, and this must not blind a run.
 func (c ValidateContext) WithComposedID() ValidateContext {
 	if c.scope == IncarnationLoaded {

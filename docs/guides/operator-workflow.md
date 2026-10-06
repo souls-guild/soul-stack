@@ -1,4 +1,4 @@
-# Day-2: Operator duty cycle
+# Operator duty cycle
 
 This guide is the next step after [first-service.md](first-service.md). There you assembled a service, registered it and created an incarnation; here you **exploit** it: you run it again, check the drift, target part of the fleet, upgrade the version, scale it and sort out incidents.
 
@@ -132,7 +132,7 @@ Available refs for upgrade (tags + service branches) - `GET /v1/services/{id}/re
 
 Adding a soul to the fleet is onboarding a new Soul (as in [getting-started.md → Step 6](../getting-started.md)): register a host with the necessary covens, issue a bootstrap token, apply `soul init` on the host. On the dev stand this is done by `make dev-souls` (re-raises the fleet in the database registry, covens are saved).
 
-Key for day-2: **the new host is picked up by late-binding automatically**. If you onboarded a host in coven `prod`, then:
+The key point: **the new host is picked up by late-binding automatically**. If you onboarded a host in coven `prod`, then:
 
 - the next run with `where:`/`on: [prod]` (section 3) will enable it without editing the script - the target will resolve at the time of run;
 - regular scheduled runs (**Cadence**, [ADR-046](../adr/0046-cadence.md)) and event-driven reactions (**Vigil**, [ADR-030](../adr/0030-vigil-oracle.md)) will cover it on the next tick - both resolve the target at the time of triggering, and not at the time of setting.
@@ -169,7 +169,7 @@ Triage of typical problems (`apply` hangs in `applying`, souls in `disconnected`
 
 ## 7. What to watch
 
-Prometheus metrics - on `:9090/metrics`, namespace `keeper_*` (Keeper-side) and `soul_*` (Soul-side). In normal day-2 practice, keep track of a few things:
+Prometheus metrics - on `:9090/metrics`, namespace `keeper_*` (Keeper-side) and `soul_*` (Soul-side). In normal operation, keep track of a few things:
 
 - **`keeper_grpc_streams_active`** — how many souls are online; drop below expected number = part of the fleet has fallen off (check `souls.status = 'disconnected'`).
 - **Apply failure rate** — `rate(keeper_scenario_runs_total{result="failed"}[15m]) / rate(keeper_scenario_runs_total[15m])`; growth = runs fail, incarnations go to `error_locked`.

@@ -10,7 +10,7 @@ description: >-
 
   ★ PILOT SCOPE (D1, 2026-06-27): ONLY sentinel mode (master-replica + sentinel daemon;
   replicas_per_master=0 gives a standalone equivalent). cluster is OUT of scope (DragonFly cluster -
-  emulated, separate slice). ONLY scenario `create` is implemented. Day-2 (restart/add_user/
+  emulated, separate slice). ONLY scenario `create` is implemented. The advanced scenarios (restart/add_user/
   rotate_tls/destroy/update_config) - NEXT slice AFTER review. No mode dispatcher
   (single mode), no migrations (v1).
 
@@ -18,20 +18,20 @@ description: >-
 # NIM-735: the version is derived from migrations/, never written down).
 #   - 002_install_layout_to_vars: moves install + host-layout
 #     (conf_dir/data_dir) from state into service vars - install is a read-model with no readers,
-#     layout is read directly by day-2 from service vars (default(vars.<x>, '<default>')). Mirrors
+#     layout is read directly by the advanced scenarios from service vars (default(vars.<x>, '<default>')). Mirrors
 #     redis 012_install_layout_to_vars (Option A). DragonFly has NO modules_base_url (redis modules don't
 #     apply to DF) -> three fields are cut, not four. sysctl_settings STAYS (read-model).
 #   - 003_cloud_provision_read_model: cloud-provision read-model (ADR-061,
 #     Option A - create raises the VM in the same run; user decision 2026-07-01,
 #     DragonFly cloud-provision modeled on redis). Adds provisioned_vm_ids (array
-#     string - provider-vm-id of created VMs, day-2 teardown read them for the cloud-destroy
+#     string - provider-vm-id of created VMs, the teardown after create read them for the cloud-destroy
 #     leaf, `core.cloud.destroyed` — removed in NIM-761, nothing reads them today)
 #     and provisioned_provider (string - the cloud-Provider name). Mirrors redis 007_cloud_provision_read_model.
 #     ⛔ Both are DEAD since NIM-761 (see the state_schema block below): nothing writes them,
 #     and on an incarnation created today all three provisioned_* fields are ABSENT, not
 #     empty - the '[]' / '' defaults this step described needed a create that wrote them.
 #   - 004_provisioned_sids: cascade-destroy read-model (addition to v3).
-#     Adds provisioned_sids (array string - SID/FQDN of VMs created by our run; day-2
+#     Adds provisioned_sids (array string - SID/FQDN of VMs created by our run; the
 #     cascade-teardown finished off orphaned souls/seeds/tokens - the Reaper does NOT tear down pending-VM-
 #     souls itself, without sids they would have remained orphaned, anti-replay violated). Alongside provisioned_vm_ids: vm_ids -
 #     provider-id (for the removed core.cloud.destroyed), sids - the Keeper-side Soul identity (for that cascade).
@@ -61,9 +61,9 @@ description: >-
 #   - df_config (opaque, additional_properties: true) - the COMPUTED RESULT of translating simple
 #     input into the flagfile map (what actually goes into render). This is the write-model of "as deployed".
 #   - named fields (tls/memory_mb/...) - the operator's INTENT in simple typed
-#     terms (read-model). Day-2 scenarios read them by name. install and host-layout
+#     terms (read-model). Advanced scenarios read them by name. install and host-layout
 #     (conf_dir/data_dir) moved into service vars (v1->v2, Option A): install - a read-model with no
-#     readers, layout - day-2 reads vars.
+#     readers, layout - the advanced scenarios read vars.
 # BOTH representations are filled from a SINGLE create compute pass - no drift between them.
 state_schema:
   # Effective DragonFly version (distro pin for package; upstream semver for binary).
@@ -79,7 +79,7 @@ state_schema:
   # ── Named intent fields (read-model) ────────────────────────────────────
   # TLS intent: whether TLS is on + Vault PATHS for cert/key/CA (NOT the PEM itself - the secret is not
   # stored in state, security). From compute.tls_* (the same values as in the df_config TLS block). ★ NO only/port:
-  # DragonFly has TLS on the MAIN port (no tls_port, no "TLS-only") - day-2 scenarios
+  # DragonFly has TLS on the MAIN port (no tls_port, no "TLS-only") - advanced scenarios
   # connect to the local instance over a UNIX socket, they don't need the TLS port.
   tls:
     type: object
@@ -90,7 +90,7 @@ state_schema:
       key_ref:  { type: string }
       ca_ref:   { type: string }
   # ★ install + host-layout (conf_dir/data_dir) MOVED into service vars (v1->v2, Option A):
-  # install - a read-model with no readers, layout - day-2 reads service vars directly
+  # install - a read-model with no readers, layout - the advanced scenarios read service vars directly
   # (default(vars.conf_dir, '/etc/dragonfly') / data_dir). state no longer has these fields -
   # set would write a key outside the schema -> state validation would fail (see migration 002_install_layout_to_vars).
   # Memory budget for DragonFly, MB. From input.memory_mb; not set -> 0.
@@ -148,7 +148,7 @@ state_schema:
   # from (service, incarnation, df_users, name) - no path is written anywhere in this repo -
   # and never in state. `key: name` says which sibling property is the element's identity, i.e.
   # the last path segment. Written by core.state.set, revealed to the operator by
-  # .../secrets/reveal, and read back by day-2 scenarios through that module's register.
+  # .../secrets/reveal, and read back by advanced scenarios through that module's register.
   df_users:
     type: array
     items:
@@ -167,7 +167,7 @@ state_schema:
   # in service vars (vars.system_acl_users / vars.system_acl_users_sentinel - policy, not a
   # per-incarnation fact), and the password is declared `type: secret`, so its value lives in
   # Vault at a path Keeper DERIVES from (service, incarnation, system_acl_users, name).
-  # Written by create, read back by every day-2 scenario through core.state.set's
+  # Written by create, read back by every advanced scenario through core.state.set's
   # register - which is why the set is recorded rather than recomputed from vars: an operator
   # who edits vars after create must not silently re-point an in-cluster credential.
   system_acl_users:
@@ -208,7 +208,7 @@ state_schema:
   #
   # They were the FACT that "these hosts were raised by our create run via cloud-create":
   # written by `create` when input.provision.enabled, from the register of a
-  # `core.cloud.created` step, and read by day-2 teardown for `core.cloud.destroyed` -
+  # `core.cloud.created` step, and read by the teardown after create for `core.cloud.destroyed` -
   # vm_ids as the provider-side id, provider as its registry name, sids as the
   # Keeper-side Soul identity for the cascade over souls / seeds / bootstrap tokens.
   #

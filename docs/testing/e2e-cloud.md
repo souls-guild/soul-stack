@@ -1,7 +1,7 @@
 # Cloud live-E2E orchestrator (`scripts/e2e-cloud/`)
 
 Runbook of a repeatable live run of Soul Stack against a **permanent** keeper on
-cloud VM. The operator runs create / day-2 / destroy scripts with one command
+cloud VM. The operator runs create and the advanced scenarios, destroy included, with one command
 (redis and hereafter DragonFly) via the Operator API and receives a report with assertions.
 Reusable for regressions and pre-release checks.
 
@@ -121,7 +121,7 @@ Both lists are examples. The order and composition are set by the operator; empt
 ```bash
 make e2e-cloud SUITE=create-destroy
 # or directly:
-bash scripts/e2e-cloud/runbook.sh <create|create-destroy|day2>
+bash scripts/e2e-cloud/runbook.sh <create|create-destroy|operations>
 ```
 
 Dry run without network - `DRY_RUN=1`: prints the call sequence and generates
@@ -129,7 +129,7 @@ skeleton report on synthetic responses. It is useful to check the parameters and
 steps before the actual run.
 
 ```bash
-DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user SCENARIO_INPUT='{"name":"alice"}'
+DRY_RUN=1 make e2e-cloud SUITE=operations SCENARIO=add_user SCENARIO_INPUT='{"name":"alice"}'
 ```
 
 ### Key parameters (env, defaults)
@@ -153,9 +153,9 @@ DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user SCENARIO_INPUT='{"name":"a
 | `COVENS` | (empty) | covens on create (CSV → JSON array) |
 | `E2E_CREATE_INPUT` | (empty) | `input`-JSON for create |
 | `E2E_CREATE_MODE` | `engine` | `engine` (POST creates) / `script` (creates a bring-up, the engine catches the latest `apply_id` from `/runs`) |
-| `SCENARIO` / `SCENARIO_INPUT` | (empty) | day-2: single script + its `input`-JSON |
-| `SCENARIOS` | (empty) | day-2: `;`-list (`name` or `name::<json>`) |
-| `STATE_ASSERT_PATH` / `STATE_ASSERT_EXPECTED` | (empty) | day-2: opt. assertion state fields after script |
+| `SCENARIO` / `SCENARIO_INPUT` | (empty) | operations: single script + its `input`-JSON |
+| `SCENARIOS` | (empty) | operations: `;`-list (`name` or `name::<json>`) |
+| `STATE_ASSERT_PATH` / `STATE_ASSERT_EXPECTED` | (empty) | operations: opt. assertion state fields after script |
 | `ALLOW_DESTROY` | `true` | destroy without teardown (`allow_destroy=true`) |
 | `HEALTHY_TERMINAL` | `ready` | healthy terminal `incarnation.status` |
 | `SCRIPTS_DIR` | `.pm/scripts` | directory of local bring-up scripts |
@@ -179,20 +179,20 @@ incarnation without running) - the step is marked SKIP and only the status `read
 is already there and locked (`error_locked` / `migration_failed`) - `unlock` + destroy +
 wait for disappearance; then `create`-suite; then `DELETE` and demolition confirmation.
 **Re-run must be completed without manual intervention** - this is an acceptance criterion.
-- **`day2`** — generic engine `run_scenario`: `POST /scenarios/{scenario}` → poll →
+- **`operations`** — generic engine `run_scenario`: `POST /scenarios/{scenario}` → poll →
 `assert_run_success`. Single script (`$SCENARIO` + `$SCENARIO_INPUT`) or
 `;`-list (`$SCENARIOS`, element `name` or `name::<json>`). Script name -
 any service-defined (`add_user` / `update_config` / `restart` / `rotate_tls` /
 cluster-ops). Opt. after a single successful scenario - assertion of the state field
   (`$STATE_ASSERT_PATH` == `$STATE_ASSERT_EXPECTED`).
 
-Example day-2:
+Example operations:
 
 ```bash
 EXEC_MODE=tsh INCARNATION=redis-auto \
   SCENARIO=add_user SCENARIO_INPUT='{"name":"alice","acl":"~* +@read"}' \
   STATE_ASSERT_PATH='.state.users[]?.name' STATE_ASSERT_EXPECTED=alice \
-  make e2e-cloud SUITE=day2
+  make e2e-cloud SUITE=operations
 ```
 
 ## What assertit
@@ -220,7 +220,7 @@ drift | error_locked | migration_failed | provisioning | ready`).
 **Destroy** will assert on disappearance: `GET /{name}` → **404** (more reliable than status
 teardown-run - covers `allow_destroy=true` without teardown).
 
-**Day-2 state** (optional) - `assert_state_field` retrieves the jq path from `.state` and
+**Operations state** (optional) - `assert_state_field` retrieves the jq path from `.state` and
 compares with the expected (contains semantics for streams like `.state.users[]?.name`).
 
 Confirmed Operator API routes (all under `/v1`, `Authorization: Bearer <jwt>`):
@@ -228,7 +228,7 @@ Confirmed Operator API routes (all under `/v1`, `Authorization: Bearer <jwt>`):
 | Operation | Route |
 |---|---|
 | create | `POST /v1/incarnations` → 202 `IncarnationCreateReply` |
-| day-2 (generic) | `POST /v1/incarnations/{id}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
+| operations (generic) | `POST /v1/incarnations/{id}/scenarios/{scenario}` → 202 `IncarnationRunReply` |
 | destroy | `DELETE /v1/incarnations/{id}?allow_destroy=<bool>` → 202 `IncarnationDestroyReply` |
 | unlock | `POST /v1/incarnations/{id}/unlock` → 200 |
 | run status | `GET /v1/incarnations/{id}/runs/{apply_id}` → `RunDetailReply` |

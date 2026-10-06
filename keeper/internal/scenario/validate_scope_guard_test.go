@@ -1,7 +1,7 @@
 package scenario
 
 // The `validate:` incarnation context ON THE REQUEST PATHS (NIM-833): the same
-// scenario file, run through [ValidateInput] on day-2 and on create, must see
+// scenario file, run through [ValidateInput] on an advanced scenario and on create, must see
 // different facts — and must say so rather than quietly seeing none.
 //
 // shared/config/validate_scope_guard_test.go guards the stance itself. This file
@@ -16,8 +16,8 @@ package scenario
 //     is the one case an input-only context happens to get right.
 //  2. drop the `if scn.IDTemplate != ""` withdrawal from ValidateInput —
 //     TestValidateInput_ComposedIDScenarioRefusesTheIdentifier.
-//  3. add "label" to the map DayTwoIncarnation builds —
-//     TestValidateInput_DayTwoCarriesNoLabel.
+//  3. add "label" to the map RunPathIncarnation builds —
+//     TestValidateInput_RunPathCarriesNoLabel.
 
 import (
 	"context"
@@ -53,20 +53,20 @@ func scopeRun(t *testing.T, yaml string, inc config.ValidateContext) error {
 	return err
 }
 
-func dayTwoScope() config.ValidateContext {
-	return DayTwoIncarnation(scopeIncID, "redis", "v1.2.3", map[string]any{"replicas": 3})
+func runPathScope() config.ValidateContext {
+	return RunPathIncarnation(scopeIncID, "redis", "v1.2.3", map[string]any{"replicas": 3})
 }
 
-// TestValidateInput_DayTwoRuleReadsTheRow — case 1 of the ticket: a rule over
-// `incarnation.id` passes on day-2, under both spellings of the root.
-func TestValidateInput_DayTwoRuleReadsTheRow(t *testing.T) {
+// TestValidateInput_RunPathRuleReadsTheRow — case 1 of the ticket: a rule over
+// `incarnation.id` passes on an advanced scenario, under both spellings of the root.
+func TestValidateInput_RunPathRuleReadsTheRow(t *testing.T) {
 	for _, rule := range []string{
 		`incarnation.id == '` + scopeIncID + `'`,
 		`incarnation.name == '` + scopeIncID + `'`,
 		`incarnation.state.replicas > 0`,
 	} {
-		if err := scopeRun(t, scopeScenario(rule, ""), dayTwoScope()); err != nil {
-			t.Errorf("day-2 rule %q: %v", rule, err)
+		if err := scopeRun(t, scopeScenario(rule, ""), runPathScope()); err != nil {
+			t.Errorf("advanced-scenario rule %q: %v", rule, err)
 		}
 	}
 }
@@ -145,33 +145,33 @@ func TestValidateInput_ComposedIDScenarioRefusesTheIdentifier(t *testing.T) {
 	}
 }
 
-// TestValidateInput_DayTwoCarriesNoLabel — [ADR-0085] holds in this environment
+// TestValidateInput_RunPathCarriesNoLabel — [ADR-0085] holds in this environment
 // too, and `validate:` is the fourth one it has to hold in (the three named in
 // keeper/internal/render/label_invariant_guard_test.go are the others). A caption
 // is mutable: if a rule could read one, editing a screen would change whether a
 // create or a run is allowed to proceed.
-func TestValidateInput_DayTwoCarriesNoLabel(t *testing.T) {
+func TestValidateInput_RunPathCarriesNoLabel(t *testing.T) {
 	// The builder takes no caption at all, which is the cheapest place to stop it;
 	// this asserts the map it produces, through the real function.
-	inc := DayTwoIncarnation(scopeIncID, "redis", "v1.2.3", map[string]any{"replicas": 3})
+	inc := RunPathIncarnation(scopeIncID, "redis", "v1.2.3", map[string]any{"replicas": 3})
 
 	if err := scopeRun(t, scopeScenario(`incarnation.label != ''`, ""), inc); err == nil {
 		t.Error("incarnation.label resolved in the validate: context — ADR-0085: a caption participates in nothing derived")
 	}
 
 	// `label` is unexpressible rather than merely unused, and this is the assertion
-	// that says so: the field set the day-2 path answers for is fixed and does not
+	// that says so: the field set the advanced-scenario path answers for is fixed and does not
 	// contain it, so no value a caller passes can make `incarnation.label` resolve.
 	// (Substituting the caption FOR the identifier — the render guard's second
-	// mutation — cannot happen here either: DayTwoIncarnation takes no caption.)
-	for _, f := range dayTwoFields {
+	// mutation — cannot happen here either: RunPathIncarnation takes no caption.)
+	for _, f := range runPathFields {
 		if strings.EqualFold(f, "label") {
-			t.Errorf("dayTwoFields gained %q — a scenario branching on a mutable caption "+
+			t.Errorf("runPathFields gained %q — a scenario branching on a mutable caption "+
 				"turns editing a screen into changing whether a run is allowed to start", f)
 		}
 	}
 
-	// The day-2 set stays a SUBSET of the run's `incarnation.*`: host_count is the
+	// The advanced-scenario set stays a SUBSET of the run's `incarnation.*`: host_count is the
 	// one field the run has and this does not, and it must refuse rather than read
 	// a roster the request path never loaded.
 	if err := scopeRun(t, scopeScenario(`incarnation.host_count > 0`, ""), inc); !errors.Is(err, config.ErrIncarnationNotInScope) {
@@ -185,7 +185,7 @@ func TestValidateInput_DayTwoCarriesNoLabel(t *testing.T) {
 // fact", which would report the scenario broken for one incarnation and fine for
 // its sibling.
 func TestValidateInput_NullStateIsNotAScopeError(t *testing.T) {
-	inc := DayTwoIncarnation(scopeIncID, "redis", "v1.2.3", nil)
+	inc := RunPathIncarnation(scopeIncID, "redis", "v1.2.3", nil)
 	err := scopeRun(t, scopeScenario(`incarnation.state.replicas > 0`, ""), inc)
 	if errors.Is(err, config.ErrIncarnationNotInScope) {
 		t.Fatalf("a NULL state column was diagnosed as the scenario being out of scope: %v", err)

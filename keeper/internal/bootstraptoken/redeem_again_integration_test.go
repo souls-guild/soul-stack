@@ -318,7 +318,7 @@ func TestSystemKIDs_CoversEveryMarker(t *testing.T) {
 		t.Errorf("SystemKIDs() omits %v — RedeemAgain would accept a burn these markers wrote", missing)
 	}
 	// Both sides counted as sets of VALUES: comparing a value-set against a
-	// name-map would report a spurious failure the day two markers deliberately
+	// name-map would report a spurious failure the day any two markers deliberately
 	// share a string, and would miss a duplicated entry in SystemKIDs().
 	distinct := map[string]bool{}
 	for _, v := range declared {

@@ -8,7 +8,7 @@
 -- create path it would read `spec.input` for rerun-last and find `{}`, so a rerun
 -- of a failed bootstrap would start with no input — which is why a rollback
 -- across this migration should be paired with re-running the affected creates
--- rather than with rerun-last. Day-2 reruns are unaffected: that path read
+-- rather than with rerun-last. Advanced-scenario reruns are unaffected: that path read
 -- apply_runs.recipe, which this migration never touched.
 --
 -- NOT NULL DEFAULT '{}' so existing rows come back valid rather than NULL, which

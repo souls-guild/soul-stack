@@ -80,9 +80,9 @@ in, or, on the one non-stateful object, the single verb naming the operation.
 | `instance.configured` | Apply map directives `redis.conf` through `CONFIG SET` (+ optional `CONFIG REWRITE`). Startup-only directives (`port`/`dir`/`aclfile`/… - denilista) **are skipped** (CONFIG SET rejects them). | `true` with ≥1 directive applied. |
 | `acl.reloaded` | Hot-reload ACL of live Redis via `ACL LOAD` (re-read `aclfile` in its entirety - `users.acl` renders destiny BEFORE this step). Idempotent **by design**; the output `ACL LIST` is not** included in Output (it may carry a password-hash). | `true`/`false` by diff `ACL LIST` before/after `LOAD` (matched → `false`, no-op). |
 | `cluster.created` | Build a hash-slot cluster (16384 slots) from scratch via `CLUSTER MEET`/`ADDSLOTS`/`REPLICATE`. | Idempotent: `true` on change, `false` (no-op) on converged input. |
-| `cluster.node-added` | Attach one node to a formed cluster (day-2). | Idempotent: `true` on change, `false` (no-op) if the node is already in. |
-| `cluster.node-removed` | Evict one node (day-2), migrating a master's slots to the remaining masters first (`SETSLOT`/`MIGRATE`), then `CLUSTER FORGET`. | Idempotent: `true` on change, `false` (no-op) if the node is already gone. |
-| `cluster.resharded` | Transfer N slots master→master (day-2). | **NOT idempotent** (see below): `true` on successful migration, `failed` on input error; there is no no-op branch. |
+| `cluster.node-added` | Attach one node to a formed cluster (used by advanced scenarios). | Idempotent: `true` on change, `false` (no-op) if the node is already in. |
+| `cluster.node-removed` | Evict one node (used by advanced scenarios), migrating a master's slots to the remaining masters first (`SETSLOT`/`MIGRATE`), then `CLUSTER FORGET`. | Idempotent: `true` on change, `false` (no-op) if the node is already gone. |
+| `cluster.resharded` | Transfer N slots master→master (used by advanced scenarios). | **NOT idempotent** (see below): `true` on successful migration, `failed` on input error; there is no no-op branch. |
 | `cluster.external-joined` | Live migration step 1: add the new nodes as replicas of the old cluster's masters 1:1. | Idempotent: `true` on change, `false` (no-op) on converged input. |
 | `cluster.failed-over` | Live migration step 2: promote those replicas to masters via graceful `CLUSTER FAILOVER`. | Idempotent: `true` on change, `false` (no-op) if already master. |
 | `cluster.external-forgotten` | Live migration step 3: `CLUSTER FORGET` the old nodes. | Idempotent: `true` on change, `false` (no-op) on an unknown node. |
@@ -223,7 +223,7 @@ idempotency on the plugin side.
 
 > **★ Startup-only directives are skipped (denilist).** Part of the `redis.conf` directives
 > is set **only at the start of the process** - `CONFIG SET` rejects them ("can't set ...
-> at runtime" / "Unknown option"). Day-2 `update_config` renders **full** `redis.conf`
+> at runtime" / "Unknown option"). The advanced scenario `update_config` renders **full** `redis.conf`
 > (including such directives - they are needed the next time the process is restarted) and sends
 > plugin **all** `config`-map; the plugin **passes such keys** (does not fall on them),
 > hot-settable applies as usual. Changing the startup-only directive will take effect when
@@ -434,7 +434,7 @@ follows. Without dry-run preview.
 Manages the Redis cluster **entirely via go-redis** (no `redis-cli`/shell).
 The operation is address level 3 — one action per operation (NIM-766; there is no `action:` param). Implemented:
 
-- day-1/day-2 over **your** cluster: `created` (build from scratch), `node-added`
+- create and the advanced scenarios over **your** cluster: `created` (build from scratch), `node-added`
 (attach one node), `node-removed` (withdraw one node), `resharded` (transfer
 N slots master→master);
 - three steps **live migration between clusters** (old → new, without downtime):
@@ -445,7 +445,7 @@ N slots master→master);
 > **★ Idempotency.** `created`/`node-added`/`node-removed`/`external-joined`/
 > `failed-over`/`external-forgotten` **idempotent** - re-apply on
 > converged input gives `changed=false` (no-op), it is safe to keep them in converge.
-> **`resharded` - NO.** This is an imperative **exec-style** day-2 operation (without `unless`):
+> **`resharded` - NO.** This is an imperative **exec-style** operation of an advanced scenario (without `unless`):
 > applying again will shift **more** `slots` slots from `from` to `to`. The operator is calling
 > reshard **explicitly**, exactly as many times as transfers are needed; reshard **not** part
 > convergence loop.
@@ -551,7 +551,7 @@ argument due to typed `GetKeysInSlot`) → `CLUSTER SETSLOT <slot> NODE
 <to-id>` on both nodes.
 
 > **★ reshard is NOT IDEMPOTENT (consciously).** Repeated apply will move **more**
-> `slots` slots from `from` to `to` is an imperative exec-style day-2 operation,
+> `slots` slots from `from` to `to` is an imperative exec-style operation of an advanced scenario,
 > **not** part of converge. No `unless`/probe "already transferred": operator responds
 > for how many times he calls her. L0(`cluster_test.go`) proves
 > **sequence** of commands and lossless on fake-conn, but does not "prove"

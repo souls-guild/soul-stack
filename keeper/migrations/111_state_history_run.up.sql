@@ -5,10 +5,10 @@
 --
 -- WHY HERE. `rerun-last` recovers the failed run's input from two different
 -- places depending on which branch produced it (`UnlockForRerun`): the create
--- path reads `incarnation.spec.input`, the day-2 path reads
+-- path reads `incarnation.spec.input`, the advanced-scenario path reads
 -- `apply_runs.recipe` by the apply_id of the last history row. The two have
--- different lifetimes — spec is forever, recipe is purged after 30 days — so a
--- day-2 rerun already dies in `ErrRerunInputUnavailable` once the recipe is
+-- different lifetimes — spec is forever, recipe is purged after 30 days — so an
+-- advanced-scenario rerun already dies in `ErrRerunInputUnavailable` once the recipe is
 -- gone, with no way back. `state_history` is read in that same transaction
 -- already, as the POINTER to the failed run, and it is kept for a year.
 --
@@ -43,7 +43,7 @@
 -- Both are NULLABLE and both stay NULL on existing rows. That is not laziness
 -- about backfill — there is nothing to backfill FROM. A history row records that
 -- an attempt happened; the input that produced it lived somewhere else, and for
--- day-2 runs older than the purge it no longer exists anywhere. A NULL `run`
+-- advanced-scenario runs older than the purge it no longer exists anywhere. A NULL `run`
 -- means "this attempt cannot be replayed from history", which the rerun path
 -- answers with a 422 asking for the input rather than a 409 dead end.
 --

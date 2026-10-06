@@ -228,7 +228,7 @@ step (f):
    > second claim back with a subject that is not in this tree: the two
    > `TestL3bRedisServiceLive_*` cases run `github.com/soul-stack-services/redis` at the
    > commit pinned in `tests/e2e-live/harness/servicecatalog.go` — a create onto a roster,
-   > then a day-2 scenario against the live instance.
+   > then an advanced scenario against the live instance.
    >
    > Still uncovered, and worth knowing before a tag: `update_config`, `restart`, `destroy`
    > and `rotate_tls` (scenarios the published service does not have yet), and the whole

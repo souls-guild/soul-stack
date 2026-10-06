@@ -479,7 +479,8 @@ def check_report_renders_the_join() -> str:
 
 # Fixtures for --self-test. Every failure text below is real: the three
 # transport errors are the ones quoted in NIM-406, one per container, each from
-# a different hole in a different wait strategy.
+# a different hole in a different wait strategy. Only the test names were
+# changed since (NIM-893 took a banned term out of them); no verdict reads a name.
 #
 # They exist because this logic is the one piece of the ticket `make test`
 # cannot see — it is not Go — and a classifier that is quietly wrong is strictly
@@ -513,17 +514,17 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # that tool picked here, it would speak for the other test too.
         [
             ("TestL3bPluginChannel_CatalogAndAllow", "STAND-SETUP"),
-            ("TestL3bRedisLive_Day2AddUser", "TEST-FAILURE"),
+            ("TestL3bRedisLive_AddUser", "TEST-FAILURE"),
         ],
         "=== RUN   TestL3bPluginChannel_CatalogAndAllow\n"
         "    stack.go:181: NewStack: postgres: keeper init: pg ping: "
         "dial tcp 127.0.0.1:34492: connect: connection refused\n"
         "    setupdecl.go:57: @@MARKER@@ — no assertion in this test ever ran\n"
         "--- FAIL: TestL3bPluginChannel_CatalogAndAllow (3.88s)\n"
-        "=== RUN   TestL3bRedisLive_Day2AddUser\n"
+        "=== RUN   TestL3bRedisLive_AddUser\n"
         "    redis_ops_adduser_live_test.go:118: ACL GETUSER alice: got \"\", want the "
         "created user\n"
-        "--- FAIL: TestL3bRedisLive_Day2AddUser (288.10s)\n"
+        "--- FAIL: TestL3bRedisLive_AddUser (288.10s)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t291.99s\n",
     ),
     (
@@ -541,22 +542,22 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # depend on being noticed if it changes.
         [
             ("TestL3bSmokeNginxLive_InstallAndStart", "STAND-SETUP"),
-            ("TestL3bRedisLive_Day2AddUser", "TEST-FAILURE"),
+            ("TestL3bRedisLive_AddUser", "TEST-FAILURE"),
         ],
         "=== RUN   TestL3bSmokeNginxLive_InstallAndStart\n"
         "=== PAUSE TestL3bSmokeNginxLive_InstallAndStart\n"
-        "=== RUN   TestL3bRedisLive_Day2AddUser\n"
-        "=== PAUSE TestL3bRedisLive_Day2AddUser\n"
+        "=== RUN   TestL3bRedisLive_AddUser\n"
+        "=== PAUSE TestL3bRedisLive_AddUser\n"
         "=== CONT  TestL3bSmokeNginxLive_InstallAndStart\n"
         "    stack.go:187: NewStack: vault: InitVaultTestSecrets: enable pki mount: "
         "Put \"http://127.0.0.1:33242/v1/sys/mounts/pki\": dial tcp 127.0.0.1:33242: "
         "connect: connection refused\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
         "--- FAIL: TestL3bSmokeNginxLive_InstallAndStart (4.02s)\n"
-        "=== CONT  TestL3bRedisLive_Day2AddUser\n"
+        "=== CONT  TestL3bRedisLive_AddUser\n"
         "    redis_ops_adduser_live_test.go:118: ACL GETUSER alice: got \"\", want the "
         "created user\n"
-        "--- FAIL: TestL3bRedisLive_Day2AddUser (288.10s)\n"
+        "--- FAIL: TestL3bRedisLive_AddUser (288.10s)\n"
         "FAIL\tgithub.com/souls-guild/soul-stack/tests/e2e-live\t292.20s\n",
     ),
     (
@@ -567,24 +568,24 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # `TestX/sub` as its own test would hand main() a name the mask never
         # named, which then also makes the parent's `--- FAIL` land in an empty
         # block. Splitting on `/` is what prevents that, and this pins it.
-        [("TestL3bRedisLive_Day2Restart", "STAND-SETUP")],
-        "=== RUN   TestL3bRedisLive_Day2Restart\n"
-        "=== RUN   TestL3bRedisLive_Day2Restart/sentinel\n"
-        "=== CONT  TestL3bRedisLive_Day2Restart/sentinel\n"
+        [("TestL3bRedisLive_Restart", "STAND-SETUP")],
+        "=== RUN   TestL3bRedisLive_Restart\n"
+        "=== RUN   TestL3bRedisLive_Restart/sentinel\n"
+        "=== CONT  TestL3bRedisLive_Restart/sentinel\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
-        "    --- FAIL: TestL3bRedisLive_Day2Restart/sentinel (0.51s)\n"
-        "--- FAIL: TestL3bRedisLive_Day2Restart (3.94s)\n",
+        "    --- FAIL: TestL3bRedisLive_Restart/sentinel (0.51s)\n"
+        "--- FAIL: TestL3bRedisLive_Restart (3.94s)\n",
     ),
     (
         "transport text WITHOUT a declaration stays TEST-FAILURE",
         # Isolates the marker from any temptation to sniff library text: this
         # carries the redis wait-strategy failure verbatim, and it is still not
         # STAND-SETUP, because nothing declared it.
-        [("TestL3bRedisLive_Day2Restart", "TEST-FAILURE")],
-        "=== RUN   TestL3bRedisLive_Day2Restart\n"
+        [("TestL3bRedisLive_Restart", "TEST-FAILURE")],
+        "=== RUN   TestL3bRedisLive_Restart\n"
         "    redis_ops_common_test.go:88: sentinel probe: wait until ready: external "
         "check: get state: context deadline exceeded\n"
-        "--- FAIL: TestL3bRedisLive_Day2Restart (61.30s)\n",
+        "--- FAIL: TestL3bRedisLive_Restart (61.30s)\n",
     ),
     (
         "`connection refused` mid-test WITHOUT a declaration stays TEST-FAILURE",
@@ -595,16 +596,16 @@ SELF_TEST: list[tuple[str, list[tuple[str, str]], str]] = [
         # of the declaration makes this case go red, which is why the fixture
         # above it is not enough: that one carries different text, so the
         # tempting shortcut slipped past it unnoticed.
-        [("TestL3bRedisLive_Day2UpdateUsers", "TEST-FAILURE")],
-        "=== RUN   TestL3bRedisLive_Day2UpdateUsers\n"
+        [("TestL3bRedisLive_UpdateUsers", "TEST-FAILURE")],
+        "=== RUN   TestL3bRedisLive_UpdateUsers\n"
         "    redis_ops_common_test.go:204: post-apply ACL check: dial tcp "
         "127.0.0.1:39117: connect: connection refused\n"
-        "--- FAIL: TestL3bRedisLive_Day2UpdateUsers (274.61s)\n",
+        "--- FAIL: TestL3bRedisLive_UpdateUsers (274.61s)\n",
     ),
     (
         "started and never finished (timeout panic) -> TEST-FAILURE, not swallowed",
-        [("TestL3bRedisLive_Day2Destroy", "TEST-FAILURE")],
-        "=== RUN   TestL3bRedisLive_Day2Destroy\n"
+        [("TestL3bRedisLive_Destroy", "TEST-FAILURE")],
+        "=== RUN   TestL3bRedisLive_Destroy\n"
         "panic: test timed out after 45m0s\n",
     ),
     (

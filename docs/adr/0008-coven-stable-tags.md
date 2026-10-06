@@ -176,7 +176,7 @@ That gap closes a real product surface. A run resolves its roster at start and a
 
 **Consequence for this ADR's own wording.** Wherever this file says the declared role "lives only in `incarnation.spec.hosts[].role`", read: lives only in `incarnation_choir_voices.role`. A host with no Voice has **no declared role** — an empty value, not a default one, symmetric to the way this ADR already treats an unlabelled host on the coven axis.
 
-**What an author writes instead.** `module: core.choir.present` with `on: keeper` inside the create scenario (params `incarnation` / `choir` / `sid` / `role` / `position`), or `POST /v1/incarnations/{id}/choirs/{choir}/voices` day-2. Both existed before this amendment; they are now the only ways.
+**What an author writes instead.** `module: core.choir.present` with `on: keeper` inside the create scenario (params `incarnation` / `choir` / `sid` / `role` / `position`), or `POST /v1/incarnations/{id}/choirs/{choir}/voices` after create. Both existed before this amendment; they are now the only ways.
 
 ## Amendment (2026-08-03, NIM-410, [ADR-0082](0082-service-vars.md)): the assembly order collapses to one lexical layer
 

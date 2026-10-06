@@ -287,7 +287,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   are the ones that make a claim the other three cannot:
   `TestL3bRedisServiceLive_CreateFromSouls` (a published service rolled onto a roster ends
   in a live Redis answering to a credential it minted for itself into Vault at a
-  keeper-derived path) and `TestL3bRedisServiceLive_Day2AddUser` (a day-2 scenario reads
+  keeper-derived path) and the add-user test, now `TestL3bRedisServiceLive_AddUser` (an advanced scenario reads
   that state back, upserts one ACL user, re-renders `users.acl` whole and reaches the live
   ACL — while the credential an existing client already holds keeps working). NIM-871 had
   left the gate proving a module is **delivered**, which is a different sentence from a
@@ -314,7 +314,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   entry above: the published service's own `create` raises MACHINES — libvirt VMs, an SSH
   host CA, cloud-init, an agent installed over `core.ssh.run` — and a docker tier whose
   souls are already onboarded cannot host that, so the gate drives `create_from_souls`, the
-  same rollout onto an existing roster. Four of the six day-2 claims NIM-871 removed
+  same rollout onto an existing roster. Four of the six advanced-scenario claims NIM-871 removed
   (`update_config`, `restart`, `destroy`, `rotate_tls`) are scenarios the published service
   does not have yet.
 
@@ -364,7 +364,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   has no command that creates a database, so a `present` could only report success having
   done nothing observable. `collection.present` is what brings one into being — MongoDB's
   own semantics — and now reports `database_created`. Sharding is deferred with its reasons
-  in NIM-820; day-2 on a user's password is NIM-821, where the SCRAM-verifier answer to
+  in NIM-820; changing a user's password after create is NIM-821, where the SCRAM-verifier answer to
   NIM-383 §2 is written down.
 
 - `soul-lint validate-service-tree <dir>` — one invocation checks a WHOLE service
@@ -808,11 +808,11 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   depend on a foreign repository.
   **What is no longer covered, stated plainly rather than folded into "cleanup":**
   `make e2e-live-gate` — the blocking pre-tag step ([RELEASING.md](RELEASING.md) step e) —
-  went from nine tests to three, because six of them were `TestL3bRedisLive_Day2*`
-  and each ran a live create of this service followed by a day-2 scenario through
+  went from nine tests to three, because six of them were advanced-scenario `TestL3bRedisLive_*` tests
+  and each ran a live create of this service followed by an advanced scenario through
   the ADR-065 plugin channel. Nothing in the tree replaces them: the remaining corpus
   services are render-only (L0), so **no live test now proves that a `create` reaches
-  a running service, nor that any day-2 scenario operates one.** The L3a lifecycle
+  a running service, nor that any advanced scenario operates one.** The L3a lifecycle
   (`TestE2EServiceRedis_*`, `TestE2EServiceRedis_CreateCluster`), the k8s resharding
   test, and ~15 engine guards that used the tree as a fixture — the golden `service.yml`
   load, the ladder traversal and parse, the block fan-out and sentinel-replica render
@@ -856,7 +856,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
     never reached there and still is not.
   - Pre-flight on the **create** path now synthesizes the incarnation with
     `spec.ServiceRef.Name`, the same string the row will carry — so
-    `incarnation.service` no longer means one thing at create and another on day-2.
+    `incarnation.service` no longer means one thing at create and another in an advanced scenario.
     The engine-compat error text likewise names the registered service.
 
 ### Fixed
@@ -1092,7 +1092,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   registry row cannot be read still asserts the host alone.
 - **`type: secret` is breaking, deliberately, with no migration.** Derived paths
   do not match what existing incarnations wrote by hand, so an incarnation
-  created before this change fails closed on its next day-2 run. This lands
+  created before this change fails closed on its next advanced-scenario run. This lands
   before the release.
 - **An author-written path into a service's own namespace is refused**
   (`vault_path_in_own_namespace`) in all four spellings: `${ vault(...) }`, a
@@ -1716,7 +1716,7 @@ order to act in.
   bootstrap-`create`. That fallback stopped covering anything when the keeper-side
   `core.choir` module landed: a create scenario now writes its own Voices with a
   `core.choir.present` step (`on: keeper`, params `incarnation` / `choir` / `sid` /
-  `role` / `position`) before any task reads a role, and day-2 the same is
+  `role` / `position`) before any task reads a role, and after create the same is
   `POST /v1/incarnations/{name}/choirs/{choir}/voices`. **A host that no Voice
   places into a part has an empty declared role** — not a default group — which
   was already the rule for hosts outside the declared spec.
@@ -1738,7 +1738,7 @@ order to act in.
   create REQUEST, persisted, and every key that turned out to matter was given a
   real home outside it while the copy stayed behind and started lying —
   `hosts[]` to `incarnation_membership` and then to the Voice's role, `traits` to
-  the `incarnation.traits` column (where a day-2 `PUT .../traits` edited only the
+  the `incarnation.traits` column (where a later `PUT .../traits` edited only the
   column, so `spec.traits` went stale on the first edit), `essence` to nothing.
 
   **What was `spec.input` is now per-attempt.** Each run's replayable snapshot —
@@ -1753,8 +1753,8 @@ order to act in.
   **`rerun-last` therefore replays the service version the attempt USED**, not
   whatever the incarnation is pinned to now. An upgrade between the failure and
   the retry used to substitute the new code silently. It also has one source
-  instead of two: the create path read `spec.input` and the day-2 path read
-  `apply_runs.recipe`, whose 30-day purge made a day-2 rerun eventually
+  instead of two: the create path read `spec.input` and the advanced-scenario path read
+  `apply_runs.recipe`, whose 30-day purge made an advanced-scenario rerun eventually
   impossible. Where an attempt has no snapshot (a terminal recorded without one,
   or a row predating the migration) the endpoint now accepts an `input` in the
   body — and REFUSES one when the attempt is replayable, because "rerun that" and
@@ -2258,7 +2258,7 @@ order to act in.
 - **The `redis` example generates ACL user passwords instead of demanding a
   pre-seed.** `add_user` and `update_users` used to abort at render unless the
   operator had run `vault kv put` for every new user first — a manual step in
-  front of the most frequent day-2 action. Both now mint what is missing through
+  front of the most frequent advanced scenario. Both now mint what is missing through
   a keeper-side `core.vault.kv-present` step (32 alphanumeric characters from
   `crypto/rand`) at the path the render already reads, and the value never leaves
   the Keeper: only the path and field name reach output, audit, logs and OTel.
@@ -2562,7 +2562,7 @@ order to act in.
   Migrations `108` / `109` clean the `spec` key and the dead grants. See the
   Upgrade notes above, which cover the fail-closed RBAC consequence and the
   replacement (`core.choir.present` in a scenario, `POST .../choirs/{choir}/voices`
-  day-2).
+  after create).
 
   The `topology.Querier` interface lost `QueryRow` in the same change: every read
   the resolver makes is set-shaped now, so "the resolver does not consult

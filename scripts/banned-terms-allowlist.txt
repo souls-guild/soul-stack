@@ -1,0 +1,9 @@
+# Lines scripts/check-banned-terms.py lets through, each with the reason it cannot be
+# fixed in this tree. One entry per line: `path:line:count  # reason`, where line 0 is the
+# path itself and count is the exact number of matches the line carries. A line with more
+# matches, fewer, or none is red, so an entry cannot outlive its reason or hide a new hit.
+#
+# Rewording the line is the default. Historical text (CHANGELOG, ADR amendments) is
+# reworded too: the term changes, the decision and its date do not (NIM-893).
+
+examples/module/redis/schema.json:1:3  # generated and vendored byte-for-byte from the pinned soul-stack-plugin/redis commit (check-plugin-schema), and the whole document is this one line; NIM-935 fixes the module descriptions upstream, bumps the pin, re-vendors and deletes this entry

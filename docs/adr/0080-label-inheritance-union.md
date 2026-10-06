@@ -294,7 +294,7 @@
     linger forever inside an RBAC dimension — a permanent visibility leak — and the
     collision outcome would still be "whoever synced last".
   - **Two columns per host (host lane + projected lane) with a precedence rule.**
-    Keeps day-2 propagation and makes overwriting structurally impossible, but it
+    Keeps post-create propagation and makes overwriting structurally impossible, but it
     is still copying (now with bookkeeping), and it forces the precedence rule
     rejected in item 3.
   - **Per-host overrides declared on the incarnation (`spec.hosts[].traits`).**

@@ -231,12 +231,12 @@ var writeRoutesNoAudit = map[route]string{
 	// pattern"). audit deliberately not written.
 	{http.MethodPost, "/v1/modules/{name}/form-prep"}: "ADR-045 S3: read-only resolve of source catalogs for the UI form (live SIDs), without mutating state - audit deliberately not written (pattern soul.list/service.list)",
 
-	// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2
+	// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — advanced-scenario
 	// pre-fill of the scenario UI form from incarnation.state (docs/input.md). POST by
 	// HTTP method (carries an optional body-ref), but a read-only resolve by semantics —
 	// reads the state of a single incarnation, mutates nothing. Permission
 	// incarnation.get (read pattern). audit deliberately not written.
-	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}/form-prefill"}: "day-2 pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
+	{http.MethodPost, "/v1/incarnations/{id}/scenarios/{scenario}/form-prefill"}: "advanced-scenario pre-fill of the form from incarnation.state (docs/input.md): read-only resolve of a single incarnation, without mutation - audit deliberately not written (pattern get/module.form-prep)",
 
 	// POST /v1/incarnations/resolve-id — the name a create WOULD compose from the
 	// chosen scenario's id.template, plus whether it is free (NIM-331). POST by HTTP

@@ -34,7 +34,7 @@ binary_allow_private: true
 # -- Host layout: base MongoDB config and data directories --------------------------
 # conf_dir/data_dir are author-context (a fleet forks this repo and edits the layout here for
 # their own storage layout). compute reads them from here and forwards them to render. NOT persisted
-# in state - day-2 reads the layout from vars.conf_dir/data_dir (has()-safe default). Default = the
+# in state - the advanced scenarios read the layout from vars.conf_dir/data_dir (has()-safe default). Default = the
 # official MongoDB layout (mongod.conf in /etc, data in /var/lib/mongodb).
 conf_dir: /etc/mongodb
 data_dir: /var/lib/mongodb

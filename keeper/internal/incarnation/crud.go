@@ -44,7 +44,7 @@ var (
 	// manual run). Narrower than [ErrIncarnationNotLocked], which covers all
 	// three blocking statuses.
 	ErrIncarnationNotErrorLocked = errors.New("incarnation: not in error_locked status (rerun-last requires error_locked)")
-	// ErrRerunInputUnavailable — rerun-last cannot recover the failed day-2
+	// ErrRerunInputUnavailable — rerun-last cannot recover the failed advanced-scenario
 	// run's input: the last state_history snapshot points to an apply_run whose
 	// recipe (`apply_runs.recipe`) is NULL. Causes: the run failed before
 	// dispatch (render_failed/no_hosts/preflight, recipe-less terminal row from
@@ -53,7 +53,7 @@ var (
 	// (purge_apply_runs). Fail-closed: rerunning without the saved input would
 	// apply defaults or fail input validation, so instead we reject — operator
 	// does a plain unlock and runs the scenario manually with explicit input.
-	// Since NIM-408 there is no create/day-2 fork here: every path reads the same
+	// Since NIM-408 there is no create/advanced-scenario fork here: every path reads the same
 	// state_history.run snapshot, so the create path hits this sentinel too when
 	// the attempt has none. Handler maps to 409.
 	ErrRerunInputUnavailable = errors.New("incarnation: rerun-last has no run snapshot to replay (the attempt failed before dispatch, or predates the snapshot) — pass the input to run with, or unlock and start the scenario yourself")
@@ -1023,14 +1023,14 @@ var _ TxBeginner = (*pgxpool.Pool)(nil)
 // Scenario filled ONLY by [UnlockForRerun] (for [Unlock] — ""): name
 // of scenario caller reruns via runner.Start. This is the last
 // failed scenario of incarnation (latest state_history snapshot) — bootstrap
-// scenario on create path (== incarnation.created_scenario) OR day-2 scenario
+// scenario on create path (== incarnation.created_scenario) OR an advanced scenario
 // (add_user / update_acl / …). Replaces former hardcode "rerun only
 // created_scenario": rerun-last reruns the actually failed operation.
 //
 // Input filled ONLY by [UnlockForRerun] (for [Unlock] — nil): input of failed
 // run, read from that attempt's own state_history.run snapshot under the same
 // FOR UPDATE (NIM-408; invariant A: vault-ref as strings, secrets not revealed).
-// One source for create and day-2 alike. Caller passes it to RunSpec.Input — rerun-last
+// One source for create and advanced scenarios alike. Caller passes it to RunSpec.Input — rerun-last
 // recovers failure with SAME input values (version/shards/user/…),
 // not defaults. nil = scenario without input.
 type UnlockResult struct {
@@ -1435,12 +1435,12 @@ var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not neede
 // Scope=last-failed: restarts LAST FAILED scenario of incarnation (last
 // state_history snapshot: run.go::abort → lockIncarnation →
 // UpdateStateFromRun writes failed scenario name and its apply_id). This can be
-// bootstrap creator (`create`/`create_cluster`/…) OR day-2-scenario
+// bootstrap creator (`create`/`create_cluster`/…) OR an advanced scenario
 // (add_user / update_acl / …) — both restarted identically.
 //
 // Recovery of failed run's input (so restart proceeds with SAME
 // values, not defaults):
-//   - one path for both create and day-2 (NIM-408): input from the failed
+//   - one path for both create and advanced scenarios (NIM-408): input from the failed
 //     attempt's own state_history.run snapshot, read under the same FOR UPDATE
 //     (invariant A — vault-ref as strings, secrets not revealed). No snapshot →
 //     fail-closed [ErrRerunInputUnavailable] (reasons and semantics — see
@@ -1453,14 +1453,14 @@ var ErrRerunInputNotNeeded = errors.New("incarnation: rerun-last input not neede
 // state_history.apply_id — unlock-transition snapshot correlates with run being started.
 //
 // Atomicity: single transaction SELECT … FOR UPDATE → gate error_locked →
-// last-failed probe → (day-2) recipe probe → INSERT state_history →
+// last-failed probe → (advanced scenario) recipe probe → INSERT state_history →
 // UPDATE status=applying → commit. FOR UPDATE serializes rerun relative to
 // concurrent scenario-runner (its lockRun locks same row).
 //
 // Returns:
 //   - [ErrIncarnationNotFound]       — name doesn't exist (404).
 //   - [ErrIncarnationNotErrorLocked] — status not error_locked (409).
-//   - [ErrRerunInputUnavailable]     — day-2-path but failed run's input
+//   - [ErrRerunInputUnavailable]     — advanced-scenario path but failed run's input
 //     unavailable (recipe IS NULL: early abort without recipe / legacy / apply_run
 //     purged — full list at sentinel) (409).
 //
@@ -1480,7 +1480,7 @@ func UnlockForRerun(ctx context.Context, pool TxBeginner, id, reason, rerunByAID
 // endpoint; an input that quietly replaced a recorded one would make rerun-last a
 // way to run something else under the name of a retry.
 //
-// The recovery exists because before NIM-408 a day-2 rerun became impossible once
+// The recovery exists because before NIM-408 an advanced-scenario rerun became impossible once
 // `apply_runs.recipe` was purged at 30 days, with nothing the operator could do.
 //
 // Note what it cannot recover: the service ref the attempt used. Without a
@@ -1508,7 +1508,7 @@ func UnlockForRerunWithInput(ctx context.Context, pool TxBeginner, id, reason, r
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	// State and status only. `created_scenario` and `spec` are no longer read
-	// here: the create-vs-day-2 branch they served is gone, because the failed
+	// here: the create-vs-advanced-scenario branch they served is gone, because the failed
 	// attempt's input now comes from its own history row whichever path produced
 	// it (NIM-408).
 	const selectForUpdateSQL = `
@@ -1535,7 +1535,7 @@ FOR UPDATE
 	// Scope=last-failed: restart LAST FAILED scenario of incarnation.
 	// Last state_history snapshot carries failed scenario name AND apply_id of that
 	// run (run.go::abort → lockIncarnation → UpdateStateFromRun). apply_id —
-	// authoritative correlation with recipe (day-2 input), more precise than matching by
+	// authoritative correlation with recipe (advanced-scenario input), more precise than matching by
 	// scenario name. Same FOR UPDATE-tx: read serialized relative to
 	// concurrent scenario-runner.
 	// The last row that records an ATTEMPT. The rerun-transition markers this
@@ -1566,9 +1566,9 @@ LIMIT 1
 
 	// The failed attempt's replayable snapshot, from the history row that already
 	// pointed at it (NIM-408). ONE source: before this, the create path read
-	// `incarnation.spec.input` and the day-2 path read `apply_runs.recipe` by
+	// `incarnation.spec.input` and the advanced-scenario path read `apply_runs.recipe` by
 	// apply_id, and the two have different lifetimes — spec was forever, recipe is
-	// purged at 30 days — so a day-2 rerun died in ErrRerunInputUnavailable with no
+	// purged at 30 days — so an advanced-scenario rerun died in ErrRerunInputUnavailable with no
 	// way back. History is kept for a year and is read in this same transaction.
 	//
 	// A row with no snapshot is not an error here: it is an attempt that cannot be

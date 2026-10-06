@@ -4,7 +4,7 @@
 // state, and then operated (NIM-876).
 //
 // WHAT THESE TWO REPLACE. NIM-871 cut `examples/service/redis` out of the engine, and with
-// it the six gate tests that created a live Redis and ran a day-2 scenario against it. The
+// it the six gate tests that created a live Redis and ran an advanced scenario against it. The
 // gate went from nine tests to three, and the three that remained prove a MODULE is
 // delivered — fetched, Sigil-verified, hot-registered — which is a different claim from a
 // SERVICE being operated. Between the two claims sits everything a service is: a
@@ -26,7 +26,7 @@
 // tests drive `create_from_souls`, which is the same rollout onto a roster that already
 // exists. The machine half is proven by a live run on a workstation stand (the service's
 // README records what that costs) and by nothing automated. That is a real hole and it is
-// smaller than the one it replaces: what left with NIM-871 was the rollout AND the day-2
+// smaller than the one it replaces: what left with NIM-871 was the rollout AND the advanced-scenario
 // operation, and both are back.
 //
 // ⚠ The run needs egress: the service installs Redis from packages.redis.io, as the six
@@ -61,10 +61,10 @@ const (
 	// redisOperatorUser — the operator account `create_from_souls` is given.
 	redisOperatorUser = "app"
 
-	// redisDay2User — the account add_user adds. Deliberately NOT in the create input:
-	// the day-2 run is what has to bring it into existence, in state, in users.acl and on
+	// redisAddedUser — the account add_user adds. Deliberately NOT in the create input:
+	// the advanced-scenario run is what has to bring it into existence, in state, in users.acl and on
 	// the live instance.
-	redisDay2User = "reporter"
+	redisAddedUser = "reporter"
 
 	// redisVersion — from the service's closed input enum, all of which the apt
 	// repository it names publishes.
@@ -76,7 +76,7 @@ const (
 // the pinned service registered.
 //
 // Not a shared Stack — a shared SHAPE. Each test gets its own stand: these are the two
-// halves of a service's life and a day-2 test that inherited a create's containers would
+// halves of a service's life and an advanced-scenario test that inherited a create's containers would
 // pass or fail partly on what the other test left behind.
 func redisServiceStack(t *testing.T) *harness.Stack {
 	t.Helper()
@@ -218,14 +218,14 @@ func TestL3bRedisServiceLive_CreateFromSouls(t *testing.T) {
 	})
 }
 
-// TestL3bRedisServiceLive_Day2AddUser — the service is OPERATED: a day-2 scenario changes a
+// TestL3bRedisServiceLive_AddUser — the service is OPERATED: an advanced scenario changes a
 // running incarnation and the change reaches the live instance.
 //
-// This is the claim NIM-871 left with. A create proves a service can be stood up; only a
-// day-2 run proves the state it wrote can be read back, extended and re-applied — the
+// This is the claim NIM-871 left with. A create proves a service can be stood up; only an
+// advanced-scenario run proves the state it wrote can be read back, extended and re-applied — the
 // upsert over `state.redis_users`, a second mint at a derived path, a re-render of the whole
 // users.acl, and a plugin verb against the live ACL. Nothing else in this tier does that.
-func TestL3bRedisServiceLive_Day2AddUser(t *testing.T) {
+func TestL3bRedisServiceLive_AddUser(t *testing.T) {
 	stack := redisServiceStack(t)
 
 	sid := stack.SoulContainers[0].SID
@@ -236,17 +236,17 @@ func TestL3bRedisServiceLive_Day2AddUser(t *testing.T) {
 
 	adminPass := harness.ReadVaultKV(t, stack,
 		redisServiceAlias+"/"+inc+"/system_acl_users/"+redisAdminUser, "password")
-	// Read BEFORE the day-2 run, compared after: `add_user` passes every other account
+	// Read BEFORE the advanced-scenario run, compared after: `add_user` passes every other account
 	// without a `password` property precisely so their credentials are required rather than
 	// reissued, and a rotation is invisible in state — the password was never in state.
 	appPassBefore := harness.ReadVaultKV(t, stack,
 		redisServiceAlias+"/"+inc+"/redis_users/"+redisOperatorUser, "password")
 
-	// The day-2 run. The new account's password is in neither the input nor Vault yet:
+	// The advanced-scenario run. The new account's password is in neither the input nor Vault yet:
 	// add_user mints it, and that is the half of this test a state assertion cannot see.
 	addApply := stack.RunScenario(t, inc, "add_user", map[string]any{
 		"user": map[string]any{
-			"name":  redisDay2User,
+			"name":  redisAddedUser,
 			"perms": "~metrics:* +@read",
 			"state": "on",
 		},
@@ -262,23 +262,23 @@ func TestL3bRedisServiceLive_Day2AddUser(t *testing.T) {
 	stack.AssertIncarnationState(t, inc, map[string]any{
 		"redis_users": []any{
 			map[string]any{"name": redisOperatorUser, "perms": "~app:* +@read +@write -@dangerous", "state": "on"},
-			map[string]any{"name": redisDay2User, "perms": "~metrics:* +@read", "state": "on"},
+			map[string]any{"name": redisAddedUser, "perms": "~metrics:* +@read", "state": "on"},
 		},
 	})
 
-	// (b) ★ THE LIVE EFFECT, which is the point of a day-2 test: the account exists on the
+	// (b) ★ THE LIVE EFFECT, which is the point of an advanced-scenario test: the account exists on the
 	// instance after ACL SETUSER, with the rights the request asked for, and it exists as
 	// ITSELF — a password add_user minted into Vault during this run authenticates against
 	// the running server. The perms are read through the ADMIN connection: `ACL GETUSER` is
 	// an admin command, and asking a `+@read` account for it would be a NOPERM about this
 	// test rather than about the service.
 	adminConn := harness.RedisConn{SoulIdx: 0, Host: "127.0.0.1", Port: 6379, User: redisAdminUser, Pass: adminPass}
-	stack.AssertRedisACLUser(t, 0, "127.0.0.1", 6379, redisAdminUser, adminPass, redisDay2User)
-	stack.AssertRedisACLUserPerms(t, adminConn, redisDay2User, "~metrics:*")
-	day2Pass := harness.ReadVaultKV(t, stack,
-		redisServiceAlias+"/"+inc+"/redis_users/"+redisDay2User, "password")
+	stack.AssertRedisACLUser(t, 0, "127.0.0.1", 6379, redisAdminUser, adminPass, redisAddedUser)
+	stack.AssertRedisACLUserPerms(t, adminConn, redisAddedUser, "~metrics:*")
+	addedPass := harness.ReadVaultKV(t, stack,
+		redisServiceAlias+"/"+inc+"/redis_users/"+redisAddedUser, "password")
 	stack.AssertRedisUserAuthenticates(t,
-		harness.RedisConn{SoulIdx: 0, Host: "127.0.0.1", Port: 6379, User: redisDay2User, Pass: day2Pass},
+		harness.RedisConn{SoulIdx: 0, Host: "127.0.0.1", Port: 6379, User: redisAddedUser, Pass: addedPass},
 		"metrics:probe")
 
 	// (c) ★ THE ACCOUNT THAT WAS ALREADY THERE STILL WORKS, under the credential it was
@@ -290,7 +290,7 @@ func TestL3bRedisServiceLive_Day2AddUser(t *testing.T) {
 	appPassAfter := harness.ReadVaultKV(t, stack,
 		redisServiceAlias+"/"+inc+"/redis_users/"+redisOperatorUser, "password")
 	if appPassAfter != appPassBefore {
-		t.Errorf("add_user rotated %s's password: a day-2 run that touches one account must not "+
+		t.Errorf("add_user rotated %s's password: an advanced-scenario run that touches one account must not "+
 			"reissue a credential the clients of another are holding", redisOperatorUser)
 	}
 	stack.AssertRedisUserAuthenticates(t,
@@ -303,7 +303,7 @@ func TestL3bRedisServiceLive_Day2AddUser(t *testing.T) {
 	// (d) users.acl on disk carries the new account too. Without this the test would pass on
 	// a scenario that only spoke to the running instance, and the account would vanish on
 	// the next restart — a failure nobody sees until a reboot.
-	stack.AssertHostFileContent(t, 0, "/etc/redis/users.acl", "user "+redisDay2User)
+	stack.AssertHostFileContent(t, 0, "/etc/redis/users.acl", "user "+redisAddedUser)
 
 	stack.AssertAuditEvent(t, "incarnation.scenario_started", map[string]any{
 		"scenario": "add_user",

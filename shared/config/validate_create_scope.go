@@ -15,9 +15,9 @@ package config
 // or stay quiet on what it refuses.
 //
 // FAIL-CLOSED, and the trade-off is worth stating: a `create: true` scenario may
-// also be run day-2, where the row exists and a `incarnation.state` rule would work.
+// also be run as an advanced scenario, where the row exists and a `incarnation.state` rule would work.
 // It is still refused, because the create path is a declared path of that scenario
-// and the rule hard-fails there. Splitting a day-2-only rule into a day-2-only
+// and the rule hard-fails there. Splitting an advanced-only rule into an advanced-only
 // scenario is the way out, and the message says so.
 
 import (
@@ -43,7 +43,7 @@ const createScopePlaceholderID = "id"
 //     readable and nothing else is.
 //
 // A scenario that is not a create starter is not checked here: its rules run on the
-// day-2 path, which answers for the full set.
+// advanced-scenario path, which answers for the full set.
 //
 // rules is passed separately from m because the post-merge caller
 // (resolveCovenantValidateScopeDiags) checks the EFFECTIVE list — covenant rules
@@ -82,7 +82,7 @@ func validateCreateScopeRules(root *ast.MappingNode, m *ScenarioManifest, rules 
 			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 			Code:     "validate_rule_out_of_scope",
 			Message:  fmt.Sprintf("validate[%d] cannot run on the create path: %v", i, err),
-			Hint:     "on create the incarnation does not exist yet; move a rule that needs its state or history to a day-2 scenario, and express a constraint on the identifier over incarnation.id (or, when id.template composes it, over the input.* components it composes from)",
+			Hint:     "on create the incarnation does not exist yet; move a rule that needs its state or history to an advanced scenario, and express a constraint on the identifier over incarnation.id (or, when id.template composes it, over the input.* components it composes from)",
 			YAMLPath: fmt.Sprintf("$.validate[%d].that", i),
 		}))
 	}

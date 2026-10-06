@@ -61,7 +61,7 @@ Only `service.yml` and at least one script (`scenario/<name>/main.yml`) are requ
 
 There is no need to list scripts in `service.yml` - keeper finds them with auto-discover in the `scenario/` directory.
 
-The second auto-discovery channel is the `upgrade/<slug>/` directory next to `scenario/`: version-to-version upgrade scripts with self-describing top-level key `from:` (source versions). They are launched by `POST /v1/incarnations/{id}/upgrade`, and are not shown in regular day-2 script lists. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md), names - [naming-rules.md → Upgrade v2](../naming-rules.md).
+The second auto-discovery channel is the `upgrade/<slug>/` directory next to `scenario/`: version-to-version upgrade scripts with self-describing top-level key `from:` (source versions). They are launched by `POST /v1/incarnations/{id}/upgrade`, and are not shown in regular advanced-scenario lists. Design - [ADR-0068](../adr/0068-service-upgrade-v2.md), names - [naming-rules.md → Upgrade v2](../naming-rules.md).
 
 ## `service.yml` - manifest
 
@@ -424,7 +424,7 @@ Rules:
 - **The declaration is in the script, not in the manifest.** The starting set of the keeper service is output by **auto-discover**: scans `scenario/`, the set includes **exactly** scripts with `create: true`. In `service.yml`, startup scripts are not listed (like any others - keeper finds them in the `scenario/` directory, see "Repository Layout").
 - **The name `create` is NOT privileged.** A script with the name `create` is included in the set only if it itself carries `create: true` - just like any other. The magical default `create` is no longer there.
 - **Several create scripts are the norm.** The service can offer several starting paths (for example, redis: `create` - from scratch, `create_from_souls` - on ready-made hosts, `migrate_cluster` - with data filled from an external source). The operator selects one by field `create_scenario`; if the service has ≥1 create script, the selection is **required** (empty → `422`, input is validated against the schema of a specific script).
-- **Service without `create: true` scripts → bare incarnation.** If no script carries `create: true`, `POST /v1/incarnations` creates a **bare incarnation**: write to `ready` without running and without `apply_id` (`incarnation.created_scenario` = `null`). Further work is done through day-2 operations (`POST /v1/incarnations/{id}/scenarios/{scenario}`). Such a service consists only of day-2 scenarios and does not know how to "raise itself from scratch" with one call - this is a valid pattern.
+- **Service without `create: true` scripts → bare incarnation.** If no script carries `create: true`, `POST /v1/incarnations` creates a **bare incarnation**: write to `ready` without running and without `apply_id` (`incarnation.created_scenario` = `null`). Further work is done through advanced scenarios (`POST /v1/incarnations/{id}/scenarios/{scenario}`). Such a service consists only of advanced scenarios and does not know how to "raise itself from scratch" with one call - this is a valid pattern.
 
 Choice semantics, three branches of the contract and bare-incarnation on the API side - [`docs/keeper/operator-api/incarnations.md → Startup scenario selection and bare-incarnation`](../keeper/operator-api/incarnations.md).
 

@@ -6,7 +6,7 @@
 --
 -- The consequence of rolling back is worth stating rather than discovering: a
 -- keeper on pre-NIM-408 code resolves a rerun's input the old way (create path
--- from `incarnation.spec.input`, day-2 from `apply_runs.recipe`), which works
+-- from `incarnation.spec.input`, an advanced scenario from `apply_runs.recipe`), which works
 -- only while that column still exists and the recipe has not been purged. If the
 -- rollback crosses the migration that drops `incarnation.spec`, the create path
 -- has nowhere left to read from and every rerun-last of a create failure answers

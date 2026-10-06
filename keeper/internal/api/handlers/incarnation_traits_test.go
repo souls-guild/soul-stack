@@ -24,7 +24,7 @@ import (
 // and go straight into the `incarnation.traits` column ($10), which has been their
 // source of truth since migration 088. The detour through a freeform `spec` map
 // existed only because `spec` was where the request used to be persisted; that
-// copy went stale the moment a day-2 `PUT .../traits` edited the column, and the
+// copy went stale the moment a later `PUT .../traits` edited the column, and the
 // column itself is gone (NIM-408).
 func TestIncarnation_Create_TraitsGoToTheColumn(t *testing.T) {
 	db := &fakeIncDB{}

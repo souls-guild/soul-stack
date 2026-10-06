@@ -1,4 +1,4 @@
-# L0 test for rotate_tls: day-2 TLS material rotation WITHOUT restart. Operator supplies NEW
+# L0 test for rotate_tls: TLS material rotation WITHOUT restart. Operator supplies NEW
 # Vault refs for cert/key/ca; the scenario re-renders the PEM into ${conf_dir}/tls/ from the new refs and sends
 # three CONFIG SET tls_*_file (UNDERSCORE — DragonFly form!) via redis.command.run under
 # an onchanges gate (DragonFly recreates SSL_CTX and re-reads live). Render-only, hermetic.
@@ -48,7 +48,7 @@ fixtures:
 
     # ★ [ADR-0083] §4: create recorded the service's own accounts here -- only the
     # NAME; each password is a `type: secret` property living in Vault under a derived
-    # path. The day-2 `core.state.set` task resolves THIS list into the register.
+    # path. The advanced scenario's `core.state.set` task resolves THIS list into the register.
     system_acl_users:
       - { name: default_admin }
 

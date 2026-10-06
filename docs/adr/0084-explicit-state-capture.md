@@ -181,7 +181,7 @@ close it. The restriction is pinned by `TestRender_LoopOnKeeperTaskRejected`
 - A failed run leaves state describing what was actually captured before it died, not an
   all-or-nothing snapshot. `provisioned_vm_ids` / `provisioned_sids`
   (`examples/service/redis/covenant.yml:809-821`) stop being lost when a task after provisioning
-  fails — which is the failure that leaves real cloud VMs that day-2 cascade-destroy cannot find.
+  fails — which is the failure that leaves real cloud VMs that a later cascade-destroy cannot find.
 - `state_history` becomes a snapshot per capture rather than per run.
 - Capture is an ordinary task: it has a position, it participates in `require:` / `onchanges:`, and
   it is visible in the rendered plan and in run visibility like every other step.
@@ -508,7 +508,7 @@ So the grammar ports in full, and gains three operations that only make sense as
 
 **Deferred, and named so it is not mistaken for an omission: `expect` on `set`/`present`/`append`.**
 An earlier draft of this section proposed extending `expect` there as compare-and-swap — assert the
-prior value before overwriting — as a defence against two day-2 scenarios racing on one field. It is
+prior value before overwriting — as a defence against two advanced scenarios racing on one field. It is
 not implemented, and the reason is that it would not be the same `expect`. ADR-057's `expect` counts
 how many elements `match:` hit (`checkExpect`); a whole-field `set` has no `match:`, so the guard
 would have to compare a **value**, which is a different mechanism wearing an existing word. That is a

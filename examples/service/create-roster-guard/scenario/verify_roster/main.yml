@@ -1,6 +1,6 @@
 name: verify_roster
 description: >-
-  Day-2 counterpart of `create`: the same topology guard over a roster that is
+  Advanced-scenario counterpart of `create`: the same topology guard over a roster that is
   already bound. Nothing here builds a roster — no keeper-side bind, no refresh
   emitter — so the roster at request time IS the roster this run will use, and
   the guard can be answered before anything mutates (ADR-009 amendment

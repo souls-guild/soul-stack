@@ -52,7 +52,7 @@ import (
 //	GET    /v1/incarnations/{id}                   — get incarnation (M0.6c-1).
 //	GET    /v1/incarnations/{id}/history           — state_history (M0.6c-1).
 //	POST   /v1/incarnations/{id}/scenarios/{scenario} — run named scenario (M0.6c).
-//	POST   /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2 form prefill from state (docs/input.md).
+//	POST   /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — advanced-scenario form prefill from state (docs/input.md).
 //	POST   /v1/incarnations/{id}/unlock            — clear error_locked (M0.6c).
 //	POST   /v1/incarnations/{id}/upgrade           — migrate state_schema_version (ADR-019).
 //	GET    /v1/incarnations/{id}/upgrade-paths     — upgrade paths: tags + on-demand ?to= (ADR-0068 §6).
@@ -575,7 +575,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaIncarnationTelemetry(newHumaCadenceAPI(r), telemetryH)
 			})
 
-			// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — day-2
+			// POST /v1/incarnations/{id}/scenarios/{scenario}/form-prefill — advanced-scenario
 			// pre-fill of the scenario UI form from incarnation.state (docs/input.md). A READ
 			// resolve (not a mutation): audit is NOT wired, newHumaCadenceAPI. Permission
 			// incarnation.get (reuse: whoever reads the incarnation also gets the prefill of its

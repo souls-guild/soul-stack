@@ -59,7 +59,7 @@ MongoDB runtime is this plugin.
 > **sharded** (`mongos`/config/shard + [Choir](../../naming-rules.md)) — deferred with a
 > reason in **NIM-820**: it needs a `mongos` and config-server replica sets that exist
 > nowhere in this tree, and `addShard` stands on `replicaset`, which did not exist before
-> this. Also outside: `keyFile` (intra-cluster SCRAM authentication) and day-2 on a
+> this. Also outside: `keyFile` (intra-cluster SCRAM authentication) and advanced scenarios on a
 > user's password/roles (**NIM-821** — the SCRAM verifier CAN be reproduced and compared,
 > see the note in `user.present` below). TLS: `mongod` in the corpus service runs plain,
 > and the `tls*` parameters are declared on every action for forward-compat.
@@ -133,7 +133,7 @@ unavailable) → `failed`.
 
 `createUser`/`dropUser` over live `mongod` entirely via go-mongo-driver.
 Idempotent by `usersInfo(name)`: `present` + user exists → no-op (changing the
-password or roles of an existing user is day-2 and is **NIM-821** — the SCRAM verifier
+password or roles of an existing user is an advanced scenario and is **NIM-821** — the SCRAM verifier
 `usersInfo` returns with `showCredentials` CAN be reproduced from a candidate password
 and compared, which is the answer to NIM-383 §2; it is not done here); `present` + no →
 `createUser` (`changed=true`); `absent` + is → `dropUser` (`changed=true`);
@@ -252,14 +252,14 @@ able to win an election.
 **Bootstrap.** With `security.authorization: enabled` a set is initiated BEFORE the first
 admin exists, because the localhost exception holds only while the admin DB has no users.
 So `initiated` takes the same connection path `user.present` takes — auth first, no-auth
-loopback on an auth failure. The three day-2 actions do **not**: an auth failure there is a
+loopback on an auth failure. The three advanced-scenario actions do **not**: an auth failure there is a
 failure.
 
 **The primary hop.** `replSetReconfig` only runs on the primary, and `replSetGetStatus`
 names it by its **config host**, which is routable between members and not necessarily from
 the host this plugin runs on — the same split redis has between a node's `addr` (dial) and
 its `ip:port` (gossip). A member therefore declares `host` (what goes into the config) and
-an optional `addr` (what we dial); `primary_addr` is the override for the day-2 actions,
+an optional `addr` (what we dial); `primary_addr` is the override for the advanced-scenario actions,
 which are given one member rather than the whole set.
 
 | Param | On | Type | Required/default | Meaning |

@@ -41,7 +41,7 @@ import (
 
 // varsAssertServiceRepo is a service whose ONLY source for `vars.tier` is its
 // own `vars/`, so a resolver that reads the wrong place does not merely get a
-// stale value — it gets no key at all, and `has(vars.tier)` in the day-2
+// stale value — it gets no key at all, and `has(vars.tier)` in the advanced-scenario
 // scenario's assert says so.
 func varsAssertServiceRepo(t *testing.T) string {
 	t.Helper()

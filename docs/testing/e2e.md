@@ -257,12 +257,12 @@ FetchModule → Sigil-verify → hot-register → live apply.
 - `TestL3bPluginChannel_CatalogAndAllow` - module catalog + allow mechanics over the
 gRPC-stdio plugin channel.
 
-- `TestL3bRedisServiceLive_CreateFromSouls` / `_Day2AddUser` - a published service
+- `TestL3bRedisServiceLive_CreateFromSouls` / `_AddUser` - a published service
 brought to a working state and then operated. The subject is out of tree and pinned by
 commit (NIM-876): `github.com/soul-stack-services/redis`, fetched into a cache by
 `make e2e-live-services`, extracted to a path that carries the commit.
 
-The multi-host `TestL3bRedisClusterLive_ThreeNode` and the six `TestL3bRedisLive_Day2*`
+The multi-host `TestL3bRedisClusterLive_ThreeNode` and the six advanced-scenario `TestL3bRedisLive_*`
 cases ran `examples/service/redis` and left with it (NIM-871). Two of their claims came
 back as the pair above; a cluster topology, `update_config`, `restart`, `destroy` and
 `rotate_tls` did not.

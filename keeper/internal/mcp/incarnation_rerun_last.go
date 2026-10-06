@@ -37,7 +37,7 @@ type incarnationRerunLastOutput struct {
 // callIncarnationRerunLast — mutating async tool keeper.incarnation.rerun-last.
 // Parity with REST IncarnationHandler.RerunLast: clears error_locked and
 // restarts the LAST failed scenario in the same action — bootstrap
-// `create`/… or day-2 add_user/… (architecture.md → "Atomicity and
+// `create`/… or an advanced scenario such as add_user/… (architecture.md → "Atomicity and
 // error_locked"). Under one FOR UPDATE: error_locked → applying, skipping ready.
 //
 // RBAC-context — covens ∪ {name} (name-bound, parity with unlock). audit:
@@ -124,8 +124,8 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 	// Restart the last failed scenario (async): status is already applying
 	// (UnlockForRerun). FromLocked — lockRun must not transition status
 	// again, it expects to see applying already. ScenarioName — name of the
-	// failed scenario from UnlockResult (create or day-2). Input — its saved
-	// input (spec.input on the create path / recipe.input on the day-2 path,
+	// failed scenario from UnlockResult (create or an advanced scenario). Input — its saved
+	// input (spec.input on the create path / recipe.input on the advanced-scenario path,
 	// read under the same FOR UPDATE): without it, a restart with required
 	// fields (redis cluster: version/shards) would fail input validation or
 	// silently apply defaults (parity with REST RerunLastTyped).

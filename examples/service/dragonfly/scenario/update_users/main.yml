@@ -1,6 +1,6 @@
 name: update_users
 description: >-
-  Day-2: BULK edit of ALL operator-added ACL users on an ALREADY running DragonFly
+  Advanced scenario: BULK edit of ALL operator-added ACL users on an ALREADY running DragonFly
   WITHOUT restarting the process (bulk-replace). Production convention
   "hot-reload > restart" (docs/destiny/production-conventions.md §3a/§6): ACL is applied on
   the fly via ACL LOAD, no daemon restart needed. REUSE from redis/update_users (DragonFly
@@ -24,7 +24,7 @@ description: >-
   (system + the new operator-extra set) and REVIVES it via redis.acl.reloaded (ACL LOAD).
 
   Idempotency: ACL LOAD is idempotent BY CONSTRUCTION; the plugin does an honest diff of ACL LIST
-  before/after (changed=false on match). The users.acl render is deterministic. Day-2: the instance is ALREADY
+  before/after (changed=false on match). The users.acl render is deterministic. The instance is ALREADY
   running (auth via the vault() password + TLS discriminator from incarnation.state.tls).
 
   Targeting — applies to the whole incarnation (on omitted, ADR-008/009): the new users.acl + ACL LOAD go to
@@ -39,7 +39,7 @@ input:
   users:
     type: array
     required: true
-    # day-2 form-prefill (docs/input.md → "Pre-fill from state"): "editing everyone" means the form
+    # advanced-scenario form-prefill (docs/input.md → "Pre-fill from state"): "editing everyone" means the form
     # opens with the CURRENT operator-extra set already shown (the operator edits the delta rather than
     # entering the set from scratch or silently wiping it). Source — incarnation.state.df_users (the
     # same AclUser array the df_users capture below writes), so the
@@ -78,7 +78,7 @@ validate:
 # on ACL LOAD is dropped even on a TLS instance). run_dir is host-invariant; the default duplicates the default.
 compute:
   local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
-  # ★ admin_user (default_admin redesign): the name of the system admin user, a literal (day-2 outside
+  # ★ admin_user (default_admin redesign): the name of the system admin user, a literal (advanced scenario, outside
   # the covenant). ACL LOAD connects as this user; the masteruser/masterauth top-up reads it.
   admin_user: "${ 'default_admin' }"
   # ── Effective host layout: install/conf_dir/data_dir from service vars (v1→v2 migration) ──
@@ -157,7 +157,7 @@ tasks:
         # ★★ CRITICAL (system-ACL-users): the FULL users.acl = SYSTEM users (from service vars, FIRST) +
         # operator-extra (the NEW input.users — an ARRAY of AclUser — ON TOP). update_users re-renders
         # the WHOLE file (not append) → WITHOUT topping up the system users, this render would WIPE default_admin/replica/
-        # monitoring/sentinel/haproxy → breaking AUTH/replication/sentinel on day-2. System users (incl.
+        # monitoring/sentinel/haproxy → breaking AUTH/replication/sentinel in the advanced scenarios. System users (incl.
         # default_admin) are topped up on EVERY render from vars.system_acl_users. last-wins:
         # operator-extra overrides a same-named system user (system names are locked by the validate
         # guard — no collision). Each user's Vault password — secret/dragonfly/<inc>/{df_users,system_acl_users}/<name>#password.

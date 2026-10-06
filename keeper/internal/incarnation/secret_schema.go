@@ -66,7 +66,7 @@ func StateSchemaSecrets(art *artifact.ServiceArtifact) audit.SecretSchema {
 //     legal ([config.CollectSecretFields]): a top-level scalar, and a property of a
 //     top-level array's items. The second folds to the whole collection —
 //     `redis_users` in the example service, an ACL inventory that is public and read
-//     by every day-2 scenario — so taking it masks live diagnostics out of every run
+//     by every advanced scenario — so taking it masks live diagnostics out of every run
 //     plan the service writes, for a value that is not supposed to be there. The
 //     first folds to itself: exact, no collateral, so it is taken.
 //

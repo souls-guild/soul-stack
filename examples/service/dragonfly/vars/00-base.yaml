@@ -140,7 +140,7 @@ sentinel_redis_package_version: "5:7.0.15-1~deb12u7"
 # full rights `~* &* +@all`, added ALWAYS (like replica/monitoring) — into BOTH sets.
 # Replaced the former "default under requirepass" model: requirepass is DEPRECATED and removed from the flagfile,
 # all authentication (incl. internal: replication/sentinel/health-PING) goes under default_admin.
-# The redis plugin connects with username=default_admin (see create/day-2 deploy bodies).
+# The redis plugin connects with username=default_admin (see the create and advanced-scenario deploy bodies).
 # DragonFly carries a full redis-compatible ACL (SETUSER/aclfile with #<sha256>/masteruser/
 # masterauth — acl/user.cc, tls_helpers.cc), so the model transfers without adaptation.
 #

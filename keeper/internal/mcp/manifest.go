@@ -279,7 +279,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.incarnation.rerun-last",
-			Description:  "Clears error_locked and, in the same action, reruns the LAST failed incarnation scenario (bootstrap 'create'/... or day-2 add_user/...) with the saved input of the failed run. Only from error_locked. Async operation - returns _apply_id + scenario. Permission: incarnation.rerun-last.",
+			Description:  "Clears error_locked and, in the same action, reruns the LAST failed incarnation scenario (bootstrap 'create'/... or an advanced scenario such as add_user/...) with the saved input of the failed run. Only from error_locked. Async operation - returns _apply_id + scenario. Permission: incarnation.rerun-last.",
 			InputSchema:  schemaIncarnationRerunLastInput,
 			OutputSchema: schemaIncarnationRerunLastOutput,
 		},
@@ -1473,7 +1473,7 @@ var (
 "properties":{
 "_apply_id":{"type":"string","description":"ULID of the rerun."},
 "incarnation":{"type":"string"},
-"scenario":{"type":"string","description":"Name of the rerun scenario (the last one that failed: bootstrap 'create'/... or day-2 add_user/...)."}}}`)
+"scenario":{"type":"string","description":"Name of the rerun scenario (the last one that failed: bootstrap 'create'/... or an advanced scenario such as add_user/...)."}}}`)
 
 	schemaIncarnationUnlockOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

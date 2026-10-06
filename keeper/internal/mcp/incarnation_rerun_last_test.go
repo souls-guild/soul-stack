@@ -3,7 +3,7 @@ package mcp
 // Guard tests for the keeper.incarnation.rerun-last MCP tool (REST parity
 // with IncarnationHandler.RerunLastTyped, incarnation_rerun_test.go): lifting
 // error_locked + restarting the last failed scenario in one action. Covers
-// the create/day-2 happy path (202 + apply_id + scenario + audit), RBAC
+// the create and advanced-scenario happy paths (202 + apply_id + scenario + audit), RBAC
 // scope-deny on a foreign coven, the status gate, fail-closed recipe-null,
 // and argument validation.
 
@@ -201,12 +201,12 @@ func TestToolsCall_IncarnationRerunLast_NoStoredInput_NilInput(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput — day-2 happy path
-// (REST parity with TestRerunLast_Day2_ReusesRecipeInput_202): the last
+// TestToolsCall_IncarnationRerunLast_AdvancedReusesRecipeInput — advanced-scenario happy path
+// (REST parity with TestRerunLast_Advanced_ReusesRecipeInput_202): the last
 // failure was add_user (≠ created `create`), its input comes from the
 // recipe apply_run → 202, RunSpec.ScenarioName=="add_user", Input from the
 // recipe (not spec.input), scenario in reply/audit == add_user.
-func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
+func TestToolsCall_IncarnationRerunLast_AdvancedReusesRecipeInput(t *testing.T) {
 	spec := map[string]any{"input": map[string]any{"version": "8.6.1"}} // must NOT leak through
 	pool := &fakePool{
 		incFn:          incLockedSpec(spec),
@@ -247,17 +247,17 @@ func TestToolsCall_IncarnationRerunLast_Day2ReusesRecipeInput(t *testing.T) {
 	if rec.events[0].Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", rec.events[0].Payload["scenario"])
 	}
-	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false.
+	// an advanced-scenario recipe without from_upgrade → RunSpec.FromUpgrade=false.
 	if starter.gotSpec.FromUpgrade {
 		t.Error("RunSpec.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2FromUpgrade — MAJOR guard (ADR-0068,
+// TestToolsCall_IncarnationRerunLast_AdvancedFromUpgrade — MAJOR guard (ADR-0068,
 // REST parity): MCP rerun-last on a run with recipe.from_upgrade=true
 // propagates FromUpgrade=true into RunSpec → restart from upgrade/<slug>/,
 // not scenario/.
-func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
+func TestToolsCall_IncarnationRerunLast_AdvancedFromUpgrade(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLockedSpec(map[string]any{}),
 		lastScenarioFn: func(string) (string, error) { return "to_v2", nil },
@@ -284,11 +284,11 @@ func TestToolsCall_IncarnationRerunLast_Day2FromUpgrade(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2BareIncarnation — a bare incarnation
-// (created_scenario IS NULL) locked at day-2 → rerun-last works via the
+// TestToolsCall_IncarnationRerunLast_AdvancedBareIncarnation — a bare incarnation
+// (created_scenario IS NULL) locked by an advanced scenario → rerun-last works via the
 // recipe path (previously: 409). ScenarioName from the last run, Input from
 // the recipe.
-func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
+func TestToolsCall_IncarnationRerunLast_AdvancedBareIncarnation(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLocked(nil, ""), // created_scenario = NULL
 		lastScenarioFn: func(string) (string, error) { return "update_acl", nil },
@@ -300,7 +300,7 @@ func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
 	h, _ := newTestHandlerFull(t, pool, rerunRBAC(), starter, &mcpResolver{ok: true}, nil)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.rerun-last",
-		`{"id":"redis-bare","reason":"rerun bare day-2"}`)
+		`{"id":"redis-bare","reason":"rerun bare advanced"}`)
 	if resp.Error != nil {
 		t.Fatalf("unexpected error: %+v", resp.Error)
 	}
@@ -315,12 +315,12 @@ func TestToolsCall_IncarnationRerunLast_Day2BareIncarnation(t *testing.T) {
 	}
 }
 
-// TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable — day-2, but no
+// TestToolsCall_IncarnationRerunLast_AdvancedRecipeUnavailable — an advanced scenario, but no
 // recipe (recipe IS NULL / apply_run purged → ErrNoRows): fail-closed
 // rerun-input-unavailable (a distinct code from incarnation-locked,
 // symmetric with REST TypeRerunInputUnavailable), run does NOT start, audit
 // is NOT written.
-func TestToolsCall_IncarnationRerunLast_Day2RecipeUnavailable(t *testing.T) {
+func TestToolsCall_IncarnationRerunLast_AdvancedRecipeUnavailable(t *testing.T) {
 	pool := &fakePool{
 		incFn:          incLocked(nil, "create"),
 		lastScenarioFn: func(string) (string, error) { return "add_user", nil },

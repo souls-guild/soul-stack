@@ -144,7 +144,7 @@ func ResolveScenarioCovenant(m *ScenarioManifest, doc *Document, serviceRoot str
 // resolveCovenantValidateScopeDiags runs the create-path scope check over the
 // EFFECTIVE `validate:` list (NIM-833) — same motive and same core as the two above.
 // A covenant fragment cannot be checked on its own: a rule reading
-// `incarnation.state` is correct for every day-2 scenario that extends it and fatal
+// `incarnation.state` is correct for every advanced scenario that extends it and fatal
 // for every create scenario that does, and only the merged manifest says which this
 // one is.
 //

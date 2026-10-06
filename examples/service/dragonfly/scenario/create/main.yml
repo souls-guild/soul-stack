@@ -677,7 +677,7 @@ tasks:
       value: "${ compute.df_config }"
 
   # tls: the same compute.tls_* (cert/key/ca — Vault PATHS, not PEM). ★ WITHOUT only/port: with
-  # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — day-2 connects via the socket.
+  # DragonFly TLS is on the main port (no tls_port, no "TLS-only") — the advanced scenarios connect via the socket.
   - name: Record the TLS material references
     module: core.state.set
     params:

@@ -785,13 +785,13 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         # stayed green, because nothing here distinguishes the two behaviours.
         # That is worse than a gap: the next reader takes the name for coverage.
         # The half it does hold is above; the half it did not is below.
-        [("TestRedisCluster_Day2", "STAND-SETUP", None)],
-        "=== RUN   TestRedisCluster_Day2\n"
-        "=== RUN   TestRedisCluster_Day2/add_user\n"
-        "=== CONT  TestRedisCluster_Day2/add_user\n"
-        "    --- FAIL: TestRedisCluster_Day2/add_user (0.51s)\n"
+        [("TestRedisCluster_Advanced", "STAND-SETUP", None)],
+        "=== RUN   TestRedisCluster_Advanced\n"
+        "=== RUN   TestRedisCluster_Advanced/add_user\n"
+        "=== CONT  TestRedisCluster_Advanced/add_user\n"
+        "    --- FAIL: TestRedisCluster_Advanced/add_user (0.51s)\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
-        "--- FAIL: TestRedisCluster_Day2 (3.94s)\n",
+        "--- FAIL: TestRedisCluster_Advanced (3.94s)\n",
     ),
     (
         "a subtest's FAIL line does not close its parent's block",
@@ -811,14 +811,14 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         # testcontainers logs to stderr at column 0 in every L3a run, so this is
         # the ordinary shape of a test that tears a container down mid-run, not a
         # constructed one.
-        [("TestRedisCluster_Day2", "STAND-SETUP", None)],
-        "=== RUN   TestRedisCluster_Day2\n"
-        "=== RUN   TestRedisCluster_Day2/add_user\n"
-        "    --- FAIL: TestRedisCluster_Day2/add_user (0.51s)\n"
-        "        redis_day2_test.go:88: apply: rpc error: code = Unavailable\n"
+        [("TestRedisCluster_Advanced", "STAND-SETUP", None)],
+        "=== RUN   TestRedisCluster_Advanced\n"
+        "=== RUN   TestRedisCluster_Advanced/add_user\n"
+        "    --- FAIL: TestRedisCluster_Advanced/add_user (0.51s)\n"
+        "        redis_advanced_test.go:88: apply: rpc error: code = Unavailable\n"
         "2026/08/07 12:04:11 🐳 Terminating container: 4f1c9ab0c2de\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
-        "--- FAIL: TestRedisCluster_Day2 (3.94s)\n",
+        "--- FAIL: TestRedisCluster_Advanced (3.94s)\n",
     ),
     (
         "container text WITHOUT a declaration stays TEST-FAILURE",
@@ -876,8 +876,8 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         # alone"; the bigger fact here is that every test after this one never ran
         # at all, and the run certifies nothing. Reading the marker first would
         # hide a truncated suite behind a per-test infrastructure note.
-        [("TestRedisCluster_Day2", "TIMEOUT", None)],
-        "=== RUN   TestRedisCluster_Day2\n"
+        [("TestRedisCluster_Advanced", "TIMEOUT", None)],
+        "=== RUN   TestRedisCluster_Advanced\n"
         "    stack.go:166: NewStack: redis: redis container: "
         "context deadline exceeded\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
@@ -885,7 +885,7 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         "context deadline exceeded\n"
         "panic: test timed out after 30m0s\n"
         "\trunning tests:\n"
-        "\t\tTestRedisCluster_Day2 (29m58s)\n",
+        "\t\tTestRedisCluster_Advanced (29m58s)\n",
     ),
     (
         "the same block WITHOUT the timeout -> STAND-SETUP (the control for the pair above)",
@@ -893,14 +893,14 @@ SELF_TEST: list[tuple[str, list[tuple[str, str, str | None]], str]] = [
         # make the fixture above about the ORDER of the two checks rather than
         # about the marker being ignored: if the marker branch were dead, this one
         # goes red and that one does not.
-        [("TestRedisCluster_Day2", "STAND-SETUP", None)],
-        "=== RUN   TestRedisCluster_Day2\n"
+        [("TestRedisCluster_Advanced", "STAND-SETUP", None)],
+        "=== RUN   TestRedisCluster_Advanced\n"
         "    stack.go:166: NewStack: redis: redis container: "
         "context deadline exceeded\n"
         "    setupdecl.go:92: @@MARKER@@ — the stand's infrastructure never came up\n"
         "    stack.go:298: [teardown] postgres container did not terminate: "
         "context deadline exceeded\n"
-        "--- FAIL: TestRedisCluster_Day2 (124.03s)\n",
+        "--- FAIL: TestRedisCluster_Advanced (124.03s)\n",
     ),
     (
         "log-after-test panic mid-test -> the open test is the bystander, the panic names the culprit",

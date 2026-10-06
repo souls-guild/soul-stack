@@ -535,7 +535,7 @@ create: true
 	writeScenario(t, root, "create_cluster", `description: cluster-bootstrap
 create: true
 `)
-	writeScenario(t, root, "add_user", `description: day-2 operation
+	writeScenario(t, root, "add_user", `description: advanced scenario
 create: false
 `)
 	writeScenario(t, root, "restart", `description: restart without flag
@@ -652,7 +652,7 @@ func TestListUpgrades_MissingDir_Empty(t *testing.T) {
 }
 
 // TestListScenarios_IgnoresUpgradeDir is an isolation regression guard
-// (ADR-0068 §3): upgrade/<slug>/ must NOT leak into the day-2 scenario list,
+// (ADR-0068 §3): upgrade/<slug>/ must NOT leak into the advanced-scenario list,
 // and scenario/ must not leak into the upgrade list. Channels are strictly
 // separated.
 func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
@@ -679,7 +679,7 @@ func TestListScenarios_IgnoresUpgradeDir(t *testing.T) {
 
 // TestListScenarios_StrayFromNotProjected is the PHYSICAL field-isolation gate
 // (ADR-0068 §3): stray top-level `from:` in scenario/<name>/main.yml must NOT
-// leak into the day-2 reply. FromVersions is filled only on the upgrade/
+// leak into the advanced-scenario reply. FromVersions is filled only on the upgrade/
 // channel (dir==upgradeDir), not indirectly by directory. Regression guard for
 // an operator accidentally writing `from:` in a regular scenario.
 func TestListScenarios_StrayFromNotProjected(t *testing.T) {

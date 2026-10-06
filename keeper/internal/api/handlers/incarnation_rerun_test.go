@@ -166,11 +166,11 @@ func TestRerunLast_NoStoredInput_NilInput_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_ReusesRecipeInput_202 — day-2 happy-path: the last failed one
+// TestRerunLast_Advanced_ReusesRecipeInput_202 — advanced-scenario happy path: the last failed one
 // — add_user (≠ created `create`), its input is taken from its own history snapshot → 202,
 // RunSpec.ScenarioName=="add_user", RunSpec.Input=={user:alice} (not the incarnation spec),
 // reply.Scenario=="add_user", audit scenario=="add_user".
-func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
+func TestRerunLast_Advanced_ReusesRecipeInput_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		// The incarnation spec carries version — it must NOT leak into the rerun.
@@ -188,7 +188,7 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun add_user verified", nil)
 	if err != nil {
-		t.Fatalf("RerunLastTyped day-2 err = %v", err)
+		t.Fatalf("RerunLastTyped advanced err = %v", err)
 	}
 	if out.Scenario != "add_user" {
 		t.Errorf("reply scenario = %q, want add_user", out.Scenario)
@@ -215,18 +215,18 @@ func TestRerunLast_Day2_ReusesRecipeInput_202(t *testing.T) {
 	if ev == nil || ev.Payload["scenario"] != "add_user" {
 		t.Errorf("audit scenario = %v, want add_user", ev)
 	}
-	// day-2 recipe without from_upgrade → RunSpec.FromUpgrade=false (restart from scenario/).
+	// an advanced-scenario recipe without from_upgrade → RunSpec.FromUpgrade=false (restart from scenario/).
 	if starter.gotSpec.FromUpgrade {
 		t.Error("RunSpec.FromUpgrade = true, want false (snapshot without from_upgrade)")
 	}
 }
 
-// TestRerunLast_Day2_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last of
+// TestRerunLast_Advanced_FromUpgradeRecipe_202 — MAJOR-guard (ADR-0068): rerun-last of
 // a run whose snapshot carries from_upgrade=true (a failed auto-started upgrade scenario)
 // must pass FromUpgrade=true into RunSpec — otherwise the restart looks for scenario/<slug>/
 // (which does not exist, §3) and fails with 500. Checks the wiring UnlockResult.FromUpgrade →
 // RunSpec.FromUpgrade at the HANDLER level (the DB layer does not catch it).
-func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
+func TestRerunLast_Advanced_FromUpgradeRecipe_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row {
@@ -243,7 +243,7 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 
 	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-prod", "rerun upgrade verified", nil)
 	if err != nil {
-		t.Fatalf("RerunLastTyped day-2 upgrade err = %v", err)
+		t.Fatalf("RerunLastTyped advanced upgrade err = %v", err)
 	}
 	if out.Scenario != "to_v2" {
 		t.Errorf("reply scenario = %q, want to_v2", out.Scenario)
@@ -259,10 +259,10 @@ func TestRerunLast_Day2_FromUpgradeRecipe_202(t *testing.T) {
 	}
 }
 
-// TestRerunLast_Day2_BareIncarnation_202 — a bare incarnation (created_scenario IS
-// NULL) locked by a day-2 scenario → rerun-last is applicable from the history snapshot (was:
+// TestRerunLast_Advanced_BareIncarnation_202 — a bare incarnation (created_scenario IS
+// NULL) locked by an advanced scenario → rerun-last is applicable from the history snapshot (was:
 // 409). ScenarioName and Input both from the last history row.
-func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
+func TestRerunLast_Advanced_BareIncarnation_202(t *testing.T) {
 	db := &fakeIncDB{
 		selectByNameRow: func(n string) pgx.Row { return makeIncStatusRow(n, "error_locked") },
 		unlockSelectRow: func(_ string) pgx.Row { return makeUnlockSelectRowBare("error_locked") },
@@ -274,9 +274,9 @@ func TestRerunLast_Day2_BareIncarnation_202(t *testing.T) {
 	starter := &fakeStarter{}
 	h := newRerunHandler(db, starter, &fakeAuditWriter{})
 
-	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare day-2", nil)
+	out, err := h.RerunLastTyped(context.Background(), claims("archon-alice"), "redis-bare", "rerun bare advanced", nil)
 	if err != nil {
-		t.Fatalf("RerunLastTyped bare day-2 err = %v", err)
+		t.Fatalf("RerunLastTyped bare advanced err = %v", err)
 	}
 	if out.Scenario != "update_acl" {
 		t.Errorf("reply scenario = %q, want update_acl", out.Scenario)
@@ -380,7 +380,7 @@ func TestRerunLast_FallsBackToTheCurrentPin(t *testing.T) {
 // TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput — the recovery path, and
 // the only reason the body takes an input at all.
 //
-// Before NIM-408 a day-2 rerun became impossible once apply_runs.recipe was
+// Before NIM-408 an advanced-scenario rerun became impossible once apply_runs.recipe was
 // purged at 30 days: ErrRerunInputUnavailable with nothing the operator could do.
 // Now the refusal is answerable — they send the input and the restart proceeds.
 func TestRerunLast_UnreplayableAttemptAcceptsSuppliedInput(t *testing.T) {

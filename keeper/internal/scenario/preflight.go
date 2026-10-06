@@ -261,7 +261,7 @@ func (r *Runner) resolvePreflightServiceVars(
 		// the create inserts it, and the same one the render context two dozen lines
 		// up is built from (spec.ServiceRef.Name). It was read off the manifest until
 		// NIM-726, so a manifest whose `name:` disagreed with its registration gave
-		// `incarnation.service` one value at create and another on day-2, with no
+		// `incarnation.service` one value at create and another in an advanced scenario, with no
 		// check anywhere between them.
 		inc = &incarnation.Incarnation{
 			ID:      spec.IncarnationName,

@@ -193,7 +193,7 @@ tests/e2e-live/
 ├── smoke_nginx_live_test.go        # TestL3bSmokeNginxLive_InstallAndStart
 ├── module_delivery_live_test.go    # TestL3bModuleDeliveryLive_SynthesisFetchHotRegister
 ├── plugin_channel_test.go          # TestL3bPluginChannel_CatalogAndAllow
-├── redis_service_live_test.go      # TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}
+├── redis_service_live_test.go      # TestL3bRedisServiceLive_{CreateFromSouls,AddUser}
 ├── staged_probe_live_test.go       # TestL3bStagedProbeLive_WhereTargetsOnlyMaster
 └── plugin_beacon_test.go           # TestE2EBeaconPlugin_FullLoop
 ```
@@ -227,8 +227,8 @@ L3a hit the same FK ordering and moved to the same helper (NIM-210), so the
 auto-started create run is no longer covered end-to-end at either tier.
 
 `AddMember` on its own remains correct for an incarnation that already exists
-(e.g. `fc5_when_gating_test.go`, which seeds a ready incarnation and runs a
-day-2 scenario); it fails fast with the order instruction if the row is missing.
+(e.g. `fc5_when_gating_test.go`, which seeds a ready incarnation and runs an
+advanced scenario); it fails fast with the order instruction if the row is missing.
 
 ## Slices
 
@@ -252,16 +252,16 @@ L3b is implemented iteratively. Slice map (architect consultation `a0af3d90ec118
 | `TestL3bStagedProbeLive_WhereTargetsOnlyMaster` | 2+ | **staged-render probe→where on a live soul** (ADR-056): a real probe step emits a per-host register, and the Passage action `where: register.*=='master'` is genuinely applied ONLY on the master host. L3b analog of `TestE2EStagedFailover_2Passage`, but via a real apply instead of a stub. |
 | `TestE2EBeaconPlugin_FullLoop` | 1 | Real `soul_beacon` plugin (gRPC-over-stdio): inotify portent → Vigil → Decree → Oracle → fired scenario on a live soul. |
 | `TestL3bRedisServiceLive_CreateFromSouls` | 1 | **A service is brought to a working state** (NIM-876): the pinned out-of-tree redis service, rolled onto the roster through `POST /v1/incarnations` with `source: { roster: true }`, ending in a live Redis that answers to the credential it minted for itself into Vault at a keeper-derived path. |
-| `TestL3bRedisServiceLive_Day2AddUser` | 1 | **A service is operated** (NIM-876): a day-2 scenario reads the state the create wrote, upserts one ACL user, re-renders `users.acl` whole and reaches the live ACL — while the credential an existing client already holds keeps working. |
+| `TestL3bRedisServiceLive_AddUser` | 1 | **A service is operated** (NIM-876): an advanced scenario reads the state the create wrote, upserts one ACL user, re-renders `users.acl` whole and reaches the live ACL — while the credential an existing client already holds keeps working. |
 
 ## Known coverage blockers (NOT-L3b-able)
 
 ### ★ The machine half of a create is not covered here (NIM-876)
 
-NIM-871 took this tier's service create and its six day-2 operations
-(`TestL3bRedisLive_Day2{AddUser,UpdateConfig,Restart,UpdateUsers,Destroy,RotateTls}`) out
+NIM-871 took this tier's service create and its six advanced scenarios
+(the `TestL3bRedisLive_*` tests over `add_user`, `update_config`, `restart`, `update_users`, `destroy` and `rotate_tls`) out
 with `examples/service/redis`. Two of those claims are back as
-`TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}`, driving the pinned out-of-tree
+`TestL3bRedisServiceLive_{CreateFromSouls,AddUser}`, driving the pinned out-of-tree
 service; four are not, because `update_config`, `restart`, `destroy` and `rotate_tls` are
 scenarios the published service does not have yet.
 

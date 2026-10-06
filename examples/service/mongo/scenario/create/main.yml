@@ -398,7 +398,7 @@ tasks:
   # and carry no register edge. The VALUES stay defined once — in covenant.yml's compute —
   # while the STEPS are local to the scenario: a covenant is a contract, not a task list
   # (ADR-0084 F-B, decision B2). mongo_config is the same compute.mongo_config that went
-  # into the mongod.conf render, so a repeat apply and day-2 see one source of truth.
+  # into the mongod.conf render, so a repeat apply and the advanced scenarios see one source of truth.
   # system_users/mongo_users are NOT here: their capture is the minting step at the top of
   # this body ([ADR-0083] §4).
 

@@ -10,7 +10,7 @@
 --   hosts[]        -> incarnation_membership (NIM-124), then the Voice's role
 --                     (ADR-044 / NIM-330). Key stripped by migration 108.
 --   traits         -> the incarnation.traits column (migration 088). The copy
---                     went stale on the first day-2 PUT .../traits, and kept
+--                     went stale on the first later PUT .../traits, and kept
 --                     being returned by GET /v1/incarnations/{name}.
 --   essence        -> nothing: the override had two readers and no writer.
 --                     Key stripped by migration 110.

@@ -739,11 +739,11 @@ func TestUnlockForRerun_RejectNonErrorLocked(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_ReusesRecipeInput — day-2 happy path: the last failed
+// TestUnlockForRerun_Advanced_ReusesRecipeInput — advanced-scenario happy path: the last failed
 // run was add_user, and its input comes from that attempt's OWN history snapshot
 // → allowed, Scenario=="add_user", Input=={user:alice}. One source since
-// NIM-408: no apply_runs probe, and no create-vs-day-2 branch to pick it.
-func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
+// NIM-408: no apply_runs probe, and no create-vs-advanced-scenario branch to pick it.
+func TestUnlockForRerun_Advanced_ReusesRecipeInput(t *testing.T) {
 	const applyID = "01HRERUN00000000000000000E"
 	tx := &fakeTx{
 		execErrAt: -1,
@@ -757,7 +757,7 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 
 	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun add_user", "archon-alice", "01HRERUNHIST000000000000E", applyID)
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2 add_user: %v", err)
+		t.Fatalf("UnlockForRerun advanced add_user: %v", err)
 	}
 	if res.Scenario != "add_user" {
 		t.Errorf("Scenario = %q, want add_user (last failed operational run)", res.Scenario)
@@ -776,9 +776,9 @@ func TestUnlockForRerun_Day2_ReusesRecipeInput(t *testing.T) {
 		t.Error("UnlockResult.FromUpgrade = true, want false (recipe without from_upgrade)")
 	}
 	if !tx.committed {
-		t.Error("rerun-last day-2 tx not committed")
+		t.Error("rerun-last advanced tx not committed")
 	}
-	// history label is rerun-last, applied to the last failed day-2 scenario.
+	// history label is rerun-last, applied to the last failed advanced scenario.
 	if tx.execArgs[0][2] != rerunLastScenarioLabel {
 		t.Errorf("history scenario = %v, want %q", tx.execArgs[0][2], rerunLastScenarioLabel)
 	}
@@ -811,12 +811,12 @@ func TestUnlockForRerun_SnapshotNull_FailClosed(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_BareIncarnation — a bare incarnation (no create
-// scenario ever ran) locked by a day-2 scenario. It is no longer a distinct
+// TestUnlockForRerun_Advanced_BareIncarnation — a bare incarnation (no create
+// scenario ever ran) locked by an advanced scenario. It is no longer a distinct
 // PATH — the branch that asked "was this the creator?" is gone with the two
 // sources — and this holds that the case still resolves: Scenario=="add_user",
 // Input from that attempt's own snapshot.
-func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
+func TestUnlockForRerun_Advanced_BareIncarnation(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
@@ -827,9 +827,9 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 	}
 	pool := &fakePool{txs: []*fakeTx{tx}}
 
-	res, err := UnlockForRerun(context.Background(), pool, "redis-bare", "rerun bare day-2", "archon-alice", "01HRERUNHIST00000000000B0", "01HRERUN0000000000000000B0")
+	res, err := UnlockForRerun(context.Background(), pool, "redis-bare", "rerun bare advanced", "archon-alice", "01HRERUNHIST00000000000B0", "01HRERUN0000000000000000B0")
 	if err != nil {
-		t.Fatalf("UnlockForRerun bare day-2: %v", err)
+		t.Fatalf("UnlockForRerun bare advanced: %v", err)
 	}
 	if res.Scenario != "add_user" {
 		t.Errorf("Scenario = %q, want add_user", res.Scenario)
@@ -838,7 +838,7 @@ func TestUnlockForRerun_Day2_BareIncarnation(t *testing.T) {
 		t.Errorf("UnlockResult.Input = %v, want {user:bob} (recipe.input)", res.Input)
 	}
 	if !tx.committed {
-		t.Error("rerun-last bare day-2 tx not committed")
+		t.Error("rerun-last bare advanced tx not committed")
 	}
 }
 
@@ -1096,10 +1096,10 @@ func TestUpgradeStateSchema_SlugWithoutRunApplyID_Legacy(t *testing.T) {
 	}
 }
 
-// TestUnlockForRerun_Day2_FromUpgradeRecipe — the failed run was an upgrade
+// TestUnlockForRerun_Advanced_FromUpgradeRecipe — the failed run was an upgrade
 // scenario (its snapshot carries from_upgrade=true, ADR-0068): rerun-last returns
 // FromUpgrade=true so RunSpec restarts it from upgrade/, not scenario/.
-func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
+func TestUnlockForRerun_Advanced_FromUpgradeRecipe(t *testing.T) {
 	tx := &fakeTx{
 		execErrAt: -1,
 		queryRows: []scriptedRow{
@@ -1112,7 +1112,7 @@ func TestUnlockForRerun_Day2_FromUpgradeRecipe(t *testing.T) {
 
 	res, err := UnlockForRerun(context.Background(), pool, "redis-prod", "rerun upgrade", "archon-alice", "01HRERUNHIST0000000000UPG", "01HRERUN000000000000000UPG")
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2 upgrade: %v", err)
+		t.Fatalf("UnlockForRerun advanced upgrade: %v", err)
 	}
 	if !res.FromUpgrade {
 		t.Error("UnlockResult.FromUpgrade = false, want true (snapshot from_upgrade -> rerun from upgrade/)")

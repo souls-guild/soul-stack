@@ -32,7 +32,7 @@ description: >-
 #     "as deployed".
 #   - named fields (memory_mb/wiredtiger_cache_gb/...) — the operator's INTENT in simple
 #     typed concepts (read-model). install and host-layout (conf_dir/data_dir)
-#     are moved into service vars (author-context, day-2 reads service vars directly).
+#     are moved into service vars (author-context, the advanced scenarios read service vars directly).
 # BOTH are filled from a SINGLE create compute pass — there is no desync.
 state_schema:
   # Effective MongoDB version (upstream series for binary; distro pin for package).

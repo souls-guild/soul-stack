@@ -8,11 +8,11 @@ import (
 	"testing"
 )
 
-// TestIntegration_UnlockForRerun_Day2_ReplaysTheAttemptSnapshot — the day-2 branch
+// TestIntegration_UnlockForRerun_Advanced_ReplaysTheAttemptSnapshot — the advanced-scenario branch
 // of rerun-last on REAL PG rather than a fakeTx.
 //
 // It used to assert the input came from `apply_runs.recipe`. That source is gone
-// (NIM-408): the recipe lived on a table with a 30-day purge, so a day-2 rerun of
+// (NIM-408): the recipe lived on a table with a 30-day purge, so an advanced-scenario rerun of
 // an older failure eventually became impossible, and the create path read a
 // different source again (`spec.input`) — two answers to one question. The
 // replayable snapshot now lives on the attempt's OWN `state_history` row, which
@@ -23,7 +23,7 @@ import (
 // that no longer exists passes every one of them and fails on the first real
 // query — which is exactly how `UpdateTraits` was still selecting the dropped
 // `spec` column with a green unit suite.
-func TestIntegration_UnlockForRerun_Day2_ReplaysTheAttemptSnapshot(t *testing.T) {
+func TestIntegration_UnlockForRerun_Advanced_ReplaysTheAttemptSnapshot(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")
 	ctx := context.Background()
@@ -49,7 +49,7 @@ func TestIntegration_UnlockForRerun_Day2_ReplaysTheAttemptSnapshot(t *testing.T)
 		t.Fatalf("Create error_locked: %v", err)
 	}
 
-	// The last attempt: a failed day-2 `add_user` (≠ the created `create`), with
+	// The last attempt: a failed advanced-scenario `add_user` (≠ the created `create`), with
 	// its replayable snapshot on its own row.
 	if _, err := integrationPool.Exec(ctx, `
 INSERT INTO state_history (history_id, incarnation_name, scenario, state_before, state_after, apply_id, run, run_status)
@@ -63,10 +63,10 @@ VALUES ($1, $2, 'add_user', '{}'::jsonb, '{}'::jsonb, $3,
 
 	res, err := UnlockForRerun(ctx, integrationPool, name, "rerun add_user", creator, newHistoryID, newApplyID)
 	if err != nil {
-		t.Fatalf("UnlockForRerun day-2: %v", err)
+		t.Fatalf("UnlockForRerun advanced: %v", err)
 	}
 	if res.Scenario != "add_user" {
-		t.Errorf("Scenario = %q, want add_user (the last failed day-2)", res.Scenario)
+		t.Errorf("Scenario = %q, want add_user (the last failed advanced scenario)", res.Scenario)
 	}
 	if res.Input == nil || res.Input["user"] != "alice" {
 		t.Errorf("Input = %v, want {user:alice} from the attempt's snapshot", res.Input)

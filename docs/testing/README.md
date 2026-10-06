@@ -15,7 +15,7 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 | **L3a** - E2E fast-loop | `tests/e2e/` | `e2e` | testcontainers (PG/Redis/Vault) + Keeper-process in-process + soul-stub. Contract tests apply_runs lifecycle / RBAC / audit / MCP. | every PR (when L3a-imp slice stabilizes), `make e2e` |
 | **L3b** - E2E smoke | `tests/e2e-live/` | `e2e_live` | Real `soul`-binary in a privileged Debian-12 container (systemd-PID-1) + Keeper process + mTLS + real apply. Flagship scripts. | **a tag** (`make e2e-live-gate` is a blocking job in `release.yml`, NIM-879) + on demand; **feature-complete** (5 slices L3b-1..L3b-5 = done): real CSR Bootstrap + `smoke-nginx-live` (apt + systemd) + module delivery + the plugin channel. ★ The broad `make e2e-live` is dispatched from `nightly.yml`, which has **no schedule and had never run once** before NIM-879 — the line here used to say it "really drives nightly", and that is exactly the false green the ticket was about. ★ The multi-host `redis-cluster-live` fixture and every service-lifecycle case left with `examples/service/redis` (NIM-871), taking the blocking gate from nine tests to three. L3b-6 (drift-live) - done: `TestL3bDriftLive_HelloWorld` runs drift-check on a live soul through a real `core.file.Plan` (module `core.file.present`), and not stub-Plan like L3a |
 | **L3c** - E2E k8s | `tests/e2e-k8s/` | `e2e_k8s` | kind-cluster, real K8s-deployment Keeper + Soul + Redis-Cluster + PG. HA cases (Watchman, Toll, leader-failover). | weekly / pre-release, **L3c-1..L3c-5 part A ready** (single-keeper ping, multi-keeper + Soul CSR Bootstrap, kill-leader failover, Toll degraded-mode); L3c-5 part B (redis-cluster resharding) - framework + t.Skip to in-cluster git-server-pod |
-| **L4** – manual soak + cloud live-run | — | — | Manual pre-release testing under load **+ repeatable cloud orchestrator** `scripts/e2e-cloud/` (create / day-2 / destroy via keeper's Operator API on VM, teleport), see [e2e-cloud.md](e2e-cloud.md). | first product post / on-demand |
+| **L4** – manual soak + cloud live-run | — | — | Manual pre-release testing under load **+ repeatable cloud orchestrator** `scripts/e2e-cloud/` (create and the advanced scenarios, destroy included, via keeper's Operator API on VM, teleport), see [e2e-cloud.md](e2e-cloud.md). | first product post / on-demand |
 
 ## Where to write tests
 
@@ -25,7 +25,7 @@ and [ADR-039](../adr/0039-e2e-testing.md) (E2E).
 - **Scenario-runner contract → apply_runs → audit → metrics** → L3a in `tests/e2e/`.
 - **Real host mutation (filesystem/systemd)** → L3b in `tests/e2e-live/`.
 - **HA script (multi-Keeper / failover)** → L3c in `tests/e2e-k8s/` (when it works).
-- **Live cloud day-2 / create-destroy on persistent keeper** → `scripts/e2e-cloud/`
+- **Live cloud create, advanced scenarios and create-destroy on persistent keeper** → `scripts/e2e-cloud/`
 (not Go-harness, bash over Operator API via teleport; see [e2e-cloud.md](e2e-cloud.md)).
 
 ## Communication with CI
@@ -405,12 +405,12 @@ delivered module vs real redis.
 - **Smoke plugin channel** (`TestL3bPluginChannel_*`): module directory + allow mechanics
 gRPC-stdio plugin channel.
 - **A service brought to a working state, then operated** (`TestL3bRedisServiceLive_*`:
-create-from-souls, day-2 add-user) — the claim the three bullets above cannot make. They
+create-from-souls, add-user) — the claim the three bullets above cannot make. They
 prove a module is **delivered**; these prove a **service** is stood up and then changed:
 state written and read back, secrets minted at keeper-derived Vault paths, `users.acl`
 re-rendered whole, the live ACL reconciled through the plugin channel. The subject is out
 of tree and pinned by commit (NIM-876) — `examples/service/redis` used to play this part
-and left with NIM-871, taking six `TestL3bRedisLive_Day2*` cases with it. Four of those six
+and left with NIM-871, taking six advanced-scenario `TestL3bRedisLive_*` cases with it. Four of those six
 claims (update-config, restart, destroy, rotate-tls) are still uncovered, as is the machine
 half of a create; see "A service create is NO LONGER locally covered" below.
 
@@ -609,17 +609,17 @@ cloud provision (`CloudDriver`), `install_method=binary` (there is no public sou
 standalone redis binaries), cluster redis topology, multi-keeper HA.
 
 **★ A service create is covered again, by a subject that is not in this tree (NIM-876).**
-Each of the six `TestL3bRedisLive_Day2*` tests ran `examples/service/redis::create` end to
+Each of the six advanced-scenario `TestL3bRedisLive_*` tests ran `examples/service/redis::create` end to
 end first — a real `redis-server` plus the node-exporter / redis-exporter / vector
-destinies into a Debian-12 container — and only then exercised its day-2 scenario against
+destinies into a Debian-12 container — and only then exercised its advanced scenario against
 that live instance. That service left the engine with NIM-871 and the six tests went with
 it, taking the gate from nine tests to three.
 
-Two of those claims are back as `TestL3bRedisServiceLive_{CreateFromSouls,Day2AddUser}`,
+Two of those claims are back as `TestL3bRedisServiceLive_{CreateFromSouls,AddUser}`,
 driving `github.com/soul-stack-services/redis` at a pinned commit. Three things are still
 NOT covered, and each for its own reason:
 
-- **four day-2 scenarios** — `update_config`, `restart`, `destroy`, `rotate_tls` — because
+- **four advanced scenarios** — `update_config`, `restart`, `destroy`, `rotate_tls` — because
   the published service does not have them yet;
 - **the machine half of a create** — VMs through a keeper-side provider, cloud-init, an
   agent installed over `core.ssh.run`, a bootstrap token redeemed — because a docker tier
@@ -648,7 +648,7 @@ how to add new E2E cases, soul-stub contract. Includes L3b partition
 (kind + bitnami Helm, link to `tests/e2e-k8s/README.md`).
 - [e2e-cloud.md](e2e-cloud.md) - cloud live-E2E orchestrator runbook
 (`scripts/e2e-cloud/`): bash over Operator API via teleport, two keeper worlds
-(`local` / `tsh`), suites create / create-destroy / day-2, asserts by apply_run,
+(`local` / `tsh`), suites create / create-destroy / operations, asserts by apply_run,
 report format and exit codes. L4-adjacent, outside the ephemeral-invariant L3a/L3b.
 
 ## See also

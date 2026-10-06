@@ -79,9 +79,9 @@ type fakePool struct {
 	// `create`) — create path (last failed = created).
 	lastScenarioFn func(name string) (string, error)
 
-	// recipeFn — backing for the rerun-last day-2 recipe probe `SELECT recipe FROM
+	// recipeFn — backing for the rerun-last advanced-scenario recipe probe `SELECT recipe FROM
 	// apply_runs WHERE apply_id = $1 AND recipe IS NOT NULL LIMIT 1`. nil →
-	// ErrNoRows (fail-closed). Set for the day-2 happy path (recipe-jsonb with input).
+	// ErrNoRows (fail-closed). Set for the advanced-scenario happy path (recipe-jsonb with input).
 	recipeFn func(applyID string) ([]byte, error)
 
 	// soulBulkCountFn — backing for the souls-bulk traits projection (SyncTraitsToHosts
@@ -194,7 +194,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		_, total := f.historyItems(name, incarnation.HistoryFilter{})
 		return countRow{n: total}
 	}
-	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits day-2
+	// UPDATE incarnation … RETURNING updated_at (UpdateHosts/UpdateTraits post-create
 	// mutations): returns a fresh updated_at on Scan(*time.Time). Checked BEFORE
 	// the general `FROM incarnation` match (that predicate is also in this
 	// UPDATE's WHERE).
@@ -259,7 +259,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 		}
 		return staticRow{values: []any{last, dummyApplyID, f.rerunSnapshotFor(last)}}
 	}
-	// rerun-last day-2 recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
+	// rerun-last advanced-scenario recipe probe: SELECT recipe FROM apply_runs WHERE apply_id …
 	// No longer reached from rerun-last (NIM-408): its input is the history
 	// snapshot whichever branch produced the run.
 	if contains(sql, "FROM apply_runs") && contains(sql, "recipe IS NOT NULL") {

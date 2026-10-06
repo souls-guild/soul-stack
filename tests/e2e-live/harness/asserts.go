@@ -689,9 +689,9 @@ func shellQuote(s string) string {
 	return `'` + strings.ReplaceAll(s, `'`, `'\''`) + `'`
 }
 
-// ── Redis day-2 asserts (NIM-54, L3b) ───────────────────────────────────────
+// ── Redis advanced-scenario asserts (NIM-54, L3b) ───────────────────────────
 //
-// Live redis-cli/openssl asserts for day-2 scenarios (update_config / restart /
+// Live redis-cli/openssl asserts for advanced scenarios (update_config / restart /
 // rotate_tls / update_users) on top of the soul container. A single connection
 // descriptor RedisConn (plain XOR server-only-TLS) + a private redisCLIPrefix
 // builder — all public asserts are built on top of it with a single sc.Exec.

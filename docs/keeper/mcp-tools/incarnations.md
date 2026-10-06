@@ -15,7 +15,7 @@ Creating an instance - launching the selected starting script (or a bare incarna
 | `name` | `string` (kebab-case) | yes | Name of the new instance. |
 | `service` | `string` | yes | Service name. |
 | `covens` | `array<string>` | optional | Declared env-Coven-tags ([ADR-008](../../adr/0008-coven-stable-tags.md) amendment a). |
-| `traits` | `object` | optional | Operator-set trait incarnation marks (key → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Placed in `incarnation.traits` and nowhere else - member hosts are not touched ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Day-2 replacement - `keeper.incarnation.traits-set`. |
+| `traits` | `object` | optional | Operator-set trait incarnation marks (key → `scalar`\|`list of scalars`, [ADR-060](../../adr/0060-traits.md)). Placed in `incarnation.traits` and nowhere else - member hosts are not touched ([NIM-281](../../adr/0008-coven-stable-tags.md#amendment-2026-08-05-nim-281-a-label-is-never-inherited)). Replacement after create - `keeper.incarnation.traits-set`. |
 | `create_scenario` | `string` | conditional | The name of the starting script (scenario with `create: true`). Required, if the service offers ≥1 create script (empty → `validation-failed` with a list of valid ones); value out of set → `validation-failed`. A service without create scripts → gives a bare incarnation. Details - [operator-api/incarnations.md → Selecting a starting script](../operator-api/incarnations.md). |
 | `input` | `object` | optional | Input of the selected startup script (validated against its `input:` schema). |
 
@@ -30,7 +30,7 @@ Creating an instance - launching the selected starting script (or a bare incarna
 
 Restarting the **last crashed** script from `error_locked`: REST mirror [`POST /v1/incarnations/{id}/rerun-last`](../operator-api/incarnations.md). Permission: `incarnation.rerun-last`. Async: **yes**.
 
-Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-good, snapshot in `state_history`) and with the same action restarts **last fallen script** incarnations - bootstrap (`create`/..., if creation failed) OR day-2 operation (`add_user`/...) — with the saved input of the failed run (`error_locked → applying` bypassing `ready`). Input is restored from `incarnation.spec.input` (create-path) or from the failed run recipe (`apply_runs.recipe.input`, day-2-path), not from defaults. Difference from `keeper.incarnation.unlock`: it only removes the block, rerun removes and restarts the fallen script in one action. Works only from `error_locked`; status is not `error_locked` → `incarnation-locked`, input of the failed run is not available (the run fell to dispatch and the recipe was not written / the recipe was cleared by retention / legacy run, fail-closed) → separate code `rerun-input-unavailable` ([mcp-tools.md → Errors](../mcp-tools.md#errors)). Status poll - `keeper.incarnation.get`. Audit event - `incarnation.rerun_last` (NOT `incarnation.unlocked`).
+Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-good, snapshot in `state_history`) and with the same action restarts **last fallen script** incarnations - bootstrap (`create`/..., if creation failed) OR an advanced scenario (`add_user`/...) — with the saved input of the failed run (`error_locked → applying` bypassing `ready`). Input is restored from `incarnation.spec.input` (create-path) or from the failed run recipe (`apply_runs.recipe.input`, advanced-scenario path), not from defaults. Difference from `keeper.incarnation.unlock`: it only removes the block, rerun removes and restarts the fallen script in one action. Works only from `error_locked`; status is not `error_locked` → `incarnation-locked`, input of the failed run is not available (the run fell to dispatch and the recipe was not written / the recipe was cleared by retention / legacy run, fail-closed) → separate code `rerun-input-unavailable` ([mcp-tools.md → Errors](../mcp-tools.md#errors)). Status poll - `keeper.incarnation.get`. Audit event - `incarnation.rerun_last` (NOT `incarnation.unlocked`).
 
 **Input:**
 
@@ -45,9 +45,9 @@ Under one `FOR UPDATE` removes the block (`state` DOES NOT touch - last known-go
 |---|---|---|
 | `_apply_id` | `string` (ULID) | ID of the restarted run. |
 | `incarnation` | `string` | Name instance. |
-| `scenario` | `string` | The name of the restarted (last crashed) script is bootstrap `create`/… or day-2 `add_user`/…. |
+| `scenario` | `string` | The name of the restarted (last crashed) script is bootstrap `create`/… or an advanced scenario such as `add_user`/…. |
 
-Errors: `not-found` (incarnation does not exist), `incarnation-locked` (status not `error_locked`), `rerun-input-unavailable` (input of the failed day-2 run is not available - the run fell to dispatch and the recipe was not written / the recipe was cleared by retention / legacy run without a recipe), `validation-failed` (empty `reason` / `reason` longer than 500 characters / broken `name` / incarnation service not registered), `internal-error` (runner not configured / transaction / run).
+Errors: `not-found` (incarnation does not exist), `incarnation-locked` (status not `error_locked`), `rerun-input-unavailable` (input of the failed advanced-scenario run is not available - the run fell to dispatch and the recipe was not written / the recipe was cleared by retention / legacy run without a recipe), `validation-failed` (empty `reason` / `reason` longer than 500 characters / broken `name` / incarnation service not registered), `internal-error` (runner not configured / transaction / run).
 
 #### `keeper.incarnation.run`
 

@@ -224,7 +224,7 @@ vault_ref: { type: secret }
 // per marker. ADR-0083 §1 permits `type: secret` in two positions, and they land on
 // opposite sides of the rule: a top-level scalar folds to itself, while a property
 // of a top-level array's items folds to the whole ENCLOSING COLLECTION —
-// an ACL inventory keyed by user name, which is public and read by every day-2
+// an ACL inventory keyed by user name, which is public and read by every advanced
 // scenario.
 //
 // The first version of this fix inherited every path from the collector and folded
@@ -259,7 +259,7 @@ db_password: { type: string, secret: true }
 	if got["redis_users"] {
 		t.Errorf("`redis_users` is a seal address: %v\n"+
 			"Its ONLY secret is `type: secret`, whose value never enters state — so this masks the ACL\n"+
-			"inventory out of apply_run_plan.params, status_details and error_summary for every day-2\n"+
+			"inventory out of apply_run_plan.params, status_details and error_summary for every advanced-scenario\n"+
 			"run of the service, and masks no secret at all.", got)
 	}
 	if !got["vault_ref"] {
@@ -412,7 +412,7 @@ func TestStateSchemaMarkers_EveryShapeDecidedForBothQuestions(t *testing.T) {
 		schema:   "redis_users:\n  type: array\n  items:\n    type: object\n    properties:\n      name: { type: string, required: true }\n      password:\n        type: secret\n        key: name",
 		wantMask: []string{"redis_users[].password"},
 		wantSeal: nil,
-		reason: "THE ROUND-1 CASE. The fold would seal the whole ACL inventory -- public, read by every day-2 " +
+		reason: "THE ROUND-1 CASE. The fold would seal the whole ACL inventory -- public, read by every advanced " +
 			"scenario -- for a value the merge keeps out of the record",
 	}, {
 		name:     "type, ON an additional_properties node",

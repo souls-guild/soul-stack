@@ -781,7 +781,7 @@ func (s *Stack) CreateIncarnationWithApplyScenario(t *testing.T, name, serviceRe
 // race [Stack.CreateIncarnation] documents and retries: RunTyped resolves the
 // service from the in-memory Holder snapshot (TTL poll 10s + Redis pub/sub
 // invalidation), and the FIRST run of a test flow can land in the window before
-// registerExampleService's entry is visible. Day-2 calls are long past the
+// registerExampleService's entry is visible. Advanced-scenario calls are long past the
 // window and never spin; the bootstrap create run
 // ([Stack.CreateIncarnationOnRoster]) is the one that needs it.
 func (s *Stack) RunScenario(t *testing.T, incarnationName string, scenarioName string, input map[string]any) string {

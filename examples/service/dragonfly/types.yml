@@ -6,7 +6,7 @@
 #
 # ★ REUSE from service redis 1:1 (DragonFly is redis-compatible: ACL format and perms
 # tokens are identical). In PILOT (sentinel-only, create) AclUser is read ONLY by create
-# (input.users array); add_user/update_users — day-2, NEXT slice.
+# (input.users array); add_user/update_users — advanced scenarios, NEXT slice.
 types:
   # AclUser — a single DragonFly ACL user record (operator-extra). create reads an
   # array of such records (input.users). Single perms-pattern (token-shape filter re2,

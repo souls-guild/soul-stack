@@ -82,7 +82,7 @@ The fallback literal is selected by the `type` parameter (`''` / `{}` / `[]` / `
 | `required` | boolean | `false` | The parameter is required **unconditionally**. `false` - absence allowed. This boolean is the **only** form of requiredness in the dialect — there is no object-level list `required: [names]` at any level, and none in `state_schema` either ([ADR-0086](adr/0086-one-schema-dialect.md)). |
 | `required_when` | string | — | The parameter is required **conditionally** - when the CEL predicate over `input.*` is true. See ["Conditional Mandatory"](#conditional-required_when). |
 | `default` | (by `type`) | — | Default value if no parameter is passed. Must match `type` (linter checks). Implies `required: false`. |
-| `prefill_from_state` | string | — | The path `state.<path>` to `incarnation.state`, whose **current** value the UI substitutes as a pre-fill day-2 form. This is a UI tooltip, **not** part of the value resolver (NOT a default). See ["Pre-fill from state"](#pre-fill-from-state-prefill_from_state). |
+| `prefill_from_state` | string | — | The path `state.<path>` to `incarnation.state`, whose **current** value the UI substitutes as a pre-fill of an advanced-scenario form. This is a UI tooltip, **not** part of the value resolver (NOT a default). See ["Pre-fill from state"](#pre-fill-from-state-prefill_from_state). |
 | `enum` | array | — | List of valid values. Any value must be included in the list. |
 | `secret` | boolean | `false` | The value is masked in logs, traces, reports and UI. For passwords, tokens, keys. |
 | `description` | string | `""` | Human-readable description. Used in UI, MCP, `soul-lint` help. |
@@ -121,7 +121,7 @@ input:
 
 ### Pre-fill from state: `prefill_from_state`
 
-Day-2 scenario rules an already existing incarnation. Often it is more convenient for the operator to open the form **with the current values** of the corresponding fields and correct the delta, rather than enter everything again. Example from the `redis` service: the `update_config` form for the `redis_version` field should open with the `redis_version` that is currently written in `incarnation.state`.
+An advanced scenario rules an already existing incarnation. Often it is more convenient for the operator to open the form **with the current values** of the corresponding fields and correct the delta, rather than enter everything again. Example from the `redis` service: the `update_config` form for the `redis_version` field should open with the `redis_version` that is currently written in `incarnation.state`.
 
 For this - `prefill_from_state: state.<path>`:
 
@@ -145,7 +145,7 @@ input:
 
 | | `default` | `prefill_from_state` |
 |---|---|---|
-| When to use | when resolving values ​​(merge phase), if the parameter is not passed | when preparing day-2-form (UI) |
+| When to use | when resolving values ​​(merge phase), if the parameter is not passed | when preparing an advanced-scenario form (UI) |
 | Source of value | static literal from schema | current `incarnation.state` |
 | Gets into effective input | **yes** (if the parameter is not passed) | **no** - UI tooltip only |
 

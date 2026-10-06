@@ -550,16 +550,16 @@ tasks: [ ... ]
 
 | Path | `incarnation.*` carries | A rule reading anything else |
 |---|---|---|
-| day-2 run (`POST .../scenarios/{scenario}`) | `id` (+ the `name` window alias), `service`, `service_version`, `state` — a **subset** of what the run itself sees | refused |
+| advanced-scenario run (`POST .../scenarios/{scenario}`) | `id` (+ the `name` window alias), `service`, `service_version`, `state` — a **subset** of what the run itself sees | refused |
 | create, operator-supplied id | `id` / `name` only — the incarnation does not exist yet | refused |
 | create, scenario with an `id:` block (§2.6) | nothing — the id is composed from `input:` *after* this gate | refused |
 | isolated destiny pass, L0 trial case | nothing | refused |
 
-What a path **answers for** does not depend on the row: `incarnation.state` is in scope on every day-2 request, and an incarnation whose state column is NULL gives the ordinary `no such key` the run gives. The alternative — deriving the answerable set from the row — reports the same scenario broken for one incarnation and fine for its sibling, which is a diagnosis about data dressed up as one about the file.
+What a path **answers for** does not depend on the row: `incarnation.state` is in scope on every advanced-scenario request, and an incarnation whose state column is NULL gives the ordinary `no such key` the run gives. The alternative — deriving the answerable set from the row — reports the same scenario broken for one incarnation and fine for its sibling, which is a diagnosis about data dressed up as one about the file.
 
 A refusal is a **pre-flight malfunction (5xx)**, not a 422: the operator's input is not what is wrong, the rule is, and the message names the field, the path and what that path does have. The check is a **pre-pass over every rule, before any is evaluated** — inside the loop it would sit behind the first-false short-circuit, and then whether a scenario looks broken would depend on what the operator typed. It reads the predicate's AST, so it fires on every reference position — including `has(incarnation.state)` and `size(incarnation)`, the two forms that would otherwise answer `false` and `0` and let a rule report success over an empty namespace ([NIM-619](../adr/0009-scenario-dsl.md) records the same shape for `compute`). Substituting an empty structure for the absent half is exactly the outcome this prevents: a rule that checks nothing and is believed.
 
-**A create scenario is caught offline.** `soul-lint` judges a `create: true` scenario's rules — its own and any inherited from `covenant.yml` — against the stance a create request will arrive with, and refuses one that can never run (`validate_rule_out_of_scope`, ERROR). Same core as the runtime guard, so the linter cannot come to flag what the keeper allows. Fail-closed and worth knowing: a `create: true` scenario that is *also* run day-2 is still refused a day-2-only rule — split it into a day-2 scenario.
+**A create scenario is caught offline.** `soul-lint` judges a `create: true` scenario's rules — its own and any inherited from `covenant.yml` — against the stance a create request will arrive with, and refuses one that can never run (`validate_rule_out_of_scope`, ERROR). Same core as the runtime guard, so the linter cannot come to flag what the keeper allows. Fail-closed and worth knowing: a `create: true` scenario that is *also* run as an advanced scenario is still refused a rule only an advanced scenario can answer — split it into a separate advanced scenario.
 
 > **The upshot for a create scenario.** A constraint on the identifier — "the id must fit the cloud's VM-name grammar" — belongs in `validate:` on a create scenario that takes the id from the operator: it answers 422 **before** the row is written. A scenario that composes its id from `input:` writes that rule over the `input.*` components instead, because there the id *is* those components.
 
@@ -1197,7 +1197,7 @@ The **cross-host barrier is unchanged** and still unconditional:
 **What moved is the commit, not the barrier.** A run that dies half-way now leaves state describing
 exactly what was captured **before** it died, rather than nothing at all. That is the point of the
 change: `provisioned_vm_ids` captured immediately after provisioning survives a failure three tasks
-later, so a day-2 cascade-destroy can still find the VMs it has to reap. The old all-or-nothing
+later, so a later cascade-destroy can still find the VMs it has to reap. The old all-or-nothing
 commit lost them and left real cloud instances that nothing in Postgres pointed at.
 
 **`error_locked` is incarnation-scoped, not host-scoped**, and that is what makes a partial commit

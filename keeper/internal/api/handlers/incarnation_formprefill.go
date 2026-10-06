@@ -1,7 +1,7 @@
 package handlers
 
 // Form-prefill handler of the Operator API (`POST /v1/incarnations/{id}/scenarios/
-// {scenario}/form-prefill`) — day-2 pre-fill of the scenario's UI form with the CURRENT
+// {scenario}/form-prefill`) — advanced-scenario pre-fill of the scenario's UI form with the CURRENT
 // incarnation.state values (docs/input.md → "Pre-fill from state").
 //
 // Scenario-schema fields that declare `prefill_from_state: state.<path>` must open in the

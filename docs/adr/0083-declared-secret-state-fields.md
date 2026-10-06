@@ -768,7 +768,7 @@ even a stray marker that did arrive is refused rather than honoured (`state.go:5
 
 **What this changes for a reader** is the case of a schema change that re-points the path a secret is
 derived under. Taken at its word, *"a missing one is minted"* says such a change self-heals on the
-next run. It does not, and the two routes fail in **opposite** directions: a day-2 step re-resolving
+next run. It does not, and the two routes fail in **opposite** directions: a step of an advanced scenario re-resolving
 an already-stored record breaks **loudly**, while a create-class step carrying `generate_secret({…})`
 mints **silently** at the new path, leaving the incarnation holding a credential the running service
 does not know. That consequence is already recorded — from the code rather than from this ADR — in
@@ -782,7 +782,7 @@ The live example of a re-pointed derived path is
 `examples/service/redis/migrations/015_system_acl_users/main.yml`
 — v14 minted under `secret/redis/<inc>/users/<name>`, v15 derives
 `secret/redis/<inc>/system_acl_users/<name>` — and it is exactly this shape: the step defaults the new
-field to `[]`, so a v14 incarnation's next day-2 run (`core.state.set` over
+field to `[]`, so a v14 incarnation's next advanced-scenario run (`core.state.set` over
 `${ default(incarnation.state.system_acl_users, []) }`, e.g.
 `scenario/restart/main.yml` `:62-69`)
 writes an empty list and reports success. **Cite it for the path shape only** — its own description

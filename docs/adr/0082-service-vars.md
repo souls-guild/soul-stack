@@ -158,7 +158,7 @@ themselves: *"a **fleet** on an internal mirror sets true in spec.essence"*.
 **Per-incarnation values** — `conf_dir`, `sentinel_master_name`, `vector_log_sources`,
 `sentinel_master_defaults` — deliberately kept out of the Run form. `covenant.yml` records
 the reasoning: *"NOT operator input … the override is in the incarnation's `spec.essence`,
-not the Run form … are NOT persisted in state … day-2 `add_node` reads
+not the Run form … are NOT persisted in state … [the advanced scenario] `add_node` reads
 `essence.conf_dir`/`data_dir`."*
 
 Not one of them moves. They stay in `vars/00-base.yaml`; only the way to override them
@@ -167,7 +167,7 @@ changes.
 That second group is also why this decision keeps a different boundary intact. Those keys are
 desired constants that must survive between runs, and `incarnation.state` is closed to them:
 **state is a projection of what IS, and these describe what SHOULD BE.** Any design that
-relocated them into `input:` would have parked desired values in `state` through the day-2
+relocated them into `input:` would have parked desired values in `state` through the advanced-scenario
 form-prefill path, and the `state = projection of actual` line would have blurred to buy an
 override nobody could point at a user of.
 
@@ -360,7 +360,7 @@ metaphor EXAMPLES, where a retired term would be actively misleading. Nothing is
   [§2](#2-a-fleet-overrides-a-services-defaults-by-forking-the-service-repo) for the signal
   that would justify it.
 - **Moving the per-incarnation keys into `input:` behind a collapsed `form:` section.**
-  Mechanically workable (`form_layout.go` has `Collapsed`/`ShowWhen`, day-2 prefills from
+  Mechanically workable (`form_layout.go` has `Collapsed`/`ShowWhen`, advanced-scenario forms prefill from
   state) and rejected for the boundary it costs: desired constants would land in `state`,
   which is a projection of actual.
 - **Keeping the name `Essence`.** The name was justified by a property that is being removed.

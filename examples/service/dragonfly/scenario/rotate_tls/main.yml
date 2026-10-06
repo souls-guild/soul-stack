@@ -1,6 +1,6 @@
 name: rotate_tls
 description: >-
-  Day-2: rotation of DragonFly TLS material (server cert/key + CA) WITHOUT restarting the process.
+  Advanced scenario: rotation of DragonFly TLS material (server cert/key + CA) WITHOUT restarting the process.
   DragonFly re-reads cert/key/CA on the fly via CONFIG SET tls_*_file — no daemon restart
   needed (production convention "hot-reload > restart", docs/destiny/production-
   conventions.md §3a/§6). REUSE from redis/rotate_tls.
@@ -85,10 +85,10 @@ validate:
 compute:
   local_addr: "${ 'unix:' + default(vars.run_dir, '/var/run/dragonfly') + '/dragonfly.sock' }"
   # ★ admin_user (default_admin redesign): the 3 CONFIG SET tls_*_file connect as this user
-  # (requirepass removed). Literal (day-2 outside the covenant).
+  # (requirepass removed). Literal (advanced scenario, outside the covenant).
   admin_user: "${ 'default_admin' }"
   # ── host layout from service vars (v1→v2 migration): conf_dir/data_dir/install no longer in state ──
-  # ★ conf_dir from service vars (not state) — day-2 reads the actual layout; PEM is placed in
+  # ★ conf_dir from service vars (not state) — an advanced scenario reads the actual layout; PEM is placed in
   # ${conf_dir}/tls/. install for the rotate read-model without a real reader → package default.
   conf_dir:   "${ default(vars.conf_dir, '/etc/dragonfly') }"
   data_dir:   "${ default(vars.data_dir, '/var/lib/dragonfly') }"

@@ -109,10 +109,10 @@ func TestToolsCall_IncarnationRun_RBACForbidden(t *testing.T) {
 	}
 }
 
-// scenarioMCPDayTwoIncarnationRule is a day-2 scenario whose only rule reads the
+// scenarioMCPRunPathRule is an advanced scenario whose only rule reads the
 // incarnation the request is about — the context NIM-833 gave `validate:`. The
 // backing row's id is `redis-prod`, so the rule comes out false.
-const scenarioMCPDayTwoIncarnationRule = `name: rotate
+const scenarioMCPRunPathRule = `name: rotate
 validate:
   - that: "incarnation.id.matches('^[a-z]+$')"
     message: the identifier must be letters only
@@ -130,7 +130,7 @@ tasks: []
 func TestToolsCall_IncarnationRun_ValidateRuleFails_422(t *testing.T) {
 	pool := &fakePool{incFn: incWithStatus(incarnation.StatusReady)}
 	starter := &mcpStarter{}
-	loader := &mcpLoader{scenarioYAML: scenarioMCPDayTwoIncarnationRule}
+	loader := &mcpLoader{scenarioYAML: scenarioMCPRunPathRule}
 	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, loader)
 
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",

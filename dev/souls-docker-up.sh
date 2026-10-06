@@ -2,7 +2,7 @@
 #
 # dev/souls-docker-up.sh - bring up local souls as docker containers (NIM-26).
 #
-# Why: day-2 scenarios and UI tests without a cloud need souls with an isolated FS/
+# Why: advanced scenarios and UI tests without a cloud need souls with an isolated FS/
 # packages/services. Host souls (dev/souls-up.sh) aren't suitable for this - all souls
 # share the host FS. Here each soul is a privileged Debian-12 systemd container with
 # a freshly mounted soul binary; onboards to the keeper process on the host.

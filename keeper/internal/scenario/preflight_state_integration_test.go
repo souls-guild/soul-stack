@@ -20,7 +20,7 @@ package scenario
 //
 // Both were caught by the L3b live gate, which is the point: unit coverage of
 // pre-flight never supplied a state-reading assert, so the gap was invisible
-// until day-2 scenarios of a real service ran against a real incarnation.
+// until the advanced scenarios of a real service ran against a real incarnation.
 //
 // Same shape as NIM-271 (pre-flight resolved service vars from a synthetic
 // incarnation), and fixed the same way — pre-flight takes the input run() would.
@@ -40,7 +40,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
-// stateAssertServiceRepo is a service whose day-2 scenarios read
+// stateAssertServiceRepo is a service whose advanced scenarios read
 // `incarnation.state` from an assert — once bare, once guarded — so the two
 // symptom shapes are exercised by the same fixture.
 func stateAssertServiceRepo(t *testing.T) string {
@@ -103,7 +103,7 @@ tasks:
 }
 
 // seedStatefulIncarnation seeds a READY incarnation of THIS fixture's service
-// carrying the state a day-2 assert reads, plus its roster. Distinct from
+// carrying the state an advanced-scenario assert reads, plus its roster. Distinct from
 // gap4_test.go's seedIncarnationWithState, which pins service "noop": the
 // pre-flight path resolves the service snapshot by name, so the row has to name
 // this repo. The state is the point — it exists in the row, and the only

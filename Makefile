@@ -133,7 +133,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema
+.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema check-banned-terms
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -594,16 +594,16 @@ e2e-live: build build-linux plugin-sources e2e-live-services
 #       a SERVICE is brought to a working state: a published service repo at a pinned
 #       commit, rolled onto the roster, ending in a Redis that answers with the credential
 #       it minted for itself into Vault at a keeper-derived path.
-#   TestL3bRedisServiceLive_Day2AddUser                          (NIM-876)
-#       a SERVICE is OPERATED: a day-2 scenario reads the state the create wrote, upserts
+#   TestL3bRedisServiceLive_AddUser                              (NIM-876)
+#       a SERVICE is OPERATED: an advanced scenario reads the state the create wrote, upserts
 #       it, re-renders users.acl whole, and reaches the live ACL - while the credential an
 #       existing client already holds keeps working.
 #
 # ★ THE HOLE NIM-871 OPENED IS CLOSED, and not by putting a service back in the tree. The
-# six tests it removed (TestL3bRedisLive_Day2*) ran `examples/service/redis`; a service is
+# six advanced-scenario tests it removed (TestL3bRedisLive_*) ran `examples/service/redis`; a service is
 # its own repository, so the subject is now fetched - github.com/soul-stack-services/redis
 # at the commit pinned in tests/e2e-live/harness/servicecatalog.go. Two of the six claims
-# come back that way (create, one day-2 operation) and four do not: update_config, restart,
+# come back that way (create, one advanced scenario) and four do not: update_config, restart,
 # destroy and rotate_tls are scenarios the published service does not have yet.
 #
 # ★ WHAT A GREEN RUN STILL DOES NOT PROVE: the published service's own `create` raises
@@ -667,7 +667,7 @@ e2e-live: build build-linux plugin-sources e2e-live-services
 # red run. Read the script's header before editing this list.
 E2E_GATE_TESTS := TestL3bModuleDeliveryLive_SynthesisFetchHotRegister \
 	TestL3bSmokeNginxLive_InstallAndStart TestL3bPluginChannel_CatalogAndAllow \
-	TestL3bRedisServiceLive_CreateFromSouls TestL3bRedisServiceLive_Day2AddUser
+	TestL3bRedisServiceLive_CreateFromSouls TestL3bRedisServiceLive_AddUser
 
 # e2e-live-services - fetches the out-of-tree service repositories this tier drives, at the
 # commits tests/e2e-live/harness/servicecatalog.go pins (NIM-876).
@@ -839,9 +839,9 @@ e2e-k8s: docker-build-keeper docker-build-soul
 # (EXEC_MODE=tsh) or direct curl (EXEC_MODE=local). NOT part of `check` (requires
 # a cloud/teleport + pre-built artifacts; symmetric with e2e / e2e-live). Bring-up
 # scripts (environment-specific) live locally in $$SCRIPTS_DIR and are NOT committed to git - the runner
-# invokes them at runtime. Suite - the SUITE variable (create|create-destroy|day2). Examples:
+# invokes them at runtime. Suite - the SUITE variable (create|create-destroy|operations). Examples:
 #   make e2e-cloud SUITE=create-destroy
-#   DRY_RUN=1 make e2e-cloud SUITE=day2 SCENARIO=add_user   # print calls without network
+#   DRY_RUN=1 make e2e-cloud SUITE=operations SCENARIO=add_user   # print calls without network
 SUITE ?= create-destroy
 e2e-cloud:
 	@bash scripts/e2e-cloud/runbook.sh $(SUITE)
@@ -1481,7 +1481,8 @@ GATE_CHECK_TIERS := check-fmt vet vet-tags build test@build \
 	check-webui-freshness check-webui-freshness-guard check-doc-links \
 	check-approle-template check-makefile-recipes \
 	check-vuln@build lint@build trial@build check-e2e-cloud check-gate check-gate-slot \
-	check-ci-status check-release-gate check-modules-run check-vuln-corpus check-plugin-schema
+	check-ci-status check-release-gate check-modules-run check-vuln-corpus check-plugin-schema \
+	check-banned-terms
 GATE_L1_TIERS := test-race@build test-integration@build e2e@build
 
 # GATE_SLOTS — how many gates may run at once ON THIS MACHINE, and therefore how
@@ -1949,6 +1950,15 @@ check-makefile-recipes:
 	@DEV_STAND=check-recipes DEV_STAND_SLOT=1 $(MAKE) --no-print-directory dev-stop
 	@echo "check-makefile-recipes: dev-stop ran to completion on an empty stand"
 
+# check-banned-terms - a term this project banned stays out of every file git would
+# commit (NIM-893). One sweep already brought it to zero, and eleven weeks later it was
+# back in 116 files: a sweep does not hold, a gate tier does. What is matched and what is
+# not: scripts/check-banned-terms.py; the replacement: docs/naming-rules.md; the lines
+# that cannot be fixed here, each with its reason: scripts/banned-terms-allowlist.txt.
+check-banned-terms:
+	@scripts/check-banned-terms.py
+	@scripts/check-banned-terms.py --self-test
+
 # govulncheck - the supply-chain CI gate across EVERY Go module in the tree (security
 # audit, pre-beta).
 # Symbol-scan: fails (exit 3) ONLY when a vulnerability is actually reachable through the
@@ -2382,6 +2392,7 @@ help:
 	@echo "  check-doc-links   internal doc-link integrity (markdown + Go comments)"
 	@echo "  check-approle-template  shipped Vault AppRole role template issues a periodic token"
 	@echo "  check-makefile-recipes  every \`bash -c\` recipe passes one intact quoted script"
+	@echo "  check-banned-terms      no banned term in any file git would commit (allowlist: scripts/banned-terms-allowlist.txt)"
 	@echo "  check-vuln        govulncheck supply-chain across EVERY go.mod in the tree (offline: SKIP_VULNCHECK=1)"
 	@echo "  check-vuln-corpus guard: check-vuln scans the whole tree, and never skips what it cannot scan"
 	@echo "  lint              soul-lint over the examples/ corpus (destiny/service/manifest/scenario)"

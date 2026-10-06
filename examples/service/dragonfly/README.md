@@ -34,7 +34,7 @@ Division of responsibilities (ADR-009):
 chain (ADR-019):
 
 - [`002_install_layout_to_vars`](migrations/002_install_layout_to_vars/main.yml) - `install` + host layout (`conf_dir`/`data_dir`)
-  moved out of state into `service vars` (a read-model with no readers / day-2 operations read service vars
+  moved out of state into `service vars` (a read-model with no readers / advanced scenarios read service vars
   directly). DragonFly has **no** `modules_base_url` (redis modules don't apply to DF) - three
   fields are dropped, not four;
 - [`003_cloud_provision_read_model`](migrations/003_cloud_provision_read_model/main.yml) - cloud-provision read-model: `provisioned_vm_ids`
@@ -139,10 +139,10 @@ health-PING) goes through the system `default_admin` account. The `redis` plugin
 connects as `username=default_admin`. The built-in DragonFly `default` user is rendered `off`
 (absent from the sets) until the operator declares it in `input.users`.
 
-In every task that renders `users.acl` (create + day-2 `add_user`/`update_users`), the set
+In every task that renders `users.acl` (create + the advanced `add_user`/`update_users`), the set
 is assembled by a double `merge()`: system accounts from service vars (bottom layer) + operator-extra
 (on top, last-wins). System accounts are **not stored in state** - they are re-added from service vars
-on **every** render, otherwise a re-render would wipe `replica`/`sentinel` and break day-2 replication.
+on **every** render, otherwise a re-render would wipe `replica`/`sentinel` and break replication.
 
 ## Scenarios
 
@@ -188,7 +188,7 @@ the migration ladder is forward-only, but nothing writes them any more, so on a 
 incarnation all three are **absent**.
 
 
-### Day-2 scenarios
+### Advanced scenarios
 
 - **[`add_user`](scenario/add_user/main.yml)** - add/override **one** ACL user
   without a restart (hot-reload `ACL LOAD` via `redis.acl.reloaded`). Merges into `state.df_users`,
@@ -285,7 +285,7 @@ go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/create-sentinel-tls/case.yml
 # mandatory monitoring (node-exporter + vector in the plan)
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/create/tests/monitoring-observability/case.yml
-# day-2
+# advanced scenarios
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/add_user/tests/add-user-plaintext/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/update_users/tests/bulk-replace-removes-user/case.yml
 go run ./cmd/soul-trial run ../examples/service/dragonfly/scenario/restart/tests/rolling-restart-replicas/case.yml

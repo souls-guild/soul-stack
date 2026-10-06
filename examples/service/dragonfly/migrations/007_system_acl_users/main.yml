@@ -15,7 +15,7 @@ description: >-
   ★ The Vault values do NOT move. v6 minted them under the authored path
   secret/dragonfly/<inc>/users/<name>; v7 derives secret/dragonfly/<inc>/system_acl_users/<name>.
   The migration DSL is a pure function of state and cannot touch Vault, so a v6
-  incarnation's day-2 run fails closed on the missing secret rather than silently
+  incarnation's advanced-scenario run fails closed on the missing secret rather than silently
   authenticating with a fresh one. That is the intended failure: an in-cluster
   credential is not something a schema migration may re-point.
 

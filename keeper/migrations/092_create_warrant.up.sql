@@ -4,7 +4,7 @@
 -- under cert-rotation Variant 1 (Keeper-centric). The scan axis for the Reaper rule
 -- `rotate_due_certs` is `not_after`: certs whose expiry falls within the
 -- threshold are rotated centrally (Keeper generates a new keypair+CSR,
--- SignCSR via Vault PKI, WriteKV into Vault, spawns the day-2 Voyage scenario
+-- SignCSR via Vault PKI, WriteKV into Vault, spawns the advanced Voyage scenario
 -- rotate_tls).
 --
 -- ★ DIFFERENCE FROM soul_seeds (009): soul_seeds are Soul agents' IDENTITY certs

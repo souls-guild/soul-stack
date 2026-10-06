@@ -98,7 +98,7 @@ type ScenarioManifest struct {
 // vars/soulprint/register/vault — in `that` is a compile-time
 // undeclared-reference error (a structural barrier, not a textual guard).
 //
-// WHICH incarnation facts a rule may read depends on the path: day-2 has the row,
+// WHICH incarnation facts a rule may read depends on the path: an advanced scenario has the row,
 // create has only the identity the request carries, and a create scenario composing
 // its own id has not even that. That difference is expressed rather than papered
 // over — see [ValidateContext] (validate_scope.go). Topology/roster checks stay

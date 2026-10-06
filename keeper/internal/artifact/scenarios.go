@@ -24,7 +24,7 @@ const scenarioDir = "scenario"
 
 // upgradeDir — second channel for auto-discovery of scenarios (ADR-0068 §3): directory
 // `upgrade/<slug>/main.yml` alongside scenarioDir. Keeps version-to-version
-// upgrade scenarios separate from day-2 scenario/ (not shown in regular listings).
+// upgrade scenarios separate from the advanced scenarios in scenario/ (not shown in regular listings).
 const upgradeDir = "upgrade"
 
 // scenarioMainFile is the root YAML scenario file inside `<dir>/<name>/`.
@@ -300,10 +300,10 @@ func validateRulesYAML(data []byte) []scenarioValidateRuleYAML {
 // ListScenarios scans `scenario/*/main.yml` in a materialized Service repository
 // snapshot (serviceRoot is absolute path to snapshot, typically
 // [ServiceArtifact.LocalDir]) and returns a list of scenario metadata sorted by
-// name for the day-2 UI dropdown.
+// name for the advanced-scenario UI dropdown.
 //
 // This is ONLY the scenario/ channel: upgrade/<slug>/ does NOT appear here
-// (ADR-0068 §3 — upgrade scenarios do not clutter day-2 listings; they are
+// (ADR-0068 §3 — upgrade scenarios do not clutter advanced-scenario listings; they are
 // returned by [ListUpgrades]).
 func ListScenarios(serviceRoot string, logger *slog.Logger) ([]Scenario, error) {
 	return listFromDir(serviceRoot, scenarioDir, logger)
@@ -462,7 +462,7 @@ func loadScenario(serviceRoot, dir, name string, logger *slog.Logger) (Scenario,
 		Form:        scenarioFormProjection(raw.Form),
 	}
 	// Channel isolation is PHYSICAL, not just directory-based (ADR-0068 §3): stray
-	// `from:` in scenario/<name>/main.yml must not leak into day-2 reply —
+	// `from:` in scenario/<name>/main.yml must not leak into the advanced-scenario reply —
 	// FromVersions carries only upgrade/ channel.
 	if dir == upgradeDir {
 		sc.FromVersions = raw.FromVersions
