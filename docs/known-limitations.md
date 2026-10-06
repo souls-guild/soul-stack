@@ -112,6 +112,10 @@ The `/oracle/fires` page in the Web-UI is a placeholder with an explicit WIP mes
 
 `redis.addr` accepts one TCP address. Redis Sentinel with automatic master-discovery is not natively supported - rolling out via a TCP proxy to a dynamic master ([operations/infra.md → HA Redis](operations/infra.md#ha-redis)). Single-instance and Redis Cluster are supported. For small beta - single-instance + AOF.
 
+### Register reads a destiny cannot resolve are not all refused
+
+A destiny is rendered by the Keeper before any of its tasks runs, with no register in scope, so a `register.*` read in a key the Keeper renders never resolves. A task's `where:`/`vars:`/`params:`/`loop.*:`/`on:` reading a register of the same destiny is refused (`within_destiny_register_dependency`, NIM-939). Not refused: a value in the destiny's `vars.yml`, a name no task declares written in `on:`, and `register.self` in any of those keys. A plain read there fails the run at render; a `has()`-guarded one silently takes its fallback on every run.
+
 ### Semantic-breaking: `create_scenario` (empty NO MORE does not mean auto-`create`)
 
 Semantics of the field `create_scenario` (`POST /v1/incarnations`, MCP `keeper.incarnation.create`) **changed**: empty `create_scenario` **NO LONGER means** auto-run reserved script `create` ([ADR-009 amendment 2026-06-29](adr/0009-scenario-dsl.md)). Now with an empty value: if the service offers create scripts (at least one `create: true`) → **422 `create_scenario_required`** (selection is required, valid names are listed); if none `create: true` → **bare-incarnation** (`StatusReady` without run, `created_scenario = NULL`). Wire circuit is additive (the field existed before), breaking only the meaning. **Affected** are external API/MCP clients that used `create` without `create_scenario` when calculating auto-`create` - they need to explicitly pass `create_scenario`.

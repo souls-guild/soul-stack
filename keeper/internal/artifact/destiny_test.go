@@ -2,6 +2,7 @@ package artifact
 
 import (
 	"context"
+	"strings"
 	"testing"
 )
 
@@ -74,6 +75,28 @@ func TestDestinyLoad_MissingTasksFile(t *testing.T) {
 	loader := NewDestinyLoader(t.TempDir(), nil)
 	if _, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()}); err == nil {
 		t.Fatal("want error for missing tasks/main.yml")
+	}
+}
+
+// TestDestinyLoad_SiblingRegisterReadRejected — the Keeper refuses, at load, a
+// destiny whose Keeper-rendered key reads a register of the same destiny (NIM-939).
+// Every production resolver (scenario, push, core.ssh.apply) loads through here, so
+// this is the runtime half of the check soul-lint makes offline.
+func TestDestinyLoad_SiblingRegisterReadRejected(t *testing.T) {
+	tr := &testRepo{t: t, dir: t.TempDir()}
+	tr.initRepo()
+	tr.writeFile("destiny.yml", destinyManifestYML)
+	tr.writeFile("tasks/main.yml", "- name: probe\n  module: core.exec.run\n  register: probe\n  params:\n    cmd: /bin/true\n"+
+		"- name: write role\n  module: core.file.present\n  params:\n    path: \"${ input.marker_file }\"\n    content: \"${ register.probe.stdout }\"\n")
+	tr.commit("destiny reading a sibling register at render")
+
+	loader := NewDestinyLoader(t.TempDir(), nil)
+	_, err := loader.Load(context.Background(), DestinyRef{Name: "pilot-flat", Git: tr.fileURL()})
+	if err == nil {
+		t.Fatal("Load accepted a destiny whose params read a sibling's register - it renders before any task runs")
+	}
+	if !strings.Contains(err.Error(), `reads register "probe", declared by task "probe"`) {
+		t.Errorf("refused for a different reason: %v", err)
 	}
 }
 

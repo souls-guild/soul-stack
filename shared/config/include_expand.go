@@ -111,17 +111,19 @@ func ExpandIncludesWithModules(tasks []Task, resolve IncludeResolver, modules Mo
 }
 
 // ExpandIncludesInDestiny is [ExpandIncludes] for a DESTINY's own `tasks/` tree,
-// where an included body is subject to the one rule a scenario's is not: a
+// where an included body is subject to a rule a scenario's is not: a
 // destiny is Soul-side by construction, so a keeper-side module address anywhere
 // in it can never execute (`keeper_module_in_destiny`, NIM-749).
 //
 // A separate entry point rather than a parameter on [ExpandIncludes] because the
 // seven scenario callers must never pass it, and a bool at every call site is a
 // bool somebody eventually passes the wrong way round. The flag reaches the
-// included body's own [LoadDestinyTasksFromBytes] — without it the check stops at
-// the destiny's `tasks/main.yml` and a capture one `include:` deep is linted
-// clean, folded by L0, and dies at dispatch: the exact false-green this rule
-// exists to close.
+// included body's own [LoadDestinyTasksFromBytes] — without it the keeper-module
+// check stops at the destiny's `tasks/main.yml` and a capture one `include:` deep
+// is linted clean, folded by L0, and dies at dispatch: the exact false-green this
+// rule exists to close.
+//
+// The flat plan it returns is also checked for [CodeWithinDestinyRegisterDependency].
 func ExpandIncludesInDestiny(tasks []Task, resolve IncludeResolver) ([]Task, []diag.Diagnostic) {
 	return expandIncludes(tasks, resolve, true, nil)
 }
@@ -163,6 +165,9 @@ func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool, mo
 	if !diag.HasErrors(e.diags) {
 		e.diags = append(e.diags, validateFlatTaskAddresses(out)...)
 		e.diags = append(e.diags, validateFlatBlockKeeperSide(out)...)
+		if destinyTasks {
+			e.diags = append(e.diags, validateFlatDestinyRegisterReads(out)...)
+		}
 	}
 	return out, e.diags
 }

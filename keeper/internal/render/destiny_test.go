@@ -172,6 +172,54 @@ func TestRender_ApplyDestiny_StateIsolation(t *testing.T) {
 	}
 }
 
+// TestRender_ApplyDestiny_RegisterIsolation — a destiny renders against an empty
+// `register` root whatever the run has accumulated (NIM-939). The caller carries a
+// same-named `probe` in all three channels a scenario task reads, standing in for an
+// earlier Passage's stale value; the destiny's own `probe` has not run yet. A plain
+// read must fail as no-such-key rather than pick up STALE, and a has()-guarded one
+// renders its fallback — the silent shape the load-time
+// config.CodeWithinDestinyRegisterDependency refusal exists for.
+func TestRender_ApplyDestiny_RegisterIsolation(t *testing.T) {
+	renderWith := func(t *testing.T, content string) ([]*RenderedTask, error) {
+		t.Helper()
+		dst := &ResolvedDestiny{
+			Name: "role",
+			Tasks: []config.Task{
+				{Name: "probe", Register: "probe", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "/bin/true"}}},
+				{Name: "write role", Module: &config.ModuleTask{Module: "core.file.present", Params: map[string]any{"path": "/etc/role", "content": content}}},
+			},
+		}
+		h := host("a.example.com", []string{"svc"}, nil)
+		stale := map[string]any{"probe": map[string]any{"stdout": "STALE"}}
+		tasks, _, err := NewPipeline(nil, newEngine(t), nil, nil).Render(context.Background(), RenderInput{
+			Scenario:       applyScenario("role", nil),
+			Incarnation:    IncarnationMeta{ID: "svc"},
+			Hosts:          []*topology.HostFacts{h},
+			Destiny:        &stubDestinyResolver{resolved: dst},
+			Register:       stale,
+			RegisterByHost: map[string]map[string]any{h.SID: stale},
+			KeeperRegister: stale,
+		})
+		return tasks, err
+	}
+
+	t.Run("plain read fails", func(t *testing.T) {
+		_, err := renderWith(t, "${ register.probe.stdout }")
+		if err == nil || !strings.Contains(err.Error(), "no such key: probe") {
+			t.Fatalf("err = %v, want no such key: probe - the destiny pass saw a register of the caller's", err)
+		}
+	})
+	t.Run("has() takes the fallback", func(t *testing.T) {
+		tasks, err := renderWith(t, "${ has(register.probe) ? register.probe.stdout : 'none' }")
+		if err != nil {
+			t.Fatalf("Render: %v", err)
+		}
+		if got := tasks[1].Params.GetFields()["content"].GetStringValue(); got != "none" {
+			t.Fatalf("content = %q, want none", got)
+		}
+	})
+}
+
 // TestRender_ApplyDestiny_MissingRequired — a required destiny input isn't
 // passed via apply.input and has no default → contract error.
 func TestRender_ApplyDestiny_MissingRequired(t *testing.T) {

@@ -905,6 +905,12 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
 12. **Keep `within_block_register_dependency` for a block rolled as a group** — a default block no
     longer needs it — and establish whether a destiny has an equivalent.
     If not, add one or state the gap in [docs/known-limitations.md](../known-limitations.md).
+    *Established (NIM-939):* it had none. The destiny pass renders against an empty `register`
+    root, so there is no stale-value path and a plain read fails at render — but `soul-lint`
+    passed it and a `has()`-guarded read took its fallback silently. Added
+    `within_destiny_register_dependency`, checked on the flat destiny plan by `soul-lint` and by
+    the Keeper's destiny loader. What it does not cover is stated in
+    [known-limitations.md](../known-limitations.md#register-reads-a-destiny-cannot-resolve-are-not-all-refused).
 13. **Checks.** Refusals for top-level `async:` and for `require:` outside a destiny (NIM-906 owns
     their shape) live in the shared validator, so the Keeper enforces them too — service
     repositories are not linted. In `soul-lint`: a warning for a child's `serial:` or barrier-kind
@@ -984,5 +990,5 @@ group.
 | [settings.md](../scenario/settings.md) | **new** — the scenario `settings:` block (fork 4); design, not implemented |
 | [ADR-draft per-host params dispatch](draft-per-host-params-dispatch.md) | **builds on it** — NIM-908's `ParamsBySID` is the model for the per-host overlay the rendered predicates need; NIM-908 left flow control refused when it differs per host (open Q #25), which decision 4 answers |
 | [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers, what has to be built; design, not implemented |
-| [known-limitations.md](../known-limitations.md) | **updated if** item 12 finds no destiny equivalent; there is no register/destiny entry there today |
+| [known-limitations.md](../known-limitations.md) | item 12 found no destiny equivalent and NIM-939 added one; the reads it does not refuse are listed there |
 | `shared/audit/task_executed.go:56-60` | **comment is now wrong** — it asserts keeper tasks carry `passage=0`, which ADR-056 Slice 2 already falsified and this ADR makes uniformly false |

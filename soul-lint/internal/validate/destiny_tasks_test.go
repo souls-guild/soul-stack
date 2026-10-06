@@ -199,6 +199,27 @@ func TestDestinyTasks_KeeperSideModuleIsRefusedOffline(t *testing.T) {
 	}
 }
 
+// NIM-939: a Keeper-rendered key reading a register of the same destiny is refused
+// offline, one include away included — the per-file pass sees a declared name there.
+func TestDestinyTasks_SiblingRegisterReadIsRefusedOffline(t *testing.T) {
+	root := t.TempDir()
+	manifest := filepath.Join(root, "destiny.yml")
+	stageWrite(t, manifest, "name: probe\ndescription: a destiny reading a sibling register at render\n")
+	stageWrite(t, filepath.Join(root, "tasks", "main.yml"),
+		"- name: probe\n  module: core.exec.run\n  register: probe\n  params:\n    cmd: /bin/true\n\n- include: body.yml\n")
+	stageWrite(t, filepath.Join(root, "tasks", "body.yml"),
+		"- name: write role\n  module: core.file.present\n  params:\n    path: /etc/role\n    content: \"${ register.probe.stdout }\"\n")
+
+	code, out := runDestiny(t, manifest, nil)
+
+	if code != ExitHasErrors {
+		t.Fatalf("exit = %d, want %d\n%s", code, ExitHasErrors, out)
+	}
+	if !containsDiagFor(out, filepath.Join("tasks", "main.yml"), "within_destiny_register_dependency") {
+		t.Errorf("a destiny reading its sibling's register at render passed the lint\n%s", out)
+	}
+}
+
 // An include that does not resolve is an ERROR here, not a deferral. A destiny is
 // its own git artifact — there is no second level offline and none at run time
 // either, so unlike a loose scenario there is nothing the keeper could resolve later
