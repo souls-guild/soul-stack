@@ -192,6 +192,9 @@ func collectRefs(seq *ast.SequenceNode, pathPrefix string, known map[string]bool
 				out = append(out, checkRefList(tok.Value, kv.Value, known, taskPath)...)
 			case "when", "changed_when", "failed_when", "where":
 				out = append(out, checkPredicateRefs(tok.Value, kv.Value, known, taskPath)...)
+				if tok.Value == "when" {
+					out = append(out, checkWhenRegisterSelf(kv.Value, taskPath)...)
+				}
 				out = append(out, checkSoulprintRefs(tok.Value, kv.Value, taskPath)...)
 				out = append(out, checkStateRefs(tok.Value, kv.Value, taskPath)...)
 			case "assert":

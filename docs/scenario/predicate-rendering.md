@@ -1,9 +1,12 @@
 # Rendering a post-module predicate on the Keeper
 
-> **Status: design, not implemented.** Specified by the draft ADR
+> **Status: the rewrite is built, nothing calls it yet.** Specified by the draft ADR
 > [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), decision 4.
-> Today the Soul evaluates `changed_when:`, `failed_when:` and `retry.until:` itself, against the
-> registers it accumulated inside one message.
+> The rewrite and its differential test are `RenderPredicate` in `shared/cel/predicate_render.go`
+> (NIM-928), the parse-time refusals of §3 are in `shared/config`. The rewrite only substitutes
+> (§3); simplifying what the host context alone decides is NIM-970. Dispatch does not render a
+> predicate until NIM-943: today the Soul evaluates `changed_when:`, `failed_when:` and
+> `retry.until:` itself, against the registers it accumulated inside one message.
 
 Under linear dispatch no register crosses the wire (decision 4). `changed_when:`, `failed_when:` and
 `retry.until:` judge the module's result, so they cannot be *decided* before the module runs, but
@@ -17,7 +20,7 @@ the Soul receives a predicate that reads only `register.self`:
   failed_when: register.self.stdout != register.probe.stdout
 ```
 
-arrives on the Soul as `register.self.stdout != "bob"`.
+arrives on the Soul as `register.self.stdout != dyn("bob")` (§2, **Types**).
 
 ## 1. The contract — an equivalence, not an algorithm
 
@@ -52,7 +55,7 @@ alone, over the same values.
 - **Field arguments.** `has()` and `default()` take a field, not a value: `has("v")` does not parse
   and `default("v", y)` is refused (`parser/macro.go:550-556`, `shared/cel/default.go:83-85`). Their
   first argument is decided as a whole — `default(register.probe.x, register.self.y)` included.
-- **Types.** The Soul type-checks what it compiles (`shared/cel/engine.go:434`), and a number from
+- **Types.** The Soul type-checks what it compiles (`shared/cel/engine.go:451`), and a number from
   JSON is a double that prints as `3.0` (`parser/unparser.go:296-302`). So `3.0 == 3`,
   `size(register.self.members) >= 3.0` and a ternary with a string arm and a double arm are compile
   errors where the original, over `dyn` variables, evaluates. A substituted value wrapped in
@@ -80,16 +83,78 @@ alone, over the same values.
   iteration variable can shadow it too: in `register.self.l.exists(int, type(int) == int)` the last
   `int` is the variable, not the type.
 
+Building the rewrite found four more, each now a case of the same test. A randomized differential
+test over generated predicates found all four, against an earlier version that also simplified; the
+first is why this one does not:
+
+- **A part of a node can type narrower than the node.** The checker typed the original over its
+  `dyn` operands; the arm of a ternary, or `default()`'s fallback, alone can type narrower.
+  `{"x": 1}.filter(y, default(input.missing, y) || register.self.b)` reduced to `y || …` has `y` a
+  string, which `||` refuses; an index is a free type parameter the next overload binds
+  (`dyn(1) / register.self.l[false]` checks as `double`). This is why the rewrite only substitutes:
+  every node of the original stays, and `default()` over a closed field keeps its own expansion,
+  ternary included.
+- **The error term's own type.** An empty map literal gets fresh type parameters, so a bare
+  `{}.f` unifies with whatever stands beside it and can narrow an enclosing ternary. The term is
+  `dyn({}).keeper_eval_error`.
+- **cel-go prints what its parser does not read back.** `!(!x)` prints as `!!x`, and the parser drops
+  an even run of `!` or `-` — for a non-bool `x`, a value where the original errs; `(-x).f` prints
+  as `-x.f`, which parses as `-(x.f)`. The author's own text can hold either, so such an operand is
+  grouped by `dyn(...)` before printing.
+- **cel-go's checker is order-dependent.** Entering a comprehension's scope drops the filter on
+  cross-type numeric comparisons, and it is not restored on exit, so `0 < 2.5` type-checks after
+  the first comprehension the check enters and is refused before it (cel-go v0.29.2). A read the
+  Keeper evaluates alone is evaluated inside a one-element comprehension, and a rendering that no
+  longer type-checks because a substitution took a comprehension with it — from an index key, or
+  from the field of a `has()`/`default()` — is sent inside one:
+  `[0].map(v0, dyn("a") == register.self.v && size(register.self.l) >= 2.5)[0]`.
+
 ## 3. Printing, refusals and the fallback
 
-The printed result has its map keys sorted, so the same values give the same text. A bare
-`register` (no field after it) and a task registered as `self` are refused at compile, since either
-makes "everything but `register.self`" ambiguous; inside a group the same refusal covers a child's
-open `when:`.
+**The rewrite only substitutes** (user, 2026-10-07). Each read of the host context outside the open
+set — a root, a field of one, an index into one by a key that reads nothing open — becomes its
+value on that host; nothing is simplified or dropped, so the Soul checks and evaluates the
+author's tree node for node. `has(x)` over such a read becomes the bool it evaluates to (x is a
+field, so it cannot become a value), and `default(x, y)` becomes its own expansion
+`(true ? dyn(<x>) : <y>)` or `(false ? dyn({}).keeper_eval_error : <y>)` — for a root x,
+`default(x, y)` is x itself, `dyn(<x>)`. Where x's operand errs, `has(x)` becomes the error term,
+and so does the condition of `default()`'s expansion.
+
+The printed result has its map keys sorted, so the same values give the same text. A task registered
+as `self` is refused at compile, since it makes "everything but `register.self`" ambiguous. A bare
+`register` (no field after it) is the open register and the decided ones as one map, so no text
+reads one without the other; it is refused when rendered, without a rule of its own at compile — no
+predicate in the corpus writes it (user, 2026-10-07). Inside a group the same applies to a child's
+open `when:`. A `when:` reading `register.self` is refused at compile: it runs before the module,
+so the task's own result does not exist there — on the Soul today that predicate fails on every
+host.
+
+| Refusal | Code | Where |
+|---|---|---|
+| `register: self` | `register_name_reserved` | parse, scenario and destiny |
+| `when:` reads `register.self` | `when_register_self_unsupported` | parse, scenario and destiny |
+| a value the text cannot carry, a bare `register`, or a rendering the Soul would not accept as sent | `predicate_not_renderable` | render |
+| the rendering still reads the host context outside the open set | `predicate_residual_reference` | render — guards the rewrite itself |
+
+A value the Keeper substitutes is printed as `dyn(<literal>)`; NaN and the infinities as
+`dyn(double("NaN"))`, `dyn(double("+Inf"))`, `dyn(double("-Inf"))`; a timestamp as
+`dyn(timestamp("<RFC 3339>"))` with its offset — refused where that text does not read back through
+`timestamp()` to the same instant: an offset with seconds, an offset or a local year the parser
+rejects, an instant outside the years 0001–9999 UTC; a duration as
+`dyn(duration("<Go duration>"))`; a type by its name. A refusal never quotes the rendered text — only the author's predicate — since
+the text can hold a substituted secret. Because nothing is simplified, a value travels to the host
+even where the context alone decides the condition — `size(vars.password) > 8` carries the password
+— as `flow_context` carries it today; deciding such parts on the Keeper is NIM-970.
+
+The parse-time checks are textual like the rest of `shared/config` and read the dot form
+`ExtractRegisterRefs` reads: a comprehension variable named `register` reads as the root there, an
+escaped quote inside a string literal can make the literal's text read as code, and
+`register .self` (a space before the dot) or a backtick-quoted field is not seen; the render resolves
+names by scope.
 
 **The fallback** is to carry the values as typed variables instead of text. That removes the type,
 error-term and size traps, and the text-guard and masking work in §5 with them, but costs the
-readable form the user chose (`register.self.stdout != "bob"`). If the differential test cannot be
+readable form the user chose (`register.self.stdout != dyn("bob")`). If the differential test cannot be
 passed with literals, S1 returns to the user with the failing cases; it does not switch on its own.
 
 ## 4. The open set

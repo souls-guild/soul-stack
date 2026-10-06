@@ -412,6 +412,23 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 		return prg, nil
 	}
 
+	prg, err := e.compileUncached(env, loopNames, expr, allowHosts, allowRegisterHosts, computeScope, stance)
+	if err != nil {
+		return nil, err
+	}
+
+	e.mu.Lock()
+	e.cache[cacheKey] = prg
+	e.mu.Unlock()
+
+	return prg, nil
+}
+
+// compileUncached is [Engine.compile] without the cache: the same guards and env.Compile.
+// A Keeper-rendered predicate ([Engine.RenderPredicate]) is checked through it because
+// its text carries one host's values and is unique per host and run — caching it would
+// grow the cache without bound.
+func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (cel.Program, error) {
 	if err := guardUnsupported(expr, e.kv != nil, e.genSecret); err != nil {
 		return nil, err
 	}
@@ -456,15 +473,10 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 		return nil, err
 	}
 
-	prg, err = env.Program(ast)
+	prg, err := env.Program(ast)
 	if err != nil {
 		return nil, &ErrCompile{Expr: expr, Err: err}
 	}
-
-	e.mu.Lock()
-	e.cache[cacheKey] = prg
-	e.mu.Unlock()
-
 	return prg, nil
 }
 

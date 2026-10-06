@@ -1812,6 +1812,16 @@ func validateRegisterField(kv *ast.MappingValueNode, pathPrefix string) []diag.D
 			YAMLPath: pathPrefix + ".register",
 		})}
 	}
+	if sn.Value == registerSelfName {
+		tok := sn.GetToken()
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "register_name_reserved",
+			Message:  fmt.Sprintf("register %q is reserved: register.self is every task's own result in changed_when:/failed_when:/retry.until:", sn.Value),
+			Hint:     "rename the register; the Keeper decides every register but register.self before dispatch, so a task named self would be both",
+			YAMLPath: pathPrefix + ".register",
+		})}
+	}
 	return nil
 }
 

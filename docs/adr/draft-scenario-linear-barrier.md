@@ -188,7 +188,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        failed_when: register.self.stdout != register.probe.stdout
      ```
 
-     and the Soul receives `register.self.stdout != "bob"`.
+     and the Soul receives `register.self.stdout != dyn("bob")`.
 
      **The rewrite owes an equivalence, not an algorithm**, and is specified in
      [docs/scenario/predicate-rendering.md](../scenario/predicate-rendering.md). For every value the
@@ -997,6 +997,6 @@ group.
 | [orchestration.md](../scenario/orchestration.md) line 273 | **closes an open question** — *"there is no tolerance threshold for partial failure (§8, open Q)"* is answered by `tolerate` at the barrier |
 | [settings.md](../scenario/settings.md) | **new** — the scenario `settings:` block (fork 4); design, not implemented |
 | [ADR-draft per-host params dispatch](draft-per-host-params-dispatch.md) | **builds on it** — NIM-908's `ParamsBySID` is the model for the per-host overlay the rendered predicates need; NIM-908 left flow control refused when it differs per host (open Q #25), which decision 4 answers |
-| [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers, what has to be built; design, not implemented |
+| [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers, what has to be built; the rewrite is built (NIM-928), dispatch does not call it yet (NIM-943) |
 | [known-limitations.md](../known-limitations.md) | item 12 found no destiny equivalent and NIM-939 added one; the reads it does not refuse are listed there |
 | `shared/audit/task_executed.go:56-60` | **comment is now wrong** — it asserts keeper tasks carry `passage=0`, which ADR-056 Slice 2 already falsified and this ADR makes uniformly false |
