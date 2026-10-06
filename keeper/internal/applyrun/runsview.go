@@ -32,10 +32,27 @@ const (
 	// RunStatusFailed indicates all host rows are terminal with at least one
 	// failed/orphaned (non-success). Takes priority over cancelled.
 	RunStatusFailed RunStatus = "failed"
+	// RunStatusPartialFailed indicates the run finished without some of its hosts:
+	// they failed under `on_failure: host` and the rest ran to the end. The
+	// incarnation ends error_locked and a Voyage counts the run as failed.
+	//
+	// [AggregateRunStatus] never returns it: the host rows of such a run are the
+	// rows of a failed run, so only a record of the drop, written by whoever drops
+	// the host (NIM-948), can tell the two apart.
+	RunStatusPartialFailed RunStatus = "partial_failed"
 	// RunStatusCancelled indicates all host rows are terminal with cancelled,
 	// but no failed/orphaned rows.
 	RunStatusCancelled RunStatus = "cancelled"
 )
+
+// RunStatuses returns the closed set of [RunStatus] values, in the order the API
+// lists them. The filter, the stats buckets, the wire enums and the Voyage outcome
+// are each checked against it, so a value added here and missed there goes red.
+func RunStatuses() []RunStatus {
+	return []RunStatus{
+		RunStatusApplying, RunStatusSuccess, RunStatusFailed, RunStatusPartialFailed, RunStatusCancelled,
+	}
+}
 
 // RunSummary represents a single row in a run list (GET .../runs and global
 // GET /v1/runs). Aggregates all host×passage rows for one apply_id: aggregate status,
@@ -56,16 +73,18 @@ type RunSummary struct {
 	StartedByAID *string
 }
 
-// RunHostStatus represents the status of a single host within a run
-// (GET .../runs/{apply_id}). One host corresponds to N rows (by Passage from staged-render);
-// the projection carries the per-passage row as-is — the UI sees the failed task address
-// per passage.
+// RunHostStatus represents one host row of a run (GET .../runs/{apply_id}). A host
+// has one row per unit it was sent, keyed by Passage: the ADR-056 Passage today, the
+// step once linear dispatch (NIM-907) is on. The projection carries each row as-is,
+// so the failed task's address stays on the unit it failed in.
 //
-// FailedTaskIdx is the LOCAL index of the failed task in its Passage's ApplyRequest
-// (nil on success/still-running/dispatch-level failure). FailedPlanIndex is the
-// GLOBAL end-to-end plan_index of the same task across the entire plan (correlation key
-// with the scenario plan; nil under the same conditions). ErrorSummary is the
-// operator-facing reason (`task <idx> <module>: <message>`, secret-masked on the write path).
+// FailedTaskIdx is the LOCAL index of the failed task in the ApplyRequest this row was
+// dispatched with (nil on success/still-running/dispatch-level failure).
+// FailedPlanIndex is the GLOBAL end-to-end plan_index of the same task across the
+// entire plan (correlation key with the scenario plan; nil under the same
+// conditions); both hold the row's FIRST failure (recordTaskFailureSQL). ErrorSummary
+// is the operator-facing reason (`task <idx> <module>: <message>`, secret-masked on
+// the write path).
 type RunHostStatus struct {
 	SID             string
 	Status          Status
@@ -81,7 +100,10 @@ type RunHostStatus struct {
 	// the contract a param is checked against is the manifest compiled into THAT
 	// agent — a park mid-upgrade legitimately answers differently host to host,
 	// and flattening that would report a fleet-wide truth nobody established.
-	// Empty for a run that had nothing to say.
+	// Stored per row, so a host with several rows (one per Passage, one per step
+	// under linear dispatch) spreads its notices over them and the dedup above
+	// holds within a row only: a reader wanting the host's set groups the rows by
+	// SID. Empty for a run that had nothing to say.
 	Notices []RunNotice
 }
 

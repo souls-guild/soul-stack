@@ -204,7 +204,7 @@ Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "exe
 |---|---|---|
 | `apply_id` | `string` (ULID) | Run ID. |
 | `scenario` | `string` | Run scenario name. |
-| `status` | `enum` | Aggregate status of the ENTIRE run - convolution of host lines: `applying` (at least one line is not terminal), `failed` (all are terminal, there is `failed`/`orphaned` - priority is given to `cancelled`), `cancelled` (all are terminal, there is `cancelled`, none `failed`/`orphaned`), `success` (`success`/`no_match` only). |
+| `status` | `enum` | Aggregate status of the ENTIRE run - convolution of host lines: `applying` (at least one line is not terminal), `failed` (all are terminal, there is `failed`/`orphaned` - priority is given to `cancelled`), `cancelled` (all are terminal, there is `cancelled`, none `failed`/`orphaned`), `success` (`success`/`no_match` only), `partial_failed` (the run finished without some of its hosts, `on_failure: host`; not yet produced by this fold - [naming-rules.md → Run statuses](../../naming-rules.md#run-statuses)). |
 | `started_at` | `string` (RFC 3339) | `MIN(started_at)` by host lines. |
 | `finished_at` | `string` (RFC 3339, optional) | `MAX(finished_at)`, only when ALL host lines have finished; otherwise the key is omitted (run still `applying`). |
 | `started_by_aid` | `string` (AID, optional) | Initiator; the key is omitted if the initiator is removed. |
@@ -217,7 +217,7 @@ Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "exe
 
 Permission: `incarnation.history`. **REST-only - there is no MCP-tool.** Path-params: `id`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRun`.
 
-Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` - list form above) + `hosts[]`. There are N lines per host (according to Passage staged-render) - the UI sees the address of the failed per-passage task.
+Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` - list form above) + `hosts[]`. A host has one line per unit it was sent, ordered by `sid`, then `passage` - so the address of a failed task stays on the unit it failed in. The unit is the Passage today and becomes the step once linear dispatch is on ([draft-scenario-linear-barrier.md](../../adr/draft-scenario-linear-barrier.md) §`passage`), when a host has one line per step.
 
 **`hosts[]` — `RunHostStatusEntry`:**
 
@@ -225,13 +225,13 @@ Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`
 |---|---|---|
 | `sid` | `string` (FQDN) | Host. |
 | `status` | `enum` | Host-level status line: `planned`/`claimed`/`running`/`dispatched`/`success`/`failed`/`cancelled`/`orphaned`/`no_match`. |
-| `passage` | `int` | Passage line number. |
-| `failed_task_idx` | `int` (optional) | LOCAL index of the failed task in `ApplyRequest` of its Passage; only on a crashed host (otherwise the key is omitted). |
-| `failed_plan_index` | `int` (optional) | GLOBAL end-to-end `plan_index` of the same task across the entire scenario plan (correlation key with the plan); only on the crashed host. |
+| `passage` | `int` | Index of the unit this line was dispatched for: the Passage today, the 0-based step index once linear dispatch is on. Can have holes; nothing about it is contiguous. |
+| `failed_task_idx` | `int` (optional) | LOCAL index of the failed task in the `ApplyRequest` this line was dispatched with; only on a crashed line (otherwise the key is omitted). |
+| `failed_plan_index` | `int` (optional) | GLOBAL end-to-end `plan_index` of the same task across the entire scenario plan (correlation key with the plan); only on a crashed line. Holds the line's **first** failure - a later one on the same line does not overwrite it. |
 | `error_summary` | `string` (optional) | Operator-facing reason (`task <idx> <module>: <message>`, secret-masked on write-path); only on the crashed host. |
 | `attempt` | `int` | Line attempt number. |
 | `cancel_requested` | `bool` | Whether cancellation has been requested. |
-| `notices` | `array` (optional) | Advisory findings this host reported during the run ([ADR-0076(u)](../../adr/0076-engine-compat-window.md)). Unlike `error_summary`, **independent of `status`**: the task ran and succeeded, and something about how it was asked is on its way out. Key omitted when the run had nothing to say. Elements are `{code, module, param, message}` — today `code` is only `deprecated_param`, and `message` carries the deadline and the replacement. Deduplicated by `(code, module, param)`: one deprecated param used by twenty tasks is one thing to migrate, not twenty lines. **Per host, deliberately** — the contract a param is checked against is the manifest compiled into *that* agent, so a park mid-upgrade legitimately answers differently host to host, and flattening it into one run-level verdict would report a fleet-wide truth nobody established. |
+| `notices` | `array` (optional) | Advisory findings this host reported during the run ([ADR-0076(u)](../../adr/0076-engine-compat-window.md)). Unlike `error_summary`, **independent of `status`**: the task ran and succeeded, and something about how it was asked is on its way out. Key omitted when the run had nothing to say. Elements are `{code, module, param, message}` — today `code` is only `deprecated_param`, and `message` carries the deadline and the replacement. Deduplicated by `(code, module, param)`: one deprecated param used by twenty tasks is one thing to migrate, not twenty lines. **Per host, deliberately** — the contract a param is checked against is the manifest compiled into *that* agent, so a park mid-upgrade legitimately answers differently host to host, and flattening it into one run-level verdict would report a fleet-wide truth nobody established. Stored **per line**, so the dedup holds within a line only: a host with several lines (one per Passage, one per step under linear dispatch) spreads its notices over them, and a reader wanting the host's set groups the lines by `sid`. |
 
 **Errors:** `400 malformed-request` (non-ULID `apply_id`), `404 not-found` (incarnation outside scope/does not exist; `apply_id` does not exist **or belongs to another incarnation** - store layer filters `WHERE apply_id AND incarnation_name`, cross-incarnation reading of runs is excluded), `422 validation-failed` (invalid path-`id`).
 
@@ -246,7 +246,7 @@ Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.
 | Field | Type | Meaning |
 |---|---|---|
 | `plan_index` | `int` | End-to-end task index in the scenario plan (correlation key with `failed_plan_index` detail endpoint). |
-| `passage` | `int` | Number Passage staged-render. |
+| `passage` | `int` | Index of the unit the task was dispatched in - the `passage` of the detail lines it ran on: the Passage today, the 0-based step index once linear dispatch is on. |
 | `name` | `string` | Task name. |
 | `module` | `string` | Task module (`core.pkg.installed`, ...). |
 | `params` | `object` (optional) | Rendered operator input parameters of the task, **secret-masked** (secret note below). The key is omitted for tasks without params. |
@@ -274,7 +274,7 @@ The same convolution of `apply_runs` by `apply_id`, but **through all incarnatio
 
 | Param | Type | Meaning |
 |---|---|---|
-| `status` | `enum` (`applying`/`success`/`failed`/`cancelled`) | Optional filter by aggregate run status. It is applied at the SQL level (otherwise `total`/`offset` would be separated from the post-filter). Invalid value → `422 validation-failed`. |
+| `status` | `enum` (`applying`/`success`/`failed`/`partial_failed`/`cancelled`) | Optional filter by aggregate run status. It is applied at the SQL level (otherwise `total`/`offset` would be separated from the post-filter). Invalid value → `422 validation-failed`. |
 | `incarnation` | `string` | Optional filter by the name of the owner's incarnation. Invalid name → `422 validation-failed`. |
 | `offset` | `int` (≥0, default 0) | [§ Pagination](../operator-api.md#pagination). |
 | `limit` | `int` (default 50) | **Cap = 100** (not general 1000: global convolution is more expensive than flat list). Out-of-range / >100 → `400 malformed-request`. |
@@ -298,7 +298,7 @@ Run counters by aggregate status within the boundaries of the Purview-scope oper
 | `all` | `object` | For all the time. |
 | `last_24h` | `object` | Runs **started** in the last 24 hours (window by `started_at` run - same axis as list order). |
 
-Cart form: `{total, applying, success, failed, cancelled}` (`int`; `total` = amount; zero counters enabled - enum closed; `failed` enabled orphaned hosts).
+Cart form: `{total, applying, success, failed, partial_failed, cancelled}` (`int`; `total` = amount; zero counters enabled - enum closed; `failed` enabled orphaned hosts).
 
 **Errors:** `403 forbidden`, `500 internal-error`.
 

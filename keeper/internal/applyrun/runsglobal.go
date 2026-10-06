@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"slices"
 	"strings"
 	"time"
 
@@ -62,22 +63,37 @@ var runsSortableColumns = map[string]string{
 	"scenario":    "scenario",
 }
 
-// ValidRunStatus is the closed set of aggregate run statuses (filter for /v1/runs).
+// ValidRunStatus reports whether s is in [RunStatuses] (filter for /v1/runs).
 func ValidRunStatus(s RunStatus) bool {
-	switch s {
-	case RunStatusApplying, RunStatusSuccess, RunStatusFailed, RunStatusCancelled:
-		return true
-	}
-	return false
+	return slices.Contains(RunStatuses(), s)
 }
 
 // RunsStatusCounts represents counters for runs by aggregate status. Total = sum of all.
 type RunsStatusCounts struct {
-	Total     int
-	Applying  int
-	Success   int
-	Failed    int
-	Cancelled int
+	Total         int
+	Applying      int
+	Success       int
+	Failed        int
+	PartialFailed int
+	Cancelled     int
+}
+
+// add counts n runs of status s. A status outside [RunStatuses] still counts toward
+// Total, so the buckets never sum to more than Total.
+func (c *RunsStatusCounts) add(s RunStatus, n int) {
+	c.Total += n
+	switch s {
+	case RunStatusApplying:
+		c.Applying += n
+	case RunStatusSuccess:
+		c.Success += n
+	case RunStatusFailed:
+		c.Failed += n
+	case RunStatusPartialFailed:
+		c.PartialFailed += n
+	case RunStatusCancelled:
+		c.Cancelled += n
+	}
 }
 
 // RunsStats represents a summary of the global run read-view: all-time and last
@@ -91,7 +107,8 @@ type RunsStats struct {
 // for both list and stats. The status column is the SQL form of [AggregateRunStatus];
 // literals are gathered from Go constants (init below) — a single source of priority
 // applying > failed > cancelled > success. Unknown status is treated as non-terminal
-// (parity with AggregateRunStatus default branch).
+// (parity with AggregateRunStatus default branch). Like AggregateRunStatus it has no
+// branch for [RunStatusPartialFailed]; whoever records the drop adds it to both.
 //
 // apply_runs is aliased as `ar`, incarnation as `i`: incarnation has its own status →
 // bare columns would be ambiguous. LEFT JOIN is defensive (FK ON DELETE CASCADE doesn't
@@ -305,18 +322,8 @@ GROUP BY status`
 		if err := rows.Scan(&status, &total, &last); err != nil {
 			return RunsStats{}, fmt.Errorf("applyrun: scan runs stats: %w", err)
 		}
-		stats.All.Total += total
-		stats.Last24h.Total += last
-		switch RunStatus(status) {
-		case RunStatusApplying:
-			stats.All.Applying, stats.Last24h.Applying = total, last
-		case RunStatusSuccess:
-			stats.All.Success, stats.Last24h.Success = total, last
-		case RunStatusFailed:
-			stats.All.Failed, stats.Last24h.Failed = total, last
-		case RunStatusCancelled:
-			stats.All.Cancelled, stats.Last24h.Cancelled = total, last
-		}
+		stats.All.add(RunStatus(status), total)
+		stats.Last24h.add(RunStatus(status), last)
 	}
 	if err := rows.Err(); err != nil {
 		return RunsStats{}, fmt.Errorf("applyrun: iterate runs stats: %w", err)

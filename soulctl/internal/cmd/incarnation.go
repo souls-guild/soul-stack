@@ -1,11 +1,13 @@
 package cmd
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
 	"io"
+	"slices"
 	"strconv"
 	"time"
 
@@ -313,22 +315,43 @@ func printRunDetail(cmd *cobra.Command, d *wire.RunDetailReply) error {
 // printRunNotices writes the deprecation block, or nothing at all when no host
 // reported anything — a quiet run must look exactly as it did before this
 // existed.
+//
+// A host has one row per Passage (per step once linear dispatch is on), and keeper
+// dedupes notices within a row only, so a deprecated param passed in three units
+// arrives three times. Merged here by (code, module, param) per host and sorted by
+// that key, as keeper sorts a row, so the same set reads the same on every host.
 func printRunNotices(out io.Writer, hosts []wire.RunHostStatusEntry) {
-	any := false
+	type noticeKey struct{ code, module, param string }
+	var (
+		sids  []string
+		bySID = map[string][]wire.RunNoticeEntry{}
+		seen  = map[string]map[noticeKey]bool{}
+	)
 	for _, h := range hosts {
-		if len(h.Notices) > 0 {
-			any = true
-			break
+		for _, n := range h.Notices {
+			if seen[h.SID] == nil {
+				seen[h.SID] = map[noticeKey]bool{}
+				sids = append(sids, h.SID)
+			}
+			k := noticeKey{n.Code, n.Module, n.Param}
+			if seen[h.SID][k] {
+				continue
+			}
+			seen[h.SID][k] = true
+			bySID[h.SID] = append(bySID[h.SID], n)
 		}
 	}
-	if !any {
+	if len(sids) == 0 {
 		return
 	}
 	fmt.Fprintln(out)
 	fmt.Fprintln(out, "notices (the run succeeded; these stop working in a future release):")
-	for _, h := range hosts {
-		for _, n := range h.Notices {
-			fmt.Fprintf(out, "  %s  %s: %s\n", h.SID, n.Module, n.Message)
+	for _, sid := range sids {
+		slices.SortFunc(bySID[sid], func(a, b wire.RunNoticeEntry) int {
+			return cmp.Or(cmp.Compare(a.Code, b.Code), cmp.Compare(a.Module, b.Module), cmp.Compare(a.Param, b.Param))
+		})
+		for _, n := range bySID[sid] {
+			fmt.Fprintf(out, "  %s  %s: %s\n", sid, n.Module, n.Message)
 		}
 	}
 }

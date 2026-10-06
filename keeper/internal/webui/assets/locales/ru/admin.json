@@ -149,6 +149,7 @@
   "auditEventLabel_soul_token-issued": "Для Soul выпущен токен",
   "auditEventLabel_soul_traits-changed": "Traits Soul изменены",
   "auditEventLabel_soulprint_received": "Soulprint получен",
+  "auditEventLabel_ssh_run": "Выполнены команды или применена Destiny по SSH",
   "auditEventLabel_synod_created": "Synod создан",
   "auditEventLabel_synod_deleted": "Synod удалён",
   "auditEventLabel_synod_operator-added": "Archon добавлен в Synod",

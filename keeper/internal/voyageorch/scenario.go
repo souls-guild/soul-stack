@@ -10,6 +10,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 )
 
@@ -129,6 +130,26 @@ func (o TargetOutcome) toTargetStatus() voyage.TargetStatus {
 // abort/shutdown, no_match — benign "incarnation out of scope", parity
 // tideorch.classifyApplyOutcome).
 func (o TargetOutcome) isFailure() bool { return o == OutcomeFailed }
+
+// OutcomeOfRun projects an incarnation's aggregate run status onto the outcome of
+// its Voyage target; done is false while the run is still applying. partial_failed
+// is a failure: the run left hosts behind and its incarnation is error_locked. A
+// status outside [applyrun.RunStatuses] is a failure too (fail-closed, parity
+// toTargetStatus).
+func OutcomeOfRun(s applyrun.RunStatus) (outcome TargetOutcome, done bool) {
+	switch s {
+	case applyrun.RunStatusApplying:
+		return "", false
+	case applyrun.RunStatusSuccess:
+		return OutcomeSucceeded, true
+	case applyrun.RunStatusFailed, applyrun.RunStatusPartialFailed:
+		return OutcomeFailed, true
+	case applyrun.RunStatusCancelled:
+		return OutcomeCancelled, true
+	default:
+		return OutcomeFailed, true
+	}
+}
 
 // parseIncarnationTargets parses target_resolved (kind=scenario): JSONB array
 // of incarnation names (snapshot of set from run start, ADR-043). Empty array /

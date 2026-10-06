@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 # Classification of the run status and polling until terminal. Pure (network only via
-# keeper_api). Source of truth for apply-run statuses is
-# keeper/internal/applyrun/applyrun.go (the RunDetailReply.status aggregate:
-# applying|success|failed|cancelled). Sets are data-driven, seeded from the enum.
+# keeper_api). Source of truth for apply-run statuses is applyrun.RunStatuses in
+# keeper/internal/applyrun/runsview.go (the RunDetailReply.status aggregate:
+# applying|success|failed|partial_failed|cancelled). Sets are data-driven, seeded from the enum.
 
 # Classification sets (override for mutation-test guards).
 : "${E2E_STATUS_SUCCESS:=success}"
-: "${E2E_STATUS_FAIL:=failed cancelled}"
+: "${E2E_STATUS_FAIL:=failed partial_failed cancelled}"
 : "${E2E_STATUS_TRANSIENT:=applying}"
 
 # _in_set <needle> <space-list>
@@ -26,7 +26,7 @@ classify_status() {
 	else echo CONTINUE; fi
 }
 
-# poll_until_terminal <name> <apply_id> → 0 success / 1 failed|cancelled / 2 timeout.
+# poll_until_terminal <name> <apply_id> → 0 success / 1 failed|partial_failed|cancelled / 2 timeout.
 # Every $POLL_INTERVAL sec pulls GET /runs/{apply_id}, up to $POLL_MAX iterations.
 # As a side effect sets POLL_LAST_JSON / POLL_LAST_STATUS / POLL_LAST_HTTP.
 poll_until_terminal() {

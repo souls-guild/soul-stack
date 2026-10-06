@@ -22,7 +22,7 @@ import (
 // done by AllRunsTyped: invalid status/incarnation → 422); offset/limit are int32 with a
 // default (out-of-range/limit>100 → 400).
 type runsListInput struct {
-	Status        string `query:"status" doc:"filter by aggregate run status (applying/success/failed/cancelled); invalid -> 422"`
+	Status        string `query:"status" doc:"filter by aggregate run status (applying/success/failed/partial_failed/cancelled); invalid -> 422"`
 	Incarnation   string `query:"incarnation" doc:"filter by incarnation name; invalid name -> 422"`
 	Service       string `query:"service" doc:"filter by the incarnation's owner service (exact match); longer than 128 characters -> 422"`
 	Q             string `query:"q" doc:"free-text search (substring, case-insensitive) over incarnation/scenario/service/started_by; longer than 128 characters -> 422"`
@@ -46,7 +46,7 @@ func runsListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/",
 		Summary:       "Global run list (paged)",
-		Description:   "Folds apply_runs by apply_id ACROSS ALL incarnations: run status (applying/success/failed/cancelled), owner incarnation, time bounds, initiator. A run (apply_run) is NOT a Voyage. Sorting by column - sort/sort_dir (stable tie-break on apply_id). Visibility scoped by RBAC (ADR-047, fail-closed: empty scope -> empty list). Permission incarnation.history. Read-only.",
+		Description:   "Folds apply_runs by apply_id ACROSS ALL incarnations: run status (applying/success/failed/partial_failed/cancelled), owner incarnation, time bounds, initiator. A run (apply_run) is NOT a Voyage. Sorting by column - sort/sort_dir (stable tie-break on apply_id). Visibility scoped by RBAC (ADR-047, fail-closed: empty scope -> empty list). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -71,7 +71,7 @@ func runsStatsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/stats",
 		Summary:       "Run summary counters",
-		Description:   "Run counters by aggregate status (total/applying/success/failed/cancelled) for all time and for the last 24 hours, within the RBAC scope (fail-closed: empty scope -> zero aggregate). Permission incarnation.history. Read-only.",
+		Description:   "Run counters by aggregate status (total/applying/success/failed/partial_failed/cancelled) for all time and for the last 24 hours, within the RBAC scope (fail-closed: empty scope -> zero aggregate). Permission incarnation.history. Read-only.",
 		Tags:          []string{"runs"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusForbidden, http.StatusInternalServerError},
@@ -88,7 +88,7 @@ type GlobalRunEntry struct {
 	Incarnation  string     `json:"incarnation"`
 	Service      string     `json:"service"`
 	Scenario     string     `json:"scenario"`
-	Status       string     `json:"status" enum:"applying,success,failed,cancelled"`
+	Status       string     `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
@@ -107,11 +107,12 @@ type runsListReply struct {
 // RunsStatsBucket — one run-summary bucket (all time or the last 24 hours): total +
 // a counter for each aggregate status (zeros included — the enum is closed).
 type RunsStatsBucket struct {
-	Total     int `json:"total" doc:"total runs in the bucket"`
-	Applying  int `json:"applying" doc:"runs in progress"`
-	Success   int `json:"success" doc:"successful runs"`
-	Failed    int `json:"failed" doc:"failed runs (including orphaned hosts)"`
-	Cancelled int `json:"cancelled" doc:"cancelled runs"`
+	Total         int `json:"total" doc:"total runs in the bucket"`
+	Applying      int `json:"applying" doc:"runs in progress"`
+	Success       int `json:"success" doc:"successful runs"`
+	Failed        int `json:"failed" doc:"failed runs (including orphaned hosts)"`
+	PartialFailed int `json:"partial_failed" doc:"runs that finished without some of their hosts"`
+	Cancelled     int `json:"cancelled" doc:"cancelled runs"`
 }
 
 // RunsStatsReply — the native body of GET /v1/runs/stats: two buckets of the same shape.
@@ -144,10 +145,11 @@ func newRunsStatsReply(v handlers.RunsStatsView) RunsStatsReply {
 
 func newRunsStatsBucket(v handlers.RunsStatsBucketView) RunsStatsBucket {
 	return RunsStatsBucket{
-		Total:     v.Total,
-		Applying:  v.Applying,
-		Success:   v.Success,
-		Failed:    v.Failed,
-		Cancelled: v.Cancelled,
+		Total:         v.Total,
+		Applying:      v.Applying,
+		Success:       v.Success,
+		Failed:        v.Failed,
+		PartialFailed: v.PartialFailed,
+		Cancelled:     v.Cancelled,
 	}
 }

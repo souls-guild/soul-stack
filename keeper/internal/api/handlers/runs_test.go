@@ -297,6 +297,20 @@ func TestAllRunsTyped_Filters_Bind(t *testing.T) {
 	}
 }
 
+// TestAllRunsTyped_PartialFailedFilter_Binds — partial_failed is in the run-status
+// enum ahead of its writer (NIM-948), so filtering by it is a query, not a 422.
+func TestAllRunsTyped_PartialFailedFilter_Binds(t *testing.T) {
+	db := &fakeIncDB{}
+	h := newRunsHandler(db, fakeIncScoper{unrestricted: true})
+	if _, err := h.AllRunsTyped(context.Background(), runsClaims(),
+		AllRunsInput{Status: "partial_failed", Offset: 0, Limit: 50}); err != nil {
+		t.Fatalf("AllRunsTyped(status=partial_failed): %v", err)
+	}
+	if !argsHasString(db.lastRunsArgs, "partial_failed") {
+		t.Errorf("status filter did not arrive as a bind-arg: %v", db.lastRunsArgs)
+	}
+}
+
 // TestAllRunsTyped_Projection_OK — happy path of the store→View projection: two runs
 // of different incarnations, all fields carried over.
 func TestAllRunsTyped_Projection_OK(t *testing.T) {
@@ -371,7 +385,9 @@ func TestRunsStatsTyped_OK(t *testing.T) {
 			return &runsStatsRows{rows: [][3]any{
 				{"success", int(10), int(3)},
 				{"failed", int(2), int(1)},
-				{"applying", int(1), int(1)},
+				{"partial_failed", int(4), int(2)},
+				{"cancelled", int(5), int(4)},
+				{"applying", int(7), int(6)},
 			}}, nil
 		},
 	}
@@ -380,11 +396,11 @@ func TestRunsStatsTyped_OK(t *testing.T) {
 	if err != nil {
 		t.Fatalf("RunsStatsTyped: %v", err)
 	}
-	wantAll := RunsStatsBucketView{Total: 13, Applying: 1, Success: 10, Failed: 2}
+	wantAll := RunsStatsBucketView{Total: 28, Applying: 7, Success: 10, Failed: 2, PartialFailed: 4, Cancelled: 5}
 	if stats.All != wantAll {
 		t.Errorf("All = %+v, want %+v", stats.All, wantAll)
 	}
-	want24h := RunsStatsBucketView{Total: 5, Applying: 1, Success: 3, Failed: 1}
+	want24h := RunsStatsBucketView{Total: 16, Applying: 6, Success: 3, Failed: 1, PartialFailed: 2, Cancelled: 4}
 	if stats.Last24h != want24h {
 		t.Errorf("Last24h = %+v, want %+v", stats.Last24h, want24h)
 	}

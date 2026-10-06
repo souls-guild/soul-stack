@@ -79,7 +79,7 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 		st := applyrun.RunStatus(in.Status)
 		if !applyrun.ValidRunStatus(st) {
 			return zero, incProblem(problem.TypeValidationFailed,
-				"invalid 'status' filter: must be one of applying/success/failed/cancelled")
+				"invalid 'status' filter: must be one of applying/success/failed/partial_failed/cancelled")
 		}
 		filter.Status = st
 	}
@@ -154,11 +154,12 @@ func (h *IncarnationHandler) AllRunsTyped(ctx context.Context, claims *jwt.Claim
 // RunsStatsBucketView — run counters by aggregate status (one summary bucket: all
 // time or the last 24 hours).
 type RunsStatsBucketView struct {
-	Total     int
-	Applying  int
-	Success   int
-	Failed    int
-	Cancelled int
+	Total         int
+	Applying      int
+	Success       int
+	Failed        int
+	PartialFailed int
+	Cancelled     int
 }
 
 // RunsStatsView — flat domain projection of the 200 body of GET /v1/runs/stats. The
@@ -190,10 +191,11 @@ func (h *IncarnationHandler) RunsStatsTyped(ctx context.Context, claims *jwt.Cla
 // runsStatsBucketView projects the store counters into a domain view.
 func runsStatsBucketView(c applyrun.RunsStatusCounts) RunsStatsBucketView {
 	return RunsStatsBucketView{
-		Total:     c.Total,
-		Applying:  c.Applying,
-		Success:   c.Success,
-		Failed:    c.Failed,
-		Cancelled: c.Cancelled,
+		Total:         c.Total,
+		Applying:      c.Applying,
+		Success:       c.Success,
+		Failed:        c.Failed,
+		PartialFailed: c.PartialFailed,
+		Cancelled:     c.Cancelled,
 	}
 }

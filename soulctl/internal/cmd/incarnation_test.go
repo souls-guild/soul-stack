@@ -398,6 +398,57 @@ func TestPrintRunDetailShowsNoticesOnASuccessfulRun(t *testing.T) {
 	}
 }
 
+// TestPrintRunDetailMergesNoticesAcrossAHostsRows — a host has several rows (one per
+// Passage, one per step under linear dispatch), and keeper dedupes notices within a
+// row only. Three rows passing the same deprecated param must read as one thing to
+// migrate on that host, not three, while a different param on the same host and the
+// same param on another host each stay. The merge is sorted by key, as keeper sorts
+// a row: host-a meets port first, yet prints address first, like host-b would.
+func TestPrintRunDetailMergesNoticesAcrossAHostsRows(t *testing.T) {
+	address := wire.RunNoticeEntry{
+		Code: "deprecated_param", Module: "redis.instance.pinged", Param: "address",
+		Message: `param "address" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
+	}
+	port := wire.RunNoticeEntry{
+		Code: "deprecated_param", Module: "redis.instance.pinged", Param: "port",
+		Message: `param "port" is deprecated since 0.4.0 and stops working in 0.6.0; use "addr" instead`,
+	}
+	var buf bytes.Buffer
+	cmd := &cobra.Command{}
+	cmd.SetOut(&buf)
+	if err := printRunDetail(cmd, &wire.RunDetailReply{
+		ApplyID: "01HX0000000000000000000000", Scenario: "scale", Status: "success",
+		StartedAt: time.Date(2026, 5, 26, 12, 0, 0, 0, time.UTC),
+		Hosts: []wire.RunHostStatusEntry{
+			{SID: "host-a", Status: "success", Passage: 0, Notices: []wire.RunNoticeEntry{port}},
+			{SID: "host-a", Status: "success", Passage: 1},
+			{SID: "host-a", Status: "success", Passage: 2, Notices: []wire.RunNoticeEntry{address, port}},
+			{SID: "host-a", Status: "success", Passage: 3, Notices: []wire.RunNoticeEntry{address}},
+			{SID: "host-b", Status: "success", Passage: 0, Notices: []wire.RunNoticeEntry{address}},
+		},
+	}); err != nil {
+		t.Fatalf("printRunDetail: %v", err)
+	}
+	_, notices, ok := strings.Cut(buf.String(), "notices (")
+	if !ok {
+		t.Fatalf("no notices section:\n%s", buf.String())
+	}
+	want := []string{
+		`  host-a  redis.instance.pinged: ` + address.Message,
+		`  host-a  redis.instance.pinged: ` + port.Message,
+		`  host-b  redis.instance.pinged: ` + address.Message,
+	}
+	var got []string
+	for _, line := range strings.Split(notices, "\n")[1:] {
+		if line != "" {
+			got = append(got, line)
+		}
+	}
+	if strings.Join(got, "\n") != strings.Join(want, "\n") {
+		t.Errorf("notice lines:\n%s\nwant:\n%s", strings.Join(got, "\n"), strings.Join(want, "\n"))
+	}
+}
+
 // A run with nothing to report must print exactly what it printed before the
 // notice block existed - no empty heading, no stray blank section.
 func TestPrintRunDetailQuietWhenNoNotices(t *testing.T) {

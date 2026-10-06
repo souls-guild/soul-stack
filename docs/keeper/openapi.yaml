@@ -1199,6 +1199,7 @@ components:
             - applying
             - success
             - failed
+            - partial_failed
             - cancelled
           type: string
       required:
@@ -3138,6 +3139,7 @@ components:
             - applying
             - success
             - failed
+            - partial_failed
             - cancelled
           type: string
       required:
@@ -3158,6 +3160,7 @@ components:
         error_summary:
           type: string
         failed_plan_index:
+          description: plan_index of the first task that failed on this row (a later failure on the same row does not overwrite it); correlates with tasks[].plan_index
           format: int64
           type: integer
         failed_task_idx:
@@ -3170,6 +3173,7 @@ components:
             - array
             - "null"
         passage:
+          description: "index of the unit this row was dispatched for: the Passage today; once linear dispatch is on, the 0-based step index, a host then having one row per step it was sent. Values can have holes - nothing about them is contiguous"
           format: int64
           type: integer
         sid:
@@ -3223,6 +3227,7 @@ components:
             - applying
             - success
             - failed
+            - partial_failed
             - cancelled
           type: string
       required:
@@ -3248,6 +3253,7 @@ components:
           additionalProperties: {}
           type: object
         passage:
+          description: "index of the unit this task was dispatched in, the passage of the run-detail rows it ran on: the Passage today, the 0-based step index once linear dispatch is on"
           format: int64
           type: integer
         plan_index:
@@ -3354,6 +3360,10 @@ components:
           description: failed runs (including orphaned hosts)
           format: int64
           type: integer
+        partial_failed:
+          description: runs that finished without some of their hosts
+          format: int64
+          type: integer
         success:
           description: successful runs
           format: int64
@@ -3367,6 +3377,7 @@ components:
         - applying
         - success
         - failed
+        - partial_failed
         - cancelled
       type: object
     RunsStatsReply:
@@ -8864,7 +8875,7 @@ paths:
         - incarnation
   /v1/incarnations/{id}/runs:
     get:
-      description: "Fold apply_runs by apply_id: run status (applying/success/failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only."
+      description: "Fold apply_runs by apply_id: run status (applying/success/failed/partial_failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only."
       operationId: listIncarnationRuns
       parameters:
         - description: incarnation id
@@ -11075,15 +11086,15 @@ paths:
         - role
   /v1/runs:
     get:
-      description: "Folds apply_runs by apply_id ACROSS ALL incarnations: run status (applying/success/failed/cancelled), owner incarnation, time bounds, initiator. A run (apply_run) is NOT a Voyage. Sorting by column - sort/sort_dir (stable tie-break on apply_id). Visibility scoped by RBAC (ADR-047, fail-closed: empty scope -> empty list). Permission incarnation.history. Read-only."
+      description: "Folds apply_runs by apply_id ACROSS ALL incarnations: run status (applying/success/failed/partial_failed/cancelled), owner incarnation, time bounds, initiator. A run (apply_run) is NOT a Voyage. Sorting by column - sort/sort_dir (stable tie-break on apply_id). Visibility scoped by RBAC (ADR-047, fail-closed: empty scope -> empty list). Permission incarnation.history. Read-only."
       operationId: listRuns
       parameters:
-        - description: filter by aggregate run status (applying/success/failed/cancelled); invalid -> 422
+        - description: filter by aggregate run status (applying/success/failed/partial_failed/cancelled); invalid -> 422
           explode: false
           in: query
           name: status
           schema:
-            description: filter by aggregate run status (applying/success/failed/cancelled); invalid -> 422
+            description: filter by aggregate run status (applying/success/failed/partial_failed/cancelled); invalid -> 422
             type: string
         - description: filter by incarnation name; invalid name -> 422
           explode: false
@@ -11188,7 +11199,7 @@ paths:
         - runs
   /v1/runs/stats:
     get:
-      description: "Run counters by aggregate status (total/applying/success/failed/cancelled) for all time and for the last 24 hours, within the RBAC scope (fail-closed: empty scope -> zero aggregate). Permission incarnation.history. Read-only."
+      description: "Run counters by aggregate status (total/applying/success/failed/partial_failed/cancelled) for all time and for the last 24 hours, within the RBAC scope (fail-closed: empty scope -> zero aggregate). Permission incarnation.history. Read-only."
       operationId: getRunsStats
       responses:
         "200":

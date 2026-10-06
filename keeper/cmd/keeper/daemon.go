@@ -5921,38 +5921,20 @@ func (a *voyagePgIncarnationAwaiter) Await(ctx context.Context, applyID string) 
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID string) (voyageorch.TargetOutcome, bool) {
-	statuses, err := applyrun.SelectStatusesByApplyID(ctx, a.db, applyID)
+	rows, err := applyrun.SelectStatusesByApplyID(ctx, a.db, applyID)
 	if err != nil {
 		a.logger.Warn("voyageorch: await poll failed",
 			slog.String("apply_id", applyID), slog.Any("error", err))
 		return "", false
 	}
-	if len(statuses) == 0 {
-		return "", false // Keeper daemon runtime wiring note.
+	// The run status the API shows, not a copy of its fold: a status the fold
+	// learns (partial_failed) reaches the Voyage through OutcomeOfRun's mapping
+	// instead of being a host row this loop has never heard of.
+	statuses := make([]applyrun.Status, len(rows))
+	for i, r := range rows {
+		statuses[i] = r.Status
 	}
-	var anyFailed, anyCancelled, allBenign = false, false, true
-	for _, s := range statuses {
-		switch s.Status {
-		case applyrun.StatusSuccess, applyrun.StatusNoMatch:
-			// benign
-		case applyrun.StatusCancelled:
-			anyCancelled, allBenign = true, false
-		case applyrun.StatusFailed, applyrun.StatusOrphaned:
-			anyFailed, allBenign = true, false
-		default:
-			return "", false // Keeper daemon runtime wiring note.
-		}
-	}
-	switch {
-	case anyFailed:
-		return voyageorch.OutcomeFailed, true
-	case anyCancelled:
-		return voyageorch.OutcomeCancelled, true
-	case allBenign:
-		return voyageorch.OutcomeSucceeded, true
-	default:
-		return voyageorch.OutcomeFailed, true
-	}
+	return voyageorch.OutcomeOfRun(applyrun.AggregateRunStatus(statuses))
 }
 
 // Keeper daemon runtime wiring note.

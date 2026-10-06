@@ -43,6 +43,8 @@ echo "== classify_status (RED/GREEN) =="
 it "success→PASS (GREEN)"; assert_eq PASS "$(classify_status success)"
 it "failed→FAIL"; assert_eq FAIL "$(classify_status failed)"
 it "cancelled→FAIL"; assert_eq FAIL "$(classify_status cancelled)"
+# A run that left hosts behind is terminal: as an unknown status it would poll to the timeout.
+it "partial_failed→FAIL"; assert_eq FAIL "$(classify_status partial_failed)"
 it "applying→CONTINUE"; assert_eq CONTINUE "$(classify_status applying)"
 # RED: sabotage the success set - success is no longer PASS (catches exactly this assert).
 it "RED: success token flipped → no longer PASS"

@@ -1273,6 +1273,18 @@ The names below are **convention examples** illustrating how event-types are sor
 
 When implementing each subsystem, PR adds specific names to the "Registered event-types" table indicating the required fields `payload` and a link to the standard ADR.
 
+## Run statuses
+
+Enumeration of the aggregate status of one scenario run (`applyrun.RunStatus`): the `status` of `RunSummaryEntry` / `RunDetailReply` / `GlobalRunEntry` and the buckets of `GET /v1/runs/stats`. It is folded from the run's `apply_runs` host rows, not stored. Not to be confused with `apply_runs.status` (one host row) or `incarnation.status` (`error_locked` is the incarnation's state, not the run's).
+
+`run status: applying | success | failed | partial_failed | cancelled`
+
+- **`applying`** — at least one host row is not terminal.
+- **`success`** — every host row ended `success` or `no_match`.
+- **`failed`** — every host row is terminal and at least one is `failed`/`orphaned`; takes priority over `cancelled`.
+- **`partial_failed`** — the run finished without some of its hosts: they failed under `on_failure: host` and the rest ran to the end ([draft-scenario-linear-barrier.md](adr/draft-scenario-linear-barrier.md) item 4). The incarnation ends `error_locked`, and a Voyage counts the run as failed. The same word `push_runs` and Voyages use for "some failed, the rest finished". ⚠ The fold does not produce it yet: the host rows of such a run are the rows of a `failed` run, so the value appears once the drop itself is recorded (NIM-948).
+- **`cancelled`** — every host row is terminal, at least one is `cancelled` and none is `failed`/`orphaned`.
+
 ## push_runs statuses
 
 Enumeration of `push_runs.status` values (push-orchestrator internal contract, [ADR-032](adr/0032-push-orchestrator.md)). Not to be confused with `apply_runs.status` (`success`/`failed`/`cancelled`/`orphaned`/`no_match`) - push-orchestrator does not overlap with Acolyte work-queue.

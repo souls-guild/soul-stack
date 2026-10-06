@@ -173,30 +173,31 @@ type StateHistoryEntry struct {
 }
 
 // RunSummaryEntry — native element of runs.items (GET /v1/incarnations/{id}/runs).
-// status — aggregate run status (applying/success/failed/cancelled). finished_at
-// / started_by_aid — omitempty (nil → key omitted: run still applying / initiator
-// removed). Form is symmetric with StateHistoryEntry.
+// status — aggregate run status (applying/success/failed/partial_failed/cancelled).
+// finished_at / started_by_aid — omitempty (nil → key omitted: run still applying /
+// initiator removed). Form is symmetric with StateHistoryEntry.
 type RunSummaryEntry struct {
 	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
 	Scenario     string     `json:"scenario"`
-	Status       string     `json:"status" enum:"applying,success,failed,cancelled"`
+	Status       string     `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
 	StartedAt    time.Time  `json:"started_at"`
 	FinishedAt   *time.Time `json:"finished_at,omitempty"`
 	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
 }
 
-// RunHostStatusEntry — native element of runs/{apply_id}.hosts[]: status of one host in
-// the run. failed_task_idx (local index of the failed task within its Passage) /
-// failed_plan_index (global cross-cutting plan_index of the same task) / error_summary
-// are filled ONLY on the failed host (omitempty: nil → key omitted on success/running).
-// status — host-level status (planned/claimed/running/dispatched/success/failed/
-// cancelled/orphaned/no_match).
+// RunHostStatusEntry — native element of runs/{apply_id}.hosts[]: one row of one host
+// in the run, a host having one row per Passage it was sent (per step once linear
+// dispatch is on). failed_task_idx (local
+// index of the failed task within the row's ApplyRequest) / failed_plan_index (global
+// cross-cutting plan_index of the same task) / error_summary are filled ONLY on a
+// failed row (omitempty: nil → key omitted on success/running). status — host-level
+// status (planned/claimed/running/dispatched/success/failed/cancelled/orphaned/no_match).
 type RunHostStatusEntry struct {
 	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper, __run__=run-sentinel abort to dispatch), not addressing a Soul (NIM-36)"`
 	Status          string  `json:"status"`
-	Passage         int     `json:"passage"`
+	Passage         int     `json:"passage" doc:"index of the unit this row was dispatched for: the Passage today; once linear dispatch is on, the 0-based step index, a host then having one row per step it was sent. Values can have holes - nothing about them is contiguous"`
 	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
-	FailedPlanIndex *int    `json:"failed_plan_index,omitempty"`
+	FailedPlanIndex *int    `json:"failed_plan_index,omitempty" doc:"plan_index of the first task that failed on this row (a later failure on the same row does not overwrite it); correlates with tasks[].plan_index"`
 	ErrorSummary    *string `json:"error_summary,omitempty"`
 	Attempt         int32   `json:"attempt"`
 	CancelRequested bool    `json:"cancel_requested"`
@@ -228,7 +229,7 @@ type RunNoticeEntry struct {
 type RunDetailReply struct {
 	ApplyID      string                  `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
 	Scenario     string                  `json:"scenario"`
-	Status       string                  `json:"status" enum:"applying,success,failed,cancelled"`
+	Status       string                  `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
 	StartedAt    time.Time               `json:"started_at"`
 	FinishedAt   *time.Time              `json:"finished_at,omitempty"`
 	StartedByAID *string                 `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
@@ -263,7 +264,7 @@ type RunTaskHostEntry struct {
 // audit (pending hosts not included).
 type RunTaskEntry struct {
 	PlanIndex int                     `json:"plan_index"`
-	Passage   int                     `json:"passage"`
+	Passage   int                     `json:"passage" doc:"index of the unit this task was dispatched in, the passage of the run-detail rows it ran on: the Passage today, the 0-based step index once linear dispatch is on"`
 	ID        string                  `json:"id"`
 	Module    string                  `json:"module"`
 	Params    *map[string]interface{} `json:"params,omitempty"`

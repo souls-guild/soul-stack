@@ -201,9 +201,9 @@ EXEC_MODE=tsh INCARNATION=redis-auto \
 this is only "accepted", not "applied". The engine is polling
 `GET /v1/incarnations/{id}/runs/{apply_id}` (`RunDetailReply`) to the terminal:
 
-- Unit `.status` ∈ `applying | success | failed | cancelled` (source of truth -
-  `keeper/internal/applyrun/applyrun.go`). `classify_status`:
-`success → PASS`, `failed|cancelled → FAIL`, `applying → CONTINUE`. Unknown
+- Unit `.status` ∈ `applying | success | failed | partial_failed | cancelled` (source of truth -
+  `applyrun.RunStatuses` in `keeper/internal/applyrun/runsview.go`). `classify_status`:
+`success → PASS`, `failed|partial_failed|cancelled → FAIL`, `applying → CONTINUE`. Unknown
 status → `CONTINUE` (safe: will reach timeout, not falsely count success).
 - **`assert_run_success` = `.status=="success"` And each `.hosts[].status` ∈
 {`success`, `no_match`}.** `no_match` - benign terminal: script targeting

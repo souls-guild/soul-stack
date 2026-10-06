@@ -186,7 +186,7 @@ func incRunsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{id}/runs",
 		Summary:       "List incarnation runs (paged)",
-		Description:   "Fold apply_runs by apply_id: run status (applying/success/failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
+		Description:   "Fold apply_runs by apply_id: run status (applying/success/failed/partial_failed/cancelled), time bounds, initiator. Run (apply_run) - NOT Voyage. Outside RBAC scope -> 404. Permission incarnation.history. Read-only.",
 		Tags:          []string{"incarnation"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

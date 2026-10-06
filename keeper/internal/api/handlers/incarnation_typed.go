@@ -1264,7 +1264,7 @@ func (h *IncarnationHandler) HistoryTyped(ctx context.Context, name string, filt
 // incarnation_name in the store layer additionally excludes runs of a different incarnation.
 
 // RunSummaryView — FLAT domain row of the run list. Package api projects
-// it into native. Status is the aggregate run status (applying/success/failed/cancelled).
+// it into native. Status is the aggregate run status (applying/success/failed/partial_failed/cancelled).
 // Incarnation is the run's owner: not returned in the per-incarnation wire (implicit),
 // a separate entry field in the global GET /v1/runs.
 type RunSummaryView struct {
