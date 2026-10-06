@@ -33,6 +33,10 @@ type ScenarioManifest struct {
 	Vars        map[string]any `yaml:"vars,omitempty"`
 	Tasks       []Task         `yaml:"tasks"`
 
+	// Settings is the scenario level of `settings:` — the default for every task
+	// beneath it and the only level that may carry a run-kind key.
+	Settings *ScenarioSettings `yaml:"settings,omitempty"`
+
 	// Extends names a covenant fragment at the service-repo root (`covenant.yml`
 	// without extension, `<dir>/<name>` at most one directory deep, each segment
 	// matching refPathSegment — see reCovenantName in covenant.go, which is the
@@ -386,6 +390,10 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	// 4a) `compute:` — structural validation (only if the key is present).
 	if topKeys["compute"] {
 		out = append(out, validateComputeBlock(root, "$.compute")...)
+	}
+
+	if topKeys["settings"] {
+		out = append(out, validateScenarioSettings(root)...)
 	}
 
 	// 5) `input:` — shared schema validator.

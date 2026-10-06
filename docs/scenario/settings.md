@@ -1,9 +1,16 @@
 # Scenario settings — the `settings:` block
 
-> **Status: design, not implemented.** Specified by the draft ADR
+> **Status: parsed, not acted on.** Specified by the draft ADR
 > [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), fork 4.
-> Nothing below is accepted by today's parser — an older Keeper refuses the `settings:` key outright.
-> Every rule here is a user decision of 2026-09-30 / 2026-10-01 unless marked **open**.
+> Since NIM-927 the shape (§1), the keys and their values (§2), the §3 refusals — a run-kind key
+> below the scenario, `settings:` where it may not be written, an unknown key — and the §2.3
+> warning are enforced by the one validator in `shared/config` (the Keeper refuses what `soul-lint`
+> refuses); `config.MergeSettings` merges two levels key by key, and render applies it so far only
+> from a block to its children. **Not yet:** rule 4's
+> warning and §3.1's refusal (NIM-940), and every behaviour the keys describe — the barrier, the
+> timeouts, `serial_scope` (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
+> `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
+> 2026-10-01 unless marked **open**.
 
 A scenario declares how its own run behaves — what a host's failure kills, how many failed hosts it
 tolerates, how long it waits for a lost agent, a task, and the whole run — in one `settings:` block.
@@ -49,18 +56,18 @@ tasks:
           task_timeout: 30m
 ```
 
-The scenario top level is a flat list of thirteen keys today (`shared/config/scenario.go:27-85`), none
-of which governs execution behaviour. `settings:` is the first such container, so the timeouts and
-whatever arrives later have one home instead of a key each.
+The scenario top level was a flat list of thirteen keys, none of which governed execution behaviour.
+`settings:` is the first such container, so the timeouts and whatever arrives later have one home
+instead of a key each.
 
 A block composes its keys by **several** rules, and `settings:` takes the `vars:` one. The authority
-is `mergeBlockInheritance` (`keeper/internal/render/block.go:280-291`):
+is `mergeBlockInheritance` (`keeper/internal/render/block.go:280-292`):
 
 | Key on the block | Against the child's own key |
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:367-380`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:368-381`) |
 | `transport:` | **child wins, whole map** |
 | `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:65`, `:228-236`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
@@ -132,7 +139,7 @@ the inline path today:
 - **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
   `orphaned` (`keeper/internal/applyrun/crud.go:971-979`), so a Soul that dies mid-task leaves its row
   `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1361-1372`). And a result finished while the stream was down must still reach
+  operator cancelled (`keeper/internal/scenario/run.go:1366-1377`). And a result finished while the stream was down must still reach
   the Keeper when it returns, or the wait buys nothing.
 - **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
   (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
@@ -147,7 +154,7 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:996-1023`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1001-1028`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:141-150`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
@@ -178,8 +185,8 @@ reported — the process that would report it is gone — so no value of `soul_t
 `systemctl reboot` succeed. That needs its own design (Ansible has a dedicated `reboot` module for
 exactly this); §6.
 
-`timeout:` is refused on a block today (`shared/config/scenario_task.go:1104-1111`) and on an
-applier (`:1263-1266`). Lifting it on a block is NIM-910's amendment, not this document's;
+`timeout:` is refused on a block today (`shared/config/scenario_task.go:1110-1117`) and on an
+applier (`:1269-1273`). Lifting it on a block is NIM-910's amendment, not this document's;
 `settings: {task_timeout: X}` on a block or an applier needs no such lift, and is the default for
 every task beneath it.
 
@@ -195,22 +202,38 @@ every task beneath it.
    **default** block each child is its own step with its own barrier, so the key is read like
    anywhere else. In a block **rolled as one group** the children share one message and one barrier,
    so a child's barrier-kind key — and its `serial:` — is not read, and `soul-lint` warns.
-5. **A run-kind key below the scenario level is refused**, with a hint to the task-kind equivalent:
-   `scenario_timeout: 1h` on a task would read as a bound on that task and bound nothing.
+5. **A run-kind key below the scenario level is refused** (`settings_run_key_below_scenario`), with a
+   hint to the task-kind equivalent: `scenario_timeout: 1h` on a task would read as a bound on that
+   task and bound nothing. A `task_timeout` larger than the run's `scenario_timeout` is legal — both
+   bounds hold, and the smaller one ends the task.
 6. **Inside an applier, the destiny's tasks inherit the applier's settings.** A destiny is not a
    scenario and gains no `settings:` key, so its tasks can change none of them — except through their
    own `timeout:`, which is `task_timeout`'s shorthand everywhere (§2.3) and, as the lower level, wins.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:791-793`); an `assert:` (it
-fails the render, not a host); an `include:` for now (each spliced task is its own barrier, so the
-meaning differs from a block's and deserves its own decision; refusing is additive to lift later).
+keeper failure always ends the run — `keeper/internal/scenario/run.go:796-799`) —
+`settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
+`settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
+meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
+`settings_on_include_invalid`. A destiny has no `settings:` key at all: written in one, it is
+`unknown_key`.
 
 **Two rules for whatever is added next**, so the single validator survives growth: an **unknown key**
-inside `settings:` is an error, never ignored — that is what makes a new key or a nested sub-block an
-additive change, failing loudly on an older Keeper instead of being dropped; and a new key must
-**declare its kind** (task, barrier, block or run), which is its whole placement rule.
+inside `settings:` is an error (`unknown_key`), never ignored — that is what makes a new key or a
+nested sub-block an additive change, failing loudly on an older Keeper instead of being dropped; and
+a new key must **declare its kind** (task, barrier, block or run), which is its whole placement rule —
+the kind is a column of the key table in `shared/config/scenario_settings.go`.
+
+**Values.** `on_failure` and `serial_scope` take their enum (`enum_invalid` otherwise); `tolerate` an
+integer ≥ 0 or a string `N%` with N in 0..100 (quoting it is customary, not required); the three timeouts a duration string (`30s`, `5m`,
+`1h30m`, `2d`). Zero is legal only for `task_timeout` — spelled `0` or `"0s"`, "no limit"; a zero
+`soul_timeout` or `scenario_timeout`, and any negative duration, is `value_out_of_range`.
+
+**`timeout:` beside `settings.task_timeout`** (§2.3): when both are written on one task and differ,
+`soul-lint` warns `timeout_shadowed_by_task_timeout` on the `timeout:` line, and the Keeper accepts
+the file. Under this design the explicit key wins; until task timeouts are read from `settings:`
+(NIM-949) the Soul still applies `timeout:`, which is why the warning says both.
 
 ### 3.1 A block rolled as one group — the canary
 
@@ -285,14 +308,14 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
 
 ⚠ **Almost none of this exists today.** The barrier returns on the first failed host
 (`dispatch.go:426-429`) and the abort force-fails every row still running
-(`keeper/internal/scenario/run.go:1361-1372`) on the assumption that no result will arrive — false
+(`keeper/internal/scenario/run.go:1366-1377`) on the assumption that no result will arrive — false
 for a live host. The only failure record per host is one first-arrival slot, `failed_plan_index`
 (`keeper/internal/applyrun/crud.go:425-451`), which the barrier does not even read: its one reader,
 `failedPlanIndex` (`dispatch.go:537-549`), has no callers. A dead host is caught only on the Acolyte
 path, which linear runs do not take: only a row marked `dispatched` — which the claim does,
 `claim.go:211` — can be set `orphaned` (`crud.go:971-979`). The
 audit log does record every task failure, and the cross-passage gate already reads it
-(`run.go:808`).
+(`run.go:813`).
 
 ## 5. Naming
 
@@ -309,7 +332,7 @@ scenario saying so.
 ## 6. Open
 
 - **Which hosts are "the run's" for `tolerate: "N%"`.** The roster is re-read at every refresh
-  boundary (`keeper/internal/scenario/run.go:655-662`): it grows during provisioning and can lose an
+  boundary (`keeper/internal/scenario/run.go:660-667`): it grows during provisioning and can lose an
   offline host with no failure recorded. Recommended: the distinct hosts the run has dispatched at
   least one task to, counted at the barrier being checked.
 - **A dropped host must stay dropped across that re-read** — the ADR's item 5. A refresh boundary

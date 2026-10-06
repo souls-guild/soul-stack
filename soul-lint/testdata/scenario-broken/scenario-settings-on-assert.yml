@@ -1,0 +1,7 @@
+name: settings-on-assert
+tasks:
+  - name: Settings on a render-time check
+    assert:
+      that: ["true"]
+    settings:
+      on_failure: host

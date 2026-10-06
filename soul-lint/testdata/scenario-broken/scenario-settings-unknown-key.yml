@@ -1,0 +1,9 @@
+name: settings-unknown-key
+settings:
+  on_failure: scenario
+tasks:
+  - name: A misspelt settings key
+    module: core.exec.run
+    params: { cmd: "true" }
+    settings:
+      on_failur: host

@@ -83,10 +83,13 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 				YAMLPath: fmt.Sprintf("$[%d]", i),
 			})
 		}
-		diags = append(diags, validateTaskNode(item, fmt.Sprintf("$[%d]", i))...)
+		taskDiags := validateTaskNode(item, fmt.Sprintf("$[%d]", i))
 		if opts.DestinyTasks {
-			diags = append(diags, validateKeeperModuleInDestiny(item, fmt.Sprintf("$[%d]", i))...)
+			taskDiags = dropScenarioSettingsDiags(taskDiags)
+			taskDiags = append(taskDiags, validateKeeperModuleInDestiny(item, fmt.Sprintf("$[%d]", i))...)
+			taskDiags = append(taskDiags, validateSettingsInDestiny(item, fmt.Sprintf("$[%d]", i))...)
 		}
+		diags = append(diags, taskDiags...)
 	}
 	// Cross-task invariants over the whole list (duplicate register, unknown
 	// register references in onchanges/onfail/require). See validateTaskRefs.

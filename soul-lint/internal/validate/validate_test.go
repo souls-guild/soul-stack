@@ -116,6 +116,19 @@ func TestGolden_ScenarioTransportTaskKey(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/transport-task-key.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioSettings — docs/scenario/settings.md §1 at every level it may
+// be written. The refusals are the `scenario-broken/scenario-settings-*` fixtures.
+func TestGolden_ScenarioSettings(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/settings.yml", KindScenario, false, ExitOK, nil)
+}
+
+// A task writing `timeout:` and a different `settings.task_timeout` lints clean
+// with a warning: the explicit key wins (settings.md §2.3).
+func TestGolden_ScenarioSettingsTimeoutShadowed(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/settings-timeout-shadowed.yml", KindScenario, false, ExitOK,
+		[]string{"timeout_shadowed_by_task_timeout"})
+}
+
 // TestGolden_ScenarioCoreServedWithoutSchema — the half of NIM-888 that must stay
 // green: `core.augur` and `core.cert` are served and ship no schema document, so
 // they lint clean with an unchecked hint. The refused half is the

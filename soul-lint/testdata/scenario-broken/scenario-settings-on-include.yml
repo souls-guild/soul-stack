@@ -1,0 +1,6 @@
+name: settings-on-include
+tasks:
+  - name: Settings on an include
+    include: _shared/deploy.yml
+    settings:
+      on_failure: host

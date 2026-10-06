@@ -45,8 +45,9 @@ On top of the tasks from [destiny/tasks.md](../destiny/tasks.md), the scenario t
 | `serial:` | int (1..M) OR string `"<N>%"` | module/apply/`block:`-task | optional (omitted = entire target width) *Granularity - per-Passage min-width (in N=1 = per-RUN), see subsection §2.2.1 below* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-task | optional |
 | `transport:` | string (transport name) OR map keyed by ONE transport name | module/apply/`block:`-task, Soul-side only | optional (omitted = the registry decides) — see §2.2.5 |
+| `settings:` | map of the run-behaviour keys | module/apply/`block:`-task and a block child, Soul-side only; refused on `assert:`/`include:` | optional — parsed and merged, not yet acted on; see [settings.md](settings.md) |
 
-In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1).
+In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1); `settings:` - the scenario level of the run-behaviour block ([settings.md](settings.md)).
 
 Everything else in the scenario task is exactly the same as in the destiny task, with the same semantics ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-complete-list-of-task-blocks)). Discrepancies with destiny are explicitly listed in §6 (resource resolution) and §10 (template context).
 

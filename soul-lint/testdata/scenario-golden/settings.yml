@@ -1,0 +1,31 @@
+name: converge
+description: The settings block of docs/scenario/settings.md §1, at every level it may be written.
+
+settings:
+  on_failure: scenario
+  tolerate: "10%"
+  soul_timeout: 1m
+  task_timeout: 0
+  scenario_timeout: 24h
+
+tasks:
+  - name: probe replication lag
+    module: core.exec.run
+    params: { cmd: "true" }
+    register: lag
+    settings:
+      on_failure: host
+
+  - name: rolling config update
+    settings:
+      on_failure: host
+    block:
+      - name: render config
+        module: core.file.present
+        params: { path: /etc/app.conf, content: "x" }
+      - name: migrate schema
+        module: core.exec.run
+        params: { cmd: "true" }
+        settings:
+          on_failure: scenario
+          task_timeout: 30m

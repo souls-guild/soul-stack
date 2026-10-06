@@ -539,6 +539,8 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 // accepting the key too. One key, one diagnostic, and the surviving one is the
 // true one. It comes back here when the output-contract slice makes `output:`
 // legal on a module task, because forwarding it through include stays unbuilt.
+// `settings:` (NIM-927) is absent for the same reason: `settings_on_include_invalid`
+// refuses it at validation.
 func includeModifierReason(task Task) string {
 	switch {
 	case task.Loop != nil:

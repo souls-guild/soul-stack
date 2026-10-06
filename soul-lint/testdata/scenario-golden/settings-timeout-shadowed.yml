@@ -1,0 +1,8 @@
+name: settings-timeout-shadowed
+tasks:
+  - name: Both spellings of the task bound, disagreeing
+    module: core.exec.run
+    params: { cmd: "true" }
+    timeout: 5m
+    settings:
+      task_timeout: 10m

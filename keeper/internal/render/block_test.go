@@ -3,7 +3,9 @@ package render
 import (
 	"context"
 	"errors"
+	"reflect"
 	"testing"
+	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -827,4 +829,35 @@ func (s staticResolver) Resolve(_ context.Context, name string) (*ResolvedDestin
 		return nil, errors.New("unknown destiny")
 	}
 	return s.res, nil
+}
+
+// TestMergeBlockInheritance_SettingsMergeKeyByKeyThroughNesting — `settings:`
+// flows outer block → inner block → child key by key, and the child's own
+// `timeout:` beats the task_timeout an enclosing block set.
+func TestMergeBlockInheritance_SettingsMergeKeyByKeyThroughNesting(t *testing.T) {
+	leaf := moduleTask("leaf", "core.exec.run")
+	leaf.Timeout = "5m"
+	inner := config.Task{
+		Name:     "inner",
+		Settings: &config.ScenarioSettings{SerialScope: new(config.SerialScopeBlock)},
+		Block:    &config.BlockTask{Block: []config.Task{leaf}},
+	}
+	outer := config.Task{
+		Name: "outer",
+		Settings: &config.ScenarioSettings{
+			OnFailure:   new(config.OnFailureHost),
+			TaskTimeout: new(30 * time.Minute),
+		},
+		Block: &config.BlockTask{Block: []config.Task{inner}},
+	}
+
+	got := mergeBlockInheritance(mergeBlockInheritance(outer, inner), leaf).Settings
+	want := &config.ScenarioSettings{
+		OnFailure:   new(config.OnFailureHost),
+		TaskTimeout: new(5 * time.Minute),
+		SerialScope: new(config.SerialScopeBlock),
+	}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("leaf settings = %+v, want %+v", got, want)
+	}
 }

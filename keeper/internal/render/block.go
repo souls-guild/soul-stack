@@ -101,7 +101,7 @@ type blockChildRecurser func(child config.Task, idx int, childTargeted []*topolo
 // so block inheritance doesn't drift between renderBlockTask and
 // renderDestinyBlock (major drift risk):
 //
-//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites/transport
+//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites/transport/settings
 //	→ keepIncludeGroup(child)                 — conditional-include group-drop
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
@@ -265,8 +265,8 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 
 // mergeBlockInheritance builds a block descendant with inheritance from the
 // container merged in (destiny/tasks.md §6.5). Does NOT mutate the source
-// structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail/Require
-// and Transport rewritten. Other fields (Module/Apply/Block/Loop/Register/params/
+// structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail/Require,
+// Transport and Settings rewritten. Other fields (Module/Apply/Block/Loop/Register/params/
 // serial/run_once/…)
 // stay as in the source descendant: serial is NOT inherited by the descendant
 // (wave width is distributed via DispatchPlan in renderBlockTask, not through a
@@ -286,6 +286,7 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.OnFail = unionNames(blockTask.OnFail, child.OnFail)
 	out.Require = mergeRequire(blockTask.Require, child.Require)
 	out.Transport = mergeTransport(blockTask.Transport, child.Transport)
+	out.Settings = config.InheritSettings(blockTask.Settings, child)
 
 	return out
 }

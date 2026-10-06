@@ -49,6 +49,9 @@ type Task struct {
 	Serial    any    `yaml:"serial,omitempty"` // int >= 1 | "<N>%"
 	RunOnce   bool   `yaml:"run_once,omitempty"`
 	Transport any    `yaml:"transport,omitempty"` // "<name>" | {<name>: {params}} — see TransportSpec
+	// Settings is the task's own level, merged with its enclosing blocks' by
+	// render. Read it through [Task.OwnSettings], which folds `timeout:` in.
+	Settings *ScenarioSettings `yaml:"settings,omitempty"`
 
 	// Discriminator (exactly one non-nil).
 	Module  *ModuleTask  `yaml:"module,omitempty"`
@@ -613,6 +616,9 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 	// independent: they are unbuilt on EVERY kind, so the diagnostic must not read
 	// as "meaningless on this kind".
 	out = append(out, validateOutputUnsupported(present, pathPrefix)...)
+
+	// 1d) `settings:` — refused by discriminator and side, otherwise validated.
+	out = append(out, validateTaskSettings(present, pathPrefix)...)
 
 	// 2) Discriminator: exactly one of {module, apply, include, block, assert}.
 	// `assert:` is a render-time precondition (ADR-009 amendment): a check, NOT an

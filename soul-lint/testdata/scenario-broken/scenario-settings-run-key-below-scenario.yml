@@ -1,0 +1,7 @@
+name: settings-run-key-below-scenario
+tasks:
+  - name: A run-wide bound written on one task
+    module: core.exec.run
+    params: { cmd: "true" }
+    settings:
+      scenario_timeout: 1h

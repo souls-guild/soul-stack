@@ -90,6 +90,10 @@ var validateRuleSliceType = reflect.TypeOf([]ValidateRule(nil))
 // (like validateRuleSliceType/computeBlockType).
 var formLayoutType = reflect.TypeOf(FormLayout{})
 
+// scenarioSettingsType is a reflect-walker stop point for `settings:`: its fields
+// carry no yaml tags, and decodeSettings reports its unknown keys itself.
+var scenarioSettingsType = reflect.TypeOf(ScenarioSettings{})
+
 // walkUnknownKeys walks the AST mapping `root` against the yaml tags of type
 // `cfg`, collecting `unknown_key` diagnostics for keys absent from the Go struct.
 //
@@ -225,9 +229,9 @@ func walkValueAgainstType(n ast.Node, t reflect.Type, path string) []diag.Diagno
 	if t == validateRuleSliceType {
 		return nil
 	}
-	// FormLayout — own AST validator validateFormLayout (cross-invariants +
-	// unknown_key over sections/fields); the generic walker does not descend here.
-	if t == formLayoutType {
+	// FormLayout / ScenarioSettings — own AST validators (validateFormLayout,
+	// decodeSettings) raise unknown_key themselves; the generic walker does not descend here.
+	if t == formLayoutType || t == scenarioSettingsType {
 		return nil
 	}
 
