@@ -49,7 +49,7 @@ Two earlier drafts of this ADR said otherwise. Recorded so the claim is not made
   accumulated map as it is, with no default (`shared/cel/vars.go:280-289`), so a name nobody emitted
   is a cel-go `no such key` at render, not an empty read.
 - **Cross-passage `onchanges:`/`onfail:` is already resolved Keeper-side** from accumulated per-host
-  CHANGED/FAILED facts (`keeper/internal/scenario/crosspassage.go:34-191`, wired at
+  CHANGED/FAILED facts (`keeper/internal/scenario/crosspassage.go:42-218`, wired at
   `keeper/internal/scenario/run.go:796-814`), and a Keeper that cannot read those facts **refuses
   the run** rather than guessing (`cross_passage_requisite_unsupported`,
   `keeper/internal/scenario/run.go:486-493`).
@@ -142,7 +142,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        `skipped: true` (`soul/internal/runtime/applyrunner.go:1414-1421`), and a later
        `register.X.changed` reads `false` from it. A task the Keeper never sends writes nothing, and
        that read would raise instead. The Keeper writes the SKIPPED event and register for that host
-       itself — as it must for a host the requisite gate drops (`crosspassage.go:91-99`). Inside a
+       itself — as it must for a host the requisite gate drops (`crosspassage.go:107-115`). Inside a
        group the child is sent with `when: false` instead of being left out, so the Soul writes the
        SKIPPED register in the message, where a sibling's open predicate can read it. That `false`
        holds on some hosts and not others, so it travels in the per-host overlay
@@ -216,10 +216,10 @@ depends on anything is the fact that *k* comes after *k−1*.
 
 5. **`onchanges:` needs no new mechanism — the existing Keeper-side path becomes the only path.**
    `crossPassageGate.applyGate` already resolves a requisite whose source is in an earlier Passage,
-   per host, from the audit log's CHANGED sets (`keeper/internal/scenario/crosspassage.go:78-162`).
+   per host, from the audit log's CHANGED sets (`keeper/internal/scenario/crosspassage.go:94-178`).
    Under this ADR every requisite source outside a group rolled as one is in an earlier message, so
    that branch runs on every
-   dispatch instead of rarely — ⚠ **except for an applier source, which it gets wrong today**
+   dispatch instead of rarely — an applier source included, which it got wrong until NIM-931
    (§`onchanges:`). Inside a group, a child the gate drops on a host is sent there as `when: false`
    (decision 4), so its siblings still see its SKIPPED register. **`onfail:` is a different matter
    and is fork 1.**
@@ -273,7 +273,7 @@ depends on anything is the fact that *k* comes after *k−1*.
 > cross-host barrier — an `assert:` (`keeper/internal/render/pipeline.go:227-237`), a conditionally
 > dropped `include:` group (`:209-214`), a statically-false `when:` (`:973-975` →
 > `dispatch.go:588-606` → `:66-73`), a keeper-side task (decision 3), and a task whose `where:` or
-> requisite gate leaves it with no host (`crosspassage.go:91-99`). Under the happens-before
+> requisite gate leaves it with no host (`crosspassage.go:107-115`). Under the happens-before
 > formulation this is a fact about barrier *count*, not about ordering, and it costs the decision
 > nothing: step *k+1* still waits for step *k−1*'s barrier.
 
@@ -410,7 +410,7 @@ the rescue tail itself after a fail-stop (`soul/internal/runtime/applyrunner.go:
 
 Under this ADR every top-level `onfail:` source is in an earlier message, and by the section above
 its failure ends the run before the rescue message is built. The onfail call to `resolveKind`
-(`crosspassage.go:120`) can only fire inside a run the barrier has already ended.
+(`crosspassage.go:136`) can only fire inside a run the barrier has already ended.
 
 Under `on_failure: host` it does not reach the failed host either: that host has been dropped, and a
 dropped host receives no later task. So the rescue misses its one target under **both** radii.
@@ -430,13 +430,14 @@ would stop firing silently — the exact silence this ADR is escaping.
 
 It does not reach that path. `applyGate` resolves the requisite Keeper-side first, and either strips
 it from the wire (a source changed → consumer runs) or drops the consumer from the host slice
-(`crosspassage.go:137-162`). A source that was SKIPPED, or filtered out by `where:` on that host,
+(`crosspassage.go:153-178`). A source that was SKIPPED, or filtered out by `where:` on that host,
 correctly counts as not-changed — the set is CHANGED status from the audit log, not "a register row
 exists" (`crosspassage.go:18-23`). A source inside a group keeps its own `plan_index`, which is the
 audit key.
 
-What changes is standing, and for one kind of source also semantics: today this is the rare branch,
-skipped entirely for a single-Passage run; under this ADR it runs on every dispatch.
+What changes is standing (for an applier source, also semantics, until NIM-931 shipped that change):
+today this is the rare branch, skipped entirely for a single-Passage run; under this ADR it runs on
+every dispatch.
 
 ⚠ **An applier as a requisite source never fires across a barrier.** The gate's sets are built from
 an event's `status` (`keeper/internal/auditpg/changed_tasks.go:73-82`). An applier's register is
@@ -452,7 +453,10 @@ on opposite sides of one — and universal under this ADR. The tree's own exampl
 (`:155`) and gates its live-reload `CONFIG SET` steps on `onchanges: [tls_certs]` (`:215` on), so
 the rotation would report success without the reload. **S1 resolves an applier source from its
 children's statuses** — the Keeper knows them, they are the terminal's `aggregate_of` — with a guard
-test in that shape (item 16).
+test in that shape (item 16). **Shipped ahead of the train in NIM-931**, so the Keeper-side failure
+described from the ⚠ to here is the code before it: `newCrossPassageGate` reads `aggregate_of`, guarded by
+`TestCrossPassageGate_ApplierSourceResolvedByChildren` and
+`TestIntegration_CrossPassageOnChanges_ApplierSource`.
 
 ⚠ **And one existing refusal goes from rare to universal.** A Keeper with no `AuditReader` already
 **refuses** a staged run carrying a cross-passage requisite — `cross_passage_requisite_unsupported`
@@ -694,14 +698,14 @@ before the run ends. Hosts where the source succeeded receive
 nothing from it.
 
 Half of the resolution exists: the cross-passage gate narrows an `onfail:` consumer to the hosts where
-its source FAILED (`keeper/internal/scenario/crosspassage.go:120`). But it only *filters* the hosts
+its source FAILED (`keeper/internal/scenario/crosspassage.go:136`). But it only *filters* the hosts
 already in the consumer's plan — it cannot add one — and the run aborts at the barrier before the
 rescue message is built. Removing the abort is not enough; the rescue still misses unless S1 also
 builds these:
 
 - **a dropped host stays targetable** by an `onfail:` consumer whose source failed on it — under
   `on_failure: host` it has left the roster;
-- **an applier source** resolves from its children (§`onchanges:`);
+- **an applier source** resolves from its children (§`onchanges:`) — shipped in NIM-931;
 - **a failure with no task row** — `send_apply_failed` (`keeper/internal/scenario/dispatch.go:336-340`),
   an expired `soul_timeout`, a push transport error — is written as a
   FAILED event for every task the message carried: the top-level task and each child of its group,
@@ -923,7 +927,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     - Barrier timeout and straggler policy; a run started under ADR-056 while the Keeper is
       redeployed.
 16. **Applier sources resolve from their children** for the cross-barrier gate (§`onchanges:`), with
-    a guard test in the `rotate_tls` shape.
+    a guard test in the `rotate_tls` shape. Shipped ahead of the train in NIM-931.
 17. **Decision 4's machinery**, each piece absent today except the guards it lifts: a rewrite that
     meets the equivalence in
     [predicate-rendering.md](../scenario/predicate-rendering.md), with the differential test

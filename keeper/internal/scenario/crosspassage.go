@@ -22,6 +22,14 @@ package scenario
 // row exists" (register is written for ok/skipped probes too). onfail mirrors
 // this over FAILED∪TIMED_OUT.
 //
+// Applier sources (NIM-931). `onchanges:`/`onfail:` naming an applier's
+// register resolve to its synthetic terminal `core.noop.run`, whose own
+// task.executed status is always OK: Soul folds the children into the
+// terminal's register_data, never into its status. The terminal's own fact
+// would answer "not changed, not failed" for every applier, so the gate reads
+// its children (aggregate_of) instead — CHANGED if any child changed, FAILED if
+// any child failed or timed out, the same fold as Soul's aggregateRegisterData.
+//
 // Per-host. CHANGED/FAILED is a fact of a SPECIFIC host (source changed on
 // host-a, ok on host-b). So the "consumer runs / excluded" decision and the
 // wire-requisite rewrite are made per-(sid).
@@ -44,6 +52,10 @@ type crossPassageGate struct {
 	// alone).
 	passageByIndex map[int]int
 
+	// aggregateOf — an applier terminal's Index → its children's global
+	// Indices; a source listed here is answered by its children's facts.
+	aggregateOf map[int][]int
+
 	// changed / failed — per-(sid, planIndex) CHANGED / (FAILED∪TIMED_OUT) facts,
 	// accumulated over Passages < current (auditpg). planIndex = global Index.
 	changed map[auditpg.ChangedTaskKey]struct{}
@@ -55,10 +67,14 @@ type crossPassageGate struct {
 // changed/failed are CHANGED/FAILED facts from Passages < p.
 func newCrossPassageGate(tasks []*render.RenderedTask, changed, failed map[auditpg.ChangedTaskKey]struct{}) *crossPassageGate {
 	idx := make(map[int]int, len(tasks))
+	agg := make(map[int][]int)
 	for _, t := range tasks {
 		idx[t.Index] = t.Passage
+		if len(t.AggregateOf) > 0 {
+			agg[t.Index] = t.AggregateOf
+		}
 	}
-	return &crossPassageGate{passageByIndex: idx, changed: changed, failed: failed}
+	return &crossPassageGate{passageByIndex: idx, aggregateOf: agg, changed: changed, failed: failed}
 }
 
 // applyGate rewrites a Passage's per-host slice by cross-passage requisites:
@@ -178,14 +194,25 @@ func (g *crossPassageGate) splitRequisite(idxs []int, consumerPassage int) (cros
 	return cross, same
 }
 
-// anyKey — OR across cross-passage sources: is at least one (sid, srcIdx) in
-// the facts set (changed / failed). srcIdx is the global plan_index (=
-// auditpg key).
+// anyKey — OR across cross-passage sources: is at least one source's fact for
+// sid in the set (changed / failed). Indices are the global plan_index (=
+// auditpg key); an applier source contributes its children's facts.
 func (g *crossPassageGate) anyKey(set map[auditpg.ChangedTaskKey]struct{}, sid string, srcIdxs []int) bool {
 	for _, srcIdx := range srcIdxs {
-		if _, ok := set[auditpg.ChangedTaskKey{SID: sid, PlanIndex: srcIdx}]; ok {
-			return true
+		for _, factIdx := range g.factIndices(srcIdx) {
+			if _, ok := set[auditpg.ChangedTaskKey{SID: sid, PlanIndex: factIdx}]; ok {
+				return true
+			}
 		}
 	}
 	return false
+}
+
+// factIndices — the plan indices whose facts answer for source srcIdx: an
+// applier terminal's children, otherwise the source itself.
+func (g *crossPassageGate) factIndices(srcIdx int) []int {
+	if children, ok := g.aggregateOf[srcIdx]; ok {
+		return children
+	}
+	return []int{srcIdx}
 }

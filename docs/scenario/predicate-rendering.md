@@ -115,7 +115,7 @@ Each piece is absent today, except the two existing host-invariance guards, whic
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
-  (`keeper/internal/scenario/crosspassage.go:129-134`), and each host's slice reaches the wire
+  (`keeper/internal/scenario/crosspassage.go:145-150`), and each host's slice reaches the wire
   through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:278`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on
