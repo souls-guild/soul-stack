@@ -386,10 +386,10 @@ func checkRefList(kind string, value ast.Node, known map[string]bool, taskPath s
 // hop makes that shape reachable in ordinary authoring, so the caller drops it.
 var reRegisterCELRef = regexp.MustCompile(`(^|[^A-Za-z0-9_.])register\.(hosts\.)?([a-z][a-z0-9_]*)(\()?`)
 
-// celStringLiteral — a CEL string literal (single/double quotes). Mirrors
-// shared/cel.stringLiteralRe; we strip the contents before the textual identifier
-// search so that `register.x` inside a data literal does not yield a false
-// unknown_register_reference.
+// celStringLiteral — a CEL string literal (single/double quotes). It knows no escapes
+// and no comments, so a quote in either pairs wrongly. We strip the contents before
+// the textual identifier search so that `register.x` inside a data literal does not
+// yield a false unknown_register_reference.
 var celStringLiteral = regexp.MustCompile(`'[^']*'|"[^"]*"`)
 
 // reSoulprintRef catches a soulprint reference in CEL text (the host-variant layer

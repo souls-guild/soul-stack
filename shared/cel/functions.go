@@ -74,29 +74,6 @@ var vaultGuard = regexp.MustCompile(`\bvault\s*\(`)
 // reason for a call that would otherwise have produced a marker nobody resolves.
 var generateSecretGuard = regexp.MustCompile(`\bgenerate_secret\s*\(`)
 
-// internalIdentGuard catches identifiers prefixed with `__` in the AUTHOR's
-// expression. The `__` prefix is reserved for internal mechanisms of the CEL layer:
-// the vault() macro expands to `__vault_read(path, __vault_resolver)`, where
-// `__vault_read`/`__vault_resolver` are hidden arguments unavailable to the author.
-//
-// WITHOUT this guard the author could write `${ __vault_read('secret/anything',
-// __vault_resolver).password }` directly and read ANY path, bypassing the vault()
-// macro and the `vault(`-token guard/lint/mask (security blocker). The guard applies
-// ALWAYS (with or without a KVReader): a `__` identifier in author text is always an
-// error, independent of a vault client.
-//
-// guardUnsupported runs on the AUTHOR text BEFORE macro expansion
-// (`__vault_read`/`__vault_resolver` appear only inside env.Compile), so a legal
-// `vault('secret/x')` doesn't hit the guard. A `\w` to the left is NOT allowed (else
-// `a__b` would false-fire), `.`/token start are allowed: the Soul Stack vocabulary has
-// no legal bare identifiers with `__`.
-//
-// Matching runs over text WITH STRING LITERALS STRIPPED (see stripStringLiterals): a
-// `__` sequence INSIDE a literal is data, not a CEL identifier (e.g. the field
-// `__host` in the predicate string soulprint.hosts.where("__host == 'x'"), which can
-// call nothing), and is not caught.
-var internalIdentGuard = regexp.MustCompile(`(^|\W)__\w`)
-
 // guardUnsupported returns [ErrUnsupported] if the expression contains a construct
 // outside pilot scope. vaultEnabled=true (Engine with a KVReader) lifts the vault()
 // guard — the function is registered and works; genSecretEnabled=true (the ordinary
@@ -109,9 +86,6 @@ func guardUnsupported(expr string, vaultEnabled, genSecretEnabled bool) error {
 		if p.re.MatchString(expr) {
 			return &ErrUnsupported{Expr: expr, Feature: p.feature}
 		}
-	}
-	if internalIdentGuard.MatchString(stripStringLiterals(expr)) {
-		return &ErrUnsupported{Expr: expr, Feature: "identifier with prefix '__' (reserved for internal CEL mechanisms)"}
 	}
 	if !vaultEnabled && vaultGuard.MatchString(expr) {
 		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}
@@ -132,21 +106,6 @@ func normalize(expr string) string {
 }
 
 var spaceRun = regexp.MustCompile(`'[^']*'|"[^"]*"|\s+`)
-
-// stringLiteralRe matches a CEL string literal (single/double quotes). Used by
-// stripStringLiterals to cut out literal contents before the text guard over
-// identifiers — literal contents are data, not CEL tokens.
-var stringLiteralRe = regexp.MustCompile(`'[^']*'|"[^"]*"`)
-
-// stripStringLiterals replaces string-literal contents with empty quotes, preserving
-// the expression structure outside literals. Needed by guards that scan text for CEL
-// identifiers/calls: a token inside a literal (`"__host"`) is data, not an identifier.
-// Not for CEL semantics — only for text analysis.
-func stripStringLiterals(expr string) string {
-	return stringLiteralRe.ReplaceAllStringFunc(expr, func(lit string) string {
-		return lit[:1] + lit[len(lit)-1:]
-	})
-}
 
 func normalizeWhitespace(s string) string {
 	if s == "" {

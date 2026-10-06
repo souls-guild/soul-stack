@@ -27,7 +27,7 @@ import "fmt"
 // something the platform grants on request.
 
 // MarkerKey — the reserved key identifying a secret-request marker. The `__` prefix is
-// the CEL layer's reserved namespace ([internalIdentGuard], shared/cel/functions.go).
+// the CEL layer's reserved namespace (Engine.guardInternalIdents, shared/cel/internal_ident.go).
 const MarkerKey = "__secret_request"
 
 // Marker renders p into its travelling form (see the package comment). Round-trips

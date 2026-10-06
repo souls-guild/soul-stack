@@ -64,7 +64,7 @@ var contextVars = []string{
 // undeclared-reference error, so the migration-CEL sandbox is enforced by
 // non-declaration, not a textual guard ([docs/migrations.md § "Forbidden in
 // migration-CEL"]). `vault()`/`now()` are additionally caught by existing guards
-// (vaultGuard/unsupportedPatterns/internalIdentGuard in functions.go).
+// (vaultGuard/unsupportedPatterns in functions.go, and [Engine.guardInternalIdents]).
 var migrationVars = []string{
 	"state",
 }
@@ -413,6 +413,9 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 	}
 
 	if err := guardUnsupported(expr, e.kv != nil, e.genSecret); err != nil {
+		return nil, err
+	}
+	if err := e.guardInternalIdents(expr); err != nil {
 		return nil, err
 	}
 

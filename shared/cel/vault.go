@@ -54,7 +54,7 @@ const vaultFuncName = "__vault_read"
 // vaultResolverVar — a reserved activation variable carrying the per-eval resolver
 // {ctx, kv} into the binding function. The '__' prefix is reserved for internal
 // mechanisms: author expressions with any `__` identifier are rejected by
-// [internalIdentGuard] in guardUnsupported (functions.go) BEFORE compile — otherwise an
+// [Engine.guardInternalIdents] BEFORE compile — otherwise an
 // author could bypass the vault() macro by calling `__vault_read(...)` directly. The
 // macro injects this variable as a hidden argument after passing the guard.
 const vaultResolverVar = "__vault_resolver"
