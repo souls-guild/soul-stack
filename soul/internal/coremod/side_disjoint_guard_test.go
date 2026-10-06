@@ -1,10 +1,30 @@
 package coremod
 
 import (
+	"reflect"
+	"sort"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
+
+// TestSoulSideCatalogMatchesTheSoulRegistry — the served catalog in `shared/` IS
+// the set this binary executes (NIM-888/NIM-890).
+//
+// soul-lint refuses a `core.*` address the catalog does not list, and
+// `GET /v1/modules` lists exactly the catalog. A module registered here but
+// missing from it is refused by the linter and hidden from the operator; one
+// listed but no longer registered passes the linter and fails on every host.
+func TestSoulSideCatalogMatchesTheSoulRegistry(t *testing.T) {
+	served := Names()
+	sort.Strings(served)
+	if len(served) == 0 {
+		t.Fatal("the soul-side registry is empty — the comparison would pass vacuously")
+	}
+	if got := coremanifest.SoulSideAddrs(); !reflect.DeepEqual(got, served) {
+		t.Fatalf("soul-side catalog drifted from the soul registry\n  catalog:  %v\n  registry: %v", got, served)
+	}
+}
 
 // TestNoSoulSideModuleIsInTheKeeperCatalog — the other half of the disjointness
 // the whole derivation rests on (NIM-749).

@@ -81,7 +81,7 @@ func captureThenSetRepo(t *testing.T) string {
 description: a mid-run capture plus a later core.state.set
 tasks:
   - name: capture a field mid-run
-    module: core.probe.captured
+    module: fakekeeper.probe.captured
     on: keeper
     params: {}
   - name: work on the host
@@ -110,7 +110,7 @@ func TestIntegration_Capture_SurvivesTheSuccessTerminal(t *testing.T) {
 	gitURL := captureThenSetRepo(t)
 
 	probe := &capturingStateModule{field: "captured", value: "mid-run"}
-	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": probe})
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"fakekeeper.probe": probe})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
@@ -152,7 +152,7 @@ func captureThenFailRepo(t *testing.T) string {
 description: a mid-run capture followed by a failing task
 tasks:
   - name: capture a field mid-run
-    module: core.probe.captured
+    module: fakekeeper.probe.captured
     on: keeper
     params: {}
   - name: work on the host
@@ -183,7 +183,7 @@ func TestIntegration_Capture_SurvivesTheFailureTerminal(t *testing.T) {
 	gitURL := captureThenFailRepo(t)
 
 	probe := &capturingStateModule{field: "captured", value: "mid-run"}
-	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": probe})
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"fakekeeper.probe": probe})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusFailed}
 	r := newRunnerKeeperStaged(t, disp, keepers)
@@ -224,7 +224,7 @@ func TestIntegration_Capture_HistoryKeepsTheTerminalLast(t *testing.T) {
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 	gitURL := captureThenSetRepo(t)
 
-	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": &capturingStateModule{field: "captured", value: "mid-run"}})
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"fakekeeper.probe": &capturingStateModule{field: "captured", value: "mid-run"}})
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
 

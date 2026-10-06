@@ -4,9 +4,9 @@
 // a module from the catalog instead of typing a name by hand.
 //
 // Two sources:
-//   - core — the static doc table [coreModuleDocs] (keeper does not see
-//     soul/internal/coremod per ADR-011; the implementations carry no declarative
-//     input schema — core params are empty, see modulecatalog_coredata.go);
+//   - core — every address in the served catalog of `shared/coremanifest` (keeper
+//     does not see soul/internal/coremod per ADR-011), states and params from the
+//     module's declaration, description from [coreModuleDocs];
 //   - plugin — active (non-revoked) plugin_sigils grants, params read from the
 //     grant's signed schema document (`modules[*].states[*].input`). One entry per
 //     MODULE, named `<alias>.<module>`: the artifact contributes level 2 only.
@@ -245,25 +245,7 @@ func (h *ModuleCatalogHandler) GetTyped(ctx context.Context, name string) (Modul
 // buildCatalog assembles the full catalog (core + plugin), sorted by name.
 // Returns an error only on a plugin-registry read failure (core is static).
 func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalogItem, error) {
-	items := make([]moduleCatalogItem, 0, len(coreModuleDocs))
-	for _, c := range coreModuleDocs {
-		params := []moduleParam{}
-		introducedIn := ""
-		if m, ok := coremanifest.Default().Lookup(c.Name); ok {
-			params = moduleToParams(m)
-			introducedIn = m.IntroducedIn
-		}
-		items = append(items, moduleCatalogItem{
-			Name:             c.Name,
-			Kind:             "core",
-			Description:      c.Description,
-			States:           c.States,
-			ErrandSafe:       len(c.ErrandSafeStates) > 0,
-			Params:           params,
-			IntroducedIn:     introducedIn,
-			errandSafeStates: append([]string(nil), c.ErrandSafeStates...),
-		})
-	}
+	items := coreCatalogItems()
 
 	if h.plugins != nil {
 		entries, err := h.plugins.ActivePlugins(ctx)
@@ -277,6 +259,40 @@ func (h *ModuleCatalogHandler) buildCatalog(ctx context.Context) ([]moduleCatalo
 
 	sort.Slice(items, func(i, j int) bool { return items[i].Name < items[j].Name })
 	return items, nil
+}
+
+// coreCatalogItems lists every served core module — the served catalog, not the
+// editorial table, so a module the table forgot is published without a description
+// rather than hidden (NIM-890).
+func coreCatalogItems() []moduleCatalogItem {
+	served := append(coremanifest.SoulSideAddrs(), coremanifest.KeeperSideAddrs()...)
+	items := make([]moduleCatalogItem, 0, len(served))
+	for _, name := range served {
+		doc := coreModuleDocs[name]
+		params := []moduleParam{}
+		states := append([]string{}, doc.States...)
+		introducedIn := ""
+		if m, ok := coremanifest.Default().Lookup(name); ok {
+			params = moduleToParams(m)
+			introducedIn = m.IntroducedIn
+			states = make([]string, 0, len(m.States))
+			for state := range m.States {
+				states = append(states, state)
+			}
+		}
+		sort.Strings(states)
+		items = append(items, moduleCatalogItem{
+			Name:             name,
+			Kind:             "core",
+			Description:      doc.Description,
+			States:           states,
+			ErrandSafe:       len(doc.ErrandSafeStates) > 0,
+			Params:           params,
+			IntroducedIn:     introducedIn,
+			errandSafeStates: append([]string(nil), doc.ErrandSafeStates...),
+		})
+	}
+	return items
 }
 
 // pluginCatalogItems builds the catalog entries of ONE active plugin grant — one per

@@ -242,7 +242,7 @@ The block is also **published by `GET /v1/modules`** beside `introduced_in`, as 
 | Level | What removal does today | How it is announced |
 |---|---|---|
 | **Parameter** | Was **silent** — a Soul reads params by key, so a key it does not know is never read and the module reports success while nothing happened | `deprecated:` — the only mechanism that can warn |
-| **State / module (`core.`)** | **Loud, and early**: `module_state_unknown` from the static check with a line and column, `module.not_found` before dispatch | Release notes + those diagnostics; a manifest note would say less, later |
+| **State / module (`core.`)** | **Loud, and early**: `core_module_unknown` (module, since NIM-888 — before it a removed module was a hint and then silently changed side) and `module_state_unknown` (state) from the static check with a line and column | Release notes + those diagnostics; a manifest note would say less, later |
 | **State / module (plugin)** | Governed by the plugin's own version line — its **git ref** ([ADR-007](../adr/0007-versioning-git-ref.md)) | The `ref:` the author pinned; the module does not move under them |
 
 The engine-version axis genuinely does not reach a plugin's module: a plugin's `introduced_in` is read by nothing (the floor walk returns early on any namespace but `core`), which is why the table above says the key "states nothing about a keeper release". A module-level `deprecated` would inherit exactly that emptiness — while costing what any new manifest key costs: on an older Soul it is a decode error, and the whole slot is skipped, so the **module disappears** rather than merely losing a label.

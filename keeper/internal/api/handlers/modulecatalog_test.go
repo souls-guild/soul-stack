@@ -111,11 +111,8 @@ func TestModuleCatalog_ListTyped_CoreAndPlugin(t *testing.T) {
 		t.Fatalf("ListTyped: %v", err)
 	}
 
-	// Every table entry is served, plus the one plugin. This compares the table
-	// against itself and so cannot catch a module MISSING from the table — six are
-	// (NIM-890); the derived guard belongs to that ticket.
-	if len(resp.Items) != len(coreModuleDocs)+1 {
-		t.Fatalf("expected %d entries (core + 1 plugin), got %d", len(coreModuleDocs)+1, len(resp.Items))
+	if want := len(servedCoreAddrs()) + 1; len(resp.Items) != want {
+		t.Fatalf("expected %d entries (served core + 1 plugin), got %d", want, len(resp.Items))
 	}
 
 	// Sorted by name.
@@ -299,8 +296,8 @@ func TestModuleCatalog_ListTyped_NoPlugins(t *testing.T) {
 	if err != nil {
 		t.Fatalf("ListTyped: %v", err)
 	}
-	if len(resp.Items) != len(coreModuleDocs) {
-		t.Fatalf("without plugins expected %d core modules, got %d", len(coreModuleDocs), len(resp.Items))
+	if want := len(servedCoreAddrs()); len(resp.Items) != want {
+		t.Fatalf("without plugins expected %d core modules, got %d", want, len(resp.Items))
 	}
 	for _, it := range resp.Items {
 		if it.Kind != "core" {

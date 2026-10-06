@@ -1,0 +1,6 @@
+name: core-module-unknown
+description: one step naming a core module no binary serves (NIM-888)
+tasks:
+  - name: gone
+    module: core.cloud.created
+    params: { count: 1 }

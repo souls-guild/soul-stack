@@ -35,7 +35,7 @@ func keeperRegisterCaptureRepo(t *testing.T) string {
 description: keeper-register in a capture (live provisioned_vm_ids class)
 tasks:
   - name: provision vm
-    module: core.probe.created
+    module: fakekeeper.probe.created
     on: keeper
     register: provision
     params:
@@ -66,7 +66,7 @@ func TestIntegration_KeeperRegisterInCapture_CommitsToState(t *testing.T) {
 	gitURL := keeperRegisterCaptureRepo(t)
 
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
-	keepers := keeperRegistryWith(map[string]module.SoulModule{"core.probe": bootstrap})
+	keepers := keeperRegistryWith(map[string]module.SoulModule{"fakekeeper.probe": bootstrap})
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)

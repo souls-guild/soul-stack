@@ -351,12 +351,11 @@ func (s *Stub) dialAndHandshake(ctx context.Context, addr string, sendWardRoster
 				// must match behavior. Same for the modules: an unannounced one is a
 				// per-host reject before dispatch.
 				//
-				// The module list comes from the embedded core catalog rather than a
-				// soul registry (soul/internal/... is unimportable from here), so the
-				// stub claims every core module including the keeper-side ones. That is
-				// deliberate for a test double: it answers whatever the fixtures ask of
-				// it, and keeper never asks a Soul for an `on: keeper` module anyway.
-				Capabilities: config.SoulCapabilities(coremanifest.Default().Names()),
+				// soul/internal/... is unimportable from here; the served Soul-side
+				// catalog is held equal to that registry by a guard test, so the stub
+				// announces exactly what a real agent does — no keeper-side module, which
+				// a gate that wrongly asked a Soul for one would otherwise find here.
+				Capabilities: config.SoulCapabilities(coremanifest.SoulSideAddrs()),
 			},
 		},
 	}); err != nil {

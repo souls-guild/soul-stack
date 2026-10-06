@@ -24,7 +24,8 @@ import (
 //   - unknown param (`command` instead of `cmd` for core.exec) → unknown_param;
 //   - missing required param (`cmd`/`path`) → missing_required_param;
 //   - wrong literal type (string where a list was expected) → param_type_mismatch;
-//   - unknown module state (`core.exec.runn`) → module_state_unknown.
+//   - unknown module state (`core.exec.runn`) → module_state_unknown;
+//   - a `core.*` module no binary serves (`core.cloud.created`) → core_module_unknown.
 //
 // What it does NOT catch (known limitation, see observations): enum, numeric bounds,
 // nested object/array schemas — absent from the plugin.InputParamDef DSL. Full
@@ -48,11 +49,13 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 	reg := coremanifest.Default()
 	def, ok := reg.State("core."+mod, state)
 	if !ok {
-		// Either module core.<mod> is absent from the registry, or the state is
-		// unknown. If the module itself is missing (new core, no manifest yet) — stay
-		// quiet (not an author error). If the module exists but the state doesn't — error.
 		if _, hasMod := reg.Lookup("core." + mod); !hasMod {
-			return nil
+			if coremanifest.IsServed("core." + mod) {
+				// Served with no schema document (core.augur, core.cert): the
+				// plugin post-pass says out loud that its params went unchecked.
+				return nil
+			}
+			return []diag.Diagnostic{coreModuleUnknownDiag(sn, "core."+mod, pathPrefix)}
 		}
 		tok := sn.GetToken()
 		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
@@ -82,6 +85,26 @@ func validateModuleParams(moduleKV, paramsKV *ast.MappingValueNode, pathPrefix s
 		out = append(out, checkInstallAliasParam(paramsNode, pathPrefix)...)
 	}
 	return out
+}
+
+// DiagCoreModuleUnknown marks a `core.*` address no binary of this engine serves.
+//
+// An ERROR, unlike [DiagPluginParamsUnchecked]. A plugin's schema can be missing from
+// one checkout and present in another; `core` is reserved, so no plugin can supply
+// this address and the task cannot run on this engine. Left to the runtime it does
+// not fail loudly either: [coremanifest.SideOf] routes an unknown address Soul-side,
+// so a removed keeper-side module silently changes side (NIM-863).
+const DiagCoreModuleUnknown = "core_module_unknown"
+
+func coreModuleUnknownDiag(sn *ast.StringNode, base, pathPrefix string) diag.Diagnostic {
+	tok := sn.GetToken()
+	return diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:     DiagCoreModuleUnknown,
+		Message:  fmt.Sprintf("%s is not a core module this engine serves, and `core` is a reserved name no plugin can supply", base),
+		Hint:     "check the address, or run an engine release that ships the module",
+		YAMLPath: pathPrefix + ".module",
+	})
 }
 
 // checkInstallAliasParam — `core.module.installed` takes a REGISTRATION ALIAS in

@@ -50,13 +50,63 @@ var keeperSideCore = map[string]struct{}{
 	Namespace + ".vault":     {}, // ADR-017 — Vault KV read/write
 }
 
+// soulSideCore is the catalog of core module BASE addresses the Soul binary
+// serves — the other half of [keeperSideCore], and together with it the whole
+// set of addresses `core.*` can name (NIM-888/NIM-890).
+//
+// It exists because the declarations in [coreModules] are NOT that set: a core
+// module may be served and ship no schema document (`core.augur` here, `core.cert`
+// on the keeper side). Every reader that asked [Default] "does this module exist"
+// was answering a different question — soul-lint told authors `core.augur` was
+// not served, and the `GET /v1/modules` table kept its own third list.
+//
+// Held against `soul/internal/coremod.Names()` by
+// `soul/internal/coremod/side_disjoint_guard_test.go`, in both directions.
+var soulSideCore = map[string]struct{}{
+	Namespace + ".archive":   {},
+	Namespace + ".augur":     {},
+	Namespace + ".cmd":       {},
+	Namespace + ".cron":      {},
+	Namespace + ".directory": {},
+	Namespace + ".exec":      {},
+	Namespace + ".file":      {},
+	Namespace + ".firewall":  {},
+	Namespace + ".git":       {},
+	Namespace + ".group":     {},
+	Namespace + ".http":      {},
+	Namespace + ".line":      {},
+	Namespace + ".module":    {},
+	Namespace + ".mount":     {},
+	Namespace + ".noop":      {},
+	Namespace + ".pkg":       {},
+	Namespace + ".repo":      {},
+	Namespace + ".service":   {},
+	Namespace + ".sysctl":    {},
+	Namespace + ".url":       {},
+	Namespace + ".user":      {},
+}
+
+// IsServed reports whether base address addr (`core.augur`, no state suffix) is a
+// core module some binary of this engine executes — whether or not it ships a
+// schema document. A `core.*` address answering false names nothing this engine
+// can run, and no plugin can supply a reserved name to fill the gap.
+func IsServed(addr string) bool {
+	if _, ok := soulSideCore[addr]; ok {
+		return true
+	}
+	_, ok := keeperSideCore[addr]
+	return ok
+}
+
 // SideOf returns the side that executes the core module at base address addr
 // (`core.state`, NOT `core.state.set` — split the state suffix off first).
 //
 // A non-core or unknown address answers [schema.SideSoul]. That is the honest
 // answer rather than a third "unknown" value: the caller's question is where to
 // route, host-side is where an unrecognised address has always gone, and a
-// plugin's own declaration is read from its manifest, not from here.
+// plugin's own declaration is read from its manifest, not from here. Whether a
+// `core.*` address exists at all is [IsServed]'s question, and the static check
+// refuses one that does not before anything asks where it goes.
 func SideOf(addr string) schema.Side {
 	if _, ok := keeperSideCore[addr]; ok {
 		return schema.SideKeeper
@@ -70,9 +120,14 @@ func IsKeeperSide(addr string) bool { return SideOf(addr) == schema.SideKeeper }
 
 // KeeperSideAddrs lists the keeper-side core base addresses in lexicographic
 // order — for diagnostics, which must be byte-identical for identical input.
-func KeeperSideAddrs() []string {
-	out := make([]string, 0, len(keeperSideCore))
-	for addr := range keeperSideCore {
+func KeeperSideAddrs() []string { return sortedAddrs(keeperSideCore) }
+
+// SoulSideAddrs lists the Soul-side core base addresses in lexicographic order.
+func SoulSideAddrs() []string { return sortedAddrs(soulSideCore) }
+
+func sortedAddrs(set map[string]struct{}) []string {
+	out := make([]string, 0, len(set))
+	for addr := range set {
 		out = append(out, addr)
 	}
 	sort.Strings(out)

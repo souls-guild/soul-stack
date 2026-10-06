@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/diag"
@@ -202,6 +203,9 @@ func coreDecoy() *spyManifests {
 		"core.exec": {Name: "exec", States: map[string]plugin.StateDef{
 			"run": {Input: map[string]plugin.InputParamDef{"command": {Type: "string"}}},
 		}},
+		"core.augur": {Name: "augur", States: map[string]plugin.StateDef{
+			"fetch": {Input: map[string]plugin.InputParamDef{"bogus": {Type: "int"}}},
+		}},
 		"keeper.push": {Name: "push", States: map[string]plugin.StateDef{
 			"run": {Input: map[string]plugin.InputParamDef{"anything": {Type: "string"}}},
 		}},
@@ -217,11 +221,27 @@ func TestPluginParams_ReservedAliasDoesNotReachTheBuiltinBypass(t *testing.T) {
 	if len(r.asked) != 0 {
 		t.Errorf("the resolver was consulted for a reserved name %v — a plugin registered as `core` would define what core.* accepts", r.asked)
 	}
-	if !hasCodeP(diags, DiagPluginParamsUnchecked) {
-		t.Errorf("core.redis passed in silence: %v", diagCodesP(diags))
+	if !hasCodeP(diags, DiagCoreModuleUnknown) {
+		t.Errorf("core.redis was not refused: %v", diagCodesP(diags))
 	}
-	if diag.HasErrors(diags) {
-		t.Errorf("an engine-vs-definition gap was reported as an error: %v", diags)
+}
+
+// Served without a schema, `core.augur` is the address that still reaches the
+// reserved-name branch — and a decoy schema for it must not get to judge its params.
+func TestPluginParams_ReservedAliasDoesNotDescribeAServedCoreModule(t *testing.T) {
+	r := coreDecoy()
+	src := "- name: t\n  module: core.augur.fetch\n  params:\n    omen: vault\n"
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src),
+		ValidateOptions{ModuleManifests: r})
+
+	if len(r.asked) != 0 {
+		t.Errorf("the resolver was consulted for %v — a plugin registered as `core` would define what core.augur accepts", r.asked)
+	}
+	if hasCodeP(diags, "unknown_param") {
+		t.Errorf("the decoy schema judged core.augur's params: %v", diagCodesP(diags))
+	}
+	if !hasCodeP(diags, DiagPluginParamsUnchecked) {
+		t.Errorf("core.augur passed in silence: %v", diagCodesP(diags))
 	}
 }
 
@@ -260,19 +280,55 @@ func TestPluginParams_BuiltinModuleIsCheckedAgainstTheEmbeddedRegistry(t *testin
 	}
 }
 
-// `core.<something this build does not have>` is an engine older than the definition
-// (ADR-0076), not an author error — but it is not a pass either, and it used to produce
-// nothing at all.
-func TestPluginParams_UnknownBuiltinIsReportedAsUnchecked(t *testing.T) {
-	src := "- name: t\n  module: core.haproxy.present\n  params:\n    whatever: 1\n"
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
-
-	d := firstWithCode(diags, DiagPluginParamsUnchecked)
-	if d == nil {
-		t.Fatalf("core.haproxy passed in silence: %v", diagCodesP(diags))
+// ★ GUARD (NIM-888). `core.<something no binary serves>` is refused: `core` is reserved,
+// so no plugin can supply it and the task cannot run on this engine. As a hint it passed
+// soul-lint with exit 0 and then, at run time, silently changed side (NIM-863). One
+// error, not an error plus the old unchecked hint for the same address.
+func TestPluginParams_UnservedCoreModuleIsAnError(t *testing.T) {
+	cases := map[string]string{
+		"removed module":    "- name: t\n  module: core.cloud.created\n  params:\n    count: 1\n",
+		"never existed":     "- name: t\n  module: core.haproxy.present\n  params:\n    whatever: 1\n",
+		"nested in a block": "- name: b\n  block:\n    - name: t\n      module: core.cloud.created\n      params: {}\n",
 	}
-	if d.Level != diag.LevelHint {
-		t.Errorf("level is %q — an engine that predates the definition is not the author's error", d.Level)
+	for name, src := range cases {
+		t.Run(name, func(t *testing.T) {
+			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+			d := firstWithCode(diags, DiagCoreModuleUnknown)
+			if d == nil {
+				t.Fatalf("an unserved core address was not refused: %v", diagCodesP(diags))
+			}
+			if d.Level != diag.LevelError {
+				t.Errorf("level is %q, want error", d.Level)
+			}
+			if hasCodeP(diags, DiagPluginParamsUnchecked) {
+				t.Errorf("the refused address was ALSO reported as merely unchecked: %v", diagCodesP(diags))
+			}
+		})
+	}
+}
+
+// ★ GUARD (NIM-888). The other half: a core module that is served but ships no schema
+// document is not refused, and the hint says what is true about it. It used to say
+// "this engine serves no built-in module core.augur" — about a module the Soul runs.
+func TestPluginParams_ServedCoreModuleWithoutSchemaIsUnchecked(t *testing.T) {
+	for _, src := range []string{
+		"- name: t\n  module: core.augur.fetch\n  params:\n    omen: vault\n",
+		"- name: t\n  module: core.cert.registered\n  params: {}\n",
+	} {
+		_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+		if diag.HasErrors(diags) {
+			t.Errorf("a served module was refused: %v", diags)
+		}
+		d := firstWithCode(diags, DiagPluginParamsUnchecked)
+		if d == nil {
+			t.Fatalf("a module with no schema passed in silence: %v", diagCodesP(diags))
+		}
+		if d.Level != diag.LevelHint {
+			t.Errorf("level is %q, want hint", d.Level)
+		}
+		if strings.Contains(d.Message, "serves no built-in module") {
+			t.Errorf("a served module was reported as not served: %s", d.Message)
+		}
 	}
 }
 

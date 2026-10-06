@@ -111,9 +111,9 @@ func (s *Stub) Open(ctx context.Context) error {
 				// Capability announcement (ADR-056 S5, ADR-0076(i)): keeper rejects a
 				// host before dispatch when the plan needs something it did not
 				// announce, so a silent stub would measure nothing. Same shape as
-				// tests/e2e soulstub: claims every core module, since it answers
-				// whatever the load scenario asks of it.
-				Capabilities: config.SoulCapabilities(coremanifest.Default().Names()),
+				// tests/e2e soulstub: the served Soul-side catalog, which is what a
+				// real agent announces.
+				Capabilities: config.SoulCapabilities(coremanifest.SoulSideAddrs()),
 			},
 		},
 	}); err != nil {

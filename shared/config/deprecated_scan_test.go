@@ -94,6 +94,24 @@ func TestScanDeprecated_FullyResolvedAndCleanIsClean(t *testing.T) {
 	}
 }
 
+// A core module the engine serves without a schema (core.augur, core.cert) is not
+// a gap: nothing of it can be marked deprecated. It used to be reported as
+// unknown_core_module — "a definition newer than this binary" — about a module the
+// binary runs (NIM-888).
+func TestScanDeprecated_ServedCoreModuleWithoutSchemaIsNotAGap(t *testing.T) {
+	scan := scanTasksForDeprecated([]Task{
+		moduleTask("core.augur.fetch", map[string]any{"omen": "vault"}),
+		moduleTask("core.cert.registered", map[string]any{}),
+	}, deprecatingRegistry(), nil)
+
+	if len(scan.Unresolved) != 0 {
+		t.Fatalf("unresolved = %+v, want none — the engine serves these modules", scan.Unresolved)
+	}
+	if !scan.Clean() {
+		t.Error("Clean() is false for modules that cannot carry a deprecation")
+	}
+}
+
 // A core module this engine does not carry is a different gap from a plugin one
 // — the definition is newer than the binary reading it — and it must not be
 // mistaken for a clean result either.

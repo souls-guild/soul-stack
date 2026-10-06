@@ -1,0 +1,9 @@
+name: core-module-served-without-schema
+description: core modules that are served but ship no schema document lint clean (NIM-888)
+tasks:
+  - name: read the omen
+    module: core.augur.fetch
+    params: { omen: vault, query: x }
+  - name: register the warrant
+    module: core.cert.registered
+    params: {}

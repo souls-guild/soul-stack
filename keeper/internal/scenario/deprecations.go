@@ -70,7 +70,9 @@ type DeprecationGap struct {
 	// Subject — the service ref or the module address the gap is about.
 	Subject string
 	// Reason — machine-readable: `plugin_namespace` / `unknown_core_module`
-	// (from the definition walk), `load_failed` / `parse_failed` (here).
+	// (from the definition walk), `load_failed` / `parse_failed` (here). A scenario
+	// naming a core module or state this engine lacks fails to parse first
+	// (`core_module_unknown` / `module_state_unknown`), so here it is `parse_failed`.
 	Reason string
 	// Detail — the error text, when there is one worth showing.
 	Detail string

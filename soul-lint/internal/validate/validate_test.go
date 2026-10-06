@@ -116,6 +116,15 @@ func TestGolden_ScenarioTransportTaskKey(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/transport-task-key.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioCoreServedWithoutSchema — the half of NIM-888 that must stay
+// green: `core.augur` and `core.cert` are served and ship no schema document, so
+// they lint clean with an unchecked hint. The refused half is the
+// `scenario-broken/scenario-core-module-unknown` fixture.
+func TestGolden_ScenarioCoreServedWithoutSchema(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/core-module-served-without-schema.yml", KindScenario, false, ExitOK,
+		[]string{"plugin_params_unchecked"})
+}
+
 // TestGolden_ScenarioSerialStaged — serial: + staged (N>1 Passage) is VALID
 // (ADR-056 §S4 amend, S-2D1): the serial_staged_unsupported restriction was
 // lifted, 2D serial×passage is implemented. The scenario passes lint with

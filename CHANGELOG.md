@@ -861,6 +861,24 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Fixed
 
+- **A `core.*` address no binary serves is an error, and `GET /v1/modules` lists every
+  served core module (NIM-888, NIM-890).** One served catalog lives in `shared/coremanifest`
+  — `SoulSideAddrs()` (21) and `KeeperSideAddrs()` (7) — held equal to both registries by
+  guard tests, and the readers that decide whether a core module exists ask it.
+  - **`core_module_unknown`, an ERROR,** from the static check, so `soul-lint` refuses the
+    address, and so does the Keeper when a run (or its input) is parsed. Service registration
+    does not parse scenarios and still accepts it. It was a `plugin_params_unchecked`
+    hint with exit 0, and at run time the address routed Soul-side, so a removed keeper-side
+    module silently changed side (NIM-863). A definition still naming one (`core.cloud.*`)
+    now fails lint.
+  - `core.augur` and `core.cert` — served, no schema — stay an unchecked hint, which no longer
+    says the engine does not serve them; `on: keeper` on `core.augur` is now
+    `on_keeper_on_soul_module`.
+  - **`GET /v1/modules`** gains `core.directory`, `core.noop`, `core.module`, `core.cert`,
+    `core.ssh` and `core.state`, and its state lists come from the declarations: `core.git`
+    gains `pulled`, `core.service` `disabled`/`masked`, `core.sysctl` `applied`. States in the
+    unfiltered list are alphabetical now. The response shape is unchanged.
+
 - **The blocking pre-tag gate was red on the release tip, and not about the product**
   (NIM-876). Migration `118_registry_id` renamed `incarnation.name` to `id` ([ADR-0085](docs/adr/0085-entity-id-and-label.md))
   and deliberately left the five `*_name` FK columns alone, `apply_runs.incarnation_name`

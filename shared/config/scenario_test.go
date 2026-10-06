@@ -5,6 +5,7 @@ import (
 	"strings"
 	"testing"
 
+	"github.com/souls-guild/soul-stack/shared/coremanifest"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
@@ -1627,12 +1628,29 @@ tasks:
 		}
 	})
 
-	// The scope is DECLARED core modules, not the whole `core` namespace, and the
-	// difference is load-bearing: the keeper's registry is built from its Deps, so a
-	// `core.*` address with no declaration here can still be a registered keeper-side
-	// module — the integration harness registers `core.probe.*` exactly that way.
-	// Refusing it broke a dozen keeper-chain cases.
-	t.Run("an undeclared core address is left alone", func(t *testing.T) {
+	// The scope is the SERVED catalog, not the declarations: core.augur ships no
+	// schema and is still a host module (NIM-888).
+	t.Run("a served Soul-side module with no schema is refused", func(t *testing.T) {
+		if _, declared := coremanifest.Default().Lookup("core.augur"); declared {
+			t.Fatal("core.augur gained a declaration — pick another served-but-undeclared Soul-side module")
+		}
+		src := `name: x
+tasks:
+  - name: probe
+    module: core.augur.fetch
+    on: keeper
+    params: { omen: vault, query: x }
+`
+		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+		if !hasCodeAt(diags, "on_keeper_on_soul_module", "$.tasks[0].on") {
+			dump(t, diags)
+			t.Fatalf("on: keeper on core.augur routes a host module to the keeper")
+		}
+	})
+
+	// An address in neither catalog is a different finding with its own code: the
+	// module does not exist, so "it is Soul-side" would be false too.
+	t.Run("a core address nobody serves is core_module_unknown, not this rule", func(t *testing.T) {
 		src := `name: x
 tasks:
   - name: probe
@@ -1643,7 +1661,11 @@ tasks:
 		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 		if hasCode(diags, "on_keeper_on_soul_module") {
 			dump(t, diags)
-			t.Fatalf("a core address this binary has no declaration for may still be a registered keeper-side module")
+			t.Fatalf("an unserved core address was called a Soul-side module")
+		}
+		if !hasCodeAt(diags, DiagCoreModuleUnknown, "$.tasks[0].module") {
+			dump(t, diags)
+			t.Fatalf("expected %s at the module: key", DiagCoreModuleUnknown)
 		}
 	})
 

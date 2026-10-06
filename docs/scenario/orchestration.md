@@ -653,9 +653,10 @@ is now an **error** (`on_keeper_redundant`).
 
 The keeper-side list above is the catalog in `shared/coremanifest/side.go`
 (`coremanifest.KeeperSideAddrs`), which is also what the diagnostic's own hint prints. An address
-that leaves it does not become "a module that needs `on: keeper`" — it becomes **Soul-side**, which
-is what an unknown address has always been, and a plan that relied on it being keeper-side then
-aborts `no_hosts` on the empty roster it was written to run on (NIM-863).
+that leaves both catalogs does not become "a module that needs `on: keeper`" — it is refused as
+`core_module_unknown` before anything routes it (NIM-888). Until then it became **Soul-side**, which
+is what an unknown address has always been, and a plan that relied on it being keeper-side aborted
+`no_hosts` on the empty roster it was written to run on (NIM-863).
 
 That leaves `on:` with one meaning, the one this section is about: **which covens**. It used to carry
 two, a list of labels and a magic scalar meaning "no hosts at all", in the same key. A coven list on a

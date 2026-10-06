@@ -52,9 +52,10 @@ linter refuses `on: keeper` on a core address as redundant
 
 ★ The derivation reads a **catalog**, not a naming pattern, so an address the catalog
 does not know is routed **Soul-side** — that is the honest answer for a plugin, whose
-side is declared in its own schema document. A core address that has been *removed*
-therefore does not error; it silently changes side. `on: keeper` stays as the only
-spelling a keeper-side **plugin** address has.
+side is declared in its own schema document. A `core.*` address in neither catalog never
+gets that far: it is refused as `core_module_unknown` by the static check (NIM-888).
+Before that a *removed* core address did not error, it silently changed side (NIM-863).
+`on: keeper` stays as the only spelling a keeper-side **plugin** address has.
 
 ## Soul-side core modules
 
@@ -168,7 +169,13 @@ own address ([known-limitations.md](../known-limitations.md)).
 
 The Keeper-side table's seven base addresses are exactly what
 `shared/coremanifest.KeeperSideAddrs()` returns — the list the linter and the render
-pipeline route by, so a row that disagrees with it is a bug in the row.
+pipeline route by, so a row that disagrees with it is a bug in the row. The Soul-side
+twenty-one are `shared/coremanifest.SoulSideAddrs()`. Guard tests hold each list equal
+to its registry in both directions (`soul/internal/coremod`, `keeper/internal/coremod`),
+and every reader that decides whether a core module exists asks the pair:
+`GET /v1/modules` lists exactly their union, and the static check refuses any other
+`core.*` address as `core_module_unknown` (NIM-888/NIM-890). A served module need not ship a schema —
+`core.augur` and `core.cert` do not, and their params go unchecked rather than refused.
 
 `docs/module/core/` holds **26 directories** — 25 of these modules plus `core-beacon`.
 Three modules have no per-module page yet and are documented where their spec lives:

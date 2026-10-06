@@ -356,6 +356,31 @@ is how the drift in NIM-206 survived long enough to be found by hand. A definiti
 author usually cannot produce somebody else's schema, so failing them for its absence
 would punish the wrong person.
 
+### A `core.*` address is never a binding question
+
+`core` is reserved, so `--modules` can neither help nor be blamed for a `core.*`
+step. Its answer comes from the core catalog compiled into the tool
+([module/README.md → Catalog status](module/README.md#catalog-status)), in one of three
+forms:
+
+| The address | Answer |
+|---|---|
+| A served module with a schema (`core.pkg.installed`) | Checked like any module: `unknown_param`, `missing_required_param`, `module_state_unknown`. |
+| A served module that ships no schema (`core.augur.fetch`, `core.cert.registered`) | `plugin_params_unchecked`, a hint, saying the engine serves the module and has no schema for it. |
+| An address no binary serves (`core.cloud.created`) | **`core_module_unknown`, an ERROR** (NIM-888). |
+
+**The last one is an error and not a hint because nothing on this engine can make it
+run.** A plugin's schema can be absent from one checkout and present in another; a
+`core.*` module this engine's binaries do not serve stays unserved whatever is bound or
+registered, because no plugin may supply a reserved name — only an engine release that
+ships the module can. As
+a hint it printed `OK:` with exit 0, and the runtime did not fail loudly either: an
+address the side catalog does not know is routed Soul-side, so a removed keeper-side
+module silently changed side and a keeper-only plan aborted `no_hosts` (NIM-863). The
+Keeper raises the same error when a run (or its input) is parsed, because it reads the
+same validator. Service registration does not parse scenarios, so it still accepts such
+a service — `soul-lint` is the check that stops it before it reaches a cluster.
+
 ### A step written in an `include:`d body
 
 It is checked like any other, at its own file and line, in `validate-scenario` and

@@ -65,8 +65,8 @@ type UnresolvedModule struct {
 	Module string
 	// Reason — why, in one machine-readable token: `plugin_namespace` (the
 	// manifest ships with the plugin, not with the definition) or
-	// `unknown_core_module` (a core module this binary does not carry — an
-	// engine older than the definition).
+	// `unknown_core_module` (a core module this binary does not serve, or a state
+	// its declaration lacks — an engine older than the definition).
 	Reason string
 	// Where — the location of the task that used it.
 	Where string
@@ -82,8 +82,10 @@ const (
 	// ReasonUnknownPluginState — the plugin manifest resolved but declares no
 	// such state, so this task's params were not checked against anything.
 	ReasonUnknownPluginState = "unknown_plugin_state"
-	// ReasonUnknownCoreModule — namespace is `core` but this engine has no
-	// manifest for it: the definition is newer than the binary scanning it.
+	// ReasonUnknownCoreModule — namespace is `core` but this engine does not serve
+	// the module, or its declaration lacks the state: the definition is newer than
+	// the binary scanning it. A module served with no schema (core.augur) is not
+	// this: it can carry no deprecation, so nothing about it is unresolved.
 	ReasonUnknownCoreModule = "unknown_core_module"
 	// ReasonReservedNamespace — address level 1 is a reserved name other than
 	// `core` (`keeper.x`, `sigil.x`), which the built-in registry does not serve
@@ -104,8 +106,9 @@ type DeprecatedScan struct {
 }
 
 // Clean reports whether the scan both found nothing AND was able to look
-// everywhere. A caller rendering "this service is fine" must ask THIS rather
-// than `len(Uses) == 0`, or it will say "fine" about a definition it never read.
+// everywhere a deprecation can be declared. A caller rendering "this service is
+// fine" must ask THIS rather than `len(Uses) == 0`, or it will say "fine" about a
+// definition it never read.
 func (s DeprecatedScan) Clean() bool {
 	return len(s.Uses) == 0 && len(s.Unresolved) == 0
 }
@@ -178,6 +181,12 @@ func moduleDeprecatedUses(addr string, params map[string]any, where string, reg 
 		_, builtin = reg.Lookup(name)
 	}
 	if !builtin {
+		if ns == coremanifest.Namespace && coremanifest.IsServed(name) {
+			// Served with no schema document (core.augur, core.cert): a deprecation
+			// is declared on a schema param, so there is nothing it could mark and
+			// nothing left unresolved — not "a definition newer than this binary".
+			return
+		}
 		if plugin.IsReserved(ns) {
 			reason := ReasonReservedNamespace
 			if ns == "core" {

@@ -1594,23 +1594,10 @@ func validateKeeperModuleInDestiny(item ast.Node, pathPrefix string) []diag.Diag
 // module". docs/keeper/modules.md has asserted this was "a validation error"
 // since ADR-017; nothing enforced it.
 //
-// Scoped to core modules this binary carries a DECLARATION for, which is
-// narrower than "the core namespace" and deliberately so.
-//
-// Widening it to the whole reserved namespace looked right and is wrong: the
-// keeper's module registry is built from its Deps, not from the catalog, so a
-// `core.*` address this binary has no declaration for can still be a registered
-// keeper-side module. The integration harness does exactly that with
-// `core.probe.*`, and refusing it broke a dozen keeper-chain cases — the
-// premise "the registry serves exactly the catalog" is simply false.
-//
-// The cost of the narrow scope is one blind spot: `core.augur` is served by the
-// Soul and ships no declaration, so `on: keeper` on it is still accepted here and
-// still fails at dispatch. Named rather than papered over — closing it means
-// giving augur a declaration in `shared/coremanifest`, which is its own change.
-// (`core.cert` is manifest-less on the keeper side for the same reason, which is
-// why the SIDE catalog is a list of addresses rather than a projection of the
-// declarations.)
+// Scoped to the SERVED Soul-side catalog, not to the declarations: `core.augur`
+// ships no schema and is still a host module, so keying on [coremanifest.Default]
+// accepted `on: keeper` on it and failed at dispatch. A `core.*` address in
+// neither catalog is not this rule's finding — it is `core_module_unknown`.
 func validateOnKeeperOnSoulModule(onKV *ast.MappingValueNode, addr, pathPrefix string) []diag.Diagnostic {
 	sn, isStr := onKV.Value.(*ast.StringNode)
 	if !isStr || sn.Value != KeeperTarget {
@@ -1620,7 +1607,7 @@ func validateOnKeeperOnSoulModule(onKV *ast.MappingValueNode, addr, pathPrefix s
 	if !ok {
 		return nil
 	}
-	if _, declared := coremanifest.Default().Lookup(base); !declared {
+	if !coremanifest.IsServed(base) || coremanifest.IsKeeperSide(base) {
 		return nil
 	}
 	tok := onKV.Key.GetToken()

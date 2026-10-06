@@ -179,3 +179,33 @@ func TestRegistrySideMatchesTheCatalog(t *testing.T) {
 		t.Errorf("core.exec: Side = %q, want %q", m.Side, schema.SideSoul)
 	}
 }
+
+// TestEveryDeclarationIsServed — a schema for a module nobody executes would let
+// the static check pass `params:` for a task that can never run (NIM-888). The
+// converse does not hold and is not asserted: `core.augur` and `core.cert` are
+// served with no declaration.
+func TestEveryDeclarationIsServed(t *testing.T) {
+	for _, addr := range Default().Names() {
+		if !IsServed(addr) {
+			t.Errorf("%s is declared but in neither served catalog", addr)
+		}
+	}
+	for _, addr := range []string{Namespace + ".augur", Namespace + ".cert"} {
+		if !IsServed(addr) {
+			t.Errorf("IsServed(%q) = false — served without a schema is still served", addr)
+		}
+	}
+	if IsServed(Namespace + ".cloud") {
+		t.Error("IsServed(core.cloud) = true — the module was removed in NIM-761")
+	}
+}
+
+// TestServedCatalogsAreDisjoint — the address decides the side only while no core
+// name is on both lists (NIM-749).
+func TestServedCatalogsAreDisjoint(t *testing.T) {
+	for _, addr := range SoulSideAddrs() {
+		if IsKeeperSide(addr) {
+			t.Errorf("%s is listed on both sides", addr)
+		}
+	}
+}

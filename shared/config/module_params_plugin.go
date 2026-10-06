@@ -133,11 +133,12 @@ func (w *pluginParamWalk) visitMapping(mm *ast.MappingNode, path string) {
 		return
 	}
 	if plugin.IsReserved(ns) {
-		// A reserved name the built-in registry does not serve. No resolver may
-		// answer for it: a `--modules core=…` binding, or a grant a cluster
-		// accepted under a reserved alias, would otherwise get to define what
-		// `core.*` accepts. Not an error — the definition may simply target an
-		// engine newer than this one (ADR-0076) — but never a silent pass either.
+		// A reserved name with no declaration here. No resolver may answer for it:
+		// a `--modules core=…` binding, or a grant a cluster accepted under a
+		// reserved alias, would otherwise get to define what `core.*` accepts.
+		if ns == coremanifest.Namespace && !coremanifest.IsServed(address) {
+			return // core_module_unknown, raised at decode by validateModuleParams.
+		}
 		if !w.reported[address] {
 			w.reported[address] = true
 			w.out = append(w.out, w.reservedDiag(address, ns, sn, path))
@@ -188,23 +189,30 @@ func (w *pluginParamWalk) resolveModule(ns, mod string) (plugin.ModuleDef, bool)
 	return w.resolver.ResolveModule(ns, mod)
 }
 
-// reservedDiag is the unchecked hint for a reserved namespace this engine does not
-// serve. Deliberately the same code as the ordinary miss — the fact being reported is
-// the same one ("these params were not checked") and an operator filtering on it must
-// see both — with a message that does not send the author looking for a plugin manifest
-// they could never legally supply.
+// reservedDiag is the unchecked hint for a reserved-namespace address with no schema
+// here: a core module served without one (`core.augur`, `core.cert`), or a reserved
+// name other than `core`. Deliberately the same code as the ordinary miss — the fact
+// being reported is the same one ("these params were not checked") and an operator
+// filtering on it must see both — with a message that does not send the author looking
+// for a plugin manifest they could never legally supply.
 func (w *pluginParamWalk) reservedDiag(address, ns string, sn *ast.StringNode, path string) diag.Diagnostic {
 	line, col := 0, 0
 	if tok := sn.GetToken(); tok != nil {
 		line, col = tok.Position.Line, tok.Position.Column
 	}
+	msg := fmt.Sprintf("params of %s were not checked: %q is a reserved name and this engine serves no built-in module %s",
+		address, ns, address)
+	hint := "a reserved name cannot be supplied by a plugin, so --modules cannot fill this gap; " +
+		"check the address, or run an engine release that ships the module"
+	if coremanifest.IsServed(address) {
+		msg = fmt.Sprintf("params of %s were not checked: the engine serves this module but it ships no schema document", address)
+		hint = "nothing to supply: a reserved name cannot be described by a plugin schema, so --modules cannot fill this gap"
+	}
 	return diagAt(line, col, diag.Diagnostic{
 		Level: diag.LevelHint, Phase: diag.PhaseSemanticValidate,
-		Code: DiagPluginParamsUnchecked,
-		Message: fmt.Sprintf("params of %s were not checked: %q is a reserved name and this engine serves no built-in module %s",
-			address, ns, address),
-		Hint: "a reserved name cannot be supplied by a plugin, so --modules cannot fill this gap; " +
-			"check the address, or run an engine release that ships the module",
+		Code:     DiagPluginParamsUnchecked,
+		Message:  msg,
+		Hint:     hint,
 		YAMLPath: path + ".module",
 	})
 }

@@ -20,9 +20,9 @@ func TestCoreModuleDocs_VerbShellStatesMatchSingleSource(t *testing.T) {
 
 	// The catalog's errand-safe entries that correspond to a verb-shell address.
 	inCatalog := map[string]bool{}
-	for _, doc := range coreModuleDocs {
+	for name, doc := range coreModuleDocs {
 		for _, state := range doc.ErrandSafeStates {
-			full := doc.Name + "." + state
+			full := name + "." + state
 			if coremanifest.IsVerbShell(full) {
 				inCatalog[full] = true
 			}

@@ -92,7 +92,7 @@ func (m *capturingKeeperModule) Apply(req *pluginv1.ApplyRequest, stream grpc.Se
 
 // paramsForState returns the Params the module received at a specific state (for
 // chains where one module executes across multiple Passages under different
-// states — e.g. core.probe.created at P0 and core.probe.delivered at P1).
+// states — e.g. fakekeeper.probe.created at P0 and fakekeeper.probe.delivered at P1).
 func (m *capturingKeeperModule) paramsForState(state string) map[string]any {
 	m.mu.Lock()
 	defer m.mu.Unlock()
@@ -114,7 +114,7 @@ func (m *capturingKeeperModule) states() []string {
 // keeperChainServiceRepo — 2-Passage all-keeper chain (ADR-056, Slice 2):
 //
 //	#0 provision (fakecloud.vm.created, register: provision) → Passage 0
-//	#1 deliver   (core.probe.delivered, params reads register.provision.ip) → Passage 1
+//	#1 deliver   (fakekeeper.probe.delivered, params reads register.provision.ip) → Passage 1
 //
 // Stratify splits by Passage (deliver reads register provision in params).
 // all-keeper → no_hosts bypass. This is an end-to-end proof of keeper→keeper
@@ -140,7 +140,7 @@ tasks:
     params:
       provider: fake
   - name: deliver bootstrap
-    module: core.probe.delivered
+    module: fakekeeper.probe.delivered
     on: keeper
     params:
       target_ip: "${ register.provision.ip }"
@@ -150,13 +150,14 @@ tasks:
 // keeperChain3ServiceRepo — 3-Passage all-keeper chain (ADR-056, Slice 2),
 // ★ mirrors the target live flow for creating a redis cluster (provision→deliver→register):
 //
-//	#0 provision (core.probe.created,   register: provision, output ip)          → Passage 0
-//	#1 deliver   (core.probe.delivered, params target_ip=register.provision.ip,
+//	#0 provision (fakekeeper.probe.created,   register: provision, output ip)          → Passage 0
+//	#1 deliver   (fakekeeper.probe.delivered, params target_ip=register.provision.ip,
 //	             register: deliver, echoParams forwards target_ip into output)        → Passage 1
-//	#2 finalize  (core.probe.finalized, params origin=register.deliver.target_ip) → Passage 2
+//	#2 finalize  (fakekeeper.probe.finalized, params origin=register.deliver.target_ip) → Passage 2
 //
-// All links are base core.probe (NOT in coremanifest → params aren't validated
-// by scenario-load, register expressions pass freely), distinguished by state — one
+// All links are base fakekeeper.probe (a plugin address no manifest resolves → params
+// aren't validated by scenario-load, register expressions pass freely; a `core.*`
+// stand-in would be refused as core_module_unknown, NIM-888), distinguished by state — one
 // capturingKeeperModule serves all three, paramsForState(state) separates
 // per-Passage Params. Each link reads the PREVIOUS link's register → Stratify
 // splits into 3 Passages. Transitivity: the provision.ip value (P0) is forwarded
@@ -168,19 +169,19 @@ func keeperChain3ServiceRepo(t *testing.T) string {
 description: 3-passage all-keeper chain (bootstrap.created -> delivered -> finalized)
 tasks:
   - name: provision vm
-    module: core.probe.created
+    module: fakekeeper.probe.created
     on: keeper
     register: provision
     params:
       provider: fake
   - name: deliver bootstrap
-    module: core.probe.delivered
+    module: fakekeeper.probe.delivered
     on: keeper
     register: deliver
     params:
       target_ip: "${ register.provision.ip }"
   - name: finalize
-    module: core.probe.finalized
+    module: fakekeeper.probe.finalized
     on: keeper
     params:
       origin: "${ register.deliver.target_ip }"
@@ -204,7 +205,7 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 	seedIncarnation(t, "noop-prod")
 	// No hosts seeded: all-keeper → no_hosts bypass (provision-from-zero).
 
-	// One core.probe module serves all three states (created/delivered/finalized):
+	// One fakekeeper.probe module serves all three states (created/delivered/finalized):
 	// echoes ip in every register-output; echoParams forwards target_ip from params
 	// into output (P1 puts the target_ip it got from register.provision.ip into its
 	// own register-output → finalize reads register.deliver.target_ip).
@@ -212,7 +213,7 @@ func TestIntegration_KeeperChain_3Passage_TransitiveRegister(t *testing.T) {
 		output:     map[string]any{"ip": "10.0.0.7"},
 		echoParams: []string{"target_ip"},
 	}
-	keepers := fakeKeeperRegistry{"core.probe": bootstrap}
+	keepers := fakeKeeperRegistry{"fakekeeper.probe": bootstrap}
 	gitURL := keeperChain3ServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
@@ -294,8 +295,8 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	bootstrap := &capturingKeeperModule{output: map[string]any{"delivered": true}}
 	keepers := fakeKeeperRegistry{
-		"fakecloud.vm": cloud,
-		"core.probe":   bootstrap,
+		"fakecloud.vm":     cloud,
+		"fakekeeper.probe": bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -369,12 +370,12 @@ func TestIntegration_KeeperChain_Rerun_NoPKConflict(t *testing.T) {
 }
 
 // keeperForwardAccumServiceRepo — #2 forward-accumulation: P2 reads register from
-// BOTH P0 AND P1 at once. All links are base core.probe (free-form params),
+// BOTH P0 AND P1 at once. All links are base fakekeeper.probe (free-form params),
 // distinguished by state.
 //
-//	#0 provision (core.probe.created,   register: provision, output ip+token)    → Passage 0
-//	#1 deliver   (core.probe.delivered, register: deliver,   output ip+token)    → Passage 1 (reads register.provision.ip)
-//	#2 finalize  (core.probe.finalized, params from_p0=register.provision.ip
+//	#0 provision (fakekeeper.probe.created,   register: provision, output ip+token)    → Passage 0
+//	#1 deliver   (fakekeeper.probe.delivered, register: deliver,   output ip+token)    → Passage 1 (reads register.provision.ip)
+//	#2 finalize  (fakekeeper.probe.finalized, params from_p0=register.provision.ip
 //	                                              + from_p1=register.deliver.token)   → Passage 2
 //
 // finalize (P2) reads register of the two previous Passages at once — the
@@ -386,19 +387,19 @@ func keeperForwardAccumServiceRepo(t *testing.T) string {
 description: P2 reads register of both P0 and P1 (forward-accumulation)
 tasks:
   - name: provision vm
-    module: core.probe.created
+    module: fakekeeper.probe.created
     on: keeper
     register: provision
     params:
       provider: fake
   - name: deliver bootstrap
-    module: core.probe.delivered
+    module: fakekeeper.probe.delivered
     on: keeper
     register: deliver
     params:
       target_ip: "${ register.provision.ip }"
   - name: finalize reads both
-    module: core.probe.finalized
+    module: fakekeeper.probe.finalized
     on: keeper
     params:
       from_p0: "${ register.provision.ip }"
@@ -421,7 +422,7 @@ func TestIntegration_KeeperChain_ForwardAccumulation(t *testing.T) {
 	// P0's register provision.ip and P1's register deliver.token are both available
 	// to the finalizer.
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7", "token": "tok-abc"}}
-	keepers := fakeKeeperRegistry{"core.probe": bootstrap}
+	keepers := fakeKeeperRegistry{"fakekeeper.probe": bootstrap}
 	gitURL := keeperForwardAccumServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
@@ -464,13 +465,13 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 	seedOperator(t, "archon-alice")
 	seedIncarnation(t, "noop-prod")
 
-	// A single core.probe that fails on the LAST state (finalized = P2).
+	// A single fakekeeper.probe that fails on the LAST state (finalized = P2).
 	bootstrap := &capturingKeeperModule{
 		output:      map[string]any{"ip": "10.0.0.7"},
 		echoParams:  []string{"target_ip"},
 		failOnState: "finalized",
 	}
-	keepers := fakeKeeperRegistry{"core.probe": bootstrap}
+	keepers := fakeKeeperRegistry{"fakekeeper.probe": bootstrap}
 	gitURL := keeperChain3ServiceRepo(t)
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
@@ -524,7 +525,7 @@ func TestIntegration_KeeperChain_FailPassage2_EarlyPassagesSucceed(t *testing.T)
 // a keeper register) in params. Structure:
 //
 //	#0 host probe (core.exec.run, register: hostprobe) → Passage 0 (host task)
-//	#1 keeper read (core.probe.read, params data=register.hostprobe.stdout) → Passage 1
+//	#1 keeper read (fakekeeper.probe.read, params data=register.hostprobe.stdout) → Passage 1
 //
 // The keeper-task reads register.hostprobe.* — a HOST register emitted by the
 // Passage 0 host task. It lives in RegisterByHost[<hostSID>], while keeperVars
@@ -543,7 +544,7 @@ tasks:
       args: ["ok"]
     changed_when: "false"
   - name: keeper reads host register
-    module: core.probe.read
+    module: fakekeeper.probe.read
     on: keeper
     params:
       data: "${ register.hostprobe.stdout }"
@@ -571,7 +572,7 @@ func TestIntegration_KeeperChain_CrossChannel_FailClosed(t *testing.T) {
 	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
 
 	bootstrap := &capturingKeeperModule{output: map[string]any{"ok": true}}
-	keepers := fakeKeeperRegistry{"core.probe": bootstrap}
+	keepers := fakeKeeperRegistry{"fakekeeper.probe": bootstrap}
 	gitURL := crossChannelServiceRepo(t)
 
 	// host probe (Passage 0) terminates success — Passage 0 converges, the run
@@ -622,8 +623,8 @@ func TestIntegration_KeeperChain_2Passage_RegisterChained(t *testing.T) {
 	cloud := &capturingKeeperModule{output: map[string]any{"ip": "10.0.0.7"}}
 	bootstrap := &capturingKeeperModule{output: map[string]any{"delivered": true}}
 	keepers := fakeKeeperRegistry{
-		"fakecloud.vm": cloud,
-		"core.probe":   bootstrap,
+		"fakecloud.vm":     cloud,
+		"fakekeeper.probe": bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -703,8 +704,8 @@ func TestIntegration_KeeperChain_FailPassage1_ErrorLocked(t *testing.T) {
 	// bootstrap.delivered fails (failOnState="delivered").
 	bootstrap := &capturingKeeperModule{failOnState: "delivered"}
 	keepers := fakeKeeperRegistry{
-		"fakecloud.vm": cloud,
-		"core.probe":   bootstrap,
+		"fakecloud.vm":     cloud,
+		"fakekeeper.probe": bootstrap,
 	}
 	gitURL := keeperChainServiceRepo(t)
 
@@ -869,7 +870,7 @@ tasks:
     params:
       provider: fake
   - name: deliver
-    module: core.probe.delivered
+    module: fakekeeper.probe.delivered
     on: keeper
     params:
       target_ip: "${ register.provision.ip }"
