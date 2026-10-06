@@ -340,7 +340,7 @@ func (p *Purger) PurgeApplyTaskRegister(ctx context.Context, gracePeriod time.Du
 // would be the same double apply. Rule now "finish under-delivered"
 // (claimed, died before delivery), not "reclaim zombie-running".
 //
-// `attempt` is NOT reset: next [applyrun.ClaimNext] increments it
+// `attempt` is NOT reset: next [applyrun.ClaimNext] raises it
 // (fencing-epoch grows), and Keeper-guard on RunResult receipt (S1/S5) cuts off
 // stale result of previous attempt by `attempt`. Without this, re-claim of stale
 // claimed could conflict with late RunResult — therefore rule
@@ -359,6 +359,14 @@ func (p *Purger) PurgeApplyTaskRegister(ctx context.Context, gracePeriod time.Du
 // PG would not infer unused parameter type (42P18).
 //
 //	$1 batch  — LIMIT of batch returned per run
+//
+// The outer UPDATE matches the whole key `(apply_id, sid, passage)` and
+// re-checks status and lease (ADR-027 amend (p)(b)4). A host of a linear run
+// has one row per step, so the pair would also reopen its earlier, terminal
+// steps. And the inner SELECT locks nothing: a row that MarkDispatched or a
+// re-claim committed after this statement took its snapshot is re-checked
+// against the outer condition only, so without it a `dispatched` row would go
+// back to `planned` and be sent twice.
 const reclaimApplyRunsSQL = `
 WITH reclaimed AS (
     UPDATE apply_runs
@@ -366,8 +374,10 @@ WITH reclaimed AS (
         claim_by_kid     = NULL,
         claim_at         = NULL,
         claim_expires_at = NULL
-    WHERE (apply_id, sid) IN (
-        SELECT apply_id, sid
+    WHERE status = 'claimed'
+      AND claim_expires_at < NOW()
+      AND (apply_id, sid, passage) IN (
+        SELECT apply_id, sid, passage
         FROM apply_runs
         WHERE status = 'claimed'
           AND claim_expires_at < NOW()
@@ -384,7 +394,7 @@ SELECT count(*) FROM reclaimed
 // re-claim, resetting `claim_by_kid`/`claim_at`/`claim_expires_at`.
 // `dispatched`/`running` are NOT reclaimed — after delivery run is owned by Soul,
 // re-claim = double apply (ADR-027 amend, S4). `attempt` is PRESERVED —
-// fencing-epoch is incremented by next claim, Keeper-guard on RunResult receipt
+// fencing-epoch is raised by the next claim, Keeper-guard on RunResult receipt
 // cuts off stale result of previous attempt.
 // Returns count of returned jobs in batch.
 //

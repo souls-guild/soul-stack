@@ -159,7 +159,7 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 	if len(claimed) != 1 || claimed[0].Attempt != 1 {
 		t.Fatalf("first claim: len=%d attempt=%v, want 1/1", len(claimed), claimed)
 	}
-	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
+	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, 0, 1, ""); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	if got := readApplyStatus(t, ctx, applyID, sid); got != string(applyrun.StatusDispatched) {
@@ -210,7 +210,7 @@ func TestIntegration_RecoveryReclaim_StaleRunResultDropped_LiveAttempt2Commits(t
 		t.Fatalf("repeat claim attempt=%d, want 2 (1→2 via re-claim)", reclaim[0].Attempt)
 	}
 	// Drive it to dispatched, as a live Acolyte would before SendApply.
-	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
+	if err := applyrun.MarkDispatched(ctx, integrationPool, applyID, sid, 0, 2, ""); err != nil {
 		t.Fatalf("MarkDispatched#2: %v", err)
 	}
 

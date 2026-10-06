@@ -27,8 +27,10 @@ package redis
 
 import (
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"slices"
 	"sync"
 	"time"
 
@@ -243,7 +245,7 @@ func scanKIDs(ctx context.Context, s redis.Cmdable) ([]string, error) {
 }
 
 // ReadInstanceMeta reads the value of the presence key `keeper:instance:<kid>`
-// — lightweight instance metadata (a `{started_at, kid}` JSON written by the
+// — lightweight instance metadata (a `{started_at, kid, capabilities}` JSON written by the
 // caller in [RegisterInstance]). Returns (meta, true) if the key is alive;
 // (_, false) if the instance is dead / the key has expired (`redis.Nil`).
 // Feeds `GET /v1/cluster`: the list of live KIDs ([LiveKIDs]) plus each one's
@@ -268,6 +270,46 @@ func ReadInstanceMeta(ctx context.Context, c *Client, kid string) (string, bool,
 		return "", false, fmt.Errorf("redis.ReadInstanceMeta: GET %q: %w", ConclaveKey(kid), err)
 	}
 	return v, true, nil
+}
+
+// CapabilityStepQueue — the instance's Acolytes take a linear run's step rows
+// by `(apply_id, sid, passage)` and keep the host's attempt monotonic across
+// steps (ADR-027 amend (p)). An instance whose record does not carry it would
+// claim a step row as a whole run and send the scenario in one message.
+const CapabilityStepQueue = "step_queue"
+
+// AllLiveHaveCapability reports whether every live instance's Conclave record
+// lists `capability`. It answers false — never an optimistic true — when the
+// registry is empty, when a record is not the JSON [RegisterInstance]'s caller
+// writes (an older instance, or the bare-KID fallback), or on a Redis error
+// (returned alongside). An instance whose key expired between SCAN and GET is
+// gone and does not count.
+func AllLiveHaveCapability(ctx context.Context, c *Client, capability string) (bool, error) {
+	if capability == "" {
+		return false, errors.New("redis.AllLiveHaveCapability: empty capability")
+	}
+	kids, err := LiveKIDs(ctx, c)
+	if err != nil {
+		return false, err
+	}
+	seen := 0
+	for _, kid := range kids {
+		meta, ok, err := ReadInstanceMeta(ctx, c, kid)
+		if err != nil {
+			return false, err
+		}
+		if !ok {
+			continue
+		}
+		var rec struct {
+			Capabilities []string `json:"capabilities"`
+		}
+		if json.Unmarshal([]byte(meta), &rec) != nil || !slices.Contains(rec.Capabilities, capability) {
+			return false, nil
+		}
+		seen++
+	}
+	return seen > 0, nil
 }
 
 // CountLive returns the number of live keeper instances (= len([LiveKIDs])).

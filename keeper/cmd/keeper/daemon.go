@@ -2953,11 +2953,13 @@ func (d *daemon) observeConclaveLive(ctx context.Context) {
 // Keeper daemon runtime wiring note.
 func conclaveMeta(kid string) string {
 	b, err := json.Marshal(struct {
-		StartedAt string `json:"started_at"`
-		KID       string `json:"kid"`
+		StartedAt    string   `json:"started_at"`
+		KID          string   `json:"kid"`
+		Capabilities []string `json:"capabilities"`
 	}{
-		StartedAt: time.Now().UTC().Format(time.RFC3339),
-		KID:       kid,
+		StartedAt:    time.Now().UTC().Format(time.RFC3339),
+		KID:          kid,
+		Capabilities: []string{keeperredis.CapabilityStepQueue},
 	})
 	if err != nil {
 		return kid

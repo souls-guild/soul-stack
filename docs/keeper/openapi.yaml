@@ -3153,6 +3153,7 @@ components:
       additionalProperties: false
       properties:
         attempt:
+          description: fencing epoch of the last work-queue claim of this row; 0 if the row was never claimed (sent inline, keeper-side, or still planned). It grows across a host's rows of one run, so a later step of a host can start above 1 without ever having been re-claimed
           format: int32
           type: integer
         cancel_requested:

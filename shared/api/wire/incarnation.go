@@ -199,7 +199,7 @@ type RunHostStatusEntry struct {
 	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
 	FailedPlanIndex *int    `json:"failed_plan_index,omitempty" doc:"plan_index of the first task that failed on this row (a later failure on the same row does not overwrite it); correlates with tasks[].plan_index"`
 	ErrorSummary    *string `json:"error_summary,omitempty"`
-	Attempt         int32   `json:"attempt"`
+	Attempt         int32   `json:"attempt" doc:"fencing epoch of the last work-queue claim of this row; 0 if the row was never claimed (sent inline, keeper-side, or still planned). It grows across a host's rows of one run, so a later step of a host can start above 1 without ever having been re-claimed"`
 	CancelRequested bool    `json:"cancel_requested"`
 	// Notices — advisory findings this host reported during the run (NIM-237),
 	// deduplicated by (code, module, param). Unlike error_summary, INDEPENDENT of

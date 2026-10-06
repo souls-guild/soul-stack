@@ -32,6 +32,11 @@ var (
 	// recovery race) — first one wins. NOT an error: the caller treats it as
 	// a no-op (logs it, doesn't fail the barrier).
 	ErrApplyRunAlreadyTerminal = errors.New("applyrun: row is already in a terminal status")
+	// ErrWardLost — the caller's claim of the row is no longer the live one: the
+	// row was reclaimed, and is `planned` again or claimed at a later attempt
+	// (ADR-027 amend (p)(b)). The write was skipped; the row's current owner, or
+	// the next claim, closes it.
+	ErrWardLost = errors.New("applyrun: the Ward is no longer held at this attempt")
 )
 
 const (
@@ -162,8 +167,8 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 
 const insertPlannedSQL = `
 INSERT INTO apply_runs (
-    apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe, input
-) VALUES ($1, $2, $3, $4, 'planned', $5, $6, $7)
+    apply_id, sid, incarnation_name, scenario, status, started_by_aid, recipe, input, passage
+) VALUES ($1, $2, $3, $4, 'planned', $5, $6, $7, $8)
 RETURNING started_at
 `
 
@@ -235,6 +240,7 @@ func InsertPlanned(ctx context.Context, db ExecQueryRower, run *ApplyRun) error 
 		startedByArg,
 		recipeJSON,
 		inputArg,
+		run.Passage,
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)
@@ -353,6 +359,73 @@ func UpdateStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, p
 		return fmt.Errorf("applyrun: update status probe: %w", perr)
 	}
 	return fmt.Errorf("%w (status=%s)", ErrApplyRunAlreadyTerminal, statusStr)
+}
+
+// updateWardStatusSQL is [updateStatusSQL] for the Acolyte that claimed the
+// row: it lands only while the row is still in this claim's phase
+// (`claimed`, or `dispatched` after a failed send) AND at this claim's
+// attempt. Reclaim keeps `attempt` (purger.go), so the status filter is what
+// fences a writer whose row went back to `planned` and is not re-claimed yet.
+const updateWardStatusSQL = `
+UPDATE apply_runs
+SET status        = $3,
+    error_summary = COALESCE($4, error_summary),
+    finished_at   = NOW()
+WHERE apply_id = $1 AND sid = $2 AND passage = $5
+  AND attempt = $6
+  AND status IN ('claimed', 'dispatched')
+`
+
+const probeWardSQL = `
+SELECT status, attempt FROM apply_runs WHERE apply_id = $1 AND sid = $2 AND passage = $3
+`
+
+// UpdateWardStatus moves the row an Acolyte claimed at `attempt` to a terminal
+// status, unless that claim has been lost to a reclaim (ADR-027 amend (p)(b)6).
+//
+// Returns:
+//   - [ErrApplyRunNotFound]        — no row at all.
+//   - [ErrApplyRunAlreadyTerminal] — the row is already terminal.
+//   - [ErrWardLost]                — the row is `planned` again or held at
+//     another attempt; nothing was written.
+func UpdateWardStatus(ctx context.Context, db ExecQueryRower, applyID, sid string, passage, attempt int, status Status, errorSummary *string) error {
+	if applyID == "" {
+		return fmt.Errorf("applyrun: empty apply_id")
+	}
+	if sid == "" {
+		return fmt.Errorf("applyrun: empty sid")
+	}
+	if !ValidStatus(status) || !status.terminal() {
+		return fmt.Errorf("applyrun: invalid ward terminal status %q", status)
+	}
+
+	var errorSummaryArg any
+	if errorSummary != nil {
+		errorSummaryArg = *errorSummary
+	}
+
+	tag, err := db.Exec(ctx, updateWardStatusSQL, applyID, sid, string(status), errorSummaryArg, passage, attempt)
+	if err != nil {
+		return fmt.Errorf("applyrun: update ward status: %w", err)
+	}
+	if tag.RowsAffected() == 1 {
+		return nil
+	}
+
+	var (
+		statusStr  string
+		rowAttempt int
+	)
+	if perr := db.QueryRow(ctx, probeWardSQL, applyID, sid, passage).Scan(&statusStr, &rowAttempt); perr != nil {
+		if errors.Is(perr, pgx.ErrNoRows) {
+			return ErrApplyRunNotFound
+		}
+		return fmt.Errorf("applyrun: update ward status probe: %w", perr)
+	}
+	if Status(statusStr).terminal() {
+		return fmt.Errorf("%w (status=%s)", ErrApplyRunAlreadyTerminal, statusStr)
+	}
+	return fmt.Errorf("%w (status=%s, attempt=%d, ours=%d)", ErrWardLost, statusStr, rowAttempt, attempt)
 }
 
 const selectByApplyIDSQL = `
@@ -722,11 +795,13 @@ func RequestCancel(ctx context.Context, db ExecQueryRower, applyID string) (int6
 const selectCancelRequestedSQL = `
 SELECT cancel_requested
 FROM apply_runs
-WHERE apply_id = $1 AND sid = $2
+WHERE apply_id = $1 AND sid = $2 AND passage = $3
 `
 
 // SelectCancelRequested reads the current `cancel_requested` flag for row
-// `(applyID, sid)`. The Acolyte calls it in claim-execute BEFORE SendApply
+// `(applyID, sid, passage)` — keyed by the step, because an earlier step's
+// terminal row of the same host never carries the flag (RequestCancel skips
+// terminals). The Acolyte calls it in claim-execute BEFORE SendApply
 // (ADR-027 cutover): if Cancel was requested between claim and send, the
 // apply does NOT go out to the Soul. A separate narrow read (rather than the
 // flag from [ClaimNext]'s RETURNING) — because the claim→SendApply window is
@@ -734,9 +809,9 @@ WHERE apply_id = $1 AND sid = $2
 // Ward was already claimed.
 //
 // Returns [ErrApplyRunNotFound] if the row doesn't exist.
-func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid string) (bool, error) {
+func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int) (bool, error) {
 	var cancelRequested bool
-	err := db.QueryRow(ctx, selectCancelRequestedSQL, applyID, sid).Scan(&cancelRequested)
+	err := db.QueryRow(ctx, selectCancelRequestedSQL, applyID, sid, passage).Scan(&cancelRequested)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return false, ErrApplyRunNotFound
@@ -751,7 +826,7 @@ func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid 
 // locks the chosen planned rows and SKIPS rows already locked by
 // competitors — two Acolytes on different instances never claim the same
 // row. The outer UPDATE moves them to `claimed`, stamps the owner/lease, and
-// increments `attempt` (fencing epoch, ADR-027(g)). RETURNING hands the
+// raises `attempt` (fencing epoch, ADR-027(g)). RETURNING hands the
 // claimed rows back to this exact Acolyte.
 //
 //	$1 claim_by_kid   — KID of the claiming Acolyte
@@ -765,39 +840,54 @@ func SelectCancelRequested(ctx context.Context, db ExecQueryRower, applyID, sid 
 // failed. A recovery re-claim overwrites the stamp with whoever actually
 // re-rendered, which is the honest answer to "what rendered this row".
 //
-// passage-aware claim — S3: claim by `(apply_id, sid)` is unique as long as
-// every row carries passage=0 (S1/S2: stratification computes passage
-// statically, but the stage loop that writes passage>0 apply_runs rows is
-// S3). Once staged-render starts laying down N rows per host (one per
-// Passage), claim will become passage-aware (claim only rows of the
-// currently active Passage — a task becomes `(apply_id, sid, passage)`,
-// ADR-056/ADR-027 amend). Symmetric with updateStatusSQL.
+// A host of a linear run has one row per step (ADR-027 amend (p)), so the
+// claim matches the whole key `(apply_id, sid, passage)`: matching the pair
+// would also claim the host's earlier, terminal steps.
+//
+// attempt is the host's epoch in the run, not this row's claim count: the
+// Soul fences by apply_id alone (soul/internal/runtime AcceptAttempt), so a
+// step's first claim must exceed every attempt the host's earlier steps
+// reached, or the Soul drops it. At most one row per host and run is
+// non-terminal (amend (p)(a)), so MAX over the host's rows is stable here.
+// The MAX reads the statement's snapshot even when a concurrent claim and
+// reclaim of the same row forced a re-check, so it is floored by r.attempt,
+// which the re-check reads from the row version it locked.
+//
+// The pick is a MATERIALIZED CTE so it runs once. As an `IN (subquery)` the
+// planner may re-run it per outer row, and each re-run skips the rows this
+// statement has already updated — the LIMIT then stops bounding the batch.
 const claimNextSQL = `
-UPDATE apply_runs AS r
-SET status           = 'claimed',
-    claim_by_kid     = $1,
-    claim_at         = NOW(),
-    claim_expires_at = NOW() + $2::interval,
-    attempt          = r.attempt + 1,
-    keeper_version   = COALESCE($4, r.keeper_version)
-WHERE (r.apply_id, r.sid) IN (
-    SELECT c.apply_id, c.sid
+WITH picked AS MATERIALIZED (
+    SELECT c.apply_id, c.sid, c.passage
     FROM apply_runs AS c
     WHERE c.status = 'planned'
     ORDER BY c.started_at ASC
     FOR UPDATE SKIP LOCKED
     LIMIT $3
 )
-RETURNING apply_id, sid, incarnation_name, scenario, task_idx, status,
-          error_summary, started_at, finished_at, started_by_aid,
-          claim_by_kid, claim_at, claim_expires_at, attempt, recipe,
-          keeper_version, soul_version
+UPDATE apply_runs AS r
+SET status           = 'claimed',
+    claim_by_kid     = $1,
+    claim_at         = NOW(),
+    claim_expires_at = NOW() + $2::interval,
+    attempt          = GREATEST(r.attempt,
+                                (SELECT MAX(h.attempt) FROM apply_runs AS h
+                                 WHERE h.apply_id = r.apply_id AND h.sid = r.sid)) + 1,
+    keeper_version   = COALESCE($4, r.keeper_version)
+FROM picked AS p
+WHERE r.apply_id = p.apply_id AND r.sid = p.sid AND r.passage = p.passage
+  AND r.status = 'planned'
+RETURNING r.apply_id, r.sid, r.passage, r.incarnation_name, r.scenario, r.task_idx, r.status,
+          r.error_summary, r.started_at, r.finished_at, r.started_by_aid,
+          r.claim_by_kid, r.claim_at, r.claim_expires_at, r.attempt, r.recipe,
+          r.keeper_version, r.soul_version
 `
 
 // ClaimNext atomically claims up to batch planned tasks for Acolyte kid,
 // moving them planned → claimed: stamps claim_by_kid/claim_at,
 // claim_expires_at = NOW()+lease, keeper_version (engine provenance,
-// ADR-0076(l)), and increments attempt (fencing epoch). Race-freedom between
+// ADR-0076(l)), and raises attempt above every attempt the host reached in the
+// run (fencing epoch, see [claimNextSQL]). Race-freedom between
 // competing Acolytes on different instances is guaranteed by `FOR UPDATE SKIP
 // LOCKED` (locked rows are skipped). FIFO by started_at.
 //
@@ -805,8 +895,8 @@ RETURNING apply_id, sid, incarnation_name, scenario, task_idx, status,
 // with no version wired up) leaves whatever the column already held rather than
 // erasing a stamp with nothing.
 //
-// Returns the claimed rows (already in `claimed` status, attempt
-// incremented). An empty slice (not an error) means no planned tasks exist,
+// Returns the claimed rows (already in `claimed` status, with their passage and
+// new attempt). An empty slice (not an error) means no planned tasks exist,
 // or they were all already claimed by competitors.
 func ClaimNext(ctx context.Context, db ExecQueryRower, kid string, lease time.Duration, batch int, keeperVersion string) ([]*ApplyRun, error) {
 	if kid == "" {
@@ -855,6 +945,7 @@ func scanClaimedRow(row pgx.Row) (*ApplyRun, error) {
 	if err := row.Scan(
 		&run.ApplyID,
 		&run.SID,
+		&run.Passage,
 		&run.IncarnationName,
 		&run.Scenario,
 		&run.TaskIdx,
@@ -884,14 +975,18 @@ func scanClaimedRow(row pgx.Row) (*ApplyRun, error) {
 	return &run, nil
 }
 
+// The attempt match is what lets only the live claim hand the task off: an
+// Acolyte whose Ward was reclaimed and re-claimed at a later attempt finds the
+// row `claimed` again and would otherwise mark it and send its stale attempt,
+// which the Soul runs and the receive check then drops (ADR-027 amend (p)(b)2).
 const markDispatchedSQL = `
 UPDATE apply_runs
 SET status       = 'dispatched',
-    soul_version = COALESCE($3, soul_version)
-WHERE apply_id = $1 AND sid = $2 AND status = 'claimed'
+    soul_version = COALESCE($5, soul_version)
+WHERE apply_id = $1 AND sid = $2 AND passage = $3 AND attempt = $4 AND status = 'claimed'
 `
 
-// MarkDispatched moves the claimed task `(applyID, sid)` from claimed →
+// MarkDispatched moves the claimed task `(applyID, sid, passage)` from claimed →
 // dispatched — the Acolyte calls it AND COMMITS IT TO PG STRICTLY BEFORE
 // SendApply (a deliver-once intent marker, ADR-027 amend S3). Once a row is
 // dispatched, recovery-reclaim does NOT touch it (reclaim is scoped to
@@ -916,7 +1011,8 @@ WHERE apply_id = $1 AND sid = $2 AND status = 'claimed'
 // Returns:
 //   - [ErrApplyRunNotFound]   — no row at all.
 //   - [ErrApplyRunNotClaimed] — the row exists but isn't in `claimed` status.
-func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid, soulVersion string) error {
+//   - [ErrWardLost]           — the row is `claimed` at another attempt.
+func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid string, passage, attempt int, soulVersion string) error {
 	if applyID == "" {
 		return fmt.Errorf("applyrun: empty apply_id")
 	}
@@ -924,25 +1020,28 @@ func MarkDispatched(ctx context.Context, db ExecQueryRower, applyID, sid, soulVe
 		return fmt.Errorf("applyrun: empty sid")
 	}
 
-	tag, err := db.Exec(ctx, markDispatchedSQL, applyID, sid, nullableVersion(soulVersion))
+	tag, err := db.Exec(ctx, markDispatchedSQL, applyID, sid, passage, attempt, nullableVersion(soulVersion))
 	if err != nil {
 		return fmt.Errorf("applyrun: mark dispatched: %w", err)
 	}
 	if tag.RowsAffected() == 1 {
 		return nil
 	}
-	// 0 rows affected: either the row doesn't exist, or it's not in
-	// `claimed`. Disambiguate for an informative error (guard vs not-found)
-	// with a single status probe.
-	var statusStr string
-	scanErr := db.QueryRow(ctx,
-		`SELECT status FROM apply_runs WHERE apply_id = $1 AND sid = $2`,
-		applyID, sid).Scan(&statusStr)
+	// 0 rows affected: the row doesn't exist, isn't `claimed`, or is claimed
+	// at another attempt. One probe tells them apart.
+	var (
+		statusStr  string
+		rowAttempt int
+	)
+	scanErr := db.QueryRow(ctx, probeWardSQL, applyID, sid, passage).Scan(&statusStr, &rowAttempt)
 	if scanErr != nil {
 		if errors.Is(scanErr, pgx.ErrNoRows) {
 			return ErrApplyRunNotFound
 		}
 		return fmt.Errorf("applyrun: mark dispatched probe: %w", scanErr)
+	}
+	if Status(statusStr) == StatusClaimed {
+		return fmt.Errorf("%w (attempt=%d, ours=%d)", ErrWardLost, rowAttempt, attempt)
 	}
 	return fmt.Errorf("%w (status=%s)", ErrApplyRunNotClaimed, statusStr)
 }

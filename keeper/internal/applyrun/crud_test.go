@@ -270,8 +270,8 @@ func TestInsert_InputPropagated(t *testing.T) {
 	}
 }
 
-// TestInsertPlanned_InputPropagated: the masked input snapshot is written as the
-// last InsertPlanned arg (after recipe) into the jsonb input column.
+// TestInsertPlanned_InputPropagated: the masked input snapshot is written into
+// the jsonb input column, and the step's passage beside it.
 func TestInsertPlanned_InputPropagated(t *testing.T) {
 	f := &fakeDB{
 		queryRowFunc: func(_ string) pgx.Row {
@@ -281,18 +281,21 @@ func TestInsertPlanned_InputPropagated(t *testing.T) {
 	snap := json.RawMessage(`{"x":"***MASKED***"}`)
 	run := &ApplyRun{
 		ApplyID: "a", SID: "s", IncarnationName: "i", Scenario: "sc",
-		Recipe: &Recipe{ScenarioName: "create"}, Input: snap,
+		Recipe: &Recipe{ScenarioName: "create"}, Input: snap, Passage: 4,
 	}
 	if err := InsertPlanned(context.Background(), f, run); err != nil {
 		t.Fatalf("InsertPlanned: %v", err)
 	}
-	// args: apply_id, sid, incarnation_name, scenario, started_by_aid, recipe, input.
-	if len(f.queryRowArgs) != 7 {
-		t.Fatalf("args len = %d, want 7", len(f.queryRowArgs))
+	// args: apply_id, sid, incarnation_name, scenario, started_by_aid, recipe, input, passage.
+	if len(f.queryRowArgs) != 8 {
+		t.Fatalf("args len = %d, want 8", len(f.queryRowArgs))
 	}
 	got, ok := f.queryRowArgs[6].(json.RawMessage)
 	if !ok || string(got) != string(snap) {
 		t.Errorf("args[6] input = %v, want %s", f.queryRowArgs[6], snap)
+	}
+	if f.queryRowArgs[7] != 4 {
+		t.Errorf("args[7] passage = %v, want 4", f.queryRowArgs[7])
 	}
 }
 
@@ -788,7 +791,7 @@ func TestSelectCancelRequested_True(t *testing.T) {
 	f := &fakeDB{queryRowFunc: func(string) pgx.Row {
 		return staticRow{values: []any{true}}
 	}}
-	got, err := SelectCancelRequested(context.Background(), f, "01HCANCEL", "host-a")
+	got, err := SelectCancelRequested(context.Background(), f, "01HCANCEL", "host-a", 2)
 	if err != nil {
 		t.Fatalf("SelectCancelRequested: %v", err)
 	}
@@ -798,8 +801,11 @@ func TestSelectCancelRequested_True(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "cancel_requested") {
 		t.Errorf("SQL must select cancel_requested: %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 2 || f.queryRowArgs[0] != "01HCANCEL" || f.queryRowArgs[1] != "host-a" {
-		t.Errorf("args = %v, want [01HCANCEL host-a]", f.queryRowArgs)
+	if !strings.Contains(f.queryRowSQL, "passage = $3") {
+		t.Errorf("SQL must read the step's own row: %q", f.queryRowSQL)
+	}
+	if len(f.queryRowArgs) != 3 || f.queryRowArgs[0] != "01HCANCEL" || f.queryRowArgs[1] != "host-a" || f.queryRowArgs[2] != 2 {
+		t.Errorf("args = %v, want [01HCANCEL host-a 2]", f.queryRowArgs)
 	}
 }
 
@@ -807,7 +813,7 @@ func TestSelectCancelRequested_False(t *testing.T) {
 	f := &fakeDB{queryRowFunc: func(string) pgx.Row {
 		return staticRow{values: []any{false}}
 	}}
-	got, err := SelectCancelRequested(context.Background(), f, "01HRUN", "host-a")
+	got, err := SelectCancelRequested(context.Background(), f, "01HRUN", "host-a", 0)
 	if err != nil {
 		t.Fatalf("SelectCancelRequested: %v", err)
 	}
@@ -820,7 +826,7 @@ func TestSelectCancelRequested_NotFound(t *testing.T) {
 	f := &fakeDB{queryRowFunc: func(string) pgx.Row {
 		return errRow{err: pgx.ErrNoRows}
 	}}
-	_, err := SelectCancelRequested(context.Background(), f, "01HGHOST", "host-a")
+	_, err := SelectCancelRequested(context.Background(), f, "01HGHOST", "host-a", 0)
 	if !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("err = %v, want ErrApplyRunNotFound", err)
 	}
@@ -889,8 +895,14 @@ func TestClaimNext_QueryShape(t *testing.T) {
 	if !strings.Contains(f.querySQL, "FOR UPDATE SKIP LOCKED") {
 		t.Errorf("SQL does not contain FOR UPDATE SKIP LOCKED: %q", f.querySQL)
 	}
-	if !strings.Contains(f.querySQL, "attempt          = r.attempt + 1") {
-		t.Errorf("SQL does not increment attempt: %q", f.querySQL)
+	if !strings.Contains(f.querySQL, "r.apply_id = p.apply_id AND r.sid = p.sid AND r.passage = p.passage") {
+		t.Errorf("SQL does not claim by the whole key: %q", f.querySQL)
+	}
+	if !strings.Contains(f.querySQL, "AS MATERIALIZED") {
+		t.Errorf("the pick must run once, or LIMIT stops bounding the batch: %q", f.querySQL)
+	}
+	if !strings.Contains(f.querySQL, "SELECT MAX(h.attempt) FROM apply_runs AS h") {
+		t.Errorf("SQL does not raise attempt above the host's earlier steps: %q", f.querySQL)
 	}
 	if len(f.queryArgs) != 4 {
 		t.Fatalf("args len = %d, want 4", len(f.queryArgs))
@@ -932,10 +944,10 @@ func TestClaimNext_EmptyKeeperVersionIsNull(t *testing.T) {
 
 func TestMarkDispatched_Validation(t *testing.T) {
 	f := &fakeDB{}
-	if err := MarkDispatched(context.Background(), f, "", "s", ""); err == nil {
+	if err := MarkDispatched(context.Background(), f, "", "s", 0, 1, ""); err == nil {
 		t.Error("empty apply_id: expected error")
 	}
-	if err := MarkDispatched(context.Background(), f, "a", "", ""); err == nil {
+	if err := MarkDispatched(context.Background(), f, "a", "", 0, 1, ""); err == nil {
 		t.Error("empty sid: expected error")
 	}
 	if f.execCalls != 0 {
@@ -946,22 +958,22 @@ func TestMarkDispatched_Validation(t *testing.T) {
 func TestMarkDispatched_GuardFilter(t *testing.T) {
 	// Exec touched the row → ok, no probe SELECT needed.
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	if err := MarkDispatched(context.Background(), f, "a", "s", "v0.1.9"); err != nil {
+	if err := MarkDispatched(context.Background(), f, "a", "s", 3, 2, "v0.1.9"); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
-	if !strings.Contains(f.execSQL, "status = 'claimed'") {
-		t.Errorf("guard filter status='claimed' missing from SQL: %q", f.execSQL)
+	if !strings.Contains(f.execSQL, "passage = $3 AND attempt = $4 AND status = 'claimed'") {
+		t.Errorf("guard filter (step, attempt, claimed) missing from SQL: %q", f.execSQL)
 	}
 	if !strings.Contains(f.execSQL, "'dispatched'") {
 		t.Errorf("target status dispatched missing from SQL: %q", f.execSQL)
 	}
 	// The target's announced version is stamped by the SAME statement as the
 	// deliver-once marker (ADR-0076(l)) — no extra round trip before the handoff.
-	if !strings.Contains(f.execSQL, "soul_version = COALESCE($3, soul_version)") {
+	if !strings.Contains(f.execSQL, "soul_version = COALESCE($5, soul_version)") {
 		t.Errorf("SQL does not stamp soul_version: %q", f.execSQL)
 	}
-	if len(f.execArgs) != 3 || f.execArgs[2] != "v0.1.9" {
-		t.Errorf("exec args = %v, want soul_version v0.1.9 in $3", f.execArgs)
+	if len(f.execArgs) != 5 || f.execArgs[2] != 3 || f.execArgs[3] != 2 || f.execArgs[4] != "v0.1.9" {
+		t.Errorf("exec args = %v, want [a s 3 2 v0.1.9]", f.execArgs)
 	}
 	if f.queryRowCalls != 0 {
 		t.Errorf("queryRowCalls = %d, want 0 (successful UPDATE doesn't add status)", f.queryRowCalls)
@@ -972,11 +984,11 @@ func TestMarkDispatched_GuardFilter(t *testing.T) {
 // earlier stamp, and must never block the handoff: the argument goes to NULL.
 func TestMarkDispatched_EmptySoulVersionIsNull(t *testing.T) {
 	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
-	if err := MarkDispatched(context.Background(), f, "a", "s", ""); err != nil {
+	if err := MarkDispatched(context.Background(), f, "a", "s", 0, 1, ""); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
-	if len(f.execArgs) != 3 || f.execArgs[2] != nil {
-		t.Errorf("exec args = %v, want nil (NULL, not \"\") in $3", f.execArgs)
+	if len(f.execArgs) != 5 || f.execArgs[4] != nil {
+		t.Errorf("exec args = %v, want nil (NULL, not \"\") in $5", f.execArgs)
 	}
 }
 
@@ -989,7 +1001,7 @@ func TestMarkDispatched_ZeroRows_NotFound(t *testing.T) {
 			return errRow{err: pgx.ErrNoRows}
 		},
 	}
-	if err := MarkDispatched(context.Background(), f, "a", "s", ""); !errors.Is(err, ErrApplyRunNotFound) {
+	if err := MarkDispatched(context.Background(), f, "a", "s", 0, 1, ""); !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("err = %v, want ErrApplyRunNotFound", err)
 	}
 }
@@ -1000,11 +1012,79 @@ func TestMarkDispatched_ZeroRows_NotClaimed(t *testing.T) {
 		execTag:    pgconn.NewCommandTag("UPDATE 0"),
 		execTagSet: true,
 		queryRowFunc: func(_ string) pgx.Row {
-			return staticRow{values: []any{"dispatched"}}
+			return staticRow{values: []any{"dispatched", 1}}
 		},
 	}
-	if err := MarkDispatched(context.Background(), f, "a", "s", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(context.Background(), f, "a", "s", 0, 1, ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("err = %v, want ErrApplyRunNotClaimed", err)
+	}
+}
+
+func TestMarkDispatched_ZeroRows_ClaimedElsewhere_WardLost(t *testing.T) {
+	f := &fakeDB{
+		execTag:    pgconn.NewCommandTag("UPDATE 0"),
+		execTagSet: true,
+		queryRowFunc: func(_ string) pgx.Row {
+			return staticRow{values: []any{"claimed", 3}}
+		},
+	}
+	if err := MarkDispatched(context.Background(), f, "a", "s", 0, 2, ""); !errors.Is(err, ErrWardLost) {
+		t.Errorf("err = %v, want ErrWardLost", err)
+	}
+}
+
+// --- UpdateWardStatus (the claim path's own terminal, fenced by attempt) ---
+
+func TestUpdateWardStatus_RejectsNonTerminal(t *testing.T) {
+	f := &fakeDB{}
+	for _, s := range []Status{StatusPlanned, StatusClaimed, StatusDispatched, StatusRunning, "bogus"} {
+		if err := UpdateWardStatus(context.Background(), f, "a", "s", 0, 1, s, nil); err == nil {
+			t.Errorf("status %q: expected an error", s)
+		}
+	}
+	if f.execCalls != 0 {
+		t.Errorf("execCalls = %d, want 0", f.execCalls)
+	}
+}
+
+func TestUpdateWardStatus_FencedSQL(t *testing.T) {
+	f := &fakeDB{execTag: pgconn.NewCommandTag("UPDATE 1"), execTagSet: true}
+	summary := "send_apply_failed"
+	if err := UpdateWardStatus(context.Background(), f, "a", "s", 2, 5, StatusFailed, &summary); err != nil {
+		t.Fatalf("UpdateWardStatus: %v", err)
+	}
+	for _, want := range []string{"passage = $5", "attempt = $6", "status IN ('claimed', 'dispatched')"} {
+		if !strings.Contains(f.execSQL, want) {
+			t.Errorf("SQL lacks %q: %q", want, f.execSQL)
+		}
+	}
+	if len(f.execArgs) != 6 || f.execArgs[4] != 2 || f.execArgs[5] != 5 {
+		t.Errorf("exec args = %v, want passage 2 in $5 and attempt 5 in $6", f.execArgs)
+	}
+}
+
+func TestUpdateWardStatus_ZeroRows(t *testing.T) {
+	cases := []struct {
+		name string
+		row  pgx.Row
+		want error
+	}{
+		{"no row", errRow{err: pgx.ErrNoRows}, ErrApplyRunNotFound},
+		{"terminal", staticRow{values: []any{"success", 1}}, ErrApplyRunAlreadyTerminal},
+		{"re-claimed later", staticRow{values: []any{"claimed", 2}}, ErrWardLost},
+		{"reclaimed, not re-claimed", staticRow{values: []any{"planned", 1}}, ErrWardLost},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			f := &fakeDB{
+				execTag:      pgconn.NewCommandTag("UPDATE 0"),
+				execTagSet:   true,
+				queryRowFunc: func(string) pgx.Row { return tc.row },
+			}
+			if err := UpdateWardStatus(context.Background(), f, "a", "s", 0, 1, StatusNoMatch, nil); !errors.Is(err, tc.want) {
+				t.Errorf("err = %v, want %v", err, tc.want)
+			}
+		})
 	}
 }
 

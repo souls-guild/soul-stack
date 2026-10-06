@@ -965,7 +965,15 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   warnings for a child's `serial:` or barrier-kind setting inside a group. S1's step numbering
   already splits a default block, so the modes that decide which blocks split cannot come later.
 - **S3** — the Acolyte path, which must be in before linear dispatch is enabled (item 7), and the
-  public `passage` projection.
+  public `passage` projection. The queue learns steps first —
+  [ADR-027 amend (p)](0027-apply-work-queue.md) (NIM-960): the planned insert, the claim, the
+  `dispatched` mark, the claim path's own writes and its `ApplyRequest`, the Cancel read and
+  reclaim keyed by `(apply_id, sid, passage)` — the mark and the claim path's writes also fenced
+  by `attempt` and reclaim by the row's status, which changes one-step runs too — a fencing epoch
+  that survives a re-claimed step, and an older Keeper kept off a linear run's rows (the Conclave
+  capability `step_queue`); then the Acolyte renders a step, the run goroutine asks the capability
+  before queueing a step, and the Oracle path gets a step loop or refuses a multi-step scenario
+  (NIM-961).
 - **S4** — `soul-lint`: drop the other derivation-only diagnostics.
 
 `within_block_register_dependency` is removed in **no** slice; it is narrowed to blocks rolled as one
@@ -978,7 +986,7 @@ group.
 | [ADR-056](0056-staged-render-passage.md) | **superseded** — the derived N-Passage plan is replaced by a happens-before order; FC-5 retires, since every reference across a barrier is resolved on the Keeper |
 | [ADR-012(d)](0012-keeper-soul-grpc.md) | **amended** — for a scenario task, `when:` is evaluated on the Keeper and the post-module predicates arrive with everything but `register.self` — and, in a group, the group's own registers — rendered in, per host, behind a capability bit (item 10); a grouped child's `when:` that still reads a sibling goes to the Soul the same way; no register crosses the wire, and `flow_context` loses its purpose |
 | [ADR-0075](0075-intra-host-async-tasks.md) | still applies inside a destiny; top-level `async:`, and `require:` outside a destiny, must be refused (NIM-906) |
-| [ADR-027](0027-apply-work-queue.md) | **affected** — the work-queue path is unreachable for linear runs unless restored |
+| [ADR-027](0027-apply-work-queue.md) | **affected** — the work-queue path is unreachable for linear runs unless restored; amend (p) re-keys the queue by step (S3) |
 | [ADR-009](0009-scenario-dsl.md) | **amended** — a `settings:` block with one schema at every level, inherited as a value like `vars:` (not composed like `when:`/`where:`), the first execution-behaviour container in the grammar; the execution model changes. Block inheritance of `retry:`/`timeout:`/`async:` is a **separate** amendment, NIM-910 |
 | [ADR-010](0010-templating.md) | unaffected — the register grammar and the NIM-909 amendment stand |
 | [ADR-0084](0084-explicit-state-capture.md) | **amended** — a capture runs where it is written (§State capture); its per-Passage state refresh and stale same-Passage read rule (`0084:228-235`, `:328-341`) become per step, so that stale read can no longer arise and its `soul-lint` check retires in S1 |

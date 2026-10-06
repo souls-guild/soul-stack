@@ -1289,7 +1289,7 @@ func TestIntegration_MarkDispatched_Ok(t *testing.T) {
 		t.Fatalf("ClaimNext: %v", err)
 	}
 
-	if err := MarkDispatched(ctx, integrationPool, "01HMARK", "host-a", ""); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, "01HMARK", "host-a", 0, 1, ""); err != nil {
 		t.Fatalf("MarkDispatched: %v", err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, "01HMARK", "host-a")
@@ -1313,18 +1313,18 @@ func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 
 	// running -> dispatched: guard (running outside claimed).
 	seedApplyRun(t, "01HG", "host-running") // Inserts StatusRunning.
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-running", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-running", 0, 1, ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("running→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 
 	// planned → dispatched: guard.
 	seedPlanned(t, "01HG", "host-planned")
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-planned", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-planned", 0, 1, ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("planned→dispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 
 	// Absent row -> NotFound.
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "ghost", ""); !errors.Is(err, ErrApplyRunNotFound) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "ghost", 0, 1, ""); !errors.Is(err, ErrApplyRunNotFound) {
 		t.Errorf("ghost: err = %v, want ErrApplyRunNotFound", err)
 	}
 
@@ -1334,10 +1334,10 @@ func TestIntegration_MarkDispatched_GuardRejectsNonClaimed(t *testing.T) {
 	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, ""); err != nil {
 		t.Fatalf("ClaimNext: %v", err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", ""); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", 0, 1, ""); err != nil {
 		t.Fatalf("MarkDispatched#1: %v", err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", ""); !errors.Is(err, ErrApplyRunNotClaimed) {
+	if err := MarkDispatched(ctx, integrationPool, "01HG", "host-twice", 0, 1, ""); !errors.Is(err, ErrApplyRunNotClaimed) {
 		t.Errorf("repeated MarkDispatched: err = %v, want ErrApplyRunNotClaimed", err)
 	}
 }
@@ -1436,7 +1436,7 @@ func dispatchRow(t *testing.T, applyID, sid string) int {
 	if _, err := ClaimNext(ctx, integrationPool, "keeper-1", 30*time.Second, 10, ""); err != nil {
 		t.Fatalf("ClaimNext(%s/%s): %v", applyID, sid, err)
 	}
-	if err := MarkDispatched(ctx, integrationPool, applyID, sid, ""); err != nil {
+	if err := MarkDispatched(ctx, integrationPool, applyID, sid, 0, 1, ""); err != nil {
 		t.Fatalf("MarkDispatched(%s/%s): %v", applyID, sid, err)
 	}
 	got, err := SelectByApplyID(ctx, integrationPool, applyID, sid)

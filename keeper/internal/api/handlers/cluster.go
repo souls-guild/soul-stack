@@ -20,7 +20,7 @@ import (
 type ClusterRegistry interface {
 	// LiveKIDs — KIDs of live instances (SCAN of the keeper:instance:* presence keys).
 	LiveKIDs(ctx context.Context) ([]string, error)
-	// InstanceMeta — raw value of an instance's presence key (`{started_at,kid}` JSON);
+	// InstanceMeta — raw value of an instance's presence key (`{started_at,kid,capabilities}` JSON);
 	// (_, false) if the key expired between LiveKIDs and this read (TTL race).
 	InstanceMeta(ctx context.Context, kid string) (string, bool, error)
 }

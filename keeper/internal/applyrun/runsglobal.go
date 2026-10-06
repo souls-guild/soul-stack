@@ -140,9 +140,8 @@ LEFT JOIN incarnation i ON ar.incarnation_name = i.id`,
 // terminalStatusesSQL returns terminal host statuses as a list of SQL literals
 // ('success','no_match',...). Statuses are trusted package constants, not input.
 func terminalStatusesSQL() string {
-	terminal := []Status{StatusSuccess, StatusNoMatch, StatusFailed, StatusOrphaned, StatusCancelled}
-	quoted := make([]string, len(terminal))
-	for i, s := range terminal {
+	quoted := make([]string, len(terminalStatuses))
+	for i, s := range terminalStatuses {
 		quoted[i] = "'" + string(s) + "'"
 	}
 	return strings.Join(quoted, ",")

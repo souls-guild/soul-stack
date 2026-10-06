@@ -96,6 +96,7 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	log := c.logger.With(
 		slog.String("apply_id", run.ApplyID),
 		slog.String("sid", run.SID),
+		slog.Int("passage", run.Passage),
 		slog.Int("attempt", run.Attempt),
 	)
 
@@ -120,9 +121,9 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		}
 		if errors.Is(err, errHostDestroyed) {
 			// NIM-56: host status destroyed (removed by cloud-destroy cascade) → benign no_match, not a failure.
-			if uerr := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); uerr != nil {
-				if errors.Is(uerr, applyrun.ErrApplyRunAlreadyTerminal) {
-					log.Info("scenario: claim benign no_match (destroy cascade) - single-winner no-op")
+			if uerr := c.closeWard(ctx, run, applyrun.StatusNoMatch, nil); uerr != nil {
+				if errors.Is(uerr, applyrun.ErrApplyRunAlreadyTerminal) || errors.Is(uerr, applyrun.ErrWardLost) {
+					log.Info("scenario: claim benign no_match (destroy cascade) - not written", slog.Any("reason", uerr))
 					return
 				}
 				log.Error("scenario: claim benign no_match (destroy cascade) not recorded", slog.Any("error", uerr))
@@ -147,12 +148,12 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// for this run. FINDING-01 option (b) — terminal `no_match`, NOT `success`:
 		// apply_runs no longer over-reports "success where nothing was applied"
 		// (the Acolyte path writes planned for EVERY roster host BEFORE per-host
-		// on:/where: resolution). UpdateStatus sets finished_at. The barrier
+		// on:/where: resolution). UpdateWardStatus sets finished_at. The barrier
 		// counts no_match as a benign terminal (like success) → the run proceeds
 		// to ready, not error_locked.
-		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusNoMatch, nil); err != nil {
-			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-				log.Info("scenario: claim no-op no_match - single-winner no-op, first committer won")
+		if err := c.closeWard(ctx, run, applyrun.StatusNoMatch, nil); err != nil {
+			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) || errors.Is(err, applyrun.ErrWardLost) {
+				log.Info("scenario: claim no-op no_match - not written", slog.Any("reason", err))
 				return
 			}
 			log.Error("scenario: claim no-op no_match not recorded", slog.Any("error", err))
@@ -171,12 +172,12 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// the host. A PG read error is treated fail-open (don't cancel): rare, and
 	// skipping the cancel is safer than falsely canceling an already-valid
 	// apply — a repeat Cancel/recovery will finish it off.
-	if cancelled, cerr := applyrun.SelectCancelRequested(ctx, c.deps.Deps.DB, run.ApplyID, run.SID); cerr != nil {
+	if cancelled, cerr := applyrun.SelectCancelRequested(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage); cerr != nil {
 		log.Warn("scenario: claim - reading cancel_requested failed, continuing apply", slog.Any("error", cerr))
 	} else if cancelled {
-		if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusCancelled, nil); err != nil {
-			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-				log.Info("scenario: claim cancelled - single-winner no-op, first committer won")
+		if err := c.closeWard(ctx, run, applyrun.StatusCancelled, nil); err != nil {
+			if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) || errors.Is(err, applyrun.ErrWardLost) {
+				log.Info("scenario: claim cancelled - not written", slog.Any("reason", err))
 				return
 			}
 			log.Error("scenario: claim - cancelled status not recorded after Cancel in the claim window", slog.Any("error", err))
@@ -200,26 +201,31 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// invariant: once a row is dispatched, recovery-reclaim doesn't touch it
 	// (reclaim is scoped to status='claimed', S4). If MarkDispatched fails
 	// (PG error), we do NOT send apply — Ward stays claimed (recovery
-	// re-claims it); nothing was sent — no double apply. Races/repeat
-	// transitions are cut off by the status='claimed' filter inside
-	// MarkDispatched.
+	// re-claims it); nothing was sent — no double apply. Races, repeats and a
+	// Ward lost to a re-claim are cut off by MarkDispatched's filter on
+	// status='claimed' and this claim's attempt.
 	//
 	// The version this host announced rides along (ADR-0076(l)): this is the last
 	// point before handoff at which the target is known, and it is still the same
 	// connection the capability gate judged.
 	soulVersion := readAnnouncedSoulVersion(ctx, c.deps.Deps.SoulVersion, run.SID, log)
-	if err := applyrun.MarkDispatched(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, soulVersion); err != nil {
+	if err := applyrun.MarkDispatched(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, run.Attempt, soulVersion); err != nil {
+		if errors.Is(err, applyrun.ErrWardLost) {
+			log.Info("scenario: Ward re-claimed at a later attempt, SendApply not called", slog.Any("reason", err))
+			return
+		}
 		log.Error("scenario: claimed -> dispatched not recorded, SendApply not called (Ward left claimed for recovery)", slog.Any("error", err))
 		return
 	}
 
 	// ApplyRequest carries attempt = run.Attempt (fencing epoch, ADR-027(g)):
-	// ClaimNext incremented it on Ward capture (claimNextSQL: attempt =
-	// r.attempt+1), so a re-claim of an expired job arrives with a higher
-	// attempt and the Soul-guard (on RunResult receipt) rejects the original
-	// stale duplicate. SendApply additionally routes by SID-lease (apply only
-	// through the stream owner — the first layer of protection against double
-	// execution).
+	// ClaimNext raised it on Ward capture above every attempt this host reached
+	// in the run, so a re-claim of an expired job — or the next step after a
+	// re-claimed one — arrives with a higher attempt and the Soul-guard rejects
+	// only the stale duplicate. SendApply additionally routes by SID-lease
+	// (apply only through the stream owner — the first layer of protection
+	// against double execution). Passage is echoed back in TaskEvent/RunResult,
+	// which is how they find this step's row.
 	req := &keeperv1.ApplyRequest{
 		ApplyId: run.ApplyID,
 		// ToProtoTasksForHost(run.SID): THIS host's per-host render_context for
@@ -228,11 +234,12 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		// is filled with the same per-host variants as in the run-goroutine path.
 		Tasks:   render.ToProtoTasksForHost(hostTasks, run.SID),
 		Attempt: int32(run.Attempt),
+		Passage: int32(run.Passage),
 	}
 	if err := c.deps.Deps.Outbound.SendApply(ctx, run.SID, req); err != nil {
 		// SendApply returned an error: delivery is NOT CONFIRMED (a network
 		// failure could have hit AFTER transit — the host may have received the
-		// job). Terminal to failed (updateStatusSQL allows dispatched→failed) —
+		// job). Terminal to failed (UpdateWardStatus allows dispatched→failed) —
 		// safe even if delivery actually happened: attempt fencing +
 		// single-winner cut off the duplicate, and reclaim doesn't touch a
 		// terminal. Drain interruption lands here too (closing with a terminal
@@ -268,14 +275,21 @@ func (c *ClaimRunner) aborted(ctx context.Context) bool {
 	return ctx.Err() != nil
 }
 
+// closeWard writes this claim's terminal for its own step row, fenced by the
+// claim's attempt: an Acolyte that lost the Ward to a reclaim must not close
+// a row a newer claim owns ([applyrun.ErrWardLost]).
+func (c *ClaimRunner) closeWard(ctx context.Context, run *applyrun.ApplyRun, status applyrun.Status, summary *string) error {
+	return applyrun.UpdateWardStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, run.Attempt, status, summary)
+}
+
 // markFailed moves a claimed job to failed with an already-safe summary (no
 // exposed secret). summary is read externally via barrier/status_details
 // without masking — caller must pass a scrubbed/neutral string.
 func (c *ClaimRunner) markFailed(ctx context.Context, run *applyrun.ApplyRun, summary string, log *slog.Logger) {
-	if err := applyrun.UpdateStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, applyrun.StatusFailed, &summary); err != nil {
-		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) {
-			log.Info("scenario: claim failed - single-winner no-op, first committer won",
-				slog.String("summary", summary))
+	if err := c.closeWard(ctx, run, applyrun.StatusFailed, &summary); err != nil {
+		if errors.Is(err, applyrun.ErrApplyRunAlreadyTerminal) || errors.Is(err, applyrun.ErrWardLost) {
+			log.Info("scenario: claim failed - not written",
+				slog.String("summary", summary), slog.Any("reason", err))
 			return
 		}
 		log.Error("scenario: claim failed status not recorded - the barrier may hang until timeout",

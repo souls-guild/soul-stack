@@ -14,6 +14,7 @@ package applyrun
 
 import (
 	"encoding/json"
+	"slices"
 	"time"
 )
 
@@ -89,6 +90,12 @@ func ValidStatus(s Status) bool {
 		return true
 	}
 	return false
+}
+
+var terminalStatuses = []Status{StatusSuccess, StatusNoMatch, StatusFailed, StatusOrphaned, StatusCancelled}
+
+func (s Status) terminal() bool {
+	return slices.Contains(terminalStatuses, s)
 }
 
 // ApplyRun — runtime representation of an `apply_runs` registry row.
