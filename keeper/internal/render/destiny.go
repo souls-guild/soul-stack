@@ -489,8 +489,8 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 // than quoted: [BenchmarkApplyInput_ResolveByRoster] is this call with the roster as
 // its axis. On 2026-09-28, four inputs: ~0.17 ms at one host against ~0.69 ms at nine,
 // i.e. ~0.065 ms per extra host. `vault()` does NOT scale with it — the resolution memo
-// is per-PASS ([WithVaultFence]) and this loop runs inside one, so a sealed input is one
-// ReadKV whether the roster is one host or nine, which
+// ([WithVaultFence]) spans at least the whole Render this loop runs inside, so a sealed
+// input is one ReadKV whether the roster is one host or nine, which
 // TestApplyInput_VaultReadsDoNotScaleWithTheRoster asserts and a mutation kills.
 //
 // The applier's task-level `vars:` are resolved into that env first, exactly

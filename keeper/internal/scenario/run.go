@@ -249,6 +249,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	ctx, cancel := context.WithTimeout(ctx, r.effectiveRunTimeout(scn.Tasks))
 	defer cancel()
 
+	// One vault() memo for the whole run (NIM-934): every pass re-renders tasks
+	// that already ran, and a secret that disappears mid-run must not fail the run
+	// over one of them. Bound before the first Render and before any keeper-side
+	// step, so the renders `core.ssh.apply` makes inside its step share it and a
+	// step's Vault write reaches it (the client forgets the written secret on the
+	// context it was handed).
+	ctx = render.WithVaultFence(ctx, inc.Service)
+
 	// 3. Resolve run hosts (roster by the incarnation's Coven label). Factored
 	//    into resolveRoster because it's called AGAIN in the stage-loop at
 	//    refresh boundaries (mid-run re-resolve, ADR-0061 §S3): after a

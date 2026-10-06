@@ -680,8 +680,8 @@ first cut and it was measured wrong — see the per-host-params ADR's corpus not
 **Cost.** N renders of `apply.input` instead of one, and re-measurable rather than quoted —
 `BenchmarkApplyInput_ResolveByRoster` takes the roster as its axis. On 2026-09-28, four inputs:
 ~0.17 ms at one host against ~0.69 ms at nine, i.e. ~0.065 ms per extra host. `vault()` does not
-scale with it — the resolution memo is per-PASS and this loop runs inside one, so a sealed input
-is one `ReadKV` whether the roster is one host or nine.
+scale with it — the resolution memo spans the run (NIM-934) and this loop runs inside it, so a
+sealed input is one `ReadKV` whether the roster is one host or nine.
 
 **What this does NOT do.** It does not make FLOW CONTROL per host (open Q #25 stays open there).
 It does not change the seal: provenance is derived from expression text, not from values, so the

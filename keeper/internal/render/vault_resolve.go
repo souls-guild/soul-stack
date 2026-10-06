@@ -101,12 +101,12 @@ func readVaultRef(ctx context.Context, vc KVReader, ref string) (any, error) {
 		return nil, fmt.Errorf("render: %w", err)
 	}
 
-	// Through the per-render-pass memo, not vc.ReadKV directly: this phase and CEL
-	// vault() read the same secrets in the same pass (a password referenced by a
-	// `vault:` param and by ${ vault(...) } is one path), and a pass that caches on
-	// one route only is both slower and no longer a single point-in-time view. The
-	// memo is bound on ctx by Pipeline.Render; without it this degrades to a plain
-	// ReadKV (soul-lint/Trial/unit-eval), same as the CEL side.
+	// Through the memo, not vc.ReadKV directly: this phase and CEL vault() read the
+	// same secrets in the same run (a password referenced by a `vault:` param and by
+	// ${ vault(...) } is one path), and a run that caches on one route only is both
+	// slower and no longer a single point-in-time view. The memo is bound on ctx by
+	// the run or, outside one, by Pipeline.Render; without it this degrades to a
+	// plain ReadKV (soul-lint, direct unit-eval), same as the CEL side.
 	data, err := cel.ReadKVMemoized(ctx, vc, logical)
 	if err != nil {
 		// NIM-73: the path in FLAT form (logical, without the `vault:` prefix) is
@@ -239,7 +239,7 @@ func walkRegisterValue(ctx context.Context, vc KVReader, v any, service, incarna
 }
 
 // WithVaultFence returns ctx carrying the two things every CEL pass that can call
-// vault() needs: the per-pass resolution memo and the §7 own-namespace guard.
+// vault() needs: the resolution memo and the §7 own-namespace guard.
 //
 // They are bound together because they are not independent. The guard runs inside
 // vault() BEFORE the memoized read, so a ctx carrying the memo but not the guard
@@ -247,10 +247,14 @@ func walkRegisterValue(ctx context.Context, vc KVReader, v any, service, incarna
 // served that value without the guard ever being consulted. One constructor makes
 // the pair impossible to split by accident.
 //
-// The memo is per-PASS, not per-run: Render and EvalAsserts each
-// take their own. `core.state.*` mints a secret between the render pass and
-// the state-op pass, and a read carried across that boundary would serve the
-// pre-mint value.
+// The memo is per-RUN when the caller is a run: scenario.Runner binds this on the
+// run's context, and the memo half is idempotent, so every Render of that run, the
+// state-op evaluators of its `core.state.*` steps and the renders `core.ssh.apply`
+// makes inside its step all share one. A keeper-side step that writes Vault mid-run
+// (`core.state.*` mints, `core.vault.kv-present` generates, `core.cert.issued`
+// stores) is seen by the next read because the Vault client forgets the written
+// secret on that same context (keeper/internal/vault.Client.WriteKV). A caller
+// outside a run gets a memo of its own.
 //
 // A nil ctx is accepted (context.Background()); an empty service fences nothing,
 // the condition ownNamespaceVaultGuard already applies.

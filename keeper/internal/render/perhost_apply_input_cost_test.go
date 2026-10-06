@@ -61,8 +61,8 @@ func costScenario() (*config.ScenarioManifest, *stubDestinyResolver) {
 
 // ★ The cost NIM-908 does NOT pay. apply.input renders once per host now, and a
 // `${ vault(...) }` among its values would be an extra Vault round-trip per host if
-// the resolution memo were not per-PASS ([WithVaultFence]) — nine hosts, nine reads
-// of the same path, on a system where reading a secret is audited.
+// the resolution memo ([WithVaultFence]) did not span the whole Render — nine hosts,
+// nine reads of the same path, on a system where reading a secret is audited.
 //
 // The memo makes it one. Pinning it here because the guarantee is a property of
 // WHERE the memo is bound, not of this loop: moving the fence inside the per-host
@@ -82,7 +82,7 @@ func TestApplyInput_VaultReadsDoNotScaleWithTheRoster(t *testing.T) {
 			t.Fatalf("Render with %d hosts: %v", n, err)
 		}
 		if got := kv.n.Load(); got != 1 {
-			t.Errorf("hosts=%d: ReadKV called %d times, want 1 -- the per-pass vault memo is not covering the per-host apply.input loop", n, got)
+			t.Errorf("hosts=%d: ReadKV called %d times, want 1 -- the vault memo is not covering the per-host apply.input loop", n, got)
 		}
 	}
 }

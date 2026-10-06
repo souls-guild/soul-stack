@@ -545,6 +545,7 @@ changes are that numbering, the gate inside a default block and the held block t
 its step, and the block's `where:` and `run_once:` are resolved once.
 
 ⚠ **The `${ vault() }` exposure widens, and memoization already exists — its SCOPE is the change.**
+(Done in NIM-934; this paragraph describes the code before it.)
 `cel.ReadKVMemoized` memoizes a secret read for the duration of one render pass
 (`shared/cel/vault.go:156-181`), bound on the context by `Pipeline.Render`
 (`keeper/internal/render/pipeline.go:124,130`) and used by both the `vault:` phase and CEL
@@ -825,7 +826,9 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    the whole run over a secret only a completed task needed (§Rendering). ⚠ **It needs invalidation on
    write**: keeper-side steps write Vault mid-run (`keeper/internal/coremod/vault/kvpresent.go:113`,
    `keeper/internal/coremod/state/state.go:648`), and a run-wide memo would hand a later task the
-   value from before the write.
+   value from before the write. **Done in NIM-934:** bound once in `Runner.run`; every KV write a
+   step of the run makes, `core.cert.issued` included, forgets the written secret in
+   `vault.Client.WriteKV`. A write outside the run (the Reaper's rotation, an operator) does not.
 3. **The `settings:` block** ([docs/scenario/settings.md](../scenario/settings.md)): one type and one
    validator at every level; key-by-key merge; the placement rule by kind (task / barrier / block / run); the
    barrier **waiting for every dispatched host** instead of returning on the first failure, **not

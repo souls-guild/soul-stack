@@ -72,39 +72,51 @@ type vaultResolver struct {
 	kv  KVReader
 }
 
-// vaultMemoKey — a private context-value key type for the per-render-pass cache of
-// vault() resolutions (see [WithVaultMemo], [vaultMemo]). Unexported so the value can't
-// be overwritten from outside the package by an accidental key collision.
+// vaultMemoKey — a private context-value key type for the cache of vault() resolutions
+// (see [WithVaultMemo], [vaultMemo]). Unexported so the value can't be overwritten from
+// outside the package by an accidental key collision.
 type vaultMemoKey struct{}
 
-// vaultMemo — a cache of vault() resolutions within ONE render-pass. The key is `body`
+// vaultMemo — a cache of vault() resolutions for whatever bound it. The key is `body`
 // (the Vault path WITHOUT `#field`), i.e. exactly the ReadKV argument; the value is the
 // whole secret map. Dedup is tied to the backend call: vault('secret/x#password') and
 // vault('secret/x#tls') hit one ReadKV('secret/x'), so we cache the whole map and select
 // the needed field per-call AFTER the cache (#field correctness is preserved — different
 // fields are selected from one cached map).
 //
-// Scope is per-render-pass: the cache lives in a context.Context that Keeper creates for
-// one Pipeline.Render (one incarnation, one run) and passes into Vars.Ctx of all eval
-// calls of that pass. Not package-level and not on the Engine (the Engine is shared
-// across incarnations) — otherwise there'd be cross-request secret leakage and stale
-// values. Different render passes carry different contexts → they don't share the cache.
+// Scope is a Keeper RUN: the scenario run binds one memo on its context before its first
+// render, and every render pass of that run — the stage loop's re-renders and the
+// renders a keeper-side step makes for hosts outside the roster — shares it. A run's
+// passes re-render tasks that already ran, and a secret that disappears mid-run must
+// not fail the run over a task that only needed it before. Pipeline.Render binds its own
+// memo only when the context carries none (Acolyte claim, Trial, unit eval). Not
+// package-level and not on the Engine (the Engine is shared across incarnations) —
+// otherwise there'd be cross-request secret leakage and stale values.
 //
-// Concurrency: within one render-pass the eval calls are sequential (Pipeline.Render is
-// sequential per-task), but mu is held for safety in case of concurrent per-host fan-out
-// over a shared ctx. A cache miss may lead to a parallel double ReadKV of one path
-// (harmless: the value is idempotent), but the map write is synchronized.
+// The run's own writes are what can make an entry stale, and [ForgetVaultReads] drops
+// it: the Keeper Vault client calls it on every KV write. A write made OUTSIDE the run
+// (an operator, the Reaper's rotation, a host or plugin with its own credentials) is
+// not seen until the next run — the run keeps the value it read first. The view is
+// per path, not per run: two paths first read in different passes can straddle such a
+// write, so a cert and its key at two paths, rotated between the reads, reach the run
+// as a mismatched pair. A per-pass memo had the same hole, one pass wide.
+//
+// Concurrency: mu guards the map; a miss may still read one path twice in parallel
+// (harmless: the value is idempotent). epoch counts forgets: a read that was in flight
+// when one happened may have fetched the value from before the write, so it is returned
+// to its caller but not stored.
 type vaultMemo struct {
-	mu sync.Mutex
-	m  map[string]map[string]any
+	mu    sync.Mutex
+	m     map[string]map[string]any
+	epoch uint64
 }
 
-// WithVaultMemo binds a per-render-pass cache of vault() resolutions to ctx. Called by
-// Keeper ONCE at the start of a render-pass (Pipeline.Render); the returned ctx is
-// passed into Vars.Ctx of all eval calls of the pass. A repeated vault() with the same
-// path in that pass is served from the cache — Vault isn't hit again. Without a call (or
-// with a ctx lacking the memo — soul-lint/Trial, direct unit-eval) vault() works as
-// before, hitting ReadKV every time: the cache is an optimization, not a result contract.
+// WithVaultMemo binds a cache of vault() resolutions to ctx; every vault() and `vault:`
+// read under the returned ctx shares it. Idempotent: a ctx that already carries a memo is
+// returned unchanged, which is how a render pass inside a run uses the run's memo rather
+// than a fresh one. Without a call (or with a ctx lacking the memo — soul-lint, direct
+// unit-eval) vault() hits ReadKV every time. Inside a run the memo is more than an
+// optimization: it is what keeps a secret gone mid-run from failing a later pass.
 func WithVaultMemo(ctx context.Context) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -128,10 +140,9 @@ type VaultPathGuard func(path string) error
 // vaultPathGuardKey — ctx key for [VaultPathGuard].
 type vaultPathGuardKey struct{}
 
-// WithVaultPathGuard binds g to ctx for the whole render-pass, alongside the vault
-// memo it rides with ([WithVaultMemo]). A ctx without a guard fences nothing — the
-// offline modes (soul-lint, Trial, direct unit-eval) have no incarnation in scope and
-// so no namespace to fence.
+// WithVaultPathGuard binds g to ctx alongside the vault memo it rides with
+// ([WithVaultMemo]). A ctx without a guard fences nothing — soul-lint and direct
+// unit-eval have no incarnation in scope and so no namespace to fence.
 func WithVaultPathGuard(ctx context.Context, g VaultPathGuard) context.Context {
 	if ctx == nil {
 		ctx = context.Background()
@@ -150,17 +161,41 @@ func vaultPathGuardFrom(ctx context.Context) VaultPathGuard {
 
 // ReadKVMemoized is [readKVMemoized] for callers outside this package. The
 // vault-resolve phase (`vault:` refs in params, keeper/internal/render) reads the
-// same secrets in the same render-pass as CEL vault() and must share one cache:
-// two paths caching differently means one of them re-queries Vault for a value the
-// other already holds, and the pass stops being a single point-in-time view.
+// same secrets in the same run as CEL vault() and must share one cache: two paths
+// caching differently means one of them re-queries Vault for a value the other
+// already holds, and the run stops being a single point-in-time view.
 func ReadKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]any, error) {
 	return readKVMemoized(ctx, kv, body)
 }
 
-// readKVMemoized reads secret body via kv with dedup within a render-pass. The cache
-// is taken from ctx ([vaultMemoKey], created by [WithVaultMemo]). If there's no cache
-// (ctx without memo) — a direct ReadKV without caching. ReadKV errors are NOT cached: a
-// retry in the same pass (e.g. a transient Vault failure) repeats the read.
+// ForgetVaultReads drops every memoized read on ctx whose body sameSecret matches, so
+// the next read of that secret goes to Vault. A no-op when ctx carries no memo.
+//
+// The match is the caller's because the spellings of one secret are the KV client's
+// business: `secret/x`, `/secret/x` and the mount-relative `x` are one entry in Vault
+// and three keys here, and only the client knows its mount.
+func ForgetVaultReads(ctx context.Context, sameSecret func(body string) bool) {
+	if ctx == nil {
+		return
+	}
+	memo, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo)
+	if !ok {
+		return
+	}
+	memo.mu.Lock()
+	defer memo.mu.Unlock()
+	memo.epoch++
+	for body := range memo.m {
+		if sameSecret(body) {
+			delete(memo.m, body)
+		}
+	}
+}
+
+// readKVMemoized reads secret body via kv with dedup under the memo bound on ctx
+// ([vaultMemoKey], created by [WithVaultMemo]). If there's no cache (ctx without memo) —
+// a direct ReadKV without caching. ReadKV errors are NOT cached: a retry in the same
+// run (e.g. a transient Vault failure) repeats the read.
 func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]any, error) {
 	memo, ok := ctx.Value(vaultMemoKey{}).(*vaultMemo)
 	if !ok {
@@ -169,6 +204,7 @@ func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]a
 
 	memo.mu.Lock()
 	cached, hit := memo.m[body]
+	epoch := memo.epoch
 	memo.mu.Unlock()
 	if hit {
 		return cached, nil
@@ -180,7 +216,9 @@ func readKVMemoized(ctx context.Context, kv KVReader, body string) (map[string]a
 	}
 
 	memo.mu.Lock()
-	memo.m[body] = data
+	if memo.epoch == epoch {
+		memo.m[body] = data
+	}
 	memo.mu.Unlock()
 	return data, nil
 }

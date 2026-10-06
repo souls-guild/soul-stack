@@ -121,11 +121,11 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		span.End()
 	}()
 
-	// per-render-pass vault() memo: repeated vault(same-path) calls in this
-	// pass (per-host × operational redis ACL/sentinel scenarios — dozens of
-	// identical reads) hit the cache instead of re-querying Vault. Scoped to
-	// exactly this Render call (one incarnation): the cache lives in ctx, not
-	// on Engine (which is shared across runs).
+	// The vault() memo: repeated vault(same-path) calls (per-host × operational
+	// redis ACL/sentinel scenarios — dozens of identical reads) hit the cache
+	// instead of re-querying Vault. A run binds it on ctx for the whole run, and
+	// this call then keeps the run's memo; a caller outside a run gets one scoped
+	// to this Render.
 	ctx = WithVaultFence(ctx, in.Incarnation.Service)
 	in.Ctx = ctx // propagate to CEL vault() (ReadKV cancel/timeout + memo + fence)
 
@@ -1033,8 +1033,11 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 	if in.Scenario == nil {
 		return fmt.Errorf("render: scenario manifest is nil")
 	}
-	// assert pre-flight is its own pass; assert.that[] may call vault(), so the
-	// context carries cancel/timeout, the memo and the fence.
+	// assert.that[] may call vault(), so the context carries cancel/timeout, the
+	// memo and the fence. The memo is this call's own, not the run's: pre-flight
+	// runs on the request path before the run exists, and a value it read must not
+	// become the run's view of that secret — the run's view starts at the run's
+	// own first read.
 	ctx = WithVaultFence(ctx, in.Incarnation.Service)
 	in.Ctx = ctx
 	// compute: available in assert.that[] the same as in params/where (one
@@ -1754,9 +1757,9 @@ func setRenderContext(st *structpb.Struct, rc map[string]any) error {
 // expressions without a ctx would be that hole with a shorter name, so there
 // isn't one.
 //
-// merge is called once per run and evaluates per element, so the fence's memo is
-// shared across every element of that merge — the same point-in-time view the
-// render pass gets.
+// A scenario run calls it with the run's context, so the fence's memo is the run's: every element
+// of the merge, and the render passes around it, see one view of a secret, and a
+// mint by the step itself is forgotten by the Vault client's write.
 //
 // match — the identity predicate of an `add` element ([ADR-0084] §"add").
 // Bindings: `elem` (the existing element) and `value` (the one being added,

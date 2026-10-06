@@ -7,6 +7,13 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **The render passes of a scenario run share one read of each `vault()` secret (NIM-934).**
+  One memo of Vault reads spans the run (`vault:` refs in params included), so a secret rotated away
+  mid-run no longer fails a later pass that re-renders a task which already ran. A keeper-side
+  step of the same run that writes Vault (`core.state.<verb>`, `core.vault.kv-present`,
+  `core.cert.issued`) makes the next pass read that secret again. A change made outside the
+  run does not reach a secret the run has already read.
+
 - **A task's `params:` are dispatched PER HOST — open Q #25 closed for params (NIM-908,
   [ADR-draft per-host-params-dispatch](docs/adr/draft-per-host-params-dispatch.md)).** Params
   were host-invariant by construction: one `RenderedTask` carried one params struct for the
@@ -97,8 +104,8 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   - **Cost:** N renders instead of one — ~0.17 ms at one host against ~0.69 ms at nine
     (four inputs), i.e. ~0.065 ms per extra host, re-measurable with
     `BenchmarkApplyInput_ResolveByRoster` rather than quoted. `vault()` does not scale
-    with the roster: the resolution memo is per-PASS and this loop runs inside one, so a
-    sealed input is one `ReadKV` whether the roster is one host or nine.
+    with the roster: the resolution memo spans the run (NIM-934) and this loop runs inside
+    it, so a sealed input is one `ReadKV` whether the roster is one host or nine.
   - **Not covered:** `soul-lint` reports neither half, so both are caught at render. The
     per-host-input half is not offline work — it needs the caller's `apply: input:` resolved
     against the callee destiny, which soul-lint's per-artifact entry points do not do — and

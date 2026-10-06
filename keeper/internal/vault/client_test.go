@@ -43,6 +43,18 @@ type fakeVaultMux struct {
 	issuedToken   string
 	loginRequests int
 	lastLoginBody map[string]any
+
+	// KV v2 writes (POST/PUT on /data/) store into secrets; failWrites answers them
+	// 500 instead. reads counts KV v2 GETs per rel.
+	mu         sync.Mutex
+	failWrites bool
+	reads      map[string]int
+}
+
+func (f *fakeVaultMux) readCount(rel string) int {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.reads[rel]
 }
 
 func newFakeVault(mount string) *fakeVaultMux {
@@ -105,10 +117,37 @@ func (f *fakeVaultMux) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		})
 		return
 
+	case strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/data/") && (r.Method == http.MethodPost || r.Method == http.MethodPut):
+		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/data/")
+		f.mu.Lock()
+		defer f.mu.Unlock()
+		if f.failWrites {
+			w.WriteHeader(http.StatusInternalServerError)
+			_ = json.NewEncoder(w).Encode(map[string]any{"errors": []string{"write refused"}})
+			return
+		}
+		var body struct {
+			Data map[string]any `json:"data"`
+		}
+		_ = json.NewDecoder(r.Body).Decode(&body)
+		f.secrets[rel] = body.Data
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]any{
+			"request_id": "test",
+			"data":       map[string]any{"version": 2},
+		})
+		return
+
 	case strings.HasPrefix(r.URL.Path, "/v1/"+f.mount+"/data/"):
 		// KV v2 read-path.
 		rel := strings.TrimPrefix(r.URL.Path, "/v1/"+f.mount+"/data/")
+		f.mu.Lock()
+		if f.reads == nil {
+			f.reads = map[string]int{}
+		}
+		f.reads[rel]++
 		data, ok := f.secrets[rel]
+		f.mu.Unlock()
 		if !ok {
 			w.WriteHeader(http.StatusNotFound)
 			return
