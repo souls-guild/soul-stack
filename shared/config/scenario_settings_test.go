@@ -80,7 +80,7 @@ func effectiveOf(m *ScenarioManifest, task Task) ScenarioSettings {
 
 // inheritChild is the settings row of keeper/internal/render.mergeBlockInheritance.
 func inheritChild(block, child Task) Task {
-	child.Settings = InheritSettings(block, child)
+	child.Settings = InheritSettings(block.Settings, child)
 	return child
 }
 
@@ -196,19 +196,19 @@ func settingsString(s ScenarioSettings) string {
 func TestInheritSettings_ChildTimeoutBeatsBlockTaskTimeout(t *testing.T) {
 	block := Task{Settings: &ScenarioSettings{TaskTimeout: new(30 * time.Minute)}}
 	child := Task{Timeout: "5m"}
-	got := InheritSettings(block, child)
+	got := InheritSettings(block.Settings, child)
 	if got == nil || got.TaskTimeout == nil || *got.TaskTimeout != 5*time.Minute {
 		t.Fatalf("child timeout: 5m under a block task_timeout: 30m resolved to %s, want 5m", settingsString(deref(got)))
 	}
 }
 
-func TestInheritSettings_BlockWithNeitherKeyKeepsTheChildsOwn(t *testing.T) {
+func TestInheritSettings_BlockWithoutSettingsKeepsTheChildsOwn(t *testing.T) {
 	own := &ScenarioSettings{OnFailure: new(OnFailureHost)}
 	child := Task{Timeout: "5m", Settings: own}
-	if got := InheritSettings(Task{}, child); got != own {
+	if got := InheritSettings(nil, child); got != own {
 		t.Fatalf("a block with no settings changed the child's settings: %s, want %s", settingsString(deref(got)), settingsString(*own))
 	}
-	if got := InheritSettings(Task{}, Task{Timeout: "5m"}); got != nil {
+	if got := InheritSettings(nil, Task{Timeout: "5m"}); got != nil {
 		t.Errorf("a block with no settings gave a child with none %s", settingsString(*got))
 	}
 }

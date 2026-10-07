@@ -24,7 +24,6 @@ import (
 //   - onchanges/onfail: union of block+child names → descendant.
 //   - transport: the child's own key wins, the block's is the default — so the
 //     NEAREST enclosing block wins on nesting (NIM-870).
-//   - retry:/timeout: the same rule, a default each child may override (NIM-910).
 //
 // width is computed ONCE from block.Serial against the number of targeted hosts
 // and inherited by all descendants (SerialWidth in every DispatchPlan). targeted
@@ -199,8 +198,7 @@ type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted 
 // so block inheritance doesn't drift between renderBlockTask and
 // renderDestinyBlock (major drift risk):
 //
-//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites/transport/
-//	                                            settings/retry/timeout
+//	mergeBlockInheritance(blockTask, child)   — merge in when/where/vars/requisites/transport/settings
 //	→ keepIncludeGroup(child)                 — conditional-include group-drop
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
@@ -429,15 +427,11 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 // mergeBlockInheritance builds a block descendant with inheritance from the
 // container merged in (destiny/tasks.md §6.5). Does NOT mutate the source
 // structs — returns a copy of child with When/Where/Vars/OnChanges/OnFail/Require,
-// Transport, Settings, Retry and Timeout rewritten. Other fields (Module/Apply/Block/
-// Loop/Register/params/serial/run_once/…)
+// Transport and Settings rewritten. Other fields (Module/Apply/Block/Loop/Register/params/
+// serial/run_once/…)
 // stay as in the source descendant: serial is NOT inherited by the descendant
 // (wave width is distributed via DispatchPlan in renderBlockTask, not through a
 // task field).
-//
-// `retry:` is the child's whole map or the block's, never a mix: a child's `retry:`
-// is its own statement, as `transport:` is, so a child naming `count: 2` does not
-// also take the block's `delay:`.
 //
 // Require is the third requisite and inherits like the other two: a block carries
 // no RenderedTask of its own, so a key left un-merged here is not "applied to the
@@ -453,11 +447,7 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.OnFail = unionNames(blockTask.OnFail, child.OnFail)
 	out.Require = mergeRequire(blockTask.Require, child.Require)
 	out.Transport = mergeTransport(blockTask.Transport, child.Transport)
-	out.Settings = config.InheritSettings(blockTask, child)
-	if out.Retry == nil {
-		out.Retry = blockTask.Retry
-	}
-	out.Timeout = config.InheritTimeout(blockTask, child)
+	out.Settings = config.InheritSettings(blockTask.Settings, child)
 
 	return out
 }
@@ -505,11 +495,7 @@ func mergeTransport(blockTransport, childTransport any) any {
 // requisites merged in — the apply: half of [mergeBlockInheritance], for the
 // other construct that expands into a group of tasks (NIM-245).
 //
-// The three requisites travel, and so does a `timeout:` a block above the applier
-// handed it: a destiny's tasks take the applier's task timeout, their own
-// `timeout:` winning (settings.md §3 rule 6). The applier's own `timeout:` is
-// refused at parse, so only an inherited one reaches here. The requisites are
-// resolved NAME→INDEX over the whole
+// Only the three requisites travel. They are resolved NAME→INDEX over the whole
 // flat plan in Render's final pass, so they are env-agnostic: an index means the
 // same thing on both sides of the destiny boundary. `when:`/`where:`/`vars:` are
 // not, and are handled where they are written — see [renderApplyDestiny]. For
@@ -528,7 +514,6 @@ func mergeApplierInheritance(applier config.Task, child config.Task) config.Task
 	out.OnChanges = unionNames(applier.OnChanges, child.OnChanges)
 	out.OnFail = unionNames(applier.OnFail, child.OnFail)
 	out.Require = mergeRequire(applier.Require, child.Require)
-	out.Timeout = config.InheritTimeout(applier, child)
 	return out
 }
 
@@ -645,12 +630,6 @@ func guardPilotBlockChild(child config.Task, idx int, blockName string) error {
 	// boundary applies (NIM-245). Checked after the kind switch: an empty task
 	// should be reported as such, not as a when: problem.
 	if child.Apply != nil {
-		// Its own retry: is refused at parse, so this one came from the block —
-		// refused before render by config.RetryOverApply, and here for any path
-		// that renders without it, since renderApplyDestiny would drop it.
-		if child.Retry != nil {
-			return fmt.Errorf("%w: retry: inherited from block %q reaches the applier task[%d] %q - an applier invokes no module, and its destiny's tasks are not retried on the scenario's behalf", ErrUnsupportedDSL, blockName, idx, child.Name)
-		}
 		return guardApplierWhen(child, idx)
 	}
 	return nil

@@ -222,7 +222,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// On the author's plan, before the synthesized install steps below: soul-lint
 	// never sees those, and one landing in a serial: task's Passage would make the
 	// Keeper refuse a file the linter passed.
-	if d, bad := authoredPlanRefusal(scn); bad {
+	if d, bad := implicitSerialScope(scn); bad {
 		abort(d.Code, fmt.Errorf("scenario %s/%s: %s; %s", spec.IncarnationName, spec.ScenarioName, d.Message, d.Hint))
 		return
 	}
@@ -1811,12 +1811,11 @@ func maskErrText(err error, sealedPaths map[string]bool) string {
 	return err.Error()
 }
 
-// authoredPlanRefusal is the Keeper's half of the refusals soul-lint makes on the
-// plan after include expansion: serial_scope (NIM-940) and a block's retry: over an
-// applier (NIM-910). A plan that does not stratify is left to the run's own
-// Stratify, which aborts it as render_failed.
-func authoredPlanRefusal(scn *config.ScenarioManifest) (diag.Diagnostic, bool) {
-	ds := append(config.RetryOverApply(scn.Tasks), config.ImplicitSerialScope(scn.Settings, scn.Tasks)...)
+// implicitSerialScope is the Keeper's half of the serial_scope refusals (NIM-940).
+// A plan that does not stratify is left to the run's own Stratify, which aborts it
+// as render_failed.
+func implicitSerialScope(scn *config.ScenarioManifest) (diag.Diagnostic, bool) {
+	ds := config.ImplicitSerialScope(scn.Settings, scn.Tasks)
 	if passage, err := config.Stratify(scn.Tasks); err == nil {
 		ds = append(ds, config.ImplicitSerialScopeAcrossTasks(scn.Settings, scn.Tasks, passage)...)
 	}

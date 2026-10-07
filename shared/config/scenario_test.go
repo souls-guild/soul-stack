@@ -316,8 +316,6 @@ tasks:
 // TestLoadScenarioManifest_BlockForbiddenKeys (guard #8) — module-specific keys
 // on a block task are cut fail-closed with code <key>_on_block_invalid
 // (destiny/tasks.md §6.5 does not mention them on block). async: is also rejected.
-// retry: and timeout: left the list in NIM-910 — they are defaults for the
-// children (block_retry_timeout_test.go).
 //
 // ★ `output:` is still cut on a block, but by `output_unsupported` (NIM-334) — it
 // is unimplemented on EVERY kind, so it left the _on_block_invalid family rather
@@ -326,6 +324,8 @@ func TestLoadScenarioManifest_BlockForbiddenKeys(t *testing.T) {
 	cases := map[string]string{
 		"changed_when_on_block_invalid": "changed_when: \"true\"",
 		"failed_when_on_block_invalid":  "failed_when: \"false\"",
+		"retry_on_block_invalid":        "retry: { count: 3 }",
+		"timeout_on_block_invalid":      "timeout: 30s",
 		"output_unsupported":            "output: { x: \"y\" }",
 		"params_on_block_invalid":       "params: { a: 1 }",
 		"async_on_block_invalid":        "async: true",

@@ -99,36 +99,16 @@ func (t Task) OwnSettings() ScenarioSettings {
 }
 
 // InheritSettings is the `settings:` row of block inheritance: the child's own level
-// merged over the block's. Each side's `timeout:` is folded into its own level BEFORE
-// the merge — the child's beats a `task_timeout` the block set, and the block's is
-// the block's `task_timeout` (settings.md §2.3), which folding either over the merged
-// result would get backwards. A block with neither key leaves the child as written.
-func InheritSettings(block, child Task) *ScenarioSettings {
-	if block.Settings == nil && block.Timeout == "" {
+// merged over the block's. The child's `timeout:` is folded in BEFORE the merge — it
+// is the child's level and beats a `task_timeout` the block set, which folding it
+// over the merged result would get backwards. A block without settings leaves the
+// child as written.
+func InheritSettings(block *ScenarioSettings, child Task) *ScenarioSettings {
+	if block == nil {
 		return child.Settings
 	}
-	merged := MergeSettings(block.OwnSettings(), child.OwnSettings())
+	merged := MergeSettings(*block, child.OwnSettings())
 	return &merged
-}
-
-// InheritTimeout is the `timeout:` a block hands a child on the wire, which until
-// task timeouts are read from `settings:` (NIM-949) is the only one the Soul
-// applies. The child's own `timeout:` wins; a child whose own `settings:` writes
-// `task_timeout` keeps none, so the wire carries no value a lower level's
-// `task_timeout` overrode — that level's reaches the Soul with NIM-949, like every
-// other `settings.task_timeout`. The one disagreement left is a level writing both
-// spellings with different values: the wire carries its `timeout:`, the merge its
-// `task_timeout`, and `timeout_shadowed_by_task_timeout` warns, as on a task.
-// child is the child as written, before [InheritSettings] filled its settings
-// with the block's.
-func InheritTimeout(block, child Task) string {
-	if child.Timeout != "" {
-		return child.Timeout
-	}
-	if child.Settings != nil && child.Settings.TaskTimeout != nil {
-		return ""
-	}
-	return block.Timeout
 }
 
 // UnmarshalYAML decodes through the same [decodeSettings] the validators run. The

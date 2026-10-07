@@ -46,8 +46,8 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 | `require:` | array of register-id OR `"all"` | every task of a destiny except `include:` (refused on every scenario task - §8) | optional |
 | `changed_when:` | string (template-expr) | module-task | optional |
 | `failed_when:` | string (template-expr) | module-task | optional |
-| `retry:` | map | module-task; block-task - a default for its children (§6.5) | optional |
-| `timeout:` | duration | module-task; block-task - a default for its children (§6.5) | optional |
+| `retry:` | map | module-task | optional |
+| `timeout:` | duration | module-task | optional |
 
 Any other key is a validation error.
 
@@ -290,7 +290,7 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 
 ## 6.5. Block - inline task group
 
-`block:` is the third type of task: an **inline list** of N tasks, to which the general `when:` (and optional `onchanges:` / `onfail:` / `require:`) applies, and which can carry defaults for its children (`vars:`, `retry:`, `timeout:`). It is used when several neighboring tasks have **the same condition** and you don't want to repeat `when:` on each one or put it into a separate file via `include:`.
+`block:` is the third type of task: an **inline list** of N tasks, to which the general `when:` (and optional `onchanges:` / `onfail:` / `require:`) applies. It is used when several neighboring tasks have **the same condition** and you don't want to repeat `when:` on each one or put it into a separate file via `include:`.
 
 ```yaml
 - name: Apply Redis configuration
@@ -318,9 +318,6 @@ All three tasks are executed only when `input.action == 'apply'`; if false, all 
 - **Conditional `include:` inside a block - two independent axes.** An include child may carry its own static `when:` (conditional include, §4). Its group-drop and the block's `when:` compose, and group-drop is decided **first**: a false include-when removes the spliced tasks **physically** (no placeholder, no index), while a static-false block `when:` leaves each surviving child a skip-placeholder with its `register:`. So "the block is off" and "the include was not taken" stay distinguishable in the plan.
 - **`when:` block tasks** is a wrapping condition. Falsy → all tasks are skipped. The `when:` block task is ANDed into **each child** (see inheritance below), so the `skipped: when` mark is placed on **each child**, rather than as a single entry on the block task. This is an invariant: `register:` of children remains visible from the outside even with skip (see "register of children is visible from the outside").
 - **`onchanges:` / `onfail:` / `require:` block tasks** - inherited by **every** descendant (the block itself emits no task, so a requisite left on it would reach nothing) and merged with the descendant's own as a **union of names**. For a descendant that declares none of its own, this reads as "the requisite applies to the whole group": no named source changed/failed → every descendant is skipped. For a descendant that declares its OWN, the two sets merge rather than intersect - see the composition rule below.
-- **`retry:` / `timeout:` block tasks** - **defaults** every descendant inherits and may override (NIM-910), so a group that needs the same retries or the same bound is written once. They act **per child**: each child retries up to `count` times on its own, and `timeout:` bounds each child's attempt, not the block as a whole. The child's own key wins, in either direction - `retry:` as a **whole map** (a child's `retry: { count: 1 }` turns the block's retries off; `count`/`delay` are never mixed between the two levels), and the **nearest** enclosing block's key wins on nesting. In a scenario a block's `timeout:` is that block's `settings: { task_timeout }` ([scenario/settings.md §2.3](../scenario/settings.md#23-timeout-is-shorthand-for-task_timeout)); a child whose own `settings:` writes `task_timeout` takes that one instead. A block is an overlay or one group under linear dispatch ([scenario/settings.md §3.1](../scenario/settings.md#31-a-block-rolled-as-one-group--the-canary)); either way each child carries the value. Two limits:
-  - **`retry.until:` is refused on a block** (`retry_until_on_block_invalid`). `until:` re-judges one module's result - after the last attempt a false `until:` fails a task that succeeded - so on a block it is the `failed_when:` override the block refuses, written once for children whose results differ in shape. Keep `count:`/`delay:` on the block and put `until:` on the child.
-  - **Over an `apply:` child, `retry:` is refused** (`retry_on_apply_invalid`, the applier's own code), whether the applier is written in the block or spliced in by a within-block `include:`: the applier invokes no module, and passing the key on would retry destiny tasks their author never marked retryable. `timeout:` does cross an applier: a destiny's tasks inherit the applier's task timeout and their own `timeout:` wins ([scenario/settings.md §3](../scenario/settings.md#3-rules) rule 6). Until task timeouts are read from `settings:` (NIM-949) that happens only through the block's `timeout:`, and `settings: { task_timeout }` on the applier itself stops it ([scenario/settings.md §2.3](../scenario/settings.md#23-timeout-is-shorthand-for-task_timeout)).
 - **Internal `when:`** are valid and can be combined with an external one by AND: the internal task is executed only if the external `when:` block is truthy AND its own `when:` truthy.
 - **★ Requisites compose as OR and therefore WIDEN - `when:` composes as AND and narrows.** This is the normative behaviour of both group constructs (`block:` here, `apply:` in [orchestration.md §2.1.2](../scenario/orchestration.md#212-the-appliers-own-keys---what-reaches-the-group-and-what-decides-before-it)), and the asymmetry is deliberate, not an oversight. `onchanges:`/`onfail:` on a single task already mean "**any** of the named sources changed/failed" ([§8](#8-requisites---inter-task-dependencies)), and the union inherits that meaning: a descendant carrying `onchanges: [inner]` under a block carrying `onchanges: [outer]` ends up with `[outer, inner]` and runs when **either** changed. So a group-level requisite makes such a descendant run **more** often, not less - the opposite of how the outer line reads. A descendant with no requisite of its own is unaffected: for it the group requisite is a pure narrowing, which is the case the key was built for.
 
@@ -338,9 +335,9 @@ The specification above is the full design intent of `block:`. The implementatio
 **Implemented in pilot C1:**
 
 - `module:`-descendants, `apply:`-descendants (delegation to destiny with inherited `serial:`-window), nested `block:` and `include:`-descendants inside block.
-- Inheritance from a block task to its descendants: `when:` (combined with internal AND), `where:`, `serial:`, requisites (`onchanges:` / `onfail:` / `require:`), `vars:`, and since NIM-910 `retry:` / `timeout:` (the child's own key wins).
+- Inheritance from a block task to its descendants: `when:` (combined with internal AND), `where:`, `serial:`, requisites (`onchanges:` / `onfail:` / `require:`), `vars:`.
 - Static-skip of the entire group by `when:` (falsy → all tasks are skipped). Expands into **per-descendant** skip-placeholders: block.`when:` is poured into each child via AND, static-when each one becomes false, and each child carries its own `skipped: when` + its own `register:`. `register:` of children is visible outside block and with static-skip (flat-register-scope is invariant with respect to truthy/falsy - see below).
-- Fail-closed failure of module-specific keys at the block level (codes `*_on_block_invalid`, see [naming-rules.md → Error codes](../naming-rules.md)). The same cut exists at the other construct that expands into a group - an `apply:` task, codes `*_on_apply_invalid` ([scenario/orchestration.md §2.1.2](../scenario/orchestration.md)); the two lists differ because the constructs lose different keys.
+- Fail-closed failure of module-specific keys at the block level (codes `*_on_block_invalid`, see [naming-rules.md → Error codes](../naming-rules.md)). The same cut exists at the other construct that expands into a group - an `apply:` task, codes `*_on_apply_invalid` ([scenario/orchestration.md §2.1.2](../scenario/orchestration.md)); the two lists differ because the constructs lose different keys. `retry:` and `timeout:` stay in this cut on purpose: a key on the block would read as a default for every child, which is not obvious (user, 2026-10-07; NIM-910 lifted them and was reverted) - write them on the children.
 
 **Post-pilot (spec saved as design intent, pilot C1 implementation does not support):**
 
@@ -349,7 +346,7 @@ The specification above is the full design intent of `block:`. The implementatio
 
 ### `block:` inside the destiny-passage (apply:destiny)
 
-`block:` is supported not only in scenario, but also **within destiny**, rendered via `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Previously, `block:` in the destiny pass was rejected by the pilot restriction (`ErrUnsupportedDSL`) - the restriction was **removed**. Mirror scenario-block in destiny semantics: inheritance `when:` (AND-merge with internal), `vars:` (base→override), requisites (`onchanges:` / `onfail:` / `require:` - union), `retry:` / `timeout:` (the child's own key wins; `retry.until:` refused on the block), nested `block:`; descendants - `module:`, nested `block:` or `include:` (expanded before render, see §6.5). Within-block `include:` behaves identically in both layers - the expander is shared, only the render-time key boundary differs.
+`block:` is supported not only in scenario, but also **within destiny**, rendered via `apply: { destiny: … }` ([ADR-009 amendment](../adr/0009-scenario-dsl.md)). Previously, `block:` in the destiny pass was rejected by the pilot restriction (`ErrUnsupportedDSL`) - the restriction was **removed**. Mirror scenario-block in destiny semantics: inheritance `when:` (AND-merge with internal), `vars:` (base→override), requisites (`onchanges:` / `onfail:` / `require:` - union), nested `block:`; descendants - `module:`, nested `block:` or `include:` (expanded before render, see §6.5). Within-block `include:` behaves identically in both layers - the expander is shared, only the render-time key boundary differs.
 
 **Destiny-block key boundary** (stricter than scenario-block): scenario orchestration on destiny-block or its descendant is **prohibited** (`ErrUnsupportedDSL`) - in destiny it is meaningless (no roster resolution on the descendant, no nested `apply:`):
 
@@ -643,7 +640,7 @@ Here `${ has(input.maxmemory) ? input.maxmemory : '256mb' }` substitutes default
 ### `retry:`
 
 - **Type:** map.
-- **Applies to:** module task; on a `block:` it is a default each child inherits, without `until:` (§6.5).
+- **Applies to:** module task.
 - **Semantics:** repeat the task up to `count` times if it fails or the `until:` condition is not met. **Enforce - Soul-side** (flow-control, `applyrunner.runTaskWithRetry`): Keeper pulls `count`/`delay`/`until` into `RenderedTask`, the loop is wound by Soul during the run (`until` depends on `register.self.*` fresh attempt - known only to Soul).
 
 ```yaml
@@ -665,7 +662,7 @@ A task is considered finally-failed if all `count` attempts failed/timed out (wi
 ### `timeout:`
 
 - **Type:** duration (Go syntax: `30s`, `5m`, `1h30m`).
-- **Applies to:** module task; on a `block:` it is a default each child inherits (§6.5).
+- **Applies to:** module task.
 - **Semantics:** a hard limit on one attempt (with `retry:` - for each separately: each Apply gets its own `context.WithTimeout`). Upon expiration, the module receives a cancellation signal (host-side gRPC cancel), the attempt is marked TIMED_OUT (`register.<name>.timed_out == true`). With `retry:` TIMED_OUT the attempt is retraced if there are still attempts (see loop semantics above); `until` is not evaluated on a TIMED_OUT attempt.
 
 ### `no_log:` — removed ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §8)

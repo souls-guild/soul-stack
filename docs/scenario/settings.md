@@ -63,18 +63,16 @@ The scenario top level was a flat list of thirteen keys, none of which governed 
 instead of a key each.
 
 A block composes its keys by **several** rules, and `settings:` takes the `vars:` one. The authority
-is `mergeBlockInheritance` (`keeper/internal/render/block.go:447-463`):
+is `mergeBlockInheritance` (`keeper/internal/render/block.go:441-453`):
 
 | Key on the block | Against the child's own key |
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:544-557`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:529-542`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
-| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:73`, `:328`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
+| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:326`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
-| `timeout:` | the block's `task_timeout` (§2.3), so the `settings:` row decides it — **child wins** (NIM-910) |
-| `retry:` | **child wins, whole map**; on nesting the nearest block's (NIM-910). `until:` is refused on a block, and a block's `retry:` over an applier child is refused ([tasks.md §6.5](../destiny/tasks.md)) |
 
 ## 2. The keys
 
@@ -189,21 +187,11 @@ reported — the process that would report it is gone — so no value of `soul_t
 `systemctl reboot` succeed. That needs its own design (Ansible has a dedicated `reboot` module for
 exactly this); §6.
 
-On a block `timeout:` is allowed since NIM-910 and means the same: `timeout: X` on a block **is**
-`settings: {task_timeout: X}` on that block, the default for every task beneath it, and it is per
-task — each child is bounded on its own, not the block as a whole. On an applier it stays refused
-(`shared/config/scenario_task.go:1304-1308`); `settings: {task_timeout: X}` is the spelling there.
-
-Until task timeouts are read from `settings:` (NIM-949) the Soul applies only a task's `timeout:`, so
-a block also hands its `timeout:` to each child that writes no timeout of its own — the nearest
-block's, and across an applier into the destiny's tasks (§3 rule 6). It stops at a level whose own
-`settings:` writes `task_timeout`: the merge above gives that level's value, and the wire carries
-none until NIM-949 carries `task_timeout` itself. So today `settings: {task_timeout: X}` on an applier
-bounds nothing, **and** stops a `timeout:` from a block around it, leaving the destiny's tasks
-unbounded; to bound them now, write `timeout:` on the block around the applier and nothing on the
-applier. The one level where the wire and the merge still disagree is one that writes both spellings
-with different values: the wire carries its `timeout:`, the merge its `task_timeout`, and
-`timeout_shadowed_by_task_timeout` warns (§3).
+`timeout:` is refused on a block (`shared/config/scenario_task.go:1110-1117`) and on an applier
+(`:1271-1275`), and stays so: NIM-910 made `timeout:` and `retry:` on a block a default for its
+children and was reverted (user, 2026-10-07) — a key on the block reading as each child's default is
+not obvious. `settings: {task_timeout: X}` on a block or an applier is the default for every task
+beneath it once NIM-949 reads it; until then write `timeout:` on the task.
 
 ## 3. Rules
 

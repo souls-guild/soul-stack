@@ -122,13 +122,6 @@ func TestGolden_ScenarioSettings(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/settings.yml", KindScenario, false, ExitOK, nil)
 }
 
-// A block's retry: and timeout: lint clean, and so does a child overriding them —
-// its own retry: with until:, its own timeout:, its own settings.task_timeout
-// (NIM-910). The refusals are `scenario-broken/scenario-block-retry-*`.
-func TestGolden_ScenarioBlockRetryTimeout(t *testing.T) {
-	runExpect(t, "../../testdata/scenario-golden/block-retry-timeout.yml", KindScenario, false, ExitOK, nil)
-}
-
 // A task writing `timeout:` and a different `settings.task_timeout` lints clean
 // with a warning: the explicit key wins (settings.md §2.3).
 func TestGolden_ScenarioSettingsTimeoutShadowed(t *testing.T) {
