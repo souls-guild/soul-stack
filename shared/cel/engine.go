@@ -97,9 +97,10 @@ var flowControlVars = []string{
 type Engine struct {
 	env *cel.Env
 
-	// noMacroParser — parser WITHOUT registered macros. Used only in the rewrite
-	// phase (rewriteHostsWhere): exists/all/map/filter/exists_one/.where stay plain
-	// CallKind and are therefore round-trippable by parser.Unparse. The final
+	// noMacroParser — parser WITHOUT registered macros, for every reading of the tree
+	// as written (the rewrite phase, the guards, the reference readers):
+	// exists/all/map/filter/exists_one/.where stay plain CallKind and are therefore
+	// round-trippable by parser.Unparse. The final
 	// env.Compile (macros enabled) expands .filter/.exists natively into a
 	// comprehension. See [hosts.go].
 	noMacroParser *parser.Parser
@@ -143,9 +144,12 @@ type Engine struct {
 
 	// genSecret — generate_secret() ([ADR-0083] §3) is registered in this env (only
 	// the ordinary scenario/destiny pass, see [buildEngine]). Immutable after the
-	// constructor; read by [guardUnsupported] to reject the call with a stated reason
+	// constructor; read by [Engine.guardUnsupported] to reject the call with a stated reason
 	// in the passes that don't have it, rather than with a bare undeclared-reference.
 	genSecret bool
+
+	// noCache — [WithoutCompileCache]: compile skips the cache entirely.
+	noCache bool
 }
 
 // Option configures the Engine at build ([New]). Applied before the CEL env is
@@ -157,7 +161,8 @@ type Option func(*engineConfig)
 // after applying options, New builds the env and moves the fields into the
 // Engine.
 type engineConfig struct {
-	kv KVReader
+	kv      KVReader
+	noCache bool
 }
 
 // WithVault enables the CEL vault() function ([templating.md §2.3], [ADR-017]),
@@ -166,6 +171,15 @@ type engineConfig struct {
 // (a real *vault.Client) or by offline modes (a fixture-backed reader).
 func WithVault(kv KVReader) Option {
 	return func(c *engineConfig) { c.kv = kv }
+}
+
+// WithoutCompileCache compiles every expression afresh and keeps nothing. For the
+// Soul: a predicate the Keeper rendered carries one host's substituted values, a
+// secret among them, and is unique per host and run — a cache would grow with every
+// run and hold each secret, in its key, for the life of the process
+// (predicate-rendering.md §5).
+func WithoutCompileCache() Option {
+	return func(c *engineConfig) { c.noCache = true }
 }
 
 // New builds an Engine with the Soul Stack CEL env: cel-go stdlib + the
@@ -304,8 +318,7 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		return nil, fmt.Errorf("creating CEL environment: %w", err)
 	}
 
-	// Parser without macros (no Macros(...) options). Needed only for the rewrite
-	// phase: see the Engine.noMacroParser field.
+	// Parser without macros (no Macros(...) options): see the Engine.noMacroParser field.
 	noMacroParser, err := parser.NewParser()
 	if err != nil {
 		return nil, fmt.Errorf("creating CEL parser without macros: %w", err)
@@ -317,6 +330,7 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 		cache:         make(map[string]cel.Program),
 		loopEnvs:      make(map[string]*cel.Env),
 		kv:            cfg.kv,
+		noCache:       cfg.noCache,
 		migration:     mode.migration,
 		flowControl:   mode.flowControl,
 		genSecret:     genSecret,
@@ -386,6 +400,9 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 		allowHosts = false
 		allowRegisterHosts = false
 	}
+	if e.noCache {
+		return e.compileUncached(env, loopNames, expr, allowHosts, allowRegisterHosts, computeScope, stance)
+	}
 
 	cacheKey := expr
 	if len(loopNames) > 0 {
@@ -429,7 +446,7 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 // its text carries one host's values and is unique per host and run — caching it would
 // grow the cache without bound.
 func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (cel.Program, error) {
-	if err := guardUnsupported(expr, e.kv != nil, e.genSecret); err != nil {
+	if err := e.guardUnsupported(expr); err != nil {
 		return nil, err
 	}
 	if err := e.guardInternalIdents(expr); err != nil {
@@ -483,9 +500,18 @@ func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, 
 	return prg, nil
 }
 
+// CachedPrograms is the number of compiled programs the Engine holds — zero, always,
+// on an Engine built [WithoutCompileCache].
+func (e *Engine) CachedPrograms() int {
+	e.mu.RLock()
+	defer e.mu.RUnlock()
+	return len(e.cache)
+}
+
 // Reset clears the compile-cache and the loop-env cache. Intended for tests; in
 // prod the caches grow boundedly (the number of unique expressions and loop-name
-// sets in loaded scenarios).
+// sets in loaded scenarios) — except for Keeper-rendered predicates, which is why
+// the Soul's Engine is built [WithoutCompileCache].
 func (e *Engine) Reset() {
 	e.mu.Lock()
 	clear(e.cache)

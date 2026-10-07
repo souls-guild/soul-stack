@@ -6,8 +6,6 @@ import (
 
 	"google.golang.org/protobuf/types/known/structpb"
 
-	"github.com/souls-guild/soul-stack/shared/config"
-
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
 
@@ -121,12 +119,16 @@ type asyncFlows struct {
 	// sendErr is the first sink I/O failure a flow hit. Run returns it after the
 	// final barrier, the same way the main flow returns its own.
 	sendErr error
+
+	// registerRefs names the registers a predicate reads ([ApplyRunner.registerRefs]).
+	registerRefs func(expr string) []string
 }
 
-func newAsyncFlows(limit int) *asyncFlows {
+func newAsyncFlows(limit int, registerRefs func(expr string) []string) *asyncFlows {
 	f := &asyncFlows{
-		byIdx:  make(map[int32]*asyncFlow),
-		byName: make(map[string][]*asyncFlow),
+		byIdx:        make(map[int32]*asyncFlow),
+		byName:       make(map[string][]*asyncFlow),
+		registerRefs: registerRefs,
 	}
 	if limit > 0 {
 		f.sem = make(chan struct{}, limit)
@@ -292,14 +294,13 @@ func (s *flowSet) addIdx(f *asyncFlows, idx []int32) {
 	}
 }
 
-// addNames resolves the `register.<name>` references of one CEL predicate
-// through the canonical parser the cross-ref validator and stage-render
-// stratification already share; callers hold f.mu.
+// addNames resolves the `register.<name>` references of one CEL predicate;
+// callers hold f.mu.
 func (s *flowSet) addNames(f *asyncFlows, expr string) {
 	if expr == "" {
 		return
 	}
-	for _, name := range config.ExtractRegisterRefs(expr) {
+	for _, name := range f.registerRefs(expr) {
 		for _, fl := range f.byName[name] {
 			s.add(fl)
 		}

@@ -123,7 +123,7 @@ If there is no type information, the node receives the type `dyn`. This is not a
 
 ### 2.5. Compile-cache
 
-The CEL expression is compiled **once** per pair `(scenario, scenario_version)` and evaled multiple times with different activations (per-host, per-iteration loop, per-retry). Compile-cache is required - without it, each `where:` pays parsing + type-checking for each step of each host.
+The CEL expression is compiled **once** per pair `(scenario, scenario_version)` and evaled multiple times with different activations (per-host, per-iteration loop, per-retry). Compile-cache is required - without it, each `where:` pays parsing + type-checking for each step of each host. Two paths compile uncached: the Soul's flow-control engine, on every evaluation, and the Keeper's check of a rendered predicate — a Keeper-rendered predicate is unique per host and run and carries substituted values, so a cache would grow with every run and keep every secret ([predicate-rendering.md §5](scenario/predicate-rendering.md#5-what-has-to-be-built)).
 
 Cache key: `(scenario_id, scenario_git_ref, normalized_expr)`. Invalidation is natural when changing git ref (new version - new key).
 
@@ -507,6 +507,8 @@ welcome {{ "{{" }} user.name {{ "}}" }}
 | **Non-string CEL result when merging** ([§5](#5-non-string-cel-result-in-yaml) case (b), list/map) | gluing a structure to a string | runtime-error |
 
 All template engine errors go to OTel-trace as **structured events** with coordinates (file, YAML node/line `.tmpl`, position in expression), source expression and engine message. `soul-lint` uses the same coordinate forms so that the linter output and runtime errors point to the same location.
+
+One exception: a flow-control predicate the **Soul** evaluates (`when:`, `changed_when:`, `failed_when:`, `retry.until:`) fails with the predicate's kind, the task's name and the class of the error only — never the predicate text or the CEL engine message, in the `TaskEvent` and in the Soul's log alike. The Keeper substitutes values into such a predicate once dispatch renders predicates (NIM-943), a secret among them, and both the text and the engine message can echo it ([predicate-rendering.md §5](scenario/predicate-rendering.md#5-what-has-to-be-built)). The author's predicate is in the scenario or destiny, at the task the event names.
 
 ## 11. See also
 

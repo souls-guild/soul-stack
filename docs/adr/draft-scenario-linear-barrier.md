@@ -60,16 +60,17 @@ Two earlier drafts of this ADR said otherwise. Recorded so the claim is not made
   `within_block_register_dependency` (`shared/config/passage.go:94-105`).
 - **The one spelling invisible to all of the above was closed at compile by NIM-909** — choosing a
   register's name by index is refused by `shared/cel.guardRegisterNameByIndex`
-  (`shared/cel/register_index.go:80-110`) and offline as `register_index_form`
+  (`shared/cel/register_index.go:81-111`) and offline as `register_index_form`
   (`soul-lint/internal/validate/register_index.go:61`).
 
 So the class was real, and it was **patchable point by point** — one of those patches landed the
 same day this ADR was written. The linear model does not cure it and is not offered as a cure. What
-it removes is the **dependence on a derived boundary**: one dot-form regex is read by four
+it removes is the **dependence on a derived boundary**: one dot-form regex was read by four
 subsystems at once — the Passage graph, the cross-reference existence check (which is `soul-lint`'s
 `unknown_register_reference`), the Soul's `async:` join set (`soul/internal/runtime`
-`flowSet.addNames`) and `config.IsStaticPredicate` (`shared/config/task_refs.go:430`); the four are
-named together at `shared/cel/register_index.go:10-46`.
+`flowSet.addNames`; on the parse tree since NIM-929, the regex kept only for text that does not
+parse) and `config.IsStaticPredicate` (`shared/config/task_refs.go:433`); the four are
+named together at `shared/cel/register_index.go:10-47`.
 
 This ADR retires the Passage graph — **one of those four readers** — and with `when:` evaluated on
 the Keeper (decision 4), the static/dynamic classification stops deciding where a module task's
@@ -139,7 +140,7 @@ depends on anything is the fact that *k* comes after *k−1*.
      its `soulprint.self`. A host where it is false is not sent the task. Five things follow; all but
      the last are new:
      - **The skip is still recorded.** A Soul-side skip reports SKIPPED with a register that reads
-       `skipped: true` (`soul/internal/runtime/applyrunner.go:1414-1421`), and a later
+       `skipped: true` (`soul/internal/runtime/applyrunner.go:1440-1447`), and a later
        `register.X.changed` reads `false` from it. A task the Keeper never sends writes nothing, and
        that read would raise instead. The Keeper writes the SKIPPED event and register for that host
        itself — as it must for a host the requisite gate drops (`crosspassage.go:107-115`). Inside a
@@ -152,7 +153,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        with the records [predicate-rendering.md §1](../scenario/predicate-rendering.md) gives it.
        Today every render error leaves the whole pass and the stage loop aborts the run
        (`keeper/internal/scenario/run.go:731-737`), as a failing static `when:` does
-       (`render.evalStaticWhen`; `shared/cel/register_index.go:31-35`). This needs error capture per
+       (`render.evalStaticWhen`; `shared/cel/register_index.go:32-36`). This needs error capture per
        task and host, and a Keeper-written FAILED event, `apply_runs` row and audit record.
      - **Flow control is evaluated for the active task only.** Already-active tasks are re-rendered at
        every step (§Price); re-evaluating a finished task's `when:` against registers written since
@@ -172,7 +173,7 @@ depends on anything is the fact that *k* comes after *k−1*.
      So the static/dynamic classification, which NIM-909 found load-bearing and fragile, stops
      deciding where a module task's `when:` runs — and only that. The predicate language does not
      change: predicates compile in the flow-control environment (`cel.NewFlowControl`,
-     `shared/cel/engine.go:190`), not the render one (`cel.New`, `:175`), so `compute.*`,
+     `shared/cel/engine.go:204`), not the render one (`cel.New`, `:189`), so `compute.*`,
      `soulprint.hosts`, `vault()` and `generate_secret()` stay out of them.
    - **`onchanges:`/`onfail:`** are resolved by the cross-passage gate (decision 5).
    - **`changed_when:`, `failed_when:` and `retry.until:` are rendered on the Keeper and evaluated
@@ -197,8 +198,8 @@ depends on anything is the fact that *k* comes after *k−1*.
      inside a group, the group on that host — fails before dispatch with a named code. Every trap
      the reviews found is a case in a differential test S1 must pass. **The open set is
      `register.self`, and inside a group also the group's own registers**, which the Soul
-     accumulates inside the message, as a destiny does. Three things have to be built, each absent
-     today — a per-host overlay for the predicates (params got one in NIM-908, `ParamsBySID`;
+     accumulates inside the message, as a destiny does. Three things have to be built — absent
+     when this was written, two of them since shipped ahead of the train in NIM-929 — a per-host overlay for the predicates (params got one in NIM-908, `ParamsBySID`;
      predicates did not), Soul text guards that leave a substituted value alone, and masking at every site that
      echoes a predicate — and the two existing host-invariance guards on predicates are lifted. **The fallback** — typed variables instead of text — costs the readable
      form the user chose, and only the user takes it.
@@ -230,9 +231,9 @@ depends on anything is the fact that *k* comes after *k−1*.
 7. **`async:` and `require:` outside a destiny are refused.**
    Neither has anything to act on when a message holds one task. ADR-0075's barriers are `require:`,
    an implicit register reference, and the end of the run — *"which is the end of THIS
-   ApplyRequest"* (`soul/internal/runtime/applyrunner.go:316-319`); and a `require:` source in an
+   ApplyRequest"* (`soul/internal/runtime/applyrunner.go:318-321`); and a `require:` source in an
    earlier Passage is already encoded as the sentinel `-1`, which for a barrier reads *"nothing to
-   wait for"* (`soul/internal/runtime/async.go:182-184`,
+   wait for"* (`soul/internal/runtime/async.go:184-186`,
    `keeper/internal/render/prototask.go:111-117`). Inside a destiny both still work and ADR-0075
    applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1103-1105`). A key that stays legal and stops having an effect is the silence this ADR is about, so
    both become **refusals** — `async:` at top level, and `require:` anywhere outside a destiny:
@@ -251,7 +252,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    (`keeper/internal/render/block.go:508-513`). The replacement is a `register:` on each `apply:`
    before the waiting point, and a `require:` inside the destiny for a wait among its own tasks: the
    terminal carries every task of the destiny in `aggregate_of`, which the Soul awaits as a gate and
-   fail-stops on (`soul/internal/runtime/applyrunner.go:464-476`). Nor does one step mean one task:
+   fail-stops on (`soul/internal/runtime/applyrunner.go:466-478`). Nor does one step mean one task:
    a `loop:` + `async: true` fan-out is one step whose iterations run alongside each other
    (decision 2); refused with the rest, that loop moves into a destiny.
    `examples/service/example-cloud-bootstrap/scenario/existing-vm/main.yml` used a top-level
@@ -275,7 +276,8 @@ depends on anything is the fact that *k* comes after *k−1*.
   a flow-control key there is evaluated on the Soul, inside the message (decision 4). A default block
   needs it no longer: its children sit on opposite sides of a barrier.
 - **It does not remove the text scan.** It retires one of the four readers (§Context); the
-  cross-reference existence check, the Soul's `async:` join set and `config.IsStaticPredicate` stay —
+  cross-reference existence check, the Soul's `async:` join set (on the parse tree since NIM-929, the
+  regex only as its fallback) and `config.IsStaticPredicate` stay —
   the last no longer decides where a module task's `when:` runs, but still holds the keys that must
   be static (decision 4).
 - **It is not the fix for the empty-register class.** That is §Alternatives B, and it is orthogonal
@@ -421,8 +423,8 @@ real outcome and need a record, so "not reached" synthesis ships with the policy
 ### Top-level `onfail:` would become unreachable — fork 1, answered
 
 Today a rescue works because the failure and the rescue travel in the same message: the Soul runs
-the rescue tail itself after a fail-stop (`soul/internal/runtime/applyrunner.go:334-341`,
-`:492-513`), and requisites are deliberately not passage-defining
+the rescue tail itself after a fail-stop (`soul/internal/runtime/applyrunner.go:336-343`,
+`:494-515`), and requisites are deliberately not passage-defining
 (`keeper/internal/scenario/crosspassage.go:7-11`), so source and rescue stay together.
 
 Under this ADR every top-level `onfail:` source is in an earlier message, and by the section above
@@ -460,11 +462,11 @@ every dispatch.
 an event's `status` (`keeper/internal/auditpg/changed_tasks.go:73-82`). An applier's register is
 carried by a terminal `core.noop.run` task, whose status is the noop's own — OK, always
 (`soul/internal/coremod/noop/noop.go:78`); the Soul overwrites only its `register_data` with the OR
-over the destiny's children (`soul/internal/runtime/applyrunner.go:679-691`, `aggregateRegisterData`
-at `:1478`). Inside one message that is enough, because the Soul gates on the register. The Keeper
+over the destiny's children (`soul/internal/runtime/applyrunner.go:681-693`, `aggregateRegisterData`
+at `:1504`). Inside one message that is enough, because the Soul gates on the register. The Keeper
 gates on the status, so `onchanges: [<applier>]` resolved Keeper-side reads "not changed" every time;
 and after a child's fail-stop the terminal is still emitted as OK, carrying the aggregate
-(`:492-500`), so `onfail: [<applier>]` never sees FAILED either. Latent today — a requisite does not split a Passage, so the two rarely sit
+(`:494-502`), so `onfail: [<applier>]` never sees FAILED either. Latent today — a requisite does not split a Passage, so the two rarely sit
 on opposite sides of one — and universal under this ADR. The tree's own example breaks:
 `examples/service/dragonfly/scenario/rotate_tls/main.yml` registers the applier as `tls_certs`
 (`:155`) and gates its live-reload `CONFIG SET` steps on `onchanges: [tls_certs]` (`:215` on), so
@@ -634,12 +636,12 @@ a window of silent regression. The audit of existing scenarios belongs in the sa
 ### `retry:`/`until:` survives, because it never crosses a boundary
 
 The retry loop is entirely inside one task inside one `Run`
-(`soul/internal/runtime/applyrunner.go:802-903`), and `until:` is evaluated against `register.self`
-merged into `registerByName` (`:931-932`). A barrier around the message does not touch it.
+(`soul/internal/runtime/applyrunner.go:804-905`), and `until:` is evaluated against `register.self`
+merged into `registerByName` (`:933-934`). A barrier around the message does not touch it.
 
 A **cross-task** register inside `until:` was the open edge: FC-5 excludes `retry.until` by design
 (`shared/config/passage.go:579-588`), and on the Soul such a read dies as `flowcontrol.until_error`
-→ task FAILED (`:867-873`). Decision 4 closes it differently: the Keeper renders the reference into a
+→ task FAILED (`soul/internal/runtime/applyrunner.go:869-875`). Decision 4 closes it differently: the Keeper renders the reference into a
 value before the task leaves, so `until:` arrives reading only `register.self`.
 
 ### Provenance: finer per step, thinner after a failure
@@ -648,7 +650,7 @@ Each dispatched step gets its own `apply_runs` row, status and events. A 12-task
 is still one task, so it still yields one row per host.
 
 ⚠ **But a failure now records less.** Today a fail-stop still emits a SKIPPED `TaskEvent` for every
-remaining task of the message (`soul/internal/runtime/applyrunner.go:492-513`), so the audit says
+remaining task of the message (`soul/internal/runtime/applyrunner.go:494-515`), so the audit says
 what did not run. Under this ADR those tasks are never dispatched and nothing is written about them.
 Under `on_failure: host` the dropped host's remaining tasks are a real outcome, so "not
 reached" synthesis ships with the failure policy (§Fail-stop) rather than as separate work.
@@ -702,7 +704,7 @@ whether or not the linear model lands.
 **Adopted for whatever crosses a barrier** (fork 2). `when:` is decided before the module, and every
 input it can read from an earlier message is in the Keeper's hands at render time, so it moves at no
 cost. The other three cannot be *decided* there: `changed_when:`, `failed_when:` and `until:` judge
-the module's result (`soul/internal/runtime/applyrunner.go:1146-1157`, `:867`), so deciding them on
+the module's result (`soul/internal/runtime/applyrunner.go:1148-1159`, `:869`), so deciding them on
 the Keeper would cost a round trip each. They are rendered there instead (decision 4).
 
 An earlier revision rejected the split as "two evaluation sites against two snapshots of the same
@@ -753,7 +755,7 @@ mechanism that is already there.
 Three consequences. The run ends only after the last rescue's barrier, and only then closes its
 failure list ([settings.md §4](../scenario/settings.md)). A successful rescue does **not** change the
 terminal status, matching today's in-message rule that *"onfail tasks never undo the failure:
-RunResult stays FAILED"* (`soul/internal/runtime/applyrunner.go:334-339`). And **a rescue's own
+RunResult stays FAILED"* (`soul/internal/runtime/applyrunner.go:336-341`). And **a rescue's own
 failure is judged like any task's** (user, 2026-10-01), by its own effective `on_failure`: under
 `scenario` it is one more entry in the failure list — the host leaves two errors, the source's and
 the rescue's — and under `host` the host, already out, stays out and the log records that it left.
@@ -906,14 +908,15 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
 10. **A capability bit is needed for the rendered predicates.** An earlier revision required one for
     carried registers; that reason is gone, but another replaces it. Literal-aware text guards and
     masking at the echo sites are Soul-side changes, and an older Soul compiles the *normalized*
-    text (`shared/cel/eval.go:70`, `:77`): whitespace after an escaped quote collapses into a
+    text (`shared/cel/eval.go:98`, `:105`, as `normalize` read before NIM-929): whitespace after an escaped quote collapses into a
     silently different literal, and a substituted secret is echoed in its errors. So a Soul that does
     not announce the bit is not sent a rendered predicate — the run is refused, fail-closed, as
     `gatePassageCapability` refuses today (item 8), with the same blast radius: one such Soul stops
     every scenario that carries a rendered predicate to it. A `when:` the Keeper decides sends
     nothing new — for a step it is blanked, and a grouped child's `when: false` is a predicate any
     Soul already evaluates — and a predicate in which no reference was resolved travels as written and
-    needs no bit. One catch: a child with no `when:` of its own that the requisite gate drops on one
+    needs no bit. That an older Soul reads a few shapes of an author's own text as it always did is
+    a known limitation, not the bit's concern ([known-limitations.md](../known-limitations.md#an-older-soul-reads-some-authored-predicates-as-before-nim-929)). One catch: a child with no `when:` of its own that the requisite gate drops on one
     host now carries `when: false` there, and a non-empty `when` makes the capability gate demand
     `CapabilityFlowControl` — from the shared `When` today
     (`keeper/internal/scenario/soulcompat.go:97-99`). That gate must read the per-host value, and
@@ -975,7 +978,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
       redeployed.
 16. **Applier sources resolve from their children** for the cross-barrier gate (§`onchanges:`), with
     a guard test in the `rotate_tls` shape. Shipped ahead of the train in NIM-931.
-17. **Decision 4's machinery**, each piece absent today except the guards it lifts: a rewrite that
+17. **Decision 4's machinery**, each piece absent when this was written except the guards it lifts: a rewrite that
     meets the equivalence in
     [predicate-rendering.md](../scenario/predicate-rendering.md), with the differential test
     covering every trap listed there, and the walk that checks nothing outside the open set is left;
@@ -983,7 +986,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     `register_name_reserved` already reserves `hosts` (`shared/config/scenario_task.go:1812-1820`),
     and a bare `register` refused in the post-module predicates;
     their per-host overlay; Soul text guards that leave a substituted value alone; masking at every
-    echo site; Keeper-written SKIPPED and FAILED records; error capture per task and host.
+    echo site; Keeper-written SKIPPED and FAILED records; error capture per task and host. Shipped
+    ahead of the train: the rewrite with its differential test, the residual walk, the bare `register`
+    refusal and the `register: self` reservation in NIM-928; the Soul text guards and the masking in
+    NIM-929.
 18. **Rescue routing** — fork 1's four obligations.
 
 ## Slices

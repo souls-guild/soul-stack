@@ -1039,15 +1039,15 @@ func TestRenderPredicate_SortedMapKeys(t *testing.T) {
 }
 
 // TestRenderPredicate_NothingResolved — a predicate that reads only the open set comes
-// back as written and says so: it needs no new capability on the Soul (§5).
+// back as written, edges trimmed, and says so (§5).
 func TestRenderPredicate_NothingResolved(t *testing.T) {
 	e := newFlowControlEngine(t)
-	got, err := e.RenderPredicate("register.self.rc  != 0", hostContext(), []string{RegisterSelf})
+	got, err := e.RenderPredicate("  register.self.rc  != 0\n", hostContext(), []string{RegisterSelf})
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got.Resolved || got.Text != "register.self.rc != 0" {
-		t.Fatalf("got %+v, want the normalized original, unresolved", got)
+	if got.Resolved || got.Text != "register.self.rc  != 0" {
+		t.Fatalf("got %+v, want the original as written, unresolved", got)
 	}
 	got, err = e.RenderPredicate("register.self.rc != input.n", hostContext(), []string{RegisterSelf})
 	if err != nil {
@@ -1082,16 +1082,28 @@ func TestRenderPredicate_OriginalRefusals(t *testing.T) {
 	}
 }
 
-// TestRenderPredicate_SoulGuardsOnSubstitutedText — the rendering is refused where the
-// Soul's guards, as they stand, would reject or rewrite a substituted string: `vault(`
-// in a value, and a whitespace run after an escaped quote, which normalize collapses
-// (predicate-rendering.md §5, "The Soul's text guards"). The text never reaches a Soul
-// that would read it differently.
-func TestRenderPredicate_SoulGuardsOnSubstitutedText(t *testing.T) {
-	ctx := withInput(withInput(hostContext(), "fn", "vault(x)"), "quoted", "a\"  b")
+// TestRenderPredicate_SubstitutedTextPassesTheSoulsGuards — a substituted string the
+// Soul's guards used to reject or rewrite renders, and reads on the Soul as the
+// original reads: `vault(` in a value is data to a guard that reads calls, and a
+// whitespace run after an escaped quote survives a normalization that only trims
+// (predicate-rendering.md §5, "The Soul's text guards").
+func TestRenderPredicate_SubstitutedTextPassesTheSoulsGuards(t *testing.T) {
+	ctx := withInput(withInput(hostContext(), "fn", "vault(x) now() generate_secret(1)"), "quoted", "a\"  b")
 	runPredicateCases(t, []predicateCase{
-		{name: "vault( in a value", expr: "register.self.s == input.fn", ctx: ctx, refuse: CodePredicateNotRenderable, reason: "vault("},
-		{name: "escaped quote then two spaces", expr: "register.self.s == input.quoted", ctx: ctx, refuse: CodePredicateNotRenderable, reason: "normalization"},
+		{
+			name:  "calls in a value",
+			expr:  "register.self.s == input.fn",
+			ctx:   ctx,
+			want:  `register.self.s == dyn("vault(x) now() generate_secret(1)")`,
+			opens: []map[string]any{self(map[string]any{"s": "vault(x) now() generate_secret(1)"}), self(map[string]any{"s": "x"})},
+		},
+		{
+			name:  "escaped quote then two spaces",
+			expr:  "register.self.s == input.quoted",
+			ctx:   ctx,
+			want:  `register.self.s == dyn("a\"  b")`,
+			opens: []map[string]any{self(map[string]any{"s": "a\"  b"}), self(map[string]any{"s": "a\" b"})},
+		},
 	})
 }
 
@@ -1110,8 +1122,6 @@ func TestRenderPredicate_RefusalNeverQuotesTheRendering(t *testing.T) {
 		expr string
 		ctx  Vars
 	}{
-		{"guard", "register.self.s == input.v", withInput(ctx, "v", secret+" vault(x)")},
-		{"normalization", "register.self.s == input.v", withInput(ctx, "v", secret+"\"  b")},
 		{"size", "register.self.s == input.v", withInput(ctx, "v", secret+strings.Repeat("x", 100_000))},
 		{"nesting", "register.self.s == input.v", withInput(ctx, "v", []any{secret, nestedList(260)})},
 	} {

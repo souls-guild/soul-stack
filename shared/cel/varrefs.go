@@ -2,6 +2,8 @@ package cel
 
 import (
 	"fmt"
+	"sort"
+	"strings"
 
 	"github.com/google/cel-go/common/ast"
 )
@@ -226,4 +228,45 @@ func isVarsIndex(n ast.Expr) bool {
 	}
 	op := args[0]
 	return op.Kind() == ast.IdentKind && op.AsIdent() == "vars"
+}
+
+// RegisterNames returns the sorted names expr reads as `register.<name>` or
+// `register.hosts.<name>`, `self` excluded, read from the parse tree — so a name that
+// sits inside a literal, a value the Keeper substituted, is not one. ok is false when
+// expr does not parse; the caller then falls back to the text reading
+// (config.ExtractRegisterRefs), which misreads in both directions — but only text
+// that fails to compile anyway reaches it.
+func (e *Engine) RegisterNames(expr string) ([]string, bool) {
+	parsed, err := e.parseNoMacro(expr)
+	if err != nil {
+		return nil, false
+	}
+	seen := map[string]bool{}
+	ast.PostOrderVisit(parsed.Expr(), ast.NewExprVisitor(func(n ast.Expr) {
+		if n.Kind() != ast.SelectKind {
+			return
+		}
+		s := n.AsSelect()
+		op := s.Operand()
+		switch {
+		case isRegisterIdentNode(op):
+			if f := s.FieldName(); f != RegisterSelf && f != registerHostsKey {
+				seen[f] = true
+			}
+		case op.Kind() == ast.SelectKind && op.AsSelect().FieldName() == registerHostsKey &&
+			isRegisterIdentNode(op.AsSelect().Operand()):
+			seen[s.FieldName()] = true
+		}
+	}))
+	names := make([]string, 0, len(seen))
+	for name := range seen {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names, true
+}
+
+// isRegisterIdentNode reports the `register` root, a leading dot allowed.
+func isRegisterIdentNode(n ast.Expr) bool {
+	return n.Kind() == ast.IdentKind && strings.TrimPrefix(n.AsIdent(), ".") == registerIdent
 }

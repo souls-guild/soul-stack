@@ -265,9 +265,9 @@ uncovered half is worse than being ignored.
   decision deletes), and **for the other six keeper-side bases nothing fires offline at all.**
 - At render `IsKeeperTask` is false, so the task takes the Soul-side path and the predicate rides the
   `RenderedTask` to the agent — where it is evaluated **before** the module lookup: `evalWhen` at
-  [`soul/internal/runtime/applyrunner.go:522`](../../soul/internal/runtime/applyrunner.go), the skip
-  at [`:559-566`](../../soul/internal/runtime/applyrunner.go), and the lookup that would have raised
-  `module.not_found` only at [`:998`](../../soul/internal/runtime/applyrunner.go).
+  [`soul/internal/runtime/applyrunner.go:524`](../../soul/internal/runtime/applyrunner.go), the skip
+  at [`:561-568`](../../soul/internal/runtime/applyrunner.go), and the lookup that would have raised
+  `module.not_found` only at [`:1000`](../../soul/internal/runtime/applyrunner.go).
 
 So `when` **true** gives a loud failure. But **`when` false on every host gives SKIPPED everywhere,
 a GREEN run, and the cloud-create / soul-register / bootstrap-delivery silently never happened.** The

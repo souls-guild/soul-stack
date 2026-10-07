@@ -41,6 +41,11 @@ type Hello struct {
 	//     (`soul_passage_unsupported`, fail-closed) — otherwise the next Passage's
 	//     barrier would wait for a terminal an old binary would never send (a hang
 	//     in applying).
+	//   - "rendered_predicate": Soul can receive a flow-control predicate the
+	//     Keeper rendered, values substituted in as literals: its text guards treat
+	//     a literal as data, and it echoes neither the predicate nor its CEL error,
+	//     either of which can carry a substituted secret. An old binary is not sent
+	//     one.
 	//
 	// An empty set = an old Soul with no capability announcement (forward-compat,
 	// ADR-012(c) only-add): keeper treats it as supporting NO features at all

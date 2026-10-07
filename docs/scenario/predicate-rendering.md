@@ -51,11 +51,11 @@ alone, over the same values.
   `register` match the unknown pattern whole (`interpreter/attribute_patterns.go:260-261`).
 - **Printing.** With macros expanded a comprehension does not print (`parser/unparser.go:110-111`)
   and this tree records no macro calls; `rewriteHostsWhere` parses without macros for that reason
-  (`noMacroParser`, `shared/cel/engine.go:100-105`; `shared/cel/hosts.go:20-26`).
+  (`noMacroParser`, `shared/cel/engine.go:100-106`; `shared/cel/hosts.go:20-26`).
 - **Field arguments.** `has()` and `default()` take a field, not a value: `has("v")` does not parse
   and `default("v", y)` is refused (`parser/macro.go:550-556`, `shared/cel/default.go:83-85`). Their
   first argument is decided as a whole — `default(register.probe.x, register.self.y)` included.
-- **Types.** The Soul type-checks what it compiles (`shared/cel/engine.go:451`), and a number from
+- **Types.** The Soul type-checks what it compiles (`shared/cel/engine.go:471`), and a number from
   JSON is a double that prints as `3.0` (`parser/unparser.go:296-302`). So `3.0 == 3`,
   `size(register.self.members) >= 3.0` and a ternary with a string arm and a double arm are compile
   errors where the original, over `dyn` variables, evaluates. A substituted value wrapped in
@@ -77,7 +77,7 @@ alone, over the same values.
   fails with a named code.
 - **Hidden references.** The check that nothing outside the open set is left must walk the result:
   compiling cannot find one, because every root is declared `dyn` in the flow-control environment
-  (`shared/cel/engine.go:269-271`). A bound iteration variable counts as open, and it is resolved by
+  (`shared/cel/engine.go:283-285`). A bound iteration variable counts as open, and it is resolved by
   scope, not by name: `register.self.members.exists(input, input == "a")` compiles, and its `input`
   is not the root. A type name (`int`, `string`) is an identifier the walk must allow, and an
   iteration variable can shadow it too: in `register.self.l.exists(int, type(int) == int)` the last
@@ -153,7 +153,7 @@ escaped quote inside a string literal can make the literal's text read as code, 
 names by scope.
 
 **The fallback** is to carry the values as typed variables instead of text. That removes the type,
-error-term and size traps, and the text-guard and masking work in §5 with them, but costs the
+error-term and size traps — and would have spared the text-guard work in §5, now built, though not the masking: cel-go quotes a missing key whatever carried it — but costs the
 readable form the user chose (`register.self.stdout != dyn("bob")`). If the differential test cannot be
 passed with literals, S1 returns to the user with the failing cases; it does not switch on its own.
 
@@ -168,7 +168,9 @@ does. Its `when:` is decided on the Keeper only when nothing in it is open.
 
 ## 5. What has to be built
 
-Each piece is absent today, except the two existing host-invariance guards, which are lifted.
+Each piece is absent today, except the two existing host-invariance guards, which are lifted, and
+the Soul side — text guards, masking, async barriers and the announcement of the capability bit
+— which NIM-929 built.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
   host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:582`),
@@ -192,22 +194,45 @@ Each piece is absent today, except the two existing host-invariance guards, whic
   on the Keeper, that reason is gone. So is the reason for the second layer NIM-908 kept,
   `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:713-717`): with every `vars` and
   `input` reference substituted, no flow context travels for a scenario task to differ per host.
-- **The Soul's text guards must leave a substituted value alone.** `guardUnsupported` matches `now(`,
-  `vault(` and `generate_secret(` in the raw text, string literals included
-  (`shared/cel/functions.go:107-123`), and `normalize`'s literal regex does not understand an escaped
-  quote (`:130-136`), so a value containing `vault(` fails the task and one containing `\"` can have
-  its whitespace collapsed. The guards learn literals. Carrying the values as bound variables
-  instead is the fallback in §3, and only the user takes it.
-- **Masking.** A substituted value can be a secret — from a sealed register, or a `vault()` var — and
-  the predicate text is echoed into errors and logs at every evaluation site: `when`
-  (`soul/internal/runtime/applyrunner.go:537`), `until` (`:947`), `failed_when` (`:1179`), the shared
-  path (`:1268-1281`) and `logFlowControlError` (`:1341-1356`) — and through every `%v` of an error,
-  since `ErrCompile`, `ErrEval` and `ErrUnsupported` each embed the expression
-  (`shared/cel/eval.go:27-28`, `:40-41`, `:55-56`). The Soul must name the predicate's kind and the
-  task there, never the rendered text.
+- **The Soul's text guards leave a substituted value alone — built (NIM-929).** They used to match
+  `now(`, `vault(` and `generate_secret(` in the raw text, string literals included, and
+  `normalize` collapsed whitespace with a literal regex that did not understand an escaped quote, so
+  a value containing `vault(` failed the task and one containing `\"` could become a different
+  literal. The guards now read the calls in the parse tree (`shared/cel/functions.go`, the same way
+  the `__` guard does since NIM-965), and `normalize` only trims the edges, so the Soul compiles the
+  text it receives. The Keeper's own check of a rendering against the Soul
+  (`checkSoulAccepts`, `shared/cel/predicate_render.go`) runs the same code, so it no longer
+  refuses either case. Carrying the values as bound variables instead is the fallback in §3, and
+  only the user takes it.
+- **Masking — built (NIM-929).** A substituted value can be a secret — from a sealed register, or a
+  `vault()` var — and the predicate text used to be echoed into errors and logs at every evaluation
+  site, and through every `%v` of an error: `ErrCompile`, `ErrEval` and `ErrUnsupported` each embed
+  the expression, and cel-go's own message quotes the source on a compile error and the key on a
+  lookup that misses (`no such key: <value>`). The Soul now names the predicate's kind, the task and the error's class
+  (`cel.RedactedReason`), never the text (`soul/internal/runtime/applyrunner.go`). The error types
+  are unchanged: soul-lint and the Keeper print what an author wrote, with its line address. The
+  Soul's flow-control engine compiles without a cache (`cel.WithoutCompileCache`): a rendered
+  predicate is unique per host and run, and a cache keyed by its text would grow with every run and
+  hold every substituted secret for the life of the process.
+- **The Soul's async barriers read a predicate's registers from its parse tree — built (NIM-929).**
+  A predicate naming `register.<name>` waits for that task's async flow, and fail-stops there if
+  the flow failed. The names used to come from `config.ExtractRegisterRefs`, whose quote-pairing
+  regex read `register.web` inside `dyn("a\" register.web b")`; they now come from
+  `Engine.RegisterNames`, so neither a substituted value nor a literal the regex misreads names a
+  flow.
 
-A capability bit gates a rendered predicate: an older Soul compiles the normalized text and echoes
-what it receives. A decided `when:` is blanked and needs nothing. A grouped child's `when: false`
+The guards and `normalize` sit on the shared compile path, so reading what the parser reads
+changes every engine, not only the Soul's, and what an author wrote wherever they misread it: a
+literal or comment holding `now(`, `vault(` or `generate_secret(` is no longer refused, and no text
+is rewritten where collapsing its whitespace changed the parse — a literal after an escaped quote or
+inside triple quotes (`'''it's  x'''`), a `//` comment and the line after it, a backtick name with
+spaces. An older Soul keeps its own reading of those shapes, and for its async barriers the
+regex's: a `register.<name>` its quote pairing misreads as code makes it wait ([known-limitations.md](../known-limitations.md#an-older-soul-reads-some-authored-predicates-as-before-nim-929)).
+
+A capability bit, `rendered_predicate`, gates a rendered predicate: an older Soul compiles the
+whitespace-collapsed text and echoes what it receives. The Soul announces it (NIM-929); the Keeper's
+gate is NIM-946. A decided `when:` is blanked and needs nothing. A grouped child's `when: false`
 and a predicate in which no reference was resolved need no new bit (the ADR's item 10), only the
 existing ones a predicate needs today — `CapabilityFlowControl`, and `CapabilityRetry` for `until:`
-(`keeper/internal/scenario/soulcompat.go:97-101`).
+(`keeper/internal/scenario/soulcompat.go:97-101`). That an older Soul reads a few shapes of an
+author's own text as it always did is a known limitation, not the bit's concern.

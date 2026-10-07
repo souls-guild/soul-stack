@@ -313,8 +313,8 @@ func TestCache_HitAndReset(t *testing.T) {
 	if _, err := e.EvalExpression("input.foo == 'bar'", vars); err != nil {
 		t.Fatalf("first eval: %v", err)
 	}
-	// The normalized form of the same expression must map to the same key.
-	if _, err := e.EvalExpression("input.foo   ==   'bar'", vars); err != nil {
+	// Edge whitespace is trimmed, so the same text maps to the same key.
+	if _, err := e.EvalExpression("  input.foo == 'bar'\n", vars); err != nil {
 		t.Fatalf("second eval: %v", err)
 	}
 

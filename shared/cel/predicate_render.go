@@ -61,8 +61,7 @@ const (
 	// CodePredicateNotRenderable — a value the text cannot carry (invalid UTF-8, a
 	// timestamp that does not read back, a type name an iteration variable captures), a
 	// bare `register`, or a rendered text the Soul would not accept as sent (100 000
-	// code points, 250 levels of nesting, a guard, or the whitespace normalization
-	// misreading a string literal).
+	// code points, 250 levels of nesting, a type check it fails).
 	CodePredicateNotRenderable = "predicate_not_renderable"
 	// CodePredicateResidualReference — the rendered text still reads the host context
 	// outside the open set. Guards the rewrite itself: a correct rewrite never trips it.
@@ -96,7 +95,7 @@ func (e *ErrPredicateRender) Error() string {
 // RenderedPredicate is the text the Soul evaluates. Resolved reports that the original
 // reads the host context outside the open set, so Text is the rendering; when it is
 // false Text is the author's predicate (normalized) and needs no capability beyond the
-// one a predicate needs today (predicate-rendering.md §5).
+// ones a predicate needs today (predicate-rendering.md §5).
 type RenderedPredicate struct {
 	Text     string
 	Resolved bool
@@ -224,8 +223,8 @@ func newPredicateRenderer(e *Engine, expr string, vars Vars, loopNames, open []s
 	return r
 }
 
-// unparse prints on one line: the Soul normalizes whitespace, and the text must reach
-// it unchanged (checkSoulAccepts).
+// unparse prints on one line rather than at cel-go's 80-column wrap, which would put
+// newlines the author never wrote into the text the Soul receives.
 func (r *predicateRenderer) unparse(e ast.Expr) (string, error) {
 	return parser.Unparse(r.groupForParser(e), r.info, parser.WrapOnColumn(math.MaxInt32))
 }
@@ -828,17 +827,13 @@ func forEachChild(e ast.Expr, sc scope, f func(ast.Expr, scope)) {
 const expressionCodePointLimit = 100_000
 
 // checkSoulAccepts runs the rendered text through what the Soul does before it
-// evaluates a predicate — normalize, the guards, the parser's limits, the type check —
+// evaluates a predicate — the guards, the parser's limits, the type check —
 // uncached, since the text is one host's. The Keeper never sends what the Soul would
 // reject or read differently.
 func (r *predicateRenderer) checkSoulAccepts(text string) error {
 	if n := utf8.RuneCountInString(text); n > expressionCodePointLimit {
 		return r.refusalErr(CodePredicateNotRenderable,
 			fmt.Sprintf("the rendered text has %d code points; the Soul's parser stops at %d", n, expressionCodePointLimit))
-	}
-	if normalize(text) != text {
-		return r.refusalErr(CodePredicateNotRenderable,
-			"the Soul's whitespace normalization would change a string literal in the rendered text: it does not read an escaped quote")
 	}
 	var soul Vars
 	if _, err := r.e.compileUncached(r.e.env, nil, text, false, false, soul.ComputeScope, soul.hostStance()); err != nil {

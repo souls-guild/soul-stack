@@ -75,11 +75,7 @@ func (e *Engine) namesInternal(root ast.Expr, bareNames bool) bool {
 // wherePredicateNamesInternal checks the calls in the literal predicate of a
 // `.where("<predicate>")` call; any other call answers false.
 func (e *Engine) wherePredicateNamesInternal(c ast.CallExpr) bool {
-	if !c.IsMemberFunction() || c.FunctionName() != "where" || len(c.Args()) != 1 ||
-		c.Args()[0].Kind() != ast.LiteralKind {
-		return false
-	}
-	pred, ok := c.Args()[0].AsLiteral().Value().(string)
+	pred, ok := wherePredicate(c)
 	if !ok {
 		return false
 	}
@@ -88,6 +84,16 @@ func (e *Engine) wherePredicateNamesInternal(c ast.CallExpr) bool {
 		return strings.Contains(pred, "__")
 	}
 	return e.namesInternal(parsed.Expr(), false)
+}
+
+// wherePredicate returns the literal predicate of a `.where("<predicate>")` call.
+func wherePredicate(c ast.CallExpr) (string, bool) {
+	if !c.IsMemberFunction() || c.FunctionName() != "where" || len(c.Args()) != 1 ||
+		c.Args()[0].Kind() != ast.LiteralKind {
+		return "", false
+	}
+	pred, ok := c.Args()[0].AsLiteral().Value().(string)
+	return pred, ok
 }
 
 // isInternalName reports a `__`-prefixed name in any segment: the parser keeps a

@@ -209,7 +209,7 @@ func (e *ErrOutOfScope) Unwrap() error { return ErrNamespaceOutOfScope }
 // guardComputeScope rejects a `compute` reference in a context that has no such
 // namespace ([ComputeScope]). Called from [Engine.compile] after the cache lookup
 // (the scope is part of the key, see [ComputeScope.cacheTag]) and after
-// guardUnsupported.
+// [Engine.guardUnsupported].
 //
 // Cheap text pre-filter first, then the AST — `compute` inside a CEL string
 // literal (`soulprint.hosts.where("compute == 4")`, where it is a host field, not

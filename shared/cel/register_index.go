@@ -10,11 +10,12 @@ import (
 // Choosing a register's NAME by index is refused at compile (NIM-909).
 //
 // A cross-task register reference is `register.<name>` — a field select on the bare
-// `register` ident — and one parser answers for all of it: [config.ExtractRegisterRefs].
+// `register` ident — and outside the Soul one parser answers for all of it:
+// [config.ExtractRegisterRefs].
 // Stratification builds the Passage graph from it, the cross-reference validator (which
 // is also `soul-lint`'s `unknown_register_reference`) checks existence from it, the
-// Soul's `async:` join set resolves through it ([soul/internal/runtime] flowSet.addNames),
-// and [config.IsStaticPredicate] decides from it whether a `when:` reads a register at
+// Soul's `async:` join set resolved through it until NIM-929 moved it to the parse tree
+// ([Engine.RegisterNames]), and [config.IsStaticPredicate] decides from it whether a `when:` reads a register at
 // all. It is a dot-form regex, and [config.ExtractRegisterRefs] says so outright:
 // *"Dynamic access `register["x"]` is not covered by this form — there is no dot, the
 // regex does not match (a safe skip)."*

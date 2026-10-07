@@ -56,6 +56,34 @@ func (e *ErrUnsupported) Error() string {
 	return fmt.Sprintf("CEL unsupported %q: construct %s not yet implemented (pilot)", e.Expr, e.Feature)
 }
 
+// RedactedReason names the class of a CEL error and nothing it was given: not the
+// expression, and not cel-go's message either, since a compile error quotes the
+// source and a lookup that misses quotes the key. A predicate the Keeper rendered
+// carries substituted values, a secret among them (predicate-rendering.md §5), and
+// the Soul cannot tell it from one an author wrote, so its echo sites print this
+// instead of the error. Error() keeps the text for soul-lint and the Keeper, which
+// see only what an author wrote.
+func RedactedReason(err error) string {
+	var (
+		unsupported *ErrUnsupported
+		compileErr  *ErrCompile
+		evalErr     *ErrEval
+	)
+	switch {
+	case errors.As(err, &unsupported):
+		// Feature is always a constant of this package, never a piece of the input.
+		return "uses an unsupported construct: " + unsupported.Feature
+	case errors.As(err, &compileErr):
+		return "does not compile"
+	case errors.Is(err, ErrPredicateNotBool):
+		return "did not return a bool"
+	case errors.As(err, &evalErr):
+		return "failed to evaluate"
+	default:
+		return "was refused"
+	}
+}
+
 // EvalExpression evaluates an expression where the whole string is CEL — the form
 // of top-level expression keys (where:/when:/changed_when:/failed_when:/until:,
 // [templating.md §2.1]). Returns ref.Val as-is; type interpretation (bool for

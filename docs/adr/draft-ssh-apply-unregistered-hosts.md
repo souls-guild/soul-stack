@@ -162,7 +162,7 @@ is a failed step. The destiny is:
   machine yet — and the `soul` destiny reads no fact;
 - **fed values by reference, never re-parsed as templates.** The synthetic task's
   `apply: input:` reads `${ input.<name> }`, and the values ride in as the scenario input; CEL
-  does not re-interpolate a value it returns (`shared/cel/eval.go:151-183`). A register value is
+  does not re-interpolate a value it returns (`shared/cel/eval.go:179-211`). A register value is
   data from a plugin or a cloud API, and one that contains `${ … }` must reach the destiny as
   that text. `pushorch` builds its synthetic task the opposite way — literal values as
   `apply: input:`, evaluated again, with an empty service and so no fence

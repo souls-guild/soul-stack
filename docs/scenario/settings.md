@@ -129,7 +129,7 @@ the percentage is over the run.
 
 | Key | Governs | Default |
 |---|---|---|
-| `task_timeout` | how long one task may **execute** | none — Soul applies a limit only when one is written (`soul/internal/runtime/applyrunner.go:1035`) |
+| `task_timeout` | how long one task may **execute** | none — Soul applies a limit only when one is written (`soul/internal/runtime/applyrunner.go:1037`) |
 | `soul_timeout` | how long a lost **connection** may last before the host is declared unavailable | `1m` |
 | `scenario_timeout` | how long the whole **run** may last | `24h` |
 
@@ -315,7 +315,7 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   when it fails, even if its source failed under `host`.
 - If any recorded failure on a host is at a task whose radius is `scenario`, the run ends: a fatal
   failure that happened is fatal whatever else happened on that host. Under `async:` several children
-  can fail on one host (`soul/internal/runtime/applyrunner.go:466-478` — siblings are not cancelled),
+  can fail on one host (`soul/internal/runtime/applyrunner.go:468-480` — siblings are not cancelled),
   and none is lost.
 - A failure **tied to no task** — the dispatch itself failed (`send_apply_failed`,
   `keeper/internal/scenario/dispatch.go:336-340`), a push transport failed, or `soul_timeout` ran

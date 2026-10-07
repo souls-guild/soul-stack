@@ -4,6 +4,7 @@ import (
 	"regexp"
 	"strings"
 
+	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 )
@@ -40,23 +41,16 @@ var stringType ref.Type = types.StringType
 // a decision on eval-time semantics; until then now(...) is rejected by the guard as
 // unsupported.
 
-// unsupportedPatterns — constructs declared by the spec but NOT in pilot scope.
-// Rejected before compile to return a meaningful [ErrUnsupported] instead of an
-// opaque CEL "no such field/overload".
+// The three text patterns below are [guardUnsupportedText]'s, the fallback for text the
+// parser refuses; a parsed expression is judged by its calls ([Engine.guardUnsupported]).
+// Each catches the construct's characteristic token, so a refusal names the construct
+// rather than an opaque CEL "no such field/overload".
 //
-// soulprint.hosts / .where(...) are no longer here: they are implemented by a
-// compile-time AST rewrite of a static literal predicate into a native
-// filter-comprehension (see hosts.go); destiny-pass isolation and receiver/literal
-// validation are done there too, not by a text guard.
+// soulprint.hosts / .where(...) are not here: they are implemented by a compile-time
+// AST rewrite of a static literal predicate into a native filter-comprehension (see
+// hosts.go); destiny-pass isolation and receiver/literal validation are done there.
 //
-// vault( is no longer here unconditionally: with an Engine that has a KVReader
-// ([WithVault]) the vault() function is registered and works ([vault.go]); its guard
-// remains only when no KVReader is set (see vaultGuard in [guardUnsupported]) — to
-// give a meaningful ErrUnsupported instead of "no such function" in Vault-less
-// contexts.
-//
-// Each pattern catches the construct's characteristic token:
-//   - now(                   — eval-time time (see above).
+//   - now( — eval-time time (see above), refused everywhere.
 var unsupportedPatterns = []struct {
 	feature string
 	re      *regexp.Regexp
@@ -64,24 +58,83 @@ var unsupportedPatterns = []struct {
 	{"now()", regexp.MustCompile(`\bnow\s*\(`)},
 }
 
-// vaultGuard catches a vault() call — rejected only when the Engine is built without a
-// KVReader (vault() is not registered, see [guardUnsupported]).
+// vaultGuard catches a vault() call — refused only when the Engine is built without a
+// KVReader ([WithVault] registers the function, [vault.go]).
 var vaultGuard = regexp.MustCompile(`\bvault\s*\(`)
 
-// generateSecretGuard catches a generate_secret() call — rejected in the passes where
+// generateSecretGuard catches a generate_secret() call — refused in the passes where
 // the function is not registered ([ADR-0083] §3: migration, flow-control, service
 // vars). Without it the author gets a bare undeclared-reference; with it, a stated
 // reason for a call that would otherwise have produced a marker nobody resolves.
 var generateSecretGuard = regexp.MustCompile(`\bgenerate_secret\s*\(`)
 
-// guardUnsupported returns [ErrUnsupported] if the expression contains a construct
-// outside pilot scope. vaultEnabled=true (Engine with a KVReader) lifts the vault()
-// guard — the function is registered and works; genSecretEnabled=true (the ordinary
-// scenario/destiny pass) lifts the generate_secret() guard the same way. vars is NOT rejected by the guard:
-// it's declared as a variable and resolved from Vars.Vars (the flat namespace: the
-// service's own vars under the destiny/task locals); an empty map gives the normal
-// no-such-key, not a panic.
-func guardUnsupported(expr string, vaultEnabled, genSecretEnabled bool) error {
+// generateSecretFeature is the [ErrUnsupported] feature of a generate_secret() call
+// outside the one pass that registers it.
+const generateSecretFeature = "generate_secret(...) (only the scenario/destiny render pass can request a secret)"
+
+// guardUnsupported returns [ErrUnsupported] if the expression calls a function outside
+// pilot scope: now() always, vault() on an Engine without a KVReader, generate_secret()
+// outside the ordinary scenario/destiny pass. vars is NOT rejected by the guard: it's
+// declared as a variable and resolved from Vars.Vars (the flat namespace: the service's
+// own vars under the destiny/task locals); an empty map gives the normal no-such-key,
+// not a panic.
+//
+// It reads the calls in the parsed tree, like [Engine.guardInternalIdents], not the
+// text: the Keeper substitutes values into a predicate as literals
+// (predicate-rendering.md §5), and a value holding `vault(` is data. The calls in a
+// `.where("<predicate>")` literal count, since the rewrite makes them code. Text the
+// parser refuses falls back to [guardUnsupportedText], so its refusal reads as it did.
+func (e *Engine) guardUnsupported(expr string) error {
+	called, ok := e.calledFunctions(expr)
+	if !ok {
+		return guardUnsupportedText(expr, e.kv != nil, e.genSecret)
+	}
+	switch {
+	case called["now"]:
+		return &ErrUnsupported{Expr: expr, Feature: "now()"}
+	case e.kv == nil && called["vault"]:
+		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}
+	case !e.genSecret && called["generate_secret"]:
+		return &ErrUnsupported{Expr: expr, Feature: generateSecretFeature}
+	}
+	return nil
+}
+
+// calledFunctions returns the name of every call in expr and in its `.where`
+// predicates, a leading dot dropped and member calls included (`x.now()` counts). ok is
+// false when expr or one of its predicates does not parse.
+func (e *Engine) calledFunctions(expr string) (map[string]bool, bool) {
+	parsed, err := e.parseNoMacro(expr)
+	if err != nil {
+		return nil, false
+	}
+	called := map[string]bool{}
+	ok := true
+	var walk func(ast.Expr)
+	walk = func(root ast.Expr) {
+		ast.PostOrderVisit(root, ast.NewExprVisitor(func(n ast.Expr) {
+			if n.Kind() != ast.CallKind {
+				return
+			}
+			c := n.AsCall()
+			called[strings.TrimPrefix(c.FunctionName(), ".")] = true
+			if pred, isWhere := wherePredicate(c); isWhere {
+				p, err := e.parseNoMacro(pred)
+				if err != nil {
+					ok = false
+					return
+				}
+				walk(p.Expr())
+			}
+		}))
+	}
+	walk(parsed.Expr())
+	return called, ok
+}
+
+// guardUnsupportedText is [Engine.guardUnsupported] over raw text, for text the parser
+// refuses: the compiler refuses it too, and this keeps the more useful reason.
+func guardUnsupportedText(expr string, vaultEnabled, genSecretEnabled bool) error {
 	for _, p := range unsupportedPatterns {
 		if p.re.MatchString(expr) {
 			return &ErrUnsupported{Expr: expr, Feature: p.feature}
@@ -91,30 +144,16 @@ func guardUnsupported(expr string, vaultEnabled, genSecretEnabled bool) error {
 		return &ErrUnsupported{Expr: expr, Feature: "vault(...)"}
 	}
 	if !genSecretEnabled && generateSecretGuard.MatchString(expr) {
-		return &ErrUnsupported{Expr: expr, Feature: "generate_secret(...) (only the scenario/destiny render pass can request a secret)"}
+		return &ErrUnsupported{Expr: expr, Feature: generateSecretFeature}
 	}
 	return nil
 }
 
-// normalize brings an expression to a canonical form for the compile-cache key:
-// collapses internal whitespace runs and trims the edges. Doesn't change CEL semantics
-// (whitespace outside string literals is insignificant); string literals in Soul Stack
-// expressions use single quotes ([templating.md §2.2]), and whitespace inside them is
-// preserved as-is — so normalization touches only whitespace, not literal contents.
+// normalize trims the edges and nothing else. The engine compiles the normalized text,
+// so collapsing whitespace inside it would have to know where every literal, comment
+// and backtick name ends — a second lexer beside the parser's, the kind that let a
+// direct __vault_read through (NIM-965). The compile cache is keyed by the text as
+// written.
 func normalize(expr string) string {
-	return spaceRun.ReplaceAllStringFunc(strings.TrimSpace(expr), normalizeWhitespace)
-}
-
-var spaceRun = regexp.MustCompile(`'[^']*'|"[^"]*"|\s+`)
-
-func normalizeWhitespace(s string) string {
-	if s == "" {
-		return s
-	}
-	switch s[0] {
-	case '\'', '"':
-		return s // string literal — leave untouched
-	default:
-		return " "
-	}
+	return strings.TrimSpace(expr)
 }

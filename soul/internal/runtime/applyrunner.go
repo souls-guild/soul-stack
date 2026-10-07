@@ -64,8 +64,10 @@ type ApplyRunner struct {
 
 	// flowEngine is the Soul-side sandboxed CEL engine for flow-control
 	// predicates (when:/changed_when:/failed_when:, ADR-012(d)). One per
-	// runner: env is fixed, compile cache is reused across tasks and runs (no
-	// concurrent runs, ADR-012(a)). No vault-client — external access is
+	// runner, env fixed, and no compile cache ([cel.WithoutCompileCache]): a
+	// Keeper-rendered predicate is unique per run and carries its substituted
+	// values, so a cache would grow without bound and keep every secret it saw.
+	// No vault-client — external access is
 	// keeper-only, Soul-side CEL is pure. flowEngineErr is set if engine
 	// construction fails (cel-go incompatibility, "should never happen"); if
 	// set, [ApplyRunner.Run] fails the run with an internal error instead of
@@ -143,7 +145,7 @@ const recentlyFinishedTTL = 30 * time.Second
 // instrumentation ([ApplyMetrics] methods are nil-safe no-ops) — push mode
 // (soul apply) and unit tests run without the obs stack.
 func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
-	engine, err := cel.NewFlowControl()
+	engine, err := cel.NewFlowControl(cel.WithoutCompileCache())
 	return &ApplyRunner{
 		registry:         reg,
 		metrics:          metrics,
@@ -421,7 +423,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// flows tracks the run's `async:` tasks (ADR-0075). Inert on a plan that
 	// uses none: nothing is launched, so every barrier resolves to nothing and
 	// the loop below is the sequential runner it has always been.
-	flows := newAsyncFlows(r.asyncLimit)
+	flows := newAsyncFlows(r.asyncLimit, r.registerRefs)
 	// Serialize sink writes — async flows finalize concurrently (see lockedSink).
 	sink = &lockedSink{sink: sink}
 	defer func() {
@@ -534,7 +536,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 				Error: &keeperv1.TaskError{
 					Code:    "flowcontrol.when_error",
 					Module:  task.GetModule(),
-					Message: fmt.Sprintf("when %q: %v", task.GetWhen(), whenErr),
+					Message: flowControlErrorMessage("when", task, whenErr),
 				},
 			}
 			ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
@@ -869,7 +871,7 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 				// Runtime-/compile-error CEL in until → task FAILED (same as when/
 				// changed_when/failed_when, templating.md §10). Terminal, no retry.
 				r.logFlowControlError("until", task, err)
-				return flowControlErrorEvent(applyID, idx, "flowcontrol.until_error", task, until, err)
+				return flowControlErrorEvent(applyID, idx, "flowcontrol.until_error", "until", task, err)
 			}
 			if ok {
 				// until-true → exit; final status is the attempt's status AS-IS
@@ -897,7 +899,7 @@ func (r *ApplyRunner) runTaskWithRetry(runCtx context.Context, applyID string, i
 	// FAILED/TIMED_OUT — return it as-is (TIMED_OUT isn't collapsed into
 	// FAILED).
 	if until != "" {
-		return untilExhaustedEvent(applyID, idx, task, until, maxAttempts)
+		return untilExhaustedEvent(applyID, idx, task, maxAttempts)
 	}
 	return ev
 }
@@ -936,7 +938,7 @@ func (r *ApplyRunner) evalUntil(expr string, task *keeperv1.RenderedTask, regist
 // attempts with until-false: task FAILED (flowcontrol.until_exhausted), even
 // if the last attempt was OK/CHANGED (until is a mandatory success condition,
 // destiny/tasks.md §9).
-func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask, until string, attempts int) *keeperv1.TaskEvent {
+func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask, attempts int) *keeperv1.TaskEvent {
 	ev := &keeperv1.TaskEvent{
 		ApplyId: applyID,
 		TaskIdx: idx,
@@ -944,7 +946,7 @@ func untilExhaustedEvent(applyID string, idx int32, task *keeperv1.RenderedTask,
 		Error: &keeperv1.TaskError{
 			Code:    "flowcontrol.until_exhausted",
 			Module:  task.GetModule(),
-			Message: fmt.Sprintf("until %q did not become truthy after %d attempts", until, attempts),
+			Message: fmt.Sprintf("until of task %q did not become truthy after %d attempts", task.GetName(), attempts),
 		},
 	}
 	ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
@@ -1146,7 +1148,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		res, err := r.evalFlowPredicate(cw, task, mergeRegisterSelf(registerByName, selfRegister))
 		if err != nil {
 			r.logFlowControlError("changed_when", task, err)
-			return flowControlErrorEvent(applyID, idx, "flowcontrol.changed_when_error", task, cw, err), nil
+			return flowControlErrorEvent(applyID, idx, "flowcontrol.changed_when_error", "changed_when", task, err), nil
 		}
 		changed = res
 		selfRegister["changed"] = changed
@@ -1157,7 +1159,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 		res, err := r.evalFlowPredicate(fw, task, mergeRegisterSelf(registerByName, selfRegister))
 		if err != nil {
 			r.logFlowControlError("failed_when", task, err)
-			return flowControlErrorEvent(applyID, idx, "flowcontrol.failed_when_error", task, fw, err), nil
+			return flowControlErrorEvent(applyID, idx, "flowcontrol.failed_when_error", "failed_when", task, err), nil
 		}
 		failed = res
 		selfRegister["failed"] = failed
@@ -1176,7 +1178,7 @@ func (r *ApplyRunner) runTask(ctx context.Context, applyID string, idx int32, ta
 			ev.Error = &keeperv1.TaskError{
 				Code:    "flowcontrol.failed_when",
 				Module:  modName,
-				Message: fmt.Sprintf("failed_when %q evaluated to true", task.GetFailedWhen()),
+				Message: fmt.Sprintf("failed_when of task %q evaluated to true", task.GetName()),
 			}
 		}
 	case changed:
@@ -1254,6 +1256,20 @@ func registerStruct(self map[string]any) *structpb.Struct {
 	return &structpb.Struct{Fields: fields}
 }
 
+// registerRefs names the registers a predicate reads, for the async barriers. It reads
+// the parse tree: a Keeper-rendered predicate carries substituted values, and a
+// `register.<name>` inside one is data — read as a reference it would make this task
+// wait for that flow, and fail-stop here if the flow failed. Text that does not parse
+// fails at evaluation anyway, so how the text reading misreads it does not matter.
+func (r *ApplyRunner) registerRefs(expr string) []string {
+	if r.flowEngine != nil {
+		if names, ok := r.flowEngine.RegisterNames(expr); ok {
+			return names
+		}
+	}
+	return config.ExtractRegisterRefs(expr)
+}
+
 // evalFlowPredicate evaluates changed_when/failed_when with the sandboxed
 // flow-control engine. Activation is flow_context (input/vars/
 // incarnation/self) + register (prior tasks + register.self of the fresh
@@ -1263,9 +1279,9 @@ func (r *ApplyRunner) evalFlowPredicate(expr string, task *keeperv1.RenderedTask
 }
 
 // flowControlErrorEvent builds the common TaskEvent for a runtime-/compile-error
-// CEL in changed_when/failed_when: task FAILED (same as when, templating.md
+// CEL in changed_when/failed_when/until: task FAILED (same as when, templating.md
 // §10). Symmetric to the when-branch in Run.
-func flowControlErrorEvent(applyID string, idx int32, code string, task *keeperv1.RenderedTask, expr string, err error) *keeperv1.TaskEvent {
+func flowControlErrorEvent(applyID string, idx int32, code, kind string, task *keeperv1.RenderedTask, err error) *keeperv1.TaskEvent {
 	ev := &keeperv1.TaskEvent{
 		ApplyId: applyID,
 		TaskIdx: idx,
@@ -1273,11 +1289,20 @@ func flowControlErrorEvent(applyID string, idx int32, code string, task *keeperv
 		Error: &keeperv1.TaskError{
 			Code:    code,
 			Module:  task.GetModule(),
-			Message: fmt.Sprintf("%s %q: %v", code, expr, err),
+			Message: flowControlErrorMessage(kind, task, err),
 		},
 	}
 	ev.RegisterData = buildRegisterData(ev.GetStatus(), nil)
 	return ev
+}
+
+// flowControlErrorMessage names the predicate's kind, the task and the class of
+// the error, never the predicate or the error's own text: the Keeper substitutes
+// values into a predicate, a secret among them, and both echo them
+// (predicate-rendering.md §5). Every flow-control message and log line goes
+// through [cel.RedactedReason] for that reason.
+func flowControlErrorMessage(kind string, task *keeperv1.RenderedTask, err error) string {
+	return fmt.Sprintf("%s of task %q %s", kind, task.GetName(), cel.RedactedReason(err))
 }
 
 // evalWhen evaluates the `when:` flow-control predicate (ADR-012(d)) with the
@@ -1337,7 +1362,8 @@ func flowSection(fc map[string]any, key string) map[string]any {
 // an invalid predicate during pre-render validation) — logged at warn so the
 // keeper<->soul mismatch is visible in logs/OTel. A runtime-error CEL (e.g.
 // missing register.x) is a normal Destiny-author mistake, also warn (the task
-// becomes FAILED either way).
+// becomes FAILED either way). The reason is redacted, as in the TaskEvent
+// ([flowControlErrorMessage]).
 func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTask, err error) {
 	var ce *cel.ErrCompile
 	var ue *cel.ErrUnsupported
@@ -1346,14 +1372,14 @@ func (r *ApplyRunner) logFlowControlError(kind string, task *keeperv1.RenderedTa
 			slog.String("kind", kind),
 			slog.String("task", task.GetName()),
 			slog.String("module", task.GetModule()),
-			slog.Any("error", err))
+			slog.String("reason", cel.RedactedReason(err)))
 		return
 	}
 	slog.Default().Warn("runtime: flow-control predicate runtime-error",
 		slog.String("kind", kind),
 		slog.String("task", task.GetName()),
 		slog.String("module", task.GetModule()),
-		slog.Any("error", err))
+		slog.String("reason", cel.RedactedReason(err)))
 }
 
 // skipOnChanges decides whether to skip a task per the DSL-core `onchanges:`

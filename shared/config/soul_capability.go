@@ -9,11 +9,11 @@ import "sort"
 // depends on it. Registry — naming-rules.md → "Soul-capabilities".
 //
 // Three groups: Keeper↔Soul protocol features (passage, console), Soul-side DSL
-// features the binary enforces itself (flow_control, retry, dry_run), and one
-// `module:<name>` entry per core module the binary implements. The module group
-// is what closes the silent-ignore mode of ADR-0076: an unannounced module is a
-// per-host fail-closed rejection before dispatch instead of a task reporting
-// OK/CHANGED with no effect.
+// features the binary enforces itself (flow_control, retry, rendered_predicate,
+// dry_run), and one `module:<name>` entry per core module the binary implements.
+// The module group is what closes the silent-ignore mode of ADR-0076: an
+// unannounced module is a per-host fail-closed rejection before dispatch instead of
+// a task reporting OK/CHANGED with no effect.
 //
 // The constants live in shared/config (not keeper- or soul-internal): both keeper
 // (the gates in run.go) and Soul (the grpc-client announcement) must
@@ -57,6 +57,18 @@ const (
 	// retryable.
 	CapabilityRetry = "retry"
 
+	// CapabilityRenderedPredicate — Soul is safe to receive a flow-control
+	// predicate the Keeper rendered, with values substituted in as literals
+	// (predicate-rendering.md §5): its guards read the calls in the parse tree, so a
+	// literal is data, its normalization only trims the edges, and no message or log
+	// line echoes the predicate or its CEL error. An older binary collapses
+	// whitespace — a substituted `\"` followed by spaces becomes a different literal
+	// — and echoes a substituted secret into its errors, so the Keeper does not send
+	// it one. Not needed for a predicate in which nothing was substituted: that an
+	// older binary keeps its own reading of a few shapes of an author's text is a
+	// known limitation (docs/known-limitations.md), not this bit's concern.
+	CapabilityRenderedPredicate = "rendered_predicate"
+
 	// CapabilityDryRun — Soul honors ApplyRequest.dry_run / ErrandRequest.dry_run
 	// by calling SoulModule.Plan instead of Apply (ADR-031(b)/(c)). A binary that
 	// predates the flag reads the request by the keys it knows, misses this one,
@@ -93,9 +105,9 @@ func ModuleCapability(module string) string { return CapabilityModulePrefix + mo
 // reconnects (Registry.Names() iterates a map). A nil/empty coreModules is
 // legitimate — a build with no modules announces only the feature set.
 func SoulCapabilities(coreModules []string) []string {
-	out := make([]string, 0, len(coreModules)+6)
+	out := make([]string, 0, len(coreModules)+7)
 	out = append(out, CapabilityPassage, CapabilityConsole, CapabilityConsoleStream,
-		CapabilityFlowControl, CapabilityRetry, CapabilityDryRun)
+		CapabilityFlowControl, CapabilityRetry, CapabilityRenderedPredicate, CapabilityDryRun)
 	seen := make(map[string]struct{}, len(coreModules))
 	for _, m := range coreModules {
 		if m == "" {

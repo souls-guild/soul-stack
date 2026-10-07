@@ -105,9 +105,10 @@ func (e *Engine) rewriteHostsWhere(expr string, allowHosts bool) (string, error)
 }
 
 // parseNoMacro parses the expression WITHOUT macros: exists/all/map/filter/
-// exists_one/.where stay plain CallKind (round-trippable by Unparse). Used only in
-// the rewrite phase; final compilation goes through env (macros on). An error is
-// syntactic (clear, not opaque).
+// exists_one/.where stay plain CallKind (round-trippable by Unparse). It serves every
+// reading of the tree as written — the rewrite, the guards, the reference readers;
+// final compilation goes through env (macros on). An error is syntactic (clear, not
+// opaque).
 func (e *Engine) parseNoMacro(expr string) (*ast.AST, error) {
 	parsed, iss := e.noMacroParser.Parse(common.NewTextSource(expr))
 	if iss != nil && len(iss.GetErrors()) > 0 {
