@@ -21,6 +21,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   the execution model, which `soul-lint` cannot see. `existing-vm` and the `core.ssh` /
   `core.bootstrap` doc examples drop their `require:` lines.
 
+- **`retry:` and `timeout:` on a `block:` are defaults every child inherits (NIM-910,
+  [ADR-009](docs/adr/0009-scenario-dsl.md) amendment 2026-10-07).** Both keys were refused on a block
+  (`retry_on_block_invalid`, `timeout_on_block_invalid` — retired). A child without its own key takes
+  the nearest block's; its own `retry:` replaces the block's whole map and its own `timeout:` wins.
+  `timeout:` on a block is that block's `settings: {task_timeout}`, and render also carries it on the
+  wire to each child — and across an applier child into the destiny's tasks — stopping at a level
+  whose own `settings:` writes `task_timeout`. `until:` in a block's `retry:` is refused
+  (`retry_until_on_block_invalid`), and so is a block's `retry:` that reaches an applier, written in
+  the block or spliced in by `include:` (`retry_on_apply_invalid`, by soul-lint and by the Keeper).
+  Same in a destiny's blocks. `async:` on a block stays refused (NIM-959).
+
 - **The render passes of a scenario run share one read of each `vault()` secret (NIM-934).**
   One memo of Vault reads spans the run (`vault:` refs in params included), so a secret rotated away
   mid-run no longer fails a later pass that re-renders a task which already ran. A keeper-side

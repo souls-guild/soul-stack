@@ -55,7 +55,7 @@ Two earlier drafts of this ADR said otherwise. Recorded so the claim is not made
   `keeper/internal/scenario/run.go:486-493`).
 - **Cross-passage `when:`/`changed_when:`/`failed_when:` is already a fail-closed refusal** — FC-5,
   `config.CodeCrossPassageWhenGating` (`shared/config/passage.go:106-116`), detector at
-  `shared/config/passage.go:533-567`, offline in `soul-lint/internal/validate/stage.go:213-230`.
+  `shared/config/passage.go:533-567`, offline in `soul-lint/internal/validate/stage.go:214-231`.
 - **A `block:` child reading a sibling's register is already a fail-closed refusal** —
   `within_block_register_dependency` (`shared/config/passage.go:94-105`).
 - **The one spelling invisible to all of the above was closed at compile by NIM-909** — choosing a
@@ -237,9 +237,9 @@ depends on anything is the fact that *k* comes after *k−1*.
    earlier Passage is already encoded as the sentinel `-1`, which for a barrier reads *"nothing to
    wait for"* (`soul/internal/runtime/async.go:184-186`,
    `keeper/internal/render/prototask.go:116-122`). Inside a destiny both still work and ADR-0075
-   applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1103-1105`). A key that stays legal and stops having an effect is the silence this ADR is about, so
+   applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1108-1110`). A key that stays legal and stops having an effect is the silence this ADR is about, so
    both become **refusals** — `async:` at top level, and `require:` anywhere outside a destiny:
-   `async:` is already refused inside a block (`keeper/internal/render/block.go:620-621`), so a
+   `async:` is already refused inside a block (`keeper/internal/render/block.go:635-636`), so a
    block child's `require:` would wait on nothing. **Shape (NIM-941, codes approved by the user
    2026-10-06):** `async_outside_destiny` and `require_outside_destiny`, both ERROR, refused on
    presence on every scenario task — top level, any block depth, a scenario's included body.
@@ -251,7 +251,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    could reach an applied destiny's `async:` tasks in the same message — one Passage today, a block
    rolled as one group under linear dispatch — by `require: all`, by a name an `async:` destiny
    task also registers, or written on an `apply:` task and merged into every task of the destiny
-   (`keeper/internal/render/block.go:512-517`). The replacement is a `register:` on each `apply:`
+   (`keeper/internal/render/block.go:526-532`). The replacement is a `register:` on each `apply:`
    before the waiting point, and a `require:` inside the destiny for a wait among its own tasks: the
    terminal carries every task of the destiny in `aggregate_of`, which the Soul awaits as a gate and
    fail-stops on (`soul/internal/runtime/applyrunner.go:466-478`). Nor does one step mean one task:
@@ -533,10 +533,10 @@ the index counts steps, each child of a default block takes one, and `stampPassa
 the file. **The placeholder gate is also applied inside block rendering**: today the gate runs once per
 top-level entry (`keeper/internal/render/pipeline.go:196-199`, `:268`) and `renderBlockTask` then
 renders every child in the same pass (`:367-368`), each child's own `where:` included
-(`blockChildTargets`, `keeper/internal/render/block.go:417-425`). So while child *k* is active, child *k+1* would be
+(`blockChildTargets`, `keeper/internal/render/block.go:419-427`). So while child *k* is active, child *k+1* would be
 rendered too and a read of *k*'s register would raise. The gate and its placeholder are applied per
-child as well, in `walkBlockChildren` (`block.go:292-297`), before a child's targets are resolved
-(`:305`, `:322`); the top-level gate stays, keyed to the block's first step, so the block's own
+child as well, in `walkBlockChildren` (`block.go:294-299`), before a child's targets are resolved
+(`:307`, `:324`); the top-level gate stays, keyed to the block's first step, so the block's own
 `where:` (`keeper/internal/render/pipeline.go:301`) is not resolved early either. And fork 3's rule
 that a default block's `where:` and `run_once:` are resolved once, at its first child, and held is
 new too: today both are re-resolved on every pass. All of it lands in S1.
@@ -614,7 +614,7 @@ and stops having its effect is a silence, and a silence gets a refusal — the s
 `serial_scope`: `block` for a canary, `task` for steps that really are independent — in the shared
 validator so the Keeper enforces it too, since service repositories are not linted. Only
 host-dispatched tasks count: a keeper-side task cannot go into a block (`block_on_keeper_invalid`,
-`shared/config/scenario_task.go:1036`), so a serial host task followed by keeper steps — as in
+`shared/config/scenario_task.go:1037`), so a serial host task followed by keeper steps — as in
 `long-runner/scenario/serial_waves` — has nothing to regroup and does not trigger it.
 Not a plain refusal: `{change, check}` is textually indistinguishable from two genuinely independent
 tasks, so the author must be able to say which they meant. **Its trigger is a transition rule**: it
@@ -985,7 +985,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     [predicate-rendering.md](../scenario/predicate-rendering.md), with the differential test
     covering every trap listed there, and the walk that checks nothing outside the open set is left;
     `guardFlowControlHostInvariant` and `flowContextHostInvariant` lifted for rendered predicates; `register: self` reserved, as
-    `register_name_reserved` already reserves `hosts` (`shared/config/scenario_task.go:1812-1820`),
+    `register_name_reserved` already reserves `hosts` (`shared/config/scenario_task.go:1845-1853`),
     and a bare `register` refused in the post-module predicates;
     their per-host overlay; Soul text guards that leave a substituted value alone; masking at every
     echo site; Keeper-written SKIPPED and FAILED records; error capture per task and host. Shipped
@@ -1017,10 +1017,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   (NIM-941 put them on the train ahead of the dispatch loop — unconditional, since `soul-lint` cannot
   see the model, and harmless because the train reaches `main` only with the enablement, NIM-952);
   FC-5's retirement on both sides at once — the Keeper's refusal (`keeper/internal/scenario/run.go:448-449`)
-  and `soul-lint`'s (`soul-lint/internal/validate/stage.go:223`) — or one of them refuses scenarios
+  and `soul-lint`'s (`soul-lint/internal/validate/stage.go:224`) — or one of them refuses scenarios
   that are now legal; for the same reason `soul-lint`'s Passage-keyed state checks —
-  `StaleStateRead` (`:258`) retires, since a capture now finishes before a later reader renders, and
-  `StoreAfterUse` (`:240`) is re-keyed to plan order;
+  `StaleStateRead` (`:259`) retires, since a capture now finishes before a later reader renders, and
+  `StoreAfterUse` (`:241`) is re-keyed to plan order;
   fork 1's outcome; the `settings:` block with its fail-by-default, its one
   validator, the key-by-key merge and the "not inherited from the Voyage key" statement; the terminal status
   `on_failure: host` needs and its obligations (items 4-5); the canary diagnostics (item 6). Any
@@ -1051,7 +1051,7 @@ group.
 | [ADR-012(d)](0012-keeper-soul-grpc.md) | **amended** — for a scenario task, `when:` is evaluated on the Keeper and the post-module predicates arrive with everything but `register.self` — and, in a group, the group's own registers — rendered in, per host, behind a capability bit (item 10); a grouped child's `when:` that still reads a sibling goes to the Soul the same way; no register crosses the wire, and `flow_context` loses its purpose |
 | [ADR-0075](0075-intra-host-async-tasks.md) | still applies inside a destiny; `async:` and `require:` outside a destiny are refused (`async_outside_destiny`, `require_outside_destiny`, NIM-941) |
 | [ADR-027](0027-apply-work-queue.md) | **affected** — the work-queue path is unreachable for linear runs unless restored; amend (p) re-keys the queue by step (S3) |
-| [ADR-009](0009-scenario-dsl.md) | **amended** — a `settings:` block with one schema at every level, inherited as a value like `vars:` (not composed like `when:`/`where:`), the first execution-behaviour container in the grammar; the execution model changes. Block inheritance of `retry:`/`timeout:`/`async:` is a **separate** amendment, NIM-910 |
+| [ADR-009](0009-scenario-dsl.md) | **amended** — a `settings:` block with one schema at every level, inherited as a value like `vars:` (not composed like `when:`/`where:`), the first execution-behaviour container in the grammar; the execution model changes. Block inheritance of `retry:`/`timeout:` is a **separate** amendment, NIM-910 (ADR-009 amendment 2026-10-07); `async:` on a block is open, NIM-959 |
 | [ADR-010](0010-templating.md) | unaffected — the register grammar and the NIM-909 amendment stand |
 | [ADR-0084](0084-explicit-state-capture.md) | **amended** — a capture runs where it is written (§State capture); its per-Passage state refresh and stale same-Passage read rule (`0084:228-235`, `:328-341`) become per step, so that stale read can no longer arise and its `soul-lint` check retires in S1 |
 | [orchestration.md §2.2.1](../scenario/orchestration.md) | **rewritten** — the per-Passage `serial:` minimum, the wave/barrier invariant and the canary idiom |

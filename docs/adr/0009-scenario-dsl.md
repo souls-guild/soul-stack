@@ -694,3 +694,48 @@ soul-lint's per-artifact entry points do not do — and shipping only the `soulp
 would teach an author to trust a linter that answers half the question. Amends
 [ADR-0082](0082-service-vars.md), whose "`apply: input:` resolves on `targeted[0]`" is now
 history.
+
+## Amendment 2026-10-07 (NIM-910): `retry:` and `timeout:` on a `block:` are defaults the children inherit
+
+A `block:` refused both keys (`retry_on_block_invalid`, `timeout_on_block_invalid`) on the reading
+that a key on a block belongs to the block as a whole — "one call's retry/timeout" on a construct that
+invokes no module. The block is an overlay of defaults over its children instead (user, 2026-10-01,
+during NIM-907; the draft ADR's fork 3), the reading `vars:` and `settings:` already have, and under it
+`retry: { count: 3 }` on a block is "each child retries up to three times by default". Both keys are
+now allowed on a block, in a scenario and in a destiny alike (the validator is shared):
+
+- **Per child, child wins.** Each descendant inherits the nearest enclosing block's key and may
+  override it in either direction. `retry:` is the child's **whole map** or the block's, never a mix
+  (user, 2026-10-07): a child's `retry:` is its own statement, as `transport:` is, so a child naming
+  `count: 2` does not also take the block's `delay:`. `timeout:` bounds each child's attempt, not the
+  block as a whole.
+- **`timeout:` is the block's `task_timeout`.** [settings.md §2.3](../scenario/settings.md) made
+  `timeout: X` on a task `settings: {task_timeout: X}` on it; a block is no exception, so the two
+  spellings inherit by one merge (`config.InheritSettings`). Until task timeouts are read from
+  `settings:` (NIM-949) the Soul applies only the wire `timeout:`, so render also hands the nearest
+  block's `timeout:` to each child that writes none — and stops at a level whose own `settings:`
+  writes `task_timeout`, so the wire carries no value a lower level's `task_timeout` overrode
+  (`config.InheritTimeout`). The one disagreement left is a level writing both spellings with
+  different values — the wire carries its `timeout:`, the merge its `task_timeout` — and
+  `timeout_shadowed_by_task_timeout` warns, as it does on a task.
+- **`retry.until:` stays refused on a block** (`retry_until_on_block_invalid`, user 2026-10-07):
+  `until:` re-judges one module's result, which is the `failed_when:` override a block refuses.
+- **An applier child.** A block's `retry:` reaching an applier — written in the block or spliced in by
+  a within-block `include:` — is refused with the applier's own code, `retry_on_apply_invalid` (user
+  2026-10-07): passed on, it would retry destiny tasks their author never marked retryable. It is
+  checked on the expanded plan by soul-lint and by the Keeper's run path (`config.RetryOverApply`), and
+  render refuses it on any other path that renders the branch. A branch a static `when:` skips is caught
+  only by those two: Trial (L0) renders it as a skip and passes, as it does a `serial_scope` refusal.
+  A block's `timeout:` **does** cross an applier: a destiny's
+  tasks take the applier's task timeout and their own `timeout:` wins (settings.md §3 rule 6).
+- **Both linear modes alike.** Render merges the keys into every child before it decides whether the
+  child is a step of its own or one task of a group (`walkBlockChildren`), so the value a child carries
+  does not depend on how the block rolls.
+
+`async:` on a block is not part of this amendment — it stays refused (`async_on_block_invalid`); what it
+would mean when a default block's children are separate steps is open (NIM-959). Implementation —
+`shared/config/scenario_task.go` (`blockForbiddenKeys`, `validateRetryUntilOnBlock`),
+`shared/config/scenario_settings.go` (`InheritSettings`, `InheritTimeout`),
+`shared/config/block_retry.go` (`RetryOverApply`), `keeper/internal/render/block.go`
+(`mergeBlockInheritance`, `mergeApplierInheritance`, `guardPilotBlockChild`). Normative text —
+[destiny/tasks.md §6.5](../destiny/tasks.md).

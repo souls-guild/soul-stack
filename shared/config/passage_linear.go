@@ -71,7 +71,7 @@ func linearStepNode(t Task, scenario *ScenarioSettings, next *int) StepNode {
 // nested block is a group.
 func LinearBlockChild(block, child Task) Task {
 	out := child
-	out.Settings = InheritSettings(block.Settings, child)
+	out.Settings = InheritSettings(block, child)
 	if out.Serial == nil {
 		out.Serial = block.Serial
 	}

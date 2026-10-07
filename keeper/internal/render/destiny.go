@@ -106,7 +106,7 @@ type DestinyResolver interface {
 //
 // applier is the whole parent task, not just its `apply:` block — the
 // function that renders a task's fan-out has to see the task, or keys land
-// nowhere and no one is told (NIM-245). Three of its fields are read here:
+// nowhere and no one is told (NIM-245). Four of its fields are read here:
 //
 // applier.Register — if non-empty, renderApplyDestiny emits a synthetic
 // terminal `core.noop.run` after the child tasks, with Register=applier.Register
@@ -132,6 +132,10 @@ type DestinyResolver interface {
 // the other side of the boundary. The applier's `when:` is decided before this
 // call instead (static-when at the scenario level), and a `when:` that cannot be
 // decided there is refused by [guardApplierWhen].
+//
+// applier.Timeout — only ever a `timeout:` a block above handed down (its own is
+// refused at parse); each child without its own takes it, through
+// [mergeApplierInheritance] (NIM-910).
 func (p *Pipeline) renderApplyDestiny(
 	ctx context.Context,
 	parentIn RenderInput,
@@ -307,7 +311,7 @@ func (p *Pipeline) renderApplyDestiny(
 		// block: inside a destiny pass (ADR-009 amendment 2026-06-24) —
 		// render-time fan-out into the flat layer, like scenario
 		// (renderBlockTask), but with destiny semantics: env-agnostic
-		// inheritance (mergeBlockInheritance: when/vars/requisites), the
+		// inheritance (mergeBlockInheritance: when/vars/requisites/retry/timeout), the
 		// roster is inherited WHOLESALE (block does NOT narrow hosts —
 		// where/on on a destiny block are rejected by
 		// guardDestinyBlockChild), and the destiny parent's serialWidth
@@ -1023,7 +1027,8 @@ func (p *Pipeline) renderDestinyBlock(
 //
 // — all meaningless in a destiny (no per-child roster resolve, no nested
 // destiny). VALID (env-agnostic inheritance + flat core): when (AND-merge),
-// name, vars, onchanges/onfail/require (union), nested block:; a child is
+// name, vars, onchanges/onfail/require (union), retry/timeout (the child's own
+// wins; retry.until is refused at parse), nested block:; a child is
 // module: or a nested block:.
 //
 // include: on a child is NOT a boundary — within-block include is supported and

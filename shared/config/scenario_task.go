@@ -707,6 +707,7 @@ func validateTaskNode(item ast.Node, pathPrefix string) []diag.Diagnostic {
 			}))
 		}
 		out = append(out, validateBlockForbiddenKeys(present, pathPrefix)...)
+		out = append(out, validateRetryUntilOnBlock(present, pathPrefix)...)
 	}
 
 	// 4) Scenario delta: on / serial / run_once. `where:` is already checked in block
@@ -1091,10 +1092,14 @@ func validateBlockChildOnKeeper(item ast.Node, childPath string) []diag.Diagnost
 
 // blockForbiddenKeys — module-specific keys not allowed at the BLOCK level (fail-
 // closed; destiny/tasks.md §6.5 does not mention them on a block). A block invokes no
-// module, so a module-result override (`changed_when`/`failed_when`), one call's
-// retry/timeout, and `params:` (module arguments) are meaningless on
-// it. Each key is rejected with code `<key>_on_block_invalid` (symmetric to
-// register_on_block_invalid). `register:` is already rejected separately above.
+// module, so a module-result override (`changed_when`/`failed_when`) and `params:`
+// (module arguments) are meaningless on it. Each key is rejected with code
+// `<key>_on_block_invalid` (symmetric to register_on_block_invalid). `register:` is
+// already rejected separately above.
+//
+// `retry:` and `timeout:` LEFT this list in NIM-910: on a block they are defaults
+// every child inherits and may override, not one call's — except `retry.until`,
+// which re-judges a module's result like `failed_when` (validateRetryUntilOnBlock).
 //
 // `output:` LEFT this list in NIM-334: it is refused on every kind at once by
 // validateOutputUnsupported, because it is unimplemented everywhere and not
@@ -1105,15 +1110,43 @@ func validateBlockChildOnKeeper(item ast.Node, childPath string) []diag.Diagnost
 // fail-closed until a slice implements it), code async_on_block_invalid.
 //
 // Keys inherited by a block (`when`/`where`/`vars`/`onchanges`/`onfail`/`require`/
-// `on`/`serial`/`run_once`/`name`/`loop`) are NOT in the list: §6.5 explicitly allows
-// them on a block.
+// `on`/`serial`/`run_once`/`name`/`loop`/`retry`/`timeout`/`settings`) are NOT in the
+// list: §6.5 explicitly allows them on a block.
 var blockForbiddenKeys = []string{
 	"changed_when",
 	"failed_when",
-	"retry",
-	"timeout",
 	"params",
 	"async",
+}
+
+// validateRetryUntilOnBlock raises `retry_until_on_block_invalid` for `until:` in a
+// block's `retry:`. A block's `retry:` is every child's default, but `until:` judges
+// one module's result — after the last attempt a false `until:` fails a task that
+// succeeded — so on a block it is the `failed_when` override the block refuses,
+// written once for children whose results differ in shape.
+func validateRetryUntilOnBlock(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
+	kv, ok := present["retry"]
+	if !ok {
+		return nil
+	}
+	m, isMap := kv.Value.(*ast.MappingNode)
+	if !isMap {
+		return nil
+	}
+	for _, sub := range m.Values {
+		tok := sub.Key.GetToken()
+		if tok == nil || tok.Value != "until" {
+			continue
+		}
+		return []diag.Diagnostic{diagAt(tok.Position.Line, tok.Position.Column, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
+			Code:     "retry_until_on_block_invalid",
+			Message:  "retry.until: is not allowed on a block task — a block's retry: is every child's default, and until: re-judges one module's result, which a block does not have (see docs/destiny/tasks.md §6.5)",
+			Hint:     "keep count:/delay: on the block and put until: on the child whose result it judges",
+			YAMLPath: pathPrefix + ".retry.until",
+		})}
+	}
+	return nil
 }
 
 // validateBlockForbiddenKeys raises `<key>_on_block_invalid` for each present module-
@@ -1131,7 +1164,7 @@ func validateBlockForbiddenKeys(present map[string]*ast.MappingValueNode, pathPr
 			Level: diag.LevelError, Phase: diag.PhaseSchemaValidate,
 			Code:     key + "_on_block_invalid",
 			Message:  fmt.Sprintf("%s: is not allowed on a block task (block does not invoke a module — see docs/destiny/tasks.md §6.5)", key),
-			Hint:     "place module-specific keys on the inner module-task; block: only carries when/where/vars/requisites/serial/run_once",
+			Hint:     "place module-specific keys on the inner module-task; block: only carries when/where/vars/requisites/serial/run_once/retry/timeout/settings",
 			YAMLPath: pathPrefix + "." + key,
 		}))
 	}
