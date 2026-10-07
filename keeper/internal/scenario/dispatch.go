@@ -62,8 +62,18 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// cross-passage onchanges didn't fire on a host (and has no same-passage
 	// source) is dropped from that host's slice; otherwise cross-passage
 	// indexes are stripped from the wire (Soul gates by same-passage only).
-	perHost = gate.applyGate(perHost, passage)
-	if len(perHost) == 0 {
+	//
+	// Linear dispatch applies it together with the flow control the Keeper settled
+	// (keeper_flow.go), and records itself what a host is not sent or fails before
+	// it is sent.
+	var settled map[string]*settledHost
+	if spec.executionModel == ExecutionLinear {
+		perHost, settled = settleHosts(perHost, gate, passage)
+	} else {
+		perHost = gate.applyGate(perHost, passage)
+	}
+	closed := closedHosts(settled, perHost)
+	if len(perHost) == 0 && len(closed) == 0 {
 		// No Passage task targets any host (where: filtered out all hosts on
 		// every task). Not an error: nothing to apply in this Passage; for
 		// N=1 the run succeeds as a no-op.
@@ -88,16 +98,48 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		return refusedDispatchError(routeRefusals)
 	}
 
+	// A host the Keeper closed with every task skipped holds a terminal row before
+	// the first wave: it is sent nothing and changes nothing, so it waits on no other
+	// host and takes no wave's place — a wave's width counts hosts the step may
+	// change. A host the Keeper failed takes its place among those, by SID, and fails
+	// at its turn, so the hosts of later waves are never sent the step.
+	failedEarly := failedBeforeSend(settled, closed)
+	dispatchedTotal := 0
+	for _, sid := range closed {
+		if failedEarly[sid] {
+			continue
+		}
+		if err := r.closeSettledHost(ctx, spec, log, passage, sid, settled[sid]); err != nil {
+			return err
+		}
+		dispatchedTotal++
+	}
 	sids := sortedSIDs(perHost)
+	for sid := range failedEarly {
+		sids = append(sids, sid)
+	}
+	if len(sids) == 0 {
+		return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
+	}
+	sort.Strings(sids)
 	waves := splitWaves(sids, effectiveSerialWidth(plans))
 
-	// Waves are strictly sequential (§2.2.1). dispatchedTotal accumulates
-	// hosts from all waves started so far — the barrier waits on exactly
-	// those (a host with no apply_runs row must not make the barrier wait
-	// until timeout).
-	dispatchedTotal := 0
+	// Waves are strictly sequential (§2.2.1). dispatchedTotal counts the closed
+	// hosts, those the Keeper failed in each wave and those dispatchWave left with
+	// a running row; a host whose send failed is not counted, as its failed row
+	// breaks the barrier by itself. A host with no row must not make it wait.
 	for wi, wave := range waves {
-		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, wave, dispatchByHost, pushRoutes)
+		failedHere := map[string]bool{}
+		for _, sid := range wave {
+			if failedEarly[sid] {
+				if err := r.closeSettledHost(ctx, spec, log, passage, sid, settled[sid]); err != nil {
+					return err
+				}
+				failedHere[sid] = true
+				dispatchedTotal++
+			}
+		}
+		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, sendsIn(wave, failedHere), dispatchByHost, pushRoutes, settled)
 		dispatchedTotal += dispatched
 
 		// Per-wave barrier: wait for terminal status of hosts from ALL waves
@@ -105,11 +147,18 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		// apply_runs rows filtered by passage, so a failed host in the
 		// current wave breaks the barrier immediately (fail-stop) — the next
 		// wave doesn't start.
-		if berr := r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log); berr != nil {
+		//
+		// A host the Keeper failed in this wave is known before anything is sent,
+		// so its row does not break the barrier while the hosts sent beside it run:
+		// they finish, and then the step fails and no later wave starts.
+		if berr := r.waitBarrierExcept(ctx, spec.ApplyID, passage, dispatchedTotal, failedHere, log); berr != nil {
 			return berr
 		}
 		if derr != nil {
 			return derr
+		}
+		if len(failedHere) > 0 {
+			return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
 		}
 		if len(waves) > 1 {
 			log.Info("scenario: serial wave completed",
@@ -260,7 +309,10 @@ func serialPresent(serial any) bool {
 // its send IS the run, so there is no send outcome to inspect here, and every
 // exit of [Runner.dispatchPushHost] writes a terminal the barrier observes —
 // which is the same contract the stream branch has with an arriving RunResult.
-func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string, dispatchByHost map[string]hostDispatch, pushRoutes map[string]pushRoute) (int, error) {
+//
+// settled carries the records the Keeper writes for a host it still sends a
+// message to — a loop iteration it skipped there — written once the row exists.
+func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string, dispatchByHost map[string]hostDispatch, pushRoutes map[string]pushRoute, settled map[string]*settledHost) (int, error) {
 	dispatched := 0
 	for _, sid := range wave {
 		// attempt is INTENTIONALLY left at 0: this is the old inline path
@@ -305,6 +357,9 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			SoulVersion:   r.dispatchSoulVersion(ctx, sid, dispatchByHost[sid], log),
 		}); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
+		}
+		if sh := settled[sid]; sh != nil {
+			r.writeKeeperRecords(ctx, spec, log, passage, sid, numberedAfter(sh.records, len(perHost[sid])))
 		}
 
 		// Push branch (NIM-880): the send IS the whole run, so it goes to its own
@@ -403,6 +458,12 @@ func (r *Runner) warnCrossKeeperDispatch(ctx context.Context, sid string, log *s
 //     Cancel/Shutdown). Any non-success terminal fails the run (fail-closed,
 //     §7).
 func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantHosts int, log *slog.Logger) error {
+	return r.waitBarrierExcept(ctx, applyID, passage, wantHosts, nil, log)
+}
+
+// waitBarrierExcept is [Runner.waitBarrier] with the failed rows of the hosts in
+// failedEarly counted as terminal instead of failing the barrier.
+func (r *Runner) waitBarrierExcept(ctx context.Context, applyID string, passage, wantHosts int, failedEarly map[string]bool, log *slog.Logger) error {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 
@@ -423,7 +484,7 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantH
 			return fmt.Errorf("scenario: barrier interrupted: %w", errCancelRequested)
 		}
 
-		done, failed := classify(statuses, passage, wantHosts)
+		done, failed := classifyExcept(statuses, passage, wantHosts, failedEarly)
 		if failed != nil {
 			return failed
 		}
@@ -464,6 +525,12 @@ func cancelRequested(statuses []applyrun.HostStatus) bool {
 // `task <idx> <module>: <message>`, BUG-3). NULL error_summary (dispatch-level
 // failure without a TaskEvent) → falls back to the host status itself.
 func classify(statuses []applyrun.HostStatus, passage, wantHosts int) (done bool, failed error) {
+	return classifyExcept(statuses, passage, wantHosts, nil)
+}
+
+// classifyExcept is [classify] with a failed row of a host in failedEarly counted as
+// a terminal rather than a failure.
+func classifyExcept(statuses []applyrun.HostStatus, passage, wantHosts int, failedEarly map[string]bool) (done bool, failed error) {
 	terminal := 0
 	for _, hs := range statuses {
 		// Staged-render (ADR-056): this Passage's barrier only counts
@@ -503,6 +570,10 @@ func classify(statuses []applyrun.HostStatus, passage, wantHosts int) (done bool
 			// (commitSuccess), not error_locked.
 			terminal++
 		case applyrun.StatusFailed, applyrun.StatusCancelled, applyrun.StatusOrphaned:
+			if hs.Status == applyrun.StatusFailed && failedEarly[hs.SID] {
+				terminal++
+				continue
+			}
 			// orphaned (Soul reconcile, ADR-027(g)) is a terminal
 			// non-success: the barrier counts it as a host failure
 			// (incarnation → error_locked via commitRunState), same as

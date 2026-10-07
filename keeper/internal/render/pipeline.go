@@ -436,6 +436,11 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	if err := resolveRequire(tasks); err != nil {
 		return nil, nil, err
 	}
+	// After the walk: a task's step is stamped only at the end of its top-level
+	// iteration, and only the step being dispatched is settled.
+	if err := p.settleFlow(in, tasks, plans); err != nil {
+		return nil, nil, err
+	}
 
 	return tasks, plans, nil
 }
@@ -468,9 +473,13 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// (soulprint.self) on a multi-host target would silently resolve using
 	// the first host's facts for everyone (dispatch hands out one
 	// RenderedTask carrying the first host's flow_context). Reject before
-	// building flow_context — mirrors reLoopWhenSoulprint (loop.go).
-	if err := guardFlowControlHostInvariant(task, targeted); err != nil {
-		return nil, err
+	// building flow_context — mirrors reLoopWhenSoulprint (loop.go). Lifted
+	// where the Keeper settles the predicates per host ([Pipeline.settleFlow]).
+	keeperFlow := in.keeperFlow()
+	if !keeperFlow {
+		if err := guardFlowControlHostInvariant(task, targeted); err != nil {
+			return nil, err
+		}
 	}
 
 	rt := &RenderedTask{
@@ -482,10 +491,10 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		Timeout:  task.Timeout,
 		// [ADR-0083] §8: derived from the module manifest, never authored.
 		SecretOutput: config.SecretOutputFields(task.Module.Module, in.Modules),
-		// flow-control CEL strings (ADR-012(d)) pass through as-is — Keeper
-		// never evaluates them (they depend on register.* from prior tasks,
-		// known only to Soul). Host-invariant (one predicate text per task);
-		// Soul evaluates per host.
+		// flow-control CEL strings (ADR-012(d)) as the author wrote them. Under
+		// staged dispatch they travel as-is and the Soul evaluates them per host;
+		// under linear dispatch [Pipeline.settleFlow] settles them per host into
+		// FlowBySID, and these stay the author's text for diagnostics.
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,
@@ -525,7 +534,14 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// the first host; fc for the rest is still built to keep their snapshot
 	// valid.
 	if skip, serr := p.staticWhenSkips(in, task, renderHosts, len(targeted), loopVars); serr != nil {
-		return nil, serr
+		if !settlesStaticWhenError(in, task, serr) {
+			return nil, serr
+		}
+		// Under linear dispatch it fails the task on every host it targets
+		// ([Pipeline.settleFlow]) rather than the run; params are not rendered,
+		// as for a false one.
+		rt.flowFailure = whenFailure(p.cel, task.When, p.taskSealSources(in, task), staticWhenCause(serr))
+		return rt, nil
 	} else if skip != nil {
 		rt.FlowContext = skip
 		return rt, nil
@@ -543,6 +559,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// visible. Per-task (host-invariant), nil Sealed → no-op.
 	sources := p.taskSealSources(in, task)
 	collectSealed(p.cel, in.Sealed, task.Module.Params, sources, "")
+	if keeperFlow {
+		rt.flowSeal = sources
+	}
 
 	isRendered := task.Module.Module == moduleFileRendered
 
@@ -682,7 +701,9 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// this host's snapshot); the wire value rt.FlowContext comes from the
 		// first host (hi==0). Not a forgotten per-host dispatch — host-variant
 		// flow-control on multi-host is already rejected by
-		// guardFlowControlHostInvariant.
+		// guardFlowControlHostInvariant. Under linear dispatch every host's
+		// snapshot is kept instead (flowContextBySID) for [Pipeline.settleFlow],
+		// and nothing of it travels.
 		fc, err := buildFlowContext(in, h, vars, len(targeted), fcReads)
 		if err != nil {
 			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
@@ -694,6 +715,12 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// host falls back to Params — the first by SID — which is the silent
 		// substitution NIM-908 removes. Deciding per iteration cannot see that.
 		paramsBySID[h.SID] = st
+		if keeperFlow && len(targeted) > 0 {
+			if rt.flowContextBySID == nil {
+				rt.flowContextBySID = make(map[string]*structpb.Struct, len(targeted))
+			}
+			rt.flowContextBySID[h.SID] = fc
+		}
 		if hi == 0 {
 			rt.Params = st
 			rt.FlowContext = fc
@@ -733,7 +760,10 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// run's result), and NIM-908 deliberately did not take it. Until it is
 		// taken, a host-variant predicate stays refused — loudly, which is the
 		// backstop the ticket asks for wherever dispatch does not reach.
-		if hasFlowControl(task) && !flowContextHostInvariant(rt.FlowContext, fc) {
+		//
+		// Linear dispatch took it (NIM-943): every reference is substituted per
+		// host, and no flow_context travels for a scenario task.
+		if !keeperFlow && hasFlowControl(task) && !flowContextHostInvariant(rt.FlowContext, fc) {
 			return nil, fmt.Errorf(
 				"render: task %q: host-variant flow_context (vars derived from soulprint.self) on a multi-host target (%s vs %s) - fail-closed; per-host dispatch is deferred (separate ADR)",
 				task.Name, firstSID, h.SID)
@@ -818,7 +848,7 @@ func (p *Pipeline) staticWhenSkips(
 
 	pass, err := evalStaticWhen(task.When, firstFC)
 	if err != nil {
-		return nil, fmt.Errorf("render: task %q: static-when %q: %w", task.Name, task.When, err)
+		return nil, &staticWhenEvalError{task: task.Name, when: task.When, err: err}
 	}
 	if pass {
 		return nil, nil // when:true — task is active, render params normally.
@@ -972,6 +1002,9 @@ func (p *Pipeline) emitStaticWhenSkip(
 	}
 	skip, err := p.staticWhenSkips(in, task, renderHosts, len(in.Hosts), nil)
 	if err != nil {
+		if settlesStaticWhenError(in, task, err) {
+			return false, nil // fails per host where the task renders (renderTaskIter).
+		}
 		return false, err
 	}
 	if skip == nil {

@@ -95,7 +95,11 @@ func (p *Pipeline) renderBlockTask(
 	if roll.overlay {
 		steps = roll.steps
 	}
-	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, includeGroups, guardPilotBlockChild, childTarget, childRecurse, steps)
+	tasks, plans, err := p.walkBlockChildren(ctx, in, blockTask, startIndex, width, includeGroups, guardPilotBlockChild, childTarget, childRecurse, steps)
+	if err == nil && roll.group && in.keeperFlow() {
+		markGroup(tasks, groupRegisters(blockTask))
+	}
+	return tasks, plans, err
 }
 
 // blockRoll is how a scenario block's children dispatch under linear dispatch

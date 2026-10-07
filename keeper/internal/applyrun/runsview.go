@@ -79,7 +79,9 @@ type RunSummary struct {
 // so the failed task's address stays on the unit it failed in.
 //
 // FailedTaskIdx is the LOCAL index of the failed task in the ApplyRequest this row was
-// dispatched with (nil on success/still-running/dispatch-level failure).
+// dispatched with (nil on success/still-running/dispatch-level failure); for a host the
+// Keeper failed before sending it anything (linear dispatch, NIM-943), its position in
+// the slice the host was grouped with.
 // FailedPlanIndex is the GLOBAL end-to-end plan_index of the same task across the
 // entire plan (correlation key with the scenario plan; nil under the same
 // conditions); both hold the row's FIRST failure (recordTaskFailureSQL). ErrorSummary

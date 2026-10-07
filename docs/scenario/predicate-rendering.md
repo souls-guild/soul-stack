@@ -1,12 +1,14 @@
 # Rendering a post-module predicate on the Keeper
 
-> **Status: the rewrite is built, nothing calls it yet.** Specified by the draft ADR
+> **Status: built on the Keeper, behind linear dispatch.** Specified by the draft ADR
 > [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), decision 4.
 > The rewrite and its differential test are `RenderPredicate` in `shared/cel/predicate_render.go`
 > (NIM-928), the parse-time refusals of §3 are in `shared/config`. The rewrite only substitutes
-> (§3); simplifying what the host context alone decides is NIM-970. Dispatch does not render a
-> predicate until NIM-943: today the Soul evaluates `changed_when:`, `failed_when:` and
-> `retry.until:` itself, against the registers it accumulated inside one message.
+> (§3); simplifying what the host context alone decides is NIM-970. A run executing linearly
+> settles its step's flow control on the Keeper (NIM-943, `keeper/internal/render/flow.go`); a staged
+> run — every run until NIM-952 — still sends the predicates as written, and the Soul evaluates
+> them against the registers it accumulated inside one message. The Soul's half of §5 is built
+> (NIM-929); the capability gate is NIM-946.
 
 Under linear dispatch no register crosses the wire (decision 4). `changed_when:`, `failed_when:` and
 `retry.until:` judge the module's result, so they cannot be *decided* before the module runs, but
@@ -29,7 +31,9 @@ author's predicate gives against that host's full context — the same value, or
 original errs. An error is not a failure of the contract: it is carried (§2, **Errors**).
 
 Where the Keeper cannot guarantee the equivalence for a host on which the task would run, that
-host's task fails before dispatch with a named code. Inside a block rolled as one group, where the
+host's task fails before dispatch with a named code — inside a group also where a child's open
+`when:` (§4) or a requisite on a sibling might have skipped it, since the Keeper cannot send what
+it cannot render. Inside a block rolled as one group, where the
 child cannot be dispatched alone, the whole group fails on that host, judged by the child's radius.
 Every task the message would have carried gets a FAILED record, as for a failure tied to no task
 (the ADR's fork 1), except a child the Keeper had already decided to skip there, which gets a
@@ -168,32 +172,32 @@ does. Its `when:` is decided on the Keeper only when nothing in it is open.
 
 ## 5. What has to be built
 
-Each piece is absent today, except the two existing host-invariance guards, which are lifted, and
-the Soul side — text guards, masking, async barriers and the announcement of the capability bit
-— which NIM-929 built.
+The Keeper's two pieces are built for a run executing linearly (NIM-943), and the Soul side — text
+guards, masking, async barriers and the announcement of the capability bit — by NIM-929.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
-  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:582`),
-  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:613`),
-  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:147`)
+  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:653`),
+  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:633`),
+  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:180`)
   ([ADR-draft per-host params dispatch](../adr/draft-per-host-params-dispatch.md)). Flow control is
   the half NIM-908 left refused: a host-variant flow context fails the render
-  (`keeper/internal/render/pipeline.go:713-717`). Every predicate that travels needs the same kind
+  (`keeper/internal/render/pipeline.go:766-770`). Every predicate that travels needs the same kind
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
   (`keeper/internal/scenario/crosspassage.go:145-150`), and each host's slice reaches the wire
-  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:278`). A `when:`
+  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:330`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on
-  the first only.
+  the first only. *Built:* `RenderedTask.FlowBySID`, read by `ToProtoTasksForHost`.
 - **The soulprint guard is lifted for a rendered predicate.** `guardFlowControlHostInvariant`
-  (`keeper/internal/render/pipeline.go:1418-1434`, called at `:449`) refuses a `when:`,
+  (`keeper/internal/render/pipeline.go:1475-1491`, called at `:480`) refuses a `when:`,
   `changed_when:` or `failed_when:` naming `soulprint` on a multi-host target, because today the
   Soul would evaluate it against the first host's snapshot. With `soulprint.self` resolved per host
   on the Keeper, that reason is gone. So is the reason for the second layer NIM-908 kept,
-  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:713-717`): with every `vars` and
+  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:766-770`): with every `vars` and
   `input` reference substituted, no flow context travels for a scenario task to differ per host.
+  *Built:* both are skipped in a linear scenario pass; a destiny's tasks keep them.
 - **The Soul's text guards leave a substituted value alone — built (NIM-929).** They used to match
   `now(`, `vault(` and `generate_secret(` in the raw text, string literals included, and
   `normalize` collapsed whitespace with a literal regex that did not understand an escaped quote, so

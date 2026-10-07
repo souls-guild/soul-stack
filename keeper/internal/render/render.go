@@ -38,6 +38,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -630,6 +631,35 @@ type RenderedTask struct {
 	// held to that (trial L2 refuses a plan carrying this map; push converts per
 	// SID). The invariant is asserted by TestProtoTasks_EveryMultiHostDispatchPathPassesASID.
 	ParamsBySID map[string]*structpb.Struct
+
+	// FlowBySID — the flow control the Keeper settled for this task on each target
+	// host, under linear dispatch and only for the step being dispatched (draft ADR
+	// NIM-907, decision 4; [HostFlow]). nil — the predicates travel as written, with
+	// FlowContext, and the Soul evaluates them: staged dispatch, a destiny task, an
+	// earlier step's task re-rendered. When set, [ToProtoTasksForHost] sends this
+	// host's predicates and no flow_context, and the dispatcher reads Skip and
+	// Failure before anything is sent.
+	FlowBySID map[string]HostFlow
+
+	// Grouped — a descendant of a block rolled as one group (linear dispatch): its
+	// siblings travel in the same message and can read its register there, so a host
+	// that skips it is still sent it, as `when: false`, and the Soul records the skip
+	// where they can see it.
+	Grouped bool
+
+	// flowContextBySID — each target host's flow_context, kept for [Pipeline.settleFlow]
+	// to evaluate the predicates against: the snapshot a Soul would have been sent.
+	flowContextBySID map[string]*structpb.Struct
+	// flowSeal — the task's secret sources, to tell whether a predicate that failed to
+	// evaluate may have quoted a secret in its error.
+	flowSeal cel.SealSources
+	// flowFailure — a static `when:` that failed to evaluate: host-invariant, so the
+	// task fails on every host it targets.
+	flowFailure *FlowFailure
+	// groupRegisters — inside a group, the register names of the whole group: they
+	// stay open in this task's predicates, because the Soul accumulates them inside
+	// the message.
+	groupRegisters []string
 }
 
 // RenderedOp — one `core.state.<verb>` capture after the Keeper-side CEL render

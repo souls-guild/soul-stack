@@ -24,7 +24,9 @@ import (
 // changed_when/failed_when to the next). FlowContext is a per-host snapshot of
 // the non-register CEL context. Until/RetryCount/RetryDelay are the DSL retry
 // core (destiny/tasks.md §9), the retry loop is enforced Soul-side
-// (applyrunner.runTaskWithRetry); until is a CEL string as-is.
+// (applyrunner.runTaskWithRetry); until is a CEL string as-is. Under linear
+// dispatch the four predicates are what the Keeper settled for the host
+// ([flowForHost]).
 //
 // The single render→proto converter: both the scenario-orchestrator
 // (dispatch) and trial-L2 (l2_run) call it, so adding a RenderedTask field
@@ -50,7 +52,9 @@ import (
 // With an empty sid this converter CANNOT express a per-host value — it answers
 // with [RenderedTask.Params] and [RenderedTask.RenderContextBySID] is not consulted
 // — so a plan carrying [RenderedTask.ParamsBySID] would be flattened onto the first
-// host by SID for everyone, which is the defect NIM-908 removes. Callers are held
+// host by SID for everyone, which is the defect NIM-908 removes; one carrying
+// [RenderedTask.FlowBySID] would send the author's predicates with the first host's
+// flow_context, reading registers no host has under linear dispatch. Callers are held
 // to it: pushorch converts per SID inside its fan-out, and trial L2 refuses such a
 // plan outright (it has one stand and cannot honour it). A new caller is caught by
 // TestProtoTasks_EveryMultiHostDispatchPathPassesASID.
@@ -67,7 +71,7 @@ func ToProtoTasks(tasks []*RenderedTask) []*keeperv1.RenderedTask {
 // dispatch per host does not need to ask — it simply passes its SID.
 func PlanIsPerHost(tasks []*RenderedTask) bool {
 	for _, t := range tasks {
-		if t != nil && len(t.ParamsBySID) > 0 {
+		if t != nil && (len(t.ParamsBySID) > 0 || len(t.FlowBySID) > 0) {
 			return true
 		}
 	}
@@ -93,6 +97,7 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 	globalToLocal := localIndexMap(tasks)
 	out := make([]*keeperv1.RenderedTask, 0, len(tasks))
 	for _, t := range tasks {
+		flow := flowForHost(t, sid)
 		out = append(out, &keeperv1.RenderedTask{
 			Name:         t.Name,
 			Module:       t.Module,
@@ -118,12 +123,12 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 			Async:       t.Async,
 			RequireIdx:  remapRequisites(t.RequireIdx, globalToLocal),
 			RequireAll:  t.RequireAll,
-			When:        t.When,
-			ChangedWhen: t.ChangedWhen,
-			FailedWhen:  t.FailedWhen,
-			FlowContext: t.FlowContext,
+			When:        flow.when,
+			ChangedWhen: flow.changedWhen,
+			FailedWhen:  flow.failedWhen,
+			FlowContext: flow.context,
 			Register:    t.Register,
-			Until:       t.Until,
+			Until:       flow.until,
 			RetryCount:  int32(t.RetryCount),
 			RetryDelay:  t.RetryDelay,
 			// PlanIndex is the task's global index (across all Passages), the
@@ -135,6 +140,34 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 	}
 	return out
 }
+
+// wireFlow is the flow-control half of one task's wire form for one host.
+type wireFlow struct {
+	when, changedWhen, failedWhen, until string
+	context                              *structpb.Struct
+}
+
+// flowForHost picks what a host is sent for a task's flow control: the author's
+// predicates with flow_context when the Soul evaluates them, or what the Keeper
+// settled for THIS host ([RenderedTask.FlowBySID]) and no flow_context — every
+// reference is substituted, so the snapshot has no reader left. A skipped task sent
+// at all is a grouped child, and it travels as `when: false` with nothing else to
+// evaluate. A host whose task failed before dispatch is never converted: the
+// dispatcher closes it first.
+func flowForHost(t *RenderedTask, sid string) wireFlow {
+	hf, ok := t.FlowBySID[sid]
+	if sid == "" || !ok {
+		return wireFlow{when: t.When, changedWhen: t.ChangedWhen, failedWhen: t.FailedWhen, until: t.Until, context: t.FlowContext}
+	}
+	if hf.Skip {
+		return wireFlow{when: skippedWhen}
+	}
+	return wireFlow{when: hf.When, changedWhen: hf.ChangedWhen, failedWhen: hf.FailedWhen, until: hf.Until}
+}
+
+// skippedWhen is the `when:` a grouped child carries to a host the Keeper decided it
+// skips there (draft ADR NIM-907, decision 4).
+const skippedWhen = "false"
 
 // paramsForHost returns a task's wire params for a specific sid. Golden path
 // (sid=="" / no per-host render_context for this SID) → t.Params as-is.

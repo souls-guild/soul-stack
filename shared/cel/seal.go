@@ -217,6 +217,12 @@ func (e *Engine) DetectSealed(raw string, sources SealSources) bool {
 	return false
 }
 
+// PredicateReadsSecret is [Engine.DetectSealed] for a whole-string predicate
+// (`when:`, `failed_when:`), which carries no `${ … }` wrapper.
+func (e *Engine) PredicateReadsSecret(expr string, sources SealSources) bool {
+	return e.exprReadsSecret(expr, sources)
+}
+
 // exprReadsSecret parses one CEL expression (without the `${ }` wrapper) without
 // macros and returns true if anywhere in the tree it reads a secret source per
 // sources.
