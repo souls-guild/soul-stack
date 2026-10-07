@@ -22,19 +22,74 @@ type TxBeginner interface {
 
 var _ TxBeginner = (*pgxpool.Pool)(nil)
 
+// PresenceChecker answers which SIDs have an agent holding a live EventStream —
+// the Redis SID-lease, the same source the onboarding barrier polls.
+type PresenceChecker interface {
+	SoulsStreamAlive(ctx context.Context, sids []string) (map[string]struct{}, error)
+}
+
 // IssuerPG implements Issuer over the Keeper identity registries.
 type IssuerPG struct {
 	Pool TxBeginner
 	TTL  time.Duration
+	// Presence decides whether a host holding an identity is passed through
+	// (NIM-886). nil fails closed the moment a batch holds such a host.
+	Presence PresenceChecker
 }
 
-// NewIssuerPG wires the public issued-state to Keeper Postgres. A non-positive
-// TTL falls back to the canonical bootstrap-token TTL.
-func NewIssuerPG(pool TxBeginner, ttl time.Duration) *IssuerPG {
+// NewIssuerPG wires the public issued-state to Keeper Postgres and to the
+// presence lease. A non-positive TTL falls back to the canonical bootstrap-token
+// TTL.
+func NewIssuerPG(pool TxBeginner, presence PresenceChecker, ttl time.Duration) *IssuerPG {
 	if ttl <= 0 {
 		ttl = bootstraptoken.DefaultTokenTTL
 	}
-	return &IssuerPG{Pool: pool, TTL: ttl}
+	return &IssuerPG{Pool: pool, TTL: ttl, Presence: presence}
+}
+
+// presenceReadTimeout bounds the lease read, which runs while the batch holds
+// FOR UPDATE on every Soul row in it: a Redis that hangs must not hold a
+// concurrent Bootstrap of those hosts for the client's whole retry budget.
+const presenceReadTimeout = 5 * time.Second
+
+// NoAgentHost is one host [NoAgentError] refuses: what the registry holds for
+// it. LastSeenAt nil means no stream on record.
+type NoAgentHost struct {
+	SID        string
+	Status     string
+	LastSeenAt *time.Time
+}
+
+// NoAgentError refuses a batch holding hosts that own an identity in the
+// registry while no agent is connected with it (NIM-886). Passing such a host
+// through as onboarded is what made a machine re-created under a known SID skip
+// its install, report success, and fail fifteen minutes later at the barrier:
+// the registry cannot tell a re-created machine from a stopped agent, and only
+// a live stream proves the identity is still held. Every such host that reaches
+// the check is named at once, so a re-created group is repaired in one pass.
+//
+// Which way out applies is the operator's to know, and the wrong one costs: a
+// host forgotten while its disk still holds the seed cannot onboard again, as
+// the install's seed guard skips `soul init` and the agent presents a seed the
+// Keeper no longer has.
+type NoAgentError struct {
+	Hosts []NoAgentHost
+}
+
+func (e *NoAgentError) Error() string {
+	parts := make([]string, 0, len(e.Hosts))
+	for _, h := range e.Hosts {
+		seen := "no stream on record"
+		if h.LastSeenAt != nil {
+			seen = "last stream on record " + h.LastSeenAt.UTC().Format(time.RFC3339)
+		}
+		parts = append(parts, fmt.Sprintf("%q (status %s, %s)", h.SID, h.Status, seen))
+	}
+	return fmt.Sprintf("%d host(s) hold an identity in the registry but no agent is connected with it: %s. "+
+		"If a machine was re-created under the same SID it cannot use that identity: forget the record "+
+		"(DELETE /v1/souls/{sid}) and repeat the run. If it is the same machine, bring its agent up and repeat — "+
+		"forgetting a host whose disk still holds its seed leaves it unable to onboard",
+		len(e.Hosts), strings.Join(parts, ", "))
 }
 
 const insertPendingSoulSQL = `
@@ -45,7 +100,7 @@ ON CONFLICT (sid) DO NOTHING
 `
 
 const selectSoulForIssueSQL = `
-SELECT transport, status
+SELECT transport, status, last_seen_at
 FROM souls
 WHERE sid = $1
 FOR UPDATE
@@ -94,7 +149,9 @@ WHERE sid = $1
 //     invalidate any unused token (expired or not), then issue a fresh
 //     default-TTL token;
 //   - connected/disconnected agent SID that is this run's own: passed through
-//     untouched and tokenless, [IssuedHost.Onboarded] (NIM-780);
+//     untouched and tokenless, [IssuedHost.Onboarded] (NIM-780) — but only while
+//     an agent holds a live stream with it; otherwise the batch is refused with
+//     [NoAgentError] (NIM-886);
 //   - connected/disconnected held by another incarnation, revoked/destroyed, or
 //     transport=ssh: fail closed.
 //
@@ -131,12 +188,19 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationNam
 	}()
 
 	out := make([]IssuedHost, 0, len(sids))
+	var onboarded []NoAgentHost
 	for _, sid := range sids {
 		host, err := i.issueOne(ctx, tx, sid, incarnationName, reissue)
 		if err != nil {
 			return nil, &SIDIssueError{SID: sid, Err: err}
 		}
+		if host.Onboarded {
+			onboarded = append(onboarded, host.registered)
+		}
 		out = append(out, host)
+	}
+	if err := i.requireLiveAgents(ctx, onboarded); err != nil {
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
@@ -144,6 +208,38 @@ func (i *IssuerPG) IssueBatch(ctx context.Context, sids []string, incarnationNam
 	}
 	committed = true
 	return out, nil
+}
+
+// requireLiveAgents is the second half of the onboarded arm: an identity in the
+// registry is not enough to be passed through, an agent has to hold it now. It
+// runs before COMMIT, so a refusal rolls back every write the batch made.
+func (i *IssuerPG) requireLiveAgents(ctx context.Context, hosts []NoAgentHost) error {
+	if len(hosts) == 0 {
+		return nil
+	}
+	if i.Presence == nil {
+		return fmt.Errorf("bootstrap issuer: %d host(s) hold an identity, and with no presence checker configured nothing can tell whether their agents are connected", len(hosts))
+	}
+	sids := make([]string, len(hosts))
+	for k, h := range hosts {
+		sids[k] = h.SID
+	}
+	pctx, cancel := context.WithTimeout(ctx, presenceReadTimeout)
+	defer cancel()
+	alive, err := i.Presence.SoulsStreamAlive(pctx, sids)
+	if err != nil {
+		return fmt.Errorf("bootstrap issuer: check agent presence: %w", err)
+	}
+	var absent []NoAgentHost
+	for _, h := range hosts {
+		if _, ok := alive[h.SID]; !ok {
+			absent = append(absent, h)
+		}
+	}
+	if len(absent) > 0 {
+		return &NoAgentError{Hosts: absent}
+	}
+	return nil
 }
 
 func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName string, reissue bool) (IssuedHost, error) {
@@ -157,7 +253,8 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 	created := tag.RowsAffected() == 1
 
 	var transport, status string
-	if err := tx.QueryRow(ctx, selectSoulForIssueSQL, sid).Scan(&transport, &status); err != nil {
+	var lastSeenAt *time.Time
+	if err := tx.QueryRow(ctx, selectSoulForIssueSQL, sid).Scan(&transport, &status, &lastSeenAt); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return IssuedHost{}, fmt.Errorf("Soul disappeared while locking it")
 		}
@@ -240,6 +337,9 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 		// capability and this host has a seed to authenticate with), and no
 		// pending refresh — re-arming a live host would wipe its presence and
 		// expose it to the Reaper's pending sweep while its stream is up.
+		//
+		// Owned is not yet passed through: [IssuerPG.requireLiveAgents] still asks
+		// whether an agent holds this identity now, once for the whole batch.
 		owned, oerr := keepersoul.OwnedByRun(ctx, tx, sid, incarnationName)
 		if oerr != nil {
 			return IssuedHost{}, oerr
@@ -261,7 +361,11 @@ func (i *IssuerPG) issueOne(ctx context.Context, tx pgx.Tx, sid, incarnationName
 			}
 			return IssuedHost{}, fmt.Errorf("Soul is already onboarded (status %q, active seed %t) and is not this run's own (%s); refusing identity takeover", status, hasActiveSeed, owner)
 		}
-		return IssuedHost{SID: sid, Onboarded: true}, nil
+		return IssuedHost{
+			SID:        sid,
+			Onboarded:  true,
+			registered: NoAgentHost{SID: sid, Status: status, LastSeenAt: lastSeenAt},
+		}, nil
 	default:
 		return IssuedHost{}, fmt.Errorf("Soul status %q is not eligible for bootstrap issuance", status)
 	}

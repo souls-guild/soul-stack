@@ -500,8 +500,9 @@ func TestVaultMemo_DifferentFieldsSameSecretOneCall(t *testing.T) {
 	}
 }
 
-// Different render passes do NOT share the cache: each pass with its own memo-ctx →
-// a separate backend call. Pins per-pass scope (no cross-request leak/stale).
+// Separately bound memos do NOT share the cache: two runs, or two renders outside a
+// run, each with their own memo-ctx → a separate backend call each. No cross-request
+// leak/stale.
 func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 	kv := newCountingKV(map[string]map[string]any{
 		"secret/redis/admin": {"password": "s3cr3t"},
@@ -521,6 +522,141 @@ func TestVaultMemo_SeparatePassesDoNotShareCache(t *testing.T) {
 	// 3 passes × dedup within a pass = 3 backend calls (not 1, not 6).
 	if got := kv.calls("secret/redis/admin"); got != 3 {
 		t.Fatalf("backend calls = %d, want 3 (one per pass, cache not shared)", got)
+	}
+}
+
+// ★ Re-binding keeps the memo already on ctx (NIM-934). A run binds one memo and every
+// Render of the run binds again on top of it; a re-bind that started a fresh cache
+// would turn the run's memo back into a per-pass one, and a secret gone mid-run would
+// fail the run again.
+func TestVaultMemo_RebindKeepsTheBoundMemo(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/redis/admin": {"password": "s3cr3t"},
+	})
+	e := newVaultEngine(t, kv)
+
+	run := WithVaultMemo(context.Background())
+	const expr = "${ vault('secret/redis/admin#password') }"
+	for pass := 0; pass < 3; pass++ {
+		if _, err := e.EvalInterpolation(expr, Vars{Ctx: WithVaultMemo(run)}); err != nil {
+			t.Fatalf("pass #%d: %v", pass, err)
+		}
+	}
+	if got := kv.calls("secret/redis/admin"); got != 1 {
+		t.Fatalf("backend calls = %d, want 1 (every pass re-binds onto the run's memo)", got)
+	}
+}
+
+// ForgetVaultReads drops exactly the entries its predicate matches: the forgotten
+// secret is read again, a neighbour stays served from the memo.
+func TestVaultMemo_ForgetDropsOnlyTheMatchingSecret(t *testing.T) {
+	kv := newCountingKV(map[string]map[string]any{
+		"secret/app/creds":  {"password": "old"},
+		"/secret/app/creds": {"password": "old"},
+		"secret/app/other":  {"token": "keep"},
+	})
+	ctx := WithVaultMemo(context.Background())
+	for _, p := range []string{"secret/app/creds", "/secret/app/creds", "secret/app/other"} {
+		if _, err := ReadKVMemoized(ctx, kv, p); err != nil {
+			t.Fatalf("prime %s: %v", p, err)
+		}
+	}
+
+	var asked []string
+	ForgetVaultReads(ctx, func(body string) bool {
+		asked = append(asked, body)
+		return strings.TrimPrefix(body, "/") == "secret/app/creds"
+	})
+	if len(asked) != 3 {
+		t.Fatalf("predicate saw %v, want every memoized body", asked)
+	}
+
+	kv.secrets["secret/app/creds"] = map[string]any{"password": "new"}
+	kv.secrets["/secret/app/creds"] = map[string]any{"password": "new"}
+	for _, p := range []string{"secret/app/creds", "/secret/app/creds"} {
+		got, err := ReadKVMemoized(ctx, kv, p)
+		if err != nil {
+			t.Fatalf("re-read %s: %v", p, err)
+		}
+		if got["password"] != "new" {
+			t.Errorf("%s after forget = %v, want the value written after the read", p, got["password"])
+		}
+		if n := kv.calls(p); n != 2 {
+			t.Errorf("%s backend calls = %d, want 2 (forgotten → read again)", p, n)
+		}
+	}
+	if _, err := ReadKVMemoized(ctx, kv, "secret/app/other"); err != nil {
+		t.Fatalf("re-read other: %v", err)
+	}
+	if n := kv.calls("secret/app/other"); n != 1 {
+		t.Errorf("secret/app/other backend calls = %d, want 1 (not matched → still memoized)", n)
+	}
+}
+
+// Forgetting on a ctx without a memo (the API, the Reaper) is a no-op, not a panic.
+func TestVaultMemo_ForgetWithoutMemoIsNoop(t *testing.T) {
+	called := false
+	ForgetVaultReads(context.Background(), func(string) bool { called = true; return true })
+	if called {
+		t.Fatal("predicate consulted without a memo on ctx")
+	}
+}
+
+// blockingKV parks the first ReadKV of a path until release is closed, returning the
+// value it held when the read STARTED — a read that was in flight while a write landed.
+type blockingKV struct {
+	mu      sync.Mutex
+	value   map[string]any
+	calls   int
+	started chan struct{}
+	release chan struct{}
+}
+
+func (b *blockingKV) ReadKV(_ context.Context, _ string) (map[string]any, error) {
+	b.mu.Lock()
+	b.calls++
+	first := b.calls == 1
+	v := b.value
+	b.mu.Unlock()
+	if first {
+		close(b.started)
+		<-b.release
+	}
+	return v, nil
+}
+
+// ★ A read in flight when a forget happens must not be stored: it may have fetched the
+// value from before the write, and storing it would hand that stale value to every
+// later pass of the run — the failure invalidation exists to prevent.
+func TestVaultMemo_ReadInFlightAcrossAForgetIsNotStored(t *testing.T) {
+	kv := &blockingKV{
+		value:   map[string]any{"password": "before-write"},
+		started: make(chan struct{}),
+		release: make(chan struct{}),
+	}
+	ctx := WithVaultMemo(context.Background())
+
+	done := make(chan map[string]any)
+	go func() {
+		got, _ := ReadKVMemoized(ctx, kv, "secret/app/creds")
+		done <- got
+	}()
+	<-kv.started
+	kv.mu.Lock()
+	kv.value = map[string]any{"password": "after-write"}
+	kv.mu.Unlock()
+	ForgetVaultReads(ctx, func(string) bool { return true })
+	close(kv.release)
+	if got := <-done; got["password"] != "before-write" {
+		t.Fatalf("in-flight read returned %v, want what it fetched", got["password"])
+	}
+
+	got, err := ReadKVMemoized(ctx, kv, "secret/app/creds")
+	if err != nil {
+		t.Fatalf("read after the forget: %v", err)
+	}
+	if got["password"] != "after-write" {
+		t.Fatalf("read after the forget = %v, want after-write: the in-flight read was memoized across the forget", got["password"])
 	}
 }
 

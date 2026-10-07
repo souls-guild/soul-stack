@@ -260,7 +260,10 @@ func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingSe
 		if !barrier.satisfied {
 			// B1-strict: quota shortfall at timeout — failed (fail-stop run,
 			// state not committed — error_locked).
-			msg := barrierTimeoutMessage(sids, awaitCfg, barrier)
+			// Detached: when the run's end stopped the wait, its context is done,
+			// and the facts that name the cause are wanted most exactly then.
+			msg := barrierTimeoutMessage(sids, awaitCfg, barrier) +
+				m.notOnlineFacts(context.WithoutCancel(ctx), barrier.pending, barrier.startedAt)
 			return util.SendFailed(stream, msg)
 		}
 	}

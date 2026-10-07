@@ -31,6 +31,7 @@ import (
 
 	vaultapi "github.com/hashicorp/vault/api"
 
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -433,6 +434,14 @@ func (c *Client) ReadKV(ctx context.Context, path string) (_ map[string]any, err
 //
 // SECURITY: secret field values (including the private key) never end up in error
 // text — only the path (the secret's name, not its contents).
+//
+// A write drops the reads of that secret memoized on ctx ([cel.ForgetVaultReads]). A
+// scenario run memoizes its reads for the whole run, and a keeper-side step writes
+// mid-run — `core.state.*` mints, `core.vault.kv-present` generates, `core.cert.issued`
+// stores the material — so a later pass must read what the step wrote. Here rather than
+// in each step because every writer comes through this method; a ctx with no memo (the
+// API, the Reaper) makes it a no-op. Dropped on failure too: a write that errored may
+// still have landed.
 func (c *Client) WriteKV(ctx context.Context, path string, data map[string]any) (err error) {
 	rel, err := c.relativeKVPath(path)
 	if err != nil {
@@ -441,6 +450,10 @@ func (c *Client) WriteKV(ctx context.Context, path string, data map[string]any) 
 	if len(data) == 0 {
 		return fmt.Errorf("vault: empty data for KV write %q", path)
 	}
+	defer cel.ForgetVaultReads(ctx, func(body string) bool {
+		r, rerr := c.relativeKVPath(body)
+		return rerr == nil && sameKVEntry(r, rel)
+	})
 
 	// keeper_vault_*-metrics: write round-trip latency + error counter.
 	// The label is mount-only (not the path-with-secret), like ObserveRead. nil metrics
@@ -464,6 +477,15 @@ func (c *Client) WriteKV(ctx context.Context, path string, data map[string]any) 
 		return err
 	}
 	return nil
+}
+
+// sameKVEntry compares two mount-relative paths the way a forget must: relativeKVPath
+// keeps doubled and leading `/`, and whether `a//b` reaches the same entry as `a/b` is
+// up to the HTTP layer and Vault, so both are treated as one. Over-matching costs one
+// extra read; under-matching hands a later pass the value from before the write.
+func sameKVEntry(a, b string) bool {
+	clean := func(p string) string { return strings.TrimPrefix(path.Clean("/"+p), "/") }
+	return clean(a) == clean(b)
 }
 
 // ListKV lists secret names under prefix at the KV v2 metadata path
