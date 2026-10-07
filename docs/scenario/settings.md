@@ -6,9 +6,9 @@
 > below the scenario, `settings:` where it may not be written, an unknown key — and the §2.3
 > warning are enforced by the one validator in `shared/config` (the Keeper refuses what `soul-lint`
 > refuses); `config.MergeSettings` merges two levels key by key, and render applies it so far only
-> from a block to its children. **Not yet:** rule 4's
-> warning and §3.1's refusal (NIM-940), and every behaviour the keys describe — the barrier, the
-> timeouts, `serial_scope` (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
+> from a block to its children. Since NIM-940 §3.1's two refusals are enforced the same way and
+> `soul-lint` gives rule 4's warning. **Not yet:** every behaviour the keys describe — the
+> barrier, the timeouts, `serial_scope` (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
 > `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
 > 2026-10-01 unless marked **open**.
 
@@ -93,7 +93,7 @@ defines it.
 | `soul_timeout` | task | duration | `1m` | How long a lost agent stream may stay lost before the host fails *for unavailability*. |
 | `task_timeout` | task | duration, `0` | `0` = no limit | How long one task may execute. A task's own `timeout:` is shorthand for it — §2.3. |
 | `scenario_timeout` | run | duration | `24h` | How long the whole run may take. |
-| `serial_scope` | block | `task` \| `block` | `task` | What one `serial:` wave carries on a block: one task — each child is its own step — or the whole block, rolled as one group (§3.1). It decides whether the block is one step with one barrier or its children are steps, each with its own, so it is read from the block's own merged settings, not from a barrier owner — and only on a block that has `serial:`, its own or inherited; anywhere else unused, not an error. |
+| `serial_scope` | block | `task` \| `block` | `task` | What one `serial:` wave carries on a block: one task — each child is its own step — or the whole block, rolled as one group (§3.1). It decides whether the block is one step with one barrier or its children are steps, each with its own, so it is read from the block's own merged settings, not from a barrier owner — and only on a block that has `serial:`, its own or inherited; anywhere else unused, not an error, except that a line written on a task with `serial:` or above it answers §3.1's transition refusal. |
 
 ### 2.1 `on_failure` and `tolerate` — the Ansible model
 
@@ -201,7 +201,8 @@ every task beneath it.
 4. **A barrier-kind key on a block's child depends on how the block rolls** (ADR fork 3). In a
    **default** block each child is its own step with its own barrier, so the key is read like
    anywhere else. In a block **rolled as one group** the children share one message and one barrier,
-   so a child's barrier-kind key — and its `serial:` — is not read, and `soul-lint` warns.
+   so a child's barrier-kind key — and its `serial:` — is not read, and `soul-lint` warns
+   `group_child_key_unread`, for a descendant at any depth.
 5. **A run-kind key below the scenario level is refused** (`settings_run_key_below_scenario`), with a
    hint to the task-kind equivalent: `scenario_timeout: 1h` on a task would read as a bound on that
    task and bound nothing. A `task_timeout` larger than the run's `scenario_timeout` is legal — both
@@ -262,14 +263,35 @@ stops the roll at two hosts. With `task`, the default, `upgrade` reaches all ten
 `serial:` a canary.
 
 **The default was kept after this evidence** (user, 2026-10-01; the ADR's fork 3):
-`examples/service/dragonfly/scenario/restart/main.yml:104-132` is this canary written as a plain block
-with `serial: 1`, and under the default it would restart every replica before checking any. It gets
-`serial_scope: block` in the change that switches the default, and every block with `serial:` — its
+`examples/service/dragonfly/scenario/restart/main.yml:105-135` is this canary; it was a plain block
+with `serial: 1`, and under the default it would restart every replica before checking any, so it
+writes `serial_scope: block` since NIM-940, ahead of the switch. Every block with `serial:` — its
 own or inherited — and two or more host-dispatched tasks beneath it, counted through nested blocks on the list after
 `include:` expansion, must take its
 `serial_scope` from a line the author wrote — on the block or on any level above it, either value.
 Otherwise the shared validator refuses it, so the Keeper does too, not only `soul-lint`: service
-repositories are not linted.
+repositories are not linted. The code is `serial_scope_implicit`, reported once, at the outermost
+such block; a line written there settles every block beneath it.
+
+**The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:636-647`),
+so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
+written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
+shares a derived Passage with another host step — in either order — must also take its
+`serial_scope` from a line the author wrote, on the task, above it or in the scenario's `settings:`,
+either value: neither stretches a wave over the next task. Otherwise it is refused as
+`serial_scope_implicit_across_tasks`. Keeper-side tasks share no wave and are not counted, so a
+`serial:` task followed by `core.state.<verb>` captures (`long-runner/scenario/serial_waves`) passes.
+A block without `serial:` is an overlay whatever its `serial_scope`, so its children are counted as
+steps of their own; a module or applier child's own `serial:` is not read inside a block today, so it
+carries none, and neither does a block with `serial:` whose host tasks all sit in nested blocks without
+one — today's render gives them no width (`keeper/internal/render/block.go`, `renderBlockTask`). The rule reads the derivation, so it goes when the derivation goes, after the service
+repositories are audited. The canary of the dragonfly example trips it as well: "Restart the current
+master last" (`restart/main.yml:142`) shares the replicas' Passage, so today it restarts in its SID's
+place among the width-1 waves — its `serial_scope: block` answers both refusals.
+
+Both refusals run on the plan the author wrote, after `include:` expansion: the Keeper checks before it
+synthesizes `core.module.installed` steps from `modules[]`, which `soul-lint` never sees.
 
 ## 4. How a barrier judges failures
 
@@ -340,6 +362,13 @@ scenario saying so.
 - **A task that restarts its own agent or host** (§2.3) — its result never arrives.
 - **`soul_timeout` for a push host**, which holds no stream (§2.2).
 
+- **A group's nested `serial:` is only warned about** (NIM-940). Inside a block rolled as one group,
+  a nested block's own `serial:` narrows today's derived wave (a nested block enters the Passage's
+  minimum width) and is not read under linear dispatch, so the wave widens. Rule 4 makes that a
+  `soul-lint` warning, `group_child_key_unread`; the Keeper accepts the file. A group exists only
+  where an author wrote `serial_scope: block`, which no scenario predating NIM-927 can carry, so the
+  change is never inherited unnoticed — but an unlinted repository gets no word of it. Whether it
+  becomes a refusal is open.
 - **A per-machine `soul_timeout`.** A machine-level value was mentioned before the scenario-level one
   was chosen. A scenario-level value covers the case that motivates it — a scenario that reboots hosts
   needs a longer one — so a machine layer is left for later.

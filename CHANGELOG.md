@@ -259,6 +259,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **A `serial:` whose meaning linear dispatch changes must say which meaning it wants (NIM-940,
+  [settings.md §3.1](docs/scenario/settings.md)).** Two refusals in the shared validator, so the
+  Keeper's run path refuses what `soul-lint` refuses: **`serial_scope_implicit`** — a block reached
+  by `serial:` (its own or an enclosing block's) over two or more host tasks; and
+  **`serial_scope_implicit_across_tasks`** — a `serial:` sharing a Passage of today's derived plan
+  with another host step, in either order, keeper-side tasks not counted. Both are silenced by a
+  `serial_scope` the author wrote, either value, on the task, a level above it or the scenario's
+  `settings:`. `soul-lint` also warns **`group_child_key_unread`** for a `serial:` or barrier-kind
+  setting on a descendant of a block rolled as one group. `dragonfly/scenario/restart` writes
+  `serial_scope: block`; contrary to the ADR draft, it also tripped the across-tasks rule — its
+  "restart the master last" step shares the replicas' Passage and today restarts in its SID's
+  place among the width-1 waves.
+
 - **`core.ssh.apply` — a destiny applied over SSH to hosts a list names, not the registry (NIM-905,
   [ADR-draft ssh-apply-unregistered-hosts](docs/adr/draft-ssh-apply-unregistered-hosts.md)).** A bare
   VM could not be given a destiny: the push branch is picked by the host's own `souls.transport`,
@@ -1099,6 +1112,15 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   resolves the set once and both rights read it.
 
 ### Upgrade notes
+
+- **A `serial:` whose meaning linear dispatch changes is refused on the Keeper's run path**
+  (`NIM-940`): a block reached by `serial:` over two or more host tasks with no written
+  `serial_scope` (`serial_scope_implicit`), and a `serial:` sharing a derived Passage with another
+  host step (`serial_scope_implicit_across_tasks`). Service repositories are not linted, so such a
+  scenario error-locks its incarnation at run start. Run `soul-lint validate-service-tree <dir>` over
+  every service repository **before** upgrading — `validate-service` checks only `service.yml` — and write `settings: {serial_scope: block}` (a canary) or
+  `task` (independent steps) where it is refused — a Keeper older than NIM-927 refuses `settings:`
+  itself, so the two cannot be mixed in one repository revision.
 
 - **A `coven=`-scoped `errand.run` or `soul.console` becomes live over that
   coven's hosts** (`NIM-650`) without a role edit — it was inert before. Review

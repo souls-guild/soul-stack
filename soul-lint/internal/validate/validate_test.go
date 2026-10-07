@@ -129,6 +129,34 @@ func TestGolden_ScenarioSettingsTimeoutShadowed(t *testing.T) {
 		[]string{"timeout_shadowed_by_task_timeout"})
 }
 
+// A group's child writing serial: lints clean with a warning: the group has one
+// width, its own (settings.md §3 rule 4). The two serial_scope refusals are the
+// `scenario-broken/scenario-serial-scope-*` fixtures.
+func TestGolden_ScenarioSerialScopeGroupChild(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/serial-scope-group-child.yml", KindScenario, false, ExitOK,
+		[]string{"group_child_key_unread"})
+}
+
+// The tree's own serial: examples, linted where they live. serial_waves is a
+// serial host task followed by keeper-side captures, which share no wave with it;
+// dragonfly/restart is the canary that writes serial_scope: block.
+func TestGolden_SerialExamplesWriteOrNeedNoSerialScope(t *testing.T) {
+	for _, p := range []string{
+		"../../../examples/service/long-runner/scenario/serial_waves/main.yml",
+		"../../../examples/service/dragonfly/scenario/restart/main.yml",
+	} {
+		t.Run(p, func(t *testing.T) {
+			var out, errOut bytes.Buffer
+			if code := Run(Options{Path: p, Kind: KindScenario}, &out, &errOut); code != ExitOK {
+				t.Fatalf("exit code %d, want %d\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
+			}
+			if strings.Contains(out.String(), "serial_scope") {
+				t.Fatalf("a serial_scope diagnostic on a tree example:\n%s", out.String())
+			}
+		})
+	}
+}
+
 // TestGolden_ScenarioCoreServedWithoutSchema — the half of NIM-888 that must stay
 // green: `core.augur` and `core.cert` are served and ship no schema document, so
 // they lint clean with an unchecked hint. The refused half is the

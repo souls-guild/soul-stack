@@ -116,6 +116,7 @@ tasks:
   - name: Rolling-restart replicas one at a time
     where: register.redis_role.stdout == 'slave'
     serial: 1
+    settings: { serial_scope: block }
     block:
       - name: Restart redis-server
         module: core.service.restarted

@@ -146,6 +146,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 		return out
 	}
 
+	out = withFile(config.ImplicitSerialScope(m.Settings, tasks), scenarioPath, out)
+
 	// Wide match is a WARN, and unlike everything below it does NOT return: the
 	// wide form is legitimate ("clear every user"), it is just far more often a
 	// predicate the author meant to narrow. Emitted here, before the ordering
@@ -189,6 +191,8 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 	// serial×passage is implemented — each Passage runs its own serial waves at
 	// its own per-Passage width. Stratification yields a plain passage_plan HINT
 	// (below).
+
+	out = withFile(config.ImplicitSerialScopeAcrossTasks(m.Settings, tasks, plan), scenarioPath, out)
 
 	// A within-block register dependency is an ERROR (ADR-056, §"Risks —
 	// silent-wrong-target"). A block: child reading the register of a sibling
@@ -277,6 +281,16 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 		Message: passagePlanSummary(plan),
 	})
 
+	return out
+}
+
+// withFile appends ds to out, addressed to the linted file: a check over the flat
+// plan has no coordinates left to give.
+func withFile(ds []diag.Diagnostic, file string, out []diag.Diagnostic) []diag.Diagnostic {
+	for _, d := range ds {
+		d.File = file
+		out = append(out, d)
+	}
 	return out
 }
 

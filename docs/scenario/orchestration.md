@@ -267,7 +267,13 @@ waves - strictly sequential.
 - **Apply to** module-, applier- and `block:`-task. On `block:`-task
 the wave rolls **the entire block** (all its internal steps) one at a time
 recruiting hosts before moving on to the next wave is an idiom
-"wave = {change, check health}" (see §5).
+"wave = {change, check health}" (see §5). The idiom writes
+`settings: {serial_scope: block}` on the block: under linear dispatch a block
+is an overlay by default, so the shared validator refuses a block reached by
+`serial:` over two or more host tasks that does not write its `serial_scope`
+(`serial_scope_implicit`), and a `serial:` sharing a Passage with another host
+step without one (`serial_scope_implicit_across_tasks`) —
+[settings.md §3.1](settings.md).
 - **Falling in a wave (fail-stop, invariant).** First host, finally-failed
 after the inherited `retry:` is exhausted, stops rolling:
 subsequent waves will not start. Direct consequence of absolute fail-closed

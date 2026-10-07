@@ -198,7 +198,9 @@ incarnation all three are **absent**.
   untouched (re-added from service vars);
 - **[`restart`](scenario/restart/main.yml)** - rolling-restart with no config change. Each
   host's role is taken from a live probe (`redis.instance.role-probed`), replicas one at a time
-  (`serial: 1`), master last. Only the DragonFly data plane restarts (`core.service.restarted`
+  (`serial: 1`, `serial_scope: block`: restart and resync check travel in one wave), master last
+  once linear dispatch is on — until then the master step shares the replicas' Passage and restarts
+  in its SID's place among the waves. Only the DragonFly data plane restarts (`core.service.restarted`
   of the `dragonfly` unit); the sentinel daemon is untouched;
 - **[`rotate_tls`](scenario/rotate_tls/main.yml)** - cert/key/CA rotation without a restart. The
   destiny re-renders the PEMs from the new Vault refs -> three `CONFIG SET` calls -

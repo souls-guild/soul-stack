@@ -596,10 +596,20 @@ host-dispatched tasks count: a keeper-side task cannot go into a block (`block_o
 `long-runner/scenario/serial_waves` — has nothing to regroup and does not trigger it.
 Not a plain refusal: `{change, check}` is textually indistinguishable from two genuinely independent
 tasks, so the author must be able to say which they meant. **Its trigger is a transition rule**: it
-fires where ADR-056's derivation — kept for this check alone — would put a top-level host task
-carrying `serial:` in one Passage with a later host task, which is exactly the set of scenarios
-whose meaning changes, and it goes when the derivation goes, after the service repositories are
-audited. No example in this tree triggers it. **And it must ship before linear
+fires where ADR-056's derivation — kept for this check alone — would put a host step carrying
+`serial:` in one Passage with another host step, **in either order**, and it goes when the
+derivation goes, after the service repositories are audited. *Decided (user, 2026-10-06, NIM-940):*
+an earlier revision said "with a later host task", which misses half the set — today one wave loop
+carries the whole Passage at its narrowest width (`keeper/internal/scenario/dispatch.go:636-647`),
+so a step without `serial:` written *before* one with it rolls too, and stops rolling under this
+ADR. The opt-out is the block rule's: a `serial_scope` the author wrote, either value, on the task,
+above it or in the scenario's `settings:` — neither value stretches a wave over the next task, so a
+canary is still spelled with a block. The codes are `serial_scope_implicit_across_tasks` here and
+`serial_scope_implicit` for the block (fork 3), and `soul-lint` warns `group_child_key_unread`
+(item 13). An earlier revision also said no example in this tree triggers it; `dragonfly/scenario/restart`
+does — "Restart the current master last" shares the replicas' Passage, so today it restarts in its
+SID's place among the width-1 waves rather than last — and its `serial_scope: block` answers both
+refusals ([settings.md §3.1](../scenario/settings.md)). **And it must ship before linear
 dispatch is turned on, not in a later slice** — the meaning changes in S1, so a diagnostic that arrives in S2 is
 a window of silent regression. The audit of existing scenarios belongs in the same window.
 
@@ -779,8 +789,8 @@ carries — one task, or the whole block. It lives in `settings:`, so a scenario
 every block; it is read only on a block that has `serial:`, and anywhere else it is unused, not an
 error ([settings.md §2](../scenario/settings.md)).
 
-**Re-confirmed after review round 7's evidence (user, 2026-10-01).** The tree's own canary is a plain
-block: `examples/service/dragonfly/scenario/restart/main.yml:104-132` puts "restart dragonfly" and
+**Re-confirmed after review round 7's evidence (user, 2026-10-01).** The tree's own canary was a plain
+block: `examples/service/dragonfly/scenario/restart/main.yml:105-135` puts "restart dragonfly" and
 "wait until the replica has resynced with master" in one block under `serial: 1`, so that rolling
 does not move to the next replica until the current one has caught up. Under this default, without
 `serial_scope: block`, the same file restarts every replica, one at a time, and only then checks any
@@ -788,7 +798,8 @@ of them. The user kept the default anyway: a block is first of all a way to grou
 Ansible, where a block's tasks run one after another across the hosts — the canary is what
 `serial_scope: block` is for. What ships with that answer:
 
-- **The dragonfly example gets `serial_scope: block`** in the change that switches the default.
+- **The dragonfly example gets `serial_scope: block`** — written by NIM-940, ahead of the switch,
+  together with the refusal below.
 - **A refusal with an explicit opt-out** on every block that has `serial:` — its own or inherited —
   and two or more host-dispatched tasks beneath it, counted through nested blocks on the list after `include:`
   expansion, where the flat checks already run (`shared/config/include_expand.go:163-166`): its
@@ -854,11 +865,12 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
 6. **The canary diagnostics and the scenario audit ship before linear dispatch is enabled**, not in a
    later slice: the one for top-level `{change, check}` pairs (§Consequences) and the one for a block
    with `serial:` that does not write its mode out (fork 3). The audit also lists every keeper task
-   written after a host task (decision 3). The fixtures with a block under `serial:` migrate with
-   them: the `soul-lint` fixture named in fork 3, the inline YAML at
-   `shared/config/passage_test.go:116-118`, and `TestDispatch_BlockSerialWave`
-   (`keeper/internal/scenario/block_serial_test.go:13-16`), which asserts the whole-block wave the
-   new default flips.
+   written after a host task (decision 3). *Shipped in NIM-940:* `serial_scope_implicit_across_tasks`
+   and `serial_scope_implicit`, with the audit as a comment on epic NIM-926. The fixtures with a
+   block under `serial:` migrated with them: the `soul-lint` fixture named in fork 3, the inline YAML
+   at `shared/config/passage_test.go:116-119`, and `TestDispatch_BlockSerialWave`
+   (`keeper/internal/scenario/block_serial_test.go:13-19`), which asserts the whole-block wave and so
+   now writes `serial_scope: block`.
 7. **The Acolyte path.** **Decided (user, 2026-10-02): restoring work-queue dispatch for linear runs
    blocks enabling linear dispatch**, rather than following later: the default radius ends a whole
    fleet's run mid-flight, and the wall clock grows T-fold, so the chance of a run being alive across

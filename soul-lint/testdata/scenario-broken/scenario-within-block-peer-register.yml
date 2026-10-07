@@ -2,6 +2,10 @@ name: within-block-peer-register
 tasks:
   - name: Rolling restart group
     serial: 1
+    # A group: a default block makes each child its own step, where reading a
+    # sibling's register is legal.
+    settings:
+      serial_scope: block
     block:
       # probe inside the block -- peer register is unavailable at render (a block
       # is atomic, the probe has not run yet, when/where/params resolve

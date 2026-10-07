@@ -15,7 +15,8 @@ import (
 // host's ApplyRequest carries ALL of the block's children (groupByHost), and
 // wave width = 1 → 3 waves of 1 (splitWaves). This "whole block, one wave"
 // behavior is emergent (same SerialWidth+TargetSIDs on every child), no
-// contract change needed.
+// contract change needed. Under linear dispatch it is the group mode only, so the
+// block says serial_scope: block (settings.md §3.1).
 func TestDispatch_BlockSerialWave(t *testing.T) {
 	engine, err := cel.New()
 	if err != nil {
@@ -26,9 +27,11 @@ func TestDispatch_BlockSerialWave(t *testing.T) {
 	mod := func(name, module string) config.Task {
 		return config.Task{Name: name, Module: &config.ModuleTask{Module: module, Params: map[string]any{}}}
 	}
+	groupScope := config.SerialScopeBlock
 	task := config.Task{
-		Name:   "rolling-restart",
-		Serial: 1,
+		Name:     "rolling-restart",
+		Serial:   1,
+		Settings: &config.ScenarioSettings{SerialScope: &groupScope},
 		Block: &config.BlockTask{Block: []config.Task{
 			mod("Restart redis-server", "core.service.restarted"),
 			mod("Wait until healthy", "core.exec.run"),

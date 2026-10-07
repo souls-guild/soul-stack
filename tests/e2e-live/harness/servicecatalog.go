@@ -102,7 +102,7 @@ func serviceCatalog() []externalService {
 		{
 			alias:  "redis",
 			url:    "https://github.com/soul-stack-services/redis.git",
-			commit: "b89c062d5f6ad71e458be752b52f70dc955ca5f2",
+			commit: "c18a07fbec14b5823339d82bdfbcf99834e43baa",
 			why: "a live service being created and then operated: create_from_souls " +
 				"(roster-at-create, ADR-0081) and add_user (an advanced scenario through the plugin channel)",
 		},

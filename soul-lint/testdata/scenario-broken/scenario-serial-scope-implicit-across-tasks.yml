@@ -1,0 +1,14 @@
+name: serial-scope-implicit-across-tasks
+tasks:
+  # {change, check} under serial: share one wave loop today; under linear
+  # dispatch the change rolls over every host before the check starts.
+  - name: Upgrade redis
+    module: core.pkg.installed
+    serial: 2
+    params:
+      name: redis
+  - name: Check redis answers
+    module: core.exec.run
+    params:
+      cmd: redis-cli
+      args: ["ping"]

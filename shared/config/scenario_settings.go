@@ -138,6 +138,7 @@ type settingKey struct {
 	// the scenario level.
 	instead string
 	decode  func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic
+	written func(s ScenarioSettings) bool
 }
 
 // settingKeys is the whole schema of `settings:`. A new key declares its kind here,
@@ -147,32 +148,32 @@ var settingKeys = []settingKey{
 		var d []diag.Diagnostic
 		s.OnFailure, d = settingEnum(v, path, OnFailureScenario, OnFailureHost)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.OnFailure != nil }},
 	{name: "tolerate", kind: settingBarrier, decode: func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic {
 		var d []diag.Diagnostic
 		s.Tolerate, d = settingTolerate(v, path)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.Tolerate != nil }},
 	{name: "soul_timeout", kind: settingTask, decode: func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic {
 		var d []diag.Diagnostic
 		s.SoulTimeout, d = settingDuration(v, path, false)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.SoulTimeout != nil }},
 	{name: "task_timeout", kind: settingTask, decode: func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic {
 		var d []diag.Diagnostic
 		s.TaskTimeout, d = settingDuration(v, path, true)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.TaskTimeout != nil }},
 	{name: "scenario_timeout", kind: settingRun, instead: "task_timeout", decode: func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic {
 		var d []diag.Diagnostic
 		s.ScenarioTimeout, d = settingDuration(v, path, false)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.ScenarioTimeout != nil }},
 	{name: "serial_scope", kind: settingBlock, decode: func(v ast.Node, path string, s *ScenarioSettings) []diag.Diagnostic {
 		var d []diag.Diagnostic
 		s.SerialScope, d = settingEnum(v, path, SerialScopeTask, SerialScopeBlock)
 		return d
-	}},
+	}, written: func(s ScenarioSettings) bool { return s.SerialScope != nil }},
 }
 
 func lookupSettingKey(name string) (settingKey, bool) {

@@ -1,0 +1,16 @@
+name: serial-scope-implicit
+tasks:
+  # A canary written the way it was before linear dispatch: under the default
+  # overlay each child would roll over every host before the next one starts.
+  - name: Upgrade then check, two hosts at a time
+    serial: 2
+    block:
+      - name: Upgrade redis
+        module: core.pkg.installed
+        params:
+          name: redis
+      - name: Check redis answers
+        module: core.exec.run
+        params:
+          cmd: redis-cli
+          args: ["ping"]

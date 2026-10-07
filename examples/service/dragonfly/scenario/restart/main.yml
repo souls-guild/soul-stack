@@ -97,13 +97,16 @@ tasks:
       username: "${ compute.admin_user }"
       password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
 
-  # Rolling-restart replicas one host at a time (serial: 1). serial: on a block: rolls the whole
-  # block over one set of hosts before the next wave (orchestration.md §2, Variant A:
-  # a wave = {change, check health}). block.where (slave) is inherited by both children
+  # Rolling-restart replicas one host at a time (serial: 1). serial_scope: block rolls the whole
+  # block over one set of hosts before the next wave (settings.md §3.1, the canary:
+  # a wave = {change, check health}); without it each child would roll over every replica
+  # before the next one starts. block.where (slave) is inherited by both children
   # — they render ONLY on replicas, master isn't touched in this wave.
   - name: Rolling-restart replicas one at a time
     where: register.df_role.role == 'slave'
     serial: 1
+    settings:
+      serial_scope: block
     block:
       # Restart DragonFly's data plane (the `dragonfly` systemd unit). The sentinel daemon
       # (redis-sentinel) is NOT touched — it's a separate process.
@@ -131,7 +134,9 @@ tasks:
           username: "${ compute.admin_user }"
           password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
 
-  # Restart master AFTER all replicas (the rolling invariant "master last"). run_once: —
+  # Restart master AFTER all replicas (the rolling invariant "master last"). Until linear dispatch
+  # (NIM-907) is on, this step shares the replicas' Passage and restarts in its SID's place among
+  # the width-1 waves, so "last" holds only for a master whose SID sorts last. run_once: —
   # exactly one host (first by SID) from resolving on:+where: (orchestration.md §2). >1 "current
   # master" per probe is normal for sentinel-multi (rare), the step runs on one deterministic host per run.
   - name: Restart the current master last
