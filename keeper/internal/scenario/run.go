@@ -40,6 +40,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// paths below (secrets never land in PG — see maskedInputSnapshot).
 	spec.inputSnapshot = maskedInputSnapshot(spec.Input)
 
+	// Decided here, once, and held for the whole run (draft ADR NIM-907, item 15):
+	// every later choice between the two models reads spec.executionModel.
+	spec.executionModel = r.executionModel()
+
 	// In-process span for the whole scenario run. incarnation/scenario name are
 	// trace attributes for filtering (can't be metric labels — cardinality,
 	// ADR-024 §2.2); carry no secrets. apply_id correlates with RunResult/
@@ -49,6 +53,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			attribute.String("incarnation", spec.IncarnationName),
 			attribute.String("scenario", spec.ScenarioName),
 			attribute.String("apply_id", spec.ApplyID),
+			attribute.String("execution_model", string(spec.executionModel)),
 		),
 	)
 
@@ -404,7 +409,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// resolves declares, and the capability set its plan requires — and stamps it
 	// onto the state it produces. Pure recording; the gates that reject on those
 	// same facts already ran above and per-Passage below.
-	prov := newRunProvenance(r.deps.KeeperVersion, serviceCompatEntity(art), destinyRes)
+	prov := newRunProvenance(r.deps.KeeperVersion, spec.executionModel, serviceCompatEntity(art), destinyRes)
 
 	// 4.9. Stratify the run by register dependency (staged-render, ADR-056 §b) —
 	//      BEFORE the first Render: a task reading register.X in
@@ -418,10 +423,23 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//      TaskPassage/ActivePassage=0 — otherwise it would eagerly render a
 	//      future Passage's register-dependent where against an empty register
 	//      and fail (the original drift).
-	passage, perr := render.Stratify(scn.Tasks)
-	if perr != nil {
-		abort("render_failed", fmt.Errorf("scenario: passage stratification %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
-		return
+	//
+	//      Linear dispatch numbers the plan in steps instead — from the plan
+	//      alone, no register graph — and keeps the step shape for render: a
+	//      default block's children are steps of their own.
+	var (
+		passage render.Passage
+		steps   []config.StepNode
+	)
+	if spec.executionModel == ExecutionLinear {
+		passage, steps = config.LinearPassage(scn.Tasks, scn.Settings)
+	} else {
+		var perr error
+		passage, perr = render.Stratify(scn.Tasks)
+		if perr != nil {
+			abort("render_failed", fmt.Errorf("scenario: passage stratification %s/%s: %w", spec.IncarnationName, spec.ScenarioName, perr))
+			return
+		}
 	}
 	staged := passage.Count > 1
 
@@ -445,7 +463,18 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//       silently select hosts by a stale/external register. soul-lint must
 	//       catch this offline; here it's a runtime safety net (reject, not
 	//       silent-wrong-target).
-	if info, bad := config.WithinBlockRegisterDependency(scn.Tasks); bad {
+	//
+	//       Under linear dispatch only a block rolled as one group is atomic: a
+	//       default block's children are steps, and a later child reads an
+	//       earlier one's register like any later step (ADR item 12).
+	if spec.executionModel == ExecutionLinear {
+		if info, bad := config.WithinGroupRegisterDependency(scn.Tasks, scn.Settings); bad {
+			abort(config.CodeWithinBlockRegisterDependency, fmt.Errorf(
+				"scenario %s/%s: task %q inside a block rolled as one group (serial_scope: block) reads register %q, emitted by sibling %q of the SAME group - the group travels as one message, so the register exists only Soul-side after the sibling ran, while where/params resolve Keeper-side BEFORE dispatch; move the reader or the probe out of the group",
+				spec.IncarnationName, spec.ScenarioName, info.ReaderName, info.RegisterName, info.EmitterName))
+			return
+		}
+	} else if info, bad := config.WithinBlockRegisterDependency(scn.Tasks); bad {
 		abort(config.CodeWithinBlockRegisterDependency, fmt.Errorf(
 			"scenario %s/%s: task %q inside block: reads register %q, emitted by sibling %q of the SAME block - impossible at render (block is atomic, peer-register is available only Soul-side AFTER probe, while where/when/params resolve Keeper-side BEFORE dispatch); move the probe to top-level (different Passage)",
 			spec.IncarnationName, spec.ScenarioName, info.ReaderName, info.RegisterName, info.EmitterName))
@@ -551,6 +580,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		renderIn.TaskPassage = passage.TaskPassage
 		renderIn.ActivePassage = 0
 	}
+	if steps != nil {
+		// Set on a one-step linear run as well: how a block rolls — a child's own
+		// serial:, one width for a group — is the model's, not the step count's.
+		renderIn.Steps = steps
+		renderIn.HeldTargets = render.NewHeldTargets()
+	}
 
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
@@ -598,7 +633,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// stay in the run-goroutine in Phase 1). The run's terminal is recorded
 	// strictly AFTER the LAST Passage's barrier — once, not per-wave or
 	// per-Passage (ADR-056 §d).
-	if r.acolyteEnabled && !hasSerialTask(scn) && !staged {
+	//   - a linear run → OLD path, one step included, until NIM-961: the
+	//     claim-time render knows neither the model nor the step shape, and
+	//     without them it AND-s a default block's where: into each child, which
+	//     can choose other hosts than the run's own render did.
+	if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear {
 		// Acolyte path — non-staged (Acolyte excludes staged): all keeper tasks
 		// are in Passage 0, step-5 render (ActivePassage=0) already fully
 		// rendered them. Run them BEFORE the host tasks' planned fan-out —
@@ -1598,6 +1637,11 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	}
 	if spec.VoyageID != nil {
 		payload["voyage_id"] = *spec.VoyageID
+	}
+	// The one record of the model a FAILED run executed in: engine_compat is
+	// stamped on the successful commit only.
+	if spec.executionModel != "" {
+		payload["execution_model"] = string(spec.executionModel)
 	}
 
 	ev := &audit.Event{

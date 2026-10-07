@@ -918,7 +918,9 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     projection (`keeper/internal/applyrun/runsview.go:60-62`), in `soulctl incarnation`
     (`soulctl/internal/cmd/incarnation.go:302`) and in the companion web UI.
 12. **Keep `within_block_register_dependency` for a block rolled as a group** — a default block no
-    longer needs it — and establish whether a destiny has an equivalent.
+    longer needs it — and establish whether a destiny has an equivalent. *Narrowed (NIM-942)* for
+    a run executing linearly; a staged run still refuses it on every block, and `soul-lint`, which
+    knows no execution model, still refuses it on every block too.
     If not, add one or state the gap in [docs/known-limitations.md](../known-limitations.md).
     *Established (NIM-939):* it had none. The destiny pass renders against an empty `register`
     root, so there is no stale-value path and a plain read fails at render — but `soul-lint`
@@ -940,6 +942,13 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
       `serial:` rolls as a canary or across the whole fleet at once depending on which Keeper picked
       the run up. The execution model must be **pinned to the run** at its start and recorded, not
       read from whichever instance is serving.
+      *Pinned (NIM-942):* `execution_model: staged | linear` is decided once at the top of the run
+      and recorded in `engine_compat` on success and in the `incarnation.run_completed` payload on
+      success and on a failure terminal (user, 2026-10-06) — not for a destroy run, which emits
+      neither, nor by an instance that lost the terminal to another; `staged` stays the default
+      until NIM-952. It lives in the run goroutine, which is enough for the inline path only — an
+      instance that claims work-queue rows has no way to read it, and that belongs to NIM-961.
+      Until then a linear run stays inline, one step included.
     - **Rollback:** a cross-task `when:` is legal in the new model and an older Keeper refuses it
       (FC-5) — loudly, which is acceptable, but it means a scenario authored after the change cannot
       run on a rolled-back Keeper. What goes *silent* on rollback is the order: an older Keeper runs

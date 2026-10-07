@@ -30,17 +30,19 @@ import (
 // the only place that renders and the only place that commits state.
 type runProvenance struct {
 	keeperVersion string
+	model         ExecutionModel
 	service       config.CompatEntity
 	destiny       *destinyResolver
 	caps          map[string]struct{}
 }
 
-// newRunProvenance starts accumulating for a run rendered by keeperVersion
-// against the given service entity. destiny may be nil (a run with no destiny
-// source resolves none).
-func newRunProvenance(keeperVersion string, service config.CompatEntity, destiny *destinyResolver) *runProvenance {
+// newRunProvenance starts accumulating for a run rendered by keeperVersion in
+// model against the given service entity. destiny may be nil (a run with no
+// destiny source resolves none).
+func newRunProvenance(keeperVersion string, model ExecutionModel, service config.CompatEntity, destiny *destinyResolver) *runProvenance {
 	return &runProvenance{
 		keeperVersion: keeperVersion,
+		model:         model,
 		service:       service,
 		destiny:       destiny,
 		caps:          make(map[string]struct{}),
@@ -89,6 +91,7 @@ func (p *runProvenance) stamp() *incarnation.EngineCompat {
 		KeeperWindow:     window,
 		WindowEnforced:   window.Declared() && comparable,
 		SoulCapabilities: caps,
+		ExecutionModel:   string(p.model),
 	}
 	if out.IsZero() {
 		return nil

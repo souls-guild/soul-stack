@@ -36,13 +36,17 @@ type EngineCompat struct {
 	// question is what the state needed from the estate, and the per-host
 	// answer is the apply_runs rows of the same run.
 	SoulCapabilities []string `json:"soul_capabilities,omitempty"`
+
+	// ExecutionModel — how the run ordered its tasks: `staged` (ADR-056) or
+	// `linear` (draft ADR NIM-907, item 15), decided once at the run's start.
+	ExecutionModel string `json:"execution_model,omitempty"`
 }
 
-// IsZero reports whether the stamp carries nothing worth writing. A run that
-// rendered always carries at least a keeper version, so this only fires on
-// paths with no engine facts at all (unit wiring), where writing an empty
-// object would replace a real earlier stamp with noise.
+// IsZero reports whether the stamp carries nothing worth writing — a stamp nobody
+// filled, where an empty object would replace a real earlier one with noise. A run
+// always records its execution model, so a stamp from a run is never zero, a
+// unit-wired one without a keeper version included.
 func (e *EngineCompat) IsZero() bool {
 	return e == nil ||
-		(e.KeeperVersion == "" && e.KeeperWindow == nil && !e.WindowEnforced && len(e.SoulCapabilities) == 0)
+		(e.KeeperVersion == "" && e.KeeperWindow == nil && !e.WindowEnforced && len(e.SoulCapabilities) == 0 && e.ExecutionModel == "")
 }

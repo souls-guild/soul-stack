@@ -278,6 +278,24 @@ type RenderInput struct {
 	// before, bit-for-bit).
 	ActivePassage int
 
+	// Steps — linear dispatch only (draft ADR NIM-907, §`passage`): one node per
+	// top-level task, as [config.LinearPassage] numbered the plan. A default
+	// block's children then each carry their own Passage, are each a placeholder
+	// until their step, take the block's `serial:` as a default they may override,
+	// and keep the hosts the block resolved at its first step ([HeldTargets]); a
+	// block rolled as one group is one step at one width. nil — staged dispatch
+	// (ADR-056), where a block is one Passage unit. Gating still keys on
+	// TaskPassage: Steps without it renders every task, with a default block's
+	// children stamped with their steps and every top-level task with 0 — the run
+	// leaves TaskPassage unset only for a one-step plan, where both are 0. Must
+	// come from the same task list as Scenario.Tasks, or Render refuses it.
+	Steps []config.StepNode
+
+	// HeldTargets — the hosts each default block resolved at its first step, for
+	// its later ones (linear dispatch). One per run, shared by its passes like
+	// Sealed. nil — a block's hosts are resolved again on every pass.
+	HeldTargets *HeldTargets
+
 	// Sealed — accumulator of sealed paths for the render run (seal /
 	// sealed-paths, [ADR-010] §7.4). Render marks the path of any params cell
 	// whose RAW `${ … }` value reads a secret source (secret-input/vault()/
@@ -411,7 +429,8 @@ type RenderedTask struct {
 	// waits for terminal rows (apply_id, sid, passage=N). 0 = the only Passage
 	// (N=1 / non-staged) — bit-for-bit as before staged-render.
 	// apply:destiny/loop descendants inherit the parent's Passage (block is an
-	// atomic Passage unit, ADR-056).
+	// atomic Passage unit, ADR-056). Under linear dispatch it is the step index
+	// (RenderInput.Steps), and a default block's child carries its own.
 	Passage int
 	// ID — stable task address from the DSL core `id:` (config.Task.ID, T1): an
 	// alternative to register for addressing a task without capturing a

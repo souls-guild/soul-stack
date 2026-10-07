@@ -1002,14 +1002,16 @@ func (p *Pipeline) renderDestinyBlock(
 	// The roster is inherited by the block WHOLESALE: a destiny block carries
 	// no on/where (rejected by the guard) — children apply to the same hosts
 	// as the block.
-	childTarget := func(_ config.Task) ([]*topology.HostFacts, error) {
+	childTarget := func(_ int, _ config.Task) ([]*topology.HostFacts, error) {
 		return targeted, nil
 	}
 	// nested block → recurse into the same destiny layer (cascading inheritance).
-	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+	childRecurse := func(_ int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
 		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width, includeGroups)
 	}
-	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, includeGroups, guardDestinyBlockChild, childTarget, childRecurse)
+	// No steps: a destiny is one step whole (draft ADR NIM-907, decision 6), so its
+	// blocks render in the applier's pass at the applier's width under either model.
+	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, includeGroups, guardDestinyBlockChild, childTarget, childRecurse, nil)
 }
 
 // guardDestinyBlockChild is the key boundary for a destiny block (render

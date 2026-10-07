@@ -108,6 +108,29 @@ func TestListedHostRender_TasksIncarnationAndSecrets(t *testing.T) {
 	}
 }
 
+// The synthetic render renders a destiny block whole, whatever model the calling
+// run executes in (NIM-942, item 7): it carries no TaskPassage and no Steps, so
+// nothing in it is gated, and a destiny is one step under either model.
+func TestListedHostRender_DestinyBlockRendersWhole(t *testing.T) {
+	pair := config.Task{Name: "pair", Block: &config.BlockTask{Block: []config.Task{
+		{Name: "first", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "first"}}},
+		{Name: "second", Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "second"}}},
+	}}}
+	rd, err := renderListedHostDestiny(context.Background(), listedPipeline(t), listedHostResolver{installDestiny(pair)}, listedMeta, nil, nil,
+		"soul", "vm-1.example", map[string]any{"note": "hello", "bootstrap_token": listedToken})
+	if err != nil {
+		t.Fatalf("render: %v", err)
+	}
+	if len(rd.Tasks) != 4 {
+		t.Fatalf("tasks = %d, want 4", len(rd.Tasks))
+	}
+	for _, task := range rd.Tasks {
+		if task.GetParams() == nil {
+			t.Errorf("task %q has no params, want it rendered", task.GetName())
+		}
+	}
+}
+
 // A listed host has no Soulprint: a destiny reading a fact fails the render,
 // naming it, rather than rendering an empty value.
 func TestListedHostRender_NoSoulprintFacts(t *testing.T) {

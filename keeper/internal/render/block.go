@@ -54,6 +54,9 @@ import (
 // register/requisites via walkBlockChildren. This keeps register of a static-false
 // block's descendants visible from outside (flat-register-scope is invariant under
 // static-skip — the loopStaticSkip pattern).
+//
+// roll is the block's mode under linear dispatch; the zero value is staged
+// dispatch, exactly as above.
 func (p *Pipeline) renderBlockTask(
 	ctx context.Context,
 	in RenderInput,
@@ -61,20 +64,110 @@ func (p *Pipeline) renderBlockTask(
 	startIndex int,
 	targeted []*topology.HostFacts,
 	includeGroups includeGroupCache,
+	roll blockRoll,
 ) ([]*RenderedTask, []DispatchPlan, error) {
+	if roll.overlay && len(roll.steps) != len(blockTask.Block.Block) {
+		return nil, nil, fmt.Errorf("render: block %q: the step shape has %d nodes for %d children - it was built from another plan", blockTask.Name, len(roll.steps), len(blockTask.Block.Block))
+	}
 	width := serialWidth(blockTask.Serial, len(targeted))
+	if roll.group {
+		width = roll.width
+	}
 
 	// childTarget: a descendant resolves its own on:/where:/run_once: against the
 	// block's hosts (scenario orchestration inside a block is allowed —
-	// orchestration.md §2.2.2); the block NARROWS the descendant's roster.
-	childTarget := func(child config.Task) ([]*topology.HostFacts, error) {
-		return p.blockChildTargets(in, child, targeted)
+	// orchestration.md §2.2.2); the block NARROWS the descendant's roster. A nested
+	// default block under linear dispatch holds what it resolved at its first step.
+	childTarget := func(pos int, child config.Task) ([]*topology.HostFacts, error) {
+		resolve := func() ([]*topology.HostFacts, error) {
+			return p.blockChildTargets(in, child, targeted)
+		}
+		if roll.overlay && child.Block != nil && !roll.steps[pos].Group {
+			return holdTargets(in, config.StepPath(roll.path, pos), resolve)
+		}
+		return resolve()
 	}
 	// childRecurse: a nested block → recursion into the same renderBlockTask.
-	childRecurse := func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		return p.renderBlockTask(ctx, in, child, idx, childTargeted, includeGroups)
+	childRecurse := func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
+		return p.renderBlockTask(ctx, in, child, idx, childTargeted, includeGroups, roll.nested(pos, child, childTargeted, width))
 	}
-	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, includeGroups, guardPilotBlockChild, childTarget, childRecurse)
+	var steps []config.StepNode
+	if roll.overlay {
+		steps = roll.steps
+	}
+	return p.walkBlockChildren(ctx, in, blockTask, startIndex, width, includeGroups, guardPilotBlockChild, childTarget, childRecurse, steps)
+}
+
+// blockRoll is how a scenario block's children dispatch under linear dispatch
+// (RenderInput.Steps). The zero value is staged dispatch (ADR-056): every child
+// renders in the block's pass at the block's width, a nested block at its own.
+type blockRoll struct {
+	// overlay — a default block: each child is a step of its own (steps holds one
+	// node per child), and the block's hosts are held under path.
+	overlay bool
+	steps   []config.StepNode
+	path    string
+	// group — a block rolled as one group, or a block inside one: one step, and
+	// every descendant rolls at width; a descendant's own `serial:` is not read.
+	group bool
+	width int
+}
+
+// nested is the roll of the nested block at child position pos. child carries the
+// serial it inherited, and targeted is what it resolved to.
+func (r blockRoll) nested(pos int, child config.Task, targeted []*topology.HostFacts, width int) blockRoll {
+	switch {
+	case r.group:
+		return blockRoll{group: true, width: width}
+	case r.overlay && r.steps[pos].Group:
+		return blockRoll{group: true, width: serialWidth(child.Serial, len(targeted))}
+	case r.overlay:
+		return blockRoll{overlay: true, steps: r.steps[pos].Children, path: config.StepPath(r.path, pos)}
+	}
+	return blockRoll{}
+}
+
+// HeldTargets keeps each default block's hosts from the pass that rendered its
+// first step (linear dispatch, draft ADR NIM-907 fork 3). Re-resolved at each
+// child's step, a `where:` reading a register an earlier child changed, or a
+// `run_once:` over a changed host set, would send the children to different
+// hosts. Keyed by the block's plan position ([config.StepPath]). Not safe for
+// concurrent use: a run renders its passes one after another.
+type HeldTargets struct {
+	sids map[string][]string
+}
+
+// NewHeldTargets returns an empty set for one run.
+func NewHeldTargets() *HeldTargets {
+	return &HeldTargets{sids: map[string][]string{}}
+}
+
+// holdTargets returns a default block's hosts: resolved by the first pass that
+// renders the block, the same hosts on every later one. A held host that has left
+// the roster since is dropped, not brought back.
+func holdTargets(in RenderInput, key string, resolve func() ([]*topology.HostFacts, error)) ([]*topology.HostFacts, error) {
+	if in.HeldTargets == nil {
+		return resolve()
+	}
+	if sids, ok := in.HeldTargets.sids[key]; ok {
+		bySID := make(map[string]*topology.HostFacts, len(in.Hosts))
+		for _, h := range in.Hosts {
+			bySID[h.SID] = h
+		}
+		out := make([]*topology.HostFacts, 0, len(sids))
+		for _, sid := range sids {
+			if h, ok := bySID[sid]; ok {
+				out = append(out, h)
+			}
+		}
+		return out, nil
+	}
+	hosts, err := resolve()
+	if err != nil {
+		return nil, err
+	}
+	in.HeldTargets.sids[key] = sidsOf(hosts)
+	return hosts, nil
 }
 
 // blockChildGuard — checks a block descendant's kind before rendering. The
@@ -88,13 +181,13 @@ type blockChildGuard func(child config.Task, idx int, blockName string) error
 // blockChildTargeter resolves a block descendant's roster. The scenario layer
 // narrows the roster by the descendant's on:/where:/run_once:; the destiny layer
 // inherits the block's roster WHOLESALE (block in destiny carries no orchestration
-// — rejected by the guard).
-type blockChildTargeter func(child config.Task) ([]*topology.HostFacts, error)
+// — rejected by the guard). pos is the child's position in the block.
+type blockChildTargeter func(pos int, child config.Task) ([]*topology.HostFacts, error)
 
 // blockChildRecurser renders a NESTED block descendant (child.Block != nil). Each
 // layer supplies its own recursion (renderBlockTask / renderDestinyBlock) so
 // cascading inheritance doesn't drift between layers.
-type blockChildRecurser func(child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
+type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error)
 
 // walkBlockChildren — the SINGLE traversal of a block's descendants for both
 // layers (scenario and destiny). Source of truth for descendant processing order,
@@ -105,6 +198,8 @@ type blockChildRecurser func(child config.Task, idx int, childTargeted []*topolo
 //	→ keepIncludeGroup(child)                 — conditional-include group-drop
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
+//	→ futurePlaceholder(child)                — linear dispatch, a default block's
+//	                                            child whose step is still ahead
 //	→ render: nested block (recurse) / apply / module
 //	→ stampTransport(child)                   — the descendant's effective transport
 //	                                            onto the plans it just produced
@@ -129,6 +224,14 @@ type blockChildRecurser func(child config.Task, idx int, childTargeted []*topolo
 // let it through (the destiny guard rejects apply on a descendant — nested apply
 // in destiny is forbidden, guardDestinyTask); so the child.Apply branch is only
 // reachable in the scenario layer.
+//
+// steps — a default block under linear dispatch only (scenario layer), one node
+// per child: each child is then its own step. Its output is stamped with that
+// step (a nested default block stamps its own children), it is a placeholder
+// while its step is still ahead — decided before its targets, so a `where:`
+// reading an earlier sibling's register is never evaluated early — and it rolls
+// at its own `serial:`, the block's being only its default. nil — every child
+// renders in this pass at width, as one Passage unit.
 func (p *Pipeline) walkBlockChildren(
 	ctx context.Context,
 	in RenderInput,
@@ -139,12 +242,19 @@ func (p *Pipeline) walkBlockChildren(
 	guard blockChildGuard,
 	target blockChildTargeter,
 	recurse blockChildRecurser,
+	steps []config.StepNode,
 ) ([]*RenderedTask, []DispatchPlan, error) {
 	tasks := make([]*RenderedTask, 0, len(blockTask.Block.Block))
 	plans := make([]DispatchPlan, 0, len(blockTask.Block.Block))
 	idx := startIndex
 	for i := range blockTask.Block.Block {
 		child := mergeBlockInheritance(blockTask, blockTask.Block.Block[i])
+		var step *config.StepNode
+		if steps != nil {
+			step = &steps[i]
+			child = linearOverlayChild(blockTask, blockTask.Block.Block[i], child)
+		}
+		childStart := len(tasks)
 
 		// Conditional-include group-drop of a child spliced by a within-block
 		// include — BEFORE the static-when skip, as in the top-level loops. A
@@ -165,6 +275,9 @@ func (p *Pipeline) walkBlockChildren(
 		if skipped, serr := p.emitStaticWhenSkip(ctx, in, child, &tasks, &plans, &idx); serr != nil {
 			return nil, nil, serr
 		} else if skipped {
+			if step != nil {
+				stampPassage(tasks, childStart, step.Step)
+			}
 			continue
 		}
 
@@ -172,29 +285,43 @@ func (p *Pipeline) walkBlockChildren(
 			return nil, nil, gerr
 		}
 
+		if step != nil && in.TaskPassage != nil && step.Step > in.ActivePassage {
+			tasks = append(tasks, futurePlaceholder(child, idx, step.Step))
+			plans = append(plans, DispatchPlan{TaskIndex: idx})
+			idx++
+			continue
+		}
+
 		// Nested block: recursion — cascading inheritance (the outer predicate is
 		// already merged into child via mergeBlockInheritance, now child passes it
-		// down to its own descendants). serial is NOT inherited into child
-		// (mergeBlockInheritance doesn't touch it): a nested block without serial:
-		// rides its own width (0 = one wave).
+		// down to its own descendants). Under staged dispatch serial is NOT
+		// inherited into child (mergeBlockInheritance doesn't touch it): a nested
+		// block without serial: rides its own width (0 = one wave).
 		if child.Block != nil {
-			childTargeted, terr := target(child)
+			childTargeted, terr := target(i, child)
 			if terr != nil {
 				return nil, nil, terr
 			}
-			bt, bp, berr := recurse(child, idx, childTargeted)
+			bt, bp, berr := recurse(i, child, idx, childTargeted)
 			if berr != nil {
 				return nil, nil, berr
 			}
 			tasks = append(tasks, bt...)
 			plans = append(plans, bp...)
 			idx += len(bt)
+			if step != nil && step.Children == nil {
+				stampPassage(tasks, childStart, step.Step)
+			}
 			continue
 		}
 
-		childTargeted, terr := target(child)
+		childTargeted, terr := target(i, child)
 		if terr != nil {
 			return nil, nil, terr
+		}
+		childWidth := width
+		if step != nil {
+			childWidth = serialWidth(child.Serial, len(childTargeted))
 		}
 
 		// apply-descendant: an isolated destiny render pass with inherited width.
@@ -209,7 +336,7 @@ func (p *Pipeline) walkBlockChildren(
 		planStart := len(plans)
 
 		if child.Apply != nil {
-			dt, dp, derr := p.renderApplyDestiny(ctx, in, child, idx, childTargeted, width)
+			dt, dp, derr := p.renderApplyDestiny(ctx, in, child, idx, childTargeted, childWidth)
 			if derr != nil {
 				return nil, nil, derr
 			}
@@ -218,6 +345,9 @@ func (p *Pipeline) walkBlockChildren(
 			idx += len(dt)
 			if terr := stampTransport(plans[planStart:], child); terr != nil {
 				return nil, nil, terr
+			}
+			if step != nil {
+				stampPassage(tasks, childStart, step.Step)
 			}
 			continue
 		}
@@ -231,14 +361,41 @@ func (p *Pipeline) walkBlockChildren(
 		plans = append(plans, DispatchPlan{
 			TaskIndex:   idx,
 			TargetSIDs:  sidsOf(childTargeted),
-			SerialWidth: width,
+			SerialWidth: childWidth,
 		})
 		idx++
 		if terr := stampTransport(plans[planStart:], child); terr != nil {
 			return nil, nil, terr
 		}
+		if step != nil {
+			stampPassage(tasks, childStart, step.Step)
+		}
 	}
 	return tasks, plans, nil
+}
+
+// linearOverlayChild is a default block's child under linear dispatch: the shared
+// inheritance with two rows changed. `serial:` becomes a default the child may
+// override ([config.LinearBlockChild]). `where:` is not AND-ed in: the block chose
+// its hosts at its first step and holds them ([HeldTargets]), and its predicate
+// AND-ed into every child would choose again at each child's step, against
+// registers the earlier children changed.
+func linearOverlayChild(block, raw, merged config.Task) config.Task {
+	merged.Serial = config.LinearBlockChild(block, raw).Serial
+	merged.Where = raw.Where
+	return merged
+}
+
+// futurePlaceholder stands in for a task whose Passage is still ahead
+// (staged-render, ADR-056 §c.1; under linear dispatch also a default block's
+// later child): Index, Name, Register, ID and Passage, no params and no targets,
+// so nothing that reads a register not yet collected is evaluated.
+func futurePlaceholder(task config.Task, idx, passage int) *RenderedTask {
+	rt := &RenderedTask{Index: idx, Name: task.Name, Register: task.Register, ID: task.ID, Passage: passage}
+	if task.Module != nil {
+		rt.Module = task.Module.Module
+	}
+	return rt
 }
 
 // blockChildTargets resolves a block descendant's target: child's on:/where:

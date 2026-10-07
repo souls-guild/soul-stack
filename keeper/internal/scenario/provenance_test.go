@@ -35,7 +35,7 @@ func resolverWith(entities ...config.CompatEntity) *destinyResolver {
 // would claim the run was free to use a keeper that one of its destinies had
 // already ruled out.
 func TestRunProvenance_StampIntersectsResolvedWindows(t *testing.T) {
-	p := newRunProvenance("v0.2.0", serviceEntity(window("0.1.0", "0.9.0")), resolverWith(
+	p := newRunProvenance("v0.2.0", "", serviceEntity(window("0.1.0", "0.9.0")), resolverWith(
 		config.CompatEntity{Kind: config.CompatEntityDestiny, Name: "redis", Ref: "v2.1.0", Window: window("0.2.0", "0.3.0")},
 		config.CompatEntity{Kind: config.CompatEntityDestiny, Name: "vector", Ref: "v1.0.0", Window: window("0.1.5", "")},
 	))
@@ -76,7 +76,7 @@ func TestRunProvenance_DedupesRepeatedDestinyResolution(t *testing.T) {
 // A staged run gates per Passage; the stamp is the UNION across them. Recording
 // only the last Passage would understate what the state needed from the estate.
 func TestRunProvenance_UnionsRequiredCapabilitiesAcrossPasses(t *testing.T) {
-	p := newRunProvenance("v0.2.0", serviceEntity(nil), nil)
+	p := newRunProvenance("v0.2.0", "", serviceEntity(nil), nil)
 	p.observeRequired(map[string][]string{
 		"host-a": {"module:core.exec", "flow_control"},
 		"host-b": {"module:core.exec"},
@@ -102,7 +102,7 @@ func TestRunProvenance_UnionsRequiredCapabilitiesAcrossPasses(t *testing.T) {
 // would later read as "this run was checked against [min,max)" when it was not.
 func TestRunProvenance_VersionlessBuildRecordsUnenforced(t *testing.T) {
 	for _, raw := range []string{config.DevVersionSentinel, "abc1234", ""} {
-		p := newRunProvenance(raw, serviceEntity(window("0.1.0", "0.3.0")), nil)
+		p := newRunProvenance(raw, "", serviceEntity(window("0.1.0", "0.3.0")), nil)
 		got := p.stamp()
 		if got == nil {
 			t.Fatalf("version %q: stamp = nil, want the window recorded anyway", raw)
@@ -122,7 +122,7 @@ func TestRunProvenance_VersionlessBuildRecordsUnenforced(t *testing.T) {
 // No entity declared anything: unbounded, so there is no window to record and
 // nothing was enforced. The version and capabilities still are facts.
 func TestRunProvenance_UndeclaredWindowRecordsNothingEnforced(t *testing.T) {
-	p := newRunProvenance("v0.2.0", serviceEntity(nil), resolverWith(
+	p := newRunProvenance("v0.2.0", "", serviceEntity(nil), resolverWith(
 		config.CompatEntity{Kind: config.CompatEntityDestiny, Name: "redis", Ref: "v2.1.0"},
 	))
 	got := p.stamp()
@@ -137,11 +137,21 @@ func TestRunProvenance_UndeclaredWindowRecordsNothingEnforced(t *testing.T) {
 	}
 }
 
+// The stamp records the model the run executed in (draft ADR NIM-907, item 15).
+func TestRunProvenance_StampRecordsExecutionModel(t *testing.T) {
+	for _, model := range []ExecutionModel{ExecutionStaged, ExecutionLinear} {
+		got := newRunProvenance("v0.2.0", model, serviceEntity(nil), nil).stamp()
+		if got == nil || got.ExecutionModel != string(model) {
+			t.Errorf("stamp = %+v, want execution_model %q", got, model)
+		}
+	}
+}
+
 // A path with no engine facts at all writes nothing rather than an empty object:
 // the incarnation column is COALESCE'd, so an empty stamp would replace a real
 // earlier record with noise.
 func TestRunProvenance_EmptyStampIsNil(t *testing.T) {
-	if got := newRunProvenance("", serviceEntity(nil), nil).stamp(); got != nil {
+	if got := newRunProvenance("", "", serviceEntity(nil), nil).stamp(); got != nil {
 		t.Errorf("stamp = %+v, want nil (nothing to record)", got)
 	}
 	var nilProv *runProvenance

@@ -7,8 +7,10 @@
 > warning are enforced by the one validator in `shared/config` (the Keeper refuses what `soul-lint`
 > refuses); `config.MergeSettings` merges two levels key by key, and render applies it so far only
 > from a block to its children. Since NIM-940 §3.1's two refusals are enforced the same way and
-> `soul-lint` gives rule 4's warning. **Not yet:** every behaviour the keys describe — the
-> barrier, the timeouts, `serial_scope` (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
+> `soul-lint` gives rule 4's warning. Since NIM-942 `serial_scope` decides how a block rolls — but
+> only in a run that executes linearly, and no run does until NIM-952 moves the default execution
+> model (`execution_model`, [naming-rules.md](../naming-rules.md)). **Not yet:** every other
+> behaviour the keys describe — the barrier, the timeouts (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
 > `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
 > 2026-10-01 unless marked **open**.
 
@@ -139,7 +141,7 @@ the inline path today:
 - **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
   `orphaned` (`keeper/internal/applyrun/crud.go:971-979`), so a Soul that dies mid-task leaves its row
   `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1366-1377`). And a result finished while the stream was down must still reach
+  operator cancelled (`keeper/internal/scenario/run.go:1414-1437`). And a result finished while the stream was down must still reach
   the Keeper when it returns, or the wait buys nothing.
 - **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
   (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
@@ -154,7 +156,7 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1001-1028`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1071-1084`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:141-150`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
@@ -213,7 +215,7 @@ every task beneath it.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:796-799`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:851-854`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -330,7 +332,7 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
 
 ⚠ **Almost none of this exists today.** The barrier returns on the first failed host
 (`dispatch.go:426-429`) and the abort force-fails every row still running
-(`keeper/internal/scenario/run.go:1366-1377`) on the assumption that no result will arrive — false
+(`keeper/internal/scenario/run.go:1414-1437`) on the assumption that no result will arrive — false
 for a live host. The only failure record per host is one first-arrival slot, `failed_plan_index`
 (`keeper/internal/applyrun/crud.go:425-451`), which the barrier does not even read: its one reader,
 `failedPlanIndex` (`dispatch.go:537-549`), has no callers. A dead host is caught only on the Acolyte
@@ -354,7 +356,7 @@ scenario saying so.
 ## 6. Open
 
 - **Which hosts are "the run's" for `tolerate: "N%"`.** The roster is re-read at every refresh
-  boundary (`keeper/internal/scenario/run.go:660-667`): it grows during provisioning and can lose an
+  boundary (`keeper/internal/scenario/run.go:715-722`): it grows during provisioning and can lose an
   offline host with no failure recorded. Recommended: the distinct hosts the run has dispatched at
   least one task to, counted at the barrier being checked.
 - **A dropped host must stay dropped across that re-read** — the ADR's item 5. A refresh boundary

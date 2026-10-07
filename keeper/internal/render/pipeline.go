@@ -177,6 +177,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	}
 	in.Compute = computed
 
+	if in.Steps != nil && len(in.Steps) != len(in.Scenario.Tasks) {
+		return nil, nil, fmt.Errorf("render: the step shape has %d nodes for %d tasks - it was built from another plan", len(in.Steps), len(in.Scenario.Tasks))
+	}
+
 	tasks := make([]*RenderedTask, 0, len(in.Scenario.Tasks))
 	plans := make([]DispatchPlan, 0, len(in.Scenario.Tasks))
 	idx := 0
@@ -264,13 +268,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// orchestrator won't dispatch it in the active passage. Once its
 		// passage becomes active, a repeat Render resolves it fully. Gated
 		// strictly to staged mode (TaskPassage set) — non-staged callers never
-		// reach this branch.
+		// reach this branch. Under linear dispatch a default block's passage is its
+		// first step, so its `where:` is not resolved before then either.
 		if in.TaskPassage != nil && passage > in.ActivePassage {
-			rt := &RenderedTask{Index: idx, Name: task.Name, Register: task.Register, ID: task.ID, Passage: passage}
-			if task.Module != nil {
-				rt.Module = task.Module.Module
-			}
-			tasks = append(tasks, rt)
+			tasks = append(tasks, futurePlaceholder(task, idx, passage))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
 			continue
@@ -298,14 +299,28 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			continue
 		}
 
-		targeted, err := resolveTargets(p.cel, in, task)
+		resolve := func() ([]*topology.HostFacts, error) {
+			t, err := resolveTargets(p.cel, in, task)
+			if err != nil {
+				return nil, err
+			}
+			// run_once: trims the target to one host (first by SID) before
+			// rendering params and building the plan — orchestration.md §2.2.2.
+			return applyRunOnce(t, task.RunOnce), nil
+		}
+		// Linear dispatch: a default block's hosts are chosen at its first step
+		// and held for its later ones (fork 3).
+		roll := topLevelRoll(in.Steps, i, task)
+		var targeted []*topology.HostFacts
+		var err error
+		if roll.overlay {
+			targeted, err = holdTargets(in, roll.path, resolve)
+		} else {
+			targeted, err = resolve()
+		}
 		if err != nil {
 			return nil, nil, err
 		}
-
-		// run_once: trims the target to one host (first by SID) before
-		// rendering params and building the plan — orchestration.md §2.2.2.
-		targeted = applyRunOnce(targeted, task.RunOnce)
 
 		// Everything appended from here on belongs to THIS task's fan-out, and
 		// carries its transport (stampTransport below, once per branch).
@@ -358,21 +373,29 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// block.on/block.where + run_once (above) — descendants inherit
 		// on/where/run_once for free. width from block.serial is handed to
 		// every descendant. stampPassage stamps the whole fan-out with one
-		// Passage (block is atomic per Passage, ADR-056). A static-when-false
+		// Passage (block is atomic per Passage, ADR-056) — under linear dispatch
+		// only a group is; a default block's children are steps of their own
+		// (blockRoll). A static-when-false
 		// block isn't gated by emitStaticWhenSkip (it skips block tasks) — it
 		// falls through here instead: walkBlockChildren ANDs block.when into
 		// every descendant, and each child emits its own skip placeholder with
 		// register/requisites (keeps flat-register-scope intact on skip —
 		// otherwise descendant registers would be lost).
 		if task.Block != nil {
-			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted, includeGroupKeep)
+			if roll.group {
+				roll.width = serialWidth(task.Serial, len(targeted))
+			}
+			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted, includeGroupKeep, roll)
 			if berr != nil {
 				return nil, nil, berr
 			}
 			tasks = append(tasks, bt...)
 			plans = append(plans, bp...)
 			idx += len(bt)
-			stampPassage(tasks, passageStart, passage)
+			// A default block's children carry their own steps already.
+			if !roll.overlay {
+				stampPassage(tasks, passageStart, passage)
+			}
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
 			}
@@ -1933,6 +1956,19 @@ func taskPassageAt(plan []int, i int) int {
 		return 0
 	}
 	return plan[i]
+}
+
+// topLevelRoll is the linear-dispatch mode of top-level task i when it is a block
+// (RenderInput.Steps); the zero value — staged dispatch, or not a block. A group's
+// width is filled in once its hosts are known.
+func topLevelRoll(steps []config.StepNode, i int, task config.Task) blockRoll {
+	if task.Block == nil || i < 0 || i >= len(steps) {
+		return blockRoll{}
+	}
+	if steps[i].Group {
+		return blockRoll{group: true}
+	}
+	return blockRoll{overlay: true, steps: steps[i].Children, path: config.StepPath("", i)}
 }
 
 // stampPassage sets passage on every RenderedTask added by the current

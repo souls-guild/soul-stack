@@ -250,6 +250,10 @@ type RunSpec struct {
 	// row (migration 101). Unexported: set by run(), not by the API caller.
 	inputSnapshot json.RawMessage
 
+	// executionModel — the model this run executes in, decided once at run start
+	// ([Runner.executionModel]). Unexported: set by run(), not by the API caller.
+	executionModel ExecutionModel
+
 	// FromLocked — run starts from an already-reserved applying status
 	// (rerun-last: incarnation.UnlockForRerun under FOR UPDATE moved
 	// error_locked→applying bypassing ready, race-free). lockRun with
@@ -564,6 +568,10 @@ type Deps struct {
 	// string carrying no version, e.g. `0.0.0-dev`) → the window is NOT enforced
 	// and the skip is logged; unit paths without a wire-up behave as before.
 	KeeperVersion string
+
+	// ExecutionModel — the model a run started on this instance executes in
+	// ([ExecutionModel]). Zero value → staged (ADR-056) until NIM-952.
+	ExecutionModel ExecutionModel
 
 	// PollInterval / RunTimeout — override the defaults (for tests). Zero
 	// value → default.
