@@ -183,7 +183,7 @@ close it. The restriction is pinned by `TestRender_LoopOnKeeperTaskRejected`
   (`examples/service/redis/covenant.yml:809-821`) stop being lost when a task after provisioning
   fails — which is the failure that leaves real cloud VMs that a later cascade-destroy cannot find.
 - `state_history` becomes a snapshot per capture rather than per run.
-- Capture is an ordinary task: it has a position, it participates in `require:` / `onchanges:`, and
+- Capture is an ordinary task: it has a position, it participates in `onchanges:` (`require:` is destiny-only since NIM-941), and
   it is visible in the rendered plan and in run visibility like every other step.
 - The two hard-zeroed redis fields stop being lies — a capture step is not bound by the
   `AllowHosts=false` restriction of the state render context.

@@ -378,7 +378,8 @@ tasks:
 }
 
 // The negative half: the gate is about the applier, not about `async:`. An
-// ordinary module task next to an apply: one keeps the key.
+// ordinary module task next to an apply: one does not draw it (in a scenario it
+// draws async_outside_destiny instead, NIM-941).
 func TestLoadScenarioManifest_AsyncOnApply_ModuleTaskUnaffected(t *testing.T) {
 	src := `name: x
 tasks:
@@ -392,11 +393,11 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "async_on_apply_invalid") {
 		dump(t, diags)
-		t.Fatalf("async: on a module task must not be flagged")
+		t.Fatalf("async: on a module task must not draw async_on_apply_invalid")
 	}
 }
 
-// TestLoadScenarioManifest_AsyncOnKeeper — the third and last construct where
+// TestLoadScenarioManifest_AsyncOnKeeper — the third construct where
 // `async:` has no meaning. Render already refused it; this moves the refusal to
 // where the author is looking (NIM-247).
 func TestLoadScenarioManifest_AsyncOnKeeper(t *testing.T) {
@@ -413,9 +414,8 @@ tasks:
 	}
 }
 
-// Negative — `require:` on a keeper task stays legal (redundant, since the
-// keeper executor runs its tasks in plan order), and `async:` on an ordinary
-// Soul-side task is untouched by the keeper gate.
+// Negative — the keeper gate is about the side: `async:` on a Soul-side task and
+// `require:` on a keeper task draw only the scenario-wide refusals (NIM-941).
 func TestLoadScenarioManifest_AsyncOnKeeper_NeighboursUnaffected(t *testing.T) {
 	src := `name: x
 tasks:
@@ -430,7 +430,11 @@ tasks:
 	_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 	if hasCode(diags, "async_on_keeper_invalid") {
 		dump(t, diags)
-		t.Fatalf("require: on a keeper task and async: on a Soul-side task must both pass")
+		t.Fatalf("a Soul-side async: and a keeper-side require: must not draw async_on_keeper_invalid")
+	}
+	if !hasCodeAt(diags, CodeAsyncOutsideDestiny, "$.tasks[0].async") || !hasCodeAt(diags, CodeRequireOutsideDestiny, "$.tasks[1].require") {
+		dump(t, diags)
+		t.Fatalf("expected %s and %s", CodeAsyncOutsideDestiny, CodeRequireOutsideDestiny)
 	}
 }
 
@@ -627,8 +631,9 @@ tasks:
 		})
 	}
 
-	// The negative half: the same keys on a Soul-side module stay legal. Without
-	// it the checks could fire on everything and still look correct.
+	// The negative half: the same keys on a Soul-side module do not draw the
+	// keeper codes. Without it the checks could fire on everything and still look
+	// correct. (`async:` there draws async_outside_destiny since NIM-941.)
 	t.Run("a Soul-side module is untouched", func(t *testing.T) {
 		src := `name: x
 tasks:
@@ -645,7 +650,7 @@ tasks:
 		_, _, diags, _ := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
 		if hasCode(diags, "when_on_keeper_dynamic_unsupported") || hasCode(diags, "async_on_keeper_invalid") {
 			dump(t, diags)
-			t.Fatalf("a Soul-side task must keep when:/async:")
+			t.Fatalf("a Soul-side task must not draw the keeper-side codes for when:/async:")
 		}
 	})
 }
@@ -822,6 +827,9 @@ tasks:
 //
 // ★ `vars:` is here since NIM-336: it is resolved into the env that renders
 // `apply.input`, so it is an answered key, not a lost one.
+//
+// ★ `require:` LEFT this fixture in NIM-941: it is refused on every scenario task
+// (`require_outside_destiny`), an applier included.
 func TestLoadScenarioManifest_ApplyAllowedKeysOK(t *testing.T) {
 	src := `name: x
 tasks:
@@ -838,7 +846,6 @@ tasks:
     on: [redis]
     serial: 1
     onchanges: [probe]
-    require: [probe]
     register: rolled
   - apply:
       destiny: redis
@@ -874,13 +881,14 @@ tasks:
 	}
 }
 
-// TestLoadScenarioManifest_AsyncTaskKeyAccepted — the other half of the rename:
-// `async: true` on an ordinary task parses clean and lands on Task.Async.
-func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {
-	src := "name: x\ntasks:\n  - module: core.exec.run\n    async: true\n    register: probe\n    params: { cmd: \"true\" }\n  - module: core.exec.run\n    require: [probe]\n    params: { cmd: \"true\" }\n"
-	m, _, diags, err := LoadScenarioManifestFromBytes("main.yml", []byte(src), ValidateOptions{})
+// TestLoadDestinyTasks_AsyncTaskKeyAccepted — the other half of the rename:
+// `async: true` on an ordinary destiny task parses clean and lands on Task.Async.
+// A scenario refuses both keys since NIM-941, so the subject is a destiny.
+func TestLoadDestinyTasks_AsyncTaskKeyAccepted(t *testing.T) {
+	src := "- module: core.exec.run\n  async: true\n  register: probe\n  params: { cmd: \"true\" }\n- module: core.exec.run\n  require: [probe]\n  params: { cmd: \"true\" }\n"
+	tasks, diags, err := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if err != nil {
-		t.Fatalf("LoadScenarioManifestFromBytes: %v", err)
+		t.Fatalf("LoadDestinyTasksFromBytes: %v", err)
 	}
 	for _, d := range diags {
 		if d.Level == diag.LevelError {
@@ -888,10 +896,10 @@ func TestLoadScenarioManifest_AsyncTaskKeyAccepted(t *testing.T) {
 			t.Fatalf("async:/require: wrongly rejected: %s", d.Code)
 		}
 	}
-	if !m.Tasks[0].Async {
-		t.Error("Tasks[0].Async = false, want true")
+	if !tasks[0].Async {
+		t.Error("tasks[0].Async = false, want true")
 	}
-	all, names, ok := m.Tasks[1].RequireSpec()
+	all, names, ok := tasks[1].RequireSpec()
 	if !ok || all || len(names) != 1 || names[0] != "probe" {
 		t.Errorf("RequireSpec() = %v/%v/%v, want false/[probe]/true", all, names, ok)
 	}

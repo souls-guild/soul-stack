@@ -36,7 +36,7 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 	if err != nil {
 		return nil, err
 	}
-	tasks, tdiags, err := config.LoadDestinyTasksFromBytes(tasksPath, data, config.ValidateOptions{})
+	tasks, tdiags, err := config.LoadDestinyTasksFromBytes(tasksPath, data, config.ValidateOptions{DestinyTasks: true})
 	if err != nil {
 		return nil, err
 	}
@@ -48,7 +48,7 @@ func (r realRedisDestinyResolver) Resolve(_ context.Context, name string) (*Reso
 	// within-destiny include (tasks/<sub>.yml) is expanded BEFORE render — mirrors
 	// prod (artifact.DestinyLoader.parseTasks) and trial (fixtureDestinyResolver):
 	// tasks/main.yml of destiny redis is just an include list of logical groups.
-	expanded, idiags := config.ExpandIncludes(tasks, func(name string) ([]byte, string, error) {
+	expanded, idiags := config.ExpandIncludesInDestiny(tasks, func(name string) ([]byte, string, error) {
 		rel := filepath.Join("tasks", name)
 		d, rerr := os.ReadFile(filepath.Join(r.dir, rel))
 		return d, rel, rerr

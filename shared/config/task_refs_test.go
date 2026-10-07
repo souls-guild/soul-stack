@@ -34,7 +34,7 @@ func TestTaskRefs_DuplicateRegister_Destiny(t *testing.T) {
     path: /etc/redis2.conf
     content: y
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !diag.HasErrors(diags) {
 		t.Fatal("expected a duplicate_task_address error")
 	}
@@ -63,7 +63,7 @@ func TestTaskRefs_UnknownOnChanges_Destiny(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		t.Fatalf("unknown_register_reference count = %d, want 1; diags=%v", got, diags)
 	}
@@ -87,7 +87,7 @@ func TestTaskRefs_UnknownOnFail_Destiny(t *testing.T) {
   params:
     cmd: rollback
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		t.Fatalf("unknown_register_reference (onfail) count = %d, want 1; diags=%v", got, diags)
 	}
@@ -106,7 +106,7 @@ func TestTaskRefs_UnknownRequire_Destiny(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		t.Fatalf("unknown_register_reference (require) count = %d, want 1; diags=%v", got, diags)
 	}
@@ -126,7 +126,7 @@ func TestTaskRefs_RequireAll_NotFlagged(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		t.Fatalf("require: all must not produce unknown_register_reference; got=%d, diags=%v", got, diags)
 	}
@@ -153,7 +153,7 @@ func TestTaskRefs_Valid_Destiny(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "duplicate_task_address") + countCode(diags, "unknown_register_reference"); got != 0 {
 		t.Fatalf("a valid plan must not produce cross-ref errors; got=%d, diags=%v", got, diags)
 	}
@@ -175,7 +175,7 @@ func TestTaskRefs_CELRef_NotFlagged(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		t.Fatalf("a CEL wrapper in onchanges must not be flagged; got=%d, diags=%v", got, diags)
 	}
@@ -205,7 +205,7 @@ func TestTaskRefs_BlockNested_Destiny(t *testing.T) {
     path: /etc/other
     content: y
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	// onchanges:[inner_conf] resolves (block register visible) → no unknown ref.
 	if got := countCode(diags, "unknown_register_reference"); got != 0 {
 		t.Errorf("block register must be visible from top-level onchanges; got unknown=%d, diags=%v", got, diags)
@@ -234,7 +234,7 @@ func TestTaskAddress_DuplicateID_Destiny(t *testing.T) {
     name: vm.dirty_ratio
     value: "20"
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
 		t.Fatalf("a duplicate id must be flagged; duplicate_task_address count = %d, want 1", got)
@@ -262,7 +262,7 @@ func TestTaskAddress_IDCollidesRegister_Destiny(t *testing.T) {
     name: vm.swappiness
     value: "10"
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
 		t.Fatalf("a register/id collision must be flagged; count = %d, want 1", got)
@@ -291,7 +291,7 @@ func TestTaskAddress_RegisterCollidesID_Destiny(t *testing.T) {
     path: /etc/redis.conf
     content: x
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "duplicate_task_address"); got != 1 {
 		dump(t, diags)
 		t.Fatalf("an id/register collision must be flagged; count = %d, want 1", got)
@@ -319,7 +319,7 @@ func TestTaskAddress_UniqueIDAndRegister_Destiny(t *testing.T) {
     name: vm.swappiness
     value: "10"
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "duplicate_task_address"); got != 0 {
 		dump(t, diags)
 		t.Fatalf("unique register+id must not produce a duplicate; count = %d, want 0", got)
@@ -343,7 +343,7 @@ func TestTaskAddress_IDNotResolvableInRequisites_Destiny(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 1 {
 		dump(t, diags)
 		t.Fatalf("an onchanges reference to an id-task must be unknown_register_reference; count = %d, want 1", got)
@@ -421,7 +421,7 @@ func TestTaskTypes_OnChangesScalar_Rejected(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].onchanges") {
 		dump(t, diags)
 		t.Fatalf("expected type_mismatch on $[1].onchanges (scalar instead of a list)")
@@ -441,7 +441,7 @@ func TestTaskTypes_OnFailScalar_Rejected(t *testing.T) {
   params:
     cmd: rollback
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].onfail") {
 		dump(t, diags)
 		t.Fatalf("expected type_mismatch on $[1].onfail (scalar instead of a list)")
@@ -457,7 +457,7 @@ func TestTaskTypes_RequireAll_Accepted(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "type_mismatch") != 0 {
 		dump(t, diags)
 		t.Fatalf("require: all must not produce type_mismatch")
@@ -478,7 +478,7 @@ func TestTaskTypes_RequireScalarOther_Rejected(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !hasCodeAt(diags, "type_mismatch", "$[1].require") {
 		dump(t, diags)
 		t.Fatalf("expected type_mismatch on $[1].require (scalar != all)")
@@ -498,7 +498,7 @@ func TestTaskTypes_RequireList_Accepted(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "type_mismatch") != 0 {
 		dump(t, diags)
 		t.Fatalf("require: [prep] must not produce type_mismatch")
@@ -514,7 +514,7 @@ func TestTaskTypes_OnChangesNonStringElem_Rejected(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !hasCodeAt(diags, "type_mismatch", "$[0].onchanges[0]") {
 		dump(t, diags)
 		t.Fatalf("expected type_mismatch on $[0].onchanges[0] (int element)")
@@ -536,7 +536,7 @@ func TestTaskRefs_CELWhenUnknown_Destiny(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if !hasCodeAt(diags, "unknown_register_reference", "$[1].when") {
 		dump(t, diags)
 		t.Fatalf("expected unknown_register_reference on $[1].when (typo in a register name in CEL)")
@@ -556,7 +556,7 @@ func TestTaskRefs_CELWhenKnown_Destiny(t *testing.T) {
   params:
     name: redis
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
 		t.Fatalf("an existing register name in when must not be flagged")
@@ -577,7 +577,7 @@ func TestTaskRefs_CELSelf_NotFlagged(t *testing.T) {
   params:
     cmd: redis-cli ping
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
 		t.Fatalf("register.self must not be flagged by the cross-ref check")
@@ -594,7 +594,7 @@ func TestTaskRefs_CELStringLiteral_NotFalsePositive(t *testing.T) {
   params:
     cmd: check
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
 		t.Fatalf("register.<x> inside a string literal must not be flagged")
@@ -618,7 +618,7 @@ func TestTaskRefs_CELRetryUntilLoopWhere_Unknown(t *testing.T) {
   params:
     cmd: act ${ x }
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if got := countCode(diags, "unknown_register_reference"); got != 3 {
 		dump(t, diags)
 		t.Fatalf("expected 3 unknown_register_reference (where/loop.when/retry.until); got=%d", got)
@@ -641,7 +641,7 @@ func TestTaskRefs_CELDynamicAccess_NotFlagged(t *testing.T) {
   params:
     cmd: act
 `
-	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+	_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 	if countCode(diags, "unknown_register_reference") != 0 {
 		dump(t, diags)
 		t.Fatalf("a dynamic register[...] must not produce unknown_register_reference")
@@ -708,7 +708,7 @@ func TestTaskRefs_UnknownInterpField_Destiny(t *testing.T) {
 	}
 	for field, src := range cases {
 		t.Run(field, func(t *testing.T) {
-			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{})
+			_, diags, _ := LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), ValidateOptions{DestinyTasks: true})
 			if got := countCode(diags, "unknown_register_reference"); got != 1 {
 				dump(t, diags)
 				t.Fatalf("%s: unknown_register_reference count = %d, want 1 (ADR-056 S2 validator gap not closed)", field, got)

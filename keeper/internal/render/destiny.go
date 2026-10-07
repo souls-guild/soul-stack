@@ -96,9 +96,9 @@ type DestinyResolver interface {
 // indices stay contiguous (mirrors scenario).
 //
 // targeted is the apply task's host set (after the parent's on:/where:/
-// run_once: resolve). The destiny inherits this roster; per-task on:/where:
-// inside a destiny isn't supported in the pilot (guardDestinyTask rejects
-// them).
+// run_once: resolve). The destiny inherits this roster, narrowed per task by
+// a top-level destiny task's own on:/where: (resolveTargets below); a block in a
+// destiny refuses on:/where: on itself and its children.
 //
 // serialWidth is the parent apply task's `serial:` wave width
 // (orchestration.md §2.2.1): inherited by all destiny tasks (the whole

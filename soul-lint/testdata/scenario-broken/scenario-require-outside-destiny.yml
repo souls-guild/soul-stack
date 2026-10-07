@@ -1,0 +1,47 @@
+name: require-outside-destiny
+create: true
+description: >-
+  Onboard ready-made VMs. Keeper mints one bootstrap token per FQDN/SID, runs
+  this site's install commands on each host over SSH, and then waits for every
+  Soul to come online. The middle step carries the transport; what it runs is
+  authored here, not by the engine.
+
+input:
+  sids:
+    type: array
+    items:
+      type: string
+    required: true
+    description: Non-empty unique FQDN/SID list of the ready-made VMs.
+
+tasks:
+  - name: Mint bootstrap tokens for ready-made VMs
+    module: core.bootstrap.issued
+    register: bootstrap
+    params:
+      sids: "${ input.sids }"
+      reissue: true
+
+  - name: Install soul and redeem the token
+    module: core.ssh.run
+    register: install
+    require: [bootstrap]
+    params:
+      hosts: "${ register.bootstrap.hosts }"
+      ssh_provider: "${ vars.ssh_provider }"
+      join_wait_timeout: "${ vars.join_wait_timeout }"
+      steps:
+        - run: "curl -fsSL ${ vars.soul_binary_url } -o /usr/local/bin/soul && chmod 0755 /usr/local/bin/soul"
+        - run: "install -d -m 0700 /etc/soul && umask 077 && cat > /etc/soul/token && chmod 0400 /etc/soul/token"
+          stdin_from: bootstrap_token
+        - run: 'test -e /var/lib/soul-stack/seed/current/cert.pem || SOUL_BOOTSTRAP_TOKEN="$(cat /etc/soul/token)" /usr/local/bin/soul init --config /etc/soul/soul.yml'
+        - run: "systemctl daemon-reload && systemctl enable soul && systemctl start soul"
+
+  - name: Await ready-made VM onboarding
+    module: core.soul.registered
+    register: onboarded
+    require: [install]
+    params:
+      sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
+      await_online: true
+      refresh_soulprint: true

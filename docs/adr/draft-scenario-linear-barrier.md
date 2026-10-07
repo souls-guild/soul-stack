@@ -227,19 +227,36 @@ depends on anything is the fact that *k* comes after *k−1*.
 6. **Destiny is unchanged.** Passages never existed inside a destiny and none are introduced;
    `vars.yml` and task params are already resolved per host.
 
-7. **`async:` and `require:` outside a destiny are deferred to NIM-906.**
+7. **`async:` and `require:` outside a destiny are refused.**
    Neither has anything to act on when a message holds one task. ADR-0075's barriers are `require:`,
    an implicit register reference, and the end of the run — *"which is the end of THIS
    ApplyRequest"* (`soul/internal/runtime/applyrunner.go:316-319`); and a `require:` source in an
    earlier Passage is already encoded as the sentinel `-1`, which for a barrier reads *"nothing to
    wait for"* (`soul/internal/runtime/async.go:182-184`,
    `keeper/internal/render/prototask.go:111-117`). Inside a destiny both still work and ADR-0075
-   applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1097-1099`). A key that stays legal and stops having an effect is the silence this ADR is about, so
+   applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1103-1105`). A key that stays legal and stops having an effect is the silence this ADR is about, so
    both become **refusals** — `async:` at top level, and `require:` anywhere outside a destiny:
-   `async:` is already refused inside a block (`keeper/internal/render/block.go:458-459`), so a
-   block child's `require:` would wait on nothing. The shape of those refusals is NIM-906's.
-   `examples/service/example-cloud-bootstrap/scenario/existing-vm/main.yml` uses a top-level
-   `require:` (`:56`, `:71`) and is migrated with them.
+   `async:` is already refused inside a block (`keeper/internal/render/block.go:616-617`), so a
+   block child's `require:` would wait on nothing. **Shape (NIM-941, codes approved by the user
+   2026-10-06):** `async_outside_destiny` and `require_outside_destiny`, both ERROR, refused on
+   presence on every scenario task — top level, any block depth, a scenario's included body.
+   In a scenario, `async:` on a block child is now refused at parse, not only by the render guard; where
+   `async_on_apply_invalid`/`async_on_block_invalid`/`async_on_keeper_invalid` already refuses the
+   key, that code is the one reported. Unconditional — not keyed to the execution model pinned to the run — since `soul-lint`
+   cannot know it. NIM-906 keeps only the "do not wait" flag itself. **What this premise
+   misses** (found in NIM-941's review, user kept the refusal 2026-10-07): a scenario `require:`
+   could reach an applied destiny's `async:` tasks in the same message — one Passage today, a block
+   rolled as one group under linear dispatch — by `require: all`, by a name an `async:` destiny
+   task also registers, or written on an `apply:` task and merged into every task of the destiny
+   (`keeper/internal/render/block.go:508-513`). The replacement is a `register:` on each `apply:`
+   before the waiting point, and a `require:` inside the destiny for a wait among its own tasks: the
+   terminal carries every task of the destiny in `aggregate_of`, which the Soul awaits as a gate and
+   fail-stops on (`soul/internal/runtime/applyrunner.go:464-476`). Nor does one step mean one task:
+   a `loop:` + `async: true` fan-out is one step whose iterations run alongside each other
+   (decision 2); refused with the rest, that loop moves into a destiny.
+   `examples/service/example-cloud-bootstrap/scenario/existing-vm/main.yml` used a top-level
+   `require:` on two keeper-side steps and was migrated with them; the service repositories are
+   NIM-940's.
 
 8. **A host's failure ends the run by default, and that default is configurable** (user, 2026-09-30).
    Ending the run stays the behaviour of a scenario that declares nothing, because a barrier sits after a
@@ -928,8 +945,8 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     `within_destiny_register_dependency`, checked on the flat destiny plan by `soul-lint` and by
     the Keeper's destiny loader. What it does not cover is stated in
     [known-limitations.md](../known-limitations.md#register-reads-a-destiny-cannot-resolve-are-not-all-refused).
-13. **Checks.** Refusals for top-level `async:` and for `require:` outside a destiny (NIM-906 owns
-    their shape) live in the shared validator, so the Keeper enforces them too — service
+13. **Checks.** Refusals for `async:` and `require:` outside a destiny (decision 7; shipped by
+    NIM-941) live in the shared validator, so the Keeper enforces them too — service
     repositories are not linted. In `soul-lint`: a warning for a child's `serial:` or barrier-kind
     setting inside a block rolled as one group ([settings.md](../scenario/settings.md) rule 4), and
     removal of the diagnostics that only meant something under derivation
@@ -975,7 +992,9 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   children each numbered and gated per child, its targets held; the execution model pinned to the run (item 15); the `vault()` memo
   widened to the run; Keeper-side `when:` and partial evaluation of the post-module predicates,
   with their secret masking, and items 16-18; the `passage` capability bit and item 10's new one;
-  decision 7's `async:`/`require:` refusals, which must land when those keys stop having an effect;
+  decision 7's `async:`/`require:` refusals, which must land when those keys stop having an effect
+  (NIM-941 put them on the train ahead of the dispatch loop — unconditional, since `soul-lint` cannot
+  see the model, and harmless because the train reaches `main` only with the enablement, NIM-952);
   FC-5's retirement on both sides at once — the Keeper's refusal (`keeper/internal/scenario/run.go:448-449`)
   and `soul-lint`'s (`soul-lint/internal/validate/stage.go:223`) — or one of them refuses scenarios
   that are now legal; for the same reason `soul-lint`'s Passage-keyed state checks —
@@ -1009,7 +1028,7 @@ group.
 |---|---|
 | [ADR-056](0056-staged-render-passage.md) | **superseded** — the derived N-Passage plan is replaced by a happens-before order; FC-5 retires, since every reference across a barrier is resolved on the Keeper |
 | [ADR-012(d)](0012-keeper-soul-grpc.md) | **amended** — for a scenario task, `when:` is evaluated on the Keeper and the post-module predicates arrive with everything but `register.self` — and, in a group, the group's own registers — rendered in, per host, behind a capability bit (item 10); a grouped child's `when:` that still reads a sibling goes to the Soul the same way; no register crosses the wire, and `flow_context` loses its purpose |
-| [ADR-0075](0075-intra-host-async-tasks.md) | still applies inside a destiny; top-level `async:`, and `require:` outside a destiny, must be refused (NIM-906) |
+| [ADR-0075](0075-intra-host-async-tasks.md) | still applies inside a destiny; `async:` and `require:` outside a destiny are refused (`async_outside_destiny`, `require_outside_destiny`, NIM-941) |
 | [ADR-027](0027-apply-work-queue.md) | **affected** — the work-queue path is unreachable for linear runs unless restored; amend (p) re-keys the queue by step (S3) |
 | [ADR-009](0009-scenario-dsl.md) | **amended** — a `settings:` block with one schema at every level, inherited as a value like `vars:` (not composed like `when:`/`where:`), the first execution-behaviour container in the grammar; the execution model changes. Block inheritance of `retry:`/`timeout:`/`async:` is a **separate** amendment, NIM-910 |
 | [ADR-010](0010-templating.md) | unaffected — the register grammar and the NIM-909 amendment stand |

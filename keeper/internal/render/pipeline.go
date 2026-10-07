@@ -1224,10 +1224,8 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 	// async: is Soul-side task concurrency (ADR-0075): the flag rides
 	// RenderedTask to a Soul runner, and a keeper task never reaches one. It
 	// would be a silent no-op — reject, like apply:/loop: above. `require:` is
-	// NOT rejected: the keeper executor runs its tasks in plan order, so the
-	// barrier is simply already satisfied (the same redundancy a linear
-	// Soul-side flow has), and threading it keeps its names under the
-	// unknown-register check.
+	// not checked here: a keeper task lives only in a scenario, whose validator
+	// refuses the key on every task (require_outside_destiny, NIM-941).
 	if task.Async {
 		return nil, fmt.Errorf("%w: async: on a keeper-side task (task[%d] %q)", ErrUnsupportedDSL, idx, task.Name)
 	}
@@ -1853,10 +1851,10 @@ func (p *Pipeline) StateOpEvaluators(ctx context.Context, service string) (State
 // fan-out (renderBlockTask, like loop/apply:destiny). The guard remains for
 // unexpanded include: and empty tasks.
 //
-// async: (ADR-0075, NIM-150) is no longer rejected — it is honoured, threaded
-// into RenderedTask.Async for the Soul runner. `async:` on a block: is still
-// deferred, but it is caught EARLIER, by the config validator
-// (async_on_block_invalid), so there is nothing left to check here.
+// async: (ADR-0075, NIM-150) is not rejected here: on a scenario task the
+// config validator refuses it first (async_outside_destiny, NIM-941; on a
+// block, async_on_block_invalid). A destiny task carries it to the wire
+// through guardDestinyTask instead.
 func guardPilotDSL(task config.Task, idx int) error {
 	switch {
 	case task.Apply != nil:

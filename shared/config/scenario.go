@@ -435,7 +435,9 @@ func schemaValidateScenario(path string, root *ast.MappingNode, m *ScenarioManif
 	tasksNode := findSequenceValue(root, "tasks")
 	if tasksNode != nil {
 		for i, item := range tasksNode.Values {
-			out = append(out, validateTaskNode(item, fmt.Sprintf("$.tasks[%d]", i))...)
+			path := fmt.Sprintf("$.tasks[%d]", i)
+			out = append(out, validateTaskNode(item, path)...)
+			out = append(out, validateDestinyOnlyKeys(item, path)...)
 		}
 	}
 
@@ -618,7 +620,7 @@ func findSequenceValue(m *ast.MappingNode, name string) *ast.SequenceNode {
 // cross-ref inside CEL predicates (`when:`/`changed_when:`/`until:`) are deferred
 // (M1.3/M1.5).
 func semanticValidateScenario(m *ScenarioManifest, root *ast.MappingNode) []diag.Diagnostic {
-	out := validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks", nil)
+	out := dropRequireRefDiags(validateTaskRefs(findSequenceValue(root, "tasks"), "$.tasks", nil))
 	out = append(out, validateExtendsField(m, root)...)
 	return out
 }

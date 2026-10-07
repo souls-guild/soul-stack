@@ -12,7 +12,8 @@
 // Pilot DSL scope (PM decision): sequential tasks + per-host fan-out +
 // apply:destiny + include (expanded before render via config.ExpandIncludes)
 // + serial/run_once (slice D: run_once narrows the target at render time,
-// serial rolls hosts in waves at dispatch time) + block/loop/async. What is
+// serial rolls hosts in waves at dispatch time) + block/loop, with async inside
+// an applied destiny only (a scenario task refuses it, NIM-941). What is
 // still out of pilot scope is a key on a node that cannot carry it (loop: on an
 // apply: task, loop:/async: on a keeper-side task, scenario orchestration inside
 // a destiny) — render.Pipeline rejects those (ErrUnsupportedDSL).

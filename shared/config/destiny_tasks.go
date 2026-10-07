@@ -88,12 +88,18 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 			taskDiags = dropScenarioSettingsDiags(taskDiags)
 			taskDiags = append(taskDiags, validateKeeperModuleInDestiny(item, fmt.Sprintf("$[%d]", i))...)
 			taskDiags = append(taskDiags, validateSettingsInDestiny(item, fmt.Sprintf("$[%d]", i))...)
+		} else {
+			taskDiags = append(taskDiags, validateDestinyOnlyKeys(item, fmt.Sprintf("$[%d]", i))...)
 		}
 		diags = append(diags, taskDiags...)
 	}
 	// Cross-task invariants over the whole list (duplicate register, unknown
 	// register references in onchanges/onfail/require). See validateTaskRefs.
-	diags = append(diags, validateTaskRefs(seq, "$", opts.OuterRegisters)...)
+	refs := validateTaskRefs(seq, "$", opts.OuterRegisters)
+	if !opts.DestinyTasks {
+		refs = dropRequireRefDiags(refs)
+	}
+	diags = append(diags, refs...)
 	// Plugin module params against a resolved manifest (NIM-228) — the same
 	// post-pass the mapping-rooted entry points run.
 	diags = append(diags, validatePluginModuleParams(seq, opts.ModuleManifests)...)

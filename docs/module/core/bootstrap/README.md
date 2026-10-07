@@ -279,7 +279,6 @@ Ready-made VM chain today:
 # the barrier below waits for presence that cannot arrive.
 
 - module: core.soul.registered
-  require: [bootstrap]
   params:
     sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
     await_online: true

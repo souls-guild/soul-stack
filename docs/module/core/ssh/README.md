@@ -25,7 +25,6 @@ author's, and the requirements binding that author are in the
 - name: Install soul and redeem the token
   module: core.ssh.run
   register: install
-  require: [tokens]
   params:
     hosts: "${ register.tokens.hosts }"
     ssh_provider: vault-ssh

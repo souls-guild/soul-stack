@@ -7,6 +7,20 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **`async:` and `require:` are destiny-only keys (NIM-941, [ADR-draft
+  scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) decision 7).** Concurrency on
+  a host — a `loop:`'s iterations included, though a loop is one step under linear dispatch — lives
+  in a destiny, and apart from the scenario's own `async:` tasks a scenario `require:` waited on
+  something only where it reached an applied destiny's `async:` tasks (see the upgrade note). The
+  shared validator refuses both on every scenario task — top level, any block depth, a scenario's
+  included body — as **`async_outside_destiny`** and **`require_outside_destiny`**, so the Keeper's
+  run parse refuses what `soul-lint` refuses. `async:` keeps `async_on_apply_invalid` /
+  `async_on_block_invalid` / `async_on_keeper_invalid` where those apply, and the names inside a
+  refused `require:` list are not judged on top of it. Inside a destiny both keys are unchanged
+  ([ADR-0075](docs/adr/0075-intra-host-async-tasks.md)). The refusal is unconditional — not keyed to
+  the execution model, which `soul-lint` cannot see. `existing-vm` and the `core.ssh` /
+  `core.bootstrap` doc examples drop their `require:` lines.
+
 - **The render passes of a scenario run share one read of each `vault()` secret (NIM-934).**
   One memo of Vault reads spans the run (`vault:` refs in params included), so a secret rotated away
   mid-run no longer fails a later pass that re-renders a task which already ran. A keeper-side
@@ -1119,6 +1133,24 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   resolves the set once and both rights read it.
 
 ### Upgrade notes
+
+- **`async:` and `require:` on a scenario task are refused wherever the Keeper parses a scenario**
+  (`NIM-941`): `async_outside_destiny` / `require_outside_destiny`, at any block depth and in an
+  included body. A create or an explicit run is refused on the request — HTTP 500 "resolve create
+  plan failed" / "validate scenario … input failed" / "pre-flight assert … failed", a tool error
+  over MCP — and the Keeper log carries the diagnostic's message, not its code (a key only in an
+  included body escapes that check on a create under `lifecycle.auto_create: false`). A run started
+  without that pre-parse — Voyage, rerun-last, the run after an upgrade, whose state migration has
+  already committed — fails with reason `scenario_load_failed` and error-locks the incarnation
+  (`destroy_failed` for a destroy). Run `soul-lint validate-service-tree <dir>` over every service
+  repository **before** upgrading. Apart from the scenario's own `async:` tasks, a scenario
+  `require:` waited on something only where it reached an applied destiny's `async:` tasks in the
+  same Passage. To keep such a wait, give each `apply:` before the waiting point a `register:` — its
+  terminal waits for every task of its destiny and stops the run on a failed one; a wait among one
+  destiny's own tasks (what a `require:` on its `apply:` did, merged into every task of it) is a
+  `require:` inside the destiny. A scenario `async:` task — a `loop:` with `async: true` included —
+  ran concurrently within its Passage: that work moves into a destiny, `async:` and the `require:`
+  that joined it with it.
 
 - **A `serial:` whose meaning linear dispatch changes is refused on the Keeper's run path**
   (`NIM-940`): a block reached by `serial:` over two or more host tasks with no written

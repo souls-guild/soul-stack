@@ -44,14 +44,18 @@ type ValidateOptions struct {
 	// [LoadDestinyTasksFromBytes] and are otherwise indistinguishable at that
 	// layer, since both are a bare top-level task sequence.
 	//
-	// One rule needs the distinction (NIM-749): a destiny task is Soul-side by
+	// Rules that need the distinction: a destiny task is Soul-side by
 	// construction — it is rendered per host and dispatched to a Soul — so a
 	// keeper-side module address in one can never execute
-	// (`keeper_module_in_destiny`). In a scenario the same address is the
-	// ordinary, correct way to write a keeper-side step.
+	// (`keeper_module_in_destiny`, NIM-749). In a scenario the same address is the
+	// ordinary, correct way to write a keeper-side step. The reverse holds for
+	// `async:`/`require:`, legal only in a destiny ([CodeAsyncOutsideDestiny],
+	// [CodeRequireOutsideDestiny], NIM-941).
 	//
-	// Defaults to false, which is the safe direction: the scenario and include
-	// paths must NOT raise that diagnostic, and a destiny loader that forgets the
-	// flag loses one check rather than rejecting valid files.
+	// ⚠ Defaults to false, the scenario reading, and since NIM-941 that is no
+	// longer the harmless direction: a destiny loader that forgets the flag refuses
+	// every `async:`/`require:` in a valid destiny. Every production loader whose
+	// diagnostics reach a verdict sets it; the ones that pass the zero value
+	// discard them.
 	DestinyTasks bool
 }

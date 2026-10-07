@@ -57,7 +57,6 @@ tasks:
   - name: Install soul and redeem the token
     module: core.ssh.run
     register: install
-    require: [bootstrap]
     params:
       hosts: "${ register.bootstrap.hosts }"
       ssh_provider: "${ vars.ssh_provider }"
@@ -72,7 +71,6 @@ tasks:
   - name: Await ready-made VM onboarding
     module: core.soul.registered
     register: onboarded
-    require: [install]
     params:
       sid: "${ register.bootstrap.hosts.map(h, h.sid) }"
       await_online: true

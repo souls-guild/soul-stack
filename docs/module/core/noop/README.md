@@ -100,7 +100,7 @@ now (`output_unsupported`) and never carried a value in the first place.
 
 ### Placeholder-anchor
 
-Barrier that waits for a set of previous tasks through `require:` and does nothing
+Barrier that waits for a set of previous tasks through `require:` and does nothing - inside a destiny, since a scenario refuses `require:` (`require_outside_destiny`) -
 does it himself:
 
 ```yaml

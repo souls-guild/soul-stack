@@ -2,7 +2,7 @@
 
 This document is a **normative specification of the delta scenario** on top of the destiny task DSL core. The source of truth when implementing a scenario orchestrator.
 
-**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `async:`, `loop:`, `register:`, `output:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is. This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
+**DSL task core is NOT duplicated here.** All task blocks (`module:`, `include:`, `block:`, `params:`, task-level `vars:`, `when:`, `async:`, `loop:`, `register:`, `output:`, `onchanges:`, `onfail:`, `require:`, `changed_when:`, `failed_when:`, `retry:`, `timeout:`), their semantics, barriers, requisites and template context - **are fully described in [destiny/tasks.md](../destiny/tasks.md)** and are inherited by the scenario as is - except `async:` and `require:`, which act only inside a destiny and are refused on every scenario task, at any block depth and in an included body (`async_outside_destiny`, `require_outside_destiny`, [destiny/tasks.md §6](../destiny/tasks.md)). This document covers **only what destiny doesn't**: targeting, cross-host coordination, `apply: { destiny: … }`, `incarnation.state` entry, resource resolution, script tests.
 
 Any key not described here and not described in [destiny/tasks.md](../destiny/tasks.md) is a scenario validation error.
 
@@ -113,11 +113,12 @@ An applier expands into N destiny tasks, so each of its own keys has to be answe
 
 | Key on the applier | Where it is answered |
 |---|---|
-| `onchanges:` · `onfail:` · `require:` | **Merged into every destiny task of the group**, exactly as a `block:` passes its own down ([destiny/tasks.md §6.5](../destiny/tasks.md)). These are resolved from register **name to task index** over the whole flat plan, so an index means the same thing on both sides of the destiny boundary. |
+| `onchanges:` · `onfail:` | **Merged into every destiny task of the group**, exactly as a `block:` passes its own down ([destiny/tasks.md §6.5](../destiny/tasks.md)). These are resolved from register **name to task index** over the whole flat plan, so an index means the same thing on both sides of the destiny boundary. |
 | `where:` · `on:` · `run_once:` | **Before the group is rendered** - they select the hosts the whole destiny lands on (§4, §2.2.2). `where:` is the register- and soulprint-capable one: use it for any host-variant condition. |
 | `serial:` | Inherited by every destiny task - the whole destiny rolls as one wave (§2.2.1). |
 | `when:` | **At render, Keeper-side** - and therefore it must be **static** (`input.` / `vars.` / `incarnation.`). A static-false applier collapses into a single skip placeholder carrying its own `register:`; a static-true one renders normally. |
 | `async:` | **Refused** (`async_on_apply_invalid`) - asynchrony of a whole group is deferred ([ADR-0075](../adr/0075-intra-host-async-tasks.md)). |
+| `require:` | **Refused** (`require_outside_destiny`) - like on every scenario task. It used to be merged into every destiny task of the group; a wait it held among the destiny's own tasks is a `require:` inside the destiny, and a wait on an earlier `apply:` is a `register:` on that `apply:`. |
 | `vars:` | **On the caller's side, into `apply.input`** - the applier's own `vars:` plus any a `block:` above merged in are resolved in the scenario env, and only the resulting VALUES cross into the destiny, exactly like every other `apply.input` value. NOT inherited by the children: the destiny renders its own locals from its `vars.yml` ([destiny/vars.md](../destiny/vars.md)) and never sees its caller's. |
 | `changed_when:` · `failed_when:` · `retry:` · `timeout:` · `params:` | **Refused** (`<key>_on_apply_invalid`) - module-specific keys that an applier cannot answer, see below. |
 | `id:` · `loop:` | **Refused** (`id_unsupported_target` / `loop_unsupported_target`) - both are allowed only on a module task in the pilot; an applier is one of the discriminators they already cover. |
@@ -157,7 +158,7 @@ Concretely, with a destiny task written as
 
 an applier that adds `onchanges: [df_config]` over that destiny does **not** confine the restart to a config change - the task ends up gated on `[df_config, dragonfly_bin, dragonfly_unit]` and restarts on a binary change even when `df_config` never moved. A destiny task carrying no requisite of its own is unaffected: for it the applier's `onchanges:` is a pure narrowing, which is the case shown above. Expressing "applier AND destiny task" needs a wire change and is deferred to NIM-351; until then, if the inner requisite must stay authoritative, gate the applier with `where:` instead, or leave the requisite off the applier.
 
-**Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the three requisites, so nothing else it carries reaches a rendered task. A key that turns out to be answerable on the caller's side leaves the family rather than staying refused - `vars:` did, see below.
+**Module-specific keys on an applier are refused** (family `<key>_on_apply_invalid`, the apply-side mirror of `<key>_on_block_invalid`, NIM-286). The membership rule is that the key **works on a module task and is lost on an applier**: an applier invokes no module, and render hands its children only the requisites (`onchanges:`/`onfail:` - `require:` is refused on a scenario task), so nothing else it carries reaches a rendered task. A key that turns out to be answerable on the caller's side leaves the family rather than staying refused - `vars:` did, see below.
 
 | Refused key | Why it has no answer here | Write instead |
 |---|---|---|
@@ -239,13 +240,13 @@ This axis is **orthogonal** to `async:` and `loop:` DSL cores - do not confuse:
 
 | Mechanism | Axis | Source | Semantics |
 |---|---|---|---|
-| `async:` (tasks.md §6) | concurrent flows on ONE host | — | fire-and-forget, the flow does not wait; barriers are `require:` / a register reference / the end of the run |
+| `async:` (tasks.md §6) | concurrent flows on ONE host, inside a destiny | — | fire-and-forget, the flow does not wait; barriers are `require:` / a register reference / the end of the run |
 | `loop:` (tasks.md §7) | data collection | `input.*` / `vars.*` | repeat step by element |
 | `serial:` | Target HOSTS | resolve `on:`/`where:` | waves across ≤N hosts, waves sequentially |
 | `run_once:` | Target HOSTS | resolve `on:`/`where:` | exactly one (first by SID) target host |
 
 Combinable: step with `loop:` under `serial:` runs the entire loop on each
-wave host; `async:` inside the host works regardless of waves.
+wave host; `async:` inside an applied destiny works regardless of waves.
 
 > **Discovery phase of `loop:` (normative).** `loop:` is expanded in
 > **render phase** - one task gives **N `RenderedTask`** for elements `items:`,
@@ -711,7 +712,7 @@ whole section exists to prevent.
 3. **Cross-incarnation targeting is prohibited by construction.** The `on:` resolver cannot return a host that is not a member of the current incarnation, given any set of covens — the roster is membership-scoped, so a stable coven can only intersect it, never reach outside it. This is a security invariant (see [ADR-008](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)), now enforced by the membership join rather than by the name-coven.
 4. Role (master / replica) **never Coven** and does not participate in `on:`. The volatile role is expressed only through `where:` (see §4).
 
-**Flow control on a keeper-side task is not the Soul-side one.** The keeper's own runner walks its tasks in plan order and evaluates no predicate, so `async:` is refused (`async_on_keeper_invalid`), `loop:`/`apply:`/`block:` are refused, `require:` is accepted-and-redundant, and a `when:` reading `register.*`/`soulprint.*` is refused (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - it would be accepted and dropped, and the step that runs regardless of its condition is the one that writes incarnation state (§7). A **static** `when:` stays the working form: the keeper settles it at render, before the task is routed keeper-side. The full key-by-key answer with replacements - [keeper/modules.md](../keeper/modules.md).
+**Flow control on a keeper-side task is not the Soul-side one.** The keeper's own runner walks its tasks in plan order and evaluates no predicate, so `async:` is refused (`async_on_keeper_invalid`), `loop:`/`apply:`/`block:` are refused, `require:` is refused as on every scenario task (`require_outside_destiny`), and a `when:` reading `register.*`/`soulprint.*` is refused (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - it would be accepted and dropped, and the step that runs regardless of its condition is the one that writes incarnation state (§7). A **static** `when:` stays the working form: the keeper settles it at render, before the task is routed keeper-side. The full key-by-key answer with replacements - [keeper/modules.md](../keeper/modules.md).
 
 These four are judged by the task's **side**, i.e. by its module address — not by a written
 `on: keeper`. That is a real widening rather than a restatement: while the checks keyed on the
@@ -1082,7 +1083,9 @@ limited by a hard ceiling (insurance on top of cycle-detection).
 task is also allowed **static** `when:` - conditional include (see below).
 Include task with other scope/control modifiers (`vars:` / `loop:` /
 requisites / `on:` / `where:`) **not expanded** - this is an error
-`include_modifier_unsupported` (so that scope is not lost silently). Full forwarding
+`include_modifier_unsupported` (so that scope is not lost silently); `async:` and
+`require:` are refused before expansion, as on every scenario task
+(`async_outside_destiny`, `require_outside_destiny`). Full forwarding
 (task-level `vars:` on the include task are visible to the tasks of the connected file; `loop:` on
 `include:` - repeat the file N times) - subsequent slice (see §8).
 
@@ -1559,8 +1562,8 @@ while `_<family>/` reuses the existing service-level tier and is excluded from
 scenario discovery by the prefix alone.
 - **Full scope forwarding via `include:`.** Now only pure scope is expanded
 `include: <file>`; scope/control modifiers on an include task
-(`vars:`/`loop:`/`when:`/requisites/`on:`/`where:`) are rejected
-(`include_modifier_unsupported`, §6). Forwarding semantics (task-level `vars:`
+(`vars:`/`loop:`/`register:`/requisites/`changed_when:`/`failed_when:`/`retry:`/`timeout:`/`on:`/`where:`/`serial:`/`run_once:`) are rejected - a static `when:` is legal
+(`include_modifier_unsupported`, §6; `async:`/`require:` draw `async_outside_destiny`/`require_outside_destiny`). Forwarding semantics (task-level `vars:`
 visible to tasks of the connected file; `loop:` to `include:` - file repeat) -
 subsequent slice.
 - **Multi-host sandbox (L3-dispatch).** **L0 render-multi-host (`fixtures.hosts`) - closed** (amendment 2026-06-22, [ADR-023](../adr/0023-trial-test-runner.md)): the list of hosts is driven by a standard harness at the render level. **L3-dispatch** remains open: docker block format `stand:` for multi-host scenario test, `assert.dispatch` (who actually executes the master) and assertions for committed cross-host `incarnation.state` - open Q extension about sandbox from [destiny/testing.md](../destiny/testing.md). Not a closed solution.
@@ -1577,7 +1580,7 @@ step targeting for `create` is not entered; `where:`-invariant
 ## 9. See also
 
 - [concept.md](concept.md) - what is a scenario, border with destiny, declared vs actual role, role-agnostic service vars.
-- [destiny/tasks.md](../destiny/tasks.md) - **DSL task core**, inherited by scenario entirely (source of truth according to `module`/`include`/`block`/`async`/`loop`/`register`/requisites/`retry`/`timeout`/`changed_when`/`failed_when`/template context).
+- [destiny/tasks.md](../destiny/tasks.md) - **DSL task core**, inherited by scenario entirely except `async:`/`require:`, which are destiny-only (source of truth according to `module`/`include`/`block`/`async`/`loop`/`register`/requisites/`retry`/`timeout`/`changed_when`/`failed_when`/template context).
 - [architecture.md → ADR-008](../adr/0008-coven-stable-tags.md), [ADR-009](../adr/0009-scenario-dsl.md).
 - [architecture.md → "Targeting and host communication"](../architecture.md) - `on:`/`where:`, resolver contract, probe.
 - [architecture.md → "Service - structure and manifest"](../architecture.md) - service repo layout and `scenario/<name>/main.yml`.

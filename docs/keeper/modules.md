@@ -58,7 +58,7 @@ A keeper-side task is executed by the keeper's own scenario runner, which walks 
 | `block:` | **Refused** (`block_on_keeper_invalid`) - a block fans its children out over the run's hosts, and the keeper is not one of them. Refused at **both** levels: on the block, and on a keeper-side task nested inside one - the child needs no `on:` to be caught, since its module address is what decides. Keeper-side tasks go flat, in the scenario's own task list. |
 | `when:` **static** (`input.` / `vars.` / `incarnation.`) | **Honoured.** The keeper settles it at render, before the task is routed keeper-side: false collapses the step to a skip placeholder, true renders it normally. This is the working form. |
 | `when:` reading `register.*` / `soulprint.*` | **Refused** (`when_on_keeper_dynamic_unsupported`, [ADR-0084](../adr/0084-explicit-state-capture.md) F-D) - see below. |
-| `require:` | **Accepted, redundant** - the keeper runs its tasks in plan order, so the barrier is already satisfied; threading it keeps its names under the unknown-register check. |
+| `require:` | **Refused** (`require_outside_destiny`) - as on every scenario task, where a keeper-side task lives: the keeper runs its tasks in plan order, so the barrier has nothing to wait for ([destiny/tasks.md §6](../destiny/tasks.md)). |
 | `register:` · `id:` | **Accepted** - the task's register is accumulated under the keeper target and is readable by a **later keeper task** (`register.*` in the run-level context above). |
 
 **A `when:` that reads `register.*` or `soulprint.*` is an error**, not a slow path. `when:` is a Soul-side predicate: it is evaluated in the Soul's own flow-control sandbox, and a keeper task never reaches a Soul. Until it was refused, the key was accepted and dropped on the floor - the file said the step was conditional and the step ran every time. Since [ADR-0084](../adr/0084-explicit-state-capture.md) made `core.state.<verb>` the only writer of incarnation state, the step that runs every time is the step that **writes state**, which is why this is an ERROR at parse (`soul-lint`, with a line and a column) with a fail-closed backstop at render.
@@ -334,7 +334,6 @@ It exists because `core.exec.run` and `core.file.present` are Soul-side and a fr
 ```yaml
 - name: Install soul and redeem the token
   module: core.ssh.run
-  require: [tokens]
   params:
     hosts: "${ register.tokens.hosts }"
     ssh_provider: vault-ssh

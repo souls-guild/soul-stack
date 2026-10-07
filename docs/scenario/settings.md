@@ -69,7 +69,7 @@ is `mergeBlockInheritance` (`keeper/internal/render/block.go:280-292`):
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:368-381`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:525-538`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
 | `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:65`, `:228-236`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |

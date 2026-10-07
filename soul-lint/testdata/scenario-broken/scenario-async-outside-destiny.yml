@@ -1,0 +1,8 @@
+name: async-outside-destiny
+tasks:
+  - name: Render the nginx vhost
+    module: core.file.rendered
+    async: true
+    params:
+      template: vhost.conf.tmpl
+      path: /etc/nginx/sites-enabled/app.conf

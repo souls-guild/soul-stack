@@ -446,7 +446,7 @@ func stampIncludeGroup(tasks []Task, when string, groupID int) {
 func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen string, outer map[string]bool) ([]Task, bool) {
 	name := task.Include.Include
 
-	if reason := includeModifierReason(task); reason != "" {
+	if reason := includeModifierReason(task, e.destinyTasks); reason != "" {
 		e.addError("include_modifier_unsupported",
 			fmt.Sprintf("include %q carries %s - forwarding scope/control through include is out of slice B; move the modifier onto a module task of the included file", name, reason),
 			"")
@@ -545,14 +545,16 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 // true one. It comes back here when the output-contract slice makes `output:`
 // legal on a module task, because forwarding it through include stays unbuilt.
 // `settings:` (NIM-927) is absent for the same reason: `settings_on_include_invalid`
-// refuses it at validation.
-func includeModifierReason(task Task) string {
+// refuses it at validation. `async:`/`require:` are skipped in a scenario for it too
+// (`async_outside_destiny`/`require_outside_destiny`, NIM-941); in a destiny this
+// switch is their only refusal.
+func includeModifierReason(task Task, inDestiny bool) string {
 	switch {
 	case task.Loop != nil:
 		return "loop: (slice E)"
 	case len(task.Vars) > 0:
 		return "vars:"
-	case task.Async:
+	case task.Async && inDestiny:
 		return "async:"
 	case task.Register != "":
 		return "register:"
@@ -560,7 +562,7 @@ func includeModifierReason(task Task) string {
 		return "onchanges:"
 	case len(task.OnFail) > 0:
 		return "onfail:"
-	case task.Require != nil:
+	case task.Require != nil && inDestiny:
 		return "require:"
 	case task.ChangedWhen != "":
 		return "changed_when:"

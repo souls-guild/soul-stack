@@ -8,33 +8,59 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/config"
+	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// asyncScenario — the canonical ADR-0075 shape parsed from YAML (so the test
+// asyncDestinyTasks — the canonical ADR-0075 shape parsed from YAML (so the test
 // covers the config grammar too, not just the struct): two fire-and-forget
-// probes, then a task holding an explicit barrier on both.
-const asyncScenario = `
-name: async-pilot
-description: two async probes joined by an explicit require
-tasks:
-  - name: collect cpu
-    module: core.exec.run
-    register: collect_cpu
-    async: true
-    params:
-      cmd: collect-cpu
-  - name: collect memory
-    module: core.exec.run
-    register: collect_memory
-    async: true
-    params:
-      cmd: collect-memory
-  - name: send report
-    module: core.exec.run
-    require: [collect_cpu, collect_memory]
-    params:
-      cmd: report-send
+// probes, then a task holding an explicit barrier on both. A destiny's tasks,
+// because a scenario refuses both keys since NIM-941.
+const asyncDestinyTasks = `
+- name: collect cpu
+  module: core.exec.run
+  register: collect_cpu
+  async: true
+  params:
+    cmd: collect-cpu
+- name: collect memory
+  module: core.exec.run
+  register: collect_memory
+  async: true
+  params:
+    cmd: collect-memory
+- name: send report
+  module: core.exec.run
+  require: [collect_cpu, collect_memory]
+  params:
+    cmd: report-send
 `
+
+// renderAsyncDestiny loads src as a destiny's `tasks/main.yml` and renders it
+// through an applier on one host.
+func renderAsyncDestiny(t *testing.T, src string) []*RenderedTask {
+	t.Helper()
+	parsed, diags, err := config.LoadDestinyTasksFromBytes("tasks/main.yml", []byte(src), config.ValidateOptions{DestinyTasks: true})
+	if err != nil {
+		t.Fatalf("LoadDestinyTasksFromBytes: %v", err)
+	}
+	for _, d := range diags {
+		if d.Level == diag.LevelError {
+			t.Fatalf("destiny diagnostic (%s): %s", d.Code, d.Message)
+		}
+	}
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	tasks, _, err := p.Render(context.Background(), RenderInput{
+		Scenario:    applyScenario("async-pilot", map[string]any{}),
+		Input:       map[string]any{},
+		Incarnation: IncarnationMeta{ID: "svc"},
+		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
+		Destiny:     &stubDestinyResolver{resolved: &ResolvedDestiny{Name: "async-pilot", Tasks: parsed}},
+	})
+	if err != nil {
+		t.Fatalf("Render: %v", err)
+	}
+	return tasks
+}
 
 func asyncRenderInput(m *config.ScenarioManifest) RenderInput {
 	return RenderInput{
@@ -48,14 +74,10 @@ func asyncRenderInput(m *config.ScenarioManifest) RenderInput {
 // TestRender_AsyncAndRequireReachTheWire is the acceptance test of NIM-150: the
 // ADR-0075 construct parses, survives render, and lands in RenderedTask's wire
 // form with require: resolved from register names into LOCAL task indices. The
-// guards that used to reject the key (guardPilotDSL) no longer fire.
+// render guards that used to reject the key (guardPilotDSL, guardDestinyTask) no
+// longer fire.
 func TestRender_AsyncAndRequireReachTheWire(t *testing.T) {
-	m := loadStagedManifest(t, asyncScenario)
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	tasks, _, err := p.Render(context.Background(), asyncRenderInput(m))
-	if err != nil {
-		t.Fatalf("Render: %v (the async: guard must be lifted, ADR-0075)", err)
-	}
+	tasks := renderAsyncDestiny(t, asyncDestinyTasks)
 	if len(tasks) != 3 {
 		t.Fatalf("rendered tasks = %d, want 3", len(tasks))
 	}
@@ -88,27 +110,19 @@ func TestRender_AsyncAndRequireReachTheWire(t *testing.T) {
 // TestRender_RequireAllReachesTheWire — the scalar form `require: all` sets
 // require_all and names no source, so require_idx stays empty.
 func TestRender_RequireAllReachesTheWire(t *testing.T) {
-	m := loadStagedManifest(t, `
-name: async-all
-description: a global barrier over every async task
-tasks:
-  - name: collect cpu
-    module: core.exec.run
-    register: collect_cpu
-    async: true
-    params:
-      cmd: collect-cpu
-  - name: final consistency check
-    module: core.exec.run
-    require: all
-    params:
-      cmd: check-cluster-state
+	tasks := renderAsyncDestiny(t, `
+- name: collect cpu
+  module: core.exec.run
+  register: collect_cpu
+  async: true
+  params:
+    cmd: collect-cpu
+- name: final consistency check
+  module: core.exec.run
+  require: all
+  params:
+    cmd: check-cluster-state
 `)
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	tasks, _, err := p.Render(context.Background(), asyncRenderInput(m))
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
 	if !tasks[1].RequireAll {
 		t.Error("RequireAll = false, want true (`require: all` scalar form)")
 	}
@@ -121,9 +135,9 @@ tasks:
 	}
 }
 
-// TestRender_AsyncInDestiny — guardDestinyTask no longer rejects async: either
-// (ADR-0075 lifts BOTH render guards): a destiny task runs Soul-side inside the
-// same ApplyRequest, so asynchrony is as meaningful there as in a scenario.
+// TestRender_AsyncInDestiny — guardDestinyTask does not reject async: (ADR-0075
+// lifted both render guards): a destiny task runs Soul-side inside one
+// ApplyRequest, and since NIM-941 a destiny is the only place the key is legal.
 func TestRender_AsyncInDestiny(t *testing.T) {
 	d := &ResolvedDestiny{
 		Name: "warm-caches",
@@ -169,23 +183,15 @@ func TestRender_AsyncInDestiny(t *testing.T) {
 // flag, so each runs in its own flow. A threading regression here would silently
 // make only some iterations async.
 func TestRender_LoopAsyncMarksEveryIteration(t *testing.T) {
-	m := loadStagedManifest(t, `
-name: loop-async
-description: every iteration of an async loop runs in its own flow
-tasks:
-  - name: fetch
-    module: core.exec.run
-    async: true
-    loop:
-      items: "${ ['a', 'b', 'c'] }"
-    params:
-      cmd: "fetch ${ item }"
+	tasks := renderAsyncDestiny(t, `
+- name: fetch
+  module: core.exec.run
+  async: true
+  loop:
+    items: "${ ['a', 'b', 'c'] }"
+  params:
+    cmd: "fetch ${ item }"
 `)
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-	tasks, _, err := p.Render(context.Background(), asyncRenderInput(m))
-	if err != nil {
-		t.Fatalf("Render: %v", err)
-	}
 	if len(tasks) != 3 {
 		t.Fatalf("rendered tasks = %d, want 3 (one per loop item)", len(tasks))
 	}
@@ -249,28 +255,33 @@ func TestRender_RequireUnknownRegister(t *testing.T) {
 // source of the barrier lands in Passage 1, while the task awaiting it stays in
 // Passage 0 (`require:` is deliberately NOT passage-defining). The two would
 // then travel in different ApplyRequests with the consumer dispatched first.
-const crossPassageRequireScenario = `
-name: cross-passage-require
-description: a barrier whose source lands in the next Passage
-tasks:
-  - name: probe role
-    module: core.exec.run
-    register: role
-    changed_when: "false"
-    params:
-      cmd: detect-role
-  - name: act on master only
-    module: core.exec.run
-    register: acted
-    where: "register.role.stdout == 'master'"
-    params:
-      cmd: promote
-  - name: waits for a task it can never see
-    module: core.exec.run
-    require: [acted]
-    params:
-      cmd: report
-`
+//
+// Built as a struct: the validator refuses `require:` in a scenario since
+// NIM-941, and what is pinned here is the render guard standing behind it.
+func crossPassageRequireScenario() *config.ScenarioManifest {
+	return &config.ScenarioManifest{
+		Name: "cross-passage-require",
+		Tasks: []config.Task{
+			{
+				Name:        "probe role",
+				Register:    "role",
+				ChangedWhen: "false",
+				Module:      &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "detect-role"}},
+			},
+			{
+				Name:     "act on master only",
+				Register: "acted",
+				Where:    "register.role.stdout == 'master'",
+				Module:   &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "promote"}},
+			},
+			{
+				Name:    "waits for a task it can never see",
+				Require: []string{"acted"},
+				Module:  &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "report"}},
+			},
+		},
+	}
+}
 
 // TestRender_RequireCrossPassageForwardRejected — the Passage invariant of
 // ADR-0075(d): an async flow never outlives its Passage, so a barrier can only
@@ -279,7 +290,7 @@ tasks:
 // for"), and shipping it would silently reverse the declared order — reject at
 // render instead.
 func TestRender_RequireCrossPassageForwardRejected(t *testing.T) {
-	m := loadStagedManifest(t, crossPassageRequireScenario)
+	m := crossPassageRequireScenario()
 	plan, err := Stratify(m.Tasks)
 	if err != nil {
 		t.Fatalf("Stratify: %v", err)

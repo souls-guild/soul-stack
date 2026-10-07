@@ -409,7 +409,7 @@ gRPC EventStream, `transport: ssh` hosts by opening an SSH session, delivering `
 exec'ing it. Everything downstream of the send is shared — one `apply_runs` row, one event
 sink, one barrier.
 
-**`register:` fills, and a `require:` over it releases.** This was the question ADR-032 left
+**`register:` fills, and a later step reading it is released.** This was the question ADR-032 left
 open: `register_data` rides on `TaskEvent`, and `apply_task_register` has a foreign key to
 `apply_runs(apply_id, sid, passage)`, which a bare push run never writes. A scenario run
 does — the barrier polls that table — so the key is satisfied, and both branches feed the

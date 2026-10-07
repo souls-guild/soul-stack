@@ -16,10 +16,10 @@ Scenario - unit of operation on [Incarnation](../architecture.md). Folder `scena
 
 ## Related Documents
 
-- [`docs/destiny/tasks.md`](../destiny/tasks.md) - **full specification of the DSL task core** (`module`, `include`, `block`, `async`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, template context). Scenario inherits this core entirely; [orchestration.md](orchestration.md) describes only the delta scenario on top of it.
+- [`docs/destiny/tasks.md`](../destiny/tasks.md) - **full specification of the DSL task core** (`module`, `include`, `block`, `async`, `loop`, `register`, `onchanges`/`onfail`/`require`, `retry`, `timeout`, `changed_when`/`failed_when`, template context). Scenario inherits this core entirely, except `async`/`require`, which act only inside a destiny (`async_outside_destiny`, `require_outside_destiny`); [orchestration.md](orchestration.md) describes only the delta scenario on top of it.
 - [`docs/architecture.md`](../architecture.md):
   - [ADR-008](../adr/0008-coven-stable-tags.md) - Coven as stable boolean tags (not role).
-  - [ADR-009](../adr/0009-scenario-dsl.md) - scenario receives the full DSL of destiny tasks; border with destiny - recommendation.
+  - [ADR-009](../adr/0009-scenario-dsl.md) - scenario receives the full DSL of destiny tasks (except `async:`/`require:`, destiny-only); border with destiny - recommendation.
   - [Service - structure and manifest](../architecture.md) - layout of the service repo where `scenario/` lives.
   - [Targeting and host communication](../architecture.md) - `on:`/`where:`, resolver contract, probe as a volatile role mechanism.
   - [Incarnation - runtime service instance](../architecture.md) - what the scenario, `state`/`status`/`error_locked` is working on.

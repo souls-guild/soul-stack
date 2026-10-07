@@ -1211,7 +1211,8 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 // keeper/internal/render.renderApplyDestiny, and `When`/`Where`/`On`/
 // `RunOnce`/`Serial` in the scenario loop that calls it. Nothing else on the
 // applier reaches a RenderedTask: mergeApplierInheritance carries only the
-// three requisites into the children, and the group's terminal is a synthetic
+// requisites into the children (`onchanges:`/`onfail:` from a validated plan —
+// `require:` is refused in a scenario, NIM-941), and the group's terminal is a synthetic
 // `core.noop.run` whose register is an aggregate of the children.
 //
 // ★ `vars:` left this list in NIM-336. It was the one member that could be
@@ -1248,8 +1249,9 @@ func validateAsyncOnApply(present map[string]*ast.MappingValueNode, pathPrefix s
 //     `loop_unsupported_target` respectively (the last two gate every
 //     non-module discriminator, applier included).
 //   - `register:` and the applier's inherited keys (`when:`/`where:`/`on:`/
-//     `serial:`/`run_once:`/`onchanges:`/`onfail:`/`require:`/`name:`) — all
-//     read, all working.
+//     `serial:`/`run_once:`/`onchanges:`/`onfail:`/`name:`) — all read, all
+//     working. `require:` is refused on every scenario task instead
+//     (`require_outside_destiny`, NIM-941).
 var applyForbiddenKeys = []struct{ key, why, hint string }{
 	{
 		"changed_when",
@@ -1355,7 +1357,7 @@ func keeperSideBecause(addr string) string {
 }
 
 // validateAsyncOnKeeper raises `async_on_keeper_invalid` for `async:` on a
-// keeper-side task — the third and last construct where the flag has no meaning,
+// keeper-side task — the third construct where the flag has no meaning,
 // joining `async_on_block_invalid` and `async_on_apply_invalid` (NIM-247).
 //
 // `async:` is Soul-side task concurrency: a keeper task is executed by the
@@ -1368,9 +1370,8 @@ func keeperSideBecause(addr string) string {
 // off a written `on: keeper`: `async:` is equally a no-op on a `core.state.set`
 // that carries no `on:` at all, and that is now the ordinary way to write one.
 //
-// `require:` on a keeper task is deliberately NOT touched: it is accepted and
-// redundant, since the keeper executor runs its tasks in plan order
-// (destiny/tasks.md §8).
+// `require:` on a keeper task is not this check's: a keeper task lives only in a
+// scenario, where the key is refused on every task (`require_outside_destiny`).
 func validateAsyncOnKeeper(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	addr, isKeeper := keeperSideTask(present)
 	if !isKeeper {

@@ -36,14 +36,14 @@ Pivot table. Semantics, validation and examples are in §4-§8.
 | `params:` | map | module-task | required if `module:` |
 | `vars:` | map | everyone | optional |
 | `when:` | string (template-expr) | everyone (on include there is only a **static** predicate, see §4) | optional |
-| `async:` | bool | everyone | optional, default `false` |
+| `async:` | bool | module-task of a destiny, not inside a `block:` (refused there at render, not by `soul-lint`; refused on `block:`/`apply:`/`include:` and on every scenario task - §6) | optional, default `false` |
 | `loop:` | map | module-task | optional (on include - **deferred**, see §7) |
 | `register:` | string (identifier) | module-task | optional |
 | `id:` | string (identifier) | module-task (pilot) | optional |
 | `output:` | map | — | **refused** (`output_unsupported`) - the output contract is unimplemented, see §9 |
 | `onchanges:` | array of register-id | everyone | optional |
 | `onfail:` | array of register-id | everyone | optional |
-| `require:` | array of register-id OR `"all"` | everyone | optional |
+| `require:` | array of register-id OR `"all"` | every task of a destiny except `include:` (refused on every scenario task - §8) | optional |
 | `changed_when:` | string (template-expr) | module-task | optional |
 | `failed_when:` | string (template-expr) | module-task | optional |
 | `retry:` | map | module-task | optional |
@@ -121,7 +121,7 @@ infinite recursion;
   - `name:` on the include task works as **group header** in the apply log;
   - on an include task are allowed **only** `include:`/`name:`/`when:`; any other
 modifier (`vars:`/`loop:`/`register:`/`async:`/scenario-delta) - error
-`include_modifier_unsupported` (disclosure whitelist so that scope is not lost silently).
+`include_modifier_unsupported` (disclosure whitelist so that scope is not lost silently). In a scenario, `async:` and `require:` on an include draw `async_outside_destiny`/`require_outside_destiny` instead (§6).
 - **Conditional include (`when:` on the include task) - render-phase group-drop.** On
 include-task allow `when:` - then the connected task group is included in the plan
 **only** if the predicate is true. When `when:` is false - ALL tasks of the connected
@@ -160,7 +160,7 @@ See §6.5 - inline task group with common `when:` / requisites.
 
 ### `async:`
 
-Flag on the task - see §6. Not a separate type of task, and not accepted on a construct that expands into a group (`block:`, `apply:` - §6 "Rules").
+Flag on the task - see §6. Not a separate type of task, and not accepted on a construct that expands into a group (`block:`, `apply:` - §6 "Rules"). A destiny's key only: a scenario refuses it (`async_outside_destiny`, §6).
 
 > `parallel:` is **reserved** and is not a valid key ([ADR-0075](../adr/0075-intra-host-async-tasks.md)): it is held for a future concurrent **group with a join**, which is a different construct from asynchrony. Writing it is an `unknown_key` error.
 
@@ -189,6 +189,8 @@ The specific max length will be fixed along with the lint rule.
 ## 6. Asynchronous tasks (`async: true`)
 
 `async:` - **flag** on a normal task (`bool`, default `false`). Not a separate type of task and **not a grouping mechanism**. Semantics - fire-and-forget: the task starts in its own flow, the main flow goes on without waiting for its completion. Fixed by [ADR-0075](../adr/0075-intra-host-async-tasks.md).
+
+> **Inside a destiny only, together with `require:`.** Under [linear dispatch](../adr/draft-scenario-linear-barrier.md) (decision 7) a scenario sends each of its tasks as its own step once the previous one has finished on every host, so concurrency on a host - a `loop:`'s iterations included, though a loop is one step - lives in a destiny. Apart from the scenario's own `async:` tasks, which move into a destiny together with the `require:` that joined them, a scenario `require:` waited on something only where it reached an applied destiny's `async:` tasks in the same message (one Passage today, a block rolled as one group under linear dispatch). To keep such a wait, give each `apply:` before the waiting point a `register:` - its terminal waits for every task of its destiny, `async:` ones included, and stops the run on a failed one; a wait among one destiny's own tasks (what a `require:` written on its `apply:` did, merged into every task of it) is a `require:` inside the destiny. The refusal ships with the release train that turns linear dispatch on, ahead of the switch itself, and does not depend on it: `soul-lint` cannot see which model a Keeper runs. Both are refused on every scenario task - at the top level, at any block depth and in an included body - as `async_outside_destiny` and `require_outside_destiny`, by `soul-lint` and by the Keeper when it parses a run (NIM-941). Where a construct already refuses `async:` (an applier, a block, a keeper-side task), its own code stays the one reported. To run tasks concurrently on a host, write them in a destiny and apply it.
 
 > **`parallel:` is reserved, not a synonym.** It is held for a future concurrent **group with a join** - a bounded set of tasks with a group-scoped outcome - which is a different construct from asynchrony. Today `parallel:` is not a valid key (`unknown_key`).
 
@@ -274,8 +276,8 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 ### Rules
 
 - **No grouping.** `async: true` on two adjacent tasks **does not** mean "execute together". Each simply runs in its own flow independently. Neighbours can be anything - other async tasks, ordinary tasks, include, block. A construct that *does* group is the reserved `parallel:` (not implemented).
-- **Not on a construct that expands into a group.** `async:` is rejected fail-closed on a `block:` (`async_on_block_invalid`, §6.5) and on an `apply:` task (`async_on_apply_invalid`) - the two constructs that fan out into several tasks. Running a whole group in one flow is the design intent and a deferred slice ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); until it lands, render carries the flag onto none of the expanded tasks, so accepting the key would hand back the ordinary sequential duration with nothing said about it. Put `async:` on the individual tasks instead - inside the block, or inside the destiny the applier invokes.
-- **Not on a keeper-side task.** `async: true` on a keeper-side task is rejected (`async_on_keeper_invalid`). The side is read off the module ADDRESS since NIM-749, not off a written `on: keeper` — the flag is equally a no-op on a `core.state.set` carrying no `on:` at all: `async:` is Soul-side task concurrency and a keeper task is executed by the keeper's own runner, never reaching a Soul - honouring the flag would be a no-op. `require:` on a keeper task is a different matter and stays legal (§8).
+- **Not on a construct that expands into a group.** `async:` is rejected fail-closed on a `block:` (`async_on_block_invalid`, §6.5) and on an `apply:` task (`async_on_apply_invalid`) - the two constructs that fan out into several tasks. Running a whole group in one flow is the design intent and a deferred slice ([ADR-0075](../adr/0075-intra-host-async-tasks.md)); until it lands, render carries the flag onto none of the expanded tasks, so accepting the key would hand back the ordinary sequential duration with nothing said about it. Put `async:` on the individual tasks of the destiny the applier invokes instead - not inside a block, where it is refused too (see below).
+- **Not on a keeper-side task.** `async: true` on a keeper-side task is rejected (`async_on_keeper_invalid`). The side is read off the module ADDRESS since NIM-749, not off a written `on: keeper` — the flag is equally a no-op on a `core.state.set` carrying no `on:` at all: `async:` is Soul-side task concurrency and a keeper task is executed by the keeper's own runner, never reaching a Soul - honouring the flag would be a no-op. A keeper-side task lives only in a scenario, where `require:` is refused too (§8).
 - **Failure is observed where it is awaited.** A failed async task writes `register.<name>.failed = true` and **does not** interrupt the main flow at the moment it fails. The flow learns about it exactly where it reaches for it - an explicit `require:`, an implicit reference, or the final barrier - and there the ordinary fail-stop of §8 engages: the run is irreversibly failed, subsequent ordinary tasks are skipped, only the `onfail:` rescue tail runs.
 - **Siblings are never cancelled.** Async tasks already in flight run to completion and are collected by the final barrier. This is deliberate: cancelling would make the set of tasks that actually ran depend on scheduling timing and leave the host in a state no one declared. The cost is accepted - a doomed run may keep working as long as its slowest in-flight task. An opt-in cancel is a deferred extension ([ADR-0075](../adr/0075-intra-host-async-tasks.md)).
 - **Gating stays sequential.** The async task's own `when:` / `onchanges:` / `onfail:` are evaluated **in the main flow at its position in the plan**, before it is launched. So *whether* a task runs never depends on timing - only *when* it finishes does.
@@ -283,8 +285,8 @@ A declared per-module concurrency class is a deferred extension ([ADR-0075](../a
 - **Requisites via `register.<name>`** work as usual and are the local-barrier form. `onchanges: [ping]` after an `async: true` task registering `ping` is correct: the framework waits for `ping`, checks `register.ping.changed`, then executes or skips the current task.
 - **The apply log is no longer in plan order.** Task events from async flows interleave; each carries its plan index and the UI orders by it, not by arrival. Nothing is lost - the order is not the plan's.
 - **`loop:` + `async: true`** - each iteration runs in its own flow, the main flow goes on. Details - §7.
-- **`include:` / `block:` with `async: true`** - **deferred** (see §6.5). Design intent: the whole connected group runs in one flow (tasks inside stay sequential) and the main flow goes on, with no implicit barrier at the group boundary. Gated fail-closed until a slice implements it (`async_on_block_invalid`). A task **inside** a block is deferred with it: the group is meant to become one flow, so marking one of its members async ahead of that decision is rejected too.
-- **A keeper-side task with `async: true`** - **rejected** (the side comes from the module address, not from a written `on: keeper`). `async:` is Soul-side task concurrency; a keeper-side task ([keeper/modules.md](../keeper/modules.md)) executes in the Keeper's scenario runner and never reaches a Soul, so the flag would be a silent no-op. `require:` on a keeper task is accepted and simply redundant (see §8).
+- **`include:` / `block:` with `async: true`** - **deferred** (see §6.5). Design intent: the whole connected group runs in one flow (tasks inside stay sequential) and the main flow goes on, with no implicit barrier at the group boundary. Gated fail-closed until a slice implements it (`async_on_block_invalid` on a block, `include_modifier_unsupported` on an include in a destiny, `async_outside_destiny` on an include in a scenario). A task **inside** a block is deferred with it: the group is meant to become one flow, so marking one of its members async ahead of that decision is rejected too.
+- **A keeper-side task with `async: true`** - **rejected** (the side comes from the module address, not from a written `on: keeper`). `async:` is Soul-side task concurrency; a keeper-side task ([keeper/modules.md](../keeper/modules.md)) executes in the Keeper's scenario runner and never reaches a Soul, so the flag would be a silent no-op. `require:` there is refused like on every scenario task (see §8).
 
 ## 6.5. Block - inline task group
 
@@ -566,7 +568,7 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 ### `require:`
 
 - **Type:** **array of register-id** OR **string `"all"`**.
-- **Applies to:** all types of problems.
+- **Applies to:** every task kind of a destiny except `include:` (`include_modifier_unsupported`). Refused on every scenario task (`require_outside_destiny`, §6).
 - **Semantics:** the task does not start until the mentioned async tasks have finished. In a linear flow without `async:` the requirement is redundant (order is already guaranteed).
 - **Form 1 - `require: [a, b, c]`.** Wait for the listed tasks by their `register:`-id. The barrier is local - only for these three, the remaining async tasks keep running.
 - **Form 2 - `require: all`.** Special meaning: wait for **every** async task started earlier in this run - including ones that have already finished, whose outcome the barrier then observes. Used as an explicit "synchronization barrier" - for example, before a task that wants to see a consistent state after several async phases. Mixed (`require: [a, "all"]`) - validation error; the form is strictly one of two.
@@ -592,7 +594,7 @@ By default, the run operates in **fail-stop** mode: the first failed task (`fail
 
 - **A name no task registers** - a typo would silently degrade the barrier into "wait for nothing", so it is a render error, exactly like a typo in `onchanges:`.
 - **A source that is not EARLIER in the plan** (`require_forward_reference`, caught by the config validator and `soul-lint` before render) - a Soul runner resolves what a task waits for in the main flow, at that task's plan position, so only flows launched by then can be in the set. A barrier naming a source that starts later resolves to nothing: the runner does not deadlock and does not fail, it simply does not wait, and the ordering written into the plan never happens. The degenerate case - a task naming its own `register:` - is the same no-op and is refused with it. This also makes a `require:` **cycle** unrepresentable: a cycle needs at least one forward edge.
-- **A source in a LATER [Passage](../adr/0056-staged-render-passage.md)** - `require:` is deliberately not passage-defining (it expresses order within a Passage, not a Keeper-side data dependency), so a barrier can end up naming a task that stratification pushed into the next Passage. The two would then travel in different `ApplyRequest`s with the consumer dispatched first, and no wire form can say "wait for a task in a message you have not received". Rejected at render. Unlike a cross-Passage `onchanges:`, which Keeper *can* resolve from what the earlier Passage recorded, an ordering constraint has nothing to resolve against - the source has not run yet. The opposite direction is fine and stays silent: a source in an **earlier** Passage is already finalized, because a Passage closes on every host before the next one starts.
+- **A source in a LATER [Passage](../adr/0056-staged-render-passage.md)** - `require:` is deliberately not passage-defining (it expresses order within a Passage, not a Keeper-side data dependency), so a barrier can end up naming a task that stratification pushed into the next Passage. The two would then travel in different `ApplyRequest`s with the consumer dispatched first, and no wire form can say "wait for a task in a message you have not received". Rejected at render. Unlike a cross-Passage `onchanges:`, which Keeper *can* resolve from what the earlier Passage recorded, an ordering constraint has nothing to resolve against - the source has not run yet. The opposite direction is fine and stays silent: a source in an **earlier** Passage is already finalized, because a Passage closes on every host before the next one starts. **Unreachable from a validated plan since NIM-941**: a scenario refuses `require:`, and a destiny's tasks share one Passage. The render check stays as defense-in-depth.
 
 A source that simply did not survive per-host `where:` filtering is not an error - it never ran on this host, so there is nothing to wait for and the barrier passes. Nor is a barrier on an ordinary (non-`async:`) predecessor: it is redundant rather than wrong, and the plan keeps working unchanged if that source later becomes `async: true`.
 
@@ -600,7 +602,7 @@ A name that **fanned out** - a `loop:` task, whose N iterations share one `regis
 
 Order is the in-order walk of the task list, descending into `block:` - a block fans out at its own position and its children take the indices straight after it, so "earlier" means exactly what the apply log shows. An `include:` splices tasks in place and cannot reorder two tasks of one file.
 
-> **Keeper-side tasks** (judged by the module address, not by a written `on: keeper`). `require:` is accepted and redundant - the keeper executor runs its tasks in plan order. `async:` is **rejected**: it is Soul-side task concurrency, a keeper task never reaches a Soul runner, and honouring it would be a silent no-op.
+> **Keeper-side tasks** (judged by the module address, not by a written `on: keeper`) exist only in a scenario - a destiny refuses them (`keeper_module_in_destiny`). `require:` on one is refused like on any scenario task (`require_outside_destiny`): the keeper executor runs its tasks in plan order, so there is nothing to wait for. `async:` is **rejected** by its own code (`async_on_keeper_invalid`): it is Soul-side task concurrency, a keeper task never reaches a Soul runner, and honouring it would be a silent no-op.
 
 ### Addressing via `register:`, not via `name:`
 
