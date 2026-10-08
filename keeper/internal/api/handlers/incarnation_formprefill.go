@@ -141,8 +141,9 @@ func (h *IncarnationHandler) prefillFieldsForScenario(ctx context.Context, inc *
 	if !ok {
 		return nil
 	}
-	// The version is the one the incarnation was created/migrated at (the same schema that
-	// ListScenarios handed the form AND that secretSchemaForIncarnation uses).
+	// The version is the one the incarnation was created/migrated at, the schema
+	// secretSchemaForIncarnation uses. The form's fields come from ListScenarios, which
+	// defaults to the registry's ref (ADR-0068 amendment 2026-10-08).
 	// There is no client override: a single version for whitelist+secret-set is the anti
 	// version-craft invariant (see the FormPrefillTyped doc comment).
 	if inc.ServiceVersion != "" {
