@@ -37,6 +37,7 @@ func TestRenderPredicate_Randomized(t *testing.T) {
 		if err != nil {
 			t.Fatalf("RenderPredicate(%q): %v", expr, err)
 		}
+		checkResolvesAgrees(t, e, expr, ctx, []string{RegisterSelf}, got)
 		rendered++
 		for j := 0; j < 6; j++ {
 			ov := self(g.openValue())

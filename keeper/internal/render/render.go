@@ -307,6 +307,11 @@ type RenderInput struct {
 	// a block's children to narrow further ([coveredDropped]). Set per block.
 	droppedCover []*topology.HostFacts
 
+	// SoulNeeds — what every task of a linear run sends to which hosts, as far as it
+	// is known before the run, for the capability gate ahead of the first step
+	// (NIM-946). Filled by the first pass that reaches it; nil — not collected.
+	SoulNeeds *SoulNeeds
+
 	// Sealed — accumulator of sealed paths for the render run (seal /
 	// sealed-paths, [ADR-010] §7.4). Render marks the path of any params cell
 	// whose RAW `${ … }` value reads a secret source (secret-input/vault()/

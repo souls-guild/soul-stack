@@ -167,7 +167,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// compute expression may read one.
 	in.sealedCompute = sealedComputeNames(p.cel, in)
 
-	// compute: resolved ONCE per run (run-level context, no soulprint — a
+	// compute: resolved ONCE per pass (run-level context, no soulprint — a
 	// host-invariance barrier) before task rendering — the `compute.<name>`
 	// result is visible in apply.input/where/params of every host via hostVars
 	// (ADR-009).
@@ -456,6 +456,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	if err := p.settleFlow(in, tasks, plans); err != nil {
 		return nil, nil, err
 	}
+	p.fillSoulNeeds(ctx, in)
 
 	return tasks, plans, nil
 }

@@ -136,6 +136,7 @@ func checkPredicateCase(t *testing.T, e *Engine, c predicateCase) {
 	if err != nil {
 		t.Fatalf("RenderPredicate(%q): %v", c.expr, err)
 	}
+	checkResolvesAgrees(t, e, c.expr, c.ctx, open, got)
 	if c.want != "" && got.Text != c.want {
 		t.Errorf("RenderPredicate(%q)\n got: %s\nwant: %s", c.expr, got.Text, c.want)
 	}
@@ -150,6 +151,19 @@ func checkPredicateCase(t *testing.T, e *Engine, c predicateCase) {
 		if msg := sameOutcome(wantVal, wantErr, gotVal, gotErr); msg != "" {
 			t.Errorf("open set %v:\n original: %s\n rendered: %s\n %s", ov, c.expr, got.Text, msg)
 		}
+	}
+}
+
+// checkResolvesAgrees — ★ GUARD (NIM-946). The Keeper decides before a run which hosts
+// will be sent a rendered predicate from PredicateResolves, and gates them on the
+// rendered_predicate bit; the dispatch sends what RenderPredicate returned. A static
+// answer that says "nothing substituted" where RenderPredicate substituted would send a
+// rendered predicate to a Soul that never announced it can read one.
+func checkResolvesAgrees(t *testing.T, e *Engine, expr string, ctx Vars, open []string, got RenderedPredicate) {
+	t.Helper()
+	resolves, err := e.PredicateResolves(expr, open, ctx.loopNames())
+	if err != nil || resolves != got.Resolved {
+		t.Errorf("PredicateResolves(%q, %v) = %v, %v; RenderPredicate resolved %v", expr, open, resolves, err, got.Resolved)
 	}
 }
 

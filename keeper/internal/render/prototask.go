@@ -145,6 +145,15 @@ func ToProtoTasksForHost(tasks []*RenderedTask, sid string) []*keeperv1.Rendered
 type wireFlow struct {
 	when, changedWhen, failedWhen, until string
 	context                              *structpb.Struct
+	rendered                             bool
+}
+
+// SentFlow is the flow control host sid is sent for t, as [ToProtoTasksForHost] puts
+// it on the wire, and whether a value was substituted into it — what the Soul there
+// must announce it can read (NIM-946).
+func SentFlow(t *RenderedTask, sid string) HostFlow {
+	f := flowForHost(t, sid)
+	return HostFlow{When: f.when, ChangedWhen: f.changedWhen, FailedWhen: f.failedWhen, Until: f.until, Rendered: f.rendered}
 }
 
 // flowForHost picks what a host is sent for a task's flow control: the author's
@@ -162,7 +171,7 @@ func flowForHost(t *RenderedTask, sid string) wireFlow {
 	if hf.Skip {
 		return wireFlow{when: skippedWhen}
 	}
-	return wireFlow{when: hf.When, changedWhen: hf.ChangedWhen, failedWhen: hf.FailedWhen, until: hf.Until}
+	return wireFlow{when: hf.When, changedWhen: hf.ChangedWhen, failedWhen: hf.FailedWhen, until: hf.Until, rendered: hf.Rendered}
 }
 
 // skippedWhen is the `when:` a grouped child carries to a host the Keeper decided it

@@ -7,7 +7,7 @@ import (
 )
 
 // resolveCompute evaluates the scenario-level `compute:` block (ADR-009
-// amendment 2026-06-23) once per run, returning name→value for
+// amendment 2026-06-23) once per render pass, returning name→value for
 // [RenderInput.Compute]. Entries resolve in declaration order; an
 // already-computed value is visible to later ones as `compute.<name>`
 // (accumulated in acc).
@@ -26,10 +26,10 @@ import (
 // every host, but the sentence that used to stand here — "apply.input is resolved
 // on targeted[0]" — described the defect, not a guarantee.
 //
-// Resolved once: an already-computed in.Compute (from a caller or previous
-// pass) is returned as-is — idempotent across repeated calls in staged
-// render. Empty/absent block → nil (`compute.<name>` is a plain
-// no-such-key, backward-compat bit-for-bit).
+// An already-computed in.Compute (from a caller) is returned as-is. The run sets
+// none, so each of its passes resolves the block again — against the state it
+// re-read, which a capture of an earlier step has changed. Empty/absent block →
+// nil (`compute.<name>` is a plain no-such-key, backward-compat bit-for-bit).
 //
 // Non-string values (number/bool/collection) pass through as literals — the
 // CEL phase only touches strings (mirrors resolveTaskVars/renderValue).

@@ -260,6 +260,10 @@ type RunSpec struct {
 	// ([config.StepSettings]); nil for a staged run. Set by run().
 	stepSettings []config.ScenarioSettings
 
+	// prov — the run's engine provenance, for a gate that runs inside dispatch to
+	// record what it judged the run against. Unexported: set by run().
+	prov *runProvenance
+
 	// FromLocked — run starts from an already-reserved applying status
 	// (rerun-last: incarnation.UnlockForRerun under FOR UPDATE moved
 	// error_locked→applying bypassing ready, race-free). lockRun with

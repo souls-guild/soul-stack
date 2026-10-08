@@ -79,6 +79,10 @@ type DestinyResolver interface {
 	Resolve(ctx context.Context, name string) (*ResolvedDestiny, error)
 }
 
+// applierRegisterModule is the module of the terminal task that folds an applier's
+// register out of its destiny tasks (renderApplyDestiny).
+const applierRegisterModule = "core.noop.run"
+
 // renderApplyDestiny runs the isolated destiny render pass (V2, ADR-009) for
 // the parent apply task and returns its rendered tasks plus dispatch plans.
 //
@@ -392,7 +396,7 @@ func (p *Pipeline) renderApplyDestiny(
 			// Struct only exists so the proto field isn't nil (ApplyRequest
 			// assembly).
 			Params:      &structpb.Struct{Fields: map[string]*structpb.Value{}},
-			Module:      "core.noop.run",
+			Module:      applierRegisterModule,
 			Register:    applierRegister,
 			AggregateOf: aggregateOf,
 		})

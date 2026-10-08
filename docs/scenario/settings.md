@@ -147,13 +147,13 @@ the inline path today:
 - **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
   `orphaned` (`keeper/internal/applyrun/crud.go:1100-1108`), so a Soul that dies mid-task leaves its row
   `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1541-1564`). And a result finished while the stream was down must still reach
+  operator cancelled (`keeper/internal/scenario/run.go:1557-1580`). And a result finished while the stream was down must still reach
   the Keeper when it returns, or the wait buys nothing.
 - **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
   (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
-  (`keeper/internal/scenario/dispatch.go:561-574`); `soul_timeout` has to cover that wait too.
+  (`keeper/internal/scenario/dispatch.go:564-577`); `soul_timeout` has to cover that wait too.
 - **The Keeper running the run may not hold the stream.** Under HA the stream can sit on another
-  instance (`dispatch.go:592-596`), so noticing the drop needs that instance to say so. A push host
+  instance (`dispatch.go:595-599`), so noticing the drop needs that instance to say so. A push host
   has no stream at all; what `soul_timeout` means for it is open (§6).
 
 `scenario_timeout` **replaces** today's `defaultRunTimeout` of 5 minutes
@@ -162,7 +162,7 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1172-1185`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1188-1201`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:143-152`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
@@ -222,7 +222,7 @@ beneath it once NIM-949 reads it; until then write `timeout:` on the task.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:917-920`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:933-936`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -283,7 +283,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:943-954`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:946-957`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
@@ -327,7 +327,7 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   can fail on one host (`soul/internal/runtime/applyrunner.go:468-480` — siblings are not cancelled),
   and none is lost.
 - A failure **tied to no task** — the dispatch itself failed (`send_apply_failed`,
-  `keeper/internal/scenario/dispatch.go:561-574`), a push transport failed, or `soul_timeout` ran
+  `keeper/internal/scenario/dispatch.go:564-577`), a push transport failed, or `soul_timeout` ran
   out — is judged by the **barrier owner's** radius. A Keeper-side evaluation error, such as a
   failing `when:`, is tied to its task and judged by that task's radius.
 - **The FAILED records the Keeper writes for such failures are not judged again.** A failure with no
@@ -337,6 +337,11 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   resolution can see it. Those records are not "recorded failures" for the "any recorded failure"
   rule two bullets up: the failure is judged once — by the barrier owner's radius when it is tied to
   no task, by the child's radius when a group fails before dispatch.
+- **A capability refusal is not a host's failure.** A host whose Soul does not announce what the run
+  will send it (`soul_capability_unsupported`) ends the run whatever the radius — no host is dropped
+  and `tolerate` does not count it. What is known before the run is refused before the first step,
+  over the whole plan; what only a step can know, at that step, before it sends anything
+  ([draft ADR item 10](../adr/draft-scenario-linear-barrier.md), NIM-946).
 - Actively stopping in-flight work when the run ends is a separate, opt-in idea: NIM-911.
 
 **Built in NIM-948, for a linear run** (`keeper/internal/scenario/failure_policy.go`). The barrier

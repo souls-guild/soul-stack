@@ -138,7 +138,7 @@ func (e *Engine) RenderPredicate(expr string, vars Vars, open []string) (Rendere
 				"and no text reads one without the other; name the register (register.self.<field>, register.<name>.<field>)")
 	}
 	text := norm
-	resolved := len(r.contextReads(parsed.Expr(), nil)) > 0
+	resolved := r.resolves(parsed.Expr())
 	var out ast.Expr
 	if resolved {
 		out = r.subst(parsed.Expr(), nil)
@@ -166,6 +166,29 @@ func (e *Engine) RenderPredicate(expr string, vars Vars, open []string) (Rendere
 		return RenderedPredicate{}, err
 	}
 	return RenderedPredicate{Text: text, Resolved: resolved}, nil
+}
+
+// PredicateResolves reports whether [Engine.RenderPredicate] substitutes into expr —
+// its [RenderedPredicate.Resolved] — without a host context: whether a value is
+// substituted depends on what the text reads, never on the values. The Keeper uses it
+// to know before a run which hosts will be sent a rendered predicate (NIM-946). open
+// and loopNames are what RenderPredicate would be given: the open registers, and the
+// names of the loop variables its Vars bind.
+func (e *Engine) PredicateResolves(expr string, open, loopNames []string) (bool, error) {
+	norm := normalize(expr)
+	if norm == "" {
+		return false, nil
+	}
+	parsed, err := e.parseNoMacro(norm)
+	if err != nil {
+		return false, &ErrCompile{Expr: expr, Err: err}
+	}
+	return newPredicateRenderer(e, expr, Vars{}, loopNames, open, parsed.SourceInfo()).resolves(parsed.Expr()), nil
+}
+
+// resolves reports whether e reads the host context outside the open set.
+func (r *predicateRenderer) resolves(e ast.Expr) bool {
+	return len(r.contextReads(e, nil)) > 0
 }
 
 // scope is the set of iteration variables bound at a node.

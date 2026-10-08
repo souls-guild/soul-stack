@@ -414,6 +414,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// onto the state it produces. Pure recording; the gates that reject on those
 	// same facts already ran above and per-Passage below.
 	prov := newRunProvenance(r.deps.KeeperVersion, spec.executionModel, serviceCompatEntity(art), destinyRes)
+	spec.prov = prov
 
 	// 4.9. Stratify the run by register dependency (staged-render, ADR-056 §b) —
 	//      BEFORE the first Render: a task reading register.X in
@@ -609,6 +610,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// serial:, one width for a group — is the model's, not the step count's.
 		renderIn.Steps = steps
 		renderIn.HeldTargets = render.NewHeldTargets()
+		renderIn.SoulNeeds = render.NewSoulNeeds()
 	}
 
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
@@ -623,6 +625,17 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		}
 		abort("render_failed", err)
 		return
+	}
+
+	// Soul-side compat gate of a linear run (draft ADR NIM-907 item 10): the whole
+	// plan before its first step — and before either dispatch path — rather than
+	// each step as it comes, which would refuse step k after the steps before it
+	// changed hosts. What only a step can know is gated there (dispatchPassage).
+	if spec.executionModel == ExecutionLinear {
+		if err := r.gateLinearPlanCapabilities(ctx, spec, renderIn.SoulNeeds.List(), hosts); err != nil {
+			abort(reasonSoulCapabilityUnsupported, err)
+			return
+		}
 	}
 
 	// 6. Dispatch: path branching (ADR-027, Phase 1.4.2) × staged-render (ADR-056).
@@ -884,12 +897,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// roster is re-resolved into renderIn.Hosts (below), and these plans
 			// were rendered against THAT slice. Reading the stale one would
 			// attribute a Passage's requirements to a roster the Passage is not
-			// about.
-			pRequired := exemptPushHosts(requiredSoulCapabilities(pTasks, pPlans), renderIn.Hosts)
-			prov.observeRequired(pRequired)
-			if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, pRequired); err != nil {
-				abort(reasonSoulCapabilityUnsupported, err)
-				return
+			// about. A linear run is gated ahead of its first step and in
+			// dispatchPassage instead.
+			if spec.executionModel != ExecutionLinear {
+				pRequired := exemptPushHosts(requiredSoulCapabilities(pTasks, pPlans), renderIn.Hosts)
+				prov.observeRequired(pRequired)
+				if err := r.gateSoulCapabilities(ctx, spec.IncarnationName, spec.ScenarioName, pRequired); err != nil {
+					abort(reasonSoulCapabilityUnsupported, err)
+					return
+				}
 			}
 
 			// Keeper-side tasks for THIS Passage (Slice 2): run on tasks RE-rendered
@@ -954,7 +970,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				step = stepRecipe(spec, art.SHA1, renderIn, regNames)
 			}
 			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts, step, fails); err != nil {
-				abort("dispatch_failed", err)
+				abort(dispatchAbortReason(err), err)
 				return
 			}
 			// A barrier reads a cluster-wide Cancel while it waits; a keeper step

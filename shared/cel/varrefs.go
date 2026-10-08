@@ -162,6 +162,17 @@ func (e *Engine) PredicateReads(expr string, roots []string) map[string]RootRead
 	return out
 }
 
+// HostPredicateReads is [Engine.PredicateReads] for a bare predicate that may call
+// `soulprint.hosts.where("…")` — a `where:` — whose string argument is itself a
+// predicate: it is inlined first, as [Engine.InterpolationReads] does for a block, so
+// what it reads is seen.
+func (e *Engine) HostPredicateReads(expr string, roots []string) map[string]RootReads {
+	if rewritten, err := e.rewriteHostsWhere(expr, true); err == nil {
+		expr = rewritten
+	}
+	return e.PredicateReads(expr, roots)
+}
+
 // InterpolationReads is [Engine.PredicateReads] over an INTERPOLATED string — a
 // `params:` value, a `vars:` value, an `on:` element, an `apply: input:` value — as
 // opposed to a bare predicate. Every `${ … }` block is scanned and the results are

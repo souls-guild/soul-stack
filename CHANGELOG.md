@@ -7,6 +7,24 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A linear run checks its Souls' capabilities over the whole plan before its first step (NIM-946,
+  [ADR-draft scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) item 10).** Every
+  task is checked against the hosts its `on:` / `where:` / `run_once:` resolve to when none of them
+  — nor, beside a `where:`, its `vars:` — reads a register, and its `where:` reads no
+  `incarnation.state` an earlier capture changes — a later applier's destiny is resolved up front
+  for this — so a host whose Soul lacks a module, `flow_control`, `retry` or `rendered_predicate`
+  for step *k* refuses the run before step 0 changes anything. A predicate the Keeper substitutes a
+  value into needs `rendered_predicate`; one reading only `register.self` does not, and a `when:`
+  the Keeper decides needs nothing. Each step is checked again on what each host is sent, after the
+  requisite gate, so a grouped child sent `when: false` needs `flow_control` on that host alone.
+  What only a step can know is refused there, and the refusal says so: a task whose targeting reads
+  a register, or such state directly or through `compute:` / `vars:`, a host or a task a refresh
+  boundary or a dropped host brings in, a destiny task behind a static `when:`, a conditional
+  include or its own `on:`/`where:`, a grouped child's `when: false`, a task the survey could not
+  judge. The reason is `soul_capability_unsupported`; it ends the run whatever the step's
+  `on_failure` — no host is dropped for it — and the message names the step and task that need each
+  capability. Behind the linear execution model; a staged run is gated as before.
+
 - **A linear run's barrier judges failures by `on_failure` and `tolerate` (NIM-948, [settings.md
   §4](docs/scenario/settings.md)).** It waits for every host a step was sent to instead of returning
   on the first failure, so a host still working finishes and every failure lands in the run's

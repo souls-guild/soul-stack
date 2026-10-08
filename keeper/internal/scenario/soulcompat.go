@@ -2,7 +2,9 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"slices"
 	"sort"
 	"strings"
 
@@ -103,6 +105,104 @@ func taskSoulCapabilities(t *render.RenderedTask) []string {
 	return caps
 }
 
+// capabilityOrigins names, per host and capability, the first task that needs it —
+// `step N "task"` — for the refusal to say what to look at.
+type capabilityOrigins map[string]map[string]string
+
+func (o capabilityOrigins) note(sid, capability string, step int, task string) {
+	if o[sid] == nil {
+		o[sid] = map[string]string{}
+	}
+	if _, ok := o[sid][capability]; !ok {
+		o[sid][capability] = fmt.Sprintf("step %d %q", step, task)
+	}
+}
+
+// aheadSoulCapabilities is the requirement of a linear run's whole plan, before its
+// first step (draft ADR NIM-907 item 10, NIM-946): every task against the hosts its
+// targeting resolves to before the run ([render.SoulNeed]). In step order, so a
+// capability is attributed to the first step that needs it.
+func aheadSoulCapabilities(needs []render.SoulNeed) (map[string][]string, capabilityOrigins) {
+	sorted := slices.Clone(needs)
+	slices.SortStableFunc(sorted, func(a, b render.SoulNeed) int { return a.Step - b.Step })
+	req := make(map[string]map[string]struct{})
+	origins := capabilityOrigins{}
+	for _, n := range sorted {
+		var caps []string
+		if name, _, ok := config.SplitModuleAddr(n.Module); ok && strings.HasPrefix(name, "core.") {
+			caps = append(caps, config.ModuleCapability(name))
+		}
+		if n.FlowControl {
+			caps = append(caps, config.CapabilityFlowControl)
+		}
+		if n.Retry {
+			caps = append(caps, config.CapabilityRetry)
+		}
+		if n.RenderedPredicate {
+			caps = append(caps, config.CapabilityRenderedPredicate)
+		}
+		addCapabilities(req, origins, n.TargetSIDs, caps, n.Step, n.Task)
+	}
+	return sortedCapabilitySets(req), origins
+}
+
+// stepSoulCapabilities is the requirement of one step of a linear run, per host,
+// from what that host is sent once the Keeper settled the step: after the requisite
+// gate and the Keeper's `when:`, so a host is asked only for what reaches it — a
+// grouped child the Keeper skips there travels as `when: false` and needs
+// flow_control on that host alone.
+func stepSoulCapabilities(perHost map[string][]*render.RenderedTask, step int) (map[string][]string, capabilityOrigins) {
+	req := make(map[string]map[string]struct{})
+	origins := capabilityOrigins{}
+	for _, sid := range sortedSIDs(perHost) {
+		for _, t := range perHost[sid] {
+			addCapabilities(req, origins, []string{sid}, sentSoulCapabilities(t, sid), step, t.Name)
+		}
+	}
+	return sortedCapabilitySets(req), origins
+}
+
+// sentSoulCapabilities is [taskSoulCapabilities] over what host sid is sent for t
+// ([render.SentFlow]) rather than the author's predicates, plus the rendered
+// predicate's bit.
+func sentSoulCapabilities(t *render.RenderedTask, sid string) []string {
+	var caps []string
+	if name, _, ok := config.SplitModuleAddr(t.Module); ok && strings.HasPrefix(name, "core.") {
+		caps = append(caps, config.ModuleCapability(name))
+	}
+	flow := render.SentFlow(t, sid)
+	if flow.When != "" || flow.ChangedWhen != "" || flow.FailedWhen != "" {
+		caps = append(caps, config.CapabilityFlowControl)
+	}
+	if flow.Until != "" || t.RetryCount > 1 {
+		caps = append(caps, config.CapabilityRetry)
+	}
+	if flow.Rendered {
+		caps = append(caps, config.CapabilityRenderedPredicate)
+	}
+	return caps
+}
+
+func addCapabilities(req map[string]map[string]struct{}, origins capabilityOrigins, sids, caps []string, step int, task string) {
+	if len(caps) == 0 {
+		return
+	}
+	for _, sid := range sids {
+		if sid == "" {
+			continue
+		}
+		set, ok := req[sid]
+		if !ok {
+			set = make(map[string]struct{}, len(caps))
+			req[sid] = set
+		}
+		for _, c := range caps {
+			set[c] = struct{}{}
+			origins.note(sid, c, step, task)
+		}
+	}
+}
+
 func sortedCapabilitySets(in map[string]map[string]struct{}) map[string][]string {
 	out := make(map[string][]string, len(in))
 	for sid, set := range in {
@@ -126,6 +226,12 @@ func sortedCapabilitySets(in map[string]map[string]struct{}) map[string][]string
 // capability over the hosts that need it — a plan touching k modules across the
 // roster costs k pipelines, not one per host.
 func (r *Runner) gateSoulCapabilities(ctx context.Context, incarnationName, scenarioName string, required map[string][]string) error {
+	return r.gateSoulCapabilitiesFor(ctx, incarnationName, scenarioName, required, nil)
+}
+
+// gateSoulCapabilitiesFor is [Runner.gateSoulCapabilities] whose refusal names, for
+// each missing capability, the first task that needs it.
+func (r *Runner) gateSoulCapabilitiesFor(ctx context.Context, incarnationName, scenarioName string, required map[string][]string, origins capabilityOrigins) error {
 	if len(required) == 0 {
 		return nil
 	}
@@ -163,11 +269,66 @@ func (r *Runner) gateSoulCapabilities(ctx context.Context, incarnationName, scen
 	}
 	parts := make([]string, 0, len(missing))
 	for _, sid := range sortedKeys(missing) {
-		parts = append(parts, fmt.Sprintf("host %s: update the soul binary, it does not announce %s", sid, strings.Join(missing[sid], ", ")))
+		caps := make([]string, 0, len(missing[sid]))
+		for _, c := range missing[sid] {
+			if origin := origins[sid][c]; origin != "" {
+				c += " (" + origin + ")"
+			}
+			caps = append(caps, c)
+		}
+		parts = append(parts, fmt.Sprintf("host %s: update the soul binary, it does not announce %s", sid, strings.Join(caps, ", ")))
 	}
 	return fmt.Errorf(
-		"scenario %s/%s: the plan uses modules/features these hosts did not announce, so applying it would be silently ignored there - %s (ADR-0076(i))",
+		"scenario %s/%s: the plan uses modules/features these hosts did not announce, so applying it would be silently ignored or misread there - %s (ADR-0076(i))",
 		incarnationName, scenarioName, strings.Join(parts, "; "))
+}
+
+// gateLinearPlanCapabilities is the capability gate of a linear run ahead of its
+// first step (draft ADR NIM-907 item 10): the whole plan, as far as it is known before
+// the run, so a host that cannot run a later step refuses the run before an earlier
+// one changed anything. What it cannot know is gated at each step
+// ([Runner.gateStepCapabilities]).
+func (r *Runner) gateLinearPlanCapabilities(ctx context.Context, spec RunSpec, needs []render.SoulNeed, hosts []*topology.HostFacts) error {
+	required, origins := aheadSoulCapabilities(needs)
+	required = exemptPushHosts(required, hosts)
+	spec.prov.observeRequired(required)
+	return r.gateSoulCapabilitiesFor(ctx, spec.IncarnationName, spec.ScenarioName, required, origins)
+}
+
+// errStepCapability is a step of a linear run refused by the capability gate; the run
+// aborts as reasonSoulCapabilityUnsupported rather than as a dispatch failure.
+type errStepCapability struct{ err error }
+
+func (e *errStepCapability) Error() string { return e.err.Error() }
+func (e *errStepCapability) Unwrap() error { return e.err }
+
+// gateStepCapabilities gates one step of a linear run on what each host is sent,
+// once the Keeper settled the step and before any of its `apply_runs` rows is written
+// or anything is sent (its `apply_run_plan` rows are persisted before). It
+// refuses late only what [Runner.gateLinearPlanCapabilities] could not know
+// (render/soul_needs.go lists it): a task whose targeting reads a register or state an
+// earlier capture changes, a host or a task a change of the roster brings in, a destiny
+// task the destiny's render could switch off on a host, the `when: false` a grouped
+// child is sent where the Keeper skips it, and a task the survey could not judge.
+func (r *Runner) gateStepCapabilities(ctx context.Context, spec RunSpec, step int, perHost map[string][]*render.RenderedTask, hosts []*topology.HostFacts) error {
+	required, origins := stepSoulCapabilities(perHost, step)
+	required = exemptPushHosts(required, hosts)
+	spec.prov.observeRequired(required)
+	if err := r.gateSoulCapabilitiesFor(ctx, spec.IncarnationName, spec.ScenarioName, required, origins); err != nil {
+		if step > 0 {
+			err = fmt.Errorf("%w; refused at step %d, after the steps before it ran", err, step)
+		}
+		return &errStepCapability{err: err}
+	}
+	return nil
+}
+
+func dispatchAbortReason(err error) string {
+	var capErr *errStepCapability
+	if errors.As(err, &capErr) {
+		return reasonSoulCapabilityUnsupported
+	}
+	return "dispatch_failed"
 }
 
 // streamedSIDs lists the roster hosts whose capabilities are a question anyone
@@ -197,9 +358,10 @@ func streamedSIDs(hosts []*topology.HostFacts) []string {
 // about. Applied to the requirement rather than inside the gate so the
 // observability counter (prov.observeRequired) reports what is actually gated.
 //
-// ⚠ It MUTATES and returns the map it was given. Both call sites wrap a fresh
-// [requiredSoulCapabilities] result, so nothing is shared today; a caller
-// passing a cached map would have that cache stripped for every later reader.
+// ⚠ It MUTATES and returns the map it was given. Every call site wraps a fresh
+// requirement ([requiredSoulCapabilities], [aheadSoulCapabilities],
+// [stepSoulCapabilities]), so nothing is shared today; a caller passing a cached map
+// would have that cache stripped for every later reader.
 func exemptPushHosts(required map[string][]string, hosts []*topology.HostFacts) map[string][]string {
 	if len(required) == 0 {
 		return required

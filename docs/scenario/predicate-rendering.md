@@ -8,7 +8,7 @@
 > settles its step's flow control on the Keeper (NIM-943, `keeper/internal/render/flow.go`); a staged
 > run — every run until NIM-952 — still sends the predicates as written, and the Soul evaluates
 > them against the registers it accumulated inside one message. The Soul's half of §5 is built
-> (NIM-929); the capability gate is NIM-946.
+> (NIM-929), and so is the Keeper's capability gate (NIM-946, §5).
 
 Under linear dispatch no register crosses the wire (decision 4). `changed_when:`, `failed_when:` and
 `retry.until:` judge the module's result, so they cannot be *decided* before the module runs, but
@@ -176,26 +176,26 @@ The Keeper's two pieces are built for a run executing linearly (NIM-943), and th
 guards, masking, async barriers and the announcement of the capability bit — by NIM-929.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
-  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:889`),
-  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:643`),
-  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:180`)
+  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:892`),
+  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:648`),
+  picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:189`)
   ([ADR-draft per-host params dispatch](../adr/draft-per-host-params-dispatch.md)). Flow control is
   the half NIM-908 left refused: a host-variant flow context fails the render
-  (`keeper/internal/render/pipeline.go:781-785`). Every predicate that travels needs the same kind
+  (`keeper/internal/render/pipeline.go:782-786`). Every predicate that travels needs the same kind
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
   (`keeper/internal/scenario/crosspassage.go:158-163`), and each host's slice reaches the wire
-  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:500`). A `when:`
+  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:503`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on
   the first only. *Built:* `RenderedTask.FlowBySID`, read by `ToProtoTasksForHost`.
 - **The soulprint guard is lifted for a rendered predicate.** `guardFlowControlHostInvariant`
-  (`keeper/internal/render/pipeline.go:1490-1506`, called at `:495`) refuses a `when:`,
+  (`keeper/internal/render/pipeline.go:1491-1507`, called at `:496`) refuses a `when:`,
   `changed_when:` or `failed_when:` naming `soulprint` on a multi-host target, because today the
   Soul would evaluate it against the first host's snapshot. With `soulprint.self` resolved per host
   on the Keeper, that reason is gone. So is the reason for the second layer NIM-908 kept,
-  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:781-785`): with every `vars` and
+  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:782-786`): with every `vars` and
   `input` reference substituted, no flow context travels for a scenario task to differ per host.
   *Built:* both are skipped in a linear scenario pass; a destiny's tasks keep them.
 - **The Soul's text guards leave a substituted value alone — built (NIM-929).** They used to match
@@ -234,9 +234,26 @@ spaces. An older Soul keeps its own reading of those shapes, and for its async b
 regex's: a `register.<name>` its quote pairing misreads as code makes it wait ([known-limitations.md](../known-limitations.md#an-older-soul-reads-some-authored-predicates-as-before-nim-929)).
 
 A capability bit, `rendered_predicate`, gates a rendered predicate: an older Soul compiles the
-whitespace-collapsed text and echoes what it receives. The Soul announces it (NIM-929); the Keeper's
-gate is NIM-946. A decided `when:` is blanked and needs nothing. A grouped child's `when: false`
+whitespace-collapsed text and echoes what it receives. The Soul announces it (NIM-929) and the
+Keeper gates it (NIM-946). A decided `when:` is blanked and needs nothing. A grouped child's `when: false`
 and a predicate in which no reference was resolved need no new bit (the ADR's item 10), only the
 existing ones a predicate needs today — `CapabilityFlowControl`, and `CapabilityRetry` for `until:`
-(`keeper/internal/scenario/soulcompat.go:97-101`). That an older Soul reads a few shapes of an
+(`keeper/internal/scenario/soulcompat.go:168-184`, read off what the host is sent). That an older Soul reads a few shapes of an
 author's own text as it always did is a known limitation, not the bit's concern.
+
+Whether a value will be substituted depends on the text alone, so the Keeper knows it before the
+run: `Engine.PredicateResolves` is the static half of `RenderPredicate`, held to its `Resolved`
+on the whole differential corpus. A linear run is therefore refused **before its first step**
+when a Soul that did not announce the bit is the target of a later step's rendered predicate —
+the first pass surveys every task against the hosts its targeting resolves to before the run
+(`keeper/internal/render/soul_needs.go`). Each step is gated again, after the requisite gate, on
+what each host is sent; it refuses late only what the survey cannot know — a task whose targeting
+reads a register or `incarnation.state` an earlier capture changes (directly or through `compute:`
+or its `vars:`), a host or a task a refresh boundary or a dropped host brings in, a destiny task
+behind a static `when:`, a conditional include or its own `on:`/`where:`, the `when: false` a
+grouped child is sent where the Keeper skips it, and a task the survey could not judge. The refusal
+is `soul_capability_unsupported` and names the host, the bit, and the step and task that need it:
+
+```
+host b.example.com: update the soul binary, it does not announce rendered_predicate (step 1 "check")
+```

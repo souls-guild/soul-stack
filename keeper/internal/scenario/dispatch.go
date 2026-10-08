@@ -81,6 +81,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	var settled map[string]*settledHost
 	if spec.executionModel == ExecutionLinear {
 		perHost, settled = settleHosts(perHost, gate, passage)
+		if err := r.gateStepCapabilities(ctx, spec, passage, perHost, hosts); err != nil {
+			return err
+		}
 	} else {
 		perHost = gate.applyGate(perHost, passage)
 	}
