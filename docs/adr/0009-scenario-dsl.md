@@ -448,7 +448,8 @@ Three consequences worth stating separately:
   a capture keeps what that capture recorded, which is the point for a field like
   `provisioned_vm_ids` where losing the record leaks the resource.
 - **Ordering is now the author's, so it is linted.** `soul-lint` reports `state_store_after_use`
-  (a field read before the capture that writes it) and `state_stale_same_passage_read` as ERRORs,
+  (a field read before the capture that writes it) and `state_stale_same_passage_read` (retired by
+  NIM-944) as ERRORs,
   and `state_wide_match` (a `modify`/`remove` with no `match:`) as a WARN — see
   [`docs/scenario/orchestration.md §7.1`](../scenario/orchestration.md#71-the-capture-verbs).
 - **A capture sees no per-host data at all.** As an `on: keeper` task it renders through the

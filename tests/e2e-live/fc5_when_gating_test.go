@@ -79,8 +79,9 @@ func TestFC5WhenGating_LiveRegister(t *testing.T) {
 	// action (WITHOUT its own where:) is now SAME-passage (Passage 0) -> Soul sees
 	// the register same-passage in its ApplyRequest -> when works: master -> OK, replicas
 	// -> SKIPPED. Genuinely cross-passage when (probe in an earlier Passage for a DIFFERENT
-	// reason) - UNSUPPORTED, caught by soul-lint/keeper `cross_passage_when_unsupported`
-	// (a unit-guard in shared/config + soul-lint testdata, NOT this live scenario).
+	// reason) - UNSUPPORTED for a run executing staged, refused by the keeper
+	// `cross_passage_when_unsupported` (a unit-guard in shared/config, NOT this live
+	// scenario); soul-lint dropped the code with linear dispatch (NIM-944).
 	stack := harness.NewStack(t, harness.Config{
 		ExamplePath: wgExamplePath,
 		ServiceName: wgService,

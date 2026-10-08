@@ -139,12 +139,12 @@ that is where `vault()`, the git access to the destiny and the `input:` contract
 [ADR-012](0012-keeper-soul-grpc.md)(d) keeps Vault tokens off the host. The Keeper side runs
 **inside the module, at Apply**, through the run's render pipeline handed to it on the module
 context — the channel `StateOpEvaluators` already use
-(`keeper/internal/scenario/keeper_dispatch.go:371-375`). The alternative — teaching the render
+(`keeper/internal/scenario/keeper_dispatch.go:373-377`). The alternative — teaching the render
 pipeline to expand this module's destiny into a new `RenderedTask` field — was rejected: it would
 reshape how a keeper-side step is rendered and stamped, in exactly the code NIM-907 is about to
 rework. A step whose
 params read `register.mint` sits in a later Passage than the mint
-(`shared/config/passage.go:126-137`), so a render error comes after the mint either way; here it
+(`shared/config/passage.go:127-138`), so a render error comes after the mint either way; here it
 is a failed step. The destiny is:
 
 - **resolved** through the run's own destiny resolver: a `service.yml destiny[]` entry at its

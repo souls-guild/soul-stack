@@ -7,6 +7,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-draft
+  scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) S1).** A `when:` /
+  `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported
+  (`cross_passage_when_unsupported`): the Keeper decides it for a run executing linearly, and keeps
+  the refusal for a run executing staged. `state_stale_same_passage_read` is gone: under linear
+  dispatch a capture is a step of its own, and the run re-reads the state before every later step;
+  a run executing staged renders that read stale with nothing refusing it. `state_store_after_use`
+  compares plan positions — a consumer written before the capture is reported even where the
+  derived Passages ran the capture first, and one written after it no longer is. Unconditional,
+  since `soul-lint` cannot see the execution model pinned to a run.
+
 - **`async:` and `require:` are destiny-only keys (NIM-941, [ADR-draft
   scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) decision 7).** Concurrency on
   a host — a `loop:`'s iterations included, though a loop is one step under linear dispatch — lives
@@ -894,6 +905,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
     The engine-compat error text likewise names the registered service.
 
 ### Fixed
+
+- **A host requisite on a keeper-side task reads the keeper's fact (NIM-944).** A keeper-side task's
+  `task.executed` is recorded under the keeper's SID, and the requisite gate looked a source up under
+  the consumer host's own, so a host task with `onchanges:` on a keeper-side task in an earlier
+  message never ran. It now runs when the keeper task changed — under linear
+  dispatch, and in a staged run where the derivation put the two in different Passages. Where a
+  staged run carries both in one Passage — every one-Passage staged run included — the link still
+  reads "not changed" on the Soul.
+
+- **`task.executed` is written with `audit.enabled: false` too (NIM-944, [ADR-022(i)](docs/adr/0022-audit-pipeline.md)).**
+  A run reads it back to resolve an `onchanges:` / `onfail:` whose source ran in an earlier message;
+  suppressed, every such consumer was skipped without a word. It now also reaches the herald tap and
+  the OTel dual-write (behind `otel_export`) with the audit off.
 
 - **A `core.*` address no binary serves is an error, and `GET /v1/modules` lists every
   served core module (NIM-888, NIM-890).** One served catalog lives in `shared/coremanifest`

@@ -32,7 +32,9 @@ package scenario
 //
 // Per-host. CHANGED/FAILED is a fact of a SPECIFIC host (source changed on
 // host-a, ok on host-b). So the "consumer runs / excluded" decision and the
-// wire-requisite rewrite are made per-(sid).
+// wire-requisite rewrite are made per-(sid). A keeper-side source is the
+// exception: it ran once, on the Keeper, and its fact is recorded under
+// render.KeeperTargetSID, so it answers for every host.
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
@@ -56,16 +58,21 @@ type crossPassageGate struct {
 	// Indices; a source listed here is answered by its children's facts.
 	aggregateOf map[int][]int
 
+	// keeperSide — the global Indices of keeper-side tasks, whose facts are
+	// keyed by render.KeeperTargetSID instead of a host's SID.
+	keeperSide map[int]bool
+
 	// changed / failed — per-(sid, planIndex) CHANGED / (FAILED∪TIMED_OUT) facts,
 	// accumulated over Passages < current (auditpg). planIndex = global Index.
 	changed map[auditpg.ChangedTaskKey]struct{}
 	failed  map[auditpg.ChangedTaskKey]struct{}
 }
 
-// newCrossPassageGate assembles the gate for dispatching Passage p. tasks is
-// the WHOLE resolved plan (all Passages; needed for sources' passageByIndex).
-// changed/failed are CHANGED/FAILED facts from Passages < p.
-func newCrossPassageGate(tasks []*render.RenderedTask, changed, failed map[auditpg.ChangedTaskKey]struct{}) *crossPassageGate {
+// newCrossPassageGate assembles the gate for dispatching Passage p. tasks and
+// plans are the WHOLE resolved plan (all Passages; needed for sources'
+// passageByIndex and for which of them ran on the Keeper). changed/failed are
+// CHANGED/FAILED facts from Passages < p.
+func newCrossPassageGate(tasks []*render.RenderedTask, plans []render.DispatchPlan, changed, failed map[auditpg.ChangedTaskKey]struct{}) *crossPassageGate {
 	idx := make(map[int]int, len(tasks))
 	agg := make(map[int][]int)
 	for _, t := range tasks {
@@ -74,7 +81,13 @@ func newCrossPassageGate(tasks []*render.RenderedTask, changed, failed map[audit
 			agg[t.Index] = t.AggregateOf
 		}
 	}
-	return &crossPassageGate{passageByIndex: idx, aggregateOf: agg, changed: changed, failed: failed}
+	keeper := make(map[int]bool)
+	for _, pl := range plans {
+		if pl.Keeper {
+			keeper[pl.TaskIndex] = true
+		}
+	}
+	return &crossPassageGate{passageByIndex: idx, aggregateOf: agg, keeperSide: keeper, changed: changed, failed: failed}
 }
 
 // applyGate rewrites a Passage's per-host slice by cross-passage requisites:
@@ -200,7 +213,11 @@ func (g *crossPassageGate) splitRequisite(idxs []int, consumerPassage int) (cros
 func (g *crossPassageGate) anyKey(set map[auditpg.ChangedTaskKey]struct{}, sid string, srcIdxs []int) bool {
 	for _, srcIdx := range srcIdxs {
 		for _, factIdx := range g.factIndices(srcIdx) {
-			if _, ok := set[auditpg.ChangedTaskKey{SID: sid, PlanIndex: factIdx}]; ok {
+			factSID := sid
+			if g.keeperSide[factIdx] {
+				factSID = render.KeeperTargetSID
+			}
+			if _, ok := set[auditpg.ChangedTaskKey{SID: factSID, PlanIndex: factIdx}]; ok {
 				return true
 			}
 		}

@@ -141,7 +141,7 @@ the inline path today:
 - **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
   `orphaned` (`keeper/internal/applyrun/crud.go:971-979`), so a Soul that dies mid-task leaves its row
   `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1414-1437`). And a result finished while the stream was down must still reach
+  operator cancelled (`keeper/internal/scenario/run.go:1447-1470`). And a result finished while the stream was down must still reach
   the Keeper when it returns, or the wait buys nothing.
 - **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
   (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
@@ -156,7 +156,7 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1071-1084`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1104-1117`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:141-150`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
@@ -216,7 +216,7 @@ beneath it once NIM-949 reads it; until then write `timeout:` on the task.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:851-854`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:875-878`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -277,7 +277,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:707-718`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:720-731`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
@@ -333,14 +333,14 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
 
 ⚠ **Almost none of this exists today.** The barrier returns on the first failed host
 (`dispatch.go:487-490`) and the abort force-fails every row still running
-(`keeper/internal/scenario/run.go:1414-1437`) on the assumption that no result will arrive — false
+(`keeper/internal/scenario/run.go:1447-1470`) on the assumption that no result will arrive — false
 for a live host. The only failure record per host is one first-arrival slot, `failed_plan_index`
 (`keeper/internal/applyrun/crud.go:425-451`), which the barrier does not even read: its one reader,
-`failedPlanIndex` (`dispatch.go:608-620`), has no callers. A dead host is caught only on the Acolyte
+`failedPlanIndex` (`dispatch.go:621-633`), has no callers. A dead host is caught only on the Acolyte
 path, which linear runs do not take: only a row marked `dispatched` — which the claim does,
 `claim.go:211` — can be set `orphaned` (`crud.go:971-979`). The
 audit log does record every task failure, and the cross-passage gate already reads it
-(`run.go:813`).
+(`run.go:885-898`).
 
 ## 5. Naming
 
@@ -357,7 +357,7 @@ scenario saying so.
 ## 6. Open
 
 - **Which hosts are "the run's" for `tolerate: "N%"`.** The roster is re-read at every refresh
-  boundary (`keeper/internal/scenario/run.go:715-722`): it grows during provisioning and can lose an
+  boundary (`keeper/internal/scenario/run.go:739-746`): it grows during provisioning and can lose an
   offline host with no failure recorded. Recommended: the distinct hosts the run has dispatched at
   least one task to, counted at the barrier being checked.
 - **A dropped host must stay dropped across that re-read** — the ADR's item 5. A refresh boundary

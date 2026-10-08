@@ -22,6 +22,13 @@
 // precisely what the flag must not buy. Hence [AlwaysWrite]: the reload pair and
 // `audit.disabled` are written regardless of the toggle.
 //
+// `task.executed` is in the set for a different reason: the scenario runner reads
+// it back. An `onchanges:`/`onfail:` whose source ran in an earlier message is
+// resolved from those rows (keeper/internal/auditpg/changed_tasks.go), and with
+// them suppressed every such consumer reads "not changed" and is skipped in
+// silence. Under linear dispatch that is every requisite outside a group (draft
+// ADR NIM-907 item 9).
+//
 // # Why the transition marker lives here and not in an OnReload subscriber
 //
 // `config.Store.notify` runs each subscriber in its own goroutine, so a marker
@@ -42,14 +49,15 @@ import (
 )
 
 // AlwaysWrite lists the event types written even with `audit.enabled: false`
-// (ADR-022(i)). Each is a record ABOUT the gate rather than an ordinary event:
-// the two reload outcomes (which is how the toggle is flipped at all) and the
-// `audit.disabled` marker. `audit.enabled` is deliberately absent — the gate is
-// already open when re-enabling is journaled.
+// (ADR-022(i)): the records ABOUT the gate — the two reload outcomes (which is how
+// the toggle is flipped at all) and the `audit.disabled` marker — and
+// `task.executed`, which a run reads back (see the package doc). `audit.enabled`
+// is deliberately absent — the gate is already open when re-enabling is journaled.
 var AlwaysWrite = map[audit.EventType]struct{}{
 	audit.EventConfigReloadSucceeded: {},
 	audit.EventConfigReloadFailed:    {},
 	audit.EventAuditDisabled:         {},
+	audit.EventTaskExecuted:          {},
 }
 
 // Config assembles the master gate. Next and Enabled are required.

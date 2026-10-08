@@ -163,8 +163,10 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 // visibility of keeper-side progress is a separate channel,
 // [Runner.publishKeeperTaskExecuted] (ADR-068 §A2).
 //
-// Audit=nil (unit build without audit) → no-op. A write error is only logged:
-// losing the event degrades observability but doesn't fail the run.
+// Audit=nil (unit build without audit) → no-op. A write error is only logged and
+// does not fail the run — and a later step's `onchanges:`/`onfail:` on this task
+// then reads "not changed, not failed", since the requisite gate reads these rows
+// (NIM-974).
 func (r *Runner) emitKeeperTaskExecuted(ctx context.Context, applyID string, passage int, rt *render.RenderedTask, changed, failed bool, message string, log *slog.Logger) {
 	if r.deps.Audit == nil {
 		return

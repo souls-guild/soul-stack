@@ -368,13 +368,12 @@ func RunCase(ctx context.Context, c *Case, caseFile string, opts Options) (Resul
 	// [stateop.OpsFromPlan] drops the placeholder, which has no params to check and
 	// no write to fold.
 	//
-	// What L0 does NOT reproduce is per-Passage granularity: the plan is rendered
+	// What L0 does NOT reproduce is per-step granularity: the plan is rendered
 	// once, so a step's `value:` is the one rendered against fixtures.state, not
 	// against the state its predecessors just wrote. The divergence is a false green
-	// that this harness cannot see; what catches it is the ordering guard
-	// ([config.StaleStateRead], `state_stale_same_passage_read`), and that guard runs
-	// in SOUL-LINT, not here — a project whose CI runs the trial without the linter
-	// keeps the false green.
+	// that this harness cannot see, and since linear dispatch retired soul-lint's
+	// `state_stale_same_passage_read` (NIM-944) nothing offline catches it
+	// (docs/known-limitations.md).
 	captures, cerr := stateop.OpsFromPlan(tasks)
 	if cerr != nil {
 		return res, fmt.Errorf("trial: %w", cerr)

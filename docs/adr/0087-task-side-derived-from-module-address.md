@@ -94,7 +94,7 @@ reader has to reconstruct it.
 mistakes with opposite fixes — *"delete the line"* against *"this step cannot run where you sent
 it"* — and collapsing them into one diagnostic would hand the author the wrong remedy. Today the
 Soul-side case is accepted offline and dies at
-[`keeper/internal/scenario/keeper_dispatch.go:274-276`](../../keeper/internal/scenario/keeper_dispatch.go)
+[`keeper/internal/scenario/keeper_dispatch.go:314-324`](../../keeper/internal/scenario/keeper_dispatch.go)
 (`unknown keeper-side module`), after the run has started, at the head of its Passage.
 
 **`on: [coven-a]` on a keeper-side address is an error and is never ignored.** Silently dropping a
@@ -217,14 +217,14 @@ name.
 
 Drop `on: keeper` and every keeper task's `On` becomes nil. `taskReadsRoster`
 ([`:193-194`](../../shared/config/passage_refresh.go)) therefore turns **true** for it, and
-`Stratify`'s roster edge ([`shared/config/passage.go:247-265`](../../shared/config/passage.go), with
-`readsRoster` filled at [`:174-178`](../../shared/config/passage.go)) pushes every keeper task
+`Stratify`'s roster edge ([`shared/config/passage.go:248-266`](../../shared/config/passage.go), with
+`readsRoster` filled at [`:175-179`](../../shared/config/passage.go)) pushes every keeper task
 standing after a `refresh_soulprint` emitter into a **later Passage**.
 
 **The affected set is narrower than the 171 lines, and the count is not the point.** The roster edge
 is drawn only where a plan has a refresh emitter at all — the fill above is gated on
 `if len(refreshEmitters) > 0` — and then only for tasks standing **after** one
-([`shared/config/passage.go:254`](../../shared/config/passage.go), `j >= i → break`). In `examples/` exactly four trees carry a `refresh_soulprint` at all — `redis`,
+([`shared/config/passage.go:255`](../../shared/config/passage.go), `j >= i → break`). In `examples/` exactly four trees carry a `refresh_soulprint` at all — `redis`,
 `dragonfly`, `example-cloud-bootstrap`, `create-roster-guard` — so what re-stratifies today is the
 keeper tasks standing after an emitter inside those four.
 
@@ -280,7 +280,7 @@ the author wrote a targeting key, so the predicate meets `guardKeeperWhen` inste
 **The reinforcing fact: the tree already derives from the address in three places while the router
 derives from `on:`.**
 
-- `stateCaptureVerb` ([`shared/config/state_capture_order.go:229-238`](../../shared/config/state_capture_order.go))
+- `stateCaptureVerb` ([`shared/config/state_capture_order.go:148-157`](../../shared/config/state_capture_order.go))
 - the Passage stratifier's state and refresh axes
   ([`shared/config/passage_refresh.go:295`](../../shared/config/passage_refresh.go),
   [`:86`](../../shared/config/passage_refresh.go))

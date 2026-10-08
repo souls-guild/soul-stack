@@ -235,6 +235,12 @@ has: read the capture's `effective` output through `register.<name>`, or push th
 later Passage with a `register:` dependency. This is also what keeps L0 honest — the harness threads
 state task-by-task, and this rule is what makes the difference unobservable.
 
+*Amended (NIM-944, [draft ADR linear barrier](draft-scenario-linear-barrier.md) S1):* the stale-read
+rule is retired. Under linear dispatch a capture is a step of its own and the state is re-read before
+every later step renders, so a read written after it sees the captured value; a run still executing
+staged renders it stale with nothing refusing it. The store-after-use guard compares plan positions,
+the order a run executes its steps in.
+
 Two limitations to record, since a guard that silently under-covers is worse than none:
 
 - soul-lint is blind across `include:` boundaries for per-task rules. A capture step and its
@@ -645,7 +651,9 @@ What L0 does **not** reproduce is per-Passage granularity. The plan is rendered 
 wrote — offline, a capture and a later interpolated read of the same field cannot disagree the way
 they would in a run. That divergence would be a false green; what makes it unreachable is
 `config.StaleStateRead` rejecting the pair offline (see "The ordering guard"), not the harness
-modelling Passages. A capture whose params do not survive `CheckParams` is reported as an error
+modelling Passages. Since NIM-944 retired that rule nothing does: under linear dispatch a read written
+after a capture renders the captured value in a run and the fixture's in L0
+([known-limitations.md](../known-limitations.md#l0-renders-a-state-read-after-a-capture-against-the-fixture)). A capture whose params do not survive `CheckParams` is reported as an error
 rather than a failed assert — the run would refuse the same task at load, so there is no verdict to
 give — and it is checked for every case, including one that asserts no state at all.
 

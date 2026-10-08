@@ -7,7 +7,7 @@
 > write is no longer an element of a `state_changes:` list applied after the cross-host barrier, it
 > is a keeper-side task `module: core.state.<verb>` standing at its own position in `tasks:`, and it
 > lands at that step. One consequence is that ordering stops being an intra-block property and
-> becomes the author's, guarded by soul-lint (`state_store_after_use`, `state_stale_same_passage_read`,
+> becomes the author's, guarded by soul-lint (`state_store_after_use`, `state_stale_same_passage_read` — retired by NIM-944,
 > `state_wide_match`). `foreach` is dropped with the block — a step has `loop:`. Read the verb
 > semantics below; read the placement and the ordering rules in ADR-0084.
 

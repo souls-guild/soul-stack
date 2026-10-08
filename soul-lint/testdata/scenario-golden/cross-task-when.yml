@@ -1,0 +1,29 @@
+name: cross-task-when
+tasks:
+  # A probe of the role: register role.
+  - name: Probe redis role
+    module: core.cmd.shell
+    register: role
+    changed_when: false
+    params:
+      cmd: "redis-cli role | head -1 | tr -d '\n'"
+  # Reads the probe in where:, so the derivation would put it a Passage after the
+  # probe; it emits register: marker for the task below to read.
+  - name: Mark on the current master
+    module: core.cmd.shell
+    where: register.role.stdout == 'master'
+    register: marker
+    changed_when: false
+    params:
+      cmd: "touch /tmp/marked"
+  # when: reads the probe from an earlier step. The derivation put it a Passage
+  # after the probe (through register.marker) and refused it as
+  # cross_passage_when_unsupported; under linear dispatch the Keeper decides it.
+  - name: Act when role is master across steps
+    module: core.cmd.shell
+    when: register.role.stdout == 'master'
+    changed_when: false
+    vars:
+      seed: "${ register.marker.stdout }"
+    params:
+      cmd: "touch /tmp/acted"

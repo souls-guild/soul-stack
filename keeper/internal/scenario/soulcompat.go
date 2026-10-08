@@ -252,18 +252,36 @@ func (r *Runner) gatePassageCapability(ctx context.Context, spec RunSpec, hosts 
 	if len(hosts) > 0 && len(sids) == 0 {
 		return nil
 	}
+	// Under linear dispatch every run of more than one step comes here (draft ADR
+	// NIM-907 item 8), and removing a register dependency removes no step.
+	linear := spec.executionModel == ExecutionLinear
 	if r.soulCap == nil {
+		if linear {
+			return fmt.Errorf(
+				"scenario %s/%s: run of %d steps requires confirmation of host passage-capability, but the presence checker is unavailable (no Redis) - fail-closed rejection (ADR-056 §S5)",
+				spec.IncarnationName, spec.ScenarioName, passageCount)
+		}
 		return fmt.Errorf(
 			"scenario %s/%s: staged run (%d Passage) requires confirmation of host passage-capability, but the presence checker is unavailable (no Redis) - fail-closed rejection (ADR-056 §S5)",
 			spec.IncarnationName, spec.ScenarioName, passageCount)
 	}
 	lacking, err := r.soulCap.SoulsLackingCapability(ctx, sids, config.CapabilityPassage)
 	if err != nil {
+		if linear {
+			return fmt.Errorf(
+				"scenario %s/%s: run of %d steps: host passage-capability check failed - fail-closed rejection (ADR-056 §S5): %w",
+				spec.IncarnationName, spec.ScenarioName, passageCount, err)
+		}
 		return fmt.Errorf(
 			"scenario %s/%s: staged run host passage-capability check failed - fail-closed rejection (ADR-056 §S5): %w",
 			spec.IncarnationName, spec.ScenarioName, err)
 	}
 	if len(lacking) > 0 {
+		if linear {
+			return fmt.Errorf(
+				"scenario %s/%s: run of %d steps requires a Passage-aware Soul, but hosts %v do not support the passage field - update the soul binary (ADR-056 §S5)",
+				spec.IncarnationName, spec.ScenarioName, passageCount, lacking)
+		}
 		return fmt.Errorf(
 			"scenario %s/%s: staged run (%d Passage by register dependency) requires a Passage-aware Soul, but hosts %v do not support the passage field - update the soul binary or remove the register dependency (ADR-056 §S5)",
 			spec.IncarnationName, spec.ScenarioName, passageCount, lacking)

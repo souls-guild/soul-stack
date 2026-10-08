@@ -103,6 +103,17 @@ func TestGolden_ScenarioIncarnationStateRead(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/incarnation-state-read.yml", KindScenario, false, ExitOK, nil)
 }
 
+// TestGolden_ScenarioCrossTaskWhen — ★ GUARD, the linter half of FC-5's
+// retirement (draft ADR NIM-907, S1; the Keeper half is
+// TestIntegration_LinearCrossStepWhenRuns). A `when:` reading a register from an
+// earlier step lints clean: the Keeper decides it. Both halves go in one change, or
+// one side refuses a scenario the other accepts.
+//
+// Mutation: keep `cross_passage_when_unsupported` in the stage pass → ExitHasErrors.
+func TestGolden_ScenarioCrossTaskWhen(t *testing.T) {
+	runExpect(t, "../../testdata/scenario-golden/cross-task-when.yml", KindScenario, false, ExitOK, nil)
+}
+
 // TestGolden_ScenarioTransportTaskKey — the task-level `transport:` (NIM-870)
 // in every form that must LINT CLEAN: the scalar, the dict with params, the
 // dict with none, and a block whose descendant overrides the inherited key.

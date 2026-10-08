@@ -237,7 +237,7 @@ sequence is forced:
 
 1. **NIM-758 — keeper learns to execute a keeper-side plugin.** This is more than a dispatcher
    patch; there are **three** places that refuse, and only the first is a lookup:
-   - `Runner.applyKeeperTask` (`keeper/internal/scenario/keeper_dispatch.go:274-276`) resolves the
+   - `Runner.applyKeeperTask` (`keeper/internal/scenario/keeper_dispatch.go:292`, the lookup now at `:335`) resolves the
      address against `r.keeperModules` — a `coremod.Registry` — and nowhere else; a miss is
      `unknown keeper-side module`.
    - `coremod.Default` (`keeper/internal/coremod/registry.go:200`, the hardcoded map at `:209`)

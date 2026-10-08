@@ -120,3 +120,29 @@ func TestGatePassageCapability_RefusalNamesTheHosts(t *testing.T) {
 		}
 	}
 }
+
+// Under linear dispatch every run of more than one step is gated (draft ADR NIM-907
+// item 8), and a scenario with no register dependency at all is refused too — so
+// the refusal must not tell its author to remove one.
+func TestGatePassageCapability_LinearRefusalAdvisesOnlyTheBinary(t *testing.T) {
+	r := &Runner{soulCap: &fakeSoulCap{lacking: []string{"old.example.com"}}}
+	spec := RunSpec{IncarnationName: "i", ScenarioName: "s", executionModel: ExecutionLinear}
+	err := r.gatePassageCapability(context.Background(), spec, []*topology.HostFacts{hostFacts("old.example.com", "agent")}, 3)
+	if err == nil {
+		t.Fatal("a host lacking the passage capability was accepted")
+	}
+	if strings.Contains(err.Error(), "register dependency") {
+		t.Errorf("linear refusal points at a register dependency: %v", err)
+	}
+	if !strings.Contains(err.Error(), "run of 3 steps") || !strings.Contains(err.Error(), "update the soul binary") {
+		t.Errorf("linear refusal does not name the steps and the remedy: %v", err)
+	}
+
+	for name, soulCap := range map[string]SoulCapabilityChecker{"no checker": nil, "checker error": &fakeSoulCap{err: errors.New("redis down")}} {
+		r := &Runner{soulCap: soulCap}
+		err := r.gatePassageCapability(context.Background(), spec, []*topology.HostFacts{hostFacts("old.example.com", "agent")}, 3)
+		if err == nil || strings.Contains(err.Error(), "staged run") || !strings.Contains(err.Error(), "run of 3 steps") {
+			t.Errorf("%s: linear refusal = %v, want it to name the steps and not a staged run", name, err)
+		}
+	}
+}

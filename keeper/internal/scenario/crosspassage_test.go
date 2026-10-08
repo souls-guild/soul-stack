@@ -55,7 +55,7 @@ func findTask(ts []*render.RenderedTask, name string) *render.RenderedTask {
 // cross-passage idx removed from wire (OnChangesIdx empty → Soul unconditional).
 func TestCrossPassageGate_OnChangesFires(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
-	g := newCrossPassageGate(plan,
+	g := newCrossPassageGate(plan, nil,
 		keySet(key("host-a", 0)), // source 0 changed on host-a
 		nil)
 
@@ -81,7 +81,7 @@ func TestCrossPassageGate_OnChangesFires(t *testing.T) {
 // with no other tasks drops out of the slice.
 func TestCrossPassageGate_OnChangesSkips(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
-	g := newCrossPassageGate(plan, keySet(), nil) // nothing changed
+	g := newCrossPassageGate(plan, nil, keySet(), nil) // nothing changed
 
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0}}
 	perHost := map[string][]*render.RenderedTask{"host-a": {consumer}}
@@ -96,7 +96,7 @@ func TestCrossPassageGate_OnChangesSkips(t *testing.T) {
 // FAILED on the host → rescue runs, cross-passage idx removed from wire.
 func TestCrossPassageGate_OnFailFires(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
-	g := newCrossPassageGate(plan,
+	g := newCrossPassageGate(plan, nil,
 		nil,
 		keySet(key("host-a", 0))) // source 0 failed on host-a
 
@@ -117,7 +117,7 @@ func TestCrossPassageGate_OnFailFires(t *testing.T) {
 // failed → rescue is excluded.
 func TestCrossPassageGate_OnFailSkips(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
-	g := newCrossPassageGate(plan, nil, keySet()) // nothing failed
+	g := newCrossPassageGate(plan, nil, nil, keySet()) // nothing failed
 
 	rescue := &render.RenderedTask{Index: 1, Passage: 1, Name: "rescue", OnFailIdx: []int{0}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {rescue}}, 1)
@@ -130,7 +130,7 @@ func TestCrossPassageGate_OnFailSkips(t *testing.T) {
 // host-b → consumer runs ONLY on host-a. Per-host resolution.
 func TestCrossPassageGate_PerHostDivergent(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
-	g := newCrossPassageGate(plan, keySet(key("host-a", 0)), nil) // changed only on host-a
+	g := newCrossPassageGate(plan, nil, keySet(key("host-a", 0)), nil) // changed only on host-a
 
 	mk := func() *render.RenderedTask {
 		return &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0}}
@@ -154,7 +154,7 @@ func TestCrossPassageGate_SkippedSourceNotChanged(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1)
 	// CHANGED set is empty: source 0 finished SKIPPED/OK, a register row may
 	// have been written, but it's not in the CHANGED set.
-	g := newCrossPassageGate(plan, keySet(), nil)
+	g := newCrossPassageGate(plan, nil, keySet(), nil)
 
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
@@ -171,7 +171,7 @@ func TestCrossPassageGate_SkippedSourceNotChanged(t *testing.T) {
 func TestCrossPassageGate_MixedCrossAndSame_CrossNotChanged(t *testing.T) {
 	// idx0 Passage0 (A, cross); idx2 Passage1 (B, same); idx1 Passage1 (consumer).
 	plan := fullPlan(0, 0, 1, 1, 2, 1)
-	g := newCrossPassageGate(plan, keySet(), nil) // A is NOT changed
+	g := newCrossPassageGate(plan, nil, keySet(), nil) // A is NOT changed
 
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0, 2}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
@@ -193,7 +193,7 @@ func TestCrossPassageGate_MixedCrossAndSame_CrossNotChanged(t *testing.T) {
 // stays, OnChangesIdx empty.
 func TestCrossPassageGate_MixedCrossAndSame_CrossChanged(t *testing.T) {
 	plan := fullPlan(0, 0, 1, 1, 2, 1)
-	g := newCrossPassageGate(plan, keySet(key("host-a", 0)), nil) // A changed
+	g := newCrossPassageGate(plan, nil, keySet(key("host-a", 0)), nil) // A changed
 
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0, 2}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
@@ -213,7 +213,7 @@ func TestCrossPassageGate_MixedCrossAndSame_CrossChanged(t *testing.T) {
 // doesn't touch it, R1-remap on Soul).
 func TestCrossPassageGate_NoCrossPassage_Untouched(t *testing.T) {
 	plan := fullPlan(0, 1, 1, 1) // both in Passage 1 (same)
-	g := newCrossPassageGate(plan, keySet(), nil)
+	g := newCrossPassageGate(plan, nil, keySet(), nil)
 
 	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "restart", OnChangesIdx: []int{0}}
 	got := g.applyGate(map[string][]*render.RenderedTask{"host-a": {consumer}}, 1)
@@ -231,5 +231,37 @@ func TestCrossPassageGate_Nil(t *testing.T) {
 	got := g.applyGate(in, 0)
 	if len(got["host-a"]) != 1 || got["host-a"][0] != consumer {
 		t.Fatalf("nil-gate must return perHost as-is")
+	}
+}
+
+// ★ GUARD (NIM-944). A keeper-side source ran once, on the Keeper, and its fact is
+// recorded under render.KeeperTargetSID. A host consumer of it — `onchanges:` on a
+// keeper step that wrote a secret, say — must read that fact on every host; looked
+// up under the host's own SID it never matches and the consumer is dropped in
+// silence. Under linear dispatch every keeper step is its own message, so every
+// such link takes this path.
+//
+// Mutation: look the fact up under the consumer's SID for a keeper-side source →
+// the consumer is dropped on both hosts.
+func TestCrossPassageGate_KeeperSourceAnswersForEveryHost(t *testing.T) {
+	plan := fullPlan(0, 0, 1, 1)
+	plans := []render.DispatchPlan{
+		{TaskIndex: 0, TargetSIDs: []string{render.KeeperTargetSID}, Keeper: true},
+		{TaskIndex: 1, TargetSIDs: []string{"host-a", "host-b"}},
+	}
+	consumer := &render.RenderedTask{Index: 1, Passage: 1, Name: "reload", OnChangesIdx: []int{0}}
+	perHost := map[string][]*render.RenderedTask{"host-a": {consumer}, "host-b": {consumer}}
+
+	changed := newCrossPassageGate(plan, plans, keySet(key(render.KeeperTargetSID, 0)), nil)
+	got := changed.applyGate(perHost, 1)
+	for _, sid := range []string{"host-a", "host-b"} {
+		if names := taskNames(got[sid]); len(names) != 1 || names[0] != "reload" {
+			t.Errorf("%s slice = %v, want [reload] (the keeper source changed)", sid, names)
+		}
+	}
+
+	unchanged := newCrossPassageGate(plan, plans, keySet(key("host-a", 0)), nil)
+	if got := unchanged.applyGate(perHost, 1); len(got) != 0 {
+		t.Errorf("slices = %v, want none: a host-keyed fact for a keeper-side source is not its fact", got)
 	}
 }

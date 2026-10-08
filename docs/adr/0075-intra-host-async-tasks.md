@@ -70,7 +70,7 @@
 - **Consequences.**
   - `parallel:` disappears as a valid key; `Task.Parallel` becomes `Task.Async` (yaml `async`), and `parallel_on_block_invalid` becomes `async_on_block_invalid`. No migration for anyone: the key has no consumer in `examples/` and no run could carry it.
   - The two render guards stop rejecting the key and start honouring it; the statically-false-`when:` precedence ([tasks.md §7](../destiny/tasks.md)) is unchanged, so an inactive branch still renders regardless.
-  - `require:` becomes load-bearing instead of decorative, and its existing per-file reference validation ([task_refs.go](../../shared/config/task_refs.go)) becomes a correctness gate rather than a nicety. It stays **non-passage-defining** ([`shared/config/passage.go:619`](../../shared/config/passage.go)): it expresses order within a Passage, not a Keeper-side data dependency.
+  - `require:` becomes load-bearing instead of decorative, and its existing per-file reference validation ([task_refs.go](../../shared/config/task_refs.go)) becomes a correctness gate rather than a nicety. It stays **non-passage-defining** ([`shared/config/passage.go:129-131`](../../shared/config/passage.go)): it expresses order within a Passage, not a Keeper-side data dependency.
   - The Soul runner gains real concurrency: `registerByIdx`/`registerByName` ([`applyrunner.go:384`](../../soul/internal/runtime/applyrunner.go)) need synchronization, and fail-stop grows a second trigger (a barrier observing a failed async task) beside the existing in-line one.
   - Operators see an interleaved apply log on any run using `async:`. This is new and worth saying in release notes: nothing is missing, the order is no longer the plan's.
 

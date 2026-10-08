@@ -160,7 +160,7 @@ func TestSkippedOn_ClearsWhatGatesARunningTask(t *testing.T) {
 // gateChangedOn is a gate for passage 1 whose only CHANGED fact is src on sid.
 func gateChangedOn(tasks []*render.RenderedTask, sid string, src int) *crossPassageGate {
 	changed := map[auditpg.ChangedTaskKey]struct{}{{SID: sid, PlanIndex: src}: {}}
-	return newCrossPassageGate(tasks, changed, nil)
+	return newCrossPassageGate(tasks, nil, changed, nil)
 }
 
 // ★ GUARD (decision 4, the Soul's order). A `when:` that failed fails the task even

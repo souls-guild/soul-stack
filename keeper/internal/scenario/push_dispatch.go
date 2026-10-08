@@ -66,8 +66,9 @@ const (
 	// CONSTANT, never the error text: `apply_runs.error_summary` is read back
 	// unmasked, and a transport error can carry the request that produced it.
 	reasonPushTransportFailed = "push_transport_failed"
-	// reasonSoulPassageUnsupported — a host cannot carry a staged run's Passage
-	// field (ADR-056 §S5). ONE constant for both branches, because it is one
+	// reasonSoulPassageUnsupported — a host cannot carry the Passage field of a
+	// run sent in more than one message: a staged run's Passage, a linear run's
+	// step (ADR-056 §S5). ONE constant for both branches, because it is one
 	// defect caught two ways: on the stream by the capability a Soul announced,
 	// on push by the Passage the delivered binary echoes back.
 	reasonSoulPassageUnsupported = "soul_passage_unsupported"
@@ -522,10 +523,12 @@ func (r *Runner) dispatchPushHost(ctx context.Context, spec RunSpec, log *slog.L
 	// the run record holding no trace of what was applied.
 	//
 	// The run still FAILS: a binary that cannot carry the field cannot be trusted
-	// with a staged plan. But it fails with its work recorded.
+	// with a plan sent in more than one message. But it fails with its work
+	// recorded.
 	//
-	// A non-staged run sends passage 0 and every binary echoes 0, so the common
-	// case is untouched.
+	// Under linear dispatch `passage` is the step's index, so a run of more than
+	// one step stamps it here as a staged run stamps its Passage. A one-message
+	// run sends passage 0 and every binary echoes 0, so that case is untouched.
 	//
 	// ⚠ The flag is read after SendApply returns, which is only sound because
 	// [PushApplyDispatcher] requires onEvent to be called synchronously before it
@@ -560,7 +563,7 @@ func (r *Runner) dispatchPushHost(ctx context.Context, spec RunSpec, log *slog.L
 			slog.Any("error", err))
 	}
 	if passageEchoMismatch.Load() {
-		log.Error("scenario: push host echoed the wrong Passage - its soul binary cannot carry a staged plan",
+		log.Error("scenario: push host echoed the wrong Passage - its soul binary cannot carry a plan sent in more than one message",
 			slog.String("sid", sid), slog.Int("passage", passage))
 		// Same suppression as the transport branch below, for the same reason:
 		// UpdateStatus COALESCEs, so a non-nil summary WINS. A task that failed
@@ -643,14 +646,14 @@ func passageMismatchSummary(sid string, passage int, sawTaskFailure bool) string
 	if sawTaskFailure {
 		return ""
 	}
-	return fmt.Sprintf("%s: host %s echoed a Passage other than %d - the soul binary it ran cannot carry a staged plan (ADR-056 §S5)",
+	return fmt.Sprintf("%s: host %s echoed a Passage other than %d - the soul binary it ran cannot carry a plan sent in more than one message (ADR-056 §S5)",
 		reasonSoulPassageUnsupported, sid, passage)
 }
 
 // stampPassage returns ev carrying the Keeper's authoritative Passage, without
 // mutating the caller's message.
 //
-// [proto.Clone] is a DEEP copy, so on a staged run against a passage-blind binary
+// [proto.Clone] is a DEEP copy, so on a multi-message run against a passage-blind binary
 // every event copies its `register_data` — up to the 1 MiB per line
 // [push.ParseStream] admits. That is the price of keeping the run's record of
 // what actually happened on the host: the alternative is either mutating a

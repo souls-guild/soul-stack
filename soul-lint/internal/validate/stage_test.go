@@ -658,7 +658,7 @@ func TestStageDiagnostics_IncludeRootedAtServiceRoot(t *testing.T) {
 // --- ADR-0084 ordering guards ---
 //
 // The config-level tests own the predicates themselves. What only the linter can
-// prove is the reason both live at stage level: the capture and the task it must be
+// prove is the reason they live at stage level: the capture and the task it must be
 // ordered against routinely arrive from DIFFERENT files, so the check has to run on
 // the EXPANDED plan. A per-file task rule sees one half of the pair and blesses it
 // (soul-lint's per-task rules are blind across an `include:` boundary).
@@ -736,11 +736,18 @@ func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
 	}
 }
 
-// TestStageDiagnostics_StaleStateReadAcrossInclude — the second rule, same boundary:
-// the capture is in main.yml, the interpolated read of the field it writes arrives
-// from the included body and lands in the SAME Passage, where an interpolated read
-// still renders the pre-capture value.
-func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
+// TestStageDiagnostics_StateReadAfterCaptureLintsClean — ★ GUARD (draft ADR
+// NIM-907, S1). The capture is in main.yml and the interpolated read of the field
+// it writes arrives from the included body. Under derived Passages the two shared a
+// Passage and the read rendered the pre-capture value, which
+// `state_stale_same_passage_read` refused. A run executing linearly runs the capture
+// as a step of its own and re-reads the state before the reader's step renders, so
+// the pair lints clean; soul-lint answers for that model, as it cannot see the one
+// pinned to a run.
+//
+// Mutation: keep the stale same-Passage read check in the stage pass → this plan is
+// refused.
+func TestStageDiagnostics_StateReadAfterCaptureLintsClean(t *testing.T) {
 	root := t.TempDir()
 	stageWrite(t, filepath.Join(root, "service.yml"), "")
 	stageWrite(t, filepath.Join(root, "scenario", "_create", "announce.yml"),
@@ -760,15 +767,8 @@ func TestStageDiagnostics_StaleStateReadAcrossInclude(t *testing.T) {
 `+"  - include: _create/announce.yml\n")
 
 	diags := stageDiagnostics(main, stageParse(t, main), nil)
-	d := diagWithCode(diags, config.CodeStateStaleRead)
-	if d == nil {
-		t.Fatalf("want %s across the include boundary, got %+v", config.CodeStateStaleRead, diags)
-	}
-	if d.Level != diag.LevelError {
-		t.Errorf("level = %v, want Error", d.Level)
-	}
-	if !strings.Contains(d.Message, "endpoint") {
-		t.Errorf("the message must name the field: %q", d.Message)
+	if diag.HasErrors(diags) {
+		t.Fatalf("a read after the capture that stores the field must lint clean: %+v", diags)
 	}
 }
 

@@ -13,12 +13,18 @@ package validate
 //     the run would never have started.
 //   - passage structure (how many Passages, how many tasks each) — HINT
 //     (informational, for the author).
-//   - the two capture-ordering rules of [ADR-0084] — ERROR: a consumer that
-//     reads a register BEFORE the `core.state.<verb>` step that stores it
-//     ([config.StoreAfterUse]), and an interpolated `${ incarnation.state.<field> }`
-//     read that runs after a same-Passage capture of that field
-//     ([config.StaleStateRead]). Both need the EXPANDED task list, which is
-//     exactly what this pass has and the per-file task rules do not.
+//   - the capture-ordering rule of [ADR-0084] — ERROR: a consumer that reads a
+//     register BEFORE the `core.state.<verb>` step that stores it, in plan order
+//     ([config.StoreAfterUse]). It needs the EXPANDED task list, which is exactly
+//     what this pass has and the per-file task rules do not.
+//
+// Two rules retired with linear dispatch (draft ADR NIM-907, S1), which this
+// linter answers for although it cannot see the execution model pinned to a run:
+// `cross_passage_when_unsupported` (FC-5), since the Keeper decides a `when:`
+// across steps and renders the other register reads into the post-module
+// predicates, and `state_stale_same_passage_read`, since a capture is a step of
+// its own and the run re-reads the state before every later step renders. The
+// Keeper keeps FC-5 for a run executing staged.
 //
 // serial: + staged (N>1 Passage) is no longer an error (ADR-056 §S4 amend,
 // S-2D1): 2D serial×passage is implemented — each Passage runs its serial
@@ -214,34 +220,12 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 		return out
 	}
 
-	// Cross-passage when-gating is an ERROR (ADR-056:85 amend, FC-5). A task
-	// gates `when:`/`changed_when:`/`failed_when:` on a register emitted in an
-	// EARLIER Passage. flow-control is Soul-side per-task gating (ADR-012(d)),
-	// visible only within its OWN Passage; a cross-passage register is
-	// unavailable to it (a different ApplyRequest) → silent `no such key` →
-	// the task FAILS. After the narrow-fix, flow-control itself doesn't split
-	// the Passage, but a probe may have landed in an earlier Passage for a
-	// DIFFERENT reason (another task with `where: register.X`). where: can do
-	// this (Keeper re-renders with accumulated register), when: cannot.
-	// Fail-closed reject, offline.
-	if info, bad := config.CrossPassageWhenGating(tasks, plan); bad {
-		out = append(out, diag.Diagnostic{
-			Level:   diag.LevelError,
-			Phase:   diag.PhaseSemanticValidate,
-			File:    scenarioPath,
-			Code:    config.CodeCrossPassageWhenGating,
-			Message: fmt.Sprintf("task %q gates %s: by register %q from a different Passage (consumer passage %d, source passage %d) -- Soul-side gating sees only its own Passage, a cross-passage register is unavailable to it -> no such key", info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage),
-			Hint:    "when:/changed_when:/failed_when: by register from a different Passage is unsupported (Soul-side gating sees only its own Passage) -- use where: for cross-task register targeting, OR register.self for same-task gating",
-		})
-		return out
-	}
-
 	// Store-after-use is an ERROR ([ADR-0084], "The ordering guard"). A task
 	// consumes a register that a `core.state.<verb>` step captures, and consumes
 	// it FIRST: in the window between the two a crash leaves a live host
 	// configured with a value that exists nowhere else. Generate -> store -> use
 	// is recoverable at every crash point; this is the one order that is not.
-	if info, bad := config.StoreAfterUse(tasks, plan); bad {
+	if info, bad := config.StoreAfterUse(tasks); bad {
 		out = append(out, diag.Diagnostic{
 			Level:   diag.LevelError,
 			Phase:   diag.PhaseSemanticValidate,
@@ -249,24 +233,6 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 			Code:    config.CodeStateStoreAfterUse,
 			Message: fmt.Sprintf("task %q consumes register %q BEFORE the capture step %q (core.state.%s) stores it -- a crash between the two leaves a host configured with a value that exists nowhere else", info.OtherName, info.Ref, info.CaptureName, info.CaptureVerb),
 			Hint:    "move the core.state.<verb> step ahead of every consumer of that register: generate -> store -> use",
-		})
-		return out
-	}
-
-	// A stale same-Passage state read is an ERROR ([ADR-0084], same section). An
-	// interpolated `${ incarnation.state.<field> }` refreshes only at a Passage
-	// boundary, so a reader after a same-Passage capture of that field renders the
-	// PRE-capture value -- while the verb engine, which always reads live, would
-	// have written the new one. Rejected rather than letting the two mechanisms
-	// disagree in production.
-	if info, bad := config.StaleStateRead(tasks, plan); bad {
-		out = append(out, diag.Diagnostic{
-			Level:   diag.LevelError,
-			Phase:   diag.PhaseSemanticValidate,
-			File:    scenarioPath,
-			Code:    config.CodeStateStaleRead,
-			Message: fmt.Sprintf("task %q reads ${ incarnation.state.%s } in the SAME Passage (%d) where %q (core.state.%s) captures it -- an interpolated read refreshes only at a Passage boundary, so it renders the pre-capture value", info.OtherName, info.Ref, info.CapturePassage, info.CaptureName, info.CaptureVerb),
-			Hint:    "read the capture's effective output through register.<name>, or push the reader into a later Passage with a register: dependency on the capture",
 		})
 		return out
 	}

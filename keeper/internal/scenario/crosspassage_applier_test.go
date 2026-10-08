@@ -133,7 +133,7 @@ func TestCrossPassageGate_ApplierSourceResolvedByChildren(t *testing.T) {
 			if len(perHost) != 2 {
 				t.Fatalf("Passage 1 targets %d hosts before the gate, want 2", len(perHost))
 			}
-			got := newCrossPassageGate(tasks, tc.changed, tc.failed).applyGate(perHost, 1)
+			got := newCrossPassageGate(tasks, nil, tc.changed, tc.failed).applyGate(perHost, 1)
 
 			for _, sid := range []string{"a.example.com", "b.example.com"} {
 				want, wantHost := tc.want[sid]

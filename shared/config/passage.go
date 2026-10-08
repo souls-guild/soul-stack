@@ -110,8 +110,9 @@ const (
 	// ApplyRequest) → `no such key` silently. After the narrow-fix flow-control does
 	// not split the Passage itself, but the probe may have moved to an earlier
 	// Passage for ANOTHER reason (another task with `where: register.X`). Fail-closed
-	// reject (offline soul-lint + runtime keeper safeguard), symmetric to
-	// CodeWithinBlockRegisterDependency. Fixed by where: (cross-task targeting) or
+	// reject by the Keeper for a run executing staged, symmetric to
+	// CodeWithinBlockRegisterDependency; soul-lint stopped reporting it with linear
+	// dispatch (NIM-944), where the Keeper decides such a `when:`. Fixed by where: (cross-task targeting) or
 	// register.self (same-task gating).
 	CodeCrossPassageWhenGating = "cross_passage_when_unsupported"
 )

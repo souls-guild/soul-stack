@@ -166,7 +166,7 @@ passed with literals, S1 returns to the user with the failing cases; it does not
 The open set is `register.self`, and inside a group also the group's own registers. A block rolled
 as one group puts several tasks in one message, and a child's `when: register.<sibling>` is valid
 there today: the within-block detector deliberately leaves flow control out
-(`shared/config/passage.go:675-680`). For such a child the sibling's register stays open, and the
+(`shared/config/passage.go:676-681`). For such a child the sibling's register stays open, and the
 Soul evaluates against what it accumulates inside the message — as it does today, and as a destiny
 does. Its `when:` is decided on the Keeper only when nothing in it is open.
 
@@ -176,7 +176,7 @@ The Keeper's two pieces are built for a run executing linearly (NIM-943), and th
 guards, masking, async barriers and the announcement of the capability bit — by NIM-929.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
-  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:653`),
+  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:666`),
   and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:633`),
   picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:180`)
   ([ADR-draft per-host params dispatch](../adr/draft-per-host-params-dispatch.md)). Flow control is
@@ -185,7 +185,7 @@ guards, masking, async barriers and the announcement of the capability bit — b
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
-  (`keeper/internal/scenario/crosspassage.go:145-150`), and each host's slice reaches the wire
+  (`keeper/internal/scenario/crosspassage.go:158-163`), and each host's slice reaches the wire
   through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:330`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on

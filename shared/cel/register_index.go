@@ -38,7 +38,7 @@ import (
 //     the registers of their ApplyRequest, for as long as the producer travels in the
 //     same Passage. The dot form has a detector for the moment it stops — reading a
 //     register emitted in an EARLIER Passage is [config.CodeCrossPassageWhenGating]
-//     ([ADR-056] FC-5), offline and again as a runtime safeguard — and that detector
+//     ([ADR-056] FC-5), a Keeper refusal for a run executing staged — and that detector
 //     reads dot-form refs, so the index form walks past it and dies on `no such key`.
 //   - `retry.until:`: travels to the Soul the same way, and FC-5 excludes it by design
 //     ([config.flowControlRead]), so here the dot form is no better guarded. This one

@@ -16,8 +16,8 @@ const (
 	ExecutionStaged ExecutionModel = "staged"
 	// ExecutionLinear is the draft ADR NIM-907: a step per top-level task, a block
 	// rolled as one group counting as one, and per child of a default block, in plan
-	// order ([config.LinearPassage]). The existing Passage loop iterates those steps;
-	// the dispatch loop the ADR specifies is NIM-944.
+	// order ([config.LinearPassage]). The Passage loop in run.go iterates those
+	// steps, each after the barrier of the one before it (NIM-944).
 	ExecutionLinear ExecutionModel = "linear"
 )
 

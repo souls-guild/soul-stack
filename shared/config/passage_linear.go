@@ -120,6 +120,79 @@ func WithinGroupRegisterDependency(tasks []Task, scenario *ScenarioSettings) (Wi
 	return WithinBlockInfo{}, false
 }
 
+// CrossStepRequisite is [CrossPassageRequisite] under linear dispatch: an
+// `onchanges:`/`onfail:` whose source runs in another step than the task that
+// reads it. The Keeper resolves every such link from the audit log
+// (keeper/internal/scenario/crosspassage.go), so a Keeper without an audit reader
+// refuses the run (draft ADR NIM-907 item 9). It sees what the staged detector
+// does not: a default block's children are steps of their own, and a link
+// between two of them crosses a step. A block rolled as one group is one step,
+// and links inside it are resolved inside its message. A requisite written on a
+// block reaches every task in it, as render merges it. steps is [LinearPassage]'s
+// for the same tasks.
+func CrossStepRequisite(tasks []Task, steps []StepNode) (CrossPassageInfo, bool) {
+	if len(steps) != len(tasks) {
+		return CrossPassageInfo{}, false
+	}
+	var links []stepLink
+	for i := range tasks {
+		collectStepLinks(&tasks[i], steps[i], nil, &links)
+	}
+	emitted := map[string][]int{}
+	for _, l := range links {
+		if l.task.Register != "" {
+			emitted[l.task.Register] = append(emitted[l.task.Register], l.step)
+		}
+	}
+	for _, l := range links {
+		for _, req := range l.reqs {
+			for _, src := range emitted[req.name] {
+				if src != l.step {
+					return CrossPassageInfo{
+						ConsumerName:    taskDisplayName(l.task),
+						RequisiteName:   req.name,
+						Kind:            req.kind,
+						ConsumerPassage: l.step,
+						SourcePassage:   src,
+					}, true
+				}
+			}
+		}
+	}
+	return CrossPassageInfo{}, false
+}
+
+// stepLink is one task of the plan with the step it runs in and every requisite
+// it reads: its own and those of the blocks around it.
+type stepLink struct {
+	task *Task
+	step int
+	reqs []taskRequisite
+}
+
+func collectStepLinks(t *Task, node StepNode, inherited []taskRequisite, out *[]stepLink) {
+	reqs := append([]taskRequisite(nil), inherited...)
+	for _, name := range t.OnChanges {
+		reqs = append(reqs, taskRequisite{name: name, kind: "onchanges"})
+	}
+	for _, name := range t.OnFail {
+		reqs = append(reqs, taskRequisite{name: name, kind: "onfail"})
+	}
+	if node.Children == nil {
+		*out = append(*out, stepLink{task: t, step: node.Step, reqs: reqs})
+	}
+	if t.Block == nil {
+		return
+	}
+	for j := range t.Block.Block {
+		child := StepNode{Step: node.Step}
+		if node.Children != nil {
+			child = node.Children[j]
+		}
+		collectStepLinks(&t.Block.Block[j], child, reqs, out)
+	}
+}
+
 func groupPeerRegisterRead(t Task, scenario *ScenarioSettings) (WithinBlockInfo, bool) {
 	if t.Block == nil {
 		return WithinBlockInfo{}, false

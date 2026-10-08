@@ -1397,21 +1397,19 @@ because a capture routinely arrives through an include and the per-file task rul
 crash point is recoverable: crash before the capture and nothing was applied; crash after it and the
 value is in Postgres/Vault where an operator can reach it. If it is generated, **used**, and only
 then captured, a crash in the window between leaves a live host configured with a value that exists
-nowhere else.
+nowhere else. "Before" is plan order — the order a run executes its steps in under linear dispatch
+(NIM-944); under the derived Passages a consumer written after the capture could still run first.
 
-A second rule rides the same pass. **A stale same-Passage read is an ERROR too**
-(`state_stale_same_passage_read`): an interpolated `${ incarnation.state.<field> }` refreshes only
-at a Passage boundary, so a task reading a field that an earlier task in the **same** Passage
-captures would render the *pre-capture* value — while the verb engine, which always reads live,
-would have written the new one. Rather than let the two mechanisms disagree in production, soul-lint
-rejects the pair; the author's options are the ones the DSL already has (read
-`register.<capture>.effective`, or push the reader into a later Passage with a `register:`
-dependency).
+A second rule, `state_stale_same_passage_read`, rode the same pass until linear dispatch: an
+interpolated `${ incarnation.state.<field> }` read written after a capture of that field in the
+**same** Passage rendered the *pre-capture* value, while the verb engine, which always reads live,
+wrote the new one. Under linear dispatch a capture is a step of its own and the state is re-read
+before every later step renders, so the read sees the captured value and the rule is gone (NIM-944).
+A run still executing staged (`execution_model: staged`, the default until NIM-952) renders that read
+stale, and nothing refuses it any more.
 
-Both rules run after `include:` expansion, since a producer and its capture routinely land in
-different files. Cross-Passage dataflow goes through `apply_task_register` and is not a lexical
-relationship, so the guards cover the within-Passage case — which is where the whole current corpus
-lives.
+The rule runs after `include:` expansion, since a producer and its capture routinely land in
+different files.
 
 #### Reading state while writing it
 
@@ -1425,9 +1423,9 @@ read-modify-write verbs mean anything: an `add … on_conflict: skip` is idempot
 can see the element a previous step inserted, and an `expect` asserting against a frozen snapshot
 would be worse than no assert at all.
 
-*An interpolated `${ incarnation.state.… }` read refreshes per Passage.* A Passage renders as one
-pass before it dispatches, so the read carries the state as of that Passage's render; from Passage 1
-on the runner re-reads the row at the boundary. The re-read is unlocked on purpose (the row is
+*An interpolated `${ incarnation.state.… }` read refreshes per Passage — per step under linear
+dispatch.* A Passage renders as one pass before it dispatches, so the read carries the state as of
+that Passage's render; from Passage 1 on the runner re-reads the row at the boundary. The re-read is unlocked on purpose (the row is
 already held `applying` by this very run, so the only writer is this run's own capture path) and is
 gated on the plan actually containing a capture step, so a plan without one renders bit-for-bit as
 before.

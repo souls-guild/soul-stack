@@ -210,3 +210,107 @@ tasks:
 		t.Errorf("info = %+v, want b reading a from a", info)
 	}
 }
+
+// ★ GUARD (draft ADR NIM-907 item 9). Under linear dispatch every requisite whose
+// source runs in another step is resolved from the audit log, so the detector that
+// decides whether the Keeper needs one must see a default block's children as the
+// steps they are. The staged detector reads the block as one entry and misses the
+// link between them: run without an audit log, the consumer is skipped silently.
+//
+// Mutation: answer for a linear run with [CrossPassageRequisite] → the default
+// block's link is not reported.
+func TestCrossStepRequisite_SeesDefaultBlockChildren(t *testing.T) {
+	cases := []struct {
+		name     string
+		src      string
+		cross    bool
+		consumer string
+	}{
+		{
+			name: "sibling children of a default block",
+			src: `
+name: linear
+tasks:
+  - name: pair
+    block:
+      - name: write config
+        module: core.exec.run
+        register: cfg
+        params: { cmd: write }
+      - name: reload
+        module: core.exec.run
+        onchanges: [cfg]
+        params: { cmd: reload }
+`,
+			cross:    true,
+			consumer: "reload",
+		},
+		{
+			name: "a requisite on a default block reaches its children",
+			src: `
+name: linear
+tasks:
+  - name: write config
+    module: core.exec.run
+    register: cfg
+    params: { cmd: write }
+  - name: on change
+    onchanges: [cfg]
+    block:
+      - name: reload
+        module: core.exec.run
+        params: { cmd: reload }
+`,
+			cross:    true,
+			consumer: "reload",
+		},
+		{
+			name: "sibling children of a group travel in one message",
+			src: `
+name: linear
+tasks:
+  - name: canary
+    serial: 1
+    settings:
+      serial_scope: block
+    block:
+      - name: write config
+        module: core.exec.run
+        register: cfg
+        params: { cmd: write }
+      - name: reload
+        module: core.exec.run
+        onchanges: [cfg]
+        params: { cmd: reload }
+`,
+		},
+		{
+			name: "no requisite",
+			src:  linearOverlayAndGroup,
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			m := loadLinearManifest(t, tc.src)
+			plan, steps := LinearPassage(m.Tasks, m.Settings)
+			info, bad := CrossStepRequisite(m.Tasks, steps)
+			if bad != tc.cross {
+				t.Fatalf("CrossStepRequisite = %v (%+v), want %v", bad, info, tc.cross)
+			}
+			if !tc.cross {
+				return
+			}
+			if info.ConsumerName != tc.consumer || info.RequisiteName != "cfg" || info.Kind != "onchanges" {
+				t.Errorf("info = %+v, want %q reading cfg through onchanges", info, tc.consumer)
+			}
+			if info.SourcePassage >= info.ConsumerPassage {
+				t.Errorf("info = %+v, want the source step before the consumer's", info)
+			}
+			if tc.name == "sibling children of a default block" {
+				if _, staged := CrossPassageRequisite(m.Tasks, plan); staged {
+					t.Error("the staged detector now sees a default block's children - the fixture no longer shows what it misses")
+				}
+			}
+		})
+	}
+}

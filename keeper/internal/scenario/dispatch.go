@@ -513,6 +513,19 @@ func cancelRequested(statuses []applyrun.HostStatus) bool {
 	return false
 }
 
+// stepCancelRequested is the cluster-wide Cancel check at the end of step p, for
+// a step whose last row went terminal with no barrier polling after it.
+func (r *Runner) stepCancelRequested(ctx context.Context, applyID string, p int) error {
+	statuses, err := applyrun.SelectStatusesByApplyID(ctx, r.deps.DB, applyID)
+	if err != nil {
+		return fmt.Errorf("scenario: cancel check after step %d: %w", p, err)
+	}
+	if cancelRequested(statuses) {
+		return fmt.Errorf("scenario: cancel requested by step %d: %w", p, errCancelRequested)
+	}
+	return nil
+}
+
 // classify evaluates a run's host status slice:
 //   - failed != nil — at least one failed/cancelled/orphaned (fail-closed).
 //   - done == true  — all wantHosts reached a terminal and all are benign

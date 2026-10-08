@@ -491,15 +491,21 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//        split a Passage, but a probe may have landed in an earlier Passage
 	//        for a DIFFERENT reason (another task with `where: register.X`).
 	//        where: handles this (Keeper re-renders with accumulated register),
-	//        when: doesn't. soul-lint catches this offline; here it's a runtime
-	//        safety net (reject, not a silent no-such-key failure). Gate applies
+	//        when: doesn't. Reject, not a silent no-such-key failure. Gate applies
 	//        strictly to staged runs (N=1 → one Passage, cross-passage
 	//        impossible).
-	if info, bad := config.CrossPassageWhenGating(scn.Tasks, passage); bad {
-		abort(config.CodeCrossPassageWhenGating, fmt.Errorf(
-			"scenario %s/%s: task %q gates %s: on register %q from a different Passage (consumer passage %d, source passage %d) - Soul-side gating only sees its own Passage, cross-passage register is unavailable -> no such key; use where: for cross-task register-targeting or register.self for same-task gating (ADR-056:85)",
-			spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage))
-		return
+	//
+	//        Retired under linear dispatch (draft ADR NIM-907, decision 4): the
+	//        Keeper decides a `when:` across steps and renders the other
+	//        registers into the post-module predicates (keeper_flow.go), so no
+	//        such read reaches the Soul. soul-lint dropped the check with it.
+	if spec.executionModel != ExecutionLinear {
+		if info, bad := config.CrossPassageWhenGating(scn.Tasks, passage); bad {
+			abort(config.CodeCrossPassageWhenGating, fmt.Errorf(
+				"scenario %s/%s: task %q gates %s: on register %q from a different Passage (consumer passage %d, source passage %d) - Soul-side gating only sees its own Passage, cross-passage register is unavailable -> no such key; use where: for cross-task register-targeting or register.self for same-task gating (ADR-056:85)",
+				spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RegisterName, info.ConsumerPassage, info.SourcePassage))
+			return
+		}
 	}
 
 	// 4.95. serial + staged (N>1) — 2D serial×passage IMPLEMENTED (ADR-056 §S4
@@ -533,8 +539,21 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//        Passage, cross-passage impossible). The CrossPassageRequisite
 	//        detector is reused to check whether a cross-passage link exists (if
 	//        so, a reader is required).
+	//
+	//        Under linear dispatch every requisite whose source runs in another
+	//        step takes this path, so the audit log is an operational
+	//        prerequisite for any scenario with one (draft ADR NIM-907 item 9).
+	//        CrossStepRequisite also sees the links between a default block's
+	//        children, which are steps of their own.
 	if staged && r.deps.AuditReader == nil {
-		if info, bad := config.CrossPassageRequisite(scn.Tasks, passage); bad {
+		if spec.executionModel == ExecutionLinear {
+			if info, bad := config.CrossStepRequisite(scn.Tasks, steps); bad {
+				abort("cross_passage_requisite_unsupported", fmt.Errorf(
+					"scenario %s/%s: task %q references via %s: register %q, emitted at step %d while it runs at step %d - under linear dispatch the Keeper resolves such a link from the audit log (AuditReader), and none is configured -> fail-closed rejection",
+					spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RequisiteName, info.SourcePassage, info.ConsumerPassage))
+				return
+			}
+		} else if info, bad := config.CrossPassageRequisite(scn.Tasks, passage); bad {
 			abort("cross_passage_requisite_unsupported", fmt.Errorf(
 				"scenario %s/%s: task %q references via %s: register %q whose source is in a different Passage (consumer passage %d, source passage %d) - cross-passage gating requires an audit log (AuditReader), but it is unavailable -> fail-closed rejection (ADR-056 R3)",
 				spec.IncarnationName, spec.ScenarioName, info.ConsumerName, info.Kind, info.RequisiteName, info.ConsumerPassage, info.SourcePassage))
@@ -615,6 +634,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// keeper task at step-5 render is a placeholder with no Params — it can
 	// only be dispatched once its Passage becomes active); for the Acolyte
 	// path, just Passage 0 (Acolyte excludes staged).
+	//
+	// Under linear dispatch a keeper-side task is a step of its own (it cannot
+	// sit in a block), so "before its Passage's host dispatch" is vacuous: it runs
+	// where it is written, after the barrier of every step before it and before
+	// any step after it (draft ADR NIM-907, decision 3).
 	//
 	//   - staged (Passage.Count>1): OLD path (inline) — stage-loop below.
 	//     Acolyte renders per-host at claim time ONCE (not per-Passage) — staged
@@ -870,7 +894,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					abort("register_load_failed", fmt.Errorf("scenario: cross-passage failed facts: %w", ferr))
 					return
 				}
-				gate = newCrossPassageGate(tasks, changed, failed)
+				gate = newCrossPassageGate(tasks, plans, changed, failed)
 			}
 			// renderIn.Hosts for the same reason: the plans' TargetSIDs come from
 			// that slice, so the per-host transport decision has to be built from
@@ -880,6 +904,15 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts); err != nil {
 				abort("dispatch_failed", err)
 				return
+			}
+			// A barrier reads a cluster-wide Cancel while it waits; a keeper step
+			// has none, and under linear dispatch it can be the run's last step, so
+			// a Cancel that flagged its row would go unread and the run commit.
+			if spec.executionModel == ExecutionLinear {
+				if err := r.stepCancelRequested(ctx, spec.ApplyID, p); err != nil {
+					abort("dispatch_failed", err)
+					return
+				}
 			}
 		}
 	}

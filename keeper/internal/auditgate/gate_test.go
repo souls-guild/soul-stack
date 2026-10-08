@@ -80,6 +80,24 @@ func TestGate_DisabledStillWritesTheRecordOfItsOwnClosing(t *testing.T) {
 	}
 }
 
+// ★ GUARD (NIM-944, draft ADR NIM-907 item 9). A run resolves an `onchanges:`/
+// `onfail:` across messages from the `task.executed` rows it reads back
+// (auditpg.SelectChangedTaskKeys / SelectFailedTaskKeys). Swallowed with the audit
+// off, every such consumer reads "not changed" and is skipped without a word.
+//
+// Mutation: drop task.executed from AlwaysWrite → it is swallowed.
+func TestGate_DisabledStillWritesWhatARunReadsBack(t *testing.T) {
+	rec := &recorder{}
+	w := master(rec, always(false))
+
+	if err := w.Write(context.Background(), &audit.Event{EventType: audit.EventTaskExecuted}); err != nil {
+		t.Fatalf("Write: %v", err)
+	}
+	if len(rec.got) != 1 || rec.got[0] != audit.EventTaskExecuted {
+		t.Fatalf("got %v, want task.executed written with the audit off", rec.got)
+	}
+}
+
 // A disabled gate is a configured outcome, not a failure: returning an error
 // would fail the initiator's own operation (an HTTP request, a Reaper rule).
 func TestGate_DisabledReportsSuccess(t *testing.T) {
