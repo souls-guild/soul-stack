@@ -9,8 +9,9 @@
 > from a block to its children. Since NIM-940 §3.1's two refusals are enforced the same way and
 > `soul-lint` gives rule 4's warning. Since NIM-942 `serial_scope` decides how a block rolls — but
 > only in a run that executes linearly, and no run does until NIM-952 moves the default execution
-> model (`execution_model`, [naming-rules.md](../naming-rules.md)). **Not yet:** every other
-> behaviour the keys describe — the barrier, the timeouts (the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
+> model (`execution_model`, [naming-rules.md](../naming-rules.md)). Since NIM-948 a linear run's
+> barrier reads `on_failure` and `tolerate` (§4), on the same terms. **Not yet:** the timeouts and
+> the `onfail:` rescue across barriers (§4; the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
 > `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
 > 2026-10-01 unless marked **open**.
 
@@ -63,15 +64,15 @@ The scenario top level was a flat list of thirteen keys, none of which governed 
 instead of a key each.
 
 A block composes its keys by **several** rules, and `settings:` takes the `vars:` one. The authority
-is `mergeBlockInheritance` (`keeper/internal/render/block.go:460-472`):
+is `mergeBlockInheritance` (`keeper/internal/render/block.go:480-492`):
 
 | Key on the block | Against the child's own key |
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:548-561`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:568-581`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
-| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:345`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
+| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:358`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
 
 ## 2. The keys
@@ -91,7 +92,7 @@ defines it.
 | Key | Kind | Values | Default | Meaning |
 |---|---|---|---|---|
 | `on_failure` | task | `host` \| `scenario` | `scenario` | What a host's failure at this task kills. `scenario` — the run ends. `host` — that host leaves the run, the rest continue; a run that finished without some hosts ends `partial_failed`, the incarnation `error_locked`, and a Voyage counts it as failed (user, 2026-10-02; the ADR's item 4). |
-| `tolerate` | barrier | `N` \| `"N%"` | no limit | Counts the hosts dropped under radius `host`: the run ends once **more than** N of them — or more than N% of the run's hosts (§6) — have failed in total. A failure under radius `scenario` ends the run without consulting it, so beside `scenario` it is unused, not an error. |
+| `tolerate` | barrier | `N` \| `"N%"` | no limit | Counts the hosts dropped under radius `host`: the run ends once **more than** N of them — or more than N% of the run's hosts (§2.1) — have failed in total. A failure under radius `scenario` ends the run without consulting it, so beside `scenario` it is unused, not an error. |
 | `soul_timeout` | task | duration | `1m` | How long a lost agent stream may stay lost before the host fails *for unavailability*. |
 | `task_timeout` | task | duration, `0` | `0` = no limit | How long one task may execute. A task's own `timeout:` is shorthand for it — §2.3. |
 | `scenario_timeout` | run | duration | `24h` | How long the whole run may take. |
@@ -117,9 +118,14 @@ Voyage setting can never be misread as a barrier setting.
 host fails at most once (it leaves the run), so the count only grows, and twelve tasks losing one host
 each are twelve hosts against the threshold, not one per task. The count is checked **at every
 barrier**, against that barrier owner's merged `tolerate`: a task may tighten or loosen the threshold
-from its own barrier on. `N%` is of the run's hosts — which set that is, is open (§6) — and **rounds
-down**, the direction that stops
-sooner — so `"10%"` of fewer than ten hosts is zero, which is radius `scenario`.
+from its own barrier on — a barrier where nothing failed included. `N%` is of the run's hosts — **the
+hosts the run has targeted with at least one task by the barrier being checked**, dropped ones
+included (user, 2026-10-08, NIM-948): every host with a row in the run so far, whether it was sent
+the task, skipped it on the Keeper's decision or failed before the send — and **rounds down**, the
+direction that stops sooner — so `"10%"` of fewer
+than ten hosts is zero, which is radius `scenario`. The set grows with the run: a first step that goes
+to one host (`run_once:`) checks `"20%"` against one, so a failure there ends the run, and a step
+after the roster grew checks it against more.
 
 ⚠ One difference from Ansible, stated so it is not assumed away: Ansible checks `max_fail_percentage`
 per `serial` batch, because its `serial` batches the whole play. Here `serial:` batches one task, so
@@ -139,25 +145,25 @@ failure; a slow task on a live host is never mistaken for a dead one. What this 
 the inline path today:
 
 - **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
-  `orphaned` (`keeper/internal/applyrun/crud.go:1074-1082`), so a Soul that dies mid-task leaves its row
+  `orphaned` (`keeper/internal/applyrun/crud.go:1100-1108`), so a Soul that dies mid-task leaves its row
   `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1505-1528`). And a result finished while the stream was down must still reach
+  operator cancelled (`keeper/internal/scenario/run.go:1541-1564`). And a result finished while the stream was down must still reach
   the Keeper when it returns, or the wait buys nothing.
 - **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
   (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
-  (`keeper/internal/scenario/dispatch.go:526-530`); `soul_timeout` has to cover that wait too.
+  (`keeper/internal/scenario/dispatch.go:561-574`); `soul_timeout` has to cover that wait too.
 - **The Keeper running the run may not hold the stream.** Under HA the stream can sit on another
-  instance (`dispatch.go:548-552`), so noticing the drop needs that instance to say so. A push host
+  instance (`dispatch.go:592-596`), so noticing the drop needs that instance to say so. A push host
   has no stream at all; what `soul_timeout` means for it is open (§6).
 
 `scenario_timeout` **replaces** today's `defaultRunTimeout` of 5 minutes
-(`keeper/internal/scenario/scenario.go:136-139`), whose stated job — "guards against an eternal
+(`keeper/internal/scenario/scenario.go:138-141`), whose stated job — "guards against an eternal
 barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also killed any legitimate task
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1136-1149`, `deployBudget` at
-`keeper/internal/scenario/scenario.go:141-150`), and `max_await_timeout` is a `keeper.yml` key — an
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1172-1185`, `deployBudget` at
+`keeper/internal/scenario/scenario.go:143-152`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
 already covers onboarding.
@@ -216,7 +222,7 @@ beneath it once NIM-949 reads it; until then write `timeout:` on the task.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:897-900`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:917-920`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -277,7 +283,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:899-910`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:943-954`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
@@ -313,13 +319,15 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   under `scenario` it is one more entry — the host leaves two errors, the source's and the
   rescue's; under `host` the host, already out, stays out and the log records that it left. The
   radius is the rescue's own: a rescue left at the default `scenario` ends the run for every host
-  when it fails, even if its source failed under `host`.
+  when it fails, even if its source failed under `host`. ⚠ **Not built yet (NIM-951):** today a
+  dropped host receives no later task, a rescue included, and is recorded SKIPPED there; a run that
+  ends runs no later rescue at all.
 - If any recorded failure on a host is at a task whose radius is `scenario`, the run ends: a fatal
   failure that happened is fatal whatever else happened on that host. Under `async:` several children
   can fail on one host (`soul/internal/runtime/applyrunner.go:468-480` — siblings are not cancelled),
   and none is lost.
 - A failure **tied to no task** — the dispatch itself failed (`send_apply_failed`,
-  `keeper/internal/scenario/dispatch.go:526-530`), a push transport failed, or `soul_timeout` ran
+  `keeper/internal/scenario/dispatch.go:561-574`), a push transport failed, or `soul_timeout` ran
   out — is judged by the **barrier owner's** radius. A Keeper-side evaluation error, such as a
   failing `when:`, is tied to its task and judged by that task's radius.
 - **The FAILED records the Keeper writes for such failures are not judged again.** A failure with no
@@ -331,18 +339,44 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   no task, by the child's radius when a group fails before dispatch.
 - Actively stopping in-flight work when the run ends is a separate, opt-in idea: NIM-911.
 
-⚠ **Almost none of this exists today.** The barrier returns on the first failed host
-(`dispatch.go:635-638`) and the abort force-fails every row still running
-(`keeper/internal/scenario/run.go:1505-1528`) on the assumption that no result will arrive — false
-for a live host. The only failure record per host is one first-arrival slot, `failed_plan_index`
-(`keeper/internal/applyrun/crud.go:522-528`), which the barrier does not even read: its one reader,
-`failedPlanIndex` (`dispatch.go:800-812`), has no callers. A dead host is caught only on the Acolyte
-path, which since NIM-961 carries a linear run's step when the work-queue takes it
-([ADR-027 amend (q)](../adr/0027-apply-work-queue.md)) and an inline step does not: only a row
-marked `dispatched` — which the claim does, `claim.go:229` — can be set `orphaned`
-(`crud.go:1074-1082`). The
-audit log does record every task failure, and the cross-passage gate already reads it
-(`run.go:907-920`).
+**Built in NIM-948, for a linear run** (`keeper/internal/scenario/failure_policy.go`). The barrier
+(`Runner.waitStep`) waits for every host a step — or a `serial:` wave of it — was sent to, and
+`stepJudge.verdict` judges each failed host by every task it reported failed: the row's first failure
+(`failed_plan_index`) and the step's FAILED/TIMED_OUT `task.executed` facts in the audit log, the
+source the cross-step requisite gate reads; without an audit reader, the first failure alone. A host
+the Keeper failed before sending is judged by its cause alone. The list is `runFailures`, held by the
+run goroutine. A send that fails no longer stops the wave: the row is failed `send_apply_failed` and
+judged with the rest. A dropped host:
+
+- leaves every later step's roster, a roster re-read at a refresh boundary included;
+- stays in `soulprint.hosts`, at its SID position, with `dropped: true` (user, 2026-10-08): all hosts
+  are `soulprint.hosts`, the ones still in the run `soulprint.hosts.filter(h, !h.dropped)`. It keeps
+  its entries in `register.hosts.<name>`, and a `core.state.<verb>` step after the drop writes as
+  usual (user, 2026-10-08) — the incarnation ends `error_locked` either way;
+- gets a SKIPPED `task.executed` — "not reached", what a Soul's fail-stop writes for the rest of its
+  message — for each later task whose `on:` selects it. Its `where:` is not evaluated: it would read
+  registers the host stopped producing. A `run_once:` task covers no dropped host;
+- is audited once, as `apply.host_dropped` (`sid`, `step`, `reason`, and `task` when the failure is
+  tied to one).
+
+A barrier that would drop the last live host of the run's roster ends the run `failed` (§6). The
+roster is the incarnation's hosts the run holds, targeted by a step or not: a run whose steps all go
+to one coven of a larger incarnation goes on, as a no-op, after that coven's last host drops, and ends
+`partial_failed` — the hosts outside the coven are still in it. A run that reaches
+its end without some hosts marks each dropped host's failed row `apply_runs.dropped` (migration 122),
+so the run reads `partial_failed`; the incarnation goes `error_locked` with reason `partial_failed`,
+and `incarnation.run_completed` says `partial_failed`. A run that ends early for any reason marks
+nothing, and its rows fold to `failed`. `failed_plan_index` keeps its public meaning, a row's first
+failure (`shared/api/wire/incarnation.go`, read by `keeper/internal/applyrun/runsview.go`).
+
+⚠ **A staged run keeps today's barrier** until NIM-952 retires it: it returns on the first failed
+host (`classifyExcept`, `keeper/internal/scenario/dispatch.go`) and the abort force-fails every row
+still running (`ensureTerminalApplyRun`, `keeper/internal/scenario/run.go`). A dead host is caught
+only on the Acolyte path — which since NIM-961 carries a linear run's step when the work-queue takes
+it ([ADR-027 amend (q)](../adr/0027-apply-work-queue.md)), and an inline step does not: only a row
+marked `dispatched` — which the claim does — can be set `orphaned` (`OrphanDispatched`,
+`keeper/internal/applyrun/crud.go`). A linear run judges such a row, which carries no task, by the
+barrier owner's radius, on either path: a queued step's barrier is the inline one's.
 
 ## 5. Naming
 
@@ -358,12 +392,6 @@ scenario saying so.
 
 ## 6. Open
 
-- **Which hosts are "the run's" for `tolerate: "N%"`.** The roster is re-read at every refresh
-  boundary (`keeper/internal/scenario/run.go:753-760`): it grows during provisioning and can lose an
-  offline host with no failure recorded. Recommended: the distinct hosts the run has dispatched at
-  least one task to, counted at the barrier being checked.
-- **A dropped host must stay dropped across that re-read** — the ADR's item 5. A refresh boundary
-  would otherwise re-admit a host `on_failure: host` removed, if it is still online.
 - **A task that restarts its own agent or host** (§2.3) — its result never arrives.
 - **`soul_timeout` for a push host**, which holds no stream (§2.2).
 
@@ -377,5 +405,9 @@ scenario saying so.
 - **A per-machine `soul_timeout`.** A machine-level value was mentioned before the scenario-level one
   was chosen. A scenario-level value covers the case that motivates it — a scenario that reboots hosts
   needs a longer one — so a machine layer is left for later.
-- **A run with every host dropped** — the next step's host map is empty, a no-op
-  (`dispatch.go:80-87`). Recommended: it ends as failed.
+
+Decided (NIM-948, user, 2026-10-08): the denominator of `tolerate: "N%"` (§2.1); a dropped host stays
+dropped across a roster re-read at a refresh boundary, which would otherwise re-admit it while it is
+still online; a run left with no live host in its roster ends `failed` at the barrier that would
+drop the last one (the recommendation; §4 says which roster); `soulprint.hosts` and `core.state.<verb>` after a drop (§4). Whether
+`soulprint.hosts` becomes a map keyed by SID instead of a list read by position is NIM-978.

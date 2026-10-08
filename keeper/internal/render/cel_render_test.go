@@ -249,7 +249,7 @@ func TestSoulprintSelfMap_Traits(t *testing.T) {
 	}
 
 	// Symmetry: a soulprint.hosts element carries the same traits.
-	elem := hostFactsToMap(h)
+	elem := hostFactsToMap(h, false)
 	htraits, ok := elem["traits"].(map[string]any)
 	if !ok || htraits["namespace"] != "dba-ns" {
 		t.Errorf("hosts[].traits = %v, want consistent with self", elem["traits"])
@@ -402,7 +402,7 @@ func TestSoulprintSelf_HostsSymmetry(t *testing.T) {
 		Choirs: []string{"primaries", "voters"},
 	}
 	self := soulprintSelfMap(h)
-	hostsEl := hostFactsToMap(h)
+	hostsEl := hostFactsToMap(h, false)
 
 	if self["sid"] != hostsEl["sid"] {
 		t.Errorf("sid mismatch: self=%v hosts=%v", self["sid"], hostsEl["sid"])

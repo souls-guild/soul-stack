@@ -254,6 +254,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			return nil, nil, serr
 		} else if skipped {
 			stampPassage(tasks, passageStart, passage)
+			stampOnFailure(in, tasks, passageStart, task)
 			continue
 		}
 
@@ -274,6 +275,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			tasks = append(tasks, futurePlaceholder(task, idx, passage))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
+			stampOnFailure(in, tasks, passageStart, task)
 			continue
 		}
 
@@ -321,6 +323,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		if err != nil {
 			return nil, nil, err
 		}
+		notReached, err := coveredDropped(p.cel, in, task, in.Dropped)
+		if err != nil {
+			return nil, nil, err
+		}
 
 		// Everything appended from here on belongs to THIS task's fan-out, and
 		// carries its transport (stampTransport below, once per branch).
@@ -341,6 +347,8 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, dp...)
 			idx += len(dt)
 			stampPassage(tasks, passageStart, passage)
+			stampOnFailure(in, tasks, passageStart, task)
+			stampNotReached(plans[planStart:], notReached)
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
 			}
@@ -362,6 +370,8 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			plans = append(plans, lp...)
 			idx += len(lt)
 			stampPassage(tasks, passageStart, passage)
+			stampOnFailure(in, tasks, passageStart, task)
+			stampNotReached(plans[planStart:], notReached)
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
 			}
@@ -385,7 +395,9 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			if roll.group {
 				roll.width = serialWidth(task.Serial, len(targeted))
 			}
-			bt, bp, berr := p.renderBlockTask(ctx, in, task, idx, targeted, includeGroupKeep, roll)
+			bin := in
+			bin.droppedCover = notReached
+			bt, bp, berr := p.renderBlockTask(ctx, bin, task, idx, targeted, includeGroupKeep, roll)
 			if berr != nil {
 				return nil, nil, berr
 			}
@@ -396,6 +408,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			if !roll.overlay {
 				stampPassage(tasks, passageStart, passage)
 			}
+			stampOnFailure(in, tasks, passageStart, task)
 			if terr := stampTransport(plans[planStart:], task); terr != nil {
 				return nil, nil, terr
 			}
@@ -415,6 +428,8 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		})
 		idx++
 		stampPassage(tasks, passageStart, passage)
+		stampOnFailure(in, tasks, passageStart, task)
+		stampNotReached(plans[planStart:], notReached)
 		if terr := stampTransport(plans[planStart:], task); terr != nil {
 			return nil, nil, terr
 		}

@@ -8,8 +8,7 @@ import (
 
 // TestRunStatusesIsTheDecidedSet pins the closed set itself: every other guard is
 // checked against RunStatuses, so a value dropped from it would take its own guards
-// down with it. partial_failed is in the set although nothing produces it yet
-// (NIM-948): the public schema carries it ahead of its writer.
+// down with it.
 func TestRunStatusesIsTheDecidedSet(t *testing.T) {
 	want := []RunStatus{"applying", "success", "failed", "partial_failed", "cancelled"}
 	if got := RunStatuses(); !slices.Equal(got, want) {

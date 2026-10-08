@@ -89,7 +89,13 @@ func (p *Pipeline) renderBlockTask(
 	}
 	// childRecurse: a nested block → recursion into the same renderBlockTask.
 	childRecurse := func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		return p.renderBlockTask(ctx, in, child, idx, childTargeted, includeGroups, roll.nested(pos, child, childTargeted, width))
+		cin := in
+		cover, err := coveredDropped(p.cel, in, child, in.droppedCover)
+		if err != nil {
+			return nil, nil, err
+		}
+		cin.droppedCover = cover
+		return p.renderBlockTask(ctx, cin, child, idx, childTargeted, includeGroups, roll.nested(pos, child, childTargeted, width))
 	}
 	var steps []config.StepNode
 	if roll.overlay {
@@ -301,6 +307,7 @@ func (p *Pipeline) walkBlockChildren(
 			if step != nil {
 				stampPassage(tasks, childStart, step.Step)
 			}
+			stampOnFailure(in, tasks, childStart, child)
 			continue
 		}
 
@@ -312,6 +319,7 @@ func (p *Pipeline) walkBlockChildren(
 			tasks = append(tasks, futurePlaceholder(child, idx, step.Step))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
+			stampOnFailure(in, tasks, childStart, child)
 			continue
 		}
 
@@ -335,12 +343,17 @@ func (p *Pipeline) walkBlockChildren(
 			if step != nil && step.Children == nil {
 				stampPassage(tasks, childStart, step.Step)
 			}
+			stampOnFailure(in, tasks, childStart, child)
 			continue
 		}
 
 		childTargeted, terr := target(i, child)
 		if terr != nil {
 			return nil, nil, terr
+		}
+		notReached, nerr := coveredDropped(p.cel, in, child, in.droppedCover)
+		if nerr != nil {
+			return nil, nil, nerr
 		}
 		childWidth := width
 		if step != nil {
@@ -372,6 +385,8 @@ func (p *Pipeline) walkBlockChildren(
 			if step != nil {
 				stampPassage(tasks, childStart, step.Step)
 			}
+			stampOnFailure(in, tasks, childStart, child)
+			stampNotReached(plans[planStart:], notReached)
 			continue
 		}
 
@@ -393,6 +408,8 @@ func (p *Pipeline) walkBlockChildren(
 		if step != nil {
 			stampPassage(tasks, childStart, step.Step)
 		}
+		stampOnFailure(in, tasks, childStart, child)
+		stampNotReached(plans[planStart:], notReached)
 	}
 	return tasks, plans, nil
 }
@@ -436,6 +453,9 @@ func futurePlaceholder(task config.Task, idx, passage int) *RenderedTask {
 func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted []*topology.HostFacts) ([]*topology.HostFacts, error) {
 	scoped := in
 	scoped.Hosts = targeted
+	// The dropped hosts the block's `on:` selects stand beside its hosts, so a
+	// child's where: sees the block's share of soulprint.hosts, not the run's.
+	scoped.Dropped = in.droppedCover
 	childTargeted, err := resolveTargets(p.cel, scoped, child)
 	if err != nil {
 		return nil, err

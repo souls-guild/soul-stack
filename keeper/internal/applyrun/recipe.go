@@ -63,6 +63,10 @@ type RecipeStep struct {
 	// incarnation since is not in it, and a `run_once:` or `soulprint.hosts`
 	// rendered over the live roster would disagree with the run's own render.
 	Roster []string `json:"roster"`
+	// Dropped — the SIDs the run dropped under `on_failure: host` before this step
+	// (NIM-948). Not in Roster — nothing targets them — but still in
+	// `soulprint.hosts`, flagged `dropped`, so the claim renders the list the run did.
+	Dropped []string `json:"dropped,omitempty"`
 	// HeldTargets — each default block's hosts, chosen at the block's first
 	// step and held for its later ones (render.HeldTargets), by plan position.
 	HeldTargets map[string][]string `json:"held_targets,omitempty"`

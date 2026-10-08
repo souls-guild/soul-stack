@@ -271,6 +271,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"120_plugin_sigils_release_artifacts.up.sql",
 		"121_add_incarnation_applying_cancel_requested.down.sql",
 		"121_add_incarnation_applying_cancel_requested.up.sql",
+		"122_add_apply_runs_dropped.down.sql",
+		"122_add_apply_runs_dropped.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

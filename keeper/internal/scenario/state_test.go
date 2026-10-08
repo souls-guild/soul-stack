@@ -508,7 +508,7 @@ func buildOps(t *testing.T, tasks []*render.RenderedTask) []render.RenderedOp {
 // and a repeat is idempotent through on_conflict: skip.
 //
 // ⚠ `loop:` does NOT yet reach here: renderKeeperTask rejects it
-// (pipeline.go:1092-1094, pinned by TestRender_LoopOnKeeperTaskRejected). Until that
+// (pipeline.go:1107-1109, pinned by TestRender_LoopOnKeeperTaskRejected). Until that
 // lifts, a capture over a runtime-sized collection has to be written out, which
 // is the one thing `foreach` could express and this cannot.
 func TestStateAddTasks_GrowByN(t *testing.T) {

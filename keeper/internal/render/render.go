@@ -297,6 +297,16 @@ type RenderInput struct {
 	// Sealed. nil — a block's hosts are resolved again on every pass.
 	HeldTargets *HeldTargets
 
+	// Dropped — the hosts a linear run dropped under `on_failure: host`
+	// (settings.md §4). Hosts never holds them: no task targets a dropped host. They
+	// stay in `soulprint.hosts`, flagged `dropped` ([runHosts]), and each plan names
+	// the ones its task would have reached ([DispatchPlan.NotReached]).
+	Dropped []*topology.HostFacts
+
+	// droppedCover — the dropped hosts the enclosing blocks' `on:` still selects, for
+	// a block's children to narrow further ([coveredDropped]). Set per block.
+	droppedCover []*topology.HostFacts
+
 	// Sealed — accumulator of sealed paths for the render run (seal /
 	// sealed-paths, [ADR-010] §7.4). Render marks the path of any params cell
 	// whose RAW `${ … }` value reads a secret source (secret-input/vault()/
@@ -647,6 +657,11 @@ type RenderedTask struct {
 	// where they can see it.
 	Grouped bool
 
+	// OnFailure — the effective `on_failure` a failure at this task is judged by
+	// (settings.md §4): `scenario` or `host`. Keeper-only, never on the wire. Set under
+	// linear dispatch only; a destiny's tasks carry their applier's.
+	OnFailure string
+
 	// flowContextBySID — each target host's flow_context, kept for [Pipeline.settleFlow]
 	// to evaluate the predicates against: the snapshot a Soul would have been sent.
 	flowContextBySID map[string]*structpb.Struct
@@ -754,4 +769,9 @@ type DispatchPlan struct {
 	// transport decision, and every plan of the expansion carries the same pair.
 	TransportName   string
 	TransportParams map[string]any
+
+	// NotReached — the hosts the run dropped that this task would have reached, by
+	// its `on:` alone ([coveredDropped]), sorted. The dispatcher records the task
+	// SKIPPED on each: what a Soul's fail-stop records for the rest of its message.
+	NotReached []string
 }

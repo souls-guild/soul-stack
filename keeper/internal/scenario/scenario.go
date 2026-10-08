@@ -48,6 +48,7 @@ import (
 	"github.com/souls-guild/soul-stack/sdk/module"
 	"github.com/souls-guild/soul-stack/sdk/schema"
 	"github.com/souls-guild/soul-stack/shared/audit"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // scenarioMainFile is the scenario entry point in the service repo
@@ -254,6 +255,10 @@ type RunSpec struct {
 	// executionModel — the model this run executes in, decided once at run start
 	// ([Runner.executionModel]). Unexported: set by run(), not by the API caller.
 	executionModel ExecutionModel
+
+	// stepSettings — a linear run's merged `settings:` per step
+	// ([config.StepSettings]); nil for a staged run. Set by run().
+	stepSettings []config.ScenarioSettings
 
 	// FromLocked — run starts from an already-reserved applying status
 	// (rerun-last: incarnation.UnlockForRerun under FOR UPDATE moved

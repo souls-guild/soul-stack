@@ -106,9 +106,9 @@ type RunsStats struct {
 // runsAggregateSelect aggregates apply_runs by apply_id: the common subquery base
 // for both list and stats. The status column is the SQL form of [AggregateRunStatus];
 // literals are gathered from Go constants (init below) — a single source of priority
-// applying > failed > cancelled > success. Unknown status is treated as non-terminal
-// (parity with AggregateRunStatus default branch). Like AggregateRunStatus it has no
-// branch for [RunStatusPartialFailed]; whoever records the drop adds it to both. A
+// applying > failed > cancelled > partial_failed > success, where a failed row that
+// is a drop ([MarkDropped]) counts toward partial_failed, not failed. Unknown status
+// is treated as non-terminal (parity with AggregateRunStatus default branch). A
 // run holding its incarnation's applying lock is applying whatever its rows say
 // ([runLockHeldSQL]).
 //
@@ -128,8 +128,9 @@ SELECT ar.apply_id,
        CASE
          WHEN bool_or(%[9]s)                           THEN '%[2]s'
          WHEN bool_or(ar.status NOT IN (%[1]s))        THEN '%[2]s'
-         WHEN bool_or(ar.status IN ('%[3]s','%[4]s'))  THEN '%[5]s'
+         WHEN bool_or(ar.status IN ('%[3]s','%[4]s') AND NOT ar.dropped) THEN '%[5]s'
          WHEN bool_or(ar.status = '%[6]s')             THEN '%[7]s'
+         WHEN bool_or(ar.dropped)                      THEN '%[10]s'
          ELSE '%[8]s'
        END                                             AS status
 FROM apply_runs ar
@@ -139,6 +140,7 @@ LEFT JOIN incarnation i ON ar.incarnation_name = i.id`,
 	StatusCancelled, RunStatusCancelled,
 	RunStatusSuccess,
 	runLockHeldSQL,
+	RunStatusPartialFailed,
 )
 
 // terminalStatusesSQL returns terminal host statuses as a list of SQL literals

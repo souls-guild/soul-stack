@@ -36,9 +36,9 @@ const (
 	// they failed under `on_failure: host` and the rest ran to the end. The
 	// incarnation ends error_locked and a Voyage counts the run as failed.
 	//
-	// [AggregateRunStatus] never returns it: the host rows of such a run are the
-	// rows of a failed run, so only a record of the drop, written by whoever drops
-	// the host (NIM-948), can tell the two apart.
+	// The host rows of such a run are the rows of a failed run; `apply_runs.dropped`
+	// on the failed row of each dropped host (migration 122, [MarkDropped]) is what
+	// tells the two apart.
 	RunStatusPartialFailed RunStatus = "partial_failed"
 	// RunStatusCancelled indicates all host rows are terminal with cancelled,
 	// but no failed/orphaned rows.
@@ -96,6 +96,9 @@ type RunHostStatus struct {
 	ErrorSummary    *string
 	Attempt         int32
 	CancelRequested bool
+	// Dropped — this failed row dropped its host from a run that finished without it
+	// ([MarkDropped]).
+	Dropped bool
 	// Notices — advisory findings this host reported during the run (NIM-237),
 	// deduplicated by (code, module, param): the same deprecated param used by
 	// twenty tasks is one thing to migrate. Per-host rather than per-run because
@@ -126,26 +129,29 @@ type RunDetail struct {
 	Input map[string]any
 }
 
-// AggregateRunStatus collapses a run into [RunStatus]. Priority order (corresponds
-// to barrier classification, dispatch.go classify): the run holds its
-// incarnation's applying lock (lockHeld, [runLockHeldSQL]) or any row is
-// non-terminal → applying; else failed/orphaned → failed; else cancelled →
-// cancelled; else (only success/no_match) → success. Empty slice → applying
-// (rows not yet dispatched — run not complete).
+// AggregateRunStatus collapses a run into [RunStatus]. dropped is how many of its
+// rows are a dropped host's ([MarkDropped]), each of them failed or orphaned.
+// Priority order (corresponds to barrier classification, dispatch.go classify): the
+// run holds its incarnation's applying lock (lockHeld, [runLockHeldSQL]) or any row
+// is non-terminal → applying; else a failed/orphaned row that is not a drop →
+// failed; else cancelled → cancelled; else a drop → partial_failed; else (only
+// success/no_match) → success. Empty slice → applying (rows not yet dispatched —
+// run not complete).
 //
 // The rows alone cannot say a run is over: between one step's barrier and the
 // next step's rows every row is terminal (NIM-972).
-func AggregateRunStatus(statuses []Status, lockHeld bool) RunStatus {
+func AggregateRunStatus(statuses []Status, dropped int, lockHeld bool) RunStatus {
 	if lockHeld || len(statuses) == 0 {
 		return RunStatusApplying
 	}
-	var hasFailure, hasCancelled bool
+	var failures int
+	var hasCancelled bool
 	for _, s := range statuses {
 		switch s {
 		case StatusSuccess, StatusNoMatch:
 			// benign terminal.
 		case StatusFailed, StatusOrphaned:
-			hasFailure = true
+			failures++
 		case StatusCancelled:
 			hasCancelled = true
 		default:
@@ -154,10 +160,12 @@ func AggregateRunStatus(statuses []Status, lockHeld bool) RunStatus {
 		}
 	}
 	switch {
-	case hasFailure:
+	case failures > dropped:
 		return RunStatusFailed
 	case hasCancelled:
 		return RunStatusCancelled
+	case dropped > 0:
+		return RunStatusPartialFailed
 	default:
 		return RunStatusSuccess
 	}
@@ -176,7 +184,8 @@ SELECT ar.apply_id,
             THEN MAX(ar.finished_at) END               AS finished_at,
        MIN(ar.started_by_aid)                          AS started_by_aid,
        array_agg(ar.status)                            AS statuses,
-       bool_or(` + runLockHeldSQL + `)                 AS lock_held
+       bool_or(` + runLockHeldSQL + `)                 AS lock_held,
+       COUNT(*) FILTER (WHERE ar.dropped)              AS dropped
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.incarnation_name = $1
@@ -216,12 +225,13 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 			rs         RunSummary
 			statusStrs []string
 			lockHeld   bool
+			dropped    int
 		)
-		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs, &lockHeld); err != nil {
+		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs, &lockHeld, &dropped); err != nil {
 			return nil, 0, fmt.Errorf("applyrun: scan run summary: %w", err)
 		}
 		rs.Incarnation = incarnationName
-		rs.Status = AggregateRunStatus(toStatuses(statusStrs), lockHeld)
+		rs.Status = AggregateRunStatus(toStatuses(statusStrs), dropped, lockHeld)
 		out = append(out, rs)
 	}
 	if err := rows.Err(); err != nil {
@@ -233,7 +243,7 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 const selectRunHostsSQL = `
 SELECT ar.sid, ar.status, ar.passage, ar.task_idx, ar.failed_plan_index, ar.error_summary,
        ar.attempt, ar.cancel_requested, ar.scenario, ar.started_at, ar.finished_at, ar.started_by_aid,
-       ar.input, ar.notices, ` + runLockHeldSQL + `
+       ar.input, ar.notices, ` + runLockHeldSQL + `, ar.dropped
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.apply_id = $1 AND ar.incarnation_name = $2
@@ -257,6 +267,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	var (
 		detail   RunDetail
 		statuses []Status
+		dropped  int
 		// Run finality: expose FinishedAt only when every row has finished (max of
 		// non-nil; nil if at least one row is still running).
 		allFinished = true
@@ -278,11 +289,14 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			&hs.SID, &statusStr, &hs.Passage, &hs.FailedTaskIdx, &hs.FailedPlanIndex,
 			&hs.ErrorSummary, &hs.Attempt, &hs.CancelRequested,
 			&rowScenario, &rowStarted, &rowFinished, &rowStartedBy,
-			&rowInput, &rowNotices, &lockHeld,
+			&rowInput, &rowNotices, &lockHeld, &hs.Dropped,
 		); err != nil {
 			return nil, fmt.Errorf("applyrun: scan run host: %w", err)
 		}
 		hs.Status = Status(statusStr)
+		if hs.Dropped {
+			dropped++
+		}
 		// notices is an append-only log (one entry per reporting task), collapsed
 		// here into the set an operator acts on. Unparseable jsonb is dropped
 		// rather than failing the read: a run's outcome must stay visible even if
@@ -324,7 +338,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	if detail.ApplyID == "" {
 		return nil, ErrApplyRunNotFound
 	}
-	detail.Status = AggregateRunStatus(statuses, lockHeld)
+	detail.Status = AggregateRunStatus(statuses, dropped, lockHeld)
 	if allFinished && !lockHeld {
 		detail.FinishedAt = &maxFinished
 	}
@@ -332,7 +346,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 }
 
 const selectRunStatusSQL = `
-SELECT ar.status, ` + runLockHeldSQL + `
+SELECT ar.status, ` + runLockHeldSQL + `, ar.dropped
 FROM apply_runs ar
 LEFT JOIN incarnation i ON ar.incarnation_name = i.id
 WHERE ar.apply_id = $1
@@ -349,22 +363,26 @@ func SelectRunStatus(ctx context.Context, db ExecQueryRower, applyID string) (Ru
 	var (
 		statuses []Status
 		lockHeld bool
+		dropped  int
 	)
 	for rows.Next() {
 		var (
-			s    string
-			held bool
+			s          string
+			held, drop bool
 		)
-		if err := rows.Scan(&s, &held); err != nil {
+		if err := rows.Scan(&s, &held, &drop); err != nil {
 			return "", fmt.Errorf("applyrun: scan run status: %w", err)
 		}
 		statuses = append(statuses, Status(s))
 		lockHeld = lockHeld || held
+		if drop {
+			dropped++
+		}
 	}
 	if err := rows.Err(); err != nil {
 		return "", fmt.Errorf("applyrun: iterate run status: %w", err)
 	}
-	return AggregateRunStatus(statuses, lockHeld), nil
+	return AggregateRunStatus(statuses, dropped, lockHeld), nil
 }
 
 // toStatuses converts a slice of status strings from array_agg into []Status.

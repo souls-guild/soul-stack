@@ -18,6 +18,7 @@ import (
 type statusRowsDB struct {
 	statuses []applyrun.Status
 	lockHeld bool
+	dropped  int
 }
 
 func (d *statusRowsDB) Exec(context.Context, string, ...any) (pgconn.CommandTag, error) {
@@ -25,13 +26,15 @@ func (d *statusRowsDB) Exec(context.Context, string, ...any) (pgconn.CommandTag,
 }
 func (d *statusRowsDB) QueryRow(context.Context, string, ...any) pgx.Row { return nil }
 func (d *statusRowsDB) Query(context.Context, string, ...any) (pgx.Rows, error) {
-	return &statusRows{statuses: d.statuses, lockHeld: d.lockHeld, i: -1}, nil
+	return &statusRows{statuses: d.statuses, lockHeld: d.lockHeld, dropped: d.dropped, i: -1}, nil
 }
 
 type statusRows struct {
 	statuses []applyrun.Status
 	lockHeld bool
-	i        int
+	// dropped — how many of the leading rows are a dropped host's.
+	dropped int
+	i       int
 }
 
 func (r *statusRows) Close()                                       {}
@@ -43,13 +46,14 @@ func (r *statusRows) Values() ([]any, error)                       { return nil,
 func (r *statusRows) RawValues() [][]byte                          { return nil }
 func (r *statusRows) Conn() *pgx.Conn                              { return nil }
 
-// Scan answers SelectRunStatus's (status, lock_held) and, for any other shape,
+// Scan answers SelectRunStatus's (status, lock_held, dropped) and, for any other shape,
 // fills the leading (sid, status) of SelectStatusesByApplyID: an awaiter that
 // went back to reading the rows alone fails on its verdict, not on a scan.
 func (r *statusRows) Scan(dest ...any) error {
-	if len(dest) == 2 {
+	if len(dest) == 3 {
 		*dest[0].(*string) = string(r.statuses[r.i])
 		*dest[1].(*bool) = r.lockHeld
+		*dest[2].(*bool) = r.i < r.dropped
 		return nil
 	}
 	*dest[0].(*string) = "host-" + string(rune('a'+r.i))
@@ -67,20 +71,24 @@ func TestVoyageAwaiterPollOutcome(t *testing.T) {
 		name     string
 		rows     []applyrun.Status
 		lockHeld bool
+		dropped  int
 		outcome  voyageorch.TargetOutcome
 		done     bool
 	}{
-		{"no rows yet", nil, false, "", false},
-		{"still dispatched", []applyrun.Status{applyrun.StatusFailed, applyrun.StatusDispatched}, false, "", false},
-		{"success + no_match", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusNoMatch}, false, voyageorch.OutcomeSucceeded, true},
-		{"orphaned host", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusOrphaned}, false, voyageorch.OutcomeFailed, true},
-		{"failed beats cancelled", []applyrun.Status{applyrun.StatusCancelled, applyrun.StatusFailed}, false, voyageorch.OutcomeFailed, true},
-		{"cancelled", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusCancelled}, false, voyageorch.OutcomeCancelled, true},
-		{"between steps", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusSuccess}, true, "", false},
+		{"no rows yet", nil, false, 0, "", false},
+		{"still dispatched", []applyrun.Status{applyrun.StatusFailed, applyrun.StatusDispatched}, false, 0, "", false},
+		{"success + no_match", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusNoMatch}, false, 0, voyageorch.OutcomeSucceeded, true},
+		{"orphaned host", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusOrphaned}, false, 0, voyageorch.OutcomeFailed, true},
+		{"failed beats cancelled", []applyrun.Status{applyrun.StatusCancelled, applyrun.StatusFailed}, false, 0, voyageorch.OutcomeFailed, true},
+		{"cancelled", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusCancelled}, false, 0, voyageorch.OutcomeCancelled, true},
+		{"between steps", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusSuccess}, true, 0, "", false},
+		// NIM-948: a run that finished without a dropped host reads partial_failed,
+		// which a Voyage counts as failed.
+		{"partial_failed", []applyrun.Status{applyrun.StatusFailed, applyrun.StatusSuccess}, false, 1, voyageorch.OutcomeFailed, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			a := &voyagePgIncarnationAwaiter{
-				db:     &statusRowsDB{statuses: tc.rows, lockHeld: tc.lockHeld},
+				db:     &statusRowsDB{statuses: tc.rows, lockHeld: tc.lockHeld, dropped: tc.dropped},
 				logger: slog.New(slog.NewTextHandler(io.Discard, nil)),
 			}
 			o, done := a.pollOutcome(context.Background(), "01HX0000000000000000000000")

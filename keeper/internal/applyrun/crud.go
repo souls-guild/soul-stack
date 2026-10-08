@@ -680,7 +680,7 @@ func DedupeNotices(in []RunNotice) []RunNotice {
 }
 
 const selectStatusesByApplyIDSQL = `
-SELECT sid, status, task_idx, failed_plan_index, error_summary, cancel_requested, passage
+SELECT sid, status, task_idx, failed_plan_index, error_summary, cancel_requested, passage, dropped
 FROM apply_runs
 WHERE apply_id = $1
 ORDER BY sid ASC, passage ASC
@@ -723,6 +723,10 @@ type HostStatus struct {
 	// the host's rows, and the barrier behaves bit-for-bit as before
 	// staged-render.
 	Passage int
+
+	// Dropped — the row dropped its host from a run that finished without it
+	// ([MarkDropped]).
+	Dropped bool
 }
 
 // SelectStatusesByApplyID returns statuses for every host of one run (one
@@ -748,7 +752,7 @@ func SelectStatusesByApplyID(ctx context.Context, db ExecQueryRower, applyID str
 			hs        HostStatus
 			statusStr string
 		)
-		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.FailedPlanIndex, &hs.ErrorSummary, &hs.CancelRequested, &hs.Passage); err != nil {
+		if err := rows.Scan(&hs.SID, &statusStr, &hs.TaskIdx, &hs.FailedPlanIndex, &hs.ErrorSummary, &hs.CancelRequested, &hs.Passage, &hs.Dropped); err != nil {
 			return nil, fmt.Errorf("applyrun: statuses scan: %w", err)
 		}
 		hs.Status = Status(statusStr)
@@ -758,6 +762,28 @@ func SelectStatusesByApplyID(ctx context.Context, db ExecQueryRower, applyID str
 		return nil, fmt.Errorf("applyrun: statuses iter: %w", err)
 	}
 	return out, nil
+}
+
+const markDroppedSQL = `
+UPDATE apply_runs
+SET dropped = TRUE
+WHERE apply_id = $1 AND sid = $2 AND passage = $3 AND status IN ('failed', 'orphaned')
+`
+
+// MarkDropped records that host sid's failed row of step passage dropped the host
+// from a run that went on to its end without it (docs/scenario/settings.md §4), so the
+// run folds to `partial_failed` ([AggregateRunStatus]). Only a failed or orphaned
+// row can be one; a row that is not is a programming error, reported as
+// [ErrApplyRunNotFound].
+func MarkDropped(ctx context.Context, db ExecQueryRower, applyID, sid string, passage int) error {
+	tag, err := db.Exec(ctx, markDroppedSQL, applyID, sid, passage)
+	if err != nil {
+		return fmt.Errorf("applyrun: mark dropped (%s, passage %d): %w", sid, passage, err)
+	}
+	if tag.RowsAffected() == 0 {
+		return fmt.Errorf("applyrun: mark dropped (%s, passage %d): no failed row: %w", sid, passage, ErrApplyRunNotFound)
+	}
+	return nil
 }
 
 const requestCancelSQL = `

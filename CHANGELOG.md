@@ -7,6 +7,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **A linear run's barrier judges failures by `on_failure` and `tolerate` (NIM-948, [settings.md
+  §4](docs/scenario/settings.md)).** It waits for every host a step was sent to instead of returning
+  on the first failure, so a host still working finishes and every failure lands in the run's
+  error. Each failed host is judged by the task it failed at: under `scenario` the run ends after the
+  step; under `host` the host is dropped — it receives no later task, a roster re-read included —
+  until more than `tolerate` hosts have dropped or none is left. A dropped host stays in
+  `soulprint.hosts` with the new field **`dropped: true`**, each later task that would have reached
+  it is recorded SKIPPED on it, and the drop is audited as **`apply.host_dropped`**. A run that
+  reaches its end without some hosts reads **`partial_failed`**, marked by the new column
+  `apply_runs.dropped` (migration 122); its incarnation is `error_locked` and
+  `incarnation.run_completed` says `partial_failed`. A send that fails no longer stops the wave.
+  Staged runs keep today's barrier; their `soulprint.hosts` entries carry `dropped: false`.
+
 - **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-draft
   scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) S1).** A `when:` /
   `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported

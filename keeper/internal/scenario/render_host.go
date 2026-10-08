@@ -205,6 +205,7 @@ func stepRenderInput(ctx context.Context, deps Deps, in *render.RenderInput, ste
 		return fmt.Errorf("scenario: RenderForHost: topology: %w", err)
 	}
 	in.Hosts = pinnedRoster(members, step.Roster)
+	in.Dropped = pinnedRoster(members, step.Dropped)
 	linear, steps := config.LinearPassage(in.Scenario.Tasks, in.Scenario.Settings)
 	if linear.Count > 1 {
 		in.TaskPassage = linear.TaskPassage

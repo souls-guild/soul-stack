@@ -766,8 +766,8 @@ tasks:
 // fails A without queueing it, queues B, and waits for B's result before the step
 // fails, as in one inline wave.
 //
-// Mutation: wait the step's barrier with no exception for the Keeper-failed host →
-// the step fails at once and B's row is swept to failed before its result.
+// Mutation: end dispatchStepPlanned with the fail-fast waitBarrier → the step fails
+// at once and B's row is swept to failed before its result.
 func TestIntegration_LinearQueuedStepOutlivesAKeeperFailedHost(t *testing.T) {
 	const hostA, hostB = "host-a.example.com", "host-b.example.com"
 	seedTwoHosts(t, hostA, hostB)

@@ -18,7 +18,8 @@ import (
 // is merged key by key over the one above ([MergeSettings]). A nil field is a key
 // that level did not write.
 //
-// Parsed, validated and merged only — nothing reads the values yet (epic NIM-926).
+// `on_failure` and `tolerate` are read since NIM-948, by a linear run's barrier; the
+// other keys are parsed, validated and merged only (epic NIM-926).
 // Merges copy the pointers, so a merged value is shared with the parsed tasks it
 // came from: never write through a field.
 // Unrelated to the Keeper's cluster-wide settings (`SettingsStore`).
@@ -36,6 +37,22 @@ type ScenarioSettings struct {
 type Tolerate struct {
 	N       int
 	Percent bool
+}
+
+// Limit is how many dropped hosts the threshold allows out of hosts — the hosts the
+// run has targeted with at least one task by the barrier being checked (settings.md
+// §2.1, user decision NIM-948). A percent rounds down, the direction that stops sooner.
+func (t Tolerate) Limit(hosts int) int {
+	if !t.Percent {
+		return t.N
+	}
+	return t.N * hosts / 100
+}
+
+// Exceeded reports whether dropped hosts out of hosts end the run: more than the
+// limit, never as many.
+func (t Tolerate) Exceeded(dropped, hosts int) bool {
+	return dropped > t.Limit(hosts)
 }
 
 const (
@@ -96,6 +113,20 @@ func (t Task) OwnSettings() ScenarioSettings {
 		}
 	}
 	return s
+}
+
+// EffectiveOnFailure is the `on_failure` judging a failure at t: t's own level over
+// the scenario's, over the `scenario` default. t must already carry its enclosing
+// blocks' settings ([InheritSettings]).
+func EffectiveOnFailure(scenario *ScenarioSettings, t Task) string {
+	eff := DefaultScenarioSettings()
+	if scenario != nil {
+		eff = MergeSettings(eff, *scenario)
+	}
+	if t.Settings != nil {
+		eff = MergeSettings(eff, *t.Settings)
+	}
+	return *eff.OnFailure
 }
 
 // InheritSettings is the `settings:` row of block inheritance: the child's own level

@@ -52,13 +52,21 @@ import (
 // Fail-stop (§2.2.1): the first failed/cancelled host in a wave stops rolling —
 // later waves don't start, dispatch returns an error.
 //
+// A linear run (fails non-nil) judges failures instead (failure_policy.go): each
+// wave's barrier waits for every host it was sent to, a host that failed under
+// `on_failure: host` is dropped and the waves roll on, and only a failure that ends
+// the run stops them — after the wave has finished.
+//
 // Barrier invariant (§7): serial never splits the state commit — dispatch
 // returns only after all waves complete (or fail-stop); state commits once in
 // run(), never per-wave.
 //
 // step is the recipe of a linear run's step rows, nil for a staged run: with it
 // the step may go through the work-queue instead ([Runner.queuesStep]).
-func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts, step *applyrun.Recipe) error {
+func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts, step *applyrun.Recipe, fails *runFailures) error {
+	if fails != nil {
+		r.writeNotReached(ctx, spec, log, passage, tasks, plans)
+	}
 	perHost := groupByHost(tasks, plans)
 	// Cross-passage requisite gating (ADR-056 R3): per-host resolution of
 	// onchanges/onfail links whose source is in an earlier Passage. nil gate
@@ -83,6 +91,11 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		// N=1 the run succeeds as a no-op.
 		log.Info("scenario: dispatch - no Passage task targets hosts, no-op",
 			slog.Int("passage", passage))
+		if fails != nil {
+			// Still a barrier: its owner's `tolerate` is checked against the hosts
+			// dropped so far.
+			return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, nil, nil), 0, fails, hosts)
+		}
 		return nil
 	}
 
@@ -93,8 +106,8 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	if len(refusals) > 0 {
 		return refusedDispatchError(refusals)
 	}
-	if step != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost) {
-		return r.dispatchStepPlanned(ctx, spec, log, passage, perHost, settled, closed, step)
+	if step != nil && fails != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost) {
+		return r.dispatchStepPlanned(ctx, spec, log, passage, tasks, perHost, settled, closed, step, fails, hosts)
 	}
 	// Every push host's SshProvider, resolved before this Passage's first wave —
 	// a routing miss must not surface at a host's turn, with the hosts ahead of it
@@ -109,7 +122,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// the first wave: it is sent nothing and changes nothing, so it waits on no other
 	// host and takes no wave's place — a wave's width counts hosts the step may
 	// change. A host the Keeper failed takes its place among those, by SID, and fails
-	// at its turn, so the hosts of later waves are never sent the step.
+	// at its turn; its wave's barrier judges it like a host the Soul failed.
 	failedEarly := failedBeforeSend(settled, closed)
 	dispatchedTotal := 0
 	for _, sid := range closed {
@@ -121,11 +134,18 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		}
 		dispatchedTotal++
 	}
+	var judge *stepJudge
+	if fails != nil {
+		judge = newStepJudge(spec, passage, tasks, perHost, settled)
+	}
 	sids := sortedSIDs(perHost)
 	for sid := range failedEarly {
 		sids = append(sids, sid)
 	}
 	if len(sids) == 0 {
+		if judge != nil {
+			return r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts)
+		}
 		return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
 	}
 	sort.Strings(sids)
@@ -133,8 +153,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 
 	// Waves are strictly sequential (§2.2.1). dispatchedTotal counts the closed
 	// hosts, those the Keeper failed in each wave and those dispatchWave left with
-	// a running row; a host whose send failed is not counted, as its failed row
-	// breaks the barrier by itself. A host with no row must not make it wait.
+	// a running row; a host whose send failed is counted by a linear run, which
+	// judges its failed row, and not by a staged one, where that row breaks the
+	// barrier by itself. A host with no row must not make it wait.
 	for wi, wave := range waves {
 		failedHere := map[string]bool{}
 		for _, sid := range wave {
@@ -149,23 +170,33 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, sendsIn(wave, failedHere), dispatchByHost, pushRoutes, settled)
 		dispatchedTotal += dispatched
 
+		if judge != nil {
+			if derr != nil {
+				// The hosts sent before the error are working: they finish, or the
+				// abort would force-fail rows a live host is about to report.
+				return r.failAfterSent(ctx, spec, log, passage, dispatchedTotal, derr)
+			}
+			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts); err != nil {
+				return err
+			}
+			if len(waves) > 1 {
+				log.Info("scenario: serial wave completed",
+					slog.Int("wave", wi+1), slog.Int("waves_total", len(waves)), slog.Int("hosts", len(wave)))
+			}
+			continue
+		}
+
 		// Per-wave barrier: wait for terminal status of hosts from ALL waves
 		// started so far in this Passage. classify scans the run's
 		// apply_runs rows filtered by passage, so a failed host in the
 		// current wave breaks the barrier immediately (fail-stop) — the next
-		// wave doesn't start.
-		//
-		// A host the Keeper failed in this wave is known before anything is sent,
-		// so its row does not break the barrier while the hosts sent beside it run:
-		// they finish, and then the step fails and no later wave starts.
-		if berr := r.waitBarrierExcept(ctx, spec.ApplyID, passage, dispatchedTotal, failedHere, log); berr != nil {
+		// wave doesn't start. A staged run settles no host on the Keeper, so no
+		// host fails before its send here.
+		if berr := r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log); berr != nil {
 			return berr
 		}
 		if derr != nil {
 			return derr
-		}
-		if len(failedHere) > 0 {
-			return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
 		}
 		if len(waves) > 1 {
 			log.Info("scenario: serial wave completed",
@@ -273,6 +304,9 @@ func stepRecipe(spec RunSpec, commit string, in render.RenderInput, names map[in
 		roster = append(roster, h.SID)
 	}
 	rec.Step = &applyrun.RecipeStep{Roster: roster, RegisterNames: names}
+	for _, h := range in.Dropped {
+		rec.Step.Dropped = append(rec.Step.Dropped, h.SID)
+	}
 	if in.HeldTargets != nil {
 		rec.Step.HeldTargets = in.HeldTargets.Snapshot()
 	}
@@ -343,11 +377,10 @@ func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, 
 // sent. The barrier stays here.
 //
 // One step's rows only: the next step's are written after this barrier, which is
-// what keeps at most one non-terminal row per host (ADR-027 amend (p)(a)).
-func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, settled map[string]*settledHost, closed []string, recipe *applyrun.Recipe) error {
-	// A host the Keeper failed is sent nothing, and its row must not break the
-	// barrier before the hosts queued beside it finish — as in one inline wave.
-	failedEarly := failedBeforeSend(settled, closed)
+// what keeps at most one non-terminal row per host (ADR-027 amend (p)(a)). The
+// barrier judges the step's failures as an inline wave's does: a host the Keeper
+// failed is judged with the hosts queued beside it, once they finish.
+func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, perHost map[string][]*render.RenderedTask, settled map[string]*settledHost, closed []string, recipe *applyrun.Recipe, fails *runFailures, hosts []*topology.HostFacts) error {
 	total := 0
 	for _, sid := range closed {
 		if err := r.closeSettledHost(ctx, spec, log, passage, sid, settled[sid]); err != nil {
@@ -366,7 +399,12 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 			Input:           spec.inputSnapshot,
 			Passage:         passage,
 		}); err != nil {
-			return fmt.Errorf("scenario: insert planned apply_run (%s, step %d): %w", sid, passage, err)
+			// The rows queued before the error are claimed and sent: they finish, or
+			// the abort would close a row a live host is applying.
+			if total > 0 {
+				r.publishSummons(ctx, log)
+			}
+			return r.failAfterSent(ctx, spec, log, passage, total, fmt.Errorf("scenario: insert planned apply_run (%s, step %d): %w", sid, passage, err))
 		}
 		total++
 		log.Info("scenario: step queued", slog.String("sid", sid), slog.Int("passage", passage))
@@ -374,13 +412,7 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 	if len(perHost) > 0 {
 		r.publishSummons(ctx, log)
 	}
-	if err := r.waitBarrierExcept(ctx, spec.ApplyID, passage, total, failedEarly, log); err != nil {
-		return err
-	}
-	if len(failedEarly) > 0 {
-		return r.waitBarrier(ctx, spec.ApplyID, passage, total, log)
-	}
-	return nil
+	return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, perHost, settled), total, fails, hosts)
 }
 
 // publishSummons sends one best-effort Summons signal for planned assignments
@@ -433,12 +465,15 @@ func serialPresent(serial any) bool {
 // wave (parallel within a wave per §2.2.1 semantics; the stream branch sends
 // sequentially but without a barrier between hosts of the same wave — the
 // barrier sits between waves). Returns the number of hosts that now have a
-// running `apply_runs` row the barrier will wait on, and the first Insert/send
-// error, if any.
+// running `apply_runs` row the barrier will wait on — on a linear run also a host
+// whose send failed, whose failed row the barrier judges — and the first
+// Insert/send error, if any.
 //
 // On a stream send failure the host is marked failed immediately — no RunResult
-// will arrive for it, otherwise the per-wave barrier would hang until timeout;
-// the failed row breaks the barrier normally (fail-stop).
+// will arrive for it, otherwise the per-wave barrier would hang until timeout. On
+// a staged run the failed row breaks the barrier normally (fail-stop) and the
+// wave stops there; a linear run sends the rest of the wave and judges the row at
+// the barrier.
 //
 // A push host (NIM-880) counts as dispatched the moment its goroutine starts:
 // its send IS the run, so there is no send outcome to inspect here, and every
@@ -526,7 +561,16 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// wrapped error above (which passes through MaskSecrets in
 			// lockIncarnation before being written).
 			summary := "send_apply_failed"
-			_ = applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, passage, applyrun.StatusFailed, &summary)
+			uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, passage, applyrun.StatusFailed, &summary)
+			// A linear run judges the failed row at the barrier, by the step's
+			// radius, and sends the step to the rest of the wave meanwhile. Not the
+			// err itself in the log: it may echo a secret, and slog is not masked.
+			if spec.executionModel == ExecutionLinear && uerr == nil {
+				log.Warn("scenario: ApplyRequest send failed - the host's row is failed and judged at the barrier",
+					slog.String("sid", sid), slog.String("error_summary", summary))
+				dispatched++
+				continue
+			}
 			return dispatched, fmt.Errorf("scenario: send apply (%s): %w", sid, err)
 		}
 		dispatched++

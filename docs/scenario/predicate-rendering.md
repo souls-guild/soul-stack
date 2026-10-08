@@ -176,26 +176,26 @@ The Keeper's two pieces are built for a run executing linearly (NIM-943), and th
 guards, masking, async barriers and the announcement of the capability bit — by NIM-929.
 
 - **Per-host transport.** The rendered predicate depends on that host's registers, so it differs per
-  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:845`),
-  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:633`),
+  host. One `RenderedTask` serves every host it goes to (`keeper/internal/scenario/dispatch.go:889`),
+  and since NIM-908 it carries per-host params: `ParamsBySID` (`keeper/internal/render/render.go:643`),
   picked for each host by `paramsForHost` (`keeper/internal/render/prototask.go:180`)
   ([ADR-draft per-host params dispatch](../adr/draft-per-host-params-dispatch.md)). Flow control is
   the half NIM-908 left refused: a host-variant flow context fails the render
-  (`keeper/internal/render/pipeline.go:766-770`). Every predicate that travels needs the same kind
+  (`keeper/internal/render/pipeline.go:781-785`). Every predicate that travels needs the same kind
   of overlay as params — `changed_when:`, `failed_when:` and `until:`, and a grouped child's `when:` whose
   residual is still open; without it, host 1's predicate would silently go to every host. A path
   past render already exists: the requisite gate clones a task per host
   (`keeper/internal/scenario/crosspassage.go:158-163`), and each host's slice reaches the wire
-  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:465`). A `when:`
+  through `ToProtoTasksForHost(perHost[sid], sid)` (`keeper/internal/scenario/dispatch.go:500`). A `when:`
   the Keeper decides for a step needs none: it decides the host slice, which is per host already.
   Inside a group it does: a child skipped on one host and not another travels as `when: false` on
   the first only. *Built:* `RenderedTask.FlowBySID`, read by `ToProtoTasksForHost`.
 - **The soulprint guard is lifted for a rendered predicate.** `guardFlowControlHostInvariant`
-  (`keeper/internal/render/pipeline.go:1475-1491`, called at `:480`) refuses a `when:`,
+  (`keeper/internal/render/pipeline.go:1490-1506`, called at `:495`) refuses a `when:`,
   `changed_when:` or `failed_when:` naming `soulprint` on a multi-host target, because today the
   Soul would evaluate it against the first host's snapshot. With `soulprint.self` resolved per host
   on the Keeper, that reason is gone. So is the reason for the second layer NIM-908 kept,
-  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:766-770`): with every `vars` and
+  `flowContextHostInvariant` (`keeper/internal/render/pipeline.go:781-785`): with every `vars` and
   `input` reference substituted, no flow context travels for a scenario task to differ per host.
   *Built:* both are skipped in a linear scenario pass; a destiny's tasks keep them.
 - **The Soul's text guards leave a substituted value alone — built (NIM-929).** They used to match

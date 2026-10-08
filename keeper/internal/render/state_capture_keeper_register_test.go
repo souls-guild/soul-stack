@@ -16,7 +16,7 @@ import (
 // were already created and paid for, with their ids nowhere on disk.
 //
 // The capture is now an ordinary `on: keeper` task, so the read rides keeperVars
-// (dispatch.go:180-183) instead of a context of its own. Mutation: drop the
+// (dispatch.go:211-214) instead of a context of its own. Mutation: drop the
 // KeeperRegister branch in keeperVars and this fails at eval.
 func TestStateCapture_ReadsKeeperRegister(t *testing.T) {
 	manifest := &config.ScenarioManifest{

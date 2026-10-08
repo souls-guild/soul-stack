@@ -437,6 +437,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	)
 	if spec.executionModel == ExecutionLinear {
 		passage, steps = config.LinearPassage(scn.Tasks, scn.Settings)
+		spec.stepSettings = config.StepSettings(scn.Tasks, scn.Settings)
 	} else {
 		var perr error
 		passage, perr = render.Stratify(scn.Tasks)
@@ -729,6 +730,14 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		capturesState := config.HasStateCapture(scn.Tasks)
 		passageTasks, passagePlans := tasks, plans
 		var regNames map[int]string
+		// A linear run's failure list (docs/scenario/settings.md §4): its barriers
+		// judge every failure by its task's `on_failure`, and a host dropped under
+		// `host` is out of every later step's roster.
+		var fails *runFailures
+		ran := map[int]render.DispatchPlan{}
+		if spec.executionModel == ExecutionLinear {
+			fails = newRunFailures()
+		}
 		for p := 0; p < passage.Count; p++ {
 			if p > 0 {
 				// Mid-run roster re-resolve (ADR-0061 §S3) at a refresh boundary:
@@ -772,7 +781,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					// ⚠ This is a SECOND place a staged run can refuse after Passage 0
 					// has applied and the keeper-side tasks have provisioned. Unavoidable:
 					// the host it is about did not exist when the up-front gate ran.
-					if gerr := r.gatePassageCapability(ctx, spec, grown, passage.Count); gerr != nil {
+					if gerr := r.gatePassageCapability(ctx, spec, fails.live(grown), passage.Count); gerr != nil {
 						abort(reasonSoulPassageUnsupported, gerr)
 						return
 					}
@@ -829,6 +838,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				}
 				renderIn.TaskPassage = passage.TaskPassage
 				renderIn.ActivePassage = p
+				// A host the run dropped is out of every later step — a roster
+				// re-read at a refresh boundary included, where a fresh snapshot
+				// would re-admit it while it is still online (settings.md §6) — and
+				// still listed in soulprint.hosts.
+				renderIn.Hosts = fails.live(renderIn.Hosts)
+				renderIn.Dropped = fails.droppedFacts()
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
 				if rerr != nil {
 					abort("render_failed", rerr)
@@ -837,7 +852,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				passageTasks, passagePlans = pt, pp
 				// Keep the resolved tasks/plans for the next Passage's register resolve
 				// and the final changed_tasks aggregation (Index stable across Passages).
-				tasks, plans = pt, pp
+				tasks, plans = pt, withStepTargets(pp, ran)
 			}
 
 			// NIM-37 (H1): persist THIS Passage's plan from its active render
@@ -849,6 +864,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
 
 			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
+			if fails != nil {
+				for _, pl := range pPlans {
+					ran[pl.TaskIndex] = pl
+				}
+			}
 
 			// Soul-side compat gate for Passage p (ADR-0076(i)): every host this
 			// Passage targets must announce the modules and Soul-side features ITS
@@ -933,7 +953,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			if spec.executionModel == ExecutionLinear {
 				step = stepRecipe(spec, art.SHA1, renderIn, regNames)
 			}
-			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts, step); err != nil {
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts, step, fails); err != nil {
 				abort("dispatch_failed", err)
 				return
 			}
@@ -946,6 +966,22 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					return
 				}
 			}
+		}
+		// A run that reached its end without the hosts it dropped ends
+		// partial_failed, its incarnation error_locked (settings.md §2). A teardown
+		// has no such outcome: one without some hosts failed.
+		if fails != nil && len(fails.dropped) > 0 {
+			if spec.TerminalMode == TerminalDestroy {
+				fails.close()
+				abort("dispatch_failed", fails.errorOf("the teardown finished without the hosts it dropped"))
+				return
+			}
+			finalized, cause := r.finishPartial(ctx, spec, fails, sealed.Paths(), log)
+			span.RecordError(errors.New(maskErrText(cause, sealed.Paths())))
+			if finalized {
+				r.emitRunCompleted(ctx, spec, runCompletedStatusPartialFailed, tasks, plans, log)
+			}
+			return
 		}
 	}
 
@@ -1649,11 +1685,12 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore ma
 // run_completed status values for the incarnation.run_completed payload
 // (ADR-052 §k). One event for any normal-run terminal; the outcome goes into
 // payload.status (task.executed/run.completed pattern — filter by field, not
-// by event_type sprawl). error_locked collapses into "failed" (no
-// sub-statuses).
+// by event_type sprawl): the run status. error_locked collapses into "failed",
+// except after a run that finished without the hosts it dropped (NIM-948).
 const (
-	runCompletedStatusSuccess = "success"
-	runCompletedStatusFailed  = "failed"
+	runCompletedStatusSuccess       = "success"
+	runCompletedStatusFailed        = "failed"
+	runCompletedStatusPartialFailed = "partial_failed"
 )
 
 // emitRunCompleted writes the incarnation.run_completed audit event at a

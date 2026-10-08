@@ -418,7 +418,7 @@ walks the map structurally:
 | `StripDeclaredSecrets` | `shared/config/secret_field.go:506` |
 | `ScanDuplicateSecretKeys` | `shared/config/secret_collection_keys.go:54`; callers `soul-lint/internal/validate/secret_collection_keys.go:54`, `keeper/internal/artifact/scenario_input_types.go:84` |
 | reveal | `keeper/internal/api/handlers/incarnation_reveal_secrets.go:336` |
-| the `core.state.*` write path | `keeper/internal/coremod/state/state.go:169`, `:175`; threaded raw at `keeper/internal/scenario/keeper_dispatch.go:360` via `coremodutil.WithStateSchema` (`keeper/internal/coremod/util/runctx.go:64-79`), from `keeper/internal/scenario/run.go:706,897` |
+| the `core.state.*` write path | `keeper/internal/coremod/state/state.go:169`, `:175`; threaded raw at `keeper/internal/scenario/keeper_dispatch.go:360` via `coremodutil.WithStateSchema` (`keeper/internal/coremod/util/runctx.go:64-79`), from `keeper/internal/scenario/run.go:707,917` |
 
 An unexpanded schema makes a `$type`-carried secret **invisible to the collector**. That is
 verbatim the failure `docs/adr/0083-declared-secret-state-fields.md:106-110` forbids:

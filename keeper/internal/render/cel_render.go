@@ -629,19 +629,22 @@ func covensList(items []string) []any {
 	return out
 }
 
-// soulprintHosts projects in.Hosts into []map for the cel accessor
+// soulprintHosts projects the run's hosts into []map for the cel accessor
 // soulprint.hosts: the stable layer (sid/role/covens/choirs/network/os,
 // orchestration.md §4.1). network/os come from the host's last-reported
 // Soulprint map; covens/role/choirs are registry data (HostFacts.Coven/Role/
-// Choirs). Not projected in the destiny pass (nil) — the accessor is cut off
-// there by isolation.
+// Choirs). A host the run dropped stays listed with `dropped: true` ([runHosts]).
+// Not projected in the destiny pass (nil) — the accessor is cut off there by
+// isolation.
 func soulprintHosts(in RenderInput) []map[string]any {
-	if in.destinyIsolated || len(in.Hosts) == 0 {
+	hosts := runHosts(in)
+	if in.destinyIsolated || len(hosts) == 0 {
 		return nil
 	}
-	out := make([]map[string]any, 0, len(in.Hosts))
-	for _, h := range in.Hosts {
-		out = append(out, hostFactsToMap(h))
+	dropped := droppedSIDs(in)
+	out := make([]map[string]any, 0, len(hosts))
+	for _, h := range hosts {
+		out = append(out, hostFactsToMap(h, dropped[h.SID]))
 	}
 	return out
 }
@@ -650,8 +653,10 @@ func soulprintHosts(in RenderInput) []map[string]any {
 // fields. covens/choirs are slice copies (cel reads them as list); traits is
 // an operator-set key-value map (ADR-060, registry projection); network/os are
 // Soulprint submaps (missing → empty map, field access yields a normal
-// no-such-key).
-func hostFactsToMap(h *topology.HostFacts) map[string]any {
+// no-such-key). dropped — the run dropped the host under `on_failure: host`
+// (settings.md §4): all hosts are `soulprint.hosts`, the ones still in the run
+// `soulprint.hosts.filter(h, !h.dropped)`.
+func hostFactsToMap(h *topology.HostFacts, dropped bool) map[string]any {
 	return map[string]any{
 		"sid":     h.SID,
 		"role":    h.Role,
@@ -660,6 +665,7 @@ func hostFactsToMap(h *topology.HostFacts) map[string]any {
 		"traits":  orEmptyMap(h.Traits), // operator-set key-value (ADR-060), like covens/choirs
 		"network": soulprintSection(h.Soulprint, "network"),
 		"os":      soulprintSection(h.Soulprint, "os"),
+		"dropped": dropped,
 	}
 }
 

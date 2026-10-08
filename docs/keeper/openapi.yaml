@@ -25,6 +25,7 @@ components:
           enum:
             - apply.cancelled
             - apply.dispatched
+            - apply.host_dropped
             - audit.disabled
             - audit.enabled
             - augur.access_denied

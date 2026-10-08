@@ -278,7 +278,9 @@ step without one (`serial_scope_implicit_across_tasks`) —
 - **Falling in a wave (fail-stop, invariant).** First host, finally-failed
 after the inherited `retry:` is exhausted, stops rolling:
 subsequent waves will not start. Direct consequence of absolute fail-closed
-and §7. There is no tolerance threshold for partial failure (§8, open Q).
+and §7. This is a staged run; a linear run judges the failure by `on_failure`
+and `tolerate` instead — under `host` the host is dropped and the waves roll on
+([settings.md §4](settings.md), NIM-948).
 - **Interaction with barrier (§7) is an invariant, not an option.** `serial:`
 **does not split a Passage**: the wave loop closes inside the Passage, and only
 then does the next Passage start. A `core.state.<verb>` capture placed after a
@@ -840,6 +842,7 @@ element - **stable** host facts:
 | `network` | map | stable host network facts (`network.primary_ip`, `network.fqdn`, `network.interfaces[]`) - typed scheme [ADR-018](../adr/0018-soulprint-typed.md), full spec [`docs/soul/soulprint.md → NetworkFacts`](../soul/soulprint.md#networkfacts). The same stable layer that gives off `soulprint.where(...)`. |
 | `os` | map | stable host OS facts (`os.family`, ...). |
 | `covens` | array of string | stable host Coven labels — **real stable tags only** (cluster / project / environment / datacenter). The incarnation name is **no longer** projected here ([ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-2026-07-17-nim-124-incarnationname-is-not-a-coven--membership-is-a-first-class-relation)); membership lives in `incarnation_membership`, not in `covens`. |
+| `dropped` | bool | the run dropped the host under `on_failure: host` ([settings.md §4](settings.md), NIM-948): it stays listed, at its SID position, so `[0]` names the same host before and after a drop, and receives no later task. All hosts of the run are `soulprint.hosts`; the ones still in it are `soulprint.hosts.filter(h, !h.dropped)`. `false` on every host of a run that dropped none, and of every staged run. |
 
 `soulprint.hosts.where("<predicate>")` filters the list by any stable
 element attribute(`role`, `sid`, `covens`, `network.*`, `os.*`); result -
@@ -1042,8 +1045,9 @@ Error handling in scenario - **only mechanisms inherited from the DSL core**: `r
 >
 > - **The candidate host fell into probe-Passage** → the barrier of this Passage records a failure → the run stops, **the next Passage (where `where:` is located) does not start**, `incarnation.state` is not committed → `error_locked` (§7). The destructive step simply doesn't reach dispatch.
 > - **The host is terminal, but `register:` is incomplete** (probe returned without the required key for a specific host) → when rendering `where:` of the next Passage, accessing `register.<probe>.*` of this host gives an eval error `no such key` → task `failed` (caught normally, §7), and not silently "the wrong target."
+> - **A linear run** closes it the same way under the default `on_failure: scenario`: the step's barrier waits for every host and ends the run. Under `on_failure: host` the failed probe host is dropped and the next step runs on the rest — the author's explicit opt-in to exactly that partial target, bounded by `tolerate` when it is set and otherwise only by the last live host ([settings.md §4](settings.md#4-how-a-barrier-judges-failures)).
 >
-> Manual completeness idiom (`failed_when: size(...) < incarnation.host_count`) **needless and unenforceable** (see above and §4.2): safety provides a barrier. review/architect When reviewing scenario specs and the pilot, they check that there is no path left that bypasses the fail-stop barrier for destructive-on-failed/partial-probe.
+> Manual completeness idiom (`failed_when: size(...) < incarnation.host_count`) **needless and unenforceable** (see above and §4.2): safety provides a barrier. review/architect When reviewing scenario specs and the pilot, they check that there is no path left that bypasses the fail-stop barrier for destructive-on-failed/partial-probe; a linear run's `on_failure: host`, chosen as [settings.md §4](settings.md#4-how-a-barrier-judges-failures) describes, is the one allowed bypass for a host the probe was sent to, and the review confirms it is intended.
 
 ## 6. Two-level resource resolution
 

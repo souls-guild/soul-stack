@@ -268,8 +268,10 @@ const (
 	// its own terminal (`incarnation.destroy_completed` / `.destroy_failed`).
 	//
 	// Payload: `{incarnation, scenario, apply_id, status, changed_tasks,
-	// cadence_id?, voyage_id?}`. `status` ∈ {`success`, `failed`}
-	// (error_locked folds into `failed` — no sub-statuses). `changed_tasks` =
+	// cadence_id?, voyage_id?}`. `status` ∈ {`success`, `failed`,
+	// `partial_failed`} — the run status: a run that finished without the hosts it
+	// dropped is `partial_failed` (NIM-948); any other error_locked folds into
+	// `failed`. `changed_tasks` =
 	// array of `{idx, name, register, id, module, changed_hosts, total_hosts}`
 	// for tasks that changed on at least one host (source = aggregate of
 	// audit_log over `task.executed`+CHANGED, loop-folded by register∪id
@@ -454,6 +456,15 @@ const (
 	// cancellation of the in-flight ApplyRunner) is recorded by a separate
 	// `run.completed` with `status: CANCELLED`.
 	EventApplyCancelled EventType = "apply.cancelled"
+
+	// EventApplyHostDropped — a linear run dropped a host under `on_failure: host`
+	// (docs/scenario/settings.md §4, NIM-948): the host failed, receives no later
+	// task, and the run goes on without it. Written at the barrier that judged the
+	// failure, once per host. `source: keeper_internal`, `archon_aid: NULL`,
+	// `correlation_id = apply_id`. Payload: `{sid, apply_id, incarnation, scenario,
+	// step, task?, reason}` — `task` is the name of the task the host failed at,
+	// absent for a failure tied to no task (a send that failed, a lost agent).
+	EventApplyHostDropped EventType = "apply.host_dropped"
 
 	// EventLeaseForceReleased — a presence-gated Keeper instance seized a SID
 	// lease from a PROVABLY DEAD prev-holder on a Soul reconnect (ADR-027

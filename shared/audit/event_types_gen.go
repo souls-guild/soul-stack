@@ -7,6 +7,7 @@ package audit
 var allEventTypes = []EventType{
 	"apply.cancelled",                           // EventApplyCancelled
 	"apply.dispatched",                          // EventApplyDispatched
+	"apply.host_dropped",                        // EventApplyHostDropped
 	"audit.disabled",                            // EventAuditDisabled
 	"audit.enabled",                             // EventAuditEnabled
 	"augur.access_denied",                       // EventAugurAccessDenied

@@ -251,6 +251,7 @@ type applyRunHostRow struct {
 	// read that as "nothing reported", not as an error.
 	notices  []byte
 	lockHeld bool
+	dropped  bool
 }
 
 // applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
@@ -274,7 +275,7 @@ func (r *applyRunsHostRows) Scan(dest ...any) error {
 	vals := []any{
 		row.sid, row.status, row.passage, row.taskIdx, row.failedPlan, row.errorSummary,
 		row.attempt, row.cancelRequested, row.scenario, row.startedAt, row.finishedAt, row.startedBy,
-		row.input, row.notices, row.lockHeld,
+		row.input, row.notices, row.lockHeld, row.dropped,
 	}
 	for i, d := range dest {
 		if err := scanApplyRunCol(d, vals[i]); err != nil {

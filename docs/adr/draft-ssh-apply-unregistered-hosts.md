@@ -317,7 +317,7 @@ to await.
 
 **14. The run's ceiling bounds the step — today's conflation, not fixed here.** The step has no
 task-level limit; what bounds it is the join wait per host and the run-wide ceiling: 5 min
-(`keeper/internal/scenario/scenario.go:139`), raised to `max_await_timeout` + 10 min only when
+(`keeper/internal/scenario/scenario.go:140`), raised to `max_await_timeout` + 10 min only when
 the plan carries a refresh emitter (`effectiveRunTimeout`, `keeper/internal/scenario/run.go`). The ceiling is
 the run timeout doing a task timeout's job. NIM-907's `settings:` separates the two
 ([settings.md](../scenario/settings.md): `scenario_timeout`, default 24h, replacing the 5-minute

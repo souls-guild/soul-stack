@@ -739,3 +739,75 @@ func TestIntegration_ListRuns_SortService(t *testing.T) {
 		t.Errorf("total diverged when changing sort_dir: asc=%d desc=%d", total, totalDesc)
 	}
 }
+
+// ★ GUARD (NIM-948). A run whose every failure dropped its host reads
+// `partial_failed` on all three read paths — the global list, the per-incarnation
+// list and the run detail — and one failure that is not a drop keeps it `failed`.
+// The SQL CASE and [AggregateRunStatus] are two copies of one fold; this pins them
+// together on the column that tells a drop from a failure.
+//
+// Mutations: drop `AND NOT ar.dropped` from the SQL CASE → the partial run reads
+// failed on /v1/runs; drop the `dropped` count from the per-incarnation list → the
+// same there; MarkDropped without its status filter → a success row is marked.
+func TestIntegration_RunStatus_DroppedRowsFoldToPartialFailed(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "redis-prod", "archon-alice")
+	ctx := context.Background()
+
+	seedRun(t, ctx, "01HDP01", "redis-prod", "create", StatusSuccess, StatusFailed, StatusFailed)
+	seedRun(t, ctx, "01HDP02", "redis-prod", "create", StatusSuccess, StatusFailed, StatusFailed)
+	seedRun(t, ctx, "01HDP03", "redis-prod", "create", StatusCancelled, StatusFailed)
+	for _, d := range []struct{ applyID, host string }{
+		{"01HDP01", "host-b"}, {"01HDP01", "host-c"},
+		{"01HDP02", "host-b"},
+		{"01HDP03", "host-b"},
+	} {
+		if err := MarkDropped(ctx, integrationPool, d.applyID, d.host+"-"+d.applyID, 0); err != nil {
+			t.Fatalf("MarkDropped(%s, %s): %v", d.applyID, d.host, err)
+		}
+	}
+	if err := MarkDropped(ctx, integrationPool, "01HDP01", "host-a-01HDP01", 0); err == nil {
+		t.Error("MarkDropped marked a success row")
+	}
+
+	want := map[string]RunStatus{
+		"01HDP01": RunStatusPartialFailed,
+		"01HDP02": RunStatusFailed,
+		"01HDP03": RunStatusCancelled,
+	}
+	global, _, err := ListRuns(ctx, integrationPool, RunsFilter{}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns: %v", err)
+	}
+	perInc, _, err := ListRunsByIncarnation(ctx, integrationPool, "redis-prod", 0, 50)
+	if err != nil {
+		t.Fatalf("ListRunsByIncarnation: %v", err)
+	}
+	for name, runs := range map[string][]RunSummary{"global": global, "incarnation": perInc} {
+		if len(runs) != len(want) {
+			t.Fatalf("%s list: %d runs, want %d", name, len(runs), len(want))
+		}
+		for _, r := range runs {
+			if r.Status != want[r.ApplyID] {
+				t.Errorf("%s list %s: status %q, want %q", name, r.ApplyID, r.Status, want[r.ApplyID])
+			}
+		}
+	}
+	for applyID, w := range want {
+		detail, err := SelectRunDetail(ctx, integrationPool, applyID, "redis-prod")
+		if err != nil {
+			t.Fatalf("SelectRunDetail(%s): %v", applyID, err)
+		}
+		if detail.Status != w {
+			t.Errorf("detail %s: status %q, want %q", applyID, detail.Status, w)
+		}
+	}
+	partial, _, err := ListRuns(ctx, integrationPool, RunsFilter{Status: RunStatusPartialFailed}, unrestrictedScope, 0, 50)
+	if err != nil {
+		t.Fatalf("ListRuns(status=partial_failed): %v", err)
+	}
+	if len(partial) != 1 || partial[0].ApplyID != "01HDP01" {
+		t.Errorf("status=partial_failed filter = %+v, want only 01HDP01", partial)
+	}
+}

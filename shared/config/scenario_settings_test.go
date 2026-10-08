@@ -476,3 +476,58 @@ tasks:
 		t.Errorf("warned at %v, want only $.tasks[0].timeout", warned)
 	}
 }
+
+// ★ GUARD (settings.md §2.1, NIM-948). `tolerate` ends the run once MORE than its
+// limit have dropped — `tolerate: 1` goes on after one and ends at two — and a
+// percent is of the hosts given, rounded down.
+//
+// Mutations: `>=` for `>` → one drop under `tolerate: 1` ends the run; round a
+// percent up → 10% of 15 allows 2.
+func TestTolerate_ExceededIsMoreThanTheLimit(t *testing.T) {
+	for _, tc := range []struct {
+		name           string
+		tolerate       Tolerate
+		dropped, hosts int
+		want           bool
+	}{
+		{"one of one allowed", Tolerate{N: 1}, 1, 10, false},
+		{"two of one allowed", Tolerate{N: 1}, 2, 10, true},
+		{"zero allowed", Tolerate{N: 0}, 1, 10, true},
+		{"10% of 15 is 1", Tolerate{N: 10, Percent: true}, 1, 15, false},
+		{"10% of 15 is not 2", Tolerate{N: 10, Percent: true}, 2, 15, true},
+		{"10% of fewer than ten is zero", Tolerate{N: 10, Percent: true}, 1, 9, true},
+		{"100% never ends", Tolerate{N: 100, Percent: true}, 4, 4, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := tc.tolerate.Exceeded(tc.dropped, tc.hosts); got != tc.want {
+				t.Errorf("Exceeded(%d, %d) = %v, want %v (limit %d)", tc.dropped, tc.hosts, got, tc.want, tc.tolerate.Limit(tc.hosts))
+			}
+		})
+	}
+}
+
+// ★ GUARD (settings.md §4). A failure is judged by the effective on_failure of the
+// task it happened at: the task's own level over the scenario's, over `scenario`.
+//
+// Mutation: merge the scenario level over the task's → the task's `host` loses to
+// the scenario's `scenario`.
+func TestEffectiveOnFailure(t *testing.T) {
+	host, scn := OnFailureHost, OnFailureScenario
+	for _, tc := range []struct {
+		name     string
+		scenario *ScenarioSettings
+		task     Task
+		want     string
+	}{
+		{"default", nil, Task{Name: "a"}, OnFailureScenario},
+		{"scenario level", &ScenarioSettings{OnFailure: &host}, Task{Name: "a"}, OnFailureHost},
+		{"task beats scenario", &ScenarioSettings{OnFailure: &scn}, Task{Name: "a", Settings: &ScenarioSettings{OnFailure: &host}}, OnFailureHost},
+		{"task back to scenario", &ScenarioSettings{OnFailure: &host}, Task{Name: "a", Settings: &ScenarioSettings{OnFailure: &scn}}, OnFailureScenario},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := EffectiveOnFailure(tc.scenario, tc.task); got != tc.want {
+				t.Errorf("EffectiveOnFailure = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
