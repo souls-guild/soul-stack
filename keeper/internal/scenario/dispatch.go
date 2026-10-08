@@ -2,6 +2,7 @@ package scenario
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"log/slog"
 	"sort"
@@ -88,6 +89,8 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		perHost = gate.applyGate(perHost, passage)
 	}
 	closed := closedHosts(settled, perHost)
+	watch := r.newStepWatch(spec, passage, log)
+	defer watch.stop()
 	if len(perHost) == 0 && len(closed) == 0 {
 		// No Passage task targets any host (where: filtered out all hosts on
 		// every task). Not an error: nothing to apply in this Passage; for
@@ -97,7 +100,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		if fails != nil {
 			// Still a barrier: its owner's `tolerate` is checked against the hosts
 			// dropped so far.
-			return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, nil, nil), 0, fails, hosts)
+			return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, nil, nil), 0, fails, hosts, watch)
 		}
 		return nil
 	}
@@ -110,7 +113,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 		return refusedDispatchError(refusals)
 	}
 	if step != nil && fails != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost) {
-		return r.dispatchStepPlanned(ctx, spec, log, passage, tasks, perHost, settled, closed, step, fails, hosts)
+		return r.dispatchStepPlanned(ctx, spec, log, passage, tasks, perHost, settled, closed, step, fails, hosts, watch)
 	}
 	// Every push host's SshProvider, resolved before this Passage's first wave —
 	// a routing miss must not surface at a host's turn, with the hosts ahead of it
@@ -147,7 +150,7 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	}
 	if len(sids) == 0 {
 		if judge != nil {
-			return r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts)
+			return r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch)
 		}
 		return r.waitBarrier(ctx, spec.ApplyID, passage, dispatchedTotal, log)
 	}
@@ -158,7 +161,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// hosts, those the Keeper failed in each wave and those dispatchWave left with
 	// a running row; a host whose send failed is counted by a linear run, which
 	// judges its failed row, and not by a staged one, where that row breaks the
-	// barrier by itself. A host with no row must not make it wait.
+	// barrier by itself. A host with no row must not make it wait — except a linear
+	// step's host waiting for a stream, which gets one unless the step ends or the
+	// run is cancelled first ([stepWatch.send]).
 	for wi, wave := range waves {
 		failedHere := map[string]bool{}
 		for _, sid := range wave {
@@ -170,16 +175,16 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 				dispatchedTotal++
 			}
 		}
-		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, sendsIn(wave, failedHere), dispatchByHost, pushRoutes, settled)
+		dispatched, derr := r.dispatchWave(ctx, spec, log, passage, perHost, sendsIn(wave, failedHere), dispatchByHost, pushRoutes, settled, watch)
 		dispatchedTotal += dispatched
 
 		if judge != nil {
 			if derr != nil {
 				// The hosts sent before the error are working: they finish, or the
 				// abort would force-fail rows a live host is about to report.
-				return r.failAfterSent(ctx, spec, log, passage, dispatchedTotal, derr)
+				return r.failAfterSent(ctx, spec, log, passage, dispatchedTotal-watch.withdraw(), derr, watch)
 			}
-			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts); err != nil {
+			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch); err != nil {
 				return err
 			}
 			if len(waves) > 1 {
@@ -383,7 +388,7 @@ func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, 
 // what keeps at most one non-terminal row per host (ADR-027 amend (p)(a)). The
 // barrier judges the step's failures as an inline wave's does: a host the Keeper
 // failed is judged with the hosts queued beside it, once they finish.
-func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, perHost map[string][]*render.RenderedTask, settled map[string]*settledHost, closed []string, recipe *applyrun.Recipe, fails *runFailures, hosts []*topology.HostFacts) error {
+func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, perHost map[string][]*render.RenderedTask, settled map[string]*settledHost, closed []string, recipe *applyrun.Recipe, fails *runFailures, hosts []*topology.HostFacts, watch *stepWatch) error {
 	total := 0
 	for _, sid := range closed {
 		if err := r.closeSettledHost(ctx, spec, log, passage, sid, settled[sid]); err != nil {
@@ -391,8 +396,9 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 		}
 		total++
 	}
+	queued := false
 	for _, sid := range sortedSIDs(perHost) {
-		if err := applyrun.InsertPlanned(ctx, r.deps.DB, &applyrun.ApplyRun{
+		run := &applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
 			SID:             sid,
 			IncarnationName: spec.IncarnationName,
@@ -401,21 +407,46 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 			Recipe:          recipeFor(recipe, perHost[sid]),
 			Input:           spec.inputSnapshot,
 			Passage:         passage,
-		}); err != nil {
+		}
+		// A row written later, once its host's stream is there, signals the claim
+		// itself; the rest are signalled together below.
+		write := func(late bool) error {
+			err := applyrun.InsertPlanned(ctx, r.deps.DB, run)
+			// A late write is retried: a row an earlier try wrote is this one.
+			if err != nil && !(late && errors.Is(err, applyrun.ErrApplyRunAlreadyExists)) {
+				return err
+			}
+			log.Info("scenario: step queued", slog.String("sid", run.SID), slog.Int("passage", passage))
+			if !late {
+				queued = true
+				return nil
+			}
+			// A Cancel that landed after the wait checked for one finds no flag on a row
+			// written since, and the claim reads only the row's: flag it.
+			// A read error leaves the row unflagged: flagging a run that was not
+			// cancelled would end it at the barrier.
+			if c, _ := r.cancelFlagged(ctx, spec.ApplyID); c {
+				if _, ferr := applyrun.RequestCancel(ctx, r.deps.DB, spec.ApplyID); ferr != nil {
+					log.Warn("scenario: flagging a late-queued row of a cancelled run failed", slog.String("sid", run.SID), slog.Any("error", ferr))
+				}
+			}
+			r.publishSummons(ctx, log)
+			return nil
+		}
+		if err := watch.queue(ctx, run, write); err != nil {
 			// The rows queued before the error are claimed and sent: they finish, or
 			// the abort would close a row a live host is applying.
-			if total > 0 {
+			if queued {
 				r.publishSummons(ctx, log)
 			}
-			return r.failAfterSent(ctx, spec, log, passage, total, fmt.Errorf("scenario: insert planned apply_run (%s, step %d): %w", sid, passage, err))
+			return r.failAfterSent(ctx, spec, log, passage, total-watch.withdraw(), fmt.Errorf("scenario: insert planned apply_run (%s, step %d): %w", sid, passage, err), watch)
 		}
 		total++
-		log.Info("scenario: step queued", slog.String("sid", sid), slog.Int("passage", passage))
 	}
-	if len(perHost) > 0 {
+	if queued {
 		r.publishSummons(ctx, log)
 	}
-	return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, perHost, settled), total, fails, hosts)
+	return r.waitAndJudge(ctx, spec, log, newStepJudge(spec, passage, tasks, perHost, settled), total, fails, hosts, watch)
 }
 
 // publishSummons sends one best-effort Summons signal for planned assignments
@@ -469,14 +500,13 @@ func serialPresent(serial any) bool {
 // sequentially but without a barrier between hosts of the same wave — the
 // barrier sits between waves). Returns the number of hosts that now have a
 // running `apply_runs` row the barrier will wait on — on a linear run also a host
-// whose send failed, whose failed row the barrier judges — and the first
-// Insert/send error, if any.
+// waiting for its stream, which gets a row unless the step ends or the run is
+// cancelled first — and the first Insert/send error, if any.
 //
-// On a stream send failure the host is marked failed immediately — no RunResult
-// will arrive for it, otherwise the per-wave barrier would hang until timeout. On
-// a staged run the failed row breaks the barrier normally (fail-stop) and the
-// wave stops there; a linear run sends the rest of the wave and judges the row at
-// the barrier.
+// On a stream send failure a staged run marks the host failed immediately — no
+// RunResult will arrive for it, otherwise the per-wave barrier would hang until
+// timeout — and the failed row breaks the barrier normally (fail-stop). A linear
+// run's stream host waits for its stream instead ([stepWatch.send]).
 //
 // A push host (NIM-880) counts as dispatched the moment its goroutine starts:
 // its send IS the run, so there is no send outcome to inspect here, and every
@@ -485,7 +515,9 @@ func serialPresent(serial any) bool {
 //
 // settled carries the records the Keeper writes for a host it still sends a
 // message to — a loop iteration it skipped there — written once the row exists.
-func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string, dispatchByHost map[string]hostDispatch, pushRoutes map[string]pushRoute, settled map[string]*settledHost) (int, error) {
+//
+// A linear step (watch non-nil) sends a stream host through [stepWatch.send].
+func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, wave []string, dispatchByHost map[string]hostDispatch, pushRoutes map[string]pushRoute, settled map[string]*settledHost, watch *stepWatch) (int, error) {
 	dispatched := 0
 	for _, sid := range wave {
 		// attempt is INTENTIONALLY left at 0: this is the old inline path
@@ -506,7 +538,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// (apply_id, sid, passage).
 			Passage: int32(passage),
 		}
-		if err := applyrun.Insert(ctx, r.deps.DB, &applyrun.ApplyRun{
+		run := &applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
 			SID:             sid,
 			IncarnationName: spec.IncarnationName,
@@ -528,12 +560,23 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// is the binary this Keeper delivers, named by a keeper.yml key.
 			KeeperVersion: r.deps.KeeperVersion,
 			SoulVersion:   r.dispatchSoulVersion(ctx, sid, dispatchByHost[sid], log),
-		}); err != nil {
+		}
+		records := func() {
+			if sh := settled[sid]; sh != nil {
+				r.writeKeeperRecords(ctx, spec.ApplyID, log, passage, sid, numberedAfter(sh.records, len(perHost[sid])))
+			}
+		}
+		if watch != nil && !dispatchByHost[sid].isPush() {
+			if err := watch.send(ctx, run, req, records); err != nil {
+				return dispatched, err
+			}
+			dispatched++
+			continue
+		}
+		if err := applyrun.Insert(ctx, r.deps.DB, run); err != nil {
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}
-		if sh := settled[sid]; sh != nil {
-			r.writeKeeperRecords(ctx, spec.ApplyID, log, passage, sid, numberedAfter(sh.records, len(perHost[sid])))
-		}
+		records()
 
 		// Push branch (NIM-880): the send IS the whole run, so it goes to its own
 		// goroutine and the barrier — already waiting on the row inserted above —
@@ -541,7 +584,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 		// one case handled inline: without a goroutine nothing writes a terminal,
 		// and the barrier would wait out the run timeout.
 		if hd := dispatchByHost[sid]; hd.isPush() {
-			if err := r.startPushHost(ctx, spec, log, passage, sid, hd, pushRoutes[sid], req, len(perHost[sid])); err != nil {
+			if err := r.startPushHost(watch.pushContext(ctx), spec, log, passage, sid, hd, pushRoutes[sid], req, len(perHost[sid])); err != nil {
 				return dispatched, err
 			}
 			dispatched++
@@ -564,16 +607,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			// wrapped error above (which passes through MaskSecrets in
 			// lockIncarnation before being written).
 			summary := "send_apply_failed"
-			uerr := applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, passage, applyrun.StatusFailed, &summary)
-			// A linear run judges the failed row at the barrier, by the step's
-			// radius, and sends the step to the rest of the wave meanwhile. Not the
-			// err itself in the log: it may echo a secret, and slog is not masked.
-			if spec.executionModel == ExecutionLinear && uerr == nil {
-				log.Warn("scenario: ApplyRequest send failed - the host's row is failed and judged at the barrier",
-					slog.String("sid", sid), slog.String("error_summary", summary))
-				dispatched++
-				continue
-			}
+			_ = applyrun.UpdateStatus(ctx, r.deps.DB, spec.ApplyID, sid, passage, applyrun.StatusFailed, &summary)
 			return dispatched, fmt.Errorf("scenario: send apply (%s): %w", sid, err)
 		}
 		dispatched++

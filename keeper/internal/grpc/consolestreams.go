@@ -189,14 +189,14 @@ func (e *consoleStreamEntry) close() {
 
 // send — non-blocking enqueue of one downstream console frame. false means the
 // queue is full or the stream is detached; the caller reports it as
-// [ErrOutboundQueueFull], the same contract [streamEntry.send] has.
+// [ErrOutboundQueueFull], the same contract [streamEntry.send] has, and like it
+// holds closeMu through the send.
 func (e *consoleStreamEntry) send(msg *keeperv1.ConsoleToSoul) bool {
 	e.closeMu.Lock()
+	defer e.closeMu.Unlock()
 	if e.closed {
-		e.closeMu.Unlock()
 		return false
 	}
-	e.closeMu.Unlock()
 
 	select {
 	case e.outCh <- msg:

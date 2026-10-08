@@ -115,8 +115,9 @@ the minting step ran (NIM-189, NIM-780) — since NIM-886 `core.bootstrap.issued
 emits it only for a host whose agent was connected at that moment, and refuses a
 host that holds an identity with no agent behind it, so a machine re-created under
 an old SID no longer reaches this skip — once its predecessor's stream is gone,
-which for a machine killed without closing its connection can take minutes
-(NIM-962). It carries **no** `bootstrap_token` key
+which for a machine killed without closing its connection takes up to about 40
+seconds since the EventStream server pings a silent stream (NIM-949), not yet
+measured on a stand (NIM-962). It carries **no** `bootstrap_token` key
 — absent, not empty — and no address either, since issuance knows no IPs. Such a
 host is **skipped, not dialed**, reported as `{sid, ran: false, skipped: true}`
 and counted in `skipped`; `count` keeps its meaning of every host in the roster.
@@ -368,10 +369,13 @@ states; tell them apart by `action`.
 
 ### Bounds
 
-- The step is bounded by the join wait per host and the run's ceiling — 5 min, or
-  `max_await_timeout` + 10 min when the plan carries a `refresh_soulprint: true`
-  emitter. A chain that installs agents needs that emitter on its
-  `core.soul.registered`, and the slowest host's install has to fit.
+- The step is bounded by the join wait per host and by the run's bound. In a run
+  that executes linearly that bound is `scenario_timeout` (24h by default), and the
+  step is also bounded by its `task_timeout` as a whole — every host at once,
+  written on it as `timeout:` (settings.md §2.3, NIM-949). In a staged run the
+  bound is 5 min, or `max_await_timeout` + 10 min when the plan carries a
+  `refresh_soulprint: true` emitter — a chain that installs agents there needs that
+  emitter on its `core.soul.registered` — and `timeout:` on the step is ignored.
 - The inner run's task events are not stored per host; the audit record carries
   the task list and the step's message the failure.
 - `/var/lib/soul-stack/bin/soul` is left on the host.

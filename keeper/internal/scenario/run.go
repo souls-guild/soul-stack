@@ -262,8 +262,9 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//      WithTimeout wraps runCtx (WithCancel from Start): the sub-context
 	//      still inherits cancellation from the active-map, so Cancel/Shutdown
 	//      still abort the run. defer cancel covers any return from run()
-	//      (including the early aborts below).
-	ctx, cancel := context.WithTimeout(ctx, r.effectiveRunTimeout(scn.Tasks))
+	//      (including the early aborts below). A linear run is bounded by its
+	//      scenario_timeout instead (runDeadline, NIM-949).
+	ctx, cancel := context.WithTimeout(ctx, r.runDeadline(spec, scn))
 	defer cancel()
 
 	// One vault() memo for the whole run (NIM-934): every pass re-renders tasks

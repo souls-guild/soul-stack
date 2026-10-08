@@ -504,7 +504,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		Module:   task.Module.Module,
 		Register: task.Register,
 		ID:       task.ID,
-		Timeout:  task.Timeout,
+		Timeout:  wireTimeout(in, task),
 		// [ADR-0083] §8: derived from the module manifest, never authored.
 		SecretOutput: config.SecretOutputFields(task.Module.Module, in.Modules),
 		// flow-control CEL strings (ADR-012(d)) as the author wrote them. Under
@@ -1320,7 +1320,7 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 		Params:         st,
 		Register:       task.Register,
 		ID:             task.ID,
-		Timeout:        task.Timeout,
+		Timeout:        wireTimeout(in, task),
 		When:           task.When,
 		ChangedWhen:    task.ChangedWhen,
 		FailedWhen:     task.FailedWhen,

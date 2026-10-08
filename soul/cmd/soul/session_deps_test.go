@@ -19,6 +19,7 @@ import (
 func TestSessionDeps_FieldRoster(t *testing.T) {
 	want := []string{
 		"runner",
+		"applies",
 		"errandRunner",
 		"scheduler",
 		"soulprintPush",

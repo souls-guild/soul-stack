@@ -10,6 +10,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -561,17 +562,37 @@ func (d *sendFailingDispatcher) SendApply(ctx context.Context, sid string, req *
 	return d.failingStepDispatcher.SendApply(ctx, sid, req)
 }
 
-// ★ GUARD (settings.md §4). A send that fails is a failure tied to no task: the row is
-// failed `send_apply_failed`, the step goes to the rest of the wave, and the barrier
-// owner's radius judges it — under `host` the host is dropped and the run finishes
-// without it.
+// threeStepsUnderHostQuickLoss is threeStepsUnderHost with a host that has no
+// stream given up after 300ms instead of soul_timeout's default minute.
+const threeStepsUnderHostQuickLoss = `name: roll
+description: three steps, every failure drops its host
+settings:
+  on_failure: host
+  soul_timeout: 300ms
+tasks:
+  - name: first
+    module: core.exec.run
+    params: { cmd: first }
+  - name: second
+    module: core.exec.run
+    params: { cmd: second }
+  - name: third
+    module: core.exec.run
+    params: { cmd: third }
+`
+
+// ★ GUARD (settings.md §4). A host whose send keeps failing is a failure tied to no
+// task: it waits for its stream (NIM-949, §2.2) while the step goes to the rest of
+// the wave, its row is failed `soul_unavailable` once soul_timeout runs out, and the
+// barrier owner's radius judges it — under `host` the host is dropped and the run
+// finishes without it.
 //
-// Mutation: return from the wave at a failed send, as a staged run does → the run
-// ends dispatch_failed and host-c is never sent the step.
+// Mutation: return from the wave at a send that found no stream → the run ends
+// dispatch_failed and host-c is never sent the step.
 func TestIntegration_LinearFailedSendIsJudgedByTheStep(t *testing.T) {
 	seedPolicyRoster(t, "redis-prod", policyHostA, policyHostB, policyHostC)
 	disp := &sendFailingDispatcher{failingStepDispatcher: newFailingStepDispatcher(t, nil), refuse: map[string]bool{policyHostB: true}}
-	applyID := startPolicyRun(t, newPolicyRunner(t, disp, nil), "redis-prod", "redis", linearServiceRepo(t, "roll", threeStepsUnderHost), "roll")
+	applyID := startPolicyRun(t, newPolicyRunner(t, disp, nil), "redis-prod", "redis", linearServiceRepo(t, "roll", threeStepsUnderHostQuickLoss), "roll")
 
 	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
 	if inc.StatusDetails["reason"] != reasonPartialFailed {
@@ -586,8 +607,8 @@ func TestIntegration_LinearFailedSendIsJudgedByTheStep(t *testing.T) {
 		t.Fatalf("sent = %v, want %v", got, want)
 	}
 	row := rowsOf(t, applyID)[[2]any{policyHostB, 0}]
-	if row.Status != applyrun.StatusFailed || !row.Dropped || row.ErrorSummary == nil || *row.ErrorSummary != "send_apply_failed" {
-		t.Errorf("host-b row = %s dropped=%v summary=%v, want a dropped send_apply_failed row", row.Status, row.Dropped, row.ErrorSummary)
+	if row.Status != applyrun.StatusFailed || !row.Dropped || row.ErrorSummary == nil || !strings.HasPrefix(*row.ErrorSummary, soulUnavailable+":") {
+		t.Errorf("host-b row = %s dropped=%v summary=%v, want a dropped %s row", row.Status, row.Dropped, row.ErrorSummary, soulUnavailable)
 	}
 	drops := auditPayloads(t, applyID, audit.EventApplyHostDropped)
 	if len(drops) != 1 || drops[0]["sid"] != policyHostB {
@@ -687,7 +708,7 @@ func TestIntegration_FailAfterSentWaitsAndKeepsTheCancel(t *testing.T) {
 			time.Sleep(200 * time.Millisecond)
 			_ = applyrun.UpdateStatus(ctx, integrationPool, applyID, policyHostA, 0, applyrun.StatusSuccess, nil)
 		}()
-		err := r.failAfterSent(ctx, RunSpec{ApplyID: applyID}, discardLog(), 0, 1, cause)
+		err := r.failAfterSent(ctx, RunSpec{ApplyID: applyID}, discardLog(), 0, 1, cause, nil)
 		if !errors.Is(err, cause) || errors.Is(err, errCancelRequested) {
 			t.Fatalf("failAfterSent = %v, want the dispatch error alone", err)
 		}
@@ -704,21 +725,37 @@ func TestIntegration_FailAfterSentWaitsAndKeepsTheCancel(t *testing.T) {
 		if _, err := applyrun.RequestCancel(ctx, integrationPool, applyID); err != nil {
 			t.Fatalf("RequestCancel: %v", err)
 		}
-		err := r.failAfterSent(ctx, RunSpec{ApplyID: applyID}, discardLog(), 0, 1, cause)
+		err := r.failAfterSent(ctx, RunSpec{ApplyID: applyID}, discardLog(), 0, 1, cause, nil)
 		if !errors.Is(err, cause) || !errors.Is(err, errCancelRequested) {
 			t.Errorf("failAfterSent = %v, want the dispatch error joined with the Cancel", err)
 		}
 	})
 }
 
+// silentDispatcher takes every request and answers none; the test writes the
+// Soul's result itself.
+type silentDispatcher struct{}
+
+func (silentDispatcher) SendApply(context.Context, string, *keeperv1.ApplyRequest) error { return nil }
+
+// noStreamDispatcher refuses every send, as for a host with no agent stream.
+type noStreamDispatcher struct{ tries atomic.Int64 }
+
+func (d *noStreamDispatcher) SendApply(context.Context, string, *keeperv1.ApplyRequest) error {
+	d.tries.Add(1)
+	return errors.New("stream gone")
+}
+
 // ★ GUARD (NIM-972 over NIM-948). A linear run's barrier is waitStep, so it reads
-// the applying lock's Cancel as the staged barrier does: it acts on it while the
-// host's row is running inline, and defers it while a queued row is dispatched — the
-// abort would close a delivered row while its Soul applies it.
+// the applying lock's Cancel as the staged barrier does: it acts on it while no row
+// of the step is delivered — the host still waits for its stream (NIM-949) — and
+// defers it while the step's row is dispatched, inline (NIM-949 writes an inline
+// step's row dispatched with the send) or queued: the abort would close a delivered
+// row while its Soul applies it.
 //
-// Mutations: read the row flags only in waitStep → "acts" waits on the held host
-// past waitRunDone's deadline; act on the lock whatever the rows → "defers" stops
-// the run while the row is dispatched.
+// Mutations: read the row flags only in waitStep → "acts" waits on the streamless
+// host past waitRunDone's deadline; act on the lock whatever the rows → "defers"
+// and "defers inline" stop the run while the row is dispatched.
 func TestIntegration_LinearBarrierReadsTheLockCancel(t *testing.T) {
 	const host = "host-a.example.com"
 	body := `name: create
@@ -740,15 +777,47 @@ tasks:
 
 	t.Run("acts", func(t *testing.T) {
 		gitURL := setup(t)
-		owner := newRunnerInWindow(t, newHeldDispatcher(t), auditpg.NewReader(integrationPool), stubSoulCap{}, nil)
+		disp := &noStreamDispatcher{}
+		owner := newRunnerInWindow(t, disp, auditpg.NewReader(integrationPool), stubSoulCap{}, nil)
 		applyID := startModelRun(t, owner, ExecutionLinear, "noop-prod", "noop", gitURL, "create")
-		waitHostRow(t, applyID, host, applyrun.StatusRunning)
+		deadline := time.Now().Add(10 * time.Second)
+		for disp.tries.Load() < 2 {
+			if time.Now().After(deadline) {
+				t.Fatal("the host never waited for its stream")
+			}
+			time.Sleep(10 * time.Millisecond)
+		}
 		if locked, err := incarnation.RequestRunCancel(ctx, integrationPool, applyID); err != nil || !locked {
 			t.Fatalf("RequestRunCancel = %v, %v; want the lock flagged", locked, err)
 		}
 		waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
-		if rows := hostRows(t, applyID); len(rows) != 1 || rows[0].Status != applyrun.StatusRunning {
-			t.Errorf("host rows when the run stopped = %+v, want the live apply left running", rows)
+		if rows := hostRows(t, applyID); len(rows) != 0 {
+			t.Errorf("host rows when the run stopped = %+v, want none — the step never reached the host", rows)
+		}
+	})
+
+	t.Run("defers inline", func(t *testing.T) {
+		gitURL := setup(t)
+		owner := newRunnerInWindow(t, silentDispatcher{}, auditpg.NewReader(integrationPool), stubSoulCap{}, nil)
+		applyID := startModelRun(t, owner, ExecutionLinear, "noop-prod", "noop", gitURL, "create")
+		waitHostRow(t, applyID, host, applyrun.StatusDispatched)
+		if locked, err := incarnation.RequestRunCancel(ctx, integrationPool, applyID); err != nil || !locked {
+			t.Fatalf("RequestRunCancel = %v, %v; want the lock flagged", locked, err)
+		}
+		time.Sleep(300 * time.Millisecond)
+		inc, err := incarnation.SelectByID(ctx, integrationPool, "noop-prod")
+		if err != nil {
+			t.Fatalf("SelectByID: %v", err)
+		}
+		if inc.Status != incarnation.StatusApplying {
+			t.Fatalf("the run stopped (status %q) while its inline row was dispatched", inc.Status)
+		}
+		if err := applyrun.UpdateStatus(ctx, integrationPool, applyID, host, 0, applyrun.StatusSuccess, nil); err != nil {
+			t.Fatalf("the Soul's result: %v", err)
+		}
+		waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
+		if rows := hostRows(t, applyID); len(rows) != 1 || rows[0].Status != applyrun.StatusSuccess {
+			t.Errorf("host rows = %+v, want the Soul's success", rows)
 		}
 	})
 

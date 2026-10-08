@@ -1,6 +1,6 @@
 # Scenario settings — the `settings:` block
 
-> **Status: parsed, not acted on.** Specified by the draft ADR
+> **Status: parsed; partly acted on (below).** Specified by the draft ADR
 > [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), fork 4.
 > Since NIM-927 the shape (§1), the keys and their values (§2), the §3 refusals — a run-kind key
 > below the scenario, `settings:` where it may not be written, an unknown key — and the §2.3
@@ -8,10 +8,13 @@
 > refuses); `config.MergeSettings` merges two levels key by key, and render applies it so far only
 > from a block to its children. Since NIM-940 §3.1's two refusals are enforced the same way and
 > `soul-lint` gives rule 4's warning. Since NIM-942 `serial_scope` decides how a block rolls — but
-> only in a run that executes linearly, and no run does until NIM-952 moves the default execution
-> model (`execution_model`, [naming-rules.md](../naming-rules.md)). Since NIM-948 a linear run's
-> barrier reads `on_failure` and `tolerate` (§4), on the same terms. **Not yet:** the timeouts and
-> the `onfail:` rescue across barriers (§4; the rest of epic NIM-926). A Keeper older than NIM-927 refuses the
+> only in a run that executes linearly, which a run does on a Keeper whose `keeper.yml` sets
+> `scenario.execution_model: linear` (NIM-950) until NIM-952 moves the default execution model
+> (`execution_model`, [naming-rules.md](../naming-rules.md)). Since NIM-948 a linear run's
+> barrier reads `on_failure` and `tolerate` (§4), on the same terms, and since NIM-949 the three
+> timeouts are read (§2.2–§2.3): `task_timeout` in every run, `soul_timeout` and `scenario_timeout`
+> in a run that executes linearly. **Not yet:** the `onfail:` rescue across barriers (§4; the rest of
+> epic NIM-926). A Keeper older than NIM-927 refuses the
 > `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
 > 2026-10-01 unless marked **open**.
 
@@ -64,13 +67,13 @@ The scenario top level was a flat list of thirteen keys, none of which governed 
 instead of a key each.
 
 A block composes its keys by **several** rules, and `settings:` takes the `vars:` one. The authority
-is `mergeBlockInheritance` (`keeper/internal/render/block.go:480-492`):
+is `mergeBlockInheritance` (`keeper/internal/render/block.go:484-499`):
 
 | Key on the block | Against the child's own key |
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:568-581`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:581-594`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
 | `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:358`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
@@ -135,38 +138,88 @@ the percentage is over the run.
 
 | Key | Governs | Default |
 |---|---|---|
-| `task_timeout` | how long one task may **execute** | none — Soul applies a limit only when one is written (`soul/internal/runtime/applyrunner.go:1037`) |
+| `task_timeout` | how long one task may **execute** | none — Soul applies a limit only when one is written (`soul/internal/runtime/applyrunner.go:1069`) |
 | `soul_timeout` | how long a lost **connection** may last before the host is declared unavailable | `1m` |
 | `scenario_timeout` | how long the whole **run** may last | `24h` |
 
 Keeper holds a live stream to every daemon agent. When a host's stream has been gone for
 `soul_timeout`, the host fails for unavailability and is judged by `on_failure` like any other
-failure; a slow task on a live host is never mistaken for a dead one. What this needs, none of it on
-the inline path today:
+failure; a slow task on a live host is never mistaken for a dead one. Since NIM-949, in a run that
+executes linearly (`keeper/internal/scenario/step_watch.go`):
 
-- **A row left `running` by a lost stream must be resolved.** Only a `dispatched` row can be set
-  `orphaned` (`keeper/internal/applyrun/crud.go:1100-1108`), so a Soul that dies mid-task leaves its row
-  `running`, and nothing ends it short of the whole run aborting, which force-fails it unless an
-  operator cancelled (`keeper/internal/scenario/run.go:1557-1580`). And a result finished while the stream was down must still reach
-  the Keeper when it returns, or the wait buys nothing.
-- **A send to a host whose stream is gone must wait, not fail.** Today the send fails at once
-  (`keeper/internal/grpc/outbound.go:150-155`) and the dispatch reports `send_apply_failed`
-  (`keeper/internal/scenario/dispatch.go:564-577`); `soul_timeout` has to cover that wait too.
-- **The Keeper running the run may not hold the stream.** Under HA the stream can sit on another
-  instance (`dispatch.go:595-599`), so noticing the drop needs that instance to say so. A push host
-  has no stream at all; what `soul_timeout` means for it is open (§6).
+- **The stream is the SID lease.** Whichever Keeper instance holds a host's stream holds its Redis
+  lease (`soul:<sid>:lock`), releases it when the stream ends and loses it by TTL when it dies itself,
+  so the instance running the step reads the drop from the lease without a message of its own. A
+  live stream whose lease key vanished — Redis restarted or failed over — takes it again at the next
+  renewal, or a live agent would read as gone. The EventStream server pings a silent stream after
+  30s and closes it 10s later (`keeper/internal/grpc/eventstream.go`), so a host that died without
+  closing its connection is noticed within 40s, not when the kernel gives up on TCP minutes later.
+  Without Redis there is no lease to read, and a lost host is bounded by `scenario_timeout` alone.
+- **A step's row is written `dispatched`, and only together with the send.** A host whose stream
+  has been gone for the step's `soul_timeout` while the step is out on it is failed by the barrier
+  with `error_summary` **`soul_unavailable`** (a reason a task failure already recorded is kept) and
+  judged, as a failure tied to no task, by the barrier owner's radius (§4). A stream that comes back
+  in time forgives the loss. This holds on either path: a step the work-queue carries (NIM-961) has
+  its row marked `dispatched` by the claim before the send. A Soul that comes back without the step —
+  restarted, or never received it — does not declare it in its `WardRoster`, and the existing sweep
+  orphans the row at once (`keeper/internal/applyrun/crud.go:1105-1117`), which is why the row is not
+  written ahead of a stream to carry it. Since a run's steps share one `apply_id`, a Soul now declares
+  each message by `apply_id` **and** `passage` (`ActiveApply.passage`), and the sweep spares only the
+  rows named — a Soul still holding step *k*'s undelivered result no longer shields step *k+1*,
+  which it never received. A request queued to a stream before that stream's `WardRoster` is swept
+  counts as declared: the roster was taken before the Soul read it.
+- **A send to a host with no stream waits.** Every `SendApply` failure is a missing or saturated
+  stream, so the host waits in its own goroutine — the hosts behind it in the wave are not held up —
+  and is sent the step once its stream is there; after `soul_timeout` it fails `soul_unavailable`.
+  A host known to have no stream is not tried until it has one, and then only once the stream has
+  been there for five polls, so a reconnected Soul's `WardRoster` is swept before the row is written.
+  Nothing of a step goes out after the step ended. A step the work-queue carries (NIM-961) waits the
+  same way before its row is queued (**decided, user, 2026-10-08**): the claim that takes the row
+  sends at once, so a host with no stream when the step starts gets its `planned` row only once its
+  stream has been there five polls,
+  and fails `soul_unavailable` with nothing queued if it does not come. A stream lost between the
+  row and the claim still fails the host `send_apply_failed`.
+- **A result finished while the stream was down reaches the Keeper.** The Soul runs an apply off its
+  session loop (`soul/cmd/soul/applyworker.go`), so it reconnects mid-step, and reports through a
+  relay (`soul/internal/runtime/relay.go`) that queues while there is no stream and hands the next
+  stream every event not confirmed delivered; an event counts as delivered once the stream it went
+  out on stayed up a minute longer. Its `WardRoster` declares those messages. A replayed event can
+  arrive twice: a second RunResult is a no-op, a second TaskEvent adds one audit record. A TaskEvent
+  over the Keeper's message size limit ends each stream it is sent on with `ResourceExhausted`,
+  quoting its size; the event of that size, refused three times, is given up — the events sent with
+  it, the RunResult among them, stay, and a stream that ends any other way, a Keeper restarting,
+  counts nothing. An event that cannot be serialized at all is dropped at the first try.
+  ⚠ An agent older than NIM-949 does neither — it reconnects only after the step, its result lost —
+  so its host's step waits out `scenario_timeout` after a drop. A Soul since NIM-949 announces
+  `result_relay`; no gate reads it yet — refusing a host without it in a linear run is NIM-983.
+- **A push host** (`transport: ssh`) has no stream: its `soul_timeout` is a wait for an SSH session
+  (**decided, user, 2026-10-07**). A refused connect — nothing started on the host — is retried until
+  `soul_timeout`, then the host fails `soul_unavailable`; a session that broke after the command
+  started fails at once, since retrying it would apply the step twice. Every dial error but a
+  refused host key counts as a refused connect, an authentication refusal included: it is retried
+  for `soul_timeout` and reported `soul_unavailable`.
+- **Not covered.** A request for a host whose stream another Keeper instance holds crosses Redis
+  pub/sub: a full queue at the holder is waited on for 10s, and a request still dropped leaves the
+  row `dispatched`, the stream up, until `scenario_timeout`; a publish that times out after Redis
+  delivered it is sent again, so the Soul can apply the step twice. A step sent to a Soul that
+  reconnected a moment before — its `WardRoster` not yet swept — can have its row orphaned while the
+  Soul applies it: only a host that waited for its stream waits out the sweep. A lease key that vanished is
+  taken back at the holder's next renewal, a third of its 60s TTL, so a `soul_timeout` under 20s can
+  fail a live host after a Redis restart. An Augur fetch or a module download a step makes while its
+  stream is down fails, as with no Keeper. A push host's SSH connect already under way when the step
+  ends runs on and applies the step.
 
-`scenario_timeout` **replaces** today's `defaultRunTimeout` of 5 minutes
-(`keeper/internal/scenario/scenario.go:138-141`), whose stated job — "guards against an eternal
+`scenario_timeout` **replaces** the 5-minute `defaultRunTimeout`
+(`keeper/internal/scenario/scenario.go:138-141`) in a linear run, whose stated job — "guards against an eternal
 barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also killed any legitimate task
 running longer, which contradicted "no task limit by default".
 
-It replaces the provision-run ceiling as well. Today a plan with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1188-1201`, `deployBudget` at
+It replaces the provision-run ceiling as well. A staged run with a refresh emitter gets
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1189-1202`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:143-152`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
-already covers onboarding.
+already covers onboarding. A staged run keeps both until NIM-952 retires the model.
 
 ### 2.3 `timeout:` is shorthand for `task_timeout`
 
@@ -197,7 +250,20 @@ exactly this); §6.
 (`:1271-1275`), and stays so: NIM-910 made `timeout:` and `retry:` on a block a default for its
 children and was reverted (user, 2026-10-07) — a key on the block reading as each child's default is
 not obvious. `settings: {task_timeout: X}` on a block or an applier is the default for every task
-beneath it once NIM-949 reads it; until then write `timeout:` on the task.
+beneath it.
+
+Since NIM-949 the wire carries each task's merged `task_timeout` — the scenario level, its blocks'
+and its own, in every run (`keeper/internal/render/task_timeout.go`); a task in a scenario that
+writes no `settings:` anywhere keeps its `timeout:` as written. An applier hands its merged value to
+the destiny's tasks, whose own `timeout:` wins (§3 rule 6), so `settings: {task_timeout: X}` on an
+applier bounds the destiny's tasks.
+
+A keeper-side task takes the same merged value, written on it as its own `timeout:` — `settings:`
+is refused there (§3) — and it bounds the step **as a whole** (**decided, user, 2026-10-07**): one
+deadline over the module call, so a `core.ssh.apply` is cut on every host at once, not per host. A
+scenario-level `task_timeout` therefore bounds `core.ssh.apply` and `core.soul.registered`'s wait
+too, and the step lifts it with its own `timeout:`. This holds in a run that executes linearly; a
+staged run keeps ignoring `timeout:` on a keeper-side task, as it always has.
 
 ## 3. Rules
 
@@ -222,12 +288,13 @@ beneath it once NIM-949 reads it; until then write `timeout:` on the task.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:933-936`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:934-937`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
 `settings_on_include_invalid`. A destiny has no `settings:` key at all: written in one, it is
-`unknown_key`.
+`unknown_key`. A keeper-side task still takes the scenario's `task_timeout`, and changes it with its
+own `timeout:` (§2.3).
 
 **Two rules for whatever is added next**, so the single validator survives growth: an **unknown key**
 inside `settings:` is an error (`unknown_key`), never ignored — that is what makes a new key or a
@@ -242,8 +309,7 @@ integer ≥ 0 or a string `N%` with N in 0..100 (quoting it is customary, not re
 
 **`timeout:` beside `settings.task_timeout`** (§2.3): when both are written on one task and differ,
 `soul-lint` warns `timeout_shadowed_by_task_timeout` on the `timeout:` line, and the Keeper accepts
-the file. Under this design the explicit key wins; until task timeouts are read from `settings:`
-(NIM-949) the Soul still applies `timeout:`, which is why the warning says both.
+the file. The explicit key is the one that reaches the Soul; the `timeout:` line is dead.
 
 ### 3.1 A block rolled as one group — the canary
 
@@ -283,7 +349,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:946-957`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:980-991`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
@@ -324,11 +390,12 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   ends runs no later rescue at all.
 - If any recorded failure on a host is at a task whose radius is `scenario`, the run ends: a fatal
   failure that happened is fatal whatever else happened on that host. Under `async:` several children
-  can fail on one host (`soul/internal/runtime/applyrunner.go:468-480` — siblings are not cancelled),
+  can fail on one host (`soul/internal/runtime/applyrunner.go:500-512` — siblings are not cancelled),
   and none is lost.
-- A failure **tied to no task** — the dispatch itself failed (`send_apply_failed`,
-  `keeper/internal/scenario/dispatch.go:564-577`), a push transport failed, or `soul_timeout` ran
-  out — is judged by the **barrier owner's** radius. A Keeper-side evaluation error, such as a
+- A failure **tied to no task** — the dispatch itself failed (`send_apply_failed`: a queued step's
+  claim found no stream, `keeper/internal/scenario/claim.go:261-271`), a push transport failed, `soul_timeout` ran
+  out (`soul_unavailable`, §2.2), or a reconnected Soul did not declare the step (`orphaned`) — is
+  judged by the **barrier owner's** radius. A Keeper-side evaluation error, such as a
   failing `when:`, is tied to its task and judged by that task's radius.
 - **The FAILED records the Keeper writes for such failures are not judged again.** A failure with no
   task row, or a group that fails before dispatch, gets a FAILED record for every task its message
@@ -350,8 +417,8 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
 (`failed_plan_index`) and the step's FAILED/TIMED_OUT `task.executed` facts in the audit log, the
 source the cross-step requisite gate reads; without an audit reader, the first failure alone. A host
 the Keeper failed before sending is judged by its cause alone. The list is `runFailures`, held by the
-run goroutine. A send that fails no longer stops the wave: the row is failed `send_apply_failed` and
-judged with the rest. A dropped host:
+run goroutine. A send that fails no longer stops the wave: the host waits for its stream and fails
+`soul_unavailable` at `soul_timeout` (§2.2), and the row is judged with the rest. A dropped host:
 
 - leaves every later step's roster, a roster re-read at a refresh boundary included;
 - stays in `soulprint.hosts`, at its SID position, with `dropped: true` (user, 2026-10-08): all hosts
@@ -376,12 +443,12 @@ failure (`shared/api/wire/incarnation.go`, read by `keeper/internal/applyrun/run
 
 ⚠ **A staged run keeps today's barrier** until NIM-952 retires it: it returns on the first failed
 host (`classifyExcept`, `keeper/internal/scenario/dispatch.go`) and the abort force-fails every row
-still running (`ensureTerminalApplyRun`, `keeper/internal/scenario/run.go`). A dead host is caught
-only on the Acolyte path — which since NIM-961 carries a linear run's step when the work-queue takes
-it ([ADR-027 amend (q)](../adr/0027-apply-work-queue.md)), and an inline step does not: only a row
-marked `dispatched` — which the claim does — can be set `orphaned` (`OrphanDispatched`,
-`keeper/internal/applyrun/crud.go`). A linear run judges such a row, which carries no task, by the
-barrier owner's radius, on either path: a queued step's barrier is the inline one's.
+still running (`ensureTerminalApplyRun`, `keeper/internal/scenario/run.go`). Its dead host is caught
+only on the Acolyte path, where the claim marks the row `dispatched` (`OrphanDispatched`,
+`keeper/internal/applyrun/crud.go`). In a linear run, on either path ([ADR-027 amend
+(q)](../adr/0027-apply-work-queue.md)), a dead host is caught by `soul_timeout` and a step its Soul
+lost by the `WardRoster` sweep (§2.2) — an inline step's row is written `dispatched` with the send
+since NIM-949 — and such a row, carrying no task, is judged by the barrier owner's radius.
 
 ## 5. Naming
 
@@ -398,7 +465,6 @@ scenario saying so.
 ## 6. Open
 
 - **A task that restarts its own agent or host** (§2.3) — its result never arrives.
-- **`soul_timeout` for a push host**, which holds no stream (§2.2).
 
 - **A group's nested `serial:` is only warned about** (NIM-940). Inside a block rolled as one group,
   a nested block's own `serial:` narrows today's derived wave (a nested block enters the Passage's

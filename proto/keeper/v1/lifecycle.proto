@@ -113,4 +113,12 @@ message ActiveApply {
   // status is reserved for future use (detailing the run's phase on Soul). NOT
   // read by Keeper in the MVP: an apply_id's presence in the set means "the run
   // is being minded". Never reuse field 3.
+
+  // passage: which of the run's messages is minded — echo of
+  // ApplyRequest.passage (NIM-949). One entry per minded passage. Set, it
+  // narrows the claim to that row: a run's steps share one apply_id, and a
+  // claim by apply_id alone would also cover a later step the Soul never
+  // received. Unset (a Soul older than NIM-949), the entry claims every row of
+  // the apply_id, as before.
+  optional int32 passage = 4;
 }

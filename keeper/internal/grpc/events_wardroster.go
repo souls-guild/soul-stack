@@ -32,7 +32,10 @@ func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionI
 		return
 	}
 
-	known := wardRosterToActive(ev)
+	// The roster was taken before the Soul read anything on this stream, so a
+	// request already routed to it is one the roster cannot name — and its row
+	// must not be read as lost (NIM-949).
+	known := append(wardRosterToActive(ev), h.routedToSession(sid)...)
 	orphaned, err := applyrun.OrphanDispatched(ctx, h.deps.ApplyRunDB, sid, known)
 	if err != nil {
 		h.logger.Warn("eventstream: orphan dispatched sweep failed",
@@ -57,6 +60,21 @@ func (h *eventStreamHandler) handleWardRoster(ctx context.Context, sid, sessionI
 		slog.Int("known", len(known)))
 }
 
+// routedToSession is the applies already queued to sid's stream on this instance,
+// as declarations of their own rows. nil without a StreamManager.
+func (h *eventStreamHandler) routedToSession(sid string) []*applyrun.ActiveApply {
+	if h.deps.Manager == nil {
+		return nil
+	}
+	routed := h.deps.Manager.takeRouted(sid)
+	out := make([]*applyrun.ActiveApply, 0, len(routed))
+	for _, r := range routed {
+		passage := r.passage
+		out = append(out, &applyrun.ActiveApply{ApplyID: r.applyID, Passage: &passage})
+	}
+	return out
+}
+
 // wardRosterToActive maps the proto set [keeperv1.WardRoster] into domain
 // [applyrun.ActiveApply], isolating the applyrun CRUD layer from proto generation.
 // An empty/nil set → nil (an explicit declaration of "nothing is being tracked").
@@ -70,10 +88,15 @@ func wardRosterToActive(ev *keeperv1.WardRoster) []*applyrun.ActiveApply {
 		if a == nil {
 			continue
 		}
-		out = append(out, &applyrun.ActiveApply{
+		entry := &applyrun.ActiveApply{
 			ApplyID: a.GetApplyId(),
 			Attempt: a.GetAttempt(),
-		})
+		}
+		if a.Passage != nil {
+			passage := a.GetPassage()
+			entry.Passage = &passage
+		}
+		out = append(out, entry)
 	}
 	return out
 }

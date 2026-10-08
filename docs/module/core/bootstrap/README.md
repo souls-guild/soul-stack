@@ -150,8 +150,9 @@ older than its `max_age`.
 - **"Connected" is the presence lease** in Redis, the source the onboarding barrier
   polls, not `souls.status`. It is read once per batch and only when the batch holds
   an identity at all. ⚠ The lease can outlive a machine killed without closing its
-  connection by a few minutes — the Keeper notices the dead stream only when TCP
-  does (NIM-962) — so a machine re-created under the
+  connection until the Keeper notices the dead stream — within about 40 seconds
+  since the EventStream server pings a silent stream (NIM-949), not yet measured on a
+  stand (NIM-962) — so a machine re-created under the
   same SID inside that window is still passed through. A lease that cannot be read within 5 seconds refuses the step
   (`check agent presence: …`) rather than guess, and so does a Keeper with no
   presence source.

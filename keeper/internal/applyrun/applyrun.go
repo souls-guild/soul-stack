@@ -173,10 +173,13 @@ type ApplyRun struct {
 // WardRoster (Soul-reconcile, ADR-027(g), S6). Domain counterpart of the
 // keeperv1.ActiveApply proto message; the gRPC handler maps proto → domain so
 // the CRUD layer (this package) stays independent of proto generation (like
-// the rest of applyrun). [OrphanDispatched] only reads ApplyID; Attempt is
-// kept for a future epoch mismatch check (in MVP, presence of apply_id in
-// the set protects the row from orphaning regardless of attempt).
+// the rest of applyrun). [OrphanDispatched] reads ApplyID and Passage; Attempt
+// is kept for a future epoch mismatch check (in MVP, presence in the set
+// protects the row from orphaning regardless of attempt).
 type ActiveApply struct {
 	ApplyID string
 	Attempt int32
+	// Passage — the one row of the apply this entry claims (NIM-949). nil: a Soul
+	// that does not report it, and the entry claims every row of the apply.
+	Passage *int32
 }

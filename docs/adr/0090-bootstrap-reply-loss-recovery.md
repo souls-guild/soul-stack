@@ -36,7 +36,7 @@ Option 1 is a prerequisite of Option 2, not a competitor: both need one honest p
 ### Option 1 — stop lying about the state; recover by re-issuing a token
 
 1. **`Bootstrap` leaves `souls.status` at `pending`.** No new name is minted: `pending` is already documented as "operator issued bootstrap token, Soul not yet connected" (`soul.go:30`), which is precisely true after a bootstrap and stays true until a stream exists.
-2. **The EventStream writes `connected` on first contact**, next to the existing `last_seen_at` flush (`keeper/internal/grpc/eventstream.go:1374-1390`). That is the event the enum already claims the value means.
+2. **The EventStream writes `connected` on first contact**, next to the existing `last_seen_at` flush (`keeper/internal/grpc/eventstream.go:1430-1441`). That is the event the enum already claims the value means.
 3. Recovery is then by re-issuing a token — `issue-token` on the Operator API or MCP. (At the time this option was written it also looked as though `IssuerPG.issueOne` would re-arm such a host automatically, since it would now read `pending`. Implementation showed that must NOT happen: a host with an active seed being handed a fresh token is a takeover primitive — see "What implementation and review added", item 2. The scenario path therefore converges over it — and since NIM-886 only while an agent is connected under that seed, refusing such a host by name otherwise — and re-issuing is a deliberate operator act.)
 
 **Anti-replay contract: untouched.** No proto change, no `Burn` change, no new column.

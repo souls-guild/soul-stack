@@ -146,3 +146,60 @@ func TestDispatch_OldSoulNoWardRoster_NoSweep(t *testing.T) {
 		}
 	}
 }
+
+// ★ GUARD (NIM-949). An entry that names its passage reaches the sweep as an
+// (apply_id, passage) pair, not as an apply_id that would claim every step of
+// the run.
+//
+// Mutation: map every entry to an apply_id-only declaration → the pair arrays
+// are empty and apply-live is in $2 → red.
+func TestHandleWardRoster_PassageClaimsOnlyItsRow(t *testing.T) {
+	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
+	h, _ := newTestHandlerWithApplyRunMetrics(t, &recordingAudit{}, ardb)
+	passage := int32(2)
+
+	h.handleWardRoster(context.Background(), "host.example.com", "session-1", &keeperv1.WardRoster{
+		Active: []*keeperv1.ActiveApply{{ApplyId: "apply-live", Passage: &passage}},
+	})
+
+	if ids, _ := ardb.execArgs[1].([]string); len(ids) != 0 {
+		t.Errorf("apply_id-only set = %v, want empty", ids)
+	}
+	ids, _ := ardb.execArgs[3].([]string)
+	passages, _ := ardb.execArgs[4].([]int32)
+	if len(ids) != 1 || ids[0] != "apply-live" || len(passages) != 1 || passages[0] != 2 {
+		t.Errorf("declared pairs = %v / %v, want [apply-live] / [2]", ardb.execArgs[3], ardb.execArgs[4])
+	}
+}
+
+// ★ GUARD (NIM-949). A request queued to the stream before its WardRoster is
+// swept is one the roster could not name — the Soul took it before reading
+// anything — so its row is declared for it; and recording stops at the sweep.
+//
+// Mutations: sweep the roster alone → the pair is missing → red; keep recording
+// after the sweep → the second take is not empty → red.
+func TestHandleWardRoster_RequestRoutedToTheSessionIsDeclared(t *testing.T) {
+	ardb := &fakeApplyRunDB{execTag: pgconn.NewCommandTag("UPDATE 0")}
+	h, _ := newTestHandlerWithApplyRunMetrics(t, &recordingAudit{}, ardb)
+	h.deps.Manager = NewStreamManager(discardLogger(t))
+	const sid = "host.example.com"
+	h.deps.Manager.RegisterStream(sid, nil)
+	entry := h.deps.Manager.lookup(sid)
+	h.deps.Manager.deliverLocal(sid, &keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_ApplyRequest{
+		ApplyRequest: &keeperv1.ApplyRequest{ApplyId: "apply-new", Passage: 5},
+	}}, entry)
+
+	h.handleWardRoster(context.Background(), sid, "session-1", &keeperv1.WardRoster{})
+
+	ids, _ := ardb.execArgs[3].([]string)
+	passages, _ := ardb.execArgs[4].([]int32)
+	if len(ids) != 1 || ids[0] != "apply-new" || len(passages) != 1 || passages[0] != 5 {
+		t.Errorf("declared pairs = %v / %v, want [apply-new] / [5]", ardb.execArgs[3], ardb.execArgs[4])
+	}
+	h.deps.Manager.deliverLocal(sid, &keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_ApplyRequest{
+		ApplyRequest: &keeperv1.ApplyRequest{ApplyId: "apply-later", Passage: 6},
+	}}, entry)
+	if later := h.deps.Manager.takeRouted(sid); len(later) != 0 {
+		t.Errorf("routed after the sweep = %v, want none (recording stops)", later)
+	}
+}

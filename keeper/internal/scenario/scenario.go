@@ -571,6 +571,13 @@ type Deps struct {
 	// (single-keeper-only footgun of the acolytes=0 default).
 	LeaseOwner LeaseOwnerChecker
 
+	// SoulPresence — which agents hold a stream, cluster-wide: what a linear step
+	// waits for before sending and what tells it a host's stream is lost
+	// ([stepWatch]). nil → no dead-host detector, so a lost host is bounded by
+	// scenario_timeout, and a waiting send is retried every poll — no stream has
+	// to settle first — until soul_timeout fails the host.
+	SoulPresence SoulPresenceChecker
+
 	// SoulCap — soul-capability checker for target hosts, used by run.go's staged
 	// gate (ADR-056 §S5) and by the plan-requirement gate (ADR-0076(i)). nil →
 	// both reject fail-closed (can't confirm support without Redis). Set at

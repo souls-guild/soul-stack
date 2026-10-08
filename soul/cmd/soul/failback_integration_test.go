@@ -196,14 +196,17 @@ func TestReconnect_LeaseHeld_SpraysToOtherEndpoint(t *testing.T) {
 // loop (NIM-207) because nothing built this file.
 func startReconnectLoop(t *testing.T, store *config.Store[config.SoulConfig], cli *soulgrpc.Client, logger *slog.Logger) func() {
 	t.Helper()
+	runner := runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil)
 	deps := sessionDeps{
-		runner:           runtime.NewApplyRunner(coremod.Default(installmod.Deps{}), nil),
+		runner:           runner,
+		applies:          newApplyWorker(runner, logger),
 		soulprintPush:    newTestPusher(testSID),
 		utilizationPulse: newTestUtilPusher(testSID),
 		logger:           logger,
 	}
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
+	go deps.applies.run(ctx)
 	go func() {
 		defer close(done)
 		reconnectLoop(ctx, store, cli, deps)
@@ -342,6 +345,40 @@ func TestFailbackIntegration_TwoEndpoints(t *testing.T) {
 		t.Errorf("phase 2: server-A active=%d, want 1", got)
 	}
 
+	// ★ GUARD (NIM-949). The new stream gets the Soul's WardRoster, as any connect
+	// does: its Keeper sweeps a step the old stream lost on the way instead of the
+	// host waiting out scenario_timeout with its stream present.
+	//
+	// Mutation: drop the swap's SendWardRoster → none reaches server-A → red.
+	if !waitFor(func() bool { return srvA.wardRosters.Load() >= 1 }, 3*time.Second) {
+		t.Error("phase 2: server-A got no WardRoster after the swap")
+	}
+
+	// ★ GUARD (NIM-949). The session loop reads the new stream after the swap. The
+	// retired stream's reader blocks handing the loop its end, so a swap that only
+	// waits for that reader to exit never starts the new one: the agent stays
+	// connected — its lease held, its host present — and answers nothing, so a
+	// linear step sent to it waits out scenario_timeout instead of soul_timeout.
+	//
+	// Mutation: wait on readerDone without taking recvCh → no RunResult → red.
+	if err := srvA.sendToSoul(&keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_ApplyRequest{
+		ApplyRequest: &keeperv1.ApplyRequest{ApplyId: "after-swap"},
+	}}); err != nil {
+		t.Fatalf("phase 2: send ApplyRequest to server-A's stream: %v", err)
+	}
+	if !waitFor(func() bool { return srvA.runResults.Load() >= 1 }, 3*time.Second) {
+		t.Fatal("phase 2: no RunResult after the swap — the session loop does not read the new stream")
+	}
+
+	// ★ GUARD (NIM-949). The swapped-in stream is the one the Soul keeps: dialed
+	// under the failback loop's context, it died when the loop was stopped right
+	// after the swap, and every failback became a reconnect.
+	//
+	// Mutation: dial with the failback loop's ctx → a second handshake → red.
+	if n := srvA.helloCount(); n != 1 {
+		t.Errorf("phase 2: server-A saw %d handshakes, want 1 — the swapped-in stream was dropped and redialed", n)
+	}
+
 	// Phase 3 (A down → fallback to B) is deliberately skipped (see doc comment
 	// at the top of the file). Reconnect-fallback coverage is handled by unit
 	// tests in soul/internal/grpc/client_test.go.
@@ -357,6 +394,12 @@ type mockKeeper struct {
 	active        int64       // atomic — count of in-flight EventStream handlers
 	helloAttempts int64       // atomic — count of received Hello (handshake attempts)
 	rejectLease   atomic.Bool // when true — reject handshake with AlreadyExists (lease-held)
+	runResults    atomic.Int64
+	wardRosters   atomic.Int64
+
+	// stream is the latest stream past its handshake, for sendToSoul.
+	streamMu sync.Mutex
+	stream   grpc.BidiStreamingServer[keeperv1.FromSoul, keeperv1.FromKeeper]
 
 	srv *grpc.Server
 	ln  *trackingListener
@@ -391,15 +434,35 @@ func (m *mockKeeper) EventStream(stream grpc.BidiStreamingServer[keeperv1.FromSo
 	}}}); err != nil {
 		return err
 	}
+	m.streamMu.Lock()
+	m.stream = stream
+	m.streamMu.Unlock()
 	for {
-		_, err := stream.Recv()
+		msg, err := stream.Recv()
 		if errors.Is(err, io.EOF) {
 			return nil
 		}
 		if err != nil {
 			return nil
 		}
+		if msg.GetRunResult() != nil {
+			m.runResults.Add(1)
+		}
+		if msg.GetWardRoster() != nil {
+			m.wardRosters.Add(1)
+		}
 	}
+}
+
+// sendToSoul sends msg on the latest stream; the handler only receives after the
+// handshake, so this is the stream's one sender.
+func (m *mockKeeper) sendToSoul(msg *keeperv1.FromKeeper) error {
+	m.streamMu.Lock()
+	defer m.streamMu.Unlock()
+	if m.stream == nil {
+		return errors.New("no stream")
+	}
+	return m.stream.Send(msg)
 }
 
 func (m *mockKeeper) helloCount() int64 { return atomic.LoadInt64(&m.helloAttempts) }

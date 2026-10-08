@@ -1095,8 +1095,13 @@ const orphanDispatchedErrorSummary = "orphaned: RunResult lost, Soul does not tr
 // (a re-claim is in progress), the row is NOT terminalized — it's safer to
 // skip an orphan than to make one falsely.
 //
+// A declaration that names its passage (NIM-949) protects that row only: a
+// linear run's steps share one apply_id, and a Soul still holding step k must
+// not shield step k+1 it never received.
+//
 //	$1 sid   — host whose dispatched rows we're checking
-//	$2 known — ARRAY of apply_id declared alive in WardRoster (may be empty)
+//	$2 known — ARRAY of apply_id declared alive with no passage (may be empty)
+//	$4, $5   — the (apply_id, passage) pairs declared alive, as two arrays
 const orphanDispatchedSQL = `
 UPDATE apply_runs
 SET status        = 'orphaned',
@@ -1105,6 +1110,10 @@ SET status        = 'orphaned',
 WHERE sid = $1
   AND status = 'dispatched'
   AND apply_id != ALL($2)
+  AND NOT EXISTS (
+    SELECT 1 FROM unnest($4::text[], $5::int[]) AS k(apply_id, passage)
+    WHERE k.apply_id = apply_runs.apply_id AND k.passage = apply_runs.passage
+  )
 `
 
 // OrphanDispatched terminalizes `sid`'s dispatched rows whose apply_id the
@@ -1113,7 +1122,8 @@ WHERE sid = $1
 // handoff": otherwise the row would stay stuck in `dispatched` forever
 // (reclaim is scoped to `claimed`, and there's no Reaper dispatched-timeout).
 //
-// known — apply_ids the Soul declared tracked (from WardRoster.active). An
+// known — what the Soul declared tracked (from WardRoster.active): each entry
+// claims its passage's row, or with no passage every row of its apply_id. An
 // empty set is an explicit declaration of "nothing is tracked" → ALL of the
 // SID's dispatched rows are terminalized (correct: after a Soul restart, no
 // in-flight run physically exists). A nil set is treated as empty.
@@ -1135,13 +1145,21 @@ func OrphanDispatched(ctx context.Context, db ExecQueryRower, sid string, known 
 	// ARRAY of known apply_id for PG's `!= ALL($2)`. Empty/nil → empty array:
 	// `apply_id != ALL('{}')` is true for all → all dispatched are terminalized.
 	knownIDs := make([]string, 0, len(known))
+	pairIDs := make([]string, 0, len(known))
+	pairPassages := make([]int32, 0, len(known))
 	for _, a := range known {
-		if a != nil && a.ApplyID != "" {
-			knownIDs = append(knownIDs, a.ApplyID)
+		if a == nil || a.ApplyID == "" {
+			continue
 		}
+		if a.Passage == nil {
+			knownIDs = append(knownIDs, a.ApplyID)
+			continue
+		}
+		pairIDs = append(pairIDs, a.ApplyID)
+		pairPassages = append(pairPassages, *a.Passage)
 	}
 
-	tag, err := db.Exec(ctx, orphanDispatchedSQL, sid, knownIDs, orphanDispatchedErrorSummary)
+	tag, err := db.Exec(ctx, orphanDispatchedSQL, sid, knownIDs, orphanDispatchedErrorSummary, pairIDs, pairPassages)
 	if err != nil {
 		return 0, fmt.Errorf("applyrun: orphan dispatched: %w", err)
 	}

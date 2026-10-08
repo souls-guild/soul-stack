@@ -2,7 +2,9 @@ package grpc
 
 import (
 	"context"
+	"sync"
 	"testing"
+	"time"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
@@ -248,5 +250,142 @@ func TestStreamManager_Close_IsIdempotent(t *testing.T) {
 	case <-ctx.Done():
 	default:
 		t.Fatal("stream ctx not cancelled")
+	}
+}
+
+func applyMsg(applyID string, passage int32) *keeperv1.FromKeeper {
+	return &keeperv1.FromKeeper{Payload: &keeperv1.FromKeeper_ApplyRequest{
+		ApplyRequest: &keeperv1.ApplyRequest{ApplyId: applyID, Passage: passage},
+	}}
+}
+
+// ★ GUARD (NIM-949). An ApplyRequest another instance published finds the queue
+// full and waits for room instead of being dropped: its sender took it as
+// delivered, and nothing would tell the step it never reached the Soul. While it
+// waits it is declared, so the stream's WardRoster sweep, landing meanwhile, spares
+// its row.
+//
+// Mutations: forward tries once, as deliverLocal does → false → red; record the
+// request only once delivered → the sweep does not see it → red.
+func TestStreamManager_ForwardWaitsForRoom(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	out := m.Register("host.example.com")
+	entry := m.lookup("host.example.com")
+	for range outboundBufferSize {
+		if !entry.send(&keeperv1.FromKeeper{}) {
+			t.Fatal("send failed while filling the queue")
+		}
+	}
+	swept := make(chan []routedApply, 1)
+	go func() {
+		time.Sleep(10 * forwardRetryEvery)
+		swept <- m.takeRouted("host.example.com")
+		<-out
+	}()
+	if !m.forward("host.example.com", applyMsg("a1", 1), entry, nil) {
+		t.Fatal("forward = false, want the request queued once room appears")
+	}
+	if got := <-swept; len(got) != 1 || got[0] != (routedApply{applyID: "a1", passage: 1}) {
+		t.Errorf("declared while waiting = %v, want [a1/1]", got)
+	}
+}
+
+// ★ GUARD (NIM-949). The stream's teardown ends the wait: the subscriber is joined
+// before the stream is unregistered, so a wait it cannot end would hold the lease
+// and the host's presence for forwardApplyWait per buffered request.
+//
+// Mutation: forward ignores stop → it returns only at forwardApplyWait → red.
+func TestStreamManager_ForwardStopsWithTheStream(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	m.Register("host.example.com")
+	entry := m.lookup("host.example.com")
+	for range outboundBufferSize {
+		entry.send(&keeperv1.FromKeeper{})
+	}
+	stop := make(chan struct{})
+	go func() {
+		time.Sleep(2 * forwardRetryEvery)
+		close(stop)
+	}()
+	start := time.Now()
+	if m.forward("host.example.com", applyMsg("a1", 1), entry, stop) {
+		t.Fatal("forward = true on a full queue")
+	}
+	if waited := time.Since(start); waited > forwardApplyWait/2 {
+		t.Errorf("forward returned after %s, want soon after stop", waited)
+	}
+}
+
+// ★ GUARD (NIM-949). A request the queue refused is not declared for the stream:
+// the Soul never gets it, and declared it would keep the WardRoster sweep off a
+// row nothing will answer.
+//
+// Mutation: drop forgetRouted → the refused request is declared → red.
+func TestStreamManager_RefusedRequestIsNotDeclared(t *testing.T) {
+	m := NewStreamManager(discardLogger(t))
+	m.Register("host.example.com")
+	entry := m.lookup("host.example.com")
+	for range outboundBufferSize {
+		entry.send(&keeperv1.FromKeeper{})
+	}
+	if m.deliverLocal("host.example.com", applyMsg("a1", 1), entry) {
+		t.Fatal("deliverLocal = true on a full queue")
+	}
+	if got := m.takeRouted("host.example.com"); len(got) != 0 {
+		t.Errorf("routed = %v, want none", got)
+	}
+}
+
+// ★ GUARD (NIM-949). A send racing the entry's close never panics: forward retries
+// a send every 50ms for up to 10s, while a reconnect to this instance evicts — and
+// closes — the entry. The window is a few instructions wide, so a plain run rarely
+// hits it; under -race (make test-race) the unsynchronised send and close are
+// reported every run.
+//
+// Mutation: release closeMu before the channel send → DATA RACE under -race → red.
+func TestStreamEntry_SendRacingCloseDoesNotPanic(t *testing.T) {
+	for range 3000 {
+		e := &streamEntry{outCh: make(chan *keeperv1.FromKeeper, 1)}
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				if e.send(&keeperv1.FromKeeper{}) {
+					select {
+					case <-e.outCh:
+					default:
+					}
+				}
+			}
+		}()
+		e.close()
+		wg.Wait()
+	}
+}
+
+// ★ GUARD (NIM-949). The console stream's entry keeps the same contract: a frame
+// sent while Unregister or CloseAllFor closes the entry never panics. Under -race
+// the unsynchronised send and close are reported every run.
+//
+// Mutation: release closeMu before the channel send → DATA RACE under -race → red.
+func TestConsoleStreamEntry_SendRacingCloseDoesNotPanic(t *testing.T) {
+	for range 3000 {
+		e := &consoleStreamEntry{outCh: make(chan *keeperv1.ConsoleToSoul, 1)}
+		var wg sync.WaitGroup
+		wg.Add(1)
+		go func() {
+			defer wg.Done()
+			for range 20 {
+				if e.send(&keeperv1.ConsoleToSoul{}) {
+					select {
+					case <-e.outCh:
+					default:
+					}
+				}
+			}
+		}()
+		e.close()
+		wg.Wait()
 	}
 }

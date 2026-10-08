@@ -477,6 +477,10 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 // block" — it is dropped from the plan entirely. That was harmless while
 // `require:` reached no runtime (ADR-0075 context) and became a silent loss of an
 // ordering the author declared once NIM-150 put it on the wire.
+//
+// A block's own `timeout:` is refused at parse, so a Timeout it carries is an
+// applier's task timeout handed to a destiny block by [mergeApplierInheritance];
+// it reaches the block's children the same way, their own `timeout:` winning.
 func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task {
 	out := child
 	out.When = andMergePredicate(blockTask.When, child.When)
@@ -487,6 +491,9 @@ func mergeBlockInheritance(blockTask config.Task, child config.Task) config.Task
 	out.Require = mergeRequire(blockTask.Require, child.Require)
 	out.Transport = mergeTransport(blockTask.Transport, child.Transport)
 	out.Settings = config.InheritSettings(blockTask.Settings, child)
+	if out.Timeout == "" {
+		out.Timeout = blockTask.Timeout
+	}
 
 	return out
 }
@@ -534,8 +541,11 @@ func mergeTransport(blockTransport, childTransport any) any {
 // requisites merged in — the apply: half of [mergeBlockInheritance], for the
 // other construct that expands into a group of tasks (NIM-245).
 //
-// Only the three requisites travel. They are resolved NAME→INDEX over the whole
-// flat plan in Render's final pass, so they are env-agnostic: an index means the
+// The three requisites travel, and so does the applier's effective task timeout,
+// which [Pipeline.renderApplyDestiny] puts in its `timeout:`: a destiny's tasks take
+// it, their own `timeout:` winning (settings.md §3 rule 6). The requisites are
+// resolved NAME→INDEX over the whole flat plan in Render's final pass, so they are
+// env-agnostic: an index means the
 // same thing on both sides of the destiny boundary. `when:`/`where:`/`vars:` are
 // not, and are handled where they are written — see [renderApplyDestiny]. For
 // `vars:` "where it is written" is the caller: [Pipeline.resolveApplyInput]
@@ -553,6 +563,9 @@ func mergeApplierInheritance(applier config.Task, child config.Task) config.Task
 	out.OnChanges = unionNames(applier.OnChanges, child.OnChanges)
 	out.OnFail = unionNames(applier.OnFail, child.OnFail)
 	out.Require = mergeRequire(applier.Require, child.Require)
+	if out.Timeout == "" {
+		out.Timeout = applier.Timeout
+	}
 	return out
 }
 

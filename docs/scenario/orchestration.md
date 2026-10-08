@@ -164,7 +164,7 @@ an applier that adds `onchanges: [df_config]` over that destiny does **not** con
 |---|---|---|
 | `changed_when:` · `failed_when:` | No module result to re-judge. | Put it on the destiny task whose result you are re-judging; the applier's `register:` already reports `changed`/`failed` as the OR of its children (§2.1.1). |
 | `retry:` | Repeats **one** module call; a group has no single call to repeat, and re-running the group is a different operation. | Put `retry:` on the destiny task that can be retried on its own. |
-| `timeout:` | Bounds **one** module call, not the duration of a group. | Put `timeout:` on the destiny tasks that need bounding. |
+| `timeout:` | Bounds **one** module call, not the duration of a group. | Put `timeout:` on the destiny tasks that need bounding, or write `settings: { task_timeout }` on the applier: since NIM-949 it is the default of the destiny's tasks, whose own `timeout:` wins ([settings.md §3](settings.md#3-rules) rule 6). |
 | `params:` | Module arguments, and an applier calls no module. `module:`+`apply:` is caught as `task_discriminator_multiple`; a lone `params:` used to slip through. | `apply: { input: { … } }`, checked against the destiny's own `input:` contract. |
 
 ★ These were not simply dropped, which is why refusing beats leaving them: a static-false `when:` collapses the applier into one skip placeholder that **does** copy `changed_when`/`failed_when`/`timeout`/`id` onto itself. The keys were honoured exactly when they could not matter, and ignored whenever they could.

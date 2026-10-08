@@ -18,8 +18,9 @@ import (
 // is merged key by key over the one above ([MergeSettings]). A nil field is a key
 // that level did not write.
 //
-// `on_failure` and `tolerate` are read since NIM-948, by a linear run's barrier; the
-// other keys are parsed, validated and merged only (epic NIM-926).
+// `on_failure` and `tolerate` are read since NIM-948, by a linear run's barrier, and
+// the three timeouts since NIM-949; the other keys are parsed, validated and merged
+// only (epic NIM-926).
 // Merges copy the pointers, so a merged value is shared with the parsed tasks it
 // came from: never write through a field.
 // Unrelated to the Keeper's cluster-wide settings (`SettingsStore`).
@@ -384,8 +385,7 @@ func validateScenarioSettings(root *ast.MappingNode) []diag.Diagnostic {
 // validateTaskSettings checks a task's `settings:`: refused outright where the block
 // cannot be written (settings.md §3), otherwise checked as a level below the
 // scenario. A task writing both `timeout:` and a different `settings.task_timeout`
-// is warned about: by §2.3 the explicit key wins, but render still puts `timeout:`
-// on the wire until task timeouts are read from settings (NIM-949).
+// is warned about: by §2.3 the explicit key wins, and one of the two lines is dead.
 func validateTaskSettings(present map[string]*ast.MappingValueNode, pathPrefix string) []diag.Diagnostic {
 	kv, ok := present["settings"]
 	if !ok {
@@ -405,7 +405,7 @@ func validateTaskSettings(present map[string]*ast.MappingValueNode, pathPrefix s
 	if addr, isKeeper := keeperSideTask(present); isKeeper {
 		return refuse("settings_on_keeper_invalid",
 			fmt.Sprintf("on a keeper-side task (%s) — it gathers no hosts at a barrier, and a keeper-side failure always ends the run", keeperSideBecause(addr)),
-			"drop settings: here; a keeper-side step takes the scenario's settings and changes none of them")
+			"drop settings: here; a keeper-side step takes the scenario's settings, and its own timeout: is the one it may change")
 	}
 	if _, isAssert := present["assert"]; isAssert {
 		return refuse("settings_on_assert_invalid",
@@ -434,7 +434,7 @@ func validateTaskSettings(present map[string]*ast.MappingValueNode, pathPrefix s
 		out = append(out, diagAt(ttok.Position.Line, ttok.Position.Column, diag.Diagnostic{
 			Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
 			Code:     "timeout_shadowed_by_task_timeout",
-			Message:  fmt.Sprintf("timeout: %s and settings.task_timeout: %s on the same task disagree — settings.task_timeout is the one that bounds the task (docs/scenario/settings.md §2.3), though until task timeouts are read from settings the Soul still applies timeout:", sn.Value, *s.TaskTimeout),
+			Message:  fmt.Sprintf("timeout: %s and settings.task_timeout: %s on the same task disagree — settings.task_timeout is the one that bounds the task (docs/scenario/settings.md §2.3)", sn.Value, *s.TaskTimeout),
 			Hint:     "keep one spelling: timeout: is shorthand for settings.task_timeout",
 			YAMLPath: pathPrefix + ".timeout",
 		}))

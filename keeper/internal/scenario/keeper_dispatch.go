@@ -89,7 +89,7 @@ func (r *Runner) dispatchKeeperTasks(ctx context.Context, spec RunSpec, stateSch
 	}
 
 	for _, rt := range keeperTasks {
-		changed, failed, output, msg := r.applyKeeperTask(ctx, spec, stateSchema, rt, sealedPaths)
+		changed, failed, output, msg := r.applyKeeperStep(ctx, spec, stateSchema, rt, sealedPaths)
 		log.Info("scenario: keeper-side task executed",
 			slog.String("module", rt.Module),
 			slog.Int("task_idx", rt.Index),

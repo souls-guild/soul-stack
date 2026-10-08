@@ -217,6 +217,38 @@ func TestIntegration_Steps_WardStatusFencedByPhaseAndAttempt(t *testing.T) {
 	}
 }
 
+// ★ GUARD (NIM-949). A declaration that names its passage claims that row only:
+// a Soul still holding step 0's undelivered events does not shield step 1, which
+// it never received — the sweep orphans it. A declaration without a passage (an
+// older Soul) still claims every row of the apply.
+//
+// Mutation: drop the passage pairs from orphanDispatchedSQL (back to apply_id
+// alone) → the step-0 declaration spares step 1 → red.
+func TestIntegration_Steps_OrphanDispatchedByPassage(t *testing.T) {
+	resetSteps(t)
+	seedStepRow(t, "host-a", 0, StatusSuccess, 1)
+	plannedStep(t, "host-a", 1)
+	ctx := context.Background()
+	live := claimOne(t, "keeper-1")
+	if err := MarkDispatched(ctx, integrationPool, stepsApplyID, "host-a", 1, live.Attempt, ""); err != nil {
+		t.Fatalf("mark step 1: %v", err)
+	}
+	step := func(p int32) *int32 { return &p }
+
+	if n, err := OrphanDispatched(ctx, integrationPool, "host-a", []*ActiveApply{{ApplyID: stepsApplyID}}); err != nil || n != 0 {
+		t.Fatalf("declared without a passage: orphaned %d (err %v), want 0", n, err)
+	}
+	if n, err := OrphanDispatched(ctx, integrationPool, "host-a", []*ActiveApply{{ApplyID: stepsApplyID, Passage: step(1)}}); err != nil || n != 0 {
+		t.Fatalf("declared step 1: orphaned %d (err %v), want 0", n, err)
+	}
+	if n, err := OrphanDispatched(ctx, integrationPool, "host-a", []*ActiveApply{{ApplyID: stepsApplyID, Passage: step(0)}}); err != nil || n != 1 {
+		t.Fatalf("declared only step 0: orphaned %d (err %v), want 1 (step 1)", n, err)
+	}
+	if row := readStepRow(t, "host-a", 1); row.status != StatusOrphaned {
+		t.Errorf("step 1 = %q, want orphaned", row.status)
+	}
+}
+
 // Soul-reconcile is keyed by apply_id; with one open row per host and run the
 // apply_id names that row. Only the open step is orphaned, the finished one
 // keeps its terminal.

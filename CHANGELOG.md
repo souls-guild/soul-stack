@@ -38,6 +38,21 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `incarnation.run_completed` says `partial_failed`. A send that fails no longer stops the wave.
   Staged runs keep today's barrier; their `soulprint.hosts` entries carry `dropped: false`.
 
+- **The three timeouts are read (NIM-949, [settings.md §2.2](docs/scenario/settings.md)).** A
+  task's merged `task_timeout` — the scenario's, its blocks' and its own `settings:` — reaches the
+  wire in every run, and an applier hands it to the destiny's tasks. In a run executing linearly,
+  `scenario_timeout` (default `24h`) is the one bound on the run, replacing the 5-minute ceiling
+  and the provision budget; `soul_timeout` (default `1m`) fails a host whose agent stream stays lost
+  for that long with `soul_unavailable`, a host with no stream is sent its step once one comes, and
+  a push host's refused SSH connect is retried for that long; a keeper-side step is bounded by its
+  `timeout:` as a whole. The Soul runs an apply off its session loop and relays what it finished
+  while the stream was down to the next stream, declaring each message by apply and step
+  (`ActiveApply.passage`); it announces `result_relay`. The Keeper pings a silent agent stream
+  (30s, closed 10s later) and retakes a SID lease its Redis lost. A step the work-queue carries
+  (NIM-961) is queued for a host only once its stream is there, since its claim sends at once.
+  ⚠ A Soul older than NIM-949 loses a result finished during a drop: its step waits out
+  `scenario_timeout`.
+
 - **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-draft
   scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) S1).** A `when:` /
   `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported
@@ -936,6 +951,15 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
     The engine-compat error text likewise names the registered service.
 
 ### Fixed
+
+- **A Soul keeps reading its stream after a failback swap (NIM-949).** The swap waited for the
+  retired stream's reader to exit while that reader waited to hand the session loop the stream's
+  end, so the agent stayed connected — its host present — and read nothing on the new stream until
+  it restarted. The same wait held a session that ended on a failed send. A run's request or
+  cancel a closing stream still delivers is honoured. The swapped-in stream is dialed under the
+  session's context, not the failback loop's, which ends right after the swap — past the hang, the
+  new stream would have died with it — and it gets the Soul's `WardRoster`, so a step lost on the
+  old stream is swept instead of waited on.
 
 - **A host requisite on a keeper-side task reads the keeper's fact (NIM-944).** A keeper-side task's
   `task.executed` is recorded under the keeper's SID, and the requisite gate looked a source up under

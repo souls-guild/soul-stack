@@ -1121,9 +1121,10 @@ func TestOrphanDispatched_SweepSQL(t *testing.T) {
 	if !strings.Contains(f.execSQL, "finished_at   = NOW()") {
 		t.Errorf("SQL does not set finished_at: %q", f.execSQL)
 	}
-	// args: $1=sid, $2=known apply_ids, $3=error_summary.
-	if len(f.execArgs) != 3 {
-		t.Fatalf("execArgs len = %d, want 3", len(f.execArgs))
+	// args: $1=sid, $2=known apply_ids, $3=error_summary, $4/$5=declared
+	// (apply_id, passage) pairs (NIM-949), empty for an entry without a passage.
+	if len(f.execArgs) != 5 {
+		t.Fatalf("execArgs len = %d, want 5", len(f.execArgs))
 	}
 	if f.execArgs[0] != "host-1" {
 		t.Errorf("$1 = %v, want host-1", f.execArgs[0])

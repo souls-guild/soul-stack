@@ -15,6 +15,7 @@ import (
 	"fmt"
 	"log/slog"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"go.opentelemetry.io/otel"
@@ -86,9 +87,9 @@ type ApplyRunner struct {
 	// (ADR-0075(e), `async.max_concurrent` in soul.yml). 0 = unlimited. The
 	// ceiling is host-side on purpose: how much concurrency a machine tolerates
 	// is not something the plan's author can judge. Set via
-	// [ApplyRunner.SetAsyncLimit] from the same goroutine that calls Run, like
-	// hostFacts — no extra sync.
-	asyncLimit int
+	// [ApplyRunner.SetAsyncLimit] by each new session while a run may be under
+	// way on another goroutine, so atomic; a run reads it once, at its start.
+	asyncLimit atomic.Int64
 
 	mu     sync.Mutex
 	active map[string]context.CancelFunc
@@ -127,6 +128,16 @@ type ApplyRunner struct {
 	// Guarded by the same mu as active — short ops, no concurrent apply per
 	// Soul (ADR-012(a)).
 	lastSeenAttempt map[string]int32
+
+	// passages — the passage of each apply in active or recentlyFinished: the
+	// WardRoster names the message it holds, since a run's messages share one
+	// apply_id (NIM-949). Guarded by mu.
+	passages map[string]int32
+
+	// alsoOwned lists messages the Soul still answers for outside Run: received
+	// and not started, or finished with a result not yet delivered ([Relay]).
+	// Set once at startup ([ApplyRunner.SetAlsoOwned]); nil — none.
+	alsoOwned func() []OwnedApply
 }
 
 // recentlyFinishedTTL — window a finished Run stays in [ApplyRunner.ActiveSet]
@@ -155,6 +166,7 @@ func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
 		recentlyFinished: make(map[string]time.Time),
 		nowFn:            time.Now,
 		lastSeenAttempt:  make(map[string]int32),
+		passages:         make(map[string]int32),
 	}
 }
 
@@ -166,16 +178,20 @@ func NewApplyRunner(reg Registry, metrics *ApplyMetrics) *ApplyRunner {
 // (ADR-012(a)) and the value never changes after startup, so no extra sync.
 func (r *ApplyRunner) SetHostFacts(f util.HostFacts) { r.hostFacts = f }
 
+// SetAlsoOwned adds the messages f lists to [ApplyRunner.ActiveSet]. Called once at
+// startup, before the first session; f must not call back into the runner.
+func (r *ApplyRunner) SetAlsoOwned(f func() []OwnedApply) { r.alsoOwned = f }
+
 // SetAsyncLimit sets the host-side ceiling on concurrent `async:` tasks
 // (ADR-0075(e)). 0/negative = unlimited. Above the ceiling a flow waits for a
 // slot — it is never dropped and never fails for want of one, so a run is
 // correct at any setting, only slower. Called from cmd/soul with
-// `async.max_concurrent`, on the goroutine that drives Run.
+// `async.max_concurrent`.
 func (r *ApplyRunner) SetAsyncLimit(n int) {
 	if n < 0 {
 		n = 0
 	}
-	r.asyncLimit = n
+	r.asyncLimit.Store(int64(n))
 }
 
 // Cancel attempts to cancel the active apply with the given id. Returns true
@@ -239,8 +255,13 @@ func (r *ApplyRunner) AcceptAttempt(applyID string, attempt int32) bool {
 }
 
 func (r *ApplyRunner) register(applyID string, cancel context.CancelFunc) {
+	r.registerPassage(applyID, 0, cancel)
+}
+
+func (r *ApplyRunner) registerPassage(applyID string, passage int32, cancel context.CancelFunc) {
 	r.mu.Lock()
 	r.active[applyID] = cancel
+	r.passages[applyID] = passage
 	r.mu.Unlock()
 }
 
@@ -267,11 +288,12 @@ func (r *ApplyRunner) unregister(applyID string) {
 //     entries without one report attempt=0 (old Keeper without fencing, or
 //     epoch not yet seen).
 //
-// Returns one [keeperv1.ActiveApply] per apply_id (deduped over the union).
-// A nil result explicitly declares "nothing owned": the caller sends a
-// WardRoster with empty active[], and Keeper terminates all of the SID's
-// dispatched rows on it. Correct both right after a restart (sets empty) and
-// after the sole run finishes and ages out of the TTL.
+// Returns one [keeperv1.ActiveApply] per message (apply_id and passage, deduped
+// over the union), each naming its passage so the Keeper's sweep spares that row
+// and no other of the run (NIM-949). A nil result explicitly declares "nothing
+// owned": the caller sends a WardRoster with empty active[], and Keeper
+// terminates all of the SID's dispatched rows on it. Correct both right after a
+// restart (sets empty) and after the sole run finishes and ages out of the TTL.
 func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 	r.mu.Lock()
 	defer r.mu.Unlock()
@@ -281,28 +303,38 @@ func (r *ApplyRunner) ActiveSet() []*keeperv1.ActiveApply {
 	for id, at := range r.recentlyFinished {
 		if now.Sub(at) >= recentlyFinishedTTL {
 			delete(r.recentlyFinished, id)
+			if _, running := r.active[id]; !running {
+				delete(r.passages, id)
+			}
 		}
 	}
 
-	ids := make(map[string]struct{}, len(r.active)+len(r.recentlyFinished))
+	owned := make(map[OwnedApply]struct{}, len(r.active)+len(r.recentlyFinished))
 	for id := range r.active {
-		ids[id] = struct{}{}
+		owned[OwnedApply{ApplyID: id, Passage: r.passages[id]}] = struct{}{}
 	}
 	for id := range r.recentlyFinished {
-		ids[id] = struct{}{}
+		owned[OwnedApply{ApplyID: id, Passage: r.passages[id]}] = struct{}{}
 	}
-	if len(ids) == 0 {
+	if r.alsoOwned != nil {
+		for _, o := range r.alsoOwned() {
+			owned[o] = struct{}{}
+		}
+	}
+	if len(owned) == 0 {
 		return nil
 	}
 
-	out := make([]*keeperv1.ActiveApply, 0, len(ids))
-	for id := range ids {
+	out := make([]*keeperv1.ActiveApply, 0, len(owned))
+	for o := range owned {
+		passage := o.Passage
 		// attempt echo: authoritative epoch comes from lastSeenAttempt (last
 		// accepted attempt). No entry (old Keeper / attempt=0) → 0: Keeper's
 		// epoch-guard treats 0 as "no fencing" and won't fence on it.
 		out = append(out, &keeperv1.ActiveApply{
-			ApplyId: id,
-			Attempt: r.lastSeenAttempt[id],
+			ApplyId: o.ApplyID,
+			Attempt: r.lastSeenAttempt[o.ApplyID],
+			Passage: &passage,
 		})
 	}
 	return out
@@ -393,7 +425,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// Captured once — all events of this ApplyRequest belong to one Passage.
 	passage := req.GetPassage()
 	if applyID != "" {
-		r.register(applyID, cancel)
+		r.registerPassage(applyID, passage, cancel)
 		defer r.unregister(applyID)
 	}
 
@@ -423,7 +455,7 @@ func (r *ApplyRunner) Run(ctx context.Context, req *keeperv1.ApplyRequest, sink 
 	// flows tracks the run's `async:` tasks (ADR-0075). Inert on a plan that
 	// uses none: nothing is launched, so every barrier resolves to nothing and
 	// the loop below is the sequential runner it has always been.
-	flows := newAsyncFlows(r.asyncLimit, r.registerRefs)
+	flows := newAsyncFlows(int(r.asyncLimit.Load()), r.registerRefs)
 	// Serialize sink writes — async flows finalize concurrently (see lockedSink).
 	sink = &lockedSink{sink: sink}
 	defer func() {

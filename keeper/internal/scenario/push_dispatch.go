@@ -537,7 +537,7 @@ func (r *Runner) dispatchPushHost(ctx context.Context, spec RunSpec, log *slog.L
 		passageEchoMismatch atomic.Bool
 		sawTaskFailure      atomic.Bool
 	)
-	rr, err := r.deps.PushApply.SendApply(ctx, sid, route, req, func(ev *keeperv1.TaskEvent) {
+	rr, err := r.sendPush(ctx, spec, log, passage, sid, route, req, func(ev *keeperv1.TaskEvent) {
 		if int(ev.GetPassage()) != passage {
 			passageEchoMismatch.Store(true)
 			ev = stampPassage(ev, passage)
@@ -593,7 +593,11 @@ func (r *Runner) dispatchPushHost(ctx context.Context, spec RunSpec, log *slog.L
 		// per-task reason the sink already stored with a transport sentence that
 		// says less.
 		summary := ""
-		if !sawTaskFailure.Load() {
+		switch {
+		case sawTaskFailure.Load():
+		case errors.Is(err, errPushUnreachable):
+			summary = fmt.Sprintf("%s: no SSH session within soul_timeout (%s)", soulUnavailable, stepSoulTimeout(spec, passage))
+		default:
 			summary = reasonPushTransportFailed
 		}
 		r.terminatePushHost(ctx, spec, log, passage, sid, applyrun.StatusFailed, summary)

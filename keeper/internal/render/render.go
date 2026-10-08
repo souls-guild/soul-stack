@@ -472,10 +472,9 @@ type RenderedTask struct {
 	SecretOutput []string
 	// Timeout — per-task hard limit for one Apply attempt (DSL core timeout:,
 	// destiny/tasks.md §9), Soul Stack `duration` convention (Go duration "30s"
-	// OR `<N>d` suffix); "" = no per-task limit. Format is validated at
-	// destiny/scenario PARSE time (config validator); render only threads
-	// config.Task.Timeout into proto keeperv1.RenderedTask.Timeout unchanged and
-	// unvalidated (string-consistent with Task.Timeout/RetrySpec.Delay).
+	// OR `<N>d` suffix); "" = no per-task limit. In a scenario it is the task's
+	// effective `task_timeout` ([wireTimeout]); a task's own `timeout:` that is the
+	// effective value travels verbatim.
 	Timeout     string
 	RawTemplate string
 

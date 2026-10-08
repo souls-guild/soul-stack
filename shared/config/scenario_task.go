@@ -1271,7 +1271,7 @@ var applyForbiddenKeys = []struct{ key, why, hint string }{
 	{
 		"timeout",
 		"timeout: bounds ONE module call, not the duration of a group",
-		"put timeout: on the destiny tasks that need bounding",
+		"put timeout: on the destiny tasks that need bounding, or settings: { task_timeout } on the applier",
 	},
 	{
 		"params",

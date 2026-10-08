@@ -15,6 +15,8 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"regexp"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -24,6 +26,7 @@ import (
 	"google.golang.org/grpc/codes"
 	"google.golang.org/grpc/credentials"
 	"google.golang.org/grpc/status"
+	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
@@ -383,6 +386,61 @@ func TestIntegration_EventStream_TaskEventWritesAudit(t *testing.T) {
 	}
 	if !found {
 		t.Fatal("audit_log: task.executed with apply_id not found")
+	}
+}
+
+// ★ GUARD (NIM-949). A message over the recv limit ends the stream with
+// ResourceExhausted quoting the message's size, which is how the Soul's relay
+// (soul/cmd/soul/applyworker.go keeperRefused, the same pattern) knows which event
+// to give up. grpc sends that status itself, whatever the handler returns — its own
+// recv error is Internal — so no Keeper code decides it and there is no mutation;
+// this pins the library behaviour the relay relies on.
+func TestIntegration_EventStream_OversizeMessageIsResourceExhausted(t *testing.T) {
+	resetAll(t)
+	plain, sid := seedOnboardingFixtures(t)
+
+	bsAddr, bsStop := startTestServer(t)
+	defer bsStop()
+	csrPEM, clientKey := mustMakeCSRWithKeyIT(t, sid)
+	bsClient, closeBS := dialClient(t, bsAddr)
+	defer closeBS()
+	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Second)
+	defer cancel()
+	bsReply, err := bsClient.Bootstrap(ctx, &keeperv1.BootstrapRequest{
+		Sid: sid, BootstrapToken: plain, CsrPem: []byte(csrPEM),
+	})
+	if err != nil {
+		t.Fatalf("Bootstrap: %v", err)
+	}
+
+	caRootPEM := fetchVaultPKIRootCA(t, ctx)
+	rc, _ := newIntegrationRedisClient(t)
+	esAddr, esStop := startEventStreamServerExt(t, caRootPEM, EventStreamDeps{
+		SeedDB: integrationPool, SoulDB: integrationPool, Redis: rc,
+		AuditWriter: auditpg.NewWriter(integrationPool), KID: "kid-test",
+	})
+	defer esStop()
+	stream := helloAndEventStream(t, ctx, esAddr, bsReply.GetCertificatePem(), clientKey)
+
+	msg := &keeperv1.FromSoul{
+		Payload: &keeperv1.FromSoul_TaskEvent{TaskEvent: &keeperv1.TaskEvent{
+			ApplyId:      "01HABCAPPLY00000000000000",
+			SecretOutput: []string{strings.Repeat("x", eventStreamMaxRecvMsgSize+1)},
+		}},
+	}
+	_ = stream.Send(msg)
+	refused := regexp.MustCompile(`received message larger than max \((\d+) vs\. \d+\)`)
+	for {
+		_, err := stream.Recv()
+		if err == nil {
+			continue
+		}
+		st := status.Convert(err)
+		m := refused.FindStringSubmatch(st.Message())
+		if st.Code() != codes.ResourceExhausted || m == nil || m[1] != strconv.Itoa(proto.Size(msg)) {
+			t.Errorf("stream ended with %v, want ResourceExhausted quoting size %d", err, proto.Size(msg))
+		}
+		return
 	}
 }
 

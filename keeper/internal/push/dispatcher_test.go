@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"errors"
+	"fmt"
 	"io"
 	"log/slog"
 	"strings"
@@ -254,6 +255,51 @@ func TestSendApply_ConnectFail(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "connect") {
 		t.Errorf("error is not about connect: %v", err)
+	}
+	// ★ GUARD (NIM-949): a refused connect is the one failure the scenario
+	// dispatcher may retry until soul_timeout — nothing ran on the host.
+	if !errors.Is(err, ErrConnect) {
+		t.Errorf("connect failure %v does not carry ErrConnect", err)
+	}
+}
+
+// ★ GUARD (NIM-949). Only a connect that may succeed on retry carries ErrConnect:
+// a deny before it, a host key refused at it, or a session that ended without a
+// RunResult after the command started must not — retrying would retry a refusal
+// or apply twice.
+//
+// Mutation: tag a HostKeyError with ErrConnect → red.
+func TestSendApply_OnlyConnectIsErrConnect(t *testing.T) {
+	deny := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: false, authReason: "policy deny", signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial:      func(_ context.Context, _ DialConfig) (Session, error) { return &mockSession{}, nil },
+	})
+	if _, err := deny.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-5"}, nil); err == nil || errors.Is(err, ErrConnect) {
+		t.Errorf("Authorize deny = %v, want an error without ErrConnect", err)
+	}
+	cut := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, _ DialConfig) (Session, error) {
+			return &mockSession{runErr: &ssh.ExitError{}}, nil
+		},
+	})
+	if _, err := cut.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-6"}, nil); err == nil || errors.Is(err, ErrConnect) {
+		t.Errorf("session cut before RunResult = %v, want an error without ErrConnect", err)
+	}
+	refused := newTestDispatcher(t, Deps{
+		Providers: map[string]ProviderEntry{testProviderName: {Provider: &mockProvider{authAllowed: true, signReply: validSignReply(t)}}},
+		Targets:   &mockTargets{target: sshTarget()},
+		Souls:     &mockSouls{s: sshSoul()},
+		Dial: func(_ context.Context, _ DialConfig) (Session, error) {
+			return nil, fmt.Errorf("ssh: handshake failed: %w", &HostKeyError{Err: errors.New("certificate signed by unrecognized authority")})
+		},
+	})
+	if _, err := refused.SendApply(context.Background(), "host-1.example.com", Route{Provider: testProviderName}, &keeperv1.ApplyRequest{ApplyId: "ap-7"}, nil); err == nil || errors.Is(err, ErrConnect) || !IsHostKeyError(err) {
+		t.Errorf("host key refused at connect = %v, want a HostKeyError without ErrConnect (retrying cannot make the key acceptable)", err)
 	}
 }
 

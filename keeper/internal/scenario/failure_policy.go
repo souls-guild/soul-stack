@@ -332,8 +332,8 @@ func reachedHosts(statuses []applyrun.HostStatus) int {
 // run's rows. Unlike [Runner.waitBarrier] a failed row does not end the wait: the hosts
 // still working finish, and every failure they report is judged. A row Cancel and the
 // run's context end it at once; the lock's Cancel waits while only a dispatched row is
-// open.
-func (r *Runner) waitStep(ctx context.Context, applyID string, passage, wantHosts int, log *slog.Logger) ([]applyrun.HostStatus, error) {
+// open. watch fails a host whose stream stays lost ([stepWatch.check]).
+func (r *Runner) waitStep(ctx context.Context, applyID string, passage, wantHosts int, log *slog.Logger, watch *stepWatch) ([]applyrun.HostStatus, error) {
 	ticker := time.NewTicker(r.pollInterval)
 	defer ticker.Stop()
 	for {
@@ -363,6 +363,7 @@ func (r *Runner) waitStep(ctx context.Context, applyID string, passage, wantHost
 		if terminal >= wantHosts {
 			return statuses, nil
 		}
+		watch.check(ctx, statuses)
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("scenario: barrier interrupted: %w", ctx.Err())
@@ -393,11 +394,11 @@ func withStepTargets(plans []render.DispatchPlan, ran map[int]render.DispatchPla
 // a row it is applying. The run ends with cause, joined with a cluster-wide Cancel
 // that arrived meanwhile, so the abort still reads the Cancel; any other wait error
 // is only logged.
-func (r *Runner) failAfterSent(ctx context.Context, spec RunSpec, log *slog.Logger, passage, wantHosts int, cause error) error {
+func (r *Runner) failAfterSent(ctx context.Context, spec RunSpec, log *slog.Logger, passage, wantHosts int, cause error, watch *stepWatch) error {
 	if wantHosts == 0 {
 		return cause
 	}
-	if _, werr := r.waitStep(ctx, spec.ApplyID, passage, wantHosts, log); werr != nil {
+	if _, werr := r.waitStep(ctx, spec.ApplyID, passage, wantHosts, log, watch); werr != nil {
 		if errors.Is(werr, errCancelRequested) {
 			return errors.Join(cause, werr)
 		}
@@ -409,8 +410,8 @@ func (r *Runner) failAfterSent(ctx context.Context, spec RunSpec, log *slog.Logg
 
 // waitAndJudge is one wave's barrier under linear dispatch: every one of wantHosts
 // rows of the step terminal, then [Runner.judgeWave].
-func (r *Runner) waitAndJudge(ctx context.Context, spec RunSpec, log *slog.Logger, j *stepJudge, wantHosts int, fails *runFailures, roster []*topology.HostFacts) error {
-	statuses, err := r.waitStep(ctx, spec.ApplyID, j.step, wantHosts, log)
+func (r *Runner) waitAndJudge(ctx context.Context, spec RunSpec, log *slog.Logger, j *stepJudge, wantHosts int, fails *runFailures, roster []*topology.HostFacts, watch *stepWatch) error {
+	statuses, err := r.waitStep(ctx, spec.ApplyID, j.step, wantHosts, log, watch)
 	if err != nil {
 		return err
 	}

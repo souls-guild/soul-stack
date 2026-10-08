@@ -41,8 +41,6 @@ import (
 	"syscall"
 	"time"
 
-	"go.opentelemetry.io/otel"
-	"go.opentelemetry.io/otel/propagation"
 	"google.golang.org/protobuf/encoding/protojson"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -586,8 +584,11 @@ func runDaemon(args []string) int {
 	// would turn a Keeper outage into failed unit starts (StartLimitBurst) on
 	// every host. The live connection state goes out as STATUS= instead.
 	notifier.Ready(fmt.Sprintf("connecting: sid=%s endpoints=%d", sid, len(endpoints)))
+	applies := newApplyWorker(runner, logger)
+	go applies.run(ctx)
 	reconnectLoop(ctx, store, client, sessionDeps{
 		runner:           runner,
+		applies:          applies,
 		errandRunner:     errandRunner,
 		scheduler:        scheduler,
 		soulprintPush:    sp,
@@ -845,6 +846,7 @@ func runApply(args []string) int {
 // one session's lifetime, and that tuning must not leak back into the loop.
 type sessionDeps struct {
 	runner           *runtime.ApplyRunner
+	applies          *applyWorker
 	errandRunner     *errandrunner.Runner
 	scheduler        *beacon.Scheduler
 	soulprintPush    soulprintPusher
@@ -1063,6 +1065,24 @@ type recvResult struct {
 	err error
 }
 
+// retireReader waits for the reader of a closed stream to exit. The reader may be
+// blocked handing the session loop a result — the stream's last message, or its
+// end — so the wait takes them: waiting without taking would never end. A run's
+// ApplyRequest or CancelApply among them reached the Soul before the stream closed
+// and goes to handleRun; the rest belonged to the stream.
+func retireReader(recvCh <-chan recvResult, done <-chan struct{}, handleRun func(*keeperv1.FromKeeper) bool) {
+	for {
+		select {
+		case <-done:
+			return
+		case rec := <-recvCh:
+			if rec.err == nil {
+				handleRun(rec.msg)
+			}
+		}
+	}
+}
+
 // handleSession is the recv-loop for one session. Accepts FromKeeper, dispatches
 // ApplyRequest to ApplyRunner.Run. Returns on io.EOF / Recv error / cancel.
 //
@@ -1153,23 +1173,26 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	defer func() { stopUtil() }()
 
 	swapCh := make(chan *soulgrpc.StreamSession)
+	// A failback stream outlives the loop that dialed it — it becomes this
+	// session's stream — but not the session: a dial still under way when the
+	// session ends is cut, or it would take the SID lease from the reconnect.
+	failbackDialCtx, endFailbackDials := context.WithCancel(ctx)
+	defer endFailbackDials()
 	startFailback := func(priority int) {
 		if !fb.enabled {
 			return
 		}
 		failbackCtx, failbackCancel = context.WithCancel(ctx)
-		go failbackLoop(failbackCtx, client, priority, fb, swapCh, logger)
+		go failbackLoop(failbackCtx, failbackDialCtx, client, priority, fb, swapCh, logger)
 	}
 	startFailback(sess.Priority())
 
 	// The Augur client is bound to a specific session (pending-map + Send on its
-	// stream, ADR-025). Created per-session: the apply goroutine sends AugurRequest, the
-	// reader goroutine delivers the reply straight to the client (Deliver), bypassing the
-	// select-loop — otherwise deadlock: the select-loop is blocked in runner.Run while
-	// apply runs, and AugurReply would arrive on the same recvCh that the blocked
-	// loop reads. On exit/swap the client is closed (pending Fetches get
-	// ErrClientClosed). request_id is unique only per-stream — no need for the client
-	// to survive a reconnect.
+	// stream, ADR-025). Created per-session: the apply worker sends AugurRequest
+	// through it (via [sessionLink]), and the reader goroutine delivers the reply
+	// straight to the client (Deliver). On exit/swap the client is closed (pending
+	// Fetches get ErrClientClosed). request_id is unique only per-stream — no need for
+	// the client to survive a reconnect.
 	augurClient := augur.NewClient(sess)
 
 	// The console runner is bound to a specific session for the same reason as
@@ -1184,9 +1207,13 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 
 	// Host-side ceiling on concurrent async: tasks (ADR-0075(e)). Read here, with
 	// the console limits, so a hot-reload (ADR-021) applies on the next
-	// reconnect; a run already under way keeps the ceiling it started with. Set
-	// from this goroutine, the one that later drives runner.Run.
+	// reconnect; a run already under way keeps the ceiling it started with.
 	deps.runner.SetAsyncLimit(store.Get().AsyncMaxConcurrent())
+
+	// Applies report through this stream from now on, and what a dropped stream
+	// may have lost goes out first — after the WardRoster above, which declared
+	// those applies, and before any new request is read.
+	deps.applies.attach(sess, augurClient)
 
 	// The reader goroutine reads the current sess; on swap it's restarted on
 	// the new sess. recvCh is unbuffered — a gate through which the
@@ -1223,20 +1250,68 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 	}
 	startReader(sess, augurClient)
 
+	// handleRun takes a run's ApplyRequest or CancelApply; false — msg is neither.
+	handleRun := func(msg *keeperv1.FromKeeper) bool {
+		switch payload := msg.GetPayload().(type) {
+		case *keeperv1.FromKeeper_ApplyRequest:
+			req := payload.ApplyRequest
+			logger.Info("apply: received",
+				slog.String("apply_id", req.GetApplyId()),
+				slog.Int("tasks", len(req.GetTasks())),
+				slog.Int("attempt", int(req.GetAttempt())),
+			)
+			// attempt-fencing guard (ADR-027(g), Phase 2): reject a
+			// stale ApplyRequest (attempt < the one already seen for apply_id) — a duplicate
+			// from a stale Ward whose original apply has already been accepted. B1: a rejected
+			// request is silently dropped (metric + debug log inside AcceptAttempt),
+			// no RunResult is sent — Keeper's barrier will close the original apply
+			// (higher attempt) with its own RunResult, runTimeout is the backstop.
+			if deps.runner.AcceptAttempt(req.GetApplyId(), req.GetAttempt()) {
+				deps.applies.submit(req)
+			}
+			return true
+		case *keeperv1.FromKeeper_CancelApply:
+			applyID := payload.CancelApply.GetApplyId()
+			cancelled := deps.applies.cancel(applyID)
+			logger.Info("apply: cancel received",
+				slog.String("apply_id", applyID),
+				slog.String("reason", payload.CancelApply.GetReason()),
+				slog.Bool("cancelled", cancelled),
+			)
+			return true
+		}
+		return false
+	}
+
 	defer func() {
+		// Before the close: Close calls CloseSend, which gRPC forbids beside a
+		// concurrent Send, and once detached the relay sends nothing on this stream.
+		deps.applies.detach(sess)
 		// Consoles die BEFORE the stream is closed: CloseAll still gets to send
 		// each ConsoleExit, so Keeper learns the sessions ended instead of
 		// inferring it from the disconnect.
 		consoleRunner.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 		augurClient.Close()
 		_ = sess.Close()
-		<-readerDone
+		retireReader(recvCh, readerDone, handleRun)
 	}()
 
 	for {
+		// A failback swap waits until no apply is in flight, as it did while the
+		// apply ran on this loop: a swap mid-run would cut an Augur fetch or a module
+		// download short on the stream being retired.
+		var swap <-chan *soulgrpc.StreamSession
+		if !deps.applies.inFlight() {
+			swap = swapCh
+		}
 		select {
 		case <-ctx.Done():
+			// Shutdown: give a running apply the moment it needs to report its
+			// cancellation on this stream before the stream goes.
+			deps.applies.drain(applyDrainGrace)
 			return
+		case <-deps.applies.idleC():
+			// Re-evaluates the swap gate above.
 		case <-soulprintTick:
 			// Facts-refresh tick: collect and send from this loop (single writer).
 			// Send error = stream broken — bail out, reconnect will re-establish it.
@@ -1266,32 +1341,39 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 					slog.Any("error", err))
 				return
 			}
-		case newSess := <-swapCh:
-			// Failback found a better priority — switch over: close the
-			// old stream first (this unblocks reader-Recv with an err), then set the
-			// new one and start a new reader. We already hold the new session
-			// open before closing the old one → zero-downtime.
+		case newSess := <-swap:
+			// Failback found a better priority — switch over. The new session is
+			// already open, so nothing waits on a dial (zero-downtime). The old
+			// stream is retired first: what it still delivers is taken before the
+			// new stream declares the Soul's applies.
 			oldSess := sess
-			oldAugur := augurClient
-			oldConsole := consoleRunner
-			sess = newSess
-			augurClient = augur.NewClient(sess)
-			consoleRunner = consolerunner.New(sess, consoleLimits, logger, deps.consoleMetrics,
-				consolerunner.WithDialer(consoleDialer{sess}))
-			logger.Info("eventstream: failback swap",
-				slog.Int("new_priority", newSess.Priority()),
-				slog.String("session_id", newSess.SessionID()),
-			)
+			deps.applies.detach(oldSess)
 			// Close the old Augur client (pending Fetches on the old session
 			// get ErrClientClosed) — the old stream is about to be closed.
-			oldAugur.Close()
+			augurClient.Close()
 			// Consoles do NOT survive a failback swap: their session_ids were
 			// minted by the old stream's Keeper session-manager, and a pty left
 			// running while its authorizing stream goes away is exactly the
 			// orphan we refuse to create. The operator reopens on the new stream.
-			oldConsole.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
+			consoleRunner.CloseAll(keeperv1.ConsoleExitReason_CONSOLE_EXIT_REASON_SOUL_SHUTDOWN)
 			_ = oldSess.Close()
-			<-readerDone
+			retireReader(recvCh, readerDone, handleRun)
+			sess = newSess
+			augurClient = augur.NewClient(sess)
+			consoleRunner = consolerunner.New(sess, consoleLimits, logger, deps.consoleMetrics,
+				consolerunner.WithDialer(consoleDialer{sess}))
+			// The new stream's Keeper sweeps the dispatched rows this Soul does not
+			// declare, as on any connect: a request the old stream lost on the way
+			// fails its host at once instead of waiting with the host present.
+			if err := sess.SendWardRoster(deps.runner.ActiveSet()); err != nil {
+				logger.Warn("ward-roster: send failed on the failback stream (stream broken)", slog.Any("error", err))
+				return
+			}
+			deps.applies.attach(sess, augurClient)
+			logger.Info("eventstream: failback swap",
+				slog.Int("new_priority", newSess.Priority()),
+				slog.String("session_id", newSess.SessionID()),
+			)
 			readerDone = make(chan struct{})
 			startReader(sess, augurClient)
 			stopFailback()
@@ -1303,57 +1385,16 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 				} else {
 					logger.Warn("soul run: stream recv error", slog.Any("error", rec.err))
 				}
+				deps.applies.ended(sess, rec.err)
 				return
 			}
 			if ctx.Err() != nil {
 				return
 			}
+			if handleRun(rec.msg) {
+				continue
+			}
 			switch payload := rec.msg.GetPayload().(type) {
-			case *keeperv1.FromKeeper_ApplyRequest:
-				req := payload.ApplyRequest
-				logger.Info("apply: received",
-					slog.String("apply_id", req.GetApplyId()),
-					slog.Int("tasks", len(req.GetTasks())),
-					slog.Int("attempt", int(req.GetAttempt())),
-				)
-				// attempt-fencing guard (ADR-027(g), Phase 2): reject a
-				// stale ApplyRequest (attempt < the one already seen for apply_id) — a duplicate
-				// from a stale Ward whose original apply has already been accepted. B1: a rejected
-				// request is silently dropped (metric + debug log inside AcceptAttempt),
-				// no RunResult is sent — Keeper's barrier will close the original apply
-				// (higher attempt) with its own RunResult, runTimeout is the backstop.
-				if !deps.runner.AcceptAttempt(req.GetApplyId(), req.GetAttempt()) {
-					continue
-				}
-				// Extract the W3C traceparent from ApplyRequest into ctx so apply.run
-				// inside runner.Run comes up as a child span of Keeper's
-				// grpc.apply_dispatch (end-to-end trace operator → Keeper → Soul, ADR-024).
-				// Empty trace_context (old Keeper without the field) → Extract is a no-op,
-				// apply.run stays root (forward-compat degradation).
-				applyCtx := otel.GetTextMapPropagator().Extract(ctx,
-					propagation.MapCarrier{"traceparent": req.GetTraceContext()})
-				// Augur client + apply_id in the run's ctx: core.augur.fetch retrieves
-				// them via stream.Context() (the generic SoulModule contract of state+params
-				// can't express this). delegate=false — data arrives inline through
-				// Keeper, the root credential (external system's account) never
-				// reaches Soul (ADR-025).
-				applyCtx = augur.WithRun(applyCtx, augurClient, req.GetApplyId())
-				// FetchModule transport for the current session, for core.module.installed
-				// (ADR-065): same ClientConn, separate HTTP/2 stream; mirrors the
-				// augur.WithRun pattern.
-				applyCtx = installmod.WithFetcher(applyCtx, sess)
-				if err := deps.runner.Run(applyCtx, req, sess); err != nil {
-					logger.Error("apply: send failed (stream broken)", slog.Any("error", err))
-					return
-				}
-			case *keeperv1.FromKeeper_CancelApply:
-				applyID := payload.CancelApply.GetApplyId()
-				cancelled := deps.runner.Cancel(applyID)
-				logger.Info("apply: cancel received",
-					slog.String("apply_id", applyID),
-					slog.String("reason", payload.CancelApply.GetReason()),
-					slog.Bool("cancelled", cancelled),
-				)
 			case *keeperv1.FromKeeper_CancelErrand:
 				// ADR-033 slice E5: the operator cancelled an in-flight Errand via
 				// DELETE /v1/errands/{id} → Keeper sent us CancelErrand.
@@ -1519,7 +1560,11 @@ func handleSession(ctx context.Context, store *config.Store[config.SoulConfig], 
 // Interval is fb.interval ± fb.spray (uniform jitter), [docs/soul/connection.md
 // → Failback]. spray doesn't stretch the interval, it only guards against a thundering
 // herd.
-func failbackLoop(ctx context.Context, client *soulgrpc.Client, currentPriority int, fb failbackParams, swapCh chan<- *soulgrpc.StreamSession, logger *slog.Logger) {
+//
+// ctx ends the loop; the stream is dialed under dialCtx, the session's, because a
+// stream lives as long as the context it was opened with, and handleSession stops
+// this loop right after taking the stream over.
+func failbackLoop(ctx, dialCtx context.Context, client *soulgrpc.Client, currentPriority int, fb failbackParams, swapCh chan<- *soulgrpc.StreamSession, logger *slog.Logger) {
 	if currentPriority <= 1 {
 		return
 	}
@@ -1528,7 +1573,7 @@ func failbackLoop(ctx context.Context, client *soulgrpc.Client, currentPriority 
 		if !sleepCtx(ctx, d) {
 			return
 		}
-		newSess, err := client.DialPriority(ctx, currentPriority)
+		newSess, err := client.DialPriority(dialCtx, currentPriority)
 		if err != nil {
 			if soulgrpc.IsNoHigherPriority(err) {
 				// Config changed via hot-reload? Safe to just return —

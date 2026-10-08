@@ -148,18 +148,75 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 // anything that waits for a host to become reachable reintroduces this class of
 // dead setting.
 //
-// The provision-aware effective run-timeout floor (ceiling + deployBudget at the
-// default ceiling) MUST STRICTLY exceed the default connect wait of
-// `core.ssh.run` — which since NIM-872 bounds BOTH transports, a Teleport join
-// and a fresh VM's sshd alike, off one default. Otherwise the setting is dead:
-// the run aborts before the host is ever reachable, so the wait can never be
-// spent. It catches a future join-wait increase or budget decrease that would
-// make a provision run unreachable again.
+// A provision run's bound at its defaults MUST STRICTLY exceed what the run waits
+// for before the hosts exist: the default connect wait of `core.ssh.run` — which
+// since NIM-872 bounds BOTH transports, a Teleport join and a fresh VM's sshd
+// alike, off one default — and, in a linear run, the `await_online` ceiling after
+// it. Otherwise the setting is dead: the run aborts before the host is ever
+// reachable, so the wait can never be spent. A linear run's bound is its
+// scenario_timeout (NIM-949); a staged run's is ceiling + deployBudget until
+// NIM-952 retires it.
 func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
-	provisionFloor := config.DefaultMaxAwaitTimeout + deployBudget
-	if provisionFloor <= coremodssh.DefaultJoinWaitTimeout {
-		t.Errorf(
-			"provision effective run-timeout floor (%s = DefaultMaxAwaitTimeout %s + deployBudget %s) does NOT exceed join_wait_timeout (%s) — a provision run would abort before onboarding finishes (a dead setting)",
-			provisionFloor, config.DefaultMaxAwaitTimeout, deployBudget, coremodssh.DefaultJoinWaitTimeout)
+	r := newTimeoutRunner(t, defaultRunTimeout, nil)
+	plan := &config.ScenarioManifest{Tasks: []config.Task{refreshEmitterTask(), hostTask()}}
+	for model, waits := range map[ExecutionModel]time.Duration{
+		ExecutionStaged: coremodssh.DefaultJoinWaitTimeout,
+		ExecutionLinear: coremodssh.DefaultJoinWaitTimeout + config.DefaultMaxAwaitTimeout,
+	} {
+		if bound := r.runDeadline(RunSpec{executionModel: model}, plan); bound <= waits {
+			t.Errorf("%s provision run bound %s does NOT exceed what it waits for before its hosts exist (%s) — the run would abort before onboarding finishes (a dead setting)",
+				model, bound, waits)
+		}
+	}
+}
+
+// ★ GUARD (NIM-949). A linear run is bounded by its scenario_timeout alone: 24h by
+// default, the scenario's own value when it writes one — never the 5-minute run
+// ceiling nor the provision floor read from keeper.yml. A staged run keeps both.
+//
+// Mutation: runDeadline returns r.effectiveRunTimeout for a linear run → red.
+func TestRunDeadline_LinearIsScenarioTimeout(t *testing.T) {
+	r := newTimeoutRunner(t, defaultRunTimeout, func() time.Duration { return 30 * time.Minute })
+	twoHours := 2 * time.Hour
+	plain := &config.ScenarioManifest{Tasks: []config.Task{hostTask()}}
+	provision := &config.ScenarioManifest{Tasks: []config.Task{refreshEmitterTask(), hostTask()}}
+	own := &config.ScenarioManifest{Tasks: []config.Task{hostTask()}, Settings: &config.ScenarioSettings{ScenarioTimeout: &twoHours}}
+
+	for _, tc := range []struct {
+		name  string
+		model ExecutionModel
+		scn   *config.ScenarioManifest
+		want  time.Duration
+	}{
+		{"linear default", ExecutionLinear, plain, 24 * time.Hour},
+		{"linear provision", ExecutionLinear, provision, 24 * time.Hour},
+		{"linear own scenario_timeout", ExecutionLinear, own, twoHours},
+		{"staged keeps the run ceiling", ExecutionStaged, own, defaultRunTimeout},
+		{"staged keeps the provision floor", ExecutionStaged, provision, 30*time.Minute + deployBudget},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			if got := r.runDeadline(RunSpec{executionModel: tc.model}, tc.scn); got != tc.want {
+				t.Errorf("runDeadline = %s, want %s", got, tc.want)
+			}
+		})
+	}
+}
+
+// ★ GUARD (NIM-949). soul_timeout is read from the step's barrier owner, so a
+// step that writes its own differs from the scenario default beside it.
+//
+// Mutation: read stepSettings[0] for every step → step 1 answers 1m → red.
+func TestStepSoulTimeout_PerStep(t *testing.T) {
+	fiveMin := 5 * time.Minute
+	tasks := []config.Task{hostTask(), hostTask()}
+	tasks[1].Settings = &config.ScenarioSettings{SoulTimeout: &fiveMin}
+	spec := RunSpec{executionModel: ExecutionLinear, stepSettings: config.StepSettings(tasks, nil)}
+	for passage, want := range []time.Duration{time.Minute, fiveMin} {
+		if got := stepSoulTimeout(spec, passage); got != want {
+			t.Errorf("step %d soul_timeout = %s, want %s", passage, got, want)
+		}
+	}
+	if got := stepSoulTimeout(RunSpec{}, 3); got != time.Minute {
+		t.Errorf("no step settings: soul_timeout = %s, want the 1m default", got)
 	}
 }

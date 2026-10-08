@@ -191,7 +191,7 @@ is whatever the operator points `push.soul_binary_path` at, as on the registry b
 
 **9. The host needs no seed and no identity.** Answering the ticket's first question:
 `soul apply` loads `soul.yml` only if it exists, never loads a SoulSeed, and builds the core
-module registry with no trust anchor (`soul/cmd/soul/main.go:744-827`). A factless host falls
+module registry with no trust anchor (`soul/cmd/soul/main.go:745-828`). A factless host falls
 back to runtime detection for package manager and init system
 (`soul/internal/coremod/util/osfacts.go`). The bound that follows: a **plugin** module fails
 closed there (no Sigil, no anchor), and module delivery over push is not built (ADR-0089), so the
@@ -315,15 +315,16 @@ the **agent the destiny may have installed**: after the `soul` destiny the chain
 decision 1, and the barrier is that agent's own stream. After any other destiny there is nothing
 to await.
 
-**14. The run's ceiling bounds the step — today's conflation, not fixed here.** The step has no
-task-level limit; what bounds it is the join wait per host and the run-wide ceiling: 5 min
-(`keeper/internal/scenario/scenario.go:140`), raised to `max_await_timeout` + 10 min only when
-the plan carries a refresh emitter (`effectiveRunTimeout`, `keeper/internal/scenario/run.go`). The ceiling is
-the run timeout doing a task timeout's job. NIM-907's `settings:` separates the two
-([settings.md](../scenario/settings.md): `scenario_timeout`, default 24h, replacing the 5-minute
-run timeout, beside `task_timeout`), and it is not built. Until it is, a chain that installs agents
-needs `refresh_soulprint: true` on its `core.soul.registered` (as decision 1 writes it), and the
-slowest host's install has to fit in that ceiling.
+**14. The run's ceiling bounds the step — today's conflation, separated by NIM-949 under linear
+dispatch.** In a staged run the step has no task-level limit; what bounds it is the join wait per
+host and the run-wide ceiling: 5 min (`keeper/internal/scenario/scenario.go:141`), raised to
+`max_await_timeout` + 10 min only when the plan carries a refresh emitter (`effectiveRunTimeout`,
+`keeper/internal/scenario/run.go`) — the run timeout doing a task timeout's job, so a chain that
+installs agents needs `refresh_soulprint: true` on its `core.soul.registered` (as decision 1 writes
+it), and the slowest host's install has to fit in that ceiling. NIM-907's `settings:` separates the
+two ([settings.md §2.2–§2.3](../scenario/settings.md)), built in NIM-949 for a run that executes
+linearly: the run is bounded by `scenario_timeout` (24h by default), and the step by its
+`task_timeout` — see the next section.
 
 **15. The `transport:` key is not involved.** Every keeper-side task refuses it
 (`transport_on_keeper_invalid`, `shared/config/scenario_transport.go:379-405`), this one
@@ -339,10 +340,11 @@ one `soul apply` message per host, which is NIM-907's decision 6 — *destiny is
 Keeper-side evaluation of `when:` and the rendering of post-module predicates apply to scenario
 steps, not to the destiny's tasks inside this message. `settings: {on_failure, tolerate}` see one
 keeper step and not the hosts inside it, so the step stays B1-strict under any policy. Its
-`scenario_timeout` replaces the ceiling decision 14 lives under; whether its `task_timeout`
-bounds this step as a whole, or each host's run inside it, is for that work to decide — the step
-has one outcome and many hosts. The Acolyte path does not touch it: keeper-side steps run
-locally.
+`scenario_timeout` replaces the ceiling decision 14 lives under, and its `task_timeout` bounds
+this step **as a whole** — one deadline over the module call, cutting every host's session at once
+(**decided, user, 2026-10-07**, built in NIM-949): the step has one outcome and many hosts. It is
+the scenario's `task_timeout` unless the step writes its own `timeout:`, `settings:` being refused
+on a keeper-side task. The Acolyte path does not touch it: keeper-side steps run locally.
 
 ### Rejected
 

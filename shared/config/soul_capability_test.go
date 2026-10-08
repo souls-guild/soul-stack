@@ -16,7 +16,7 @@ func TestSoulCapabilities_FeaturesAndModules(t *testing.T) {
 	want := []string{
 		"console", "console_stream", "dry_run", "flow_control",
 		"module:core.file", "module:core.pkg",
-		"passage", "rendered_predicate", "retry",
+		"passage", "rendered_predicate", "result_relay", "retry",
 	}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SoulCapabilities = %v, want %v", got, want)
@@ -41,7 +41,7 @@ func TestSoulCapabilities_StableAcrossRegistryOrder(t *testing.T) {
 // two groups are independent.
 func TestSoulCapabilities_NoModules(t *testing.T) {
 	got := SoulCapabilities(nil)
-	want := []string{"console", "console_stream", "dry_run", "flow_control", "passage", "rendered_predicate", "retry"}
+	want := []string{"console", "console_stream", "dry_run", "flow_control", "passage", "rendered_predicate", "result_relay", "retry"}
 	if !reflect.DeepEqual(got, want) {
 		t.Fatalf("SoulCapabilities(nil) = %v, want %v", got, want)
 	}

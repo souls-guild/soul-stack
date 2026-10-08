@@ -317,6 +317,11 @@ var ErrRespawnNotSupported = errors.New("push: ProviderRespawner not configured"
 // error_code="ssh_provider_unavailable: <name>".
 var ErrProviderUnknown = errors.New("push: SshProvider not registered")
 
+// ErrConnect marks a SendApply that failed to open the SSH session: nothing ran on
+// the host, so the same request may be sent again without applying twice. A host
+// key that was refused does not carry it — it would be refused again.
+var ErrConnect = errors.New("push: SSH connect failed")
+
 // SendApply executes a run on a push host over SSH synchronously: lookup the
 // provider by name → resolve the target → check transport=ssh → ephemeral
 // keypair → Authorize → Sign(pubkey) → connect (CA-host-cert verify) →
@@ -427,7 +432,11 @@ func (d *SshDispatcher) SendApply(ctx context.Context, sid string, route Route, 
 		Timeout:         d.deps.DialTimeout,
 	})
 	if err != nil {
-		return nil, fmt.Errorf("push: connect %s: %w", sid, err)
+		// A key refused or unverifiable is refused again on retry (NIM-905).
+		if IsHostKeyError(err) {
+			return nil, fmt.Errorf("push: connect %s: %w", sid, err)
+		}
+		return nil, fmt.Errorf("%w: %s: %w", ErrConnect, sid, err)
 	}
 	defer func() {
 		if cerr := sess.Close(); cerr != nil {

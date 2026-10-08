@@ -3192,8 +3192,10 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	var leaseOwner scenario.LeaseOwnerChecker
+	var soulPresence scenario.SoulPresenceChecker
 	if d.redisClient != nil {
 		leaseOwner = leaseOwnerChecker{rc: d.redisClient}
+		soulPresence = topologyLeaseChecker{rc: d.redisClient}
 	}
 
 	// Keeper daemon runtime wiring note.
@@ -3299,11 +3301,12 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		ExecutionModelFn: func() scenario.ExecutionModel {
 			return executionModelOf(d.store.Get())
 		},
-		Summons:     summons,
-		StepQueue:   stepQueue,
-		LeaseOwner:  leaseOwner,
-		SoulCap:     soulCap,
-		SoulVersion: soulVersion,
+		Summons:      summons,
+		StepQueue:    stepQueue,
+		LeaseOwner:   leaseOwner,
+		SoulPresence: soulPresence,
+		SoulCap:      soulCap,
+		SoulVersion:  soulVersion,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.

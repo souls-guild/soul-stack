@@ -85,6 +85,15 @@ const (
 	// never triggers GOAWAY too_many_pings, while flooding faster than 10s
 	// still gets cut off.
 	eventStreamKeepaliveMinTime = 10 * time.Second
+
+	// eventStreamKeepaliveTime / eventStreamKeepaliveTimeout — the Keeper's own
+	// ping on a silent stream. A live Soul pings every 30s, so a stream silent for
+	// longer belongs to a host that died without closing it; without a ping of our
+	// own the Keeper learns of that only from the OS TCP keepalive, minutes later,
+	// and a lost stream starts counting toward `soul_timeout` only once it is
+	// closed (docs/scenario/settings.md §2.2).
+	eventStreamKeepaliveTime    = 30 * time.Second
+	eventStreamKeepaliveTimeout = 10 * time.Second
 )
 
 // EventStreamDeps holds the wire-up dependencies for the EventStream handler.
@@ -396,6 +405,10 @@ func NewEventStreamServer(cfg config.KeeperListenGRPCEventStream, deps EventStre
 		grpclib.KeepaliveEnforcementPolicy(keepalive.EnforcementPolicy{
 			MinTime:             eventStreamKeepaliveMinTime,
 			PermitWithoutStream: true,
+		}),
+		grpclib.KeepaliveParams(keepalive.ServerParameters{
+			Time:    eventStreamKeepaliveTime,
+			Timeout: eventStreamKeepaliveTimeout,
 		}),
 	)
 	keeperv1.RegisterKeeperServer(srv, newEventStreamHandler(deps, logger))
@@ -1203,11 +1216,15 @@ func (h *eventStreamHandler) acquireSoulLease(ctx context.Context, sid string) (
 	}
 	renewCtx, cancelRenew := context.WithCancel(ctx)
 	done := make(chan struct{})
-	go h.renewLeaseLoop(renewCtx, sid, lease, renewEvery, done)
+	// The loop may replace the lease; done orders its last write before the
+	// Release below.
+	held := lease
+	go h.renewLeaseLoop(renewCtx, sid, &held, ttl, renewEvery, done)
 
 	return func() {
 		cancelRenew()
 		<-done
+		lease := held
 		// Release with a detached ctx: the stream ctx may already be
 		// cancelled (that's the normal graceful-stop path). WithoutCancel:
 		// keep the trace baggage, don't inherit the teardown path's cancel.
@@ -1329,13 +1346,16 @@ func (h *eventStreamHandler) auditLeaseForceReleased(ctx context.Context, sid, p
 	}
 }
 
-// renewLeaseLoop is the periodic renewer. On ErrLeaseLost it closes done;
-// the main receive loop exits on its own via EOF/Canceled, because lease
-// loss is usually accompanied by a stream timeout or an explicit
-// cancellation. We do NOT force-interrupt the receive loop — let the Soul
-// drain its buffer and close the stream normally (or let another Keeper,
-// having already taken over this SID, signal it directly).
-func (h *eventStreamHandler) renewLeaseLoop(ctx context.Context, sid string, lease *keeperredis.Lease, every time.Duration, done chan<- struct{}) {
+// renewLeaseLoop is the periodic renewer. A lease whose key is gone while the
+// stream lives — Redis restarted or failed over, or was down past the TTL — is
+// taken again: presence is read from the key, and without it a live agent reads
+// as gone, which a linear step's dead-host detector fails after soul_timeout
+// (NIM-949). Taken by another Keeper, it is that Keeper's: the loop closes done
+// and the receive loop exits on its own via EOF/Canceled, because lease loss is
+// usually accompanied by a stream timeout or an explicit cancellation. We do
+// NOT force-interrupt the receive loop — let the Soul drain its buffer and close
+// the stream normally (or let the other Keeper signal it directly).
+func (h *eventStreamHandler) renewLeaseLoop(ctx context.Context, sid string, held **keeperredis.Lease, ttl, every time.Duration, done chan<- struct{}) {
 	defer close(done)
 	t := time.NewTicker(every)
 	defer t.Stop()
@@ -1344,8 +1364,20 @@ func (h *eventStreamHandler) renewLeaseLoop(ctx context.Context, sid string, lea
 		case <-ctx.Done():
 			return
 		case <-t.C:
-			if err := lease.Renew(ctx); err != nil {
+			if err := (*held).Renew(ctx); err != nil {
 				if errors.Is(err, keeperredis.ErrLeaseLost) {
+					again, aerr := keeperredis.AcquireSoulLease(ctx, h.deps.Redis, sid, h.deps.KID, ttl)
+					if aerr == nil {
+						*held = again
+						h.logger.Warn("eventstream: soul lease key was gone - taken again for the live stream",
+							slog.String("sid", sid))
+						continue
+					}
+					if !errors.Is(aerr, keeperredis.ErrLeaseTaken) {
+						h.logger.Warn("eventstream: soul lease lost and not yet taken again",
+							slog.String("sid", sid), slog.Any("error", aerr))
+						continue
+					}
 					h.logger.Warn("eventstream: soul lease lost during renewal",
 						slog.String("sid", sid))
 					return

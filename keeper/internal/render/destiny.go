@@ -136,6 +136,11 @@ const applierRegisterModule = "core.noop.run"
 // the other side of the boundary. The applier's `when:` is decided before this
 // call instead (static-when at the scenario level), and a `when:` that cannot be
 // decided there is refused by [guardApplierWhen].
+//
+// Each child without a `timeout:` of its own takes the applier's effective
+// `task_timeout` (settings.md §3 rule 6), through [mergeApplierInheritance]. The
+// applier's own `timeout:` is refused at parse, as is a block's, so what reaches
+// here is the `settings:` chain's.
 func (p *Pipeline) renderApplyDestiny(
 	ctx context.Context,
 	parentIn RenderInput,
@@ -144,6 +149,7 @@ func (p *Pipeline) renderApplyDestiny(
 	targeted []*topology.HostFacts,
 	serialWidth int,
 ) ([]*RenderedTask, []DispatchPlan, error) {
+	applier.Timeout = wireTimeout(parentIn, applier)
 	apply := applier.Apply
 	applierRegister := applier.Register
 	if parentIn.Destiny == nil {

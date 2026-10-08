@@ -839,15 +839,17 @@ answered; a source that hung through the end for a second or more with no error
 held is reported as hung, and the reported error is otherwise the last one the
 source really returned. A presence source that never answered still fails the
 step on the barrier's own timeout. A run that ends while the barrier waits — its
-deadline can be the shorter one, as a plan without `refresh_soulprint` keeps the
-5-minute default — gets the same shortfall message saying the run ended, not a
+deadline can be the shorter one, as a staged plan without `refresh_soulprint` keeps
+the 5-minute default (a linear run is bounded by its `scenario_timeout`, NIM-949) —
+gets the same shortfall message saying the run ended, not a
 timeout that never elapsed.
 
 **Not closed here:** the presence lease can outlive a machine killed without
-closing its connection by a few minutes, because the EventStream server sets no
-keepalive and the Keeper learns of the dead stream only from TCP (NIM-962). A
-machine re-created under the same SID inside that window is still passed
-through.
+closing its connection until the Keeper notices the dead stream. That took the
+kernel's TCP timeout, minutes, until NIM-949 gave the EventStream server a
+keepalive of its own (a ping after 30s of silence, closed 10s later); the window
+is not yet measured on a stand (NIM-962). A machine re-created under the same SID
+inside it is still passed through.
 
 Guards: `TestIntegration_IssuedBatch_IdentityWithoutAgent*`,
 `TestIntegration_IssuedBatch_UnreadablePresenceRefusesTheBatch`,

@@ -62,11 +62,15 @@ func (h *eventStreamHandler) startOutboundSubscriber(ctx context.Context, sid st
 		return nil
 	}
 
-	go h.runOutboundSubscriber(sid, sub, done)
-	return func() { _ = sub.Close() }
+	stop := make(chan struct{})
+	go h.runOutboundSubscriber(sid, sub, stop, done)
+	return func() {
+		close(stop)
+		_ = sub.Close()
+	}
 }
 
-func (h *eventStreamHandler) runOutboundSubscriber(sid string, sub *keeperredis.OutboundSubscription, done chan<- struct{}) {
+func (h *eventStreamHandler) runOutboundSubscriber(sid string, sub *keeperredis.OutboundSubscription, stop <-chan struct{}, done chan<- struct{}) {
 	defer close(done)
 	in := sub.Channel()
 	for msg := range in {
@@ -79,7 +83,7 @@ func (h *eventStreamHandler) runOutboundSubscriber(sid string, sub *keeperredis.
 				slog.String("sid", sid))
 			continue
 		}
-		if !h.deps.Manager.deliverLocal(sid, msg, entry) {
+		if !h.deps.Manager.forward(sid, msg, entry, stop) {
 			h.logger.Warn("eventstream: outbound subscriber drop — queue full or closed",
 				slog.String("sid", sid))
 		}

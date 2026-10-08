@@ -368,7 +368,14 @@ type ActiveApply struct {
 	// (ADR-027(g)). Keeper's epoch guard compares it against apply_runs.attempt: an
 	// entry in the set with a smaller attempt than the row (a re-claim happened)
 	// does NOT protect against orphaning.
-	Attempt       int32 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	Attempt int32 `protobuf:"varint,2,opt,name=attempt,proto3" json:"attempt,omitempty"`
+	// passage: which of the run's messages is minded — echo of
+	// ApplyRequest.passage (NIM-949). One entry per minded passage. Set, it
+	// narrows the claim to that row: a run's steps share one apply_id, and a
+	// claim by apply_id alone would also cover a later step the Soul never
+	// received. Unset (a Soul older than NIM-949), the entry claims every row of
+	// the apply_id, as before.
+	Passage       *int32 `protobuf:"varint,4,opt,name=passage,proto3,oneof" json:"passage,omitempty"`
 	unknownFields protoimpl.UnknownFields
 	sizeCache     protoimpl.SizeCache
 }
@@ -417,6 +424,13 @@ func (x *ActiveApply) GetAttempt() int32 {
 	return 0
 }
 
+func (x *ActiveApply) GetPassage() int32 {
+	if x != nil && x.Passage != nil {
+		return *x.Passage
+	}
+	return 0
+}
+
 var File_keeper_v1_lifecycle_proto protoreflect.FileDescriptor
 
 const file_keeper_v1_lifecycle_proto_rawDesc = "" +
@@ -443,10 +457,13 @@ const file_keeper_v1_lifecycle_proto_rawDesc = "" +
 	"\tnot_after\x18\x03 \x01(\v2\x1a.google.protobuf.TimestampR\bnotAfter\"F\n" +
 	"\n" +
 	"WardRoster\x128\n" +
-	"\x06active\x18\x01 \x03(\v2 .soulstack.keeper.v1.ActiveApplyR\x06active\"B\n" +
+	"\x06active\x18\x01 \x03(\v2 .soulstack.keeper.v1.ActiveApplyR\x06active\"m\n" +
 	"\vActiveApply\x12\x19\n" +
 	"\bapply_id\x18\x01 \x01(\tR\aapplyId\x12\x18\n" +
-	"\aattempt\x18\x02 \x01(\x05R\aattemptBCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
+	"\aattempt\x18\x02 \x01(\x05R\aattempt\x12\x1d\n" +
+	"\apassage\x18\x04 \x01(\x05H\x00R\apassage\x88\x01\x01B\n" +
+	"\n" +
+	"\b_passageBCZAgithub.com/souls-guild/soul-stack/proto/gen/go/keeper/v1;keeperv1b\x06proto3"
 
 var (
 	file_keeper_v1_lifecycle_proto_rawDescOnce sync.Once
@@ -486,6 +503,7 @@ func file_keeper_v1_lifecycle_proto_init() {
 	if File_keeper_v1_lifecycle_proto != nil {
 		return
 	}
+	file_keeper_v1_lifecycle_proto_msgTypes[5].OneofWrappers = []any{}
 	type x struct{}
 	out := protoimpl.TypeBuilder{
 		File: protoimpl.DescBuilder{

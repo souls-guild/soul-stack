@@ -5,6 +5,7 @@ import (
 	"errors"
 	"log/slog"
 	"sync"
+	"time"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 )
@@ -62,7 +63,22 @@ type streamEntry struct {
 	cancel  context.CancelFunc
 	closeMu sync.Mutex
 	closed  bool
+
+	// routed — every ApplyRequest queued to this stream before its WardRoster
+	// was swept ([StreamManager.takeRouted]), then nil. Capped: a Soul that
+	// never sends a roster must not grow it for the life of the stream.
+	routedMu sync.Mutex
+	routed   map[routedApply]struct{}
 }
+
+type routedApply struct {
+	applyID string
+	passage int32
+}
+
+// routedCap bounds [streamEntry.routed]; a stream sees a handful of requests
+// before its first message.
+const routedCap = 256
 
 // StreamManager — the registry of active EventStreams on the current
 // Keeper instance.
@@ -114,7 +130,100 @@ func (m *StreamManager) deliverLocal(sid string, msg *keeperv1.FromKeeper, entry
 			return console.send(consoleToSoul(msg))
 		}
 	}
-	return entry.send(msg)
+	req := msg.GetApplyRequest()
+	if req != nil {
+		entry.noteRouted(req)
+	}
+	if entry.send(msg) {
+		return true
+	}
+	if req != nil {
+		entry.forgetRouted(req)
+	}
+	return false
+}
+
+// forwardApplyWait bounds how long a message another instance published waits for
+// room in a full queue. Its sender took it as delivered once published, so a
+// dropped ApplyRequest leaves its step's row dispatched, the stream up, until
+// scenario_timeout (NIM-949); a queue drains in well under this.
+const forwardApplyWait = 10 * time.Second
+
+const forwardRetryEvery = 50 * time.Millisecond
+
+// forward is [StreamManager.deliverLocal] for a message another instance
+// published: an ApplyRequest that finds the queue full is retried until
+// forwardApplyWait has passed, the stream is gone, or stop closes — the stream's
+// teardown, which must not wait on it. The request stays declared for the
+// stream's WardRoster sweep all the while, or a sweep between two tries would
+// orphan a row the next try delivers.
+func (m *StreamManager) forward(sid string, msg *keeperv1.FromKeeper, entry *streamEntry, stop <-chan struct{}) bool {
+	req := msg.GetApplyRequest()
+	if req == nil {
+		return m.deliverLocal(sid, msg, entry)
+	}
+	entry.noteRouted(req)
+	deadline := time.NewTimer(forwardApplyWait)
+	defer deadline.Stop()
+	tick := time.NewTicker(forwardRetryEvery)
+	defer tick.Stop()
+	for !entry.send(msg) {
+		if entry.isClosed() {
+			entry.forgetRouted(req)
+			return false
+		}
+		select {
+		case <-tick.C:
+		case <-deadline.C:
+			entry.forgetRouted(req)
+			return false
+		case <-stop:
+			entry.forgetRouted(req)
+			return false
+		}
+	}
+	return true
+}
+
+// takeRouted returns the applies queued to sid's stream so far and stops
+// recording: the stream's WardRoster, taken before the Soul read any of them, is
+// being swept, and a request it cannot name is not a lost one (NIM-949).
+func (m *StreamManager) takeRouted(sid string) []routedApply {
+	entry := m.lookup(sid)
+	if entry == nil {
+		return nil
+	}
+	entry.routedMu.Lock()
+	defer entry.routedMu.Unlock()
+	out := make([]routedApply, 0, len(entry.routed))
+	for r := range entry.routed {
+		out = append(out, r)
+	}
+	entry.routed = nil
+	return out
+}
+
+// noteRouted records req before it is queued, so the record is never later than
+// the request.
+func (e *streamEntry) noteRouted(req *keeperv1.ApplyRequest) {
+	e.routedMu.Lock()
+	defer e.routedMu.Unlock()
+	if e.routed == nil {
+		return
+	}
+	if len(e.routed) >= routedCap {
+		e.routed = nil
+		return
+	}
+	e.routed[routedApply{applyID: req.GetApplyId(), passage: req.GetPassage()}] = struct{}{}
+}
+
+// forgetRouted takes back a request the queue refused: the Soul will not get it,
+// and declared it would keep the sweep off a row nothing answers.
+func (e *streamEntry) forgetRouted(req *keeperv1.ApplyRequest) {
+	e.routedMu.Lock()
+	defer e.routedMu.Unlock()
+	delete(e.routed, routedApply{applyID: req.GetApplyId(), passage: req.GetPassage()})
 }
 
 // Register registers a new stream for a SID WITHOUT a per-stream cancel
@@ -160,6 +269,7 @@ func (m *StreamManager) RegisterStream(sid string, cancel context.CancelFunc) <-
 		sid:    sid,
 		outCh:  make(chan *keeperv1.FromKeeper, outboundBufferSize),
 		cancel: cancel,
+		routed: make(map[routedApply]struct{}),
 	}
 	m.entries[sid] = entry
 	return entry.outCh
@@ -317,17 +427,22 @@ func (e *streamEntry) close() {
 	close(e.outCh)
 }
 
+func (e *streamEntry) isClosed() bool {
+	e.closeMu.Lock()
+	defer e.closeMu.Unlock()
+	return e.closed
+}
+
 // send — non-blocking enqueue. true → accepted, false → the channel
-// buffer is full or closed (we treat both as failure; a closed channel
-// shouldn't exist without an Unregister, but we guard against the race
-// window).
+// buffer is full or closed (we treat both as failure). closeMu is held through
+// the send, non-blocking as it is: released after the check, a close() between
+// the two — an eviction by a reconnect to this instance — panics the send.
 func (e *streamEntry) send(msg *keeperv1.FromKeeper) bool {
 	e.closeMu.Lock()
+	defer e.closeMu.Unlock()
 	if e.closed {
-		e.closeMu.Unlock()
 		return false
 	}
-	e.closeMu.Unlock()
 
 	select {
 	case e.outCh <- msg:

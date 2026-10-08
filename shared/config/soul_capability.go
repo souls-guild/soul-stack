@@ -80,6 +80,15 @@ const (
 	// gate left with the drift circuit (NIM-446).
 	CapabilityDryRun = "dry_run"
 
+	// CapabilityResultRelay — Soul runs an apply off its session loop and relays
+	// the apply's events across a dropped stream (NIM-949, user 2026-10-07): it
+	// reconnects mid-task, and what it finished while the stream was down reaches
+	// the Keeper on the next one. An older binary reconnects only after the task
+	// and loses the result, so a linear step on it waits out scenario_timeout after
+	// a drop where soul_timeout was meant to decide; refusing such a host is
+	// NIM-983 — nothing reads the bit yet.
+	CapabilityResultRelay = "result_relay"
+
 	// CapabilityModulePrefix — namespace of the per-module capability
 	// `module:<name>`, where name is the module address WITHOUT a state suffix
 	// (`module:core.pkg`, not `module:core.pkg.installed`): the registry key is the
@@ -105,9 +114,10 @@ func ModuleCapability(module string) string { return CapabilityModulePrefix + mo
 // reconnects (Registry.Names() iterates a map). A nil/empty coreModules is
 // legitimate — a build with no modules announces only the feature set.
 func SoulCapabilities(coreModules []string) []string {
-	out := make([]string, 0, len(coreModules)+7)
+	out := make([]string, 0, len(coreModules)+8)
 	out = append(out, CapabilityPassage, CapabilityConsole, CapabilityConsoleStream,
-		CapabilityFlowControl, CapabilityRetry, CapabilityRenderedPredicate, CapabilityDryRun)
+		CapabilityFlowControl, CapabilityRetry, CapabilityRenderedPredicate, CapabilityDryRun,
+		CapabilityResultRelay)
 	seen := make(map[string]struct{}, len(coreModules))
 	for _, m := range coreModules {
 		if m == "" {
