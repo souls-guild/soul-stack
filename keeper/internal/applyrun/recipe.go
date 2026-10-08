@@ -47,6 +47,34 @@ type Recipe struct {
 	// forward-compat — absence in jsonb == the normal scenario/ path. Set by
 	// the autorun's found branch (RunSpec.FromUpgrade).
 	FromUpgrade bool `json:"from_upgrade,omitempty"`
+	// Step is set on a row of a linear run's step (NIM-961): the claim renders
+	// that step (the row's passage) rather than the whole scenario. nil — the
+	// row of a staged run or of the Oracle path, rendered in one pass as before.
+	Step *RecipeStep `json:"step,omitempty"`
+}
+
+// RecipeStep is what the run goroutine had decided when it wrote a step's rows,
+// and the claim-time render must reproduce rather than decide again (ADR-027
+// amend (p)). SIDs and register names only — nothing rendered, so invariant A
+// holds.
+type RecipeStep struct {
+	// Roster — the SIDs the run renders this step against. The run re-resolves
+	// its roster only at a refresh boundary, so a host that joined the
+	// incarnation since is not in it, and a `run_once:` or `soulprint.hosts`
+	// rendered over the live roster would disagree with the run's own render.
+	Roster []string `json:"roster"`
+	// HeldTargets — each default block's hosts, chosen at the block's first
+	// step and held for its later ones (render.HeldTargets), by plan position.
+	HeldTargets map[string][]string `json:"held_targets,omitempty"`
+	// RegisterNames — plan index → register name of the plan's tasks, as the
+	// run read the earlier steps' registers: their rows carry the plan index
+	// alone.
+	RegisterNames map[int]string `json:"register_names,omitempty"`
+	// Tasks — plan indices of the tasks the run decided to send this host at
+	// this step. A claim whose own render sends anything else refuses the host:
+	// the run's roster, a fact or a destiny on a branch moved between the two
+	// renders, and the run did not decide what the claim would send.
+	Tasks []int `json:"tasks"`
 }
 
 // MarshalRecipe serializes the recipe into the jsonb form of the

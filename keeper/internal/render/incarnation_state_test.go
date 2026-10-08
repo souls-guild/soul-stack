@@ -85,7 +85,7 @@ func TestRenderState_ReadOnly(t *testing.T) {
 // input to the projection: for one RenderInput.State, `incarnation.state.*`
 // evaluates identically in P0 and P1. Under [ADR-0084] state DOES accumulate
 // across Passages, but that refresh is the runner's move — it re-reads the row
-// at the barrier and assigns renderIn.State (scenario/run.go:807-814). Render
+// at the barrier and assigns renderIn.State (scenario/run.go:810-817). Render
 // itself stays a pure function of the State it was handed, which is what makes
 // the re-read the single place the accumulation can be reasoned about.
 func TestRenderState_PassageDoesNotAlterProjection(t *testing.T) {

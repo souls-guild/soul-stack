@@ -54,7 +54,10 @@ import (
 // Barrier invariant (§7): serial never splits the state commit — dispatch
 // returns only after all waves complete (or fail-stop); state commits once in
 // run(), never per-wave.
-func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts) error {
+//
+// step is the recipe of a linear run's step rows, nil for a staged run: with it
+// the step may go through the work-queue instead ([Runner.queuesStep]).
+func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, tasks []*render.RenderedTask, plans []render.DispatchPlan, gate *crossPassageGate, hosts []*topology.HostFacts, step *applyrun.Recipe) error {
 	perHost := groupByHost(tasks, plans)
 	// Cross-passage requisite gating (ADR-056 R3): per-host resolution of
 	// onchanges/onfail links whose source is in an earlier Passage. nil gate
@@ -88,6 +91,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	dispatchByHost, refusals := resolveHostDispatch(perHost, plans, hosts)
 	if len(refusals) > 0 {
 		return refusedDispatchError(refusals)
+	}
+	if step != nil && r.queuesStep(ctx, log, passage, plans, dispatchByHost) {
+		return r.dispatchStepPlanned(ctx, spec, log, passage, perHost, settled, closed, step)
 	}
 	// Every push host's SshProvider, resolved before this Passage's first wave —
 	// a routing miss must not surface at a host's turn, with the hosts ahead of it
@@ -212,13 +218,7 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 		return fmt.Errorf("scenario: the work-queue dispatch path (keeper.acolytes>0) cannot reach transport=ssh hosts %v - run this scenario on an instance with acolytes=0, or move those hosts off the incarnation", pushSIDs)
 	}
 
-	recipe := &applyrun.Recipe{
-		ServiceRef:   spec.ServiceRef,
-		ScenarioName: spec.ScenarioName,
-		Input:        spec.Input, // vault-ref as-is — invariant A
-		StartedByAID: startedByPtr(spec.StartedByAID),
-		FromUpgrade:  spec.FromUpgrade, // upgrade run loads upgrade/<slug>/ at claim (ADR-0068)
-	}
+	recipe := runRecipe(spec)
 
 	dispatched := 0
 	for _, h := range hosts {
@@ -246,6 +246,140 @@ func (r *Runner) dispatchPlanned(ctx context.Context, spec RunSpec, log *slog.Lo
 	// passage 0, the barrier waits on the Passage 0 slice. Staged (N>1) is
 	// rejected for Acolyte in run.go.
 	return r.waitBarrier(ctx, spec.ApplyID, 0, dispatched, log)
+}
+
+// runRecipe is the render instruction a run's planned rows carry.
+func runRecipe(spec RunSpec) *applyrun.Recipe {
+	return &applyrun.Recipe{
+		ServiceRef:   spec.ServiceRef,
+		ScenarioName: spec.ScenarioName,
+		Input:        spec.Input, // vault-ref as-is — invariant A
+		StartedByAID: startedByPtr(spec.StartedByAID),
+		FromUpgrade:  spec.FromUpgrade, // upgrade run loads upgrade/<slug>/ at claim (ADR-0068)
+	}
+}
+
+// stepRecipe is the recipe of a linear run's step rows: the run's own, pinned to
+// the commit the run loaded — a branch moving mid-run must not hand a later step
+// a different plan — with what the run decided for the step. in is the step's
+// render input after its pass; names are the register names that pass read the
+// earlier steps' registers by.
+func stepRecipe(spec RunSpec, commit string, in render.RenderInput, names map[int]string) *applyrun.Recipe {
+	rec := runRecipe(spec)
+	rec.ServiceRef.Ref = commit
+	roster := make([]string, 0, len(in.Hosts))
+	for _, h := range in.Hosts {
+		roster = append(roster, h.SID)
+	}
+	rec.Step = &applyrun.RecipeStep{Roster: roster, RegisterNames: names}
+	if in.HeldTargets != nil {
+		rec.Step.HeldTargets = in.HeldTargets.Snapshot()
+	}
+	return rec
+}
+
+// recipeFor is a step's recipe for one host's row: with the tasks the run decided
+// to send it.
+func recipeFor(step *applyrun.Recipe, tasks []*render.RenderedTask) *applyrun.Recipe {
+	rec := *step
+	st := *step.Step
+	st.Tasks = planIndices(tasks)
+	rec.Step = &st
+	return &rec
+}
+
+func planIndices(tasks []*render.RenderedTask) []int {
+	out := make([]int, len(tasks))
+	for i, t := range tasks {
+		out[i] = t.Index
+	}
+	return out
+}
+
+// queuesStep reports whether a linear run's step goes through the work-queue
+// (NIM-961). It goes inline when this instance runs no Acolytes; when the step has
+// `serial:` (distributed serial is ADR-027 Phase 3); when it sends to a
+// `transport: ssh` host — the queue has no push branch, and the whole step stays
+// inline rather than splitting one barrier between two paths (user, 2026-10-08);
+// and when a live instance cannot take a step row. That last answer is asked per
+// step, so an older instance that appears mid-run keeps the later steps off the
+// queue for as long as it is live (ADR-027 amend (p)(d)(ii)); a Conclave that
+// does not answer counts as "cannot". A block rolled as one group always carries
+// `serial:`, so no group is queued — and the claim's check (RecipeStep.Tasks)
+// cannot tell a grouped child sent running from its `when: false` copy.
+func (r *Runner) queuesStep(ctx context.Context, log *slog.Logger, passage int, plans []render.DispatchPlan, dispatchByHost map[string]hostDispatch) bool {
+	if !r.acolyteEnabled || effectiveSerialWidth(plans) > 0 {
+		return false
+	}
+	for _, hd := range dispatchByHost {
+		if hd.isPush() {
+			return false
+		}
+	}
+	if r.deps.StepQueue == nil {
+		return false
+	}
+	ok, err := r.deps.StepQueue.AllLiveTakeStepRows(ctx)
+	if err != nil {
+		log.Warn("scenario: Conclave did not answer whether every instance takes step rows - step goes inline",
+			slog.Int("passage", passage), slog.Any("error", err))
+		return false
+	}
+	if !ok {
+		log.Info("scenario: a live instance cannot take step rows - step goes inline", slog.Int("passage", passage))
+	}
+	return ok
+}
+
+// dispatchStepPlanned puts one step of a linear run on the work-queue (ADR-027
+// amend (p), NIM-961). The run goroutine has rendered the step and settled every
+// host, and it stays the one that decides (user, 2026-10-08): a host it closed is
+// closed here as inline, a host with something to send gets a `planned` row, and a
+// host the step does not target gets no row, as inline. The Acolyte that claims a
+// row renders the step again for its host — the secrets live in its memory only
+// (invariant A) — settles the host the same way, and sends only if it arrives at
+// the tasks this row names; it writes the records of the tasks the host is not
+// sent. The barrier stays here.
+//
+// One step's rows only: the next step's are written after this barrier, which is
+// what keeps at most one non-terminal row per host (ADR-027 amend (p)(a)).
+func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, perHost map[string][]*render.RenderedTask, settled map[string]*settledHost, closed []string, recipe *applyrun.Recipe) error {
+	// A host the Keeper failed is sent nothing, and its row must not break the
+	// barrier before the hosts queued beside it finish — as in one inline wave.
+	failedEarly := failedBeforeSend(settled, closed)
+	total := 0
+	for _, sid := range closed {
+		if err := r.closeSettledHost(ctx, spec, log, passage, sid, settled[sid]); err != nil {
+			return err
+		}
+		total++
+	}
+	for _, sid := range sortedSIDs(perHost) {
+		if err := applyrun.InsertPlanned(ctx, r.deps.DB, &applyrun.ApplyRun{
+			ApplyID:         spec.ApplyID,
+			SID:             sid,
+			IncarnationName: spec.IncarnationName,
+			Scenario:        spec.ScenarioName,
+			StartedByAID:    startedByPtr(spec.StartedByAID),
+			Recipe:          recipeFor(recipe, perHost[sid]),
+			Input:           spec.inputSnapshot,
+			Passage:         passage,
+		}); err != nil {
+			return fmt.Errorf("scenario: insert planned apply_run (%s, step %d): %w", sid, passage, err)
+		}
+		total++
+		log.Info("scenario: step queued", slog.String("sid", sid), slog.Int("passage", passage))
+	}
+	if len(perHost) > 0 {
+		r.publishSummons(ctx, log)
+	}
+	if err := r.waitBarrierExcept(ctx, spec.ApplyID, passage, total, failedEarly, log); err != nil {
+		return err
+	}
+	if len(failedEarly) > 0 {
+		return r.waitBarrier(ctx, spec.ApplyID, passage, total, log)
+	}
+	return nil
 }
 
 // publishSummons sends one best-effort Summons signal for planned assignments
@@ -359,7 +493,7 @@ func (r *Runner) dispatchWave(ctx context.Context, spec RunSpec, log *slog.Logge
 			return dispatched, fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 		}
 		if sh := settled[sid]; sh != nil {
-			r.writeKeeperRecords(ctx, spec, log, passage, sid, numberedAfter(sh.records, len(perHost[sid])))
+			r.writeKeeperRecords(ctx, spec.ApplyID, log, passage, sid, numberedAfter(sh.records, len(perHost[sid])))
 		}
 
 		// Push branch (NIM-880): the send IS the whole run, so it goes to its own

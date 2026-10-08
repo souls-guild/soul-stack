@@ -179,6 +179,24 @@ ORDER BY sid ASC, choir_name ASC
 //   - Stale soulprint (`received_at < now - 10m`) → warn to logger,
 //     run is not blocked (ADR-018, PM-decision #2).
 func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName string) ([]*HostFacts, error) {
+	members, err := r.LoadIncarnationMembers(ctx, incarnationName)
+	if err != nil {
+		return nil, err
+	}
+	hosts, err := r.filterAlive(ctx, members)
+	if err != nil {
+		return nil, err
+	}
+
+	warnStale(ctx, r.logger, hosts, time.Now())
+	return hosts, nil
+}
+
+// LoadIncarnationMembers is phase 1 of [Resolver.LoadIncarnationHosts] alone: the
+// candidates, whatever their presence. An Acolyte rendering one step of a linear
+// run renders over the roster the run resolved before it, and a host that lost
+// its lease since is still in that roster.
+func (r *Resolver) LoadIncarnationMembers(ctx context.Context, incarnationName string) ([]*HostFacts, error) {
 	choirs, choirRoles, err := r.loadChoirMemberships(ctx, incarnationName)
 	if err != nil {
 		return nil, err
@@ -192,14 +210,7 @@ func (r *Resolver) LoadIncarnationHosts(ctx context.Context, incarnationName str
 	if err != nil {
 		return nil, err
 	}
-
-	hosts, err := r.filterAlive(ctx, mergeBySID(agents, pushHosts))
-	if err != nil {
-		return nil, err
-	}
-
-	warnStale(ctx, r.logger, hosts, time.Now())
-	return hosts, nil
+	return mergeBySID(agents, pushHosts), nil
 }
 
 // queryRoster runs one half of the phase-1 roster (see [rosterSQL] /

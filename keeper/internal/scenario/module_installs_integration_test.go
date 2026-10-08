@@ -251,7 +251,7 @@ tasks:
 	tasks, _, err := RenderForHost(context.Background(), r.deps, &applyrun.Recipe{
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName: "create",
-	}, "noop-prod", audit.NewULID(), "host-a.example.com")
+	}, "noop-prod", audit.NewULID(), "host-a.example.com", 0)
 	if err != nil {
 		t.Fatalf("RenderForHost: %v", err)
 	}
@@ -320,7 +320,7 @@ tasks:
 		ServiceRef:   artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
 		ScenarioName: "to_v2",
 		FromUpgrade:  true,
-	}, "noop-prod", audit.NewULID(), "host-a.example.com")
+	}, "noop-prod", audit.NewULID(), "host-a.example.com", 0)
 	if err != nil {
 		t.Fatalf("RenderForHost FromUpgrade: %v", err)
 	}

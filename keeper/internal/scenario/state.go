@@ -195,15 +195,28 @@ func incarnationStackVars(inc *incarnation.Incarnation) servicevars.IncarnationC
 // upToPassage=0 (first Passage) → empty map (register not collected yet — same
 // as up-front render).
 //
-// task_idx → register-name resolution is the same as in [buildRegisterByHost] (by
-// []RenderedTask of the current run). run.go's stage-loop calls this before
-// rendering each Passage and passes the result into RenderInput.RegisterByHost.
-func (r *Runner) loadRegisterByHostUpToPassage(ctx context.Context, applyID string, upToPassage int, tasks []*render.RenderedTask) (map[string]map[string]any, error) {
-	rows, err := applyrun.SelectTaskRegistersByApplyIDUpToPassage(ctx, r.deps.DB, applyID, upToPassage)
+// plan_index → register-name resolution is the same as in [buildRegisterByHost],
+// by names taken from the run's previous pass ([registerNames]). run.go's
+// stage-loop calls this before rendering each Passage and passes the result into
+// RenderInput.RegisterByHost; an Acolyte rendering a linear run's step calls it
+// with the names the run goroutine recorded on the step's row.
+func loadRegisterByHostUpToPassage(ctx context.Context, db applyrun.ExecQueryRower, applyID string, upToPassage int, names map[int]string) (map[string]map[string]any, error) {
+	rows, err := applyrun.SelectTaskRegistersByApplyIDUpToPassage(ctx, db, applyID, upToPassage)
 	if err != nil {
 		return nil, fmt.Errorf("scenario: load run register data (passage < %d): %w", upToPassage, err)
 	}
-	return buildRegisterByHost(rows, tasks), nil
+	return foldRegisterByHost(rows, names), nil
+}
+
+// registerNames maps each task's global plan index to its register name.
+func registerNames(tasks []*render.RenderedTask) map[int]string {
+	names := make(map[int]string, len(tasks))
+	for _, t := range tasks {
+		if t.Register != "" {
+			names[t.Index] = t.Register
+		}
+	}
+	return names
 }
 
 // buildRegisterByHost is a pure fold of a run's register rows into a per-host
@@ -237,16 +250,14 @@ func (r *Runner) loadRegisterByHostUpToPassage(ctx context.Context, applyID stri
 // masked on the way out ([ADR-010] §7.4). The protection moved from "drop the row
 // at the source" to "the row never holds the plaintext".
 func buildRegisterByHost(rows []applyrun.TaskRegister, tasks []*render.RenderedTask) map[string]map[string]any {
+	return foldRegisterByHost(rows, registerNames(tasks))
+}
+
+// foldRegisterByHost is [buildRegisterByHost] over a plan index → register name map.
+func foldRegisterByHost(rows []applyrun.TaskRegister, nameByIdx map[int]string) map[string]map[string]any {
 	if len(rows) == 0 {
 		return map[string]map[string]any{}
 	}
-	nameByIdx := make(map[int]string, len(tasks))
-	for _, t := range tasks {
-		if t.Register != "" {
-			nameByIdx[t.Index] = t.Register
-		}
-	}
-
 	out := make(map[string]map[string]any)
 	for i := range rows {
 		name := nameByIdx[rows[i].PlanIndex]

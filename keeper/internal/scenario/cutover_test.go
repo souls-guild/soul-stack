@@ -232,7 +232,7 @@ func TestIntegration_RenderForHost_SingleHost(t *testing.T) {
 		ScenarioName: "create",
 	}
 	tasks, plans, err := RenderForHost(context.Background(), deps, recipe,
-		"noop-prod", audit.NewULID(), "host-a.example.com")
+		"noop-prod", audit.NewULID(), "host-a.example.com", 0)
 	if err != nil {
 		t.Fatalf("RenderForHost: %v", err)
 	}
@@ -274,7 +274,7 @@ func TestIntegration_RenderForHost_HostNotInRoster(t *testing.T) {
 		ScenarioName: "create",
 	}
 	_, _, err = RenderForHost(context.Background(), deps, recipe,
-		"noop-prod", audit.NewULID(), "ghost.example.com")
+		"noop-prod", audit.NewULID(), "ghost.example.com", 0)
 	if err == nil {
 		t.Fatalf("RenderForHost for a host outside the roster succeeded, want an error")
 	}

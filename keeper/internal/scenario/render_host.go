@@ -60,7 +60,13 @@ var errHostDestroyed = errors.New("scenario: RenderForHost: host removed by clou
 // read the secret; taken from the run row, symmetric with the run-goroutine
 // path). Returns the flat []RenderedTask for the whole run + []DispatchPlan
 // (caller filters by sid).
-func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, incarnationName, applyID, sid string) ([]*render.RenderedTask, []render.DispatchPlan, error) {
+//
+// A recipe carrying a Step is a linear run's step row (NIM-961): the render is
+// the run goroutine's pass for step `passage` — the step shape, the registers the
+// earlier steps wrote, the run's roster and its held block targets, all from the
+// recipe and PG — and the caller takes that step's slice. Without a Step,
+// `passage` is not read.
+func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, incarnationName, applyID, sid string, passage int) ([]*render.RenderedTask, []render.DispatchPlan, error) {
 	if recipe == nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: nil recipe")
 	}
@@ -158,12 +164,13 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 		// claimed run than on the original.
 		Modules: modules,
 		// State is the incarnation.state snapshot for `incarnation.state.<path>`
-		// (ADR-009/010). The Acolyte (failover-claim) must reproduce EXACTLY the
-		// same params as the run-goroutine: state commits only AFTER a
-		// successful apply run, so inc.State loaded now == the run's pre-run
-		// stateBefore — a read-only snapshot identical to the original. Without
-		// this, the Acolyte would render `incarnation.state.*` as no-such-key
-		// and diverge from the original.
+		// (ADR-009/010). The Acolyte must reproduce EXACTLY the same params as the
+		// run goroutine. The incarnation is held `applying` by this run, so only
+		// the run's own `core.state.<verb>` steps move the state ([ADR-0084]), and
+		// each finishes before any later step is written: what loads now is what
+		// the goroutine renders this step against (run.go re-reads it per step).
+		// Without it the Acolyte would render `incarnation.state.*` as
+		// no-such-key and diverge from the original.
 		State: inc.State,
 		Ctx:   ctx,
 		Templates: render.NewSnapshotTemplateReader(
@@ -174,11 +181,65 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	if deps.Destiny != nil {
 		renderIn.Destiny = deps.Destiny.resolverFor(art.Manifest, deps.KeeperVersion, depsLogger(deps))
 	}
+	if recipe.Step != nil {
+		if err := stepRenderInput(ctx, deps, &renderIn, recipe.Step, incarnationName, applyID, passage); err != nil {
+			return nil, nil, err
+		}
+	}
 	tasks, plans, err := deps.Render.Render(ctx, renderIn)
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: render %s/%s: %w", incarnationName, recipe.ScenarioName, err)
 	}
 	return tasks, plans, nil
+}
+
+// stepRenderInput makes the claim render the run goroutine's pass for one step of
+// a linear run (run.go's Passage loop): the same step shape, the run's roster and
+// held block targets, and the registers the earlier steps wrote, folded by the
+// names the run read them by. Without the registers a later step's `where:` or
+// params reading `register.<earlier>` fail on a missing key; without the held
+// targets a default block's later child is re-targeted by the block's `where:`.
+func stepRenderInput(ctx context.Context, deps Deps, in *render.RenderInput, step *applyrun.RecipeStep, incarnationName, applyID string, passage int) error {
+	members, err := deps.Topology.LoadIncarnationMembers(ctx, incarnationName)
+	if err != nil {
+		return fmt.Errorf("scenario: RenderForHost: topology: %w", err)
+	}
+	in.Hosts = pinnedRoster(members, step.Roster)
+	linear, steps := config.LinearPassage(in.Scenario.Tasks, in.Scenario.Settings)
+	if linear.Count > 1 {
+		in.TaskPassage = linear.TaskPassage
+		in.ActivePassage = passage
+	}
+	in.Steps = steps
+	in.HeldTargets = render.HeldTargetsFrom(step.HeldTargets)
+	if passage > 0 {
+		reg, err := loadRegisterByHostUpToPassage(ctx, deps.DB, applyID, passage, step.RegisterNames)
+		if err != nil {
+			return fmt.Errorf("scenario: RenderForHost: %w", err)
+		}
+		in.RegisterByHost = reg
+		in.KeeperRegister = keeperRegisterBucket(reg)
+	}
+	return nil
+}
+
+// pinnedRoster is the incarnation's members narrowed to the SIDs the run renders
+// the step against, live or not — the run keeps a host that lost its lease until
+// its next refresh boundary. A host revoked or removed from the incarnation since
+// is not a member and drops out; the claim's check of its own slice
+// (ClaimRunner.settleStep) refuses a step that changes for it.
+func pinnedRoster(members []*topology.HostFacts, sids []string) []*topology.HostFacts {
+	keep := make(map[string]bool, len(sids))
+	for _, sid := range sids {
+		keep[sid] = true
+	}
+	out := make([]*topology.HostFacts, 0, len(sids))
+	for _, h := range members {
+		if keep[h.SID] {
+			out = append(out, h)
+		}
+	}
+	return out
 }
 
 // loadRosterWithHost resolves the incarnation's WHOLE roster (for the

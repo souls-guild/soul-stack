@@ -384,6 +384,15 @@ type SoulVersionReader interface {
 	ReadSoulVersion(ctx context.Context, sid string) (string, error)
 }
 
+// StepQueueChecker answers whether every live Keeper instance can take a linear
+// run's step row — its Conclave record lists the capability `step_queue`
+// (ADR-027 amend (p)(d)(ii)). False for an empty registry; an error when the
+// Conclave does not answer. Implemented over [redis.AllLiveHaveCapability] at
+// wire-up.
+type StepQueueChecker interface {
+	AllLiveTakeStepRows(ctx context.Context) (bool, error)
+}
+
 // KeeperModuleRegistry is the narrow keeper-side core Registry surface
 // (keeper/internal/coremod) scenario-runner needs for local execution of
 // `on: keeper` tasks (ADR-017, docs/keeper/modules.md). An interface (not a
@@ -541,6 +550,10 @@ type Deps struct {
 	// nil → the new dispatch path sends no Summons (best-effort, Acolyte's
 	// poll-fallback picks it up). Set at wire-up (1.4.4).
 	Summons SummonsPublisher
+
+	// StepQueue — asked before a linear run's step is queued (NIM-961). nil (no
+	// Redis) → every step of a linear run goes inline.
+	StepQueue StepQueueChecker
 
 	// LeaseOwner — SID-lease owner checker for the run-goroutine path's
 	// multi-keeper guard (acolytes=0). nil → guard disabled (no Redis / unit

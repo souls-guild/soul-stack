@@ -146,6 +146,25 @@ func NewHeldTargets() *HeldTargets {
 	return &HeldTargets{sids: map[string][]string{}}
 }
 
+// Snapshot is a copy of the held hosts by block position — what a render of a
+// later step on another instance needs to hold the same ones ([HeldTargetsFrom]).
+func (h *HeldTargets) Snapshot() map[string][]string {
+	out := make(map[string][]string, len(h.sids))
+	for key, sids := range h.sids {
+		out[key] = append([]string(nil), sids...)
+	}
+	return out
+}
+
+// HeldTargetsFrom is a run's held hosts rebuilt from a [HeldTargets.Snapshot].
+func HeldTargetsFrom(snapshot map[string][]string) *HeldTargets {
+	h := NewHeldTargets()
+	for key, sids := range snapshot {
+		h.sids[key] = append([]string(nil), sids...)
+	}
+	return h
+}
+
 // holdTargets returns a default block's hosts: resolved by the first pass that
 // renders the block, the same hosts on every later one. A held host that has left
 // the roster since is dropped, not brought back.

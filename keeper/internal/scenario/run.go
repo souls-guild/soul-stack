@@ -657,10 +657,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// stay in the run-goroutine in Phase 1). The run's terminal is recorded
 	// strictly AFTER the LAST Passage's barrier — once, not per-wave or
 	// per-Passage (ADR-056 §d).
-	//   - a linear run → OLD path, one step included, until NIM-961: the
-	//     claim-time render knows neither the model nor the step shape, and
-	//     without them it AND-s a default block's where: into each child, which
-	//     can choose other hosts than the run's own render did.
+	//   - a linear run never takes this branch, one step included: it goes
+	//     through the Passage loop, where each step is queued or sent inline on
+	//     its own ([Runner.queuesStep]), and its rows carry the step's recipe —
+	//     without it the claim-time render AND-s a default block's where: into
+	//     each child, which can choose other hosts than the run's own render did.
 	if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear {
 		// Acolyte path — non-staged (Acolyte excludes staged): all keeper tasks
 		// are in Passage 0, step-5 render (ActivePassage=0) already fully
@@ -715,6 +716,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// gates the per-Passage state re-read on below.
 		capturesState := config.HasStateCapture(scn.Tasks)
 		passageTasks, passagePlans := tasks, plans
+		var regNames map[int]string
 		for p := 0; p < passage.Count; p++ {
 			if p > 0 {
 				// Mid-run roster re-resolve (ADR-0061 §S3) at a refresh boundary:
@@ -771,7 +773,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// now sees the real fact). loadRegisterByHostUpToPassage resolves
 				// task_idx→register-name from the ALREADY-available tasks (Index is
 				// stable across Passages — same plan).
-				reg, lerr := r.loadRegisterByHostUpToPassage(ctx, spec.ApplyID, p, tasks)
+				regNames = registerNames(tasks)
+				reg, lerr := loadRegisterByHostUpToPassage(ctx, r.deps.DB, spec.ApplyID, p, regNames)
 				if lerr != nil {
 					abort("register_load_failed", lerr)
 					return
@@ -901,7 +904,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// it. After a mid-run re-resolve the outer `hosts` is a roster this
 			// Passage was not rendered against, and a grown host would look
 			// unrostered.
-			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts); err != nil {
+			var step *applyrun.Recipe
+			if spec.executionModel == ExecutionLinear {
+				step = stepRecipe(spec, art.SHA1, renderIn, regNames)
+			}
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts, step); err != nil {
 				abort("dispatch_failed", err)
 				return
 			}

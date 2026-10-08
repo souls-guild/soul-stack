@@ -247,7 +247,7 @@ func (r *Runner) closeSettledHost(ctx context.Context, spec RunSpec, log *slog.L
 	}); err != nil {
 		return fmt.Errorf("scenario: insert apply_run (%s): %w", sid, err)
 	}
-	r.writeKeeperRecords(ctx, spec, log, passage, sid, sh.records)
+	r.writeKeeperRecords(ctx, spec.ApplyID, log, passage, sid, sh.records)
 	status := applyrun.StatusSuccess
 	if sh.failed {
 		status = applyrun.StatusFailed
@@ -262,21 +262,25 @@ func (r *Runner) closeSettledHost(ctx context.Context, spec RunSpec, log *slog.L
 	return nil
 }
 
-// writeKeeperRecords writes the records through the sink a Soul's events go through.
-// The host's `apply_runs` row for this step must already exist.
-func (r *Runner) writeKeeperRecords(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, sid string, records []keeperRecord) {
-	if len(records) == 0 {
-		return
-	}
-	sink := applysink.New(applysink.Deps{
+func (r *Runner) writeKeeperRecords(ctx context.Context, applyID string, log *slog.Logger, passage int, sid string, records []keeperRecord) {
+	writeKeeperRecords(ctx, applysink.Deps{
 		DB:     r.applyDB,
 		Audit:  r.deps.Audit,
 		Bus:    r.deps.ApplyBus,
 		Source: audit.SourceKeeperInternal,
 		Logger: log,
-	})
+	}, applyID, passage, sid, records)
+}
+
+// writeKeeperRecords writes the records through the sink a Soul's events go through.
+// The host's `apply_runs` row for this step must already exist.
+func writeKeeperRecords(ctx context.Context, deps applysink.Deps, applyID string, passage int, sid string, records []keeperRecord) {
+	if len(records) == 0 {
+		return
+	}
+	sink := applysink.New(deps)
 	for _, rec := range records {
-		sink.TaskEvent(ctx, sid, rec.event(spec.ApplyID, passage))
+		sink.TaskEvent(ctx, sid, rec.event(applyID, passage))
 	}
 }
 

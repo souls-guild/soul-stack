@@ -5,11 +5,14 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/applysink"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // ClaimDeps — Acolyte claim-callback dependencies (ADR-027, Phase 1.4.3).
@@ -108,7 +111,20 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		return
 	}
 
-	tasks, plans, err := RenderForHost(ctx, c.deps.Deps, run.Recipe, run.IncarnationName, run.ApplyID, run.SID)
+	// hostTasks are the tasks this host is sent; settled is what a linear run's step
+	// decided on the Keeper for this host before sending anything (settleStep).
+	var (
+		hostTasks []*render.RenderedTask
+		settled   *settledHost
+	)
+	tasks, plans, err := RenderForHost(ctx, c.deps.Deps, run.Recipe, run.IncarnationName, run.ApplyID, run.SID, run.Passage)
+	if err == nil {
+		if run.Recipe.Step != nil {
+			hostTasks, settled, err = c.settleStep(ctx, run, tasks, plans)
+		} else {
+			hostTasks = groupByHost(tasks, plans)[run.SID]
+		}
+	}
 	if err != nil {
 		// Drain interruption (claimCtx canceled after grace expired,
 		// graceful-drain ADR-027 amend GATE-1): do NOT mark the job failed —
@@ -141,8 +157,9 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		return
 	}
 
-	// Tasks targeting exactly this SID (after on:/where: in RenderForHost).
-	hostTasks := groupByHost(tasks, plans)[run.SID]
+	// Tasks targeting exactly this SID (after on:/where: in RenderForHost). A
+	// linear run's step row never arrives here empty: settleStep refuses a host
+	// whose render differs from the run's, and the run queues only hosts it sends to.
 	if len(hostTasks) == 0 {
 		// on:/where: filtered out all tasks on this host: the host isn't targeted
 		// for this run. FINDING-01 option (b) — terminal `no_match`, NOT `success`:
@@ -217,6 +234,11 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 		log.Error("scenario: claimed -> dispatched not recorded, SendApply not called (Ward left claimed for recovery)", slog.Any("error", err))
 		return
 	}
+	// Records of the tasks the step does not send, after the mark: the mark is
+	// the fence, so a claim that lost its Ward does not write them twice.
+	if settled != nil {
+		writeKeeperRecords(ctx, c.sinkDeps(log), run.ApplyID, run.Passage, run.SID, numberedAfter(settled.records, len(hostTasks)))
+	}
 
 	// ApplyRequest carries attempt = run.Attempt (fencing epoch, ADR-027(g)):
 	// ClaimNext raised it on Ward capture above every attempt this host reached
@@ -261,6 +283,78 @@ func (c *ClaimRunner) execute(ctx context.Context, run *applyrun.ApplyRun) {
 	// apply. Closed by Soul-reconcile (post-MVP, Variant A): on reconnect Soul
 	// reports its in-flight apply_ids, Keeper reconciles stuck dispatched rows.
 	log.Info("scenario: ApplyRequest sent (claim, dispatched)", slog.Int("tasks", len(hostTasks)))
+}
+
+// settleStep is this host's part of a linear run's step, settled as the run
+// goroutine settles it (dispatchPassage): the step's slice, the flow control the
+// render decided and the cross-step requisite gate. It returns the tasks the host
+// is sent and the records of those it is not, and refuses the host unless it
+// arrives at the tasks the run decided to send it (applyrun.RecipeStep.Tasks): the
+// run decides, and a claim that would send anything else sends nothing.
+func (c *ClaimRunner) settleStep(ctx context.Context, run *applyrun.ApplyRun, tasks []*render.RenderedTask, plans []render.DispatchPlan) ([]*render.RenderedTask, *settledHost, error) {
+	stepTasks, stepPlans := tasksForPassage(tasks, plans, run.Passage)
+	var (
+		kept    []*render.RenderedTask
+		settled *settledHost
+	)
+	if mine := groupByHost(stepTasks, stepPlans)[run.SID]; len(mine) > 0 {
+		gate, err := c.stepGate(ctx, run, tasks, plans, mine)
+		if err != nil {
+			return nil, nil, err
+		}
+		out, byHost := settleHosts(map[string][]*render.RenderedTask{run.SID: mine}, gate, run.Passage)
+		kept, settled = out[run.SID], byHost[run.SID]
+	}
+	decided := run.Recipe.Step.Tasks
+	if got := planIndices(kept); (settled != nil && settled.failed) || len(got) == 0 || !slices.Equal(got, decided) {
+		return nil, nil, fmt.Errorf("scenario: step %d of %s renders tasks %v at claim where the run decided %v - its roster, a fact or a destiny on a branch moved between the two renders; nothing was sent",
+			run.Passage, run.SID, got, decided)
+	}
+	return kept, settled, nil
+}
+
+// stepGate is the cross-step requisite gate the run goroutine builds for the step
+// (run.go), over the CHANGED/FAILED facts of the steps before it. Without an audit
+// reader the run goroutine refuses a scenario that needs one before its first
+// step; an instance claiming its row without one refuses the host instead of
+// guessing that a source did not fire.
+func (c *ClaimRunner) stepGate(ctx context.Context, run *applyrun.ApplyRun, tasks []*render.RenderedTask, plans []render.DispatchPlan, mine []*render.RenderedTask) (*crossPassageGate, error) {
+	if run.Passage == 0 {
+		return nil, nil
+	}
+	reader := c.deps.Deps.AuditReader
+	if reader == nil {
+		probe := newCrossPassageGate(tasks, plans, nil, nil)
+		for _, t := range mine {
+			onchanges, _ := probe.splitRequisite(t.OnChangesIdx, run.Passage)
+			onfail, _ := probe.splitRequisite(t.OnFailIdx, run.Passage)
+			if len(onchanges) > 0 || len(onfail) > 0 {
+				return nil, fmt.Errorf("scenario: task %q gates on an earlier step's result, and this instance has no audit log to read it from", t.Name)
+			}
+		}
+		return nil, nil
+	}
+	changed, err := reader.SelectChangedTaskKeys(ctx, run.ApplyID)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: cross-step changed facts: %w", err)
+	}
+	failed, err := reader.SelectFailedTaskKeys(ctx, run.ApplyID)
+	if err != nil {
+		return nil, fmt.Errorf("scenario: cross-step failed facts: %w", err)
+	}
+	return newCrossPassageGate(tasks, plans, changed, failed), nil
+}
+
+// sinkDeps is what a record the claim writes on the Keeper's behalf goes through:
+// the sink a Soul's events go through.
+func (c *ClaimRunner) sinkDeps(log *slog.Logger) applysink.Deps {
+	return applysink.Deps{
+		DB:     c.deps.Deps.DB,
+		Audit:  c.deps.Deps.Audit,
+		Bus:    c.deps.Deps.ApplyBus,
+		Source: audit.SourceKeeperInternal,
+		Logger: log,
+	}
 }
 
 // aborted reports whether the claim's ctx was canceled — the pool's claimCtx

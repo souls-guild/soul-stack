@@ -3205,6 +3205,14 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		soulCap = soulCapChecker{rc: d.redisClient}
 	}
 
+	// Whether every live instance takes a linear run's step row — asked before a
+	// step is queued (ADR-027 amend (p)(d)(ii)). Without Redis there is no
+	// Conclave to ask, and every step goes inline.
+	var stepQueue scenario.StepQueueChecker
+	if d.redisClient != nil {
+		stepQueue = stepQueueChecker{rc: d.redisClient}
+	}
+
 	// Announced-version reader for the engine provenance stamp (ADR-0076(l)).
 	// Same Hash, same Hello write as the capability set above — so a stamped
 	// version and the capabilities a run was gated against always describe the
@@ -3289,6 +3297,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// the build version of THIS process, not a cluster-wide value.
 		KeeperVersion: version,
 		Summons:       summons,
+		StepQueue:     stepQueue,
 		LeaseOwner:    leaseOwner,
 		SoulCap:       soulCap,
 		SoulVersion:   soulVersion,
@@ -5241,6 +5250,13 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 			Audit:          d.auditWriter,
 			InputDenyPaths: cfg.Vault.InputDenyPaths,
 			KeeperVersion:  version,
+			// A linear run's step is rendered here as the run goroutine renders it
+			// (NIM-961): the same plugin manifests derive the same secret outputs, the
+			// audit log answers the cross-step requisite gate, and the records the
+			// claim writes for a task it does not send reach the live run view.
+			ModuleManifests: moduleCatalogPlugins{store: sigil.NewPGStore(d.pool)},
+			AuditReader:     auditpg.NewReader(d.pool),
+			ApplyBus:        d.applyBus,
 		},
 		KID:   cfg.KID,
 		Lease: acolyteLease(cfg),
@@ -5590,6 +5606,12 @@ type leaseOwnerChecker struct{ rc *keeperredis.Client }
 
 func (c leaseOwnerChecker) SoulLeaseOwner(ctx context.Context, sid string) (string, bool, error) {
 	return keeperredis.SoulLeaseOwner(ctx, c.rc, sid)
+}
+
+type stepQueueChecker struct{ rc *keeperredis.Client }
+
+func (c stepQueueChecker) AllLiveTakeStepRows(ctx context.Context) (bool, error) {
+	return keeperredis.AllLiveHaveCapability(ctx, c.rc, keeperredis.CapabilityStepQueue)
 }
 
 // Keeper daemon runtime wiring note.

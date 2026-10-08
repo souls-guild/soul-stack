@@ -4,10 +4,11 @@ package scenario
 // docs/adr/draft-scenario-linear-barrier.md, item 15). It is decided once, when the
 // run starts, and the whole run executes in it — never re-read from whichever
 // instance serves a later step, so Keepers of different versions during a rollout
-// cannot split one run between two orders. It lives in the run goroutine: an
-// instance claiming work-queue rows cannot read it, so a linear run stays inline
-// until NIM-961 renders a step at claim time. The run records it in its engine
-// provenance (engine_compat) and in its `incarnation.run_completed` event.
+// cannot split one run between two orders. It lives in the run goroutine. Only a
+// linear run's step row carries a step in its recipe (applyrun.RecipeStep), so an
+// instance claiming a row knows the run's model from the row, never from its own
+// configuration. The run records it in its engine provenance (engine_compat) and
+// in its `incarnation.run_completed` event.
 type ExecutionModel string
 
 const (
