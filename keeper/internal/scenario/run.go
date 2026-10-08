@@ -142,7 +142,6 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			slog.String("reason", reason),
 			slog.String("terminal_status", string(failStatus)),
 			slog.String("error", maskErrText(cause, sealed.Paths())))
-		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, sealed.Paths(), log)
 		// BAG-1: guarantee a terminal apply_runs row for the run. An early abort
 		// (no_hosts etc.) happens BEFORE dispatch — no apply_runs row exists yet,
 		// and the Voyage-awaiter polls for all rows to reach terminal, waiting
@@ -158,8 +157,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// the reaper doesn't pick up running (narrowed to claimed, ADR-027), so we
 		// force-fail running rows, otherwise apply_run hangs forever (BAG-1
 		// recovery).
+		//
+		// Before lockIncarnation: it releases the applying lock, and a reader
+		// sees an aborted run between two steps as `applying` only while the lock
+		// is held — after the release, as whatever its rows say (NIM-972).
 		keepRunning := errors.Is(cause, errCancelRequested)
 		r.ensureTerminalApplyRun(ctx, spec, reason, failureTerminalStatus(cause), keepRunning, log)
+		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, sealed.Paths(), log)
 
 		// Terminal run-failure event (T4 foundation, ADR-052 §k):
 		// incarnation.run_completed (status=failed) with partial/empty
@@ -695,8 +699,16 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			abort(reasonSoulCapabilityUnsupported, err)
 			return
 		}
+		if err := r.stepCancelRequested(ctx, spec.ApplyID, 0); err != nil {
+			abort("dispatch_failed", err)
+			return
+		}
 		if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, 0, tasks, plans, sealed.Paths()); err != nil {
 			abort("keeper_dispatch_failed", err)
+			return
+		}
+		if err := r.stepCancelRequested(ctx, spec.ApplyID, 0); err != nil {
+			abort("dispatch_failed", err)
 			return
 		}
 		if err := r.dispatchPlanned(ctx, spec, log, hosts); err != nil {
@@ -875,6 +887,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// Passage with no keeper tasks is a no-op (host-only Passage). N=1 →
 			// one call for passage 0, same behavior as the pre-loop call before
 			// Slice 2 (bit-for-bit).
+			// A Cancel made since the last barrier poll (render, gates, roster
+			// refresh — no non-terminal row of this run exists) sits on the lock;
+			// read it before the step sends anything, keeper tasks included.
+			if err := r.stepCancelRequested(ctx, spec.ApplyID, p); err != nil {
+				abort("dispatch_failed", err)
+				return
+			}
 			if err := r.dispatchKeeperTasks(ctx, spec, art.Manifest.StateSchema, log, p, passageTasks, passagePlans, sealed.Paths()); err != nil {
 				abort("keeper_dispatch_failed", err)
 				return
@@ -898,6 +917,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					return
 				}
 				gate = newCrossPassageGate(tasks, plans, changed, failed)
+			}
+			// The keeper tasks above can run for minutes; a Cancel during them
+			// must not let the hosts be sent the step.
+			if err := r.stepCancelRequested(ctx, spec.ApplyID, p); err != nil {
+				abort("dispatch_failed", err)
+				return
 			}
 			// renderIn.Hosts for the same reason: the plans' TargetSIDs come from
 			// that slice, so the per-host transport decision has to be built from
@@ -1383,8 +1408,11 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus i
 //     already reached the host, an honest terminal will arrive from it
 //     (RunResult). The failed Passage's keeper row is already failed
 //     (dispatchKeeperTasks wrote it BEFORE returning the error), earlier
-//     Passages' host rows stay success. No sentinel inserted — real rows
-//     exist;
+//     Passages' host rows stay success. No sentinel inserted while a row
+//     carries the abort ([carriesAbort]);
+//   - rows exist and none carries the abort (an abort between two steps —
+//     render, gate, roster refresh, Cancel — or a Cancel leaving running rows
+//     to finish) — the sentinel below, or the run would read success;
 //   - NO rows exist (early abort: no_hosts / scenario_load_failed /
 //     topology_failed / service_vars_failed / input_invalid / render_failed, and
 //     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
@@ -1399,6 +1427,25 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus i
 // barrier row degrades observability, not a reason to fail the goroutine.
 // Detached ctx — the original ctx may have been cancelled (Shutdown/timeout),
 // as in [lockIncarnation].
+
+// carriesAbort reports whether the run's rows will show the abort once
+// [Runner.ensureTerminalApplyRun] has closed them: a row already failed,
+// cancelled or orphaned, or a row it terminalizes. A running row left for an
+// honest RunResult (keepRunning) may still end in success.
+func carriesAbort(statuses []applyrun.HostStatus, keepRunning bool) bool {
+	for _, st := range statuses {
+		switch st.Status {
+		case applyrun.StatusFailed, applyrun.StatusCancelled, applyrun.StatusOrphaned,
+			applyrun.StatusPlanned, applyrun.StatusClaimed, applyrun.StatusDispatched:
+			return true
+		case applyrun.StatusRunning:
+			if !keepRunning {
+				return true
+			}
+		}
+	}
+	return false
+}
 
 // failureTerminalStatus maps an abort cause to the run's apply_runs terminal
 // status. Distinguished STRICTLY by [errCancelRequested] — the sentinel for
@@ -1424,11 +1471,15 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 	}
 
 	summary := reason
-	if len(statuses) == 0 {
+	if len(statuses) == 0 || !carriesAbort(statuses, keepRunning) {
 		// Early abort: no hosts, no rows. The sentinel closes the run with a
 		// terminal so the Voyage-awaiter doesn't wait forever. reason is the
 		// abort-cause text (carries no secrets; render/dispatch cause doesn't
 		// flow here).
+		//
+		// Also an abort between two steps, or a Cancel whose running rows are left
+		// to finish: no row would carry the failure, and once the lock is released
+		// the run would read success to the runs API and the Voyage (NIM-972).
 		run := applyrun.ApplyRun{
 			ApplyID:         spec.ApplyID,
 			SID:             render.RunSentinelSID,

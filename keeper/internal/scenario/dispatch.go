@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
@@ -613,7 +614,20 @@ func (r *Runner) waitBarrierExcept(ctx context.Context, applyID string, passage,
 		// the run the same way as a local ctx Cancel (run() → abort →
 		// error_locked), but survives cross-Keeper routing. Local Cancel
 		// remains the fast path via <-ctx.Done() below.
-		if cancelRequested(statuses) {
+		//
+		// The applying lock's flag (ADR-027 amend (r)) is deferred while a row is
+		// `dispatched` and none planned or claimed: the abort would close it while
+		// its Soul applies it, and GATE-1(f) keeps a delivered run uncancelled
+		// until the Keeper can send CancelApply; a later poll acts once none is
+		// dispatched. Beside an undelivered row it acts at once, as a row flag did.
+		cancelled := cancelRequested(statuses)
+		if !cancelled && !onlyDispatchedOpen(statuses) {
+			var cerr error
+			if cancelled, cerr = incarnation.RunCancelRequested(ctx, r.deps.DB, applyID); cerr != nil {
+				return fmt.Errorf("scenario: barrier poll: %w", cerr)
+			}
+		}
+		if cancelled {
 			log.Info("scenario: barrier - received cluster-wide Cancel (cancel_requested), run is being cancelled")
 			return fmt.Errorf("scenario: barrier interrupted: %w", errCancelRequested)
 		}
@@ -647,15 +661,46 @@ func cancelRequested(statuses []applyrun.HostStatus) bool {
 	return false
 }
 
-// stepCancelRequested is the cluster-wide Cancel check at the end of step p, for
-// a step whose last row went terminal with no barrier polling after it.
+// onlyDispatchedOpen reports whether the run has a dispatched row and no
+// planned or claimed one.
+func onlyDispatchedOpen(statuses []applyrun.HostStatus) bool {
+	dispatched := false
+	for i := range statuses {
+		switch statuses[i].Status {
+		case applyrun.StatusDispatched:
+			dispatched = true
+		case applyrun.StatusPlanned, applyrun.StatusClaimed:
+			return false
+		}
+	}
+	return dispatched
+}
+
+// runCancelRequested reports a cluster-wide Cancel of the run on any of its rows
+// or on the applying lock it holds. The lock is where a Cancel lands while the
+// run has no non-terminal row: before its first row, and between one step's
+// barrier and the next step's rows (ADR-027 amend (r)).
+func (r *Runner) runCancelRequested(ctx context.Context, applyID string, statuses []applyrun.HostStatus) (bool, error) {
+	if cancelRequested(statuses) {
+		return true, nil
+	}
+	return incarnation.RunCancelRequested(ctx, r.deps.DB, applyID)
+}
+
+// stepCancelRequested is the cluster-wide Cancel check at step p's boundaries:
+// before anything of the step is sent, and at its end, for a step whose last row
+// went terminal with no barrier polling after it.
 func (r *Runner) stepCancelRequested(ctx context.Context, applyID string, p int) error {
 	statuses, err := applyrun.SelectStatusesByApplyID(ctx, r.deps.DB, applyID)
 	if err != nil {
-		return fmt.Errorf("scenario: cancel check after step %d: %w", p, err)
+		return fmt.Errorf("scenario: cancel check at step %d: %w", p, err)
 	}
-	if cancelRequested(statuses) {
-		return fmt.Errorf("scenario: cancel requested by step %d: %w", p, errCancelRequested)
+	cancelled, err := r.runCancelRequested(ctx, applyID, statuses)
+	if err != nil {
+		return fmt.Errorf("scenario: cancel check at step %d: %w", p, err)
+	}
+	if cancelled {
+		return fmt.Errorf("scenario: cancel requested at step %d: %w", p, errCancelRequested)
 	}
 	return nil
 }

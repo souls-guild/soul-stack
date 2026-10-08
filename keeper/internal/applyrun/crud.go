@@ -62,12 +62,15 @@ var (
 	_ ExecQueryRower = (pgx.Tx)(nil)
 )
 
+// insertSQL stamps finished_at on a row inserted already terminal (the run
+// sentinel): the runs API reads a run as finished only when every row is, and
+// purge_apply_runs deletes only finished rows.
 const insertSQL = `
 INSERT INTO apply_runs (
     apply_id, sid, incarnation_name, scenario, task_idx, status,
     error_summary, started_by_aid, passage, input,
-    keeper_version, soul_version
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    keeper_version, soul_version, finished_at
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, CASE WHEN $13 THEN NOW() END)
 RETURNING started_at
 `
 
@@ -158,6 +161,7 @@ func Insert(ctx context.Context, db ExecQueryRower, run *ApplyRun) error {
 		// goroutine, so the caller's own build version IS the renderer's.
 		nullableVersion(run.KeeperVersion),
 		nullableVersion(run.SoulVersion),
+		run.Status.terminal(),
 	)
 	if err := row.Scan(&run.StartedAt); err != nil {
 		return mapInsertError(err)

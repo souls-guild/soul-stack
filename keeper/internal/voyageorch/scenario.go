@@ -88,8 +88,8 @@ type OrphanLockReleaser interface {
 
 // IncarnationAwaiter waits for terminal status of one per-incarnation scenario-run
 // by applyID. Production wire-up (S5) provides implementation over
-// applyrun.SelectStatusesByApplyID (poll until terminal for all incarnation hosts,
-// parity tideorch.PgApplyTerminalAwaiter); unit-tests use fake.
+// applyrun.SelectRunStatus (poll until the run status is terminal — its rows and
+// its incarnation's applying lock, NIM-972); unit-tests use fake.
 //
 // Blocks until terminal or ctx.Done. Returns [TargetOutcome] (succeeded /
 // failed / cancelled / no_match). ctx.Err on cancellation (graceful-shutdown /

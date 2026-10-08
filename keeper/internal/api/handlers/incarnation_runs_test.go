@@ -231,7 +231,7 @@ func requireProblemStatus(t *testing.T, err error, want int) {
 // applyRunHostRow — one apply_runs host row for the detail-rows-stub (column order and
 // types of selectRunHostsSQL: sid/status/passage/task_idx/failed_plan_index/
 // error_summary/attempt/cancel_requested/scenario/started_at/finished_at/started_by/
-// input/notices).
+// input/notices/lock_held).
 type applyRunHostRow struct {
 	sid             string
 	status          string
@@ -249,7 +249,8 @@ type applyRunHostRow struct {
 	// notices — raw jsonb of the run's advisory findings (migration 107). nil
 	// stands for a row written before the column existed; the projection must
 	// read that as "nothing reported", not as an error.
-	notices []byte
+	notices  []byte
+	lockHeld bool
 }
 
 // applyRunsHostRows — a pgx.Rows stub over a set of apply_runs host rows. Scan
@@ -273,7 +274,7 @@ func (r *applyRunsHostRows) Scan(dest ...any) error {
 	vals := []any{
 		row.sid, row.status, row.passage, row.taskIdx, row.failedPlan, row.errorSummary,
 		row.attempt, row.cancelRequested, row.scenario, row.startedAt, row.finishedAt, row.startedBy,
-		row.input, row.notices,
+		row.input, row.notices, row.lockHeld,
 	}
 	for i, d := range dest {
 		if err := scanApplyRunCol(d, vals[i]); err != nil {

@@ -108,7 +108,9 @@ type RunsStats struct {
 // literals are gathered from Go constants (init below) — a single source of priority
 // applying > failed > cancelled > success. Unknown status is treated as non-terminal
 // (parity with AggregateRunStatus default branch). Like AggregateRunStatus it has no
-// branch for [RunStatusPartialFailed]; whoever records the drop adds it to both.
+// branch for [RunStatusPartialFailed]; whoever records the drop adds it to both. A
+// run holding its incarnation's applying lock is applying whatever its rows say
+// ([runLockHeldSQL]).
 //
 // apply_runs is aliased as `ar`, incarnation as `i`: incarnation has its own status →
 // bare columns would be ambiguous. LEFT JOIN is defensive (FK ON DELETE CASCADE doesn't
@@ -120,10 +122,11 @@ SELECT ar.apply_id,
        COALESCE(MIN(i.service), '')                    AS service,
        MIN(ar.scenario)                                AS scenario,
        MIN(ar.started_at)                              AS started_at,
-       CASE WHEN bool_and(ar.finished_at IS NOT NULL)
+       CASE WHEN bool_and(ar.finished_at IS NOT NULL) AND NOT bool_or(%[9]s)
             THEN MAX(ar.finished_at) END               AS finished_at,
        MIN(ar.started_by_aid)                          AS started_by_aid,
        CASE
+         WHEN bool_or(%[9]s)                           THEN '%[2]s'
          WHEN bool_or(ar.status NOT IN (%[1]s))        THEN '%[2]s'
          WHEN bool_or(ar.status IN ('%[3]s','%[4]s'))  THEN '%[5]s'
          WHEN bool_or(ar.status = '%[6]s')             THEN '%[7]s'
@@ -135,6 +138,7 @@ LEFT JOIN incarnation i ON ar.incarnation_name = i.id`,
 	StatusFailed, StatusOrphaned, RunStatusFailed,
 	StatusCancelled, RunStatusCancelled,
 	RunStatusSuccess,
+	runLockHeldSQL,
 )
 
 // terminalStatusesSQL returns terminal host statuses as a list of SQL literals

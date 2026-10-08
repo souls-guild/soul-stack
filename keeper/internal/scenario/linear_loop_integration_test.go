@@ -469,10 +469,11 @@ func (m *cancellingKeeperModule) Apply(_ *pluginv1.ApplyRequest, stream grpc.Ser
 
 // ★ GUARD (draft ADR NIM-907, decision 3). A keeper step written last has no
 // barrier after it, so nothing polled a cluster-wide Cancel that flagged its row,
-// and the run committed `ready` over the operator's Cancel. The check is linear
-// only: a staged run whose last Passage holds keeper tasks alone keeps that hole.
+// and the run committed `ready` over the operator's Cancel. Two checks read it
+// now: the one after a step's keeper tasks (NIM-972, staged runs too) and the
+// one at a linear step's end.
 //
-// Mutation: drop the Cancel check at the end of a linear step → the run ends ready.
+// Mutation: drop both checks → the run ends ready.
 func TestIntegration_LinearCancelDuringLastKeeperStep(t *testing.T) {
 	resetAll(t)
 	seedOperator(t, "archon-alice")

@@ -105,6 +105,7 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 
 	applyID := audit.NewULID()
 	seedApplyRunRow(t, applyID, "host-running.example.com", applyrun.StatusRunning)
+	seedApplyRunRow(t, applyID, "host-dispatched.example.com", applyrun.StatusDispatched)
 	seedApplyRunRow(t, applyID, "host-planned.example.com", applyrun.StatusPlanned)
 	seedApplyRunRow(t, applyID, "host-claimed.example.com", applyrun.StatusClaimed)
 	seedApplyRunRow(t, applyID, "host-success.example.com", applyrun.StatusSuccess)
@@ -112,12 +113,15 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 	r := &Runner{deps: Deps{DB: integrationPool}}
 	spec := RunSpec{ApplyID: applyID, IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
-	// keepRunning=true (operator-Cancel): planned/claimed → cancelled, running — keep.
+	// keepRunning=true (operator-Cancel): planned/claimed/dispatched → cancelled, running — keep.
 	r.ensureTerminalApplyRun(context.Background(), spec, "cancelled", applyrun.StatusCancelled, true, slog.Default())
 
 	got := statusByApplyID(t, applyID)
 	if got["host-running.example.com"] != applyrun.StatusRunning {
 		t.Errorf("running host = %q, want running (Cancel does NOT touch a live apply - an honest RunResult will arrive)", got["host-running.example.com"])
+	}
+	if got["host-dispatched.example.com"] != applyrun.StatusCancelled {
+		t.Errorf("dispatched host = %q, want cancelled (operator-Cancel)", got["host-dispatched.example.com"])
 	}
 	if got["host-planned.example.com"] != applyrun.StatusCancelled {
 		t.Errorf("planned host = %q, want cancelled (operator-Cancel)", got["host-planned.example.com"])

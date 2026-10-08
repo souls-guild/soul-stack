@@ -54,6 +54,7 @@ SET status            = 'applying',
     applying_attempt  = $3,
     applying_by_kid   = $4,
     applying_since    = NOW(),
+    applying_cancel_requested = false,
     updated_at        = NOW()
 WHERE id = $1
 `

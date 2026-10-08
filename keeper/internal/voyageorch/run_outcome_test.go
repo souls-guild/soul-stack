@@ -63,7 +63,7 @@ func TestOutcomeOfRun_OverHostRows(t *testing.T) {
 		{"cancelled", []applyrun.Status{applyrun.StatusSuccess, applyrun.StatusCancelled}, OutcomeCancelled, true},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			o, done := OutcomeOfRun(applyrun.AggregateRunStatus(tc.rows))
+			o, done := OutcomeOfRun(applyrun.AggregateRunStatus(tc.rows, false))
 			if o != tc.outcome || done != tc.done {
 				t.Errorf("rows %v → (%q, %v), want (%q, %v)", tc.rows, o, done, tc.outcome, tc.done)
 			}

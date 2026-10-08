@@ -5945,20 +5945,17 @@ func (a *voyagePgIncarnationAwaiter) Await(ctx context.Context, applyID string) 
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 func (a *voyagePgIncarnationAwaiter) pollOutcome(ctx context.Context, applyID string) (voyageorch.TargetOutcome, bool) {
-	rows, err := applyrun.SelectStatusesByApplyID(ctx, a.db, applyID)
+	// The run status the API shows, not a copy of its fold: a status the fold
+	// learns (partial_failed) reaches the Voyage through OutcomeOfRun's mapping
+	// instead of being a host row this loop has never heard of, and a run between
+	// two steps, all of whose rows are terminal, still reads applying.
+	status, err := applyrun.SelectRunStatus(ctx, a.db, applyID)
 	if err != nil {
 		a.logger.Warn("voyageorch: await poll failed",
 			slog.String("apply_id", applyID), slog.Any("error", err))
 		return "", false
 	}
-	// The run status the API shows, not a copy of its fold: a status the fold
-	// learns (partial_failed) reaches the Voyage through OutcomeOfRun's mapping
-	// instead of being a host row this loop has never heard of.
-	statuses := make([]applyrun.Status, len(rows))
-	for i, r := range rows {
-		statuses[i] = r.Status
-	}
-	return voyageorch.OutcomeOfRun(applyrun.AggregateRunStatus(statuses))
+	return voyageorch.OutcomeOfRun(status)
 }
 
 // Keeper daemon runtime wiring note.

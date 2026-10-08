@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 )
 
 // Start registers a run and spawns the run-goroutine, returning immediately
@@ -121,27 +122,40 @@ func (r *Runner) Cancel(applyID string) bool {
 // cluster). Entry point for the admin API (HTTP/MCP Cancel).
 //
 // Two paths, both idempotent:
-//   - PG flag (cross-Keeper): [applyrun.RequestCancel] sets cancel_requested
-//     on all still-running rows of the run. The owning instance's goroutine
-//     sees the flag in barrier polling (waitBarrier) on the next tick and
-//     cancels the run the same way as a local Cancel (abort →
-//     error_locked). A terminal run is untouched (status='running' filter) —
-//     cancelling a finished run is a no-op.
+//   - PG flags (cross-Keeper): [incarnation.RequestRunCancel] flags the
+//     applying lock the run holds, which exists for the whole run — before its
+//     first row and between one step's barrier and the next step's rows
+//     included; [applyrun.RequestCancel] flags its non-terminal rows, which the
+//     Acolyte reads before it sends. The owning instance's goroutine reads both
+//     at step boundaries and barrier polls — the lock's deferred while a row is
+//     `dispatched` and none planned or claimed (GATE-1(f)) — and cancels the
+//     run (abort → error_locked; planned, claimed and dispatched rows closed,
+//     running ones left to their RunResult). A finished run holds no lock and
+//     no non-terminal row — cancelling it is a no-op.
 //   - local Cancel (fast path): if the goroutine is here — [Runner.Cancel]
-//     cancels runCtx immediately, without waiting for a barrier tick. If on
-//     another instance — false, the flag delivers the cancellation.
+//     cancels runCtx immediately, without waiting for a barrier tick; unless a
+//     poll took the flag first, the abort sees a context error, not an operator
+//     Cancel, and fails running rows too. If on another instance — false, the
+//     flag delivers the cancellation.
 //
 // Returns:
-//   - found — the run was active (at least one running PG row was affected OR
+//   - found — the run was active (its lock or at least one row was flagged, OR
 //     the local Cancel fired). false → no such run, or it's already terminal
-//     (caller treats it as no-op / 404).
+//     (caller treats it as no-op / 404). found is "recorded", not "will stop":
+//     a request landing after the owner's last read — past a run's last
+//     barrier poll, or a linear run's last step — is not acted on, and an owner
+//     older than migration 121 never reads the lock.
 //   - error — only a PG flag-update failure (local Cancel never errors).
 func (r *Runner) RequestCancel(ctx context.Context, applyID string) (found bool, err error) {
 	if applyID == "" {
 		return false, fmt.Errorf("scenario: empty apply_id")
 	}
-	// PG flag first — the cluster-wide path is authoritative (survives
+	// PG flags first — the cluster-wide path is authoritative (survives
 	// cross-Keeper).
+	locked, lerr := incarnation.RequestRunCancel(ctx, r.deps.DB, applyID)
+	if lerr != nil {
+		return false, fmt.Errorf("scenario: request cancel: %w", lerr)
+	}
 	affected, perr := applyrun.RequestCancel(ctx, r.deps.DB, applyID)
 	if perr != nil {
 		return false, fmt.Errorf("scenario: request cancel: %w", perr)
@@ -150,7 +164,7 @@ func (r *Runner) RequestCancel(ctx context.Context, applyID string) (found bool,
 	// immediately instead of waiting for the barrier to pick up the
 	// just-set flag.
 	local := r.Cancel(applyID)
-	return affected > 0 || local, nil
+	return locked || affected > 0 || local, nil
 }
 
 // Shutdown stops accepting new runs and waits for active ones to finish

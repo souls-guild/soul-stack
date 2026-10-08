@@ -48,7 +48,7 @@
 
 - `/runs` → `RunsFeed.tsx` = client-union `voyages+push+errands` (`:159-212`). Scenario `apply_run` — **absent**. Sorting is hardcoded `startedAt DESC`, no pagination (LIMIT=50/source).
 - `/incarnation-runs` → `IncarnationRunsList.tsx` = scenario `apply_run` via `GET /v1/runs`. Server-side pagination. No column sorting.
-- Backend `GET /v1/runs` ([`runs.go`](../../keeper/internal/api/handlers/runs.go)) — `status/incarnation/offset/limit`, the order is hardcoded `ORDER BY started_at DESC, apply_id DESC` ([`runsglobal.go:131-133`](../../keeper/internal/applyrun/runsglobal.go)).
+- Backend `GET /v1/runs` ([`runs.go`](../../keeper/internal/api/handlers/runs.go)) — `status/incarnation/offset/limit`, the order is hardcoded `ORDER BY started_at DESC, apply_id DESC` ([`runsglobal.go:134-136`](../../keeper/internal/applyrun/runsglobal.go)).
 - Sorting example: server-side `IncarnationsList.tsx` (`sort`/`sort_dir` in query+queryKey, `toggleSort`, `↑↓`); client-side `SoulsList.tsx` (`sortItems`/`▲▼`).
 
 ---
@@ -116,7 +116,7 @@ The user's goal: open a run completed a week/a month ago and see the detailed pr
 ### B1. Backend: `sort`/`sort_dir` in `GET /v1/runs`
 
 - `AllRunsInput` ([`runs.go`](../../keeper/internal/api/handlers/runs.go)) += `Sort`, `SortDir`. Whitelist: **`started_at|finished_at|status|incarnation|scenario`**; `sort_dir ∈ asc|desc`; default `started_at`/`desc` (byte-exact). Invalid → **422**.
-- `buildRunsQuery`/`ListRuns` ([`runsglobal.go:118-159`](../../keeper/internal/applyrun/runsglobal.go)): `ORDER BY` from the whitelist (the column via a `switch` over an enum, not a raw string — SQL injection). **Tie-break `, apply_id DESC`**.
+- `buildRunsQuery`/`ListRuns` ([`runsglobal.go:120-163`](../../keeper/internal/applyrun/runsglobal.go)): `ORDER BY` from the whitelist (the column via a `switch` over an enum, not a raw string — SQL injection). **Tie-break `, apply_id DESC`**.
 - **total/offset are safe**: `sort` only in `listSQL` (131-133); `countSQL` (125) is untouched. `finished_at` nullable → `NULLS LAST`.
 - Naming — `sort`/`sort_dir` (reusing `/v1/incarnations` 1:1). openapi + `npm run gen:api`.
 

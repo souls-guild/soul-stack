@@ -166,8 +166,13 @@ func TestInsert_HappyPath(t *testing.T) {
 	if !strings.Contains(f.queryRowSQL, "INSERT INTO apply_runs") {
 		t.Errorf("SQL = %q", f.queryRowSQL)
 	}
-	if len(f.queryRowArgs) != 12 {
-		t.Fatalf("args len = %d, want 12", len(f.queryRowArgs))
+	if len(f.queryRowArgs) != 13 {
+		t.Fatalf("args len = %d, want 13", len(f.queryRowArgs))
+	}
+	// A running row is not finished; only a row inserted terminal (the run
+	// sentinel) stamps finished_at (NIM-972).
+	if f.queryRowArgs[12] != false {
+		t.Errorf("args[12] finished = %v, want false for a running row", f.queryRowArgs[12])
 	}
 	if f.queryRowArgs[8] != 0 {
 		t.Errorf("args[8] passage = %v, want 0 (default Passage)", f.queryRowArgs[8])

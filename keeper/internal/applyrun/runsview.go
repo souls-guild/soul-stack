@@ -126,13 +126,17 @@ type RunDetail struct {
 	Input map[string]any
 }
 
-// AggregateRunStatus collapses the statuses of host rows for a run into [RunStatus].
-// Priority order (corresponds to barrier classification, dispatch.go classify):
-// any non-terminal → applying; else failed/orphaned → failed; else cancelled
-// → cancelled; else (only success/no_match) → success. Empty slice → applying
+// AggregateRunStatus collapses a run into [RunStatus]. Priority order (corresponds
+// to barrier classification, dispatch.go classify): the run holds its
+// incarnation's applying lock (lockHeld, [runLockHeldSQL]) or any row is
+// non-terminal → applying; else failed/orphaned → failed; else cancelled →
+// cancelled; else (only success/no_match) → success. Empty slice → applying
 // (rows not yet dispatched — run not complete).
-func AggregateRunStatus(statuses []Status) RunStatus {
-	if len(statuses) == 0 {
+//
+// The rows alone cannot say a run is over: between one step's barrier and the
+// next step's rows every row is terminal (NIM-972).
+func AggregateRunStatus(statuses []Status, lockHeld bool) RunStatus {
+	if lockHeld || len(statuses) == 0 {
 		return RunStatusApplying
 	}
 	var hasFailure, hasCancelled bool
@@ -159,18 +163,25 @@ func AggregateRunStatus(statuses []Status) RunStatus {
 	}
 }
 
+// runLockHeldSQL is true on an `apply_runs ar` row joined to `incarnation i` when
+// the row's run holds the incarnation's applying lock (ADR-027 amend (r)). A
+// `destroying` lock carries no epoch, so a destroy run is judged by its rows only.
+const runLockHeldSQL = `COALESCE(i.status = 'applying' AND i.applying_apply_id = ar.apply_id, false)`
+
 const listRunsByIncarnationSQL = `
-SELECT apply_id,
-       MIN(scenario)                                   AS scenario,
-       MIN(started_at)                                 AS started_at,
-       CASE WHEN bool_and(finished_at IS NOT NULL)
-            THEN MAX(finished_at) END                  AS finished_at,
-       MIN(started_by_aid)                             AS started_by_aid,
-       array_agg(status)                               AS statuses
-FROM apply_runs
-WHERE incarnation_name = $1
-GROUP BY apply_id
-ORDER BY MIN(started_at) DESC, apply_id DESC
+SELECT ar.apply_id,
+       MIN(ar.scenario)                                AS scenario,
+       MIN(ar.started_at)                              AS started_at,
+       CASE WHEN bool_and(ar.finished_at IS NOT NULL) AND NOT bool_or(` + runLockHeldSQL + `)
+            THEN MAX(ar.finished_at) END               AS finished_at,
+       MIN(ar.started_by_aid)                          AS started_by_aid,
+       array_agg(ar.status)                            AS statuses,
+       bool_or(` + runLockHeldSQL + `)                 AS lock_held
+FROM apply_runs ar
+LEFT JOIN incarnation i ON ar.incarnation_name = i.id
+WHERE ar.incarnation_name = $1
+GROUP BY ar.apply_id
+ORDER BY MIN(ar.started_at) DESC, ar.apply_id DESC
 LIMIT $2 OFFSET $3
 `
 
@@ -182,8 +193,8 @@ SELECT COUNT(DISTINCT apply_id) FROM apply_runs WHERE incarnation_name = $1
 // with newest first (MIN(started_at) DESC), and the total run count. scenario/
 // started_by_aid are identical across apply_id — we take MIN as a deterministic
 // representative. finished_at is MAX across rows, but only when ALL have finished
-// (otherwise NULL: run still applying). statuses is the set of host statuses for
-// aggregation by [AggregateRunStatus].
+// and the run no longer holds its lock (otherwise NULL: run still applying).
+// statuses is the set of host statuses for aggregation by [AggregateRunStatus].
 //
 // scope-gate is at the handler level (incarnation ownership is checked before
 // calling: WHERE by incarnation_name already narrows the query to one incarnation).
@@ -204,12 +215,13 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 		var (
 			rs         RunSummary
 			statusStrs []string
+			lockHeld   bool
 		)
-		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs); err != nil {
+		if err := rows.Scan(&rs.ApplyID, &rs.Scenario, &rs.StartedAt, &rs.FinishedAt, &rs.StartedByAID, &statusStrs, &lockHeld); err != nil {
 			return nil, 0, fmt.Errorf("applyrun: scan run summary: %w", err)
 		}
 		rs.Incarnation = incarnationName
-		rs.Status = AggregateRunStatus(toStatuses(statusStrs))
+		rs.Status = AggregateRunStatus(toStatuses(statusStrs), lockHeld)
 		out = append(out, rs)
 	}
 	if err := rows.Err(); err != nil {
@@ -219,12 +231,13 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 }
 
 const selectRunHostsSQL = `
-SELECT sid, status, passage, task_idx, failed_plan_index, error_summary,
-       attempt, cancel_requested, scenario, started_at, finished_at, started_by_aid,
-       input, notices
-FROM apply_runs
-WHERE apply_id = $1 AND incarnation_name = $2
-ORDER BY sid ASC, passage ASC
+SELECT ar.sid, ar.status, ar.passage, ar.task_idx, ar.failed_plan_index, ar.error_summary,
+       ar.attempt, ar.cancel_requested, ar.scenario, ar.started_at, ar.finished_at, ar.started_by_aid,
+       ar.input, ar.notices, ` + runLockHeldSQL + `
+FROM apply_runs ar
+LEFT JOIN incarnation i ON ar.incarnation_name = i.id
+WHERE ar.apply_id = $1 AND ar.incarnation_name = $2
+ORDER BY ar.sid ASC, ar.passage ASC
 `
 
 // SelectRunDetail returns the details of a single run: all host×passage rows for an
@@ -232,7 +245,8 @@ ORDER BY sid ASC, passage ASC
 // "apply_id of this incarnation"; foreign apply_id returns 0 rows → [ErrApplyRunNotFound]).
 // Header (scenario/started_at/started_by_aid) comes from the first row (identical
 // across apply_id); finished_at detail is MAX across rows, but nil until all have
-// finished; Status is the aggregate of Hosts.
+// finished and while the run holds its lock; Status is the aggregate of Hosts and
+// the lock.
 func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnationName string) (*RunDetail, error) {
 	rows, err := db.Query(ctx, selectRunHostsSQL, applyID, incarnationName)
 	if err != nil {
@@ -247,6 +261,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 		// non-nil; nil if at least one row is still running).
 		allFinished = true
 		maxFinished time.Time
+		lockHeld    bool
 	)
 	for rows.Next() {
 		var (
@@ -263,7 +278,7 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 			&hs.SID, &statusStr, &hs.Passage, &hs.FailedTaskIdx, &hs.FailedPlanIndex,
 			&hs.ErrorSummary, &hs.Attempt, &hs.CancelRequested,
 			&rowScenario, &rowStarted, &rowFinished, &rowStartedBy,
-			&rowInput, &rowNotices,
+			&rowInput, &rowNotices, &lockHeld,
 		); err != nil {
 			return nil, fmt.Errorf("applyrun: scan run host: %w", err)
 		}
@@ -309,11 +324,47 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	if detail.ApplyID == "" {
 		return nil, ErrApplyRunNotFound
 	}
-	detail.Status = AggregateRunStatus(statuses)
-	if allFinished {
+	detail.Status = AggregateRunStatus(statuses, lockHeld)
+	if allFinished && !lockHeld {
 		detail.FinishedAt = &maxFinished
 	}
 	return &detail, nil
+}
+
+const selectRunStatusSQL = `
+SELECT ar.status, ` + runLockHeldSQL + `
+FROM apply_runs ar
+LEFT JOIN incarnation i ON ar.incarnation_name = i.id
+WHERE ar.apply_id = $1
+`
+
+// SelectRunStatus is the status of run applyID as the runs API folds it, from its
+// rows and its incarnation's applying lock read in one statement.
+func SelectRunStatus(ctx context.Context, db ExecQueryRower, applyID string) (RunStatus, error) {
+	rows, err := db.Query(ctx, selectRunStatusSQL, applyID)
+	if err != nil {
+		return "", fmt.Errorf("applyrun: run status query: %w", err)
+	}
+	defer rows.Close()
+	var (
+		statuses []Status
+		lockHeld bool
+	)
+	for rows.Next() {
+		var (
+			s    string
+			held bool
+		)
+		if err := rows.Scan(&s, &held); err != nil {
+			return "", fmt.Errorf("applyrun: scan run status: %w", err)
+		}
+		statuses = append(statuses, Status(s))
+		lockHeld = lockHeld || held
+	}
+	if err := rows.Err(); err != nil {
+		return "", fmt.Errorf("applyrun: iterate run status: %w", err)
+	}
+	return AggregateRunStatus(statuses, lockHeld), nil
 }
 
 // toStatuses converts a slice of status strings from array_agg into []Status.

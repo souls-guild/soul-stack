@@ -1263,8 +1263,10 @@ const orphanReleaseScenarioLabel = "voyage-orphan-release"
 // VerifyOwnership) BEFORE calling; here — FENCING-1 (protection against alien live-lock) +
 // single-winner CAS under one FOR UPDATE:
 //
-//   - FENCING-1 (no-live-rival): release lock ONLY if incarnation HAS NO
-//     active (non-terminal) apply_run with apply_id ≠ orphanApplyID. Alien
+//   - FENCING-1 (no-live-rival): release lock ONLY if its epoch does not name
+//     another run (`applying_apply_id`, NULL for a legacy lock) AND the
+//     incarnation HAS NO active (non-terminal) apply_run with apply_id ≠
+//     orphanApplyID. Alien
 //     live run (direct run / other Voyage, started between crash and
 //     reclaim) holds active apply_runs-row with its own apply_id → its presence
 //     blocks release ([ErrOrphanLockNotReleased]). Protection against releasing alien
@@ -1313,7 +1315,7 @@ func ReleaseApplyingOrphan(ctx context.Context, pool TxBeginner, id, orphanApply
 	defer func() { _ = tx.Rollback(ctx) }()
 
 	const selectForUpdateSQL = `
-SELECT state, status
+SELECT state, status, applying_apply_id
 FROM incarnation
 WHERE id = $1
 FOR UPDATE
@@ -1321,8 +1323,9 @@ FOR UPDATE
 	var (
 		stateBytes []byte
 		statusStr  string
+		holder     *string
 	)
-	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr); err != nil {
+	if err := tx.QueryRow(ctx, selectForUpdateSQL, id).Scan(&stateBytes, &statusStr, &holder); err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
 			return ErrIncarnationNotFound
 		}
@@ -1332,6 +1335,12 @@ FOR UPDATE
 	// of previous owner / concurrent finalization already won the row). FOR UPDATE
 	// already serialized us — status is authoritative in this tx.
 	if Status(statusStr) != StatusApplying {
+		return ErrOrphanLockNotReleased
+	}
+	// FENCING-1 by the lock: the epoch names the run holding it. A live run has no
+	// non-terminal row between one step's barrier and the next step's rows, so the
+	// row check below alone would release it (NIM-972).
+	if holder != nil && *holder != orphanApplyID {
 		return ErrOrphanLockNotReleased
 	}
 
