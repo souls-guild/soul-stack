@@ -27,6 +27,27 @@ func TestRunner_ExecutionModelIsStagedUnlessLinear(t *testing.T) {
 	}
 }
 
+// keeper.yml::scenario.execution_model reaches the Runner as a function read at
+// every run start, so a reload takes the next run without a restart and wins over
+// the static field.
+//
+// Mutation: read only Deps.ExecutionModel → the configured linear runs staged.
+func TestRunner_ExecutionModelFnIsReadPerRun(t *testing.T) {
+	model := ExecutionLinear
+	r := &Runner{deps: Deps{ExecutionModel: ExecutionStaged, ExecutionModelFn: func() ExecutionModel { return model }}}
+	if got := r.executionModel(); got != ExecutionLinear {
+		t.Fatalf("configured linear → %q, want linear", got)
+	}
+	model = ExecutionStaged
+	if got := r.executionModel(); got != ExecutionStaged {
+		t.Fatalf("after reload to staged → %q, want staged", got)
+	}
+	model = "liner"
+	if got := r.executionModel(); got != ExecutionStaged {
+		t.Fatalf("unknown model %q → %q, want staged", model, got)
+	}
+}
+
 // The event carries the model the run decided at its start; a spec that never
 // went through run() carries no key rather than a made-up one.
 func TestEmitRunCompleted_CarriesExecutionModel(t *testing.T) {

@@ -293,6 +293,34 @@ type KeeperConfig struct {
 	// semantic phase; range (>0) resolved by default in
 	// [KeeperConfig.ResolvedMaxAwaitTimeout] (style `acolyte_*`).
 	MaxAwaitTimeout string `yaml:"max_await_timeout,omitempty"`
+
+	// Scenario is the scenario-run block. Optional; absent means the defaults.
+	Scenario *KeeperScenario `yaml:"scenario,omitempty"`
+}
+
+// KeeperScenario is the `scenario:` block of keeper.yml.
+type KeeperScenario struct {
+	// ExecutionModel is how a run started on THIS instance orders its tasks:
+	// `staged` (ADR-056) or `linear` (draft ADR NIM-907); empty → staged until
+	// NIM-952. Read once per run, at its start, and pinned to the run — a reload
+	// reaches the next run and never a running one, and an instance claiming a
+	// linear step from the work-queue reads the model from the row, not from here.
+	ExecutionModel string `yaml:"execution_model,omitempty"`
+}
+
+// Values of `scenario.execution_model`.
+const (
+	ScenarioExecutionStaged = "staged"
+	ScenarioExecutionLinear = "linear"
+)
+
+// ResolvedExecutionModel returns the execution model a run started now takes:
+// unset → [ScenarioExecutionStaged].
+func (c *KeeperConfig) ResolvedExecutionModel() string {
+	if c == nil || c.Scenario == nil || c.Scenario.ExecutionModel == "" {
+		return ScenarioExecutionStaged
+	}
+	return c.Scenario.ExecutionModel
 }
 
 // DefaultMaxAwaitTimeout is the default ceiling on `await_timeout` of the

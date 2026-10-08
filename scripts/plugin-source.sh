@@ -27,9 +27,9 @@
 #
 # Usage:
 #   scripts/plugin-source.sh dir <alias>    # print the tree at the pin, filling the cache
-#   scripts/plugin-source.sh prime          # fill the cache for every pinned plugin
-#   scripts/plugin-source.sh aliases        # every alias in the catalog
-#   scripts/plugin-source.sh overrides      # aliases currently pointed at a working tree
+#   scripts/plugin-source.sh prime          # fill the cache for every catalog plugin (not on-demand rows)
+#   scripts/plugin-source.sh aliases        # every alias in the catalog (not on-demand rows)
+#   scripts/plugin-source.sh overrides      # catalog aliases currently pointed at a working tree
 #
 # Environment:
 #   SOUL_STACK_PLUGIN_CACHE          cache root (default: $XDG_CACHE_HOME/soul-stack/plugins)
@@ -55,6 +55,15 @@ vmlocal|https://github.com/soul-stack-plugin/vmlocal.git|71eb17bc3d8864c8e6f0cd6
 CATALOG
 }
 
+# Pins `dir` resolves exactly like the catalog's but `prime` never fetches: `e2e-live-gate`
+# requires a successful prime, so a row here would make the gate depend on a repository
+# only a dev tool reads, and fail offline on a cache primed before the row existed.
+on_demand_catalog() {
+  cat <<'CATALOG'
+ssh-static|https://github.com/soul-stack-plugin/ssh-static.git|16cd9aae545259b628f1ffcfb7304b5990436543|the SshProvider the linear-dispatch benchmark (dev/bench/linear-dispatch) reaches its push host through
+CATALOG
+}
+
 die() { echo "plugin-source.sh: $*" >&2; exit 1; }
 
 # env_suffix - the alias as it appears in an environment variable name: upper case, and
@@ -66,9 +75,9 @@ env_suffix() {
 
 catalog_row() {
   local alias="$1" row
-  row="$(plugin_catalog | grep "^${alias}|" || true)"
+  row="$( { plugin_catalog; on_demand_catalog; } | grep "^${alias}|" || true)"
   if [ -z "${row}" ]; then
-    die "no plugin ${alias} in the catalog; it carries: $(plugin_catalog | cut -d'|' -f1 | tr '\n' ' ')"
+    die "no plugin ${alias} in the catalog; it carries: $( { plugin_catalog; on_demand_catalog; } | cut -d'|' -f1 | tr '\n' ' ')"
   fi
   printf '%s' "${row}"
 }
@@ -132,10 +141,12 @@ ensure_tree() {
 
   if ! git --git-dir="${repo}" cat-file -e "${commit}^{commit}" 2>/dev/null; then
     if offline; then
+      local fill="make plugin-sources"
+      if on_demand_catalog | grep -q "^${alias}|"; then fill="scripts/plugin-source.sh dir ${alias}"; fi
       die "${alias}: commit ${commit} is not in the cache and SOUL_STACK_PLUGIN_OFFLINE forbids fetching it.
   The cache is ${repo}.
   Prime it on a machine with a route to ${url}:
-      make plugin-sources"
+      ${fill}"
     fi
     GIT_TERMINAL_PROMPT=0 GIT_ASKPASS= SSH_ASKPASS= \
       git --git-dir="${repo}" fetch --quiet --tags "${url}" '+refs/heads/*:refs/remotes/origin/*' \

@@ -331,7 +331,56 @@ depends on anything is the fact that *k* comes after *k−1*.
   unreachable and every run inherits the limitation `:526-528` already names.
 - **A straggler now slows every step**, and `serial:` multiplies the wave count.
 
-**No number in this ADR is a measurement of the change.**
+**Measured (NIM-950, 2026-10-08).** The list above was written before any measurement; the
+numbers below are one. One scenario of twelve cheap top-level tasks (`core.exec.run true`, two of
+them reading a secret through `vault()`), both models on one commit (`release/NIM-926` after
+NIM-946, plus NIM-950's `scenario.execution_model` key), real Souls in Docker on one 24-CPU
+machine, a push host over SSH, ten runs per cell. Method, harness and every derivation:
+[dev/bench/linear-dispatch](../../dev/bench/linear-dispatch/README.md). Medians:
+
+| | staged | linear |
+|---|---|---|
+| run, 1 / 4 / 8 hosts, inline (`acolytes: 0`) | 227 / 239 / 269 ms | 2534 / 2658 / 2812 ms |
+| run, 1 / 4 / 8 hosts, work-queue (`acolytes: 2`) | 222 / 230 / 438¹ ms | 2521 / 2559 / 2610 ms |
+| run, push host, +0 / +20 ms delay | 423 / 623 ms | 4925² / 7322 ms |
+| messages per host | 1 | 12 |
+
+¹ its one step took 231 ms (median), so 6 of its 10 runs waited two ticks of the barrier poll
+(438–470 ms) and 4 one tick (230–236 ms); the same cell at +20 ms delay ran 231 ms.
+² see the push bullet: the same inline path ran 3243 ms in the `acolytes: 2` Keeper start.
+
+- **The ~200 ms gap between two steps is the barrier's polling tick, not work.** A step takes 9 ms
+  (1 host) to 30 ms (8 hosts); of the ~200 ms that pass before the next step is sent, the Keeper's
+  own work is 10–13 ms and the rest is the wait for the next 200 ms tick of the barrier poll
+  (`keeper/internal/scenario/scenario.go` `defaultPollInterval`, `failure_policy.go` `waitStep`).
+  So the tick, not the round trip, sets the price: +20 ms on every message leaves the linear run
+  unchanged (2536 against 2534 ms, 1 host), and any step shorter than a tick costs a tick.
+- **The Soul's per-message overhead is small.** Its `Run` of a one-task message takes 1 ms, against
+  13–20 ms for one twelve-task message across all staged cells (1.05–1.7 ms per task). Around
+  `Run` — the network (~1.5 ms), the Soul's request handling and the Keeper storing the result —
+  7–8 ms per message, against 30–49 ms for the one staged message (inline, no added delay).
+- **Re-render and Vault.** Inline: 12 render passes against 1, 9–24 ms of render per run against
+  2–5 ms (1–8 hosts), and **one** Vault read per run in both models — the run memo (NIM-934) holds.
+  On the work-queue every claimed host renders its step with a read of its own: 24 / 60 / 108
+  renders and **11 / 41 / 81 Vault reads** per run for 1 / 4 / 8 hosts against 2 / 5 / 9 staged,
+  i.e. hosts × the steps from the first secret-reading task on, plus the run's own read.
+- **A push host pays an SSH session per step** — 12 sessions per run against 1, each ~220 ms (dial,
+  handshake, delivery check, `soul apply`; 518 ms at +20 ms delay, about 15 round trips). Its
+  steps ran 201–284 ms, and 108 of 110 transitions waited two ticks: the run took 4.9 s against
+  0.42 s. In the `acolytes: 2` Keeper start, where a linear push step also goes inline (below),
+  the steps landed around 200 ms, most were seen on the first tick, and the run took 3.2 s — one
+  start per configuration cannot tell that start's variance from the setting, and the harness now
+  measures push at `acolytes: 0` only. At +20 ms most steps wait three ticks: 7.3 s against
+  0.62 s. The session sets the step; the tick decides whether it costs 200, 400 or 600 ms.
+- **Push hosts and the work-queue.** On an `acolytes>0` Keeper a linear step with a push host stays
+  inline, whole (`dispatch.go` `queuesStep`); a one-Passage staged run with one is refused before
+  dispatch (`dispatch_failed`, `run.go`), while a multi-Passage or `serial:` staged run sends it
+  inline.
+
+Not measured: real tasks, which dilute every fixed cost above; how re-render grows with the step
+count (always 12 here); HA; a fleet beyond 8 hosts or spread over machines (here every host shares
+the Keeper's CPU). The stand's Postgres clock (WSL2) stepped back by ~110–125 ms inside 24 of the
+runs: medians absorb it, p90 and single gaps do not.
 
 ## Consequences
 
@@ -1020,7 +1069,8 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     (`soul-lint/internal/validate/stage.go`).
 14. **A real benchmark** on a fleet, on a scenario with several top-level tasks, measuring separately:
     the round trips, the Soul's per-message overhead, and the quadratic re-render with its Vault
-    load.
+    load. *Measured (NIM-950):* §Price, harness in `dev/bench/linear-dispatch` — at twelve steps
+    only, so the growth of re-render with the step count is still unmeasured.
 15. **Operations and rollout.**
     - **HA Keepers of different versions are not fail-closed here.** The same `{change, check}` under
       `serial:` rolls as a canary or across the whole fleet at once depending on which Keeper picked
@@ -1030,7 +1080,9 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
       and recorded in `engine_compat` on success and in the `incarnation.run_completed` payload on
       success and on a failure terminal (user, 2026-10-06) — not for a destroy run, which emits
       neither, nor by an instance that lost the terminal to another; `staged` stays the default
-      until NIM-952. It lives in the run goroutine. Only a linear run's step row carries a step in
+      until NIM-952. The starting instance takes it from its own
+      `keeper.yml::scenario.execution_model`, re-read at each run start (NIM-950,
+      [config.md](../keeper/config.md#scenario)). It lives in the run goroutine. Only a linear run's step row carries a step in
       its recipe, with the run's decisions for it, so an instance that claims the row knows the
       model from the row ([ADR-027 amend (q)](0027-apply-work-queue.md), NIM-961).
     - **Rollback:** a cross-task `when:` is legal in the new model and an older Keeper refuses it

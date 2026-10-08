@@ -22,6 +22,7 @@ var (
 	enumVaultAuth      = []string{"token", "approle"}
 	enumRedisMode      = []string{"standalone", "sentinel", "cluster"}
 	enumConflictPolicy = []string{"warn", "fail"}
+	enumExecutionModel = []string{ScenarioExecutionStaged, ScenarioExecutionLinear}
 	enumCapability     = []string{
 		"run_as_root",
 		"network_outbound",
@@ -195,6 +196,11 @@ func schemaValidateKeeper(path string, root *ast.MappingNode, c *KeeperConfig) [
 
 	if c.Push != nil {
 		out = append(out, validatePush(root, c.Push)...)
+	}
+
+	// A typo here must refuse the config, not run staged under a linear label.
+	if c.Scenario != nil && c.Scenario.ExecutionModel != "" {
+		out = append(out, checkEnum(root, "$.scenario.execution_model", c.Scenario.ExecutionModel, enumExecutionModel)...)
 	}
 
 	if c.Git != nil {

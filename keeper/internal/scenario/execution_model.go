@@ -23,10 +23,14 @@ const (
 )
 
 // executionModel is the model a run started now executes in. Staged unless the
-// Runner was built with linear: the default moves in NIM-952, once every piece of
+// Runner is configured linear: the default moves in NIM-952, once every piece of
 // the linear model is in.
 func (r *Runner) executionModel() ExecutionModel {
-	if r.deps.ExecutionModel == ExecutionLinear {
+	m := r.deps.ExecutionModel
+	if r.deps.ExecutionModelFn != nil {
+		m = r.deps.ExecutionModelFn()
+	}
+	if m == ExecutionLinear {
 		return ExecutionLinear
 	}
 	return ExecutionStaged

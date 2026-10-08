@@ -1,0 +1,61 @@
+name: bench
+description: |
+  Twelve cheap top-level tasks and no register reference between them, so ADR-056
+  stages the whole plan as ONE Passage (one message per host) while the linear model
+  makes it twelve steps (twelve messages, twelve barriers). Two tasks read a secret
+  through vault(), which makes the run's re-render and its Vault load countable.
+  Guarded by TestBenchFixture_TwelveStepsOnePassage.
+
+tasks:
+  - name: t01
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t02
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t03-secret
+    module: core.exec.run
+    params:
+      cmd: test
+      args: ["-n", "${ vault(vars.secret_path + '#value') }"]
+    changed_when: "false"
+  - name: t04
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t05
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t06
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t07
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t08-secret
+    module: core.exec.run
+    params:
+      cmd: test
+      args: ["-n", "${ vault(vars.secret_path + '#value') }"]
+    changed_when: "false"
+  - name: t09
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t10
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t11
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"
+  - name: t12
+    module: core.exec.run
+    params: { cmd: "true" }
+    changed_when: "false"

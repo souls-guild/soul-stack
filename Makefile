@@ -133,7 +133,7 @@ PKG_DIR  := $(DIST_DIR)/pkg
 KEEPER_IMAGE ?= soul-stack/keeper
 SOUL_IMAGE   ?= soul-stack/soul
 
-.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test help dev-souls-docker dev-souls-docker-down check-plugin-schema check-banned-terms
+.PHONY: plugin-sources plugin-schema-vendor gen build build-keeper build-soul build-soulctl build-linux bin-keeper bin-soul bin-soul-lint test test-race test-integration e2e e2e-live e2e-live-services e2e-live-gate e2e-k8s e2e-cloud check-e2e-cloud check-all check-ci check-integration-set check-e2e-set check-gate check-ci-status check-release-gate check-modules-run check-vuln-corpus docker-build-keeper docker-build-soul docker-keeper docker-soul tidy check check-fmt vet vet-tags check-gen check-doc-links check-approle-template check-makefile-recipes check-vuln lint trial stamp-examples dev-up dev-down dev-stop dev-reset dev-provision dev-smoke dev-keeper dev-jwt dev-souls dev-web dev-stand dev-stand-free gen-audit-catalog gen-openapi check-openapi check-template check-stand-template check-soul-template check-dev-stand-build sync-webui check-webui check-webui-embed check-webui-provenance check-webui-freshness check-webui-freshness-guard sbom pkg sign stress load-test bench-linear-dispatch help dev-souls-docker dev-souls-docker-down check-plugin-schema check-banned-terms
 
 gen: gen-openapi
 	@mkdir -p $(KEEPER_PROTO_OUT) $(PLUGIN_PROTO_OUT)
@@ -2348,6 +2348,14 @@ stress:
 
 load-test: stress
 
+# bench-linear-dispatch -- staged vs linear scenario dispatch on one commit, on the
+# stand's docker Souls plus a push host (NIM-950). Needs a DEDICATED stand that is up;
+# methodology and bring-up -- dev/bench/linear-dispatch/README.md. BENCH_STEP picks
+# setup|run|report (default: all three); BENCH_* in the script's header narrow the matrix.
+BENCH_STEP ?= all
+bench-linear-dispatch:
+	@dev/bench/linear-dispatch/bench.sh $(BENCH_STEP)
+
 # Target cheat sheet. Dev-stack details -- `docs/dev/local-setup.md`.
 help:
 	@echo "Build and tests:"
@@ -2418,6 +2426,7 @@ help:
 	@echo "Load testing (soul-legion, needs a running stand):"
 	@echo "  stress            one-button load: build+mint-JWT+gon+cleanup (ENV: COUNT/RAMP/API/VOYAGE/WRITE/WRITE_DURATION/VOYAGE_CONCURRENCY/VOYAGE_POLL/ISSUE_CONCURRENCY/...)"
 	@echo "  load-test         alias for stress"
+	@echo "  bench-linear-dispatch  staged vs linear dispatch on a dedicated stand (DEV_STAND, DEDICATED_INFRA=1; BENCH_STEP, BENCH_*)"
 	@echo ""
 	@echo "OpenAPI:"
 	@echo "  gen-openapi       regenerate committed openapi.yaml from the huma aggregator"

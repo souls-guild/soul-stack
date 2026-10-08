@@ -697,6 +697,20 @@ acolytes: 0
 > an already existing SID-lease with a KID owner remains as insurance after the start (for example.
 > the second instance rose after passing the refuse-guard of the first).
 
+## `scenario`
+
+```yaml
+scenario:
+  execution_model: staged   # staged | linear
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `execution_model` | `string` (enum) | `staged` | How a scenario run started on **this instance** orders its tasks ([`execution_model`](../naming-rules.md)): `staged` — [ADR-056](../adr/0056-staged-render-passage.md) Passages; `linear` — a step per top-level task and per child of a default block, each after the barrier of the one before it ([draft ADR NIM-907](../adr/draft-scenario-linear-barrier.md)). Until NIM-952 the linear model is still being completed (the draft ADR's "Work that must land"): set it on a stand or for a measurement, not in production. Read once when a run starts and pinned to that run, so a reload reaches the next run and never a running one; an instance claiming a linear step from the work-queue takes the model from the step row, not from its own file. Any other value is refused with `enum_invalid`. The default moves to `linear` in NIM-952. |
+
+In an HA cluster each instance decides for the runs it starts, so instances whose files disagree
+start runs in different models — each run is still one model from its start to its end.
+
 ## `console`
 
 Operator-facing policy of the interactive console plane
@@ -1134,6 +1148,7 @@ Hot-reload of the config with rewriting the changed value back to disk - end-to-
 | `cadence_scheduler.lock_ttl` | yes | — | TTL Redis-lease `conductor:leader` applies between re-acquire. |
 | `cadence_scheduler.enabled` | — | yes | Conductor up/down is read at startup `setupConductor`; hot-toggle subsystems (lease + goroutine on the fly) - a separate slice. Operational management of schedules - per-Cadence `enabled` (ADR-046), without restart. |
 | `acolytes` / `acolyte_lease` / `acolyte_batch` / `acolyte_poll_interval` / `acolyte_drain_grace` | — | yes | Worker pool parameters (ADR-027) are read at startup `setupAcolyte`; restarting the pool / reinjecting claim parameters on the fly - separate slice. |
+| `scenario.execution_model` | yes | — | Read at the start of each run from the live Store snapshot and pinned to that run ([§ scenario](#scenario)). |
 | `watchman_interval` / `watchman_fail_threshold` | — | yes | Watchman (soul-shedding S2) parameters are read at startup `setupWatchman`; reinjection of the period/threshold into a live probe-loop - a separate slice. |
 | `allow_unsafe_single_path_multi_keeper` | — | yes | Opt-out refuse-guard (Finding-A) is read at startup `setupConclaveRefuseGuard`; The decision "refuse vs warn" is made once before receiving streams. |
 | `toll.threshold` / `window_size` / `degraded_ttl` / `clear_grace` / `per_coven_thresholds` / `webhook.*` | yes (all) | — | Reinjected into the live leader by `applyTollReload` from the `Store.OnReload` callback; the webhook notifier is recycled only when its own config changed ([§ toll](#toll), ADR-038). `toll.threshold` is additionally cluster-overridable through `cfg_toll_threshold` ([ADR-0073](../adr/0073-keeper-runtime-config-pg.md)). |

@@ -596,6 +596,11 @@ type Deps struct {
 	// ([ExecutionModel]). Zero value → staged (ADR-056) until NIM-952.
 	ExecutionModel ExecutionModel
 
+	// ExecutionModelFn — hot-reload-aware source of the model, read once at the
+	// start of each run (keeper.yml::scenario.execution_model). Overrides
+	// [Deps.ExecutionModel] when set.
+	ExecutionModelFn func() ExecutionModel
+
 	// PollInterval / RunTimeout — override the defaults (for tests). Zero
 	// value → default.
 	PollInterval time.Duration

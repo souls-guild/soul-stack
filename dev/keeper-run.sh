@@ -14,6 +14,10 @@
 # Parameters via env:
 #   DEV_STAND - stand identifier (empty=default), see dev/stand-env.sh
 #   REPO_ROOT - soul-stack repo root (default from script path)
+#   KEEPER_CONFIG_OVERLAY - optional YAML file deep-merged over the rendered config
+#               (maps merge, everything else replaces); needs python3 + PyYAML.
+#               The committed template stays the single source; a caller that needs
+#               different keys (dev/bench/linear-dispatch) states only those.
 
 set -euo pipefail
 
@@ -78,6 +82,26 @@ fi
 command -v envsubst >/dev/null 2>&1 || fail "envsubst not found (gettext package) - needed to render the config"
 envsubst "${KEEPER_RENDER_WHITELIST}" < "${KEEPER_TMPL}" > "${KEEPER_CONFIG}"
 log "config rendered: ${KEEPER_CONFIG}"
+if [ -n "${KEEPER_CONFIG_OVERLAY:-}" ]; then
+    [ -s "${KEEPER_CONFIG_OVERLAY}" ] || fail "KEEPER_CONFIG_OVERLAY=${KEEPER_CONFIG_OVERLAY} is missing or empty"
+    python3 - "${KEEPER_CONFIG}" "${KEEPER_CONFIG_OVERLAY}" <<'PY' || fail "overlay merge failed (python3 + PyYAML needed)"
+import sys, yaml
+def merge(base, over):
+    if isinstance(base, dict) and isinstance(over, dict):
+        for k, v in over.items():
+            base[k] = merge(base.get(k), v)
+        return base
+    return over
+cfg_path, over_path = sys.argv[1], sys.argv[2]
+with open(cfg_path) as f:
+    cfg = yaml.safe_load(f)
+with open(over_path) as f:
+    over = yaml.safe_load(f) or {}
+with open(cfg_path, "w") as f:
+    yaml.safe_dump(merge(cfg, over), f, sort_keys=False)
+PY
+    log "overlay merged: ${KEEPER_CONFIG_OVERLAY}"
+fi
 
 # 4a. Teleport push is opt-in (NIM-266) and needs an identity file this repo cannot
 # mint - `tctl auth sign` against a live Teleport. Without it keeper dies four steps
@@ -132,6 +156,16 @@ if [ -z "${STAND_SLUG}" ] || [ "${DEDICATED_INFRA}" = "1" ]; then
 else
     log "lightweight non-default stand: NOT clearing leader-leases (shared Redis - avoid hitting neighbors)"
 fi
+
+# 7a. Drop the SID leases the killed process still holds. They carry this stand's KID,
+# so the new process reads them as its own, answers every reconnect with AlreadyExists
+# ("soul lease still held by self") and its Souls stay off for a whole lease TTL; a run
+# started meanwhile dies at send_apply_failed. Compare-and-delete by owner, so a lease
+# of any other KID - a neighbour on shared Redis, keeper-b - is never touched.
+dropped="$(docker exec "${STACK_PREFIX}-redis" sh -c "redis-cli -p 6379 --scan --pattern 'soul:*:lock' | while read -r k; do
+    redis-cli -p 6379 EVAL \"if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) end return 0\" 1 \"\$k\" '${KID}'
+done" 2>/dev/null | grep -c '^1$' || true)"
+log "orphaned SID leases of ${KID} dropped: ${dropped:-0}"
 
 # 8. dev-env for file://-resolve of artifacts + explicit dev VAULT_TOKEN=root (user's env
 # may have a prod token; force root). VAULT_ADDR - from stand-env (lightweight=shared :8200).

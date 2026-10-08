@@ -27,6 +27,8 @@
 #   DEV_STAND          - stand identifier (empty=default; prefix/DB/ports/dev-dir - dev/stand-env.sh)
 #   REPO_ROOT          - soul-stack repo root (defaults from the script path)
 #   VAULT_TOKEN        - dev-Vault root token for mint-jwt (default root)
+#   SOUL_DOCKER_METRICS_PORT - opt.: serve the soul's /metrics on the container's loopback
+#                        (read with `docker exec <name> curl 127.0.0.1:<port>/metrics`)
 
 set -euo pipefail
 
@@ -117,6 +119,14 @@ logging:
   level: info
   format: text
 YAML
+    if [ -n "${SOUL_DOCKER_METRICS_PORT:-}" ]; then
+        cat >> "${cfg}" <<YAML
+
+metrics:
+  enabled: true
+  listen: "127.0.0.1:${SOUL_DOCKER_METRICS_PORT}"
+YAML
+    fi
 }
 
 # json_field FIELD -- extract a top-level string field from JSON on stdin.

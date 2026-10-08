@@ -1,0 +1,5 @@
+description: Fixture of the linear-dispatch benchmark (NIM-950) - cheap tasks, no state
+
+# No migrations/ directory -> state-schema version 1. Nothing is captured: the
+# benchmark measures dispatch, not state.
+state_schema: {}

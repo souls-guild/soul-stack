@@ -48,9 +48,11 @@ command -v python3 >/dev/null 2>&1 || fail "python3 not found in PATH (needed fo
 
 # Read signing_key from Vault (via docker exec into the vault server container -
 # there's usually no host-vault CLI on the dev machine). Extract .data.data.signing_key.
+# Inside the container Vault listens on :8200 on every stand; ${VAULT_ADDR} is the
+# HOST port, which a dedicated stand offsets (:8210 for slot 1), as dev/provision.sh does.
 log "reading signing_key from Vault (${VAULT_KV_PREFIX}/jwt-signing-key)"
 KV_JSON="$(docker exec \
-    -e VAULT_ADDR="${VAULT_ADDR}" \
+    -e VAULT_ADDR=http://127.0.0.1:8200 \
     -e VAULT_TOKEN="${VAULT_TOKEN}" \
     "${STACK_PREFIX}-vault" sh -c "vault kv get -format=json ${VAULT_KV_PREFIX}/jwt-signing-key" 2>/dev/null)" \
     || fail "failed to read Vault (is ${STACK_PREFIX}-vault up? 'make dev-up' + 'make dev-provision')"

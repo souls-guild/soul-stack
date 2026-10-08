@@ -3296,11 +3296,14 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Engine-compat window enforcement is per rendering instance (ADR-0076(f)):
 		// the build version of THIS process, not a cluster-wide value.
 		KeeperVersion: version,
-		Summons:       summons,
-		StepQueue:     stepQueue,
-		LeaseOwner:    leaseOwner,
-		SoulCap:       soulCap,
-		SoulVersion:   soulVersion,
+		ExecutionModelFn: func() scenario.ExecutionModel {
+			return executionModelOf(d.store.Get())
+		},
+		Summons:     summons,
+		StepQueue:   stepQueue,
+		LeaseOwner:  leaseOwner,
+		SoulCap:     soulCap,
+		SoulVersion: soulVersion,
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
