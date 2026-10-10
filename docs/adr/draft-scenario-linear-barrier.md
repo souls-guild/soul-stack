@@ -50,9 +50,9 @@ Two earlier drafts of this ADR said otherwise. Recorded so the claim is not made
   is a cel-go `no such key` at render, not an empty read.
 - **Cross-passage `onchanges:`/`onfail:` is already resolved Keeper-side** from accumulated per-host
   CHANGED/FAILED facts (`keeper/internal/scenario/crosspassage.go:44-235`, wired at
-  `keeper/internal/scenario/run.go:944-957`), and a Keeper that cannot read those facts **refuses
+  `keeper/internal/scenario/run.go:979-992`), and a Keeper that cannot read those facts **refuses
   the run** rather than guessing (`cross_passage_requisite_unsupported`,
-  `keeper/internal/scenario/run.go:555-569`).
+  `keeper/internal/scenario/run.go:565-579`).
 - **Cross-passage `when:`/`changed_when:`/`failed_when:` is already a fail-closed refusal** — FC-5,
   `config.CodeCrossPassageWhenGating` (`shared/config/passage.go:106-117`), detector at
   `shared/config/passage.go:534-568`, offline in `soul-lint` (retired there by NIM-944).
@@ -90,7 +90,7 @@ about the ordering is derived from register text.
 
 ⚠ **Read it as a happens-before over dispatches, not as "every host ran every task in order".** The
 roster is not constant across a run: it is re-resolved at a refresh boundary
-(`keeper/internal/scenario/run.go:776-802`), so a host admitted mid-run has executed none of the
+(`keeper/internal/scenario/run.go:804-830`), so a host admitted mid-run has executed none of the
 earlier tasks, and under `on_failure: host` (§Fail-stop) a host leaves the roster the same way.
 The invariant is about the hosts a task *went to* — it does not promise a constant fleet.
 
@@ -108,7 +108,7 @@ depends on anything is the fact that *k* comes after *k−1*.
 2. **An applier and a `loop:` fan-out are one task; a `block:` is one task only when asked to be**
    (fork 3, user, 2026-10-01). An applier (`apply: destiny:`) and a `loop:` fan-out travel whole, in
    one message — a destiny is unchanged (decision 6) and a loop is one task repeated; this is already
-   how the plan is stamped (`stampPassage`, `keeper/internal/render/pipeline.go:2026-2033`). **A
+   how the plan is stamped (`stampPassage`, `keeper/internal/render/pipeline.go:2045-2052`). **A
    `block:` is, by default, an overlay of defaults over its children**: each child is its own step,
    with its own dispatch and its own barrier, and inherits from the block by the ordinary rule — the
    lower level overrides. **With `serial_scope: block` and a `serial:`, a block rolls as one
@@ -120,13 +120,13 @@ depends on anything is the fact that *k* comes after *k−1*.
    ([ADR-0087](0087-task-side-derived-from-module-address.md)) — runs at its position in the order,
    and that moves it.** It is not an
    exception to the invariant. Today keeper-side tasks execute locally on the Keeper **strictly
-   before the host dispatch of their own Passage** (`keeper/internal/scenario/run.go:644-655`,
-   called at `:933` before `dispatchPassage` at `:972`), so in a one-Passage scenario a keeper task
+   before the host dispatch of their own Passage** (`keeper/internal/scenario/run.go:654-665`,
+   called at `:968` before `dispatchPassage` at `:1010`), so in a one-Passage scenario a keeper task
    written *after* host tasks runs *before* them. Under this ADR it runs where it is written.
    *Built (NIM-944):* a keeper-side task cannot sit in a block, so under linear dispatch it is a
    step of its own and the step loop runs it after the barrier of every step before it — "before
    its Passage's host dispatch" is the staged run's order only. A keeper step has no barrier of its
-   own, so the loop now reads a cluster-wide Cancel after every step (`run.go:977-985`): a Cancel
+   own, so the loop now reads a cluster-wide Cancel after every step (`run.go:1019-1027`): a Cancel
    that flagged the row of a keeper step written last was read by nothing, and the run committed.
    `examples/service/long-runner/scenario/serial_waves/main.yml:24-33` is that shape: two
    `core.state.set` steps written after the waves run before them today and after them under this
@@ -135,7 +135,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    task written after a host task. Task *k+1* waits for a keeper task *k* by construction — the
    loop is sequential and a keeper failure aborts before the next dispatch. What a keeper task does
    not get is a *cross-host barrier*, because it targets no host (`groupByHost` skips it,
-   `keeper/internal/scenario/dispatch.go:932-938`); there is nothing for such a barrier to wait on.
+   `keeper/internal/scenario/dispatch.go:956-962`); there is nothing for such a barrier to wait on.
 
 4. **The Soul receives only rendered inputs; whatever depends on another message is settled on
    the Keeper** (user, 2026-10-01 — fork 2). The host needs its inputs, fully rendered, and nothing else:
@@ -157,7 +157,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        inside a block rolled as one group, where the child cannot fail alone, the group on that host,
        with the records [predicate-rendering.md §1](../scenario/predicate-rendering.md) gives it.
        Today every render error leaves the whole pass and the stage loop aborts the run
-       (`keeper/internal/scenario/run.go:861-865`), as a failing static `when:` does
+       (`keeper/internal/scenario/run.go:890-894`), as a failing static `when:` does
        (`render.evalStaticWhen`; `shared/cel/register_index.go:32-36`). This needs error capture per
        task and host, and a Keeper-written FAILED event, `apply_runs` row and audit record.
      - **Flow control is evaluated for the active task only.** Already-active tasks are re-rendered at
@@ -172,7 +172,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        a group, where a false one travels as `false` and an open one as its residual, both per host.
      - **The static-only rules stay in S1.** An applier's, a keeper task's and an `include:`'s `when:`
        must be static today (`guardApplierWhen` and `guardKeeperWhen`,
-       `keeper/internal/render/pipeline.go:1954-1960`, `:1987-1993`;
+       `keeper/internal/render/pipeline.go:1973-1979`, `:2006-2012`;
        `shared/config/include_expand.go:451-467`); whether the Keeper-side evaluator lifts them is a
        later decision. `when: register.self.*` is refused at compile: the task has not run yet.
 
@@ -244,7 +244,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    `keeper/internal/render/prototask.go:116-122`). Inside a destiny both still work and ADR-0075
    applies unchanged (a block refuses `async:` today, `shared/config/scenario_task.go:1103-1105`). A key that stays legal and stops having an effect is the silence this ADR is about, so
    both become **refusals** — `async:` at top level, and `require:` anywhere outside a destiny:
-   `async:` is already refused inside a block (`keeper/internal/render/block.go:672-673`), so a
+   `async:` is already refused inside a block (`keeper/internal/render/block.go:710-711`), so a
    block child's `require:` would wait on nothing. **Shape (NIM-941, codes approved by the user
    2026-10-06):** `async_outside_destiny` and `require_outside_destiny`, both ERROR, refused on
    presence on every scenario task — top level, any block depth, a scenario's included body.
@@ -256,7 +256,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    could reach an applied destiny's `async:` tasks in the same message — one Passage today, a block
    rolled as one group under linear dispatch — by `require: all`, by a name an `async:` destiny
    task also registers, or written on an `apply:` task and merged into every task of the destiny
-   (`keeper/internal/render/block.go:561-569`). The replacement is a `register:` on each `apply:`
+   (`keeper/internal/render/block.go:599-607`). The replacement is a `register:` on each `apply:`
    before the waiting point, and a `require:` inside the destiny for a wait among its own tasks: the
    terminal carries every task of the destiny in `aggregate_of`, which the Soul awaits as a gate and
    fail-stops on (`soul/internal/runtime/applyrunner.go:498-510`). Nor does one step mean one task:
@@ -297,8 +297,8 @@ depends on anything is the fact that *k* comes after *k−1*.
 > **On counting barriers.** An earlier draft claimed "the number of barriers equals the number of
 > top-level tasks". That is false: five shapes are dispatched to no host and so produce no
 > cross-host barrier — an `assert:` (`keeper/internal/render/pipeline.go:227-237`), a conditionally
-> dropped `include:` group (`:209-214`), a statically-false `when:` (`:1045-1046` →
-> `dispatch.go:932-950` → `:94-106`), a keeper-side task (decision 3), and a task whose `where:` or
+> dropped `include:` group (`:209-214`), a statically-false `when:` (`:1064-1065` →
+> `dispatch.go:956-974` → `:94-106`), a keeper-side task (decision 3), and a task whose `where:` or
 > requisite gate leaves it with no host (`crosspassage.go:120-128`). Under linear dispatch each of
 > these steps still runs a barrier that re-checks its owner's `tolerate` (NIM-948), though none of
 > the run's hosts is sent anything. Under the happens-before
@@ -315,9 +315,9 @@ depends on anything is the fact that *k* comes after *k−1*.
   (§Before merge) must measure this separately from the round trip, because for a fleet of cheap
   tasks it may dominate.
 - **Re-render grows quadratically.** The stage loop re-renders before each step
-  (`keeper/internal/scenario/run.go:861-865`). It does **not** render the whole plan — a task in a
+  (`keeper/internal/scenario/run.go:890-894`). It does **not** render the whole plan — a task in a
   future Passage is emitted as a placeholder and its register-dependent keys are not resolved
-  (`keeper/internal/render/pipeline.go:265-279`) — but every *already-active* task is rendered
+  (`keeper/internal/render/pipeline.go:265-281`) — but every *already-active* task is rendered
   again, so task 0 is fully rendered T times, `${ vault() }` included. See §Consequences for why
   that is a correctness question and not only a cost.
 - **One Keeper↔Soul round trip per step per host**, where there was one per Passage.
@@ -325,10 +325,10 @@ depends on anything is the fact that *k* comes after *k−1*.
   — and that row is public.
 - **Crash recovery for scenario runs is lost until the Acolyte path is restored.** The work-queue
   dispatch of [ADR-027](0027-apply-work-queue.md) is gated off for staged runs —
-  `if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear` (`keeper/internal/scenario/run.go:684`),
-  with `staged := passage.Count > 1` (`:450`). Under this ADR every scenario with two or more
+  `if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear` (`keeper/internal/scenario/run.go:694`),
+  with `staged := passage.Count > 1` (`:460`). Under this ADR every scenario with two or more
   steps is staged — a single default block with two children included — so `dispatchPlanned`, claim/fencing and `ReclaimApplyRuns` become
-  unreachable and every run inherits the limitation `:526-528` already names.
+  unreachable and every run inherits the limitation `:536-538` already names.
 - **A straggler now slows every step**, and `serial:` multiplies the wave count.
 
 **Measured (NIM-950, 2026-10-08).** The list above was written before any measurement; the
@@ -392,15 +392,16 @@ dispatched and B runs it to the end. The failure is observed at the barrier, aft
 
 Under this ADR the barrier sits between every pair of tasks, and one host's failure ends the run
 there: `classify` returns an error on any host in `failed`/`cancelled`/`orphaned`
-(`keeper/internal/scenario/dispatch.go:845-857`), `waitBarrier` propagates it (`:716-719`, surfaced to the stage loop at `:203-205`), and
-`run()` aborts (`keeper/internal/scenario/run.go:973-976`). **Tasks 4..12 are then dispatched to
-nobody — including the hosts that were healthy.**
+(`keeper/internal/scenario/dispatch.go:869-881`), `waitBarrier` propagates it (`:740-743`, surfaced to the stage loop at `:221-223`), and
+`run()` aborts (`keeper/internal/scenario/run.go:1011-1014`). **Tasks 4..12 are then dispatched to
+nobody — including the hosts that were healthy** — bar the rescues of fork 1, which the run walks
+on to before it ends (NIM-951).
 
 This is not a new mechanism; it is today's barrier semantics applied T times instead of once. The
 precedent is `serial:`, which already behaves this way within a Passage: *"First host, finally-failed
 after the inherited `retry:` is exhausted, stops rolling: subsequent waves will not start"*
 ([orchestration.md §2.2.1](../scenario/orchestration.md); the per-wave barrier at
-`dispatch.go:197-205`). What changes is that the blast radius of one host's failure grows from "its
+`dispatch.go:215-223`). What changes is that the blast radius of one host's failure grows from "its
 own remaining tasks" to "the whole fleet's remaining tasks", for every scenario, not only those
 using `serial:`.
 
@@ -431,7 +432,7 @@ ADR adopts:
 
 | Value | What a host's failure ends |
 |---|---|
-| `scenario` | **The default.** The run ends at the barrier where the host failed; no later task is dispatched to anybody. |
+| `scenario` | **The default.** The run ends at the barrier where the host failed; no later task is dispatched to anybody but the rescues of fork 1. |
 | `host` | Only that host. It leaves the run; the remaining tasks go to the rest. |
 
 A threshold sits beside it, `tolerate`: with radius `host`, the run still ends once **more than** N
@@ -452,7 +453,7 @@ separate field, declared in the scenario and fed by nothing at run time** (fork 
 vocabulary is disjoint from ADR-043's, so the two cannot be confused even by eye.
 
 **Three terminal statuses, and they are not interchangeable.** `classify` ends the run on `failed`,
-`cancelled` *and* `orphaned` today (`keeper/internal/scenario/dispatch.go:845-857`):
+`cancelled` *and* `orphaned` today (`keeper/internal/scenario/dispatch.go:869-881`):
 
 - `failed` is a host failure and is what the policy governs. So is `orphaned`: the claim marks a
   queued step's row `dispatched` ([ADR-027 amend (q)](0027-apply-work-queue.md), NIM-961), and since
@@ -496,11 +497,12 @@ Under this ADR every top-level `onfail:` source is in an earlier message, and by
 its failure ends the run before the rescue message is built. The onfail call to `resolveKind`
 (`crosspassage.go:149`) can only fire inside a run the barrier has already ended.
 
-Under `on_failure: host` it does not reach the failed host either: that host has been dropped, and a
-dropped host receives no later task. So the rescue misses its one target under **both** radii.
+Under `on_failure: host` it did not reach the failed host either, before NIM-951: that host had
+been dropped, and a dropped host received no later task. So the rescue missed its one target under
+**both** radii.
 
-This is not created by this ADR — cross-passage `onfail:` is already dead the same way today; it is
-simply rare. This ADR would make it the only shape a top-level `onfail:` can take. **The user's answer
+This is not created by this ADR — cross-passage `onfail:` was already dead the same way before
+NIM-951, and still is for a staged run; it is simply rare. This ADR would make it the only shape a top-level `onfail:` can take. **The user's answer
 (fork 1): rescue is extended across barriers** — a failed host still receives the `onfail:` tasks
 whose source failed on it — under `on_failure: host` after it has been dropped, under `scenario`
 before the run ends.
@@ -544,7 +546,7 @@ described from the ⚠ to here is the code before it: `newCrossPassageGate` read
 
 ⚠ **And one existing refusal goes from rare to universal.** A Keeper with no `AuditReader` already
 **refuses** a staged run carrying a cross-passage requisite — `cross_passage_requisite_unsupported`
-(`keeper/internal/scenario/run.go:555-569`, detector `shared/config/passage.go:467-495`). That is
+(`keeper/internal/scenario/run.go:565-579`, detector `shared/config/passage.go:467-495`). That is
 loud and right. But the detector will now fire on *every* `onchanges:`/`onfail:`, so an audit log
 becomes an operational prerequisite for any scenario with a requisite. *Shipped (NIM-944):* under
 linear dispatch the detector is `config.CrossStepRequisite` (`shared/config/passage_linear.go`),
@@ -586,27 +588,27 @@ for a dropped `include:` group (`:217`) and an `assert:` (`:240`) skip `idx++`, 
 **RenderedTasks**, not top-level entries. `i` always advances. `config.Passage.TaskPassage` is
 already indexed by that position (`shared/config/passage.go:62-69`), so `passage` is input-independent
 as it stands, and the future-task placeholder gate — `passage > in.ActivePassage`
-(`pipeline.go:274`) — is **already keyed to the top-level ordinal**. This decision redefines what
+(`pipeline.go:276`) — is **already keyed to the top-level ordinal**. This decision redefines what
 goes *into* `TaskPassage`, not how the loop counts — with one exception.
 
 ⚠ **A default block's children each need their own number, and that is a re-keying.** Today every
 descendant of a top-level task takes its passage — *"block is an atomic Passage unit"*
-(`stampPassage`, `keeper/internal/render/pipeline.go:2021-2033`). A message is selected by
-`t.Passage == p` (`tasksForPassage`, `keeper/internal/scenario/dispatch.go:902-910`), the barrier
-filters host rows by it (`classifyExcept`, `:815`), `apply_runs` is keyed `(apply_id, sid, passage)`
+(`stampPassage`, `keeper/internal/render/pipeline.go:2040-2052`). A message is selected by
+`t.Passage == p` (`tasksForPassage`, `keeper/internal/scenario/dispatch.go:926-934`), the barrier
+filters host rows by it (`classifyExcept`, `:839`), `apply_runs` is keyed `(apply_id, sid, passage)`
 (migration `078_add_apply_runs_passage.up.sql`), and registers load with `passage < $2`
 (`taskregister.go:129-142`). With one number shared, a default block's children would travel in one
 message or, sent separately, collide on that key, and none could read its sibling's register. So
 the index counts steps, each child of a default block takes one, and `stampPassage` and
 `TaskPassage` are re-keyed to it — still from the plan alone, since a block's mode is written in
 the file. **The placeholder gate is also applied inside block rendering**: today the gate runs once per
-top-level entry (`keeper/internal/render/pipeline.go:203`, `:274`) and `renderBlockTask` then
-renders every child in the same pass (`:400`), each child's own `where:` included
-(`blockChildTargets`, `keeper/internal/render/block.go:453-464`). So while child *k* is active, child *k+1* would be
+top-level entry (`keeper/internal/render/pipeline.go:203`, `:276`) and `renderBlockTask` then
+renders every child in the same pass (`:419`), each child's own `where:` included
+(`blockChildTargets`, `keeper/internal/render/block.go:491-502`). So while child *k* is active, child *k+1* would be
 rendered too and a read of *k*'s register would raise. The gate and its placeholder are applied per
-child as well, in `walkBlockChildren` (`block.go:318-324`), before a child's targets are resolved
-(`:332`, `:350`); the top-level gate stays, keyed to the block's first step, so the block's own
-`where:` (`keeper/internal/render/pipeline.go:304-305`) is not resolved early either. And fork 3's rule
+child as well, in `walkBlockChildren` (`block.go:335-341`), before a child's targets are resolved
+(`:351-355`, `:389`); the top-level gate stays, keyed to the block's first step, so the block's own
+`where:` (`keeper/internal/render/pipeline.go:306-307`) is not resolved early either. And fork 3's rule
 that a default block's `where:` and `run_once:` are resolved once, at its first child, and held is
 new too: today both are re-resolved on every pass. All of it lands in S1.
 
@@ -624,7 +626,7 @@ An earlier draft said the stage loop "renders the whole plan before each step", 
 this ADR's own claim that an absent register raises. The code does neither: a task whose Passage is
 still in the future is emitted as a **placeholder** — correct `Index`, `Register`, `ID` and Passage,
 params and targets not computed — precisely so its register-dependent keys are never evaluated
-against an empty register (`keeper/internal/render/pipeline.go:265-279`, contract at
+against an empty register (`keeper/internal/render/pipeline.go:265-281`, contract at
 `keeper/internal/render/render.go:269-280`). There is no contradiction, and the mechanism this ADR
 needs already exists.
 
@@ -643,11 +645,11 @@ its step, and the block's `where:` and `run_once:` are resolved once.
 them. Two consequences, and the second is the serious one:
 
 - an already-active task's re-render is **discarded** — `tasksForPassage` keeps only the active
-  ordinal (`keeper/internal/scenario/dispatch.go:902-910`) — so re-resolving task 0's secret at every
+  ordinal (`keeper/internal/scenario/dispatch.go:926-934`) — so re-resolving task 0's secret at every
   later step is pure cost and Vault load, not a correctness problem;
 - **a secret that disappears mid-run now fails the whole run, T times more often.** Every pass
   re-resolves every already-active task's secrets, and a failure there is `render_failed`
-  (`keeper/internal/scenario/run.go:861-865`) — so a rotated-away path, or Vault being briefly
+  (`keeper/internal/scenario/run.go:890-894`) — so a rotated-away path, or Vault being briefly
   unreachable at step *k*, kills a run over a secret that only a *completed* task ever needed.
 
 Widening the memo from pass to run fixes both. It is S1 because the frequency, not the mechanism,
@@ -656,7 +658,7 @@ is what makes it matter.
 ### `serial:` — the width collapses between tasks, the wave count multiplies
 
 Today the wave width is one per Passage: the minimum positive `serial:` among the tasks *of that
-Passage* (`keeper/internal/scenario/dispatch.go:980-991`), aggregated for one documented reason —
+Passage* (`keeper/internal/scenario/dispatch.go:1004-1015`), aggregated for one documented reason —
 *"tasks of one Passage are sent to the host in one message, so it is impossible to send different
 Passage tasks in different waves"* ([orchestration.md §2.2.1](../scenario/orchestration.md)).
 
@@ -691,7 +693,7 @@ fires where ADR-056's derivation — kept for this check alone — would put a h
 `serial:` in one Passage with another host step, **in either order**, and it goes when the
 derivation goes, after the service repositories are audited. *Decided (user, 2026-10-06, NIM-940):*
 an earlier revision said "with a later host task", which misses half the set — today one wave loop
-carries the whole Passage at its narrowest width (`keeper/internal/scenario/dispatch.go:980-991`),
+carries the whole Passage at its narrowest width (`keeper/internal/scenario/dispatch.go:1004-1015`),
 so a step without `serial:` written *before* one with it rolls too, and stops rolling under this
 ADR. The opt-out is the block rule's: a `serial_scope` the author wrote, either value, on the task,
 above it or in the scenario's `settings:` — neither value stretches a wave over the next task, so a
@@ -808,9 +810,11 @@ builds these:
   `on_failure: host` it has left the roster;
 - **an applier source** resolves from its children (§`onchanges:`) — shipped in NIM-931;
 - **a failure with no task row** — `send_apply_failed` (a queued step's claim, `keeper/internal/scenario/claim.go:261-271`),
-  an expired `soul_timeout`, a push transport error — is written as a
-  FAILED event for every task the message carried: the top-level task and each child of its group,
-  by their plan indexes — a SKIPPED one for a child the Keeper had decided to skip on that host.
+  an expired `soul_timeout`, a push transport error, an `orphaned` row — is written as the records
+  a Soul's fail-stop leaves for the rest of a message, by plan index (user, 2026-10-08, NIM-951;
+  this revision wrote FAILED for every task the message carried): the first task the host did not
+  report is FAILED, every later one SKIPPED, not taken, and a task it reported keeps its record —
+  a SKIPPED one, too, for a child the Keeper had decided to skip on that host.
   Otherwise no rescue, and no applier resolution (item 16), can see it. The
   radius it is judged by is still the barrier owner's ([settings.md §4](../scenario/settings.md));
 - **once a failure ends the run, only rescue tasks are rendered.** Walking on to a rescue's position
@@ -830,6 +834,9 @@ RunResult stays FAILED"* (`soul/internal/runtime/applyrunner.go:368-373`). And *
 failure is judged like any task's** (user, 2026-10-01), by its own effective `on_failure`: under
 `scenario` it is one more entry in the failure list — the host leaves two errors, the source's and
 the rescue's — and under `host` the host, already out, stays out and the log records that it left.
+*As built (NIM-951):* the drop is recorded unless that barrier ends a run still going on or carries
+a Cancel, and a host the run had not dropped — its source failed under `scenario`, or at a barrier
+that ended the run — is dropped there first ([settings.md §4](../scenario/settings.md)).
 ⚠ The radius is the rescue's own, not its source's: a source that failed under `host` with a rescue
 left at the default `scenario` ends the run for every host if the rescue fails. An author who wants
 the rescue local writes `on_failure: host` on it.
@@ -954,7 +961,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    re-litigated: **no RBAC gate** — with no run-time override, whoever may *merge* the scenario
    decides its radius, so the control is code review on the service repository. Then the obligations,
    each absent today: **the drop set must survive a roster re-resolve** — a refresh boundary re-reads
-   the live roster (`keeper/internal/scenario/run.go:776-783`) and would re-admit a dropped host that is
+   the live roster (`keeper/internal/scenario/run.go:804-811`) and would re-admit a dropped host that is
    still online; **"not reached" records** for the dropped host's remaining tasks; **audit of the drop itself** — nothing records "host X left this run at barrier
    k", and §Provenance's "not reached" synthesis covers the dropped host's *tasks*, not the drop;
    **state capture on a dropped host** — §"State capture: a capture now waits for the steps before it" is
@@ -987,7 +994,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    fleet. *Kept (NIM-944):* a linear run of more than one step is gated, and its refusal names the
    steps instead of advising to remove a register dependency.
 9. **`AuditReader` becomes an operational prerequisite**, not a diagnostic one
-   (`keeper/internal/scenario/run.go:555-569`). *Done (NIM-944)* — see §`onchanges:`: a step-aware
+   (`keeper/internal/scenario/run.go:565-579`). *Done (NIM-944)* — see §`onchanges:`: a step-aware
    detector, and `task.executed` written regardless of `audit.enabled`.
 10. **A capability bit is needed for the rendered predicates.** An earlier revision required one for
     carried registers; that reason is gone, but another replaces it. Literal-aware text guards and
@@ -1004,7 +1011,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     host now carries `when: false` there, and a non-empty `when` makes the capability gate demand
     `CapabilityFlowControl` — read from the shared `When` by the staged gate
     (`keeper/internal/scenario/soulcompat.go:94-106`), which runs before the requisite gate
-    (`keeper/internal/scenario/run.go:903-910`). That gate must read the per-host value, and
+    (`keeper/internal/scenario/run.go:938-945`). That gate must read the per-host value, and
     so run after the requisite gate. And per step it would
     refuse late: a one-Passage run is checked before any dispatch, while a
     per-step check refuses step *k* after the steps before it have changed hosts. So the check is
@@ -1013,10 +1020,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     host a static `where:` excludes cannot refuse it. That needs a pass resolving every task's
     static targeting and features up front: a future task is a placeholder whose only input
     to the gate is its module — no hosts, no flow-control fields
-    (`keeper/internal/render/pipeline.go:265-280`). Three refusals stay late, and are stated rather
+    (`keeper/internal/render/pipeline.go:265-282`). Three refusals stay late, and are stated rather
     than hidden: a task whose `where:` reads a register, whose hosts are unknown until its step — the
-    reason the staged gate runs per Passage (`run.go:887-902`); a host admitted at a refresh boundary,
-    which did not exist when the up-front check ran (`run.go:795-797` says so for the `passage` bit);
+    reason the staged gate runs per Passage (`run.go:922-937`); a host admitted at a refresh boundary,
+    which did not exist when the up-front check ran (`run.go:823-825` says so for the `passage` bit);
     and the per-host flow-control part, which depends on the results of earlier steps.
     *Done (NIM-946).* The first pass of a linear run also surveys the whole plan
     (`keeper/internal/render/soul_needs.go`): per task, its step, module, its features, and the
@@ -1032,7 +1039,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     and a host that leaves the roster later was still asked. A predicate reading a loop variable is
     no exception: the flow context binds none, so such a task fails at its step. The gate then
     refuses the run before its first step and before either dispatch path
-    (`keeper/internal/scenario/run.go:631-640`), naming per host the first step and task that needs
+    (`keeper/internal/scenario/run.go:641-650`), naming per host the first step and task that needs
     each missing capability. Each step is gated again inside `dispatchPassage`, after the requisite
     gate and on what each host is sent (`render.SentFlow`, `dispatch.go:83-87`), before the inline
     waves and the work-queue alike; the staged in-loop gate no longer runs for a linear run. A
@@ -1119,11 +1126,27 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     with it, in the Soul's order (a failed `when:`, a false one, the requisites, a post-module
     predicate); a host failed before dispatch keeps its place among the `serial:` waves, the
     hosts sent beside it finish, and its wave's barrier judges it like any failed host — no later
-    wave starts under radius `scenario`, the host is dropped under `host` (NIM-948); a `when:` reading a secret that fails
+    wave starts under radius `scenario` but to send rescues (item 18), the host is dropped under `host` (NIM-948); a `when:` reading a secret that fails
     to evaluate keeps CEL's error out of its record.
     Not built here: the capability gate reading the per-host values (since built, item 10), and a statically
     false `when:`, which still resolves no targets and so leaves no SKIPPED record (NIM-971).
-18. **Rescue routing** — fork 1's four obligations.
+18. **Rescue routing** — fork 1's four obligations. *Built (NIM-951)*, described in
+    [settings.md §4](../scenario/settings.md). Two answers the fork left open (user, 2026-10-08):
+    a dropped host's `where:` is not evaluated for a rescue, nor its blocks' `where:` and
+    `run_once:` — the rescue's and its blocks' `on:` and the source's failure on it decide; and
+    a rescue step goes through the work-queue like any step, its rows carrying the run's rescue
+    routing ([ADR-027 amend (s)](0027-apply-work-queue.md)). The first answer's
+    reason — the host's registers stop at its failure — holds for every host once the run has
+    ended, so past the end no `where:` is evaluated: a rescue goes to the hosts its `on:` selects
+    where its source failed, and nothing that reaches no host is rendered. A step rolled in
+    `serial:` waves goes on after the wave whose failure ended the run, sending the hosts a
+    rescue fires on their rescues. A keeper-side `onfail:` task is no rescue — the Keeper
+    evaluates no requisite of its own tasks ([docs/keeper/modules.md](../keeper/modules.md)) —
+    so it does not run after a failure ended the run. ⚠ Not covered (settings.md §4): a
+    keeper-side task's own failure still aborts the run at once, before any rescue of it; a
+    block rolled as one group takes a percentage `serial:` of its live hosts only; and in the
+    later waves of the step that ended the run, a host whose applier rescue fires but whose
+    destiny has no task for it is not sent the terminal.
 
 ## Slices
 
@@ -1135,7 +1158,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   (NIM-941 put them on the train ahead of the dispatch loop — unconditional, since `soul-lint` cannot
   see the model, and harmless because the train reaches `main` only with the enablement, NIM-952);
   FC-5's retirement on both sides at once — the Keeper's refusal, kept for a staged run only
-  (`keeper/internal/scenario/run.go:509-516`), and `soul-lint`'s — or one of them refuses scenarios
+  (`keeper/internal/scenario/run.go:519-526`), and `soul-lint`'s — or one of them refuses scenarios
   that are now legal; for the same reason `soul-lint`'s Passage-keyed state checks —
   `StaleStateRead` retires, since a capture now finishes before a later reader renders, and
   `StoreAfterUse` is re-keyed to plan order (all three shipped in NIM-944);

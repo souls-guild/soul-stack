@@ -441,12 +441,12 @@ type KeeperPluginRegistry interface {
 // ChangedTaskReader is the narrow read-access surface to the audit log: sets
 // of (sid, plan_index) run tasks that terminated CHANGED (T3, changed_tasks
 // rollup) or FAILED/TIMED_OUT (ADR-056 R3, cross-passage onfail-rescue
-// gating). Backed by `task.executed` events (events_taskevent.go), not a
-// separate table. An interface (not a direct *auditpg.Reader) keeps the
-// scenario package testable without PG — a fake implements the two methods.
+// gating), or with any event at all (a linear barrier's records for a host that
+// stopped reporting, settings.md §4). Backed by `task.executed` events
+// (events_taskevent.go), not a separate table. An interface (not a direct
+// *auditpg.Reader) keeps the scenario package testable without PG.
 //
-// Implemented by [auditpg.Reader] (SelectChangedTaskKeys /
-// SelectFailedTaskKeys methods, same signature). nil → the
+// Implemented by [auditpg.Reader] (same signatures). nil → the
 // incarnation.run_completed terminal event is emitted without changed_tasks
 // (rollup skipped, run finalization doesn't fail); cross-passage
 // onchanges/onfail gating (R3) degrades fail-closed — a staged run with a
@@ -454,6 +454,7 @@ type KeeperPluginRegistry interface {
 type ChangedTaskReader interface {
 	SelectChangedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 	SelectFailedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
+	SelectReportedTaskKeys(ctx context.Context, applyID string) (map[auditpg.ChangedTaskKey]struct{}, error)
 }
 
 // Deps holds [Runner]'s constructor dependencies. All required except Logger

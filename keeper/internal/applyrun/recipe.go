@@ -79,6 +79,18 @@ type RecipeStep struct {
 	// the run's roster, a fact or a destiny on a branch moved between the two
 	// renders, and the run did not decide what the claim would send.
 	Tasks []int `json:"tasks"`
+	// Rescue — the run's failures as its rescue routing read them for this step
+	// (docs/scenario/settings.md §4), so the claim sends an `onfail:` task where the
+	// run did: to a dropped host its source failed on, and after a failure ended the
+	// run, nothing else. nil — no host dropped and the run goes on.
+	Rescue *RecipeRescue `json:"rescue,omitempty"`
+}
+
+// RecipeRescue is a step row's copy of the run's render.Rescue.
+type RecipeRescue struct {
+	Ended   bool                      `json:"ended,omitempty"`
+	EndedAt int                       `json:"ended_at,omitempty"`
+	Failed  map[string]map[string]int `json:"failed,omitempty"`
 }
 
 // MarshalRecipe serializes the recipe into the jsonb form of the

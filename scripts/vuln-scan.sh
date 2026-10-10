@@ -110,8 +110,8 @@ else
   # The stdlib half of every finding NIM-774 uncovered was this line missing.
   # Standalone, govulncheck judges the standard library by what the module itself
   # declares, so a `go 1.26.4` with no toolchain is scanned as go1.26.4 and
-  # reports everything fixed in 1.26.5 and 1.26.6 — while the same code inside
-  # the workspace reports nothing, because go.work says go1.26.6. Both answers
+  # reports everything fixed since — while the same code inside the workspace
+  # reports nothing, because go.work names a newer toolchain. Both answers
   # are about the toolchain, not about the code, and the module's own is the one
   # that travels to whoever builds it standalone. Said out loud so a reader of a
   # red run can tell which of the two they are holding. A go.work member gets no

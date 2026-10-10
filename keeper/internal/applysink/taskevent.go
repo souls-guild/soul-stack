@@ -36,6 +36,19 @@ func (s *Sink) TaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent
 	s.publishTaskExecuted(sid, ev)
 }
 
+// JudgedTaskEvent records a task outcome the Keeper writes for a host whose failure
+// the barrier has already judged — the audit event, the register and the SSE frame —
+// and leaves the row's failure reason alone: the row keeps the failure it was judged
+// by, and a FAILED event here must not become its first failed task.
+func (s *Sink) JudgedTaskEvent(ctx context.Context, sid string, ev *keeperv1.TaskEvent) {
+	if ev == nil {
+		return
+	}
+	s.writeTaskExecutedAudit(ctx, sid, ev)
+	s.accumulateRegister(ctx, sid, ev)
+	s.publishTaskExecuted(sid, ev)
+}
+
 // writeTaskExecutedAudit writes the `task.executed` audit event.
 //
 // Declared-secret output ([ADR-0083] §8): the fields TaskEvent.secret_output names

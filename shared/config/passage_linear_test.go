@@ -314,3 +314,60 @@ tasks:
 		})
 	}
 }
+
+// ★ GUARD (settings.md §4, fork 1). The steps a run that a failure ended still walks to
+// are the ones holding an `onfail:` whose source ran at an earlier step: a top-level
+// rescue, a block's `onfail:` reaching each child step, but not a rescue inside the
+// group its source sits in, nor an `onchanges:`, nor a keeper-side `onfail:` task.
+//
+// Mutations: count a same-step source → the group's own rescue makes step 4 a rescue
+// step; read every requisite kind → `notify` makes step 5 one; count a keeper-side
+// task → `record` makes step 6 one.
+func TestRescueSteps_OnlyCrossStepOnfail(t *testing.T) {
+	m := loadLinearManifest(t, `
+name: linear
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params: { cmd: deploy }
+  - name: rollback
+    module: core.exec.run
+    onfail: [deploy]
+    params: { cmd: rollback }
+  - name: cleanup
+    onfail: [deploy]
+    block:
+      - name: undo
+        module: core.exec.run
+        params: { cmd: undo }
+      - name: tidy
+        module: core.exec.run
+        params: { cmd: tidy }
+  - name: canary
+    serial: 1
+    settings: { serial_scope: block }
+    block:
+      - name: change
+        module: core.exec.run
+        register: change
+        params: { cmd: change }
+      - name: revert
+        module: core.exec.run
+        onfail: [change]
+        params: { cmd: revert }
+  - name: notify
+    module: core.exec.run
+    onchanges: [deploy]
+    params: { cmd: notify }
+  - name: record
+    module: core.soul.registered
+    onfail: [deploy]
+    params: { sid: host-new.example.com }
+`)
+	_, steps := LinearPassage(m.Tasks, m.Settings)
+	want := map[int][]string{1: {"deploy"}, 2: {"deploy"}, 3: {"deploy"}}
+	if got := RescueSteps(m.Tasks, steps); !reflect.DeepEqual(got, want) {
+		t.Errorf("RescueSteps = %v, want %v", got, want)
+	}
+}

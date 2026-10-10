@@ -232,7 +232,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// (TaskPassage==nil: Trial/Acolyte) → passage is always 0 ==
 		// ActivePassage 0 → single pass, bit-for-bit unchanged.
 		if IsAssertTask(task) {
-			if in.TaskPassage == nil || passage == in.ActivePassage {
+			if (in.TaskPassage == nil || passage == in.ActivePassage) && !in.pastEnd(passage) {
 				if err := p.evalAssertTask(in, task); err != nil {
 					return nil, nil, err
 				}
@@ -270,8 +270,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// passage becomes active, a repeat Render resolves it fully. Gated
 		// strictly to staged mode (TaskPassage set) — non-staged callers never
 		// reach this branch. Under linear dispatch a default block's passage is its
-		// first step, so its `where:` is not resolved before then either.
-		if in.TaskPassage != nil && passage > in.ActivePassage {
+		// first step, so its `where:` is not resolved before then either; past the
+		// end of a run a failure ended, a task is a placeholder unless it is a
+		// rescue that reaches a host (rescue.go).
+		if (in.TaskPassage != nil && passage > in.ActivePassage) || (task.Block == nil && in.pastEnd(passage) && !isRescue(task)) {
 			tasks = append(tasks, futurePlaceholder(task, idx, passage))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
@@ -313,19 +315,33 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		// Linear dispatch: a default block's hosts are chosen at its first step
 		// and held for its later ones (fork 3).
 		roll := topLevelRoll(in.Steps, i, task)
-		var targeted []*topology.HostFacts
+		var targeted, notReached []*topology.HostFacts
 		var err error
-		if roll.overlay {
+		routed := task.Block == nil && in.rescueRouting() && isRescue(task)
+		switch {
+		case routed:
+			targeted, notReached, err = p.routeRescue(in, task, passage, runHosts(in), droppedSIDs(in))
+		case task.Block != nil && in.pastEnd(passage):
+			targeted, err = p.onCover(in, task, in.Hosts)
+		case roll.overlay:
 			targeted, err = holdTargets(in, roll.path, resolve)
-		} else {
+		default:
 			targeted, err = resolve()
 		}
 		if err != nil {
 			return nil, nil, err
 		}
-		notReached, err := coveredDropped(p.cel, in, task, in.Dropped)
-		if err != nil {
-			return nil, nil, err
+		if task.Block == nil && in.pastEnd(passage) && len(targeted) == 0 {
+			tasks = append(tasks, futurePlaceholder(task, idx, passage))
+			plans = append(plans, DispatchPlan{TaskIndex: idx})
+			idx++
+			stampOnFailure(in, tasks, passageStart, task)
+			continue
+		}
+		if !routed {
+			if notReached, err = coveredDropped(p.cel, in, task, in.Dropped); err != nil {
+				return nil, nil, err
+			}
 		}
 
 		// Everything appended from here on belongs to THIS task's fan-out, and
@@ -395,7 +411,10 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			if roll.group {
 				roll.width = serialWidth(task.Serial, len(targeted))
 			}
-			bin := in
+			bin, cerr := p.withRescueCover(in, task, runHosts(in))
+			if cerr != nil {
+				return nil, nil, cerr
+			}
 			bin.droppedCover = notReached
 			bt, bp, berr := p.renderBlockTask(ctx, bin, task, idx, targeted, includeGroupKeep, roll)
 			if berr != nil {
@@ -2013,7 +2032,7 @@ func topLevelRoll(steps []config.StepNode, i int, task config.Task) blockRoll {
 		return blockRoll{}
 	}
 	if steps[i].Group {
-		return blockRoll{group: true}
+		return blockRoll{group: true, step: steps[i].Step}
 	}
 	return blockRoll{overlay: true, steps: steps[i].Children, path: config.StepPath("", i)}
 }

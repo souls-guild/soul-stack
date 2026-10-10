@@ -254,7 +254,7 @@ uncovered half is worse than being ignored.
 **Covered.** A dynamic `when:` written **with** `on: keeper` is refused offline
 ([`shared/config/scenario_task.go:1364-1385`](../../shared/config/scenario_task.go),
 `when_on_keeper_dynamic_unsupported`) and at render (`guardKeeperWhen`,
-[`keeper/internal/render/pipeline.go:1987`](../../keeper/internal/render/pipeline.go)).
+[`keeper/internal/render/pipeline.go:2006`](../../keeper/internal/render/pipeline.go)).
 
 **Not covered.** A dynamic `when:` on a keeper-side-module task that **omits** `on: keeper`:
 
@@ -325,10 +325,10 @@ The two survivors relocate from the `present["on"]` branch
 
 **One new code the framing above does not reach: `keeper_module_in_destiny`.** `renderKeeperTask`
 exists only on the scenario path
-([`keeper/internal/render/pipeline.go:1255`](../../keeper/internal/render/pipeline.go)), and a
+([`keeper/internal/render/pipeline.go:1274`](../../keeper/internal/render/pipeline.go)), and a
 destiny task is Soul-side by construction. The deleted `state_capture_not_on_keeper` was carrying
 that duty for `core.state` — its own doc comment at
-[`:1387-1403`](../../shared/config/scenario_task.go) says so — and its destiny half must be replaced
+[`:1406-1422`](../../shared/config/scenario_task.go) says so — and its destiny half must be replaced
 and **generalised to all keeper-side bases**. Miss it and `core.cloud.created` in a destiny reaches
 a host silently.
 

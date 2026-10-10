@@ -279,7 +279,7 @@ The stratifier orders this without help — `register.redis_users` in an apply i
 register edge, the same axis `core.vault.kv-present` rides today.
 
 `incarnation.state` is **not** touched: it remains the pre-run snapshot taken under the
-row lock, invariant across passages (`run.go:101`). Refreshing it per passage was
+row lock, invariant across passages (`run.go:102`). Refreshing it per passage was
 considered and rejected (§Rejected).
 
 #### 6. A secret in a register rides as a reference

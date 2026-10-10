@@ -25,6 +25,16 @@ func (f *fakeChangedReader) SelectFailedTaskKeys(_ context.Context, _ string) (m
 	return f.failedKeys, f.err
 }
 
+func (f *fakeChangedReader) SelectReportedTaskKeys(_ context.Context, _ string) (map[auditpg.ChangedTaskKey]struct{}, error) {
+	out := make(map[auditpg.ChangedTaskKey]struct{}, len(f.keys)+len(f.failedKeys))
+	for _, set := range []map[auditpg.ChangedTaskKey]struct{}{f.keys, f.failedKeys} {
+		for k := range set {
+			out[k] = struct{}{}
+		}
+	}
+	return out, f.err
+}
+
 func runCompletedRunner(aw audit.Writer, ar ChangedTaskReader) *Runner {
 	return &Runner{
 		deps:   Deps{Audit: aw, AuditReader: ar},

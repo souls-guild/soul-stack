@@ -1,6 +1,7 @@
 package scenario
 
 import (
+	"errors"
 	"strings"
 	"testing"
 
@@ -89,19 +90,19 @@ func TestRunFailures_EndingErrorListsEveryEntry(t *testing.T) {
 		{step: 1, sid: "b", radius: config.OnFailureScenario, reason: "second"},
 		{step: 1, sid: "c", radius: config.OnFailureHost, reason: "third"},
 	}, owner, 3, roster)
-	if err == nil {
-		t.Fatal("a scenario-radius failure did not end the run")
-	}
-	for _, want := range []string{"host a", "host b", "host c"} {
-		if !strings.Contains(err.Error(), want) {
-			t.Errorf("ending error lacks %q: %v", want, err)
-		}
+	if !errors.Is(err, errRunEnded) || !f.ended || f.endedAt != 1 {
+		t.Fatalf("a scenario-radius failure = %v (ended %v at %d), want the run ended at step 1", err, f.ended, f.endedAt)
 	}
 	if _, gone := f.dropped["c"]; gone {
 		t.Error("a host-radius failure beside the one that ended the run was committed as a drop")
 	}
 
-	f.close()
+	end := f.withEnd(err)
+	for _, want := range []string{"step 1 failed", "host a", "host b", "host c"} {
+		if !strings.Contains(end.Error(), want) {
+			t.Errorf("ending error lacks %q: %v", want, end)
+		}
+	}
 	if err := f.append(failureEntry{sid: "d"}); err == nil {
 		t.Error("a closed failure list took another entry")
 	}
@@ -142,7 +143,7 @@ func TestRunFailures_TolerateIsCheckedAtABarrierWithNoFailure(t *testing.T) {
 	}
 	tight := loose
 	tight.Tolerate = &config.Tolerate{N: 0}
-	if _, err := f.settle(2, nil, tight, 3, roster); err == nil || !strings.Contains(err.Error(), "host a") {
+	if _, err := f.settle(2, nil, tight, 3, roster); !errors.Is(err, errRunEnded) || !strings.Contains(f.withEnd(err).Error(), "host a") {
 		t.Errorf("a quiet barrier under tolerate: 0 after one drop = %v, want the run ended naming host a", err)
 	}
 }

@@ -120,8 +120,31 @@ func (r *Reader) SelectFailedTaskKeys(ctx context.Context, applyID string) (map[
 // constant names (text in payload). Dedup via a set; non-numeric plan_index is
 // skipped.
 func (r *Reader) selectTaskKeysByStatus(ctx context.Context, applyID string, statuses []string) (map[ChangedTaskKey]struct{}, error) {
-	rows, err := r.pool.Query(ctx, selectTaskKeysByStatusSQL,
-		applyID, string(audit.EventTaskExecuted), statuses)
+	return r.selectTaskKeys(ctx, selectTaskKeysByStatusSQL, applyID, string(audit.EventTaskExecuted), statuses)
+}
+
+// selectReportedTaskKeysSQL is [selectTaskKeysByStatusSQL] without the status
+// filter.
+const selectReportedTaskKeysSQL = `
+SELECT payload->>'sid' AS sid,
+       COALESCE(payload->>'plan_index', payload->>'task_idx') AS plan_index
+FROM audit_log
+WHERE correlation_id = $1
+  AND event_type = $2
+  AND payload->>'sid' IS NOT NULL
+  AND COALESCE(payload->>'plan_index', payload->>'task_idx') IS NOT NULL
+`
+
+// SelectReportedTaskKeys returns the set of (sid, plan_index) for tasks of run
+// `applyID` with a `task.executed` event of any status: what a host reported, or
+// what the Keeper recorded on its behalf. Same secret hygiene as
+// [SelectChangedTaskKeys].
+func (r *Reader) SelectReportedTaskKeys(ctx context.Context, applyID string) (map[ChangedTaskKey]struct{}, error) {
+	return r.selectTaskKeys(ctx, selectReportedTaskKeysSQL, applyID, string(audit.EventTaskExecuted))
+}
+
+func (r *Reader) selectTaskKeys(ctx context.Context, sql string, args ...any) (map[ChangedTaskKey]struct{}, error) {
+	rows, err := r.pool.Query(ctx, sql, args...)
 	if err != nil {
 		return nil, fmt.Errorf("audit: task keys query: %w", err)
 	}

@@ -55,8 +55,8 @@ import (
 //
 // A linear run (fails non-nil) judges failures instead (failure_policy.go): each
 // wave's barrier waits for every host it was sent to, a host that failed under
-// `on_failure: host` is dropped and the waves roll on, and only a failure that ends
-// the run stops them — after the wave has finished.
+// `on_failure: host` is dropped and the waves roll on, and a failure that ends the
+// run leaves the waves after its own only their rescues (settings.md §4).
 //
 // Barrier invariant (§7): serial never splits the state commit — dispatch
 // returns only after all waves complete (or fail-stop); state commits once in
@@ -156,6 +156,14 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	}
 	sort.Strings(sids)
 	waves := splitWaves(sids, effectiveSerialWidth(plans))
+	var (
+		rescues map[int]bool
+		fires   func(sid string, idx int) bool
+	)
+	if fails != nil {
+		rescues, fires = rescueIndices(tasks, gate, passage), rescueFires(gate, passage, tasks)
+	}
+	endedHere := false
 
 	// Waves are strictly sequential (§2.2.1). dispatchedTotal counts the closed
 	// hosts, those the Keeper failed in each wave and those dispatchWave left with
@@ -165,6 +173,13 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	// step's host waiting for a stream, which gets one unless the step ends or the
 	// run is cancelled first ([stepWatch.send]).
 	for wi, wave := range waves {
+		// The waves after the one whose failure ended the run send only rescues
+		// (settings.md §4). A step past an earlier end was rendered so already.
+		if endedHere {
+			if wave = rescueWave(wave, perHost, failedEarly, settled, rescues, fires); len(wave) == 0 {
+				continue
+			}
+		}
 		failedHere := map[string]bool{}
 		for _, sid := range wave {
 			if failedEarly[sid] {
@@ -185,7 +200,10 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 				return r.failAfterSent(ctx, spec, log, passage, dispatchedTotal-watch.withdraw(), derr, watch)
 			}
 			if err := r.waitAndJudge(ctx, spec, log, judge, dispatchedTotal, fails, hosts, watch); err != nil {
-				return err
+				if !errors.Is(err, errRunEnded) {
+					return err
+				}
+				endedHere = true
 			}
 			if len(waves) > 1 {
 				log.Info("scenario: serial wave completed",
@@ -210,6 +228,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 			log.Info("scenario: serial wave completed",
 				slog.Int("wave", wi+1), slog.Int("waves_total", len(waves)), slog.Int("hosts", len(wave)))
 		}
+	}
+	if endedHere {
+		return errRunEnded
 	}
 	return nil
 }
@@ -317,6 +338,9 @@ func stepRecipe(spec RunSpec, commit string, in render.RenderInput, names map[in
 	}
 	if in.HeldTargets != nil {
 		rec.Step.HeldTargets = in.HeldTargets.Snapshot()
+	}
+	if in.Rescue != nil {
+		rec.Step.Rescue = &applyrun.RecipeRescue{Ended: in.Rescue.Ended, EndedAt: in.Rescue.EndedAt, Failed: in.Rescue.Failed}
 	}
 	return rec
 }

@@ -13,8 +13,8 @@
 > (`execution_model`, [naming-rules.md](../naming-rules.md)). Since NIM-948 a linear run's
 > barrier reads `on_failure` and `tolerate` (§4), on the same terms, and since NIM-949 the three
 > timeouts are read (§2.2–§2.3): `task_timeout` in every run, `soul_timeout` and `scenario_timeout`
-> in a run that executes linearly. **Not yet:** the `onfail:` rescue across barriers (§4; the rest of
-> epic NIM-926). A Keeper older than NIM-927 refuses the
+> in a run that executes linearly; since NIM-951 an `onfail:` rescue reaches its host across
+> barriers in such a run (§4). A Keeper older than NIM-927 refuses the
 > `settings:` key outright. Every rule here is a user decision of 2026-09-30 /
 > 2026-10-01 unless marked **open**.
 
@@ -67,15 +67,15 @@ The scenario top level was a flat list of thirteen keys, none of which governed 
 instead of a key each.
 
 A block composes its keys by **several** rules, and `settings:` takes the `vars:` one. The authority
-is `mergeBlockInheritance` (`keeper/internal/render/block.go:484-499`):
+is `mergeBlockInheritance` (`keeper/internal/render/block.go:522-537`):
 
 | Key on the block | Against the child's own key |
 |---|---|
 | `when:`, `where:` | **AND** — one more IF over the group, can only cut off the block or hosts |
 | `vars:` | **merged, child wins** |
-| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:581-594`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
+| `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:619-632`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
-| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:358`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
+| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:396`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
 
 ## 2. The keys
@@ -215,7 +215,7 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. A staged run with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1189-1202`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1236-1249`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:143-152`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
@@ -288,7 +288,7 @@ staged run keeps ignoring `timeout:` on a keeper-side task, as it always has.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:934-937`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:969-972`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -349,7 +349,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:980-991`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:1004-1015`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
@@ -383,11 +383,9 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   the run is ending. The run ends after the last such rescue's barrier, and only then is the failure
   list closed. A rescue's own failure is judged like any task's, by its own effective `on_failure`:
   under `scenario` it is one more entry — the host leaves two errors, the source's and the
-  rescue's; under `host` the host, already out, stays out and the log records that it left. The
+  rescue's; under `host` the host's drop is recorded (the rescue routing below). The
   radius is the rescue's own: a rescue left at the default `scenario` ends the run for every host
-  when it fails, even if its source failed under `host`. ⚠ **Not built yet (NIM-951):** today a
-  dropped host receives no later task, a rescue included, and is recorded SKIPPED there; a run that
-  ends runs no later rescue at all.
+  when it fails, even if its source failed under `host`. Built in NIM-951 — see below.
 - If any recorded failure on a host is at a task whose radius is `scenario`, the run ends: a fatal
   failure that happened is fatal whatever else happened on that host. Under `async:` several children
   can fail on one host (`soul/internal/runtime/applyrunner.go:500-512` — siblings are not cancelled),
@@ -397,13 +395,16 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   out (`soul_unavailable`, §2.2), or a reconnected Soul did not declare the step (`orphaned`) — is
   judged by the **barrier owner's** radius. A Keeper-side evaluation error, such as a
   failing `when:`, is tied to its task and judged by that task's radius.
-- **The FAILED records the Keeper writes for such failures are not judged again.** A failure with no
-  task row, or a group that fails before dispatch, gets a FAILED record for every task its message
-  would have carried — a SKIPPED one for a child the Keeper had decided to skip on that host
-  ([predicate-rendering.md §1](predicate-rendering.md)) — so that rescue routing and applier
-  resolution can see it. Those records are not "recorded failures" for the "any recorded failure"
-  rule two bullets up: the failure is judged once — by the barrier owner's radius when it is tied to
-  no task, by the child's radius when a group fails before dispatch.
+- **The records the Keeper writes for such failures are not judged again.** A group that fails
+  before dispatch gets a FAILED record for every task its message would have carried. A failure
+  with no task row gets what a Soul's fail-stop writes for the rest of a message (user,
+  2026-10-08): the first task the host did not report is FAILED, where it stopped, and every later
+  one SKIPPED, not taken; a task it did report keeps its record. Either way a child the Keeper had
+  decided to skip on that host is SKIPPED ([predicate-rendering.md §1](predicate-rendering.md)).
+  Rescue routing and applier resolution read these records. They are not "recorded failures" for
+  the "any recorded failure" rule two bullets up: the failure is judged once — by the barrier
+  owner's radius when it is tied to no task, by the child's radius when a group fails before
+  dispatch — and they do not become the row's first failed task.
 - **A capability refusal is not a host's failure.** A host whose Soul does not announce what the run
   will send it (`soul_capability_unsupported`) ends the run whatever the radius — no host is dropped
   and `tolerate` does not count it. What is known before the run is refused before the first step,
@@ -428,8 +429,9 @@ run goroutine. A send that fails no longer stops the wave: the host waits for it
 - gets a SKIPPED `task.executed` — "not reached", what a Soul's fail-stop writes for the rest of its
   message — for each later task whose `on:` selects it. Its `where:` is not evaluated: it would read
   registers the host stopped producing. A `run_once:` task covers no dropped host;
-- is audited once, as `apply.host_dropped` (`sid`, `step`, `reason`, and `task` when the failure is
-  tied to one).
+- is audited as `apply.host_dropped` (`sid`, `step`, `reason`, and `task` when the failure is
+  tied to one) — when it drops, and again when a rescue fails on it under `host` (below); not at a
+  barrier whose verdicts end a run still going on, nor at one that carries a Cancel.
 
 A barrier that would drop the last live host of the run's roster ends the run `failed` (§6). The
 roster is the incarnation's hosts the run holds, targeted by a step or not: a run whose steps all go
@@ -440,6 +442,47 @@ so the run reads `partial_failed`; the incarnation goes `error_locked` with reas
 and `incarnation.run_completed` says `partial_failed`. A run that ends early for any reason marks
 nothing, and its rows fold to `failed`. `failed_plan_index` keeps its public meaning, a row's first
 failure (`shared/api/wire/incarnation.go`, read by `keeper/internal/applyrun/runsview.go`).
+
+**Rescue routing, built in NIM-951 for a linear run** (`keeper/internal/render/rescue.go`,
+`keeper/internal/scenario/rescue.go`). Before each step the run tells render, by host, which
+registers failed there and at which step, and whether a failure has ended the run:
+
+- a rescue — an `onfail:` task that is not keeper-side — reaches a dropped host when its `on:`,
+  and its enclosing blocks', select the host and one of its sources failed there at an earlier
+  step. No `where:` is evaluated for the host (user, 2026-10-08), the rescue's or a block's, nor a
+  block's `run_once:`, for the reason above: it would read registers the host stopped producing.
+  Its `when:` is settled on the Keeper as on any target. A dropped host the rescue does not reach
+  is recorded SKIPPED, as for any later task. A `run_once:` rescue goes to the first host by SID
+  it fires on;
+- a barrier whose verdicts end the run no longer aborts it at once. The run walks on to the steps
+  holding a rescue whose source ran at an earlier step and failed on some host
+  (`config.RescueSteps`); every other step is skipped, and the roster is not read again at a
+  refresh boundary. Past the end every host's registers stop where the run ended, so — the rule
+  above, applied to every host — nothing evaluates a `where:`: a rescue goes to the run's hosts its
+  and its enclosing blocks' `on:` select where one of its sources failed. A step rolled in
+  `serial:` waves goes on after the wave whose failure ended the run, each later wave sending the
+  hosts a rescue fires on their rescues alone. A host where the source succeeded gets nothing
+  from it, not even a record. A rescue that reaches no host, and every task that is not a rescue,
+  stays a placeholder, neither rendered nor sent. The run ends after the last rescue's barrier,
+  failed, its error the whole failure list. A Cancel still ends it at once;
+- a rescue that fails is judged by its own radius. Under `host` its host's drop is recorded:
+  `apply.host_dropped` is written — again, for a host already dropped — and a run that reaches its
+  end marks every failed row of a dropped host `dropped`, so it still reads `partial_failed`. A
+  barrier that ends a run still going on records no drop at all, whatever ends it — a failure under
+  `scenario`, `tolerate` exceeded, no host left — and neither does one that carries a Cancel.
+  After the run has ended, a rescue's failure ends nothing more: it is one more entry in the
+  list;
+- the records of a failure tied to no task (the bullet above) are written at the barrier that
+  judged it, before the next step reads the failed facts;
+- a rescue step goes through the work-queue like any step (user, 2026-10-08): its rows carry the
+  run's rescue routing, and the claim renders the rescue for the dropped host the run sent it to
+  ([ADR-027 amend (s)](../adr/0027-apply-work-queue.md));
+- ⚠ not covered: a keeper-side task's own failure still aborts the run at once
+  (`keeper_dispatch_failed`), so no rescue of a keeper-side source runs after it; and a block
+  rolled as one group takes a percentage `serial:` of its live hosts only, though a rescue inside
+  it may also reach dropped ones; and in the waves after the one whose failure ended the run, a
+  host whose applier rescue fires but whose destiny has no task for it is not sent the terminal,
+  so a later rescue reading `register.<applier>` finds none there.
 
 ⚠ **A staged run keeps today's barrier** until NIM-952 retires it: it returns on the first failed
 host (`classifyExcept`, `keeper/internal/scenario/dispatch.go`) and the abort force-fails every row

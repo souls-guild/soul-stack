@@ -53,6 +53,19 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   ⚠ A Soul older than NIM-949 loses a result finished during a drop: its step waits out
   `scenario_timeout`.
 
+- **An `onfail:` rescue reaches its host across barriers (NIM-951, [settings.md
+  §4](docs/scenario/settings.md), [ADR-draft scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md)
+  fork 1).** In a run executing linearly, a host whose task failed still receives every `onfail:`
+  task whose source failed on it: a host dropped under `host` is its target when the rescue's
+  `on:` selects it, its `where:` not evaluated, and a failure that ends the run no longer aborts
+  it at once — the run walks on to the steps holding a rescue that fires, renders nothing else
+  past the end, and ends after the last rescue's barrier, failed, with the whole failure list. A
+  rescue's failure is judged by its own `on_failure`. A failure with no task row
+  (`send_apply_failed`, `soul_unavailable`, a push transport error, `orphaned`) is recorded as a
+  Soul's fail-stop would: the first task the host did not report FAILED, the rest SKIPPED. A
+  rescue step goes through the work-queue, its row carrying the routing (ADR-027 amend (s)). ⚠ A
+  keeper-side task's own failure still aborts the run at once, before any rescue of it.
+
 - **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-draft
   scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) S1).** A `when:` /
   `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported
@@ -2727,6 +2740,17 @@ order to act in.
   `incarnation.spec`" is enforced by the compiler rather than asserted by a test.
 
 ### Security
+
+- **Go toolchain 1.26.9 and `golang.org/x/net` v0.60.0 (NIM-951).** `check-vuln` went red on
+  advisories published after the last bump: GO-2026-6617 (HTTP/2 server crash, an HPACK encoder
+  race) in `golang.org/x/net` v0.58.0, and standard-library ones fixed in go1.26.9 (`crypto/tls`,
+  `html/template`, `mime/multipart`, `net/http/httputil`). `go.work`, the three pluginhost
+  fixtures, the CI workflows and the Dockerfiles move to go1.26.9; every module requiring
+  `x/net` moves to v0.60.0 with `go get` — version edits only. It raised what x/net v0.60.0
+  requires (`x/crypto`, `x/sys`, `x/term`, `x/text`, and `x/sync` through `x/text`), brought
+  `soul-lint`, `tests/e2e` and `tests/load` up to the OpenTelemetry, `genproto` and `logr`
+  versions `shared` already required, and `tests/e2e-live` up to the `x/sys` and `x/text` its
+  local `sdk` now requires and the `x/sync` that `x/text` requires.
 
 - **A password pasted into a `*_ref` field was quoted back into `audit_log`.** Every
   field that must hold a vault-ref rejected a plaintext value by naming it —

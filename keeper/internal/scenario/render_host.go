@@ -213,6 +213,9 @@ func stepRenderInput(ctx context.Context, deps Deps, in *render.RenderInput, ste
 	}
 	in.Steps = steps
 	in.HeldTargets = render.HeldTargetsFrom(step.HeldTargets)
+	if step.Rescue != nil {
+		in.Rescue = &render.Rescue{Ended: step.Rescue.Ended, EndedAt: step.Rescue.EndedAt, Failed: step.Rescue.Failed}
+	}
 	if passage > 0 {
 		reg, err := loadRegisterByHostUpToPassage(ctx, deps.DB, applyID, passage, step.RegisterNames)
 		if err != nil {

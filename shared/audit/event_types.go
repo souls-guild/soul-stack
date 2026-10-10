@@ -458,9 +458,10 @@ const (
 	EventApplyCancelled EventType = "apply.cancelled"
 
 	// EventApplyHostDropped — a linear run dropped a host under `on_failure: host`
-	// (docs/scenario/settings.md §4, NIM-948): the host failed, receives no later
-	// task, and the run goes on without it. Written at the barrier that judged the
-	// failure, once per host. `source: keeper_internal`, `archon_aid: NULL`,
+	// (docs/scenario/settings.md §4, NIM-948): the host failed and receives no later
+	// ordinary task, only its rescues. Written when it drops and when a rescue fails on
+	// it under `host` (NIM-951), but not at a barrier that ends a run still going on or
+	// carries a Cancel. `source: keeper_internal`, `archon_aid: NULL`,
 	// `correlation_id = apply_id`. Payload: `{sid, apply_id, incarnation, scenario,
 	// step, task?, reason}` — `task` is the name of the task the host failed at,
 	// absent for a failure tied to no task (a send that failed, a lost agent).

@@ -24,9 +24,9 @@ import (
 // NIM-948). The barrier waits for every host it sent the step to — a host still
 // working is never failed on another's account — and judges each failed host by the
 // effective `on_failure` of the task it failed at. Radius `scenario` ends the run once
-// the step has finished; radius `host` drops the host: it receives no later task, and
-// the run goes on without it until `tolerate` is exceeded or no host is left. A run
-// that reaches its end without some hosts ends `partial_failed`.
+// the step has finished; radius `host` drops the host: it receives no later ordinary
+// task, only its rescues, and the run goes on without it until `tolerate` is exceeded or
+// no host is left. A run that reaches its end without some hosts ends `partial_failed`.
 
 // radiusCancelled is the verdict on a cancelled row: it ends the run whatever the
 // policy says — a Cancel is an instruction, not a failure.
@@ -67,12 +67,28 @@ type runFailures struct {
 	// dropped — the hosts the run dropped, by SID, with the roster facts they had
 	// when they left: they stay in `soulprint.hosts`.
 	dropped map[string]droppedHost
+	// ended — a failure ended the run at the barrier of step endedAt, under endLead;
+	// it goes on only to the rescues ahead (settings.md §4).
+	ended   bool
+	endedAt int
+	endLead string
 }
 
 type droppedHost struct {
 	entry failureEntry
 	facts *topology.HostFacts
+	// steps — every step whose failed row the host left: where it was dropped, and
+	// each rescue that failed on it since.
+	steps []int
 }
+
+// errRunEnded is a barrier's verdict that a failure ended the run; the failure list
+// holds why ([runFailures.withEnd]).
+var errRunEnded = errors.New("scenario: a failure ended the run")
+
+// errCancelledAfterEnd is a Cancel judged at a rescue's barrier: it stops the run at
+// once, and the failure list already names it.
+var errCancelledAfterEnd = errors.New("scenario: a host was cancelled after a failure ended the run")
 
 func newRunFailures() *runFailures {
 	return &runFailures{dropped: map[string]droppedHost{}}
@@ -136,43 +152,97 @@ func (f *runFailures) errorOf(lead string) error {
 	return fmt.Errorf("scenario: %s: %s", lead, strings.Join(parts, "; "))
 }
 
-// settle appends a barrier's verdicts and applies the policy: the error ending the
-// run, or the entries whose hosts it drops. owner is the merged settings of the
-// step's barrier owner, reached the hosts the run has targeted so far — `tolerate`'s
-// denominator (user decision, NIM-948) — and roster the step's roster, which holds
-// the facts a dropped host keeps in `soulprint.hosts`. `tolerate` is checked at every
-// barrier, one with no new failure included: a step may tighten it (settings.md
-// §2.1). Drops are committed only when the run goes on.
+// settle appends a barrier's verdicts and applies the policy: [errRunEnded] when they
+// end the run, or the entries whose hosts it drops. owner is the merged settings of
+// the step's barrier owner, reached the hosts the run has targeted so far —
+// `tolerate`'s denominator (user decision, NIM-948) — and roster the step's hosts,
+// which hold the facts a dropped host keeps in `soulprint.hosts`. `tolerate` is
+// checked at every barrier, one with no new failure included: a step may tighten it
+// (settings.md §2.1). Drops are committed only when the run goes on.
+//
+// A host already dropped is out of the count: it is at this barrier for a rescue, and
+// a rescue that fails on it under `host` only records that it left again. Once the run
+// has ended a rescue's failure ends nothing more: it is one more entry, and under `host`
+// its host's drop is recorded as well. Only a Cancel still ends the run at once.
 func (f *runFailures) settle(step int, verdicts []failureEntry, owner config.ScenarioSettings, reached int, roster []*topology.HostFacts) ([]failureEntry, error) {
 	if err := f.append(verdicts...); err != nil {
 		return nil, err
 	}
 	for _, v := range verdicts {
-		if v.radius != config.OnFailureHost {
+		if v.radius == radiusCancelled && f.ended {
+			return nil, errCancelledAfterEnd
+		}
+		if v.radius == radiusCancelled {
 			return nil, f.errorOf(fmt.Sprintf("step %d failed", v.step))
 		}
 	}
-	if len(verdicts) > 0 && len(f.live(roster))-len(verdicts) <= 0 {
-		return nil, f.errorOf(fmt.Sprintf("step %d: no host is left in the run", step))
+	if f.ended {
+		return f.drop(verdicts, roster), nil
 	}
-	if dropped := len(f.dropped) + len(verdicts); owner.Tolerate != nil && dropped > 0 {
+	fresh := 0
+	for _, v := range verdicts {
+		if v.radius != config.OnFailureHost {
+			return nil, f.end(step, fmt.Sprintf("step %d failed", v.step))
+		}
+		if _, out := f.dropped[v.sid]; !out {
+			fresh++
+		}
+	}
+	if fresh > 0 && len(f.live(roster))-fresh <= 0 {
+		return nil, f.end(step, fmt.Sprintf("step %d: no host is left in the run", step))
+	}
+	if dropped := len(f.dropped) + fresh; owner.Tolerate != nil && dropped > 0 {
 		if owner.Tolerate.Exceeded(dropped, reached) {
-			return nil, f.errorOf(fmt.Sprintf("step %d: %d hosts dropped under on_failure: host, more than tolerate allows (%d of %d)",
+			return nil, f.end(step, fmt.Sprintf("step %d: %d hosts dropped under on_failure: host, more than tolerate allows (%d of %d)",
 				step, dropped, owner.Tolerate.Limit(reached), reached))
 		}
 	}
+	return f.drop(verdicts, roster), nil
+}
+
+// drop records the hosts verdicts drop under radius `host` and returns their entries.
+// A host already out keeps the facts it left with.
+func (f *runFailures) drop(verdicts []failureEntry, roster []*topology.HostFacts) []failureEntry {
 	bySID := make(map[string]*topology.HostFacts, len(roster))
 	for _, h := range roster {
 		bySID[h.SID] = h
 	}
+	var out []failureEntry
 	for _, v := range verdicts {
-		facts := bySID[v.sid]
-		if facts == nil {
-			facts = &topology.HostFacts{SID: v.sid}
+		if v.radius != config.OnFailureHost {
+			continue
 		}
-		f.dropped[v.sid] = droppedHost{entry: v, facts: facts}
+		d, known := f.dropped[v.sid]
+		if !known {
+			facts := bySID[v.sid]
+			if facts == nil {
+				facts = &topology.HostFacts{SID: v.sid}
+			}
+			d = droppedHost{entry: v, facts: facts}
+		}
+		d.steps = append(d.steps, v.step)
+		f.dropped[v.sid] = d
+		out = append(out, v)
 	}
-	return verdicts, nil
+	return out
+}
+
+// end marks the run ended at step, its failure list under lead.
+func (f *runFailures) end(step int, lead string) error {
+	f.ended, f.endedAt, f.endLead = true, step, lead
+	return errRunEnded
+}
+
+// withEnd closes the list of a run that a failure ended and returns the error it
+// finishes with: the whole list, the rescues' failures included, beside whatever else
+// stopped it — a Cancel, an error of a rescue step.
+func (f *runFailures) withEnd(cause error) error {
+	f.close()
+	list := f.errorOf(f.endLead)
+	if errors.Is(cause, errRunEnded) || errors.Is(cause, errCancelledAfterEnd) {
+		return list
+	}
+	return errors.Join(cause, list)
 }
 
 // stepJudge judges the failed rows of one step.
@@ -429,16 +499,127 @@ func (r *Runner) judgeWave(ctx context.Context, spec RunSpec, log *slog.Logger, 
 		}
 		j.failedAt = failedTasksByHost(keys)
 	}
-	dropped, err := fails.settle(j.step, j.verdicts(statuses), j.owner, reachedHosts(statuses), roster)
+	verdicts := j.verdicts(statuses)
+	r.recordUnreported(ctx, spec, log, j, verdicts)
+	dropped, err := fails.settle(j.step, verdicts, j.owner, reachedHosts(statuses), roster)
 	if err != nil {
 		return err
 	}
 	for _, e := range dropped {
 		r.writeHostDropped(ctx, spec, e, log)
-		log.Warn("scenario: host dropped from the run under on_failure: host - it receives no later task",
+		log.Warn("scenario: host dropped from the run under on_failure: host - it receives no later ordinary task",
 			slog.String("sid", e.sid), slog.Int("step", e.step), slog.String("task", e.task), slog.String("reason", e.reason))
 	}
 	return nil
+}
+
+// recordUnreported writes, for every host whose failure is tied to no task — its step
+// never reached it, or it stopped reporting partway — what a Soul's fail-stop writes
+// for the rest of a message (settings.md §4, user 2026-10-08): the first task it did
+// not report FAILED, where it stopped, and every later one SKIPPED, not taken. A task
+// already recorded keeps its record, and a task the Keeper decided to skip on the host
+// is SKIPPED. Rescue routing and an applier's resolution read these records; the
+// barrier does not judge them again — the host was judged by the owner's radius.
+// Without an audit reader nothing reads them, and nothing says what was reported.
+func (r *Runner) recordUnreported(ctx context.Context, spec RunSpec, log *slog.Logger, j *stepJudge, verdicts []failureEntry) {
+	if r.deps.AuditReader == nil {
+		return
+	}
+	var stopped []failureEntry
+	for _, v := range verdicts {
+		if v.task == "" && v.radius != radiusCancelled && len(j.message(v.sid)) > 0 {
+			stopped = append(stopped, v)
+		}
+	}
+	if len(stopped) == 0 {
+		return
+	}
+	reported, err := r.deps.AuditReader.SelectReportedTaskKeys(ctx, spec.ApplyID)
+	if err != nil {
+		log.Warn("scenario: reading the reported tasks failed - no record is written for the hosts that stopped reporting",
+			slog.Int("step", j.step), slog.Any("error", err))
+		return
+	}
+	sink := applysink.New(applysink.Deps{
+		DB:     r.applyDB,
+		Audit:  r.deps.Audit,
+		Bus:    r.deps.ApplyBus,
+		Source: audit.SourceKeeperInternal,
+		Logger: log,
+	})
+	for _, v := range stopped {
+		for _, rec := range unreported(j.message(v.sid), v, reported) {
+			sink.JudgedTaskEvent(ctx, v.sid, rec.event(spec.ApplyID, j.step))
+		}
+	}
+}
+
+// message is what host sid was to be sent at this step, in the Soul's order: the
+// tasks sent — a grouped child the Keeper skipped among them, sent `when: false`,
+// marked SKIPPED — then the tasks the Keeper skipped outside the message. A record
+// with no status is a task the host was to run.
+func (j *stepJudge) message(sid string) []keeperRecord {
+	sent := j.sent[sid]
+	out := make([]keeperRecord, 0, len(sent))
+	for i, t := range sent {
+		rec := keeperRecord{task: t, localIdx: i}
+		if t.FlowBySID[sid].Skip {
+			rec.status = keeperv1.TaskStatus_TASK_STATUS_SKIPPED
+		}
+		out = append(out, rec)
+	}
+	if sh := j.settled[sid]; sh != nil && !sh.failed {
+		out = append(out, numberedAfter(sh.records, len(sent))...)
+	}
+	return out
+}
+
+// unreported is the records message leaves for host v.sid once it stopped: those not
+// in reported, the first task it was to run FAILED with the row's reason and the rest
+// SKIPPED.
+func unreported(message []keeperRecord, v failureEntry, reported map[auditpg.ChangedTaskKey]struct{}) []keeperRecord {
+	var out []keeperRecord
+	stopped := false
+	for _, rec := range message {
+		if _, ok := reported[auditpg.ChangedTaskKey{SID: v.sid, PlanIndex: rec.task.Index}]; ok {
+			continue
+		}
+		if rec.status == keeperv1.TaskStatus_TASK_STATUS_UNSPECIFIED {
+			rec.status = keeperv1.TaskStatus_TASK_STATUS_SKIPPED
+			if !stopped {
+				stopped = true
+				rec.status = keeperv1.TaskStatus_TASK_STATUS_FAILED
+				rec.failure = &render.FlowFailure{
+					Code:    stopCode(v.reason),
+					Message: "the host stopped reporting at this task: " + v.reason,
+				}
+			}
+		}
+		out = append(out, rec)
+	}
+	return out
+}
+
+// stopCodes are the reason codes a row's summary opens with for a failure tied to no
+// task, written by the claim, the send wait, the push branch and the WardRoster sweep.
+var stopCodes = map[string]bool{
+	soulUnavailable:                 true,
+	"send_apply_failed":             true,
+	"recipe_missing":                true,
+	reasonPushTransportFailed:       true,
+	reasonProviderNotRouted:         true,
+	reasonSoulPassageUnsupported:    true,
+	string(applyrun.StatusOrphaned): true,
+}
+
+// stopCode is the reason code heading a row's summary, or "" for a summary that opens
+// with none — a claim's render error, say.
+func stopCode(reason string) string {
+	head, _, _ := strings.Cut(reason, ":")
+	if stopCodes[head] {
+		return head
+	}
+	return ""
 }
 
 // writeHostDropped writes the audit fact of a drop: which host left at which step,
@@ -525,9 +706,11 @@ func (r *Runner) finishPartial(ctx context.Context, spec RunSpec, fails *runFail
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 	for _, d := range fails.drops() {
-		if err := applyrun.MarkDropped(wctx, r.deps.DB, spec.ApplyID, d.entry.sid, d.entry.step); err != nil {
-			log.Error("scenario: marking a dropped host's row failed - the run reads failed, not partial_failed",
-				slog.String("sid", d.entry.sid), slog.Int("step", d.entry.step), slog.Any("error", err))
+		for _, step := range d.steps {
+			if err := applyrun.MarkDropped(wctx, r.deps.DB, spec.ApplyID, d.entry.sid, step); err != nil {
+				log.Error("scenario: marking a dropped host's row failed - the run reads failed, not partial_failed",
+					slog.String("sid", d.entry.sid), slog.Int("step", step), slog.Any("error", err))
+			}
 		}
 	}
 	cause = fails.errorOf(fmt.Sprintf("the run finished without %d dropped host(s)", len(fails.dropped)))

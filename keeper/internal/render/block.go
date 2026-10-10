@@ -72,7 +72,9 @@ func (p *Pipeline) renderBlockTask(
 	width := serialWidth(blockTask.Serial, len(targeted))
 	if roll.group {
 		width = roll.width
+		in.groupStep = roll.step
 	}
+	in.blockHosts = targeted
 
 	// childTarget: a descendant resolves its own on:/where:/run_once: against the
 	// block's hosts (scenario orchestration inside a block is allowed —
@@ -89,7 +91,10 @@ func (p *Pipeline) renderBlockTask(
 	}
 	// childRecurse: a nested block → recursion into the same renderBlockTask.
 	childRecurse := func(pos int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
-		cin := in
+		cin, err := p.withRescueCover(in, child, in.rescueCover)
+		if err != nil {
+			return nil, nil, err
+		}
 		cover, err := coveredDropped(p.cel, in, child, in.droppedCover)
 		if err != nil {
 			return nil, nil, err
@@ -117,10 +122,12 @@ type blockRoll struct {
 	overlay bool
 	steps   []config.StepNode
 	path    string
-	// group — a block rolled as one group, or a block inside one: one step, and
-	// every descendant rolls at width; a descendant's own `serial:` is not read.
+	// group — a block rolled as one group, or a block inside one: one step for the
+	// whole subtree, and every descendant rolls at width; a descendant's own
+	// `serial:` is not read.
 	group bool
 	width int
+	step  int
 }
 
 // nested is the roll of the nested block at child position pos. child carries the
@@ -128,9 +135,9 @@ type blockRoll struct {
 func (r blockRoll) nested(pos int, child config.Task, targeted []*topology.HostFacts, width int) blockRoll {
 	switch {
 	case r.group:
-		return blockRoll{group: true, width: width}
+		return blockRoll{group: true, width: width, step: r.step}
 	case r.overlay && r.steps[pos].Group:
-		return blockRoll{group: true, width: serialWidth(child.Serial, len(targeted))}
+		return blockRoll{group: true, width: serialWidth(child.Serial, len(targeted)), step: r.steps[pos].Step}
 	case r.overlay:
 		return blockRoll{overlay: true, steps: r.steps[pos].Children, path: config.StepPath(r.path, pos)}
 	}
@@ -228,7 +235,9 @@ type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted 
 //	→ emitStaticWhenSkip(child)               — the AND-when may have become static-false
 //	→ guard(child)                            — layer's key boundary (callback)
 //	→ futurePlaceholder(child)                — linear dispatch, a default block's
-//	                                            child whose step is still ahead
+//	                                            child whose step is still ahead, or
+//	                                            one past the run's end that is no
+//	                                            rescue (rescue.go)
 //	→ render: nested block (recurse) / apply / module
 //	→ stampTransport(child)                   — the descendant's effective transport
 //	                                            onto the plans it just produced
@@ -243,6 +252,10 @@ type blockChildRecurser func(pos int, child config.Task, idx int, childTargeted 
 //   - guard: which descendant kinds/keys are allowed (scenario vs destiny boundary);
 //   - target: how the descendant's roster is resolved (on/where narrowing vs inheritance);
 //   - recurse: how a nested block is rendered (recursion within the same layer).
+//
+// Rescue routing (scenario layer only, rescue.go) bypasses target: a rescue child is
+// routed over the block's rescue cover, and past the run's end a nested block holds
+// what its `on:` selects, its `where:` and `run_once:` not evaluated.
 //
 // width — the container's wave width (serial: of the block for scenario / serial:
 // of the apply-task for destiny): threaded into every descendant's DispatchPlan
@@ -315,8 +328,12 @@ func (p *Pipeline) walkBlockChildren(
 			return nil, nil, gerr
 		}
 
-		if step != nil && in.TaskPassage != nil && step.Step > in.ActivePassage {
-			tasks = append(tasks, futurePlaceholder(child, idx, step.Step))
+		childStep := in.groupStep
+		if step != nil {
+			childStep = step.Step
+		}
+		if (step != nil && in.TaskPassage != nil && step.Step > in.ActivePassage) || (child.Block == nil && in.pastEnd(childStep) && !isRescue(child)) {
+			tasks = append(tasks, futurePlaceholder(child, idx, childStep))
 			plans = append(plans, DispatchPlan{TaskIndex: idx})
 			idx++
 			stampOnFailure(in, tasks, childStart, child)
@@ -329,7 +346,13 @@ func (p *Pipeline) walkBlockChildren(
 		// inherited into child (mergeBlockInheritance doesn't touch it): a nested
 		// block without serial: rides its own width (0 = one wave).
 		if child.Block != nil {
-			childTargeted, terr := target(i, child)
+			var childTargeted []*topology.HostFacts
+			var terr error
+			if in.pastEnd(childStep) {
+				childTargeted, terr = p.onCover(in, child, in.blockHosts)
+			} else {
+				childTargeted, terr = target(i, child)
+			}
 			if terr != nil {
 				return nil, nil, terr
 			}
@@ -347,13 +370,28 @@ func (p *Pipeline) walkBlockChildren(
 			continue
 		}
 
-		childTargeted, terr := target(i, child)
-		if terr != nil {
-			return nil, nil, terr
-		}
-		notReached, nerr := coveredDropped(p.cel, in, child, in.droppedCover)
-		if nerr != nil {
-			return nil, nil, nerr
+		var childTargeted, notReached []*topology.HostFacts
+		var terr error
+		if in.rescueRouting() && isRescue(child) {
+			scoped := in
+			scoped.Hosts, scoped.Dropped = in.blockHosts, in.droppedCover
+			if childTargeted, notReached, terr = p.routeRescue(scoped, child, childStep, in.rescueCover, droppedSIDs(in)); terr != nil {
+				return nil, nil, terr
+			}
+			if in.pastEnd(childStep) && len(childTargeted) == 0 {
+				tasks = append(tasks, futurePlaceholder(child, idx, childStep))
+				plans = append(plans, DispatchPlan{TaskIndex: idx})
+				idx++
+				stampOnFailure(in, tasks, childStart, child)
+				continue
+			}
+		} else {
+			if childTargeted, terr = target(i, child); terr != nil {
+				return nil, nil, terr
+			}
+			if notReached, terr = coveredDropped(p.cel, in, child, in.droppedCover); terr != nil {
+				return nil, nil, terr
+			}
 		}
 		childWidth := width
 		if step != nil {

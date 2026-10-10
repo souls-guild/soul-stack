@@ -307,6 +307,25 @@ type RenderInput struct {
 	// a block's children to narrow further ([coveredDropped]). Set per block.
 	droppedCover []*topology.HostFacts
 
+	// Rescue — a linear run's failures as rescue routing reads them (settings.md §4):
+	// a dropped host stays the target of an `onfail:` task whose source failed on it,
+	// and once a failure has ended the run only `onfail:` tasks are rendered. nil —
+	// no host dropped and the run goes on.
+	Rescue *Rescue
+
+	// groupStep — the step of the block rolled as one group being rendered, which its
+	// children share. Set per group.
+	groupStep int
+
+	// blockHosts — the live hosts of the scenario block being rendered, which its
+	// children narrow. Set per block.
+	blockHosts []*topology.HostFacts
+
+	// rescueCover — the run's hosts, live and dropped, that the enclosing blocks'
+	// `on:` selects, their `where:` and `run_once:` aside: the hosts a rescue inside
+	// may reach ([Pipeline.routeRescue]). Set per block while rescues are routed.
+	rescueCover []*topology.HostFacts
+
 	// SoulNeeds — what every task of a linear run sends to which hosts, as far as it
 	// is known before the run, for the capability gate ahead of the first step
 	// (NIM-946). Filled by the first pass that reaches it; nil — not collected.

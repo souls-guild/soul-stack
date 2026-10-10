@@ -13,7 +13,10 @@ package config
 // count as one — or a child of a default block, at any depth, unless it sits inside
 // a group.
 
-import "strconv"
+import (
+	"slices"
+	"strconv"
+)
 
 // StepNode is one task's place in the step order.
 type StepNode struct {
@@ -160,6 +163,45 @@ func CrossStepRequisite(tasks []Task, steps []StepNode) (CrossPassageInfo, bool)
 		}
 	}
 	return CrossPassageInfo{}, false
+}
+
+// RescueSteps are the steps of a linear plan holding an `onfail:` task whose source
+// runs at an earlier step, each with the source registers its rescues name — the
+// steps a run that a failure ended still walks to (docs/scenario/settings.md §4). A
+// keeper-side `onfail:` task is no rescue: the Keeper evaluates no requisite of its
+// own tasks. steps is [LinearPassage]'s for the same tasks.
+func RescueSteps(tasks []Task, steps []StepNode) map[int][]string {
+	if len(steps) != len(tasks) {
+		return nil
+	}
+	var links []stepLink
+	for i := range tasks {
+		collectStepLinks(&tasks[i], steps[i], nil, &links)
+	}
+	emitted := map[string][]int{}
+	for _, l := range links {
+		if l.task.Register != "" {
+			emitted[l.task.Register] = append(emitted[l.task.Register], l.step)
+		}
+	}
+	out := map[int][]string{}
+	for _, l := range links {
+		if IsKeeperSideTask(*l.task) {
+			continue
+		}
+		for _, req := range l.reqs {
+			if req.kind != "onfail" || slices.Contains(out[l.step], req.name) {
+				continue
+			}
+			for _, src := range emitted[req.name] {
+				if src < l.step {
+					out[l.step] = append(out[l.step], req.name)
+					break
+				}
+			}
+		}
+	}
+	return out
 }
 
 // stepLink is one task of the plan with the step it runs in and every requisite

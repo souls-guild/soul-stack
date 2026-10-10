@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"slices"
 	"time"
 
 	"github.com/jackc/pgx/v5"
@@ -128,10 +129,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// before Render (sealed empty → degrades to vault+regex, bit-for-bit).
 	sealed := render.NewSealedSet()
 
+	// A linear run's failure list (docs/scenario/settings.md §4): its barriers judge
+	// every failure by its task's `on_failure`, and a host dropped under `host` is out
+	// of every later step's roster. Declared before abort: a run that a failure ended
+	// aborts with the whole list, whatever stops it.
+	var fails *runFailures
+
 	// From here, a run failure means failStatus (state untouched). result stays
 	// runResultFailed on any abort exit below; ok is set only on a successful
 	// finish.
 	abort := func(reason string, cause error) {
+		if fails != nil && fails.ended {
+			cause = fails.withEnd(cause)
+		}
 		// cause may carry a vault:secret/-ref from a render/dispatch error. Apply
 		// the same masking as status_details in lockIncarnation to both observable
 		// channels — OTel trace (span exception) and slog — to avoid an asymmetry
@@ -744,15 +754,30 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		capturesState := config.HasStateCapture(scn.Tasks)
 		passageTasks, passagePlans := tasks, plans
 		var regNames map[int]string
-		// A linear run's failure list (docs/scenario/settings.md §4): its barriers
-		// judge every failure by its task's `on_failure`, and a host dropped under
-		// `host` is out of every later step's roster.
-		var fails *runFailures
 		ran := map[int]render.DispatchPlan{}
+		// The steps holding a rescue — an `onfail:` task whose source runs at an
+		// earlier step — with the registers they name: the only steps a run that a
+		// failure ended walks on to (settings.md §4).
+		var rescueSteps map[int][]string
 		if spec.executionModel == ExecutionLinear {
 			fails = newRunFailures()
+			rescueSteps = config.RescueSteps(scn.Tasks, steps)
 		}
 		for p := 0; p < passage.Count; p++ {
+			var rescue *render.Rescue
+			if p > 0 && fails != nil {
+				if fails.ended && len(rescueSteps[p]) == 0 {
+					continue
+				}
+				var rerr error
+				if rescue, rerr = r.rescueFor(ctx, spec, fails, tasks); rerr != nil {
+					abort("register_load_failed", rerr)
+					return
+				}
+				if fails.ended && (rescue == nil || !rescue.FiresAnywhere(rescueSteps[p], p)) {
+					continue
+				}
+			}
 			if p > 0 {
 				// Mid-run roster re-resolve (ADR-0061 §S3) at a refresh boundary:
 				// Passage P-1 finished a successful `refresh_soulprint: true` step →
@@ -773,7 +798,10 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// preserving per-Passage determinism (waves/run_once/assert stay
 				// fixed within a Passage). Re-resolve failure → abort (not silently
 				// falling back to the old roster).
-				if refreshBoundaries[p] {
+				// A run that a failure ended sends no ordinary task, so it reads no
+				// roster again: a host gone from a fresh snapshot would take with it a
+				// rescue past the end, and with that the plan indices behind it.
+				if refreshBoundaries[p] && (fails == nil || !fails.ended) {
 					grown, rerr := r.resolveRoster(ctx, spec.IncarnationName)
 					if rerr != nil {
 						abort("topology_failed", fmt.Errorf("scenario: re-resolve roster before Passage %d: %w", p, rerr))
@@ -858,6 +886,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				// still listed in soulprint.hosts.
 				renderIn.Hosts = fails.live(renderIn.Hosts)
 				renderIn.Dropped = fails.droppedFacts()
+				renderIn.Rescue = rescue
 				pt, pp, rerr := r.deps.Render.Render(ctx, renderIn)
 				if rerr != nil {
 					abort("render_failed", rerr)
@@ -875,7 +904,13 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// future Passages (their compacted indices would diverge from actual
 			// execution). Runs before dispatch, best-effort. Idempotent +
 			// non-overlapping passage slices → accumulates, doesn't overwrite.
-			r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
+			// Past the end of a run a failure ended, a step's placeholders carry its
+			// passage too: only the rescues it sends are planned.
+			if fails != nil && fails.ended {
+				r.persistRunPlan(ctx, spec, targetedTasks(passageTasks, passagePlans), p, sealed.Paths(), log)
+			} else {
+				r.persistRunPlan(ctx, spec, passageTasks, p, sealed.Paths(), log)
+			}
 
 			pTasks, pPlans := tasksForPassage(passageTasks, passagePlans, p)
 			if fails != nil {
@@ -967,12 +1002,19 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			// Passage was not rendered against, and a grown host would look
 			// unrostered.
 			var step *applyrun.Recipe
+			stepHosts := renderIn.Hosts
 			if spec.executionModel == ExecutionLinear {
 				step = stepRecipe(spec, art.SHA1, renderIn, regNames)
+				// A dropped host a rescue reaches is sent the step like any host of it.
+				stepHosts = append(slices.Clone(renderIn.Hosts), renderIn.Dropped...)
 			}
-			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, renderIn.Hosts, step, fails); err != nil {
-				abort(dispatchAbortReason(err), err)
-				return
+			if err := r.dispatchPassage(ctx, spec, log, p, pTasks, pPlans, gate, stepHosts, step, fails); err != nil {
+				if !errors.Is(err, errRunEnded) || !rescueAhead(rescueSteps, p) {
+					abort(dispatchAbortReason(err), err)
+					return
+				}
+				log.Warn("scenario: a failure ended the run - only the rescues ahead are dispatched before it ends",
+					slog.Int("step", p))
 			}
 			// A barrier reads a cluster-wide Cancel while it waits; a keeper step
 			// has none, and under linear dispatch it can be the run's last step, so
@@ -983,6 +1025,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 					return
 				}
 			}
+		}
+		// A run that a failure ended ends after the barrier of its last rescue.
+		if fails != nil && fails.ended {
+			abort("dispatch_failed", errRunEnded)
+			return
 		}
 		// A run that reached its end without the hosts it dropped ends
 		// partial_failed, its incarnation error_locked (settings.md §2). A teardown
