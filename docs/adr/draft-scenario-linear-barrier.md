@@ -135,7 +135,7 @@ depends on anything is the fact that *k* comes after *k−1*.
    task written after a host task. Task *k+1* waits for a keeper task *k* by construction — the
    loop is sequential and a keeper failure aborts before the next dispatch. What a keeper task does
    not get is a *cross-host barrier*, because it targets no host (`groupByHost` skips it,
-   `keeper/internal/scenario/dispatch.go:956-962`); there is nothing for such a barrier to wait on.
+   `keeper/internal/scenario/dispatch.go:962-968`); there is nothing for such a barrier to wait on.
 
 4. **The Soul receives only rendered inputs; whatever depends on another message is settled on
    the Keeper** (user, 2026-10-01 — fork 2). The host needs its inputs, fully rendered, and nothing else:
@@ -298,7 +298,7 @@ depends on anything is the fact that *k* comes after *k−1*.
 > top-level tasks". That is false: five shapes are dispatched to no host and so produce no
 > cross-host barrier — an `assert:` (`keeper/internal/render/pipeline.go:227-237`), a conditionally
 > dropped `include:` group (`:209-214`), a statically-false `when:` (`:1064-1065` →
-> `dispatch.go:956-974` → `:94-106`), a keeper-side task (decision 3), and a task whose `where:` or
+> `dispatch.go:962-980` → `:94-106`), a keeper-side task (decision 3), and a task whose `where:` or
 > requisite gate leaves it with no host (`crosspassage.go:120-128`). Under linear dispatch each of
 > these steps still runs a barrier that re-checks its owner's `tolerate` (NIM-948), though none of
 > the run's hosts is sent anything. Under the happens-before
@@ -354,7 +354,8 @@ machine, a push host over SSH, ten runs per cell. Method, harness and every deri
   own work is 10–13 ms and the rest is the wait for the next 200 ms tick of the barrier poll
   (`keeper/internal/scenario/scenario.go` `defaultPollInterval`, `failure_policy.go` `waitStep`).
   So the tick, not the round trip, sets the price: +20 ms on every message leaves the linear run
-  unchanged (2536 against 2534 ms, 1 host), and any step shorter than a tick costs a tick.
+  unchanged (2536 against 2534 ms, 1 host), and any step shorter than a tick costs a tick. NIM-984
+  removed the tick from the path — see the measurement after this list.
 - **The Soul's per-message overhead is small.** Its `Run` of a one-task message takes 1 ms, against
   13–20 ms for one twelve-task message across all staged cells (1.05–1.7 ms per task). Around
   `Run` — the network (~1.5 ms), the Soul's request handling and the Keeper storing the result —
@@ -382,6 +383,33 @@ count (always 12 here); HA; a fleet beyond 8 hosts or spread over machines (here
 the Keeper's CPU). The stand's Postgres clock (WSL2) stepped back by ~110–125 ms inside 24 of the
 runs: medians absorb it, p90 and single gaps do not.
 
+**Measured again with the barrier waking on the write (NIM-984, 2026-10-10).** A barrier now reads
+`apply_runs` when a row of its run is written or the run is cancelled — on whichever Keeper
+instance, through the Redis channel `apply:wake` — and polls only as a fallback, once a second
+(`keeper/internal/applywake`, `scenario.go` `defaultBarrierFallback`); the two writes that publish
+nothing — a row the WardRoster sweep orphans, one `trySend` takes back only to re-send — wait for it. The same harness on the same
+stand, on `release/NIM-926` at NIM-951 plus the NIM-984 change. Medians, NIM-950 → NIM-984:
+
+| | staged | linear |
+|---|---|---|
+| run, 1 / 4 / 8 hosts, inline (`acolytes: 0`) | 227 / 239 / 269 → 75 / 99 / 130 ms | 2534 / 2658 / 2812 → 239 / 382 / 575 ms |
+| run, 1 / 4 / 8 hosts, work-queue (`acolytes: 2`) | 222 / 230 / 438 → 83 / 143 / 240 ms | 2521 / 2559 / 2610 → 420 / 1074 / 2002 ms |
+| run, push host, +0 / +20 ms delay | 423 / 623 → 299 / 591 ms | 4925 / 7322 → 2786 / 6463 ms |
+| gap between two linear steps | – | 181–204 → 8–12 ms |
+
+- **The gap is the Keeper's own work now**: 8–12 ms in every linear cell, against the 10–13 ms the
+  first measurement estimated under the tick. Linear inline costs ×3.2 / ×3.9 / ×4.4 of staged at
+  1 / 4 / 8 hosts, where it cost ×10–11.
+- **The step sets the price now.** Inline, a step is the round trip and the slowest host, 9–35 ms.
+  On the work-queue the step grows with the fleet — 25 / 79 / 154 ms at 1 / 4 / 8 hosts, each
+  claimed host rendering its step with a Vault read of its own (above) — and at 8 hosts the run is
+  2.0 s against 0.24 s staged. A push host's step is its SSH session, ~223 ms (530 ms at +20 ms),
+  and twelve of them are its run.
+- **Staged gains too**: its one barrier stopped waiting for a tick, 30–200 ms off a run.
+
+Not measured: the wake crossing Keeper instances — one Keeper here; the cross-instance path is held
+by a guard test (`TestIntegration_BarrierEndsOnTheWakeNotOnTheFallbackPoll`), not timed.
+
 ## Consequences
 
 ### ★ Fail-stop becomes fleet-wide — the largest behavioural change for existing scenarios
@@ -392,7 +420,7 @@ dispatched and B runs it to the end. The failure is observed at the barrier, aft
 
 Under this ADR the barrier sits between every pair of tasks, and one host's failure ends the run
 there: `classify` returns an error on any host in `failed`/`cancelled`/`orphaned`
-(`keeper/internal/scenario/dispatch.go:869-881`), `waitBarrier` propagates it (`:740-743`, surfaced to the stage loop at `:221-223`), and
+(`keeper/internal/scenario/dispatch.go:875-887`), `waitBarrier` propagates it (`:745-748`, surfaced to the stage loop at `:221-223`), and
 `run()` aborts (`keeper/internal/scenario/run.go:1011-1014`). **Tasks 4..12 are then dispatched to
 nobody — including the hosts that were healthy** — bar the rescues of fork 1, which the run walks
 on to before it ends (NIM-951).
@@ -443,7 +471,7 @@ failed host of this run, not a run unit, and "more than N" is **off by one** fro
 which stops *at* the N-th. The full rules are in [docs/scenario/settings.md](../scenario/settings.md).
 
 ★ **Choosing this vocabulary also removes the collision, not just the confusion.** `RunSpec`
-(`keeper/internal/scenario/scenario.go:231-303`) carried no failure policy, and carries none fed at run
+(`keeper/internal/scenario/scenario.go:238-310`) carried no failure policy, and carries none fed at run
 time since NIM-948 either — its `stepSettings` are the scenario's own `settings:`, merged per step; ADR-043's keys live
 on the `voyages` row and are read only to decide whether to start the next Leg
 (`keeper/internal/voyageorch/scenario.go:235`). Had the task barrier read that field with ADR-043's
@@ -453,7 +481,7 @@ separate field, declared in the scenario and fed by nothing at run time** (fork 
 vocabulary is disjoint from ADR-043's, so the two cannot be confused even by eye.
 
 **Three terminal statuses, and they are not interchangeable.** `classify` ends the run on `failed`,
-`cancelled` *and* `orphaned` today (`keeper/internal/scenario/dispatch.go:869-881`):
+`cancelled` *and* `orphaned` today (`keeper/internal/scenario/dispatch.go:875-887`):
 
 - `failed` is a host failure and is what the policy governs. So is `orphaned`: the claim marks a
   queued step's row `dispatched` ([ADR-027 amend (q)](0027-apply-work-queue.md), NIM-961), and since
@@ -594,8 +622,8 @@ goes *into* `TaskPassage`, not how the loop counts — with one exception.
 ⚠ **A default block's children each need their own number, and that is a re-keying.** Today every
 descendant of a top-level task takes its passage — *"block is an atomic Passage unit"*
 (`stampPassage`, `keeper/internal/render/pipeline.go:2040-2052`). A message is selected by
-`t.Passage == p` (`tasksForPassage`, `keeper/internal/scenario/dispatch.go:926-934`), the barrier
-filters host rows by it (`classifyExcept`, `:839`), `apply_runs` is keyed `(apply_id, sid, passage)`
+`t.Passage == p` (`tasksForPassage`, `keeper/internal/scenario/dispatch.go:932-940`), the barrier
+filters host rows by it (`classifyExcept`, `:845`), `apply_runs` is keyed `(apply_id, sid, passage)`
 (migration `078_add_apply_runs_passage.up.sql`), and registers load with `passage < $2`
 (`taskregister.go:129-142`). With one number shared, a default block's children would travel in one
 message or, sent separately, collide on that key, and none could read its sibling's register. So
@@ -645,7 +673,7 @@ its step, and the block's `where:` and `run_once:` are resolved once.
 them. Two consequences, and the second is the serious one:
 
 - an already-active task's re-render is **discarded** — `tasksForPassage` keeps only the active
-  ordinal (`keeper/internal/scenario/dispatch.go:926-934`) — so re-resolving task 0's secret at every
+  ordinal (`keeper/internal/scenario/dispatch.go:932-940`) — so re-resolving task 0's secret at every
   later step is pure cost and Vault load, not a correctness problem;
 - **a secret that disappears mid-run now fails the whole run, T times more often.** Every pass
   re-resolves every already-active task's secrets, and a failure there is `render_failed`
@@ -658,7 +686,7 @@ is what makes it matter.
 ### `serial:` — the width collapses between tasks, the wave count multiplies
 
 Today the wave width is one per Passage: the minimum positive `serial:` among the tasks *of that
-Passage* (`keeper/internal/scenario/dispatch.go:1004-1015`), aggregated for one documented reason —
+Passage* (`keeper/internal/scenario/dispatch.go:1010-1021`), aggregated for one documented reason —
 *"tasks of one Passage are sent to the host in one message, so it is impossible to send different
 Passage tasks in different waves"* ([orchestration.md §2.2.1](../scenario/orchestration.md)).
 
@@ -693,7 +721,7 @@ fires where ADR-056's derivation — kept for this check alone — would put a h
 `serial:` in one Passage with another host step, **in either order**, and it goes when the
 derivation goes, after the service repositories are audited. *Decided (user, 2026-10-06, NIM-940):*
 an earlier revision said "with a later host task", which misses half the set — today one wave loop
-carries the whole Passage at its narrowest width (`keeper/internal/scenario/dispatch.go:1004-1015`),
+carries the whole Passage at its narrowest width (`keeper/internal/scenario/dispatch.go:1010-1021`),
 so a step without `serial:` written *before* one with it rolls too, and stops rolling under this
 ADR. The opt-out is the block rule's: a `serial_scope` the author wrote, either value, on the task,
 above it or in the scenario's `settings:` — neither value stretches a wave over the next task, so a

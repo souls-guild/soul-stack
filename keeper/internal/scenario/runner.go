@@ -160,6 +160,7 @@ func (r *Runner) RequestCancel(ctx context.Context, applyID string) (found bool,
 	if perr != nil {
 		return false, fmt.Errorf("scenario: request cancel: %w", perr)
 	}
+	r.deps.ApplyWake.Wake(applyID)
 	// Local fast path: if the goroutine is on this instance, cancel
 	// immediately instead of waiting for the barrier to pick up the
 	// just-set flag.

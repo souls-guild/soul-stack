@@ -358,7 +358,7 @@ func TestStageDiagnostics_LooseFileKeepsDynamicIncludeWhen(t *testing.T) {
 // the linter's verdict is worth nothing if it disagrees with the engine.
 //
 // The keeper loads the entry point channel-aware (`upgrade/<slug>/main.yml`,
-// scenario.go:58) and then builds the include levels from the scenario NAME alone:
+// scenario.go:59) and then builds the include levels from the scenario NAME alone:
 // `path.Join("scenario", scenarioName)` and `"scenario"`
 // (keeper/internal/scenario/include.go:26-27, reached from run.go / preflight.go /
 // render_host.go with spec.ScenarioName). It never learns which channel the entry

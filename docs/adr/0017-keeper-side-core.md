@@ -310,7 +310,7 @@ part of stating the price honestly.
 The catalog is a **closed enum**. `ParsePermission`
 (`keeper/internal/rbac/parser.go:98-100`) rejects an unknown name with `unknown_permission`.
 `NewEnforcerFromSnapshot` (`keeper/internal/rbac/enforcer.go:127-130`) returns on the **first**
-unparseable string in the whole snapshot, and `keeper/cmd/keeper/daemon.go:833-837` turns that
+unparseable string in the whole snapshot, and `keeper/cmd/keeper/daemon.go:835-839` turns that
 error into a start-up refusal. So one surviving `provider.create` row on one obscure role does
 not degrade one grant: it prevents the enforcer from being built, which means keeper does not
 start, which means the `role.*` API that could delete the row is not serving. That is a

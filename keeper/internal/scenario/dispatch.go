@@ -452,6 +452,8 @@ func (r *Runner) dispatchStepPlanned(ctx context.Context, spec RunSpec, log *slo
 			if c, _ := r.cancelFlagged(ctx, spec.ApplyID); c {
 				if _, ferr := applyrun.RequestCancel(ctx, r.deps.DB, spec.ApplyID); ferr != nil {
 					log.Warn("scenario: flagging a late-queued row of a cancelled run failed", slog.String("sid", run.SID), slog.Any("error", ferr))
+				} else {
+					r.deps.ApplyWake.Wake(spec.ApplyID)
 				}
 			}
 			r.publishSummons(ctx, log)
@@ -689,8 +691,9 @@ func (r *Runner) warnCrossKeeperDispatch(ctx context.Context, sid string, log *s
 		slog.String("self_kid", r.kid))
 }
 
-// waitBarrier polls apply_runs.status until all wantHosts of the run reach a
-// terminal status, or ctx is cancelled.
+// waitBarrier reads apply_runs.status — whenever a writer of a row it waits on, or
+// a Cancel, wakes it ([Deps.ApplyWake]), and at each poll — until all wantHosts of
+// the run reach a terminal status, or ctx is cancelled.
 //
 // Returns:
 //   - nil — all hosts succeeded.
@@ -704,7 +707,9 @@ func (r *Runner) waitBarrier(ctx context.Context, applyID string, passage, wantH
 // waitBarrierExcept is [Runner.waitBarrier] with the failed rows of the hosts in
 // failedEarly counted as terminal instead of failing the barrier.
 func (r *Runner) waitBarrierExcept(ctx context.Context, applyID string, passage, wantHosts int, failedEarly map[string]bool, log *slog.Logger) error {
-	ticker := time.NewTicker(r.pollInterval)
+	wake, unwatch := r.deps.ApplyWake.Watch(applyID)
+	defer unwatch()
+	ticker := time.NewTicker(r.barrierPoll())
 	defer ticker.Stop()
 
 	for {
@@ -748,6 +753,7 @@ func (r *Runner) waitBarrierExcept(ctx context.Context, applyID string, passage,
 		select {
 		case <-ctx.Done():
 			return fmt.Errorf("scenario: barrier interrupted: %w", ctx.Err())
+		case <-wake:
 		case <-ticker.C:
 		}
 	}

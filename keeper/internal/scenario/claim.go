@@ -373,7 +373,11 @@ func (c *ClaimRunner) aborted(ctx context.Context) bool {
 // claim's attempt: an Acolyte that lost the Ward to a reclaim must not close
 // a row a newer claim owns ([applyrun.ErrWardLost]).
 func (c *ClaimRunner) closeWard(ctx context.Context, run *applyrun.ApplyRun, status applyrun.Status, summary *string) error {
-	return applyrun.UpdateWardStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, run.Attempt, status, summary)
+	if err := applyrun.UpdateWardStatus(ctx, c.deps.Deps.DB, run.ApplyID, run.SID, run.Passage, run.Attempt, status, summary); err != nil {
+		return err
+	}
+	c.deps.Deps.ApplyWake.Wake(run.ApplyID)
+	return nil
 }
 
 // markFailed moves a claimed job to failed with an already-safe summary (no

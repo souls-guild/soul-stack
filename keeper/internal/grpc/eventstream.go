@@ -20,6 +20,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/applysink"
+	"github.com/souls-guild/soul-stack/keeper/internal/applywake"
 	keeperredis "github.com/souls-guild/soul-stack/keeper/internal/redis"
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
@@ -158,6 +159,11 @@ type EventStreamDeps struct {
 	// without a scenario runner); production wire-up (`keeper run`) passes
 	// the pool.
 	ApplyRunDB applyrun.ExecQueryRower
+
+	// ApplyWake wakes the barrier of a run whose row the RunResult handler
+	// closed — on whichever instance the run started (NIM-984). nil → the
+	// barrier sees the row at its next poll.
+	ApplyWake *applywake.Hub
 
 	// ConsoleHub is the session manager of the interactive console plane
 	// (NIM-143). The three Soul→Keeper `console_*` payloads are handed to it;

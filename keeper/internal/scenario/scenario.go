@@ -39,6 +39,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/applywake"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
@@ -130,10 +131,16 @@ var scenarioNameRe = regexp.MustCompile(ScenarioNamePattern)
 // ValidScenarioName checks whether name matches [ScenarioNamePattern].
 func ValidScenarioName(name string) bool { return scenarioNameRe.MatchString(name) }
 
-// defaultPollInterval is the apply_runs.status polling period for the
-// cross-host barrier fan-in (PM decision: 200ms). Optimization
-// (subscribe/event-driven) is deferred.
+// defaultPollInterval is the apply_runs.status polling period of the cross-host
+// barrier when nothing wakes it (PM decision: 200ms), and the period of the waits
+// no row write ends — a host's stream to appear, a push host's SSH connect.
 const defaultPollInterval = 200 * time.Millisecond
+
+// defaultBarrierFallback is the barrier's polling period when [Deps.ApplyWake]
+// wakes it on a row write or Cancel (NIM-984). What no wake announces waits for it:
+// a lost wake, a row the WardRoster sweep orphans or [stepWatch.retakeUnsent] takes
+// back, a host's stream staying lost past soul_timeout ([stepWatch.check], per poll).
+const defaultBarrierFallback = time.Second
 
 // defaultRunTimeout is the ceiling on a single scenario run's duration.
 // Guards against an "eternal barrier" (Soul hung, no RunResult). On expiry:
@@ -525,6 +532,11 @@ type Deps struct {
 	// operator SSE. nil → keeper-side events don't reach SSE (audit path
 	// still works as before). Same bus as the grpc handlers.
 	ApplyBus *applybus.EventBus
+	// ApplyWake wakes a run's barrier when a row of the run moves, on any
+	// instance (NIM-984). The writers that do not call its Wake are listed, with
+	// the reason, in TestApplyWake_EveryRowMoverWakesTheBarrier. nil → the
+	// barrier polls every PollInterval.
+	ApplyWake *applywake.Hub
 	// AuditReader — read access to the audit log for the per-task changed
 	// rollup (T3): the set of (sid, task_idx) CHANGED tasks in the run. nil →
 	// the incarnation.run_completed terminal event is emitted without
@@ -613,6 +625,9 @@ type Deps struct {
 	// value → default.
 	PollInterval time.Duration
 	RunTimeout   time.Duration
+	// BarrierFallback overrides [defaultBarrierFallback] (for tests). Read only
+	// with ApplyWake set.
+	BarrierFallback time.Duration
 
 	// MaxAwaitTimeoutFn — hot-reload-aware source for the `await_online`
 	// onboarding barrier ceiling ([config.KeeperConfig.ResolvedMaxAwaitTimeout],
@@ -728,5 +743,18 @@ func NewRunner(deps Deps) *Runner {
 		keeperPlugins:     deps.KeeperPlugins,
 		applyDB:           deps.DB,
 		active:            make(map[string]context.CancelFunc),
+	}
+}
+
+// barrierPoll is the barrier's polling period: [defaultBarrierFallback] while
+// [Deps.ApplyWake] wakes it, else pollInterval.
+func (r *Runner) barrierPoll() time.Duration {
+	switch {
+	case r.deps.ApplyWake == nil:
+		return r.pollInterval
+	case r.deps.BarrierFallback > 0:
+		return r.deps.BarrierFallback
+	default:
+		return defaultBarrierFallback
 	}
 }

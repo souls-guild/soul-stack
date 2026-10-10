@@ -196,6 +196,7 @@ Recorded below in Vault KV `secret/keeper/redis` (bootstrap step, rotation table
 | `keeper:instance:<kid>` | [Conclave](../adr/0006-cache-redis.md) - presence of Keeper instance | 30s (`DefaultConclaveTTL`) | renew every 10s (`DefaultConclaveRenewInterval`); filmed on graceful-shutdown. |
 | `reaper:leader` | Reaper's leadership lease | `reaper.lock_ttl` (default 5m) | renew is re-elected by TTL; one live-Reaper per cluster. |
 | `apply:summons` | pub/sub-signal "planned tasks have appeared" ([ADR-027](../adr/0027-apply-work-queue.md)) | without TTL (pub/sub) | Ephemeral signal; the loss is compensated by poll-fallback Acolytes. |
+| `apply:wake` | pub/sub-signal "a row of this run moved — its barrier re-reads `apply_runs`" (NIM-984) | without TTL (pub/sub) | Ephemeral, one per host row a barrier waits on being closed or withdrawn (bar a WardRoster orphan and a row taken back only to be re-sent) and per Cancel; the loss is compensated by the barrier's fallback poll (1 s). |
 | `events:shard:<n>` | cluster-routing apply/run events (`TaskEvent`/`RunResult`/`ErrandResult`) between Keeper instances ([ADR-006(p.1)](../adr/0006-cache-redis.md), `applybus`) | without TTL (pub/sub) | Ephemeral; fixed set of 256 shards (`n = fnv32a(apply_id) % 256`), bridge per-shard. Event loss is acceptable (fire-and-forget SSE). |
 | `sigil:anchors-changed` | pub/sub-signal "trust-anchor-set updated" ([ADR-026(h)](../adr/0026-sigil.md)) | no TTL | Ephemeral; the loss is compensated by TTL-fallback-reread (`sigil_anchors_reload_interval`, default 30s). |
 | `rbac:invalidate` | pub/sub-signal "RBAC snapshot updated" ([ADR-028](../adr/0028-rbac-storage.md#adr-028-rbac-storage--postgres)) | no TTL | TTL-poll fallback on the `Holder` side. |
@@ -220,7 +221,7 @@ maxmemory-policy noeviction
 
 - `soul:<sid>:lock` × 100k = ~10 MB
 - `keeper:instance:<kid>` × tens = <1 KB
-- `apply:summons` / `events:shard:*` / `cancel:*` - pub/sub, not stored in Redis (broadcast only)
+- `apply:summons` / `apply:wake` / `events:shard:*` / `cancel:*` - pub/sub, not stored in Redis (broadcast only)
 - pub/sub channels - not stored, broadcast only
 
 **1 GB `maxmemory` with plenty of headroom** for target scale.

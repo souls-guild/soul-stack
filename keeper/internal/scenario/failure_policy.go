@@ -398,13 +398,16 @@ func reachedHosts(statuses []applyrun.HostStatus) int {
 	return len(seen)
 }
 
-// waitStep polls until wantHosts rows of step passage are terminal and returns the
-// run's rows. Unlike [Runner.waitBarrier] a failed row does not end the wait: the hosts
-// still working finish, and every failure they report is judged. A row Cancel and the
+// waitStep reads the run's rows, when [Runner.waitBarrier] would, until wantHosts
+// rows of step passage are terminal and returns the run's rows. Unlike
+// [Runner.waitBarrier] a failed row does not end the wait: the hosts still working
+// finish, and every failure they report is judged. A row Cancel and the
 // run's context end it at once; the lock's Cancel waits while only a dispatched row is
 // open. watch fails a host whose stream stays lost ([stepWatch.check]).
 func (r *Runner) waitStep(ctx context.Context, applyID string, passage, wantHosts int, log *slog.Logger, watch *stepWatch) ([]applyrun.HostStatus, error) {
-	ticker := time.NewTicker(r.pollInterval)
+	wake, unwatch := r.deps.ApplyWake.Watch(applyID)
+	defer unwatch()
+	ticker := time.NewTicker(r.barrierPoll())
 	defer ticker.Stop()
 	for {
 		statuses, err := applyrun.SelectStatusesByApplyID(ctx, r.deps.DB, applyID)
@@ -437,6 +440,7 @@ func (r *Runner) waitStep(ctx context.Context, applyID string, passage, wantHost
 		select {
 		case <-ctx.Done():
 			return nil, fmt.Errorf("scenario: barrier interrupted: %w", ctx.Err())
+		case <-wake:
 		case <-ticker.C:
 		}
 	}

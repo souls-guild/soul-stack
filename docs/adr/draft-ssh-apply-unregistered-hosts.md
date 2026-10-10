@@ -317,7 +317,7 @@ to await.
 
 **14. The run's ceiling bounds the step — today's conflation, separated by NIM-949 under linear
 dispatch.** In a staged run the step has no task-level limit; what bounds it is the join wait per
-host and the run-wide ceiling: 5 min (`keeper/internal/scenario/scenario.go:141`), raised to
+host and the run-wide ceiling: 5 min (`keeper/internal/scenario/scenario.go:148`), raised to
 `max_await_timeout` + 10 min only when the plan carries a refresh emitter (`effectiveRunTimeout`,
 `keeper/internal/scenario/run.go`) — the run timeout doing a task timeout's job, so a chain that
 installs agents needs `refresh_soulprint: true` on its `core.soul.registered` (as decision 1 writes

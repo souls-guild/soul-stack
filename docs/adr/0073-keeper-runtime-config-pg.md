@@ -6,7 +6,7 @@
 
   The mechanism does not need inventing — it already exists twice. [ADR-028](0028-rbac-storage.md) moved RBAC and [ADR-029](0029-service-registry.md) the Service registry out of `keeper.yml` into Postgres with `rbac:invalidate` / `service:invalidate` pub/sub. The untyped `keeper_settings` table (migration `035_create_keeper_settings`, `key TEXT PRIMARY KEY` under `CHECK (key ~ '^[a-z][a-z0-9_]*$')` — so dots cannot appear in a key — plus `value TEXT NOT NULL`) grows without migrations, and `serviceregistry.Holder` already provides an `atomic.Pointer` snapshot + a 10s TTL-poll + `WatchInvalidations`.
 
-  What the reconnaissance changed: **both pilot consumers read the file snapshot, not the PG Holder.** Toll reconfigures from a `config.Store.OnReload` callback (`keeper/cmd/keeper/daemon.go:3668` → `applyTollReload`, `:3968`); Tempo re-reads per request (`d.store.Get().Tempo.ResolvedVoyageCreate()`, `:4749`). Wiring each consumer to the Holder would mean rewriting every consumer and then maintaining two config-read dialects side by side. The source switch therefore belongs **in the config layer, below the consumers**.
+  What the reconnaissance changed: **both pilot consumers read the file snapshot, not the PG Holder.** Toll reconfigures from a `config.Store.OnReload` callback (`keeper/cmd/keeper/daemon.go:3680` → `applyTollReload`, `:3980`); Tempo re-reads per request (`d.store.Get().Tempo.ResolvedVoyageCreate()`, `:4761`). Wiring each consumer to the Holder would mean rewriting every consumer and then maintaining two config-read dialects side by side. The source switch therefore belongs **in the config layer, below the consumers**.
 
 - **Decision.**
 

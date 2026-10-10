@@ -210,13 +210,13 @@ executes linearly (`keeper/internal/scenario/step_watch.go`):
   ends runs on and applies the step.
 
 `scenario_timeout` **replaces** the 5-minute `defaultRunTimeout`
-(`keeper/internal/scenario/scenario.go:138-141`) in a linear run, whose stated job — "guards against an eternal
+(`keeper/internal/scenario/scenario.go:145-148`) in a linear run, whose stated job — "guards against an eternal
 barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also killed any legitimate task
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. A staged run with a refresh emitter gets
 `max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1236-1249`, `deployBudget` at
-`keeper/internal/scenario/scenario.go:143-152`), and `max_await_timeout` is a `keeper.yml` key — an
+`keeper/internal/scenario/scenario.go:150-159`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
 already covers onboarding. A staged run keeps both until NIM-952 retires the model.
@@ -349,7 +349,7 @@ repositories are not linted. The code is `serial_scope_implicit`, reported once,
 such block; a line written there settles every block beneath it.
 
 **The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:1004-1015`),
+a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:1010-1021`),
 so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
 written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its

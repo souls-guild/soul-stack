@@ -166,7 +166,7 @@ func (w *stepWatch) send(ctx context.Context, run *applyrun.ApplyRun, req *keepe
 	}, func() error {
 		// A row an earlier try failed to withdraw: left dispatched, with nothing on
 		// the host to finish it, it would hold the deferred Cancel open.
-		_, err := applyrun.WithdrawUnsent(ctx, w.r.deps.DB, run.ApplyID, run.SID, run.Passage)
+		_, err := w.withdrawUnsent(ctx, run)
 		return err
 	})
 	return nil
@@ -202,7 +202,7 @@ func (w *stepWatch) trySend(ctx context.Context, run *applyrun.ApplyRun, req *ke
 		// The row an earlier try failed to withdraw, the step unsent: take it back
 		// and write it again with the send. Closed since — by a sweep — it settles
 		// the host as it is.
-		withdrawn, derr := applyrun.WithdrawUnsent(ctx, w.r.deps.DB, run.ApplyID, run.SID, run.Passage)
+		withdrawn, derr := w.retakeUnsent(ctx, run)
 		if derr != nil {
 			return false, derr
 		}
@@ -219,7 +219,7 @@ func (w *stepWatch) trySend(ctx context.Context, run *applyrun.ApplyRun, req *ke
 		// soul_timeout.
 		w.log.Info("scenario: no agent stream to send the step on - waiting for one",
 			slog.String("sid", run.SID), slog.Int("passage", w.passage), slog.Duration("soul_timeout", w.soulTimeout), slog.Any("error", serr))
-		withdrawn, derr := applyrun.WithdrawUnsent(ctx, w.r.deps.DB, run.ApplyID, run.SID, run.Passage)
+		withdrawn, derr := w.withdrawUnsent(ctx, run)
 		if derr != nil {
 			return false, derr
 		}
@@ -374,9 +374,27 @@ func (w *stepWatch) recordUnsent(ctx context.Context, run *applyrun.ApplyRun, su
 	default:
 		return false, err
 	}
+	w.r.deps.ApplyWake.Wake(run.ApplyID)
 	w.log.Warn("scenario: host failed for unavailability - no stream to send the step on",
 		slog.String("sid", run.SID), slog.Int("passage", w.passage), slog.Duration("soul_timeout", w.soulTimeout))
 	return true, nil
+}
+
+// withdrawUnsent takes back the dispatched row of a step the host was never sent.
+// It wakes the barrier: the row may be the last dispatched one, deferring a Cancel.
+func (w *stepWatch) withdrawUnsent(ctx context.Context, run *applyrun.ApplyRun) (bool, error) {
+	withdrawn, err := applyrun.WithdrawUnsent(ctx, w.r.deps.DB, run.ApplyID, run.SID, run.Passage)
+	if err == nil && withdrawn {
+		w.r.deps.ApplyWake.Wake(run.ApplyID)
+	}
+	return withdrawn, err
+}
+
+// retakeUnsent takes back a row to write it again with the send, waking no
+// barrier: woken in the gap, one could find no dispatched row left and act on a
+// deferred Cancel while the step still goes out.
+func (w *stepWatch) retakeUnsent(ctx context.Context, run *applyrun.ApplyRun) (bool, error) {
+	return applyrun.WithdrawUnsent(ctx, w.r.deps.DB, run.ApplyID, run.SID, run.Passage)
 }
 
 // present reports whether sid's stream is there; a presence error answers yes, so
@@ -438,6 +456,7 @@ func (w *stepWatch) check(ctx context.Context, statuses []applyrun.HostStatus) {
 		}
 		delete(w.lostSince, sid)
 		if failed {
+			w.r.deps.ApplyWake.Wake(w.spec.ApplyID)
 			w.log.Warn("scenario: host failed for unavailability - its stream stayed lost",
 				slog.String("sid", sid), slog.Int("passage", w.passage), slog.Duration("soul_timeout", w.soulTimeout))
 		}

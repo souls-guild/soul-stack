@@ -758,7 +758,9 @@ func (r *Runner) terminatePushHost(ctx context.Context, spec RunSpec, log *slog.
 			slog.String("sid", sid),
 			slog.String("status", string(status)),
 			slog.Any("error", err))
+		return
 	}
+	r.deps.ApplyWake.Wake(spec.ApplyID)
 }
 
 // resolvePushRoute picks the SshProvider for one push host: the task's own

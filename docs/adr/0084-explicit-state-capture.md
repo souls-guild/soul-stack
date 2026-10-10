@@ -281,8 +281,8 @@ Already verified; recorded here so it is not re-litigated.
 
 `error_locked` is **incarnation-scoped, not host-scoped**. `ErrLocked` is checked in the claim path
 under the same `FOR UPDATE` as the transition to `applying`
-(`keeper/internal/scenario/scenario.go:162-167`) and in the voyage spawner
-(`keeper/cmd/keeper/daemon.go:5828`). Neither `keeper/internal/errand` nor `keeper/internal/console`
+(`keeper/internal/scenario/scenario.go:169-174`) and in the voyage spawner
+(`keeper/cmd/keeper/daemon.go:5841`). Neither `keeper/internal/errand` nor `keeper/internal/console`
 references the status at all — so ad-hoc `command` / `run` against a host stays available while the
 incarnation is locked, by construction rather than by exception.
 

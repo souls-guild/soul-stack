@@ -379,14 +379,16 @@ measure() {
 cmd_run() {
     mkdir -p "${OUT}"
     : > "${OUT}/keepers.txt"
-    local version
+    local version wakes=False
     version="$(curl -s "${API}/healthz" | json_get version)"
+    # The barrier wakes on the write from NIM-984 on; report.py reads `gap` differently.
+    [ -d "${REPO_ROOT}/keeper/internal/applywake" ] && wakes=True
     python3 - "${OUT}/meta.json" <<PY
 import json, sys
 json.dump({
     "commit": "${COMMIT}", "fleets": "${FLEETS}", "delays_ms": "${DELAYS}", "models": "${MODELS}",
     "acolytes": "${ACOLYTES}", "reps": ${REPS}, "push": "${PUSH}", "cpus": $(nproc),
-    "keeper_version_before_run": "${version}",
+    "keeper_version_before_run": "${version}", "barrier_wakes": ${wakes},
 }, open(sys.argv[1], "w"), indent=1, sort_keys=True)
 PY
     local model acol delay n rep cell

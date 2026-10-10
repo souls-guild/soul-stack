@@ -73,6 +73,7 @@ Symptoms:
   - `souls.status` through `mark_disconnected` will lag behind (if reconcile with lease-fallback is enabled).
   - Conclave-presence disappears.
   - `apply:summons` pub/sub does not work → new apply will wait for poll-fallback Acolyte (default 2s).
+  - `apply:wake` pub/sub does not work → a run whose hosts answer to another instance waits the barrier's fallback poll (1s) per barrier — per step under linear dispatch.
   - `rbac:invalidate` / `service:invalidate` doesn't work → RBAC snapshots / service-registry stale until next TTL-poll.
 - `keeper_rbac_invalidations_received_total` rate = 0.
 

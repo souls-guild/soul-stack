@@ -367,7 +367,7 @@ func scenarioChannel(scenarioPath string) string {
 // `path.Join("scenario", scenarioName)` from the scenario's NAME
 // (keeper/internal/scenario/include.go:26) and never learns which channel the entry
 // point came from, even though loading that entry point is channel-aware
-// (`upgrade/%s/main.yml`, scenario.go:58). So a body next to an upgrade scenario is
+// (`upgrade/%s/main.yml`, scenario.go:59). So a body next to an upgrade scenario is
 // unreachable AT RUN TIME, and the linter's job is to say so rather than to resolve
 // it and call the definition good. Being right about the file while disagreeing
 // with the engine is the false green this whole ticket is about — and here the

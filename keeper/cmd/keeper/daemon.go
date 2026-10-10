@@ -28,6 +28,7 @@ import (
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/applywake"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditgate"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditmulti"
@@ -431,6 +432,7 @@ type daemon struct {
 	// --- redis / apply-bus ---
 	redisClient *keeperredis.Client
 	applyBus    *applybus.EventBus
+	applyWake   *applywake.Hub
 
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
@@ -2647,6 +2649,7 @@ func (d *daemon) setupRedis(ctx context.Context) error {
 	// Keeper daemon runtime wiring note.
 	// Keeper daemon runtime wiring note.
 	d.applyBus = applybus.NewBusWithRedis(logger, d.redisClient, cfg.KID)
+	d.applyWake = applywake.New(d.redisClient, cfg.KID, logger)
 	return nil
 }
 
@@ -3107,6 +3110,13 @@ func (d *daemon) setupSoulForgetWatcher(ctx context.Context) error {
 	return nil
 }
 
+// setupApplyWakeListener hands the barrier wakes other instances publish to the
+// barriers of this one (NIM-984). Without Redis the hub has nobody to hear from.
+func (d *daemon) setupApplyWakeListener(ctx context.Context) error {
+	go d.applyWake.Listen(ctx)
+	return nil
+}
+
 // setupGRPCEventStream — gRPC EventStream listener (M2.2 + M2.5): StreamManager,
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
@@ -3288,6 +3298,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		ApplyBus:       d.applyBus,
+		ApplyWake:      d.applyWake,
 		AuditReader:    auditpg.NewReader(d.pool),
 		InputDenyPaths: cfg.Vault.InputDenyPaths,
 		// Keeper daemon runtime wiring note.
@@ -3386,6 +3397,7 @@ func (d *daemon) setupGRPCEventStream(ctx context.Context) error {
 		KeeperVersion:         version,
 		Manager:               streamManager,
 		ApplyBus:              d.applyBus,
+		ApplyWake:             d.applyWake,
 		ApplyRunDB:            d.pool,
 		ConsoleHub:            consoleHub,
 		Metrics:               d.grpcMetrics,
@@ -5263,6 +5275,7 @@ func (d *daemon) setupAcolyte(ctx context.Context) error {
 			ModuleManifests: moduleCatalogPlugins{store: sigil.NewPGStore(d.pool)},
 			AuditReader:     auditpg.NewReader(d.pool),
 			ApplyBus:        d.applyBus,
+			ApplyWake:       d.applyWake,
 		},
 		KID:   cfg.KID,
 		Lease: acolyteLease(cfg),

@@ -21,7 +21,8 @@ NON_HOST_SIDS = {"keeper", "__run__"}
 # defaultPollInterval) started once the whole wave was inserted and sent row by row
 # (dispatch.go dispatchWave, then failure_policy.go waitStep), so a step is seen done
 # only on the first tick after its slowest host finished. The tick's origin is taken as
-# the step's last row insert.
+# the step's last row insert. From NIM-984 the barrier wakes on the write of the row
+# (meta.json `barrier_wakes`): `gap` is then the work itself and `work` is not printed.
 POLL_MS = 200.0
 
 
@@ -216,12 +217,16 @@ def main():
                 vals.append("–" if med is None else f"{fmt(med)} ({fmt(p90)}){mark}")
             print(f"| {d} | {t} | " + " | ".join(vals) + " |")
 
+    wakes = meta.get("barrier_wakes", False)
     print("\n## Where the time goes — medians, ms\n")
-    print("`lead` start→first dispatch · `step` dispatch→slowest host done · `gap` one step done→next dispatched · "
-          f"`work` gap less the wait for the barrier's {POLL_MS:.0f} ms tick · "
-          "`tail` last step done→terminal · `rt` one message, Keeper row insert→result · `queue` row→claim · "
+    print("`lead` start→first dispatch · `step` dispatch→slowest host done · `gap` one step done→next dispatched"
+          + (", the barrier waking on the write · " if wakes else
+             f" · `work` gap less the wait for the barrier's {POLL_MS:.0f} ms tick · ")
+          + "`tail` last step done→terminal · `rt` one message, Keeper row insert→result · `queue` row→claim · "
           "`soul_run` Soul's Run per message · `outside` rt − queue − soul_run\n")
     fields = ["steps", "msgs_per_host", "lead", "step", "gap", "work", "tail", "rt", "queue", "soul_run", "outside"]
+    if wakes:
+        fields.remove("work")
     print("| model | path | delay | target | " + " | ".join(fields) + " |")
     print("|---|---|---|---|" + "---|" * len(fields))
     for (m, a, d, t), runs in sorted(cells.items(), key=lambda kv: (kv[0][1], kv[0][2], target_order(kv[0][3]), kv[0][0])):

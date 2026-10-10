@@ -393,6 +393,10 @@ INTEGRATION_TIMEOUT ?= 15m
 # keeper/internal/integrationenv fails a full sweep that lost the flag anyway).
 PKG ?= ./...
 
+# RUN narrows it further to the tests matching a `go test -run` pattern, with the
+# same flags: `make test-integration PKG=./internal/scenario/ RUN=Barrier`.
+RUN ?=
+
 # The package set is the packages that actually carry integration-tagged tests,
 # derived from the tree by scripts/integration-packages.sh (43 today: 41 in
 # keeper, 2 in soul) rather than taken as `./...` (~155).
@@ -440,7 +444,7 @@ test-integration: $(if $(filter ./...,$(PKG)),check-integration-set,)
 		fi; \
 		echo "go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) in $$m ($$(echo $$pkgs | wc -w) tagged pkg; untagged ones run in make test / test-race)"; \
 		if ! (cd $$m && SOUL_STACK_INTEGRATION_REQUIRE_DOCKER=$(SOUL_STACK_INTEGRATION_REQUIRE_DOCKER) \
-			go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) $$pkgs 2>&1 | tee -a "$$log"); then \
+			go test -tags=integration -race -count=1 -timeout $(INTEGRATION_TIMEOUT) -p $(INTEGRATION_PARALLEL) $(if $(RUN),-run '$(RUN)') $$pkgs 2>&1 | tee -a "$$log"); then \
 			rc=1; \
 		fi; \
 	done; \

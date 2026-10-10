@@ -491,6 +491,7 @@ func runDaemon(args []string) int {
 		// After setupGRPCEventStream: the watcher's whole job is to close
 		// streams the StreamManager holds (NIM-386).
 		d.setupSoulForgetWatcher,
+		d.setupApplyWakeListener,
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.

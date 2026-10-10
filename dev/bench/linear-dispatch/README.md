@@ -37,7 +37,7 @@ it — and `report.py` recomputes the tables from that directory alone.
 | wall | `incarnation.run_completed` minus `incarnation.scenario_started` (audit `created_at`; the start row is written after the API answered, so both models lose the same few ms) |
 | steps, msgs/host | distinct `apply_runs.passage`; rows per host — one row is one ApplyRequest↔RunResult round trip |
 | lead / step / gap / tail | `apply_runs.started_at` (row written, just before the send) and `finished_at` (result stored): start→first dispatch, dispatch→slowest host done, step done→next dispatched, last done→terminal |
-| work | next dispatch minus the first barrier tick that could see the step done: the ticker (`keeper/internal/scenario/scenario.go` `defaultPollInterval`, 200 ms) starts once the wave is sent, taken as the step's last row insert — Keeper's own inter-step work. Not meaningful for the push host, whose send starts in a goroutine after an audit write, so the ticker starts later than the row |
+| work | next dispatch minus the first barrier tick that could see the step done: the ticker (`keeper/internal/scenario/scenario.go` `defaultPollInterval`, 200 ms) starts once the wave is sent, taken as the step's last row insert — Keeper's own inter-step work. Not meaningful for the push host, whose send starts in a goroutine after an audit write, so the ticker starts later than the row. Printed only for a commit before NIM-984: from it the barrier wakes on the write of the row (`meta.json` `barrier_wakes`), and `gap` is the work itself |
 | rt / queue | per row `finished_at − started_at`; on the queue path `claim_at − started_at` |
 | soul_run | Δ`soul_apply_duration_seconds` sum/count on each Soul — the Soul's `Run` per message |
 | outside | `rt − queue − soul_run`: network, the Soul's work around `Run`, Keeper's handling of the result |
@@ -83,8 +83,8 @@ env -u VAULT_ADDR -u VAULT_TOKEN make bench-linear-dispatch
   stamps (`soul_run` and render come from metric deltas). On WSL2 that clock steps: in the
   published run it went back by ~110–125 ms inside 24 runs, 9 of them with impossible negative
   intervals. Medians absorb a step; p90 and single gaps do not.
-- A step close to a 200 ms tick boundary lands on either side of it, so a cell whose steps run
-  ~200 ms (the push host) moves by a tick per step on a small shift in the step itself: push steps
+- Before NIM-984, a step close to a 200 ms tick boundary landed on either side of it, so a cell whose steps ran
+  ~200 ms (the push host) moved by a tick per step on a small shift in the step itself: push steps
   of median 220 ms ran 4.9 s, and in another Keeper start (`acolytes: 2`, where they also went
   inline) steps of median 200 ms ran 3.2 s.
 - The push host is bound by a direct `incarnation_membership` row: the members API binds only a

@@ -150,6 +150,7 @@ func (h *eventStreamHandler) correlateRunResult(ctx context.Context, sid, sessio
 			slog.Any("error", err))
 		return
 	}
+	h.deps.ApplyWake.Wake(applyID)
 	h.logger.Info("eventstream: apply_runs correlated",
 		slog.String("sid", sid),
 		slog.String("apply_id", applyID),
