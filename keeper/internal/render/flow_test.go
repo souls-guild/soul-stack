@@ -9,7 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Flow control settled on the Keeper under linear dispatch (draft ADR NIM-907,
+// Flow control settled on the Keeper under linear dispatch (ADR-0091,
 // decision 4): a step's `when:` decided per host, its post-module predicates
 // rendered per host, and the result carried to each host on its own.
 

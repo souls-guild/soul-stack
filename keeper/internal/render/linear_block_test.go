@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Render under linear dispatch (draft ADR NIM-907, §`passage`, §Rendering, fork
+// Render under linear dispatch (ADR-0091, §`passage`, §Rendering, fork
 // 3): a default block's children are steps of their own, each gated, its targets
 // held from the first step; a group is one step at one width.
 

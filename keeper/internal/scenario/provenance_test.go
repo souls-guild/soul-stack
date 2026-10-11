@@ -137,7 +137,7 @@ func TestRunProvenance_UndeclaredWindowRecordsNothingEnforced(t *testing.T) {
 	}
 }
 
-// The stamp records the model the run executed in (draft ADR NIM-907, item 15).
+// The stamp records the model the run executed in (ADR-0091, item 15).
 func TestRunProvenance_StampRecordsExecutionModel(t *testing.T) {
 	for _, model := range []ExecutionModel{ExecutionStaged, ExecutionLinear} {
 		got := newRunProvenance("v0.2.0", model, serviceEntity(nil), nil).stamp()

@@ -331,10 +331,11 @@ linearly: the run is bounded by `scenario_timeout` (24h by default), and the ste
 included. The addressing lives in the module's parameters, a different entity from the key
 ADR-0088 §4 keeps address-free.
 
-### Interaction with linear dispatch ([draft](draft-scenario-linear-barrier.md), NIM-907 — design only)
+### Interaction with linear dispatch ([ADR-0091](0091-scenario-linear-barrier.md), NIM-907 — the default since NIM-952)
 
-Today ([ADR-056](0056-staged-render-passage.md)) a keeper-side step runs in its Passage before
-that Passage's host dispatch; under NIM-907 it runs at its position (its decision 3). Either way
+Under [ADR-056](0056-staged-render-passage.md) — now the deprecated staged rollback — a keeper-side step
+runs in its Passage before that Passage's host dispatch; under linear dispatch it runs at its position
+(ADR-0091 decision 3). Either way
 it has no cross-host barrier, because it targets no roster host. Its destiny travels **whole**,
 one `soul apply` message per host, which is NIM-907's decision 6 — *destiny is unchanged*: the
 Keeper-side evaluation of `when:` and the rendering of post-module predicates apply to scenario

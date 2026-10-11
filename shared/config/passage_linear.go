@@ -1,7 +1,7 @@
 package config
 
-// Step numbering for linear dispatch (draft ADR
-// docs/adr/draft-scenario-linear-barrier.md, decisions 1-2, §`passage`, fork 3).
+// Step numbering for linear dispatch (ADR-0091,
+// docs/adr/0091-scenario-linear-barrier.md, decisions 1-2, §`passage`, fork 3).
 // Under it `passage` is the 0-based index of a STEP in the plan after
 // ExpandIncludes, computed from the plan alone — a block's mode is written in the
 // file — so nothing the data does moves a number: a task dropped at render (a false
@@ -127,7 +127,7 @@ func WithinGroupRegisterDependency(tasks []Task, scenario *ScenarioSettings) (Wi
 // `onchanges:`/`onfail:` whose source runs in another step than the task that
 // reads it. The Keeper resolves every such link from the audit log
 // (keeper/internal/scenario/crosspassage.go), so a Keeper without an audit reader
-// refuses the run (draft ADR NIM-907 item 9). It sees what the staged detector
+// refuses the run (ADR-0091 item 9). It sees what the staged detector
 // does not: a default block's children are steps of their own, and a link
 // between two of them crosses a step. A block rolled as one group is one step,
 // and links inside it are resolved inside its message. A requisite written on a

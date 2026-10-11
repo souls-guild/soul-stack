@@ -27,7 +27,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
-// Flow control settled on the Keeper under linear dispatch (draft ADR NIM-907,
+// Flow control settled on the Keeper under linear dispatch (ADR-0091,
 // decision 4), end to end: what the Keeper decided a host does not run, it records
 // itself, and a later step reads that record.
 //

@@ -145,7 +145,7 @@ func (r blockRoll) nested(pos int, child config.Task, targeted []*topology.HostF
 }
 
 // HeldTargets keeps each default block's hosts from the pass that rendered its
-// first step (linear dispatch, draft ADR NIM-907 fork 3). Re-resolved at each
+// first step (linear dispatch, ADR-0091 fork 3). Re-resolved at each
 // child's step, a `where:` reading a register an earlier child changed, or a
 // `run_once:` over a changed host set, would send the children to different
 // hosts. Keyed by the block's plan position ([config.StepPath]). Not safe for

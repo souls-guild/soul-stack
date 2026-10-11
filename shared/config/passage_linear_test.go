@@ -7,7 +7,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
-// Step numbering for linear dispatch (draft ADR NIM-907, §`passage`, fork 3): a
+// Step numbering for linear dispatch (ADR-0091, §`passage`, fork 3): a
 // default block's children are steps of their own, a block rolled as one group is
 // one, and the shape comes from the file alone.
 
@@ -211,7 +211,7 @@ tasks:
 	}
 }
 
-// ★ GUARD (draft ADR NIM-907 item 9). Under linear dispatch every requisite whose
+// ★ GUARD (ADR-0091 item 9). Under linear dispatch every requisite whose
 // source runs in another step is resolved from the audit log, so the detector that
 // decides whether the Keeper needs one must see a default block's children as the
 // steps they are. The staged detector reads the block as one entry and misses the

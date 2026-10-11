@@ -7,8 +7,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Rescue routing under linear dispatch (docs/scenario/settings.md §4, draft ADR
-// NIM-907 fork 1). A host whose task failed still receives every `onfail:` task
+// Rescue routing under linear dispatch (docs/scenario/settings.md §4, ADR-0091
+// fork 1). A host whose task failed still receives every `onfail:` task
 // whose source failed on it, at that task's step — dropped under `on_failure: host`,
 // or after a failure ended the run.
 //

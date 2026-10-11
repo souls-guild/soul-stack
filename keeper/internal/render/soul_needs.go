@@ -9,8 +9,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// What a linear run needs from its Souls, known before its first step (draft ADR
-// NIM-907 item 10, NIM-946). A future step renders as a placeholder whose only input to
+// What a linear run needs from its Souls, known before its first step (ADR-0091
+// item 10, NIM-946). A future step renders as a placeholder whose only input to
 // the capability gate is its module, and gating each step as it comes would refuse
 // step k after the steps before it changed the hosts. So the first pass also walks the
 // whole plan and states, per task, what it will send to which hosts, as far as that is

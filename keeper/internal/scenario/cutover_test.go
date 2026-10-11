@@ -45,6 +45,9 @@ func newAcolyteRunner(t *testing.T, summons SummonsPublisher) *Runner {
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
+		// The whole-run Acolyte path is taken by a one-Passage staged run only; a
+		// linear run's steps are queued one by one (linear_queue_integration_test.go).
+		ExecutionModel: ExecutionStaged,
 		// Soul-capability gates (ADR-056 §S5 / ADR-0076(i)): these hosts announce
 		// everything the plan asks of them; the fail-closed branches have their own guards.
 		SoulCap:        stubSoulCap{},

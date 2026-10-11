@@ -186,8 +186,8 @@ type RunSummaryEntry struct {
 }
 
 // RunHostStatusEntry — native element of runs/{apply_id}.hosts[]: one row of one host
-// in the run, a host having one row per Passage it was sent (per step once linear
-// dispatch is on). failed_task_idx (local
+// in the run, a host having one row per step that reached it, sent or settled by the
+// Keeper (per Passage under the deprecated staged model). failed_task_idx (local
 // index of the failed task within the row's ApplyRequest) / failed_plan_index (global
 // cross-cutting plan_index of the same task) / error_summary are filled ONLY on a
 // failed row (omitempty: nil → key omitted on success/running). status — host-level
@@ -195,7 +195,7 @@ type RunSummaryEntry struct {
 type RunHostStatusEntry struct {
 	SID             string  `json:"sid" pattern:"^(keeper|__run__|[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?(\\.[a-z0-9]([a-z0-9-]{0,61}[a-z0-9])?)*)$" doc:"host FQDN OR synthetic run sid (keeper=on:keeper, __run__=run-sentinel abort to dispatch), not addressing a Soul (NIM-36)"`
 	Status          string  `json:"status"`
-	Passage         int     `json:"passage" doc:"index of the unit this row was dispatched for: the Passage today; once linear dispatch is on, the 0-based step index, a host then having one row per step it was sent. Values can have holes - nothing about them is contiguous"`
+	Passage         int     `json:"passage" doc:"0-based index of the step this row was dispatched for, a host having one row per step that reached it, sent or settled by the Keeper without a send (the Passage index for a run under the deprecated staged model). Values can have holes - nothing about them is contiguous"`
 	FailedTaskIdx   *int    `json:"failed_task_idx,omitempty"`
 	FailedPlanIndex *int    `json:"failed_plan_index,omitempty" doc:"plan_index of the first task that failed on this row (a later failure on the same row does not overwrite it); correlates with tasks[].plan_index"`
 	ErrorSummary    *string `json:"error_summary,omitempty"`
@@ -264,7 +264,7 @@ type RunTaskHostEntry struct {
 // audit (pending hosts not included).
 type RunTaskEntry struct {
 	PlanIndex int                     `json:"plan_index"`
-	Passage   int                     `json:"passage" doc:"index of the unit this task was dispatched in, the passage of the run-detail rows it ran on: the Passage today, the 0-based step index once linear dispatch is on"`
+	Passage   int                     `json:"passage" doc:"0-based index of the step this task was dispatched in, the passage of the run-detail rows it ran on (the Passage index for a run under the deprecated staged model)"`
 	ID        string                  `json:"id"`
 	Module    string                  `json:"module"`
 	Params    *map[string]interface{} `json:"params,omitempty"`

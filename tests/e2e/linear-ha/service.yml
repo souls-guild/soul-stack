@@ -1,0 +1,5 @@
+description: |
+  Linear dispatch across two Keepers (NIM-952): a run whose steps go through the
+  work-queue while every Soul holds its stream on the other Keeper. A test
+  fixture, not an example.
+state_schema: {}

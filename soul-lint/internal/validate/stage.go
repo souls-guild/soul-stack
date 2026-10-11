@@ -18,7 +18,7 @@ package validate
 //     ([config.StoreAfterUse]). It needs the EXPANDED task list, which is exactly
 //     what this pass has and the per-file task rules do not.
 //
-// Two rules retired with linear dispatch (draft ADR NIM-907, S1), which this
+// Two rules retired with linear dispatch (ADR-0091, S1), which this
 // linter answers for although it cannot see the execution model pinned to a run:
 // `cross_passage_when_unsupported` (FC-5), since the Keeper decides a `when:`
 // across steps and renders the other register reads into the post-module

@@ -701,12 +701,12 @@ acolytes: 0
 
 ```yaml
 scenario:
-  execution_model: staged   # staged | linear
+  execution_model: linear   # linear | staged (deprecated)
 ```
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `execution_model` | `string` (enum) | `staged` | How a scenario run started on **this instance** orders its tasks ([`execution_model`](../naming-rules.md)): `staged` — [ADR-056](../adr/0056-staged-render-passage.md) Passages; `linear` — a step per top-level task and per child of a default block, each after the barrier of the one before it ([draft ADR NIM-907](../adr/draft-scenario-linear-barrier.md)). Until NIM-952 the linear model is still being completed (the draft ADR's "Work that must land"): set it on a stand or for a measurement, not in production. Read once when a run starts and pinned to that run, so a reload reaches the next run and never a running one; an instance claiming a linear step from the work-queue takes the model from the step row, not from its own file. Any other value is refused with `enum_invalid`. The default moves to `linear` in NIM-952. |
+| `execution_model` | `string` (enum) | `linear` | How a scenario run started on **this instance** orders its tasks ([`execution_model`](../naming-rules.md)): `linear` — a step per top-level task and per child of a default block, each after the barrier of the one before it ([ADR-0091](../adr/0091-scenario-linear-barrier.md)); `staged` — [ADR-056](../adr/0056-staged-render-passage.md) Passages, **deprecated**: kept for one release as the rollback (NIM-952), and every run started under it logs a warning. Read once when a run starts and pinned to that run, so a reload reaches the next run and never a running one; an instance claiming a linear step from the work-queue takes the model from the step row, not from its own file. Any other value is refused with `enum_invalid`. |
 
 In an HA cluster each instance decides for the runs it starts, so instances whose files disagree
 start runs in different models — each run is still one model from its start to its end.

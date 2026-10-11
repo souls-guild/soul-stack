@@ -1019,7 +1019,7 @@ func (p *Pipeline) renderDestinyBlock(
 	childRecurse := func(_ int, child config.Task, idx int, childTargeted []*topology.HostFacts) ([]*RenderedTask, []DispatchPlan, error) {
 		return p.renderDestinyBlock(ctx, destinyIn, child, idx, childTargeted, width, includeGroups)
 	}
-	// No steps: a destiny is one step whole (draft ADR NIM-907, decision 6), so its
+	// No steps: a destiny is one step whole (ADR-0091, decision 6), so its
 	// blocks render in the applier's pass at the applier's width under either model.
 	return p.walkBlockChildren(ctx, destinyIn, blockTask, startIndex, width, includeGroups, guardDestinyBlockChild, childTarget, childRecurse, nil)
 }

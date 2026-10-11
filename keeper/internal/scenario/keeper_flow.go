@@ -15,7 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// Records the Keeper writes itself under linear dispatch (draft ADR NIM-907,
+// Records the Keeper writes itself under linear dispatch (ADR-0091,
 // decision 4). A host the Keeper decided does not run a task is never sent it, so
 // the SKIPPED event and register the Soul would have written are written here — a
 // later `register.<task>.changed` reads false from it instead of raising. A host

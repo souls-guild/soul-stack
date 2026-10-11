@@ -279,7 +279,7 @@ type RenderInput struct {
 	// before, bit-for-bit).
 	ActivePassage int
 
-	// Steps — linear dispatch only (draft ADR NIM-907, §`passage`): one node per
+	// Steps — linear dispatch only (ADR-0091, §`passage`): one node per
 	// top-level task, as [config.LinearPassage] numbered the plan. A default
 	// block's children then each carry their own Passage, are each a placeholder
 	// until their step, take the block's `serial:` as a default they may override,
@@ -666,8 +666,8 @@ type RenderedTask struct {
 	ParamsBySID map[string]*structpb.Struct
 
 	// FlowBySID — the flow control the Keeper settled for this task on each target
-	// host, under linear dispatch and only for the step being dispatched (draft ADR
-	// NIM-907, decision 4; [HostFlow]). nil — the predicates travel as written, with
+	// host, under linear dispatch and only for the step being dispatched (ADR-0091,
+	// decision 4; [HostFlow]). nil — the predicates travel as written, with
 	// FlowContext, and the Soul evaluates them: staged dispatch, a destiny task, an
 	// earlier step's task re-rendered. When set, [ToProtoTasksForHost] sends this
 	// host's predicates and no flow_context, and the dispatcher reads Skip and

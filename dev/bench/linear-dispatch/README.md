@@ -1,6 +1,6 @@
 # Linear-dispatch benchmark (NIM-950)
 
-Measures what the [draft ADR on linear dispatch](../../../docs/adr/draft-scenario-linear-barrier.md)
+Measures what the [ADR-0091 on linear dispatch](../../../docs/adr/0091-scenario-linear-barrier.md)
 §Price states in advance — item 14 of its "Before merge" list — by running one scenario under both
 execution models on the **same commit**, on a fleet of real Souls. The model is picked per Keeper
 start through `keeper.yml::scenario.execution_model` ([config.md](../../../docs/keeper/config.md#scenario)).

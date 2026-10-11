@@ -316,8 +316,8 @@ func printRunDetail(cmd *cobra.Command, d *wire.RunDetailReply) error {
 // reported anything — a quiet run must look exactly as it did before this
 // existed.
 //
-// A host has one row per Passage (per step once linear dispatch is on), and keeper
-// dedupes notices within a row only, so a deprecated param passed in three units
+// A host has one row per step (per Passage under the deprecated staged model), and
+// keeper dedupes notices within a row only, so a deprecated param passed in three steps
 // arrives three times. Merged here by (code, module, param) per host and sorted by
 // that key, as keeper sorts a row, so the same set reads the same on every host.
 func printRunNotices(out io.Writer, hosts []wire.RunHostStatusEntry) {

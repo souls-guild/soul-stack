@@ -1,11 +1,13 @@
-# ADR-draft. Scenario dispatch is linear — a task is dispatched only after the previous one has finished
+# ADR-0091. Scenario dispatch is linear — a task is dispatched only after the previous one has finished
 
-> **Status: accepted (implementation pending); a draft until its number is stamped (NIM-907).** User decision 2026-09-28. **Supersedes [ADR-056](0056-staged-render-passage.md)**;
+> **Status: active — the default execution model since NIM-952 (2026-10-11).** User decision 2026-09-28 (NIM-907); built by
+> the NIM-926 release train. **Supersedes [ADR-056](0056-staged-render-passage.md)**, whose model stays selectable
+> for one release as the deprecated rollback `keeper.yml::scenario.execution_model: staged` (user, 2026-10-11);
 > amends [ADR-012(d)](0012-keeper-soul-grpc.md); changes what [ADR-0075](0075-intra-host-async-tasks.md)
-> applies to; affects [ADR-027](0027-apply-work-queue.md); amends [ADR-009](0009-scenario-dsl.md) and
+> applies to; amends [ADR-027](0027-apply-work-queue.md), [ADR-009](0009-scenario-dsl.md) and
 > [ADR-0084](0084-explicit-state-capture.md). **Text approved by the user on 2026-10-02**, with the
 > two decisions outside the forks: a run that dropped some hosts ends `partial_failed` (item 4), and the
-> Acolyte path blocks enabling linear dispatch (item 7). Design, not implemented. §Before merge carries **four forks** — contract decisions that need the user's answer
+> Acolyte path blocks enabling linear dispatch (item 7). §Before merge carries **four forks** — contract decisions that need the user's answer
 > before any code, each with the price of every option. **All four are answered**; fork 3's answer
 > was re-confirmed after the tree's own canary was shown to change meaning under it, and its flag is
 > `serial_scope: task | block`. Fork 4 — the scenario's `settings:` block — outgrew this ADR and is specified in
@@ -50,9 +52,9 @@ Two earlier drafts of this ADR said otherwise. Recorded so the claim is not made
   is a cel-go `no such key` at render, not an empty read.
 - **Cross-passage `onchanges:`/`onfail:` is already resolved Keeper-side** from accumulated per-host
   CHANGED/FAILED facts (`keeper/internal/scenario/crosspassage.go:44-235`, wired at
-  `keeper/internal/scenario/run.go:979-992`), and a Keeper that cannot read those facts **refuses
+  `keeper/internal/scenario/run.go:983-996`), and a Keeper that cannot read those facts **refuses
   the run** rather than guessing (`cross_passage_requisite_unsupported`,
-  `keeper/internal/scenario/run.go:565-579`).
+  `keeper/internal/scenario/run.go:569-583`).
 - **Cross-passage `when:`/`changed_when:`/`failed_when:` is already a fail-closed refusal** — FC-5,
   `config.CodeCrossPassageWhenGating` (`shared/config/passage.go:106-117`), detector at
   `shared/config/passage.go:534-568`, offline in `soul-lint` (retired there by NIM-944).
@@ -90,7 +92,7 @@ about the ordering is derived from register text.
 
 ⚠ **Read it as a happens-before over dispatches, not as "every host ran every task in order".** The
 roster is not constant across a run: it is re-resolved at a refresh boundary
-(`keeper/internal/scenario/run.go:804-830`), so a host admitted mid-run has executed none of the
+(`keeper/internal/scenario/run.go:808-834`), so a host admitted mid-run has executed none of the
 earlier tasks, and under `on_failure: host` (§Fail-stop) a host leaves the roster the same way.
 The invariant is about the hosts a task *went to* — it does not promise a constant fleet.
 
@@ -120,13 +122,13 @@ depends on anything is the fact that *k* comes after *k−1*.
    ([ADR-0087](0087-task-side-derived-from-module-address.md)) — runs at its position in the order,
    and that moves it.** It is not an
    exception to the invariant. Today keeper-side tasks execute locally on the Keeper **strictly
-   before the host dispatch of their own Passage** (`keeper/internal/scenario/run.go:654-665`,
-   called at `:968` before `dispatchPassage` at `:1010`), so in a one-Passage scenario a keeper task
+   before the host dispatch of their own Passage** (`keeper/internal/scenario/run.go:658-669`,
+   called at `:973` before `dispatchPassage` at `:1015`), so in a one-Passage scenario a keeper task
    written *after* host tasks runs *before* them. Under this ADR it runs where it is written.
    *Built (NIM-944):* a keeper-side task cannot sit in a block, so under linear dispatch it is a
    step of its own and the step loop runs it after the barrier of every step before it — "before
    its Passage's host dispatch" is the staged run's order only. A keeper step has no barrier of its
-   own, so the loop now reads a cluster-wide Cancel after every step (`run.go:1019-1027`): a Cancel
+   own, so the loop now reads a cluster-wide Cancel after every step (`run.go:1023-1031`): a Cancel
    that flagged the row of a keeper step written last was read by nothing, and the run committed.
    `examples/service/long-runner/scenario/serial_waves/main.yml:24-33` is that shape: two
    `core.state.set` steps written after the waves run before them today and after them under this
@@ -157,7 +159,7 @@ depends on anything is the fact that *k* comes after *k−1*.
        inside a block rolled as one group, where the child cannot fail alone, the group on that host,
        with the records [predicate-rendering.md §1](../scenario/predicate-rendering.md) gives it.
        Today every render error leaves the whole pass and the stage loop aborts the run
-       (`keeper/internal/scenario/run.go:890-894`), as a failing static `when:` does
+       (`keeper/internal/scenario/run.go:894-898`), as a failing static `when:` does
        (`render.evalStaticWhen`; `shared/cel/register_index.go:32-36`). This needs error capture per
        task and host, and a Keeper-written FAILED event, `apply_runs` row and audit record.
      - **Flow control is evaluated for the active task only.** Already-active tasks are re-rendered at
@@ -315,7 +317,7 @@ depends on anything is the fact that *k* comes after *k−1*.
   (§Before merge) must measure this separately from the round trip, because for a fleet of cheap
   tasks it may dominate.
 - **Re-render grows quadratically.** The stage loop re-renders before each step
-  (`keeper/internal/scenario/run.go:890-894`). It does **not** render the whole plan — a task in a
+  (`keeper/internal/scenario/run.go:894-898`). It does **not** render the whole plan — a task in a
   future Passage is emitted as a placeholder and its register-dependent keys are not resolved
   (`keeper/internal/render/pipeline.go:265-281`) — but every *already-active* task is rendered
   again, so task 0 is fully rendered T times, `${ vault() }` included. See §Consequences for why
@@ -325,10 +327,10 @@ depends on anything is the fact that *k* comes after *k−1*.
   — and that row is public.
 - **Crash recovery for scenario runs is lost until the Acolyte path is restored.** The work-queue
   dispatch of [ADR-027](0027-apply-work-queue.md) is gated off for staged runs —
-  `if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear` (`keeper/internal/scenario/run.go:694`),
-  with `staged := passage.Count > 1` (`:460`). Under this ADR every scenario with two or more
+  `if r.acolyteEnabled && !hasSerialTask(scn) && !staged && spec.executionModel != ExecutionLinear` (`keeper/internal/scenario/run.go:698`),
+  with `staged := passage.Count > 1` (`:465`). Under this ADR every scenario with two or more
   steps is staged — a single default block with two children included — so `dispatchPlanned`, claim/fencing and `ReclaimApplyRuns` become
-  unreachable and every run inherits the limitation `:536-538` already names.
+  unreachable and every run inherits the limitation `:540-542` already names.
 - **A straggler now slows every step**, and `serial:` multiplies the wave count.
 
 **Measured (NIM-950, 2026-10-08).** The list above was written before any measurement; the
@@ -421,7 +423,7 @@ dispatched and B runs it to the end. The failure is observed at the barrier, aft
 Under this ADR the barrier sits between every pair of tasks, and one host's failure ends the run
 there: `classify` returns an error on any host in `failed`/`cancelled`/`orphaned`
 (`keeper/internal/scenario/dispatch.go:875-887`), `waitBarrier` propagates it (`:745-748`, surfaced to the stage loop at `:221-223`), and
-`run()` aborts (`keeper/internal/scenario/run.go:1011-1014`). **Tasks 4..12 are then dispatched to
+`run()` aborts (`keeper/internal/scenario/run.go:1015-1018`). **Tasks 4..12 are then dispatched to
 nobody — including the hosts that were healthy** — bar the rescues of fork 1, which the run walks
 on to before it ends (NIM-951).
 
@@ -471,7 +473,7 @@ failed host of this run, not a run unit, and "more than N" is **off by one** fro
 which stops *at* the N-th. The full rules are in [docs/scenario/settings.md](../scenario/settings.md).
 
 ★ **Choosing this vocabulary also removes the collision, not just the confusion.** `RunSpec`
-(`keeper/internal/scenario/scenario.go:238-310`) carried no failure policy, and carries none fed at run
+(`keeper/internal/scenario/scenario.go:238-315`) carried no failure policy, and carries none fed at run
 time since NIM-948 either — its `stepSettings` are the scenario's own `settings:`, merged per step; ADR-043's keys live
 on the `voyages` row and are read only to decide whether to start the next Leg
 (`keeper/internal/voyageorch/scenario.go:235`). Had the task barrier read that field with ADR-043's
@@ -574,7 +576,7 @@ described from the ⚠ to here is the code before it: `newCrossPassageGate` read
 
 ⚠ **And one existing refusal goes from rare to universal.** A Keeper with no `AuditReader` already
 **refuses** a staged run carrying a cross-passage requisite — `cross_passage_requisite_unsupported`
-(`keeper/internal/scenario/run.go:565-579`, detector `shared/config/passage.go:467-495`). That is
+(`keeper/internal/scenario/run.go:569-583`, detector `shared/config/passage.go:467-495`). That is
 loud and right. But the detector will now fire on *every* `onchanges:`/`onfail:`, so an audit log
 becomes an operational prerequisite for any scenario with a requisite. *Shipped (NIM-944):* under
 linear dispatch the detector is `config.CrossStepRequisite` (`shared/config/passage_linear.go`),
@@ -589,7 +591,7 @@ now written with the audit off too ([ADR-022(i)](0022-audit-pipeline.md)).
 The column cannot be deleted: the proto field is only-add (`proto/keeper/v1/apply.proto:300`, echoed
 at `:403` and `:475`), it is in the primary key `apply_runs (apply_id, sid, passage)` and the
 foreign key from `apply_task_register` (migration `078_add_apply_runs_passage.up.sql`), in the audit
-record (`shared/audit/task_executed.go:56-60`), in the register accumulation query's
+record (`shared/audit/task_executed.go:56-61`), in the register accumulation query's
 `WHERE passage < $2` (`keeper/internal/applyrun/taskregister.go:129-142`), and on the **public**
 surface — `json:"passage"` in the API wire types (`shared/api/wire/incarnation.go:197,266`), a
 printed column in `soulctl incarnation` (`soulctl/internal/cmd/incarnation.go:302`) and the
@@ -677,7 +679,7 @@ them. Two consequences, and the second is the serious one:
   later step is pure cost and Vault load, not a correctness problem;
 - **a secret that disappears mid-run now fails the whole run, T times more often.** Every pass
   re-resolves every already-active task's secrets, and a failure there is `render_failed`
-  (`keeper/internal/scenario/run.go:890-894`) — so a rotated-away path, or Vault being briefly
+  (`keeper/internal/scenario/run.go:894-898`) — so a rotated-away path, or Vault being briefly
   unreachable at step *k*, kills a run over a secret that only a *completed* task ever needed.
 
 Widening the memo from pass to run fixes both. It is S1 because the frequency, not the mechanism,
@@ -989,7 +991,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    re-litigated: **no RBAC gate** — with no run-time override, whoever may *merge* the scenario
    decides its radius, so the control is code review on the service repository. Then the obligations,
    each absent today: **the drop set must survive a roster re-resolve** — a refresh boundary re-reads
-   the live roster (`keeper/internal/scenario/run.go:804-811`) and would re-admit a dropped host that is
+   the live roster (`keeper/internal/scenario/run.go:808-815`) and would re-admit a dropped host that is
    still online; **"not reached" records** for the dropped host's remaining tasks; **audit of the drop itself** — nothing records "host X left this run at barrier
    k", and §Provenance's "not reached" synthesis covers the dropped host's *tasks*, not the drop;
    **state capture on a dropped host** — §"State capture: a capture now waits for the steps before it" is
@@ -1013,7 +1015,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
 7. **The Acolyte path.** **Decided (user, 2026-10-02): restoring work-queue dispatch for linear runs
    blocks enabling linear dispatch**, rather than following later: the default radius ends a whole
    fleet's run mid-flight, and the wall clock grows T-fold, so the chance of a run being alive across
-   a Keeper redeploy — with no reclaim — rises on both axes at once.
+   a Keeper redeploy — with no reclaim — rises on both axes at once. *Built (NIM-960, NIM-961)*;
+   the real-binary test — two Keeper processes, the run goroutine on one and every stream on the
+   other, three steps through the queue and a `serial:` step inline — is
+   `tests/e2e/linear_ha_test.go` (NIM-952).
 8. **The `passage` capability gate's blast radius.** `gatePassageCapability`
    (`keeper/internal/scenario/soulcompat.go:412`; the capability constant is
    `shared/config/soul_capability.go`, contract at `proto/keeper/v1/lifecycle.proto:23-26`) today
@@ -1022,7 +1027,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    fleet. *Kept (NIM-944):* a linear run of more than one step is gated, and its refusal names the
    steps instead of advising to remove a register dependency.
 9. **`AuditReader` becomes an operational prerequisite**, not a diagnostic one
-   (`keeper/internal/scenario/run.go:565-579`). *Done (NIM-944)* — see §`onchanges:`: a step-aware
+   (`keeper/internal/scenario/run.go:569-583`). *Done (NIM-944)* — see §`onchanges:`: a step-aware
    detector, and `task.executed` written regardless of `audit.enabled`.
 10. **A capability bit is needed for the rendered predicates.** An earlier revision required one for
     carried registers; that reason is gone, but another replaces it. Literal-aware text guards and
@@ -1039,7 +1044,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     host now carries `when: false` there, and a non-empty `when` makes the capability gate demand
     `CapabilityFlowControl` — read from the shared `When` by the staged gate
     (`keeper/internal/scenario/soulcompat.go:94-106`), which runs before the requisite gate
-    (`keeper/internal/scenario/run.go:938-945`). That gate must read the per-host value, and
+    (`keeper/internal/scenario/run.go:942-949`). That gate must read the per-host value, and
     so run after the requisite gate. And per step it would
     refuse late: a one-Passage run is checked before any dispatch, while a
     per-step check refuses step *k* after the steps before it have changed hosts. So the check is
@@ -1050,8 +1055,8 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     to the gate is its module — no hosts, no flow-control fields
     (`keeper/internal/render/pipeline.go:265-282`). Three refusals stay late, and are stated rather
     than hidden: a task whose `where:` reads a register, whose hosts are unknown until its step — the
-    reason the staged gate runs per Passage (`run.go:922-937`); a host admitted at a refresh boundary,
-    which did not exist when the up-front check ran (`run.go:823-825` says so for the `passage` bit);
+    reason the staged gate runs per Passage (`run.go:926-941`); a host admitted at a refresh boundary,
+    which did not exist when the up-front check ran (`run.go:827-829` says so for the `passage` bit);
     and the per-host flow-control part, which depends on the results of earlier steps.
     *Done (NIM-946).* The first pass of a linear run also surveys the whole plan
     (`keeper/internal/render/soul_needs.go`): per task, its step, module, its features, and the
@@ -1067,7 +1072,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
     and a host that leaves the roster later was still asked. A predicate reading a loop variable is
     no exception: the flow context binds none, so such a task fails at its step. The gate then
     refuses the run before its first step and before either dispatch path
-    (`keeper/internal/scenario/run.go:641-650`), naming per host the first step and task that needs
+    (`keeper/internal/scenario/run.go:645-654`), naming per host the first step and task that needs
     each missing capability. Each step is gated again inside `dispatchPassage`, after the requisite
     gate and on what each host is sent (`render.SentFlow`, `dispatch.go:83-87`), before the inline
     waves and the work-queue alike; the staged in-loop gate no longer runs for a linear run. A
@@ -1117,17 +1122,23 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
       *Pinned (NIM-942):* `execution_model: staged | linear` is decided once at the top of the run
       and recorded in `engine_compat` on success and in the `incarnation.run_completed` payload on
       success and on a failure terminal (user, 2026-10-06) — not for a destroy run, which emits
-      neither, nor by an instance that lost the terminal to another; `staged` stays the default
-      until NIM-952. The starting instance takes it from its own
+      neither, nor by an instance that lost the terminal to another. `linear` is the default since
+      NIM-952; `staged` is kept for one release as the deprecated rollback, and a run started under
+      it logs a warning (user, 2026-10-11). The starting instance takes it from its own
       `keeper.yml::scenario.execution_model`, re-read at each run start (NIM-950,
       [config.md](../keeper/config.md#scenario)). It lives in the run goroutine. Only a linear run's step row carries a step in
       its recipe, with the run's decisions for it, so an instance that claims the row knows the
       model from the row ([ADR-027 amend (q)](0027-apply-work-queue.md), NIM-961).
-    - **Rollback:** a cross-task `when:` is legal in the new model and an older Keeper refuses it
-      (FC-5) — loudly, which is acceptable, but it means a scenario authored after the change cannot
+    - **Rollback:** a `when:`, `changed_when:` or `failed_when:` reading a register from another
+      derived Passage is legal in the new model and an older Keeper refuses it (FC-5) — loudly, which is acceptable, but it means a scenario authored after the change cannot
       run on a rolled-back Keeper. What goes *silent* on rollback is the order: an older Keeper runs
       keeper tasks before host dispatch again and lets healthy hosts run on after one fails. The
-      release note says both.
+      release note says both ([CHANGELOG](../../CHANGELOG.md), NIM-952). The cheaper rollback for
+      the one release that keeps it is the key, not the binary: `scenario.execution_model: staged`
+      reaches the next run on a reload, every instance runs the same binary, so the HA skew above
+      does not arise, and no schema change is undone — an older binary refuses to start against
+      this release's migrations 121 and 122 until they are taken down by hand and
+      `schema_migrations` is set back to 120.
     - Barrier timeout and straggler policy; a run started under ADR-056 while the Keeper is
       redeployed.
 16. **Applier sources resolve from their children** for the cross-barrier gate (§`onchanges:`), with
@@ -1186,7 +1197,7 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   (NIM-941 put them on the train ahead of the dispatch loop — unconditional, since `soul-lint` cannot
   see the model, and harmless because the train reaches `main` only with the enablement, NIM-952);
   FC-5's retirement on both sides at once — the Keeper's refusal, kept for a staged run only
-  (`keeper/internal/scenario/run.go:519-526`), and `soul-lint`'s — or one of them refuses scenarios
+  (`keeper/internal/scenario/run.go:523-530`), and `soul-lint`'s — or one of them refuses scenarios
   that are now legal; for the same reason `soul-lint`'s Passage-keyed state checks —
   `StaleStateRead` retires, since a capture now finishes before a later reader renders, and
   `StoreAfterUse` is re-keyed to plan order (all three shipped in NIM-944);
@@ -1206,7 +1217,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   that survives a re-claimed step, and an older Keeper kept off a linear run's rows (the Conclave
   capability `step_queue`); then the Acolyte renders a step, and the run goroutine asks the
   capability before queueing a step ([ADR-027 amend (q)](0027-apply-work-queue.md), NIM-961).
-  The Oracle path gets its step loop by becoming an ordinary incarnation run (NIM-977).
+  The Oracle path gets its step loop by becoming an ordinary incarnation run (NIM-977) — **not
+  built when linear dispatch was enabled** (user, 2026-10-11): an Oracle reaction still goes as one
+  message to its sender's SID, outside the step model
+  ([known-limitations.md](../known-limitations.md#an-oracle-reaction-is-not-dispatched-step-by-step)).
 - **S4** — `soul-lint`: drop the other derivation-only diagnostics.
 
 `within_block_register_dependency` is removed in **no** slice; it is narrowed to blocks rolled as one
@@ -1216,20 +1230,20 @@ group.
 
 | Document | Effect |
 |---|---|
-| [ADR-056](0056-staged-render-passage.md) | **superseded** — the derived N-Passage plan is replaced by a happens-before order; FC-5 retires, since every reference across a barrier is resolved on the Keeper |
+| [ADR-056](0056-staged-render-passage.md) | **superseded** (NIM-952) — the derived N-Passage plan is replaced by a happens-before order; FC-5 retires, since every reference across a barrier is resolved on the Keeper. Its model stays selectable for one release as the deprecated rollback `scenario.execution_model: staged` |
 | [ADR-012(d)](0012-keeper-soul-grpc.md) | **amended** — for a scenario task, `when:` is evaluated on the Keeper and the post-module predicates arrive with everything but `register.self` — and, in a group, the group's own registers — rendered in, per host, behind a capability bit (item 10); a grouped child's `when:` that still reads a sibling goes to the Soul the same way; no register crosses the wire, and `flow_context` loses its purpose |
 | [ADR-0075](0075-intra-host-async-tasks.md) | still applies inside a destiny; `async:` and `require:` outside a destiny are refused (`async_outside_destiny`, `require_outside_destiny`, NIM-941) |
-| [ADR-027](0027-apply-work-queue.md) | **affected** — the work-queue path is unreachable for linear runs unless restored; amend (p) re-keys the queue by step (S3) |
+| [ADR-027](0027-apply-work-queue.md) | **amended** — amends (p)-(t): the queue addresses a step row (NIM-960), a linear step goes through it (NIM-961), the run is read from its lock between steps (NIM-972), a rescue step carries its routing (NIM-951), the barrier wakes on the row write (NIM-984); amend (u) records the default (NIM-952) |
 | [ADR-009](0009-scenario-dsl.md) | **amended** — a `settings:` block with one schema at every level, inherited as a value like `vars:` (not composed like `when:`/`where:`), the first execution-behaviour container in the grammar; the execution model changes. `retry:`/`timeout:` on a block stay refused (NIM-910 lifted them as defaults for the children and was reverted, user 2026-10-07: not obvious); `async:` on a block is open, NIM-959 |
 | [ADR-010](0010-templating.md) | unaffected — the register grammar and the NIM-909 amendment stand |
-| [ADR-0084](0084-explicit-state-capture.md) | **amended** — a capture runs where it is written (§State capture); its per-Passage state refresh and stale same-Passage read rule (`0084:228-235`, `:328-341`) become per step, so that stale read can no longer arise and its `soul-lint` check retires in S1 |
-| [orchestration.md §2.2.1](../scenario/orchestration.md) | **rewritten** — the per-Passage `serial:` minimum, the wave/barrier invariant and the canary idiom |
+| [ADR-0084](0084-explicit-state-capture.md) | **amended** — a capture runs where it is written (§State capture); its per-Passage state refresh and stale same-Passage read rule (`0084:230-237`, `:330-343`) become per step, so that stale read can no longer arise and its `soul-lint` check retires in S1 |
+| [orchestration.md §2.2.1](../scenario/orchestration.md) | **rewritten** (NIM-952) — the per-Passage `serial:` minimum, the wave/barrier invariant and the canary idiom |
 | [ADR-043](0043-voyage.md) | **unaffected, and nothing is reused** — a disjoint value vocabulary (`host`/`scenario` vs `abort`/`continue`), a different unit (a host at one barrier vs a run unit), and a threshold off by one from `max_failures`. The Leg policy and `soulctl --on-failure` stay exactly as they are |
 | [naming-rules.md](../naming-rules.md) | **new rows** — `settings` and its six keys (`serial_scope` included), the refusal code for a run-kind key below the scenario level, the residual-check code and the code for a predicate the Keeper cannot carry, the refusals of a bare `register` and of `when: register.self.*`, `self` under `register_name_reserved`, and `partial_failed` joining the run-status enum. The live Voyage table has no `on_failure` row to amend, and the `wave.on_failure` row is **Tide's**, dead since ADR-043 |
-| [orchestration.md §2.2.3](../scenario/orchestration.md) | **corrected** — it still shows Tide's `--wave-size`/`--wave-on-failure`/`--target-coven` invocation and the "REPLACE concurrency" rule that ADR-043 §B1 and the code contradict |
-| [orchestration.md](../scenario/orchestration.md) line 273 | **closes an open question** — *"there is no tolerance threshold for partial failure (§8, open Q)"* is answered by `tolerate` at the barrier |
-| [settings.md](../scenario/settings.md) | **new** — the scenario `settings:` block (fork 4); design, not implemented |
+| [orchestration.md §2.2.3](../scenario/orchestration.md) | **corrected** (NIM-952) — it showed Tide's `--wave-size`/`--wave-on-failure`/`--target-coven` invocation and the "REPLACE concurrency" rule that ADR-043 §B1 and the code contradict |
+| [orchestration.md](../scenario/orchestration.md) §8 | **closed an open question** (NIM-948) — *"there is no tolerance threshold for partial failure"* is answered by `tolerate` at the barrier |
+| [settings.md](../scenario/settings.md) | **new** — the scenario `settings:` block (fork 4); implemented (NIM-927, NIM-940, NIM-942, NIM-948, NIM-949, NIM-951) |
 | [ADR-draft per-host params dispatch](draft-per-host-params-dispatch.md) | **builds on it** — NIM-908's `ParamsBySID` is the model for the per-host overlay the rendered predicates need; NIM-908 left flow control refused when it differs per host (open Q #25), which decision 4 answers |
-| [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers, what has to be built; the rewrite is built (NIM-928), dispatch calls it for a run executing linearly (NIM-943) |
+| [predicate-rendering.md](../scenario/predicate-rendering.md) | **new** — how the Keeper renders a post-module predicate (decision 4): the equivalence it owes, the traps the differential test covers; implemented (NIM-928, NIM-929, NIM-943, NIM-946) |
 | [known-limitations.md](../known-limitations.md) | item 12 found no destiny equivalent and NIM-939 added one; the reads it does not refuse are listed there |
-| `shared/audit/task_executed.go:56-60` | **comment is now wrong** — it asserts keeper tasks carry `passage=0`, which ADR-056 Slice 2 already falsified and this ADR makes uniformly false |
+| `shared/audit/task_executed.go:56-61` | **corrected** (NIM-952) — the comment asserted keeper tasks carry `passage=0`, which ADR-056 Slice 2 already falsified and this ADR made uniformly false |

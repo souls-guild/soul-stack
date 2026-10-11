@@ -11,14 +11,17 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Until NIM-952 a Runner built without a model runs staged, and only the linear
-// constant selects linear.
-func TestRunner_ExecutionModelIsStagedUnlessLinear(t *testing.T) {
+// ★ GUARD (NIM-952). A Runner built without a model runs linear, and only the
+// staged constant brings the rollback model back.
+//
+// Mutation: return ExecutionStaged for anything but ExecutionLinear in
+// executionModel → the zero and the unknown value run staged.
+func TestRunner_ExecutionModelIsLinearUnlessStaged(t *testing.T) {
 	for model, want := range map[ExecutionModel]ExecutionModel{
-		"":              ExecutionStaged,
+		"":              ExecutionLinear,
 		ExecutionStaged: ExecutionStaged,
 		ExecutionLinear: ExecutionLinear,
-		"anything-else": ExecutionStaged,
+		"anything-else": ExecutionLinear,
 	} {
 		r := &Runner{deps: Deps{ExecutionModel: model}}
 		if got := r.executionModel(); got != want {
@@ -31,20 +34,21 @@ func TestRunner_ExecutionModelIsStagedUnlessLinear(t *testing.T) {
 // every run start, so a reload takes the next run without a restart and wins over
 // the static field.
 //
-// Mutation: read only Deps.ExecutionModel → the configured linear runs staged.
+// Mutation: read only Deps.ExecutionModel → the configured staged rollback runs
+// linear.
 func TestRunner_ExecutionModelFnIsReadPerRun(t *testing.T) {
-	model := ExecutionLinear
-	r := &Runner{deps: Deps{ExecutionModel: ExecutionStaged, ExecutionModelFn: func() ExecutionModel { return model }}}
+	model := ExecutionStaged
+	r := &Runner{deps: Deps{ExecutionModel: ExecutionLinear, ExecutionModelFn: func() ExecutionModel { return model }}}
+	if got := r.executionModel(); got != ExecutionStaged {
+		t.Fatalf("configured staged → %q, want staged", got)
+	}
+	model = ExecutionLinear
 	if got := r.executionModel(); got != ExecutionLinear {
-		t.Fatalf("configured linear → %q, want linear", got)
+		t.Fatalf("after reload to linear → %q, want linear", got)
 	}
-	model = ExecutionStaged
-	if got := r.executionModel(); got != ExecutionStaged {
-		t.Fatalf("after reload to staged → %q, want staged", got)
-	}
-	model = "liner"
-	if got := r.executionModel(); got != ExecutionStaged {
-		t.Fatalf("unknown model %q → %q, want staged", model, got)
+	model = "staeged"
+	if got := r.executionModel(); got != ExecutionLinear {
+		t.Fatalf("unknown model %q → %q, want linear", model, got)
 	}
 }
 
@@ -68,7 +72,7 @@ func TestEmitRunCompleted_CarriesExecutionModel(t *testing.T) {
 	}
 }
 
-// ★ GUARD (draft ADR NIM-907, decision 1). With linear numbering the Passage
+// ★ GUARD (ADR-0091, decision 1). With linear numbering the Passage
 // selection the dispatcher already does sends a default block's children in two
 // messages, one per step, and a group in one; under staged numbering the default
 // block is one message.

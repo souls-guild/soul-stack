@@ -1,0 +1,10 @@
+name: create
+description: |
+  A trivial create scenario; the incarnation is seeded ready and the subject is
+  scenario/steps.
+tasks:
+  - name: Init marker
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: init-marker

@@ -55,6 +55,10 @@ type stepWatch struct {
 	// lostSince is when the barrier first saw a host's stream gone; read and
 	// written by the barrier goroutine only.
 	lostSince map[string]time.Time
+
+	// sealed is the run's sealed params paths as of this step's render: a failed
+	// send's error can echo the request it carried, and is masked with them.
+	sealed map[string]bool
 }
 
 func (r *Runner) newStepWatch(spec RunSpec, passage int, log *slog.Logger) *stepWatch {
@@ -73,6 +77,7 @@ func (r *Runner) newStepWatch(spec RunSpec, passage int, log *slog.Logger) *step
 		log:         log,
 		done:        make(chan struct{}),
 		lostSince:   make(map[string]time.Time),
+		sealed:      spec.sealed.Paths(),
 	}
 }
 
@@ -218,7 +223,7 @@ func (w *stepWatch) trySend(ctx context.Context, run *applyrun.ApplyRun, req *ke
 		// only queued here — so none of them is a reason to fail the host before
 		// soul_timeout.
 		w.log.Info("scenario: no agent stream to send the step on - waiting for one",
-			slog.String("sid", run.SID), slog.Int("passage", w.passage), slog.Duration("soul_timeout", w.soulTimeout), slog.Any("error", serr))
+			slog.String("sid", run.SID), slog.Int("passage", w.passage), slog.Duration("soul_timeout", w.soulTimeout), slog.String("error", maskSendError(serr, req, w.sealed)))
 		withdrawn, derr := w.withdrawUnsent(ctx, run)
 		if derr != nil {
 			return false, derr
@@ -228,6 +233,24 @@ func (w *stepWatch) trySend(ctx context.Context, run *applyrun.ApplyRun, req *ke
 	records()
 	w.log.Info("scenario: ApplyRequest sent", slog.String("sid", run.SID), slog.Int("tasks", len(req.GetTasks())))
 	return true, nil
+}
+
+// maskSendError masks what a failed send's error can echo of the request it
+// carried: the sealed values of each task's params — a sealed path names a params
+// cell, so it never matches the error text itself — then the vault-reference and
+// regex layers of maskErrText.
+func maskSendError(err error, req *keeperv1.ApplyRequest, sealed map[string]bool) string {
+	msg := err.Error()
+	if len(sealed) > 0 {
+		var secrets []string
+		for _, t := range req.GetTasks() {
+			if p := t.GetParams(); p != nil {
+				secrets = append(secrets, render.SealedValues(p.AsMap(), sealed)...)
+			}
+		}
+		msg = redactValues(msg, secrets)
+	}
+	return maskErrText(errors.New(msg), nil)
 }
 
 // await retries attempt until it reports the host done or soul_timeout runs out,

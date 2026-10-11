@@ -73,7 +73,8 @@ modules:
 }
 
 // taskCaptureDispatcher is a mockDispatcher that additionally captures the
-// full list of RenderedTasks from the sent ApplyRequest.
+// RenderedTasks of every ApplyRequest it is sent, in send order — one per step
+// under linear dispatch, so a single-host run's plan reads as one list either way.
 type taskCaptureDispatcher struct {
 	t      *testing.T
 	mu     sync.Mutex
@@ -83,9 +84,9 @@ type taskCaptureDispatcher struct {
 
 func (d *taskCaptureDispatcher) SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error {
 	d.mu.Lock()
-	d.tasks = req.GetTasks()
+	d.tasks = append(d.tasks, req.GetTasks()...)
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, d.result, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), d.result, nil); err != nil {
 		d.t.Errorf("taskCaptureDispatcher: UpdateStatus: %v", err)
 	}
 	return nil

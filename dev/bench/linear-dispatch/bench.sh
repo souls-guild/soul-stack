@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # dev/bench/linear-dispatch/bench.sh - a scenario run under the staged (ADR-056) and the
-# linear (draft ADR NIM-907) execution model, on one commit, on a fleet of real Souls
+# linear (ADR-0091) execution model, on one commit, on a fleet of real Souls
 # (NIM-950). What is measured and how each number is derived: README.md beside this file.
 #
 # Runs on a DEDICATED stand that is already up (see README.md "Bring-up"):

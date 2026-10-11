@@ -10,8 +10,8 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// What a linear run needs from its Souls before its first step (NIM-946, draft ADR
-// NIM-907 item 10).
+// What a linear run needs from its Souls before its first step (NIM-946, ADR-0091
+// item 10).
 
 func needHosts() []*topology.HostFacts {
 	return []*topology.HostFacts{

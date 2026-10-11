@@ -1,10 +1,13 @@
 # ADR-012. Keeper↔Soul gRPC contract: one EventStream with oneof, Keeper-side render, forward-compat only-add
 
-> **Pending amendment to (d) (NIM-907, design accepted 2026-10-02, not implemented).**
-> [ADR-draft. Scenario dispatch is linear](draft-scenario-linear-barrier.md) evaluates a scenario
-> task's `when:` on the Keeper and renders `changed_when:`/`failed_when:`/`until:` there, so no
-> register crosses the wire. Until linear dispatch is enabled (its S3,
-> item 7), the text below describes the code.
+> **Amended (d) 2026-10-11 (NIM-952).** [ADR-0091. Scenario dispatch is linear](0091-scenario-linear-barrier.md):
+> a scenario run sends one `ApplyRequest` per host per step. The Keeper decides a task's `when:` per
+> host and renders `changed_when:`/`failed_when:`/`until:` per host, leaving only `register.self` —
+> and, in a block rolled as one group, the group's own registers — to the Soul, which must announce
+> `rendered_predicate` to be sent a substituted predicate; no register crosses the wire and
+> `flow_context` is not sent. A run under the deprecated staged rollback
+> (`keeper.yml::scenario.execution_model: staged`) and an Oracle reaction, which has no step loop
+> yet (NIM-977), keep the text below.
 
 - **Context.** [ADR-002](0002-transport-grpc-ha.md#adr-002-transport-keeper--souls--grpc-bidirectional-stream-over-mtls-ha-keeper-cluster) fixed the transport (gRPC bidi over mTLS, initiated by Soul) but not the message contract. [Pilot scaffolding ADR-011](0011-go-layout.md#adr-011-go-code-layout-gowork-with-per-side-modules) placed a placeholder `proto/keeper/v1/keeper.proto` with the RPC `Ping`. A single consolidated decision is needed on the service structure, the layout of `.proto` files, the versioning policy, the location of Destiny rendering, and the relationship of `TaskEvent` to the `SoulModule`'s `ApplyEvent`. Some items overlap with open Q #6 (the Soulprint schema), #7 (protobuf compat) and #12 (Heartbeat).
 - **Decision.**

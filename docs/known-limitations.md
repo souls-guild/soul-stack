@@ -128,6 +128,30 @@ Since NIM-929 every CEL engine reads an expression the way the parser does ([ADR
 
 Semantics of the field `create_scenario` (`POST /v1/incarnations`, MCP `keeper.incarnation.create`) **changed**: empty `create_scenario` **NO LONGER means** auto-run reserved script `create` ([ADR-009 amendment 2026-06-29](adr/0009-scenario-dsl.md)). Now with an empty value: if the service offers create scripts (at least one `create: true`) → **422 `create_scenario_required`** (selection is required, valid names are listed); if none `create: true` → **bare-incarnation** (`StatusReady` without run, `created_scenario = NULL`). Wire circuit is additive (the field existed before), breaking only the meaning. **Affected** are external API/MCP clients that used `create` without `create_scenario` when calculating auto-`create` - they need to explicitly pass `create_scenario`.
 
+## Linear scenario dispatch: what its enablement left open
+
+Linear dispatch ([ADR-0091](adr/0091-scenario-linear-barrier.md)) is the default since NIM-952. What it does not cover yet:
+
+### An Oracle reaction is not dispatched step by step
+
+An Oracle reaction enqueues one `planned` row for the SID that sent the Portent and has no run goroutine (`keeper/cmd/keeper/oracle_enqueuer.go`): the Acolyte renders the whole scenario in one pass, before any of its tasks has run, and sends that host its tasks in one message. The path reads no execution model, so it runs exactly as before linear dispatch: no barrier between its tasks, `when:` and the post-module predicates evaluated on the Soul against the registers of that one message, and a task whose `where:`, `params:` or `vars:` reads an earlier task's register cannot render. The same scenario started from the API runs step by step. A reaction becoming an ordinary incarnation run is NIM-977; linear dispatch was enabled without it (user, 2026-10-11).
+
+### The staged model is still selectable, for one release
+
+`keeper.yml::scenario.execution_model: staged` brings back [ADR-056](adr/0056-staged-render-passage.md)'s derived Passages as a rollback, and each run started under it logs a warning. Under it a `when:`, `changed_when:` or `failed_when:` reading a register from another derived Passage is refused (FC-5) although `soul-lint` passes it, keeper tasks run before their Passage's host dispatch, and the first failed host ends the run with no `on_failure`, `tolerate`, `soul_timeout`, `scenario_timeout` or rescue across barriers. Removing the model, and the render code no validated plan reaches since NIM-941 (the applier's `require:` merge into its children, `ErrRequireCrossPassage`), is a follow-up.
+
+### Rescue routing: three cases NIM-951 does not cover
+
+Described in [settings.md §4](scenario/settings.md#4-how-a-barrier-judges-failures): a keeper-side task's own failure still aborts the run at once (`keeper_dispatch_failed`), so no rescue of a keeper-side source runs after it; a block rolled as one group takes a percentage `serial:` of its live hosts only, though a rescue inside it may also reach dropped ones; and in the waves after the one whose failure ended the run, a host whose applier rescue fires but whose destiny has no task for it is not sent the terminal, so a later rescue reading `register.<applier>` finds none there.
+
+### A successful rescue does not handle the failure
+
+An `onfail:` rescue that succeeds leaves its host failed: the host is dropped under `on_failure: host`, and the run ends `failed` or `partial_failed` as without the rescue (ADR-0091 fork 1, the Soul's in-message rule that onfail never undoes the failure). Treating a rescue as an error handler in the manner of Ansible's `block`/`rescue` — the failure counted as handled when the rescue succeeds, and a `core.task.failed` step to re-raise it — was raised by the user on 2026-10-08 and is not built; it needs its own ADR amendment.
+
+### What a step costs
+
+Each step is a round trip and a barrier. Measured on a dedicated stand (NIM-950, then NIM-984, [ADR-0091 §Price](adr/0091-scenario-linear-barrier.md)): twelve one-command steps on one host take ~0.24 s against ~0.08 s staged; a step through the work-queue renders on every claimed host and reads Vault there, so Vault reads grow as hosts × steps; and a push host (`transport: ssh`) opens an SSH session per step, ~220 ms each.
+
 ## See also
 
 - [getting-started.md](getting-started.md) - quickstart, onboarding path for an existing host.

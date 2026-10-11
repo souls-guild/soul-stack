@@ -263,6 +263,11 @@ type RunSpec struct {
 	// ([Runner.executionModel]). Unexported: set by run(), not by the API caller.
 	executionModel ExecutionModel
 
+	// sealed — the run's sealed params paths ([ADR-010] §7.4), filled by its
+	// renders; not safe for concurrent use, so a step snapshots it in the run
+	// goroutine ([Runner.newStepWatch]). Unexported: set by run().
+	sealed *render.SealedSet
+
 	// stepSettings — a linear run's merged `settings:` per step
 	// ([config.StepSettings]); nil for a staged run. Set by run().
 	stepSettings []config.ScenarioSettings
@@ -613,7 +618,7 @@ type Deps struct {
 	KeeperVersion string
 
 	// ExecutionModel — the model a run started on this instance executes in
-	// ([ExecutionModel]). Zero value → staged (ADR-056) until NIM-952.
+	// ([ExecutionModel]). Zero value → linear; staged only when named.
 	ExecutionModel ExecutionModel
 
 	// ExecutionModelFn — hot-reload-aware source of the model, read once at the

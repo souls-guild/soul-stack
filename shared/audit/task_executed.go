@@ -53,10 +53,11 @@ type TaskExecutedInput struct {
 	// is built, so no consumer of the payload has to know the field list.
 	// keeper-side puts no register_data in audit at all (secret hygiene) — leaves it empty.
 	RegisterData string
-	// Passage — the staged-render Passage index (ADR-056) the task belongs to (echo of
-	// TaskEvent.passage). 0 = the only Passage (behavior as before staged-render). Always
-	// in the payload (including 0) for per-Passage triage; keeper-side tasks (`on: keeper`)
-	// run before host fan-out → passage=0.
+	// Passage — the 0-based index of the step the task ran in (echo of
+	// TaskEvent.passage); a keeper-side task is a step of its own, at its place in
+	// the plan. Under the deprecated staged model (ADR-056) it is the Passage index
+	// instead, and keeper-side tasks run before their Passage's host fan-out. Always
+	// in the payload, including 0.
 	Passage int
 	// Notices — advisory findings about a task that ran anyway (echo of
 	// TaskEvent.notices, NIM-237): today a deprecated param. A notice carries manifest

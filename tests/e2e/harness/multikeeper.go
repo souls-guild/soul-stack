@@ -27,6 +27,8 @@ import (
 	"time"
 
 	"github.com/jackc/pgx/v5/pgxpool"
+
+	"github.com/souls-guild/soul-stack/tests/e2e/internal/soulstub"
 )
 
 // keeperProc — one live keeper subprocess of the multi-keeper cluster.
@@ -506,6 +508,22 @@ func (s *Stack) LiveKeeperGRPCAddrs() []string {
 		}
 	}
 	return out
+}
+
+// ConnectSoulStubToKeeper is [Stack.ConnectSoulStub] with the stream opened to
+// keeper[keeperIndex] instead of the primary, so the Soul's results arrive on an
+// instance other than the one the Operator API starts runs on.
+func (s *Stack) ConnectSoulStubToKeeper(t *testing.T, soulIndex, keeperIndex int) *soulstub.Stub {
+	t.Helper()
+	if keeperIndex < 0 || keeperIndex >= len(s.keepers) {
+		t.Fatalf("ConnectSoulStubToKeeper(%d, %d): keeper out of range (%d keepers)", soulIndex, keeperIndex, len(s.keepers))
+	}
+	return s.connectSoulStubAt(t, soulIndex, s.keepers[keeperIndex].grpcAddr)
+}
+
+// KeeperKID returns the KID of keeper[i] in spawn order.
+func (s *Stack) KeeperKID(i int) string {
+	return s.keepers[i].kid
 }
 
 // KeeperKIDForGRPCAddr resolves an EventStream gRPC address -> keeper KID

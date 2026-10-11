@@ -45,7 +45,7 @@ func (d *perHostCountDispatcher) SendApply(ctx context.Context, sid string, req 
 	d.mu.Lock()
 	d.counts[sid] = len(req.GetTasks())
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("perHostCountDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -72,6 +72,8 @@ func newAcolyteRunnerWith(t *testing.T, summons SummonsPublisher, disp ApplyDisp
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
+		// The whole-run Acolyte path is taken by a one-Passage staged run only.
+		ExecutionModel: ExecutionStaged,
 		// Soul-capability gates (ADR-056 §S5 / ADR-0076(i)): these hosts announce
 		// everything the plan asks of them; the fail-closed branches have their own guards.
 		SoulCap:        stubSoulCap{},
@@ -188,6 +190,7 @@ tasks:
 
 	oldDisp := newPerHostCountDispatcher(t)
 	oldRunner := newRunner(t, oldDisp, gitURL)
+	oldRunner.deps.ExecutionModel = ExecutionStaged
 	oldApplyID := audit.NewULID()
 	if err := oldRunner.Start(context.Background(), RunSpec{
 		ApplyID:         oldApplyID,
@@ -419,6 +422,7 @@ func TestIntegration_NoClaim_BarrierTimeout(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	r := NewRunner(Deps{
+		ExecutionModel: ExecutionStaged,
 		// Soul-capability gates (ADR-056 §S5 / ADR-0076(i)): these hosts announce
 		// everything the plan asks of them; the fail-closed branches have their own guards.
 		SoulCap:        stubSoulCap{},
@@ -472,7 +476,7 @@ func (d *perHostCommandDispatcher) SendApply(ctx context.Context, sid string, re
 		d.cmds[sid] = renderedExecCommand(tasks[0].GetParams())
 	}
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("perHostCommandDispatcher: UpdateStatus: %v", err)
 	}
 	return nil

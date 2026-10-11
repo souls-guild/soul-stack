@@ -134,9 +134,9 @@ tasks:
           username: "${ compute.admin_user }"
           password: "${ merge(register.system_acl_users.effective.map(u, { u.name: u.password }))[compute.admin_user] }"
 
-  # Restart master AFTER all replicas (the rolling invariant "master last"). Until linear dispatch
-  # (NIM-907) is on, this step shares the replicas' Passage and restarts in its SID's place among
-  # the width-1 waves, so "last" holds only for a master whose SID sorts last. run_once: —
+  # Restart master AFTER all replicas (the rolling invariant "master last"): a step of its own, after
+  # the replicas' canary (under the deprecated staged rollback it shares their Passage and restarts in
+  # its SID's place among the width-1 waves). run_once: —
   # exactly one host (first by SID) from resolving on:+where: (orchestration.md §2). >1 "current
   # master" per probe is normal for sentinel-multi (rare), the step runs on one deterministic host per run.
   - name: Restart the current master last

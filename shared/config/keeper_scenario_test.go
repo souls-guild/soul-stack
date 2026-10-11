@@ -6,25 +6,26 @@ import (
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
 
+// Mutation: resolve an absent key to ScenarioExecutionStaged → red.
 func TestKeeperScenario_ExecutionModel(t *testing.T) {
-	if got := loadKeeperOrFail(t, consoleBaseConfig).ResolvedExecutionModel(); got != ScenarioExecutionStaged {
-		t.Errorf("absent block → %q, want staged", got)
+	if got := loadKeeperOrFail(t, consoleBaseConfig).ResolvedExecutionModel(); got != ScenarioExecutionLinear {
+		t.Errorf("absent block → %q, want linear", got)
 	}
 	cfg := loadKeeperOrFail(t, consoleBaseConfig+`
 scenario:
-  execution_model: linear
+  execution_model: staged
 `)
-	if got := cfg.ResolvedExecutionModel(); got != ScenarioExecutionLinear {
-		t.Errorf("execution_model: linear → %q", got)
+	if got := cfg.ResolvedExecutionModel(); got != ScenarioExecutionStaged {
+		t.Errorf("execution_model: staged → %q", got)
 	}
 	var nilCfg *KeeperConfig
-	if got := nilCfg.ResolvedExecutionModel(); got != ScenarioExecutionStaged {
-		t.Errorf("nil config → %q, want staged", got)
+	if got := nilCfg.ResolvedExecutionModel(); got != ScenarioExecutionLinear {
+		t.Errorf("nil config → %q, want linear", got)
 	}
 }
 
-// A misspelt model must refuse the config: read as staged, a benchmark or a
-// rollout labelled linear would silently compare the old order with itself.
+// A misspelt model must refuse the config: read as linear, an operator rolling
+// back to staged would silently keep the new order.
 //
 // Mutation: drop the checkEnum call in schemaValidateKeeper → no error.
 func TestKeeperScenario_UnknownExecutionModelRefused(t *testing.T) {

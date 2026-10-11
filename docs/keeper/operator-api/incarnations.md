@@ -217,7 +217,7 @@ Read-view of runs (convolution of `apply_runs` by `apply_id`), under the UI "exe
 
 Permission: `incarnation.history`. **REST-only - there is no MCP-tool.** Path-params: `id`, `apply_id` (ULID; non-ULID → `400 malformed-request`). OperationID: `getIncarnationRun`.
 
-Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` - list form above) + `hosts[]`. A host has one line per unit it was sent, ordered by `sid`, then `passage` - so the address of a failed task stays on the unit it failed in. The unit is the Passage today and becomes the step once linear dispatch is on ([draft-scenario-linear-barrier.md](../../adr/draft-scenario-linear-barrier.md) §`passage`), when a host has one line per step.
+Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`finished_at`/`started_by_aid` - list form above) + `hosts[]`. A host has one line per step that reached it - sent, or settled by the Keeper without a send (a false `when:`, a requisite that dropped the task) - ordered by `sid`, then `passage` - so the address of a failed task stays on the step it failed in ([ADR-0091](../../adr/0091-scenario-linear-barrier.md) §`passage`). A run under the deprecated staged rollback has one line per derived Passage instead.
 
 **`hosts[]` — `RunHostStatusEntry`:**
 
@@ -225,7 +225,7 @@ Slice of one run by hosts: header (`apply_id`/`scenario`/`status`/`started_at`/`
 |---|---|---|
 | `sid` | `string` (FQDN) | Host. |
 | `status` | `enum` | Host-level status line: `planned`/`claimed`/`running`/`dispatched`/`success`/`failed`/`cancelled`/`orphaned`/`no_match`. |
-| `passage` | `int` | Index of the unit this line was dispatched for: the Passage today, the 0-based step index once linear dispatch is on. Can have holes; nothing about it is contiguous. |
+| `passage` | `int` | 0-based index of the step this line was dispatched for (the Passage index for a run under the deprecated staged model). Can have holes; nothing about it is contiguous. |
 | `failed_task_idx` | `int` (optional) | LOCAL index of the failed task in the `ApplyRequest` this line was dispatched with; only on a crashed line (otherwise the key is omitted). |
 | `failed_plan_index` | `int` (optional) | GLOBAL end-to-end `plan_index` of the same task across the entire scenario plan (correlation key with the plan); only on a crashed line. Holds the line's **first** failure - a later one on the same line does not overwrite it. |
 | `error_summary` | `string` (optional) | Operator-facing reason (`task <idx> <module>: <message>`, secret-masked on write-path); only on the crashed host. |
@@ -246,7 +246,7 @@ Permission: `incarnation.history` (same read-tier as RunDetail - **NOT** `audit.
 | Field | Type | Meaning |
 |---|---|---|
 | `plan_index` | `int` | End-to-end task index in the scenario plan (correlation key with `failed_plan_index` detail endpoint). |
-| `passage` | `int` | Index of the unit the task was dispatched in - the `passage` of the detail lines it ran on: the Passage today, the 0-based step index once linear dispatch is on. |
+| `passage` | `int` | 0-based index of the step the task was dispatched in - the `passage` of the detail lines it ran on (the Passage index for a run under the deprecated staged model). |
 | `name` | `string` | Task name. |
 | `module` | `string` | Task module (`core.pkg.installed`, ...). |
 | `params` | `object` (optional) | Rendered operator input parameters of the task, **secret-masked** (secret note below). The key is omitted for tasks without params. |

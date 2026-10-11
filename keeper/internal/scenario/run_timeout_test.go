@@ -154,8 +154,8 @@ func TestEffectiveRunTimeout_HotReloadCeiling(t *testing.T) {
 // alike, off one default — and, in a linear run, the `await_online` ceiling after
 // it. Otherwise the setting is dead: the run aborts before the host is ever
 // reachable, so the wait can never be spent. A linear run's bound is its
-// scenario_timeout (NIM-949); a staged run's is ceiling + deployBudget until
-// NIM-952 retires it.
+// scenario_timeout (NIM-949); a run under the deprecated staged rollback keeps
+// ceiling + deployBudget.
 func TestProvisionTimeoutExceedsJoinWait(t *testing.T) {
 	r := newTimeoutRunner(t, defaultRunTimeout, nil)
 	plan := &config.ScenarioManifest{Tasks: []config.Task{refreshEmitterTask(), hostTask()}}

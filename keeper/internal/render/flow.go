@@ -10,7 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// Flow control settled on the Keeper (draft ADR NIM-907, decision 4;
+// Flow control settled on the Keeper (ADR-0091, decision 4;
 // docs/scenario/predicate-rendering.md). Under linear dispatch no register crosses
 // the wire: a step's `when:` is decided here, per host, against that host's
 // accumulated registers and its soulprint.self, and `changed_when:`, `failed_when:`

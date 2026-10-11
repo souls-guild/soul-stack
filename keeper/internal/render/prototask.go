@@ -175,7 +175,7 @@ func flowForHost(t *RenderedTask, sid string) wireFlow {
 }
 
 // skippedWhen is the `when:` a grouped child carries to a host the Keeper decided it
-// skips there (draft ADR NIM-907, decision 4).
+// skips there (ADR-0091, decision 4).
 const skippedWhen = "false"
 
 // paramsForHost returns a task's wire params for a specific sid. Golden path

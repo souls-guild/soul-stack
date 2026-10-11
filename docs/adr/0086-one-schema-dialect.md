@@ -418,7 +418,7 @@ walks the map structurally:
 | `StripDeclaredSecrets` | `shared/config/secret_field.go:506` |
 | `ScanDuplicateSecretKeys` | `shared/config/secret_collection_keys.go:54`; callers `soul-lint/internal/validate/secret_collection_keys.go:54`, `keeper/internal/artifact/scenario_input_types.go:84` |
 | reveal | `keeper/internal/api/handlers/incarnation_reveal_secrets.go:336` |
-| the `core.state.*` write path | `keeper/internal/coremod/state/state.go:169`, `:175`; threaded raw at `keeper/internal/scenario/keeper_dispatch.go:360` via `coremodutil.WithStateSchema` (`keeper/internal/coremod/util/runctx.go:64-79`), from `keeper/internal/scenario/run.go:731,969` |
+| the `core.state.*` write path | `keeper/internal/coremod/state/state.go:169`, `:175`; threaded raw at `keeper/internal/scenario/keeper_dispatch.go:360` via `coremodutil.WithStateSchema` (`keeper/internal/coremod/util/runctx.go:64-79`), from `keeper/internal/scenario/run.go:735,973` |
 
 An unexpanded schema makes a `$type`-carried secret **invisible to the collector**. That is
 verbatim the failure `docs/adr/0083-declared-secret-state-fields.md:106-110` forbids:
@@ -491,9 +491,9 @@ unaffected by anything in this ADR.
 
 The precedent is direct. ADR-0083 landed the same way twice —
 *"this lands before the release, where compatibility is not yet owed"*
-(`docs/adr/0083-declared-secret-state-fields.md:507-509`) and
+(`docs/adr/0083-declared-secret-state-fields.md:511-513`) and
 *"a service already registered under one of the four names stops loading and must be
-renamed"* (`:635-637`) — with the `examples/` adopters migrated in the same commit.
+renamed"* (`:639-640`) — with the `examples/` adopters migrated in the same commit.
 
 Here the argument is stronger than precedent, because a compatibility window would be worse
 than no window. **An un-migrated `state_schema: {type: object, properties: {…}}` does not

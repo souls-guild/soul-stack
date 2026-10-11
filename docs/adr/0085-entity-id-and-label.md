@@ -357,7 +357,7 @@ Deleting `service.yml → name` removes one of the four enforcement surfaces of 
 namespace fence. [ADR-0083](0083-declared-secret-state-fields.md) named them, before NIM-726 landed:
 *"Four surfaces, one predicate: the manifest load (`service_name_reserved`), registration over REST
 and MCP, the derivation, and reveal"* — it now says three
-([`0083:621-626`](0083-declared-secret-state-fields.md)). The manifest load is the one that goes.
+([`0083:632-634`](0083-declared-secret-state-fields.md)). The manifest load is the one that goes.
 
 The **floor still holds** — `shared/config/secret_field.go:164-167` refuses to emit a colliding path
 at derivation, and registration still refuses the name. What is lost is that the author found out at

@@ -9,7 +9,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 )
 
-// Rescue routing of a linear run (docs/scenario/settings.md §4, draft ADR NIM-907
+// Rescue routing of a linear run (docs/scenario/settings.md §4, ADR-0091
 // fork 1): what the run goroutine tells render of its failures before each step, so
 // that a dropped host still receives the `onfail:` tasks whose source failed on it and
 // a run that a failure ended renders only those.

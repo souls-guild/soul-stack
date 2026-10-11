@@ -121,7 +121,7 @@ func TestGatePassageCapability_RefusalNamesTheHosts(t *testing.T) {
 	}
 }
 
-// Under linear dispatch every run of more than one step is gated (draft ADR NIM-907
+// Under linear dispatch every run of more than one step is gated (ADR-0091
 // item 8), and a scenario with no register dependency at all is refused too — so
 // the refusal must not tell its author to remove one.
 func TestGatePassageCapability_LinearRefusalAdvisesOnlyTheBinary(t *testing.T) {

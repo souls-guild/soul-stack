@@ -26,7 +26,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// Rescue routing across barriers (docs/scenario/settings.md §4, draft ADR NIM-907
+// Rescue routing across barriers (docs/scenario/settings.md §4, ADR-0091
 // fork 1, NIM-951): a host whose task failed still receives every `onfail:` task whose
 // source failed on it — dropped under `host`, or after a failure ended the run — and
 // nothing else after the failure.

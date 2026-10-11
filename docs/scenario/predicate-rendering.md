@@ -1,13 +1,14 @@
 # Rendering a post-module predicate on the Keeper
 
-> **Status: built on the Keeper, behind linear dispatch.** Specified by the draft ADR
-> [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), decision 4.
+> **Status: implemented.** Specified by
+> [ADR-0091](../adr/0091-scenario-linear-barrier.md) (NIM-907), decision 4.
 > The rewrite and its differential test are `RenderPredicate` in `shared/cel/predicate_render.go`
 > (NIM-928), the parse-time refusals of §3 are in `shared/config`. The rewrite only substitutes
 > (§3); simplifying what the host context alone decides is NIM-970. A run executing linearly
-> settles its step's flow control on the Keeper (NIM-943, `keeper/internal/render/flow.go`); a staged
-> run — every run until NIM-952 — still sends the predicates as written, and the Soul evaluates
-> them against the registers it accumulated inside one message. The Soul's half of §5 is built
+> settles its step's flow control on the Keeper (NIM-943, `keeper/internal/render/flow.go`) — every
+> run since NIM-952; a run under the deprecated staged rollback (`keeper.yml::scenario.execution_model:
+> staged`) and an Oracle reaction (NIM-977) still send the predicates as written, and the Soul evaluates them against the
+> registers it accumulated inside one message. The Soul's half of §5 is built
 > (NIM-929), and so is the Keeper's capability gate (NIM-946, §5).
 
 Under linear dispatch no register crosses the wire (decision 4). `changed_when:`, `failed_when:` and

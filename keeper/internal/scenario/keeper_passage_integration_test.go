@@ -800,6 +800,7 @@ func TestIntegration_MixedKeeperHostPassage0(t *testing.T) {
 
 	disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
 	r := newRunnerKeeperStaged(t, disp, keepers)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{

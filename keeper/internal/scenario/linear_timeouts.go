@@ -14,7 +14,7 @@ import (
 // (docs/scenario/settings.md §2.2, default 24h) and by nothing else: no 5-minute
 // ceiling standing in for a dead-host detector — soul_timeout is that — and no
 // keeper.yml floor, an operator's value having no say over a scenario's run. A
-// staged run keeps [Runner.effectiveRunTimeout] until NIM-952 retires it.
+// staged run, under the deprecated rollback model, keeps [Runner.effectiveRunTimeout].
 func (r *Runner) runDeadline(spec RunSpec, scn *config.ScenarioManifest) time.Duration {
 	if spec.executionModel != ExecutionLinear {
 		return r.effectiveRunTimeout(scn.Tasks)

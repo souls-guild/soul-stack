@@ -3175,7 +3175,7 @@ components:
             - array
             - "null"
         passage:
-          description: "index of the unit this row was dispatched for: the Passage today; once linear dispatch is on, the 0-based step index, a host then having one row per step it was sent. Values can have holes - nothing about them is contiguous"
+          description: 0-based index of the step this row was dispatched for, a host having one row per step that reached it, sent or settled by the Keeper without a send (the Passage index for a run under the deprecated staged model). Values can have holes - nothing about them is contiguous
           format: int64
           type: integer
         sid:
@@ -3255,7 +3255,7 @@ components:
           additionalProperties: {}
           type: object
         passage:
-          description: "index of the unit this task was dispatched in, the passage of the run-detail rows it ran on: the Passage today, the 0-based step index once linear dispatch is on"
+          description: 0-based index of the step this task was dispatched in, the passage of the run-detail rows it ran on (the Passage index for a run under the deprecated staged model)
           format: int64
           type: integer
         plan_index:

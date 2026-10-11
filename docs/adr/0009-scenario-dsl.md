@@ -1,16 +1,16 @@
 # ADR-009. Scenario — the full destiny task DSL; the boundary with destiny is a recommendation
 
-> **Pending amendment (NIM-907, design accepted 2026-10-02, not implemented).**
-> [ADR-draft. Scenario dispatch is linear](draft-scenario-linear-barrier.md) makes scenario dispatch
-> linear, a barrier after every step, and adds the scenario `settings:` block
-> ([settings.md](../scenario/settings.md)). Until linear dispatch is enabled (its S3,
-> item 7), the text below describes the code.
+> **Amended 2026-10-11 (NIM-952).** [ADR-0091. Scenario dispatch is linear](0091-scenario-linear-barrier.md):
+> a scenario run executes its steps in plan order — a step per top-level task or child of a default
+> block — each after the barrier of the one before it, and the scenario carries a `settings:` block
+> ([settings.md](../scenario/settings.md)). Where the text below speaks of Passages, it describes the
+> deprecated staged rollback (`keeper.yml::scenario.execution_model: staged`), kept for one release.
 
 > ★ **`examples/service/redis` is no longer in this repository.** It left with NIM-871 and lives on its own at [`soul-stack-services/redis`](https://github.com/soul-stack-services/redis). Every citation of that path below names a decision and the shape it took, not a file you can open here.
 
 - **Context.** Initially an isolation invariant was in force: a scenario could only `apply: { destiny: … }` (plus `target`/orchestration), but **not** `module:` directly — all the "work" had to live in an isolated, versionable, molecule-testable destiny. In practice this forced creating a separate destiny repo for the sake of a one-or-two-step inline operation (role probe, one-off command, diagnostics) that is never reused. The invariant hindered even read-only steps (probe), without which the volatile role from [ADR-008](0008-coven-stable-tags.md#adr-008-coven--stable-logical-tags-only) cannot be implemented.
 - **Decision.**
-  - **The "scenario without `module:`" invariant is fully lifted** (not only for read-only). Scenario receives **the entire destiny task DSL core** from [`docs/destiny/tasks.md`](../destiny/tasks.md): `module:` (including mutating modules), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `async:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:` — plus an orchestration layer on top (`on:`/`where:` targeting, `apply: { destiny: … }`, `state_changes`). *(`async:` and `require:` are refused outside a destiny since NIM-941, ahead of linear dispatch — [draft-scenario-linear-barrier.md](draft-scenario-linear-barrier.md) decision 7.)*
+  - **The "scenario without `module:`" invariant is fully lifted** (not only for read-only). Scenario receives **the entire destiny task DSL core** from [`docs/destiny/tasks.md`](../destiny/tasks.md): `module:` (including mutating modules), `templates`, task-level `vars:`, `register:`, `loop:`, `block:`, `async:`, `onchanges:`/`onfail:`/`require:`, `changed_when:`/`failed_when:`, `retry:`, `timeout:` — plus an orchestration layer on top (`on:`/`where:` targeting, `apply: { destiny: … }`, `state_changes`). *(`async:` and `require:` are refused outside a destiny since NIM-941, ahead of linear dispatch — [0091-scenario-linear-barrier.md](0091-scenario-linear-barrier.md) decision 7.)*
   - **The DSL core is not duplicated.** The source of truth for the core is `docs/destiny/tasks.md`; the scenario delta is a separate normative document [`docs/scenario/orchestration.md`](../scenario/orchestration.md).
   - **destiny remains** a standalone entity: a reusable, independently versionable (git ref, [ADR-007](0007-versioning-git-ref.md#adr-007-artifact-versioning--via-git-ref-not-a-manifest-field)), isolated, molecule-testable brick.
   - **The destiny / scenario boundary is a recommendation, not a wall.** The criterion for extraction into a destiny is three "yes"es: (1) reuse, (2) molecule idempotency is needed, (3) it is isolable. All three → extract into a destiny via `apply:`; otherwise an inline `module:` implementation in the scenario is permissible.

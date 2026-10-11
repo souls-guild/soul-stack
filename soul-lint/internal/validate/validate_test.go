@@ -104,7 +104,7 @@ func TestGolden_ScenarioIncarnationStateRead(t *testing.T) {
 }
 
 // TestGolden_ScenarioCrossTaskWhen — ★ GUARD, the linter half of FC-5's
-// retirement (draft ADR NIM-907, S1; the Keeper half is
+// retirement (ADR-0091, S1; the Keeper half is
 // TestIntegration_LinearCrossStepWhenRuns). A `when:` reading a register from an
 // earlier step lints clean: the Keeper decides it. Both halves go in one change, or
 // one side refuses a scenario the other accepts.

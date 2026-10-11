@@ -1,16 +1,18 @@
 # Scenario settings — the `settings:` block
 
-> **Status: parsed; partly acted on (below).** Specified by the draft ADR
-> [`draft-scenario-linear-barrier.md`](../adr/draft-scenario-linear-barrier.md) (NIM-907), fork 4.
+> **Status: implemented.** Specified by
+> [ADR-0091](../adr/0091-scenario-linear-barrier.md) (NIM-907), fork 4.
 > Since NIM-927 the shape (§1), the keys and their values (§2), the §3 refusals — a run-kind key
 > below the scenario, `settings:` where it may not be written, an unknown key — and the §2.3
 > warning are enforced by the one validator in `shared/config` (the Keeper refuses what `soul-lint`
 > refuses); `config.MergeSettings` merges two levels key by key, and render applies it so far only
 > from a block to its children. Since NIM-940 §3.1's two refusals are enforced the same way and
-> `soul-lint` gives rule 4's warning. Since NIM-942 `serial_scope` decides how a block rolls — but
-> only in a run that executes linearly, which a run does on a Keeper whose `keeper.yml` sets
-> `scenario.execution_model: linear` (NIM-950) until NIM-952 moves the default execution model
-> (`execution_model`, [naming-rules.md](../naming-rules.md)). Since NIM-948 a linear run's
+> `soul-lint` gives rule 4's warning. Since NIM-942 `serial_scope` decides how a block rolls in a
+> run that executes linearly — every run since NIM-952, unless its Keeper's `keeper.yml` sets the
+> deprecated rollback `scenario.execution_model: staged` (`execution_model`,
+> [naming-rules.md](../naming-rules.md)), under which only `task_timeout` takes effect and
+> `serial_scope` is read by the §3.1 refusals alone, as in every run; an Oracle reaction is not a
+> linear run either (NIM-977). Since NIM-948 a linear run's
 > barrier reads `on_failure` and `tolerate` (§4), on the same terms, and since NIM-949 the three
 > timeouts are read (§2.2–§2.3): `task_timeout` in every run, `soul_timeout` and `scenario_timeout`
 > in a run that executes linearly; since NIM-951 an `onfail:` rescue reaches its host across
@@ -75,7 +77,7 @@ is `mergeBlockInheritance` (`keeper/internal/render/block.go:522-537`):
 | `vars:` | **merged, child wins** |
 | `onchanges:`, `onfail:`, `require:` | **union** — which *widens* ([tasks.md §6.5](../destiny/tasks.md)); for `require:`, `all` on either side absorbs the other (`mergeRequire`, `block.go:619-632`). `require:` reaches this merge only in a destiny's block: a scenario refuses it (`require_outside_destiny`) |
 | `transport:` | **child wins, whole map** |
-| `serial:` | today **the block's width** — a module child's own `serial:` is ignored (`block.go:72`, `:396`). Under this design, a default each child may override — unless the block has `serial_scope: block` (§3.1) |
+| `serial:` | **the block's width is each child's default**, which a child's own `serial:` overrides (`config.LinearBlockChild`) — unless the block rolls as one group (§3.1). Under the staged rollback the block's width is stamped on every child and a module child's own `serial:` is ignored (`block.go:72`, `:396`) |
 | `settings:` | **merged key by key, child wins** — the `vars:` rule |
 
 ## 2. The keys
@@ -215,11 +217,11 @@ barrier (Soul hung)" — `soul_timeout` now does properly. Five minutes also kil
 running longer, which contradicted "no task limit by default".
 
 It replaces the provision-run ceiling as well. A staged run with a refresh emitter gets
-`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1236-1249`, `deployBudget` at
+`max(5m, max_await_timeout + 10m)` (`keeper/internal/scenario/run.go:1240-1253`, `deployBudget` at
 `keeper/internal/scenario/scenario.go:150-159`), and `max_await_timeout` is a `keeper.yml` key — an
 operator's value bounding a scenario's run, which the opening of this document rules out.
 **Decided (user, 2026-10-01):** that floor goes; `scenario_timeout` is the only bound on a run, and its 24-hour default
-already covers onboarding. A staged run keeps both until NIM-952 retires the model.
+already covers onboarding. A run under the deprecated staged rollback keeps both.
 
 ### 2.3 `timeout:` is shorthand for `task_timeout`
 
@@ -288,7 +290,7 @@ staged run keeps ignoring `timeout:` on a keeper-side task, as it always has.
 
 **Where `settings:` may not be written:** a keeper-side task — `on: keeper`, or a keeper-side core
 address such as `core.state.*` (it has no cross-host barrier, and a
-keeper failure always ends the run — `keeper/internal/scenario/run.go:969-972`) —
+keeper failure always ends the run — `keeper/internal/scenario/run.go:973-976`) —
 `settings_on_keeper_invalid`; an `assert:` (it fails the render, not a host) —
 `settings_on_assert_invalid`; an `include:` for now (each spliced task is its own barrier, so the
 meaning differs from a block's and deserves its own decision; refusing is additive to lift later) —
@@ -348,21 +350,22 @@ Otherwise the shared validator refuses it, so the Keeper does too, not only `sou
 repositories are not linted. The code is `serial_scope_implicit`, reported once, at the outermost
 such block; a line written there settles every block beneath it.
 
-**The same change between top-level tasks** (user, 2026-10-06, NIM-940). Today one wave loop carries
-a whole Passage of the derived plan at its narrowest `serial:` (`keeper/internal/scenario/dispatch.go:1010-1021`),
-so `{change, check}` under `serial: 2` rolls as a canary, and so does a step *without* `serial:`
-written before one with it. Under linear dispatch each step rolls on its own. So a `serial:` that
+**The same change between top-level tasks** (user, 2026-10-06, NIM-940). Under ADR-056 one wave
+loop carried a whole Passage of the derived plan at its narrowest `serial:`
+(`keeper/internal/scenario/dispatch.go:1010-1021`, still the staged rollback's), so `{change, check}`
+under `serial: 2` rolled as a canary, and so did a step *without* `serial:` written before one with
+it. Under linear dispatch each step rolls on its own. So a `serial:` that
 shares a derived Passage with another host step — in either order — must also take its
 `serial_scope` from a line the author wrote, on the task, above it or in the scenario's `settings:`,
 either value: neither stretches a wave over the next task. Otherwise it is refused as
 `serial_scope_implicit_across_tasks`. Keeper-side tasks share no wave and are not counted, so a
 `serial:` task followed by `core.state.<verb>` captures (`long-runner/scenario/serial_waves`) passes.
 A block without `serial:` is an overlay whatever its `serial_scope`, so its children are counted as
-steps of their own; a module or applier child's own `serial:` is not read inside a block today, so it
+steps of their own; a module or applier child's own `serial:` is not read inside a block under ADR-056, so it
 carries none, and neither does a block with `serial:` whose host tasks all sit in nested blocks without
-one — today's render gives them no width (`keeper/internal/render/block.go`, `renderBlockTask`). The rule reads the derivation, so it goes when the derivation goes, after the service
-repositories are audited. The canary of the dragonfly example trips it as well: "Restart the current
-master last" (`restart/main.yml:142`) shares the replicas' Passage, so today it restarts in its SID's
+one — the staged render gives them no width (`keeper/internal/render/block.go`, `renderBlockTask`). The rule reads the derivation, so it goes when the derivation goes, with `soul-lint` S4
+(NIM-953). The canary of the dragonfly example trips it as well: "Restart the current
+master last" (`restart/main.yml:142`) shares the replicas' Passage, so under ADR-056 it restarted in its SID's
 place among the width-1 waves — its `serial_scope: block` answers both refusals.
 
 Both refusals run on the plan the author wrote, after `include:` expansion: the Keeper checks before it
@@ -409,7 +412,7 @@ through its inheritance chain. Failures go into an **append-only list, closed wh
   will send it (`soul_capability_unsupported`) ends the run whatever the radius — no host is dropped
   and `tolerate` does not count it. What is known before the run is refused before the first step,
   over the whole plan; what only a step can know, at that step, before it sends anything
-  ([draft ADR item 10](../adr/draft-scenario-linear-barrier.md), NIM-946).
+  ([ADR-0091 item 10](../adr/0091-scenario-linear-barrier.md), NIM-946).
 - Actively stopping in-flight work when the run ends is a separate, opt-in idea: NIM-911.
 
 **Built in NIM-948, for a linear run** (`keeper/internal/scenario/failure_policy.go`). The barrier
@@ -484,7 +487,7 @@ registers failed there and at which step, and whether a failure has ended the ru
   host whose applier rescue fires but whose destiny has no task for it is not sent the terminal,
   so a later rescue reading `register.<applier>` finds none there.
 
-⚠ **A staged run keeps today's barrier** until NIM-952 retires it: it returns on the first failed
+⚠ **A run under the deprecated staged rollback keeps the ADR-056 barrier**: it returns on the first failed
 host (`classifyExcept`, `keeper/internal/scenario/dispatch.go`) and the abort force-fails every row
 still running (`ensureTerminalApplyRun`, `keeper/internal/scenario/run.go`). Its dead host is caught
 only on the Acolyte path, where the claim marks the row `dispatched` (`OrphanDispatched`,
@@ -510,8 +513,8 @@ scenario saying so.
 - **A task that restarts its own agent or host** (§2.3) — its result never arrives.
 
 - **A group's nested `serial:` is only warned about** (NIM-940). Inside a block rolled as one group,
-  a nested block's own `serial:` narrows today's derived wave (a nested block enters the Passage's
-  minimum width) and is not read under linear dispatch, so the wave widens. Rule 4 makes that a
+  a nested block's own `serial:` narrowed the ADR-056 derived wave (a nested block entered the
+  Passage's minimum width) and is not read under linear dispatch, so the wave widens. Rule 4 makes that a
   `soul-lint` warning, `group_child_key_unread`; the Keeper accepts the file. A group exists only
   where an author wrote `serial_scope: block`, which no scenario predating NIM-927 can carry, so the
   change is never inherited unnoticed — but an unlinted repository gets no word of it. Whether it

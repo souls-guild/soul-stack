@@ -67,12 +67,17 @@ func LoadApplyScript(stub *soulstub.Stub, scenario string, tasks []TaskResponse)
 // errand status before dispatch.
 func (s *Stack) ConnectSoulStub(t *testing.T, soulIndex int) *soulstub.Stub {
 	t.Helper()
+	return s.connectSoulStubAt(t, soulIndex, s.KeeperGRPCAddr)
+}
+
+func (s *Stack) connectSoulStubAt(t *testing.T, soulIndex int, keeperGRPCAddr string) *soulstub.Stub {
+	t.Helper()
 	if soulIndex < 0 || soulIndex >= len(s.souls) {
 		t.Fatalf("ConnectSoulStub(%d): out of range (%d souls created)", soulIndex, len(s.souls))
 	}
 	id := s.souls[soulIndex]
 
-	stub := soulstub.New(id.SID, s.KeeperGRPCAddr, id.Cert, id.Key, s.caBundle)
+	stub := soulstub.New(id.SID, keeperGRPCAddr, id.Cert, id.Key, s.caBundle)
 
 	ctx, cancel := context.WithCancel(context.Background())
 	if err := stub.Open(ctx); err != nil {

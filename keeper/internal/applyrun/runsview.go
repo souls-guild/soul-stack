@@ -74,8 +74,8 @@ type RunSummary struct {
 }
 
 // RunHostStatus represents one host row of a run (GET .../runs/{apply_id}). A host
-// has one row per unit it was sent, keyed by Passage: the ADR-056 Passage today, the
-// step once linear dispatch (NIM-907) is on. The projection carries each row as-is,
+// has one row per step it was sent, keyed by passage — the step index, or the ADR-056
+// Passage for a run under the deprecated staged model. The projection carries each row as-is,
 // so the failed task's address stays on the unit it failed in.
 //
 // FailedTaskIdx is the LOCAL index of the failed task in the ApplyRequest this row was

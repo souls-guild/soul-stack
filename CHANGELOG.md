@@ -7,8 +7,18 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Changed
 
+- **Scenario runs are linear by default (NIM-952, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)).**
+  A run executes its steps in plan order — a step per top-level task and per child of a default
+  block — each only after every host has finished the one before it; the derived Passages of
+  [ADR-056](docs/adr/0056-staged-render-passage.md) are superseded. `keeper.yml::scenario.execution_model`
+  now defaults to `linear`; `staged` stays for one release as a deprecated rollback, and each run
+  started under it logs a warning. An inline step whose send fails is retried until `soul_timeout`;
+  its log line now masks the error — a vault reference and the values of sealed params cells —
+  since a transport error can echo the request.
+  See the upgrade note.
+
 - **A linear run checks its Souls' capabilities over the whole plan before its first step (NIM-946,
-  [ADR-draft scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) item 10).** Every
+  [ADR-0091](docs/adr/0091-scenario-linear-barrier.md) item 10).** Every
   task is checked against the hosts its `on:` / `where:` / `run_once:` resolve to when none of them
   — nor, beside a `where:`, its `vars:` — reads a register, and its `where:` reads no
   `incarnation.state` an earlier capture changes — a later applier's destiny is resolved up front
@@ -54,7 +64,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `scenario_timeout`.
 
 - **An `onfail:` rescue reaches its host across barriers (NIM-951, [settings.md
-  §4](docs/scenario/settings.md), [ADR-draft scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md)
+  §4](docs/scenario/settings.md), [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)
   fork 1).** In a run executing linearly, a host whose task failed still receives every `onfail:`
   task whose source failed on it: a host dropped under `host` is its target when the rescue's
   `on:` selects it, its `where:` not evaluated, and a failure that ends the run no longer aborts
@@ -66,8 +76,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   rescue step goes through the work-queue, its row carrying the routing (ADR-027 amend (s)). ⚠ A
   keeper-side task's own failure still aborts the run at once, before any rescue of it.
 
-- **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-draft
-  scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) S1).** A `when:` /
+- **`soul-lint` answers for linear dispatch on scenario state and flow control (NIM-944, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md) S1).** A `when:` /
   `changed_when:` / `failed_when:` reading a register from an earlier task is no longer reported
   (`cross_passage_when_unsupported`): the Keeper decides it for a run executing linearly, and keeps
   the refusal for a run executing staged. `state_stale_same_passage_read` is gone: under linear
@@ -77,8 +86,7 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   derived Passages ran the capture first, and one written after it no longer is. Unconditional,
   since `soul-lint` cannot see the execution model pinned to a run.
 
-- **`async:` and `require:` are destiny-only keys (NIM-941, [ADR-draft
-  scenario-linear-barrier](docs/adr/draft-scenario-linear-barrier.md) decision 7).** Concurrency on
+- **`async:` and `require:` are destiny-only keys (NIM-941, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md) decision 7).** Concurrency on
   a host — a `loop:`'s iterations included, though a loop is one step under linear dispatch — lives
   in a destiny, and apart from the scenario's own `async:` tasks a scenario `require:` waited on
   something only where it reached an applied destiny's `async:` tasks (see the upgrade note). The
@@ -1225,6 +1233,50 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   resolves the set once and both rights read it.
 
 ### Upgrade notes
+
+- **Scenario runs are linear by default** (`NIM-952`, [ADR-0091](docs/adr/0091-scenario-linear-barrier.md)).
+  What an existing scenario does differently:
+  - a host's failure ends the run for the whole fleet once the hosts already working finish, instead
+    of letting healthy hosts run on; `settings: {on_failure: host}` drops the failed host instead,
+    bounded by `tolerate` ([settings.md](docs/scenario/settings.md));
+  - a keeper-side task — a `core.state.<verb>` capture included — runs where it is written, after
+    the host steps before it, so under the default radius a capture written after a failed step is
+    not written;
+  - `serial:` rolls each step at its own width; a canary writes `settings: {serial_scope: block}`;
+  - `onfail:` reaches its host across steps, and `when:` / the post-module predicates are settled on
+    the Keeper;
+  - a run is bounded by `scenario_timeout` (24h) and a lost agent by `soul_timeout` (1m); the
+    `max_await_timeout + 10m` floor no longer bounds a run.
+
+  **Rollback.** For this release `scenario.execution_model: staged` restores ADR-056 from the next
+  run, on a reload, with no binary change. Rolling the binary back instead first meets the schema.
+  Against a Keeper built from `main` before this train (its last migration is 120): this train adds
+  migrations 121 and 122, that Keeper refuses to start against them, and `keeper` has no down
+  command — apply `122_add_apply_runs_dropped.down.sql` and
+  `121_add_incarnation_applying_cancel_requested.down.sql` by hand, then set the recorded version
+  back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the down files do not
+  touch, or let the golang-migrate CLI's `goto 120`, pointed at this release's `keeper/migrations`,
+  do both. Past the schema, a rollback has three edges: an older Keeper refuses the `settings:` key
+  outright and a `when:`, `changed_when:` or `failed_when:` reading a register from another derived
+  Passage (FC-5) — loudly, so a scenario written for linear dispatch may not run there — and it
+  returns the old order **silently**: keeper tasks before host dispatch, and healthy hosts running
+  on after one fails.
+  **During a rolling upgrade of an HA cluster** each instance starts runs in its own model, so the
+  same scenario runs its keeper tasks first and lets healthy hosts run on after a failure when an
+  old Keeper takes it, and step by step, stopping at the failure, when a new one does; to keep one
+  order, set `staged` on the upgraded instances until the last old one is gone. A linear step goes
+  through the work-queue only once every live instance announces `step_queue`; until then it is sent
+  inline.
+
+  **Cost.** Each step is a round trip and a barrier. On a dedicated stand, twelve one-command steps
+  (`dev/bench/linear-dispatch`, medians, NIM-950 → after the barrier woke on the row write in
+  NIM-984): linear inline on 1 / 4 / 8 hosts 2534 / 2658 / 2812 → 239 / 382 / 575 ms (staged
+  75 / 99 / 130 ms); through the work-queue 2521 / 2559 / 2610 → 420 / 1074 / 2002 ms, where each
+  claimed host renders its step and reads Vault, so Vault reads grow as hosts × steps; a push host
+  4925 → 2786 ms, one SSH session per step. The pause between steps fell from ~200 ms to 8–12 ms.
+
+  **Not changed:** an Oracle reaction still goes as one message to its sender's SID, outside the
+  step model (NIM-977, [known-limitations.md](docs/known-limitations.md#an-oracle-reaction-is-not-dispatched-step-by-step)).
 
 - **`async:` and `require:` on a scenario task are refused wherever the Keeper parses a scenario**
   (`NIM-941`): `async_outside_destiny` / `require_outside_destiny`, at any block depth and in an

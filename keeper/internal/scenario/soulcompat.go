@@ -119,7 +119,7 @@ func (o capabilityOrigins) note(sid, capability string, step int, task string) {
 }
 
 // aheadSoulCapabilities is the requirement of a linear run's whole plan, before its
-// first step (draft ADR NIM-907 item 10, NIM-946): every task against the hosts its
+// first step (ADR-0091 item 10, NIM-946): every task against the hosts its
 // targeting resolves to before the run ([render.SoulNeed]). In step order, so a
 // capability is attributed to the first step that needs it.
 func aheadSoulCapabilities(needs []render.SoulNeed) (map[string][]string, capabilityOrigins) {
@@ -284,7 +284,7 @@ func (r *Runner) gateSoulCapabilitiesFor(ctx context.Context, incarnationName, s
 }
 
 // gateLinearPlanCapabilities is the capability gate of a linear run ahead of its
-// first step (draft ADR NIM-907 item 10): the whole plan, as far as it is known before
+// first step (ADR-0091 item 10): the whole plan, as far as it is known before
 // the run, so a host that cannot run a later step refuses the run before an earlier
 // one changed anything. What it cannot know is gated at each step
 // ([Runner.gateStepCapabilities]).
@@ -414,8 +414,8 @@ func (r *Runner) gatePassageCapability(ctx context.Context, spec RunSpec, hosts 
 	if len(hosts) > 0 && len(sids) == 0 {
 		return nil
 	}
-	// Under linear dispatch every run of more than one step comes here (draft ADR
-	// NIM-907 item 8), and removing a register dependency removes no step.
+	// Under linear dispatch every run of more than one step comes here (ADR-0091
+	// item 8), and removing a register dependency removes no step.
 	linear := spec.executionModel == ExecutionLinear
 	if r.soulCap == nil {
 		if linear {

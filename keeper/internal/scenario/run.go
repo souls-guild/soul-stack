@@ -41,9 +41,12 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// paths below (secrets never land in PG — see maskedInputSnapshot).
 	spec.inputSnapshot = maskedInputSnapshot(spec.Input)
 
-	// Decided here, once, and held for the whole run (draft ADR NIM-907, item 15):
+	// Decided here, once, and held for the whole run (ADR-0091, item 15):
 	// every later choice between the two models reads spec.executionModel.
 	spec.executionModel = r.executionModel()
+	if spec.executionModel == ExecutionStaged {
+		log.Warn("scenario run executes under the deprecated staged model (keeper.yml scenario.execution_model: staged), kept as a rollback for one release")
+	}
 
 	// In-process span for the whole scenario run. incarnation/scenario name are
 	// trace attributes for filtering (can't be metric labels — cardinality,
@@ -128,6 +131,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// accumulate over the whole run). Declared BEFORE abort — abort can fire
 	// before Render (sealed empty → degrades to vault+regex, bit-for-bit).
 	sealed := render.NewSealedSet()
+	spec.sealed = sealed
 
 	// A linear run's failure list (docs/scenario/settings.md §4): its barriers judge
 	// every failure by its task's `on_failure`, and a host dropped under `host` is out
@@ -512,7 +516,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//        strictly to staged runs (N=1 → one Passage, cross-passage
 	//        impossible).
 	//
-	//        Retired under linear dispatch (draft ADR NIM-907, decision 4): the
+	//        Retired under linear dispatch (ADR-0091, decision 4): the
 	//        Keeper decides a `when:` across steps and renders the other
 	//        registers into the post-module predicates (keeper_flow.go), so no
 	//        such read reaches the Soul. soul-lint dropped the check with it.
@@ -559,7 +563,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//
 	//        Under linear dispatch every requisite whose source runs in another
 	//        step takes this path, so the audit log is an operational
-	//        prerequisite for any scenario with one (draft ADR NIM-907 item 9).
+	//        prerequisite for any scenario with one (ADR-0091 item 9).
 	//        CrossStepRequisite also sees the links between a default block's
 	//        children, which are steps of their own.
 	if staged && r.deps.AuditReader == nil {
@@ -638,7 +642,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		return
 	}
 
-	// Soul-side compat gate of a linear run (draft ADR NIM-907 item 10): the whole
+	// Soul-side compat gate of a linear run (ADR-0091 item 10): the whole
 	// plan before its first step — and before either dispatch path — rather than
 	// each step as it comes, which would refuse step k after the steps before it
 	// changed hosts. What only a step can know is gated there (dispatchPassage).
@@ -667,7 +671,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// Under linear dispatch a keeper-side task is a step of its own (it cannot
 	// sit in a block), so "before its Passage's host dispatch" is vacuous: it runs
 	// where it is written, after the barrier of every step before it and before
-	// any step after it (draft ADR NIM-907, decision 3).
+	// any step after it (ADR-0091, decision 3).
 	//
 	//   - staged (Passage.Count>1): OLD path (inline) — stage-loop below.
 	//     Acolyte renders per-host at claim time ONCE (not per-Passage) — staged

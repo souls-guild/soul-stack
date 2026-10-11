@@ -221,65 +221,68 @@ func (d *stagedDispatcher) targets(passage int) []string {
 // register end-to-end through the stage loop (render→dispatch→barrier→register→
 // render).
 func TestIntegration_2Passage_WhereTargetsOnlyMaster(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "slave",
-	})
-	r := newRunner(t, disp, gitURL)
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "slave",
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
 
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// Run succeeds (both passages cleared their barriers, state-commit → ready).
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	// Passage 0 (probe): ApplyRequest to BOTH hosts (probe has no where → whole roster).
-	p0 := disp.targets(0)
-	if len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-
-	// ★ Passage 1 (action): ApplyRequest ONLY to the master host. where:
-	// register.role.stdout == 'master' resolved via the Passage 0 per-host register.
-	p1 := disp.targets(1)
-	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (only master) - staged where did not resolve via Passage 0 register", p1)
-	}
-
-	// apply_runs: per-host × per-passage. host-a: passage 0 + passage 1 (master).
-	// host-b: passage 0 ONLY (slave — Passage 1 never targeted it, no row).
-	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
-	if err != nil {
-		t.Fatalf("SelectStatusesByApplyID: %v", err)
-	}
-	got := map[string][]int{}
-	for _, st := range statuses {
-		if st.Status != applyrun.StatusSuccess {
-			t.Errorf("apply_runs[%s,passage=%d] = %s, want success", st.SID, st.Passage, st.Status)
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
 		}
-		got[st.SID] = append(got[st.SID], st.Passage)
-	}
-	if len(got["host-a.example.com"]) != 2 {
-		t.Errorf("host-a passages = %v, want [0 1] (probe + master-action)", got["host-a.example.com"])
-	}
-	if len(got["host-b.example.com"]) != 1 || got["host-b.example.com"][0] != 0 {
-		t.Errorf("host-b passages = %v, want [0] (probe only - slave was not targeted by Passage 1)", got["host-b.example.com"])
-	}
+
+		// Run succeeds (both passages cleared their barriers, state-commit → ready).
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		// Passage 0 (probe): ApplyRequest to BOTH hosts (probe has no where → whole roster).
+		p0 := disp.targets(0)
+		if len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+
+		// ★ Passage 1 (action): ApplyRequest ONLY to the master host. where:
+		// register.role.stdout == 'master' resolved via the Passage 0 per-host register.
+		p1 := disp.targets(1)
+		if len(p1) != 1 || p1[0] != "host-a.example.com" {
+			t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (only master) - staged where did not resolve via Passage 0 register", p1)
+		}
+
+		// apply_runs: per-host × per-passage. host-a: passage 0 + passage 1 (master).
+		// host-b: passage 0 ONLY (slave — Passage 1 never targeted it, no row).
+		statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
+		if err != nil {
+			t.Fatalf("SelectStatusesByApplyID: %v", err)
+		}
+		got := map[string][]int{}
+		for _, st := range statuses {
+			if st.Status != applyrun.StatusSuccess {
+				t.Errorf("apply_runs[%s,passage=%d] = %s, want success", st.SID, st.Passage, st.Status)
+			}
+			got[st.SID] = append(got[st.SID], st.Passage)
+		}
+		if len(got["host-a.example.com"]) != 2 {
+			t.Errorf("host-a passages = %v, want [0 1] (probe + master-action)", got["host-a.example.com"])
+		}
+		if len(got["host-b.example.com"]) != 1 || got["host-b.example.com"][0] != 0 {
+			t.Errorf("host-b passages = %v, want [0] (probe only - slave was not targeted by Passage 1)", got["host-b.example.com"])
+		}
+	})
 }
 
 // stagedExpandingServiceRepo — staged scenario where the Passage 1 task EXPANDS
@@ -351,70 +354,73 @@ tasks:
 // passage-1 persists as the placeholder (index 1) and apply_run_plan loses
 // index 2 → the assertion fails.
 func TestIntegration_StagedExpandingPassage_RunPlanMatchesExecution(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedExpandingServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedExpandingServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "slave",
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "slave",
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "expand",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		// Ground truth: what actually went out in ApplyRequests (echoed plan_index of
+		// each passage's active render) = what Soul would record in audit
+		// task.executed. probe idx0 (P0) + loop idx1,2 (P1) = 3 unique plan_index.
+		exec := disp.dispatchedPlanByIndex()
+		if len(exec) != 3 {
+			t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 unrolled from Passage 1)", exec)
+		}
+
+		// apply_run_plan (persistRunPlan) must match execution both in the set of
+		// plan_index and in name/passage for each index.
+		plan, err := applyrun.SelectRunPlanByApplyID(context.Background(), integrationPool, applyID)
+		if err != nil {
+			t.Fatalf("SelectRunPlanByApplyID: %v", err)
+		}
+		planByIndex := map[int]applyrun.RunPlanTask{}
+		for _, p := range plan {
+			planByIndex[p.PlanIndex] = p
+		}
+		if len(planByIndex) != len(exec) {
+			var planIdx, execIdx []int
+			for k := range planByIndex {
+				planIdx = append(planIdx, k)
+			}
+			for k := range exec {
+				execIdx = append(execIdx, k)
+			}
+			sort.Ints(planIdx)
+			sort.Ints(execIdx)
+			t.Fatalf("* H1: apply_run_plan plan_index = %v, want == execution %v (staged passage-1 was recorded with a compressed placeholder instead of the active render - index lost)", planIdx, execIdx)
+		}
+		for idx, dt := range exec {
+			p, ok := planByIndex[idx]
+			if !ok {
+				t.Fatalf("* H1: plan_index %d executed (passage %d, %q), but missing from apply_run_plan - persistRunPlan recorded the compressed placeholder instead of the unrolled render of Passage 1", idx, dt.passage, dt.name)
+			}
+			if p.Passage != dt.passage || p.Name != dt.name {
+				t.Errorf("plan_index %d: apply_run_plan (passage=%d, name=%q) != execution (passage=%d, name=%q)", idx, p.Passage, p.Name, dt.passage, dt.name)
+			}
+		}
 	})
-	r := newRunner(t, disp, gitURL)
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "expand",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	// Ground truth: what actually went out in ApplyRequests (echoed plan_index of
-	// each passage's active render) = what Soul would record in audit
-	// task.executed. probe idx0 (P0) + loop idx1,2 (P1) = 3 unique plan_index.
-	exec := disp.dispatchedPlanByIndex()
-	if len(exec) != 3 {
-		t.Fatalf("dispatched plan_index set = %v, want 3 (probe idx0 + loop idx1,2 unrolled from Passage 1)", exec)
-	}
-
-	// apply_run_plan (persistRunPlan) must match execution both in the set of
-	// plan_index and in name/passage for each index.
-	plan, err := applyrun.SelectRunPlanByApplyID(context.Background(), integrationPool, applyID)
-	if err != nil {
-		t.Fatalf("SelectRunPlanByApplyID: %v", err)
-	}
-	planByIndex := map[int]applyrun.RunPlanTask{}
-	for _, p := range plan {
-		planByIndex[p.PlanIndex] = p
-	}
-	if len(planByIndex) != len(exec) {
-		var planIdx, execIdx []int
-		for k := range planByIndex {
-			planIdx = append(planIdx, k)
-		}
-		for k := range exec {
-			execIdx = append(execIdx, k)
-		}
-		sort.Ints(planIdx)
-		sort.Ints(execIdx)
-		t.Fatalf("* H1: apply_run_plan plan_index = %v, want == execution %v (staged passage-1 was recorded with a compressed placeholder instead of the active render - index lost)", planIdx, execIdx)
-	}
-	for idx, dt := range exec {
-		p, ok := planByIndex[idx]
-		if !ok {
-			t.Fatalf("* H1: plan_index %d executed (passage %d, %q), but missing from apply_run_plan - persistRunPlan recorded the compressed placeholder instead of the unrolled render of Passage 1", idx, dt.passage, dt.name)
-		}
-		if p.Passage != dt.passage || p.Name != dt.name {
-			t.Errorf("plan_index %d: apply_run_plan (passage=%d, name=%q) != execution (passage=%d, name=%q)", idx, p.Passage, p.Name, dt.passage, dt.name)
-		}
-	}
 }
 
 // passagesBySID collects a run's apply_runs into (sid → sorted passages) and
@@ -445,53 +451,56 @@ func passagesBySID(t *testing.T, applyID string, wantStatus applyrun.Status) map
 // (dispatchPassage: len(perHost)==0 → no-op return nil), incarnation → READY.
 // An empty destructive target is a safe no-op, not a hang and not an error.
 func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "slave",
-		"host-b.example.com": "slave",
-	})
-	r := newRunner(t, disp, gitURL)
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "slave",
+			"host-b.example.com": "slave",
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
 
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	// An empty Passage 1 destructive target does NOT hang: the Passage-1 barrier
-	// never starts (no-op), the run reaches commitSuccess → ready (if the
-	// Passage-1 barrier hung on an empty set, waitRunDone would time out).
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	// Passage 0 (probe): both hosts (probe has no where → whole roster).
-	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-
-	// ★ Passage 1: NO ApplyRequest at all (all slave → where=false on each).
-	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("* Passage 1 targets = %v, want [] (all-slave: destructive target is empty, no-op)", p1)
-	}
-
-	// apply_runs: both hosts have ONLY passage 0 (no Passage-1 row — nobody was
-	// targeted). All rows success.
-	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
-	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
-		if len(got[sid]) != 1 || got[sid][0] != 0 {
-			t.Errorf("%s passages = %v, want [0] (probe only - Passage 1 was not targeted)", sid, got[sid])
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
 		}
-	}
+
+		// An empty Passage 1 destructive target does NOT hang: the Passage-1 barrier
+		// never starts (no-op), the run reaches commitSuccess → ready (if the
+		// Passage-1 barrier hung on an empty set, waitRunDone would time out).
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		// Passage 0 (probe): both hosts (probe has no where → whole roster).
+		if p0 := disp.targets(0); len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+
+		// ★ Passage 1: NO ApplyRequest at all (all slave → where=false on each).
+		if p1 := disp.targets(1); len(p1) != 0 {
+			t.Fatalf("* Passage 1 targets = %v, want [] (all-slave: destructive target is empty, no-op)", p1)
+		}
+
+		// apply_runs: both hosts have ONLY passage 0 (no Passage-1 row — nobody was
+		// targeted). All rows success.
+		got := passagesBySID(t, applyID, applyrun.StatusSuccess)
+		for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
+			if len(got[sid]) != 1 || got[sid][0] != 0 {
+				t.Errorf("%s passages = %v, want [0] (probe only - Passage 1 was not targeted)", sid, got[sid])
+			}
+		}
+	})
 }
 
 // TestIntegration_StagedProbeFail_FailStop — ★ LIFECYCLE INVARIANT (ADR-056 §d).
@@ -501,54 +510,57 @@ func TestIntegration_StagedAllSlave_NoOpReady(t *testing.T) {
 // A failed probe step must not dispatch a dependent passage on an incomplete
 // register.
 func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master", // role doesn't matter — probe fails before register
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master", // role doesn't matter — probe fails before register
+		})
+		disp.failPassage0On = map[string]bool{"host-a.example.com": true}
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+		if inc.StatusDetails["reason"] != "dispatch_failed" {
+			t.Errorf("reason = %v, want dispatch_failed (barrier Passage-0 fail-stop)", inc.StatusDetails["reason"])
+		}
+
+		// Passage 0 was targeted (probe went out), Passage 1 — NOT (the stage loop
+		// broke off at the Passage-0 barrier).
+		if p0 := disp.targets(0); len(p0) != 1 {
+			t.Errorf("Passage 0 targets = %v, want [host-a.example.com]", p0)
+		}
+		if p1 := disp.targets(1); len(p1) != 0 {
+			t.Fatalf("* Passage 1 targets = %v, want [] (probe-fail stopped the run before Passage 1)", p1)
+		}
+
+		// apply_runs: the only row is passage 0 = failed (no Passage-1 row).
+		statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
+		if err != nil {
+			t.Fatalf("SelectStatusesByApplyID: %v", err)
+		}
+		if len(statuses) != 1 {
+			t.Fatalf("apply_runs rows = %d, want 1 (only probe passage 0)", len(statuses))
+		}
+		if statuses[0].Passage != 0 || statuses[0].Status != applyrun.StatusFailed {
+			t.Errorf("apply_runs[0] = passage %d/%s, want passage 0/failed", statuses[0].Passage, statuses[0].Status)
+		}
 	})
-	disp.failPassage0On = map[string]bool{"host-a.example.com": true}
-	r := newRunner(t, disp, gitURL)
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
-	if inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("reason = %v, want dispatch_failed (barrier Passage-0 fail-stop)", inc.StatusDetails["reason"])
-	}
-
-	// Passage 0 was targeted (probe went out), Passage 1 — NOT (the stage loop
-	// broke off at the Passage-0 barrier).
-	if p0 := disp.targets(0); len(p0) != 1 {
-		t.Errorf("Passage 0 targets = %v, want [host-a.example.com]", p0)
-	}
-	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("* Passage 1 targets = %v, want [] (probe-fail stopped the run before Passage 1)", p1)
-	}
-
-	// apply_runs: the only row is passage 0 = failed (no Passage-1 row).
-	statuses, err := applyrun.SelectStatusesByApplyID(context.Background(), integrationPool, applyID)
-	if err != nil {
-		t.Fatalf("SelectStatusesByApplyID: %v", err)
-	}
-	if len(statuses) != 1 {
-		t.Fatalf("apply_runs rows = %d, want 1 (only probe passage 0)", len(statuses))
-	}
-	if statuses[0].Passage != 0 || statuses[0].Status != applyrun.StatusFailed {
-		t.Errorf("apply_runs[0] = passage %d/%s, want passage 0/failed", statuses[0].Passage, statuses[0].Status)
-	}
 }
 
 // TestIntegration_StagedAllMaster — both hosts role='master' → Passage 1 passes
@@ -556,48 +568,51 @@ func TestIntegration_StagedProbeFail_FailStop(t *testing.T) {
 // that the empty Passage-1 in all-slave is a consequence of the where filter,
 // not a broken staged loop in general.
 func TestIntegration_StagedAllMaster(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "master",
-	})
-	r := newRunner(t, disp, gitURL)
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "master",
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
 
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-	// ★ Passage 1: BOTH hosts (where master is true on each).
-	p1 := disp.targets(1)
-	if len(p1) != 2 {
-		t.Fatalf("* Passage 1 targets = %v, want both hosts (all-master)", p1)
-	}
-
-	// apply_runs: both hosts have passage 0 + passage 1, all success.
-	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
-	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
-		if len(got[sid]) != 2 {
-			t.Errorf("%s passages = %v, want [0 1] (probe + master-action)", sid, got[sid])
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
 		}
-	}
+
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		if p0 := disp.targets(0); len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+		// ★ Passage 1: BOTH hosts (where master is true on each).
+		p1 := disp.targets(1)
+		if len(p1) != 2 {
+			t.Fatalf("* Passage 1 targets = %v, want both hosts (all-master)", p1)
+		}
+
+		// apply_runs: both hosts have passage 0 + passage 1, all success.
+		got := passagesBySID(t, applyID, applyrun.StatusSuccess)
+		for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
+			if len(got[sid]) != 2 {
+				t.Errorf("%s passages = %v, want [0 1] (probe + master-action)", sid, got[sid])
+			}
+		}
+	})
 }
 
 // TestIntegration_StagedPartialProbeFail_FailClosed — probe fails on ONE of two
@@ -606,44 +621,47 @@ func TestIntegration_StagedAllMaster(t *testing.T) {
 // surviving host-a on a partial register") → the Passage-1 ApplyRequest is sent
 // to nobody → incarnation → ERROR_LOCKED.
 func TestIntegration_StagedPartialProbeFail_FailClosed(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master", // probe OK — would give master
-		"host-b.example.com": "master",
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master", // probe OK — would give master
+			"host-b.example.com": "master",
+		})
+		disp.failPassage0On = map[string]bool{"host-b.example.com": true} // probe fails on host-b
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+		if inc.StatusDetails["reason"] != "dispatch_failed" {
+			t.Errorf("reason = %v, want dispatch_failed (partial probe-fail fails the whole run)", inc.StatusDetails["reason"])
+		}
+
+		// Passage 0 went to both hosts; ★ Passage 1 — to nobody (fail-closed:
+		// surviving host-a does NOT get Passage-1 on a partial register).
+		if p0 := disp.targets(0); len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+		if p1 := disp.targets(1); len(p1) != 0 {
+			t.Fatalf("* Passage 1 targets = %v, want [] (partial probe-fail -> fail-closed, Passage 1 is not dispatched)", p1)
+		}
 	})
-	disp.failPassage0On = map[string]bool{"host-b.example.com": true} // probe fails on host-b
-	r := newRunner(t, disp, gitURL)
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
-	if inc.StatusDetails["reason"] != "dispatch_failed" {
-		t.Errorf("reason = %v, want dispatch_failed (partial probe-fail fails the whole run)", inc.StatusDetails["reason"])
-	}
-
-	// Passage 0 went to both hosts; ★ Passage 1 — to nobody (fail-closed:
-	// surviving host-a does NOT get Passage-1 on a partial register).
-	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("* Passage 1 targets = %v, want [] (partial probe-fail -> fail-closed, Passage 1 is not dispatched)", p1)
-	}
 }
 
 // --- 3-Passage (restart re-probe) ----------------------------------------
@@ -827,6 +845,7 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 		},
 	)
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -886,41 +905,44 @@ func TestIntegration_Staged3Passage_ReprobeRetargets(t *testing.T) {
 // (fail-closed rejection BEFORE dispatch, not a hang). Symmetric to
 // StagedNilSoulCap_FailClosed (also fail-closed before dispatch).
 func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "slave",
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "slave",
+		})
+		// host-b is an "old" Soul without passage capability (doesn't echo passage).
+		r := newRunnerWithSoulCap(t, disp, stubSoulCap{lacking: []string{"host-b.example.com"}})
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+		if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
+			t.Fatalf("reason = %v, want soul_passage_unsupported (old Soul under staged rejected BEFORE dispatch)", inc.StatusDetails["reason"])
+		}
+
+		// ★ Rejected BEFORE dispatch: NO ApplyRequest at all (not even the Passage 0
+		// probe went out) — not a hang, not a silent single-pass execution.
+		if p0 := disp.targets(0); len(p0) != 0 {
+			t.Fatalf("* Passage 0 targets = %v, want [] (old Soul under staged rejected BEFORE any dispatch)", p0)
+		}
 	})
-	// host-b is an "old" Soul without passage capability (doesn't echo passage).
-	r := newRunnerWithSoulCap(t, disp, stubSoulCap{lacking: []string{"host-b.example.com"}})
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
-	if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
-		t.Fatalf("reason = %v, want soul_passage_unsupported (old Soul under staged rejected BEFORE dispatch)", inc.StatusDetails["reason"])
-	}
-
-	// ★ Rejected BEFORE dispatch: NO ApplyRequest at all (not even the Passage 0
-	// probe went out) — not a hang, not a silent single-pass execution.
-	if p0 := disp.targets(0); len(p0) != 0 {
-		t.Fatalf("* Passage 0 targets = %v, want [] (old Soul under staged rejected BEFORE any dispatch)", p0)
-	}
 }
 
 // TestIntegration_StagedNilSoulCap_FailClosed — ★ FAIL-CLOSED without Redis
@@ -929,37 +951,40 @@ func TestIntegration_StagedOldSoul_Rejected(t *testing.T) {
 // the same hang risk. N=1 runs don't hit this gate (see other tests). ASSERT:
 // ERROR_LOCKED, reason = soul_passage_unsupported, no ApplyRequest at all.
 func TestIntegration_StagedNilSoulCap_FailClosed(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "slave",
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "slave",
+		})
+		r := newRunnerWithSoulCap(t, disp, nil) // no Redis checker.
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
+		if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
+			t.Fatalf("reason = %v, want soul_passage_unsupported (nil soulCap → fail-closed)", inc.StatusDetails["reason"])
+		}
+		if p0 := disp.targets(0); len(p0) != 0 {
+			t.Fatalf("* Passage 0 targets = %v, want [] (nil soulCap -> reject BEFORE dispatch)", p0)
+		}
 	})
-	r := newRunnerWithSoulCap(t, disp, nil) // no Redis checker.
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	inc := waitRunDone(t, "redis-prod", applyID, incarnation.StatusErrorLocked)
-	if inc.StatusDetails["reason"] != "soul_passage_unsupported" {
-		t.Fatalf("reason = %v, want soul_passage_unsupported (nil soulCap → fail-closed)", inc.StatusDetails["reason"])
-	}
-	if p0 := disp.targets(0); len(p0) != 0 {
-		t.Fatalf("* Passage 0 targets = %v, want [] (nil soulCap -> reject BEFORE dispatch)", p0)
-	}
 }
 
 // TestIntegration_RunOnceStaged — run_once+staged are COMPATIBLE (ADR-056 §S4):
@@ -971,30 +996,31 @@ func TestIntegration_StagedNilSoulCap_FailClosed(t *testing.T) {
 // both. Proves run_once applies to the target resolved by the Passage 0
 // per-host register (not blindly to the first roster host).
 func TestIntegration_RunOnceStaged(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
 
-	dir := t.TempDir()
-	repo, err := git.PlainInit(dir, false)
-	if err != nil {
-		t.Fatalf("PlainInit: %v", err)
-	}
-	write := func(rel, content string) {
-		full := filepath.Join(dir, rel)
-		if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
-			t.Fatalf("MkdirAll: %v", err)
+		dir := t.TempDir()
+		repo, err := git.PlainInit(dir, false)
+		if err != nil {
+			t.Fatalf("PlainInit: %v", err)
 		}
-		if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
-			t.Fatalf("WriteFile: %v", err)
+		write := func(rel, content string) {
+			full := filepath.Join(dir, rel)
+			if err := os.MkdirAll(filepath.Dir(full), 0o755); err != nil {
+				t.Fatalf("MkdirAll: %v", err)
+			}
+			if err := os.WriteFile(full, []byte(content), 0o644); err != nil {
+				t.Fatalf("WriteFile: %v", err)
+			}
 		}
-	}
-	write("service.yml", `description: run_once+staged service
+		write("service.yml", `description: run_once+staged service
 state_schema: {}
 `)
-	write("scenario/runoncestaged/main.yml", `name: runoncestaged
+		write("scenario/runoncestaged/main.yml", `name: runoncestaged
 description: probe role then run_once-act on master (staged + run_once)
 tasks:
   - name: Probe role
@@ -1010,54 +1036,56 @@ tasks:
     params:
       cmd: promote
 `)
-	wt, err := repo.Worktree()
-	if err != nil {
-		t.Fatalf("Worktree: %v", err)
-	}
-	if err := wt.AddGlob("."); err != nil {
-		t.Fatalf("AddGlob: %v", err)
-	}
-	if _, err := wt.Commit("init run_once+staged service", &git.CommitOptions{
-		Author: &object.Signature{Name: "T", Email: "t@example.test", When: time.Now()},
-	}); err != nil {
-		t.Fatalf("Commit: %v", err)
-	}
-	gitURL := "file://" + dir
+		wt, err := repo.Worktree()
+		if err != nil {
+			t.Fatalf("Worktree: %v", err)
+		}
+		if err := wt.AddGlob("."); err != nil {
+			t.Fatalf("AddGlob: %v", err)
+		}
+		if _, err := wt.Commit("init run_once+staged service", &git.CommitOptions{
+			Author: &object.Signature{Name: "T", Email: "t@example.test", When: time.Now()},
+		}); err != nil {
+			t.Fatalf("Commit: %v", err)
+		}
+		gitURL := "file://" + dir
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "master",
-		"host-b.example.com": "master", // BOTH master — where passes both
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "master",
+			"host-b.example.com": "master", // BOTH master — where passes both
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
+
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "runoncestaged",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		if p0 := disp.targets(0); len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+		// ★ Passage 1: ONLY host-a — run_once trimmed the master target
+		// {host-a,host-b} to the first by SID. Proves run_once applied to the
+		// RESOLVED Passage 1 where target (both master), not blindly to the first
+		// roster host.
+		p1 := disp.targets(1)
+		if len(p1) != 1 || p1[0] != "host-a.example.com" {
+			t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (run_once -> first by SID from the master target)", p1)
+		}
 	})
-	r := newRunner(t, disp, gitURL)
-
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "runoncestaged",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-	// ★ Passage 1: ONLY host-a — run_once trimmed the master target
-	// {host-a,host-b} to the first by SID. Proves run_once applied to the
-	// RESOLVED Passage 1 where target (both master), not blindly to the first
-	// roster host.
-	p1 := disp.targets(1)
-	if len(p1) != 1 || p1[0] != "host-a.example.com" {
-		t.Fatalf("* Passage 1 targets = %v, want [host-a.example.com] (run_once -> first by SID from the master target)", p1)
-	}
 }
 
 // TestIntegration_StagedInlineNotAcolyteClaim — ★ staged runs INLINE even under
-// AcolyteEnabled (ADR-056 §S4 LIMITATION). The run.go:308 `!staged` gate
+// AcolyteEnabled (ADR-056 §S4 LIMITATION). The run.go:698 `!staged` gate
 // excludes staged runs from the Acolyte path (dispatchPlanned): staged-render
 // always runs inline, even when the instance is in work-queue mode. Proof: zero
 // planned/claimed apply_runs rows (the Acolyte path writes planned to EVERY
@@ -1078,6 +1106,7 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 	})
 	// AcolyteEnabled=true: BUT a staged run must still go inline (gate !staged).
 	r := newRunnerAcolyte(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -1124,46 +1153,49 @@ func TestIntegration_StagedInlineNotAcolyteClaim(t *testing.T) {
 // nobody) → incarnation READY (no-op, like all-slave). Proves an empty/whitespace
 // register doesn't "leak" into the master target.
 func TestIntegration_StagedEmptyRegister(t *testing.T) {
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "redis-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
-	seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
-	gitURL := stagedServiceRepo(t)
+	forEachModel(t, func(t *testing.T, model ExecutionModel) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "redis-prod")
+		seedConnectedSoul(t, "host-a.example.com", []string{"redis-prod"})
+		seedConnectedSoul(t, "host-b.example.com", []string{"redis-prod"})
+		gitURL := stagedServiceRepo(t)
 
-	disp := newStagedDispatcher(t, map[string]string{
-		"host-a.example.com": "",    // empty stdout
-		"host-b.example.com": "   ", // whitespace
-	})
-	r := newRunner(t, disp, gitURL)
+		disp := newStagedDispatcher(t, map[string]string{
+			"host-a.example.com": "",    // empty stdout
+			"host-b.example.com": "   ", // whitespace
+		})
+		r := newRunner(t, disp, gitURL)
+		r.deps.ExecutionModel = model
 
-	applyID := audit.NewULID()
-	if err := r.Start(context.Background(), RunSpec{
-		ApplyID:         applyID,
-		IncarnationName: "redis-prod",
-		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
-		ScenarioName:    "failover",
-		StartedByAID:    "archon-alice",
-	}); err != nil {
-		t.Fatalf("Start: %v", err)
-	}
-
-	waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
-
-	if p0 := disp.targets(0); len(p0) != 2 {
-		t.Errorf("Passage 0 targets = %v, want both hosts", p0)
-	}
-	// ★ Passage 1: NONE (empty/whitespace stdout != 'master').
-	if p1 := disp.targets(1); len(p1) != 0 {
-		t.Fatalf("* Passage 1 targets = %v, want [] (empty/whitespace register != 'master')", p1)
-	}
-
-	got := passagesBySID(t, applyID, applyrun.StatusSuccess)
-	for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
-		if len(got[sid]) != 1 || got[sid][0] != 0 {
-			t.Errorf("%s passages = %v, want [0] (probe only)", sid, got[sid])
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "redis-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "failover",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
 		}
-	}
+
+		waitRunDone(t, "redis-prod", applyID, incarnation.StatusReady)
+
+		if p0 := disp.targets(0); len(p0) != 2 {
+			t.Errorf("Passage 0 targets = %v, want both hosts", p0)
+		}
+		// ★ Passage 1: NONE (empty/whitespace stdout != 'master').
+		if p1 := disp.targets(1); len(p1) != 0 {
+			t.Fatalf("* Passage 1 targets = %v, want [] (empty/whitespace register != 'master')", p1)
+		}
+
+		got := passagesBySID(t, applyID, applyrun.StatusSuccess)
+		for _, sid := range []string{"host-a.example.com", "host-b.example.com"} {
+			if len(got[sid]) != 1 || got[sid][0] != 0 {
+				t.Errorf("%s passages = %v, want [0] (probe only)", sid, got[sid])
+			}
+		}
+	})
 }
 
 // multiTaskPassage0ServiceRepo — scenario where Passage 0 carries TWO tasks
@@ -1321,6 +1353,7 @@ func TestIntegration_MultiTaskPassage0_RegisterNotClobbered(t *testing.T) {
 		targetedByPassage: map[int][]string{},
 	}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -1461,6 +1494,7 @@ func TestIntegration_PerHostDifferentWhere_RegisterResolves(t *testing.T) {
 		"host-b.example.com": "slave",
 	})
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{

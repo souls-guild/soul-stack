@@ -1,0 +1,34 @@
+name: steps
+description: |
+  Step 0 probes the role on every host. Step 1 acts on the host whose register
+  says master. Step 2 targets the replicas and resyncs only the one whose
+  register says it lags; the other is skipped by the Keeper. Step 3 rolls every
+  host one at a time, and serial: sends it inline instead of through the queue.
+tasks:
+  - name: Probe role
+    module: core.exec.run
+    register: role
+    changed_when: "false"
+    params:
+      cmd: detect-role
+
+  - name: Restart master
+    module: core.exec.run
+    where: "register.role.stdout == 'master'"
+    params:
+      cmd: restart
+
+  - name: Resync replica
+    module: core.exec.run
+    where: "register.role.stdout != 'master'"
+    when: "register.role.stdout == 'lagging'"
+    params:
+      cmd: resync
+
+  - name: Roll every host
+    module: core.exec.run
+    serial: 1
+    settings:
+      serial_scope: task
+    params:
+      cmd: roll

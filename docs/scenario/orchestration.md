@@ -42,10 +42,10 @@ On top of the tasks from [destiny/tasks.md](../destiny/tasks.md), the scenario t
 | `where:` | string (predicate-expr) | all types of tasks | optional |
 | `apply:` | map (`destiny:` + `input:`) | task-applier | alternative `module:` |
 | `assert:` | map (`that:` + `message:`) | assert task | alternative `module:`/`apply:`/`include:`/`block:` (see §2.3) |
-| `serial:` | int (1..M) OR string `"<N>%"` | module/apply/`block:`-task | optional (omitted = entire target width) *Granularity - per-Passage min-width (in N=1 = per-RUN), see subsection §2.2.1 below* |
+| `serial:` | int (1..M) OR string `"<N>%"` | module/apply/`block:`-task | optional (omitted = entire target width) *Width is the step's own, see subsection §2.2.1 below* |
 | `run_once:` | bool, default `false` | module/apply/`block:`-task | optional |
 | `transport:` | string (transport name) OR map keyed by ONE transport name | module/apply/`block:`-task, Soul-side only | optional (omitted = the registry decides) — see §2.2.5 |
-| `settings:` | map of the run-behaviour keys | module/apply/`block:`-task and a block child, Soul-side only; refused on `assert:`/`include:` | optional — parsed and merged, not yet acted on; see [settings.md](settings.md) |
+| `settings:` | map of the run-behaviour keys | module/apply/`block:`-task and a block child, Soul-side only; refused on `assert:`/`include:` | optional — merged key by key and acted on by every linear run; see [settings.md](settings.md) |
 
 In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1); `settings:` - the scenario level of the run-behaviour block ([settings.md](settings.md)).
 
@@ -68,7 +68,7 @@ Everything else in the scenario task is exactly the same as in the destiny task,
 
 An Applier task can carry `register: <name>` ([destiny/tasks.md §8](../destiny/tasks.md#8-requisites---inter-task-dependencies)) inherited from the DSL core. `register.<name>` has two parts with different implementation status:
 
-- **DSL core `.changed` / `.failed` / `.timed_out` - implemented.** This is **unit `OR`** for all child destiny tasks of the applier: `changed = OR(child.changed)`, similar to `failed` / `timed_out` (`skipped` is always `false`). External `onchanges: [<name>]` / `onfail: [<name>]` / `when: register.<name>.changed` resolves for this unit (previously it crashed with the "unknown register" error) — also when an `onchanges:` consumer lands in a later Passage than the applier: the Keeper then resolves the link from the children's own statuses ([ADR-056](../adr/0056-staged-render-passage.md) R3). Across a Passage, `when: register.<name>.*` is refused (`cross_passage_when_unsupported`) and `onfail:` cannot fire: a failed child fails the run at the Passage barrier, before the later Passage exists. Under linear dispatch it does: the host the child failed on still receives the rescue at its step ([settings.md §4](settings.md), NIM-951). If all child destiny tasks are filtered (`where:` / `include`-`when:`), the aggregate is reduced to `changed/failed/timed_out = false` (no-op applier).
+- **DSL core `.changed` / `.failed` / `.timed_out` - implemented.** This is **unit `OR`** for all child destiny tasks of the applier: `changed = OR(child.changed)`, similar to `failed` / `timed_out` (`skipped` is always `false`). External `onchanges: [<name>]` / `onfail: [<name>]` / `when: register.<name>.changed` resolves for this unit (previously it crashed with the "unknown register" error) — also when an `onchanges:` consumer is a later step than the applier: the Keeper then resolves the link from the children's own statuses (NIM-931). A later step's `when: register.<name>.*` is settled on the Keeper ([predicate-rendering.md](predicate-rendering.md)), and `onfail:` fires: the host the child failed on still receives the rescue at its step ([settings.md §4](settings.md), NIM-951). Under the deprecated staged model a `when:` across a Passage is refused (`cross_passage_when_unsupported`) and `onfail:` cannot fire. If all child destiny tasks are filtered (`where:` / `include`-`when:`), the aggregate is reduced to `changed/failed/timed_out = false` (no-op applier).
 - **`.<output field>` according to the declared top-level `output:`-contract destiny - PLANNED.** Forwarding application fields destiny ([destiny/output.md](../destiny/output.md)) to `register.<name>.<output field>` is **not yet implemented** (a separate future slice, see note in [destiny/output.md](../destiny/output.md#how-the-caller-reads---register-on-the-applier-task)). In the current volume, `register.<name>` carries only the DSL core. The producing half is unbuilt too: a destiny task cannot fill those fields, because task-level `output:` is refused (`output_unsupported`, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)).
 
 Working example (unit `.changed` / `.failed`):
@@ -228,9 +228,12 @@ on top of which `serial:` and `run_once:` work:
 - Step with a target of M hosts (after resolving `on:`+`where:`, see §3–§4) by
 by default applies **to all M hosts in the same wave** (cross-host
 fan-out), then a cross-host join before the next step. Join subordinate
-to the cross-host barrier invariant (§7): the next Passage starts strictly
+to the cross-host barrier invariant (§7): the next step starts strictly
 after the step has completed on all hosts of the run, not host by host — and a
 `core.state.<verb>` capture, being a keeper task, is one of those next steps.
+A step is a top-level task, or a child of a default block
+([ADR-0091](../adr/0091-scenario-linear-barrier.md), decision 1); each travels
+to a host in its own `ApplyRequest`.
 - Host order in any phased processing (waves `serial:`, host selection
 for `run_once:`) **deterministic**: lexicographically by `SID`.
 Non-deterministic order is prohibited - it breaks reproducibility
@@ -265,33 +268,36 @@ wave host; `async:` inside an applied destiny works regardless of waves.
 rounding up, minimum 1). Target hosts sorted by `SID`,
 beat into successive waves of size ≤N: inside the wave - in parallel,
 waves - strictly sequential.
-- **Apply to** module-, applier- and `block:`-task. On `block:`-task
-the wave rolls **the entire block** (all its internal steps) one at a time
-recruiting hosts before moving on to the next wave is an idiom
-"wave = {change, check health}" (see §5). The idiom writes
-`settings: {serial_scope: block}` on the block: under linear dispatch a block
-is an overlay by default, so the shared validator refuses a block reached by
+- **Width is the step's own.** A step rolls in waves of its own `serial:`; a step
+without one goes to all its hosts in one wave. Nothing narrows or widens a
+neighbour: `serial: 1` on one task leaves the probe before it and the check after
+it in one wave each.
+- **Apply to** module-, applier-, `loop:`- and `block:`-task. A `block:` is an
+overlay by default: each child is a step of its own, and the block's `serial:`
+is each child's default width. The idiom "wave = {change, check health}"
+(see §5) — the canary — needs the children to travel together, so the block writes
+`settings: {serial_scope: block}`: it becomes one step, and each wave carries the
+whole block to its hosts before the next wave starts
+([settings.md §3.1](settings.md)). The shared validator refuses a block reached by
 `serial:` over two or more host tasks that does not write its `serial_scope`
-(`serial_scope_implicit`), and a `serial:` sharing a Passage with another host
-step without one (`serial_scope_implicit_across_tasks`) —
-[settings.md §3.1](settings.md).
-- **Falling in a wave (fail-stop, invariant).** First host, finally-failed
-after the inherited `retry:` is exhausted, stops rolling:
-subsequent waves will not start. Direct consequence of absolute fail-closed
-and §7. This is a staged run; a linear run judges the failure by `on_failure`
-and `tolerate` instead — under `host` the host is dropped and the waves roll on
-([settings.md §4](settings.md), NIM-948).
-- **Interaction with barrier (§7) is an invariant, not an option.** `serial:`
-**does not split a Passage**: the wave loop closes inside the Passage, and only
-then does the next Passage start. A `core.state.<verb>` capture placed after a
-`serial:` step therefore runs once, after **ALL** waves across all hosts, never
-wave by wave. What a capture commits is its own write at its own step (§7), so a
-run that dies in a later wave leaves the captures that already ran — deliberately,
-not as a partial commit of one block.
+(`serial_scope_implicit`), and a `serial:` that would have shared an ADR-056
+Passage with another host step without one (`serial_scope_implicit_across_tasks`):
+the order of both changed with linear dispatch, and the author says which one is
+meant.
+- **Failing in a wave.** The wave's barrier waits for every host of the wave, then
+judges each failed host by the `on_failure` of the task it failed at: under the
+default `scenario` no later wave starts and the run ends `failed` once the hosts
+already working have finished — only `onfail:` rescues still go out; under `host`
+the host is dropped and the waves roll on, until `tolerate` is exceeded
+([settings.md §4](settings.md)).
+- **Interaction with barrier (§7) is an invariant, not an option.** The waves of a
+step close inside the step, and only then does the next step start. A
+`core.state.<verb>` capture placed after a `serial:` step therefore runs once,
+after **ALL** waves across all hosts, never wave by wave. What a capture commits
+is its own write at its own step (§7), so a run that dies in a later wave leaves
+the captures that already ran — deliberately, not as a partial commit of one block.
 
-> **Granularity `serial:` is per-Passage min-width.** The grammar allows `serial:` to be written on each task independently, and the wave width is **one per Passage**: the minimum positive `serial:`-width among tasks **of this Passage** (the narrowest window). Tasks without `serial:` do not narrow the window; if `serial:` is not carried out by any Passage task, it goes in one wave (the entire width of the target). The reason for aggregation is the dispatch model "one `ApplyRequest` per host with all its tasks en masse" (ADR-012(d)) on top of the composite PK `(apply_id, sid, passage)` table `apply_runs`: tasks of one Passage are sent to the host in one message, so it is impossible to send different Passage tasks in different waves. Choosing a minimum (not a maximum) - fail-closed: the window is narrowed to the narrowest intention of the author, the blast radius when falling is minimal.
->
-> **Per-Passage, NOT per-RUN ([ADR-056](../adr/0056-staged-render-passage.md) §serial, S-2D1).** Before stratification (one pass, N=1), the width was calculated over the entire run - this is a **special case** of per-Passage, **bit-for-bit matching** at N=1. With staged-render (probe→where gives >1 Passage), the width is derived from the tasks of **each Passage separately**: probe-Passage without `serial:` travels **in one wave**, even when the subsequent Passage carries `serial:1` - the narrow window of one Passage **does not leak** into another (otherwise the probe-pass would silently travel along one host - destructive throttle). A consequence for the author: a task without its own `serial:` will travel in narrow waves only if there is at least one narrow task in **its Passage** (not anywhere in the run). 2D `serial`×`passage` - implemented; the previous restricted pilot (serial + staged was rejected) was filmed. The fail-stop and barrier/state-commit invariants (§7) are preserved: the waves are still consistent within each Passage, the state is committed once after the **last** Passage.
+> **Under the deprecated staged model** (`keeper.yml::scenario.execution_model: staged`, the rollback kept for one release — [ADR-056](../adr/0056-staged-render-passage.md)) a wave loop carries a whole derived Passage at the narrowest positive `serial:` among its tasks, so a task without `serial:` rolls in narrow waves when a narrow task shares its Passage, and the first finally-failed host stops the roll.
 
 #### 2.2.2. `run_once:` - execution on one target host
 
@@ -309,40 +315,48 @@ validation) are different width strategies.
 #### 2.2.3. Batch run (Voyage `kind=scenario`, [ADR-043](../adr/0043-voyage.md))
 
 `serial:` / `run_once:` / `on:` / `where:` capture split and target
-**at the scenario declaration level**. For mass rollouts for 100k+ souls
-the operator can split the run into successive batches (**Leg**) +
-narrow the target by labels/coven/CEL via **invocation parameters**. This
-second level of orchestration **above** scenario-runner: ADR-009 commits
-declaration-level, **Voyage** captures the invocation-level.
+**at the scenario declaration level**, inside one incarnation. To run a
+scenario across many incarnations, the operator starts a **Voyage**
+`kind=scenario`: its unit is an incarnation, cut into successive batches
+(**Leg**). This is a second level of orchestration **above** the
+scenario-runner: ADR-009 fixes the declaration level, **Voyage** the
+invocation level.
 
-Example:
+Example (`POST /v1/voyages`; MCP `keeper.voyage.start`):
 
-```bash
-soulctl incarnation run prod-cache converge \
-  --wave-size 10000 \
-  --wave-on-failure abort \
-  --where 'soulprint.self.os.family == "debian"' \
-  --target-coven prod-eu \
-  --concurrency 100
+```json
+{
+  "kind": "scenario",
+  "scenario_name": "converge",
+  "target": { "service": "redis" },
+  "batch": "10",
+  "concurrency": 5,
+  "max_failures": "2"
+}
 ```
 
-→ Voyage `kind=scenario` breaks down the run into Legs and by incarnations, sequential
-execution, abort on the first failed Leg. Each incarnation is complete
-scenario-run with its barrier + state-commit (pairing §7).
+→ the target resolves to every `redis` incarnation; they run ten to a Leg, five
+at a time, and the Voyage stops starting new ones once two have failed.
+`soulctl run scenario <service>/<scenario>` starts the
+same Voyage over one incarnation (`--incarnation`, or the service's only one)
+and takes `--batch`, `--max-failures`, `--concurrency` and `--on-failure`; it
+refuses `--target-*`, which select hosts and belong to `run cmd`.
 
 **Invariants with respect to §2.2:**
 
-- **AND-merge target.** `target.coven[]` and `target.where` invocation
-**narrow** scenario `on:`/`where:` (intersection), do not expand. Operator
-cannot go beyond the declared scenario target through invocation.
-- **REPLACE concurrency.** `concurrency` invocation overrides scenario
-`serial:` (runtime-knob, not declared invariant).
-- **`run_once:` + batch - conflict.** Scenario with `run_once:` step
-incompatible with wave partitioning (`run_once` = exactly one target host,
-there is nothing to break). Validation rejects batch request (`422
-  validation-failed`).
-- **Per-incarnation state-commit.** §7 barrier works per-incarnation: state
-commits after each successfully completed incarnation of Leg, not after the entire Voyage.
+- **The run is untouched.** Each incarnation is one complete scenario run — its
+steps, barriers, `serial:` waves and `settings:` exactly as declared. No Voyage
+parameter reaches inside it: the target picks incarnations, never hosts within
+one; `concurrency` is the number of incarnation runs at once, not a host wave
+width.
+- **Two failure policies, two units.** Voyage `on_failure` (`abort` |
+`continue`) and `max_failures` decide whether the Voyage starts its next
+incarnation; a scenario's `settings: {on_failure, tolerate}` decides what a
+host's failure does inside one run ([settings.md](settings.md)). Neither reads
+the other.
+- **Per-incarnation boundary.** A Leg never splits one incarnation's run across
+two Legs ([ADR-043](../adr/0043-voyage.md) B1); state is written by that run's own
+capture steps (§7).
 
 Full contract (PG-table `voyages` + `voyage_targets`, back-link `voyage_targets.apply_id → apply_runs(apply_id)`,
 failure-policy, RBAC `incarnation.run`, statuses `pending`/`running`/`succeeded`/`failed`/
@@ -643,7 +657,7 @@ The bound is enforced **on the request**, by the same `scenario.ComposeID` the p
 
 ## 3. Step target - `on:`
 
-`on:` - **stable place** for step execution. Resolved by Postgres (stable layer: the incarnation **membership** relation `incarnation_membership` and the hosts' stable covens). Resolution point - **start of each Passage** ([ADR-056](../adr/0056-staged-render-passage.md)); the omitted `on:` target is stable within the Passage, but at the refresh boundary (`refresh_soulprint: true`) it will be re-resolved according to the updated roster - see §4.1 "Stability of the roster run" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Three forms:
+`on:` - **stable place** for step execution. Resolved by Postgres (stable layer: the incarnation **membership** relation `incarnation_membership` and the hosts' stable covens). Resolution point - **the step's render**, against the run's roster; the omitted `on:` target is stable from step to step, but at the refresh boundary (`refresh_soulprint: true`) it will be re-resolved according to the updated roster - see §4.1 "Stability of the roster run" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Three forms:
 
 | Form | Semantics |
 |---|---|
@@ -743,7 +757,7 @@ the step was conditional and the step wrote state every time.
 
 **Two-phase target resolution.** First, `on:` narrows the set by Postgres (stable), then `where:` filters the resulting set **per-host** by `register:` (runtime). The order is strict: `on:` → Postgres, `where:` → `register:`.
 
-> **Implementation of probe→where is staged-render (Passage, [ADR-056](../adr/0056-staged-render-passage.md)).** In order for `where:` (and `apply: input:`/`params:`/`vars:` of the next task) to actually see `register:` of the previous probe, the run is executed as N ordered **Passage** (render→dispatch→barrier→register collection): the task with `register.X` is stratified in Passage **after** the probe issuing `X`, and is rendered with the register already filled. Until this feature is rolled out on the current keeper, the mechanism resolves as it is implemented (see slice map [ADR-056](../adr/0056-staged-render-passage.md)).
+> **Why a probe's register is there to read.** A run executes its steps in plan order, each after the barrier of the one before it ([ADR-0091](../adr/0091-scenario-linear-barrier.md)): a step is rendered only once every host has reported the steps before it, so `where:` (and `apply: input:`/`params:`/`vars:` of the next task) reads the probe's register already filled.
 
 **`where:` is a predicate on two data classes.** Predicate `where:`
 operates on (1) **register data** of the previous probe
@@ -829,9 +843,9 @@ In previous examples, the key `filter:` was used to select hosts. **`filter:` wa
 
 `soulprint.hosts` - built-in **scenario-context** accessor: list all
 hosts of the current run (incarnation hosts, as seen by the roster resolver). Roster
-resolves **at the start of each Passage** (stable online set of incarnations,
-Postgres + presence-filter); within one Passage it is stable, at
-refresh-border will be re-resolved - see subsection **"Roster stability"** below
+resolves **at the start of the run** (stable online set of incarnations,
+Postgres + presence-filter); it holds from step to step and is re-resolved only at a
+refresh border - see subsection **"Roster stability"** below
 ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)). Everyone has
 element - **stable** host facts:
 
@@ -899,22 +913,23 @@ master discovery instead of sub-coven `{incarnation.id}-master`" (see §8).
 
 Roster run (set of hosts seen by `soulprint.hosts`,
 `soulprint.where(...)`, the omitted `on:`, and
-`incarnation.host_count`, §4.2) **stable within one Passage**, but **not on
+`incarnation.host_count`, §4.2) **stable within one step**, but **not on
 entire run**. The exact invariant is a weakening of the previous "roster resolves once
 up-front and the entire run does not change" ([ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md),
 amends [ADR-009 §7](../adr/0009-scenario-dsl.md)):
 
-- **Within a Passage the roster is fixed.** All Passage hosts see the same
+- **Within a step the roster is fixed.** All hosts of a step see the same
 list; determinism of waves `serial:` (§2.2.1), host selection `run_once:` (§2.2.2) and
-topological `assert:` (§2.3) inside Passage is preserved without changes. Sorting
+topological `assert:` (§2.3) inside the step is preserved without changes. Sorting
 by `SID` (§2.2) still gives a reproducible order.
 - **At the refresh border, the roster will re-resolve.** The border is a successful step
 `core.soul.registered` with `refresh_soulprint: true` ([ADR-017](../adr/0017-keeper-side-core.md),
 [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)): after it
-scenario-runner will re-resolve the incarnation roster **before the next Passage**.
-Consumers roster in subsequent Passage (`soulprint.hosts`, the omitted `on:`,
-`soulprint.self.*`) they see the already re-resolved set. Without `refresh_soulprint` step
-roster between Passage remains the same.
+scenario-runner will re-resolve the incarnation roster **before the next step**.
+Consumers of the roster in later steps (`soulprint.hosts`, the omitted `on:`,
+`soulprint.self.*`) see the already re-resolved set. Without a `refresh_soulprint` step
+the roster stays the same for the whole run. A host the run dropped under
+`on_failure: host` stays dropped across a re-resolve ([settings.md §4](settings.md)).
 - **The semantics of re-resolve is live-snapshot, NOT monotonic growth.** Re-resolve is
 fresh snapshot of the **current online set** incarnation (same Postgres + presence layer,
 the same as a regular up-front resolution), but **not** merging with the old roster. Set
@@ -922,20 +937,20 @@ the same as a regular up-front resolution), but **not** merging with the old ros
 → become visible), but may also **reduce**: a host that has gone offline to
 refresh-border, from the live-snapshot **is excluded** (rolling the role to the fallen host is not
 necessary). Don't expect the monotony of just-growing.
-- **`refresh_soulprint` — passage-defining.** Any consumer of the roster after
-of such a step the stratifier places in the **next** Passage
-([ADR-056](../adr/0056-staged-render-passage.md): new edge class "roster-refresh"),
-otherwise its render would have been seen by the old roster - silent-wrong-target. This is a separate axis
-from register-dependency; The refresh border does not introduce register links.
-- **Barrier/state-commit (§7) NOT affected.** Re-resolve - roster axis (who
-target), not the commit axis. `incarnation.state` is still committed **one
-times** after the last Passage; re-resolving the roster inside the run does not split it up.
+- **Plan order decides who sees the new roster.** A consumer written after the
+`refresh_soulprint` step is a later step and renders against the re-resolved roster;
+one written before it renders against the old one. (Under the deprecated staged
+model the stratifier moved every roster consumer after such a step into the next
+Passage, [ADR-056](../adr/0056-staged-render-passage.md) "roster-refresh" edge.)
+- **Barrier and state capture (§7) NOT affected.** Re-resolve is the roster axis (who
+is targeted), not the commit axis: `incarnation.state` is written by the run's
+capture steps, each at its own step.
 
 A typical case is a single create scenario "provision → onboarding → role":
 a machine-provider plugin step (`<alias>.vm.created`, `on: keeper` — the only
 spelling a plugin's side has) creates N VM → `core.soul.registered`
 (`await_online: true`, `refresh_soulprint: true`) registers their SID and blocks
-waits for onboarding → the next Passage applies the role to already-online hosts via
+waits for onboarding → the next step applies the role to already-online hosts via
 the omitted `on:` / `soulprint.hosts`. Onboarding barrier and list-SID - on
 same module, see [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)
 and [docs/keeper/modules.md](../keeper/modules.md).
@@ -947,11 +962,11 @@ template context, available in any expression-key (`when:`/`changed_when:`/`fail
 
 | Field | Type | Semantics |
 |---|---|---|
-| `incarnation.host_count` | int | The number of hosts in the target of the run **after** resolving `on:` (according to the roster of the current Passage) and **before** applying `where:` (volatility filter). On the probe step that targets the entire incarnation, this is `size(soulprint.hosts)` for the corresponding run. It is considered according to **the same roster** as `soulprint.hosts`: stable within Passage, will be re-resolved at the refresh boundary (live-snapshot, see §4.1 "Stability of the roster run", [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) - the value in Passage after the `refresh_soulprint` step reflects the updated online set. |
+| `incarnation.host_count` | int | The number of hosts in the target of the run **after** resolving `on:` (according to the run's current roster) and **before** applying `where:` (volatility filter). On the probe step that targets the entire incarnation, this is `size(soulprint.hosts)` for the corresponding run. It is considered according to **the same roster** as `soulprint.hosts`: stable within a step, will be re-resolved at the refresh boundary (live-snapshot, see §4.1 "Stability of the roster run", [ADR-061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) - the value in a step after the `refresh_soulprint` step reflects the updated online set. |
 
 **Purpose.** `incarnation.host_count` — run target size for expressions that need to know the incarnation width: thresholds/percentages in the script's own logic (`serial: "${ ... }"`-derived calculations, topology assertions in tests §6, sizing of parameters passed to destiny via `apply: input:`).
 
-> **Not for "probe completeness".** Idiom `failed_when: size(register.<probe>) < incarnation.host_count` ("fall if not all hosts responded to the probe") **not used and not executable**: `failed_when:` is calculated by Soul-side per-host, sees only `register:` previous tasks and `register.self.*`, but **not** its own aggregate `register.<this-probe>` and **not** cross-host `size(...)` - the call gives CEL `no such key`. The completeness of the probe does not need protection: a destructive operation on an incomplete probe is guaranteed to be cut off by the fail-stop staged-render barrier (§5, [ADR-056 §g](../adr/0056-staged-render-passage.md)), rather than manual verification.
+> **Not for "probe completeness".** Idiom `failed_when: size(register.<probe>) < incarnation.host_count` ("fall if not all hosts responded to the probe") **not used and not executable**: `failed_when:` is calculated by Soul-side per-host, sees only `register:` previous tasks and `register.self.*`, but **not** its own aggregate `register.<this-probe>` and **not** cross-host `size(...)` - the call gives CEL `no such key`. The completeness of the probe does not need protection: a destructive operation on an incomplete probe is guaranteed to be cut off by the step barrier (§5), rather than manual verification.
 
 **Access in destiny - no.** Field - part of `incarnation.*`-namespace, which is not visible in destiny ([destiny/tasks.md §10](../destiny/tasks.md#10-template-context)). destiny receives the value, if it needs it, via `apply: input:` forwarding.
 
@@ -1035,17 +1050,16 @@ params:
 
 > Mind the pipeline: `sh -c` reports the exit code of the **last** command, so `redis-cli role | head -1` stays 0 even when `redis-cli` cannot connect. An exit-code check does not cover that — a probe whose answer must be non-empty asserts on `register.self.stdout`, as the `retry: until:` idiom below does.
 
-> **"Probe completeness" is NOT expressed in a manual idiom.** The previous spec example carried `failed_when: size(register.redis_role) < incarnation.host_count` ("fail if not all hosts responded to the probe"). This idiom is **removed** - it is physically unexecutable: `failed_when:` is calculated by Soul-side per-host and sees only `register:` previous tasks + `register.self.*`; **own** aggregate `register.<this-probe>` by name and cross-host `size(...)` to it **not available** → CEL `no such key`. The completeness of the probe does not need manual verification - protection from destructive operations on an incomplete probe is provided by the fail-stop staged-render barrier (see footgun below).
+> **"Probe completeness" is NOT expressed in a manual idiom.** The previous spec example carried `failed_when: size(register.redis_role) < incarnation.host_count` ("fail if not all hosts responded to the probe"). This idiom is **removed** - it is physically unexecutable: `failed_when:` is calculated by Soul-side per-host and sees only `register:` previous tasks + `register.self.*`; **own** aggregate `register.<this-probe>` by name and cross-host `size(...)` to it **not available** → CEL `no such key`. The completeness of the probe does not need manual verification - protection from destructive operations on an incomplete probe is provided by the step barrier (see footgun below).
 
 Error handling in scenario - **only mechanisms inherited from the DSL core**: `retry:`, `onfail:`, `failed_when:`, `onchanges:` ([destiny/tasks.md §8, §9](../destiny/tasks.md#8-requisites---inter-task-dependencies)). **No new attribute is entered.**
 
-> **Probe and its consumer are different Passage ([ADR-056](../adr/0056-staged-render-passage.md)).** The step reading `register:` probe (via `where:` / `apply: input:` / `params:` / `vars:`) is executed in the **next** Passage relative to the probe itself (probe and consumer cannot be in the same Passage). This ensures that `register:` has already been collected by the barrier of the previous Passage by the time the consumer is rendered. Before the staged-render rollout is completed on the current keeper, the mechanism resolves as it is implemented.
+> **Probe and its consumer are different steps ([ADR-0091](../adr/0091-scenario-linear-barrier.md)).** The step reading `register:` probe (via `where:` / `apply: input:` / `params:` / `vars:`) is written after the probe, so it is a later step, rendered only after the probe's barrier has collected `register:` from every host. Inside a block rolled as one group the children share a step, so the Keeper refuses a child reading a sibling's register there (`within_block_register_dependency`); `soul-lint`, which knows no execution model, still refuses it in every block.
 
-> **Footgun: silent-destructive-on-partial - closed by a barrier, NOT an idiom.** Danger: a probe to which some of the hosts did not respond returns an incomplete `register:`, and the next step with `where:` therefore `register:` would apply a destructive operation (restart, failover) only to the "responding" part. **Closing - fail-stop staged-render barrier ([ADR-056 §g](../adr/0056-staged-render-passage.md)), without manual completeness check:**
+> **Footgun: silent-destructive-on-partial - closed by a barrier, NOT an idiom.** Danger: a probe to which some of the hosts did not respond returns an incomplete `register:`, and the next step with `where:` therefore `register:` would apply a destructive operation (restart, failover) only to the "responding" part. **Closing - the step barrier ([ADR-0091](../adr/0091-scenario-linear-barrier.md), decision 8), without manual completeness check:**
 >
-> - **The candidate host fell into probe-Passage** → the barrier of this Passage records a failure → the run stops, **the next Passage (where `where:` is located) does not start**, `incarnation.state` is not committed → `error_locked` (§7). The destructive step simply doesn't reach dispatch.
-> - **The host is terminal, but `register:` is incomplete** (probe returned without the required key for a specific host) → when rendering `where:` of the next Passage, accessing `register.<probe>.*` of this host gives an eval error `no such key` → task `failed` (caught normally, §7), and not silently "the wrong target."
-> - **A linear run** closes it the same way under the default `on_failure: scenario`: the step's barrier waits for every host and ends the run. Under `on_failure: host` the failed probe host is dropped and the next step runs on the rest — the author's explicit opt-in to exactly that partial target, bounded by `tolerate` when it is set and otherwise only by the last live host ([settings.md §4](settings.md#4-how-a-barrier-judges-failures)).
+> - **The candidate host failed the probe** → the probe step's barrier waits for every host and, under the default `on_failure: scenario`, ends the run: **the next step (where `where:` is located) does not start** → `error_locked` (§7). The destructive step simply doesn't reach dispatch. Under `on_failure: host` the failed probe host is dropped and the next step runs on the rest — the author's explicit opt-in to exactly that partial target, bounded by `tolerate` when it is set and otherwise only by the last live host ([settings.md §4](settings.md#4-how-a-barrier-judges-failures)).
+> - **The host is terminal, but `register:` is incomplete** (probe returned without the required key for a specific host) → when rendering `where:` of the next step, accessing `register.<probe>.*` of this host gives an eval error `no such key` and the run fails at that step's render, not silently "the wrong target."
 >
 > Manual completeness idiom (`failed_when: size(...) < incarnation.host_count`) **needless and unenforceable** (see above and §4.2): safety provides a barrier. review/architect When reviewing scenario specs and the pilot, they check that there is no path left that bypasses the fail-stop barrier for destructive-on-failed/partial-probe; a linear run's `on_failure: host`, chosen as [settings.md §4](settings.md#4-how-a-barrier-judges-failures) describes, is the one allowed bypass for a host the probe was sent to, and the review confirms it is intended.
 
@@ -1198,16 +1212,19 @@ from the address, so writing `on: keeper` on a capture is now the error (`on_kee
 
 The **cross-host barrier is unchanged** and still unconditional:
 
-1. Each Passage waits for **all** async tasks of **all** its run hosts before the next Passage
+1. Each step waits for **all** async tasks of **all** its run hosts before the next step
    starts (final-barrier extension from [destiny/tasks.md §6](../destiny/tasks.md#6-asynchronous-tasks-async-true)
    from one host to the cross-host scenario level; per-host that final barrier is the end of the
-   host's `ApplyRequest`, i.e. the end of its current Passage,
+   host's `ApplyRequest`, i.e. the end of its current step,
    [ADR-0075](../adr/0075-intra-host-async-tasks.md)).
-2. A capture is a keeper task, so it lands in a keeper Passage and is subject to that same barrier:
-   it starts only after the previous Passage has joined on every host, and a host task after it
-   starts only once the capture has committed.
-3. A finally-failed task stops the run and moves the incarnation to `status: error_locked`
-   ([architecture.md → "Incarnation"](../architecture.md)).
+2. A capture is a keeper task, so it is a step of its own, at the place it is written, subject to
+   that same barrier: it starts only after the step before it has joined on every host, and a host
+   task after it starts only once the capture has committed.
+3. A finally-failed task is judged at its step's barrier by its `on_failure`: by default it ends the
+   run and moves the incarnation to `status: error_locked`
+   ([architecture.md → "Incarnation"](../architecture.md)); under `host` the host is dropped and a
+   run that reaches its end ends `partial_failed`, the incarnation `error_locked` all the same
+   ([settings.md §4](settings.md)).
 
 **What moved is the commit, not the barrier.** A run that dies half-way now leaves state describing
 exactly what was captured **before** it died, rather than nothing at all. That is the point of the
@@ -1409,8 +1426,8 @@ interpolated `${ incarnation.state.<field> }` read written after a capture of th
 **same** Passage rendered the *pre-capture* value, while the verb engine, which always reads live,
 wrote the new one. Under linear dispatch a capture is a step of its own and the state is re-read
 before every later step renders, so the read sees the captured value and the rule is gone (NIM-944).
-A run still executing staged (`execution_model: staged`, the default until NIM-952) renders that read
-stale, and nothing refuses it any more.
+A run under the deprecated staged rollback (`keeper.yml::scenario.execution_model: staged`) renders
+that read stale, and nothing refuses it any more.
 
 The rule runs after `include:` expansion, since a producer and its capture routinely land in
 different files.
@@ -1422,21 +1439,20 @@ it is observable differs between the two mechanisms, and their granularity is no
 
 *The verb engine always reads live.* Every capture opens its own transaction and re-reads the row
 `FOR UPDATE` before mutating, so `on_conflict:`, `match:` and `expect:` are evaluated against the
-state as of that step — two captures in the same Passage included. That is what makes the
+state as of that step — two captures in a row included. That is what makes the
 read-modify-write verbs mean anything: an `add … on_conflict: skip` is idempotent only because it
 can see the element a previous step inserted, and an `expect` asserting against a frozen snapshot
 would be worse than no assert at all.
 
-*An interpolated `${ incarnation.state.… }` read refreshes per Passage — per step under linear
-dispatch.* A Passage renders as one pass before it dispatches, so the read carries the state as of
-that Passage's render; from Passage 1 on the runner re-reads the row at the boundary. The re-read is unlocked on purpose (the row is
+*An interpolated `${ incarnation.state.… }` read refreshes per step.* A step renders as one pass
+before it dispatches, so the read carries the state as of that step's render; from step 1 on the
+runner re-reads the row at the boundary (per derived Passage under the deprecated staged model). The re-read is unlocked on purpose (the row is
 already held `applying` by this very run, so the only writer is this run's own capture path) and is
 gated on the plan actually containing a capture step, so a plan without one renders bit-for-bit as
 before.
 
-*Ordering two captures across a boundary* uses what the DSL already has: `register:` on the first
-plus a `register.<name>` read in the second puts them in different Passages (`render.Stratify`).
-Usually nothing is needed — read `register.<name>.effective` instead of going back through
+*Ordering two captures* needs nothing: each is a step of its own and runs in the order written.
+To use what the first wrote, read `register.<name>.effective` instead of going back through
 `incarnation.state`.
 
 **What this costs, stated plainly:** a rendered plan is no longer a pure function of pre-run state —
@@ -1448,12 +1464,12 @@ of the run) and that the one genuinely broken order is rejected statically by th
 
 `value:` / `patch:` / `match:` see `register.<task>.<field>` — but a capture is a keeper task, and a
 keeper task reads the **keeper** register bucket only ([ADR-056](../adr/0056-staged-render-passage.md)
-slice 2): registers issued by keeper-side tasks of **previous Passages**. The per-host register of a
+slice 2): registers issued by keeper-side tasks of **earlier steps**. The per-host register of a
 host probe is **not** visible to it. The channel is one-way by design — a host task reads the union
 of its own bucket and the keeper bucket (its own wins,
 [ADR-0083](../adr/0083-declared-secret-state-fields.md) §5), a keeper task never sees host register.
 
-The shape is a capture reading the register of a keeper step from an earlier Passage — a
+The shape is a capture reading the register of a keeper step from an earlier step — a
 `side: keeper` plugin that creates something, then a capture recording what it created:
 
 ```yaml
@@ -1501,9 +1517,8 @@ host that produced it — `.stdout`, `.exit_code`, whatever the module returned.
 task (filtered out by `on:`/`where:`, or skipped) simply have no key; the map is not padded.
 
 *It is an accessor, not a task key.* The dependency it declares is on `<name>` — the same
-register, read across hosts instead of on one — so the capture lands in a **later Passage** than
-the probe ([ADR-056](../adr/0056-staged-render-passage.md), `render.Stratify`), exactly as
-`register.<name>` would. Working example and its L0 case:
+register, read across hosts instead of on one — so the capture must be written after the probe,
+a later step, exactly as for `register.<name>`. Working example and its L0 case:
 [`examples/service/state-verbs/scenario/per-host-capture/`](../../examples/service/state-verbs/scenario/per-host-capture/main.yml).
 
 *Only from a keeper-side task.* Anywhere else — a host task, the destiny pass, `when:`/`changed_when:`/
@@ -1520,7 +1535,7 @@ field, and the field it writes here is the whole SID-keyed map. Splitting it per
 task that repeats per host on the keeper side, which is a different decision
 ([ADR-0084](../adr/0084-explicit-state-capture.md), amendment 2026-08-26).
 
-Referring to a register name that no keeper task of an earlier Passage issued is an eval error
+Referring to a register name that no keeper task of an earlier step issued is an eval error
 ("no such key") → the task fails → `error_locked`, like any undeclared key in CEL. A conditional
 read is gated by a predicate over always-present data — the canon is a ternary over `input.*` with
 short-circuit, **not** `has(register.…)`.
@@ -1529,7 +1544,7 @@ short-circuit, **not** `has(register.…)`.
 [ADR-0083](../adr/0083-declared-secret-state-fields.md) §8 a `no_log: true` probe had its `register`
 dropped from the per-host register map, so `register.<task>.*` read "no such key" and the value
 could not reach `incarnation.state`. That source-side drop is gone with the key: the same fold feeds
-the next Passage's render ([ADR-056](../adr/0056-staged-render-passage.md)), so dropping a row to
+the next step's render ([ADR-0091](../adr/0091-scenario-linear-barrier.md)), so dropping a row to
 protect one field breaks the register chain for every consumer of that task. What keeps that
 plaintext off the audit surfaces is the render-time seal, and reading such a register through
 `register.hosts.<name>` seals the cell exactly as reading it directly does.
@@ -1548,11 +1563,8 @@ so an empty derived path resolved without one is a refusal rather than a fresh c
 
 ## 8. Open questions (extensions, do not close silently)
 
-- **Per-task granularity `serial:`.** Current model is per-**Passage** min-width
-(see §2.2.1; staged-render gives per-task dispatch along the task axis via Passage).
-Truly per-task waves (each task in Passage has its own width) remain
-deferred: within one Passage, tasks go to the host with one `ApplyRequest`. New
-ADR for a real request.
+- **Per-task granularity `serial:` - CLOSED** (NIM-952). Each step rolls in waves of
+its own `serial:` (§2.2.1); a group block is one step at the block's width.
 - **Service-level location of include targets - CLOSED** (2026-08-17). Two-level
 resolve (§6) looks for the include target first locally
 (`scenario/<name>/<file>`), then at service-level, and the canonical service-level

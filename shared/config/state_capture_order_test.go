@@ -55,7 +55,7 @@ tasks:
 	}
 }
 
-// TestStoreAfterUse_PlanOrderNotPassage — ★ GUARD (draft ADR NIM-907, S1: the rule
+// TestStoreAfterUse_PlanOrderNotPassage — ★ GUARD (ADR-0091, S1: the rule
 // is re-keyed to plan order). The capture waits on a readiness probe, so the
 // derivation would put it in Passage 2 and the replica's consumer, written after
 // it, in Passage 1 — "use before store". A run executes steps in the order

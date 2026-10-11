@@ -262,7 +262,7 @@ func (m *mockDispatcher) SendApply(ctx context.Context, sid string, req *keeperv
 	m.gotApplyID = req.GetApplyId()
 	m.gotTasks = len(req.GetTasks())
 	m.gotAttempt = req.GetAttempt()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, m.result, m.summary); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), m.result, m.summary); err != nil {
 		m.t.Errorf("mockDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -291,7 +291,7 @@ func (d *waveDispatcher) SendApply(ctx context.Context, sid string, req *keeperv
 		s := "simulated failure"
 		summary = &s
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, status, summary); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), status, summary); err != nil {
 		d.t.Errorf("waveDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -424,17 +424,18 @@ func newRunnerWithAuditStaged(t *testing.T, disp ApplyDispatcher) *Runner {
 		t.Fatalf("cel.New: %v", err)
 	}
 	return NewRunner(Deps{
-		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology:     topology.NewResolver(integrationPool, nil, nil),
-		ServiceVars:  servicevars.NewResolver(nil),
-		Render:       render.NewPipeline(nil, engine, nil, nil),
-		Outbound:     disp,
-		DB:           integrationPool,
-		Audit:        auditpg.NewWriter(integrationPool),
-		AuditReader:  auditpg.NewReader(integrationPool),
-		SoulCap:      stubSoulCap{},
-		PollInterval: 20 * time.Millisecond,
-		RunTimeout:   20 * time.Second,
+		ExecutionModel: ExecutionStaged,
+		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:       topology.NewResolver(integrationPool, nil, nil),
+		ServiceVars:    servicevars.NewResolver(nil),
+		Render:         render.NewPipeline(nil, engine, nil, nil),
+		Outbound:       disp,
+		DB:             integrationPool,
+		Audit:          auditpg.NewWriter(integrationPool),
+		AuditReader:    auditpg.NewReader(integrationPool),
+		SoulCap:        stubSoulCap{},
+		PollInterval:   20 * time.Millisecond,
+		RunTimeout:     20 * time.Second,
 	})
 }
 
@@ -621,6 +622,7 @@ func TestIntegration_CrossKeeperCancel_FlagInPG(t *testing.T) {
 
 	disp := &hangDispatcher{t: t}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -666,6 +668,7 @@ func TestIntegration_LocalCancel_FastPath(t *testing.T) {
 
 	disp := &hangDispatcher{t: t}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -1190,7 +1193,7 @@ func (d *captureDispatcher) SendApply(ctx context.Context, sid string, req *keep
 	if tasks := req.GetTasks(); len(tasks) > 0 {
 		d.gotCommand = renderedExecCommand(tasks[0].GetParams())
 	}
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("captureDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -1549,6 +1552,7 @@ func TestIntegration_Serial_FailStop(t *testing.T) {
 
 	disp := &waveDispatcher{t: t, failOn: "host-a.example.com"}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -1765,6 +1769,7 @@ func TestIntegration_Serial_FailStop_SecondWave(t *testing.T) {
 
 	disp := &waveDispatcher{t: t, failOn: "host-b.example.com"}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -1835,7 +1840,7 @@ func (d *cancelAfterFirstWaveDispatcher) SendApply(ctx context.Context, sid stri
 	// fail-stop). Terminal is written after the flag: the barrier will see
 	// cancel_requested on a success row and interrupt rolling before the next
 	// wave starts.
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("cancelAfterFirstWaveDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -1872,6 +1877,7 @@ func TestIntegration_Serial_CancelStopsNextWave(t *testing.T) {
 
 	disp := &cancelAfterFirstWaveDispatcher{t: t}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	disp.applyID = applyID
@@ -1921,6 +1927,7 @@ func TestIntegration_Serial_MinWidth_TwoTasks(t *testing.T) {
 
 	disp := &waveDispatcher{t: t}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{
@@ -2137,6 +2144,7 @@ func TestIntegration_SecretInParams_MaskedInObservability_NotOnWire(t *testing.T
 
 	disp := &secretWireDispatcher{t: t}
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{

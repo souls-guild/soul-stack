@@ -51,7 +51,7 @@ func (d *onchangesCaptureDispatcher) SendApply(ctx context.Context, sid string, 
 	}
 	d.byHost[sid] = m
 	d.mu.Unlock()
-	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, 0, applyrun.StatusSuccess, nil); err != nil {
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
 		d.t.Errorf("onchangesCaptureDispatcher: UpdateStatus: %v", err)
 	}
 	return nil
@@ -106,6 +106,7 @@ tasks:
 
 	disp := newOnchangesCaptureDispatcher(t)
 	r := newRunner(t, disp, gitURL)
+	r.deps.ExecutionModel = ExecutionStaged
 
 	applyID := audit.NewULID()
 	if err := r.Start(context.Background(), RunSpec{

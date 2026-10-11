@@ -736,8 +736,8 @@ func TestStageDiagnostics_StoreAfterUseCorrectOrder(t *testing.T) {
 	}
 }
 
-// TestStageDiagnostics_StateReadAfterCaptureLintsClean — ★ GUARD (draft ADR
-// NIM-907, S1). The capture is in main.yml and the interpolated read of the field
+// TestStageDiagnostics_StateReadAfterCaptureLintsClean — ★ GUARD (ADR-0091,
+// S1). The capture is in main.yml and the interpolated read of the field
 // it writes arrives from the included body. Under derived Passages the two shared a
 // Passage and the read rendered the pre-capture value, which
 // `state_stale_same_passage_read` refused. A run executing linearly runs the capture

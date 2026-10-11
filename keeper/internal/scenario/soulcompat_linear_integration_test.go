@@ -15,7 +15,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// The Soul-side capability gates of a linear run (draft ADR NIM-907 items 8, 10;
+// The Soul-side capability gates of a linear run (ADR-0091 items 8, 10;
 // NIM-946): the whole plan is checked before the first step, and each step again on
 // what each host is sent, once the Keeper settled it.
 
@@ -150,7 +150,7 @@ func confChangedOnA(sid, task string) map[string]any {
 	return map[string]any{"changed": task == "conf" && sid == flowHostA}
 }
 
-// ★ GUARD (draft ADR item 10, "that gate must read the per-host value, and so run
+// ★ GUARD (ADR-0091 item 10, "that gate must read the per-host value, and so run
 // after the requisite gate"). Host-b is sent `when: false` for restart and does not
 // announce flow_control: the step is refused there — at the step, since the drop
 // depends on step 0's result — and only after step 0 ran.
@@ -194,7 +194,7 @@ func TestIntegration_LinearGroupChildSentWithoutPredicateNeedsNoFlowControl(t *t
 	}
 }
 
-// ★ GUARD (draft ADR item 10 with NIM-948's failure policy). A capability refusal is
+// ★ GUARD (ADR-0091 item 10 with NIM-948's failure policy). A capability refusal is
 // the run's, whatever its radius: under `on_failure: host` and `tolerate: 1` host-b's
 // late refusal at act's step ends the run — no host is dropped for it, host-a is not
 // sent the next step, and the run reads failed, not partial_failed.
@@ -299,7 +299,7 @@ tasks:
 	}
 }
 
-// ★ GUARD (draft ADR item 10, a late refusal stated). act's `where:` reads the probe,
+// ★ GUARD (ADR-0091 item 10, a late refusal stated). act's `where:` reads the probe,
 // so its hosts are unknown before the run: the up-front gate cannot ask about them,
 // and the step's gate refuses host-b at act's step, after the probe ran.
 //

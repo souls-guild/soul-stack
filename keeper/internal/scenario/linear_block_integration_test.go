@@ -117,7 +117,7 @@ func (d *linearStepDispatcher) messages() map[int]map[string][]string {
 	return out
 }
 
-// ★ GUARD (draft ADR NIM-907, decision 1, item 12). A run that started linear
+// ★ GUARD (ADR-0091, decision 1, item 12). A run that started linear
 // sends a default block's children as two steps: a to both hosts at Passage 0,
 // then b — whose where: reads a's register — only to the host a said yes on, at
 // Passage 1. The same file run staged is refused within_block_register_dependency

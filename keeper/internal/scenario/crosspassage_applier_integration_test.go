@@ -167,18 +167,19 @@ func TestIntegration_CrossPassageOnChanges_ApplierSource(t *testing.T) {
 		t.Fatalf("cel.New: %v", err)
 	}
 	r := NewRunner(Deps{
-		Loader:       artifact.NewServiceLoader(t.TempDir(), nil),
-		Topology:     topology.NewResolver(integrationPool, nil, nil),
-		ServiceVars:  servicevars.NewResolver(nil),
-		Render:       render.NewPipeline(nil, engine, nil, nil),
-		Outbound:     disp,
-		Destiny:      destinySrc,
-		DB:           integrationPool,
-		Audit:        auditpg.NewWriter(integrationPool),
-		AuditReader:  auditpg.NewReader(integrationPool),
-		SoulCap:      stubSoulCap{},
-		PollInterval: 20 * time.Millisecond,
-		RunTimeout:   20 * time.Second,
+		ExecutionModel: ExecutionStaged,
+		Loader:         artifact.NewServiceLoader(t.TempDir(), nil),
+		Topology:       topology.NewResolver(integrationPool, nil, nil),
+		ServiceVars:    servicevars.NewResolver(nil),
+		Render:         render.NewPipeline(nil, engine, nil, nil),
+		Outbound:       disp,
+		Destiny:        destinySrc,
+		DB:             integrationPool,
+		Audit:          auditpg.NewWriter(integrationPool),
+		AuditReader:    auditpg.NewReader(integrationPool),
+		SoulCap:        stubSoulCap{},
+		PollInterval:   20 * time.Millisecond,
+		RunTimeout:     20 * time.Second,
 	})
 
 	applyID := audit.NewULID()

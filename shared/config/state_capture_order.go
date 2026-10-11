@@ -13,7 +13,7 @@ import (
 // would silently not compare them.
 //
 // The stale same-Passage read rule (`state_stale_same_passage_read`) retired with
-// linear dispatch (draft ADR NIM-907): a capture is a step of its own, and the run
+// linear dispatch (ADR-0091): a capture is a step of its own, and the run
 // re-reads the state before every later step renders.
 const (
 	// CodeStateStoreAfterUse — a task consumes a register BEFORE the
@@ -75,7 +75,7 @@ type StateOrderInfo struct {
 // StoreAfterUse detects the one broken capture order: a task consumes a register
 // that a `core.state.<verb>` step captures, and consumes it FIRST.
 //
-// FIRST is plan order, the order a run executes its steps in (draft ADR NIM-907);
+// FIRST is plan order, the order a run executes its steps in (ADR-0091);
 // under the derived Passages a consumer could run before a capture written above
 // it. Only a non-capture task counts as the consumer — two captures reading the
 // same register are two stores, and their relative order carries no crash-safety

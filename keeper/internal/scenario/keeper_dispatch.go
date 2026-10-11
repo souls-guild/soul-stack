@@ -465,7 +465,11 @@ func maskKeeperTaskMessage(rt *render.RenderedTask, sealedPaths map[string]bool,
 	if message == "" || len(sealedPaths) == 0 || rt.Params == nil {
 		return message
 	}
-	secrets := render.SealedValues(rt.Params.AsMap(), sealedPaths)
+	return redactValues(message, render.SealedValues(rt.Params.AsMap(), sealedPaths))
+}
+
+// redactValues replaces every secret in message with [audit.MaskedValue].
+func redactValues(message string, secrets []string) string {
 	if len(secrets) == 0 {
 		return message
 	}

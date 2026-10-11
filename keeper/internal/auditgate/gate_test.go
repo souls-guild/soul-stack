@@ -80,7 +80,7 @@ func TestGate_DisabledStillWritesTheRecordOfItsOwnClosing(t *testing.T) {
 	}
 }
 
-// ★ GUARD (NIM-944, draft ADR NIM-907 item 9). A run resolves an `onchanges:`/
+// ★ GUARD (NIM-944, ADR-0091 item 9). A run resolves an `onchanges:`/
 // `onfail:` across messages from the `task.executed` rows it reads back
 // (auditpg.SelectChangedTaskKeys / SelectFailedTaskKeys). Swallowed with the audit
 // off, every such consumer reads "not changed" and is skipped without a word.

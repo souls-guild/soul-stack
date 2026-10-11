@@ -38,7 +38,7 @@ type EngineCompat struct {
 	SoulCapabilities []string `json:"soul_capabilities,omitempty"`
 
 	// ExecutionModel — how the run ordered its tasks: `staged` (ADR-056) or
-	// `linear` (draft ADR NIM-907, item 15), decided once at the run's start.
+	// `linear` (ADR-0091, item 15), decided once at the run's start.
 	ExecutionModel string `json:"execution_model,omitempty"`
 }
 

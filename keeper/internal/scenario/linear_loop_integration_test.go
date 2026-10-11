@@ -28,7 +28,7 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// The linear dispatch loop (draft ADR NIM-907, §Decision, decisions 1 and 3): step
+// The linear dispatch loop (ADR-0091, §Decision, decisions 1 and 3): step
 // k goes to any host only after every dispatch of the steps before it has finished
 // on every host it went to, a step that went to no host included, and a keeper-side
 // task runs where it is written.
@@ -168,7 +168,7 @@ func startModelRun(t *testing.T, r *Runner, model ExecutionModel, incName, servi
 	return applyID
 }
 
-// ★ GUARD (draft ADR NIM-907, §Decision). Three independent steps, none reading a
+// ★ GUARD (ADR-0091, §Decision). Three independent steps, none reading a
 // register; the middle one targets no host. One host answers slowly. Every
 // ApplyRequest carries one step, and the last step goes to neither host until the
 // slow host has finished the first — across a step that went to nobody, since the
@@ -214,7 +214,7 @@ tasks:
 	assertHappensBefore(t, events)
 }
 
-// ★ GUARD (draft ADR NIM-907, decision 3; the shape of
+// ★ GUARD (ADR-0091, decision 3; the shape of
 // examples/service/long-runner/scenario/serial_waves). A keeper-side capture
 // written after a host step rolled in serial waves runs after the last wave's
 // terminal: at no send and no terminal of the host step is the field written yet.
@@ -301,7 +301,7 @@ tasks:
     params: { cmd: act }
 `
 
-// ★ GUARD, the Keeper half of FC-5's retirement (draft ADR NIM-907, S1; the linter
+// ★ GUARD, the Keeper half of FC-5's retirement (ADR-0091, S1; the linter
 // half is TestGolden_ScenarioCrossTaskWhen). Under linear dispatch the Keeper
 // decides `act`'s when: per host, so the run goes through and `act` reaches only
 // the master. Staged, the same file is refused before anything is sent.
@@ -346,7 +346,7 @@ func TestIntegration_LinearCrossStepWhenRuns(t *testing.T) {
 	}
 }
 
-// ★ GUARD (draft ADR NIM-907 item 9). Under linear dispatch a default block's
+// ★ GUARD (ADR-0091 item 9). Under linear dispatch a default block's
 // children are steps, so `reload onchanges: [cfg]` reads a source from an earlier
 // message and only the audit log can answer it. A Keeper without one refuses the
 // run before anything is sent; guessing "not changed" would skip the reload in
@@ -398,7 +398,7 @@ tasks:
 	}
 }
 
-// ★ GUARD for retiring `state_stale_same_passage_read` (draft ADR NIM-907, S1). A
+// ★ GUARD for retiring `state_stale_same_passage_read` (ADR-0091, S1). A
 // capture and a later task interpolating the field it writes, with no register
 // edge between them: the derivation put both in one Passage and the reader rendered
 // the pre-run value — the read soul-lint refused. Under linear dispatch the capture
@@ -467,7 +467,7 @@ func (m *cancellingKeeperModule) Apply(_ *pluginv1.ApplyRequest, stream grpc.Ser
 	return stream.Send(&pluginv1.ApplyEvent{Changed: true})
 }
 
-// ★ GUARD (draft ADR NIM-907, decision 3). A keeper step written last has no
+// ★ GUARD (ADR-0091, decision 3). A keeper step written last has no
 // barrier after it, so nothing polled a cluster-wide Cancel that flagged its row,
 // and the run committed `ready` over the operator's Cancel. Two checks read it
 // now: the one after a step's keeper tasks (NIM-972, staged runs too) and the
