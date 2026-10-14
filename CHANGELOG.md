@@ -375,6 +375,14 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `GET …/runs/{apply_id}` gains `dropped` on the failed or orphaned row of a host the run dropped
   under `on_failure: host`, read from the existing `apply_runs.dropped`.
 
+- **`examples/service/dispatch-tour`: one scenario per behaviour of a linear run, with L0 cases
+  (NIM-994).** Steps, the failure radius, `onfail:` rescue, a canary group, a `when:` the Keeper
+  settles, a render failure between steps, a keeper-side capture between host steps and the three
+  timeouts; its README says what a live run of each does on three hosts. An L0 task entry
+  (`rendered_tasks`, `task_present`, `task_absent`) now also checks a task's effective `timeout`
+  (compared as a duration, `"0"` for none), its `failed_when` text and its `onfail` sources
+  ([ADR-023](docs/adr/0023-trial-test-runner.md) amendment 2026-10-14).
+
 - **`soul-lint` warns `group_child_key_unread`** (NIM-940, [settings.md §3](docs/scenario/settings.md)
   rule 4) for a `serial:` or barrier-kind setting on a descendant of a block rolled as one group,
   which linear dispatch does not read. `dragonfly/scenario/restart` writes `serial_scope: block`, so

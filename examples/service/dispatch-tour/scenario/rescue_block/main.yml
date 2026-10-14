@@ -1,0 +1,44 @@
+name: rescue_block
+description: onfail written once on a block — each of its three children is a rescue step, and all reach only the host whose deploy failed.
+
+input:
+  fail_sid:
+    type: string
+    required: true
+    description: SID of the host whose deploy fails.
+
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params:
+      cmd: sh
+      args: ["-c", "${ soulprint.self.sid == input.fail_sid ? 'echo deploy failed on purpose >&2; exit 1' : 'echo deployed' }"]
+
+  - name: ordinary step
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["ordinary"]
+
+  - name: rollback group
+    onfail: [deploy]
+    block:
+      - name: stop service
+        module: core.exec.run
+        params:
+          cmd: echo
+          args: ["stopped"]
+
+      - name: restore config
+        module: core.exec.run
+        params:
+          cmd: echo
+          args: ["restored"]
+
+      - name: start service
+        module: core.exec.run
+        params:
+          cmd: echo
+          args: ["started"]

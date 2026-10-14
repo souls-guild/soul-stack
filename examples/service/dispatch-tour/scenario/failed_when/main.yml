@@ -1,0 +1,9 @@
+name: failed_when
+description: The command succeeds and failed_when over its own result turns it FAILED (flowcontrol.failed_when); the error names the task, not the predicate.
+
+tasks:
+  - name: verify
+    module: core.exec.run
+    failed_when: register.self.exit_code == 0
+    params:
+      cmd: "true"

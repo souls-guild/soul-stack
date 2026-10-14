@@ -1,0 +1,12 @@
+name: task_timeout
+description: settings task_timeout 10s over a 30 s sleep — the task times out after about 10 s.
+
+settings:
+  task_timeout: 10s
+
+tasks:
+  - name: sleep 30 under a 10s task_timeout
+    module: core.exec.run
+    params:
+      cmd: sleep
+      args: ["30"]

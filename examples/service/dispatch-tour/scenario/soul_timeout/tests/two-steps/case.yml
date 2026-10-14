@@ -1,0 +1,16 @@
+# Only the plan: `soul_timeout` and `on_failure` are read by the barrier while a
+# host is silent, and neither is in an L0 plan (README).
+name: a long sleep, then one more step
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: sleep, args: ["120"] }
+    - index: 1
+      module: core.exec.run
+      params: { cmd: echo, args: [after] }

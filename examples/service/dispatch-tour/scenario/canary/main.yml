@@ -1,0 +1,27 @@
+name: canary
+description: A block rolled as one group (serial_scope block, serial 1) — upgrade + check host by host; a failed check stops the roll.
+
+input:
+  fail_sid:
+    type: string
+    required: true
+    description: SID of the host whose check fails.
+
+tasks:
+  - name: canary roll
+    serial: 1
+    settings:
+      serial_scope: block
+    block:
+      - name: upgrade
+        module: core.exec.run
+        params:
+          cmd: sh
+          args: ["-c", "sleep 2; echo upgraded"]
+
+      - name: check
+        module: core.exec.run
+        changed_when: "false"
+        params:
+          cmd: sh
+          args: ["-c", "${ soulprint.self.sid == input.fail_sid ? 'echo check failed on purpose >&2; exit 1' : 'echo healthy' }"]

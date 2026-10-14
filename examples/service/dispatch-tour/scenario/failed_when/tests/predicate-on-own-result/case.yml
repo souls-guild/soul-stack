@@ -1,0 +1,13 @@
+# The predicate travels with the task as written. The Soul evaluates it after
+# the command succeeds and turns the task FAILED (README).
+name: verify carries failed_when over its own result
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  task_present:
+    - module: core.exec.run
+      failed_when: register.self.exit_code == 0
+      params_subset: { cmd: "true" }

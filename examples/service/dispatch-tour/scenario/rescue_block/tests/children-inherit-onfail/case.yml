@@ -1,0 +1,35 @@
+# `onfail:` written once on the block reaches each of its three children.
+name: every child of the rollback group is a rescue of deploy
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo deploy failed on purpose >&2; exit 1"]
+    - index: 1
+      module: core.exec.run
+      params: { cmd: echo, args: [ordinary] }
+    - index: 2
+      module: core.exec.run
+      onfail: [deploy]
+      params: { cmd: echo, args: [stopped] }
+    - index: 3
+      module: core.exec.run
+      onfail: [deploy]
+      params: { cmd: echo, args: [restored] }
+    - index: 4
+      module: core.exec.run
+      onfail: [deploy]
+      params: { cmd: echo, args: [started] }
+  task_absent:
+    - module: core.exec.run
+      onfail: [deploy]
+      params_subset: { args: [ordinary] }

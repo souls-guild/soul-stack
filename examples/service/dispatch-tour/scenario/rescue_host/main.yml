@@ -1,0 +1,33 @@
+name: rescue_host
+description: deploy fails on one host under radius `host`; the dropped host gets only its rollback, the rest go on.
+
+settings:
+  on_failure: host
+
+input:
+  fail_sid:
+    type: string
+    required: true
+    description: SID of the host whose deploy fails.
+
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params:
+      cmd: sh
+      args: ["-c", "${ soulprint.self.sid == input.fail_sid ? 'echo deploy failed on purpose >&2; exit 1' : 'echo deployed' }"]
+
+  - name: ordinary step
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["ordinary"]
+
+  - name: rollback
+    module: core.exec.run
+    onfail: [deploy]
+    params:
+      cmd: echo
+      args: ["rolled back"]

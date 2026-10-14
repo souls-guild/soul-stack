@@ -1,0 +1,30 @@
+name: rescue
+description: deploy fails on one host (radius `scenario`); its onfail rollback still reaches that host across barriers.
+
+input:
+  fail_sid:
+    type: string
+    required: true
+    description: SID of the host whose deploy fails.
+
+tasks:
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params:
+      cmd: sh
+      args: ["-c", "${ soulprint.self.sid == input.fail_sid ? 'echo deploy failed on purpose >&2; exit 1' : 'echo deployed' }"]
+
+  - name: ordinary step
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["ordinary"]
+
+  - name: rollback
+    module: core.exec.run
+    onfail: [deploy]
+    params:
+      cmd: echo
+      args: ["rolled back"]

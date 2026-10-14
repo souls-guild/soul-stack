@@ -6,6 +6,8 @@ import (
 	"path/filepath"
 
 	yaml "github.com/goccy/go-yaml"
+
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // caseFileName — canonical name of test file inside tests/<case>/.
@@ -113,9 +115,9 @@ func resolveCaseFile(path string) (string, error) {
 	return path, nil
 }
 
-// validate — structural validation of case after decode. We do not validate deeper:
-// render pipeline itself will reject invalid scenario, and
-// fixtures — free YAML data.
+// validate — structural validation of case after decode, plus the one assert value
+// that has a grammar (`timeout`). The render pipeline rejects an invalid
+// scenario itself, and fixtures are free YAML data.
 func (c *Case) validate() error {
 	if c.Name == "" {
 		return fmt.Errorf("name: required")
@@ -170,6 +172,25 @@ func (c *Case) validate() error {
 	for i, et := range c.Assert.TaskAbsent {
 		if et.Module == "" {
 			return fmt.Errorf("assert.task_absent[%d]: module required", i)
+		}
+	}
+	// Refused here: a timeout that does not parse would compare as "0" and
+	// silently assert that the task has no limit.
+	for _, sec := range []struct {
+		name    string
+		entries []ExpectedTask
+	}{
+		{"rendered_tasks", c.Assert.RenderedTasks},
+		{"task_present", c.Assert.TaskPresent},
+		{"task_absent", c.Assert.TaskAbsent},
+	} {
+		for i, et := range sec.entries {
+			if et.Timeout == "" {
+				continue
+			}
+			if _, err := config.ParseDuration(et.Timeout); err != nil {
+				return fmt.Errorf("assert.%s[%d]: timeout %q is not a duration: %w", sec.name, i, et.Timeout, err)
+			}
 		}
 	}
 	return nil

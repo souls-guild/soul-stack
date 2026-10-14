@@ -1,0 +1,17 @@
+name: render_fail
+description: The second step reads a register key the first never produced — the run fails between steps.
+
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["probe"]
+
+  - name: reads a missing register key
+    module: core.exec.run
+    params:
+      cmd: echo
+      args: ["${ register.probe.no_such_key }"]

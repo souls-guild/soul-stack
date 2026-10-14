@@ -1,0 +1,24 @@
+# The two children of the canary group, with the failing check on the host
+# `fail_sid` names. `serial:` and `serial_scope: block` are not in the plan:
+# that the pair rolls host by host and stops at the failed check is the run's
+# (README).
+name: the host fail_sid names gets the failing check
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "sleep 2; echo upgraded"]
+    - index: 1
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo check failed on purpose >&2; exit 1"]

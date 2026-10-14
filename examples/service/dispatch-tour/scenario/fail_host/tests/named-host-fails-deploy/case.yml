@@ -1,0 +1,25 @@
+# The same plan as fail_scenario: `settings.on_failure: host` changes what the
+# barrier does with the failure (drop the host, finish the rest, partial_failed).
+# A linear run stamps the radius on its plan, but L0 renders without steps and
+# does not, so it sees no difference between the two (README).
+name: the host fail_sid names gets the failing deploy
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: echo, args: [prepare] }
+    - index: 1
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo deploy failed on purpose >&2; exit 1"]
+    - index: 2
+      module: core.exec.run
+      params: { cmd: echo, args: [after] }

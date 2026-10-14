@@ -1,0 +1,16 @@
+name: many_steps
+description: Twelve cheap host steps — the barrier wakes on the row write, so steps follow each other within milliseconds.
+
+tasks:
+  - {name: step 01, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 02, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 03, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 04, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 05, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 06, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 07, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 08, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 09, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 10, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 11, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}
+  - {name: step 12, module: core.exec.run, changed_when: "false", params: {cmd: "true"}}

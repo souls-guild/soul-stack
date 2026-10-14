@@ -1,0 +1,29 @@
+# The rescue is wired to the deploy and only to it; the ordinary step is not a
+# rescue. Which host the rollback reaches is the run's routing, not the plan's
+# (README).
+name: rollback is the rescue of deploy
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo deploy failed on purpose >&2; exit 1"]
+    - index: 1
+      module: core.exec.run
+      params: { cmd: echo, args: [ordinary] }
+    - index: 2
+      module: core.exec.run
+      onfail: [deploy]
+      params: { cmd: echo, args: [rolled back] }
+  task_absent:
+    - module: core.exec.run
+      onfail: [deploy]
+      params_subset: { args: [ordinary] }

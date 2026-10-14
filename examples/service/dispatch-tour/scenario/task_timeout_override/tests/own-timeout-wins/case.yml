@@ -1,0 +1,12 @@
+# The task's own `timeout:` wins over `settings.task_timeout`.
+name: the sleep carries its own 60s limit, not the 10s from settings
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  task_present:
+    - module: core.exec.run
+      timeout: 60s
+      params_subset: { cmd: sleep, args: ["30"] }

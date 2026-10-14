@@ -1,0 +1,21 @@
+# The keeper-side capture sits between the two host steps in the plan, and its
+# write is what the state ends up holding.
+name: the marker is recorded between two host steps
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: sleep, args: ["8"] }
+    - index: 1
+      module: core.state.set
+      params: { field: marker, value: set-after-host-work }
+    - index: 2
+      module: core.exec.run
+      params: { cmd: sleep, args: ["8"] }
+  state_after:
+    marker: set-after-host-work

@@ -154,8 +154,9 @@ type AssertBlock struct {
 	// user decision 2026-06-24): test checks PRESENCE/ABSENCE of task invocation
 	// in plan, not its POSITION. Coexists with positional rendered_tasks during
 	// migration (no mutual exclusion — forms are independent, see compareTaskPresence).
-	// For each TaskPresent record, plan must have ≥1 task matching {module== ∧
-	// params_subset⊆params ∧ optional.when== ∧ optional.id==(register∪id)};
+	// For each TaskPresent record, plan must have exactly 1 task matching {module== ∧
+	// params_subset⊆params ∧ optional.when== ∧ optional.id==(register∪id) ∧
+	// optional timeout/failed_when/onfail (see ExpectedTask)};
 	// 0 matches → fail. For TaskAbsent — ≥1 match → fail. Disambiguators when/id
 	// resolve >1 match collision for task_present.
 	TaskPresent []ExpectedTask `yaml:"task_present,omitempty"`
@@ -186,6 +187,17 @@ type AssertBlock struct {
 // optional DISAMBIGUATORS on multiple match collisions: When is
 // exact equality of CEL string RenderedTask.When; ID is equality of
 // RenderedTask.Register OR RenderedTask.ID (register∪id, T1).
+//
+// Timeout/FailedWhen/OnFail are checked in BOTH forms (a mismatch in the
+// positional one, a narrower match in the presence one); empty is not checked.
+// Timeout is the EFFECTIVE limit settings.md §2.3 resolves, compared as a
+// duration, and "0" asserts there is none; a skipped placeholder carries the text
+// the task wrote instead. It is the one `settings:` value an L0
+// plan carries: `on_failure` and a `serial_scope: block` group are stamped only by
+// a render with steps, which L0 is not, and `tolerate`, `soul_timeout` and
+// `scenario_timeout` are never on a task.
+// OnFail is the `onfail:` source register names, compared as a set because a
+// loop source resolves to one index per iteration.
 type ExpectedTask struct {
 	Index  int            `yaml:"index"`
 	Module string         `yaml:"module"`
@@ -194,4 +206,8 @@ type ExpectedTask struct {
 	ParamsSubset map[string]any `yaml:"params_subset,omitempty"`
 	When         string         `yaml:"when,omitempty"`
 	ID           string         `yaml:"id,omitempty"`
+
+	Timeout    string   `yaml:"timeout,omitempty"`
+	FailedWhen string   `yaml:"failed_when,omitempty"`
+	OnFail     []string `yaml:"onfail,omitempty"`
 }

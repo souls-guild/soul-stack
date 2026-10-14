@@ -1,0 +1,24 @@
+# The host `fail_sid` names renders the deploy that exits 1. What the failure
+# then does — radius `scenario` ends the run, `after deploy` reaches no host —
+# happens at the barrier, which L0 does not have (README).
+name: the host fail_sid names gets the failing deploy
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: echo, args: [prepare] }
+    - index: 1
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo deploy failed on purpose >&2; exit 1"]
+    - index: 2
+      module: core.exec.run
+      params: { cmd: echo, args: [after] }

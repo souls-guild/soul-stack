@@ -1,0 +1,13 @@
+name: probe answers no on a host yes_sid does not name
+
+fixtures:
+  hosts:
+    - sid: node-2.example.com
+  input:
+    yes_sid: node-1.example.com
+
+assert:
+  task_present:
+    - module: core.exec.run
+      id: probe
+      params_subset: { cmd: echo, args: ["no"] }

@@ -7,6 +7,7 @@ import (
 	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 
@@ -664,6 +665,7 @@ func compareRenderedTasks(expected []ExpectedTask, got []*render.RenderedTask) [
 	for _, rt := range got {
 		byIndex[rt.Index] = rt
 	}
+	registerAt := registersByIndex(got)
 
 	var fails []string
 	for _, et := range expected {
@@ -680,8 +682,71 @@ func compareRenderedTasks(expected []ExpectedTask, got []*render.RenderedTask) [
 				fails = append(fails, diff)
 			}
 		}
+		for _, m := range flowMismatches(et, rt, registerAt) {
+			fails = append(fails, fmt.Sprintf("task index %d: %s", et.Index, m))
+		}
 	}
 	return fails
+}
+
+// flowMismatches reports where rt's effective timeout, failed_when text and
+// onfail sources differ from what et names. A field et leaves empty is not
+// checked.
+func flowMismatches(et ExpectedTask, rt *render.RenderedTask, registerAt map[int]string) []string {
+	var out []string
+	if et.Timeout != "" && !sameDuration(rt.Timeout, et.Timeout) {
+		out = append(out, fmt.Sprintf("timeout = %q, expected %q", rt.Timeout, et.Timeout))
+	}
+	if et.FailedWhen != "" && rt.FailedWhen != et.FailedWhen {
+		out = append(out, fmt.Sprintf("failed_when = %q, expected %q", rt.FailedWhen, et.FailedWhen))
+	}
+	if len(et.OnFail) > 0 {
+		want := sortedUnique(et.OnFail)
+		got := onFailSources(rt, registerAt)
+		if !slices.Equal(got, want) {
+			out = append(out, fmt.Sprintf("onfail = %v, expected %v", got, want))
+		}
+	}
+	return out
+}
+
+// registersByIndex maps a plan task's Index to its register name, for reading
+// OnFailIdx back as the names a case writes.
+func registersByIndex(tasks []*render.RenderedTask) map[int]string {
+	m := make(map[int]string, len(tasks))
+	for _, rt := range tasks {
+		if rt.Register != "" {
+			m[rt.Index] = rt.Register
+		}
+	}
+	return m
+}
+
+// sameDuration compares a plan's timeout with a case's as durations: the render
+// rewrites a limit that is not the task's own `timeout:` into its short form (an
+// inherited `60s` is `1m`), and a plan with no limit carries "", written in a
+// case as "0". Neither error is possible but "": want was checked at load, got by
+// the scenario's own parse, and "" fails to parse as the zero it stands for.
+func sameDuration(got, want string) bool {
+	w, _ := config.ParseDuration(want)
+	g, _ := config.ParseDuration(got)
+	return g == w
+}
+
+// onFailSources is rt's `onfail:` as sorted unique register names. OnFailIdx is
+// resolved from the same plan's registers, so every index has one.
+func onFailSources(rt *render.RenderedTask, registerAt map[int]string) []string {
+	names := make([]string, 0, len(rt.OnFailIdx))
+	for _, idx := range rt.OnFailIdx {
+		names = append(names, registerAt[idx])
+	}
+	return sortedUnique(names)
+}
+
+func sortedUnique(in []string) []string {
+	out := slices.Clone(in)
+	slices.Sort(out)
+	return slices.Compact(out)
 }
 
 // compareTaskPresence implements assert-by-presence (PILOT of new L0 model):
@@ -693,16 +758,18 @@ func compareRenderedTasks(expected []ExpectedTask, got []*render.RenderedTask) [
 // suggestion to narrow assert. task_absent: ≥1 match → fail.
 //
 // Match of one task — taskMatches (module== ∧ params_subset⊆params ∧ opt.when==
-// ∧ opt.id==register∪id). params_subset checked by same compareParams as
+// ∧ opt.id==register∪id ∧ opt.timeout/failed_when/onfail, see flowMismatches).
+// params_subset checked by same compareParams as
 // positional check (partial by-key, <present> marker), so subset semantics
 // identical to Params in rendered_tasks.
 func compareTaskPresence(present, absent []ExpectedTask, got []*render.RenderedTask) []string {
 	var fails []string
+	registerAt := registersByIndex(got)
 
 	for i, et := range present {
 		var matched []*render.RenderedTask
 		for _, rt := range got {
-			if taskMatches(et, rt) {
+			if taskMatches(et, rt, registerAt) {
 				matched = append(matched, rt)
 			}
 		}
@@ -718,7 +785,7 @@ func compareTaskPresence(present, absent []ExpectedTask, got []*render.RenderedT
 
 	for i, et := range absent {
 		for _, rt := range got {
-			if taskMatches(et, rt) {
+			if taskMatches(et, rt, registerAt) {
 				fails = append(fails, fmt.Sprintf("task_absent[%d]: %s — expected absence, but task found in plan",
 					i, describeExpected(et)))
 				break
@@ -743,7 +810,7 @@ func compareTaskPresence(present, absent []ExpectedTask, got []*render.RenderedT
 // skip constructors (staticSkipPlaceholder/loopSkipPlaceholder) and future-passage
 // stub leave Params nil. No explicit bool Skip flag on RenderedTask, and
 // FlowContext is uninformative — it is set even on real task.
-func taskMatches(et ExpectedTask, rt *render.RenderedTask) bool {
+func taskMatches(et ExpectedTask, rt *render.RenderedTask, registerAt map[int]string) bool {
 	if rt.Params == nil {
 		return false
 	}
@@ -751,6 +818,9 @@ func taskMatches(et ExpectedTask, rt *render.RenderedTask) bool {
 		return false
 	}
 	if et.When != "" && rt.When != et.When {
+		return false
+	}
+	if len(flowMismatches(et, rt, registerAt)) > 0 {
 		return false
 	}
 	// id-disambiguator: register∪id (T1 — both at once forbidden in DSL, so
@@ -777,6 +847,15 @@ func describeExpected(et ExpectedTask) string {
 	}
 	if et.ID != "" {
 		fmt.Fprintf(&b, ", id=%q", et.ID)
+	}
+	if et.Timeout != "" {
+		fmt.Fprintf(&b, ", timeout=%q", et.Timeout)
+	}
+	if et.FailedWhen != "" {
+		fmt.Fprintf(&b, ", failed_when=%q", et.FailedWhen)
+	}
+	if len(et.OnFail) > 0 {
+		fmt.Fprintf(&b, ", onfail=%v", sortedUnique(et.OnFail))
 	}
 	if len(et.ParamsSubset) > 0 {
 		fmt.Fprintf(&b, ", params_subset keys=%v", sortedKeys(et.ParamsSubset))

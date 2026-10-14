@@ -1,0 +1,33 @@
+name: fail_host
+description: deploy fails on one host; radius `host` drops it, the rest finish — partial_failed.
+
+settings:
+  on_failure: host
+
+input:
+  fail_sid:
+    type: string
+    required: true
+    description: SID of the host whose deploy fails.
+
+tasks:
+  - name: prepare
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["prepare"]
+
+  - name: deploy
+    module: core.exec.run
+    register: deploy
+    params:
+      cmd: sh
+      args: ["-c", "${ soulprint.self.sid == input.fail_sid ? 'echo deploy failed on purpose >&2; exit 1' : 'echo deployed' }"]
+
+  - name: after deploy
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["after"]

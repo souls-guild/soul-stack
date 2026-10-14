@@ -1,0 +1,24 @@
+# The probe answers `yes` on the host `yes_sid` names, and both later steps
+# carry their `when:`. L0 passes a `when:` over a register through as text: it
+# settles neither predicate, so which host each step skips is the run's (README).
+name: probe answers yes, both later steps are gated
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    yes_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: echo, args: ["yes"] }
+  task_present:
+    - module: core.exec.run
+      id: marked
+      when: register.probe.stdout.startsWith('yes')
+      params_subset: { cmd: echo, args: [marked] }
+    - module: core.exec.run
+      when: "!register.marked.changed"
+      params_subset: { cmd: echo, args: [unmarked host] }

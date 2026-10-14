@@ -1,0 +1,22 @@
+# Twelve steps, and nothing after them: the speed between steps is what this
+# scenario exists to show, and that only a live run measures (README).
+name: twelve cheap host steps
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - { index: 0, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 1, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 2, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 3, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 4, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 5, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 6, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 7, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 8, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 9, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 10, module: core.exec.run, params: { cmd: "true" } }
+    - { index: 11, module: core.exec.run, params: { cmd: "true" } }

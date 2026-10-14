@@ -1,0 +1,7 @@
+description: One scenario per behaviour of a linear run — steps, failure radius, onfail rescue, canary, keeper-settled when, timeouts.
+
+# No migrations/ directory -> state-schema version 1. Only keeper_mid writes
+# state: it records `marker` between two host steps.
+state_schema:
+  marker:
+    type: string

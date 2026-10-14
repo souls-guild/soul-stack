@@ -1,0 +1,13 @@
+name: task_timeout_override
+description: The same 10s task_timeout, but the task's own timeout 60s wins — the 30 s sleep passes.
+
+settings:
+  task_timeout: 10s
+
+tasks:
+  - name: sleep 30 with its own 60s timeout
+    module: core.exec.run
+    timeout: 60s
+    params:
+      cmd: sleep
+      args: ["30"]

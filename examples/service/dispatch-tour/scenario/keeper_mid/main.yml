@@ -1,0 +1,23 @@
+name: keeper_mid
+description: Host step, keeper-side state capture, host step — the capture runs where it is written.
+
+tasks:
+  - name: host work before
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: sleep
+      args: ["8"]
+
+  - name: record marker
+    module: core.state.set
+    params:
+      field: marker
+      value: set-after-host-work
+
+  - name: host work after
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: sleep
+      args: ["8"]

@@ -1,0 +1,13 @@
+# `settings.task_timeout` becomes the task's own limit in the plan. That the
+# 30 s sleep is then cut at about 10 s is the run's (README).
+name: the sleep carries the 10s limit from settings
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  task_present:
+    - module: core.exec.run
+      timeout: 10s
+      params_subset: { cmd: sleep, args: ["30"] }

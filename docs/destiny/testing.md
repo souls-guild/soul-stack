@@ -149,6 +149,36 @@ assert:
 
 `assert.dispatch` - L3 section (meant only on multi-host), the L0 loader rejects it with a strict decode.
 
+#### What one task entry checks
+
+The plan is asserted in two forms that take the same entry: `assert.rendered_tasks` by position, `assert.task_present` / `assert.task_absent` by presence (exactly one match / no match). An empty field is not checked.
+
+| Key | Positional | Presence | Checks |
+|---|---|---|---|
+| `module` | yes | yes | The module address. Required. |
+| `index` | yes | ignored | Position in the plan. |
+| `params` | yes | **ignored** | The rendered params, by key. In a presence entry write `params_subset:` — `params:` there checks nothing. |
+| `params_subset` | ignored | yes | The rendered params, by key; extra keys do not prevent a match. |
+| `when`, `id` | ignored | yes | The `when:` text; the `register:` or `id:` name. They tell apart two tasks of one module. |
+| `timeout` | yes | yes | The **effective** limit, as [settings.md §2.3](../scenario/settings.md) resolves it from the task's `timeout:` and the `settings.task_timeout` it writes or inherits. Compared as a duration, so `60s` matches the `1m` the render prints for an inherited value; `"0"` asserts no limit; a value that is no duration is refused at load. The one `settings:` value an L0 plan carries. |
+| `failed_when` | yes | yes | The `failed_when:` text as written. |
+| `onfail` | yes | yes | The `onfail:` source register names, as a set. |
+
+```yaml
+assert:
+  task_present:
+    - module: core.exec.run
+      timeout: 10s                     # from settings.task_timeout
+      params_subset: { cmd: sleep }
+    - module: core.exec.run
+      onfail: [deploy]                 # the rescue of deploy
+      params_subset: { args: [rolled back] }
+```
+
+A task the render skipped (a static `when:` that is false) is a placeholder: it has no rendered params, and its `timeout` is not resolved the way a rendered task's is. Presence never matches it; a positional entry on it should name the module only.
+
+L0 renders the plan once and without steps, so a linear run's per-step stamps — the step a task runs in, its `on_failure`, its place in a group rolled by `serial_scope: block` — are not in an L0 plan. Nor is anything the barrier decides: `soul_timeout`, which host a rescue reaches, which hosts a `when:` over a register skips. Those are live-run properties; [`examples/service/dispatch-tour`](../../examples/service/dispatch-tour/README.md) lists them scenario by scenario.
+
 #### L0 multi-host roster — `fixtures.hosts`
 
 `fixtures.soulprint` (single map) describes a **single** synthetic run host - this is sugar for single-host L0 cases (most destiny-molecules). For multi-host render-invariants (`size(soulprint.hosts)`-guard, `soulprint.hosts.where(...)`-projection, nodes-determinism master/replica), the case specifies **roster** via `fixtures.hosts` — a list of host records:

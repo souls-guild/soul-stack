@@ -1,0 +1,30 @@
+name: steps
+description: Four top-level host tasks — four linear steps, one row per host per step.
+
+tasks:
+  - name: probe hostname
+    module: core.exec.run
+    register: probe
+    changed_when: "false"
+    params:
+      cmd: hostname
+
+  - name: write marker
+    module: core.file.present
+    params:
+      path: /tmp/dispatch-tour-marker
+      content: "${ soulprint.self.sid }"
+
+  - name: read marker
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: cat
+      args: ["/tmp/dispatch-tour-marker"]
+
+  - name: done
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["done"]

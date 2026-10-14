@@ -1,0 +1,25 @@
+# The plan in order: four top-level host tasks, which a linear run dispatches
+# as four steps. L0 renders the plan once and has no step numbers; that each
+# step waits for every host is a live-run property (README).
+name: four host tasks in order, the marker carries the host's SID
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params: { cmd: hostname }
+    - index: 1
+      module: core.file.present
+      params:
+        path: /tmp/dispatch-tour-marker
+        content: node-1.example.com
+    - index: 2
+      module: core.exec.run
+      params: { cmd: cat, args: [/tmp/dispatch-tour-marker] }
+    - index: 3
+      module: core.exec.run
+      params: { cmd: echo, args: [done] }

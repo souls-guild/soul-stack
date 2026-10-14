@@ -1,0 +1,33 @@
+name: when_split
+description: A when over a probe register is settled on the Keeper — SKIPPED on hosts where it is false, nothing sent there.
+
+input:
+  yes_sid:
+    type: string
+    required: true
+    description: SID of the only host whose probe answers yes.
+
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["${ soulprint.self.sid == input.yes_sid ? 'yes' : 'no' }"]
+
+  - name: only where probe says yes
+    module: core.exec.run
+    register: marked
+    when: register.probe.stdout.startsWith('yes')
+    params:
+      cmd: echo
+      args: ["marked"]
+
+  - name: only where the previous step changed nothing
+    module: core.exec.run
+    changed_when: "false"
+    when: "!register.marked.changed"
+    params:
+      cmd: echo
+      args: ["unmarked host"]

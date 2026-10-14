@@ -1,0 +1,20 @@
+name: soul_timeout
+description: soul_timeout 1m — kill one agent mid-step (SIGKILL, not a graceful stop); that host fails soul_unavailable after about a minute.
+
+settings:
+  soul_timeout: 1m
+  on_failure: host
+
+tasks:
+  - name: long sleep
+    module: core.exec.run
+    params:
+      cmd: sleep
+      args: ["120"]
+
+  - name: after the sleep
+    module: core.exec.run
+    changed_when: "false"
+    params:
+      cmd: echo
+      args: ["after"]

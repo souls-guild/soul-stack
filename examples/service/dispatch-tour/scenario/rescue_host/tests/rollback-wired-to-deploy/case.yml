@@ -1,0 +1,29 @@
+# The plan of rescue, under `settings.on_failure: host`. The radius decides
+# that the dropped host gets only its rollback and the others go on — a barrier
+# decision L0 does not make (README).
+name: rollback is the rescue of deploy
+
+fixtures:
+  hosts:
+    - sid: node-1.example.com
+  input:
+    fail_sid: node-1.example.com
+
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: sh
+        args: ["-c", "echo deploy failed on purpose >&2; exit 1"]
+    - index: 1
+      module: core.exec.run
+      params: { cmd: echo, args: [ordinary] }
+    - index: 2
+      module: core.exec.run
+      onfail: [deploy]
+      params: { cmd: echo, args: [rolled back] }
+  task_absent:
+    - module: core.exec.run
+      onfail: [deploy]
+      params_subset: { args: [ordinary] }
