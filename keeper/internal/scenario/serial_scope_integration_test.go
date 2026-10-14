@@ -4,27 +4,29 @@ package scenario
 
 import (
 	"context"
+	"fmt"
+	"reflect"
+	"sort"
+	"strings"
+	"sync"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/artifact"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
+	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
 	"github.com/souls-guild/soul-stack/shared/audit"
-	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// The Keeper refuses on the run path what soul-lint refuses offline (NIM-940):
-// service repositories are not linted, so a refusal only the linter made would
-// leave the change silent exactly where it matters.
-
-const serialBlockWithoutScope = `name: create
+// serialBlock takes the block's settings: line, or nothing.
+const serialBlock = `name: create
 tasks:
-  - name: Roll change and check
+  - name: Upgrade then check
     serial: 1
-    block:
-      - name: Change
+%s    block:
+      - name: Upgrade
         module: core.exec.run
-        params: { cmd: echo, args: ["change"] }
+        params: { cmd: echo, args: ["upgrade"] }
         changed_when: "false"
       - name: Check
         module: core.exec.run
@@ -32,12 +34,12 @@ tasks:
         changed_when: "false"
 `
 
-const serialPairAcrossTasks = `name: create
+const serialTaskThenPlain = `name: create
 tasks:
-  - name: Change
+  - name: Upgrade
     module: core.exec.run
-    serial: 2
-    params: { cmd: echo, args: ["change"] }
+    serial: 1
+    params: { cmd: echo, args: ["upgrade"] }
     changed_when: "false"
   - name: Check
     module: core.exec.run
@@ -45,38 +47,33 @@ tasks:
     changed_when: "false"
 `
 
-const serialBlockWithScope = `name: create
-tasks:
-  - name: Roll change and check
-    serial: 1
-    settings: { serial_scope: block }
-    block:
-      - name: Change
-        module: core.exec.run
-        params: { cmd: echo, args: ["change"] }
-        changed_when: "false"
-      - name: Check
-        module: core.exec.run
-        params: { cmd: echo, args: ["check"] }
-        changed_when: "false"
-`
+// rollOrderDispatcher records each message as "<task>+<task>@<host>", in send
+// order.
+type rollOrderDispatcher struct {
+	t    *testing.T
+	mu   sync.Mutex
+	sent []string
+}
 
-// The long-runner/scenario/serial_waves shape: keeper-side captures after a serial
-// host task share no wave with it.
-const serialThenKeeperCaptures = `name: create
-tasks:
-  - name: Serial wave
-    module: core.exec.run
-    serial: 3
-    params: { cmd: echo, args: ["wave"] }
-    changed_when: "false"
-  - name: Record it
-    module: core.state.set
-    params: { field: recorded, value: "yes" }
-  - name: Record again
-    module: core.state.set
-    params: { field: captured, value: "yes" }
-`
+func (d *rollOrderDispatcher) SendApply(ctx context.Context, sid string, req *keeperv1.ApplyRequest) error {
+	var names []string
+	for _, task := range req.GetTasks() {
+		names = append(names, task.GetName())
+	}
+	d.mu.Lock()
+	d.sent = append(d.sent, strings.Join(names, "+")+"@"+strings.TrimSuffix(sid, ".example.com"))
+	d.mu.Unlock()
+	if err := applyrun.UpdateStatus(ctx, integrationPool, req.GetApplyId(), sid, int(req.GetPassage()), applyrun.StatusSuccess, nil); err != nil {
+		d.t.Errorf("rollOrderDispatcher: UpdateStatus(%s): %v", sid, err)
+	}
+	return nil
+}
+
+func (d *rollOrderDispatcher) messages() []string {
+	d.mu.Lock()
+	defer d.mu.Unlock()
+	return append([]string(nil), d.sent...)
+}
 
 func startSerialScopeRun(t *testing.T, gitURL string, disp ApplyDispatcher) string {
 	t.Helper()
@@ -94,73 +91,61 @@ func startSerialScopeRun(t *testing.T, gitURL string, disp ApplyDispatcher) stri
 	return applyID
 }
 
-func seedSerialScopeRun(t *testing.T) {
-	t.Helper()
-	resetAll(t)
-	seedOperator(t, "archon-alice")
-	seedIncarnation(t, "noop-prod")
-	seedConnectedSoul(t, "host-a.example.com", []string{"noop-prod"})
-}
-
-func TestIntegration_SerialScope_RunPathRefuses(t *testing.T) {
+// ★ GUARD (NIM-998, settings.md §3.1). The Keeper accepts a serial: block that
+// writes no serial_scope and rolls it by task: Upgrade reaches every host before
+// Check reaches any. serial_scope: block is the canary: Upgrade and Check reach one
+// host in one message before the next host is touched. A serial: task beside a
+// plain host step is accepted too, and the plain step follows it on every host. The
+// send order cannot tell the waves apart; the widths are
+// TestRender_LinearSerialByBlockMode's.
+//
+// Mutations: default serial_scope to block in DefaultScenarioSettings → the
+// unwritten block arrives as the canary; put back the NIM-940 refusal on the run
+// path → the run error-locks before anything is sent.
+func TestIntegration_SerialScope_DefaultRollsByTask(t *testing.T) {
 	for _, tc := range []struct {
-		name, scenario, reason string
+		name, scenario string
+		inOrder        []string
+		// lastWave follows inOrder as one wave, in any order.
+		lastWave []string
 	}{
-		{"block without a written serial_scope", serialBlockWithoutScope, config.CodeSerialScopeImplicit},
-		{"serial pair across tasks", serialPairAcrossTasks, config.CodeSerialScopeImplicitAcrossTasks},
+		{
+			name:     "a block without serial_scope",
+			scenario: fmt.Sprintf(serialBlock, ""),
+			inOrder:  []string{"Upgrade@host-a", "Upgrade@host-b", "Upgrade@host-c", "Check@host-a", "Check@host-b", "Check@host-c"},
+		},
+		{
+			name:     "serial_scope: block is the canary",
+			scenario: fmt.Sprintf(serialBlock, "    settings: { serial_scope: block }\n"),
+			inOrder:  []string{"Upgrade+Check@host-a", "Upgrade+Check@host-b", "Upgrade+Check@host-c"},
+		},
+		{
+			name:     "a serial: task beside a plain host step",
+			scenario: serialTaskThenPlain,
+			inOrder:  []string{"Upgrade@host-a", "Upgrade@host-b", "Upgrade@host-c"},
+			lastWave: []string{"Check@host-a", "Check@host-b", "Check@host-c"},
+		},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
-			seedSerialScopeRun(t)
-			disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
+			resetAll(t)
+			seedOperator(t, "archon-alice")
+			seedIncarnation(t, "noop-prod")
+			for _, h := range []string{"host-a", "host-b", "host-c"} {
+				seedConnectedSoul(t, h+".example.com", []string{"noop-prod"})
+			}
+			disp := &rollOrderDispatcher{t: t}
 			applyID := startSerialScopeRun(t, writeServiceRepo(t, tc.scenario), disp)
 
-			inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
-			if inc.StatusDetails["reason"] != tc.reason {
-				t.Errorf("reason = %v, want %s", inc.StatusDetails["reason"], tc.reason)
+			inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
+			got := disp.messages()
+			if len(got) != len(tc.inOrder)+len(tc.lastWave) {
+				t.Fatalf("messages = %v (status details %v), want %v then %v", got, inc.StatusDetails, tc.inOrder, tc.lastWave)
 			}
-			if disp.calls != 0 {
-				t.Errorf("SendApply calls = %d, want 0 (refused before any dispatch)", disp.calls)
-			}
-		})
-	}
-}
-
-func TestIntegration_SerialScope_RunPathAccepts(t *testing.T) {
-	for _, tc := range []struct{ name, scenario string }{
-		{"a written serial_scope", serialBlockWithScope},
-		{"keeper-side captures after a serial task", serialThenKeeperCaptures},
-	} {
-		t.Run(tc.name, func(t *testing.T) {
-			seedSerialScopeRun(t)
-			disp := &mockDispatcher{t: t, result: applyrun.StatusSuccess}
-			applyID := startSerialScopeRun(t, writeServiceRepo(t, tc.scenario), disp)
-
-			waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
-			if disp.calls == 0 {
-				t.Error("SendApply was never called: the run did not dispatch")
+			last := append([]string(nil), got[len(tc.inOrder):]...)
+			sort.Strings(last)
+			if !reflect.DeepEqual(got[:len(tc.inOrder)], tc.inOrder) || (tc.lastWave != nil && !reflect.DeepEqual(last, tc.lastWave)) {
+				t.Errorf("messages = %v, want %v then %v", got, tc.inOrder, tc.lastWave)
 			}
 		})
-	}
-}
-
-// An install step the Keeper synthesizes from modules[] lands in its consumer's
-// Passage; the author never wrote it and soul-lint never sees it, so it must not
-// make a single serial: task "share a wave".
-func TestIntegration_SerialScope_SynthesizedInstallIsNotTheAuthors(t *testing.T) {
-	seedSerialScopeRun(t)
-	gitURL := moduleServiceRepo(t, `name: create
-tasks:
-  - name: Use the echo plugin, one host at a time
-    module: community.echo.run
-    serial: 1
-    params:
-      message: hello
-`, nil)
-	disp := &taskCaptureDispatcher{t: t, result: applyrun.StatusSuccess}
-	applyID := startSerialScopeRun(t, gitURL, disp)
-
-	waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
-	if got := installIndexes(disp.captured()); len(got) != 1 {
-		t.Fatalf("synthesized installs = %v, want exactly one beside the consumer", got)
 	}
 }

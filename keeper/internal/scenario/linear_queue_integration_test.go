@@ -462,7 +462,6 @@ tasks:
   - name: first
     module: core.exec.run
     serial: 1
-    settings: { serial_scope: task }
     params: { cmd: first }
   - name: second
     module: core.exec.run

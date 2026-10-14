@@ -152,7 +152,7 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 		return out
 	}
 
-	out = withFile(config.ImplicitSerialScope(m.Settings, tasks), scenarioPath, out)
+	out = withFile(config.GroupChildKeysUnread(m.Settings, tasks), scenarioPath, out)
 
 	// Wide match is a WARN, and unlike everything below it does NOT return: the
 	// wide form is legitimate ("clear every user"), it is just far more often a
@@ -197,8 +197,6 @@ func stageDiagnostics(scenarioPath string, m *config.ScenarioManifest, modules c
 	// serial×passage is implemented — each Passage runs its own serial waves at
 	// its own per-Passage width. Stratification yields a plain passage_plan HINT
 	// (below).
-
-	out = withFile(config.ImplicitSerialScopeAcrossTasks(m.Settings, tasks, plan), scenarioPath, out)
 
 	// A within-block register dependency is an ERROR (ADR-056, §"Risks —
 	// silent-wrong-target"). A block: child reading the register of a sibling

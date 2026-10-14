@@ -1,6 +1,6 @@
 # ADR-0091. Scenario dispatch is linear — a task is dispatched only after the previous one has finished
 
-> **Status: active — the default execution model since NIM-952 (2026-10-11).** User decision 2026-09-28 (NIM-907); built by
+> **Status: amended — the default execution model since NIM-952 (2026-10-11); the two NIM-940 refusals of an unwritten `serial_scope` withdrawn by the Amendment 2026-10-14 (NIM-998).** User decision 2026-09-28 (NIM-907); built by
 > the NIM-926 release train. **Supersedes [ADR-056](0056-staged-render-passage.md)**, whose model stays selectable
 > for one release as the deprecated rollback `keeper.yml::scenario.execution_model: staged` (user, 2026-10-11);
 > amends [ADR-012(d)](0012-keeper-soul-grpc.md); changes what [ADR-0075](0075-intra-host-async-tasks.md)
@@ -10,7 +10,9 @@
 > Acolyte path blocks enabling linear dispatch (item 7). §Before merge carries **four forks** — contract decisions that need the user's answer
 > before any code, each with the price of every option. **All four are answered**; fork 3's answer
 > was re-confirmed after the tree's own canary was shown to change meaning under it, and its flag is
-> `serial_scope: task | block`. Fork 4 — the scenario's `settings:` block — outgrew this ADR and is specified in
+> `serial_scope: task | block`; the two refusals of an unwritten `serial_scope` were withdrawn
+> before release — the default is the standard behaviour
+> ([Amendment 2026-10-14](#amendment-2026-10-14-nim-998-an-unwritten-serial_scope-is-the-standard-behaviour-and-nothing-refuses-it), NIM-998). Fork 4 — the scenario's `settings:` block — outgrew this ADR and is specified in
 > [docs/scenario/settings.md](../scenario/settings.md).
 >
 > **Revision history.** Independent reviews, round after round, shaped this text; each round's
@@ -709,6 +711,11 @@ spelled with a block rolled as a group** (fork 3): one message, one wave loop, b
 before the next two. [orchestration.md §2.2.1](../scenario/orchestration.md) documents the plain
 `block:` form as the idiom today; it must add `serial_scope: block`.
 
+⛔ **Withdrawn before release** (user, 2026-10-14, NIM-998,
+[Amendment 2026-10-14](#amendment-2026-10-14-nim-998-an-unwritten-serial_scope-is-the-standard-behaviour-and-nothing-refuses-it)):
+the next paragraph records the refusals NIM-940 built and why; neither code is raised any more,
+and the change of meaning it describes is announced in the CHANGELOG's upgrade notes instead.
+
 **This one is not a lint to be added later.** By this ADR's own principle — a key that stays legal
 and stops having its effect is a silence, and a silence gets a refusal — the shape needs a
 **blocking diagnostic with an explicit opt-out** — group the pair into a block, move the `serial:` onto it and write its
@@ -928,7 +935,9 @@ Ansible, where a block's tasks run one after another across the hosts — the ca
 
 - **The dragonfly example gets `serial_scope: block`** — written by NIM-940, ahead of the switch,
   together with the refusal below.
-- **A refusal with an explicit opt-out** on every block that has `serial:` — its own or inherited —
+- ⛔ *Withdrawn before release by the
+  [Amendment 2026-10-14](#amendment-2026-10-14-nim-998-an-unwritten-serial_scope-is-the-standard-behaviour-and-nothing-refuses-it)
+  (NIM-998); recorded as decided.* **A refusal with an explicit opt-out** on every block that has `serial:` — its own or inherited —
   and two or more host-dispatched tasks beneath it, counted through nested blocks on the list after `include:`
   expansion, where the flat checks already run (`shared/config/include_expand.go:163-166`): its
   effective `serial_scope` must
@@ -938,7 +947,10 @@ Ansible, where a block's tasks run one after another across the hosts — the ca
   linted, and a `soul-lint`-only check would leave the change silent there. That example is the only
   such block among the examples. The `soul-lint` fixture
   `soul-lint/testdata/scenario-broken/scenario-within-block-peer-register.yml` has the same shape and
-  gets `serial_scope: block`, or it stops guarding `within_block_register_dependency`. Service
+  gets `serial_scope: block`, or it stops guarding `within_block_register_dependency`. *(As built,
+  `soul-lint` judges every block with the staged check, `soul-lint/internal/validate/stage.go`, so
+  the fixture guards it either way; the `serial_scope: block` line changes the verdict only on the Keeper's linear run
+  path.)* Service
   repositories are not checked and need the same audit.
 - **S1 and S2 land together** (§Slices).
 
@@ -1011,7 +1023,10 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
    block under `serial:` migrated with them: the `soul-lint` fixture named in fork 3, the inline YAML
    at `shared/config/passage_test.go:116-119`, and `TestDispatch_BlockSerialWave`
    (`keeper/internal/scenario/block_serial_test.go:13-19`), which asserts the whole-block wave and so
-   now writes `serial_scope: block`.
+   now writes `serial_scope: block`. ⛔ *Both diagnostics were withdrawn before release by NIM-998*
+   ([Amendment 2026-10-14](#amendment-2026-10-14-nim-998-an-unwritten-serial_scope-is-the-standard-behaviour-and-nothing-refuses-it));
+   the fixtures keep their `serial_scope: block`, so each still describes a group under linear
+   dispatch, although the model each of those tests runs under does not read it.
 7. **The Acolyte path.** **Decided (user, 2026-10-02): restoring work-queue dispatch for linear runs
    blocks enabling linear dispatch**, rather than following later: the default radius ends a whole
    fleet's run mid-flight, and the wall clock grows T-fold, so the chance of a run being alive across
@@ -1203,8 +1218,9 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
   `StoreAfterUse` is re-keyed to plan order (all three shipped in NIM-944);
   fork 1's outcome; the `settings:` block with its fail-by-default, its one
   validator, the key-by-key merge and the "not inherited from the Voyage key" statement; the terminal status
-  `on_failure: host` needs and its obligations (items 4-5); the canary diagnostics (item 6). Any
-  subset is a silent regression. The benchmark (item 14) runs before linear dispatch is enabled.
+  `on_failure: host` needs and its obligations (items 4-5). Any
+  subset is a silent regression. The canary diagnostics (item 6) were on this list until the
+  Amendment 2026-10-14 (NIM-998) withdrew them. The benchmark (item 14) runs before linear dispatch is enabled.
 - **S2** — lands with S1, not after it: `serial:` per step, fork 3's two block modes and item 13's
   warnings for a child's `serial:` or barrier-kind setting inside a group. S1's step numbering
   already splits a default block, so the modes that decide which blocks split cannot come later.
@@ -1225,6 +1241,46 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
 
 `within_block_register_dependency` is removed in **no** slice; it is narrowed to blocks rolled as one
 group.
+
+## Amendment 2026-10-14 (NIM-998): an unwritten `serial_scope` is the standard behaviour, and nothing refuses it
+
+**Decided by the user on 2026-10-14, at the demo of the NIM-926 train.** This revises one point of
+fork 3's answer of 2026-10-01. That answer kept the default `serial_scope: task` but required the
+author to write the line out. The default is still `task`, and it is now **the standard behaviour**:
+a block with `serial:` and no `serial_scope` rolls by task. Each child is a step of its own and goes
+over every host in waves of the block's width before the next child starts. A canary is opt-in:
+`settings: {serial_scope: block}`. The Keeper and `soul-lint` no longer refuse the file.
+
+The release had not shipped yet, so both refusals NIM-940 built on this train were withdrawn
+together:
+
+- `serial_scope_implicit`, fork 3's refusal: a block reached by `serial:` over two or more host
+  tasks, with no `serial_scope` written on it, above it or in the scenario's `settings:`.
+- `serial_scope_implicit_across_tasks`, the transition rule of §`serial:`: a `serial:` sharing a
+  Passage of the ADR-056 derivation with another host step. This one also caught more than the
+  canary. A step **without** `serial:` sharing a Passage with one that has it rolled in the narrow
+  waves under ADR-056, and under this ADR it goes to every host in one wave. Take a `stop` followed
+  by an upgrade with `serial: 2`: the service now stops on every host at once. The user saw that
+  case and withdrew this refusal too. To keep "stop and upgrade N hosts, then the next N", the two
+  steps go into one block with `serial: N` and `serial_scope: block`; a `serial:` on the `stop`
+  alone still stops every host before the first upgrade.
+
+What stays: the key and both of its values; what `block` means (one message per host, one wave
+loop: the canary); `soul-lint`'s `group_child_key_unread` warning (item 13); and the
+`serial_scope: block` in `examples/service/dragonfly/scenario/restart/main.yml`. The change of
+meaning that §`serial:` describes is unchanged. It is announced in the CHANGELOG's upgrade notes
+instead of being refused. Under the staged rollback `serial_scope` is not read, and such a file
+rolls as it did under ADR-056: each wave carries the whole block, or the whole derived Passage, at
+the Passage's narrowest `serial:`.
+
+As built: `shared/config/serial_scope.go` keeps only the warning, and nothing on the Keeper's run
+path (`keeper/internal/scenario/run.go`) refuses a file over `serial_scope` any more; the run path
+still reads it to decide which blocks roll as groups (`BlockRollsAsGroup`). The two `soul-lint`
+fixtures moved from `scenario-broken/` to `scenario-golden/`, where they lint clean. The guards
+assert the roll itself: `TestLinearPassage_SerialBlockWithoutScopeRollsByTask` checks the step
+numbering, `TestGolden_SerialWithoutScopeLintsClean` checks the linter, and
+`TestIntegration_SerialScope_DefaultRollsByTask` checks the order in which the Keeper sends to three
+hosts — by task, as the canary, and for a `serial:` task beside a plain step.
 
 ## Relation to other ADRs and documents
 

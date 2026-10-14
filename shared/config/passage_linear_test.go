@@ -1,6 +1,7 @@
 package config
 
 import (
+	"fmt"
 	"reflect"
 	"testing"
 
@@ -78,6 +79,45 @@ func TestLinearPassage_DefaultBlockChildrenAreStepsGroupIsOne(t *testing.T) {
 	}
 	if !steps[2].Group || steps[2].Children != nil {
 		t.Errorf("canary node = %+v, want one group step without children", steps[2])
+	}
+}
+
+// ★ GUARD (NIM-998, settings.md §3.1). A block with serial: and no serial_scope
+// written anywhere rolls by task: each child is a step of its own at the block's
+// width, so upgrade reaches every host before check starts. Only a written
+// serial_scope: block makes it the canary, one group step.
+//
+// Mutation: default serial_scope to block in DefaultScenarioSettings → the
+// unwritten block is one group step.
+func TestLinearPassage_SerialBlockWithoutScopeRollsByTask(t *testing.T) {
+	const tmpl = `
+name: linear
+tasks:
+  - name: roll
+    serial: 1
+%s    block:
+      - name: upgrade
+        module: core.exec.run
+        params: { cmd: upgrade }
+      - name: check
+        module: core.exec.run
+        params: { cmd: check }
+`
+	m := loadLinearManifest(t, fmt.Sprintf(tmpl, ""))
+	plan, steps := LinearPassage(m.Tasks, m.Settings)
+	if plan.Count != 2 || steps[0].Group || len(steps[0].Children) != 2 {
+		t.Fatalf("Count = %d, node = %+v, want a default block of two steps", plan.Count, steps[0])
+	}
+	for _, c := range m.Tasks[0].Block.Block {
+		if got := LinearBlockChild(m.Tasks[0], c).Serial; fmt.Sprint(got) != "1" {
+			t.Errorf("child %q serial = %v, want the block's 1", c.Name, got)
+		}
+	}
+
+	m = loadLinearManifest(t, fmt.Sprintf(tmpl, "    settings: { serial_scope: block }\n"))
+	plan, steps = LinearPassage(m.Tasks, m.Settings)
+	if plan.Count != 1 || !steps[0].Group {
+		t.Errorf("Count = %d, node = %+v, want one group step", plan.Count, steps[0])
 	}
 }
 

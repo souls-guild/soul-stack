@@ -465,7 +465,6 @@ func TestIntegration_LinearRescueWavesGoOnAfterTheEnd(t *testing.T) {
 description: a serial rescue whose first wave ends the run
 settings:
   on_failure: host
-  serial_scope: task
 tasks:
   - name: deploy
     module: core.exec.run

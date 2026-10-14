@@ -1,7 +1,8 @@
-name: serial-scope-implicit-across-tasks
+name: serial-task-beside-a-host-step
 tasks:
-  # {change, check} under serial: share one wave loop today; under linear
-  # dispatch the change rolls over every host before the check starts.
+  # Each step rolls at its own width: the upgrade two hosts at a time, then the
+  # check on every host in one wave. The staged rollback carried both in one wave
+  # loop of two.
   - name: Upgrade redis
     module: core.pkg.installed
     serial: 2

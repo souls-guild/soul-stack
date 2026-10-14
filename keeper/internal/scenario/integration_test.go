@@ -1646,13 +1646,8 @@ state_schema:
   rolled:
     type: string
 `)
-	// serial_scope: task says the two steps are independent, which they become
-	// under linear dispatch; without it the Keeper refuses the file
-	// (serial_scope_implicit_across_tasks).
 	write("scenario/roll/main.yml", `name: roll
 description: two tasks with different serial widths
-settings:
-  serial_scope: task
 tasks:
   - name: Wide step
     module: core.exec.run

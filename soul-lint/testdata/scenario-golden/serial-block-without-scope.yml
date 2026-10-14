@@ -1,7 +1,7 @@
-name: serial-scope-implicit
+name: serial-block-without-scope
 tasks:
-  # A canary written the way it was before linear dispatch: under the default
-  # overlay each child would roll over every host before the next one starts.
+  # No serial_scope: the block rolls by task. Upgrade reaches every host two at a
+  # time, then check does; a canary writes settings: {serial_scope: block}.
   - name: Upgrade then check, two hosts at a time
     serial: 2
     block:

@@ -278,12 +278,9 @@ is each child's default width. The idiom "wave = {change, check health}"
 (see §5) — the canary — needs the children to travel together, so the block writes
 `settings: {serial_scope: block}`: it becomes one step, and each wave carries the
 whole block to its hosts before the next wave starts
-([settings.md §3.1](settings.md)). The shared validator refuses a block reached by
-`serial:` over two or more host tasks that does not write its `serial_scope`
-(`serial_scope_implicit`), and a `serial:` that would have shared an ADR-056
-Passage with another host step without one (`serial_scope_implicit_across_tasks`):
-the order of both changed with linear dispatch, and the author says which one is
-meant.
+([settings.md §3.1](settings.md)). Without the setting a block with `serial:`
+rolls by task, which is the standard behaviour and is not refused (NIM-998): its
+first child goes over every host in waves before the second child starts.
 - **Failing in a wave.** The wave's barrier waits for every host of the wave, then
 judges each failed host by the `on_failure` of the task it failed at: under the
 default `scenario` no later wave starts and the run ends `failed` once the hosts

@@ -28,7 +28,5 @@ tasks:
   - name: Roll every host
     module: core.exec.run
     serial: 1
-    settings:
-      serial_scope: task
     params:
       cmd: roll

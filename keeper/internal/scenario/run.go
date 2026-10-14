@@ -237,14 +237,6 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	}
 	scn.Tasks = expanded
 
-	// On the author's plan, before the synthesized install steps below: soul-lint
-	// never sees those, and one landing in a serial: task's Passage would make the
-	// Keeper refuse a file the linter passed.
-	if d, bad := implicitSerialScope(scn); bad {
-		abort(d.Code, fmt.Errorf("scenario %s/%s: %s; %s", spec.IncarnationName, spec.ScenarioName, d.Message, d.Hint))
-		return
-	}
-
 	// Synthesize core.module.installed install steps from service.yml::modules[]
 	// (ADR-065): AFTER ExpandIncludes (consumers in branches are visible), BEFORE
 	// Stratify (a synthesized step is a roster task, stratified like its
@@ -2005,22 +1997,6 @@ func maskErrText(err error, sealedPaths map[string]bool) string {
 		return s
 	}
 	return err.Error()
-}
-
-// implicitSerialScope is the Keeper's half of the serial_scope refusals (NIM-940).
-// A plan that does not stratify is left to the run's own Stratify, which aborts it
-// as render_failed.
-func implicitSerialScope(scn *config.ScenarioManifest) (diag.Diagnostic, bool) {
-	ds := config.ImplicitSerialScope(scn.Settings, scn.Tasks)
-	if passage, err := config.Stratify(scn.Tasks); err == nil {
-		ds = append(ds, config.ImplicitSerialScopeAcrossTasks(scn.Settings, scn.Tasks, passage)...)
-	}
-	for _, d := range ds {
-		if d.Level == diag.LevelError {
-			return d, true
-		}
-	}
-	return diag.Diagnostic{}, false
 }
 
 // firstError returns the first error-level diagnostic's message (for a short

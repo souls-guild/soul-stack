@@ -141,18 +141,24 @@ func TestGolden_ScenarioSettingsTimeoutShadowed(t *testing.T) {
 }
 
 // A group's child writing serial: lints clean with a warning: the group has one
-// width, its own (settings.md §3 rule 4). The two serial_scope refusals are the
-// `scenario-broken/scenario-serial-scope-*` fixtures.
+// width, its own (settings.md §3 rule 4).
 func TestGolden_ScenarioSerialScopeGroupChild(t *testing.T) {
 	runExpect(t, "../../testdata/scenario-golden/serial-scope-group-child.yml", KindScenario, false, ExitOK,
 		[]string{"group_child_key_unread"})
 }
 
-// The tree's own serial: examples, linted where they live. serial_waves is a
-// serial host task followed by keeper-side captures, which share no wave with it;
-// dragonfly/restart is the canary that writes serial_scope: block.
-func TestGolden_SerialExamplesWriteOrNeedNoSerialScope(t *testing.T) {
+// ★ GUARD (NIM-998, settings.md §3.1). A serial: needs no written serial_scope:
+// the default rolls by task, so neither a block with serial: over two host tasks
+// nor a serial: task beside another host step draws a diagnostic. The tree's
+// serial_waves (keeper-side captures after a serial task) and dragonfly/restart
+// (the canary, serial_scope: block) are linted where they live.
+//
+// Mutation: put back the NIM-940 refusal of a serial block without serial_scope
+// in stageDiagnostics → serial-block-without-scope.yml exits with errors.
+func TestGolden_SerialWithoutScopeLintsClean(t *testing.T) {
 	for _, p := range []string{
+		"../../testdata/scenario-golden/serial-block-without-scope.yml",
+		"../../testdata/scenario-golden/serial-task-beside-a-host-step.yml",
 		"../../../examples/service/long-runner/scenario/serial_waves/main.yml",
 		"../../../examples/service/dragonfly/scenario/restart/main.yml",
 	} {
@@ -162,7 +168,7 @@ func TestGolden_SerialExamplesWriteOrNeedNoSerialScope(t *testing.T) {
 				t.Fatalf("exit code %d, want %d\nstdout: %s\nstderr: %s", code, ExitOK, out.String(), errOut.String())
 			}
 			if strings.Contains(out.String(), "serial_scope") {
-				t.Fatalf("a serial_scope diagnostic on a tree example:\n%s", out.String())
+				t.Fatalf("a serial_scope diagnostic:\n%s", out.String())
 			}
 		})
 	}

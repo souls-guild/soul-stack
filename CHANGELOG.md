@@ -358,18 +358,10 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
-- **A `serial:` whose meaning linear dispatch changes must say which meaning it wants (NIM-940,
-  [settings.md §3.1](docs/scenario/settings.md)).** Two refusals in the shared validator, so the
-  Keeper's run path refuses what `soul-lint` refuses: **`serial_scope_implicit`** — a block reached
-  by `serial:` (its own or an enclosing block's) over two or more host tasks; and
-  **`serial_scope_implicit_across_tasks`** — a `serial:` sharing a Passage of today's derived plan
-  with another host step, in either order, keeper-side tasks not counted. Both are silenced by a
-  `serial_scope` the author wrote, either value, on the task, a level above it or the scenario's
-  `settings:`. `soul-lint` also warns **`group_child_key_unread`** for a `serial:` or barrier-kind
-  setting on a descendant of a block rolled as one group. `dragonfly/scenario/restart` writes
-  `serial_scope: block`; contrary to the ADR draft, it also tripped the across-tasks rule — its
-  "restart the master last" step shares the replicas' Passage and today restarts in its SID's
-  place among the width-1 waves.
+- **`soul-lint` warns `group_child_key_unread`** (NIM-940, [settings.md §3](docs/scenario/settings.md)
+  rule 4) for a `serial:` or barrier-kind setting on a descendant of a block rolled as one group,
+  which linear dispatch does not read. `dragonfly/scenario/restart` writes `serial_scope: block`, so
+  its rolling restart stays a canary.
 
 - **`core.ssh.apply` — a destiny applied over SSH to hosts a list names, not the registry (NIM-905,
   [ADR-draft ssh-apply-unregistered-hosts](docs/adr/draft-ssh-apply-unregistered-hosts.md)).** A bare
@@ -1242,7 +1234,17 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   - a keeper-side task — a `core.state.<verb>` capture included — runs where it is written, after
     the host steps before it, so under the default radius a capture written after a failed step is
     not written;
-  - `serial:` rolls each step at its own width; a canary writes `settings: {serial_scope: block}`;
+  - `serial:` rolls each step at its own width ([settings.md §3.1](docs/scenario/settings.md)).
+    Staged dispatch carried a block with `serial: N`, or a whole derived Passage, to N hosts at a
+    time before the next N. A block with `serial:` and no `serial_scope` now rolls by task — the
+    default, not refused (NIM-998): the first child goes over every host in waves of N, and only then
+    the second. A step without `serial:` next to one with it no longer rides its neighbour's waves
+    and goes to every host at once, and a module or `apply:` child's own `serial:` inside such a
+    block, which staged dispatch ignored, is read. To keep "these steps on N hosts, then the next
+    N" — a `stop` followed by an upgrade with `serial: 2` included — put them in one block with
+    `serial: N` and `settings: {serial_scope: block}`; a `serial:` on the `stop` alone still stops
+    every host before the first upgrade. Nothing flags these shapes, so review every scenario that
+    uses `serial:` before upgrading;
   - `onfail:` reaches its host across steps, and `when:` / the post-module predicates are settled on
     the Keeper;
   - a run is bounded by `scenario_timeout` (24h) and a lost agent by `soul_timeout` (1m); the
@@ -1259,14 +1261,16 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   do both. Past the schema, a rollback has three edges: an older Keeper refuses the `settings:` key
   outright and a `when:`, `changed_when:` or `failed_when:` reading a register from another derived
   Passage (FC-5) — loudly, so a scenario written for linear dispatch may not run there — and it
-  returns the old order **silently**: keeper tasks before host dispatch, and healthy hosts running
-  on after one fails.
+  returns the old order **silently**: keeper tasks before host dispatch, healthy hosts running on
+  after one fails, and a `serial:` block that writes no `serial_scope`, or a whole derived Passage,
+  carried in one wave loop again.
   **During a rolling upgrade of an HA cluster** each instance starts runs in its own model, so the
-  same scenario runs its keeper tasks first and lets healthy hosts run on after a failure when an
-  old Keeper takes it, and step by step, stopping at the failure, when a new one does; to keep one
-  order, set `staged` on the upgraded instances until the last old one is gone. A linear step goes
-  through the work-queue only once every live instance announces `step_queue`; until then it is sent
-  inline.
+  same scenario runs its keeper tasks first, lets healthy hosts run on after a failure and carries a
+  `serial:` block, or a whole derived Passage, in one wave loop when an old Keeper takes it, and step
+  by step, stopping at the failure and rolling each step at its own width, when a new one does; to
+  keep one order, set `staged` on the upgraded instances until the last old one is gone. A linear
+  step goes through the work-queue only once every live instance announces `step_queue`; until then
+  it is sent inline.
 
   **Cost.** Each step is a round trip and a barrier. On a dedicated stand, twelve one-command steps
   (`dev/bench/linear-dispatch`, medians, NIM-950 → after the barrier woke on the row write in
@@ -1295,15 +1299,6 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   `require:` inside the destiny. A scenario `async:` task — a `loop:` with `async: true` included —
   ran concurrently within its Passage: that work moves into a destiny, `async:` and the `require:`
   that joined it with it.
-
-- **A `serial:` whose meaning linear dispatch changes is refused on the Keeper's run path**
-  (`NIM-940`): a block reached by `serial:` over two or more host tasks with no written
-  `serial_scope` (`serial_scope_implicit`), and a `serial:` sharing a derived Passage with another
-  host step (`serial_scope_implicit_across_tasks`). Service repositories are not linted, so such a
-  scenario error-locks its incarnation at run start. Run `soul-lint validate-service-tree <dir>` over
-  every service repository **before** upgrading — `validate-service` checks only `service.yml` — and write `settings: {serial_scope: block}` (a canary) or
-  `task` (independent steps) where it is refused — a Keeper older than NIM-927 refuses `settings:`
-  itself, so the two cannot be mixed in one repository revision.
 
 - **A `coven=`-scoped `errand.run` or `soul.console` becomes live over that
   coven's hosts** (`NIM-650`) without a role edit — it was inert before. Review
