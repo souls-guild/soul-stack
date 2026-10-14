@@ -63,7 +63,7 @@
   "subjectDecreeHint": "Выберите ОДНО измерение — оно решает, какие хосты могут запустить правило. Обязательно; это не та Incarnation, к которой применяется реакция.",
   "subjectDimensionLabel": "измерение",
   "subjectHintCoven": "метки — достаёт хост с такой меткой и всех участников incarnation с такой меткой",
-  "subjectHintIncarnation": "service + name — достаёт каждый хост из ростера этой incarnation",
+  "subjectHintIncarnation": "service + name — достаёт каждый хост, привязанный к этой incarnation",
   "subjectHintSid": "точные SID — достаёт эти хосты и никакие другие",
   "subjectHintTrait": "key/value — тот же двухуровневый охват, что у coven, но по карте traits",
   "subjectLegend": "Субъект (ровно одно измерение)",
