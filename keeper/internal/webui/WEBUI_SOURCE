@@ -2,7 +2,7 @@
 # scripts/sync-webui.sh; do not edit by hand. Its purpose is to make an unpaired
 # web merge visible: if this SHA does not move when the UI changed, the vendored
 # bundle is stale.
-commit=9f5ae3d3122078e01b3cac246ac296c951d29feb
-describe=v0.1.0-beta.1-44-g9f5ae3d
+commit=516a283a3958cf710427bde871d223aa4f1c96e4
+describe=v0.1.0-beta.1-45-g516a283
 branch=release/NIM-926
-assets_sha256=9de2c5ebd6a0b628b5f818aff521fcba906d55c508f94d16359fe46717e02599
+assets_sha256=31a1cc8ef5974cbed6081e87bcf3f83ecd68db8b994f38834cc450a3bc7a41f2

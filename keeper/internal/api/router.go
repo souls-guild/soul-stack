@@ -838,6 +838,18 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			})
 		})
 
+		// /v1/stats — aggregates live in their own namespace: a static segment under
+		// /v1/<registry>/{id} would shadow the GET of an object with that id.
+		// GET /stats/services counts incarnations and their members, so it is gated by
+		// incarnation.list; the handler narrows by that Purview and hosts by soul.list.
+		r.Route("/stats", func(r chi.Router) {
+			r.With(
+				apimiddleware.RequireAction(enforcer, "incarnation", "list"),
+			).Group(func(r chi.Router) {
+				registerHumaServiceStats(newHumaCadenceAPI(r), incH)
+			})
+		})
+
 		// /v1/deprecations — fleet-wide survey of module params on their way out
 		// (ADR-0076(v), NIM-268). READ, no audit. Permission incarnation.list —
 		// the same read-tier as the incarnation catalogue, because the answer IS

@@ -3789,6 +3789,38 @@ components:
         - service
         - state_schema_version
       type: object
+    ServiceStatsEntry:
+      additionalProperties: false
+      properties:
+        hosts:
+          description: distinct member hosts of those incarnations that the caller may see as Souls
+          format: int64
+          type: integer
+        incarnations:
+          description: incarnations of this service within the caller's scope
+          format: int64
+          type: integer
+        service:
+          description: service id
+          type: string
+      required:
+        - service
+        - incarnations
+        - hosts
+      type: object
+    ServiceStatsReply:
+      additionalProperties: false
+      properties:
+        by_service:
+          description: one entry per service with at least one incarnation in scope, sorted by service
+          items:
+            $ref: "#/components/schemas/ServiceStatsEntry"
+          type:
+            - array
+            - "null"
+      required:
+        - by_service
+      type: object
     ServiceTelemetryReply:
       additionalProperties: false
       properties:
@@ -13125,6 +13157,32 @@ paths:
       summary: Host-vitals of a Soul
       tags:
         - soul
+  /v1/stats/services:
+    get:
+      description: "Per service: how many incarnations the caller can list (scoped like GET /v1/incarnations) and how many distinct hosts are members of them, counting only hosts inside the caller's soul.list visibility (the soul half of GET /v1/incarnations/{id}/members; incarnation.get, which gates that roster read, is not asked for here). A host bound to two incarnations of one service counts once. Services without an incarnation in scope are omitted. Fail-closed: an empty incarnation scope -> empty by_service; an empty soul scope -> hosts 0. Permission incarnation.list. Read-only, no audit."
+      operationId: getServiceStats
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/ServiceStatsReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Incarnations and hosts per service (Overview)
+      tags:
+        - stats
   /v1/synods:
     get:
       description: "Catalog of Synod groups with role bundle and member roster (ADR-049). Permission synod.list. SCOPED TO THE CALLER: the answer holds only the groups the caller could add someone to — a group's bundle and its roster together say which packages of privilege exist and who holds them, so synod.list is not the right to read all of it. A group is visible when the caller covers the effective rights of EVERY role it bundles (the ADR-049(f) add-operator rule, read backwards); a group that bundles nothing is visible to everyone, and a visible group comes back whole. A caller holding an unrestricted `*` — or the explicit `synod.list-all` right — sees every group. Read-only, no audit."

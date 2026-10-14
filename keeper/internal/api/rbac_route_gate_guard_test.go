@@ -202,6 +202,7 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/v1/incarnations/{id}/upgrade-paths"}:                      {asks: []string{"holds:incarnation.upgrade"}},
 	{http.MethodGet, "/v1/runs"}:                                                 {asks: []string{"holds:incarnation.history"}},
 	{http.MethodGet, "/v1/runs/stats"}:                                           {asks: []string{"holds:incarnation.history"}},
+	{http.MethodGet, "/v1/stats/services"}:                                       {asks: []string{"holds:incarnation.list"}},
 	{http.MethodGet, "/v1/deprecations"}:                                         {asks: []string{"holds:incarnation.list"}},
 
 	// --- choirs (ADR-044) ---
