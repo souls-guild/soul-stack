@@ -1,0 +1,23 @@
+-- 126_state_history_error_detail.up.sql
+--
+-- NIM-1000. Where a run that did not succeed stopped, in a form an operator can
+-- follow.
+--
+-- `error_summary` (migration 111) already holds the reason on the terminal row of
+-- such a run, as one masked line: the abort's cause, e.g. `render: task "x" (host h):
+-- render: cell "args[0]": CEL eval "…": no such key: …`. It is the text and
+-- stays the text. This column is the same reason taken apart — the abort code,
+-- the step the run stopped at, the task chain with the file and line each task
+-- is written at, the host, the params cell, the expression and the innermost
+-- cause — so the run detail and the runs feed can show it without parsing a
+-- sentence.
+--
+-- jsonb, NULL when there is nothing to take apart: a successful run, a row
+-- written before this migration, a transition marker. Its shape is
+-- `applyrun.RunFailure`; absence-in-jsonb is how it stays forward-compatible.
+--
+-- Masked on the write path like `error_summary`: a cause the failing expression
+-- could have quoted a secret into is withheld before it is stored, as far as the
+-- seal detector sees the read (docs/keeper/operator-api/incarnations.md).
+
+ALTER TABLE state_history ADD COLUMN error_detail JSONB;

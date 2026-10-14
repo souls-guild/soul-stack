@@ -68,7 +68,7 @@ func TestEmitRunCompleted_SingleEventWithChangedTasks(t *testing.T) {
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local", "c.local"}},
 	}
 
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, tasks, plans, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, tasks, plans, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want exactly 1 (per-incarnation, not per-host)", len(aw.events))
@@ -114,7 +114,7 @@ func TestEmitRunCompleted_NilAuditReaderNoChangedTasks(t *testing.T) {
 	tasks := []*render.RenderedTask{{Index: 0, Register: "pkg", Module: "core.pkg.installed"}}
 	plans := []render.DispatchPlan{{TaskIndex: 0, TargetSIDs: []string{"a.local"}}}
 
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, tasks, plans, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, tasks, plans, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1 (terminal fact written even without reader)", len(aw.events))
@@ -133,7 +133,7 @@ func TestEmitRunCompleted_NilAuditReaderNoChangedTasks(t *testing.T) {
 func TestEmitRunCompleted_NilAuditNoEvent(t *testing.T) {
 	r := runCompletedRunner(nil, &fakeChangedReader{})
 	// Must not panic and must write nothing.
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusSuccess, nil, nil, nil, slog.New(slog.DiscardHandler))
 }
 
 // TestEmitRunCompleted_FailedLateAbortPartialChangedTasks — a failure with a LATE
@@ -155,7 +155,7 @@ func TestEmitRunCompleted_FailedLateAbortPartialChangedTasks(t *testing.T) {
 		{TaskIndex: 0, TargetSIDs: []string{"a.local", "b.local"}},
 	}
 
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, tasks, plans, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, tasks, plans, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1 (failed terminal)", len(aw.events))
@@ -188,7 +188,7 @@ func TestEmitRunCompleted_FailedEarlyAbortEmptyChangedTasks(t *testing.T) {
 	r := runCompletedRunner(aw, &fakeChangedReader{})
 
 	// Early abort: neither tasks nor plans (render never ran) — must not panic.
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1 (failed terminal even on early abort)", len(aw.events))
@@ -215,7 +215,7 @@ func TestEmitRunCompleted_CadenceIDPresentWhenSet(t *testing.T) {
 	cadenceID := "cad-01"
 	spec.CadenceID = &cadenceID
 
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -233,7 +233,7 @@ func TestEmitRunCompleted_CadenceIDAbsentWhenNil(t *testing.T) {
 	r := runCompletedRunner(aw, nil)
 
 	spec := runCompletedSpec() // CadenceID == nil
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -254,7 +254,7 @@ func TestEmitRunCompleted_VoyageIDPresentWhenSet(t *testing.T) {
 	voyageID := "voy-77"
 	spec.VoyageID = &voyageID
 
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -275,7 +275,7 @@ func TestEmitRunCompleted_VoyageIDPresentOnFailed(t *testing.T) {
 	voyageID := "voy-88"
 	spec.VoyageID = &voyageID
 
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusFailed, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusFailed, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))
@@ -329,7 +329,7 @@ func TestEmitRunCompleted_VoyageIDAbsentWhenNil(t *testing.T) {
 	r := runCompletedRunner(aw, nil)
 
 	spec := runCompletedSpec() // VoyageID == nil
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusSuccess, nil, nil, nil, slog.New(slog.DiscardHandler))
 
 	if len(aw.events) != 1 {
 		t.Fatalf("emitted %d events, want 1", len(aw.events))

@@ -114,8 +114,19 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 			attribute.Int("hosts", len(in.Hosts)),
 		),
 	)
+	// The top-level task being rendered: every error of the loop below returns at
+	// once, so this is the task an error came from.
+	var (
+		failing    config.Task
+		failingIdx int
+		inTask     bool
+	)
 	defer func() {
 		if err != nil {
+			if inTask {
+				err = p.taskFailure(in, failing, frameIndex(failing, failingIdx), err)
+			}
+			err = p.passFailure(in, err)
 			span.SetStatus(codes.Error, "render_failed")
 		}
 		span.End()
@@ -199,6 +210,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// every expansion path automatically.
 	for i := range in.Scenario.Tasks {
 		task := in.Scenario.Tasks[i]
+		failing, failingIdx, inTask = task, idx, true
 
 		passage := taskPassageAt(in.TaskPassage, i)
 		passageStart := len(tasks)
@@ -454,6 +466,8 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		}
 	}
 
+	inTask = false
+
 	// Resolve `onchanges:`/`onfail:` register names to task indices (Variant
 	// A) as a final pass once the whole plan is built: with apply:destiny/loop
 	// the Index is contiguous but unknown earlier (renderTaskIter renders
@@ -503,7 +517,11 @@ func (p *Pipeline) renderTask(ctx context.Context, in RenderInput, task config.T
 // list (with an empty DispatchPlan); params render in a context without
 // soulprint so the RenderedTask is complete and the orchestrator simply
 // skips dispatch.
-func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task config.Task, idx int, targeted []*topology.HostFacts, loopVars map[string]any) (*RenderedTask, error) {
+func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task config.Task, idx int, targeted []*topology.HostFacts, loopVars map[string]any) (_ *RenderedTask, err error) {
+	// The innermost level that knows the task's pass: a destiny task is rendered
+	// here with the destiny's own seal sources.
+	defer func() { err = p.taskFailure(in, task, idx, err) }()
+
 	// Fail-closed guard: a host-variant flow-control predicate
 	// (soulprint.self) on a multi-host target would silently resolve using
 	// the first host's facts for everyone (dispatch hands out one
@@ -665,11 +683,11 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		vars := hostLoopVars(in, h, len(targeted), loopVars)
 		vars, err = resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
 		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			return nil, hostErr(task.Name, h.SID, err)
 		}
 		st, err := renderParams(p.cel, resolved, vars)
 		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			return nil, hostErr(task.Name, h.SID, err)
 		}
 		// core.file.rendered: build the per-host render_context
 		// (buildRenderContext) and place it in params alongside
@@ -716,7 +734,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 				fileVars = mergeVars(in.ServiceVars, fileVars)
 			}
 			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
-				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+				return nil, hostErr(task.Name, h.SID, err)
 			}
 			if len(renderHosts) > 1 {
 				if rt.RenderContextBySID == nil {
@@ -741,7 +759,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// and nothing of it travels.
 		fc, err := buildFlowContext(in, h, vars, len(targeted), fcReads)
 		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			return nil, hostErr(task.Name, h.SID, err)
 		}
 
 		// Every host's struct is kept, and the decision about them is taken AFTER
@@ -870,11 +888,11 @@ func (p *Pipeline) staticWhenSkips(
 		vars := hostLoopVars(in, h, targetCount, loopVars)
 		vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
 		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			return nil, hostErr(task.Name, h.SID, err)
 		}
 		fc, err := buildFlowContext(in, h, vars, targetCount, fcReads)
 		if err != nil {
-			return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+			return nil, hostErr(task.Name, h.SID, err)
 		}
 		if hi == 0 {
 			firstFC = fc

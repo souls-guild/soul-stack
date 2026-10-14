@@ -285,12 +285,24 @@ func (p *Pipeline) walkBlockChildren(
 	target blockChildTargeter,
 	recurse blockChildRecurser,
 	steps []config.StepNode,
-) ([]*RenderedTask, []DispatchPlan, error) {
+) (_ []*RenderedTask, _ []DispatchPlan, err error) {
+	// As in Render: every error below returns at once, from the child last set here.
+	var (
+		failing    config.Task
+		failingIdx int
+	)
+	defer func() {
+		if err != nil {
+			err = p.taskFailure(in, failing, frameIndex(failing, failingIdx), err)
+		}
+	}()
+
 	tasks := make([]*RenderedTask, 0, len(blockTask.Block.Block))
 	plans := make([]DispatchPlan, 0, len(blockTask.Block.Block))
 	idx := startIndex
 	for i := range blockTask.Block.Block {
 		child := mergeBlockInheritance(blockTask, blockTask.Block.Block[i])
+		failing, failingIdx = child, idx
 		var step *config.StepNode
 		if steps != nil {
 			step = &steps[i]

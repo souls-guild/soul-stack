@@ -300,6 +300,9 @@ func ListRuns(ctx context.Context, db ExecQueryRower, filter RunsFilter, scope i
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("applyrun: iterate global runs: %w", err)
 	}
+	if err := attachFailures(ctx, db, out); err != nil {
+		return nil, 0, err
+	}
 	return out, total, nil
 }
 

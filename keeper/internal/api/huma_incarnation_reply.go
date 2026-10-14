@@ -165,6 +165,37 @@ func newRunSummaryEntry(v handlers.RunSummaryView) RunSummaryEntry {
 		StartedAt:    v.StartedAt,
 		FinishedAt:   v.FinishedAt,
 		StartedByAID: v.StartedByAID,
+		Failure:      newRunFailureEntry(v.Failure),
+	}
+}
+
+// newRunFailureEntry projects a run's [applyrun.RunFailure] into native; nil → nil
+// (the key is omitted on a successful run).
+func newRunFailureEntry(f *applyrun.RunFailure) *RunFailureEntry {
+	if f == nil {
+		return nil
+	}
+	var tasks []RunFailureTaskEntry
+	for _, t := range f.Tasks {
+		var via []RunFailureSourceEntry
+		for _, s := range t.IncludedFrom {
+			via = append(via, RunFailureSourceEntry{File: s.File, Line: s.Line})
+		}
+		tasks = append(tasks, RunFailureTaskEntry{
+			Index: t.Index, Name: t.Name, Module: t.Module, Destiny: t.Destiny,
+			File: t.File, Line: t.Line, IncludedFrom: via,
+		})
+	}
+	return &RunFailureEntry{
+		Summary:       f.Summary,
+		Code:          f.Code,
+		Step:          f.Step,
+		Tasks:         tasks,
+		Host:          f.Host,
+		Cell:          f.Cell,
+		Expression:    f.Expression,
+		Cause:         f.Cause,
+		CauseWithheld: f.CauseWithheld,
 	}
 }
 
@@ -212,6 +243,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 		StartedByAID: v.StartedByAID,
 		Hosts:        hosts,
 		Input:        input,
+		Failure:      newRunFailureEntry(v.Failure),
 	}
 }
 

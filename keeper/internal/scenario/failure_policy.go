@@ -720,7 +720,7 @@ func (r *Runner) finishPartial(ctx context.Context, spec RunSpec, fails *runFail
 	cause = fails.errorOf(fmt.Sprintf("the run finished without %d dropped host(s)", len(fails.dropped)))
 	log.Warn("scenario: run finished without the hosts it dropped - incarnation locked",
 		slog.Int("dropped", len(fails.dropped)), slog.String("error", maskErrText(cause, sealedPaths)))
-	return r.lockIncarnation(ctx, spec, failureStatus(spec.TerminalMode), reasonPartialFailed, cause, sealedPaths, log), cause
+	return r.lockIncarnation(ctx, spec, failureStatus(spec.TerminalMode), reasonPartialFailed, cause, runFailureOf(reasonPartialFailed, -1, cause), sealedPaths, log), cause
 }
 
 func rowTerminal(s applyrun.Status) bool {

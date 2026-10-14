@@ -59,8 +59,8 @@ func TestEmitRunCompleted_CarriesExecutionModel(t *testing.T) {
 	r := runCompletedRunner(aw, nil)
 	spec := runCompletedSpec()
 	spec.executionModel = ExecutionLinear
-	r.emitRunCompleted(context.Background(), spec, runCompletedStatusFailed, nil, nil, slog.New(slog.DiscardHandler))
-	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), spec, runCompletedStatusFailed, nil, nil, nil, slog.New(slog.DiscardHandler))
+	r.emitRunCompleted(context.Background(), runCompletedSpec(), runCompletedStatusFailed, nil, nil, nil, slog.New(slog.DiscardHandler))
 	if len(aw.events) != 2 {
 		t.Fatalf("events = %d, want 2", len(aw.events))
 	}

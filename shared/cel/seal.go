@@ -210,7 +210,7 @@ func (e *Engine) DetectSealed(raw string, sources SealSources) bool {
 		if !s.expr {
 			continue
 		}
-		if e.exprReadsSecret(s.text, sources) {
+		if e.exprReadsSecret(s.text, sources, true) {
 			return true
 		}
 	}
@@ -220,17 +220,28 @@ func (e *Engine) DetectSealed(raw string, sources SealSources) bool {
 // PredicateReadsSecret is [Engine.DetectSealed] for a whole-string predicate
 // (`when:`, `failed_when:`), which carries no `${ … }` wrapper.
 func (e *Engine) PredicateReadsSecret(expr string, sources SealSources) bool {
-	return e.exprReadsSecret(expr, sources)
+	return e.exprReadsSecret(expr, sources, true)
+}
+
+// ReadsSecretField is [Engine.PredicateReadsSecret] with a single `vault()` call
+// not counted as a read: whether anything secret can be in a path the expression
+// hands to `vault()`. An error `vault()` raises names its path (NIM-1000). Two
+// calls count, wherever they sit: one's value can reach the other's path through
+// a comprehension variable no argument shows.
+func (e *Engine) ReadsSecretField(expr string, sources SealSources) bool {
+	return e.exprReadsSecret(expr, sources, false)
 }
 
 // exprReadsSecret parses one CEL expression (without the `${ }` wrapper) without
 // macros and returns true if anywhere in the tree it reads a secret source per
-// sources.
-func (e *Engine) exprReadsSecret(expr string, sources SealSources) bool {
+// sources. A `vault()` call is such a read when withVault, and otherwise only
+// beside another one.
+func (e *Engine) exprReadsSecret(expr string, sources SealSources, withVault bool) bool {
 	parsed, perr := e.parseNoMacro(expr)
 	if perr != nil {
 		return false
 	}
+	vaultCalls := 0
 	found := false
 	ast.PostOrderVisit(parsed.Expr(), ast.NewExprVisitor(func(n ast.Expr) {
 		if found {
@@ -239,7 +250,8 @@ func (e *Engine) exprReadsSecret(expr string, sources SealSources) bool {
 		switch n.Kind() {
 		case ast.CallKind:
 			if isVaultCall(n) {
-				found = true
+				vaultCalls++
+				found = withVault || vaultCalls > 1
 			}
 		case ast.IdentKind:
 			// A WHOLE-binding read: `${ item }` with no field, which reaches no

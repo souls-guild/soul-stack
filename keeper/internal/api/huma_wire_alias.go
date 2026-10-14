@@ -67,6 +67,9 @@ type (
 	PushRunListReply                  = wire.PushRunListReply
 	PushSummaryCounts                 = wire.PushSummaryCounts
 	RunDetailReply                    = wire.RunDetailReply
+	RunFailureEntry                   = wire.RunFailureEntry
+	RunFailureSourceEntry             = wire.RunFailureSourceEntry
+	RunFailureTaskEntry               = wire.RunFailureTaskEntry
 	RunHostStatusEntry                = wire.RunHostStatusEntry
 	RunNoticeEntry                    = wire.RunNoticeEntry
 	RunSummaryEntry                   = wire.RunSummaryEntry

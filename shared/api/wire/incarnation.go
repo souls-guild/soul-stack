@@ -177,12 +177,49 @@ type StateHistoryEntry struct {
 // finished_at / started_by_aid — omitempty (nil → key omitted: run still applying /
 // initiator removed). Form is symmetric with StateHistoryEntry.
 type RunSummaryEntry struct {
-	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
-	Scenario     string     `json:"scenario"`
-	Status       string     `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	ApplyID      string           `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Scenario     string           `json:"scenario"`
+	Status       string           `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
+	StartedAt    time.Time        `json:"started_at"`
+	FinishedAt   *time.Time       `json:"finished_at,omitempty"`
+	StartedByAID *string          `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	Failure      *RunFailureEntry `json:"failure,omitempty"`
+}
+
+// RunFailureEntry — why and where a run that did not succeed stopped (NIM-1000),
+// read from the run's terminal history row. summary is the one-line reason that
+// row records; the other fields are that reason taken apart and are present only
+// on a run recorded since they exist. Absent on a successful run and on one whose
+// terminal was never recorded. Masked on the write path: a cause the failing
+// expression could have quoted a secret into, as the seal detector sees it, is
+// withheld (cause_withheld) rather than stored.
+type RunFailureEntry struct {
+	Summary       string                `json:"summary,omitempty" doc:"the reason as one masked line - the error chain of the failure"`
+	Code          string                `json:"code,omitempty" doc:"the run's abort reason, e.g. render_failed, dispatch_failed, no_hosts"`
+	Step          *int                  `json:"step,omitempty" doc:"0-based step the run stopped at (hosts[].passage); absent when it stopped outside a step - before its first or after its last"`
+	Tasks         []RunFailureTaskEntry `json:"tasks,omitempty" doc:"task chain of a render failure, outermost first: a block and its child, an applier and the destiny task it expanded into"`
+	Host          string                `json:"host,omitempty" doc:"SID the failing evaluation ran for"`
+	Cell          string                `json:"cell,omitempty" doc:"params cell path that failed to render, e.g. args[0]"`
+	Expression    string                `json:"expression,omitempty" doc:"the CEL expression as the author wrote it"`
+	Cause         string                `json:"cause,omitempty" doc:"innermost reason; a fixed sentence when cause_withheld"`
+	CauseWithheld bool                  `json:"cause_withheld,omitempty" doc:"the failing expression reads a secret, so the evaluator's own message - which can quote a value - was not recorded"`
+}
+
+// RunFailureTaskEntry — one task of RunFailureEntry.tasks.
+type RunFailureTaskEntry struct {
+	Index        *int                    `json:"index,omitempty" doc:"plan_index of the task (tasks[].plan_index of GET .../runs/{apply_id}/tasks), a loop iteration's own; absent for a task that expands (a block, an applier), for an assert, which renders into no task, and for a loop whose failing iteration is not known"`
+	Name         string                  `json:"name,omitempty"`
+	Module       string                  `json:"module,omitempty"`
+	Destiny      string                  `json:"destiny,omitempty" doc:"the destiny an applier task applies"`
+	File         string                  `json:"file,omitempty" doc:"file the task is written in, relative to its artifact: the service for a scenario task (scenario/<name>/main.yml), the destiny the applier above it names for a destiny task"`
+	Line         int                     `json:"line,omitempty" doc:"1-based line of the task in file"`
+	IncludedFrom []RunFailureSourceEntry `json:"included_from,omitempty" doc:"the include: tasks that spliced this task in, outermost first"`
+}
+
+// RunFailureSourceEntry — a line of a file of an artifact.
+type RunFailureSourceEntry struct {
+	File string `json:"file"`
+	Line int    `json:"line"`
 }
 
 // RunHostStatusEntry — native element of runs/{apply_id}.hosts[]: one row of one host
@@ -236,6 +273,7 @@ type RunDetailReply struct {
 	StartedByAID *string                 `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
 	Hosts        []RunHostStatusEntry    `json:"hosts"`
 	Input        *map[string]interface{} `json:"input,omitempty"`
+	Failure      *RunFailureEntry        `json:"failure,omitempty"`
 }
 
 // RunTaskErrorEntry — native error part of a per-host task outcome (FAILED/TIMED_OUT).

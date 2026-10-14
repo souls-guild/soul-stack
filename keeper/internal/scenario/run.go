@@ -140,6 +140,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// aborts with the whole list, whatever stops it.
 	var fails *runFailures
 
+	// The step the run is at, for the record of an abort (NIM-1000): the run
+	// sentinel's passage and the failure's step. -1 before the first step and
+	// after the last.
+	atStep := -1
+
 	// From here, a run failure means failStatus (state untouched). result stays
 	// runResultFailed on any abort exit below; ok is set only on a successful
 	// finish.
@@ -153,10 +158,16 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// with the masked DB status_details.
 		maskedCause := errors.New(maskErrText(cause, sealed.Paths()))
 		span.RecordError(maskedCause)
-		log.Error("scenario: run failed - incarnation locked",
+		failure := runFailureOf(reason, atStep, cause)
+		attrs := []any{
 			slog.String("reason", reason),
 			slog.String("terminal_status", string(failStatus)),
-			slog.String("error", maskErrText(cause, sealed.Paths())))
+			slog.String("error", maskErrText(cause, sealed.Paths())),
+		}
+		if failure.Step != nil {
+			attrs = append(attrs, slog.Int("step", *failure.Step))
+		}
+		log.Error("scenario: run failed - incarnation locked", attrs...)
 		// BAG-1: guarantee a terminal apply_runs row for the run. An early abort
 		// (no_hosts etc.) happens BEFORE dispatch — no apply_runs row exists yet,
 		// and the Voyage-awaiter polls for all rows to reach terminal, waiting
@@ -177,8 +188,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// sees an aborted run between two steps as `applying` only while the lock
 		// is held — after the release, as whatever its rows say (NIM-972).
 		keepRunning := errors.Is(cause, errCancelRequested)
-		r.ensureTerminalApplyRun(ctx, spec, reason, failureTerminalStatus(cause), keepRunning, log)
-		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, sealed.Paths(), log)
+		r.ensureTerminalApplyRun(ctx, spec, reason, max(atStep, 0), failureTerminalStatus(cause), keepRunning, log)
+		finalized := r.lockIncarnation(ctx, spec, failStatus, reason, cause, failure, sealed.Paths(), log)
 
 		// Terminal run-failure event (T4 foundation, ADR-052 §k):
 		// incarnation.run_completed (status=failed) with partial/empty
@@ -194,7 +205,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		// a single value (error_locked → failed, no sub-statuses). Best-effort:
 		// doesn't fail failure handling (detached ctx inside emitRunCompleted).
 		if spec.TerminalMode != TerminalDestroy && finalized {
-			r.emitRunCompleted(ctx, spec, runCompletedStatusFailed, tasks, plans, log)
+			r.emitRunCompleted(ctx, spec, runCompletedStatusFailed, tasks, plans, maskedFailure(failure, cause), log)
 		}
 	}
 
@@ -621,6 +632,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 		renderIn.SoulNeeds = render.NewSoulNeeds()
 	}
 
+	atStep = 0
 	tasks, plans, err = r.deps.Render.Render(ctx, renderIn)
 	if err != nil {
 		// A destiny resolved mid-render declared a window this keeper is outside
@@ -737,6 +749,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			abort("dispatch_failed", err)
 			return
 		}
+		atStep = -1
 	} else {
 		// Passage loop (ADR-056 §c): for each Passage P in order —
 		//   render(tasks in P, RegisterByHost = accumulated from Passage < P) →
@@ -761,6 +774,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			rescueSteps = config.RescueSteps(scn.Tasks, steps)
 		}
 		for p := 0; p < passage.Count; p++ {
+			atStep = p
 			var rescue *render.Rescue
 			if p > 0 && fails != nil {
 				if fails.ended && len(rescueSteps[p]) == 0 {
@@ -1023,6 +1037,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 				}
 			}
 		}
+		atStep = -1
 		// A run that a failure ended ends after the barrier of its last rescue.
 		if fails != nil && fails.ended {
 			abort("dispatch_failed", errRunEnded)
@@ -1040,7 +1055,8 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 			finalized, cause := r.finishPartial(ctx, spec, fails, sealed.Paths(), log)
 			span.RecordError(errors.New(maskErrText(cause, sealed.Paths())))
 			if finalized {
-				r.emitRunCompleted(ctx, spec, runCompletedStatusPartialFailed, tasks, plans, log)
+				r.emitRunCompleted(ctx, spec, runCompletedStatusPartialFailed, tasks, plans,
+					maskedFailure(runFailureOf(reasonPartialFailed, -1, cause), cause), log)
 			}
 			return
 		}
@@ -1140,7 +1156,7 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	// above via its own path — destroy_completed/destroy_failed; failures go
 	// through abort). Best-effort: doesn't fail an already-successful run
 	// (result=runResultOK already recorded).
-	r.emitRunCompleted(ctx, spec, runCompletedStatusSuccess, tasks, plans, log)
+	r.emitRunCompleted(ctx, spec, runCompletedStatusSuccess, tasks, plans, nil, log)
 }
 
 // resolveRoster resolves the run's host roster by the incarnation's root Coven
@@ -1412,7 +1428,7 @@ func failureStatus(mode TerminalMode) incarnation.Status {
 // exactly one winning instance (no duplicate event on a recovery takeover,
 // symmetric to the success branch, where the losing commit returns before
 // emitRunCompleted).
-func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus incarnation.Status, reason string, cause error, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
+func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus incarnation.Status, reason string, cause error, failure *applyrun.RunFailure, sealedPaths map[string]bool, log *slog.Logger) (finalized bool) {
 	// Commit under a detached ctx: the original ctx may have been cancelled
 	// (Cancel/Shutdown/timeout), but error_locked must be recorded regardless.
 	// WithoutCancel: keeps trace baggage, doesn't inherit the teardown path's
@@ -1460,7 +1476,7 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus i
 			// change, so the engines that produced it did not change either — the
 			// last successful run's stamp stays (COALESCE).
 			nil,
-			r.runOutcome(spec, failStatus, cause),
+			r.runOutcome(spec, failStatus, cause, failure),
 		)
 	})
 	if err != nil {
@@ -1514,7 +1530,9 @@ func (r *Runner) lockIncarnation(ctx context.Context, spec RunSpec, failStatus i
 //     topology_failed / service_vars_failed / input_invalid / render_failed, and
 //     also keeper_dispatch_failed on Passage 0 — the first Passage's keeper
 //     tasks run BEFORE any host-dispatch) — insert ONE sentinel row
-//     [render.RunSentinelSID] with status=`terminal` and error_summary=reason.
+//     [render.RunSentinelSID] with status=`terminal`, error_summary=reason and
+//     passage=step, the step the run stopped at (0 when it stopped outside a
+//     step).
 //
 // `terminal` is the failure terminal status (see [failureTerminalStatus]):
 // cancelled on operator Cancel, otherwise failed.
@@ -1556,7 +1574,7 @@ func failureTerminalStatus(cause error) applyrun.Status {
 	return applyrun.StatusFailed
 }
 
-func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reason string, terminal applyrun.Status, keepRunning bool, log *slog.Logger) {
+func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reason string, step int, terminal applyrun.Status, keepRunning bool, log *slog.Logger) {
 	wctx, cancel := context.WithTimeout(context.WithoutCancel(ctx), 5*time.Second)
 	defer cancel()
 
@@ -1584,8 +1602,11 @@ func (r *Runner) ensureTerminalApplyRun(ctx context.Context, spec RunSpec, reaso
 			Scenario:        spec.ScenarioName,
 			Status:          terminal,
 			ErrorSummary:    &summary,
-			StartedByAID:    startedByPtr(spec.StartedByAID),
-			Input:           spec.inputSnapshot,
+			// The step the run stopped at: a render that fails at step 2 leaves
+			// only step 1's rows, and the sentinel is the one row naming step 2.
+			Passage:      step,
+			StartedByAID: startedByPtr(spec.StartedByAID),
+			Input:        spec.inputSnapshot,
 			// Engine provenance (ADR-0076(l)): the sentinel closes a run that never
 			// reached a host, so only the keeper that tried is recordable — and it
 			// is worth recording, since an abort at render is exactly the failure a
@@ -1681,14 +1702,15 @@ func destroyForce(inc *incarnation.Incarnation) bool {
 // fatal to the terminal: the run's
 // outcome must be recorded even if its snapshot cannot be, and an unreplayable
 // row is a 422 asking for the input, not a lost terminal.
-func (r *Runner) runOutcome(spec RunSpec, status incarnation.Status, cause error) *incarnation.RunOutcome {
+func (r *Runner) runOutcome(spec RunSpec, status incarnation.Status, cause error, failure *applyrun.RunFailure) *incarnation.RunOutcome {
 	out := &incarnation.RunOutcome{
 		Status:     string(status),
 		FinishedAt: time.Now().UTC(),
 	}
 	if cause != nil {
-		out.ErrorSummary = audit.MaskSecrets(map[string]any{"e": cause.Error()})["e"].(string)
+		out.ErrorSummary = maskText(cause.Error())
 	}
+	out.ErrorDetail = failureDetail(failure)
 	snapshot, err := applyrun.MarshalRecipe(&applyrun.Recipe{
 		ServiceRef:   spec.ServiceRef,
 		ScenarioName: spec.ScenarioName,
@@ -1738,7 +1760,7 @@ func (r *Runner) commitSuccess(ctx context.Context, spec RunSpec, stateBefore ma
 			startedByPtr(spec.StartedByAID),
 			historyID,
 			engineCompat,
-			r.runOutcome(spec, incarnation.StatusReady, nil),
+			r.runOutcome(spec, incarnation.StatusReady, nil, nil),
 		)
 	})
 }
@@ -1794,7 +1816,7 @@ const (
 // (timeout/Cancel/Shutdown on failure), but the run's terminal must still be
 // recorded. All errors are only logged (warn) — the run already reached
 // terminal, losing the event just degrades observability.
-func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status string, tasks []*render.RenderedTask, plans []render.DispatchPlan, log *slog.Logger) {
+func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status string, tasks []*render.RenderedTask, plans []render.DispatchPlan, failure map[string]any, log *slog.Logger) {
 	if r.deps.Audit == nil {
 		return
 	}
@@ -1831,6 +1853,11 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 	// stamped on the successful commit only.
 	if spec.executionModel != "" {
 		payload["execution_model"] = string(spec.executionModel)
+	}
+	// Why a failed run stopped (NIM-1000), already masked: the record the runs API
+	// serves, with the reason's text as `summary`.
+	if failure != nil {
+		payload["failure"] = failure
 	}
 
 	ev := &audit.Event{

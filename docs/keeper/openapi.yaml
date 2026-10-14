@@ -1180,6 +1180,8 @@ components:
         apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
+        failure:
+          $ref: "#/components/schemas/RunFailureEntry"
         finished_at:
           format: date-time
           type: string
@@ -3115,6 +3117,8 @@ components:
         apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
+        failure:
+          $ref: "#/components/schemas/RunFailureEntry"
         finished_at:
           format: date-time
           type: string
@@ -3149,6 +3153,83 @@ components:
         - status
         - started_at
         - hosts
+      type: object
+    RunFailureEntry:
+      additionalProperties: false
+      properties:
+        cause:
+          description: innermost reason; a fixed sentence when cause_withheld
+          type: string
+        cause_withheld:
+          description: the failing expression reads a secret, so the evaluator's own message - which can quote a value - was not recorded
+          type: boolean
+        cell:
+          description: params cell path that failed to render, e.g. args[0]
+          type: string
+        code:
+          description: the run's abort reason, e.g. render_failed, dispatch_failed, no_hosts
+          type: string
+        expression:
+          description: the CEL expression as the author wrote it
+          type: string
+        host:
+          description: SID the failing evaluation ran for
+          type: string
+        step:
+          description: 0-based step the run stopped at (hosts[].passage); absent when it stopped outside a step - before its first or after its last
+          format: int64
+          type: integer
+        summary:
+          description: the reason as one masked line - the error chain of the failure
+          type: string
+        tasks:
+          description: "task chain of a render failure, outermost first: a block and its child, an applier and the destiny task it expanded into"
+          items:
+            $ref: "#/components/schemas/RunFailureTaskEntry"
+          type:
+            - array
+            - "null"
+      type: object
+    RunFailureSourceEntry:
+      additionalProperties: false
+      properties:
+        file:
+          type: string
+        line:
+          format: int64
+          type: integer
+      required:
+        - file
+        - line
+      type: object
+    RunFailureTaskEntry:
+      additionalProperties: false
+      properties:
+        destiny:
+          description: the destiny an applier task applies
+          type: string
+        file:
+          description: "file the task is written in, relative to its artifact: the service for a scenario task (scenario/<name>/main.yml), the destiny the applier above it names for a destiny task"
+          type: string
+        included_from:
+          description: "the include: tasks that spliced this task in, outermost first"
+          items:
+            $ref: "#/components/schemas/RunFailureSourceEntry"
+          type:
+            - array
+            - "null"
+        index:
+          description: plan_index of the task (tasks[].plan_index of GET .../runs/{apply_id}/tasks), a loop iteration's own; absent for a task that expands (a block, an applier), for an assert, which renders into no task, and for a loop whose failing iteration is not known
+          format: int64
+          type: integer
+        line:
+          description: 1-based line of the task in file
+          format: int64
+          type: integer
+        module:
+          type: string
+        name:
+          type: string
       type: object
     RunHostStatusEntry:
       additionalProperties: false
@@ -3216,6 +3297,8 @@ components:
         apply_id:
           pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
           type: string
+        failure:
+          $ref: "#/components/schemas/RunFailureEntry"
         finished_at:
           format: date-time
           type: string

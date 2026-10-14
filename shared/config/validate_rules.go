@@ -104,6 +104,22 @@ func (f ValidateRuleFailure) Error() string {
 	return fmt.Sprintf("%s (validate[%d] %q evaluated to false)", f.Message, f.Index, f.That)
 }
 
+// ValidateRuleError is a `validate:` rule that failed to evaluate, as opposed to
+// one that evaluated false. Err is the evaluator's own message, and it can quote
+// an input value: a caller that knows which inputs are secret decides whether to
+// show it (NIM-1000).
+type ValidateRuleError struct {
+	Index int
+	That  string
+	Err   error
+}
+
+func (e *ValidateRuleError) Error() string {
+	return fmt.Sprintf("validate[%d] %q: %v", e.Index, e.That, e.Err)
+}
+
+func (e *ValidateRuleError) Unwrap() error { return e.Err }
+
 // EvalValidateRules evaluates the `validate:` rules over the merged input (after
 // mergeInputDefaults) and the incarnation facts inc says this path knows. Returns:
 //   - (nil, nil) — all rules passed (or the list is empty);
@@ -145,7 +161,7 @@ func EvalValidateRules(rules []ValidateRule, merged map[string]any, inc Validate
 		}
 		out, _, err := prg.Eval(act)
 		if err != nil {
-			return nil, fmt.Errorf("validate[%d] %q: %w", i, rule.That, err)
+			return nil, &ValidateRuleError{Index: i, That: rule.That, Err: err}
 		}
 		b, ok := out.Value().(bool)
 		if !ok {

@@ -159,9 +159,9 @@ func expandIncludes(tasks []Task, resolve IncludeResolver, destinyTasks bool, mo
 	// run list: per-file validateTaskRefs catches a duplicate within one file, but
 	// not between the main file and an expanded include (each file there is
 	// validated in its own scope). This check runs on the final flat `[]Task` —
-	// one pass after flatten — and catches a cross-include duplicate. There are no
-	// line/col coordinates at this level (expansion erased AST positions); the
-	// diagnostic addresses by name.
+	// one pass after flatten — and catches a cross-include duplicate. The AST is
+	// gone at this level (each task keeps only its Source line); the diagnostic
+	// addresses by name.
 	if !diag.HasErrors(e.diags) {
 		e.diags = append(e.diags, validateFlatTaskAddresses(out)...)
 		e.diags = append(e.diags, validateFlatBlockKeeperSide(out)...)
@@ -515,6 +515,7 @@ func (e *includeExpander) expandOne(task Task, stack []string, ancestorWhen stri
 	}
 
 	expanded := e.expand(parsed, append(append([]string(nil), stack...), display), effectiveWhen, outer)
+	prependIncludedFrom(expanded, task.Source)
 	if groupID != 0 {
 		stampIncludeGroup(expanded, effectiveWhen, groupID)
 	}

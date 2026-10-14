@@ -62,7 +62,7 @@ func renderValue(engine *cel.Engine, v any, vars cel.Vars, path string) (any, er
 	case string:
 		res, err := engine.EvalInterpolation(t, vars)
 		if err != nil {
-			return nil, fmt.Errorf("render: cell %q: %w", path, err)
+			return nil, &cellError{path: path, err: err}
 		}
 		return res, nil
 	default:

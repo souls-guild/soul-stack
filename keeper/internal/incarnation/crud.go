@@ -855,6 +855,9 @@ type RunOutcome struct {
 	Status       string
 	FinishedAt   time.Time
 	ErrorSummary string
+	// ErrorDetail is the marshalled `applyrun.RunFailure` (migration 126, NIM-1000)
+	// — bytes for the same import-cycle reason as Snapshot.
+	ErrorDetail []byte
 }
 
 func UpdateStateFromRun(
@@ -921,6 +924,7 @@ func UpdateStateFromRun(
 		runStatusArg    any
 		finishedAtArg   any
 		errorSummaryArg any
+		errorDetailArg  any
 	)
 	if outcome != nil {
 		if len(outcome.Snapshot) > 0 {
@@ -935,19 +939,22 @@ func UpdateStateFromRun(
 		if outcome.ErrorSummary != "" {
 			errorSummaryArg = outcome.ErrorSummary
 		}
+		if len(outcome.ErrorDetail) > 0 {
+			errorDetailArg = outcome.ErrorDetail
+		}
 	}
 
 	const historyInsertSQL = `
 INSERT INTO state_history (
     history_id, incarnation_name, scenario, state_before, state_after,
     changed_by_aid, apply_id, engine_compat,
-    run, run_status, finished_at, error_summary
-) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)
+    run, run_status, finished_at, error_summary, error_detail
+) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)
 `
 	if _, err := tx.Exec(ctx, historyInsertSQL,
 		historyID, id, scenario, stateBeforeBytes, stateAfterBytes, changedByArg, applyID,
 		engineCompatArg,
-		runArg, runStatusArg, finishedAtArg, errorSummaryArg,
+		runArg, runStatusArg, finishedAtArg, errorSummaryArg, errorDetailArg,
 	); err != nil {
 		return fmt.Errorf("incarnation: insert state_history: %w", err)
 	}

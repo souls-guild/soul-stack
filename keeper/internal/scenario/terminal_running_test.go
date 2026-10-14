@@ -75,7 +75,7 @@ func TestIntegration_EnsureTerminal_TimeoutForceFailsRunning(t *testing.T) {
 	spec := RunSpec{ApplyID: applyID, IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
 	// keepRunning=false (timeout): force-fail including running.
-	r.ensureTerminalApplyRun(context.Background(), spec, "run_timeout", applyrun.StatusFailed, false, slog.Default())
+	r.ensureTerminalApplyRun(context.Background(), spec, "run_timeout", 0, applyrun.StatusFailed, false, slog.Default())
 
 	got := statusByApplyID(t, applyID)
 	if got["host-running.example.com"] != applyrun.StatusFailed {
@@ -114,7 +114,7 @@ func TestIntegration_EnsureTerminal_CancelKeepsRunning(t *testing.T) {
 	spec := RunSpec{ApplyID: applyID, IncarnationName: "noop-prod", ScenarioName: "create", StartedByAID: "archon-alice"}
 
 	// keepRunning=true (operator-Cancel): planned/claimed/dispatched → cancelled, running — keep.
-	r.ensureTerminalApplyRun(context.Background(), spec, "cancelled", applyrun.StatusCancelled, true, slog.Default())
+	r.ensureTerminalApplyRun(context.Background(), spec, "cancelled", 0, applyrun.StatusCancelled, true, slog.Default())
 
 	got := statusByApplyID(t, applyID)
 	if got["host-running.example.com"] != applyrun.StatusRunning {

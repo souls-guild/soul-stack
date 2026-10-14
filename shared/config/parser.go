@@ -139,6 +139,7 @@ func LoadScenarioManifest(path string, opts ValidateOptions) (*ScenarioManifest,
 func LoadScenarioManifestFromBytes(filename string, data []byte, opts ValidateOptions) (*ScenarioManifest, *Document, []diag.Diagnostic, error) {
 	cfg := &ScenarioManifest{}
 	doc, diags := parseAndValidate(filename, stripBOM(data), cfg, opts, semanticValidateScenario)
+	stampSourceFile(cfg.Tasks, filename)
 	return cfg, doc, diags, nil
 }
 

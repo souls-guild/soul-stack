@@ -277,24 +277,24 @@ func expandVaultMacro(mef parser.ExprHelper, _ ast.Expr, args []ast.Expr) (ast.E
 func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	path, ok := pathVal.Value().(string)
 	if !ok {
-		return types.NewErr("vault(): the path argument must be a string, got %s", pathVal.Type().TypeName())
+		return types.NewErr(vaultErrPrefix+"the path argument must be a string, got %s", pathVal.Type().TypeName())
 	}
 	res, ok := resolverVal.Value().(*vaultResolver)
 	if !ok || res == nil || res.kv == nil {
-		return types.NewErr("vault(): %v", ErrVaultUnavailable)
+		return types.NewErr(vaultErrPrefix+"%v", ErrVaultUnavailable)
 	}
 
 	// Before the memo, not after: a path the guard rejects must never be served from
 	// a cache entry a legitimate read put there.
 	if g := vaultPathGuardFrom(res.ctx); g != nil {
 		if err := g(path); err != nil {
-			return types.NewErr("vault(): %v", err)
+			return types.NewErr(vaultErrPrefix+"%v", err)
 		}
 	}
 
 	body, field, err := splitVaultField(path)
 	if err != nil {
-		return types.NewErr("vault(): %v", err)
+		return types.NewErr(vaultErrPrefix+"%v", err)
 	}
 
 	data, rerr := readKVMemoized(res.ctx, res.kv, body)
@@ -306,9 +306,9 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		// `vault:<mount>/`, so it survives masking of status_details/error_summary —
 		// the operator sees a clear cause, not `***MASKED***`.
 		if field != "" {
-			return types.NewErr("vault(): secret %s#%s not found in Vault (KV path not found or no access)", vaultPathHint(body), field)
+			return types.NewErr(vaultErrPrefix+"secret %s#%s not found in Vault (KV path not found or no access)", vaultPathHint(body), field)
 		}
-		return types.NewErr("vault(): secret %s not found in Vault (KV path not found or no access)", vaultPathHint(body))
+		return types.NewErr(vaultErrPrefix+"secret %s not found in Vault (KV path not found or no access)", vaultPathHint(body))
 	}
 
 	if field == "" {
@@ -319,9 +319,20 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		// Path+field name is actionable diagnostics (which field to seed), not a
 		// secret value: values of other secret fields are NOT put into the text. The
 		// path in flat form survives masking (NIM-73).
-		return types.NewErr("vault(): secret %s has no field %q", vaultPathHint(body), field)
+		return types.NewErr(vaultErrPrefix+"secret %s has no field %q", vaultPathHint(body), field)
 	}
 	return types.DefaultTypeAdapter.NativeToValue(val)
+}
+
+// vaultErrPrefix opens every error [callVault] returns.
+const vaultErrPrefix = "vault(): "
+
+// IsVaultError reports whether msg is an error [callVault] raised. Those name a
+// path and a field and never a value (NIM-73), so a caller that withholds CEL
+// errors because they can quote a secret (NIM-1000) may keep these: they are the
+// actionable half of a failed read.
+func IsVaultError(msg string) bool {
+	return strings.HasPrefix(msg, vaultErrPrefix)
 }
 
 // vaultPathHint normalizes a Vault KV path for actionable vault() error texts (NIM-73):

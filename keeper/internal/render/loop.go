@@ -75,7 +75,7 @@ func (p *Pipeline) renderLoopTask(
 	// branch.
 	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
 	if err != nil {
-		return nil, nil, fmt.Errorf("render: task %q loop: %w", task.Name, err)
+		return nil, nil, p.taskFailure(in, task, -1, fmt.Errorf("render: task %q loop: %w", task.Name, err))
 	}
 
 	width := serialWidth(task.Serial, len(targeted))
@@ -85,7 +85,9 @@ func (p *Pipeline) renderLoopTask(
 	for _, it := range iters {
 		keep, werr := evalLoopWhen(p.cel, in, task.Loop.When, it)
 		if werr != nil {
-			return nil, nil, fmt.Errorf("render: task %q: %w", task.Name, werr)
+			// Here, with `in` carrying the secret loop binding: above this function
+			// nothing knows `<as>` is secret.
+			return nil, nil, p.taskFailure(in, task, idx, fmt.Errorf("render: task %q: %w", task.Name, werr))
 		}
 		if !keep {
 			continue

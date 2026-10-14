@@ -148,7 +148,25 @@ func (p *Pipeline) renderApplyDestiny(
 	startIndex int,
 	targeted []*topology.HostFacts,
 	serialWidth int,
-) ([]*RenderedTask, []DispatchPlan, error) {
+) (_ []*RenderedTask, _ []DispatchPlan, err error) {
+	// Set once the pass exists: from there an error is the destiny's, withheld by
+	// the destiny's own secret inputs and addressed by the destiny task last set.
+	var (
+		pass       *RenderInput
+		failing    config.Task
+		failingIdx int
+		inTask     bool
+	)
+	defer func() {
+		if err == nil || pass == nil {
+			return
+		}
+		if inTask {
+			err = p.taskFailure(*pass, failing, frameIndex(failing, failingIdx), err)
+		}
+		err = p.passFailure(*pass, err)
+	}()
+
 	applier.Timeout = wireTimeout(parentIn, applier)
 	apply := applier.Apply
 	applierRegister := applier.Register
@@ -171,6 +189,17 @@ func (p *Pipeline) renderApplyDestiny(
 	variantInputs := hostVariantInputNames(p.cel, applier, keeperRegisterNames(parentIn.Scenario))
 	inputByHost, destinyInput, extraVariant, err := p.resolveApplyInput(parentIn, applier, resolved, targeted, variantInputs)
 	if err != nil {
+		// A destiny `validate:` rule reads the destiny's inputs, so the destiny's
+		// schema says which of them are secret; the apply.input expressions above
+		// it are the scenario's, and the scenario level decides those.
+		var ruleErr *config.ValidateRuleError
+		if errors.As(err, &ruleErr) {
+			err = p.passFailure(RenderInput{
+				Scenario:          &config.ScenarioManifest{Name: resolved.Name, Input: resolved.Input},
+				SecretStateFields: parentIn.SecretStateFields,
+				destinyIsolated:   true,
+			}, err)
+		}
 		return nil, nil, err
 	}
 	// A name the TEXT read as invariant whose VALUES turned out to differ (a
@@ -239,6 +268,16 @@ func (p *Pipeline) renderApplyDestiny(
 		// deliberately: its paths are matched against each task's own params root.
 		Sealed: parentIn.Sealed,
 	}
+	pass = &destinyIn
+
+	// The file layer's taint (NIM-811), from the RAW vars.yml text and once for
+	// the pass — the values below are per-host, the provenance is not. This is the
+	// bottom of the `vars.*` taint every task of this pass stacks its own `vars:`
+	// on; a destiny local written as `${ input.<secret> }` is the same hop a task
+	// var is, and with the destiny schema now carried it is finally detectable.
+	// Before the resolve: a local that fails to resolve over another one's secret
+	// is withheld by it (NIM-1000).
+	destinyIn.sealedFileVars = sealedVarNames(p.cel, resolved.Vars, scenarioSealSources(destinyIn))
 
 	// destiny locals from vars.yml (Option A, vars.md): resolved ONCE per
 	// pass, per host, over the destiny env (destiny input + soulprint.self +
@@ -256,13 +295,6 @@ func (p *Pipeline) renderApplyDestiny(
 	// together into every host-free context of this pass.
 	destinyIn.hostVariantVars = hostVariantDestinyVars(p.cel, resolved.Vars, variantInputs)
 
-	// The file layer's taint (NIM-811), from the RAW vars.yml text and once for
-	// the pass — the values above are per-host, the provenance is not. This is the
-	// bottom of the `vars.*` taint every task of this pass stacks its own `vars:`
-	// on; a destiny local written as `${ input.<secret> }` is the same hop a task
-	// var is, and with the destiny schema now carried it is finally detectable.
-	destinyIn.sealedFileVars = sealedVarNames(p.cel, resolved.Vars, scenarioSealSources(destinyIn))
-
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))
 	idx := startIndex
@@ -277,6 +309,7 @@ func (p *Pipeline) renderApplyDestiny(
 
 	for i := range resolved.Tasks {
 		task := mergeApplierInheritance(applier, resolved.Tasks[i])
+		failing, failingIdx, inTask = task, idx, true
 
 		// Conditional-include group-drop (ADR-009 amendment) — mirrors the
 		// scenario loop (pipeline.go), runs BEFORE emitStaticWhenSkip and
@@ -374,6 +407,7 @@ func (p *Pipeline) renderApplyDestiny(
 		})
 		idx++
 	}
+	inTask = false
 
 	// applier-register materialization (orchestration.md §2.1.1, Option B): if
 	// the applier task carries register:, the destiny run's summary MUST be
@@ -455,7 +489,7 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 		base := hostVars(destinyIn, host, len(targeted)) // base.Vars empty — start of layer
 		resolved, err := resolveVarLayer(p.cel, raw, nil, base)
 		if err != nil {
-			return nil, fmt.Errorf("render: destiny %q (vars.yml, host %s): %w", destinyIn.Scenario.Name, host.SID, err)
+			return nil, atHost(host.SID, fmt.Errorf("render: destiny %q (vars.yml, host %s): %w", destinyIn.Scenario.Name, host.SID, err))
 		}
 		out[host.SID] = resolved
 	}
@@ -549,14 +583,14 @@ func (p *Pipeline) resolveApplyInput(
 		vars := hostVars(parentIn, host, len(targeted))
 		vars, verr := resolveTaskVars(p.cel, fileVarsForHost(parentIn, host), applier.Vars, vars)
 		if verr != nil {
-			return nil, nil, nil, fmt.Errorf("render: apply destiny %q (task %q, host %s): %w", apply.Destiny, applier.Name, host.SID, verr)
+			return nil, nil, nil, atHost(host.SID, fmt.Errorf("render: apply destiny %q (task %q, host %s): %w", apply.Destiny, applier.Name, host.SID, verr))
 		}
 
 		rendered := make(map[string]any, len(apply.Input))
 		for name, raw := range apply.Input {
 			val, rerr := renderValue(p.cel, raw, vars, "apply.input."+name)
 			if rerr != nil {
-				return nil, nil, nil, fmt.Errorf("render: apply destiny %q input %q (host %s): %w", apply.Destiny, name, host.SID, rerr)
+				return nil, nil, nil, atHost(host.SID, fmt.Errorf("render: apply destiny %q input %q (host %s): %w", apply.Destiny, name, host.SID, rerr))
 			}
 			rendered[name] = val
 		}
@@ -564,7 +598,7 @@ func (p *Pipeline) resolveApplyInput(
 		merged, cerr := config.ResolveInputContract(resolved.Input, resolved.Validate, rendered,
 			config.OutOfScopeIncarnation(config.IncarnationOutOfScopeDestiny))
 		if cerr != nil {
-			return nil, nil, nil, destinyInputError(apply.Destiny, host.SID, cerr)
+			return nil, nil, nil, atHost(host.SID, destinyInputError(apply.Destiny, host.SID, cerr))
 		}
 		byHost[host.SID] = merged
 	}

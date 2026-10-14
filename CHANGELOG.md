@@ -383,6 +383,16 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   (compared as a duration, `"0"` for none), its `failed_when` text and its `onfail` sources
   ([ADR-023](docs/adr/0023-trial-test-runner.md) amendment 2026-10-14).
 
+- **A run that did not succeed says where it stopped (NIM-1000).** The run detail and both run
+  lists gain `failure`: the abort code, the step, and for a render failure the task chain with the
+  file and line each task is written at (`include:` chain too), the host, the params cell, the CEL
+  expression and the cause. It is kept on the run's terminal history row (`state_history.error_detail`,
+  migration 126) and carried by `incarnation.run_completed`; the run sentinel row (`sid: __run__`)
+  now sits at the step the run stopped at instead of 0. A cause the failing expression could have
+  quoted a secret into is withheld everywhere the error is printed — before this, a lookup keyed by
+  a secret input put the secret into `status_details` and the log. Runs recorded before the
+  upgrade show the reason as one line, as before.
+
 - **`soul-lint` warns `group_child_key_unread`** (NIM-940, [settings.md §3](docs/scenario/settings.md)
   rule 4) for a `serial:` or barrier-kind setting on a descendant of a block rolled as one group,
   which linear dispatch does not read. `dragonfly/scenario/restart` writes `serial_scope: block`, so
@@ -1278,8 +1288,10 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   **Rollback.** For this release `scenario.execution_model: staged` restores ADR-056 from the next
   run, on a reload, with no binary change. Rolling the binary back instead first meets the schema.
   Against a Keeper built from `main` before this train (its last migration is 120): this train adds
-  migrations 121 and 122, NIM-985 adds 123 and NIM-996 adds 124, that Keeper refuses to start
-  against them, and `keeper` has no down command — apply `124_add_apply_run_plan_waves.down.sql`,
+  migrations 121 and 122, NIM-985 adds 123, NIM-996 adds 124, NIM-989 adds 125 and NIM-1000 adds
+  126, that Keeper refuses to start against them, and `keeper` has no down command — apply
+  `126_state_history_error_detail.down.sql`, `125_add_voyage_targets_error.down.sql`,
+  `124_add_apply_run_plan_waves.down.sql`,
   `123_create_apply_run_plan_host_params.down.sql`, `122_add_apply_runs_dropped.down.sql` and
   `121_add_incarnation_applying_cancel_requested.down.sql` by hand, newest first, then set the
   recorded version back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the

@@ -41,11 +41,11 @@ func resolveTargets(engine *cel.Engine, in RenderInput, task config.Task) ([]*to
 			vars := hostVars(in, h, len(targeted))
 			vars, err = resolveTaskVars(engine, fileVarsForHost(in, h), task.Vars, vars)
 			if err != nil {
-				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+				return nil, hostErr(task.Name, h.SID, err)
 			}
 			ok, err := evalWhere(engine, task.Where, vars)
 			if err != nil {
-				return nil, fmt.Errorf("render: task %q (host %s): %w", task.Name, h.SID, err)
+				return nil, hostErr(task.Name, h.SID, err)
 			}
 			if ok {
 				out = append(out, h)

@@ -84,14 +84,15 @@ func runsStatsOperation() huma.Operation {
 // (per-incarnation runs) + incarnation (the run's owner: the global list is unreadable
 // without it). finished_at / started_by_aid — omitempty (nil → key omitted).
 type GlobalRunEntry struct {
-	ApplyID      string     `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
-	Incarnation  string     `json:"incarnation"`
-	Service      string     `json:"service"`
-	Scenario     string     `json:"scenario"`
-	Status       string     `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
-	StartedAt    time.Time  `json:"started_at"`
-	FinishedAt   *time.Time `json:"finished_at,omitempty"`
-	StartedByAID *string    `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	ApplyID      string           `json:"apply_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$"`
+	Incarnation  string           `json:"incarnation"`
+	Service      string           `json:"service"`
+	Scenario     string           `json:"scenario"`
+	Status       string           `json:"status" enum:"applying,success,failed,partial_failed,cancelled"`
+	StartedAt    time.Time        `json:"started_at"`
+	FinishedAt   *time.Time       `json:"finished_at,omitempty"`
+	StartedByAID *string          `json:"started_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"`
+	Failure      *RunFailureEntry `json:"failure,omitempty"`
 }
 
 // runsListReply — the GET /v1/runs envelope (the contract 4-field form
@@ -132,6 +133,7 @@ func newGlobalRunEntry(v handlers.RunSummaryView) GlobalRunEntry {
 		StartedAt:    v.StartedAt,
 		FinishedAt:   v.FinishedAt,
 		StartedByAID: v.StartedByAID,
+		Failure:      newRunFailureEntry(v.Failure),
 	}
 }
 

@@ -71,6 +71,9 @@ type RunSummary struct {
 	// applying); otherwise MAX(finished_at) across rows.
 	FinishedAt   *time.Time
 	StartedByAID *string
+	// Failure is why a run that did not succeed stopped, nil otherwise
+	// ([SelectRunFailures]).
+	Failure *RunFailure
 }
 
 // RunHostStatus represents one host row of a run (GET .../runs/{apply_id}). A host
@@ -127,6 +130,9 @@ type RunDetail struct {
 	// migration 101; masked on the write path). Run-invariant across host rows; the
 	// projection takes the first non-null. nil for old runs / input-less paths.
 	Input map[string]any
+	// Failure is why a run that did not succeed stopped, nil otherwise
+	// ([SelectRunFailures]).
+	Failure *RunFailure
 }
 
 // AggregateRunStatus collapses a run into [RunStatus]. dropped is how many of its
@@ -237,6 +243,9 @@ func ListRunsByIncarnation(ctx context.Context, db ExecQueryRower, incarnationNa
 	if err := rows.Err(); err != nil {
 		return nil, 0, fmt.Errorf("applyrun: iterate runs: %w", err)
 	}
+	if err := attachFailures(ctx, db, out); err != nil {
+		return nil, 0, err
+	}
 	return out, total, nil
 }
 
@@ -342,6 +351,12 @@ func SelectRunDetail(ctx context.Context, db ExecQueryRower, applyID, incarnatio
 	if allFinished && !lockHeld {
 		detail.FinishedAt = &maxFinished
 	}
+	rows.Close()
+	failures, err := SelectRunFailures(ctx, db, []string{applyID})
+	if err != nil {
+		return nil, err
+	}
+	detail.Failure = failures[applyID]
 	return &detail, nil
 }
 

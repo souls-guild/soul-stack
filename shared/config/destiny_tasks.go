@@ -108,5 +108,6 @@ func LoadDestinyTasksFromBytes(filename string, data []byte, opts ValidateOption
 			diags[j].File = filename
 		}
 	}
+	stampSourceFile(tasks, filename)
 	return tasks, diags, nil
 }

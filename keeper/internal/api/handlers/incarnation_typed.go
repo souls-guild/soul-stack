@@ -1277,6 +1277,8 @@ type RunSummaryView struct {
 	StartedAt    time.Time
 	FinishedAt   *time.Time
 	StartedByAID *string
+	// Failure — why a run that did not succeed stopped (NIM-1000); nil otherwise.
+	Failure *applyrun.RunFailure
 }
 
 // RunHostStatusView — FLAT domain row of one host in the run details.
@@ -1322,6 +1324,8 @@ type RunDetailView struct {
 	StartedByAID *string
 	Hosts        []RunHostStatusView
 	Input        map[string]any
+	// Failure — why a run that did not succeed stopped (NIM-1000); nil otherwise.
+	Failure *applyrun.RunFailure
 }
 
 // IncarnationRunsReply — typed envelope of GET /v1/incarnations/{id}/runs (handler-native:
@@ -1370,6 +1374,7 @@ func newRunSummaryView(s applyrun.RunSummary) RunSummaryView {
 		StartedAt:    s.StartedAt,
 		FinishedAt:   s.FinishedAt,
 		StartedByAID: s.StartedByAID,
+		Failure:      s.Failure,
 	}
 }
 
@@ -1433,6 +1438,7 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 		StartedByAID: d.StartedByAID,
 		Hosts:        hosts,
 		Input:        d.Input,
+		Failure:      d.Failure,
 	}, nil
 }
 

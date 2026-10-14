@@ -71,6 +71,47 @@ type Task struct {
 	// IncludeGroupID!=0.
 	IncludeWhen    string `yaml:"-"`
 	IncludeGroupID int    `yaml:"-"`
+
+	// Source is where the task is written: its line is stamped by [Task.UnmarshalYAML],
+	// its file by the loader that read it. IncludedFrom is the chain of `include:`
+	// tasks that spliced it in, outermost first ([ExpandIncludes]). Both exist for
+	// the operator-facing failure of a run (NIM-1000) — expansion flattens the plan,
+	// and nothing else downstream of the parser can say where a task came from.
+	Source       SourcePos   `yaml:"-"`
+	IncludedFrom []SourcePos `yaml:"-"`
+}
+
+// SourcePos is a position in a file of the artifact a task was read from: File is
+// the path relative to the artifact root (`scenario/<name>/main.yml`), Line is
+// 1-based. The zero value means "not written by an author" (a synthesized step).
+type SourcePos struct {
+	File string
+	Line int
+}
+
+// stampSourceFile sets File on every task of the list — block children included —
+// that does not carry one yet: a task spliced in by `include:` was stamped with its
+// own file when that file was loaded, and keeps it.
+func stampSourceFile(tasks []Task, file string) {
+	for i := range tasks {
+		if tasks[i].Source.File == "" {
+			tasks[i].Source.File = file
+		}
+		if tasks[i].Block != nil {
+			stampSourceFile(tasks[i].Block.Block, file)
+		}
+	}
+}
+
+// prependIncludedFrom records that tasks were spliced in by an `include:` written
+// at site — recursively, since a block's children came in with it.
+func prependIncludedFrom(tasks []Task, site SourcePos) {
+	for i := range tasks {
+		tasks[i].IncludedFrom = append([]SourcePos{site}, tasks[i].IncludedFrom...)
+		if tasks[i].Block != nil {
+			prependIncludedFrom(tasks[i].Block.Block, site)
+		}
+	}
 }
 
 // AssertSpec is a keeper-side render-time precondition of a run (ADR-009 amendment
@@ -448,6 +489,9 @@ func (t *Task) UnmarshalYAML(node ast.Node) error {
 		return err
 	}
 	*t = Task(raw)
+	if tok := mm.GetToken(); tok != nil && tok.Position != nil {
+		t.Source.Line = tok.Position.Line
+	}
 
 	// module: <string> → ModuleTask with an optional params:.
 	if moduleNode != nil {

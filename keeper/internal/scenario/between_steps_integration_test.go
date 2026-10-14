@@ -478,7 +478,11 @@ func TestIntegration_BetweenStepsCancelStopsAQueuedLinearStep(t *testing.T) {
 	close(gate.release)
 
 	waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
-	if rows := stepRows(t, applyID)[1]; len(rows) != 0 {
+	rows := stepRows(t, applyID)[1]
+	// The run's sentinel names the step it stopped at (NIM-1000); it is not a row
+	// any Acolyte could claim.
+	delete(rows, render.RunSentinelSID)
+	if len(rows) != 0 {
 		t.Errorf("step 1 rows after the Cancel: %+v", rows)
 	}
 	if sent := souls.messages()[1]; len(sent) != 0 {
