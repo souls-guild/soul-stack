@@ -35,9 +35,9 @@ func (f *fakeOrphanReleaser) ReleaseOrphanLock(_ context.Context, voyageID, name
 	return f.released, f.err
 }
 
-// targetRows — fake pgx.Rows over slice of voyage_targets rows (8 columns in order of
+// targetRows — fake pgx.Rows over slice of voyage_targets rows (10 columns in order of
 // selectTargetsSQL: voyage_id, target_kind, target_id, batch_index, status,
-// apply_id, errand_id, finished_at).
+// apply_id, errand_id, finished_at, error_code, error_message).
 type targetRows struct {
 	rows [][]any
 	i    int
@@ -87,7 +87,7 @@ func targetRow(voyageID, kind, targetID, status string, applyID *string) []any {
 	if applyID != nil {
 		ap = *applyID
 	}
-	return []any{voyageID, kind, targetID, 0, status, ap, nil, nil}
+	return []any{voyageID, kind, targetID, 0, status, ap, nil, nil, nil, nil}
 }
 
 func strptr(s string) *string { return &s }

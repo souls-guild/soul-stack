@@ -16,12 +16,36 @@ Async-by-default: **202** + `{voyage_id, kind, scope_size, status, location}` + 
 
 **Target resolution and scope boundaries:**
 
-- **kind=scenario** — bare-check `incarnation.run` (quick failure before resolution), then per-incarnation scope-check over each resolved incarnation (its covens ∪ `{name}`): start on incarnation outside the permission scope = privilege escalation → **403**.
+- **kind=scenario** — bare-check `incarnation.run` (quick failure before resolution), then per-incarnation scope-check over each resolved incarnation (its covens ∪ `{name}`): start on incarnation outside the permission scope = privilege escalation → **403**. A resolved incarnation that is `error_locked` refuses the whole Voyage with **409** — see below.
 - **kind=command** - target ∩ Purview operator ([ADR-047 §S4](../../adr/0047-purview.md), security-fix). See below.
 
-**Errors:** `400` malformed JSON or (`kind=command`) `dry_run` on a verb-shell module — see below; `401` `unauthenticated` (no/invalid JWT) or `operator-revoked-token` (AID revoke, command existence-gate, see below); `403` RBAC deny by kind / explicit foreign host (command) / incarnation outside scope (scenario); `404` explicit incarnation does not exist (scenario); `422` invalid `kind` / empty `scenario_name`/`module` by kind / no target / invalid SID/coven/name / `where` > 4 KiB / `on_failure` not from `{abort, continue}` / `batch_size`+`batch_percent` at the same time / `batch_size`+`batch_mode=window` / ranges / empty resolve (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / effective batch above `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, see below); `500` orchestrator not configured / DB failure.
+**Errors:** `400` malformed JSON or (`kind=command`) `dry_run` on a verb-shell module — see below; `401` `unauthenticated` (no/invalid JWT) or `operator-revoked-token` (AID revoke, command existence-gate, see below); `403` RBAC deny by kind / explicit foreign host (command) / incarnation outside scope (scenario); `404` explicit incarnation does not exist (scenario); `409` `incarnation-locked` — the resolved target holds an `error_locked` incarnation (scenario, see below); `422` invalid `kind` / empty `scenario_name`/`module` by kind / no target / invalid SID/coven/name / `where` > 4 KiB / `on_failure` not from `{abort, continue}` / `batch_size`+`batch_percent` at the same time / `batch_size`+`batch_mode=window` / ranges / empty resolve (`voyage_empty_target`) / scope > `voyage.max_scope` (`voyage_scope_too_large`) / effective batch above `voyage.max_batch_size` (`voyage_batch_size_too_large`); `429` `tempo-exceeded` (rate-limit, see below); `500` orchestrator not configured / DB failure.
 
 > **`input` is not logged.** Audit events `scenario_run.started` / `command_run.invoked` do not carry the body `input` (invariant A of ADR-027).
+
+##### `kind=scenario`: an `error_locked` incarnation in the target
+
+A scenario Voyage whose resolved target holds an `error_locked` incarnation is refused
+with **`409 incarnation-locked`** before the Voyage exists — the answer the
+single-incarnation route `POST /v1/incarnations/{id}/scenarios/{scenario}` gives for the
+same incarnation. The `detail` names the locked incarnations (up to ten, then a count)
+with the run that locked each, and the two ways out:
+
+```
+incarnation demo is error_locked by run 01M4X5…: unlock it (POST /v1/incarnations/demo/unlock)
+or rerun its last run (POST /v1/incarnations/demo/rerun-last) first
+```
+
+Leave the incarnation out of the target, or resolve it first. The refusal comes after
+the per-incarnation scope check (`403`) and the `max_scope` cap (`422
+voyage_scope_too_large`), so a forbidden or oversized target is answered as such.
+
+Only `error_locked` is refused here. An incarnation that is `applying`, or in another
+status a run cannot start from (`migration_failed`, `destroying`, `destroy_failed`), is
+accepted, and its target fails with the reason on its row (below). The check is advisory
+— an incarnation locked after the `202` fails its target the same way — and a
+[Cadence](cadences.md) firing does not pass through it at all: a scheduled run on a
+locked incarnation is recorded per target, not refused.
 
 ##### command ∩ Purview - security-fix with behavior change
 
@@ -55,14 +79,13 @@ both per-target:
 The run continues or stops on those according to `max_failures` / `on_failure`, like
 any other per-host failure.
 
-**Reading the outcome per host.** A `voyage_targets` row carries `status` and, once a
-dispatch succeeded, `errand_id` — it has no reason column, so the two cases above do
-not look the same in the drill even though both show `failed`. The second has an
-`errand_id`: follow it to [`GET /v1/errands/{errand_id}`](errands.md) for
-`error_message`. The first has none, because a refusal ahead of dispatch writes no
-`errands` row — for those the reason is in the Keeper log (`errand: dry_run refused
-before dispatch`, with `sid` / `module` / `started_by_aid`) and nowhere in the API.
-Same shape for any other pre-dispatch refusal, `soul_not_connected` included.
+**Reading the outcome per host.** Both cases above show `failed`, and `error_code` on
+the target tells them apart ([Target error codes](#target-error-codes)). The first —
+refused ahead of dispatch — has no `errand_id`, because no `errands` row was written;
+its code (`soul_capability_unsupported` / `soul_capability_unverifiable`) is the whole
+reason. The second has an `errand_id`: follow it to
+[`GET /v1/errands/{errand_id}`](errands.md) for `error_message`. Same shape for any
+other pre-dispatch refusal, `soul_not_connected` included.
 
 **Refused at creation:** `dry_run` together with a verb-shell module
 (`core.cmd.shell` / `core.exec.run`) → **`400`**, from the same validator the
@@ -97,6 +120,48 @@ Permission: **RBAC-by-kind** (same as Create). REST-only (no MCP-tool). Purpose 
 | `batch_mode` | `string` | `barrier` / `window`. ALWAYS present - explains the semantics of the remaining fields. |
 | `effective_batch_size` | `int?` | Resolved Leg (barrier) size. **Omitted** for `batch_mode=window` (window width = `concurrency`, not Leg - UI reads `concurrency`) or if the entire scope is one Leg (batch is not specified). |
 
-**Consistency with Create** - preview fails EXACTLY in the same place: the same general decode/validation/resolve path. `403`/`404`/`422` come under the same conditions as Create (scenario - per-incarnation scope-check; command - hybrid-semantics 403/cut/422; scope > `voyage.max_scope` → 422). Rate-limited via **own** Tempo-bucket `voyage_preview` ([ADR-050 amendment](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)) - **softer** than create (default `30 rps`, burst `60` vs `10`/`20`), because preview has a read-like effect (without persist/audit), but the resolver is heavy in cost. Excess → **429 `tempo-exceeded`** + `Retry-After`.
+**Consistency with Create** - preview fails EXACTLY in the same place: the same general decode/validation/resolve path. `403`/`404`/`409`/`422` come under the same conditions as Create (scenario - per-incarnation scope-check; command - hybrid-semantics 403/cut/422; scope > `voyage.max_scope` → 422). Rate-limited via **own** Tempo-bucket `voyage_preview` ([ADR-050 amendment](../../adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api)) - **softer** than create (default `30 rps`, burst `60` vs `10`/`20`), because preview has a read-like effect (without persist/audit), but the resolver is heavy in cost. Excess → **429 `tempo-exceeded`** + `Retry-After`.
 
 > **Note (mapping↔router).** In [`router.go`](../../../keeper/internal/api/router.go) Voyage has a sixth read route - `GET /v1/voyages/{id}/targets` (All-runs drill, ADR-043 S5), not reduced to the root mapping table `### Voyage (5)`. There is no MCP symmetry (REST-only). Mixing - separate doc-PR (see docs-writer's report on drift).
+
+#### `GET /v1/voyages/{id}/targets` — the units of a run
+
+One row per target: `target_kind` / `target_id`, `batch_index`, `status`, the back-link
+to its child run (`apply_id` for `kind=scenario`, `errand_id` for `kind=command`),
+`finished_at`, and — for a target that did not succeed — `error_code` and
+`error_message`. Both are omitted on a target that succeeded, and on a scenario target
+whose run exists and failed: the run holds that reason, follow `apply_id`.
+
+`error_message` is a sentence Keeper composed — for `incarnation_error_locked` it names
+the run that locked the incarnation. It is never a raw error: a dispatch error can quote
+request input. Codes from the Errand path carry no message; the code is the reason.
+A target the run itself stopped — an abort, a lost lease, a shutdown — gets no code.
+Which status such a host is left in depends on where the stop caught it, and some of
+those rows are never closed (NIM-1001).
+
+##### Target error codes
+
+| Code | Kind | Meaning |
+|---|---|---|
+| `incarnation_error_locked` | scenario | The incarnation was `error_locked` when its run was to start — locked after the Voyage was accepted, or reached by a Cadence. `error_message` names the run that locked it, unless the lock landed in the instant between Keeper's check and the run's start. Unlock it or rerun its last run, then run again. |
+| `incarnation_applying` | scenario | Another run was applying the incarnation; `error_message` names it on the same terms. |
+| `incarnation_not_runnable` | scenario | The incarnation's status permits no run (`migration_failed`, `destroying`, `destroy_failed`); `error_message` names the status on the same terms. |
+| `incarnation_not_found` | scenario | The incarnation was deleted after the Voyage was accepted. |
+| `service_not_registered` | scenario | The incarnation's service is not in the service registry. |
+| `orphan_lock_release_failed` | scenario | Keeper could not check for, or release, an applying lock an earlier attempt of this Voyage may have left on the incarnation; the run was not started. |
+| `await_failed` | scenario | Keeper stopped tracking the run before it ended; the run itself holds its outcome (`apply_id`). |
+| `soul_not_connected` | command | The host's Soul was not connected; no Errand was created. |
+| `errand_dry_run_unsupported` | command | `dry_run` on a module that cannot be planned; no Errand was created. |
+| `soul_capability_unsupported` | command | The host's Soul did not announce the `dry_run` capability — upgrade that agent. |
+| `soul_capability_unverifiable` | command | Keeper could not confirm the capability (no presence source); refused rather than risk applying. |
+| `invalid_request` | command | The per-host request was malformed (empty SID or module, timeout out of range). |
+| `errand_failed` | command | The Errand ran and failed; follow `errand_id`. |
+| `module_not_allowed` | command | The Soul refused the module (allow-list); follow `errand_id`. |
+| `timed_out` | command | The Errand timed out; follow `errand_id`. |
+| `cancelled` | command | The Errand itself was cancelled. A host the run itself stopped carries no code. |
+| `await_timeout` | command | Keeper stopped waiting for the Errand before it ended; follow `errand_id` for its outcome. |
+| `async_escalation` | command | The Errand escalated to async and this Keeper has no source to await it from. |
+| `unknown_status` | command | The Errand ended in a status Keeper does not know. |
+| `input_decode_error` | either | The Voyage `input` is not a JSON object. |
+| `ownership_check_failed` | either | Keeper could not confirm it still owns the Voyage (a transient database error), so it did not start this unit. |
+| `spawn_error` | either | Any other refusal before the unit started; the detail is in the Keeper log only. |

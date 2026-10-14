@@ -38,7 +38,7 @@ Creates a Voyage - a unified batch run. `kind=scenario`: apply named scenario to
 | `status` | `string` (enum `pending`/`scheduled`) | `scheduled` when `schedule_at` is specified, otherwise `pending`. |
 | `location` | `string` | REST path for get/poll (`/v1/voyages/<id>`). |
 
-Errors (like REST): `forbidden` (RBAC-by-kind deny / explicit foreign host in command / incarnation outside scope in scenario), `not-found` (explicit incarnation does not exist, scenario), `validation-failed` (invalid `kind` / empty `scenario_name`/`module` by kind / no target / broken SID/coven/name / `where` > 4 KiB / empty resolve `voyage_empty_target` / scope > `voyage.max_scope` / batch-spec conflict), `tempo-exceeded` (rate-limit bucket `voyage_create`). See hybrid semantics command∩Purview - [operator-api/voyages.md](../operator-api/voyages.md).
+Errors (like REST): `forbidden` (RBAC-by-kind deny / explicit foreign host in command / incarnation outside scope in scenario), `not-found` (explicit incarnation does not exist, scenario), `incarnation-locked` (the resolved target holds an `error_locked` incarnation, scenario — the detail names the run that locked it and the unlock / rerun-last routes, [operator-api/voyages.md](../operator-api/voyages.md#kindscenario-an-error_locked-incarnation-in-the-target)), `validation-failed` (invalid `kind` / empty `scenario_name`/`module` by kind / no target / broken SID/coven/name / `where` > 4 KiB / empty resolve `voyage_empty_target` / scope > `voyage.max_scope` / batch-spec conflict), `tempo-exceeded` (rate-limit bucket `voyage_create`). See hybrid semantics command∩Purview - [operator-api/voyages.md](../operator-api/voyages.md).
 
 #### `keeper.voyage.get`
 

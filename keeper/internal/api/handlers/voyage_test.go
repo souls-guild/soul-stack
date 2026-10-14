@@ -1344,7 +1344,7 @@ func TestVoyageTargets_OK(t *testing.T) {
 		},
 		targetsRows: func() (pgx.Rows, error) {
 			return &voyageTargetRowsIter{rows: [][]any{
-				{id, "incarnation", "inc-a", 0, "running", "apply-1", nil, nil},
+				{id, "incarnation", "inc-a", 0, "running", "apply-1", nil, nil, nil, nil},
 			}}, nil
 		},
 	}
@@ -1362,6 +1362,50 @@ func TestVoyageTargets_OK(t *testing.T) {
 	_ = json.Unmarshal(rec.Body.Bytes(), &reply)
 	if len(reply.Targets) != 1 || reply.Targets[0].TargetID != "inc-a" || reply.Targets[0].Status != "running" {
 		t.Errorf("targets = %+v, want one running inc-a", reply.Targets)
+	}
+}
+
+// The reason a target did not run reaches GET /v1/voyages/{id}/targets: before
+// NIM-989 / NIM-617 a target refused before its child run existed read a bare
+// `failed`, and a target with no reason must still omit both keys.
+func TestVoyageTargets_ReasonInReply(t *testing.T) {
+	id := audit.NewULID()
+	store := &fakeVoyageStore{
+		selectByID: func(gotID string) pgx.Row {
+			return voyageFullRow{vals: voyageRowVals(gotID, voyage.KindScenario, voyage.StatusFailed)}
+		},
+		targetsRows: func() (pgx.Rows, error) {
+			return &voyageTargetRowsIter{rows: [][]any{
+				{id, "incarnation", "demo", 0, "failed", nil, nil, nil,
+					voyage.TargetErrorIncarnationErrorLocked, "incarnation demo is error_locked by run 01HLOCKER"},
+				{id, "incarnation", "fine", 0, "succeeded", "apply-2", nil, nil, nil, nil},
+			}}, nil
+		},
+	}
+	h := newVoyageHandler(store, &fakeVoyageScenarioResolver{}, &fakeVoyageCommandResolver{}, allowAll())
+
+	rec := httptest.NewRecorder()
+	h.Targets(rec, voyageReqID(http.MethodGet, "/v1/voyages/"+id+"/targets", id, ""))
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply struct {
+		Targets []map[string]any `json:"targets"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil || len(reply.Targets) != 2 {
+		t.Fatalf("reply = %s (%v), want two targets", rec.Body.String(), err)
+	}
+	demo, fine := reply.Targets[0], reply.Targets[1]
+	if demo["error_code"] != voyage.TargetErrorIncarnationErrorLocked ||
+		demo["error_message"] != "incarnation demo is error_locked by run 01HLOCKER" {
+		t.Errorf("refused target = %v, want its error_code and error_message", demo)
+	}
+	if _, ok := fine["error_code"]; ok {
+		t.Errorf("succeeded target = %v, carries error_code", fine)
+	}
+	if _, ok := fine["error_message"]; ok {
+		t.Errorf("succeeded target = %v, carries error_message", fine)
 	}
 }
 
@@ -1516,7 +1560,7 @@ func (r *voyageRowsIter) Values() ([]any, error)                       { return 
 func (r *voyageRowsIter) RawValues() [][]byte                          { return nil }
 func (r *voyageRowsIter) Conn() *pgx.Conn                              { return nil }
 
-// voyageTargetRowsIter — for SelectTargets (8 columns).
+// voyageTargetRowsIter — for SelectTargets (10 columns).
 type voyageTargetRowsIter struct {
 	rows [][]any
 	idx  int

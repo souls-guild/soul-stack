@@ -379,8 +379,7 @@ func (h *IncarnationHandler) RunTyped(ctx context.Context, claims *jwt.Claims, n
 	}
 
 	if inc.Status == incarnation.StatusErrorLocked {
-		return zero, incProblem(problem.TypeIncarnationLocked,
-			"incarnation "+name+" is error_locked — unlock required before next run")
+		return zero, incProblem(problem.TypeIncarnationLocked, ErrorLockedDetail(name, inc.LockingApplyID()))
 	}
 
 	serviceRef, ok := h.services.Resolve(inc.Service)

@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
+	"github.com/souls-guild/soul-stack/keeper/internal/voyage"
 	"github.com/souls-guild/soul-stack/shared/coremanifest"
 )
 
@@ -148,16 +149,16 @@ func TestClassifyErrandStatus(t *testing.T) {
 		if st != tc.status || ec != tc.errCode {
 			t.Errorf("classifyErrandStatus(%q) = (%q,%q), want (%q,%q)", tc.in, st, ec, tc.status, tc.errCode)
 		}
+		if ec != "" && !voyage.IsTargetErrorCode(ec) {
+			t.Errorf("classifyErrandStatus(%q) code %q is not in voyage.TargetErrorCodes", tc.in, ec)
+		}
 	}
 }
 
 // TestClassifyDispatchErr -- the refusal → reason-token projection, wrapped the way the
-// dispatcher returns it (the bridge never sees a bare sentinel).
-//
-// Scope honestly: this asserts the function, and nothing downstream observes its
-// output yet — voyageCommandSpawner drops it and `voyage_targets` has no column for it
-// (see the classifyDispatchErr doc). So a green run here does NOT mean an operator can
-// tell these cases apart; it means the mapping is right for whoever wires it up.
+// dispatcher returns it (the bridge never sees a bare sentinel). The token is what an
+// operator reads in voyage_targets.error_code, so each must be a documented one;
+// TestVoyageCommandSpawner_ForwardsDispatchRefusalCode proves it gets there.
 //
 // The three dry_run rows became reachable at all only when NIM-559 put the flag on the
 // per-host request; each names a different fix, so collapsing any of them into the
@@ -182,8 +183,12 @@ func TestClassifyDispatchErr(t *testing.T) {
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			t.Parallel()
-			if got := classifyDispatchErr(tc.err); got != tc.want {
+			got := classifyDispatchErr(tc.err)
+			if got != tc.want {
 				t.Errorf("classifyDispatchErr(%v) = %q, want %q", tc.err, got, tc.want)
+			}
+			if !voyage.IsTargetErrorCode(got) {
+				t.Errorf("classifyDispatchErr(%v) = %q, not in voyage.TargetErrorCodes", tc.err, got)
 			}
 		})
 	}
@@ -235,7 +240,7 @@ func TestVoyageCommandSpawner_ForwardsDryRun(t *testing.T) {
 				clock:        time.Now,
 			}}
 
-			errandID, status, err := sp.SpawnCommand(context.Background(),
+			errandID, status, _, err := sp.SpawnCommand(context.Background(),
 				"V1", "s1.example", "core.file.present", "archon-alice", []byte(`{"path":"/etc/motd"}`), dryRun)
 			if err != nil {
 				t.Fatalf("SpawnCommand: %v", err)
@@ -257,5 +262,35 @@ func TestVoyageCommandSpawner_ForwardsDryRun(t *testing.T) {
 				t.Errorf("request input = %v, want path=/etc/motd", req.Input)
 			}
 		})
+	}
+}
+
+// refusingDispatcher refuses every request the way the dispatcher refuses a host
+// before its errands row exists.
+type refusingDispatcher struct{ err error }
+
+func (d refusingDispatcher) Dispatch(context.Context, errand.DispatchRequest) (errand.DispatchResult, error) {
+	return errand.DispatchResult{}, d.err
+}
+
+func (d refusingDispatcher) Cancel(context.Context, errand.CancelRequest) error { return nil }
+
+// TestVoyageCommandSpawner_ForwardsDispatchRefusalCode guards the hop NIM-617 found
+// cut: the bridge classified the refusal and voyageCommandSpawner discarded the code
+// with `_`, so a host refused before dispatch read `failed` with no reason anywhere.
+func TestVoyageCommandSpawner_ForwardsDispatchRefusalCode(t *testing.T) {
+	t.Parallel()
+	sp := &voyageCommandSpawner{bridge: &errandRunSpawnerBridge{
+		dispatcher:   refusingDispatcher{err: fmt.Errorf("dispatch host-a: %w", errand.ErrSoulNotConnected)},
+		pollInterval: time.Millisecond,
+		clock:        time.Now,
+	}}
+	errandID, _, code, err := sp.SpawnCommand(context.Background(),
+		"V1", "host-a", "core.file.present", "archon-alice", nil, false)
+	if err == nil {
+		t.Fatal("SpawnCommand: want the dispatch refusal, got nil")
+	}
+	if errandID != "" || code != voyage.TargetErrorSoulNotConnected {
+		t.Errorf("SpawnCommand = (errand %q, code %q), want (\"\", %q)", errandID, code, voyage.TargetErrorSoulNotConnected)
 	}
 }

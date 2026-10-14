@@ -29,8 +29,10 @@ type fakeDB struct {
 	finalStatusArg atomic.Value // string
 
 	// targetUpdates capture MarkTargetTerminal: by target_id (args[2]) →
-	// last written status (args[3]). Protected by mu.
+	// last written status (args[3]); targetReasons → the reason ($5, $6).
+	// Protected by mu.
 	targetUpdates map[string]string
+	targetReasons map[string]voyage.TargetReason
 
 	// recordRunningArgs enables capture of MarkTargetRunning (running-transition):
 	// runningSQL = SQL, runningBacklink = back-link arg ($4). Protected by mu.
@@ -88,6 +90,14 @@ func (f *fakeDB) Exec(_ context.Context, sql string, args ...any) (pgconn.Comman
 			tid, _ := args[2].(string)
 			st, _ := args[3].(string)
 			f.targetUpdates[tid] = st
+			if len(args) >= 6 {
+				if f.targetReasons == nil {
+					f.targetReasons = map[string]voyage.TargetReason{}
+				}
+				code, _ := args[4].(string)
+				msg, _ := args[5].(string)
+				f.targetReasons[tid] = voyage.TargetReason{Code: code, Message: msg}
+			}
 		case strings.Contains(sql, "status       = 'awaiting'") && f.recordRunningArgs:
 			// MarkTargetRunning: args[3] = back-link id (apply_id / errand_id).
 			f.runningSQL = sql
@@ -109,6 +119,13 @@ func (f *fakeDB) targetStatus(tid string) string {
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	return f.targetUpdates[tid]
+}
+
+// targetReason reads the captured reason of the target's terminal write.
+func (f *fakeDB) targetReason(tid string) voyage.TargetReason {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.targetReasons[tid]
 }
 
 // batchProgressSeq returns copy of current_batch_index-update sequence.

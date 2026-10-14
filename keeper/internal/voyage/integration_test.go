@@ -164,3 +164,51 @@ func TestInsertTargets_Integration(t *testing.T) {
 		}
 	}
 }
+
+// TestMarkTargetTerminal_ReasonRoundTrip_Integration writes a target's reason
+// through the real migration 125 columns and reads it back through SelectTargets,
+// the path GET /v1/voyages/{id}/targets serves. A target closed with the zero
+// reason must read NULL, not an empty string.
+func TestMarkTargetTerminal_ReasonRoundTrip_Integration(t *testing.T) {
+	resetAll(t)
+	ctx := context.Background()
+	seedOperator(t, "archon-test")
+
+	v := scenarioVoyage()
+	v.VoyageID = "01H000000000000000000VOYRS"
+	v.StartedByAID = "archon-test"
+	if err := Insert(ctx, integrationPool, v); err != nil {
+		t.Fatalf("Insert voyage: %v", err)
+	}
+	if err := InsertTargets(ctx, integrationPool, v.VoyageID, []VoyageTarget{
+		{TargetKind: TargetKindIncarnation, TargetID: "locked", BatchIndex: 0},
+		{TargetKind: TargetKindIncarnation, TargetID: "fine", BatchIndex: 0},
+	}); err != nil {
+		t.Fatalf("InsertTargets: %v", err)
+	}
+
+	reason := TargetReason{Code: TargetErrorIncarnationErrorLocked, Message: "incarnation locked is error_locked by run 01H0"}
+	if err := MarkTargetTerminal(ctx, integrationPool, v.VoyageID, TargetKindIncarnation, "locked", TargetStatusFailed, reason); err != nil {
+		t.Fatalf("MarkTargetTerminal(locked): %v", err)
+	}
+	if err := MarkTargetTerminal(ctx, integrationPool, v.VoyageID, TargetKindIncarnation, "fine", TargetStatusSucceeded, TargetReason{}); err != nil {
+		t.Fatalf("MarkTargetTerminal(fine): %v", err)
+	}
+
+	got, err := SelectTargets(ctx, integrationPool, v.VoyageID)
+	if err != nil {
+		t.Fatalf("SelectTargets: %v", err)
+	}
+	byID := map[string]VoyageTarget{}
+	for _, tg := range got {
+		byID[tg.TargetID] = tg
+	}
+	locked := byID["locked"]
+	if locked.ErrorCode == nil || *locked.ErrorCode != reason.Code ||
+		locked.ErrorMessage == nil || *locked.ErrorMessage != reason.Message {
+		t.Errorf("locked target reason = (%v, %v), want (%q, %q)", locked.ErrorCode, locked.ErrorMessage, reason.Code, reason.Message)
+	}
+	if fine := byID["fine"]; fine.ErrorCode != nil || fine.ErrorMessage != nil {
+		t.Errorf("succeeded target reason = (%v, %v), want both NULL", fine.ErrorCode, fine.ErrorMessage)
+	}
+}

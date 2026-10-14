@@ -178,6 +178,14 @@ type Incarnation struct {
 	ApplyingApplyID *string `json:"applying_apply_id,omitempty"`
 }
 
+// LockingApplyID is the apply_id of the run that left the incarnation in its
+// failure status (status_details.apply_id, written with error_locked /
+// migration_failed), or "" when the row carries none.
+func (i *Incarnation) LockingApplyID() string {
+	id, _ := i.StatusDetails["apply_id"].(string)
+	return id
+}
+
 // HistoryEntry — a `state_history` record (snapshot per change, ADR-009 / ADR-019).
 type HistoryEntry struct {
 	HistoryID    string         `json:"history_id"`

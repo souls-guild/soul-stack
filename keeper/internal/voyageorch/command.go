@@ -59,6 +59,11 @@ import (
 //     caller records target as failed without a back-link.
 //  4. err != nil is an internal orchestrator-call error (not a failed Errand);
 //     caller treats the Errand as failed.
+//  5. errorCode is why the host did not succeed, one of [voyage.TargetErrorCodes]
+//     ("" on success). It is the only trace of a host refused before its errands
+//     row existed (soul_not_connected, a dry_run capability gate, ...), so the
+//     caller records it on the target row (NIM-617). A host stopped by the
+//     caller's own ctx gets no code, however the spawner reports it.
 //
 // module is voyages.module (whitelisted, NOT NULL for kind=command). input is
 // voyages.input (jsonb, passed into errands.input unchanged).
@@ -70,7 +75,7 @@ import (
 // was omitted from this signature until NIM-559, which is exactly how the flag
 // came to be stored and echoed while every target ran for real.
 type CommandSpawner interface {
-	SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (errandID, status string, err error)
+	SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (errandID, status, errorCode string, err error)
 }
 
 // commandResult is the runtime outcome of one host in a Leg, collected in a
@@ -597,18 +602,18 @@ func (w *VoyageWorker) runOneCommand(ctx context.Context, run *voyage.Voyage, si
 				slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
 			fenceLost.Store(true)
 			cancelFan()
-			w.trackCommandTerminal(ctx, run.VoyageID, sid, OutcomeCancelled)
+			w.trackCommandTerminal(ctx, run.VoyageID, sid, OutcomeCancelled, voyage.TargetReason{})
 			return commandResult{SID: sid, Outcome: OutcomeCancelled}
 		}
 		// Transient PG error: cannot confirm ownership - do not send Errand,
 		// fail closed for this host (without aborting the whole Leg).
 		w.Logger.Warn("voyageorch: ownership-fence check failed (transient) - Errand not sent",
 			slog.String("voyage_id", run.VoyageID), slog.String("sid", sid), slog.Any("error", err))
-		w.trackCommandTerminal(ctx, run.VoyageID, sid, OutcomeFailed)
+		w.trackCommandTerminal(ctx, run.VoyageID, sid, OutcomeFailed, ownershipCheckFailedReason("the Errand on "+sid))
 		return commandResult{SID: sid, Outcome: OutcomeFailed}
 	}
 
-	errandID, status, err := w.CommandSpawner.SpawnCommand(ctx, run.VoyageID, sid, *run.Module, run.StartedByAID, run.Input, run.DryRun)
+	errandID, status, errorCode, err := w.CommandSpawner.SpawnCommand(ctx, run.VoyageID, sid, *run.Module, run.StartedByAID, run.Input, run.DryRun)
 	if err != nil {
 		// Internal orchestrator-call error (not a failed Errand). On ctx cancellation
 		// (leaseLost / abort) use cancelled, otherwise failed (not silent success).
@@ -617,7 +622,8 @@ func (w *VoyageWorker) runOneCommand(ctx context.Context, run *voyage.Voyage, si
 			outcome = OutcomeCancelled
 		} else {
 			w.Logger.Warn("voyageorch: spawn command failed",
-				slog.String("voyage_id", run.VoyageID), slog.String("sid", sid), slog.Any("error", err))
+				slog.String("voyage_id", run.VoyageID), slog.String("sid", sid),
+				slog.String("error_code", errorCode), slog.Any("error", err))
 			outcome = OutcomeFailed
 		}
 		// errandID can be non-empty (Errand created, but dispatch returned an error);
@@ -625,7 +631,7 @@ func (w *VoyageWorker) runOneCommand(ctx context.Context, run *voyage.Voyage, si
 		if errandID != "" {
 			w.markCommandRunning(ctx, run.VoyageID, sid, errandID, run.Attempt)
 		}
-		w.trackCommandTerminal(ctx, run.VoyageID, sid, outcome)
+		w.trackCommandTerminal(ctx, run.VoyageID, sid, outcome, commandReason(outcome, errorCode))
 		return commandResult{SID: sid, ErrandID: errandID, Outcome: outcome}
 	}
 
@@ -634,8 +640,18 @@ func (w *VoyageWorker) runOneCommand(ctx context.Context, run *voyage.Voyage, si
 	}
 
 	outcome := commandStatusToOutcome(status)
-	w.trackCommandTerminal(ctx, run.VoyageID, sid, outcome)
+	w.trackCommandTerminal(ctx, run.VoyageID, sid, outcome, commandReason(outcome, errorCode))
 	return commandResult{SID: sid, ErrandID: errandID, Outcome: outcome}
+}
+
+// commandReason is the reason recorded for a host: the spawner's code, unless
+// the host succeeded. No message — the spawner's error text is not composed for
+// an operator and can quote request input; the code is documented instead.
+func commandReason(outcome TargetOutcome, errorCode string) voyage.TargetReason {
+	if outcome == OutcomeSucceeded {
+		return voyage.TargetReason{}
+	}
+	return voyage.TargetReason{Code: errorCode}
 }
 
 // markCommandRunning best-effort sets back-link errand_id (awaiting->running) under
@@ -654,14 +670,16 @@ func (w *VoyageWorker) markCommandRunning(ctx context.Context, voyageID, sid, er
 // stopped polling from the queue). MarkTargetTerminal uses parent ctx so the write
 // can complete even when fanCtx is cancelled (graceful shutdown / abort).
 func (w *VoyageWorker) cancelRemaining(ctx context.Context, voyageID, sid string) commandResult {
-	w.trackCommandTerminal(ctx, voyageID, sid, OutcomeCancelled)
+	w.trackCommandTerminal(ctx, voyageID, sid, OutcomeCancelled, voyage.TargetReason{})
 	return commandResult{SID: sid, Outcome: OutcomeCancelled}
 }
 
-// trackCommandTerminal best-effort records host terminal state in voyage_targets.
-// PG error is logged as warn; outcome is already in commandResult (finalize authority).
-func (w *VoyageWorker) trackCommandTerminal(ctx context.Context, voyageID, sid string, outcome TargetOutcome) {
-	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindSID, sid, outcome.toTargetStatus()); err != nil {
+// trackCommandTerminal best-effort records host terminal state and its reason in
+// voyage_targets. PG error is logged as warn; outcome is already in commandResult
+// (finalize authority).
+func (w *VoyageWorker) trackCommandTerminal(ctx context.Context, voyageID, sid string, outcome TargetOutcome, reason voyage.TargetReason) {
+	reason = reasonUnlessStopped(ctx, reason)
+	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindSID, sid, outcome.toTargetStatus(), reason); err != nil {
 		w.Logger.Warn("voyageorch: MarkTargetTerminal failed (best-effort)",
 			slog.String("voyage_id", voyageID), slog.String("sid", sid),
 			slog.String("outcome", string(outcome)), slog.Any("error", err))

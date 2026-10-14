@@ -141,13 +141,15 @@ func toVoyage(o handlers.VoyageDTO) Voyage {
 
 func toVoyageTargetEntry(o handlers.VoyageTargetEntryDTO) VoyageTargetEntry {
 	return VoyageTargetEntry{
-		ApplyID:    o.ApplyID,
-		BatchIndex: o.BatchIndex,
-		ErrandID:   o.ErrandID,
-		FinishedAt: o.FinishedAt,
-		Status:     VoyageTargetEntryStatus(o.Status),
-		TargetID:   o.TargetID,
-		TargetKind: VoyageTargetEntryTargetKind(o.TargetKind),
+		ApplyID:      o.ApplyID,
+		BatchIndex:   o.BatchIndex,
+		ErrandID:     o.ErrandID,
+		ErrorCode:    o.ErrorCode,
+		ErrorMessage: o.ErrorMessage,
+		FinishedAt:   o.FinishedAt,
+		Status:       VoyageTargetEntryStatus(o.Status),
+		TargetID:     o.TargetID,
+		TargetKind:   VoyageTargetEntryTargetKind(o.TargetKind),
 	}
 }
 

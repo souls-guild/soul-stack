@@ -45,10 +45,10 @@ func voyageCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Create a Voyage",
-		Description:   "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host.",
+		Description:   "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host. 409 incarnation-locked - kind=scenario whose resolved target holds an error_locked incarnation: refused before the Voyage exists, detail names the run that locked it and the unlock / rerun-last routes.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusAccepted,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 
@@ -70,17 +70,17 @@ type voyagePreviewOutput struct {
 // voyagePreviewOperation — metadata for POST /v1/voyages/preview. DefaultStatus=200.
 // READ-like: audit not wired (preview writes no audit event, unlike Create — it is a
 // dry-resolve without creating a Voyage). RBAC-by-kind — in the handler. Errors: 400, 403, 404,
-// 422 (consistent with Create — preview rejects at the same points), 429 Tempo, 500.
+// 409, 422 (consistent with Create — preview rejects at the same points), 429 Tempo, 500.
 func voyagePreviewOperation() huma.Operation {
 	return huma.Operation{
 		OperationID:   "previewVoyage",
 		Method:        http.MethodPost,
 		Path:          "/preview",
 		Summary:       "Dry-resolve scope Voyage",
-		Description:   "Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module. Without revealing the SID list. Read-like - no audit.",
+		Description:   "Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module and the same 409 for a scenario target holding an error_locked incarnation. Without revealing the SID list. Read-like - no audit.",
 		Tags:          []string{"voyage"},
 		DefaultStatus: http.StatusOK,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 

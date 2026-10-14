@@ -34,17 +34,19 @@ type VoyageSummary struct {
 }
 
 // VoyageTargetEntry — a native voyage_targets row (All-runs drill; 1:1 shape with
-// VoyageTargetEntry, types.gen.go :4001): apply_id/errand_id/finished_at — pointer WITH omitempty
+// VoyageTargetEntry, types.gen.go :4001): apply_id/errand_id/finished_at/error_* — pointer WITH omitempty
 // (mutually exclusive kind=scenario/command back-links → key omitted); status/target_kind —
 // inline oapi enum (huma inlines `type: string`); batch_index — int; target_id — string.
 type VoyageTargetEntry struct {
-	ApplyID    *string                     `json:"apply_id,omitempty"`
-	BatchIndex int                         `json:"batch_index"`
-	ErrandID   *string                     `json:"errand_id,omitempty"`
-	FinishedAt *time.Time                  `json:"finished_at,omitempty"`
-	Status     VoyageTargetEntryStatus     `json:"status"`
-	TargetID   string                      `json:"target_id"`
-	TargetKind VoyageTargetEntryTargetKind `json:"target_kind"`
+	ApplyID      *string                     `json:"apply_id,omitempty"`
+	BatchIndex   int                         `json:"batch_index"`
+	ErrandID     *string                     `json:"errand_id,omitempty"`
+	ErrorCode    *string                     `json:"error_code,omitempty" doc:"why the target did not succeed, one of the documented snake_case codes (docs/keeper/operator-api/voyages.md); omitted for a target that succeeded, one the run itself stopped, and a scenario target whose run exists and failed (follow apply_id)"`
+	ErrorMessage *string                     `json:"error_message,omitempty" doc:"the same reason as a sentence the Keeper composed (e.g. the run that left the incarnation error_locked); omitted when there is none"`
+	FinishedAt   *time.Time                  `json:"finished_at,omitempty"`
+	Status       VoyageTargetEntryStatus     `json:"status"`
+	TargetID     string                      `json:"target_id"`
+	TargetKind   VoyageTargetEntryTargetKind `json:"target_kind"`
 }
 
 // Voyage — native snapshot of a Voyage run (GET detail / list item; 1:1 shape with Voyage,

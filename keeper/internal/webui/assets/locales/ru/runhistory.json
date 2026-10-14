@@ -213,6 +213,7 @@
   "voyageTargetsAria": "Цели Voyage",
   "voyageTargetsBatchHeading": "Батч {{index}}",
   "voyageTargetsColFinishedAt": "Завершено",
+  "voyageTargetsColReason": "Причина",
   "voyageTargetsColRun": "Прогон",
   "voyageTargetsColStatus": "Статус",
   "voyageTargetsColTarget": "Цель",

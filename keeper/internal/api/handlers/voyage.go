@@ -320,6 +320,8 @@ func VoyageSpecStub() *VoyageHandler { return &VoyageHandler{} }
 //   - 403 — RBAC deny by kind (scenario without incarnation.run / command without
 //     errand.run, or at least one resolved incarnation out of scope).
 //   - 404 — an explicit incarnation (scenario.incarnations[]) does not exist.
+//   - 409 — incarnation-locked: a resolved incarnation is error_locked (scenario),
+//     checked after the per-incarnation 403 and the max_scope 422.
 //   - 422 — invalid kind / empty scenario_name|module for the kind / no target /
 //     invalid SID/coven/name / where > 4 KiB / on_failure not in {abort,
 //     continue} / batch_size|concurrency <= 0 or concurrency > max / empty
@@ -519,6 +521,7 @@ type voyagePreviewReply struct {
 //   - 403 — RBAC deny by kind / an explicit foreign host (command) / an incarnation out of scope
 //     (scenario).
 //   - 404 — an explicit incarnation does not exist (scenario).
+//   - 409 — incarnation-locked: a resolved incarnation is error_locked (scenario).
 //   - 422 — invalid kind/target/batch* / empty resolve (voyage_empty_target) /
 //     scope > voyage.max_scope (voyage_scope_too_large) / batch_size-cap.
 //   - 429 — Tempo per-AID rate-limit (middleware, voyage_preview bucket).
@@ -598,17 +601,13 @@ func (h *VoyageHandler) PreviewTyped(ctx context.Context, claims *jwt.Claims, re
 	return reply, nil
 }
 
-// resolveScenarioScope — kind=scenario scope resolve + gates (RBAC bare-check
-// incarnation.run, per-incarnation scope-check fail-closed, max_scope-cap),
-// shared by Create and Preview. Returns a sorted snapshot of incarnation
-// names; on any failure it writes a problem and returns ok=false. Persist —
-// the caller's job (Create), Preview only reads len(resolved).
 // resolveScenarioScopeErr — an error-returning kind=scenario scope resolve + gates
 // (FULL-TYPED ADR-054 §Pattern, batch-2f self-audit): RBAC bare-check incarnation.run,
-// per-incarnation scope-check fail-closed (ADR-043 §6), max_scope-cap. Shared by
-// Create and Preview. nil error → a sorted snapshot of incarnation names; *problemError
-// on failure (the same 403/404/422/500 classification as the (w,r) variant). ctx — request
-// context (resolve/scope-select read it).
+// per-incarnation scope-check fail-closed (ADR-043 §6), max_scope-cap, then the
+// error_locked refusal (409, NIM-989). Shared by Create and Preview. nil error → a
+// sorted snapshot of incarnation names; *problemError on failure (the same
+// 403/404/409/422/500 classification as the (w,r) variant). ctx — request context
+// (resolve/scope-select read it).
 func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt.Claims, req *voyageCreateRequest) ([]string, error) {
 	if req.ScenarioName == "" {
 		return nil, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -670,6 +669,7 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 	// Otherwise starting on an incarnation outside the permission scope = privilege escalation.
 	// incReader=nil (unit test without DB scope) → skip per-incarnation scope,
 	// the bare-check above already guaranteed the base right (cluster-admin / bare role).
+	var locked []LockedIncarnation
 	if h.incReader != nil {
 		for _, name := range resolved {
 			inc, sErr := incarnation.SelectByID(ctx, h.incReader, name)
@@ -684,11 +684,22 @@ func (h *VoyageHandler) resolveScenarioScopeErr(ctx context.Context, claims *jwt
 				return nil, &problemError{problem.New(problem.TypeForbidden, "",
 					"operator lacks incarnation.run on resolved incarnation "+name)}
 			}
+			if inc.Status == incarnation.StatusErrorLocked {
+				locked = append(locked, LockedIncarnation{ID: inc.ID, LockingApplyID: inc.LockingApplyID()})
+			}
 		}
 	}
 
 	if err := h.scopeExceedsCapErr(len(resolved)); err != nil {
 		return nil, err
+	}
+	// An error_locked target is refused here, before the Voyage exists, rather than
+	// accepted and failed by its spawn a few milliseconds later (NIM-989) — parity
+	// the single-incarnation run route. Checked last: a forbidden or oversized
+	// target is the answer that comes first. Advisory only; lockRun stays the gate,
+	// and a target locked after this point is recorded on its row instead.
+	if len(locked) > 0 {
+		return nil, &problemError{problem.New(problem.TypeIncarnationLocked, "", errorLockedTargetDetail(locked))}
 	}
 	return resolved, nil
 }
@@ -1281,13 +1292,15 @@ type voyageSummaryDTO struct {
 // T5d). target_kind/status — plain string; apply_id/errand_id/finished_at —
 // pointer-optional with omitempty. Field ORDER alphabetical (like oapi-codegen).
 type voyageTargetEntryDTO struct {
-	ApplyID    *string    `json:"apply_id,omitempty"`
-	BatchIndex int        `json:"batch_index"`
-	ErrandID   *string    `json:"errand_id,omitempty"`
-	FinishedAt *time.Time `json:"finished_at,omitempty"`
-	Status     string     `json:"status"`
-	TargetID   string     `json:"target_id"`
-	TargetKind string     `json:"target_kind"`
+	ApplyID      *string    `json:"apply_id,omitempty"`
+	BatchIndex   int        `json:"batch_index"`
+	ErrandID     *string    `json:"errand_id,omitempty"`
+	ErrorCode    *string    `json:"error_code,omitempty"`
+	ErrorMessage *string    `json:"error_message,omitempty"`
+	FinishedAt   *time.Time `json:"finished_at,omitempty"`
+	Status       string     `json:"status"`
+	TargetID     string     `json:"target_id"`
+	TargetKind   string     `json:"target_kind"`
 }
 
 // scopeSizeOf decodes the target_resolved JSONB array and counts its length.
@@ -1579,13 +1592,15 @@ func (h *VoyageHandler) TargetsTyped(ctx context.Context, claims *jwt.Claims, id
 	for i := range targets {
 		t := &targets[i]
 		out = append(out, voyageTargetEntryDTO{
-			TargetKind: string(t.TargetKind),
-			TargetID:   t.TargetID,
-			BatchIndex: t.BatchIndex,
-			Status:     string(t.Status),
-			ApplyID:    t.ApplyID,
-			ErrandID:   t.ErrandID,
-			FinishedAt: t.FinishedAt,
+			TargetKind:   string(t.TargetKind),
+			TargetID:     t.TargetID,
+			BatchIndex:   t.BatchIndex,
+			Status:       string(t.Status),
+			ApplyID:      t.ApplyID,
+			ErrandID:     t.ErrandID,
+			FinishedAt:   t.FinishedAt,
+			ErrorCode:    t.ErrorCode,
+			ErrorMessage: t.ErrorMessage,
 		})
 	}
 	return VoyageTargetsReply{VoyageID: id, Targets: out}, nil

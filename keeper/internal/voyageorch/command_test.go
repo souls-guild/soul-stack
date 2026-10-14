@@ -33,6 +33,7 @@ func commandClaimRow() scanRow {
 type fakeCommandSpawner struct {
 	mu          sync.Mutex
 	failSIDs    map[string]bool
+	failCodes   map[string]string // sid -> error code returned with a failSIDs refusal
 	statuses    map[string]string // sid -> errand-status (default "success")
 	calls       []string
 	dryRuns     map[string]bool // sid -> dryRun argument as received
@@ -41,7 +42,7 @@ type fakeCommandSpawner struct {
 	delay       time.Duration
 }
 
-func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, error) {
+func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, string, error) {
 	s.mu.Lock()
 	s.calls = append(s.calls, sid)
 	if s.dryRuns == nil {
@@ -53,6 +54,7 @@ func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, mo
 		s.maxParallel = s.active
 	}
 	fail := s.failSIDs[sid]
+	failCode := s.failCodes[sid]
 	status, hasStatus := s.statuses[sid]
 	s.mu.Unlock()
 
@@ -63,7 +65,7 @@ func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, mo
 			s.mu.Lock()
 			s.active--
 			s.mu.Unlock()
-			return "", "", ctx.Err()
+			return "", "", voyage.TargetErrorSpawn, ctx.Err()
 		}
 	}
 
@@ -72,12 +74,12 @@ func (s *fakeCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, mo
 	s.mu.Unlock()
 
 	if fail {
-		return "", "", fmt.Errorf("spawn failed for %s", sid)
+		return "", "failed", failCode, fmt.Errorf("spawn failed for %s", sid)
 	}
 	if !hasStatus {
 		status = "success"
 	}
-	return "er-" + sid, status, nil
+	return "er-" + sid, status, "", nil
 }
 
 func commandVoyage(sids []string, batchSize, concurrency *int, onFailure *voyage.OnFailure, interval *time.Duration) *voyage.Voyage {
@@ -712,7 +714,7 @@ type fencingSpawner struct {
 	onFirst func()
 }
 
-func (s *fencingSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, error) {
+func (s *fencingSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, aid string, input []byte, dryRun bool) (string, string, string, error) {
 	s.mu.Lock()
 	first := len(s.calls) == 0
 	s.calls = append(s.calls, sid)
@@ -720,7 +722,7 @@ func (s *fencingSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module
 	if first && s.onFirst != nil {
 		s.onFirst()
 	}
-	return "er-" + sid, "success", nil
+	return "er-" + sid, "success", "", nil
 }
 
 func (s *fencingSpawner) callList() []string {

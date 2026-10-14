@@ -92,7 +92,6 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
-	"github.com/souls-guild/soul-stack/shared/coremanifest"
 	"github.com/souls-guild/soul-stack/shared/diag"
 	shlog "github.com/souls-guild/soul-stack/shared/log"
 	"github.com/souls-guild/soul-stack/shared/obs"
@@ -5824,32 +5823,49 @@ func (r cadenceCommandResolver) ResolveSIDs(ctx context.Context, sids, covens []
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
 type voyageScenarioSpawner struct {
-	runner   *scenario.Runner
+	runner   scenarioRunStarter
 	reader   incarnation.ExecQueryRower
 	resolver voyageServiceResolver
 }
 
+// scenarioRunStarter is the part of *scenario.Runner the spawner calls, narrowed
+// so a test can answer Start with the sentinel a lost race produces.
+type scenarioRunStarter interface {
+	Start(ctx context.Context, spec scenario.RunSpec) error
+}
+
 // Keeper daemon runtime wiring note.
 // Keeper daemon runtime wiring note.
+//
+// Every refusal is a [*voyageorch.SpawnRefusal]: its reason is the only trace the
+// target row keeps, since no run exists to carry one (NIM-989). The status checks
+// before Start name the blocking run; the same sentinels from Start cover a status
+// that changed in between, without the run.
 func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (string, error) {
 	inc, err := incarnation.SelectByID(ctx, s.reader, incarnationName)
 	if err != nil {
-		return "", fmt.Errorf("voyage scenario spawner: select incarnation %q: %w", incarnationName, err)
+		err = fmt.Errorf("voyage scenario spawner: select incarnation %q: %w", incarnationName, err)
+		if errors.Is(err, incarnation.ErrIncarnationNotFound) {
+			return "", scenarioRefusal(voyage.TargetErrorIncarnationNotFound,
+				"incarnation "+incarnationName+" no longer exists", err)
+		}
+		return "", err
 	}
-	// Keeper daemon runtime wiring note.
-	// Keeper daemon runtime wiring note.
-	if inc.Status == incarnation.StatusErrorLocked {
-		return "", fmt.Errorf("voyage scenario spawner: incarnation %q is error_locked", incarnationName)
+	if refusal := scenarioStatusRefusal(inc); refusal != nil {
+		return "", refusal
 	}
 	ref, ok := s.resolver.Resolve(inc.Service)
 	if !ok {
-		return "", fmt.Errorf("voyage scenario spawner: service %q is not registered", inc.Service)
+		return "", scenarioRefusal(voyage.TargetErrorServiceNotRegistered,
+			"service "+inc.Service+" of incarnation "+incarnationName+" is not registered",
+			fmt.Errorf("voyage scenario spawner: service %q is not registered", inc.Service))
 	}
 
 	var inputMap map[string]any
 	if len(input) > 0 {
 		if err := json.Unmarshal(input, &inputMap); err != nil {
-			return "", fmt.Errorf("voyage scenario spawner: decode input: %w", err)
+			return "", scenarioRefusal(voyage.TargetErrorInputDecode, "the Voyage input is not a JSON object",
+				fmt.Errorf("voyage scenario spawner: decode input: %w", err))
 		}
 	}
 
@@ -5877,9 +5893,56 @@ func (s *voyageScenarioSpawner) SpawnScenarioRun(ctx context.Context, voyageID, 
 		spec.VoyageID = &voyageID
 	}
 	if err := s.runner.Start(ctx, spec); err != nil {
-		return "", fmt.Errorf("voyage scenario spawner: runner.Start: %w", err)
+		return "", startRefusal(incarnationName, fmt.Errorf("voyage scenario spawner: runner.Start: %w", err))
 	}
 	return applyID, nil
+}
+
+// startRefusal classifies a Start error: the status changed between the check
+// above and lockRun's FOR UPDATE, so the sentence cannot name the run or the
+// status it no longer has in hand. Any other error stays a plain one (spawn_error).
+func startRefusal(incarnationName string, err error) error {
+	switch {
+	case errors.Is(err, scenario.ErrLocked):
+		return scenarioRefusal(voyage.TargetErrorIncarnationErrorLocked,
+			handlers.ErrorLockedDetail(incarnationName, ""), err)
+	case errors.Is(err, scenario.ErrAlreadyRunning):
+		return scenarioRefusal(voyage.TargetErrorIncarnationApplying,
+			"incarnation "+incarnationName+" is already applying another run", err)
+	case errors.Is(err, scenario.ErrNotRunnable):
+		return scenarioRefusal(voyage.TargetErrorIncarnationNotRunnable,
+			"incarnation "+incarnationName+" is in a status that does not permit a run", err)
+	}
+	return err
+}
+
+// scenarioStatusRefusal refuses an incarnation whose status, as read before
+// Start, does not permit a run (parity scenario.Runner.lockRun: ready and drift
+// run). nil — Start decides.
+func scenarioStatusRefusal(inc *incarnation.Incarnation) *voyageorch.SpawnRefusal {
+	switch inc.Status {
+	case incarnation.StatusReady, incarnation.StatusDrift:
+		return nil
+	case incarnation.StatusErrorLocked:
+		return scenarioRefusal(voyage.TargetErrorIncarnationErrorLocked,
+			handlers.ErrorLockedDetail(inc.ID, inc.LockingApplyID()),
+			fmt.Errorf("voyage scenario spawner: incarnation %q is error_locked", inc.ID))
+	case incarnation.StatusApplying:
+		msg := "incarnation " + inc.ID + " is already applying another run"
+		if inc.ApplyingApplyID != nil && *inc.ApplyingApplyID != "" {
+			msg = "incarnation " + inc.ID + " is already applying run " + *inc.ApplyingApplyID
+		}
+		return scenarioRefusal(voyage.TargetErrorIncarnationApplying, msg,
+			fmt.Errorf("voyage scenario spawner: incarnation %q is applying", inc.ID))
+	default:
+		return scenarioRefusal(voyage.TargetErrorIncarnationNotRunnable,
+			"incarnation "+inc.ID+" is "+string(inc.Status)+", which does not permit a run",
+			fmt.Errorf("voyage scenario spawner: incarnation %q is %s", inc.ID, inc.Status))
+	}
+}
+
+func scenarioRefusal(code, message string, err error) *voyageorch.SpawnRefusal {
+	return &voyageorch.SpawnRefusal{Reason: voyage.TargetReason{Code: code, Message: message}, Err: err}
 }
 
 // Keeper daemon runtime wiring note.
@@ -5994,15 +6057,12 @@ type voyageCommandSpawner struct {
 // voyageID is deliberately unused: the back-link lives in voyage_targets.errand_id,
 // and the errands row is standalone (parity single-SID /exec, ADR-033).
 //
-// The dropped third value is the refusal reason ([classifyDispatchErr]). It is dropped
-// because there is nowhere to put it: voyage_targets (migration 059) has no reason
-// column and VoyageTargetEntry no field, so a host refused before its errands row
-// exists reports `failed` with no back-link and no cause anywhere in the API. Not
-// widened here — that is a column plus a reply field, tracked on its own.
-func (s *voyageCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (string, string, error) {
+// The error code must be forwarded too: for a host refused before its errands row
+// exists ([classifyDispatchErr]) it is the only reason anywhere in the API, written
+// to voyage_targets.error_code (NIM-617). It was once discarded with `_` here.
+func (s *voyageCommandSpawner) SpawnCommand(ctx context.Context, voyageID, sid, module, startedByAID string, input []byte, dryRun bool) (string, string, string, error) {
 	_ = voyageID
-	errandID, status, _, err := s.bridge.SpawnErrand(ctx, "", sid, module, startedByAID, input, dryRun)
-	return errandID, status, err
+	return s.bridge.SpawnErrand(ctx, "", sid, module, startedByAID, input, dryRun)
 }
 
 // Keeper daemon runtime wiring note.
@@ -6060,7 +6120,7 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 	inputMap := map[string]any{}
 	if len(input) > 0 {
 		if err := json.Unmarshal(input, &inputMap); err != nil {
-			return "", "failed", "input_decode_error", fmt.Errorf("errandrun spawner: decode input: %w", err)
+			return "", "failed", voyage.TargetErrorInputDecode, fmt.Errorf("errandrun spawner: decode input: %w", err)
 		}
 	}
 
@@ -6089,7 +6149,7 @@ func (b *errandRunSpawnerBridge) SpawnErrand(ctx context.Context, runID, sid, mo
 	}
 	status, errorCode := classifyErrandStatus(res.Status)
 	if status == "" {
-		return res.ErrandID, "failed", "unknown_status", fmt.Errorf("errandrun spawner: unknown status %q", res.Status)
+		return res.ErrandID, "failed", voyage.TargetErrorUnknownStatus, fmt.Errorf("errandrun spawner: unknown status %q", res.Status)
 	}
 	return res.ErrandID, status, errorCode, nil
 }
@@ -6105,7 +6165,7 @@ func (b *errandRunSpawnerBridge) awaitTerminal(ctx context.Context, errandID str
 	if b.terminalSource == nil {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
-		return "failed", "async_escalation", nil
+		return "failed", voyage.TargetErrorAsyncEscalation, nil
 	}
 	poll := b.pollInterval
 	if poll <= 0 {
@@ -6127,13 +6187,13 @@ func (b *errandRunSpawnerBridge) awaitTerminal(ctx context.Context, errandID str
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
 			// Keeper daemon runtime wiring note.
-			return "cancelled", "cancelled", nil
+			return "cancelled", voyage.TargetErrorCancelled, nil
 		case <-ticker.C:
 			if st, ec, done := b.pollTerminal(ctx, errandID); done {
 				return st, ec, nil
 			}
 			if b.now().After(deadline) {
-				return "failed", "await_timeout", nil
+				return "failed", voyage.TargetErrorAwaitTimeout, nil
 			}
 		}
 	}
@@ -6170,13 +6230,13 @@ func classifyErrandStatus(s errand.Status) (string, string) {
 	case errand.StatusSuccess:
 		return "success", ""
 	case errand.StatusModuleNotAllowed:
-		return "module_not_allowed", "module_not_allowed"
+		return "module_not_allowed", voyage.TargetErrorModuleNotAllowed
 	case errand.StatusTimedOut:
-		return "timed_out", "timed_out"
+		return "timed_out", voyage.TargetErrorTimedOut
 	case errand.StatusCancelled:
-		return "cancelled", "cancelled"
+		return "cancelled", voyage.TargetErrorCancelled
 	case errand.StatusFailed:
-		return "failed", "errand_failed"
+		return "failed", voyage.TargetErrorErrandFailed
 	default:
 		return "", ""
 	}
@@ -6202,19 +6262,11 @@ func (b *errandRunSpawnerBridge) CancelErrand(ctx context.Context, errandID stri
 }
 
 // classifyDispatchErr projects a dispatch refusal onto a stable snake_case reason
-// token — the one place in the tree that makes that mapping.
+// token — the one place in the tree that makes that mapping. The token reaches
+// voyage_targets.error_code through [voyageCommandSpawner.SpawnCommand] and is the
+// only reason a host refused before its errands row exists carries (NIM-617).
 //
-// NO CALLER READS THE RESULT TODAY, and the doc must not pretend otherwise:
-// [errandRunSpawnerBridge.SpawnErrand] returns it, its only caller
-// [voyageCommandSpawner.SpawnCommand] discards it with `_`, and `voyage_targets`
-// (migration 059) has no column to hold it — the row carries `status` and the
-// `errand_id` back-link, nothing else. So a host refused before dispatch shows
-// `failed` with no back-link and no reason, and the cause survives only in the
-// Keeper log. Widening that needs a column plus a reply field; it is tracked
-// separately, not smuggled in here.
-//
-// The mapping is kept correct regardless, because it is the projection whoever adds
-// that column will inherit. The three dry_run tokens became reachable at all only
+// The three dry_run tokens became reachable at all only
 // when a `kind=command` Voyage started putting the flag on each per-host request
 // (NIM-559); before that the path never sent one. They answer three different
 // questions and must stay distinguishable: the module can never be planned, this
@@ -6227,17 +6279,17 @@ func (b *errandRunSpawnerBridge) CancelErrand(ctx context.Context, errandID stri
 func classifyDispatchErr(err error) string {
 	switch {
 	case errors.Is(err, errand.ErrSoulNotConnected):
-		return "soul_not_connected"
+		return voyage.TargetErrorSoulNotConnected
 	case errors.Is(err, errand.ErrDryRunVerbShell):
-		return coremanifest.ReasonDryRunUnsupported
+		return voyage.TargetErrorDryRunUnsupported
 	case errors.Is(err, errand.ErrDryRunNotAnnounced):
-		return "soul_capability_unsupported"
+		return voyage.TargetErrorSoulCapabilityUnsupported
 	case errors.Is(err, errand.ErrDryRunUnverifiable):
-		return "soul_capability_unverifiable"
+		return voyage.TargetErrorSoulCapabilityUnverifiable
 	case errors.Is(err, errand.ErrSIDEmpty), errors.Is(err, errand.ErrModuleEmpty), errors.Is(err, errand.ErrTimeoutOutOfRange):
-		return "invalid_request"
+		return voyage.TargetErrorInvalidRequest
 	default:
-		return "spawn_error"
+		return voyage.TargetErrorSpawn
 	}
 }
 

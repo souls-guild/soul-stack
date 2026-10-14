@@ -2,6 +2,7 @@ package mcp
 
 import (
 	"encoding/json"
+	"strings"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
@@ -58,8 +59,14 @@ func TestToolsCall_IncarnationRun_Success(t *testing.T) {
 }
 
 func TestToolsCall_IncarnationRun_ErrorLocked(t *testing.T) {
-	// error_locked → fast probe rejection incarnation-locked before the run starts.
-	pool := &fakePool{incFn: incWithStatus(incarnation.StatusErrorLocked)}
+	// error_locked → fast probe rejection incarnation-locked before the run starts,
+	// naming the run that locked it (parity REST and a refused Voyage, NIM-989).
+	locked := incWithStatus(incarnation.StatusErrorLocked)
+	pool := &fakePool{incFn: func(name string) (*incarnation.Incarnation, error) {
+		inc, err := locked(name)
+		inc.StatusDetails = map[string]any{"apply_id": "01HLOCKER"}
+		return inc, err
+	}}
 	starter := &mcpStarter{}
 	h, rec := newTestHandlerFull(t, pool, runnerRBAC(), starter, &mcpResolver{ok: true}, nil)
 	resp := callTool(t, h, "archon-alice", "keeper.incarnation.run",
@@ -69,6 +76,9 @@ func TestToolsCall_IncarnationRun_ErrorLocked(t *testing.T) {
 	}
 	if data := mustToolErrorData(t, resp.Error.Data); data.Code != mcpCodeIncarnationLocked {
 		t.Errorf("data.code = %q, want incarnation-locked", data.Code)
+	}
+	if !strings.Contains(resp.Error.Message, "redis-prod is error_locked by run 01HLOCKER") {
+		t.Errorf("message = %q, want the locking run named", resp.Error.Message)
 	}
 	if starter.calls != 0 {
 		t.Error("scenario must NOT start for error_locked incarnation")

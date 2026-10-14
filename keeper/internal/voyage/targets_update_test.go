@@ -80,7 +80,7 @@ func TestMarkTargetTerminal_SQLAndArgs(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	fdb := &fakeDB{}
-	if err := MarkTargetTerminal(ctx, fdb, "v1", TargetKindIncarnation, "inc-a", TargetStatusSucceeded); err != nil {
+	if err := MarkTargetTerminal(ctx, fdb, "v1", TargetKindIncarnation, "inc-a", TargetStatusSucceeded, TargetReason{}); err != nil {
 		t.Fatalf("MarkTargetTerminal: %v", err)
 	}
 	if !strings.Contains(fdb.execSQL, "finished_at = NOW()") {
@@ -94,11 +94,38 @@ func TestMarkTargetTerminal_SQLAndArgs(t *testing.T) {
 	}
 }
 
+func TestMarkTargetTerminal_WritesReason(t *testing.T) {
+	t.Parallel()
+	ctx := context.Background()
+	fdb := &fakeDB{}
+	reason := TargetReason{Code: TargetErrorIncarnationErrorLocked, Message: "incarnation inc-a is error_locked by run ap0"}
+	if err := MarkTargetTerminal(ctx, fdb, "v1", TargetKindIncarnation, "inc-a", TargetStatusFailed, reason); err != nil {
+		t.Fatalf("MarkTargetTerminal: %v", err)
+	}
+	for _, want := range []string{"error_code  = NULLIF($5, '')", "error_message = NULLIF($6, '')"} {
+		if !strings.Contains(fdb.execSQL, want) {
+			t.Errorf("SQL missing %q: %.300s", want, fdb.execSQL)
+		}
+	}
+	if len(fdb.execArgs) != 6 || fdb.execArgs[4] != reason.Code || fdb.execArgs[5] != reason.Message {
+		t.Errorf("execArgs = %v, want code in $5 and message in $6", fdb.execArgs)
+	}
+}
+
+func TestMarkTargetTerminal_RejectsMessageWithoutCode(t *testing.T) {
+	t.Parallel()
+	fdb := &fakeDB{}
+	err := MarkTargetTerminal(context.Background(), fdb, "v", TargetKindIncarnation, "inc", TargetStatusFailed, TargetReason{Message: "why"})
+	if err == nil || fdb.execCalls != 0 {
+		t.Errorf("err = %v, exec calls = %d; want a refusal before any write", err, fdb.execCalls)
+	}
+}
+
 func TestMarkTargetTerminal_RejectsNonTerminal(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, st := range []TargetStatus{TargetStatusAwaiting, TargetStatusRunning} {
-		err := MarkTargetTerminal(ctx, &fakeDB{}, "v", TargetKindIncarnation, "inc", st)
+		err := MarkTargetTerminal(ctx, &fakeDB{}, "v", TargetKindIncarnation, "inc", st, TargetReason{})
 		if err == nil || !strings.Contains(err.Error(), "not terminal") {
 			t.Errorf("status %q: err = %v, want not-terminal", st, err)
 		}
@@ -109,7 +136,7 @@ func TestMarkTargetTerminal_AllTerminalStatuses(t *testing.T) {
 	t.Parallel()
 	ctx := context.Background()
 	for _, st := range []TargetStatus{TargetStatusSucceeded, TargetStatusFailed, TargetStatusCancelled, TargetStatusNoMatch} {
-		if err := MarkTargetTerminal(ctx, &fakeDB{}, "v", TargetKindIncarnation, "inc", st); err != nil {
+		if err := MarkTargetTerminal(ctx, &fakeDB{}, "v", TargetKindIncarnation, "inc", st, TargetReason{}); err != nil {
 			t.Errorf("status %q rejected: %v", st, err)
 		}
 	}

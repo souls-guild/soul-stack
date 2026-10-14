@@ -14,6 +14,7 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
@@ -243,10 +244,12 @@ func (h *Handler) invokeVoyageHandler(
 
 // toolFromVoyageProblem converts an HTTP-handler problem+json into an
 // MCP-tool-error (parity toolFromProblem; 409 voyage_*_terminal /
-// running_cancel → not-cancellable).
+// running_cancel → not-cancellable, 409 incarnation-locked from start →
+// incarnation-locked, parity keeper.incarnation.run).
 func (h *Handler) toolFromVoyageProblem(id json.RawMessage, toolName string, rec *httptest.ResponseRecorder, status int) jsonRPCResponse {
 	body := rec.Body.Bytes()
 	var p struct {
+		Type   string `json:"type"`
 		Detail string `json:"detail"`
 	}
 	_ = json.Unmarshal(body, &p)
@@ -262,6 +265,8 @@ func (h *Handler) toolFromVoyageProblem(id json.RawMessage, toolName string, rec
 		code = mcpCodeForbidden
 	case status == http.StatusNotFound:
 		code = mcpCodeNotFound
+	case status == http.StatusConflict && p.Type == problem.TypeIncarnationLocked:
+		code = mcpCodeIncarnationLocked
 	case status == http.StatusConflict:
 		code = mcpCodeErrandNotCancellable
 	case status == http.StatusUnprocessableEntity:

@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/scenario"
@@ -99,7 +100,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 	// run (authority is lockRun under FOR UPDATE; parity with REST).
 	if inc.Status == incarnation.StatusErrorLocked {
 		return h.toolError(req.ID, toolName, mcpCodeIncarnationLocked,
-			"incarnation "+a.ID+" is error_locked — unlock required before next run")
+			handlers.ErrorLockedDetail(a.ID, inc.LockingApplyID()))
 	}
 
 	serviceRef, ok := h.deps.ServiceRegistry.Resolve(inc.Service)

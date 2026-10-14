@@ -225,16 +225,19 @@ type Voyage struct {
 
 // VoyageTarget — runtime representation of `voyage_targets` row (run unit,
 // Leg split). ApplyID (kind=scenario) and ErrandID (kind=command) — back-links
-// to child run, populated by orchestrator on spawn (S2/S3).
+// to child run, populated by orchestrator on spawn (S2/S3). ErrorCode /
+// ErrorMessage — [TargetReason] of a target that did not succeed.
 type VoyageTarget struct {
-	VoyageID   string
-	TargetKind TargetKind
-	TargetID   string
-	BatchIndex int
-	Status     TargetStatus
-	ApplyID    *string
-	ErrandID   *string
-	FinishedAt *time.Time
+	VoyageID     string
+	TargetKind   TargetKind
+	TargetID     string
+	BatchIndex   int
+	Status       TargetStatus
+	ApplyID      *string
+	ErrandID     *string
+	FinishedAt   *time.Time
+	ErrorCode    *string
+	ErrorMessage *string
 }
 
 // Summary — aggregated run summary, folded into jsonb column `summary`

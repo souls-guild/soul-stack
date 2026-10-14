@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"time"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
@@ -90,7 +89,8 @@ func InsertTargets(ctx context.Context, db ExecQueryRower, voyageID string, targ
 }
 
 const selectTargetsSQL = `
-SELECT voyage_id, target_kind, target_id, batch_index, status, apply_id, errand_id, finished_at
+SELECT voyage_id, target_kind, target_id, batch_index, status, apply_id, errand_id, finished_at,
+       error_code, error_message
 FROM voyage_targets
 WHERE voyage_id = $1
 ORDER BY batch_index ASC, target_kind ASC, target_id ASC
@@ -201,7 +201,9 @@ func MarkTargetRunning(ctx context.Context, db ExecQueryRower, voyageID string, 
 const updateTargetTerminalSQL = `
 UPDATE voyage_targets
 SET status      = $4,
-    finished_at = NOW()
+    finished_at = NOW(),
+    error_code  = NULLIF($5, ''),
+    error_message = NULLIF($6, '')
 WHERE voyage_id   = $1
   AND target_kind = $2
   AND target_id   = $3
@@ -209,14 +211,15 @@ WHERE voyage_id   = $1
 `
 
 // MarkTargetTerminal fixes terminal of run unit (succeeded / failed /
-// cancelled / no_match) + finished_at = NOW(). Called by orchestrator after
-// child run of target reaches terminal.
+// cancelled / no_match) + finished_at = NOW() + the reason it did not succeed
+// (zero reason → both columns NULL). Called by orchestrator after child run of
+// target reaches terminal, or after the target was refused before one existed.
 //
 // WHERE excludes already-terminal rows (idempotent guard, parity
 // MarkTargetRunning): repeat finalize after failover — no-op RowsAffected=0.
 // status must be terminal TargetStatus; awaiting/running → [ErrInvalidStatus]
-// (caller programming error).
-func MarkTargetTerminal(ctx context.Context, db ExecQueryRower, voyageID string, kind TargetKind, targetID string, status TargetStatus) error {
+// (caller programming error), and so is a message without a code.
+func MarkTargetTerminal(ctx context.Context, db ExecQueryRower, voyageID string, kind TargetKind, targetID string, status TargetStatus, reason TargetReason) error {
 	if voyageID == "" {
 		return fmt.Errorf("voyage: empty voyage_id")
 	}
@@ -229,7 +232,10 @@ func MarkTargetTerminal(ctx context.Context, db ExecQueryRower, voyageID string,
 	if !isTerminalTargetStatus(status) {
 		return fmt.Errorf("%w: target status %q is not terminal", ErrInvalidStatus, status)
 	}
-	if _, err := db.Exec(ctx, updateTargetTerminalSQL, voyageID, string(kind), targetID, string(status)); err != nil {
+	if reason.Code == "" && reason.Message != "" {
+		return fmt.Errorf("voyage: target %s/%s reason message without a code", kind, targetID)
+	}
+	if _, err := db.Exec(ctx, updateTargetTerminalSQL, voyageID, string(kind), targetID, string(status), reason.Code, reason.Message); err != nil {
 		return fmt.Errorf("voyage: mark target terminal (%s/%s=%s): %w", kind, targetID, status, err)
 	}
 	return nil
@@ -247,12 +253,9 @@ func isTerminalTargetStatus(s TargetStatus) bool {
 
 func scanTarget(row pgx.Row) (*VoyageTarget, error) {
 	var (
-		t          VoyageTarget
-		kindStr    string
-		statusStr  string
-		applyID    *string
-		errandID   *string
-		finishedAt *time.Time
+		t         VoyageTarget
+		kindStr   string
+		statusStr string
 	)
 	if err := row.Scan(
 		&t.VoyageID,
@@ -260,16 +263,15 @@ func scanTarget(row pgx.Row) (*VoyageTarget, error) {
 		&t.TargetID,
 		&t.BatchIndex,
 		&statusStr,
-		&applyID,
-		&errandID,
-		&finishedAt,
+		&t.ApplyID,
+		&t.ErrandID,
+		&t.FinishedAt,
+		&t.ErrorCode,
+		&t.ErrorMessage,
 	); err != nil {
 		return nil, err
 	}
 	t.TargetKind = TargetKind(kindStr)
 	t.Status = TargetStatus(statusStr)
-	t.ApplyID = applyID
-	t.ErrandID = errandID
-	t.FinishedAt = finishedAt
 	return &t, nil
 }

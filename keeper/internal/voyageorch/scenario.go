@@ -50,7 +50,8 @@ import (
 //     via Awaiter;
 //   - err != nil — run could not even start (incarnation not found /
 //     error_locked / ServiceRef does not resolve / Runner.Start rejected). Caller
-//     records target as failed without applyID.
+//     records target as failed without applyID, with the reason a [*SpawnRefusal]
+//     in the chain carries, else [voyage.TargetErrorSpawn] and no message.
 //
 // cadenceID — back-link to Cadence schedule (voyages.cadence_id, ADR-046 §2):
 // nil ⇒ manual Voyage; populated ⇒ Voyage spawned by schedule. Production-spawner
@@ -59,6 +60,33 @@ import (
 // cadence selector (T4b).
 type ScenarioSpawner interface {
 	SpawnScenarioRun(ctx context.Context, voyageID, incarnationName, scenarioName string, input []byte, startedByAID string, cadenceID *string) (applyID string, err error)
+}
+
+// SpawnRefusal is a [ScenarioSpawner] refusal to start a run, carrying the reason
+// recorded on the target's voyage_targets row. Err is the cause, kept for the log.
+type SpawnRefusal struct {
+	Reason voyage.TargetReason
+	Err    error
+}
+
+func (r *SpawnRefusal) Error() string {
+	if r.Err == nil {
+		return r.Reason.Message
+	}
+	return r.Err.Error()
+}
+
+func (r *SpawnRefusal) Unwrap() error { return r.Err }
+
+// spawnFailureReason is the reason recorded for a spawn error. An error that is
+// not a [*SpawnRefusal] gets a code and no message: its text was not composed
+// for an operator.
+func spawnFailureReason(err error) voyage.TargetReason {
+	var refusal *SpawnRefusal
+	if errors.As(err, &refusal) && refusal.Reason.Code != "" {
+		return refusal.Reason
+	}
+	return voyage.TargetReason{Code: voyage.TargetErrorSpawn}
 }
 
 // OrphanLockReleaser releases orphaned applying-lock of incarnation left from
@@ -675,12 +703,12 @@ func (w *VoyageWorker) runOneIncarnationFenced(ctx context.Context, run *voyage.
 				slog.String("kid", w.KID), slog.Int("attempt", run.Attempt))
 			fenceLost.Store(true)
 			cancelFan()
-			w.trackTerminal(ctx, run.VoyageID, name, OutcomeCancelled)
+			w.trackTerminal(ctx, run.VoyageID, name, OutcomeCancelled, voyage.TargetReason{})
 			return targetResult{IncarnationName: name, Outcome: OutcomeCancelled}
 		}
 		w.Logger.Warn("voyageorch: ownership-fence check failed (transient) — scenario-run not sent",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", err))
-		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
+		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed, ownershipCheckFailedReason("incarnation "+name))
 		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
 	}
 	return w.runOneIncarnation(ctx, run, name)
@@ -699,7 +727,11 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 	if rerr := w.reconcileOrphanLock(ctx, run, name); rerr != nil {
 		w.Logger.Warn("voyageorch: reconciliation of orphaned applying-lock failed — scenario-run not sent",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", rerr))
-		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
+		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed, voyage.TargetReason{
+			Code: voyage.TargetErrorOrphanLockReleaseFail,
+			Message: "the Keeper could not check for, or release, an applying lock an earlier attempt of this Voyage " +
+				"may have left on incarnation " + name + ", so it did not start the run",
+		})
 		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
 	}
 
@@ -707,7 +739,7 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 	if err != nil {
 		w.Logger.Warn("voyageorch: spawn scenario-run failed",
 			slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name), slog.Any("error", err))
-		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed)
+		w.trackTerminal(ctx, run.VoyageID, name, OutcomeFailed, spawnFailureReason(err))
 		return targetResult{IncarnationName: name, Outcome: OutcomeFailed}
 	}
 
@@ -717,6 +749,7 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 	}
 
 	outcome, awerr := w.ScenarioAwaiter.Await(ctx, applyID)
+	var reason voyage.TargetReason
 	if awerr != nil {
 		// ctx.Done / await error: scenario-run will reach terminal via
 		// apply_runs anyway, but we did not wait. cancelled on ctx cancellation (abort/
@@ -728,11 +761,36 @@ func (w *VoyageWorker) runOneIncarnation(ctx context.Context, run *voyage.Voyage
 				slog.String("voyage_id", run.VoyageID), slog.String("incarnation", name),
 				slog.String("apply_id", applyID), slog.Any("error", awerr))
 			outcome = OutcomeFailed
+			reason = voyage.TargetReason{
+				Code:    voyage.TargetErrorAwaitFailed,
+				Message: "the Keeper lost track of run " + applyID + " before it ended; the run itself holds its outcome",
+			}
 		}
 	}
 
-	w.trackTerminal(ctx, run.VoyageID, name, outcome)
+	w.trackTerminal(ctx, run.VoyageID, name, outcome, reason)
 	return targetResult{IncarnationName: name, ApplyID: applyID, Outcome: outcome}
+}
+
+// reasonUnlessStopped drops the reason whenever the run itself (abort, lost lease,
+// shutdown) is stopped by the time the terminal is written. Most failures on the
+// way out — the ownership read, the orphan check, the spawn — are caused by the
+// stop and their error would name the wrong reason; a genuine refusal that races
+// the stop loses its code too, the price of one rule every path inherits.
+func reasonUnlessStopped(ctx context.Context, reason voyage.TargetReason) voyage.TargetReason {
+	if ctx.Err() != nil {
+		return voyage.TargetReason{}
+	}
+	return reason
+}
+
+// ownershipCheckFailedReason is the reason of a unit not started because the
+// ownership fence could not be read (a transient PG error, not a lost lease).
+func ownershipCheckFailedReason(unit string) voyage.TargetReason {
+	return voyage.TargetReason{
+		Code:    voyage.TargetErrorOwnershipCheckFailed,
+		Message: "the Keeper could not confirm it still owns this Voyage, so it did not start " + unit,
+	}
 }
 
 // reconcileOrphanLock — recovery seam ADR-027(k): detect + FENCED release of
@@ -813,10 +871,12 @@ func (w *VoyageWorker) reconcileOrphanLock(ctx context.Context, run *voyage.Voya
 	return nil
 }
 
-// trackTerminal best-effort records target terminal in voyage_targets. PG
-// error logged as warn — outcome already fixed in targetResult (authority for finalize).
-func (w *VoyageWorker) trackTerminal(ctx context.Context, voyageID, name string, outcome TargetOutcome) {
-	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, outcome.toTargetStatus()); err != nil {
+// trackTerminal best-effort records target terminal and its reason in
+// voyage_targets. PG error logged as warn — outcome already fixed in targetResult
+// (authority for finalize).
+func (w *VoyageWorker) trackTerminal(ctx context.Context, voyageID, name string, outcome TargetOutcome, reason voyage.TargetReason) {
+	reason = reasonUnlessStopped(ctx, reason)
+	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, outcome.toTargetStatus(), reason); err != nil {
 		w.Logger.Warn("voyageorch: MarkTargetTerminal failed (best-effort)",
 			slog.String("voyage_id", voyageID), slog.String("incarnation", name),
 			slog.String("outcome", string(outcome)), slog.Any("error", err))
@@ -826,7 +886,7 @@ func (w *VoyageWorker) trackTerminal(ctx context.Context, voyageID, name string,
 // markTargetCancelled best-effort marks non-started target cancelled
 // (ctx.Done during Leg distribution). PG error logged as warn.
 func (w *VoyageWorker) markTargetCancelled(ctx context.Context, voyageID, name string) error {
-	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, voyage.TargetStatusCancelled); err != nil {
+	if err := voyage.MarkTargetTerminal(ctx, w.Pool, voyageID, voyage.TargetKindIncarnation, name, voyage.TargetStatusCancelled, voyage.TargetReason{}); err != nil {
 		w.Logger.Warn("voyageorch: MarkTargetTerminal(cancelled) failed (best-effort)",
 			slog.String("voyage_id", voyageID), slog.String("incarnation", name), slog.Any("error", err))
 		return err

@@ -5778,6 +5778,12 @@ components:
           type: integer
         errand_id:
           type: string
+        error_code:
+          description: why the target did not succeed, one of the documented snake_case codes (docs/keeper/operator-api/voyages.md); omitted for a target that succeeded, one the run itself stopped, and a scenario target whose run exists and failed (follow apply_id)
+          type: string
+        error_message:
+          description: the same reason as a sentence the Keeper composed (e.g. the run that left the incarnation error_locked); omitted when there is none
+          type: string
         finished_at:
           format: date-time
           type: string
@@ -14248,7 +14254,7 @@ paths:
       tags:
         - voyage
     post:
-      description: "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host."
+      description: "Unified batch run (ADR-043). RBAC-by-kind: scenario->incarnation.run, command->errand.run (fail-closed, in the handler). Tempo per-AID rate-limit. 400 - kind=command with dry_run on a verb-shell module: refused at creation, before a scope is resolved and a row written, since it could only fan out one identical failure per host. 409 incarnation-locked - kind=scenario whose resolved target holds an error_locked incarnation: refused before the Voyage exists, detail names the run that locked it and the unlock / rerun-last routes."
       operationId: createVoyage
       requestBody:
         content:
@@ -14285,6 +14291,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
         "422":
           content:
             application/problem+json:
@@ -14308,7 +14320,7 @@ paths:
         - voyage
   /v1/voyages/preview:
     post:
-      description: Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module. Without revealing the SID list. Read-like - no audit.
+      description: Preview of the number of units/batches WITHOUT creating a Voyage (ADR-043 amendment 4). Same validation/resolve/RBAC as Create, so the same 400 for kind=command with dry_run on a verb-shell module and the same 409 for a scenario target holding an error_locked incarnation. Without revealing the SID list. Read-like - no audit.
       operationId: previewVoyage
       requestBody:
         content:
@@ -14341,6 +14353,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
         "422":
           content:
             application/problem+json:

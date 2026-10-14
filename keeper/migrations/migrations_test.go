@@ -277,6 +277,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"123_create_apply_run_plan_host_params.up.sql",
 		"124_add_apply_run_plan_waves.down.sql",
 		"124_add_apply_run_plan_waves.up.sql",
+		"125_add_voyage_targets_error.down.sql",
+		"125_add_voyage_targets_error.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)
