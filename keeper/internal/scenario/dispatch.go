@@ -156,6 +156,9 @@ func (r *Runner) dispatchPassage(ctx context.Context, spec RunSpec, log *slog.Lo
 	}
 	sort.Strings(sids)
 	waves := splitWaves(sids, effectiveSerialWidth(plans))
+	if len(waves) > 1 {
+		r.recordWaves(ctx, spec, log, passage, plans, waves)
+	}
 	var (
 		rescues map[int]bool
 		fires   func(sid string, idx int) bool
@@ -1018,6 +1021,26 @@ func effectiveSerialWidth(plans []render.DispatchPlan) int {
 		}
 	}
 	return width
+}
+
+// recordWaves keeps a step's waves on the plan rows of its host tasks, for the run
+// view (NIM-996): it is the only record of which wave a host was in, and of the
+// hosts of a wave the run ended before. Best-effort, as [Runner.persistRunPlan]: a
+// lost write shows the step as a flat task list and changes nothing in the run.
+func (r *Runner) recordWaves(ctx context.Context, spec RunSpec, log *slog.Logger, passage int, plans []render.DispatchPlan, waves [][]string) {
+	if r.deps.DB == nil {
+		return
+	}
+	indexes := make([]int, 0, len(plans))
+	for _, p := range plans {
+		if !p.Keeper {
+			indexes = append(indexes, p.TaskIndex)
+		}
+	}
+	if err := applyrun.SetStepWaves(ctx, r.deps.DB, spec.ApplyID, indexes, waves); err != nil {
+		log.Warn("scenario: recording the step's serial waves failed - the run view shows the step as a flat task list",
+			slog.Int("passage", passage), slog.Any("error", err))
+	}
 }
 
 // splitWaves splits an already SID-sorted host list into sequential waves of

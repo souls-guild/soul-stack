@@ -293,6 +293,11 @@ step close inside the step, and only then does the next step start. A
 after **ALL** waves across all hosts, never wave by wave. What a capture commits
 is its own write at its own step (§7), so a run that dies in a later wave leaves
 the captures that already ran — deliberately, not as a partial commit of one block.
+- **The waves are recorded.** Before a step's first wave the Keeper keeps which
+hosts each wave holds, and the run's task view serves them as `waves`
+([operator-api/incarnations.md](../keeper/operator-api/incarnations.md)), so the
+rollout reads wave by wave there and a wave the run ended before still names its
+hosts.
 
 > **Under the deprecated staged model** (`keeper.yml::scenario.execution_model: staged`, the rollback kept for one release — [ADR-056](../adr/0056-staged-render-passage.md)) a wave loop carries a whole derived Passage at the narrowest positive `serial:` among its tasks, so a task without `serial:` rolls in narrow waves when a narrow task shares its Passage, and the first finally-failed host stops the roll.
 

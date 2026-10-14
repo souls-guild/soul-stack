@@ -17,7 +17,7 @@ import (
 )
 
 // planRowsStub is a pgx.Rows stub over a set of apply_run_plan rows in the order of
-// selectRunPlanByApplyIDSQL columns (plan_index/name/module/passage). Scan reuses
+// selectRunPlanByApplyIDSQL columns (plan_index/name/module/passage/params/waves). Scan reuses
 // the batch assign helper (crud_test.go).
 type planRowsStub struct {
 	rows [][]any
@@ -145,15 +145,61 @@ func TestInsertRunPlan_EmptyTasks_Noop(t *testing.T) {
 	}
 }
 
+// TestSetStepWaves_Shape — one UPDATE of the step's plan rows by plan_index, the waves
+// as one JSON array in dispatch order (NIM-996); nothing to write is no Exec.
+func TestSetStepWaves_Shape(t *testing.T) {
+	f := &fakeDB{}
+	waves := [][]string{{"b.example.com"}, {"a.example.com", "c.example.com"}}
+	if err := SetStepWaves(context.Background(), f, "AP", []int{3, 4}, waves); err != nil {
+		t.Fatalf("SetStepWaves: %v", err)
+	}
+	if f.execCalls != 1 || !strings.Contains(f.execSQL, "UPDATE apply_run_plan SET waves") {
+		t.Fatalf("execCalls = %d, SQL = %q, want one UPDATE of apply_run_plan.waves", f.execCalls, f.execSQL)
+	}
+	if len(f.execArgs) != 3 || f.execArgs[0] != "AP" {
+		t.Fatalf("execArgs = %v, want [AP, plan indexes, waves JSON]", f.execArgs)
+	}
+	if idx, ok := f.execArgs[1].([]int); !ok || len(idx) != 2 || idx[0] != 3 || idx[1] != 4 {
+		t.Errorf("args[1] = %v, want [3 4]", f.execArgs[1])
+	}
+	if got := f.execArgs[2]; got != `[["b.example.com"],["a.example.com","c.example.com"]]` {
+		t.Errorf("args[2] = %v, want the waves in dispatch order", got)
+	}
+
+	for _, tc := range []struct {
+		name    string
+		indexes []int
+		waves   [][]string
+	}{{"no plan index", nil, waves}, {"no wave", []int{3}, nil}} {
+		f := &fakeDB{}
+		if err := SetStepWaves(context.Background(), f, "AP", tc.indexes, tc.waves); err != nil || f.execCalls != 0 {
+			t.Errorf("%s: err = %v, execCalls = %d, want nil and 0", tc.name, err, f.execCalls)
+		}
+	}
+}
+
+// TestInsertRunPlan_LeavesWavesAlone — the plan is upserted again for a step past a
+// run's end and per Passage of a staged run; an upsert that touched waves would erase
+// a step's recorded waves from the run view.
+func TestInsertRunPlan_LeavesWavesAlone(t *testing.T) {
+	f := &fakeDB{}
+	if err := InsertRunPlan(context.Background(), f, "AP", []RunPlanTask{{PlanIndex: 0, Name: "x"}}); err != nil {
+		t.Fatalf("InsertRunPlan: %v", err)
+	}
+	if strings.Contains(f.execSQL, "waves") {
+		t.Errorf("the plan upsert names waves: %q", f.execSQL)
+	}
+}
+
 // TestSelectRunPlanByApplyID_Scan covers mapping columns plan_index/name/module/
-// passage/params -> RunPlanTask. ApplyID is set by caller from the
-// argument. params: row 0 carries jsonb -> []byte, row 1 is NULL -> nil.
+// passage/params/waves -> RunPlanTask. ApplyID is set by caller from the
+// argument. params and waves: row 0 carries jsonb -> []byte, row 1 is NULL -> nil.
 func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	f := &fakeDB{
 		queryFunc: func(_ string) (pgx.Rows, error) {
 			return &planRowsStub{rows: [][]any{
-				{0, "install", "core.pkg.installed", 0, []byte(`{"name":"redis"}`)},
-				{1, "secret", "core.exec.run", 1, nil},
+				{0, "install", "core.pkg.installed", 0, []byte(`{"name":"redis"}`), []byte(`[["a"],["b"]]`)},
+				{1, "secret", "core.exec.run", 1, nil, nil},
 			}}, nil
 		},
 	}
@@ -175,6 +221,9 @@ func TestSelectRunPlanByApplyID_Scan(t *testing.T) {
 	}
 	if got[1].Params != nil {
 		t.Errorf("row1 Params = %s, want nil (NULL)", got[1].Params)
+	}
+	if string(got[0].Waves) != `[["a"],["b"]]` || got[1].Waves != nil {
+		t.Errorf("Waves = %s / %s, want the stored JSON and nil (NULL)", got[0].Waves, got[1].Waves)
 	}
 }
 

@@ -24,13 +24,14 @@ import (
 )
 
 // planRow — a single apply_run_plan row (column order from selectRunPlanByApplyIDSQL:
-// plan_index/name/module/passage/params).
+// plan_index/name/module/passage/params/waves).
 type planRow struct {
 	planIndex int
 	name      string
 	module    string
 	passage   int
 	params    []byte
+	waves     []byte
 }
 
 // runPlanRowsStub — a pgx.Rows stub over a set of run-plan rows.
@@ -54,6 +55,7 @@ func (r *runPlanRowsStub) Scan(dest ...any) error {
 	*(dest[2].(*string)) = row.module
 	*(dest[3].(*int)) = row.passage
 	*(dest[4].(*[]byte)) = row.params
+	*(dest[5].(*[]byte)) = row.waves
 	return nil
 }
 
@@ -276,6 +278,38 @@ func TestRunTasksTyped_BrokenParamsJSON_Nil(t *testing.T) {
 	}
 	if len(v.Tasks) != 1 || v.Tasks[0].Params != nil {
 		t.Errorf("broken params → %v, want nil", v.Tasks[0].Params)
+	}
+}
+
+// TestRunTasksTyped_Waves — a serial: step's stored waves reach every task of the step
+// in dispatch order, the order the web reads the rollout in (NIM-996). A task outside
+// the step, a malformed column and a lone wave carry none: the view then shows a flat
+// task, never a broken one.
+func TestRunTasksTyped_Waves(t *testing.T) {
+	waves := []byte(`[["b.example.com"],["a.example.com"],["c.example.com"]]`)
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "probe", module: "core.exec.run", passage: 0},
+		planRow{planIndex: 1, name: "upgrade", module: "core.exec.run", passage: 1, waves: waves},
+		planRow{planIndex: 2, name: "check", module: "core.exec.run", passage: 1, waves: waves},
+		planRow{planIndex: 3, name: "broken", module: "core.exec.run", passage: 2, waves: []byte(`[["a"`)},
+		planRow{planIndex: 4, name: "lone", module: "core.exec.run", passage: 3, waves: []byte(`[["a.example.com"]]`)},
+	)
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunTasksTyped: %v", err)
+	}
+	want := [][]string{{"b.example.com"}, {"a.example.com"}, {"c.example.com"}}
+	for _, i := range []int{1, 2} {
+		if !reflect.DeepEqual(v.Tasks[i].Waves, want) {
+			t.Errorf("task %d waves = %v, want %v (dispatch order kept, not re-sorted)", i, v.Tasks[i].Waves, want)
+		}
+	}
+	for _, i := range []int{0, 3, 4} {
+		if v.Tasks[i].Waves != nil {
+			t.Errorf("task %d (%s) waves = %v, want nil", i, v.Tasks[i].Name, v.Tasks[i].Waves)
+		}
 	}
 }
 

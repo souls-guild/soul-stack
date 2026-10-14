@@ -201,6 +201,7 @@ type RunHostStatusEntry struct {
 	ErrorSummary    *string `json:"error_summary,omitempty"`
 	Attempt         int32   `json:"attempt" doc:"fencing epoch of the last work-queue claim of this row; 0 if the row was never claimed (sent inline, keeper-side, or still planned). It grows across a host's rows of one run, so a later step of a host can start above 1 without ever having been re-claimed"`
 	CancelRequested bool    `json:"cancel_requested"`
+	Dropped         bool    `json:"dropped,omitempty" doc:"true on the failed or orphaned row of a host the run dropped under on_failure: host and finished without; absent on every other row, a failed row of a run that ended early included"`
 	// Notices — advisory findings this host reported during the run (NIM-237),
 	// deduplicated by (code, module, param). Unlike error_summary, INDEPENDENT of
 	// status: the task ran and succeeded, and something about how it was asked is
@@ -269,6 +270,7 @@ type RunTaskEntry struct {
 	Module       string                  `json:"module"`
 	Params       *map[string]interface{} `json:"params,omitempty" doc:"masked input of the task; a top-level key whose value differs between hosts reads <per-host>, and params_by_host carries its values"`
 	ParamsByHost *RunTaskParamsByHost    `json:"params_by_host,omitempty" doc:"present only when the task's masked input differs between hosts: every leaf of the input with the values it took and the hosts that took each"`
+	Waves        [][]string              `json:"waves,omitempty" doc:"present only for a host task of a serial: step sent in more than one wave: the step's hosts per wave in dispatch order, the same on every host task of the step. It lists the hosts of a wave the run ended before; a host the Keeper settled before the first wave without sending it anything is in no wave"`
 	Hosts        []RunTaskHostEntry      `json:"hosts"`
 }
 

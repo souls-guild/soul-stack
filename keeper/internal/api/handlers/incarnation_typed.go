@@ -1292,6 +1292,9 @@ type RunHostStatusView struct {
 	ErrorSummary    *string
 	Attempt         int32
 	CancelRequested bool
+	// Dropped — this failed or orphaned row dropped its host from a run that finished without it
+	// (applyrun.MarkDropped).
+	Dropped bool
 	// Notices — advisory findings this host reported (NIM-237), deduplicated by
 	// (code, module, param). Independent of Status: a notice rides along with
 	// work that SUCCEEDED, which is the whole point — it is how a deprecation
@@ -1418,6 +1421,7 @@ func (h *IncarnationHandler) RunDetailTyped(ctx context.Context, name, applyID s
 			ErrorSummary:    hs.ErrorSummary,
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
+			Dropped:         hs.Dropped,
 			Notices:         notices,
 		})
 	}
@@ -1457,6 +1461,10 @@ type RunTaskHostView struct {
 // ParamsByHost is set only for a task whose params differ between hosts
 // (NIM-985): every leaf with its values and the hosts that received each. Params
 // then still carries `<per-host>` on the keys that differ.
+//
+// Waves is set only for a host task of a `serial:` step sent in more than one wave
+// (NIM-996): the step's hosts per wave, in dispatch order, the same on every host
+// task of the step.
 type RunTaskView struct {
 	PlanIndex    int
 	Passage      int
@@ -1464,6 +1472,7 @@ type RunTaskView struct {
 	Module       string
 	Params       map[string]any
 	ParamsByHost *applyrun.ParamsByHost
+	Waves        [][]string
 	Hosts        []RunTaskHostView
 }
 
@@ -1583,6 +1592,7 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			Module:       p.Module,
 			Params:       runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
 			ParamsByHost: byHost,
+			Waves:        runPlanWaves(p.Waves),
 			Hosts:        hosts,
 		})
 	}
@@ -1603,6 +1613,20 @@ func runPlanParams(raw []byte) map[string]any {
 		return nil
 	}
 	return m
+}
+
+// runPlanWaves decodes a step's stored waves (apply_run_plan.waves, NIM-996).
+// NULL, malformed JSON or fewer than two waves → nil: the task reads as an
+// ordinary one rather than failing the whole /tasks.
+func runPlanWaves(raw []byte) [][]string {
+	if len(raw) == 0 {
+		return nil
+	}
+	var waves [][]string
+	if err := json.Unmarshal(raw, &waves); err != nil || len(waves) < 2 {
+		return nil
+	}
+	return waves
 }
 
 // existenceProbeInScope — shared existence-probe + scope gate for Runs/RunDetail:

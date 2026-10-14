@@ -366,6 +366,15 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   before the hosts are compared, so a sealed cell stays one shared mask. Runs started before the
   upgrade have no per-host rows and show `<per-host>` as before.
 
+- **A `serial:` step's waves are kept and served (NIM-996).** The dispatcher records, before the
+  first wave, which hosts each wave of a step holds, in dispatch order, on the step's plan rows
+  (column `apply_run_plan.waves`, migration 124). `GET /v1/incarnations/{id}/runs/{apply_id}/tasks`
+  gains `waves` on every host task of a step sent in more than one wave, so the run view can show
+  the rollout wave by wave and list the hosts of a wave the run ended before. A step sent in one
+  wave, a keeper task, and every run started before the upgrade have no `waves`.
+  `GET …/runs/{apply_id}` gains `dropped` on the failed or orphaned row of a host the run dropped
+  under `on_failure: host`, read from the existing `apply_runs.dropped`.
+
 - **`soul-lint` warns `group_child_key_unread`** (NIM-940, [settings.md §3](docs/scenario/settings.md)
   rule 4) for a `serial:` or barrier-kind setting on a descendant of a block rolled as one group,
   which linear dispatch does not read. `dragonfly/scenario/restart` writes `serial_scope: block`, so
@@ -1261,18 +1270,18 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   **Rollback.** For this release `scenario.execution_model: staged` restores ADR-056 from the next
   run, on a reload, with no binary change. Rolling the binary back instead first meets the schema.
   Against a Keeper built from `main` before this train (its last migration is 120): this train adds
-  migrations 121 and 122 and NIM-985 adds 123, that Keeper refuses to start against them, and
-  `keeper` has no down command — apply `123_create_apply_run_plan_host_params.down.sql`,
-  `122_add_apply_runs_dropped.down.sql` and `121_add_incarnation_applying_cancel_requested.down.sql`
-  by hand, newest first, then set the recorded version
-  back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the down files do not
-  touch, or let the golang-migrate CLI's `goto 120`, pointed at this release's `keeper/migrations`,
-  do both. Past the schema, a rollback has three edges: an older Keeper refuses the `settings:` key
-  outright and a `when:`, `changed_when:` or `failed_when:` reading a register from another derived
-  Passage (FC-5) — loudly, so a scenario written for linear dispatch may not run there — and it
-  returns the old order **silently**: keeper tasks before host dispatch, healthy hosts running on
-  after one fails, and a `serial:` block that writes no `serial_scope`, or a whole derived Passage,
-  carried in one wave loop again.
+  migrations 121 and 122, NIM-985 adds 123 and NIM-996 adds 124, that Keeper refuses to start
+  against them, and `keeper` has no down command — apply `124_add_apply_run_plan_waves.down.sql`,
+  `123_create_apply_run_plan_host_params.down.sql`, `122_add_apply_runs_dropped.down.sql` and
+  `121_add_incarnation_applying_cancel_requested.down.sql` by hand, newest first, then set the
+  recorded version back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the
+  down files do not touch, or let the golang-migrate CLI's `goto 120`, pointed at this release's
+  `keeper/migrations`, do both. Past the schema, a rollback has three edges: an older Keeper
+  refuses the `settings:` key outright and a `when:`, `changed_when:` or `failed_when:` reading a
+  register from another derived Passage (FC-5) — loudly, so a scenario written for linear dispatch
+  may not run there — and it returns the old order **silently**: keeper tasks before host dispatch,
+  healthy hosts running on after one fails, and a `serial:` block that writes no `serial_scope`, or
+  a whole derived Passage, carried in one wave loop again.
   **During a rolling upgrade of an HA cluster** each instance starts runs in its own model, so the
   same scenario runs its keeper tasks first, lets healthy hosts run on after a failure and carries a
   `serial:` block, or a whole derived Passage, in one wave loop when an old Keeper takes it, and step

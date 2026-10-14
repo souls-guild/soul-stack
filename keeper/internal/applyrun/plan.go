@@ -2,6 +2,7 @@ package applyrun
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 
 	"github.com/jackc/pgx/v5"
@@ -33,6 +34,12 @@ type RunPlanTask struct {
 	// (template_content/render_context) are filtered out before the write. The
 	// store layer does NOT mask values — it only persists/reads them as-is.
 	Params []byte
+
+	// Waves is the JSON of the waves the task's `serial:` step rolled its hosts in
+	// (migration 124, NIM-996): an array of SID arrays in dispatch order. Read-only
+	// here — [SetStepWaves] writes it, [InsertRunPlan] leaves it alone. nil for a
+	// step sent in one wave and for a keeper task.
+	Waves []byte
 }
 
 // insertRunPlanSQL is a bulk-upsert of the plan in a single query via unnest
@@ -85,8 +92,34 @@ func InsertRunPlan(ctx context.Context, db ExecQueryRower, applyID string, tasks
 	return nil
 }
 
+const setStepWavesSQL = `
+UPDATE apply_run_plan SET waves = $3::jsonb
+WHERE apply_id = $1 AND plan_index = ANY($2::int[])
+`
+
+// SetStepWaves records the waves a `serial:` step rolled its hosts in on the plan
+// rows of the step's host tasks (planIndexes). The rows must already exist: the
+// plan of a step is written before the step is dispatched. Called once per step,
+// before its first wave; no plan index or no wave is a no-op.
+func SetStepWaves(ctx context.Context, db ExecQueryRower, applyID string, planIndexes []int, waves [][]string) error {
+	if applyID == "" {
+		return fmt.Errorf("applyrun: empty apply_id")
+	}
+	if len(planIndexes) == 0 || len(waves) == 0 {
+		return nil
+	}
+	raw, err := json.Marshal(waves)
+	if err != nil {
+		return fmt.Errorf("applyrun: marshal step waves: %w", err)
+	}
+	if _, err := db.Exec(ctx, setStepWavesSQL, applyID, planIndexes, string(raw)); err != nil {
+		return fmt.Errorf("applyrun: set step waves: %w", err)
+	}
+	return nil
+}
+
 const selectRunPlanByApplyIDSQL = `
-SELECT plan_index, name, module, passage, params
+SELECT plan_index, name, module, passage, params, waves
 FROM apply_run_plan
 WHERE apply_id = $1
 ORDER BY plan_index ASC
@@ -105,7 +138,7 @@ func SelectRunPlanByApplyID(ctx context.Context, db ExecQueryRower, applyID stri
 	var out []RunPlanTask
 	for rows.Next() {
 		t := RunPlanTask{ApplyID: applyID}
-		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.Passage, &t.Params); err != nil {
+		if err := rows.Scan(&t.PlanIndex, &t.Name, &t.Module, &t.Passage, &t.Params, &t.Waves); err != nil {
 			return nil, fmt.Errorf("applyrun: run plan scan: %w", err)
 		}
 		out = append(out, t)

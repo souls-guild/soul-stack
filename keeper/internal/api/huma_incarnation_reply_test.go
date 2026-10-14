@@ -200,3 +200,43 @@ func TestGoldenWire_RunTasksReply_ParamsByHost(t *testing.T) {
 		t.Errorf("wire =\n%s\nwant\n%s", b, want)
 	}
 }
+
+// NIM-996: a serial: step's waves ride its tasks in dispatch order, and a task sent in
+// one wave omits the key; a dropped host's row says so, every other row omits it, so
+// the body of a run without either is byte-for-byte what it was.
+func TestGoldenWire_RunWavesAndDropped(t *testing.T) {
+	encode := func(v any) string {
+		var buf bytes.Buffer
+		enc := json.NewEncoder(&buf)
+		enc.SetEscapeHTML(false)
+		if err := enc.Encode(v); err != nil {
+			t.Fatalf("marshal: %v", err)
+		}
+		return string(bytes.TrimSpace(buf.Bytes()))
+	}
+
+	tasks := newRunTasksReply(handlers.RunTasksView{Tasks: []handlers.RunTaskView{
+		{PlanIndex: 0, Passage: 1, Name: "upgrade", Module: "core.exec.run", Waves: [][]string{{"b"}, {"a", "c"}}},
+		{PlanIndex: 1, Passage: 2, Name: "report", Module: "core.exec.run"},
+	}})
+	wantTasks := `{"tasks":[` +
+		`{"plan_index":0,"passage":1,"id":"upgrade","module":"core.exec.run","waves":[["b"],["a","c"]],"hosts":[]},` +
+		`{"plan_index":1,"passage":2,"id":"report","module":"core.exec.run","hosts":[]}]}`
+	if got := encode(tasks); got != wantTasks {
+		t.Errorf("tasks wire =\n%s\nwant\n%s", got, wantTasks)
+	}
+
+	detail := newRunDetailReply(handlers.RunDetailView{
+		ApplyID: "01M4XGKBF2WQS7SBZP6QDKV9GA", Scenario: "canary", Status: "partial_failed",
+		Hosts: []handlers.RunHostStatusView{
+			{SID: "a", Status: "failed", Passage: 0, Dropped: true},
+			{SID: "b", Status: "success", Passage: 0},
+		},
+	})
+	got := encode(detail.Hosts)
+	wantHosts := `[{"sid":"a","status":"failed","passage":0,"attempt":0,"cancel_requested":false,"dropped":true},` +
+		`{"sid":"b","status":"success","passage":0,"attempt":0,"cancel_requested":false}]`
+	if got != wantHosts {
+		t.Errorf("hosts wire =\n%s\nwant\n%s", got, wantHosts)
+	}
+}

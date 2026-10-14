@@ -161,6 +161,10 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 					attempt: 1, cancelRequested: false,
 					scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
 				},
+				{ // host-c: dropped under on_failure: host (NIM-996: the run page marks it)
+					sid: "host-c", status: "failed", passage: 0, dropped: true,
+					scenario: "scale", startedAt: now, finishedAt: &now, startedBy: strp("archon-alice"),
+				},
 			}}, nil
 		},
 	}
@@ -175,8 +179,12 @@ func TestRunDetailTyped_PerHostMapping_OK(t *testing.T) {
 	if d.Status != "failed" {
 		t.Errorf("Status = %q, want failed (host-a failed)", d.Status)
 	}
-	if len(d.Hosts) != 2 {
-		t.Fatalf("len(Hosts) = %d, want 2", len(d.Hosts))
+	if len(d.Hosts) != 3 {
+		t.Fatalf("len(Hosts) = %d, want 3", len(d.Hosts))
+	}
+	if !d.Hosts[2].Dropped || d.Hosts[0].Dropped || d.Hosts[1].Dropped {
+		t.Errorf("Dropped = %v/%v/%v, want only host-c's row dropped",
+			d.Hosts[0].Dropped, d.Hosts[1].Dropped, d.Hosts[2].Dropped)
 	}
 	// host-a: carries the address of the failed task.
 	ha := d.Hosts[0]

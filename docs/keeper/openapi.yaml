@@ -3159,6 +3159,9 @@ components:
           type: integer
         cancel_requested:
           type: boolean
+        dropped:
+          description: "true on the failed or orphaned row of a host the run dropped under on_failure: host and finished without; absent on every other row, a failed row of a run that ended early included"
+          type: boolean
         error_summary:
           type: string
         failed_plan_index:
@@ -3265,6 +3268,17 @@ components:
         plan_index:
           format: int64
           type: integer
+        waves:
+          description: "present only for a host task of a serial: step sent in more than one wave: the step's hosts per wave in dispatch order, the same on every host task of the step. It lists the hosts of a wave the run ended before; a host the Keeper settled before the first wave without sending it anything is in no wave"
+          items:
+            items:
+              type: string
+            type:
+              - array
+              - "null"
+          type:
+            - array
+            - "null"
       required:
         - plan_index
         - passage

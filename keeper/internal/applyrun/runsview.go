@@ -96,7 +96,7 @@ type RunHostStatus struct {
 	ErrorSummary    *string
 	Attempt         int32
 	CancelRequested bool
-	// Dropped — this failed row dropped its host from a run that finished without it
+	// Dropped — this failed or orphaned row dropped its host from a run that finished without it
 	// ([MarkDropped]).
 	Dropped bool
 	// Notices — advisory findings this host reported during the run (NIM-237),

@@ -195,6 +195,7 @@ func newRunDetailReply(v handlers.RunDetailView) RunDetailReply {
 			ErrorSummary:    hs.ErrorSummary,
 			Attempt:         hs.Attempt,
 			CancelRequested: hs.CancelRequested,
+			Dropped:         hs.Dropped,
 			Notices:         notices,
 		}
 	}
@@ -236,6 +237,7 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 			Module:       t.Module,
 			Params:       ptrMap(t.Params),
 			ParamsByHost: newRunTaskParamsByHost(t.ParamsByHost),
+			Waves:        t.Waves,
 			Hosts:        hosts,
 		}
 	}
