@@ -6,6 +6,7 @@ import (
 	"errors"
 	"fmt"
 	"log/slog"
+	"reflect"
 	"slices"
 	"time"
 
@@ -1855,7 +1856,9 @@ func (r *Runner) emitRunCompleted(ctx context.Context, spec RunSpec, status stri
 // masking needed; params CAN carry a secret → maskRunPlanParams (seal-aware
 // masking + transport filter) on the write path. sealedPaths is the run's
 // sealed paths (sealed.Paths()) for the same seal-aware masker as
-// status_details/error_summary.
+// status_details/error_summary. A task whose params differ between hosts also
+// writes one apply_run_plan_host_params row per host (NIM-985), after its plan
+// row, which the table references.
 //
 // Best-effort: r.deps.DB=nil (unit without PG) or a write error are only
 // logged — losing the plan degrades /tasks observability, not run
@@ -1865,21 +1868,31 @@ func (r *Runner) persistRunPlan(ctx context.Context, spec RunSpec, tasks []*rend
 		return
 	}
 	plan := make([]applyrun.RunPlanTask, 0, len(tasks))
+	var hostParams []applyrun.RunPlanHostParams
 	for _, t := range tasks {
 		if t == nil || t.Passage != activePassage {
 			continue
 		}
+		params, byHost := maskRunPlanParamsByHost(t, sealedPaths)
 		plan = append(plan, applyrun.RunPlanTask{
 			ApplyID:   spec.ApplyID,
 			PlanIndex: t.Index,
 			Name:      t.Name,
 			Module:    t.Module,
 			Passage:   t.Passage,
-			Params:    maskRunPlanParams(t, sealedPaths),
+			Params:    params,
 		})
+		for _, sid := range sortedKeys(byHost) {
+			hostParams = append(hostParams, applyrun.RunPlanHostParams{PlanIndex: t.Index, SID: sid, Params: byHost[sid]})
+		}
 	}
 	if err := applyrun.InsertRunPlan(ctx, r.deps.DB, spec.ApplyID, plan); err != nil {
 		log.Warn("scenario: persisting run task plan (apply_run_plan) failed - /tasks without a plan",
+			slog.String("apply_id", spec.ApplyID), slog.Any("error", err))
+		return
+	}
+	if err := applyrun.InsertRunPlanHostParams(ctx, r.deps.DB, spec.ApplyID, hostParams); err != nil {
+		log.Warn("scenario: persisting per-host task params failed - /tasks shows <per-host> for them",
 			slog.String("apply_id", spec.ApplyID), slog.Any("error", err))
 	}
 }
@@ -1911,36 +1924,145 @@ const (
 //
 // Masking is unaffected by per-host params: the seal marks PATHS, not values, so a
 // cell sealed on one host is sealed on all of them whatever each host rendered
-// there. What NIM-908 changes here is display, not redaction.
+// there.
 func maskRunPlanParams(t *render.RenderedTask, sealedPaths map[string]bool) []byte {
+	params, _ := maskRunPlanParamsByHost(t, sealedPaths)
+	return params
+}
+
+// maskRunPlanParamsByHost is [maskRunPlanParams] plus, for a task whose params
+// differ between hosts (NIM-908), each host's value of every top-level key that
+// differs (NIM-985). In the plan row every such key reads
+// [render.PerHostParamValue], a key the first host lacks included: showing the
+// first host's value as everyone's would be the substitution NIM-908 removed
+// from the run, back in the view an operator uses to check what ran.
+//
+// A host's input is the plan row's unmarked keys plus its own row; a marked key
+// missing from its row is one that host did not render.
+//
+// ★ Every host is masked BEFORE the comparison, with the same seal. A sealed cell
+// therefore masks to one value on every host that has it: the hosts never differ
+// by what it held, and a per-host row carries it only as that mask — inside a
+// key that differs for another reason, or when some host lacks the key.
+// Comparing first and masking only the plan row would write each host's secret
+// into its own row in the clear.
+func maskRunPlanParamsByHost(t *render.RenderedTask, sealedPaths map[string]bool) (params []byte, byHost map[string][]byte) {
 	if t == nil || t.Params == nil {
-		return nil
+		return nil, nil
 	}
-	// Per-host cells are marked rather than shown (NIM-908): the plan row carries ONE
-	// params map beside per-host results, and a task whose params differ between
-	// hosts would otherwise display the first host's as if it were everyone's — the
-	// substitution this ticket removed from the run, reappearing in the view an
-	// operator uses to check what ran.
-	m := render.PlanParamsBase(t)
+	alarm := regexAlarmOncePerPath()
+	common := maskPlanCells(render.PlanParamsBase(t), sealedPaths, alarm)
+	if len(common) == 0 {
+		return nil, nil
+	}
+
+	if len(t.ParamsBySID) > 0 {
+		hosts := make(map[string]map[string]any, len(t.ParamsBySID))
+		for sid, st := range t.ParamsBySID {
+			if st != nil {
+				hosts[sid] = maskPlanCells(st.AsMap(), sealedPaths, alarm)
+			}
+		}
+		varying := varyingPlanKeys(hosts)
+		for key := range varying {
+			common[key] = render.PerHostParamValue
+		}
+		if len(varying) > 0 {
+			byHost, _ = perHostPlanRows(hosts, varying)
+		}
+	}
+
+	b, err := json.Marshal(common)
+	if err != nil {
+		return nil, nil
+	}
+	return b, byHost
+}
+
+// perHostPlanRows encodes each host's value of the varying keys. A row that does
+// not encode costs the task its per-host rows, not its plan row. A rendered
+// struct cannot produce one — structpb's AsMap already turns NaN and ±Inf into
+// strings — so the error is only for an input that does not come from there.
+func perHostPlanRows(hosts map[string]map[string]any, varying map[string]bool) (map[string][]byte, error) {
+	out := make(map[string][]byte, len(hosts))
+	for sid, m := range hosts {
+		own := make(map[string]any, len(varying))
+		for key := range varying {
+			if v, ok := m[key]; ok {
+				own[key] = v
+			}
+		}
+		b, err := json.Marshal(own)
+		if err != nil {
+			return nil, fmt.Errorf("host %s: %w", sid, err)
+		}
+		out[sid] = b
+	}
+	return out, nil
+}
+
+// maskPlanCells strips the transport keys and masks what is left.
+func maskPlanCells(m map[string]any, sealedPaths map[string]bool, alarm func(path string)) map[string]any {
 	delete(m, paramTemplateContent)
 	delete(m, paramRenderContext)
 	if len(m) == 0 {
 		return nil
 	}
-	masked := audit.MaskSecretsSealed(m, audit.SealOpts{
-		Sealed:        sealedPaths,
-		RegexFallback: audit.DefaultSealHooks.RegexFallback,
-		Logger:        audit.DefaultSealHooks.Logger,
-	})
-	// Mark per-host cells AFTER masking: the regex last resort inside
-	// MaskSecretsSealed raises an alarm on a secret-shaped value at an unsealed path,
-	// and substituting the marker first would delete the value before that layer saw
-	// it. A cell the masker already replaced is left masked.
-	b, err := json.Marshal(render.MarkPerHostCells(t, masked))
-	if err != nil {
-		return nil
+	return audit.MaskSecretsSealed(m, audit.SealOpts{Sealed: sealedPaths, RegexFallback: alarm})
+}
+
+// regexAlarmOncePerPath raises the regex last resort's alarm (metric and warn
+// line, as [audit.DefaultSealHooks] wires them) once per path for one task,
+// whichever hosts carried the cell: it names a PATH the seal missed, and N copies
+// of it per task would bury the next one.
+func regexAlarmOncePerPath() func(path string) {
+	hooks := audit.DefaultSealHooks
+	seen := map[string]bool{}
+	return func(path string) {
+		if seen[path] {
+			return
+		}
+		seen[path] = true
+		if hooks.RegexFallback != nil {
+			hooks.RegexFallback(path)
+		}
+		if hooks.Logger != nil {
+			hooks.Logger.Warn("audit: secret caught by regex-last-resort, declarative (schema/seal/vault) stayed silent - declarative gap",
+				slog.String("path", path))
+		}
 	}
-	return b
+}
+
+// varyingPlanKeys returns the top-level keys whose masked value is not the same on
+// every host; a key some hosts lack varies too.
+func varyingPlanKeys(hosts map[string]map[string]any) map[string]bool {
+	out := map[string]bool{}
+	keys := map[string]bool{}
+	for _, m := range hosts {
+		for k := range m {
+			keys[k] = true
+		}
+	}
+	for k := range keys {
+		var first any
+		seen := false
+		for _, m := range hosts {
+			v, ok := m[k]
+			if !ok {
+				out[k] = true
+				break
+			}
+			if !seen {
+				first, seen = v, true
+				continue
+			}
+			if !reflect.DeepEqual(first, v) {
+				out[k] = true
+				break
+			}
+		}
+	}
+	return out
 }
 
 // changedTasksPayload converts []ChangedTask to the event's JSON payload form

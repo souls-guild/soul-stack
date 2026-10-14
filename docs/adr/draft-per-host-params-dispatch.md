@@ -111,6 +111,30 @@ Deliberately not a schema change: no API field moves, and the companion UI needs
 release. Showing the real per-host values needs a per-host params column in the reply
 and is its own ticket.
 
+**Amendment 2026-10-14 (NIM-985): the per-host values are kept and shown.** What the
+marker hides is stored per host in `apply_run_plan_host_params` (migration 123): one
+row per host of a task whose params differ, holding that host's value of every marked
+key it rendered and nothing else. The plan row now marks every top-level key that
+differs, a key the first host lacks included, so a host's input is the plan row's
+unmarked keys plus its row. Rows cascade from `apply_run_plan`, so
+`purge_apply_run_plan` is still the only retention rule. `GET …/runs/{id}/tasks` keeps
+`params` as above and adds `params_by_host`: every leaf of the input with its values
+and the hosts that took each; a multi-line string that every host has is compared line
+by line against one base text, within bounds on size, edits and work — per leaf and
+per read of the run — past which it is compared whole.
+
+★ **Every host is masked before the hosts are compared**, with the run's seal. A sealed
+cell is therefore one mask on every host that has it: the hosts never differ by what
+it held, and a per-host row carries it only as that mask — inside a key that differs
+for another reason, or when some host lacks the key. Comparing the raw structs first and masking only the plan row would have written
+each host's secret into its own row. The regex last resort's alarm fires once per path
+per task, whichever hosts carried the cell — it reports a path the seal missed, and N
+copies of it would bury the next one.
+
+The storage granularity is the top-level key, as the marker's. Storing levels
+("shared → choir → host", only the differences at each) is NIM-986's; a multi-line
+value that differs is stored whole per host until then.
+
 ### Consequences
 
 **The `host-dependent params` render error is gone.** A scenario that hit it now

@@ -10,11 +10,16 @@ package handlers
 
 import (
 	"context"
+	"encoding/json"
+	"errors"
+	"fmt"
+	"reflect"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
 
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 	"github.com/souls-guild/soul-stack/keeper/internal/auditpg"
 )
 
@@ -271,5 +276,158 @@ func TestRunTasksTyped_BrokenParamsJSON_Nil(t *testing.T) {
 	}
 	if len(v.Tasks) != 1 || v.Tasks[0].Params != nil {
 		t.Errorf("broken params → %v, want nil", v.Tasks[0].Params)
+	}
+}
+
+// hostParamRow — one apply_run_plan_host_params row (plan_index/sid/params).
+type hostParamRow struct {
+	planIndex int
+	sid       string
+	params    []byte
+}
+
+type hostParamRowsStub struct {
+	rows []hostParamRow
+	idx  int
+}
+
+func (r *hostParamRowsStub) Next() bool {
+	if r.idx >= len(r.rows) {
+		return false
+	}
+	r.idx++
+	return true
+}
+
+func (r *hostParamRowsStub) Scan(dest ...any) error {
+	row := r.rows[r.idx-1]
+	*(dest[0].(*int)) = row.planIndex
+	*(dest[1].(*string)) = row.sid
+	*(dest[2].(*[]byte)) = row.params
+	return nil
+}
+
+func (r *hostParamRowsStub) Err() error                                   { return nil }
+func (r *hostParamRowsStub) Close()                                       {}
+func (r *hostParamRowsStub) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *hostParamRowsStub) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *hostParamRowsStub) Values() ([]any, error)                       { return nil, nil }
+func (r *hostParamRowsStub) RawValues() [][]byte                          { return nil }
+func (r *hostParamRowsStub) Conn() *pgx.Conn                              { return nil }
+
+// NIM-985: a task with per-host rows answers params_by_host beside the marked
+// params; a task without them answers params alone; a row that does not decode
+// costs its own task the view and nothing else.
+func TestRunTasksTyped_ParamsByHost(t *testing.T) {
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "echo", module: "core.exec.run", params: []byte(`{"cmd":"<per-host>","port":"6379"}`)},
+		planRow{planIndex: 1, name: "plain", module: "core.exec.run", params: []byte(`{"cmd":"true"}`)},
+		planRow{planIndex: 2, name: "broken", module: "core.exec.run", params: []byte(`{"cmd":"<per-host>"}`)},
+	)
+	db.runPlanHostRows = func() (pgx.Rows, error) {
+		return &hostParamRowsStub{rows: []hostParamRow{
+			{planIndex: 0, sid: "host-a", params: []byte(`{"cmd":"echo a"}`)},
+			{planIndex: 0, sid: "host-b", params: []byte(`{"cmd":"echo b"}`)},
+			{planIndex: 2, sid: "host-a", params: []byte(`{`)},
+		}}, nil
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunTasksTyped: %v", err)
+	}
+	t0 := v.Tasks[0]
+	if t0.Params["cmd"] != "<per-host>" || t0.ParamsByHost == nil || t0.ParamsByHost.Hosts != 2 {
+		t.Fatalf("task0 = params %v, by host %+v; want the marker and a two-host view", t0.Params, t0.ParamsByHost)
+	}
+	var cmd, port []string
+	for _, c := range t0.ParamsByHost.Cells {
+		for _, val := range c.Values {
+			entry := fmt.Sprintf("%v@%v", val.Value, val.SIDs)
+			switch c.Path {
+			case "cmd":
+				cmd = append(cmd, entry)
+			case "port":
+				port = append(port, entry)
+			}
+		}
+	}
+	if want := []string{"echo a@[host-a]", "echo b@[host-b]"}; !reflect.DeepEqual(cmd, want) {
+		t.Errorf("cmd values = %v, want %v", cmd, want)
+	}
+	if want := []string{"6379@[]"}; !reflect.DeepEqual(port, want) {
+		t.Errorf("port values = %v, want %v (shared, no SIDs)", port, want)
+	}
+	if v.Tasks[1].ParamsByHost != nil {
+		t.Errorf("task1 without rows has a per-host view: %+v", v.Tasks[1].ParamsByHost)
+	}
+	if v.Tasks[2].ParamsByHost != nil || v.Tasks[2].Params["cmd"] != "<per-host>" {
+		t.Errorf("task2 with an undecodable row = %+v, want the plan row only", v.Tasks[2])
+	}
+}
+
+// A failed per-host select degrades the reply to the plan rows; it is not a 500.
+func TestRunTasksTyped_ParamsByHostSelectErrorDegrades(t *testing.T) {
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "echo", module: "core.exec.run", params: []byte(`{"cmd":"<per-host>"}`)},
+	)
+	db.runPlanHostRows = func() (pgx.Rows, error) { return nil, errors.New("relation does not exist") }
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatalf("RunTasksTyped: %v, want the plan rows without the per-host view", err)
+	}
+	if len(v.Tasks) != 1 || v.Tasks[0].ParamsByHost != nil || v.Tasks[0].Params["cmd"] != "<per-host>" {
+		t.Errorf("tasks = %+v", v.Tasks)
+	}
+}
+
+// ★ One read of /tasks draws every task's line diffs from ONE budget, so a run
+// with many long per-host texts costs a bounded amount per poll. Two identical
+// tasks on a budget that fits one: the first is split into hunks, the second is
+// shown whole.
+// Mutation: create the budget inside the task loop → both are split.
+func TestRunTasksTyped_ParamsByHostDiffBudgetIsPerRead(t *testing.T) {
+	text := func(own string) []byte {
+		b, _ := json.Marshal(map[string]any{"content": "a\nb\n" + own + "\nc"})
+		return b
+	}
+	db := withPlan(&fakeIncDB{},
+		planRow{planIndex: 0, name: "one", module: "core.file.present", params: []byte(`{"content":"<per-host>"}`)},
+		planRow{planIndex: 1, name: "two", module: "core.file.present", params: []byte(`{"content":"<per-host>"}`)},
+	)
+	db.runPlanHostRows = func() (pgx.Rows, error) {
+		return &hostParamRowsStub{rows: []hostParamRow{
+			{planIndex: 0, sid: "host-a", params: text("x")},
+			{planIndex: 0, sid: "host-b", params: text("y")},
+			{planIndex: 1, sid: "host-a", params: text("x")},
+			{planIndex: 1, sid: "host-b", params: text("y")},
+		}}, nil
+	}
+	h := NewIncarnationHandler(db, nil, nil, nil, nil, nil, nil, nil)
+
+	h.runTasksDiffBudget = 1 << 30
+	v, err := h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil || len(v.Tasks[0].ParamsByHost.Texts) != 1 || len(v.Tasks[1].ParamsByHost.Texts) != 1 {
+		t.Fatalf("on an ample budget both tasks must split into hunks: %+v, %v", v.Tasks, err)
+	}
+	one := applyrun.RequestDiffBudget
+	if _, err := applyrun.GroupParamsByHostWithin([]byte(`{"content":"<per-host>"}`), []applyrun.RunPlanHostParams{
+		{SID: "host-a", Params: text("x")}, {SID: "host-b", Params: text("y")},
+	}, &one); err != nil {
+		t.Fatal(err)
+	}
+	cost := applyrun.RequestDiffBudget - one
+
+	h.runTasksDiffBudget = cost + cost/2
+	v, err = h.RunTasksTyped(context.Background(), "redis-prod", validApplyID, allowScope)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(v.Tasks[0].ParamsByHost.Texts) != 1 || len(v.Tasks[1].ParamsByHost.Texts) != 0 {
+		t.Errorf("texts = %d / %d, want 1 / 0 - the second task must find the read's budget spent",
+			len(v.Tasks[0].ParamsByHost.Texts), len(v.Tasks[1].ParamsByHost.Texts))
 	}
 }

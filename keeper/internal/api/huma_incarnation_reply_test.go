@@ -11,11 +11,13 @@
 package api
 
 import (
+	"bytes"
 	"encoding/json"
 	"testing"
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 )
 
 func goldenIncarnationWire(t *testing.T, name string, native any, want string) {
@@ -158,4 +160,43 @@ func TestGoldenWire_IncarnationGetReply_TraitsCreatedScenario(t *testing.T) {
 	}
 	goldenIncarnationWire(t, "GetReply/traits+created_scenario empty", newIncarnationGetReply(empty),
 		`{"covens":[],"created_at":"2026-06-14T12:00:00.123456789Z","created_by_aid":null,"id":"x","service":"s","service_version":"v1","state":null,"state_schema_version":1,"status":"ready","status_details":null,"updated_at":"2026-06-14T12:00:00.123456789Z"}`)
+}
+
+// NIM-985: the wire form of params_by_host. A shared cell carries no sids, a hunk
+// carries line/line_count, a variant with no lines on a host reads absent, and a
+// task without per-host rows omits the field.
+func TestGoldenWire_RunTasksReply_ParamsByHost(t *testing.T) {
+	reply := newRunTasksReply(handlers.RunTasksView{Tasks: []handlers.RunTaskView{
+		{PlanIndex: 0, Name: "write", Module: "core.file.present",
+			Params: map[string]any{"content": "<per-host>", "path": "/etc/x"},
+			ParamsByHost: &applyrun.ParamsByHost{
+				Hosts: 2,
+				Cells: []applyrun.ParamCell{
+					{Path: "content", Line: 2, LineCount: 1, Values: []applyrun.ParamVariant{
+						{Lines: []string{"ip 10.0.0.1"}, SIDs: []string{"a"}},
+						{Absent: true, SIDs: []string{"b"}},
+					}},
+					{Path: "path", Same: true, Values: []applyrun.ParamVariant{{Value: "/etc/x"}}},
+				},
+				Texts: []applyrun.ParamText{{Path: "content", Lines: []string{"port 1", "ip 10.0.0.1"}}},
+			}},
+		{PlanIndex: 1, Name: "plain", Module: "core.exec.run", Params: map[string]any{"cmd": "true"}},
+	}})
+	var buf bytes.Buffer
+	enc := json.NewEncoder(&buf)
+	enc.SetEscapeHTML(false)
+	if err := enc.Encode(reply); err != nil {
+		t.Fatalf("marshal: %v", err)
+	}
+	b := bytes.TrimSpace(buf.Bytes())
+	want := `{"tasks":[` +
+		`{"plan_index":0,"passage":0,"id":"write","module":"core.file.present","params":{"content":"<per-host>","path":"/etc/x"},` +
+		`"params_by_host":{"hosts":2,"cells":[` +
+		`{"path":"content","line":2,"line_count":1,"same":false,"values":[{"lines":["ip 10.0.0.1"],"sids":["a"]},{"absent":true,"sids":["b"]}]},` +
+		`{"path":"path","same":true,"values":[{"value":"/etc/x"}]}],` +
+		`"texts":[{"path":"content","lines":["port 1","ip 10.0.0.1"]}]},"hosts":[]},` +
+		`{"plan_index":1,"passage":0,"id":"plain","module":"core.exec.run","params":{"cmd":"true"},"hosts":[]}]}`
+	if string(b) != want {
+		t.Errorf("wire =\n%s\nwant\n%s", b, want)
+	}
 }

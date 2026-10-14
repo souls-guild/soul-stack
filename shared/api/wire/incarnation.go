@@ -263,12 +263,45 @@ type RunTaskHostEntry struct {
 // write path); nil for tasks without params. hosts — only hosts with a result in
 // audit (pending hosts not included).
 type RunTaskEntry struct {
-	PlanIndex int                     `json:"plan_index"`
-	Passage   int                     `json:"passage" doc:"0-based index of the step this task was dispatched in, the passage of the run-detail rows it ran on (the Passage index for a run under the deprecated staged model)"`
-	ID        string                  `json:"id"`
-	Module    string                  `json:"module"`
-	Params    *map[string]interface{} `json:"params,omitempty"`
-	Hosts     []RunTaskHostEntry      `json:"hosts"`
+	PlanIndex    int                     `json:"plan_index"`
+	Passage      int                     `json:"passage" doc:"0-based index of the step this task was dispatched in, the passage of the run-detail rows it ran on (the Passage index for a run under the deprecated staged model)"`
+	ID           string                  `json:"id"`
+	Module       string                  `json:"module"`
+	Params       *map[string]interface{} `json:"params,omitempty" doc:"masked input of the task; a top-level key whose value differs between hosts reads <per-host>, and params_by_host carries its values"`
+	ParamsByHost *RunTaskParamsByHost    `json:"params_by_host,omitempty" doc:"present only when the task's masked input differs between hosts: every leaf of the input with the values it took and the hosts that took each"`
+	Hosts        []RunTaskHostEntry      `json:"hosts"`
+}
+
+// RunTaskParamsByHost — a task's input across its hosts (NIM-985). Built from
+// masked data only: a sealed cell is one masked value on every host.
+type RunTaskParamsByHost struct {
+	Hosts int                `json:"hosts" doc:"number of hosts the task was rendered for"`
+	Cells []RunTaskParamCell `json:"cells" doc:"leaves in path order; the hunks of one multi-line value follow each other in line order under its path"`
+	Texts []RunTaskParamText `json:"texts,omitempty" doc:"base text of every leaf split into hunks (a string on every host, multi-line on at least one, within the diff bounds); replacing each hunk's line range by a host's variant gives that host's text"`
+}
+
+// RunTaskParamCell — one leaf of a task's input, or one hunk of a multi-line leaf.
+type RunTaskParamCell struct {
+	Path      string                `json:"path" doc:"leaf chain, e.g. config.replication.role or acl.users[0].name; a key holding a dot, a bracket or a quote reads [\"a.b\"]; past 32 segments (keys and list indices) the rest of a value is one cell whose value is that subtree"`
+	Line      int                   `json:"line,omitempty" doc:"1-based base-text line a hunk starts at; absent for a cell that is not a hunk"`
+	LineCount int                   `json:"line_count,omitempty" doc:"base-text lines the hunk replaces; absent or 0 on a hunk is an insertion before line"`
+	Same      bool                  `json:"same" doc:"the leaf is equal on every host; values then holds one entry without sids"`
+	Values    []RunTaskParamVariant `json:"values" doc:"ordered by host count, largest first, then by first SID"`
+}
+
+// RunTaskParamVariant — one value of a cell and the hosts that received it. A
+// variant with neither absent nor lines whose value is missing is JSON null.
+type RunTaskParamVariant struct {
+	Value  any      `json:"value,omitempty"`
+	Absent bool     `json:"absent,omitempty" doc:"the hosts have no such key, or no lines at this hunk"`
+	Lines  []string `json:"lines,omitempty" doc:"a hunk variant's lines"`
+	SIDs   []string `json:"sids,omitempty"`
+}
+
+// RunTaskParamText — the base text a path's hunks are line ranges of.
+type RunTaskParamText struct {
+	Path  string   `json:"path"`
+	Lines []string `json:"lines"`
 }
 
 // RunTasksReply — native body for GET /v1/incarnations/{id}/runs/{apply_id}/tasks

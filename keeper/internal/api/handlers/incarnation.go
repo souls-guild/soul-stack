@@ -153,6 +153,10 @@ type IncarnationHandler struct {
 	// motive as refs). nil → /tasks returns the plan without per-host results (unit
 	// without an audit reader).
 	runTasksAudit RunTaskAuditReader
+	// runTasksDiffBudget — the line-diff budget of one /tasks read (NIM-985); 0 is
+	// [applyrun.RequestDiffBudget]. A field so a test can make it small enough to
+	// run out on two tasks.
+	runTasksDiffBudget int
 	// moduleManifests — the plugin-manifest catalog for the deprecation survey
 	// (NIM-228). Optional: nil means non-core modules resolve to nothing and are
 	// reported as unresolved rather than assumed clean.

@@ -358,6 +358,14 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
 
 ### Added
 
+- **A run task's input is shown per host (NIM-985).** `GET /v1/incarnations/{id}/runs/{apply_id}/tasks`
+  gains `params_by_host` for a task whose masked params differ between hosts: every leaf of the
+  input with the values it took and the hosts that took each, a multi-line value compared line by
+  line. `params` is unchanged and still reads `<per-host>` on those keys. Each host's values are
+  kept in the new table `apply_run_plan_host_params` (migration 123), masked with the run's seal
+  before the hosts are compared, so a sealed cell stays one shared mask. Runs started before the
+  upgrade have no per-host rows and show `<per-host>` as before.
+
 - **`soul-lint` warns `group_child_key_unread`** (NIM-940, [settings.md §3](docs/scenario/settings.md)
   rule 4) for a `serial:` or barrier-kind setting on a descendant of a block rolled as one group,
   which linear dispatch does not read. `dragonfly/scenario/restart` writes `serial_scope: block`, so
@@ -1253,9 +1261,10 @@ Artifact versioning — via git ref ([ADR-007](docs/adr/0007-versioning-git-ref.
   **Rollback.** For this release `scenario.execution_model: staged` restores ADR-056 from the next
   run, on a reload, with no binary change. Rolling the binary back instead first meets the schema.
   Against a Keeper built from `main` before this train (its last migration is 120): this train adds
-  migrations 121 and 122, that Keeper refuses to start against them, and `keeper` has no down
-  command — apply `122_add_apply_runs_dropped.down.sql` and
-  `121_add_incarnation_applying_cancel_requested.down.sql` by hand, then set the recorded version
+  migrations 121 and 122 and NIM-985 adds 123, that Keeper refuses to start against them, and
+  `keeper` has no down command — apply `123_create_apply_run_plan_host_params.down.sql`,
+  `122_add_apply_runs_dropped.down.sql` and `121_add_incarnation_applying_cancel_requested.down.sql`
+  by hand, newest first, then set the recorded version
   back (`UPDATE schema_migrations SET version = 120, dirty = false`), which the down files do not
   touch, or let the golang-migrate CLI's `goto 120`, pointed at this release's `keeper/migrations`,
   do both. Past the schema, a rollback has three edges: an older Keeper refuses the `settings:` key

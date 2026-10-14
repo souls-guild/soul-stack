@@ -3253,7 +3253,11 @@ components:
           type: string
         params:
           additionalProperties: {}
+          description: masked input of the task; a top-level key whose value differs between hosts reads <per-host>, and params_by_host carries its values
           type: object
+        params_by_host:
+          $ref: "#/components/schemas/RunTaskParamsByHost"
+          description: "present only when the task's masked input differs between hosts: every leaf of the input with the values it took and the hosts that took each"
         passage:
           description: 0-based index of the step this task was dispatched in, the passage of the run-detail rows it ran on (the Passage index for a run under the deprecated staged model)
           format: int64
@@ -3306,6 +3310,96 @@ components:
       required:
         - sid
         - status
+      type: object
+    RunTaskParamCell:
+      additionalProperties: false
+      properties:
+        line:
+          description: 1-based base-text line a hunk starts at; absent for a cell that is not a hunk
+          format: int64
+          type: integer
+        line_count:
+          description: base-text lines the hunk replaces; absent or 0 on a hunk is an insertion before line
+          format: int64
+          type: integer
+        path:
+          description: leaf chain, e.g. config.replication.role or acl.users[0].name; a key holding a dot, a bracket or a quote reads ["a.b"]; past 32 segments (keys and list indices) the rest of a value is one cell whose value is that subtree
+          type: string
+        same:
+          description: the leaf is equal on every host; values then holds one entry without sids
+          type: boolean
+        values:
+          description: ordered by host count, largest first, then by first SID
+          items:
+            $ref: "#/components/schemas/RunTaskParamVariant"
+          type:
+            - array
+            - "null"
+      required:
+        - path
+        - same
+        - values
+      type: object
+    RunTaskParamText:
+      additionalProperties: false
+      properties:
+        lines:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        path:
+          type: string
+      required:
+        - path
+        - lines
+      type: object
+    RunTaskParamVariant:
+      additionalProperties: false
+      properties:
+        absent:
+          description: the hosts have no such key, or no lines at this hunk
+          type: boolean
+        lines:
+          description: a hunk variant's lines
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        sids:
+          items:
+            type: string
+          type:
+            - array
+            - "null"
+        value: {}
+      type: object
+    RunTaskParamsByHost:
+      additionalProperties: false
+      properties:
+        cells:
+          description: leaves in path order; the hunks of one multi-line value follow each other in line order under its path
+          items:
+            $ref: "#/components/schemas/RunTaskParamCell"
+          type:
+            - array
+            - "null"
+        hosts:
+          description: number of hosts the task was rendered for
+          format: int64
+          type: integer
+        texts:
+          description: base text of every leaf split into hunks (a string on every host, multi-line on at least one, within the diff bounds); replacing each hunk's line range by a host's variant gives that host's text
+          items:
+            $ref: "#/components/schemas/RunTaskParamText"
+          type:
+            - array
+            - "null"
+      required:
+        - hosts
+        - cells
       type: object
     RunTasksReply:
       additionalProperties: false

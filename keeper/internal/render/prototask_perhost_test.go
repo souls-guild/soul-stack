@@ -170,23 +170,3 @@ func TestProtoTasks_PlanIsPerHost(t *testing.T) {
 		t.Error("a plan with one per-host task reported as host-invariant")
 	}
 }
-
-// The operator-facing plan row carries ONE params map beside per-host results. A
-// cell that differs is MARKED; the cells that do not are still shown, because
-// blanking the whole map to protect one key would cost the view its point.
-func TestPlanParamsForDisplay_MarksOnlyTheCellsThatVary(t *testing.T) {
-	got := PlanParamsForDisplay(paramsBySIDTask(t))
-	if got["cmd"] != PerHostParamValue {
-		t.Errorf("params.cmd = %v, want %q — the view shows the first host's value as everyone's", got["cmd"], PerHostParamValue)
-	}
-	if got["shared"] != "same" {
-		t.Errorf("params.shared = %v, want %q — a host-invariant cell must stay visible", got["shared"], "same")
-	}
-
-	// Golden path: no per-host map → the params map, unchanged.
-	plain := paramsBySIDTask(t)
-	plain.ParamsBySID = nil
-	if got := PlanParamsForDisplay(plain); got["cmd"] != "echo a" {
-		t.Errorf("golden path altered: params.cmd = %v, want %q", got["cmd"], "echo a")
-	}
-}

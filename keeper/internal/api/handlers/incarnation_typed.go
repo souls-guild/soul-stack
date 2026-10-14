@@ -1453,13 +1453,18 @@ type RunTaskHostView struct {
 // per-host results. Params are the task's operator input parameters
 // (NIM-37 S1b), already masked by the seal-aware mechanism on the write path
 // (persistRunPlan); nil for tasks without params.
+//
+// ParamsByHost is set only for a task whose params differ between hosts
+// (NIM-985): every leaf with its values and the hosts that received each. Params
+// then still carries `<per-host>` on the keys that differ.
 type RunTaskView struct {
-	PlanIndex int
-	Passage   int
-	Name      string
-	Module    string
-	Params    map[string]any
-	Hosts     []RunTaskHostView
+	PlanIndex    int
+	Passage      int
+	Name         string
+	Module       string
+	Params       map[string]any
+	ParamsByHost *applyrun.ParamsByHost
+	Hosts        []RunTaskHostView
 }
 
 // RunTasksView — flat domain projection of GET .../runs/{apply_id}/tasks: the run
@@ -1512,6 +1517,19 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		return zero, incProblem(problem.TypeInternalError, "get run tasks failed")
 	}
 
+	// Best-effort like the plan's own write: without these rows a per-host task
+	// still answers, with `<per-host>` on the keys that differ.
+	hostParams, err := applyrun.SelectRunPlanHostParams(ctx, h.db, applyID)
+	if err != nil {
+		h.logger.Warn("incarnation.run-tasks: per-host params select failed, showing the plan rows only",
+			slog.String("name", name), slog.String("apply_id", applyID), slog.Any("error", err))
+		hostParams = nil
+	}
+	hostParamsByPlan := map[int][]applyrun.RunPlanHostParams{}
+	for _, hp := range hostParams {
+		hostParamsByPlan[hp.PlanIndex] = append(hostParamsByPlan[hp.PlanIndex], hp)
+	}
+
 	// per-host results from audit (task.executed), grouped plan_index → sid.
 	// runTasksAudit=nil (unit without a reader) → plan WITHOUT hosts. The last result on
 	// (plan_index, sid) wins (execs are ordered by time, later overwrites).
@@ -1537,6 +1555,14 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 		}
 	}
 
+	// One budget for the line diffs of every task: a poll of a run with many long
+	// per-host texts spends at most it on diffing, and past it a text is shown
+	// whole. The rest of the grouping is not budgeted: it grows with the stored
+	// rows and with key depth, which the grouping cuts at a fixed limit.
+	diffBudget := applyrun.RequestDiffBudget
+	if h.runTasksDiffBudget != 0 {
+		diffBudget = h.runTasksDiffBudget
+	}
 	tasks := make([]RunTaskView, 0, len(plan))
 	for _, p := range plan {
 		hosts := make([]RunTaskHostView, 0, len(byPlanHost[p.PlanIndex]))
@@ -1544,13 +1570,20 @@ func (h *IncarnationHandler) RunTasksTyped(ctx context.Context, name, applyID st
 			hosts = append(hosts, hv)
 		}
 		sort.Slice(hosts, func(i, j int) bool { return hosts[i].SID < hosts[j].SID })
+		byHost, gerr := applyrun.GroupParamsByHostWithin(p.Params, hostParamsByPlan[p.PlanIndex], &diffBudget)
+		if gerr != nil {
+			h.logger.Warn("incarnation.run-tasks: per-host params undecodable, showing the plan row only",
+				slog.String("apply_id", applyID), slog.Int("plan_index", p.PlanIndex), slog.Any("error", gerr))
+			byHost = nil
+		}
 		tasks = append(tasks, RunTaskView{
-			PlanIndex: p.PlanIndex,
-			Passage:   p.Passage,
-			Name:      p.Name,
-			Module:    p.Module,
-			Params:    runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
-			Hosts:     hosts,
+			PlanIndex:    p.PlanIndex,
+			Passage:      p.Passage,
+			Name:         p.Name,
+			Module:       p.Module,
+			Params:       runPlanParams(p.Params), // S1b: masked params from apply_run_plan (NULL→nil)
+			ParamsByHost: byHost,
+			Hosts:        hosts,
 		})
 	}
 	return RunTasksView{Tasks: tasks}, nil

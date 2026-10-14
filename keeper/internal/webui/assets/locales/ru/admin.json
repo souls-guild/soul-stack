@@ -21,6 +21,7 @@
   "auditEmpty": "Audit-events под фильтр не найдено.",
   "auditEventLabel_apply_cancelled": "Apply-прогон отменён",
   "auditEventLabel_apply_dispatched": "Apply отправлен на Soul",
+  "auditEventLabel_apply_host_dropped": "Хост исключён из прогона",
   "auditEventLabel_audit_disabled": "Журналирование аудита выключено",
   "auditEventLabel_audit_enabled": "Журналирование аудита включено",
   "auditEventLabel_augur_access_denied": "Запрос к Augur отклонён",

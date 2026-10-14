@@ -228,3 +228,68 @@ func TestRunExistsForIncarnation(t *testing.T) {
 		})
 	}
 }
+
+// One bulk upsert, idempotent on (apply_id, plan_index, sid), with the three
+// columns as parallel arrays in row order.
+func TestInsertRunPlanHostParams_BulkArrays(t *testing.T) {
+	f := &fakeDB{}
+	rows := []RunPlanHostParams{
+		{PlanIndex: 3, SID: "a.example.com", Params: []byte(`{"cmd":"echo a"}`)},
+		{PlanIndex: 3, SID: "b.example.com", Params: []byte(`{}`)},
+	}
+	if err := InsertRunPlanHostParams(context.Background(), f, "AP", rows); err != nil {
+		t.Fatalf("InsertRunPlanHostParams: %v", err)
+	}
+	if f.execCalls != 1 {
+		t.Fatalf("execCalls = %d, want 1 (single bulk upsert)", f.execCalls)
+	}
+	if !strings.Contains(f.execSQL, "INSERT INTO apply_run_plan_host_params") ||
+		!strings.Contains(f.execSQL, "ON CONFLICT (apply_id, plan_index, sid)") {
+		t.Errorf("SQL = %q, want an idempotent insert into apply_run_plan_host_params", f.execSQL)
+	}
+	if len(f.execArgs) != 4 || f.execArgs[0] != "AP" {
+		t.Fatalf("execArgs = %v, want [AP plan_index[] sid[] params[]]", f.execArgs)
+	}
+	planIdx, _ := f.execArgs[1].([]int)
+	sids, _ := f.execArgs[2].([]string)
+	params, _ := f.execArgs[3].([]string)
+	if len(planIdx) != 2 || planIdx[1] != 3 || len(sids) != 2 || sids[1] != "b.example.com" ||
+		len(params) != 2 || params[0] != `{"cmd":"echo a"}` || params[1] != `{}` {
+		t.Errorf("arrays = %v %v %v, want rows in order", planIdx, sids, params)
+	}
+}
+
+func TestInsertRunPlanHostParams_EmptyIsNoopAndApplyIDRequired(t *testing.T) {
+	f := &fakeDB{}
+	if err := InsertRunPlanHostParams(context.Background(), f, "AP", nil); err != nil || f.execCalls != 0 {
+		t.Fatalf("empty rows: err = %v, execCalls = %d, want nil and 0", err, f.execCalls)
+	}
+	if err := InsertRunPlanHostParams(context.Background(), f, "", []RunPlanHostParams{{SID: "a"}}); err == nil || f.execCalls != 0 {
+		t.Fatalf("empty apply_id: err = %v, execCalls = %d, want an error before the DB", err, f.execCalls)
+	}
+}
+
+func TestSelectRunPlanHostParams_ScanAndShape(t *testing.T) {
+	f := &fakeDB{
+		queryFunc: func(_ string) (pgx.Rows, error) {
+			return &planRowsStub{rows: [][]any{
+				{1, "a.example.com", []byte(`{"cmd":"echo a"}`)},
+				{1, "b.example.com", []byte(`{"cmd":"echo b"}`)},
+			}}, nil
+		},
+	}
+	got, err := SelectRunPlanHostParams(context.Background(), f, "AP")
+	if err != nil {
+		t.Fatalf("SelectRunPlanHostParams: %v", err)
+	}
+	if len(got) != 2 || got[1].PlanIndex != 1 || got[1].SID != "b.example.com" || string(got[1].Params) != `{"cmd":"echo b"}` {
+		t.Errorf("rows = %+v", got)
+	}
+	if !strings.Contains(f.querySQL, "FROM apply_run_plan_host_params") ||
+		!strings.Contains(f.querySQL, "ORDER BY plan_index ASC, sid ASC") {
+		t.Errorf("SQL = %q, want a deterministic order", f.querySQL)
+	}
+	if len(f.queryArgs) != 1 || f.queryArgs[0] != "AP" {
+		t.Errorf("queryArgs = %v, want [AP]", f.queryArgs)
+	}
+}

@@ -116,6 +116,79 @@ func SelectRunPlanByApplyID(ctx context.Context, db ExecQueryRower, applyID stri
 	return out, nil
 }
 
+// RunPlanHostParams is one row of apply_run_plan_host_params (migration 123,
+// NIM-985): one host's value of every key its task's plan row marks
+// `<per-host>`, already masked on the write path. A key the host did not render
+// is absent from Params. The store layer persists and reads the JSON as-is.
+type RunPlanHostParams struct {
+	PlanIndex int
+	SID       string
+	Params    []byte
+}
+
+const insertRunPlanHostParamsSQL = `
+INSERT INTO apply_run_plan_host_params (apply_id, plan_index, sid, params)
+SELECT $1, u.plan_index, u.sid, u.params::jsonb
+FROM unnest($2::int[], $3::text[], $4::text[]) AS u(plan_index, sid, params)
+ON CONFLICT (apply_id, plan_index, sid)
+DO UPDATE SET params = EXCLUDED.params
+`
+
+// InsertRunPlanHostParams writes per-host params rows in one bulk upsert,
+// idempotent like [InsertRunPlan]. The plan rows must already exist: the table
+// references apply_run_plan. Empty rows → no-op.
+func InsertRunPlanHostParams(ctx context.Context, db ExecQueryRower, applyID string, rows []RunPlanHostParams) error {
+	if applyID == "" {
+		return fmt.Errorf("applyrun: empty apply_id")
+	}
+	if len(rows) == 0 {
+		return nil
+	}
+	planIdx := make([]int, len(rows))
+	sids := make([]string, len(rows))
+	params := make([]string, len(rows))
+	for i, r := range rows {
+		planIdx[i] = r.PlanIndex
+		sids[i] = r.SID
+		params[i] = string(r.Params)
+	}
+	if _, err := db.Exec(ctx, insertRunPlanHostParamsSQL, applyID, planIdx, sids, params); err != nil {
+		return fmt.Errorf("applyrun: insert run plan host params: %w", err)
+	}
+	return nil
+}
+
+const selectRunPlanHostParamsSQL = `
+SELECT plan_index, sid, params
+FROM apply_run_plan_host_params
+WHERE apply_id = $1
+ORDER BY plan_index ASC, sid ASC
+`
+
+// SelectRunPlanHostParams returns the run's per-host params rows, ordered by
+// plan_index then SID. A run with no per-host task, or one that predates
+// NIM-985, has none.
+func SelectRunPlanHostParams(ctx context.Context, db ExecQueryRower, applyID string) ([]RunPlanHostParams, error) {
+	rows, err := db.Query(ctx, selectRunPlanHostParamsSQL, applyID)
+	if err != nil {
+		return nil, fmt.Errorf("applyrun: run plan host params query: %w", err)
+	}
+	defer rows.Close()
+
+	var out []RunPlanHostParams
+	for rows.Next() {
+		var r RunPlanHostParams
+		if err := rows.Scan(&r.PlanIndex, &r.SID, &r.Params); err != nil {
+			return nil, fmt.Errorf("applyrun: run plan host params scan: %w", err)
+		}
+		out = append(out, r)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("applyrun: run plan host params iter: %w", err)
+	}
+	return out, nil
+}
+
 const runExistsForIncarnationSQL = `
 SELECT EXISTS(SELECT 1 FROM apply_runs WHERE apply_id = $1 AND incarnation_name = $2)
 `

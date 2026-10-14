@@ -33,6 +33,7 @@ package api
 
 import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
 )
 
 // === top-level reply-DTO (form 1:1 with the former legacy-gen form) ===
@@ -229,15 +230,35 @@ func newRunTasksReply(v handlers.RunTasksView) RunTasksReply {
 			hosts[j] = he
 		}
 		tasks[i] = RunTaskEntry{
-			PlanIndex: t.PlanIndex,
-			Passage:   t.Passage,
-			ID:        t.Name,
-			Module:    t.Module,
-			Params:    ptrMap(t.Params),
-			Hosts:     hosts,
+			PlanIndex:    t.PlanIndex,
+			Passage:      t.Passage,
+			ID:           t.Name,
+			Module:       t.Module,
+			Params:       ptrMap(t.Params),
+			ParamsByHost: newRunTaskParamsByHost(t.ParamsByHost),
+			Hosts:        hosts,
 		}
 	}
 	return RunTasksReply{Tasks: tasks}
+}
+
+func newRunTaskParamsByHost(v *applyrun.ParamsByHost) *RunTaskParamsByHost {
+	if v == nil {
+		return nil
+	}
+	cells := make([]RunTaskParamCell, len(v.Cells))
+	for i, c := range v.Cells {
+		values := make([]RunTaskParamVariant, len(c.Values))
+		for j, pv := range c.Values {
+			values[j] = RunTaskParamVariant{Value: pv.Value, Absent: pv.Absent, Lines: pv.Lines, SIDs: pv.SIDs}
+		}
+		cells[i] = RunTaskParamCell{Path: c.Path, Line: c.Line, LineCount: c.LineCount, Same: c.Same, Values: values}
+	}
+	var texts []RunTaskParamText
+	for _, tx := range v.Texts {
+		texts = append(texts, RunTaskParamText{Path: tx.Path, Lines: tx.Lines})
+	}
+	return &RunTaskParamsByHost{Hosts: v.Hosts, Cells: cells, Texts: texts}
 }
 
 // ptrMap wraps a domain `map[string]any` into `*map[string]interface{}`, preserving nil-distinguishability:

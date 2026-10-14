@@ -1,13 +1,9 @@
 package render
 
 import (
-	"sort"
-
-	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
-	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
 // ToProtoTasks converts a render plan ([]*RenderedTask) into the
@@ -256,93 +252,16 @@ func remapRequisites(globalIdx []int, globalToLocal map[int]int32) []int32 {
 	return out
 }
 
-// PerHostParamValue is what the run-plan view shows in place of a params cell whose
-// value differs between hosts (NIM-908). It is a DISPLAY marker, not a mask: the
-// value is not secret, it is plural, and there is one column to show it in.
+// PerHostParamValue is what a run task's plan-row params show in place of a
+// top-level cell whose value differs between hosts (NIM-908). It is a marker, not
+// a mask: the value is not secret, it is plural. Each host's own value of that
+// cell is kept beside the plan row, per host (NIM-985).
 const PerHostParamValue = "<per-host>"
 
-// PlanParamsForDisplay is a task's params as the operator-facing run plan should
-// show them: the golden-path struct, with every cell that differs between hosts
-// replaced by [PerHostParamValue].
-//
-// The plan row (`apply_run_plan`, one row per task) and `GET …/runs/{id}/tasks`
-// carry ONE params map per task beside per-host RESULTS. Before NIM-908 that was
-// always honest, because params were host-invariant or the render refused. Now a
-// task can legitimately render nine different values, and showing the first host's
-// as if it were everyone's is the same silent substitution this ticket removed from
-// the run itself — in the one place an operator goes to see what ran.
-//
-// Deliberately NOT a schema change: the differing cells are marked, the rest stay
-// visible, and no API field moves. Showing the real per-host values needs a per-host
-// params column in the reply, which is a companion-UI change and its own ticket.
-//
-// nil task / nil Params → nil. No ParamsBySID → the map unchanged (golden path).
-func PlanParamsForDisplay(t *RenderedTask) map[string]any {
-	return MarkPerHostCells(t, PlanParamsBase(t))
-}
-
-// PlanParamsBase is the golden-path params map the display starts from.
+// PlanParamsBase is the golden-path params map the plan row starts from.
 func PlanParamsBase(t *RenderedTask) map[string]any {
 	if t == nil || t.Params == nil {
 		return nil
 	}
 	return t.Params.AsMap()
-}
-
-// MarkPerHostCells replaces every cell of m that differs between hosts with
-// [PerHostParamValue].
-//
-// ★ Split from [PlanParamsBase] so the caller can MASK first and mark second. The
-// order matters for a channel nobody would miss until it was needed: the run-plan
-// masker has a regex last resort that raises an ALARM when it finds something
-// secret-shaped at a path the seal did not cover ([audit.SealOpts.RegexFallback]).
-// Substituting the marker first would delete the value before that layer ever saw
-// it — no leak, but the alarm that says "the seal missed a cell" would stop firing
-// for exactly the cells this ticket made plural.
-//
-// A cell the masker already replaced is left alone: the seal's verdict outranks a
-// display marker, and "masked" is the more important thing for a reader to see.
-func MarkPerHostCells(t *RenderedTask, m map[string]any) map[string]any {
-	if t == nil || m == nil || len(t.ParamsBySID) == 0 {
-		return m
-	}
-	for key, val := range m {
-		if s, isStr := val.(string); isStr && s == audit.MaskedValue {
-			continue
-		}
-		if paramCellVaries(t, key) {
-			m[key] = PerHostParamValue
-		}
-	}
-	return m
-}
-
-// paramCellVaries reports whether one top-level params key holds different values on
-// different hosts. Top-level only: the marker replaces a whole cell, because a
-// half-marked nested map reads as data rather than as a notice.
-func paramCellVaries(t *RenderedTask, key string) bool {
-	// seen, not `first != nil`: a key ABSENT on the first host by SID and present on
-	// another is variance, and a nil-vs-nil comparison would read it as agreement.
-	var first *structpb.Value
-	seen := false
-	for _, sid := range sortedParamSIDs(t.ParamsBySID) {
-		v := t.ParamsBySID[sid].GetFields()[key]
-		if !seen {
-			first, seen = v, true
-			continue
-		}
-		if !proto.Equal(first, v) {
-			return true
-		}
-	}
-	return false
-}
-
-func sortedParamSIDs(byHost map[string]*structpb.Struct) []string {
-	out := make([]string, 0, len(byHost))
-	for sid := range byHost {
-		out = append(out, sid)
-	}
-	sort.Strings(out)
-	return out
 }

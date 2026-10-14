@@ -73,6 +73,10 @@ type (
 	RunTaskEntry                      = wire.RunTaskEntry
 	RunTaskErrorEntry                 = wire.RunTaskErrorEntry
 	RunTaskHostEntry                  = wire.RunTaskHostEntry
+	RunTaskParamCell                  = wire.RunTaskParamCell
+	RunTaskParamsByHost               = wire.RunTaskParamsByHost
+	RunTaskParamText                  = wire.RunTaskParamText
+	RunTaskParamVariant               = wire.RunTaskParamVariant
 	RunTasksReply                     = wire.RunTasksReply
 	SigilKeyIntroduceReplyStatus      = wire.SigilKeyIntroduceReplyStatus
 	SigilKeyViewStatus                = wire.SigilKeyViewStatus

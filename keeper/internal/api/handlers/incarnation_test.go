@@ -103,6 +103,8 @@ type fakeIncDB struct {
 	// and the apply_run_plan plan rows (runPlanRows, nil → empty plan).
 	runExistsRow func(applyID, name string) pgx.Row
 	runPlanRows  func() (pgx.Rows, error)
+	// runPlanHostRows — apply_run_plan_host_params rows (NIM-985), nil → none.
+	runPlanHostRows func() (pgx.Rows, error)
 
 	// Global runs read-view (GET /v1/runs[/stats]): COUNT(*) over the apply_runs rollup.
 	// runsCalled/lastRunsSQL/lastRunsArgs — the fact and contents of the count query
@@ -269,7 +271,14 @@ func (f *fakeIncDB) Query(_ context.Context, sql string, args ...any) (pgx.Rows,
 	}
 	// Run-tasks: SELECT ... FROM apply_run_plan (the run's task plan, NIM-37). It stands
 	// BEFORE the apply_runs branch: "FROM apply_run_plan" does not contain "FROM apply_runs",
-	// but we keep the order explicit. nil hook → empty plan.
+	// but we keep the order explicit. nil hook → empty plan. The per-host params table
+	// shares the prefix, so it is matched first.
+	if strings.Contains(sql, "FROM apply_run_plan_host_params") {
+		if f.runPlanHostRows != nil {
+			return f.runPlanHostRows()
+		}
+		return &emptyRows{}, nil
+	}
 	if strings.Contains(sql, "FROM apply_run_plan") {
 		if f.runPlanRows != nil {
 			return f.runPlanRows()

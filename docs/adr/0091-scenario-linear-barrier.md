@@ -1152,8 +1152,8 @@ not a property of the barrier alone, and it is expected to grow. Its own open it
       the one release that keeps it is the key, not the binary: `scenario.execution_model: staged`
       reaches the next run on a reload, every instance runs the same binary, so the HA skew above
       does not arise, and no schema change is undone — an older binary refuses to start against
-      this release's migrations 121 and 122 until they are taken down by hand and
-      `schema_migrations` is set back to 120.
+      this release's migrations 121, 122 and 123 (NIM-985) until they are taken down by hand,
+      newest first, and `schema_migrations` is set back to 120.
     - Barrier timeout and straggler policy; a run started under ADR-056 while the Keeper is
       redeployed.
 16. **Applier sources resolve from their children** for the cross-barrier gate (§`onchanges:`), with
