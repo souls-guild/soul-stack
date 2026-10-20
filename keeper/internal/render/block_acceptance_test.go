@@ -5,6 +5,7 @@ import (
 	"errors"
 	"os"
 	"path/filepath"
+	"slices"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -120,7 +121,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	// plane) + sentinel_enabled=true (bring up the daemon). master is already resolved by the caller
 	// (destiny is "dumb" — it receives READY values), so master_ip/auth_pass are
 	// literals in apply.input, no vault() in destiny cells. Required destiny-input:
-	// version (install.method=package), password (≥16), sentinel.master_ip.
+	// version (install.method=package), password (≥16).
 	applyInput := map[string]any{
 		"deploy_redis":     false,
 		"sentinel_enabled": true,
@@ -156,7 +157,7 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 		byName[tk.Name] = tk
 	}
 	redisConf := byName["Render redis.conf"]
-	sentinelConf := byName["Render sentinel.conf"]
+	sentinelConf := byName["Render sentinel.managed.conf"]
 	redisRunning := byName["Ensure redis-server is running and enabled at boot"]
 	pkgInstall := byName["Install redis-server package"]
 
@@ -177,6 +178,64 @@ func TestAcceptance_SentinelOnlySkipsRedisServer(t *testing.T) {
 	}
 	if pkgInstall.Params == nil {
 		t.Errorf("redis package is NOT installed in sentinel_only (Params == nil) - the package must always be installed (it carries the sentinel daemon)")
+	}
+
+	// Sentinel rewrites sentinel.conf itself, so the destiny renders beside it, and stops
+	// the daemon, copies, starts it and records the render as applied only while it differs
+	// from the last one applied. A render straight into sentinel.conf, or a stop/copy wired
+	// to anything that changes on every run, restarts Sentinel on every run; a copy into a
+	// running Sentinel can be saved over before it is loaded (NIM-1033).
+	if got := sentinelConf.Params.GetFields()["path"].GetStringValue(); got != "/etc/redis/sentinel.managed.conf" {
+		t.Errorf("sentinel config renders into %q, want /etc/redis/sentinel.managed.conf", got)
+	}
+	pending := byName["Check whether the rendered sentinel config is applied"]
+	stop := byName["Stop redis-sentinel before replacing its config"]
+	install := byName["Install sentinel.conf from the rendered config"]
+	running := byName["Ensure redis-sentinel is running and enabled at boot"]
+	restart := byName["Restart redis-sentinel because ACL or unit changed"]
+	record := byName["Record the applied sentinel config"]
+	for name, tk := range map[string]*RenderedTask{"check": pending, "stop": stop, "install": install, "running": running, "restart": restart, "record": record} {
+		if tk == nil {
+			t.Fatalf("sentinel %s task missing from the plan", name)
+		}
+	}
+	for name, tk := range map[string]*RenderedTask{"stop": stop, "install": install, "record": record} {
+		if !slices.Equal(tk.OnChangesIdx, []int{pending.Index}) {
+			t.Errorf("%s onchanges = %v, want only the check (%d)", name, tk.OnChangesIdx, pending.Index)
+		}
+	}
+	if slices.Contains(restart.OnChangesIdx, pending.Index) || slices.Contains(restart.OnChangesIdx, install.Index) {
+		t.Errorf("restart onchanges = %v: a new config is applied by stop+start, not by a second restart", restart.OnChangesIdx)
+	}
+	if !(pending.Index < stop.Index && stop.Index < install.Index && install.Index < running.Index && running.Index < record.Index) {
+		t.Errorf("order check %d, stop %d, install %d, running %d, record %d: want them in this order",
+			pending.Index, stop.Index, install.Index, running.Index, record.Index)
+	}
+	// A restarted (not stopped) daemon can save over the copy again; a gated start leaves a
+	// config-only change with Sentinel down and the record sealed.
+	if stop.Module != "core.service.stopped" || running.Module != "core.service.running" || len(running.OnChangesIdx) != 0 || running.When != "" {
+		t.Errorf("stop is %s, running is %s with onchanges %v and when %q: want core.service.stopped and an ungated core.service.running",
+			stop.Module, running.Module, running.OnChangesIdx, running.When)
+	}
+	acl := byName["Render sentinel-users.acl"]
+	unit := byName["Render redis-sentinel systemd unit"]
+	if acl == nil || unit == nil {
+		t.Fatalf("sentinel ACL (%v) or unit (%v) render missing from the plan", acl != nil, unit != nil)
+	}
+	if !slices.Contains(restart.OnChangesIdx, acl.Index) || !slices.Contains(restart.OnChangesIdx, unit.Index) {
+		t.Errorf("restart onchanges = %v, want the ACL and unit renders among them", restart.OnChangesIdx)
+	}
+	rescue := byName["Start redis-sentinel again after a failed config swap"]
+	if rescue == nil || rescue.Module != "core.service.running" || rescue.Index < running.Index {
+		t.Fatalf("no core.service.running rescue after the start (%v)", rescue)
+	}
+	for name, src := range map[string]*RenderedTask{"stop": stop, "install": install, "unit": unit, "running": running} {
+		if !slices.Contains(rescue.OnFailIdx, src.Index) {
+			t.Errorf("rescue onfail = %v misses the %s (%d): Sentinel stays down when it fails", rescue.OnFailIdx, name, src.Index)
+		}
+	}
+	if got := pending.Params.GetFields()["unless"].GetStringValue(); got != "cmp -s /etc/redis/sentinel.managed.conf /etc/redis/sentinel.applied.conf" {
+		t.Errorf("the check skips on %q, want the render compared with the applied record", got)
 	}
 }
 

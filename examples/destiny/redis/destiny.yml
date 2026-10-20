@@ -386,28 +386,24 @@ input:
 
   sentinel:
     type: object
-    # Field is optional (field-level required absent → false): passed
-    # only in sentinel mode (gated on sentinel_enabled). When passed —
-    # master_ip is required (object-level required: [...] below). One
-    # `required` key can carry EITHER a bool (field optionality) OR a list of
-    # required object sub-keys — here the list form is chosen, so
-    # `required: false` is absent (optionality is achieved by the default).
+    # Optional (field-level required absent → false): passed only in sentinel mode
+    # (gated on sentinel_enabled). Defaults to {}: every field is optional, and the
+    # task vars' default(input.sentinel.X, …) cannot step over a missing parent.
+    default: {}
     description: >-
       Monitored master parameters for sentinel.conf. master_ip/master_port —
       the HOST-INVARIANT address of the cluster's master (one per cluster, the scenario
-      resolves it run_once). announce-ip is NOT here: it's per-host, rendered from
-      .self.network.primary_ip. config — starting sentinel.conf directives
+      resolves it run_once). Without master_ip no `sentinel monitor` is written, and
+      the service sets the monitor at runtime (redis.sentinel.monitored) after every
+      apply of this destiny — a config change replaces sentinel.conf and with it what
+      Sentinel saved at runtime; a failover never changes the rendered config. announce-ip is NOT here: it's per-host,
+      rendered from .self.network.primary_ip. config — starting sentinel.conf directives
       (file form). auth_pass — a keeper-side resolved secret (masked).
-    # master_ip is required: sentinel without a monitored master is meaningless, and the
-    # task rendering sentinel.conf reads ${ input.sentinel.master_ip } WITHOUT a has()-guard
-    # (gated on sentinel_enabled). Required catches a missing address with a clear
-    # schema error BEFORE render, rather than a cryptic CEL "no such key" in the template.
     additional_properties: false
     properties:
       master_name:
         type: string
       master_ip:
-        required: true
         type: string
       master_port:
         type: integer

@@ -7,7 +7,8 @@
     - sentinel announce-ip is PER-HOST (the IP of THIS specific sentinel in gossip), taken
       from .self.network.primary_ip, NOT from apply.input (that resolves host-invariantly on
       the first host by SID -> all sentinels would get the same IP -> announce broken across NAT).
-    - sentinel monitor <master>: HOST-INVARIANT address (ONE master), comes from .vars.
+    - sentinel monitor <master>: HOST-INVARIANT address (ONE master), comes from .vars;
+      omitted with auth when master_ip is empty (the service monitors at runtime).
 
   .vars.sentinel_config - sorted map of startup directives (range over a MAP sorts
   keys -> no false change). monitor/auth are SEPARATE lines below (need master + quorum).
@@ -33,6 +34,7 @@ aclfile {{ .vars.conf_dir }}/sentinel-users.acl
 
 # PER-HOST: this sentinel announces its OWN primary_ip in gossip (symmetric to bind in redis.conf).
 sentinel announce-ip {{ .self.network.primary_ip }}
+{{- if .vars.master_ip }}
 
 # Monitored master (HOST-INVARIANT address: one master per cluster).
 # auth-user/auth-pass - for sentinel's AUTH against the master. ★ REDESIGN of default_admin (2026-06-30):
@@ -45,4 +47,5 @@ sentinel auth-user {{ .vars.master_name }} {{ .vars.auth_user }}
 {{- end }}
 {{- if .vars.auth_pass }}
 sentinel auth-pass {{ .vars.master_name }} {{ .vars.auth_pass }}
+{{- end }}
 {{- end }}

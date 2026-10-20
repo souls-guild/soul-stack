@@ -139,7 +139,7 @@ assert:
         version: "5:7.0.15-1~deb12u7"
     - module: core.file.rendered
       params_subset:
-        path: /etc/redis/sentinel.conf
+        path: /etc/redis/sentinel.managed.conf
         template_content: "<present>"
         mode: "0640"
         owner: redis
