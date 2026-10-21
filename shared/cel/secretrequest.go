@@ -114,7 +114,11 @@ func secretRequestEnvOptions() []cel.EnvOption {
 // parsed against the shared grammar. A policy error is a normal CEL eval error; there
 // is no secret material anywhere in it, so the text is quoted as-is.
 func callGenerateSecret(arg ref.Val) ref.Val {
-	m, ok := toNative(arg.Value()).(map[string]any)
+	native, err := toNative(arg)
+	if err != nil {
+		return types.WrapErr(err)
+	}
+	m, ok := native.(map[string]any)
 	if !ok {
 		return types.NewErr("generate_secret(): the policy argument must be a map, got %s", arg.Type().TypeName())
 	}

@@ -11,16 +11,16 @@ import (
 
 func resolveWith(t *testing.T, dir string, inc IncarnationContext) map[string]any {
 	t.Helper()
-	got, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir, Incarnation: inc})
+	got, err := viewErr(dir, inc)
 	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+		t.Fatalf("View + Materialize: %v", err)
 	}
 	return got
 }
 
 func resolveErr(t *testing.T, dir string, inc IncarnationContext) error {
 	t.Helper()
-	_, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir, Incarnation: inc})
+	_, err := viewErr(dir, inc)
 	if err == nil {
 		t.Fatal("expected an error, got nil")
 	}
@@ -59,31 +59,46 @@ func TestStack_LexicalFallbackWhenAbsent(t *testing.T) {
 	}
 }
 
-// TestStack_WhenGatesAStep — a `when:` predicate over the vars ACCUMULATED so
-// far. This is the reason `_stack.yaml` exists rather than a sorted directory:
-// a later step branches on what an earlier one loaded.
+// TestStack_WhenGatesAStep — a `when:` predicate over the incarnation's own
+// fields decides which files are stacked. It used to branch on the vars
+// accumulated so far; that is early binding and refused at parse since the
+// ADR-0082 amendment of 2026-10-15 (point 14), so the branch is now on what the
+// incarnation is, and flipping it flips the file.
 func TestStack_WhenGatesAStep(t *testing.T) {
-	layers := map[string]string{
+	dir := writeLayers(t, map[string]string{
 		"00-base.yaml":  "mode: cache\n",
 		"10-cache.yaml": "maxmemory: 512mb\n",
 		"10-store.yaml": "maxmemory: 0\n",
 		"_stack.yaml": `stack:
   - file: 00-base.yaml
   - file: 10-cache.yaml
-    when: vars.mode == 'cache'
+    when: incarnation.traits.mode == 'cache'
   - file: 10-store.yaml
-    when: vars.mode == 'store'
+    when: incarnation.traits.mode == 'store'
 `,
-	}
-	got := resolveWith(t, writeLayers(t, layers), IncarnationContext{})
+	})
+	got := resolveWith(t, dir, IncarnationContext{Traits: map[string]any{"mode": "cache"}})
 	if got["maxmemory"] != "512mb" {
 		t.Fatalf("the cache branch must apply and the store branch must not: %#v", got)
 	}
 
-	layers["00-base.yaml"] = "mode: store\n"
-	got = resolveWith(t, writeLayers(t, layers), IncarnationContext{})
+	got = resolveWith(t, dir, IncarnationContext{Traits: map[string]any{"mode": "store"}})
 	if got["maxmemory"] != uint64(0) {
-		t.Fatalf("flipping the accumulated value must flip the branch: %#v", got)
+		t.Fatalf("flipping the incarnation's trait must flip the branch: %#v", got)
+	}
+}
+
+// TestStack_WhenOverVarsRefuses — the shape TestStack_WhenGatesAStep used to pin,
+// refused at parse rather than evaluated in step order over a partial merge.
+func TestStack_WhenOverVarsRefuses(t *testing.T) {
+	dir := writeLayers(t, map[string]string{
+		"00-base.yaml":  "mode: cache\n",
+		"10-cache.yaml": "maxmemory: 512mb\n",
+		"_stack.yaml":   "stack:\n  - file: 00-base.yaml\n  - file: 10-cache.yaml\n    when: vars.mode == 'cache'\n",
+	})
+	err := resolveErr(t, dir, IncarnationContext{})
+	if !errors.Is(err, ErrStackStepInvalid) || !strings.Contains(err.Error(), "step 2") || !strings.Contains(err.Error(), "when: reads vars.mode") {
+		t.Fatalf("want the step-2 when: refusal, got %v", err)
 	}
 }
 
@@ -147,30 +162,29 @@ func TestStack_ForeachOrderIsTheListOrder(t *testing.T) {
 	}
 }
 
-// TestStack_InlineSeesAccumulatedVars — an inline step computing from what the
-// files already loaded. String values interpolate; a whole-cell expression
-// yields a native type.
-func TestStack_InlineSeesAccumulatedVars(t *testing.T) {
+// TestStack_StackedFileDerivesFromTheMergedView — what an `inline:` step was for,
+// written where the values live now: in a stacked file, whose definitions are
+// evaluated over the merged view. String values interpolate; a whole-cell
+// expression yields a native type; a non-string value is a literal.
+func TestStack_StackedFileDerivesFromTheMergedView(t *testing.T) {
 	dir := writeLayers(t, map[string]string{
 		"00-base.yaml": "conf_dir: /etc/redis\nshards: 3\n",
-		"_stack.yaml": `stack:
-  - file: 00-base.yaml
-  - inline:
-      acl_path: "${ vars.conf_dir }/users.acl"
-      replicas: "${ int(vars.shards) * 2 }"
-      literal: 7
+		"10-derived.yaml": `acl_path: "${ vars.conf_dir }/users.acl"
+replicas: "${ int(vars.shards) * 2 }"
+literal: 7
 `,
+		"_stack.yaml": "stack:\n  - file: 00-base.yaml\n  - file: 10-derived.yaml\n",
 	})
 
 	got := resolveWith(t, dir, IncarnationContext{})
 	if got["acl_path"] != "/etc/redis/users.acl" {
-		t.Errorf("inline must interpolate over accumulated vars: %#v", got["acl_path"])
+		t.Errorf("a stacked definition must interpolate over the view: %#v", got["acl_path"])
 	}
 	if got["replicas"] != int64(6) {
 		t.Errorf("a whole-cell expression must yield a native type: %#v (%T)", got["replicas"], got["replicas"])
 	}
 	if got["literal"] != uint64(7) {
-		t.Errorf("a non-string inline value passes through: %#v", got["literal"])
+		t.Errorf("a non-string value passes through: %#v", got["literal"])
 	}
 }
 
@@ -219,7 +233,7 @@ func TestStack_FileDeclaresItsOwnStrategy(t *testing.T) {
 		if want := map[string]any{"repo_uri": "mirror"}; !reflect.DeepEqual(got["install_package"], want) {
 			t.Fatalf("install_package = %#v, want %#v", got["install_package"], want)
 		}
-		if _, leaked := got[strategyKey]; leaked {
+		if _, leaked := got["_strategy"]; leaked {
 			t.Fatalf("the reserved key leaked into the result: %#v", got)
 		}
 		if got["other"] == nil {
@@ -318,14 +332,17 @@ func TestStack_OptionalTolerates_MissingIsLoudByDefault(t *testing.T) {
 // resolve to a plausible-looking subset of itself.
 func TestStack_InvalidStepsRefuse(t *testing.T) {
 	cases := map[string]string{
-		"neither file nor inline": "stack:\n  - when: \"true\"\n",
-		"both file and inline":    "stack:\n  - file: 00-base.yaml\n    inline: {a: 1}\n",
-		"foreach without as":      "stack:\n  - foreach: \"${ incarnation.covens }\"\n    file: x.yaml\n",
-		"as without foreach":      "stack:\n  - as: coven\n    file: x.yaml\n",
-		"as shadows vars":         "stack:\n  - foreach: \"${ incarnation.covens }\"\n    as: vars\n    file: x.yaml\n",
-		"as shadows incarnation":  "stack:\n  - foreach: \"${ incarnation.covens }\"\n    as: incarnation\n    file: x.yaml\n",
-		"optional on inline":      "stack:\n  - inline: {a: 1}\n    optional: true\n",
-		"unknown strategy":        "stack:\n  - file: 00-base.yaml\n    strategy: shallow\n",
+		"no file":                "stack:\n  - when: \"true\"\n",
+		"inline alone":           "stack:\n  - inline: {a: 1}\n",
+		"inline beside file":     "stack:\n  - file: 00-base.yaml\n    inline: {a: 1}\n",
+		"inline with optional":   "stack:\n  - inline: {a: 1}\n    optional: true\n",
+		"foreach without as":     "stack:\n  - foreach: \"${ incarnation.covens }\"\n    file: x.yaml\n",
+		"as without foreach":     "stack:\n  - as: coven\n    file: x.yaml\n",
+		"as shadows vars":        "stack:\n  - foreach: \"${ incarnation.covens }\"\n    as: vars\n    file: x.yaml\n",
+		"as shadows incarnation": "stack:\n  - foreach: \"${ incarnation.covens }\"\n    as: incarnation\n    file: x.yaml\n",
+		"unknown strategy":       "stack:\n  - file: 00-base.yaml\n    strategy: shallow\n",
+		"file reads vars":        "stack:\n  - file: \"${ vars.tier }.yaml\"\n",
+		"foreach reads vars":     "stack:\n  - foreach: \"${ vars.tiers }\"\n    as: t\n    file: \"${ t }.yaml\"\n",
 	}
 	for name, stack := range cases {
 		t.Run(name, func(t *testing.T) {
@@ -358,11 +375,12 @@ func TestStack_ForeachOverANonListRefuses(t *testing.T) {
 func TestStack_WhenMustBeBool(t *testing.T) {
 	dir := writeLayers(t, map[string]string{
 		"00-base.yaml": "mode: cache\n",
-		"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - file: 00-base.yaml\n    when: vars.mode\n",
+		"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - file: 00-base.yaml\n    when: incarnation.id\n",
 	})
 
-	if err := resolveErr(t, dir, IncarnationContext{}); !errors.Is(err, ErrStackStepInvalid) {
-		t.Fatalf("want ErrStackStepInvalid, got %v", err)
+	err := resolveErr(t, dir, IncarnationContext{ID: "redis-prod"})
+	if !errors.Is(err, ErrStackStepInvalid) || !strings.Contains(err.Error(), "must be a bool") {
+		t.Fatalf("want the must-be-a-bool refusal, got %v", err)
 	}
 }
 
@@ -370,7 +388,8 @@ func TestStack_WhenMustBeBool(t *testing.T) {
 // literal. A root left DECLARED but empty would let `has(soulprint.self.os)`
 // compile, evaluate false and silently skip the step — the fail-open this
 // package's error type exists to prevent. Non-declaration turns the same
-// expression into an error naming the root.
+// expression into an error naming the root, in a selector and in a layer file's
+// definition alike: both are evaluated in the service rung's environment.
 func TestStack_UndeclaredRootsAreCompileErrors(t *testing.T) {
 	for name, expr := range map[string]string{
 		"soulprint via has": `has(soulprint.self.os)`,
@@ -379,7 +398,7 @@ func TestStack_UndeclaredRootsAreCompileErrors(t *testing.T) {
 		"register":          `register.probe.stdout == 'x'`,
 		"compute":           `compute.x == 1`,
 	} {
-		t.Run(name, func(t *testing.T) {
+		t.Run(name+" in a selector", func(t *testing.T) {
 			dir := writeLayers(t, map[string]string{
 				"00-base.yaml":  "key: base\n",
 				"10-extra.yaml": "extra: 1\n",
@@ -388,6 +407,15 @@ func TestStack_UndeclaredRootsAreCompileErrors(t *testing.T) {
 			err := resolveErr(t, dir, IncarnationContext{})
 			if !strings.Contains(err.Error(), "undeclared reference") {
 				t.Fatalf("want an undeclared-reference compile error, got %v", err)
+			}
+		})
+		t.Run(name+" in a definition", func(t *testing.T) {
+			dir := writeLayers(t, map[string]string{
+				"00-base.yaml": "key: \"${ " + expr + " }\"\n",
+			})
+			err := resolveErr(t, dir, IncarnationContext{})
+			if !strings.Contains(err.Error(), "undeclared reference") || !strings.Contains(err.Error(), "vars.key") {
+				t.Fatalf("want an undeclared-reference compile error naming vars.key, got %v", err)
 			}
 		})
 	}
@@ -420,23 +448,30 @@ func TestStack_WhenGatesEachForeachIteration(t *testing.T) {
 	}
 }
 
-// TestStack_InlineReadsTheForeachBinding — an inline step inside a fan-out,
-// composing a value from the element rather than loading a file for it.
-func TestStack_InlineReadsTheForeachBinding(t *testing.T) {
+// TestStack_ForeachBindingStaysInTheSelectors — the composition an inline step
+// inside a fan-out used to do, `"${ vars.prefix }-${ coven }"`, has no home any
+// more: the binding chooses the file and is not visible inside it, because the
+// file's definitions are evaluated after the merge, where no step is in scope. A
+// value per element is a file per element.
+func TestStack_ForeachBindingStaysInTheSelectors(t *testing.T) {
 	dir := writeLayers(t, map[string]string{
-		"00-base.yaml": "prefix: svc\n",
+		"00-base.yaml":   "prefix: svc\n",
+		"coven/aaa.yaml": "last_coven: \"${ vars.prefix }-aaa\"\n",
+		"coven/zzz.yaml": "last_coven: \"${ vars.prefix }-${ coven }\"\n",
 		"_stack.yaml": `stack:
   - file: 00-base.yaml
   - foreach: "${ incarnation.covens }"
     as: coven
-    inline:
-      last_coven: "${ vars.prefix }-${ coven }"
+    file: "coven/${ coven }.yaml"
 `,
 	})
 
-	got := resolveWith(t, dir, IncarnationContext{Covens: []string{"aaa", "zzz"}})
-	if got["last_coven"] != "svc-zzz" {
-		t.Fatalf("last_coven = %#v, want svc-zzz (last iteration wins)", got["last_coven"])
+	if got := resolveWith(t, dir, IncarnationContext{Covens: []string{"zzz", "aaa"}})["last_coven"]; got != "svc-aaa" {
+		t.Fatalf("last_coven = %#v, want svc-aaa (the file of the last iteration)", got)
+	}
+	err := resolveErr(t, dir, IncarnationContext{Covens: []string{"aaa", "zzz"}})
+	if !strings.Contains(err.Error(), "coven") || !strings.Contains(err.Error(), "vars.last_coven") {
+		t.Fatalf("a binding read inside a stacked file must fail naming it, got %v", err)
 	}
 }
 
@@ -524,7 +559,7 @@ func TestStack_FileLeavingVarsDirRefuses(t *testing.T) {
 		}
 	}
 
-	got, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir})
+	got, err := viewErr(dir, IncarnationContext{})
 	if err == nil {
 		t.Fatalf("a file: leaving vars/ must be refused, got %#v", got)
 	}
@@ -533,34 +568,30 @@ func TestStack_FileLeavingVarsDirRefuses(t *testing.T) {
 	}
 }
 
-// TestStack_NestedMarkerInInlineRefuses — only TOP-LEVEL string values of an
-// `inline:` are interpolated. Passing a nested one through would put the literal
-// text `${ vars.mirror }/deb` into an apt sources line, never re-evaluated
-// downstream. An author who just watched the top level work has no reason to
-// expect the next indent to differ, so this errors and names the key.
-func TestStack_NestedMarkerInInlineRefuses(t *testing.T) {
-	for name, inline := range map[string]string{
-		"nested map":  "      install_package:\n        repo_uri: \"${ vars.mirror }/deb\"\n",
-		"nested list": "      args: [\"--url=${ vars.mirror }\"]\n",
+// TestStack_NestedDefinitionsEvaluate — point 1: a `${ … }` at any depth of a
+// layer file evaluates, inside a map or a list as at the top level. The nested
+// marker an `inline:` step had to refuse — it would have put the literal text
+// `${ vars.mirror }/deb` into an apt sources line — is now a definition like any
+// other, in a lexical file and in a stacked one.
+func TestStack_NestedDefinitionsEvaluate(t *testing.T) {
+	const derived = "install_package:\n  repo_uri: \"${ vars.mirror }/deb\"\nargs: [\"--url=${ vars.mirror }\"]\n"
+	for name, layers := range map[string]map[string]string{
+		"lexical": {"00-base.yaml": "mirror: https://m.internal\n", "10-pkg.yaml": derived},
+		"stacked": {
+			"00-base.yaml": "mirror: https://m.internal\n",
+			"10-pkg.yaml":  derived,
+			"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - file: 10-pkg.yaml\n",
+		},
 	} {
 		t.Run(name, func(t *testing.T) {
-			dir := writeLayers(t, map[string]string{
-				"00-base.yaml": "mirror: https://m.internal\n",
-				"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - inline:\n" + inline,
-			})
-			if err := resolveErr(t, dir, IncarnationContext{}); !errors.Is(err, ErrStackStepInvalid) {
-				t.Fatalf("want ErrStackStepInvalid, got %v", err)
+			got := resolveWith(t, writeLayers(t, layers), IncarnationContext{})
+			if want := map[string]any{"repo_uri": "https://m.internal/deb"}; !reflect.DeepEqual(got["install_package"], want) {
+				t.Errorf("install_package = %#v, want %#v", got["install_package"], want)
+			}
+			if want := []any{"--url=https://m.internal"}; !reflect.DeepEqual(got["args"], want) {
+				t.Errorf("args = %#v, want %#v", got["args"], want)
 			}
 		})
-	}
-
-	// The top level still interpolates — the refusal is about depth, not markers.
-	dir := writeLayers(t, map[string]string{
-		"00-base.yaml": "mirror: https://m.internal\n",
-		"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - inline:\n      repo: \"${ vars.mirror }/deb\"\n",
-	})
-	if got := resolveWith(t, dir, IncarnationContext{})["repo"]; got != "https://m.internal/deb" {
-		t.Fatalf("repo = %#v", got)
 	}
 }
 

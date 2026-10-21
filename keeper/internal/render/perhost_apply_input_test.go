@@ -592,8 +592,8 @@ func TestApplyInput_InvariantProjectionOmitsPerHostNames(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	hosts := perHostHosts()
 	applier := manifest.Tasks[0]
-	byHost, invariant, _, err := p.resolveApplyInput(perHostRenderInput(manifest, res, hosts), applier, res.resolved, hosts,
-		hostVariantInputNames(p.cel, applier, keeperRegisterNames(manifest)))
+	in := perHostRenderInput(manifest, res, hosts)
+	byHost, invariant, _, err := p.resolveApplyInput(in, applier, res.resolved, hosts, p.hostVariantInputNames(in, applier))
 	if err != nil {
 		t.Fatalf("resolveApplyInput: %v", err)
 	}
@@ -689,10 +689,10 @@ func TestApplyInput_VarsHopIsClassifiedPerHost(t *testing.T) {
 	}
 }
 
-// The counterweight, and the reason `vars` is judged per NAME and not as a root: the
-// SERVICE vars layer resolves once per run and is host-invariant by construction
-// (ADR-0082). `apply: input:` is the documented channel for forwarding it into a
-// destiny, so counting the whole `vars` root would refuse the shape the key exists for.
+// The counterweight, and the reason `vars` is judged per NAME and not as a root: a
+// SERVICE var no per-host override reaches is host-invariant (ADR-0082). `apply:
+// input:` is the documented channel for forwarding it into a destiny, so counting the
+// whole `vars` root would refuse the shape the key exists for.
 func TestApplyInput_ServiceVarsHopStaysInvariant(t *testing.T) {
 	manifest, res := perHostApplyInput(
 		[]config.Task{{
@@ -705,7 +705,7 @@ func TestApplyInput_ServiceVarsHopStaysInvariant(t *testing.T) {
 	)
 
 	in := perHostRenderInput(manifest, res, perHostHosts())
-	in.ServiceVars = map[string]any{"users": []any{"alice", "bob"}}
+	in.ServiceVars = serviceView(t, map[string]any{"users": []any{"alice", "bob"}})
 
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	tasks, _, err := p.Render(context.Background(), in)
@@ -735,7 +735,7 @@ func TestApplyInput_VarsClosureIsTransitive(t *testing.T) {
 		"timeout":  "30s",
 	}
 	for i := 0; i < 64; i++ {
-		got := hostVariantVarNames(engine, raw, nil, nil)
+		got := hostVariantVarNames(engine, []cel.VarLayer{{Rung: cel.RungTask, Defs: raw}}, nil, nil)
 		for _, name := range []string{"addr", "endpoint", "conn"} {
 			if !got[name] {
 				t.Fatalf("draw %d: %q not closed as per-host: %v", i, name, got)
@@ -1032,7 +1032,7 @@ func TestApplyInput_RegisterClassificationIsTextual(t *testing.T) {
 			}}},
 		},
 	}
-	got := hostVariantInputNames(newEngine(t), manifest.Tasks[2], keeperRegisterNames(manifest))
+	got := NewPipeline(nil, newEngine(t), nil, nil).hostVariantInputNames(RenderInput{Scenario: manifest}, manifest.Tasks[2])
 
 	want := map[string]bool{"from_soul": true}
 	for _, name := range got {
@@ -1067,7 +1067,7 @@ func TestApplyInput_TextualClassificationCoversEveryRoute(t *testing.T) {
 			"from_vars":  "${ vars.plain }",
 		}},
 	}
-	got := hostVariantInputNames(newEngine(t), applier, nil)
+	got := NewPipeline(nil, newEngine(t), nil, nil).hostVariantInputNames(RenderInput{}, applier)
 
 	want := map[string]bool{"direct": true, "via_vars": true, "nested_map": true, "nested_lst": true}
 	for _, name := range got {
@@ -1078,5 +1078,125 @@ func TestApplyInput_TextualClassificationCoversEveryRoute(t *testing.T) {
 	}
 	for name := range want {
 		t.Errorf("%q NOT classified per-host — the text reaches soulprint.self, directly, through vars: or one level down", name)
+	}
+}
+
+// ★ GUARD (ADR-0082 amendment 2026-10-15, point 16). The applier's input set closes
+// over the applier's whole VIEW, not its own `vars:` text. Under late binding a
+// service definition reads the applier's override, so a service `x: ${ vars.y }`
+// under the applier's `y: ${ soulprint.self… }` is per-host in that view, and so is
+// the input forwarding it — although neither the input's text nor the service's
+// names a per-host root. The same through a scenario definition, one level down. The
+// counterweight: the same chain over a literal override stays invariant.
+//
+// Asserted on the classifier, so the value net under it ([hostInvariantInput]) cannot
+// answer for it.
+func TestApplyInput_AServiceVarOverAPerHostOverrideIsClassifiedPerHost(t *testing.T) {
+	applier := config.Task{
+		Name: "apply",
+		Vars: map[string]any{
+			"y":     "${ soulprint.self.network.primary_ip }",
+			"fixed": "10.0.0.9",
+		},
+		Apply: &config.ApplyTask{Destiny: "d", Input: map[string]any{
+			"via_service":  "${ vars.x }",
+			"via_scenario": "${ vars.s.addr }",
+			"invariant":    "${ vars.lit }",
+		}},
+	}
+	in := RenderInput{
+		Scenario: &config.ScenarioManifest{
+			Name:  "s",
+			Vars:  map[string]any{"s": map[string]any{"addr": "${ vars.x }"}},
+			Tasks: []config.Task{applier},
+		},
+		ServiceVars: serviceView(t, map[string]any{"x": "${ vars.y }", "lit": "${ vars.fixed }"}),
+	}
+	got := NewPipeline(nil, newEngine(t), nil, nil).hostVariantInputNames(in, applier)
+	if want := "via_scenario,via_service"; strings.Join(got, ",") != want {
+		t.Fatalf("per-host inputs = %v, want [%s]", got, want)
+	}
+}
+
+// ★ GUARD (point 7). A destiny's static `when:` is decided on the roster's first host,
+// so one over a name of the task's view that resolves per host is REFUSED by name: the
+// task's own var over `soulprint.self`, a `vars.yml` name derived from one, and a
+// block's var reaching a child. Before the per-host set followed the task view, the
+// first case was decided on a.example.com (false) and the task skipped on both hosts,
+// although b.example.com's address matches.
+func TestDestinyStaticWhen_OverAHostDependentTaskVarIsRefusedByName(t *testing.T) {
+	perHostAddr := map[string]any{"addr": "${ soulprint.self.network.primary_ip }"}
+	gate := func(when string) config.Task {
+		return config.Task{
+			Name:   "gate",
+			When:   when,
+			Module: &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "true"}},
+		}
+	}
+	cases := []struct {
+		name     string
+		task     config.Task
+		fileVars map[string]any
+		named    string
+	}{
+		{
+			name:  "the task's own var",
+			task:  func() config.Task { g := gate("vars.addr == '10.0.0.2'"); g.Vars = perHostAddr; return g }(),
+			named: "vars.addr",
+		},
+		{
+			name:     "a vars.yml name derived from the task's var",
+			task:     func() config.Task { g := gate("vars.endpoint == '10.0.0.2:6379'"); g.Vars = perHostAddr; return g }(),
+			fileVars: map[string]any{"endpoint": "${ vars.addr }:6379"},
+			named:    "vars.endpoint",
+		},
+		{
+			name: "a block's var",
+			task: config.Task{
+				Name:  "group",
+				Vars:  perHostAddr,
+				Block: &config.BlockTask{Block: []config.Task{gate("vars.addr == '10.0.0.2'")}},
+			},
+			named: "vars.addr",
+		},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			manifest, res := perHostApplyInput([]config.Task{tc.task}, nil, map[string]any{})
+			res.resolved.Vars = tc.fileVars
+
+			p := NewPipeline(nil, newEngine(t), nil, nil)
+			_, _, err := p.Render(context.Background(), perHostRenderInput(manifest, res, perHostHosts()))
+			if !errors.Is(err, cel.ErrNoHostBound) {
+				t.Fatalf("a destiny static when: over a host-dependent task var was decided on one host: %v", err)
+			}
+			if !strings.Contains(err.Error(), tc.named) || !strings.Contains(err.Error(), "a static when:") {
+				t.Errorf("the refusal must name %s and the static when: context: %v", tc.named, err)
+			}
+		})
+	}
+}
+
+// ★ GUARD (point 5). A destiny's include `when:` reads the pass's `vars.yml` and no
+// task's own `vars:`, so it is judged against the pass's per-host set: a task var of the
+// same name over `soulprint.self` does not refuse it, and the group is decided off
+// `vars.yml`.
+func TestDestinyIncludeWhen_IsNotRefusedForATasksPerHostVar(t *testing.T) {
+	manifest, res := perHostApplyInput([]config.Task{{
+		Name:           "gated",
+		IncludeGroupID: 1,
+		IncludeWhen:    "vars.tier == 'prod'",
+		Vars:           map[string]any{"tier": "${ soulprint.self.network.primary_ip }"},
+		Module:         &config.ModuleTask{Module: "core.exec.run", Params: map[string]any{"cmd": "echo ${ vars.tier }"}},
+	}}, nil, map[string]any{})
+	res.resolved.Vars = map[string]any{"tier": "prod"}
+
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	tasks, _, err := p.Render(context.Background(), perHostRenderInput(manifest, res, perHostHosts()))
+	if err != nil {
+		t.Fatalf("an include when: was refused for a task var it cannot read: %v", err)
+	}
+	if len(tasks) != 1 {
+		t.Fatalf("the group was dropped: %d tasks, want 1", len(tasks))
 	}
 }

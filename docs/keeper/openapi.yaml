@@ -3165,7 +3165,7 @@ components:
           description: the failing expression reads a secret, so the evaluator's own message - which can quote a value - was not recorded
           type: boolean
         cell:
-          description: params cell path that failed to render, e.g. args[0]
+          description: "where the failing evaluation was: the params cell path that failed to render, e.g. args[0], or vars.<name> when the error was raised inside the definition of var <name> - the innermost failing definition, whichever cell or predicate read it; absent when neither"
           type: string
         code:
           description: the run's abort reason, e.g. render_failed, dispatch_failed, no_hosts

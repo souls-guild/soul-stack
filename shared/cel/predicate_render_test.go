@@ -191,7 +191,8 @@ func sameOutcome(wantVal ref.Val, wantErr error, gotVal ref.Val, gotErr error) s
 }
 
 func describe(v ref.Val) string {
-	return fmt.Sprintf("%s %#v", v.Type().TypeName(), toNative(v.Value()))
+	native, _ := toNative(v.Value())
+	return fmt.Sprintf("%s %#v", v.Type().TypeName(), native)
 }
 
 // sameVal is equality of value AND type, deep: cel-go's == is heterogeneous (1 == 1.0),

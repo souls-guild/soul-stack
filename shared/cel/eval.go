@@ -4,8 +4,11 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
+	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 )
 
@@ -118,6 +121,13 @@ func (e *Engine) EvalExpression(expr string, vars Vars) (ref.Val, error) {
 		}
 		act[vaultResolverVar] = &vaultResolver{ctx: ctx, kv: e.kv}
 	}
+	if prg.comparesVars {
+		if root, ok := act[varsRoot].(*lazyVars); ok {
+			if _, err := root.materialize(); err != nil {
+				return nil, &ErrEval{Expr: expr, Err: err}
+			}
+		}
+	}
 
 	out, _, err := prg.Eval(act)
 	if err != nil {
@@ -128,8 +138,9 @@ func (e *Engine) EvalExpression(expr string, vars Vars) (ref.Val, error) {
 	// Program is cached — a compile hook would undercount on repeated evals).
 	// EvalInterpolation calls EvalExpression for each block, so interpolation
 	// `${ … }` is caught here too. nil sink → no-op. expr is passed normalized —
-	// one cache/coverage key.
-	if e.sink != nil {
+	// one cache/coverage key. A definition evaluated by [VarView.Check] is not
+	// recorded: production would not have evaluated it.
+	if e.sink != nil && (vars.frame == nil || vars.frame.read.scratch == nil) {
 		e.sink.Record(norm, out)
 	}
 	return out, nil
@@ -152,14 +163,15 @@ func (e *Engine) EvalPredicate(expr string, vars Vars) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	b, ok := out.Value().(bool)
+	// By type, not by Value(): a lazy `vars` map's Value() would evaluate every var.
+	b, ok := out.(types.Bool)
 	if !ok {
 		return false, &ErrEval{
 			Expr: expr,
 			Err:  fmt.Errorf("predicate returned %s, expected bool: %w", out.Type().TypeName(), ErrPredicateNotBool),
 		}
 	}
-	return b, nil
+	return bool(b), nil
 }
 
 // EvalInterpolation evaluates a string with embedded `${ … }` expressions
@@ -188,7 +200,11 @@ func (e *Engine) EvalInterpolation(raw string, vars Vars) (any, error) {
 		if err != nil {
 			return nil, err
 		}
-		return toNative(val.Value()), nil
+		native, err := toNative(val)
+		if err != nil {
+			return nil, &ErrEval{Expr: segs[0].text, Err: err}
+		}
+		return native, nil
 	}
 
 	var b strings.Builder
@@ -216,43 +232,82 @@ func (e *Engine) EvalInterpolation(raw string, vars Vars) (any, error) {
 // []ref.Val and maps with ref.Val/interface keys — these must be unwrapped
 // recursively, else renderValue/resolveLoopItems won't recognize the types. Scalars
 // (string/int/bool/…) pass through.
-func toNative(v any) any {
+//
+// A lazy `vars` map anywhere in the value is materialized, and an error value is
+// returned as the error rather than kept as data: a container cel-go built is strict
+// about its elements, but a lazy map or a custom function's result is not.
+func toNative(v any) (any, error) {
 	switch t := v.(type) {
+	case *lazyVars:
+		m, err := t.materialize()
+		if err != nil {
+			return nil, err
+		}
+		return toNative(m)
+	case *types.Err:
+		return nil, t
 	case ref.Val:
 		return toNative(t.Value())
 	case []ref.Val:
-		out := make([]any, len(t))
-		for i, el := range t {
-			out[i] = toNative(el)
-		}
-		return out
+		return nativeList(t)
 	case []any:
-		out := make([]any, len(t))
-		for i, el := range t {
-			out[i] = toNative(el)
-		}
-		return out
+		return nativeList(t)
 	case map[ref.Val]ref.Val:
-		out := make(map[string]any, len(t))
-		for k, val := range t {
-			out[toNativeKey(k.Value())] = toNative(val)
-		}
-		return out
+		return nativeMap(t)
 	case map[string]any:
 		out := make(map[string]any, len(t))
 		for k, val := range t {
-			out[k] = toNative(val)
+			n, err := toNative(val)
+			if err != nil {
+				return nil, err
+			}
+			out[k] = n
 		}
-		return out
+		return out, nil
 	case map[any]any:
-		out := make(map[string]any, len(t))
-		for k, val := range t {
-			out[toNativeKey(k)] = toNative(val)
-		}
-		return out
+		return nativeMap(t)
 	default:
-		return v
+		return v, nil
 	}
+}
+
+// nativeMap converts a map whose keys are not Go strings, in the sorted order of the
+// strings they become. Two keys that become one string, `1` and `'1'`, are an error
+// naming it: either value would do, and Go's map order would pick.
+func nativeMap[K comparable, V any](m map[K]V) (map[string]any, error) {
+	byName := make(map[string]K, len(m))
+	var clashes []string
+	for k := range m {
+		name := toNativeKey(k)
+		if _, taken := byName[name]; taken {
+			clashes = append(clashes, name)
+		}
+		byName[name] = k
+	}
+	if len(clashes) > 0 {
+		return nil, fmt.Errorf("two map keys convert to the same key %q", slices.Min(clashes))
+	}
+	out := make(map[string]any, len(m))
+	for _, name := range slices.Sorted(maps.Keys(byName)) {
+		n, err := toNative(m[byName[name]])
+		if err != nil {
+			return nil, err
+		}
+		out[name] = n
+	}
+	return out, nil
+}
+
+func nativeList[T any](l []T) (any, error) {
+	out := make([]any, len(l))
+	for i, el := range l {
+		n, err := toNative(el)
+		if err != nil {
+			return nil, err
+		}
+		out[i] = n
+	}
+	return out, nil
 }
 
 // toNativeKey coerces a map key to a string (soulprint.hosts element keys are
@@ -340,14 +395,14 @@ func (e *Engine) parseBlock(raw string, start int) (string, int, error) {
 // cel-go ConvertToType(StringType). A list/map cannot be concatenated with a string
 // — [ErrEval] ([templating.md §5]).
 func stringify(expr string, val ref.Val) (string, error) {
-	switch v := val.Value().(type) {
-	case string:
-		return v, nil
-	}
-
-	str := val.ConvertToType(stringType)
-	if s, ok := str.Value().(string); ok {
-		return s, nil
+	// A lazy vars map is never a string, and its Value() would evaluate every var.
+	if _, lazy := val.(*lazyVars); !lazy {
+		if s, ok := val.Value().(string); ok {
+			return s, nil
+		}
+		if s, ok := val.ConvertToType(stringType).Value().(string); ok {
+			return s, nil
+		}
 	}
 
 	return "", &ErrEval{

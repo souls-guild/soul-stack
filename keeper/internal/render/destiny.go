@@ -4,7 +4,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"maps"
 	"reflect"
+	"slices"
 	"sort"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -54,12 +56,12 @@ type ResolvedDestiny struct {
 	// invariants.
 	Validate []config.ValidateRule
 	// Vars holds raw destiny locals from `vars.yml` (docs/destiny/vars.md),
-	// unvalidated (vars are untyped). CEL expressions `${ … }` in values
-	// resolve inside the destiny pass (renderApplyDestiny) over
-	// input+soulprint.self+incarnation, isolated from scenario scope. The
-	// result is the base `vars.*` layer; task-level `vars:` overrides
-	// same-named keys on top (Option A, vars.md "file-vars/task-vars merge").
-	// nil means the destiny has no locals.
+	// unvalidated (vars are untyped). CEL expressions `${ … }` in values, at any
+	// depth, are evaluated inside the destiny pass when a cell reads them, over
+	// input+soulprint.self+incarnation, isolated from scenario scope
+	// ([Pipeline.destinyBaseViews]). They are the base `vars.*` rung; task-level
+	// `vars:` overrides same-named keys on top (Option A, vars.md
+	// "file-vars/task-vars merge"). nil means the destiny has no locals.
 	Vars map[string]any
 	// Templates reads the `.tmpl` snapshot of THIS destiny (its templates
 	// live in their own snapshot, not the service's — single-level resolve,
@@ -186,7 +188,7 @@ func (p *Pipeline) renderApplyDestiny(
 	//
 	// PER HOST since NIM-908: inputByHost is what a host-bound context reads,
 	// destinyInput carries only the names that are the same for everyone.
-	variantInputs := hostVariantInputNames(p.cel, applier, keeperRegisterNames(parentIn.Scenario))
+	variantInputs := p.hostVariantInputNames(parentIn, applier)
 	inputByHost, destinyInput, extraVariant, err := p.resolveApplyInput(parentIn, applier, resolved, targeted, variantInputs)
 	if err != nil {
 		// A destiny `validate:` rule reads the destiny's inputs, so the destiny's
@@ -247,13 +249,14 @@ func (p *Pipeline) renderApplyDestiny(
 		// Guarded by TestRender_ApplyDestiny_SecretOutputStillDerived.
 		Modules: parentIn.Modules,
 		// ServiceVars stays nil ON PURPOSE, and it is load-bearing rather than an
-		// omission: hostVars seeds cel.Vars.Vars from it, resolveTaskVars takes the
-		// task layer's `lower` from that, so a nil here is what stops a destiny's
-		// task vars reaching the caller's service layer at all. Copying parentIn's
-		// value — the shape a `destinyIn := parentIn` refactor would produce —
-		// opens the whole service layer to every destiny task var.
-		// Guarded by TestRender_ApplyDestiny_ServiceVarsNotLeaked.
+		// omission: a destiny task's view stacks on its host's `vars.yml` view, and
+		// a cell with no task view of its own — the loop axis, a template path —
+		// would read this one. Copying parentIn's value — the shape a
+		// `destinyIn := parentIn` refactor would produce — opens the whole service
+		// layer to every destiny cell. Guarded by
+		// TestRender_ApplyDestiny_ServiceVarsNotLeaked.
 		ServiceVars: nil,
+		StrictVars:  parentIn.StrictVars,
 		// Carried over although State is NOT (a destiny reads no
 		// `incarnation.state` — the key is absent from its activation, so the
 		// address set is dead here and costs a map of names). It is here so that
@@ -266,34 +269,23 @@ func (p *Pipeline) renderApplyDestiny(
 		// NIM-812 so does `${ input.<secret> }`, off the destiny's own schema
 		// carried on Scenario above. The accumulator is shared with the parent
 		// deliberately: its paths are matched against each task's own params root.
-		Sealed: parentIn.Sealed,
+		Sealed:   parentIn.Sealed,
+		sealMemo: parentIn.sealMemo,
 	}
 	pass = &destinyIn
 
-	// The file layer's taint (NIM-811), from the RAW vars.yml text and once for
-	// the pass — the values below are per-host, the provenance is not. This is the
-	// bottom of the `vars.*` taint every task of this pass stacks its own `vars:`
-	// on; a destiny local written as `${ input.<secret> }` is the same hop a task
-	// var is, and with the destiny schema now carried it is finally detectable.
-	// Before the resolve: a local that fails to resolve over another one's secret
-	// is withheld by it (NIM-1000).
-	destinyIn.sealedFileVars = sealedVarNames(p.cel, resolved.Vars, scenarioSealSources(destinyIn))
-
-	// destiny locals from vars.yml (Option A, vars.md): resolved ONCE per
-	// pass, per host, over the destiny env (destiny input + soulprint.self +
-	// incarnation), isolated from scenario scope. resolveDestinyVars builds
-	// its own base env with empty Register/Vars and AllowHosts=false, so in a
-	// vars.yml value `register.*` and `soulprint.hosts` are isolation errors and
-	// `vars.<other>` reaches only a file-var of the SAME layer.
-	destinyVars, verr := p.resolveDestinyVars(destinyIn, resolved.Vars, targeted)
-	if verr != nil {
-		return nil, nil, verr
-	}
-	destinyIn.DestinyVarsResolved = destinyVars
+	// destiny locals from vars.yml (Option A, vars.md): one lazy view per host for
+	// the pass, evaluated in the destiny env (destiny input + soulprint.self +
+	// incarnation) and isolated from scenario scope — `register.*` and
+	// `soulprint.hosts` in a vars.yml value are isolation errors. A definition is
+	// evaluated when a cell reads it, and a destiny task's own `vars:` stack on it
+	// (ADR-0082 amendment 2026-10-15, point 5).
+	destinyIn.destinyVars = p.destinyBaseViews(destinyIn, resolved.Vars, targeted)
 	// Which of those locals actually resolve per host — the mirror of
-	// hostVariantInputs one layer down. Set AFTER the resolve so the two travel
-	// together into every host-free context of this pass.
-	destinyIn.hostVariantVars = hostVariantDestinyVars(p.cel, resolved.Vars, variantInputs)
+	// hostVariantInputs one layer down, read from the raw vars.yml text, so the
+	// two travel together into every host-free context of this pass. A context
+	// deciding a task reads its view's set instead ([Pipeline.hostVariantTaskVars]).
+	destinyIn.hostVariantVars = hostVariantDestinyVars(p.cel, p.taskVarLayers(destinyIn, config.Task{}), variantInputs)
 
 	tasks := make([]*RenderedTask, 0, len(resolved.Tasks))
 	plans := make([]DispatchPlan, 0, len(resolved.Tasks))
@@ -372,7 +364,7 @@ func (p *Pipeline) renderApplyDestiny(
 			continue
 		}
 
-		destinyTargeted, terr := resolveTargets(p.cel, destinyIn, task)
+		destinyTargeted, terr := p.resolveTargets(destinyIn, task)
 		if terr != nil {
 			return nil, nil, terr
 		}
@@ -451,51 +443,6 @@ func (p *Pipeline) renderApplyDestiny(
 	return tasks, plans, nil
 }
 
-// resolveDestinyVars resolves raw destiny locals from `vars.yml`, per host,
-// in the destiny env (Option A, vars.md). Returns sid → name → resolved
-// value.
-//
-// Isolation (CRITICAL): the base env is built by hostVars over destinyIn —
-// the isolated destiny RenderInput (Register/ServiceVars empty,
-// destinyIsolated=true → AllowHosts=false). Available: input.* (destiny
-// input, not scenario), soulprint.self.*, incarnation.*; `register.*` and
-// `soulprint.hosts` are isolation errors. The file layer sits on NOTHING
-// (resolveVarLayer is called with a nil lower layer) and its accumulator starts
-// empty, so a `vars.<other>` reference resolves only against a file-var of the
-// SAME layer (var→var allowed, eager-topological) — never against the caller's
-// service vars, and never against a task-var.
-//
-// var→var (vars.md, ADR-009/ADR-010 amendment 2026-06-24): a file-var can
-// reference another file-var via `${ vars.<other> }`; resolveVarLayer builds
-// a graph from VarRefs and resolves in topological order. Key order in
-// vars.yml doesn't matter. A cycle gives ErrVarCycle with a trace; a
-// reference to an unknown var gives ErrVarUnknownRef (eager, even if the
-// referencing var is unused). Isolation isn't weakened: var→var stays
-// strictly within the file layer.
-//
-// Per-host resolve: values may reference soulprint.self (host-variant), so
-// each host gets its own map. nil raw → nil (destiny has no locals). Empty
-// targeted (where: filtered everyone out) → one synthetic host under key "".
-func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any, targeted []*topology.HostFacts) (map[string]map[string]any, error) {
-	if len(raw) == 0 {
-		return nil, nil
-	}
-	hosts := targeted
-	if len(hosts) == 0 {
-		hosts = []*topology.HostFacts{{}}
-	}
-	out := make(map[string]map[string]any, len(hosts))
-	for _, host := range hosts {
-		base := hostVars(destinyIn, host, len(targeted)) // base.Vars empty — start of layer
-		resolved, err := resolveVarLayer(p.cel, raw, nil, base)
-		if err != nil {
-			return nil, atHost(host.SID, fmt.Errorf("render: destiny %q (vars.yml, host %s): %w", destinyIn.Scenario.Name, host.SID, err))
-		}
-		out[host.SID] = resolved
-	}
-	return out, nil
-}
-
 // resolveApplyInput computes the destiny input from apply.input, PER HOST.
 //
 // apply.input is literals/CEL in scenario env (the parent decides what to
@@ -537,8 +484,8 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 // input is one ReadKV whether the roster is one host or nine, which
 // TestApplyInput_VaultReadsDoNotScaleWithTheRoster asserts and a mutation kills.
 //
-// The applier's task-level `vars:` are resolved into that env first, exactly
-// as the module path does it (dispatch.go, renderModuleTask) — NIM-336. This
+// The applier's task-level `vars:` are read through its task view in that env,
+// exactly as the module path does it (renderTaskIter) — NIM-336. This
 // is the one applier key that CAN be answered on this side of the boundary:
 // `apply.input` renders in the SCENARIO env, where `vars.<name>` means what
 // its author meant, and only the resulting VALUES cross into the destiny — the
@@ -552,16 +499,11 @@ func (p *Pipeline) resolveDestinyVars(destinyIn RenderInput, raw map[string]any,
 // it, and the descendant carries no key of its own — so refusing it there was
 // never an option.
 //
-// ★ The loss was LOUD, not silent: the scenario pass has no file-vars base, so
-// `${ vars.x }` in apply.input failed with "no such key" for every applier.
-// What was missing is a capability the DSL documents — a block passes `vars:`
-// to its descendants (destiny/tasks.md §6.5) — and did not deliver to one kind
-// of descendant, while every module sibling in the same block got it.
-//
-// fileVarsForHost is the base layer (Variant A, vars.md): empty on the scenario
-// pass, and the destiny's own vars.yml if an applier is ever rendered inside a
-// destiny pass — so the base is always the right one for wherever this applier
-// physically sits.
+// ★ The loss was LOUD, not silent: `${ vars.x }` in apply.input failed with "no
+// such key" for every applier whose `vars:` did not reach it. What was missing is
+// a capability the DSL documents — a block passes `vars:` to its descendants
+// (destiny/tasks.md §6.5) — and did not deliver to one kind of descendant, while
+// every module sibling in the same block got it.
 func (p *Pipeline) resolveApplyInput(
 	parentIn RenderInput,
 	applier config.Task,
@@ -573,22 +515,27 @@ func (p *Pipeline) resolveApplyInput(
 	hosts := targeted
 	if len(hosts) == 0 {
 		// where: filtered everyone out — one synthetic host under key "", the same
-		// shape resolveDestinyVars uses. The destiny still renders (its tasks land in
+		// shape destinyBaseViews uses. The destiny still renders (its tasks land in
 		// the plan with an empty DispatchPlan), so its input still has to exist.
 		hosts = []*topology.HostFacts{{}}
 	}
 
 	byHost = make(map[string]map[string]any, len(hosts))
+	// Strict mode's views: the applier is a host task, materialized per targeted host
+	// as renderTaskIter does it.
+	var strictViews []*cel.VarView
 	for _, host := range hosts {
-		vars := hostVars(parentIn, host, len(targeted))
-		vars, verr := resolveTaskVars(p.cel, fileVarsForHost(parentIn, host), applier.Vars, vars)
+		vars, verr := p.withTaskView(parentIn, applier, host, hostVars(parentIn, host, len(targeted)))
 		if verr != nil {
 			return nil, nil, nil, atHost(host.SID, fmt.Errorf("render: apply destiny %q (task %q, host %s): %w", apply.Destiny, applier.Name, host.SID, verr))
 		}
+		if parentIn.StrictVars && len(targeted) > 0 {
+			strictViews = append(strictViews, vars.View)
+		}
 
 		rendered := make(map[string]any, len(apply.Input))
-		for name, raw := range apply.Input {
-			val, rerr := renderValue(p.cel, raw, vars, "apply.input."+name)
+		for _, name := range slices.Sorted(maps.Keys(apply.Input)) {
+			val, rerr := renderValue(p.cel, apply.Input[name], vars, "apply.input."+name)
 			if rerr != nil {
 				return nil, nil, nil, atHost(host.SID, fmt.Errorf("render: apply destiny %q input %q (host %s): %w", apply.Destiny, name, host.SID, rerr))
 			}
@@ -601,6 +548,11 @@ func (p *Pipeline) resolveApplyInput(
 			return nil, nil, nil, atHost(host.SID, destinyInputError(apply.Destiny, host.SID, cerr))
 		}
 		byHost[host.SID] = merged
+	}
+	for i, view := range strictViews {
+		if err := materialize(view); err != nil {
+			return nil, nil, nil, atHost(hosts[i].SID, fmt.Errorf("render: apply destiny %q (task %q, host %s): %w", apply.Destiny, applier.Name, hosts[i].SID, err))
+		}
 	}
 
 	invariant, extra := hostInvariantInput(byHost, variantInputs)
@@ -618,8 +570,9 @@ func (p *Pipeline) resolveApplyInput(
 // their own file is a rule they cannot follow.
 //
 // A name is per-host iff its value REACHES a per-host root — directly, or through
-// the applier's own `vars:` layer, which [hostVariantVarNames] closes transitively.
-// The indirect route is the one that is easy to leave out and was: see that function.
+// a name of the applier's view of `vars`, which [hostVariantVarNames] closes
+// transitively. The indirect route is the one that is easy to leave out and was: see
+// that function.
 //
 // `soulprint.self` is per-host by definition. `register` is per-host by
 // construction ([hostRegister] keys the run's buckets by SID) — per NAME, not a name-by-name verdict, even though the KEEPER bucket is unioned into
@@ -632,11 +585,12 @@ func (p *Pipeline) resolveApplyInput(
 //
 // `soulprint.hosts` is deliberately not counted: it is the run's roster, identical
 // for every host.
-func hostVariantInputNames(engine *cel.Engine, applier config.Task, keeperRegisters map[string]bool) []string {
-	variantVars := hostVariantVarNames(engine, applier.Vars, keeperRegisters, nil)
+func (p *Pipeline) hostVariantInputNames(in RenderInput, applier config.Task) []string {
+	keeperRegisters := keeperRegisterNames(in.Scenario)
+	variantVars := hostVariantVarNames(p.cel, p.taskVarLayers(in, applier), keeperRegisters, nil)
 	var names []string
 	for name, val := range applier.Apply.Input {
-		if valueReferencesHostRoots(engine, val, variantVars, keeperRegisters, nil) {
+		if readsHostRoots(rawReads(p.cel, val, hostVariantRoots), variantVars, keeperRegisters, nil) {
 			names = append(names, name)
 		}
 	}
@@ -686,8 +640,8 @@ func keeperRegisterNames(scn *config.ScenarioManifest) map[string]bool {
 	return out
 }
 
-// hostVariantVarNames closes the applier's own `vars:` layer over the per-host roots:
-// which of its names carry a per-host value, directly or through another var.
+// hostVariantVarNames closes a view of `vars` over the per-host roots: which of its
+// names carry a per-host value, directly or through another name ([viewClosure]).
 //
 // ★ Without this the fix reproduces the defect it fixes, one hop over. An applier
 // writing
@@ -695,8 +649,8 @@ func keeperRegisterNames(scn *config.ScenarioManifest) map[string]bool {
 //	vars: {addr: "${ soulprint.self.network.primary_ip }"}
 //	apply: {input: {master_addr: "${ vars.addr }"}}
 //
-// has a genuinely per-host `master_addr` — resolveTaskVars resolves that layer per
-// host inside the loop above — while the input's own text names no per-host root, so a
+// has a genuinely per-host `master_addr` — the applier's task view evaluates that
+// layer per host in resolveApplyInput — while the input's own text names no per-host root, so a
 // scan of apply.input alone reads it as invariant and hands the first host's address to
 // every host-free context. Measured on this tree before the closure existed: two hosts,
 // one `loop.items: ${ input.master_addr }`, `echo 10.0.0.1` dispatched to both, green.
@@ -705,102 +659,60 @@ func keeperRegisterNames(scn *config.ScenarioManifest) map[string]bool {
 // (mergeBlockInheritance), and that happens before renderApplyDestiny is called, so
 // applier.Vars already carries them and they close here with the rest.
 //
-// A fixpoint rather than one pass: var→var is legal within a layer and the map has no
-// declaration order (vars.md), so `b: ${ vars.a }` may be visited before `a`.
-//
-// The SERVICE vars layer is deliberately not walked. It resolves once per run and is
-// host-invariant by construction ([ADR-0082] — a `soulprint.self` in a `vars/_stack.yaml`
-// step is refused outright), so no name of it can be per-host; walking it would
-// misclassify the layer `apply: input:` exists to forward.
-func hostVariantVarNames(engine *cel.Engine, raw map[string]any, keeperRegisters, variantInputs map[string]bool) map[string]bool {
-	out := map[string]bool{}
-	for changed := true; changed; {
-		changed = false
-		for name, val := range raw {
-			if out[name] {
-				continue
-			}
-			if valueReferencesHostRoots(engine, val, out, keeperRegisters, variantInputs) {
-				out[name] = true
-				changed = true
-			}
-		}
-	}
-	return out
+// ★ The applier's WHOLE view is closed, its service and scenario rungs included
+// ([ADR-0082] amendment 2026-10-15, point 16). Neither rung's text can name a per-host
+// root (point 6), but under late binding a definition there reads the applier's
+// override: a service `x: ${ vars.y }` under the applier's `y: ${ soulprint.self… }`
+// is per-host in that view. A rung no override reaches stays invariant, so the
+// service vars `apply: input:` exists to forward are not misclassified.
+func hostVariantVarNames(engine *cel.Engine, layers []cel.VarLayer, keeperRegisters, variantInputs map[string]bool) map[string]bool {
+	return viewClosure(engine, layers, hostVariantRoots, func(reads map[string]cel.RootReads, closed map[string]bool) bool {
+		return readsHostRoots(reads, closed, keeperRegisters, variantInputs)
+	})
 }
 
-// valueReferencesHostRoots walks an apply.input value — a scalar, or the nested
-// maps/slices a structured input is written as — for a `${ … }` block reading a
-// per-host root. Nested because `input:` values are not flat: a list of addresses
-// or a map of per-host overrides carries its expressions one level down, and a
-// scan that stopped at the top would classify exactly the structured cases as
-// invariant.
-func valueReferencesHostRoots(engine *cel.Engine, val any, variantVars, keeperRegisters, variantInputs map[string]bool) bool {
-	switch v := val.(type) {
-	case string:
-		reads := engine.InterpolationReads(v, hostVariantRoots)
-		// soulprint: only `self` counts. `soulprint.hosts` is the run's roster —
-		// the same list on every host — and counting it would classify the standard
-		// topology expression (`soulprint.hosts.where(...)`) as per-host and refuse
-		// it in exactly the contexts it was designed for.
-		sp := reads[soulprintRootName]
-		if sp.Whole || sp.Fields[soulprintSelfFieldName] {
+// readsHostRoots reports whether reads — of an apply.input value or a definition, every
+// string of it at any depth ([rawReads]) — reach a per-host root. At any depth because
+// `input:` values are not flat: a list of addresses or a map of per-host overrides
+// carries its expressions one level down, and a scan that stopped at the top would
+// classify exactly the structured cases as invariant.
+func readsHostRoots(reads map[string]cel.RootReads, variantVars, keeperRegisters, variantInputs map[string]bool) bool {
+	// soulprint: only `self` counts. `soulprint.hosts` is the run's roster — the same
+	// list on every host — and counting it would classify the standard topology
+	// expression (`soulprint.hosts.where(...)`) as per-host and refuse it in exactly
+	// the contexts it was designed for.
+	sp := reads[soulprintRootName]
+	if sp.Whole || sp.Fields[soulprintSelfFieldName] {
+		return true
+	}
+	// register: per NAME. A keeper-side register is the same value on every host
+	// ([keeperRegisterNames]); every other name is the host's own bucket, and so is
+	// `register.self`. A whole-root read (`size(register)`, `register[k]`) names
+	// nothing the walk can check — fail-closed.
+	reg := reads[registerRootName]
+	if reg.Whole {
+		return true
+	}
+	for name := range reg.Fields {
+		if !keeperRegisters[name] {
 			return true
-		}
-		// register: per NAME. A keeper-side register is the same value on every host
-		// ([keeperRegisterNames]); every other name is the host's own bucket, and so
-		// is `register.self`. A whole-root read (`size(register)`, `register[k]`)
-		// names nothing the walk can check — fail-closed.
-		reg := reads[registerRootName]
-		if reg.Whole {
-			return true
-		}
-		for name := range reg.Fields {
-			if !keeperRegisters[name] {
-				return true
-			}
-		}
-		// vars: only the names already closed as per-host (hostVariantVarNames). The
-		// root as a whole is NOT per-host — the service layer under it is invariant by
-		// construction — so counting it would misclassify every input forwarding a
-		// service var. A whole-root read (`size(vars)`, `vars[k]`) is fail-closed only
-		// when there IS a per-host name to reach.
-		vr := reads[varsRootName]
-		if len(variantVars) > 0 && vr.Whole {
-			return true
-		}
-		for name := range variantVars {
-			if vr.Fields[name] {
-				return true
-			}
-		}
-		// input: only in the DESTINY pass, where variantInputs is the set of names
-		// `apply: input:` renders per host. On the applier side it is empty — the
-		// scenario's own `input:` is the operator's run input and has no host axis.
-		ir := reads[inputRootName]
-		if len(variantInputs) > 0 && ir.Whole {
-			return true
-		}
-		for name := range variantInputs {
-			if ir.Fields[name] {
-				return true
-			}
-		}
-		return false
-	case map[string]any:
-		for _, inner := range v {
-			if valueReferencesHostRoots(engine, inner, variantVars, keeperRegisters, variantInputs) {
-				return true
-			}
-		}
-	case []any:
-		for _, inner := range v {
-			if valueReferencesHostRoots(engine, inner, variantVars, keeperRegisters, variantInputs) {
-				return true
-			}
 		}
 	}
-	return false
+	// vars: only the names already closed as per-host (hostVariantVarNames). The root
+	// as a whole is NOT per-host — a name no per-host override reaches is invariant —
+	// so counting it would misclassify every input forwarding a service var. A
+	// whole-root read (`size(vars)`, `vars[k]`) is fail-closed only when there IS a
+	// per-host name to reach.
+	//
+	// The loop goes over the names read, never over the closed set: viewClosure calls
+	// this for every definition on every pass while that set grows.
+	if readsAny(reads[varsRootName], variantVars) {
+		return true
+	}
+	// input: only in the DESTINY pass, where variantInputs is the set of names
+	// `apply: input:` renders per host. On the applier side it is empty — the
+	// scenario's own `input:` is the operator's run input and has no host axis.
+	return readsAny(reads[inputRootName], variantInputs)
 }
 
 const (
@@ -813,13 +725,14 @@ const (
 
 // hostVariantRoots are the CEL roots this classification reads. The first two are
 // per-host by construction; `vars` is per-NAME and is judged against the closure
-// [hostVariantVarNames] builds, because its bottom layer — the service's own vars —
-// resolves once per run and is host-invariant.
+// [hostVariantVarNames] builds, because a name no per-host override reaches is
+// host-invariant.
 var hostVariantRoots = []string{soulprintRootName, registerRootName, varsRootName, inputRootName}
 
-// hostVariantDestinyVars closes a DESTINY's own `vars.yml` over the per-host roots
-// it can see: `soulprint.self` (available in the destiny pass), a per-host
-// `input.<name>` from [hostVariantInputNames], and another per-host destiny var.
+// hostVariantDestinyVars closes a view of a DESTINY pass over the per-host roots it
+// can see: `soulprint.self` (available in the destiny pass), a per-host
+// `input.<name>` from [Pipeline.hostVariantInputNames], and another per-host name.
+// Sorted.
 //
 // ★ The MIRROR of the applier-vars hop, one layer down, and it was open until it was
 // measured. A destiny writing
@@ -832,24 +745,41 @@ var hostVariantRoots = []string{soulprintRootName, registerRootName, varsRootNam
 // false on the first, task skipped for BOTH — silently, green. The reference that
 // reaches the decision says only `vars.addr`, which is why nothing downstream could
 // see it.
-//
-// A fixpoint for the same reason as the applier side: `vars.yml` has no declaration
-// order, so `b: ${ vars.a }` may be visited before `a`.
-func hostVariantDestinyVars(engine *cel.Engine, raw map[string]any, variantInputs []string) []string {
-	if len(raw) == 0 {
+func hostVariantDestinyVars(engine *cel.Engine, layers []cel.VarLayer, variantInputs []string) []string {
+	if len(layers) == 0 {
 		return nil
 	}
 	inputs := make(map[string]bool, len(variantInputs))
 	for _, name := range variantInputs {
 		inputs[name] = true
 	}
-	set := hostVariantVarNames(engine, raw, nil, inputs)
+	set := hostVariantVarNames(engine, layers, nil, inputs)
+	if len(set) == 0 {
+		return nil
+	}
 	out := make([]string, 0, len(set))
 	for name := range set {
 		out = append(out, name)
 	}
 	sort.Strings(out)
 	return out
+}
+
+// hostVariantTaskVars is the per-host `vars.*` set of task's view, for a context that
+// decides the task on one host for the whole roster — a static `when:`, an `assert:`
+// gate. In a destiny pass that view is the pass's `vars.yml` with the task's own block
+// + task rung on it, closed together (point 16), so a task var over `soulprint.self`
+// and a `vars.yml` name derived from one are both refused there by name ([ADR-0082]
+// amendment 2026-10-15, point 7). A context with no task rung — an include `when:`,
+// the loop axis — reads the pass's own set, [RenderInput.hostVariantVars].
+//
+// On a scenario pass it is that set too, empty: a scenario static `when:` over a
+// host-dependent task var is NIM-1020, not this.
+func (p *Pipeline) hostVariantTaskVars(in RenderInput, task config.Task) []string {
+	if !in.destinyIsolated || len(task.Vars) == 0 {
+		return in.hostVariantVars
+	}
+	return hostVariantDestinyVars(p.cel, p.taskVarLayers(in, task), in.hostVariantInputs)
 }
 
 // hostInvariantInput is what a context with no host gets: the entries whose name is

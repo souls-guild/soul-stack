@@ -40,10 +40,10 @@ package validate
 // exists after expansion.
 //
 // NOT covered: the isolated destiny pass (a destiny's own file never reaches this
-// entry point). The service-vars surface — `vars/_stack.yaml`, the third CEL
-// environment carrying this root — is covered separately, from the SERVICE entry
-// point, in service_vars.go: it is not part of a scenario and this function never
-// sees it.
+// entry point). The service-vars surface — the selectors of `vars/_stack.yaml` and
+// the definitions of every layer file under `vars/`, the third CEL environment
+// carrying this root — is covered separately, from the SERVICE entry point, in
+// service_vars.go: it is not part of a scenario and this function never sees it.
 //
 // [ADR-0085]: ../../../docs/adr/0085-entity-id-and-label.md
 
@@ -258,11 +258,17 @@ func (c *legacyRootChecker) diag(where, raw string) diag.Diagnostic {
 // otherwise cost the finding its address entirely; `$.tasks[3]` is a worse
 // address than `$.tasks[3].params.retries` and a far better one than none.
 func (c *legacyRootChecker) address(yamlPath string) (line, column int, ok bool) {
-	if c.position == nil {
+	return nearestAddress(c.position, yamlPath)
+}
+
+// nearestAddress resolves yamlPath through position, walking out to the nearest
+// enclosing path that resolves. A nil position resolves nothing.
+func nearestAddress(position func(string) (int, int, bool), yamlPath string) (line, column int, ok bool) {
+	if position == nil {
 		return 0, 0, false
 	}
 	for p := yamlPath; p != "$" && p != ""; p = trimLastPathSegment(p) {
-		if line, column, ok = c.position(p); ok {
+		if line, column, ok = position(p); ok {
 			return line, column, true
 		}
 	}
@@ -293,18 +299,24 @@ type includedBody struct {
 // includedTaskBodies collects every file the scenario's `include:` chain reaches,
 // deduplicated by display path and in a stable order.
 //
-// It drives [config.ExpandIncludes] purely to make the resolver walk the chain —
-// the flattened list it returns is deliberately DISCARDED. That list has no
-// positions (expansion erases them, include_expand.go) and its indices address a
-// run, not a file; walking each body on its own is what buys the finding a real
-// address in the file its author would open. The sibling own-namespace rule uses
-// the same resolver and takes the flat list instead, because it reports names
-// rather than places.
+// This rule walks each body on its own rather than the flattened list: the
+// list's indices address a run, not a file, and walking a body is what buys the
+// finding a real address in the file its author would open. The sibling
+// own-namespace rule uses the same resolver and takes the flat list instead,
+// because it reports names rather than places.
+func includedTaskBodies(scenarioPath string, scn *config.ScenarioManifest) []includedBody {
+	_, bodies := expandScenarioTasks(scenarioPath, scn)
+	return bodies
+}
+
+// expandScenarioTasks expands the scenario's `include:` chain as the run does, and
+// returns the flattened task list — scn.Tasks when expansion yields nothing — with
+// every body the chain reached.
 //
 // A body that cannot be resolved contributes nothing here: the expander itself
 // raises `include_not_found`/`include_cycle` with the address, and a second
-// complaint from this rule would say less about the same file.
-func includedTaskBodies(scenarioPath string, scn *config.ScenarioManifest) []includedBody {
+// complaint from a rule would say less about the same file.
+func expandScenarioTasks(scenarioPath string, scn *config.ScenarioManifest) ([]config.Task, []includedBody) {
 	// Both levels, resolved exactly as stageDiagnostics resolves them — including
 	// the loose-file case, where the second level is unavailable and the resolver
 	// reads the local one alone. A loose `main.yml` beside its own body still has
@@ -330,6 +342,9 @@ func includedTaskBodies(scenarioPath string, scn *config.ScenarioManifest) []inc
 		}
 		return data, display, err
 	}
-	_, _ = config.ExpandIncludes(scn.Tasks, recording)
-	return bodies
+	expanded, _ := config.ExpandIncludes(scn.Tasks, recording)
+	if expanded == nil {
+		expanded = scn.Tasks
+	}
+	return expanded, bodies
 }

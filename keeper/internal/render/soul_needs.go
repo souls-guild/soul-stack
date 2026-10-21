@@ -21,7 +21,9 @@ import (
 // register and no state a capture at an earlier step changes; the tasks the render
 // drops up front (an include group, a static `when:`, unless it reads such state); and
 // every feature, which the text decides. State is read directly, or through
-// `compute:` or a task's `vars:`, which every pass resolves again. What depends on the
+// `compute:` or a name of the task's view of `vars` — the service, scenario and task
+// rungs, which every pass resolves again (ADR-0082 amendment 2026-10-15, point 16).
+// What depends on the
 // run is counted as sent: a `when:` the Keeper decides at the step, an include or
 // static `when:` reading state an earlier capture changes, a requisite that drops the
 // task on a host, and a loop's items — the hosts a task's targeting resolves to, as
@@ -99,10 +101,11 @@ func (p *Pipeline) fillSoulNeeds(ctx context.Context, in RenderInput) {
 	}
 	s.movingCompute = map[string]bool{}
 	for _, cv := range in.Scenario.Compute {
-		if s.valueMoves(cv.Value, s.movingCompute, nil) {
+		if s.computeMoves(cv.Value, s.movingCompute) {
 			s.movingCompute[cv.Name] = true
 		}
 	}
+	s.runMoving = s.movingIn(p.runLevelVarLayers(in))
 	for i, task := range in.Scenario.Tasks {
 		s.task(task, in.Steps[i], in.Hosts, nil, guardTopLevel(i))
 	}
@@ -125,7 +128,11 @@ type needSurvey struct {
 	// movingCompute — the compute entries that read the state, directly or through an
 	// earlier entry: every pass recomputes the block against the state it was given.
 	movingCompute map[string]bool
-	out           []SoulNeed
+	// runMoving — the names of the run-level view (the service and scenario rungs)
+	// that read the state, the view of a task without `vars:` and of an include's
+	// `when:`.
+	runMoving map[string]bool
+	out       []SoulNeed
 }
 
 // surveyGroup is the block rolled as one group a task sits in: its registers stay
@@ -146,7 +153,7 @@ func (s *needSurvey) task(task config.Task, node config.StepNode, scope []*topol
 	}
 	scoped := s.in
 	scoped.Hosts = scope
-	targeted, err := resolveTargets(s.p.cel, scoped, task)
+	targeted, err := s.p.resolveTargets(scoped, task)
 	if err != nil {
 		return
 	}
@@ -194,9 +201,10 @@ func (s *needSurvey) block(blockTask config.Task, node config.StepNode, targeted
 // the step, so here it drops nothing.
 //
 // The flow context these are evaluated in carries no compute (a read of it fails
-// every time), and an include's `when:` none of the task's `vars:`.
+// every time), and an include's `when:` none of the task's `vars:`: it reads the
+// service and scenario rungs, the view of a task without `vars:`.
 func (s *needSurvey) off(task config.Task, step int) bool {
-	if task.IncludeGroupID != 0 && !s.movesWithState(task.IncludeWhen, step, nil, nil) {
+	if task.IncludeGroupID != 0 && !s.movesWithState(task.IncludeWhen, step, nil, s.movingVars(config.Task{}, step)) {
 		if keep, err := s.p.keepIncludeGroup(s.in, task, s.includes); err != nil || !keep {
 			return true
 		}
@@ -215,9 +223,14 @@ func (s *needSurvey) off(task config.Task, step int) bool {
 // targetingKnown reports whether the hosts a task resolves to are known before the
 // run: its `on:` reads no register, and its `where:` — with the `vars:` it is resolved
 // against, and inside a `soulprint.hosts.where("…")` — no register and no state a
-// capture before its step changes, directly or through `compute:` or those `vars:`.
-// `on:` resolves against neither the state, compute nor vars, and `vars:` is resolved
-// for `where:` alone.
+// capture before its step changes, directly or through `compute:` or a name of the
+// task's view. `on:` resolves against neither the state, compute nor vars, and `vars:`
+// is resolved for `where:` alone.
+//
+// The register test reads every string of the task's own `vars:`, at any depth,
+// whether or not the `where:` names it. No lower rung can name `register` (ADR-0082
+// amendment 2026-10-15, point 6), so a name of the view reaches one only through the
+// task rung.
 func (s *needSurvey) targetingKnown(task config.Task, step int) bool {
 	if readsRegister(task.On) {
 		return false
@@ -230,15 +243,34 @@ func (s *needSurvey) targetingKnown(task config.Task, step int) bool {
 		return false
 	}
 	for _, v := range task.Vars {
-		str, ok := v.(string)
-		if !ok {
-			continue
-		}
-		if r := s.p.cel.InterpolationReads(str, registerRoot)["register"]; r.Whole || len(r.Fields) > 0 || len(config.ExtractRegisterRefs(str)) > 0 {
+		if s.varReadsRegister(v) {
 			return false
 		}
 	}
 	return !(s.firstCapture < step && readsMoving(reads, s.movingCompute, s.movingVars(task, step)))
+}
+
+// varReadsRegister reports whether any string of a `vars:` value, at any depth, reads
+// a register: by its parse tree, or by the text reading.
+func (s *needSurvey) varReadsRegister(v any) bool {
+	switch t := v.(type) {
+	case string:
+		r := s.p.cel.InterpolationReads(t, registerRoot)["register"]
+		return r.Whole || len(r.Fields) > 0 || len(config.ExtractRegisterRefs(t)) > 0
+	case []any:
+		for _, el := range t {
+			if s.varReadsRegister(el) {
+				return true
+			}
+		}
+	case map[string]any:
+		for _, el := range t {
+			if s.varReadsRegister(el) {
+				return true
+			}
+		}
+	}
+	return false
 }
 
 var (
@@ -286,29 +318,33 @@ func readsAny(r cel.RootReads, names map[string]bool) bool {
 	return false
 }
 
-// valueMoves reports whether a `vars:` or `compute:` value reads moving state. Only
-// a string is interpolated; any other value passes through as a literal.
-func (s *needSurvey) valueMoves(v any, computes, vars map[string]bool) bool {
+// computeMoves reports whether a `compute:` value reads moving state, directly or
+// through an entry of computes. Only a string is interpolated; any other value passes
+// through as a literal. Its `vars.*` is the service view alone, which reads no state.
+func (s *needSurvey) computeMoves(v any, computes map[string]bool) bool {
 	str, ok := v.(string)
-	return ok && readsMoving(s.p.cel.InterpolationReads(str, movingRoots), computes, vars)
+	return ok && readsMoving(s.p.cel.InterpolationReads(str, movingRoots), computes, nil)
 }
 
-// movingVars names the task's `vars:` that read moving state at step, directly or
-// through another of them; nil before the first capture.
+// movingVars names the vars of task's view that read moving state at step: the
+// service, scenario and block + task rungs, directly or through another name, every
+// definition and every string of it at any depth ([viewClosure]); nil before the first
+// capture.
 func (s *needSurvey) movingVars(task config.Task, step int) map[string]bool {
-	if s.firstCapture >= step || len(task.Vars) == 0 {
+	if s.firstCapture >= step {
 		return nil
 	}
-	out := map[string]bool{}
-	for grew := true; grew; {
-		grew = false
-		for name, v := range task.Vars {
-			if !out[name] && s.valueMoves(v, s.movingCompute, out) {
-				out[name], grew = true, true
-			}
-		}
+	if len(task.Vars) == 0 {
+		return s.runMoving
 	}
-	return out
+	return s.movingIn(s.p.taskVarLayers(s.in, task))
+}
+
+// movingIn closes a view's raw layers over moving state.
+func (s *needSurvey) movingIn(layers []cel.VarLayer) map[string]bool {
+	return viewClosure(s.p.cel, layers, movingRoots, func(reads map[string]cel.RootReads, closed map[string]bool) bool {
+		return readsMoving(reads, s.movingCompute, closed)
+	})
 }
 
 // movesWithState reports whether a bare predicate at step reads state a capture at an

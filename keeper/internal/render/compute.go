@@ -32,7 +32,7 @@ import (
 // nil (`compute.<name>` is a plain no-such-key, backward-compat bit-for-bit).
 //
 // Non-string values (number/bool/collection) pass through as literals — the
-// CEL phase only touches strings (mirrors resolveTaskVars/renderValue).
+// CEL phase only touches strings (mirrors renderValue).
 func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 	if in.Compute != nil {
 		return in.Compute, nil
@@ -49,8 +49,11 @@ func (p *Pipeline) resolveCompute(in RenderInput) (map[string]any, error) {
 		Input:       in.Input,
 		Register:    in.Register,
 		Incarnation: incarnationVars(in, len(in.Hosts)),
-		Vars:        in.ServiceVars,
-		Ctx:         in.Ctx,
+		// The service view alone: the scenario `vars:` rung reads `compute.*`, so
+		// compute reading it back would be a cycle between namespaces (ADR-0082
+		// amendment 2026-10-15, point 7).
+		View: in.ServiceVars,
+		Ctx:  in.Ctx,
 		// The block resolves INSIDE its own namespace: entry i reads entries j<i as
 		// `compute.<name>` (base.Compute = acc below), so the namespace is in scope
 		// here even on the first entry — where a reference is a genuine no-such-key

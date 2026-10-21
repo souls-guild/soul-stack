@@ -1,7 +1,10 @@
 package servicevars
 
 import (
+	"bytes"
+	"log/slog"
 	"reflect"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/shared/config"
@@ -143,6 +146,71 @@ func TestResolveEffectiveTelemetry(t *testing.T) {
 				t.Errorf("collectors = %v, want %v", got.GetCollectors(), tc.wantCollect)
 			}
 		})
+	}
+}
+
+// TestTelemetryVars_EvaluatesOnlyTheTelemetryKeys — point 7: telemetry reads the
+// service view, host-free, and only the two names it needs. A broken var
+// elsewhere in the service is never evaluated, so it cannot withhold a host's
+// cadence; the evaluation counter proves the skip rather than the absence of an
+// error implying it.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: build TelemetryVars'
+// result from `view.Materialize()` instead of the two lookups. The broken var
+// then fails it.
+func TestTelemetryVars_EvaluatesOnlyTheTelemetryKeys(t *testing.T) {
+	view, err := ViewOf(map[string]any{
+		"base_interval":        "45s",
+		"telemetry_interval":   "${ vars.base_interval }",
+		"telemetry_collectors": []any{"cpu", "${ 'mem' }"},
+		"broken":               "${ vars.nope }",
+		"unrelated":            "${ vars.base_interval }-x",
+	}, IncarnationContext{})
+	if err != nil {
+		t.Fatalf("ViewOf: %v", err)
+	}
+
+	got := TelemetryVars(view, nil)
+	want := map[string]any{"telemetry_interval": "45s", "telemetry_collectors": []any{"cpu", "mem"}}
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("TelemetryVars = %#v, want %#v", got, want)
+	}
+	// telemetry_interval, the base_interval it reads, telemetry_collectors.
+	if n := view.Evaluations(); n != 3 {
+		t.Fatalf("Evaluations = %d, want 3: telemetry evaluated a var it does not read", n)
+	}
+	if cfg := ResolveEffectiveTelemetry(nil, got); cfg.GetIntervalSec() != 45 {
+		t.Fatalf("interval_sec = %d, want 45 from the evaluated definition", cfg.GetIntervalSec())
+	}
+
+	absent, err := ViewOf(map[string]any{"broken": "${ vars.nope }"}, IncarnationContext{})
+	if err != nil {
+		t.Fatalf("ViewOf: %v", err)
+	}
+	if got := TelemetryVars(absent, nil); len(got) != 0 {
+		t.Fatalf("a service without telemetry vars = %#v, want an empty map", got)
+	}
+}
+
+// TestTelemetryVars_BrokenKeyIsAbsent — a telemetry key whose definition fails
+// is dropped alone, with a WARN naming it and the error; the other key is still
+// returned. [ResolveEffectiveTelemetry] then falls back for that key only.
+func TestTelemetryVars_BrokenKeyIsAbsent(t *testing.T) {
+	view, err := ViewOf(map[string]any{
+		"telemetry_interval":   "${ vars.nope }",
+		"telemetry_collectors": []any{"mem"},
+	}, IncarnationContext{})
+	if err != nil {
+		t.Fatalf("ViewOf: %v", err)
+	}
+	var logs bytes.Buffer
+	got := TelemetryVars(view, slog.New(slog.NewTextHandler(&logs, nil)))
+	if want := map[string]any{"telemetry_collectors": []any{"mem"}}; !reflect.DeepEqual(got, want) {
+		t.Fatalf("TelemetryVars = %#v, want %#v", got, want)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "key=telemetry_interval") || !strings.Contains(out, "vars.nope") {
+		t.Fatalf("want a WARN naming the key and the error, got:\n%s", out)
 	}
 }
 

@@ -134,7 +134,7 @@ manifest is refused (exit 2) rather than walked: it is not a service tree, and
 reporting a service's worth of absences would bury the one fact that matters. The
 three flags are the per-file family's, and mean the same things
 ([`--modules`](#plugin-module-params---modules-aliaspath),
-[`--service-name`](#service-identity---service-name-name-validate-scenario)); an
+[`--service-name`](#service-identity---service-name-name-validate-scenario-validate-service)); an
 unresolvable `--modules` binding is fatal for the whole run, and fatal **once**.
 
 ### The rule it moves into the tool
@@ -505,7 +505,7 @@ over those exact bytes in counts that tell the two paths apart. A tool that quie
 stops threading the manifests loses one of the two findings and fails its own count,
 rather than reporting a smaller set nobody compares against anything.
 
-## Service identity: `--service-name <name>` (`validate-scenario`)
+## Service identity: `--service-name <name>` (`validate-scenario`, `validate-service`)
 
 A service states no name of its own. `name:` left `service.yml` with
 [NIM-726](adr/0085-entity-id-and-label.md): the name is assigned once, at
@@ -513,15 +513,28 @@ registration, and it is what the registry row is keyed on, what every derived Va
 path is built from, and what `incarnation.service` resolves to. The manifest used to
 carry a second copy that nothing compared against the first.
 
-So the one check that needs the name takes it as an argument — the own-namespace Vault
-fence ([ADR-0083](adr/0083-declared-secret-state-fields.md) §7), which refuses a task
-writing under `<mount>/<service>/`:
+So the checks that need the name take it as an argument. Two commands read it:
 
-```
-soul-lint validate-scenario scenario/create/main.yml --service-name redis
-```
+- `validate-scenario`, for the own-namespace Vault fence
+  ([ADR-0083](adr/0083-declared-secret-state-fields.md) §7), which refuses a task
+  writing under `<mount>/<service>/`:
 
-Without it the fence **cannot run, and says so**: `own_namespace_fence_unchecked`, at
+  ```
+  soul-lint validate-scenario scenario/create/main.yml --service-name redis
+  ```
+
+- `validate-service`, as the service of the stub incarnation it evaluates the service
+  view on ([Var evaluation checks](#var-evaluation-checks)). Without the flag the stub's
+  service is the placeholder `stub-service`, and a definition reading
+  `incarnation.service` is evaluated against that.
+
+`validate-service-tree` passes its own `--service-name` on to both: to the manifest and
+to every scenario it walks. `list-secret-paths` takes the same flag and requires it
+([below](#derived-secret-paths-list-secret-paths)). `validate-config`,
+`validate-destiny` and `validate-manifest` share the `validate-*` parser, so they accept
+the flag, and nothing in them reads it.
+
+Without it `validate-scenario`'s fence **cannot run, and says so**: `own_namespace_fence_unchecked`, at
 warning level, exit code unchanged. That is the whole point of moving the name onto the
 flag. Before NIM-726 an absent or nameless `service.yml` made the rule return nil — the
 scenario linted `OK`, and the same paths were refused at render. A check that did not
@@ -613,13 +626,14 @@ resolves without complaint.
 
 | Code | Level | What it catches |
 |---|---|---|
-| `stack_step_invalid` | ERROR | `vars/_stack.yaml` cannot be read as written — an unknown key, no steps under `stack:`, `file:` together with `inline:`, `foreach:` without `as:` (or the reverse), an `as:` shadowing the step context, a `strategy:` that is neither `deep` nor `replace`. Also the `_stack.yml` spelling, which is not read at all. |
-| `vars_dir_nested` | WARNING | A layer file in a subdirectory of `vars/`. The resolver reads `vars/*.yaml` and does not descend, so the file is never read — this is exactly the shape the retired `essence/coven/` layout had. One diagnostic per subdirectory. |
+| `stack_step_invalid` | ERROR | `vars/_stack.yaml` cannot be read as written — an unknown key, no steps under `stack:`, a step without `file:`, `foreach:` without `as:` (or the reverse), an `as:` shadowing the step context, a `strategy:` that is neither `deep` nor `replace`. Also the `_stack.yml` spelling, which is not read at all. Since NIM-1014 ([ADR-0082 amendment 2026-10-15](adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late), point 14) also an `inline:` step — removed; the hint says to put the values in a file under `vars/` and name it with `file:` — and a `when:` / `foreach:` / `file:` selector naming `vars.*`, which would read a value before the final merge. |
+| `vars_dir_nested` | WARNING | A layer file in a subdirectory of `vars/`, at any depth, that no `_stack.yaml` step can include. The lexical scan reads `vars/*.yaml` and does not descend, so only a `file:` step reaches a nested file — a literal one names one file (a leading `./` is cleaned away, as the Keeper's path join does), and one carrying `${ … }` (`coven/${ coven }.yaml`) any file matching its cleaned literal skeleton, each block standing for text inside one path segment: `${ c }.yaml` names no nested file. A file nothing can name is never read — this is exactly the shape the retired `essence/coven/` layout had — and the var checks below do not lint it. One diagnostic per subdirectory. |
 | `vars_retired_layout` | ERROR | The retired `essence/` directory is still present. Half a migration is worse than none: `vars/` resolves to nothing and every `default(vars.X, y)` in the repo silently takes its fallback. |
 | `vars_shadows_service_var` | WARNING | A scenario-level or task-level `vars:` name taking over one of the service's own vars. Deterministic and sometimes deliberate — `conf_dir: "${ vars.conf_dir }/conf.d"` derives from the layer below on purpose — so it warns rather than fails. Modelled on `vars_collision` ([destiny/vars.md](destiny/vars.md)). |
 
 `stack_step_invalid` runs the **same parser the Keeper runs**
-(`config.ParseServiceVarsStack`), not a second copy of the schema: a linter with
+(`servicevars.ParseStack`, `shared/servicevars/stack.go`: the shape, then the
+selectors' no-`vars.*` rule), not a second copy of the schema: a linter with
 its own reading of a file format is how a file starts passing one check and
 failing the other.
 
@@ -628,6 +642,50 @@ top-level keys of every `*.yaml` in `vars/`, without evaluating `_stack.yaml`.
 A name a conditional step might contribute still counts, which is the right side
 to err on: a `when:`-gated layer that shadows on Tuesdays is precisely the case
 an author will not find by reading.
+
+## Var evaluation checks
+
+NIM-1014, [ADR-0082 amendment 2026-10-15](adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late)
+point 12. The Keeper evaluates a var only when something reads it, so a broken var
+nobody reads no longer fails a run. These checks are where it fails instead —
+once per edit, not once per run.
+
+| Code | Level | What it catches |
+|---|---|---|
+| `var_cycle` | ERROR | A definition that reaches itself through `vars.<name>` / `vars['<name>']` reads — `has()` and `default()` included, since both evaluate their operand — in any view the artifact forms: the service view, a scenario task's (service `vars/` → the scenario's `vars:` → block + task) or a destiny task's (`vars.yml` → block + task). The service view is the layer files the Keeper can read, in its order: without `_stack.yaml` the files directly inside `vars/`, lexically; with one, each step's files in step order and with the step's `strategy:`, whatever its `when:`. A step whose `foreach:` and `file:` read nothing of `incarnation.*` is evaluated as the Keeper evaluates it, so its files come in binding order (`foreach: "${ ['b', 'a'] }"` stacks `b` under `a`); otherwise a composed `file:` contributes every file its skeleton matches (see `vars_dir_nested`), lexically, at its step's position. A layer only some incarnations stack — a `when:`-gated step, or one whose `foreach:` or `file:` reads `incarnation.*` — is conditional; `optional:` alone does not make a present file conditional, and a constant `foreach:` with a constant `file:` is stacked by every incarnation. A conditional step whose `file:` is composed and that has no `foreach:` — `file: "inc/${ incarnation.id }.yaml"` — is a one-of step: it stacks at most one file per incarnation, so its files are alternatives no incarnation stacks together. A view is walked in stacks an incarnation can have — S_all, every layer but the files of one-of steps; S_base, the always-stacked layers alone; S_L, the always-stacked layers and one conditional layer L, for each L in stack order, each file of a one-of step included — and inside one stack a read resolves as the Keeper resolves it: to the name's top definition, merged deep with the lower ones of its rung unless `strategy: replace` cuts them. `validate-service` walks S_all, S_base, then each S_L; `validate-scenario` walks the service rung in S_all and S_base only, under the scenario's own rungs; a destiny's views hold no conditional layer, so each is one stack. A stack that is the same as one already walked is not walked again. So a coven file shadowed by another coven file is still judged: `tuning: "${ vars.tuning }-prod"` in `coven-prod.yaml` with nothing below is the cycle an incarnation in `prod` alone raises, though `coven-staging.yaml` sorts above it. A ring of the always-stacked layers that a conditional layer changes in S_all is found in S_base. Two files of one one-of step close no ring: `inc/a.yaml`'s `maxmemory: "${ vars.mem }-headroom"` and `inc/b.yaml`'s `mem: "${ vars.maxmemory }+headroom"` are no cycle, since no incarnation stacks both, while a ring inside one of them is. And a ring that needs one name from two layers at once is none: `10-a.yaml`'s `x: "${ vars.y }"` and `20-b.yaml`'s `y: "${ vars.x }"`, beside its own `x: 2`, close no ring whichever covens select them. The walk misses a cycle that needs two or more particular conditional layers, short of all of them — in `validate-service` the stub evaluation below builds the stack its own incarnation selects. It does not decide mutually exclusive `when:` conditions, so S_all may be a stack no incarnation builds. It does not evaluate a `foreach:` that reads `incarnation.*`: that step's files stack lexically at the step's position, not in the order an incarnation's list binds them, so a self-read from one of them to another is judged in lexical order. And a scenario's views, which walk the service rung in S_all and S_base only, miss a ring through a conditional layer that a higher conditional layer shadows in S_all, or through a one-of step's file: `10-a.yaml`'s `x: "${ default(vars.s, 0) }"` under `20-b.yaml`'s `x: 2`, both `when:`-gated, with the scenario's `s: "${ vars.x }"`, is the `s → x → s` an incarnation in `a` alone raises, and `validate-scenario` does not report it. A self-reference reads the definitions below the layer that wrote it, a later file or step over an earlier one or a higher rung over a lower one, and is no cycle while the stack holds a definition below; with none (`a: "${ vars.a }"` in `00-base.yaml`, `has()`-guarded or not) it is the one-node cycle. It is no cycle either when the rungs below are unknown — a scenario linted without its service, a service rung that does not assemble (`var_invalid`), a `vars.yml` that does not parse (`yaml_parse_error`) — since an unknown rung may define the name. A `'a' in vars` test evaluates nothing, and where it holds something below defines `a`; a condition built of such tests implies keys where it is true and where it is false — the test implies `a` where true, a bool literal every key on the side it never takes (`false` where true, `true` where false), `!` swaps the sides, `&&` implies where true what any term does and where false what every term does, `\|\|` the reverse, `== true` and `!= false` keep the sides, `== false` and `!= true` swap them, and any other condition, a `?:` included, implies nothing — and a read is exempt in the branch of `?:` on the side its condition implies `a`, and in a term of `&&` (`\|\|`) beside a term that implies `a` where true (false), since CEL's `&&` and `\|\|` drop an error once one term decides the result. `a: "${ 'a' in vars && vars.a != '' ? vars.a + '/x' : '/etc/x' }"` and `a: "${ 'a' in vars \|\| false ? vars.a : 'd' }"` with nothing below are no cycle; `a: "${ 'a' in vars ? 'd' : vars.a }"` and `a: "${ 'a' in vars && vars.n == 1 ? 'd' : vars.a }"` read `a` where it is absent, and are. A read whose result a bool literal decides is no edge at all: in the branch of `?:` a literal condition never takes (`true ? 1 : vars.y`), and in a term of `&&` beside a term that is always false (`false && vars.y`, `vars.y && false`) or of `\|\|` beside one that is always true (`true \|\| vars.y`), CEL skips the read or drops its error, a cycle's included — always true or false meaning built of bool literals with `!`, `&&`, `\|\|` and a comparison with a bool literal — so `x: "${ true ? 1 : vars.y }"` with `y: "${ vars.x }"` is no cycle, and `x: "${ false ? 1 : vars.y }"` is; a whole read there is none either, except a whole comparison: the Keeper materializes the view before it evaluates an expression that may compare the root, whatever decides the result, so `s: "${ false && vars != {} }"` and `w: "${ true \|\| [vars].exists(m, m != {}) }"` are whole reads and, with nothing below, the one-node cycle. The root reaches a comparison through what holds it — a literal list or map, an index or a select into one, a comprehension's variable, and what a call returns, `merge({'x': vars}).x` included, unless the call is one whose result cannot hold an argument's value (`size()`, `type()`, a scalar conversion, a comparison). A whole read of `vars` — `${ vars }`, `merge(vars, …)`, `vars == …`, `vars in […]`, and, conservatively, `type(vars)` and `'a' in vars ? vars : {}` — reads every name of the view, the definition's own name below it included, so with nothing below it is the one-node cycle; `size(vars)`, `'k' in vars` and an iteration over the keys read no value. A read inside a `soulprint.hosts.where("…")` predicate counts: the engine inlines the predicate before compiling — but not one inside a map or struct literal, which the engine's rewrite does not reach. The message is the Keeper's text for the same definitions — `var_cycle: a → b → a`, rotated to the alphabetically smallest name — at the first definition of the cycle the command owns, at its string that reads the next name and in the layer that wrote that string: in a map merged deep across files that can be a lower file than the name's top (`m.a: "${ vars.p }"` of `00-base.yaml` closes `m → p → m` under `20-top.yaml`'s `m: {c: 3}` and is cited at `00-base.yaml`, `$.m.a`); the hint names the same layers. A ring names a name once per layer it passes, as the Keeper does: `var_cycle: a → b → c → a → a` is a coven file's `a: "${ vars.a }-x"` over a base ring `a → b → c → a`. Definitions that reach one another along more than one ring report every distinct ring among the first 16 the walk finds in their group of one stack, those through the group's alphabetically smallest name first, so a group reports at most 16: a ring that repeats a reported text, or cites no definition the command owns, counts toward the 16 too, and a ring through another definition of a larger group may go unreported until those are broken. A ring is reported once per view, at the first stack that finds it, compared by its names, so a second definition that closes the same names into a ring from another layer is reported only once the first is fixed: over the base's `y: "${ vars.x }"`, `10-a.yaml`'s and `20-b.yaml`'s `x: "${ vars.y }-…"`, both `when:`-gated, are one `x → y → x`, cited at `20-b.yaml`. Which ring the Keeper raises depends on its evaluation order and on the incarnation, which the text does not decide, and in a group of more than 16 rings it may be one the walk does not reach. In `validate-service`, a ring the stub evaluation below raises and the walk did not report — compared by its names, whichever layer of a repeated name its text starts at — is this error too, at its first var's file and line (a self-reference at its lowest definition, the one that finds nothing below), with a hint saying only that evaluating the service view on the stub incarnation found it. |
+| `var_unknown_ref` | ERROR | A definition reading a name that neither its own rung nor a rung below it defines. A service var that only works once a task supplies the name is this error, reported by `validate-service` — the service view that `compute:` and telemetry read would fail on it — and a scenario `vars:` definition that needs a task's name is the same error in `validate-scenario`; overriding a name from above is fine. A guarded read is exempt: a read of `vars.x` in an expression that also tests `has(vars.x)` or `'x' in vars` on that same root name — what `default(vars.x, y)` expands to, the hand-written ternary, or `'x' in vars ? vars.x : y` — is an optional-override hook (`tls: "${ default(vars.tls_override, false) }"`), not a need; a key-only test evaluates nothing, so it guards as `has()` does. `has(vars.x.y)` / `default(vars.x.y, d)` guard `y`, not `x`: `x` is still checked. A read whose result a bool literal decides (`true ? 1 : vars.x`, `false && vars.x`; see `var_cycle`) is no need. The test is per `${ … }` block and textual, for `in` as for `has()` (`!has(vars.x) ? vars.x : y` and `'x' in vars ? y : vars.x` pass it too); the L0 strict mode is what evaluates the shapes it lets through. Not judged for a scenario linted outside a service tree, whose service names are unknown, nor when the service rung cannot be read (`var_invalid`), nor in a destiny whose `vars.yml` does not parse (`yaml_parse_error`). |
+| `var_invalid` | ERROR | A definition that does not compile in its rung's environment: a service file's in `cel.NewServiceVars` (`incarnation.*` and `vars.*` only), a scenario `vars:` one in `cel.NewScenarioVars` — so `soulprint.*`, `register.*`, `vault()` and `generate_secret()` there are this error, in a string at any depth — and a block + task or `vars.yml` one in the environment render compiles it in (a host task's with its loop binding, a keeper task's, the destiny pass's). Also, in `validate-service`, a definition that fails when the whole service view is evaluated on the stub incarnation below; the message names the var, its file and the cause. Also a service view the stub cannot assemble — a step whose selector fails for it, a missing file a step requires — reported at `vars/`. A literal `file:` (no `${ … }`) of a step that is not `optional:` and names a file the tree lacks is this error at the step's `file:`, whatever its `when:` or `foreach:`: the path is the same for every incarnation that stacks the step, and the Keeper refuses each of them. A composed `file:` that reads `incarnation.*`, itself or through the binding of a `foreach:` that reads it, and renders for the stub a file the tree lacks is not this error — even where every incarnation lacks it, as `file: "coven/${ c }.yaml"` over `foreach: "${ incarnation.covens + ['zz'] }"` does: the stub's id and covens are made up (`file: "inc/${ incarnation.id }.yaml"` asks for `inc/stub-incarnation.yaml`), and the walk lints every file the step can name. A composed one that reads neither names one path too, and is this error when the stub's stack reaches it. Also a service rung the walk cannot assemble — a layer file that does not parse, or a malformed `_strategy` — reported on one line at the layer file, at the YAML error's line and column or the `_strategy` key's, its path shown as the command shows the path it was given, by `validate-service` (unless `stack_step_invalid` already explains it) and by `validate-scenario`, whose views carry that rung. A destiny's `vars.yml` that does not parse is `yaml_parse_error` instead, the code every destiny file that does not parse gets, at its line and column, on one line — a list or a scalar where the mapping is due included. The code name is pending confirmation. |
+
+Each command reports the definitions it owns: `validate-service` the service
+rung, `validate-scenario` the scenario's `vars:` and its tasks' (a cycle a task
+closes through a service var included), `validate-destiny` its `vars.yml` and
+its tasks'. A scenario's views carry the service rung so that its own
+definitions are judged against it.
+
+The walk compiles every definition against its own rung's environment and
+follows the reference graph the text spells. `vars[expr]` with a non-literal key
+names no edge, so it is left to the stub evaluation below and to the L0 trial, which renders in a strict mode that
+materializes whole every task view its render builds (each host task × host × loop iteration,
+each keeper task, each `assert:` on its decision host, each destiny task × host ×
+loop iteration); the loop axis, an include `when:` and a `template:`
+path still evaluate only what they read, and the stand-in host of an empty target or
+roster is no host, so its view is not materialized.
+
+`validate-service` additionally evaluates the whole service view — every name of
+`vars/`, assembled as the Keeper assembles it — against a stub incarnation: the
+service name given by `--service-name`, else a placeholder (a manifest no longer
+states its own name, NIM-726; see
+[Service identity](#service-identity---service-name-name-validate-scenario-validate-service)), a placeholder id
+and `service_version` (every registered incarnation has one), empty covens and an
+empty `traits` map — as the database row has it, so `incarnation.traits` is present
+and only a key in it can be missing. Every name is evaluated, so each failing definition is reported, once;
+a failure the static walk already reported for that definition — its name in that layer — is not repeated, and a
+cycle it raises is `var_cycle`, once per ring the walk did not already report. Any
+evaluation error fails the check. Empty traits are intended: a trait is optional
+per incarnation, so a definition reading `incarnation.traits.<k>` without `has()`
+fails for every incarnation that lacks it, and the check says so first. A layer file only a coven-gated `_stack.yaml`
+step includes is not selected by the stub; the static walk above covers it, since
+the walk reads every file any step can include.
 
 ## The state-schema lock: `schema-stamp` and the check
 

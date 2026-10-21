@@ -1,7 +1,8 @@
-# A single task reading one of the cycle's vars. Render never reaches it: resolving
-# the vars.yml layer aborts with var_cycle BEFORE rendering params (eager — the graph
-# is built at the start of the layer).
-- name: Use cyclic var (render must abort before this)
+# A single task reading one of the cycle's vars. It never renders: its content cell
+# asks for vars.a, evaluating a walks a → b → c, and c's read of a is a lookup already
+# on the evaluation path - var_cycle, raised by that read. The read is what fails the
+# render in production; L0's strict mode would also find the cycle without it.
+- name: Use cyclic var (reading it aborts the render)
   module: core.file.present
   params:
     path:    "${ input.marker_file }"

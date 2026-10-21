@@ -262,7 +262,15 @@ func parseAndValidate[T any](
 	return &Document{source: src, file: file, path: path}, diags
 }
 
-// yamlParseDiag converts a goccy parser error into a diag.
+// YAMLParseDiagnostic is the `yaml_parse_error` a loader reports for a document
+// that does not parse, for a caller holding the error of a loader that returns one,
+// such as [LoadDestinyVarsFromBytes].
+func YAMLParseDiagnostic(path string, err error) diag.Diagnostic { return yamlParseDiag(path, err) }
+
+// yamlParseDiag converts a goccy parser error into a diag: at its token, with the
+// message alone, since goccy's own text adds a multi-line excerpt. A document of the
+// wrong shape — a list or a scalar where a mapping is due — comes as such an error
+// too.
 func yamlParseDiag(path string, err error) diag.Diagnostic {
 	d := diag.Diagnostic{
 		Level:   diag.LevelError,
@@ -271,11 +279,15 @@ func yamlParseDiag(path string, err error) diag.Diagnostic {
 		Code:    "yaml_parse_error",
 		Message: err.Error(),
 	}
-	var sErr *yaml.SyntaxError
-	if errors.As(err, &sErr) && sErr.Token != nil {
-		d.Line = sErr.Token.Position.Line
-		d.Column = sErr.Token.Position.Column
-		d.Message = sErr.Message
+	var yErr yaml.Error
+	if errors.As(err, &yErr) {
+		if tok := yErr.GetToken(); tok != nil {
+			d.Line = tok.Position.Line
+			d.Column = tok.Position.Column
+		}
+		if msg := yErr.GetMessage(); msg != "" {
+			d.Message = msg
+		}
 	}
 	return d
 }

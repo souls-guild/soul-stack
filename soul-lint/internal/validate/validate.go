@@ -62,9 +62,11 @@ type Options struct {
 	// ServiceName is the `--service-name <name>` flag (NIM-726): the name the
 	// service being linted is registered under. It is on the flag because no file
 	// in a service repository states it any more — the name is assigned at
-	// registration and lives in the registry row. Only `validate-scenario` reads it,
-	// for the own-namespace fence; empty means the fence cannot run and is reported
-	// as `own_namespace_fence_unchecked` rather than skipped in silence.
+	// registration and lives in the registry row. `validate-scenario` reads it for
+	// the own-namespace fence; empty means the fence cannot run and is reported as
+	// `own_namespace_fence_unchecked` rather than skipped in silence.
+	// `validate-service` reads it as the stub incarnation's service, a placeholder
+	// when empty (ADR-0082 amendment 2026-10-15, point 12a).
 	ServiceName string
 }
 
@@ -167,6 +169,9 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// (vars.yml is optional, tasks/main.yml may live elsewhere — the
 		// manifest linter doesn't fail on that).
 		diags = append(diags, destinyVarsCollisionDiags(opts.Path)...)
+		// var_cycle / var_unknown_ref / var_invalid over vars.yml and every task's
+		// vars (ADR-0082 amendment 2026-10-15, point 12a).
+		diags = append(diags, destinyVarViewDiags(opts.Path)...)
 	case KindService:
 		var svc *config.ServiceManifest
 		svc, _, diags, _ = config.LoadServiceManifestFromBytes(opts.Path, src, cfgOpts)
@@ -178,9 +183,9 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		diags = append(diags, serviceCompatFloorDiags(opts.Path, svc)...)
 		// vars/ lives next to service.yml and is not reachable from the manifest,
 		// so it needs its own walk: a malformed _stack.yaml, a layer file parked
-		// in a subdirectory the resolver never enters, or the retired directory
-		// still in place (ADR-0082).
-		diags = append(diags, serviceVarsDiags(opts.Path)...)
+		// in a subdirectory no step names, the retired directory still in place, and
+		// the var checks of the service view (ADR-0082).
+		diags = append(diags, serviceVarsDiags(opts.Path, opts.ServiceName)...)
 		// migrations/ is the same shape of blind spot, and since NIM-735 it is
 		// load-bearing: the ladder no longer describes the service's state-schema
 		// version, it IS that version. A gap, a duplicate number, a directory the
@@ -230,6 +235,10 @@ func diagnose(opts Options, src []byte, modules config.ModuleManifestResolver) (
 		// names. The one cost of merging the two namespaces (ADR-0082): the
 		// shadow is deterministic and sometimes deliberate, so it warns.
 		diags = append(diags, serviceVarShadowDiags(opts.Path, scn)...)
+		// var_cycle / var_unknown_ref / var_invalid over the scenario's vars: and
+		// every task's, judged against the service rung (ADR-0082 amendment
+		// 2026-10-15, point 12a).
+		diags = append(diags, scenarioVarViewDiags(opts.Path, src, scn)...)
 		// `on: ["${ incarnation.id }"]` is fail-closed (ADR-008 amendment/NIM-124:
 		// the incarnation's own id is not a Coven). Offline parity with the keeper
 		// render resolver (resolveCovenList) — the literal is visible without CEL eval.

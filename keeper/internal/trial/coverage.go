@@ -3,6 +3,7 @@ package trial
 import (
 	"sort"
 
+	"github.com/google/cel-go/common/types"
 	"github.com/google/cel-go/common/types/ref"
 )
 
@@ -36,7 +37,9 @@ func (s *coverageSink) Record(expr string, out ref.Val) {
 		st = &branchState{}
 		s.exprs[expr] = st
 	}
-	if b, ok := out.Value().(bool); ok {
+	// By type, not by Value(): an expression that is the lazy `vars` map itself
+	// would have its whole view evaluated again here.
+	if b, ok := out.(types.Bool); ok {
 		st.boolean = true
 		if b {
 			st.sawTrue = true

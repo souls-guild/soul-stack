@@ -102,6 +102,36 @@ func TestPredicateReads_WholeRootShapes(t *testing.T) {
 	}
 }
 
+// TestPredicateReads_VarsLiteralIndexIsAField — on the `vars` root a literal index
+// names the one var the lazy view evaluates for it (ADR-0082 amendment 2026-10-15,
+// point 15); a computed index still names none, and other roots keep the
+// fail-closed rule above.
+func TestPredicateReads_VarsLiteralIndexIsAField(t *testing.T) {
+	e, err := New()
+	if err != nil {
+		t.Fatalf("New: %v", err)
+	}
+	for _, tc := range []struct {
+		expr      string
+		wantNames string
+		wantWhole bool
+	}{
+		{"vars['tls'] == true", "tls", false},
+		{"has(vars['tls']) && vars.port > 0", "port,tls", false},
+		{"vars['paths'].data == '/srv'", "paths", false},
+		{"vars[input.key] == 'x'", "", true},
+		{"vars['tls'] && size(vars) > 1", "tls", true},
+	} {
+		r := e.PredicateReads(tc.expr, predicateRoots)["vars"]
+		if got := fieldNames(t, r); got != tc.wantNames || r.Whole != tc.wantWhole {
+			t.Errorf("%q: vars fields = %q whole = %v, want %q whole = %v", tc.expr, got, r.Whole, tc.wantNames, tc.wantWhole)
+		}
+	}
+	if !e.PredicateReads("input['action'] == 'apply'", predicateRoots)["input"].Whole {
+		t.Error("input['action']: a literal index on another root must stay a whole read")
+	}
+}
+
 // TestPredicateReads_WholeAndNamed — a predicate doing both keeps Whole: the
 // named half must not mask the unnamed one.
 func TestPredicateReads_WholeAndNamed(t *testing.T) {

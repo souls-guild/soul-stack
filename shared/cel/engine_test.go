@@ -368,3 +368,26 @@ func TestConcurrentEval(t *testing.T) {
 	}
 	wg.Wait()
 }
+
+// TestNewServiceVarsSelector_DeclaresIncarnationOnly — ADR-0082 amendment 2026-10-15,
+// point 14: a `_stack.yaml` selector sees `incarnation.*` and its `foreach:` binding,
+// so `vars` in any spelling is an undeclared reference, refused at compile rather
+// than read as an empty map.
+func TestNewServiceVarsSelector_DeclaresIncarnationOnly(t *testing.T) {
+	e, err := NewServiceVarsSelector()
+	if err != nil {
+		t.Fatalf("NewServiceVarsSelector: %v", err)
+	}
+	inc := Vars{Incarnation: map[string]any{"id": "inc-1"}}
+	for _, expr := range []string{"vars.tls", "has(vars.tls)", ".vars.tls", "default(.vars.tls, false)", "size(vars) > 0"} {
+		_, err := e.EvalExpression(expr, inc)
+		var compileErr *ErrCompile
+		if !errors.As(err, &compileErr) {
+			t.Errorf("%s: err = %v, want a compile error", expr, err)
+		}
+	}
+	got, err := e.EvalExpression("incarnation.id == 'inc-1'", inc)
+	if err != nil || got.Value() != true {
+		t.Fatalf("incarnation.id = %v, %v; want true", got, err)
+	}
+}

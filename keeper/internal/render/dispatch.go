@@ -25,10 +25,10 @@ import (
 //     incarnation; fail-closed so a stale scenario errors out instead of
 //     resolving to an empty set).
 //
-// `where:` resolution — per-host bool predicate (evalWhere). Empty where →
-// all targeted hosts.
-func resolveTargets(engine *cel.Engine, in RenderInput, task config.Task) ([]*topology.HostFacts, error) {
-	covens, err := resolveOn(engine, in, task.On)
+// `where:` resolution — per-host bool predicate (evalWhere) over the task's view
+// on that host. Empty where → all targeted hosts.
+func (p *Pipeline) resolveTargets(in RenderInput, task config.Task) ([]*topology.HostFacts, error) {
+	covens, err := resolveOn(p.cel, in, task.On)
 	if err != nil {
 		return nil, err
 	}
@@ -38,12 +38,11 @@ func resolveTargets(engine *cel.Engine, in RenderInput, task config.Task) ([]*to
 	if task.Where != "" {
 		out := make([]*topology.HostFacts, 0, len(targeted))
 		for _, h := range targeted {
-			vars := hostVars(in, h, len(targeted))
-			vars, err = resolveTaskVars(engine, fileVarsForHost(in, h), task.Vars, vars)
+			vars, err := p.withTaskView(in, task, h, hostVars(in, h, len(targeted)))
 			if err != nil {
 				return nil, hostErr(task.Name, h.SID, err)
 			}
-			ok, err := evalWhere(engine, task.Where, vars)
+			ok, err := evalWhere(p.cel, task.Where, vars)
 			if err != nil {
 				return nil, hostErr(task.Name, h.SID, err)
 			}
@@ -148,7 +147,8 @@ func resolveOn(engine *cel.Engine, in RenderInput, on any) ([]string, error) {
 // `on:` labels (per-run, not per-host). A keeper task has no hosts →
 // soulprint.self/.hosts are unavailable (referencing them in a keeper task's
 // params is a normal CEL no-such-key error, as intended: a keeper step
-// operates on input/incarnation/vars, not host facts).
+// operates on input/incarnation/vars, not host facts). `vars` is not set here:
+// the caller attaches the view its cell reads (varview.go).
 //
 // compute: IS available (NIM-619). It used to be omitted, which made
 // `compute.<name>` here fail as `no such key: <name>` — a sentence about a key
@@ -227,7 +227,6 @@ func keeperVars(in RenderInput) cel.Vars {
 		RegisterHosts:      registerHosts(in),
 		AllowRegisterHosts: true,
 		Incarnation:        inc,
-		Vars:               in.ServiceVars,
 		Compute:            in.Compute,
 		Ctx:                in.Ctx,
 		// compute: is in scope here (NIM-619 variant B). It fits this context by

@@ -42,6 +42,9 @@ import (
 //     There is no separate `essence` root: it was distinguished from `vars` by
 //     being overridable from outside, and `incarnation.spec.essence` is gone.
 //
+//   - View         — the same namespace, lazy ([VarView]): when set, `vars` reads
+//     through it and Vars is not read.
+//
 // Loop — `loop:` iteration variables (destiny/tasks.md §7): the name from `as:`
 // (default `item`) → the current element, optionally the name from `index_as:` →
 // index/key. Names are arbitrary (author-chosen), so with a non-empty Loop
@@ -59,7 +62,12 @@ type Vars struct {
 	SoulprintSelf  map[string]any
 	SoulprintHosts []map[string]any
 	Vars           map[string]any
+	View           *VarView
 	Loop           map[string]any
+
+	// frame is `vars` inside a definition a [VarView] is evaluating. Set by the view
+	// alone, it outranks View and Vars.
+	frame *lazyVars
 
 	// Compute — scenario-level computed variables (`compute:`, ADR-009 amendment
 	// 2026-06-23): resolved by the Keeper ONCE per run in a run-level context (no
@@ -177,10 +185,10 @@ const registerHostsKey = "hosts"
 // activation builds the map for cel.NewActivation. soulprint is wrapped in
 // {"self": …, "hosts": […]} so the canonical form soulprint.self.<path> and the
 // scenario accessor soulprint.hosts resolve, while a bare soulprint.<path> yields a
-// missing key (caught separately by the validator — [soulprint.md]). vars —
-// task-level `vars:` ([Vars.Vars]): nil ⇒ empty map (accessing `vars.<key>` gives
-// the normal no-such-key). Values are already computed by render BEFORE the
-// activation is built (vars: resolve before params/where).
+// missing key (caught separately by the validator — [soulprint.md]). vars — the
+// lazy [Vars.View] when set, else [Vars.Vars], whose values render computed before
+// the activation is built: nil ⇒ empty map (accessing `vars.<key>` gives the
+// normal no-such-key).
 //
 // soulprint.hosts — list(map(string,dyn)); nil SoulprintHosts ⇒ empty list (access
 // in the destiny pass is cut off at compile, [Vars.AllowHosts]).
@@ -209,7 +217,7 @@ func (v Vars) activation(migration bool) map[string]any {
 			"register":    v.registerRoot(),
 			"incarnation": v.incarnationRoot(),
 			"soulprint":   map[string]any{"self": orEmpty(v.SoulprintSelf), "hosts": orEmptyHosts(v.SoulprintHosts)},
-			"vars":        orEmpty(v.Vars),
+			"vars":        v.varsRoot(),
 			"compute":     orEmpty(v.Compute),
 		}
 	}
@@ -217,6 +225,17 @@ func (v Vars) activation(migration bool) map[string]any {
 		act[name] = val
 	}
 	return act
+}
+
+func (v Vars) varsRoot() any {
+	switch {
+	case v.frame != nil:
+		return v.frame
+	case v.View != nil:
+		return v.View.root()
+	default:
+		return orEmpty(v.Vars)
+	}
 }
 
 // incarnationRoot builds the `incarnation` activation root, and is the ONE place

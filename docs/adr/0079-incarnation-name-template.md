@@ -99,11 +99,13 @@
   `input:` — modelled on the existing `form_field_unknown`, since such a template
   fails for *every* operator; `name_template_invalid` (ERROR) for a block outside the
   input sandbox or written in index form `input['x']` (which hides the component name
-  from static analysis, mirroring `vars[...]` in
-  [`shared/cel/varrefs.go`](../../shared/cel/varrefs.go)); `name_template_too_long`
-  (ERROR) when the literal skeleton alone exceeds 63 characters, which no input can
-  rescue; `name_template_constant` (WARNING) for a template with no block at all,
-  which would collide on the second create; `name_template_ignored` (WARNING) on a
+  from static analysis — `ErrIDTemplateIndexForm`; the matching refusal of `vars[...]`
+  was retired by [ADR-0082](0082-service-vars.md)'s amendment of 2026-10-15, and
+  [`shared/cel/varrefs.go`](../../shared/cel/varrefs.go) now reads `vars['k']` as the
+  name `k` and any other index as a read of the whole namespace);
+  `name_template_too_long` (ERROR) when the literal skeleton alone exceeds 63
+  characters, which no input can rescue; `name_template_constant` (WARNING) for a
+  template with no block at all, which would collide on the second create; `name_template_ignored` (WARNING) on a
   scenario that is not a create starter, where the key is dead config.
 
   Under `extends:` ([covenant fragments](0009-scenario-dsl.md)) the reference check

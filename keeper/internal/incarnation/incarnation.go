@@ -105,7 +105,7 @@ type Incarnation struct {
 	// (NIM-730 moved that spelling; `incarnation.name` is a window alias).
 	// Label reaches none of the three — deliberately, and guarded by
 	// keeper/internal/render/label_invariant_guard_test.go and
-	// keeper/internal/servicevars/label_invariant_guard_test.go (the CEL roots,
+	// shared/servicevars/label_invariant_guard_test.go (the CEL roots,
 	// all three environments) and
 	// keeper/internal/api/handlers/label_invariant_guard_test.go (the RBAC scope
 	// value, and the derived secret path at the reveal route).

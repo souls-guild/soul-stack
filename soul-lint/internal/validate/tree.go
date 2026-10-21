@@ -180,12 +180,11 @@ func treeParts(root string, opts TreeOptions, modules config.ModuleManifestResol
 	var parts []treePart
 
 	// The manifest first, because it is the part the reader will fix first — and
-	// because it is the one whose breakage used to end the whole run.
-	// No ServiceName on the manifest: the own-namespace fence reads it, and the
-	// fence runs over a scenario's tasks. Handing it here would suggest the
-	// manifest checks consume it.
+	// because it is the one whose breakage used to end the whole run. ServiceName
+	// names the stub incarnation the service view is evaluated on.
 	parts = append(parts, documentPart(filepath.Join(root, serviceManifestFile), Options{
-		Kind: KindService,
+		Kind:        KindService,
+		ServiceName: opts.ServiceName,
 	}, modules))
 
 	if p, ok := typeCatalogPart(root); ok {

@@ -61,7 +61,7 @@ func TestResolveTargets_IncarnationNameNotACoven(t *testing.T) {
 	}
 	for _, tc := range okCases {
 		t.Run(tc.name, func(t *testing.T) {
-			got, err := resolveTargets(engine, in, config.Task{On: tc.on})
+			got, err := NewPipeline(nil, engine, nil, nil).resolveTargets(in, config.Task{On: tc.on})
 			if err != nil {
 				t.Fatalf("resolveTargets: %v", err)
 			}
@@ -81,7 +81,7 @@ func TestResolveTargets_IncarnationNameNotACoven(t *testing.T) {
 	}
 	for _, tc := range errCases {
 		t.Run(tc.name, func(t *testing.T) {
-			_, err := resolveTargets(engine, in, config.Task{On: tc.on})
+			_, err := NewPipeline(nil, engine, nil, nil).resolveTargets(in, config.Task{On: tc.on})
 			if err == nil {
 				t.Fatalf("resolveTargets: expected a validation error (incarnation.name is not a Coven), got nil")
 			}

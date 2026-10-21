@@ -103,7 +103,7 @@ func overloadName(arity int) string {
 // left-to-right pass over arguments, top-level keys overwritten (right beats left).
 // A non-map argument (dyn-splicing yielded an uncomputable type) → types.NewErr (a
 // normal eval error). The result is assembled into map[ref.Val]ref.Val and adapted to
-// a CEL map via types.NewRefValMap.
+// a CEL map by [orderedTypes].
 func callMerge(args ...ref.Val) ref.Val {
 	out := make(map[ref.Val]ref.Val)
 	for _, a := range args {
@@ -111,7 +111,7 @@ func callMerge(args ...ref.Val) ref.Val {
 			return err
 		}
 	}
-	return types.NewRefValMap(types.DefaultTypeAdapter, out)
+	return orderedTypes.NativeToValue(out)
 }
 
 // callMergeList — binding for the merge(list(map)) form. The single list-of-maps
@@ -129,11 +129,13 @@ func callMergeList(arg ref.Val) ref.Val {
 			return err
 		}
 	}
-	return types.NewRefValMap(types.DefaultTypeAdapter, out)
+	return orderedTypes.NativeToValue(out)
 }
 
 // mergeInto merges one map argument into the accumulator out (top-level keys,
-// last-wins). A non-map argument → types.NewErr (returned by the caller as is).
+// last-wins). A non-map argument → types.NewErr, and so is a value the map fails to
+// produce — a lazy `vars` evaluates on Get — rather than an error kept as data
+// (returned by the caller as is).
 func mergeInto(out map[ref.Val]ref.Val, a ref.Val) ref.Val {
 	m, ok := a.(traits.Mapper)
 	if !ok {
@@ -142,7 +144,11 @@ func mergeInto(out map[ref.Val]ref.Val, a ref.Val) ref.Val {
 	it := m.Iterator()
 	for it.HasNext() == types.True {
 		k := it.Next()
-		out[k] = m.Get(k)
+		v := m.Get(k)
+		if types.IsError(v) {
+			return v
+		}
+		out[k] = v
 	}
 	return nil
 }

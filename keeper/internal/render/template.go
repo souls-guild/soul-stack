@@ -3,6 +3,7 @@ package render
 import (
 	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 
 	"google.golang.org/protobuf/types/known/structpb"
@@ -106,25 +107,31 @@ func (r *SnapshotTemplateReader) Read(relPath string) ([]byte, error) {
 	return data, nil
 }
 
+// templateFile is what a core.file.rendered step delivers, read once before the
+// per-host loop ([Pipeline.resolveTemplateUsesInput]).
+type templateFile struct {
+	// path is the `template:` path the content was read from, resolved on the
+	// run-level view; "" for inline template_content, which names no file.
+	path    string
+	content string
+	// readsInput — the template reads the root `.input.*` (Variant B, ADR-010 §3.2).
+	readsInput bool
+}
+
 // injectTemplateContent, for a core.file.rendered step, replaces the
 // `template` path with literal `template_content` in already CEL-rendered
 // params (A1, ADR-012(d)). text/template is NOT executed here — rendering
 // happens on Soul (rendered.go).
 //
-// preloaded — content already read by the caller (renderTaskIter →
-// resolveTemplateUsesInput) upon detecting a `.input` reference, so the file
-// isn't read twice. Non-empty preloaded → used as-is (reader untouched). Empty
-// preloaded (inline template, or a non-rendered module) → falls back to
-// reading via reader from params.template, as before.
+// The content is tf's and nothing is read here. params.template is the cell as
+// renderParams resolved it on the task's view, which also holds the task's own
+// `vars:`; the file is chosen on the run-level view without them (ADR-0082
+// amendment 2026-10-15, point 5), so reading that cell again could deliver another
+// file — and an empty file is content like any other.
 //
 // Other modules pass through untouched (rt.Params left alone, "" RawTemplate).
-// reader=nil for core.file.rendered with params.template and no preloaded is a
-// handoff error (Keeper isn't configured to deliver content; this exact gap
-// used to block the golden path in prod).
-//
-// params.template must be a path string (after the CEL phase; non-string is an
-// error). After injection the template key is removed — Soul doesn't need the path.
-func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded string) error {
+// After injection the template key is removed — Soul doesn't need the path.
+func injectTemplateContent(rt *RenderedTask, tf templateFile) error {
 	if rt.Module != moduleFileRendered {
 		return nil
 	}
@@ -132,33 +139,19 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 		return fmt.Errorf("render: task %q (core.file.rendered): params empty - missing key %q", rt.Name, paramTemplate)
 	}
 	fields := rt.Params.GetFields()
-	tv, ok := fields[paramTemplate]
-	if !ok {
+	if _, ok := fields[paramTemplate]; !ok {
 		// template_content is already set directly (inline template, no file) — skip.
 		if _, has := fields[paramTemplateContent]; has {
-			rt.RawTemplate = preloaded
+			rt.RawTemplate = tf.content
 			return nil
 		}
 		return fmt.Errorf("render: task %q (core.file.rendered): neither %q (path) nor %q (inline content)", rt.Name, paramTemplate, paramTemplateContent)
 	}
-	rel := tv.GetStringValue()
-	if _, isStr := tv.GetKind().(*structpb.Value_StringValue); !isStr || rel == "" {
-		return fmt.Errorf("render: task %q (core.file.rendered): %q must be a non-empty path string, got %v", rt.Name, paramTemplate, tv.AsInterface())
+	if tf.path == "" {
+		return fmt.Errorf("render: task %q (core.file.rendered): %q was not read before the render", rt.Name, paramTemplate)
 	}
 
-	content := preloaded
-	if content == "" {
-		if reader == nil {
-			return fmt.Errorf("render: task %q (core.file.rendered): TemplateReader not configured - Keeper cannot deliver template content %q (RenderInput.Templates=nil)", rt.Name, rel)
-		}
-		data, err := reader.Read(rel)
-		if err != nil {
-			return fmt.Errorf("render: task %q (core.file.rendered): %w", rt.Name, err)
-		}
-		content = string(data)
-	}
-
-	setTemplateContent(fields, content)
+	setTemplateContent(fields, tf.content)
 	// ★ And on EVERY per-host struct (NIM-908). The substitution mutates a struct in
 	// place, and rt.Params is only the first host's; a task with per-host params
 	// ([RenderedTask.ParamsBySID]) would otherwise ship `template:` — a path Soul
@@ -169,10 +162,10 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 	// applying it twice is a no-op.
 	for _, st := range rt.ParamsBySID {
 		if st != nil {
-			setTemplateContent(st.GetFields(), content)
+			setTemplateContent(st.GetFields(), tf.content)
 		}
 	}
-	rt.RawTemplate = content
+	rt.RawTemplate = tf.content
 	return nil
 }
 
@@ -181,4 +174,34 @@ func injectTemplateContent(rt *RenderedTask, reader TemplateReader, preloaded st
 func setTemplateContent(fields map[string]*structpb.Value, content string) {
 	fields[paramTemplateContent] = structpb.NewStringValue(content)
 	delete(fields, paramTemplate)
+}
+
+// templateReadError is a failed read of a `template:` path an expression built. The
+// reader's own error names the RESOLVED path at every level it wraps, and that path
+// can be built from a secret; being no CEL error, it is never judged by withhold
+// (failure.go). So it quotes the path as the author wrote it, over a cause naming no
+// path.
+type templateReadError struct {
+	raw   string
+	cause error
+}
+
+func (e *templateReadError) Error() string {
+	return fmt.Sprintf("render: reading template %q: %v", e.raw, e.cause)
+}
+
+func (e *templateReadError) Unwrap() error { return e.cause }
+
+// pathFreeCause is the part of a read error that names no path: the errno under an
+// [fs.PathError], else only whether the file was missing.
+func pathFreeCause(err error) error {
+	var pe *fs.PathError
+	switch {
+	case errors.As(err, &pe):
+		return pe.Err
+	case isNotExist(err):
+		return fs.ErrNotExist
+	default:
+		return errors.New("read failed")
+	}
 }

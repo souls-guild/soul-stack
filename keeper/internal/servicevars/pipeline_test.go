@@ -31,13 +31,24 @@ func writeLayers(t *testing.T, layers map[string]string) string {
 	return dir
 }
 
+// resolve materializes the service view of dir whole.
 func resolve(t *testing.T, dir string) map[string]any {
 	t.Helper()
-	got, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir})
+	got, err := viewErr(dir, IncarnationContext{})
 	if err != nil {
-		t.Fatalf("Resolve: %v", err)
+		t.Fatalf("View + Materialize: %v", err)
 	}
 	return got
+}
+
+// viewErr builds the service view of dir and materializes it, returning the first
+// error of either.
+func viewErr(dir string, inc IncarnationContext) (map[string]any, error) {
+	view, err := NewResolver(nil).View(ResolveInput{ServiceDir: dir, Incarnation: inc})
+	if err != nil {
+		return nil, err
+	}
+	return view.Materialize()
 }
 
 // TestResolve_ReadsFromVarsSubdir — the resolver must read layers from
@@ -213,7 +224,7 @@ func TestResolve_StackFileMisspeltRefuses(t *testing.T) {
 		"_stack.yml":   "stack:\n  - file: 00-base.yaml\n",
 	})
 
-	_, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir})
+	_, err := viewErr(dir, IncarnationContext{})
 	if err == nil {
 		t.Fatal("_stack.yml must be refused, not merged as a layer")
 	}
@@ -244,7 +255,7 @@ func TestResolve_SubdirectoriesNotWalked(t *testing.T) {
 // TestResolve_MissingVarsDirOK — a service with no vars of its own resolves to
 // an empty map, not an error.
 func TestResolve_MissingVarsDirOK(t *testing.T) {
-	got, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: t.TempDir()})
+	got, err := viewErr(t.TempDir(), IncarnationContext{})
 	if err != nil {
 		t.Fatalf("a missing vars/ must not be an error: %v", err)
 	}
@@ -268,7 +279,7 @@ func TestResolve_RetiredLayoutRefuses(t *testing.T) {
 		t.Fatalf("write: %v", err)
 	}
 
-	_, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir})
+	_, err := viewErr(dir, IncarnationContext{})
 	if err == nil {
 		t.Fatal("a snapshot on the retired layout must be refused, not resolved to nothing")
 	}
@@ -324,30 +335,55 @@ func TestResolve_EmptyLayerFile(t *testing.T) {
 
 func TestResolve_InvalidYAMLErrors(t *testing.T) {
 	dir := writeLayers(t, map[string]string{"00-base.yaml": "key: : : broken\n  - bad"})
-	if _, err := NewResolver(nil).Resolve(ResolveInput{ServiceDir: dir}); err == nil {
+	if _, err := viewErr(dir, IncarnationContext{}); err == nil {
 		t.Fatal("expected a parse error for invalid YAML")
 	}
 }
 
-// TestResolve_SymlinkOutOfTreeIsNotRead — securejoin resolves a layer path
-// inside the service dir, so a symlink pointing outside is clamped to the root
-// and the file behind it is not read.
-func TestResolve_SymlinkOutOfTreeIsNotRead(t *testing.T) {
+// TestSnapshot_SymlinkOutOfTreeIsNotRead — the snapshot FS resolves every path
+// inside the service dir through securejoin, so a symlinked layer pointing outside
+// is re-rooted under the snapshot and the file behind it is not read. Listed by
+// the lexical scan, it is skipped as missing; named by a `_stack.yaml` step, it
+// is refused as not found, as any absent `file:` is.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: open
+// `filepath.Join(string(root), name)` in snapshotFS.Open instead of the
+// securejoined path, and both subtests read the secret.
+func TestSnapshot_SymlinkOutOfTreeIsNotRead(t *testing.T) {
 	outside := t.TempDir()
 	secret := filepath.Join(outside, "secret.yaml")
 	if err := os.WriteFile(secret, []byte("leaked: true\n"), 0o644); err != nil {
 		t.Fatalf("write secret: %v", err)
 	}
-	dir := writeLayers(t, map[string]string{"00-base.yaml": "key: base\n"})
-	if err := os.Symlink(secret, filepath.Join(dir, "vars", "10-link.yaml")); err != nil {
-		t.Skipf("symlinks unavailable: %v", err)
+	link := func(t *testing.T, layers map[string]string) string {
+		t.Helper()
+		dir := writeLayers(t, layers)
+		if err := os.Symlink(secret, filepath.Join(dir, "vars", "10-link.yaml")); err != nil {
+			t.Skipf("symlinks unavailable: %v", err)
+		}
+		return dir
 	}
 
-	got := resolve(t, dir)
-	if _, leaked := got["leaked"]; leaked {
-		t.Fatal("securejoin did not clamp the symlink: a file outside serviceDir was read")
-	}
-	if got["key"] != "base" {
-		t.Fatalf("got=%#v", got)
-	}
+	t.Run("lexical", func(t *testing.T) {
+		got := resolve(t, link(t, map[string]string{"00-base.yaml": "key: base\n"}))
+		if _, leaked := got["leaked"]; leaked {
+			t.Fatal("securejoin did not clamp the symlink: a file outside serviceDir was read")
+		}
+		if got["key"] != "base" {
+			t.Fatalf("got=%#v", got)
+		}
+	})
+
+	t.Run("stack", func(t *testing.T) {
+		got, err := viewErr(link(t, map[string]string{
+			"00-base.yaml": "key: base\n",
+			"_stack.yaml":  "stack:\n  - file: 00-base.yaml\n  - file: 10-link.yaml\n",
+		}), IncarnationContext{})
+		if err == nil {
+			t.Fatalf("a step naming a symlink out of the snapshot must be refused, got %#v", got)
+		}
+		if !strings.Contains(err.Error(), `"10-link.yaml" not found`) {
+			t.Fatalf("want the step's not-found refusal, got %v", err)
+		}
+	})
 }

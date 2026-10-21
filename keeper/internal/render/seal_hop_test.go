@@ -196,9 +196,9 @@ func TestRender_SealFollowsVaultInTaskVar(t *testing.T) {
 	}
 }
 
-// Transitivity WITHIN the vars layer: `b` reads `a`, and resolveVarLayer resolves
-// the layer in topological order rather than map order, so the taint cannot be
-// decided in one pass over a map. Both spellings are asserted so the test does
+// Transitivity WITHIN the vars layer: `b` reads `a`, and a var is evaluated when it
+// is read rather than in map order, so the taint cannot be decided in one pass over
+// a map. Both spellings are asserted so the test does
 // not pass by accident of iteration order.
 func TestRender_SealTaskVarsTransitiveWithinLayer(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
@@ -380,9 +380,8 @@ func TestRender_ApplyDestinySealsVarsYmlHop(t *testing.T) {
 // through the same collector, but only if both fixes are in — the schema has to
 // be carried (NIM-812) for the var's value to be detectable at all.
 //
-// A destiny task var reads its own layer and the ones below, never the file layer
-// sideways (resolveVarLayer's documented isolation), so it is written against
-// `input.` here rather than against a vars.yml local.
+// The task var is written against `input.` directly: the hop under test is the
+// one from the destiny's own input schema.
 func TestRender_ApplyDestinySealsTaskVarOverOwnInput(t *testing.T) {
 	dst := destinyWith(
 		nil,
@@ -631,5 +630,145 @@ func TestRender_SealMarksRelocatedRenderContextVars(t *testing.T) {
 	}
 	if got := rcVars["bind"]; got != "127.0.0.1" {
 		t.Errorf("a non-secret var was masked: %v — over-seal reaches the rendered config", got)
+	}
+}
+
+// renderedRenderContextVars renders the one `core.file.rendered` task of in and returns
+// its sealed paths with render_context.vars before and after masking.
+func renderedRenderContextVars(t *testing.T, in RenderInput) (paths map[string]bool, plain, masked map[string]any) {
+	t.Helper()
+	paths, params := renderHop(t, NewPipeline(nil, newEngine(t), nil, nil), in, 0)
+	rcVars := func(params map[string]any) map[string]any {
+		rc, _ := params[paramRenderContext].(map[string]any)
+		vars, _ := rc[paramVars].(map[string]any)
+		if vars == nil {
+			t.Fatalf("render_context.vars is absent: %v", params)
+		}
+		return vars
+	}
+	return paths, rcVars(params), rcVars(audit.MaskSecretsSealed(params, audit.SealOpts{Sealed: paths}))
+}
+
+// ★ GUARD (points 15 and 17). A template reads a service name directly, with no
+// params.vars: the service definition reads a task override over a secret input, so
+// the name is tainted in the task's view, and render_context.vars carries its
+// resolved value — which only a declarative mark masks, since no raw params cell ever
+// held it.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: in renderTaskIter, hand
+// sealRenderContextVars the names tainted in task.Vars alone —
+// `own := scenarioSealSources(in); p.sealViewVars(own, []cel.VarLayer{p.taskRung(task,
+// cel.Vars{})}); sealRenderContextVars(in.Sealed, sealedVarNamesOf(own))`. It goes red.
+func TestRender_SealMarksAServiceNameTheTemplateReadsDirectly(t *testing.T) {
+	const tmpl = "conf/redis.conf.tmpl"
+	in := hopRenderInput(hopScenario(config.Task{
+		Name: "render redis.conf",
+		Vars: map[string]any{"password": "${ input.admin_password }"},
+		Module: &config.ModuleTask{Module: moduleFileRendered, Params: map[string]any{
+			"path": "/etc/redis/redis.conf", "template": tmpl,
+		}},
+	}))
+	in.ServiceVars = serviceView(t, map[string]any{"dsn": "redis://:${ vars.password }@h", "port": "6379"})
+	in.Templates = fakeReader{files: map[string][]byte{tmpl: []byte("dsn {{ .vars.dsn }}\nport {{ .vars.port }}\n")}}
+
+	paths, plain, masked := renderedRenderContextVars(t, in)
+	if plain["dsn"] != "redis://:"+hopSecret+"@h" {
+		t.Fatalf("render_context.vars.dsn = %v — the test no longer carries the secret through the service name", plain["dsn"])
+	}
+	if !paths["render_context.vars.dsn"] {
+		t.Errorf("render_context.vars.dsn is NOT sealed: %v", paths)
+	}
+	if masked["dsn"] == plain["dsn"] {
+		t.Errorf("render_context.vars.dsn survived masking as %v — the plaintext lands in apply_run_plan", masked["dsn"])
+	}
+	if masked["port"] != "6379" {
+		t.Errorf("a public service name was masked: %v", masked["port"])
+	}
+}
+
+// ★ GUARD. A params.vars key that is no name of the task's view is relocated to
+// render_context.vars like any other, so its seal has to be: the masker matches paths
+// exactly, and `vars.k` — what the raw params walk records — names no cell of what is
+// written.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: drop the collectSealed walk of
+// params.vars under render_context in renderTaskIter. It goes red.
+func TestRender_SealMarksAParamsVarsKeyThatNamesNoViewVar(t *testing.T) {
+	const tmpl = "conf/redis.conf.tmpl"
+	in := hopRenderInput(hopScenario(config.Task{
+		Name: "render redis.conf",
+		Module: &config.ModuleTask{Module: moduleFileRendered, Params: map[string]any{
+			"path":     "/etc/redis/redis.conf",
+			"template": tmpl,
+			"vars": map[string]any{
+				"k":      "${ input.admin_password }",
+				"nested": map[string]any{"list": []any{"${ input.admin_password }"}},
+				"bind":   "127.0.0.1",
+			},
+		}},
+	}))
+	in.Templates = fakeReader{files: map[string][]byte{tmpl: []byte("{{ .vars.k }} {{ .vars.nested }} {{ .vars.bind }}\n")}}
+
+	paths, plain, masked := renderedRenderContextVars(t, in)
+	if plain["k"] != hopSecret {
+		t.Fatalf("render_context.vars.k = %v — the test no longer relocates the cell", plain["k"])
+	}
+	for _, path := range []string{"render_context.vars.k", "render_context.vars.nested.list[0]"} {
+		if !paths[path] {
+			t.Errorf("%s is NOT sealed: %v", path, paths)
+		}
+	}
+	if masked["k"] == hopSecret {
+		t.Errorf("render_context.vars.k survived masking")
+	}
+	if list := masked["nested"].(map[string]any)["list"].([]any); list[0] == hopSecret {
+		t.Errorf("render_context.vars.nested.list[0] survived masking")
+	}
+	if masked["bind"] != "127.0.0.1" || paths["render_context.vars.bind"] {
+		t.Errorf("a public params.vars key was sealed: %v (paths %v)", masked["bind"], paths)
+	}
+}
+
+// ★ GUARD. A secret one level down in params.vars — a map's field, a list's element —
+// is sealed under the path it is written to, and masked there: the walk follows
+// params.vars to every depth, as it does any params cell.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: in renderTaskIter, walk only
+// the top-level strings of params.vars under render_context —
+// `for k, v := range pv.(map[string]any) { if s, ok := v.(string); ok { collectSealed(p.cel, in.Sealed, map[string]any{paramVars: map[string]any{k: s}}, sources, paramRenderContext) } }`.
+// It goes red.
+func TestRender_SealMarksParamsVarsAtDepth(t *testing.T) {
+	const tmpl = "conf/redis.conf.tmpl"
+	in := hopRenderInput(hopScenario(config.Task{
+		Name: "render redis.conf",
+		Module: &config.ModuleTask{Module: moduleFileRendered, Params: map[string]any{
+			"path":     "/etc/redis/redis.conf",
+			"template": tmpl,
+			"vars": map[string]any{
+				"creds": map[string]any{"pw": "${ input.admin_password }", "user": "admin"},
+				"k":     []any{"${ input.admin_password }", "public"},
+			},
+		}},
+	}))
+	in.Templates = fakeReader{files: map[string][]byte{tmpl: []byte("{{ .vars.creds.pw }} {{ index .vars.k 0 }}\n")}}
+
+	paths, plain, masked := renderedRenderContextVars(t, in)
+	if plain["creds"].(map[string]any)["pw"] != hopSecret || plain["k"].([]any)[0] != hopSecret {
+		t.Fatalf("render_context.vars = %v — the test no longer relocates the secret cells", plain)
+	}
+	for _, path := range []string{"render_context.vars.creds.pw", "render_context.vars.k[0]"} {
+		if !paths[path] {
+			t.Errorf("%s is NOT sealed: %v", path, paths)
+		}
+	}
+	creds, k := masked["creds"].(map[string]any), masked["k"].([]any)
+	if creds["pw"] == hopSecret {
+		t.Errorf("render_context.vars.creds.pw survived masking")
+	}
+	if k[0] == hopSecret {
+		t.Errorf("render_context.vars.k[0] survived masking")
+	}
+	if creds["user"] != "admin" || k[1] != "public" || paths["render_context.vars.creds.user"] || paths["render_context.vars.k[1]"] {
+		t.Errorf("a public cell beside a secret one was sealed: creds %v, k %v (paths %v)", creds, k, paths)
 	}
 }

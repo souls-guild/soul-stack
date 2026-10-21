@@ -199,7 +199,7 @@ type RunFailureEntry struct {
 	Step          *int                  `json:"step,omitempty" doc:"0-based step the run stopped at (hosts[].passage); absent when it stopped outside a step - before its first or after its last"`
 	Tasks         []RunFailureTaskEntry `json:"tasks,omitempty" doc:"task chain of a render failure, outermost first: a block and its child, an applier and the destiny task it expanded into"`
 	Host          string                `json:"host,omitempty" doc:"SID the failing evaluation ran for"`
-	Cell          string                `json:"cell,omitempty" doc:"params cell path that failed to render, e.g. args[0]"`
+	Cell          string                `json:"cell,omitempty" doc:"where the failing evaluation was: the params cell path that failed to render, e.g. args[0], or vars.<name> when the error was raised inside the definition of var <name> - the innermost failing definition, whichever cell or predicate read it; absent when neither"`
 	Expression    string                `json:"expression,omitempty" doc:"the CEL expression as the author wrote it"`
 	Cause         string                `json:"cause,omitempty" doc:"innermost reason; a fixed sentence when cause_withheld"`
 	CauseWithheld bool                  `json:"cause_withheld,omitempty" doc:"the failing expression reads a secret, so the evaluator's own message - which can quote a value - was not recorded"`

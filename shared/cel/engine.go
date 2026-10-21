@@ -6,7 +6,7 @@
 //   - `${ … }` interpolation in string contexts ([EvalInterpolation]).
 //   - Context variables: input, register, incarnation, soulprint.self,
 //     vars (the flat `vars.*` namespace: service vars + destiny/task locals,
-//     filled by render per-task).
+//     filled by render per-task, or read lazily through a [VarView]).
 //   - Compile-cache keyed by the normalized expression.
 //
 // Implemented:
@@ -106,7 +106,7 @@ type Engine struct {
 	noMacroParser *parser.Parser
 
 	mu    sync.RWMutex
-	cache map[string]cel.Program
+	cache map[string]program
 
 	// loopEnvs — child envs for `loop:` expressions, keyed by the sorted set of
 	// loop names (`<as>`/`<index_as>`) joined by '\x00'. Iteration names are
@@ -219,13 +219,13 @@ func NewMigration(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{migration: true}, migrationVars, opts...)
 }
 
-// serviceVarsVars — the context of a `vars/_stack.yaml` step ([ADR-0082] §3).
-// Only two names, and the SHORTNESS is the point: a service's vars are resolved
-// ONCE per run and handed to every host, so a step keyed on one host's facts
-// would apply that host's answer to the whole roster. Leaving `soulprint`
-// declared-but-empty is not a refusal — `has(soulprint.self.os)` would compile,
-// evaluate false and silently skip the step. Non-declaration makes the same
-// expression an undeclared-reference compile error, which is what the ADR
+// serviceVarsVars — the environment of a definition in a service's `vars/` files
+// ([ADR-0082] §3 and its amendment 2026-10-15). Only two names, and the SHORTNESS is
+// the point: a service's vars are resolved ONCE per run and handed to every host, so
+// a definition keyed on one host's facts would apply that host's answer to the whole
+// roster. Leaving `soulprint` declared-but-empty is not a refusal —
+// `has(soulprint.self.os)` would compile and evaluate false. Non-declaration makes
+// the same expression an undeclared-reference compile error, which is what the ADR
 // promises by "refused outright".
 //
 // [ADR-0082]: docs/adr/0082-service-vars.md
@@ -234,11 +234,20 @@ var serviceVarsVars = []string{
 	"vars",
 }
 
-// NewServiceVars builds an Engine for `vars/_stack.yaml` steps: `incarnation.*`
-// (the row's own fields, covens and traits included) and the `vars.*` accumulated
-// by earlier steps, plus whatever name a `foreach:` binds. Everything else —
-// `soulprint`, `input`, `register`, `compute` — is undeclared and therefore a
-// compile error rather than an empty map.
+// serviceVarsSelectorVars — the environment of a `vars/_stack.yaml` selector: the
+// service rung's without `vars` (amendment point 14). A step chooses files, never
+// values, and a value read while the steps are still choosing is read before the
+// final merge. Declared-but-empty would let `has(vars.tls)` answer false and decide
+// the step.
+var serviceVarsSelectorVars = []string{
+	"incarnation",
+}
+
+// NewServiceVars builds an Engine for a service-rung definition: `incarnation.*`
+// (the row's own fields, covens and traits included) and `vars.*`, read lazily
+// through the [VarView] it is evaluated in. Everything else — `soulprint`, `input`,
+// `register`, `compute` — is undeclared and therefore a compile error rather than an
+// empty map.
 //
 // [WithVault] is not meaningful here: service vars are assembled before the input
 // gate and before any secret is resolved.
@@ -246,13 +255,41 @@ func NewServiceVars(opts ...Option) (*Engine, error) {
 	return buildEngine(engineMode{serviceVars: true}, serviceVarsVars, opts...)
 }
 
+// NewServiceVarsSelector builds an Engine for a `_stack.yaml` selector (`when:`,
+// `foreach:`, `file:`): [NewServiceVars] with `incarnation.*` alone declared, plus
+// whatever name a `foreach:` binds. `vars`, in any spelling, is a compile error.
+func NewServiceVarsSelector(opts ...Option) (*Engine, error) {
+	return buildEngine(engineMode{serviceVars: true}, serviceVarsSelectorVars, opts...)
+}
+
+// scenarioVarsVars — the roots a scenario's top-level `vars:` definition may name
+// ([ADR-0082] amendment 2026-10-15, point 6): run data only. The Passage cut
+// classifies a task by the register, Vault and roster roots its own text names, so a
+// definition any task can read through `vars.<name>` must name none of them.
+// `soulprint` and `register` are undeclared, which refuses them at compile — a
+// declared empty map would let `has(register.p)` evaluate false instead.
+var scenarioVarsVars = []string{
+	"input",
+	"incarnation",
+	"compute",
+	"vars",
+}
+
+// NewScenarioVars builds an Engine for a scenario's top-level `vars:` definitions:
+// `input.*`, `incarnation.*`, `compute.*` and `vars.*`, with the task env's pure
+// functions. vault() and generate_secret() are refused, and [WithVault] is an error.
+func NewScenarioVars(opts ...Option) (*Engine, error) {
+	return buildEngine(engineMode{scenarioVars: true}, scenarioVarsVars, opts...)
+}
+
 // engineMode — mutually exclusive special Engine modes (zero-value = ordinary
-// scenario/destiny mode). Both forbid WithVault: sandboxes with no external
-// access.
+// scenario/destiny mode). Migration, flow control and scenario vars forbid
+// WithVault.
 type engineMode struct {
-	migration   bool // [NewMigration], [ADR-019]: only `state` is declared.
-	flowControl bool // [NewFlowControl], [ADR-012(d)]: Soul-side flow-control sandbox.
-	serviceVars bool // [NewServiceVars], [ADR-0082]: a `vars/_stack.yaml` step.
+	migration    bool // [NewMigration], [ADR-019]: only `state` is declared.
+	flowControl  bool // [NewFlowControl], [ADR-012(d)]: Soul-side flow-control sandbox.
+	serviceVars  bool // [NewServiceVars] and [NewServiceVarsSelector], [ADR-0082]: the service rung — a `vars/` definition or a `_stack.yaml` selector.
+	scenarioVars bool // [NewScenarioVars], [ADR-0082]: a scenario's top-level `vars:`.
 }
 
 // buildEngine — shared constructor: an env over cel.StdLib() with the declared
@@ -269,17 +306,19 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	// of state; a Soul host has no Vault tokens, external access is keeper-only).
 	// WithVault(kv) in these modes is API misuse (a latent foot-gun); we reject it
 	// here instead of silently registering vault().
-	if (mode.migration || mode.flowControl) && cfg.kv != nil {
+	if (mode.migration || mode.flowControl || mode.scenarioVars) && cfg.kv != nil {
 		switch {
 		case mode.migration:
 			return nil, fmt.Errorf("building migration-Engine: WithVault is incompatible with migration mode (ADR-019: migration-CEL sandbox forbids vault())")
-		default:
+		case mode.flowControl:
 			return nil, fmt.Errorf("building flow-control-Engine: WithVault is incompatible with flow-control mode (ADR-012(d): Soul-CEL sandbox has no external access, vault() is keeper-only)")
+		default:
+			return nil, fmt.Errorf("building scenario-vars-Engine: WithVault is incompatible with scenario-vars mode (ADR-0082: a scenario vars: definition sees run data only)")
 		}
 	}
 
-	envOpts := make([]cel.EnvOption, 0, len(vars)+5)
-	envOpts = append(envOpts, cel.StdLib())
+	envOpts := make([]cel.EnvOption, 0, len(vars)+6)
+	envOpts = append(envOpts, orderedMaps, cel.StdLib())
 	for _, name := range vars {
 		envOpts = append(envOpts, cel.Variable(name, cel.DynType))
 	}
@@ -302,13 +341,14 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	// generate_secret() ([ADR-0083] §3) — a declared secret request, resolved by
 	// `core.state.*`. Registered ONLY in the ordinary scenario/destiny pass,
 	// because that is the only pass whose output reaches that module. In the other
-	// three the request would be a marker nobody ever resolves: inert data that looks
+	// four the request would be a marker nobody ever resolves: inert data that looks
 	// like it did something. Non-registration turns each of those into an
 	// undeclared-reference compile error instead of a silent no-op — migration-CEL is
 	// a pure function of state ([ADR-019]), a Soul evaluating flow control has no
-	// state to write ([ADR-012(d)]), and service vars are resolved once per run,
-	// before the input gate and before any secret exists ([ADR-0082]).
-	genSecret := !mode.migration && !mode.flowControl && !mode.serviceVars
+	// state to write ([ADR-012(d)]), service vars are resolved once per run, before
+	// the input gate and before any secret exists ([ADR-0082]), and a scenario `vars:`
+	// definition sees run data only ([ADR-0082] amendment 2026-10-15).
+	genSecret := !mode.migration && !mode.flowControl && !mode.serviceVars && !mode.scenarioVars
 	if genSecret {
 		envOpts = append(envOpts, secretRequestEnvOptions()...)
 	}
@@ -327,7 +367,7 @@ func buildEngine(mode engineMode, vars []string, opts ...Option) (*Engine, error
 	return &Engine{
 		env:           env,
 		noMacroParser: noMacroParser,
-		cache:         make(map[string]cel.Program),
+		cache:         make(map[string]program),
 		loopEnvs:      make(map[string]*cel.Env),
 		kv:            cfg.kv,
 		noCache:       cfg.noCache,
@@ -391,7 +431,7 @@ func (e *Engine) loopEnv(names []string) (*cel.Env, error) {
 // at all; and the stance decides whether a per-host reference is ([ComputeScope.cacheTag] /
 // [hostStance.cacheTag] — the key must carry both, the cache is consulted before any
 // guard). Empty loopNames — the base env.
-func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (cel.Program, error) {
+func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (program, error) {
 	// flow-control mode ([NewFlowControl]) forces cross-host isolation:
 	// soulprint.hosts/soulprint.where and register.hosts are unavailable regardless
 	// of the Vars flags (cross-host, keeper-side — the Soul has neither). Guards
@@ -431,7 +471,7 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 
 	prg, err := e.compileUncached(env, loopNames, expr, allowHosts, allowRegisterHosts, computeScope, stance)
 	if err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	e.mu.Lock()
@@ -445,43 +485,44 @@ func (e *Engine) compile(env *cel.Env, loopNames []string, expr string, allowHos
 // A Keeper-rendered predicate ([Engine.RenderPredicate]) is checked through it because
 // its text carries one host's values and is unique per host and run — caching it would
 // grow the cache without bound.
-func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (cel.Program, error) {
+func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, allowHosts, allowRegisterHosts bool, computeScope ComputeScope, stance hostStance) (program, error) {
 	if err := e.guardUnsupported(expr); err != nil {
-		return nil, err
+		return program{}, err
 	}
 	if err := e.guardInternalIdents(expr); err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	if err := e.guardComputeScope(expr, computeScope, loopNames); err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	compiled, err := e.rewriteHostsWhere(expr, allowHosts)
 	if err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	// After the rewrite, so a register.hosts reference hidden inside a
 	// `.where("<predicate>")` string literal is scanned too (Unparse inlines it).
 	if err := e.guardRegisterHosts(expr, compiled, allowRegisterHosts); err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	ast, issues := env.Compile(compiled)
 	if issues != nil && issues.Err() != nil {
-		return nil, &ErrCompile{Expr: expr, Err: issues.Err()}
+		return program{}, &ErrCompile{Expr: expr, Err: issues.Err()}
 	}
 
 	// AFTER env.Compile, unlike the two gates above, and that order is the rule
 	// (NIM-909): this engine declares no `register` root in migration mode
-	// ([NewMigration], [ADR-019]) or in the service-vars mode ([NewServiceVars]), and
-	// there the honest answer is cel-go's own "undeclared reference to 'register'" —
-	// telling that author to "write register.<name>" would be advice they must not
-	// take. Keys on no flag and needs no cache tag: the verdict is a function of the
-	// text alone, and a refused expression never reaches the cache.
+	// ([NewMigration], [ADR-019]), in the service-vars mode ([NewServiceVars]) or in
+	// the scenario-vars mode ([NewScenarioVars]), and there the honest answer is
+	// cel-go's own "undeclared reference to 'register'" — telling that author to
+	// "write register.<name>" would be advice they must not take. Keys on no flag and
+	// needs no cache tag: the verdict is a function of the text alone, and a refused
+	// expression never reaches the cache.
 	if err := e.guardRegisterNameByIndex(expr, compiled); err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	// Same placement and the same reason (NIM-908): neither `soulprint` nor `input`
@@ -490,14 +531,23 @@ func (e *Engine) compileUncached(env *cel.Env, loopNames []string, expr string, 
 	// guard this one DOES key the cache (see [hostStance.cacheTag]) — its verdict is
 	// a function of the text AND the context, so a cache hit would bypass it.
 	if err := e.guardHostScope(expr, compiled, stance, loopNames); err != nil {
-		return nil, err
+		return program{}, err
 	}
 
 	prg, err := env.Program(ast)
 	if err != nil {
-		return nil, &ErrCompile{Expr: expr, Err: err}
+		return program{}, &ErrCompile{Expr: expr, Err: err}
 	}
-	return prg, nil
+	return program{Program: prg, comparesVars: comparesVars(ast.NativeRep().Expr())}, nil
+}
+
+// program is a compiled expression and what evaluating it needs besides the
+// activation.
+type program struct {
+	cel.Program
+	// comparesVars: the expression compares the whole `vars` ([comparesVars]), so
+	// [Engine.EvalExpression] materializes a lazy view before running it.
+	comparesVars bool
 }
 
 // CachedPrograms is the number of compiled programs the Engine holds — zero, always,

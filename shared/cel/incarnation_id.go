@@ -69,7 +69,7 @@ const (
 // static catcher there is.
 //
 // Unparseable text → false: a syntax error belongs to the compiler, which reports
-// it with a position (mirrors [Engine.VarRefs] / [Engine.ExpressionReferencesCompute]).
+// it with a position (mirrors [Engine.ExpressionReferencesCompute]).
 func (e *Engine) ExpressionReadsLegacyIncarnationID(expr string) bool {
 	if !containsIdentText(expr, incarnationRootName) {
 		return false

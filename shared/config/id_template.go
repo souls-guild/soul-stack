@@ -81,8 +81,7 @@ var ErrIDTemplateRender = errors.New("config: id.template render failed")
 // (`input['k']` / `input[expr]`) instead of the canonical select form
 // (`input.k`). Rejected deterministically: the static reference check
 // ([IDTemplateInputRefs], soul-lint) needs the component name statically known
-// from the AST, and a dynamic index does not guarantee that. Mirrors
-// shared/cel.ErrVarIndexForm for `vars`.
+// from the AST, and a dynamic index does not guarantee that.
 var ErrIDTemplateIndexForm = errors.New("config: id.template must address components as ${input.<name>}, not input[...]")
 
 // RenderIDTemplate composes an incarnation id from tmpl over the RESOLVED
@@ -170,7 +169,7 @@ func IDTemplateInputRefs(tmpl string) ([]string, error) {
 		parsed, iss := p.Parse(common.NewTextSource(s.text))
 		if iss != nil && len(iss.GetErrors()) > 0 {
 			// Unparseable blocks never get here (scanIDTemplate gates the block
-			// boundary via env.Parse); defensive, mirrors shared/cel.VarRefs.
+			// boundary via env.Parse); defensive, as shared/cel.Engine.DetectSealed is.
 			continue
 		}
 		var visitErr error

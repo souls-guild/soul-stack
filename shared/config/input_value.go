@@ -11,10 +11,12 @@ package config
 
 import (
 	"fmt"
+	"maps"
 	"net"
 	"net/mail"
 	"net/url"
 	"regexp"
+	"slices"
 	"strings"
 	"time"
 	"unicode/utf8"
@@ -196,9 +198,11 @@ const vaultRefMarker = "vault:"
 // field without `vault_scope` carrying a `vault:` value is an error (default-deny):
 // resolve itself must raise it, but ref detection is needed here to call resolve
 // at all. Only top-level secret fields (vault_scope applies only to them) — we
-// don't descend into array/object.
+// don't descend into array/object. Fields go in name order, so of two failing refs
+// the same one is reported every time.
 func resolveInputVaultRefs(schema InputSchemaMap, merged map[string]any, resolve InputVaultResolver) error {
-	for name, s := range schema {
+	for _, name := range slices.Sorted(maps.Keys(schema)) {
+		s := schema[name]
 		if s == nil || s.Type != "string" {
 			continue
 		}

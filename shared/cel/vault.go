@@ -312,7 +312,7 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 	}
 
 	if field == "" {
-		return types.DefaultTypeAdapter.NativeToValue(data)
+		return orderedTypes.NativeToValue(data)
 	}
 	val, ok := data[field]
 	if !ok {
@@ -321,7 +321,7 @@ func callVault(pathVal, resolverVal ref.Val) ref.Val {
 		// path in flat form survives masking (NIM-73).
 		return types.NewErr(vaultErrPrefix+"secret %s has no field %q", vaultPathHint(body), field)
 	}
-	return types.DefaultTypeAdapter.NativeToValue(val)
+	return orderedTypes.NativeToValue(val)
 }
 
 // vaultErrPrefix opens every error [callVault] returns.

@@ -27,7 +27,8 @@ type RunFailure struct {
 	Tasks []RunFailureTask `json:"tasks,omitempty"`
 	// Host is the SID the failing evaluation ran for.
 	Host string `json:"host,omitempty"`
-	// Cell is the params cell path (`args[0]`).
+	// Cell is the params cell path (`args[0]`), or `vars.<name>` for an error inside
+	// that var's definition.
 	Cell string `json:"cell,omitempty"`
 	// Expression is the CEL expression as the author wrote it.
 	Expression string `json:"expression,omitempty"`

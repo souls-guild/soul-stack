@@ -20,7 +20,6 @@ scenario/
     ├── main.yml              # entry point: name, description, input, tasks (inline)
     ├── <sub>.yml             # include neighbors (same task structure)
     ├── templates/            # OPTS: templates used by the steps in this script
-    ├── vars.yml              # OPTS: scenario locales (like destiny vars.yml)
     └── tests/                # OPT.: tests of this script
         └── <case>/
             └── case.yml
@@ -47,7 +46,7 @@ On top of the tasks from [destiny/tasks.md](../destiny/tasks.md), the scenario t
 | `transport:` | string (transport name) OR map keyed by ONE transport name | module/apply/`block:`-task, Soul-side only | optional (omitted = the registry decides) — see §2.2.5 |
 | `settings:` | map of the run-behaviour keys | module/apply/`block:`-task and a block child, Soul-side only; refused on `assert:`/`include:` | optional — merged key by key and acted on by every linear run; see [settings.md](settings.md) |
 
-In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1); `settings:` - the scenario level of the run-behaviour block ([settings.md](settings.md)).
+In addition to the per-task keys, scenario has **top-level** blocks: `compute:` — calculated run vars (§2.4); `validate:` - declarative input invariants (§2.5); `vars:` — the scenario's own rung of `vars.*`, between the service's `vars/` and a task's (§2.7); `extends:` - inheritance of the general service-level contract of sections from `covenant.yml` (§6.1); `settings:` - the scenario level of the run-behaviour block ([settings.md](settings.md)).
 
 Everything else in the scenario task is exactly the same as in the destiny task, with the same semantics ([destiny/tasks.md §3–§10](../destiny/tasks.md#3-complete-list-of-task-blocks)). Discrepancies with destiny are explicitly listed in §6 (resource resolution) and §10 (template context).
 
@@ -502,9 +501,9 @@ tasks:
         config: "${ compute.redis_config }" # ← and here is the same compute
 ```
 
-**Why.** `apply: input:` (per host since [NIM-908](../adr/0009-scenario-dsl.md#amendment-2026-09-28-nim-908-apply-input-renders-per-host); it resolved on the first target `SID` before that) and a capture's `params:` (keeper-side, §7.1) are **different** CEL contexts, and neither of them **sees** the task-level `vars:` of the other task (`vars:` is the scope of one task, §10). The general expression (big `merge()` - translation of a simple input into `redis.conf`) would have to be written **twice** and synchronized by hand. `compute:` declares it **once** - drift "state ≡ live config" is removed by the mechanism itself, and not by the author's discipline.
+**Why.** `apply: input:` (per host since [NIM-908](../adr/0009-scenario-dsl.md#amendment-2026-09-28-nim-908-apply-input-renders-per-host); it resolved on the first target `SID` before that) and a capture's `params:` (keeper-side, §7.1) are **different** CEL contexts, and neither of them **sees** the task-level `vars:` of the other task (`vars:` is the scope of one task, §10). The scenario's top-level `vars:` (§2.7) IS seen by both, but it is late-bound per task view: a task overriding a name under it moves it for that task alone, and a definition reading `incarnation.host_count` sees the reader's own count (0 in a keeper-side capture), so the two readers can receive different values. The general expression (big `merge()` - translation of a simple input into `redis.conf`) would have to be written **twice** and synchronized by hand. `compute:` declares it **once** - drift "state ≡ live config" is removed by the mechanism itself, and not by the author's discipline.
 
-**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. This is a **structural host invariance barrier**: a `soulprint.self` reference in a compute expression is refused at compile since [NIM-908](../adr/0010-templating.md#amendment-2026-09-28-nim-908-a-context-says-whether-it-stands-on-a-host--celhostscope), naming the `compute:` context (before that it was a bare CEL no-such-key about a field that is spelled correctly). The consequence is unchanged and is the namespace's whole basis: `compute.<name>` **is the same for all hosts**, so the same value is correctly sent both to `apply: input:` (which renders per host, and receives this value identically on each) and to a `core.state.<verb>` capture (keeper-side, hostless by construction). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
+**The resolution context is run-level, WITHOUT `soulprint`.** `compute:` is calculated in the context of `input.*` / `vars.*` / `incarnation.*` / `register.*` - **without** `soulprint.self` / `soulprint.hosts`. Its `vars.*` is the service's `vars/` alone: the scenario's `vars:` rung is not visible here (§2.7). This is a **structural host invariance barrier**: a `soulprint.self` reference in a compute expression is refused at compile since [NIM-908](../adr/0010-templating.md#amendment-2026-09-28-nim-908-a-context-says-whether-it-stands-on-a-host--celhostscope), naming the `compute:` context (before that it was a bare CEL no-such-key about a field that is spelled correctly). The consequence is unchanged and is the namespace's whole basis: `compute.<name>` **is the same for all hosts**, so the same value is correctly sent both to `apply: input:` (which renders per host, and receives this value identically on each) and to a `core.state.<verb>` capture (keeper-side, hostless by construction). Per-host values, as before, are expressed by direct per-host CEL in `params:` / template `.self`, not through `compute:`.
 
 **Declaration order is significant.** `compute[i]` can refer to a previously declared `compute[j]` (j<i) as `${ compute.<name_j> }` (accumulating from left to right). Link forward → no-such-key.
 
@@ -552,7 +551,7 @@ Because the check is at compile it also fires on the forms that used to be **sil
 
 **Names.** compute-var name - CEL-field-accessible identifier (letters/numbers/`_`, starts with letter or `_`); hyphen/dot are not allowed (would break `compute.<name>`). The name must not obscure the root context names (`input`/`register`/`incarnation`/`soulprint`/`vars`/`compute`).
 
-> **Boundary `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)) - local for one task and **visible only in its** `params:`. `compute:` - run-level, visible in `apply: input:` **and** in a capture's `params:`. If the value is needed in both the state write and the destiny transfer, this is `compute:`; if only within `params:` of one task - `vars:`.
+> **Boundary `compute:` ↔ `vars:`.** Task-level `vars:` (§10, [destiny/tasks.md §9](../destiny/tasks.md#9-strength-and-control-of-execution)) - local for one task and **visible only in its** `params:`. `compute:` - run-level, visible in `apply: input:` **and** in a capture's `params:`. If the value is needed in both the state write and the destiny transfer, this is `compute:`; if only within `params:` of one task - `vars:`. A scenario-level `vars:` entry (§2.7) is visible to both readers too, but it is NOT the same thing: it is evaluated per task view and moves with a task's override, while `compute:` is resolved once per run, host-invariant, and cannot be overridden — which is the guarantee "state ≡ live config" rests on.
 
 ### 2.5. `validate:` - declarative input invariants
 
@@ -658,6 +657,31 @@ The bound is enforced **on the request**, by the same `scenario.ComposeID` the p
 **soul-lint** catches the class offline: `id_template_input_unknown` (ERROR — `${input.X}` with X not declared in `input:`; it would fail for every operator), `id_template_invalid` (ERROR — a block outside the input sandbox, or the index form `input['x']`, which hides the component name from static analysis), `id_template_too_long` (ERROR — the literal skeleton alone exceeds the **effective** ceiling, so declaring `max_length: 40` sharpens this rule from 63 down to 40), `id_max_length_over_ceiling` (ERROR — a bound above 63 narrows nothing while reading as though it did), `id_max_length_invalid` (ERROR — a bound below 1 bounds no id), `empty_value` (ERROR — an `id:` block with no `template:`, which is a ceiling on nothing), `id_template_constant` (WARNING — no block at all, so every incarnation composes to the same id) and `id_template_ignored` (WARNING — the scenario is not a `create: true` starter, so the key is dead config). Under `extends:` (§6.1) the whole set runs **post-merge**, exactly like `form:` — before the covenant merge a component declared in the fragment would look undeclared.
 
 > **Known limitation (RBAC).** `POST /v1/incarnations` scopes its permission check from the request body before the handler runs, so a request with no `name` yields an empty context set — which admits only bare/`*` roles (MCP behaves the same way). A **scoped** operator therefore cannot create a templated incarnation yet. Fail-closed, so it can only refuse, never over-grant; scoping a create whose name is unknown until the service snapshot resolves needs its own decision.
+
+### 2.7. `vars:` — the scenario's own rung
+
+`vars:` — **top-level** scenario block (next to `input:`/`tasks:`) in `main.yml`: a map of definitions every task of the scenario sees as `vars.<name>`. It is the middle rung of the scenario pass — `<service>/vars/` → `vars:` → `block:` + task `vars:` — and was parsed and read by nothing until the [ADR-0082 amendment 2026-10-15](../adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late) made it apply (NIM-1014). There is no `scenario/<name>/vars.yml` rung; the block in `main.yml` is the rung.
+
+```yaml
+name: rotate_acl
+vars:
+  conf_dir: /opt/redis                 # overrides the service's conf_dir for this scenario
+  acl_backup: "${ vars.acl_file }.bak" # acl_file comes from the service's vars/
+tasks:
+  - name: back up the ACL file
+    module: core.exec.run
+    params:
+      cmd: cp
+      args: ["${ vars.acl_file }", "${ vars.acl_backup }"]
+```
+
+- **Late-bound, like every rung.** A task's view is the union of the three rungs, the highest winning a name, and every definition reads `vars.<other>` through it. With the service's `acl_file: "${ vars.conf_dir }/users.acl"`, `vars.acl_file` above is `/opt/redis/users.acl`; a task that sets its own `conf_dir` changes it again, for that task.
+- **Run data only — a closed list.** A definition here may name `input.*`, `incarnation.*` and `compute.*` besides `vars.*`, with the task env's functions except `vault()` and `generate_secret()`. Refused at compile: all of `soulprint` (`.self`, `.hosts`, `.where`), all of `register` (`register.hosts` included), `vault()` and `generate_secret()`. A value that depends on the host, on a probe or on a Vault read belongs in the task's own `vars:`: the Passage cut and `soul_needs` classify a task by the axes its own text names, and a scenario-wide one would add an axis to every task reading the name. ([ADR-0082 amendment 2026-10-15](../adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late), points 6 and 16.)
+- **Evaluated per task view, only when read.** Under late binding a task that overrides a name this block derives from moves the derived value for that task alone — per host, if the override is per host. The seal, the host-variance classification and `soul_needs` follow such a name through the view (point 16). The Passage cut needs no following: it already reads the task's whole `vars:`, and this block names none of its roots. The one unfollowed indirection is a `compute.*` read, since a `compute:` entry may read `register.*`; that gap is older than this block and filed as NIM-1021. A static `when:` / `assert:` is still decided on the first host whatever its `vars.<x>` depends on — a defect older than this block, filed as NIM-1020.
+- **Seen by the loop axis.** `loop.items:` and `loop.when:` read the service's `vars/` and this rung, never the block + task rung: a task-rung definition is per iteration and may read the loop binding, so the set being iterated cannot depend on it. `compute` stays out of scope there (NIM-619): a definition here that reads `compute.*` is refused when the loop axis reads it, and works in a task.
+- **Not seen by `compute:`.** `compute:` (§2.4), telemetry and the directive catalog read the service's `vars/` alone. This block reads `compute.*`, so the reverse would be a cycle between the namespaces.
+- **Not crossing `apply:`.** A destiny pass sees none of it; pass a value into `apply: input:` as with any other var.
+- **`soul-lint`** warns when a name here takes over a service var (`vars_shadows_service_var`, [soul-lint.md](../soul-lint.md#service-vars-checks-validate-service-validate-scenario)) and reports `var_cycle` / `var_unknown_ref` as ERRORs ([soul-lint.md](../soul-lint.md#var-evaluation-checks)).
 
 ## 3. Step target - `on:`
 
@@ -972,7 +996,7 @@ template context, available in any expression-key (`when:`/`changed_when:`/`fail
 
 > **Not for "probe completeness".** Idiom `failed_when: size(register.<probe>) < incarnation.host_count` ("fall if not all hosts responded to the probe") **not used and not executable**: `failed_when:` is calculated by Soul-side per-host, sees only `register:` previous tasks and `register.self.*`, but **not** its own aggregate `register.<this-probe>` and **not** cross-host `size(...)` - the call gives CEL `no such key`. The completeness of the probe does not need protection: a destructive operation on an incomplete probe is guaranteed to be cut off by the step barrier (§5), rather than manual verification.
 
-**Access in destiny - no.** Field - part of `incarnation.*`-namespace, which is not visible in destiny ([destiny/tasks.md §10](../destiny/tasks.md#10-template-context)). destiny receives the value, if it needs it, via `apply: input:` forwarding.
+**Access in destiny - its own target size.** A destiny pass carries `incarnation.host_count` too, but counted over the hosts targeted inside the pass (for `vars.yml`, the applier's: `destinyBaseViews`, `keeper/internal/render/varview.go:255`, where `host_count` is `len(targeted)`), not the run's; [destiny/tasks.md §10](../destiny/tasks.md#10-template-context). If a destiny needs the run-wide figure, forward it via `apply: input:`.
 
 ## 4.3. Convolution of aggregate `register` to a single value
 
@@ -1069,7 +1093,7 @@ Error handling in scenario - **only mechanisms inherited from the DSL core**: `r
 
 ## 6. Two-level resource resolution
 
-`templates/`, `vars.yml`, `tests/`, `include:` - script goals are resolved **two-level**:
+`templates/`, `tests/`, `include:` - script goals are resolved **two-level** (a scenario has no `vars.yml`; its own values are the top-level `vars:` block, §2.7):
 
 1. **Local first:** `scenario/<name>/<kind>/` (for example, `scenario/restart/templates/redis.conf.tmpl`).
 2. **Then service-level:** shared resource of the same `<kind>` at the service level (`service-<x>/<kind>/`).

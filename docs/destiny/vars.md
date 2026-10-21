@@ -14,9 +14,10 @@ Without `vars:`, destiny has two extremes:
 ## Semantics
 
 - **Source of truth - `destiny-<name>/vars.yml`** (next to `destiny.yml`).
-- **Isolated in destiny.** Neither the scenario, nor the operator via the API, nor the service's own `vars/` **override** these values. If the operator needs the ability to substitute, the corresponding value should be in `input:`, not in `vars:`.
+- **Isolated in destiny.** Neither the scenario, nor the operator via the API, nor the service's own `vars/` **override** these values. If the operator needs the ability to substitute, the corresponding value should be in `input:`, not in `vars:`. Inside the destiny, a task's own `vars:` may override a name — see [one view per task](#one-view-per-task-task-level-vars-over-varsyml).
 - **Can refer to `input.*`.** Vars are calculated **after** input validation - that is, the expression `"/etc/redis/users/${ input.user }.acl"` is valid. The reverse (input refers to vars) is not: input comes from outside, before vars even exist.
 - **Available in all tasks** of the same destiny - in `tasks/main.yml` and in any neighbor connected via `include:`.
+- **Evaluated when read, not up front.** A var is evaluated the first time something reads it, once, and a var nothing reads is never evaluated ([ADR-0082 amendment 2026-10-15](../adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late)) — see [How a var is evaluated](#how-a-var-is-evaluated).
 
 ## File format
 
@@ -34,19 +35,16 @@ redis_group:     redis
 acl_file_path: "/etc/redis/users/${ input.user }.acl"
 ```
 
-Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md), [docs/templating.md](../templating.md)) resolve **only when the entire value of var is a string** (top level value). non-string values (map / list / number / bool) pass **literally through** - CEL does not touch them.
+Valid value types: the same as in `input:` ([docs/input.md](../input.md)) - string / integer / number / boolean / array / object. Template expressions `"${ … }"` ([ADR-010](../adr/0010-templating.md), [docs/templating.md](../templating.md)) are interpolated in **every string, at any depth** — a string inside a map or a list is interpolated like a top-level one. The cell rule is the usual one: a cell that is one whole `${ … }` takes the native type of its result, anything else is the stringified concatenation. Non-string scalars (number / bool) pass through literally.
 
-> **Limitation (known): `${ … }` inside map/list values are NOT resolved.** If the var value is map or list, nested `${ … }` within its elements remain **raw text** and are not resolved. Resolve is applied to the entire string value, not recursively by structure.
->
-> ```yaml
-> base: /etc/redis # string - ok
-> conf_path: "${ vars.base }/redis.conf" # string - resolves to "/etc/redis/redis.conf"
->
-> paths: # map value - NOT resolved
->   conf: "${ vars.base }/redis.conf" # will remain the literal "${ vars.base }/redis.conf"
-> ```
->
-> If you need to assemble a nested structure from other vars, assemble each line sheet as a separate var, or build the entire map with one `${ … }` expression (entire cell = one marker → native type, see [templating.md](../templating.md)). Recursive rendering based on map/list depth - not implemented.
+```yaml
+base: /etc/redis
+conf_path: "${ vars.base }/redis.conf"   # "/etc/redis/redis.conf"
+
+paths:
+  conf: "${ vars.base }/redis.conf"      # "/etc/redis/redis.conf" — nested strings are interpolated too
+  data: /var/lib/redis
+```
 
 ## What is NOT in `vars.yml`
 
@@ -95,42 +93,58 @@ In the expressions `"${ … }"` (CEL interpolation, see [ADR-010](../adr/0010-te
 
 - `input.<name>` - validated destiny parameters.
 - `soulprint.self.<name>` - current host facts ([ADR-018](../adr/0018-soulprint-typed.md): `soulprint.self.os.family`, `soulprint.self.network.primary_ip`, `soulprint.self.memory.total_mb`, …).
-- **`vars.<other>`** is another variable `vars.yml` of the SAME layer (see "var → var" below).
+- `incarnation.*` - the incarnation the destiny is applied for, without its `state` snapshot.
+- **`vars.<other>`** - any name of the view of the task that reads it: another `vars.yml` name, or that task's own `vars:` (see [one view per task](#one-view-per-task-task-level-vars-over-varsyml)).
 
 Not available (intentionally):
 
-- **`register.<name>`** - task results. At the time of calculation `vars` there were no tasks yet.
-- **The SERVICE's `vars/`** - not visible here. Since [ADR-0082](../adr/0082-service-vars.md) both layers are spelled `vars.*`, but inside a destiny pass the name resolves to this file and nothing else; the service decides which of its values to put into the destiny's `input:` when calling it. The name survives the `apply:` boundary, the meaning does not — the same asymmetry that forced `apply_when_dynamic_unsupported` ([orchestration.md §2.1.2](../scenario/orchestration.md)).
-- **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only accessors. In the destiny pass they are cut off by isolation (error on compile). var → var does NOT open them.
+- **`register.<name>`** - task results. The Keeper renders a whole destiny before any of its tasks runs.
+- **The SERVICE's `vars/`** - not visible here. Since [ADR-0082](../adr/0082-service-vars.md) both layers are spelled `vars.*`, but inside a destiny pass the name resolves to this file and the destiny's own task `vars:`, and nothing else; the service decides which of its values to put into the destiny's `input:` when calling it. The name survives the `apply:` boundary, the meaning does not — the same asymmetry that forced `apply_when_dynamic_unsupported` ([orchestration.md §2.1.2](../scenario/orchestration.md)).
+- **`soulprint.hosts` / `soulprint.where(...)`** — cross-host scenario-only accessors. In the destiny pass they are cut off by isolation (error on compile). Reading another var does NOT open them: each definition keeps the environment of the file it was written in.
 
-### var → var (links inside the layer)
+### How a var is evaluated
 
-`vars.yml`-variable **may** refer to another variable of the SAME `vars.yml` via `${ vars.<other> }` (ADR-009 / ADR-010 amendment 2026-06-24). Resolve **eager-topological**:
+The normative rule is the [ADR-0082 amendment 2026-10-15](../adr/0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late); this is what it means for a `vars.yml` author.
 
-- Dependencies are extracted from CEL-AST (not regex): `${ vars.X }` in value → edge on `X`.
-- The layer is resolved in **topological order** - the variable sees the dependencies that have already been calculated. **The order of the declaration in the file does not matter**:
+- **On request, once.** `vars` is a lazy map: a var is evaluated the first time a cell reads it and the value is reused. A var nothing reads is never evaluated — a broken one included — and the unit of request is the top-level name (`vars.paths.conf` evaluates all of `paths`). A `vars.yml` value is evaluated at most once per destiny pass per host, and reused by every task whose own `vars:` override none of the names it read.
+- **The order of declaration does not matter.**
 
   ```yaml
-  # is equivalent in any order of strings
+  # equivalent in any order of lines
   root_owner: root
-  root_group: "${ vars.root_owner }"   # resolves to "root"
+  root_group: "${ vars.root_owner }"   # "root"
   ```
 
-- **Cycle** (`a → b → c → a`, including self-reference `a → a`) → render error `var_cycle` with cycle trace.
-- **Reference to a non-existent layer key** (`vars.z`, which does not exist) → render error `var_unknown_ref`. **eager** check: the error is raised even if the referencing var itself is not used anywhere (broken link = typo by the author, not a "deferred" var).
-- **Only inside its own layer.** var→var does NOT weaken the isolation: the link is still missing `register.*`/`soulprint.hosts`. The chain between the file layer and the task layer is not available (see below).
-- Index form `vars['key']` is not supported - use select form `vars.key` (the key name must be statically known from the AST).
+- **Every read form reaches the same lookup.** `vars.x`, `vars['x']` and `vars[expr]` all work. `has(vars.x)` and `default(vars.x, y)` EVALUATE `x` and raise its error rather than hiding it; only `'x' in vars` and `size(vars)` look at names without evaluating anything.
+- **Cycle** (`a → b → c → a`, including a self-reference with nothing below, `a → a`) → render error `var_cycle`, with the cycle starting at its alphabetically smallest name whatever was read first.
+- **A reference to a name nothing defines** is the ordinary CEL no-such-key, raised when the referencing var is read and naming it. It is no longer raised for a var nobody reads.
+- **Checked at edit time.** `soul-lint` reports both offline as ERRORs — `var_cycle` and `var_unknown_ref` ([soul-lint.md](../soul-lint.md#var-evaluation-checks)) — and an L0 trial renders in a strict mode that materializes every task view whole, so a broken var fails its case even if no task reads it — as long as the case's render builds a view that holds it.
 
-## Merge file-vars ↔ task-vars (Option A)
+## One view per task: task-level `vars:` over `vars.yml`
 
-The `vars.*` namespace is shared by two sources: file-level `vars.yml` (this document) and task-level `vars:` on a separate task ([tasks.md §9](tasks.md)). When the name is declared in both, **Option A** applies:
+The `vars.*` namespace of a destiny pass has two rungs: `vars.yml` (this document) and task-level `vars:` ([tasks.md §9](tasks.md#vars-task-level)), with a `block:`'s vars merged into each child task's. A task sees ONE view of them:
 
-- **task-level `vars:` overrides the file-level var of the same name.** File-vars is the base layer, task-vars are placed on top. The outcome is deterministic: on a task with its own `vars: { redis_unit_name: … }`, it is the task value that will end up in `${ vars.redis_unit_name }`, but the file-level will not.
-- **var → var works WITHIN each layer, but NOT between layers.** file-var can refer to another **file-var** (eager-topological, see "var → var" above); task-var - to another **task-var** of the same layer. But **interlayer** links are prohibited: file-var does not see task-var, task-var does not see file-var (`${ vars.<foreign_layer> }` gives `var_unknown_ref`). task-vars resolve over the same base context (`input.*` + `soulprint.self.*` + `incarnation.*`) as file-vars, and the file layer is placed under them only AFTER the resolve (override) - so task-var cannot refer to file-var.
-- **Scope isolation is preserved.** file-vars resolve inside the destiny pass (after `apply.input` validation), `register.*`/`soulprint.hosts` are not available to them - just like task-vars destiny-tasks. var→var does NOT weaken the insulation. scenario-level `vars:` in destiny are NOT visible at all (only through `apply: input:`).
-- **`soul-lint` raises `warn` (`vars_collision`)** for each name declared in both `vars.yml` and task-level `vars:` of the same destiny. This is not a mistake (Option A is clear), but almost always an oversight by the author: rename one of the two or rely on the redefinition deliberately.
+- **A task-level `vars:` name overrides the `vars.yml` name.** On a task with its own `vars: { redis_unit_name: … }`, `${ vars.redis_unit_name }` is the task value; neighbouring tasks still see the `vars.yml` value.
+- **Every definition reads through that view — late binding.** A task var may read a `vars.yml` name, and a `vars.yml` definition read by that task sees the task's override:
 
-Resolving file-vars is executed **once per destiny-pass** (per-host, because values can refer to `soulprint.self`), and not per task: file-vars are invariant across tasks of the same pass.
+  ```yaml
+  # vars.yml
+  conf_dir: /etc/redis
+  acl_file: "${ vars.conf_dir }/users.acl"
+
+  # tasks/main.yml
+  - name: Write ACL for the staging layout
+    module: core.file.present
+    vars:
+      conf_dir: /opt/redis
+    params:
+      path: "${ vars.acl_file }"         # /opt/redis/users.acl
+      content: "..."
+  ```
+
+  A self-reference reads the rung below: a task's `conf_dir: "${ vars.conf_dir }/staging"` reads `conf_dir` from `vars.yml`.
+- **Scope isolation is preserved.** The pass stays isolated from its caller: the service's `vars/` and the scenario's `vars:` are NOT visible (only what `apply: input:` passes), and `register.*`/`soulprint.hosts` stay unavailable to a `vars.yml` value however it is reached.
+- **`soul-lint` raises `warn` (`vars_collision`)** for each name declared in both `vars.yml` and task-level `vars:` of the same destiny. This is not a mistake (the override is clear), but almost always an oversight by the author: rename one of the two or rely on the redefinition deliberately.
 
 ## See also
 

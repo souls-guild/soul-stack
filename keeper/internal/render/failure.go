@@ -27,10 +27,11 @@ type Failure struct {
 	// Host is the SID the failing evaluation ran for, "" when it was not
 	// host-scoped.
 	Host string
-	// Cell is the params cell path (`args[0]`, `acl[1].name`), "" outside params.
+	// Cell is the params cell path (`args[0]`, `acl[1].name`), `vars.<name>` for an
+	// error inside that var's definition, "" outside params.
 	Cell string
-	// Expr is the CEL expression as the author wrote it, "" when the error is not
-	// a CEL one.
+	// Expr is the CEL expression as the author wrote it — the failing definition's
+	// for an error inside one — "" when the error is not a CEL one.
 	Expr string
 	// Cause is the innermost reason. When Withheld it is a fixed sentence instead.
 	Cause string
@@ -125,6 +126,11 @@ func (p *Pipeline) taskFailure(in RenderInput, task config.Task, idx int, err er
 
 // passFailure is [Pipeline.taskFailure] for an error a pass returns: it adds no
 // task, and withholds by the pass's own seal sources.
+//
+// No `vars.*` taint, because no var error reaches here unjudged: one raised in a
+// task was withheld by taskFailure with that task's view, a superset of any view
+// here, and the one evaluation outside a task that reads `vars`, `compute:`, reads
+// the service view alone, whose definitions can name no secret source.
 func (p *Pipeline) passFailure(in RenderInput, err error) error {
 	if err == nil {
 		return nil
@@ -171,6 +177,15 @@ func failureOf(err error, inDestiny bool) (*Failure, error) {
 	if errors.As(err, &cell) {
 		f.Cell = cell.path
 	}
+	// An error raised inside a definition is THAT definition's (ADR-0082 amendment
+	// 2026-10-15, point 11): its own expression, and `vars.<name>` as where it failed,
+	// not the cell that asked for it. So withhold judges the definition's text,
+	// however many reads away the asking cell is.
+	cause := err
+	if ve := innermostVarError(err); ve != nil {
+		f.Cell = "vars." + ve.Name
+		cause = ve.Err
+	}
 	var (
 		evalErr     *cel.ErrEval
 		ruleErr     *config.ValidateRuleError
@@ -178,23 +193,32 @@ func failureOf(err error, inDestiny bool) (*Failure, error) {
 		unsupported *cel.ErrUnsupported
 	)
 	switch {
-	case errors.As(err, &evalErr):
+	case errors.As(cause, &evalErr):
 		// The only CEL errors that carry a value of the run, this one and a
 		// `validate:` rule's: compile errors and unsupported constructs speak of
 		// the author's text.
 		f.Expr, f.rawCause = evalErr.Expr, evalErr.Err.Error()
 		f.Cause = f.rawCause
-	case errors.As(err, &ruleErr):
+	case errors.As(cause, &ruleErr):
 		f.Expr, f.rawCause = ruleErr.That, ruleErr.Err.Error()
 		f.Cause = f.rawCause
-	case errors.As(err, &compileErr):
+	case errors.As(cause, &compileErr):
 		f.Expr, f.Cause = compileErr.Expr, compileErr.Err.Error()
-	case errors.As(err, &unsupported):
+	case errors.As(cause, &unsupported):
 		f.Expr, f.Cause = unsupported.Expr, "uses an unsupported construct: "+unsupported.Feature
 	default:
-		f.Cause = rootCause(err).Error()
+		f.Cause = rootCause(cause).Error()
 	}
 	return f, f
+}
+
+// innermostVarError is the deepest [cel.VarError] of err's chain, or nil.
+func innermostVarError(err error) *cel.VarError {
+	var inner, ve *cel.VarError
+	for errors.As(err, &ve) {
+		inner, err = ve, ve.Err
+	}
+	return inner
 }
 
 // rootCause is the deepest error of a single-wrap chain.

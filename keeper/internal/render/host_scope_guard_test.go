@@ -54,8 +54,17 @@ var hostScopeStance = map[string]struct {
 			"DECISION is taken once for the whole roster, which is refused at the decision site (staticWhenSkips / evalIncludeWhen), " +
 			"not by this literal",
 	},
-	"resolveTaskVars": {
-		reason: "the zero Vars is returned next to a non-nil error and is never evaluated; on the success path the caller's base carries the stance",
+	"taskVarLayers": {
+		want:   "",
+		reason: "nothing is evaluated through it: the task's view is built only for its layers' raw text, which the seal, the host-variance classification and soul_needs read, and no rung's Base is kept",
+	},
+	"runLevelVarLayers": {
+		want:   "",
+		reason: "nothing is evaluated through it: the run-level view is built only for its layers' raw text, which soul_needs reads, and no rung's Base is kept",
+	},
+	"scenarioRungBase": {
+		want:   "reader.HostScope",
+		reason: "a scenario `vars:` definition is evaluated for the cell that reads it, so it stands where that cell stands: on the loop axis it is host-free and compute is out of scope, in a task it is the task's (ADR-0082 amendment 2026-10-15, point 6)",
 	},
 }
 

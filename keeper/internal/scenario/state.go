@@ -26,7 +26,7 @@ const (
 	//
 	// The two failure modes are not symmetrical, which is why this is a hard rule
 	// rather than a preference: `incarnation.traits.env == 'prd'` on a step aborts
-	// the run outright (no such key), while `has(incarnation.traits)` quietly
+	// the run outright (no such key), while `has(incarnation.traits.env)` quietly
 	// resolves one layer fewer and returns success.
 	selectIncarnationForUpdateSQL = `
 SELECT id, service, service_version, state_schema_version,

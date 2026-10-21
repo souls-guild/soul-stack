@@ -4,6 +4,7 @@ import (
 	"context"
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 
@@ -1658,5 +1659,304 @@ assert:
 	if !strings.Contains(results[0].Failures[0], "state_absent.blanked") ||
 		!strings.Contains(results[0].Failures[0], "<nil>") {
 		t.Fatalf("the failure must name the field AND show the null it still holds, got: %v", results[0].Failures)
+	}
+}
+
+// TestStrictVars_FailsATrialOnAnUnusedBrokenVar — ADR-0082 amendment 2026-10-15, point
+// 12b: the L0 harness renders in strict mode, which materializes whole every task view
+// the render builds, so a broken var nothing reads fails the case and the error names
+// it — in each rung and in each kind of task view. Without strict mode the same case
+// passes: nothing reads the var, and a render evaluates a var only on request.
+func TestStrictVars_FailsATrialOnAnUnusedBrokenVar(t *testing.T) {
+	const broken = `"${ vars.nope }"`
+	const readsUsed = `name: strict
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo ok
+`
+	destinyTree := func(t *testing.T, mainYML, destinyYML, tasks, varsYML string) string {
+		t.Helper()
+		caseDir := writeApplyDestinyTree(t, "d", mainYML, `name: strict
+fixtures:
+  default_destiny_source: file://destiny-{name}
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo ok
+`, destinyYML, tasks)
+		if varsYML != "" {
+			root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(caseDir))))
+			if err := os.WriteFile(filepath.Join(root, "destiny-d", "vars.yml"), []byte(varsYML), 0o644); err != nil {
+				t.Fatalf("write vars.yml: %v", err)
+			}
+		}
+		return caseDir
+	}
+	applyMain := `name: create
+tasks:
+  - name: apply d
+    apply:
+      destiny: d
+      input: {}
+`
+	for name, write := range map[string]func(t *testing.T) string{
+		"a host task's own vars": func(t *testing.T) string {
+			return writeScenarioTree(t, `name: create
+tasks:
+  - name: reads one var
+    vars:
+      used: ok
+      broken: `+broken+`
+    module: core.exec.run
+    params:
+      cmd: "echo ${ vars.used }"
+`, readsUsed)
+		},
+		"a service var, fixtures.vars": func(t *testing.T) string {
+			return writeScenarioTree(t, `name: create
+tasks:
+  - name: reads one var
+    module: core.exec.run
+    params:
+      cmd: "echo ${ vars.used }"
+`, `name: strict
+fixtures:
+  vars:
+    used: ok
+    broken: `+broken+`
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo ok
+`)
+		},
+		"a keeper task's own vars": func(t *testing.T) string {
+			return writeScenarioTree(t, `name: create
+tasks:
+  - name: bind
+    vars:
+      broken: `+broken+`
+    module: core.soul.registered
+    params:
+      sid: a.example.com
+      coven: [x]
+      mode: append
+`, `name: strict
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.soul.registered
+`)
+		},
+		"an assert task's own vars": func(t *testing.T) string {
+			return writeScenarioTree(t, `name: create
+tasks:
+  - name: guard
+    vars:
+      broken: `+broken+`
+    assert:
+      that: ["true"]
+  - name: reads nothing
+    module: core.exec.run
+    params:
+      cmd: echo ok
+`, readsUsed)
+		},
+		"an applier's own vars": func(t *testing.T) string {
+			return destinyTree(t, `name: create
+tasks:
+  - name: apply d
+    vars:
+      used: ok
+      broken: `+broken+`
+    apply:
+      destiny: d
+      input:
+        msg: "${ vars.used }"
+`, "name: d\ninput:\n  msg:\n    type: string\n    required: true\n", `- name: echo
+  module: core.exec.run
+  params:
+    cmd: "echo ${ input.msg }"
+`, "")
+		},
+		"a destiny's vars.yml": func(t *testing.T) string {
+			return destinyTree(t, applyMain, "name: d\n", `- name: echo
+  module: core.exec.run
+  params:
+    cmd: "echo ${ vars.used }"
+`, "used: ok\nbroken: "+broken+"\n")
+		},
+		"a destiny task's own vars": func(t *testing.T) string {
+			return destinyTree(t, applyMain, "name: d\n", `- name: echo
+  vars:
+    used: ok
+    broken: `+broken+`
+  module: core.exec.run
+  params:
+    cmd: "echo ${ vars.used }"
+`, "")
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caseDir := write(t)
+
+			results, err := Run(context.Background(), caseDir, Options{lenientVars: true})
+			if err != nil {
+				t.Fatalf("without strict mode: Run: %v", err)
+			}
+			if !results[0].Pass {
+				t.Fatalf("without strict mode the case must pass, nothing reads the broken var: %v", results[0].Failures)
+			}
+
+			_, err = Run(context.Background(), caseDir, Options{})
+			if err == nil || !strings.Contains(err.Error(), "vars.broken") {
+				t.Fatalf("strict mode: err = %v, want the case failed naming vars.broken", err)
+			}
+		})
+	}
+}
+
+// TestStrictVars_RecordsNoCoverageOfItsOwn — point 12b's check evaluates every
+// definition, and production does not: a boolean var nothing reads is no when-branch of
+// the scenario, so strict mode must not put it in the coverage report. One that a task
+// reads is still there, also when an earlier task's check reached it first — a
+// destiny's `vars.yml` view is shared by its tasks on a host. The report is the one the
+// same case gives without strict mode. Only the rungs evaluated on the trial's engine
+// record anything: a task's own `vars:` and a destiny's `vars.yml`.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: materialize with
+// `view.Materialize()` in render.materialize again — the unread var appears. Suppress
+// the sink alone and keep filling the view's memo — the read var in `vars.yml`
+// disappears.
+func TestStrictVars_RecordsNoCoverageOfItsOwn(t *testing.T) {
+	const unread, read = "'a' == 'b'", "'c' == 'c'"
+	defs := "unread_flag: \"${ " + unread + " }\"\nread_flag: \"${ " + read + " }\"\n"
+	for name, write := range map[string]func(t *testing.T) string{
+		"a task's own vars": func(t *testing.T) string {
+			return writeScenarioTree(t, `name: create
+tasks:
+  - name: reads one var
+    vars:
+      unread_flag: "${ `+unread+` }"
+      read_flag: "${ `+read+` }"
+    module: core.exec.run
+    params:
+      cmd: "echo ${ vars.read_flag }"
+`, `name: coverage
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo true
+`)
+		},
+		"a destiny's vars.yml, read by its second task": func(t *testing.T) string {
+			caseDir := writeApplyDestinyTree(t, "d", `name: create
+tasks:
+  - name: apply d
+    apply:
+      destiny: d
+      input: {}
+`, `name: coverage
+fixtures:
+  default_destiny_source: file://destiny-{name}
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo one
+    - index: 1
+      module: core.exec.run
+      params:
+        cmd: echo true
+`, "name: d\n", `- name: reads nothing
+  module: core.exec.run
+  params:
+    cmd: echo one
+- name: reads one var
+  module: core.exec.run
+  params:
+    cmd: "echo ${ vars.read_flag }"
+`)
+			root := filepath.Dir(filepath.Dir(filepath.Dir(filepath.Dir(caseDir))))
+			if err := os.WriteFile(filepath.Join(root, "destiny-d", "vars.yml"), []byte(defs), 0o644); err != nil {
+				t.Fatalf("write vars.yml: %v", err)
+			}
+			return caseDir
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			caseDir := write(t)
+			report := func(opts Options) CoverageReport {
+				t.Helper()
+				results, err := Run(context.Background(), caseDir, opts)
+				if err != nil {
+					t.Fatalf("Run: %v", err)
+				}
+				if !results[0].Pass {
+					t.Fatalf("expected PASS, got: %v", results[0].Failures)
+				}
+				return results[0].Coverage
+			}
+			strict := report(Options{})
+			branches := map[string]bool{}
+			for _, b := range strict.Branches {
+				branches[b.Expr] = true
+			}
+			if branches[unread] {
+				t.Errorf("the unread var's definition is a when-branch of the report: %+v", strict.Branches)
+			}
+			if !branches[read] {
+				t.Errorf("the read var's definition is missing from the report: %+v", strict.Branches)
+			}
+			if lenient := report(Options{lenientVars: true}); !reflect.DeepEqual(strict, lenient) {
+				t.Errorf("strict mode changed the coverage report:\nstrict  %+v\nlenient %+v", strict, lenient)
+			}
+		})
+	}
+}
+
+// TestRunCase_ServiceVarsSeeTheTraitsARunSees — fixtures.vars are evaluated against the
+// case's incarnation as a run evaluates a service's files against the row's: with no
+// traits, `incarnation.traits` is an empty map (the column is NOT NULL DEFAULT '{}'),
+// present and keyless, as soul-lint's stub has it. Absent, `has()` would answer false
+// where a run answers true, and `incarnation.traits.k` would fail on `traits` instead
+// of on `k`.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: drop `Traits: map[string]any{}`
+// from the IncarnationContext the harness builds. It goes red.
+func TestRunCase_ServiceVarsSeeTheTraitsARunSees(t *testing.T) {
+	caseDir := writeScenarioTree(t, `name: create
+tasks:
+  - name: reads the traits
+    module: core.exec.run
+    params:
+      cmd: "echo ${ vars.traits }"
+`, `name: traits
+fixtures:
+  vars:
+    traits: "${ has(incarnation.traits) }-${ size(incarnation.traits) }-${ default(incarnation.traits.team, 'none') }"
+assert:
+  rendered_tasks:
+    - index: 0
+      module: core.exec.run
+      params:
+        cmd: echo true-0-none
+`)
+	results, err := Run(context.Background(), caseDir, Options{})
+	if err != nil {
+		t.Fatalf("Run: %v", err)
+	}
+	if !results[0].Pass {
+		t.Fatalf("expected PASS, got: %v", results[0].Failures)
 	}
 }

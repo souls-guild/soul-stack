@@ -94,7 +94,7 @@ func (p *Pipeline) routeRescue(in RenderInput, task config.Task, step int, cover
 	}
 	fires := func(h *topology.HostFacts) bool { return in.Rescue.fires(h.SID, task.OnFail, step) }
 	if !past {
-		live, err := resolveTargets(p.cel, in, task)
+		live, err := p.resolveTargets(in, task)
 		if err != nil {
 			return nil, nil, err
 		}

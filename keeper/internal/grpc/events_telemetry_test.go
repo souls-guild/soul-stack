@@ -1,7 +1,9 @@
 package grpc
 
 import (
+	"bytes"
 	"context"
+	"log/slog"
 	"os"
 	"path/filepath"
 	"strings"
@@ -229,6 +231,91 @@ func TestResolveForSID_MergesManifestAndServiceVars(t *testing.T) {
 	}
 	if db.hitCovenNamed {
 		t.Error("delivery looked incarnations up by coven name — the relation is the only source of membership (NIM-248)")
+	}
+}
+
+// TestResolveForSID_BrokenUnrelatedServiceVarDoesNotWithholdTelemetry — point 7
+// of the ADR-0082 amendment of 2026-10-15, on the delivery path: telemetry reads
+// its own keys off the service view and nothing else. A typo in a var no host's
+// telemetry reads used to fail the whole resolve, and broadcastTelemetryConfig
+// swallows that as a warning — the Soul silently kept its local cadence.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: build
+// servicevars.TelemetryVars' result from `view.Materialize()` instead of its two
+// lookups.
+func TestResolveForSID_BrokenUnrelatedServiceVarDoesNotWithholdTelemetry(t *testing.T) {
+	tmp := t.TempDir()
+	varsDir := filepath.Join(tmp, "vars")
+	if err := os.MkdirAll(varsDir, 0o755); err != nil {
+		t.Fatalf("mkdir vars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "00-base.yaml"), []byte(
+		"base_interval: 90s\ntelemetry_interval: \"${ vars.base_interval }\"\nbroken: \"${ vars.nope }\"\n"), 0o644); err != nil {
+		t.Fatalf("write vars/00-base.yaml: %v", err)
+	}
+
+	manifest := &config.ServiceManifest{Telemetry: &config.TelemetryConfig{Interval: telStrPtr("45s")}}
+	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
+	db := &telemetryFakeDB{memberRows: [][]any{{"web-app", "web", "v2.0.0", []string(nil), []byte(nil)}}}
+	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
+		loader, servicevars.NewResolver(discardLogger(t)), discardLogger(t))
+
+	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
+	if err != nil {
+		t.Fatalf("a broken var telemetry does not read must not fail it: %v", err)
+	}
+	if cfg.GetIntervalSec() != 90 {
+		t.Errorf("interval_sec = %d, want 90 from the evaluated definition", cfg.GetIntervalSec())
+	}
+}
+
+// TestResolveForSID_BrokenTelemetryKeyFallsBackPerKey — a telemetry key whose own
+// definition fails to evaluate counts as absent, the same per-key fallback
+// clampIntervalSec gives a value that does not parse. The rest of the config
+// still reaches the host: the service's collectors, and the manifest's
+// `enabled: false` above all — withheld, it left the Soul collecting on its local
+// cadence. The key and the error are logged.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: in
+// servicevars.TelemetryVars, return nil on a Lookup error instead of skipping the
+// key. The service's collectors go with it.
+func TestResolveForSID_BrokenTelemetryKeyFallsBackPerKey(t *testing.T) {
+	tmp := t.TempDir()
+	varsDir := filepath.Join(tmp, "vars")
+	if err := os.MkdirAll(varsDir, 0o755); err != nil {
+		t.Fatalf("mkdir vars: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(varsDir, "00-base.yaml"), []byte(
+		"telemetry_interval: \"${ vars.nope }\"\ntelemetry_collectors: [mem]\n"), 0o644); err != nil {
+		t.Fatalf("write vars/00-base.yaml: %v", err)
+	}
+
+	disabled := false
+	manifest := &config.ServiceManifest{Telemetry: &config.TelemetryConfig{
+		Enabled: &disabled, Interval: telStrPtr("45s"), Collectors: []string{"cpu"},
+	}}
+	loader := &telemetryFakeLoader{art: &artifact.ServiceArtifact{LocalDir: tmp, Manifest: manifest}}
+	db := &telemetryFakeDB{memberRows: [][]any{{"web-app", "web", "v2.0.0", []string(nil), []byte(nil)}}}
+	var logs bytes.Buffer
+	src := NewTelemetrySource(db, telemetryFakeResolver{ref: artifact.ServiceRef{Name: "web", Git: "file:///repo"}, ok: true},
+		loader, servicevars.NewResolver(discardLogger(t)), slog.New(slog.NewTextHandler(&logs, nil)))
+
+	cfg, err := src.ResolveForSID(context.Background(), "host-a.example.com")
+	if err != nil || cfg == nil {
+		t.Fatalf("a broken telemetry key must not withhold the config: (%v, %v)", cfg, err)
+	}
+	if cfg.GetEnabled() {
+		t.Error("enabled = true, want the manifest's false")
+	}
+	if cfg.GetIntervalSec() != 45 {
+		t.Errorf("interval_sec = %d, want 45: the broken key falls back to the manifest", cfg.GetIntervalSec())
+	}
+	if got := cfg.GetCollectors(); len(got) != 1 || got[0] != "mem" {
+		t.Errorf("collectors = %v, want [mem] from the service vars", got)
+	}
+	out := logs.String()
+	if !strings.Contains(out, "level=WARN") || !strings.Contains(out, "telemetry_interval") || !strings.Contains(out, "vars.nope") {
+		t.Errorf("want a WARN naming the key and the error, got:\n%s", out)
 	}
 }
 

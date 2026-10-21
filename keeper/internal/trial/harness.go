@@ -15,6 +15,7 @@ import (
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 	"github.com/souls-guild/soul-stack/keeper/internal/stateop"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
 	"github.com/souls-guild/soul-stack/shared/cel"
@@ -268,12 +269,24 @@ func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (re
 		"scenario/"+scn.Name,
 	)
 
+	// fixtures.vars IS the service rung: definitions, evaluated on request against
+	// the case's own incarnation — its id and service, with no covens and no traits,
+	// as soul-lint's stub (ADR-0082 amendment 2026-10-15, point 12b). "No traits" is
+	// an empty map and not nil: production reads them off `incarnation.traits`, a
+	// NOT NULL DEFAULT '{}' column decoded into an empty map, so `incarnation.traits`
+	// is always present to a service definition and only a key in it can be missing.
+	incID := incarnationName(scn.Name, c.Fixtures)
+	serviceVars, err := servicevars.ViewOf(c.Fixtures.Vars, servicevars.IncarnationContext{ID: incID, Service: svcName, Traits: map[string]any{}})
+	if err != nil {
+		return rc, fmt.Errorf("trial: fixtures.vars: %w", err)
+	}
+
 	in := render.RenderInput{
 		Scenario:    scn,
-		ServiceVars: orEmptyMap(c.Fixtures.Vars),
+		ServiceVars: serviceVars,
 		Input:       effectiveInput,
 		Register:    orEmptyMap(c.Mocks.Register),
-		Incarnation: render.IncarnationMeta{ID: incarnationName(scn.Name, c.Fixtures), Service: svcName}, // NIM-58
+		Incarnation: render.IncarnationMeta{ID: incID, Service: svcName}, // NIM-58
 		Hosts:       fixtureHosts(c.Fixtures),
 		Destiny:     destiny,
 		Templates:   templates,
@@ -282,6 +295,9 @@ func renderCase(ctx context.Context, c *Case, caseFile string, opts Options) (re
 		// takes as stateBefore. nil (case without state) → key not declared
 		// (`incarnation.state.x` = no-such-key), behavior of previous cases BIT-FOR-BIT.
 		State: c.Fixtures.State,
+		// Every task view the render builds is materialized whole, so a broken var
+		// nothing reads fails the case (ADR-0082 amendment 2026-10-15, point 12b).
+		StrictVars: !opts.lenientVars,
 	}
 
 	// Mocks.Register — a single L0 payload for the probe (probe-per-host = dispatch

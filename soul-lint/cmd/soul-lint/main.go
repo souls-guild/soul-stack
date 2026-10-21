@@ -47,11 +47,15 @@
 // is the registration alias an operator picks, so `redis=./dist/schema.json`
 // states the same word the task writes and the operator will register.
 //
-// `validate-scenario` also takes `--service-name <name>` (NIM-726) — the name the
-// service is registered under, for the own-namespace Vault fence ([ADR-0083] §7).
-// It is on the flag for the same reason the module alias is: nothing in a service
-// repository states the name any more. Without it the fence cannot run, and says
-// so (`own_namespace_fence_unchecked`) rather than passing in silence.
+// `--service-name <name>` (NIM-726) is the name the service is registered under. It
+// is on the flag for the same reason the module alias is: nothing in a service
+// repository states the name any more. Two commands read it. `validate-scenario`
+// reads it for the own-namespace Vault fence ([ADR-0083] §7); without it the fence
+// cannot run, and says so (`own_namespace_fence_unchecked`) rather than passing in
+// silence. `validate-service` reads it as the service of the stub incarnation it
+// evaluates the service view on (ADR-0082 amendment 2026-10-15, point 12a); without
+// it that service is the placeholder `stub-service`. `validate-service-tree` passes
+// its own to both, the manifest and every scenario.
 //
 // `list-secret-paths` takes the same flag and for the same reason, but there it is
 // REQUIRED rather than advisory: the name is a segment of every path it prints, so
@@ -102,7 +106,7 @@ var commandTable = []command{
 		"validate keeper.yml or soul.yml", validate.KindConfig),
 	validateCommand("validate-destiny", "<path> [--json] [--modules ALIAS=PATH]...",
 		"validate destiny.yml manifest", validate.KindDestiny),
-	validateCommand("validate-service", "<path> [--json] [--modules ALIAS=PATH]...",
+	validateCommand("validate-service", "<path> [--json] [--service-name NAME] [--modules ALIAS=PATH]...",
 		"validate service.yml manifest", validate.KindService),
 	validateCommand("validate-scenario", "<path> [--json] [--service-name NAME] [--modules ALIAS=PATH]...",
 		"validate scenario/<name>/main.yml", validate.KindScenario),
@@ -498,11 +502,14 @@ func printUsage(w io.Writer) {
 	fmt.Fprintln(w, "                 Without a binding, that module's params cannot be checked and it is")
 	fmt.Fprintln(w, "                 reported as plugin_params_unchecked rather than passing silently.")
 	fmt.Fprintln(w, "")
-	fmt.Fprintln(w, "  --service-name <name>  the name the service is REGISTERED under. Read by")
-	fmt.Fprintln(w, "                 validate-scenario, for the own-namespace Vault fence (ADR-0083 §7). It is")
-	fmt.Fprintln(w, "                 a flag because no file in a service repository states the name: it is")
-	fmt.Fprintln(w, "                 assigned once, at registration. Without it the fence cannot run and is")
-	fmt.Fprintln(w, "                 reported as own_namespace_fence_unchecked rather than skipped silently.")
-	fmt.Fprintln(w, "                 list-secret-paths takes the same flag and REQUIRES it: the name is a")
-	fmt.Fprintln(w, "                 segment of every path it prints.")
+	fmt.Fprintln(w, "  --service-name <name>  the name the service is REGISTERED under. It is a flag")
+	fmt.Fprintln(w, "                 because no file in a service repository states the name: it is")
+	fmt.Fprintln(w, "                 assigned once, at registration. Four commands take it:")
+	fmt.Fprintln(w, "                 validate-scenario, for the own-namespace Vault fence (ADR-0083 §7) -")
+	fmt.Fprintln(w, "                 without it the fence cannot run and is reported as")
+	fmt.Fprintln(w, "                 own_namespace_fence_unchecked rather than skipped silently;")
+	fmt.Fprintln(w, "                 validate-service, as the service of the stub incarnation it evaluates")
+	fmt.Fprintln(w, "                 the service view on - without it the placeholder stub-service;")
+	fmt.Fprintln(w, "                 validate-service-tree, which passes it to both; and list-secret-paths,")
+	fmt.Fprintln(w, "                 which REQUIRES it: the name is a segment of every path it prints.")
 }

@@ -239,7 +239,7 @@ func (e *Engine) guardComputeScope(expr string, scope ComputeScope, loopNames []
 	parsed, perr := e.parseNoMacro(expr)
 	if perr != nil {
 		// A syntax error is not ours to report: env.Compile says it better, with a
-		// position. Mirrors VarRefs/DetectSealed, which also skip unparseable text.
+		// position. Mirrors DetectSealed, which also skips unparseable text.
 		return nil
 	}
 	if !referencesIdent(parsed.Expr(), computeRoot) {
@@ -261,7 +261,7 @@ func (e *Engine) guardComputeScope(expr string, scope ComputeScope, loopNames []
 // the runtime allows, or stays quiet on what it rejects.
 //
 // Unparseable text → false: a syntax error belongs to the compiler, which reports
-// it with a position (mirrors [Engine.VarRefs] / DetectSealed).
+// it with a position (mirrors [Engine.DetectSealed]).
 func (e *Engine) ExpressionReferencesCompute(expr string) bool {
 	if !containsIdentText(expr, computeRoot) {
 		return false
@@ -314,7 +314,7 @@ func (e *Engine) InterpolationReferencesCompute(raw string) bool {
 // report every dynamic lookup as a typo.
 //
 // Unparseable text → no names, not dynamic: a syntax error belongs to the
-// compiler, which reports it with a position (as in [Engine.VarRefs]).
+// compiler, which reports it with a position (as in [Engine.ExpressionReferencesCompute]).
 func (e *Engine) ExpressionComputeNames(expr string) (names []string, dynamic bool) {
 	if !containsIdentText(expr, computeRoot) {
 		return nil, false

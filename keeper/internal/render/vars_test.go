@@ -3,6 +3,7 @@ package render
 import (
 	"context"
 	"errors"
+	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -10,285 +11,173 @@ import (
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
-// TestResolveTaskVars_Empty proves an empty/nil task-vars leaves base untouched
-// (the Vars field stays nil → normal no-such-key on vars.<key>).
-func TestResolveTaskVars_Empty(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Input: map[string]any{"x": "v"}}
+// The task view on one host of a scenario pass (varview.go, ADR-0082 amendment
+// 2026-10-15, points 4 and 5): the service rung under the scenario `vars:` rung
+// under the block + task rung, each definition evaluated when it is read and
+// reading `vars.<other>` through the same view.
 
-	got, err := resolveTaskVars(e, nil, nil, base)
+// viewOf is the view task reads on the first host of in (a synthetic one when in
+// has none) — the view renderTaskIter builds for it.
+func viewOf(t *testing.T, in RenderInput, task config.Task) *cel.VarView {
+	t.Helper()
+	if in.Scenario == nil {
+		in.Scenario = &config.ScenarioManifest{Name: "s"}
+	}
+	h := &topology.HostFacts{SID: "a.example.com"}
+	if len(in.Hosts) > 0 {
+		h = in.Hosts[0]
+	}
+	view, err := NewPipeline(nil, newEngine(t), nil, nil).taskView(in, task, h, hostVars(in, h, 1))
 	if err != nil {
-		t.Fatalf("resolveTaskVars(nil): %v", err)
+		t.Fatalf("taskView: %v", err)
 	}
-	if got.Vars != nil {
-		t.Errorf("Vars = %v, want nil for empty task-vars", got.Vars)
-	}
+	return view
+}
 
-	got, err = resolveTaskVars(e, nil, map[string]any{}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars(empty): %v", err)
+func lookupOK(t *testing.T, view *cel.VarView, name string) any {
+	t.Helper()
+	val, found, err := view.Lookup(name)
+	if err != nil || !found {
+		t.Fatalf("vars.%s: found=%v err=%v", name, found, err)
 	}
-	if got.Vars != nil {
-		t.Errorf("Vars = %v, want nil for an empty map", got.Vars)
+	return val
+}
+
+// TestTaskView_NoOwnRungIsTheServiceView — a task without `vars:` in a scenario
+// without `vars:` reads the run's service view itself, so a service var it reads is
+// evaluated once for the run, not once per task (point 8).
+func TestTaskView_NoOwnRungIsTheServiceView(t *testing.T) {
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"conf_dir": "/etc/redis"})}
+	if got := viewOf(t, in, config.Task{Name: "plain"}); got != in.ServiceVars {
+		t.Fatalf("a task with no rung of its own must read the service view itself, got a new view")
 	}
 }
 
-// TestResolveTaskVars_FromInput proves a vars value referencing input is
-// available as vars.<key>.
-func TestResolveTaskVars_FromInput(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Input: map[string]any{"host": "10.0.0.1"}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{"addr": "${ input.host }"}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
-	}
-	if got.Vars["addr"] != "10.0.0.1" {
-		t.Errorf("vars.addr = %v, want 10.0.0.1", got.Vars["addr"])
+// TestTaskView_TaskVarReadsInput — a task var reads the reader's input.
+func TestTaskView_TaskVarReadsInput(t *testing.T) {
+	view := viewOf(t, RenderInput{Input: map[string]any{"host": "10.0.0.1"}},
+		config.Task{Vars: map[string]any{"addr": "${ input.host }"}})
+	if got := lookupOK(t, view, "addr"); got != "10.0.0.1" {
+		t.Errorf("vars.addr = %v, want 10.0.0.1", got)
 	}
 }
 
-// TestResolveTaskVars_NonStringPassthrough proves non-string vars values pass
-// through as literals (CEL only touches strings, symmetric with params).
-func TestResolveTaskVars_NonStringPassthrough(t *testing.T) {
-	e := newEngine(t)
-	got, err := resolveTaskVars(e, nil, map[string]any{
-		"port":    int64(6379),
-		"enabled": true,
-	}, cel.Vars{})
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
+// TestTaskView_NonStringLiteralsPassThrough — a non-string definition is a literal.
+func TestTaskView_NonStringLiteralsPassThrough(t *testing.T) {
+	view := viewOf(t, RenderInput{}, config.Task{Vars: map[string]any{"port": int64(6379), "enabled": true}})
+	if got := lookupOK(t, view, "port"); got != int64(6379) {
+		t.Errorf("vars.port = %v, want 6379", got)
 	}
-	if got.Vars["port"] != int64(6379) {
-		t.Errorf("vars.port = %v, want 6379", got.Vars["port"])
-	}
-	if got.Vars["enabled"] != true {
-		t.Errorf("vars.enabled = %v, want true", got.Vars["enabled"])
+	if got := lookupOK(t, view, "enabled"); got != true {
+		t.Errorf("vars.enabled = %v, want true", got)
 	}
 }
 
-// TestResolveTaskVars_NativeTypeSingleBlock proves a lone ${expr} yields a
-// native type (number), not a string (templating.md §5(a)), same as in params.
-func TestResolveTaskVars_NativeTypeSingleBlock(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Input: map[string]any{"n": int64(5)}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{"count": "${ input.n }"}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
-	}
-	if got.Vars["count"] != int64(5) {
-		t.Errorf("vars.count = %v (%T), want native int64 5", got.Vars["count"], got.Vars["count"])
+// TestTaskView_WholeExpressionKeepsItsNativeType — a lone ${expr} yields the
+// native type of its result (templating.md §5(a)), as in params.
+func TestTaskView_WholeExpressionKeepsItsNativeType(t *testing.T) {
+	view := viewOf(t, RenderInput{Input: map[string]any{"n": int64(5)}},
+		config.Task{Vars: map[string]any{"count": "${ input.n }"}})
+	if got := lookupOK(t, view, "count"); got != int64(5) {
+		t.Errorf("vars.count = %v (%T), want native int64 5", got, got)
 	}
 }
 
-// TestResolveTaskVars_VarToVar proves a task-var can reference ANOTHER
-// task-var in the same layer (var→var within a layer is ALLOWED,
-// eager-topological); declaration order doesn't matter (toposort). Guard test
-// for the var→var invariant (case #1, task layer).
-func TestResolveTaskVars_VarToVar(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Input: map[string]any{"host": "h"}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{
-		"b": "${ vars.a }-x", // declared BEFORE a — order doesn't matter
+// TestTaskView_VarToVarInTheTaskRungIgnoresOrder — a task var reads another of the
+// same rung whatever the order of declaration: nothing is sorted, a name is
+// evaluated when it is read.
+func TestTaskView_VarToVarInTheTaskRungIgnoresOrder(t *testing.T) {
+	view := viewOf(t, RenderInput{Input: map[string]any{"host": "h"}}, config.Task{Vars: map[string]any{
+		"b": "${ vars.a }-x",
 		"a": "${ input.host }",
-	}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: var→var within the task layer must resolve: %v", err)
-	}
-	if got.Vars["a"] != "h" {
-		t.Errorf("vars.a = %v, want h", got.Vars["a"])
-	}
-	if got.Vars["b"] != "h-x" {
-		t.Errorf("vars.b = %v, want h-x (b refers to a of the same layer)", got.Vars["b"])
+	}})
+	if got := lookupOK(t, view, "b"); got != "h-x" {
+		t.Errorf("vars.b = %v, want h-x", got)
 	}
 }
 
-// TestResolveTaskVars_CannotSeeFileVar proves cross-layer isolation: a
-// task-var cannot see a file-var (`${ vars.<file_var> }` → ErrVarUnknownRef,
-// file-vars aren't in the task layer). Guard test for the isolation invariant
-// (case #8, task→file).
-func TestResolveTaskVars_CannotSeeFileVar(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Input: map[string]any{"host": "h"}}
-
-	_, err := resolveTaskVars(e,
-		map[string]any{"fv": "FILE"},                   // file-vars (resolved)
-		map[string]any{"tv": "${ vars.fv }-from-task"}, // task-var references a file-var
-		base)
-	if err == nil {
-		t.Fatal("resolveTaskVars: task-var must not see file-var (cross-layer isolation)")
+// TestTaskView_TaskVarReadsAServiceVar — a task var reaches down into the service
+// rung (ADR-0082: one `vars.*` root), and the service var stays readable beside it.
+func TestTaskView_TaskVarReadsAServiceVar(t *testing.T) {
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"conf_dir": "/etc/redis"})}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"acl_path": "${ vars.conf_dir }/users.acl"}})
+	if got := lookupOK(t, view, "acl_path"); got != "/etc/redis/users.acl" {
+		t.Errorf("acl_path = %#v, want /etc/redis/users.acl", got)
 	}
-	if !errors.Is(err, ErrVarUnknownRef) {
-		t.Errorf("err = %v, want ErrVarUnknownRef (var_unknown_ref)", err)
+	if got := lookupOK(t, view, "conf_dir"); got != "/etc/redis" {
+		t.Errorf("the service var must stay readable under the task rung: %#v", got)
 	}
 }
 
-// TestResolveTaskVars_SeesServiceVarBelow — the merge of ADR-0082 in one test.
-// A task var may reach DOWN into the service's own vars, because before the
-// merge it reached them by spelling `${ essence.X }`, a different root that was
-// always in scope. Refusing `${ vars.X }` now would turn a working scenario into
-// var_unknown_ref for no reason an author could act on.
-func TestResolveTaskVars_SeesServiceVarBelow(t *testing.T) {
-	e := newEngine(t)
-	// base.Vars is the service layer, exactly as hostVars seeds it.
-	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{
-		"acl_path": "${ vars.conf_dir }/users.acl",
-	}, base)
-	if err != nil {
-		t.Fatalf("a task var must see the service layer below it: %v", err)
-	}
-	if got.Vars["acl_path"] != "/etc/redis/users.acl" {
-		t.Errorf("acl_path = %#v, want /etc/redis/users.acl", got.Vars["acl_path"])
-	}
-	// The service var itself is still there — the task layer adds, it does not
-	// replace the map.
-	if got.Vars["conf_dir"] != "/etc/redis" {
-		t.Errorf("the service layer must survive under the task layer: %#v", got.Vars)
+// TestTaskView_TaskVarDerivesFromTheNameItShadows — a self-reference reads the
+// definition below its own rung (point 9): `conf_dir: ${ vars.conf_dir }/conf.d`.
+func TestTaskView_TaskVarDerivesFromTheNameItShadows(t *testing.T) {
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"conf_dir": "/etc/redis"})}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"conf_dir": "${ vars.conf_dir }/conf.d"}})
+	if got := lookupOK(t, view, "conf_dir"); got != "/etc/redis/conf.d" {
+		t.Fatalf("conf_dir = %#v, want /etc/redis/conf.d", got)
 	}
 }
 
-// TestResolveTaskVars_ShadowsAndDerivesFromTheSameName — the shape ADR-0082 §1
-// sells as the profit of the merge, and the one a naive dependency graph turns
-// into a cycle it cannot explain. A task var may redefine a service var IN TERMS
-// OF the value it is shadowing; under two roots this was `${ essence.conf_dir }`
-// and needed no rule.
-func TestResolveTaskVars_ShadowsAndDerivesFromTheSameName(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{
-		"conf_dir": "${ vars.conf_dir }/conf.d",
-	}, base)
-	if err != nil {
-		t.Fatalf("a task var must be able to derive from the same name below it: %v", err)
-	}
-	if got.Vars["conf_dir"] != "/etc/redis/conf.d" {
-		t.Fatalf("conf_dir = %#v, want /etc/redis/conf.d", got.Vars["conf_dir"])
+// TestTaskView_SelfReferenceWithNothingBelowIsACycle — with no definition below to
+// read, a self-reference is `var_cycle x → x` (point 9).
+func TestTaskView_SelfReferenceWithNothingBelowIsACycle(t *testing.T) {
+	view := viewOf(t, RenderInput{}, config.Task{Vars: map[string]any{"x": "${ vars.x }-loop"}})
+	_, _, err := view.Lookup("x")
+	if !errors.Is(err, ErrVarCycle) || !strings.Contains(err.Error(), "var_cycle: x → x") {
+		t.Fatalf("err = %v, want var_cycle: x → x", err)
 	}
 }
 
-// TestResolveTaskVars_SelfReferenceWithNothingBelowIsACycle — the other half.
-// With no lower layer to read, a var referencing its own name IS a cycle, and
-// must still be reported as one.
-func TestResolveTaskVars_SelfReferenceWithNothingBelowIsACycle(t *testing.T) {
-	e := newEngine(t)
-
-	_, err := resolveTaskVars(e, nil, map[string]any{"x": "${ vars.x }-loop"}, cel.Vars{})
-	if err == nil {
-		t.Fatal("a self-reference with no layer below must be a cycle")
-	}
-	if !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("err = %v, want ErrVarCycle", err)
-	}
-}
-
-// TestResolveTaskVars_MutualCycleStillCaught — shadow-and-derive must not blunt
-// real cycle detection: two task vars referencing each other are still a cycle
-// even when both names also exist below.
-func TestResolveTaskVars_MutualCycleStillCaught(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Vars: map[string]any{"a": "A", "b": "B"}}
-
-	_, err := resolveTaskVars(e, nil, map[string]any{
-		"a": "${ vars.b }-1",
-		"b": "${ vars.a }-2",
-	}, base)
-	if err == nil {
-		t.Fatal("a mutual reference between two task vars is still a cycle")
-	}
-	if !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("err = %v, want ErrVarCycle", err)
-	}
-}
-
-// TestResolveTaskVars_ShadowsServiceVar — the ladder is outermost-first, so a
-// task var of the same name WINS. This is the cost of one flat namespace, and
-// the reason soul-lint warns about it (`vars_shadows_service_var`, NIM-416).
-func TestResolveTaskVars_ShadowsServiceVar(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Vars: map[string]any{"conf_dir": "/etc/redis"}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{"conf_dir": "/opt/redis"}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
-	}
-	if got.Vars["conf_dir"] != "/opt/redis" {
-		t.Errorf("conf_dir = %#v, want the task value to shadow the service one", got.Vars["conf_dir"])
-	}
-}
-
-// TestResolveTaskVars_ServiceVarUnderFileVarUnderTaskVar — the whole ladder in
-// one assertion: service < file < task. Each layer supplies a key nobody else
-// has, plus the shared name they all claim.
-func TestResolveTaskVars_ServiceVarUnderFileVarUnderTaskVar(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Vars: map[string]any{"who": "service", "only_service": 1}}
-
-	got, err := resolveTaskVars(e,
-		map[string]any{"who": "file", "only_file": 2},
-		map[string]any{"who": "task", "only_task": 3},
-		base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
-	}
-	if got.Vars["who"] != "task" {
-		t.Errorf("who = %#v, want the innermost layer to win", got.Vars["who"])
-	}
-	for k, want := range map[string]any{"only_service": 1, "only_file": 2, "only_task": 3} {
-		if got.Vars[k] != want {
-			t.Errorf("%s = %#v, want %#v — every layer must contribute", k, got.Vars[k], want)
+// TestTaskView_MutualCycleIsACycleOverServiceNamesToo — two task vars reading each
+// other are a cycle although the service rung defines both names below: neither is
+// a self-reference.
+func TestTaskView_MutualCycleIsACycleOverServiceNamesToo(t *testing.T) {
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"a": "A", "b": "B"})}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"a": "${ vars.b }-1", "b": "${ vars.a }-2"}})
+	for _, name := range []string{"a", "b"} {
+		_, _, err := view.Lookup(name)
+		if !errors.Is(err, ErrVarCycle) || !strings.Contains(err.Error(), "var_cycle: a → b → a") {
+			t.Fatalf("vars.%s: err = %v, want var_cycle: a → b → a whichever is read first", name, err)
 		}
 	}
 }
 
-// TestResolveTaskVars_StillCannotSeeFileVarThroughService — the downward opening
-// must not become a sideways one. The service layer is below BOTH, so its
-// presence gives a task var no path to a file var.
-func TestResolveTaskVars_StillCannotSeeFileVarThroughService(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{Vars: map[string]any{"svc": "SERVICE"}}
-
-	_, err := resolveTaskVars(e,
-		map[string]any{"fv": "FILE"},
-		map[string]any{"tv": "${ vars.fv }-from-task"},
-		base)
-	if err == nil {
-		t.Fatal("a task var must still not see a file var, service layer or not")
-	}
-	if !errors.Is(err, ErrVarUnknownRef) {
-		t.Errorf("err = %v, want ErrVarUnknownRef", err)
+// TestTaskView_TaskVarShadowsServiceVar — the highest rung wins a name. The cost of
+// one flat namespace, and why soul-lint warns about it (vars_shadows_service_var).
+func TestTaskView_TaskVarShadowsServiceVar(t *testing.T) {
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"conf_dir": "/etc/redis"})}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"conf_dir": "/opt/redis"}})
+	if got := lookupOK(t, view, "conf_dir"); got != "/opt/redis" {
+		t.Errorf("conf_dir = %#v, want the task value to shadow the service one", got)
 	}
 }
 
-// TestResolveTaskVars_Cycle proves a task-var→task-var cycle yields
-// ErrVarCycle with a trace. Guard test (case #2/#4 on the task layer).
-func TestResolveTaskVars_Cycle(t *testing.T) {
-	e := newEngine(t)
-	_, err := resolveTaskVars(e, nil, map[string]any{
-		"a": "${ vars.b }",
-		"b": "${ vars.a }",
-	}, cel.Vars{})
-	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveTaskVars: expected ErrVarCycle, got: %v", err)
+// TestTaskView_ServiceUnderScenarioUnderTask — the scenario pass's whole ladder:
+// each rung supplies a name nobody else has, plus the one they all claim.
+func TestTaskView_ServiceUnderScenarioUnderTask(t *testing.T) {
+	in := RenderInput{
+		ServiceVars: serviceView(t, map[string]any{"who": "service", "only_service": 1}),
+		Scenario:    &config.ScenarioManifest{Name: "s", Vars: map[string]any{"who": "scenario", "only_scenario": 2}},
+	}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"who": "task", "only_task": 3}})
+	if got := lookupOK(t, view, "who"); got != "task" {
+		t.Errorf("who = %#v, want the highest rung to win", got)
+	}
+	for k, want := range map[string]any{"only_service": 1, "only_scenario": 2, "only_task": 3} {
+		if got := lookupOK(t, view, k); got != want {
+			t.Errorf("%s = %#v, want %#v — every rung must contribute", k, got, want)
+		}
 	}
 }
 
-// TestResolveTaskVars_FromSoulprintSelf proves vars can reference
-// soulprint.self (destiny/tasks.md §9), resolved per-host.
-func TestResolveTaskVars_FromSoulprintSelf(t *testing.T) {
-	e := newEngine(t)
-	base := cel.Vars{SoulprintSelf: map[string]any{"os": map[string]any{"family": "debian"}}}
-
-	got, err := resolveTaskVars(e, nil, map[string]any{"fam": "${ soulprint.self.os.family }"}, base)
-	if err != nil {
-		t.Fatalf("resolveTaskVars: %v", err)
-	}
-	if got.Vars["fam"] != "debian" {
-		t.Errorf("vars.fam = %v, want debian", got.Vars["fam"])
+// TestTaskView_TaskVarReadsSoulprintSelf — a task var reads the host it is
+// evaluated for (destiny/tasks.md §9).
+func TestTaskView_TaskVarReadsSoulprintSelf(t *testing.T) {
+	in := RenderInput{Hosts: []*topology.HostFacts{host("a", nil, map[string]any{"os": map[string]any{"family": "debian"}})}}
+	view := viewOf(t, in, config.Task{Vars: map[string]any{"fam": "${ soulprint.self.os.family }"}})
+	if got := lookupOK(t, view, "fam"); got != "debian" {
+		t.Errorf("vars.fam = %v, want debian", got)
 	}
 }
 

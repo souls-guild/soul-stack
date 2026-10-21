@@ -118,13 +118,15 @@ type IncarnationMeta struct {
 
 // RenderInput — input for one render pipeline run.
 //
-// ServiceVars — the service's own vars (`<service>/vars/`, host-invariant,
-// ADR-0082). They are the BOTTOM of the flat `vars.*` namespace: render layers
-// the destiny's `vars.yml`, a `block:`'s and the task's own `vars:` over them,
-// outermost first, so a task reads `vars.<key>` without knowing which layer
-// supplied it. NOT forwarded in the destiny pass (renderApplyDestiny) — a
-// destiny's `vars.*` is its own alone, and it sees the caller's values only via
-// apply: input: (isolation, slice A). Register —
+// ServiceVars — the service view: the service rung of `vars.*` (`<service>/vars/`,
+// ADR-0082) alone, lazy, with no parent. The caller builds it once per run and
+// keeps it across Passages, so a service var no task overrides is evaluated once
+// for the run (amendment 2026-10-15, points 7 and 8). Every task view of the scenario
+// pass stacks the scenario `vars:` rung and the task's block + task rung on it
+// (varview.go), and a definition in any rung reads `vars.<other>` through the task's
+// view — late binding. nil — a service with no vars. NOT forwarded in the destiny
+// pass (renderApplyDestiny) — a destiny's `vars.*` is its own alone, and it sees
+// the caller's values only via apply: input: (isolation, slice A). Register —
 // register-context from already-executed tasks (register-name → payload),
 // supplied by the orchestrator (.g) during per-task render; empty in pilot
 // (cross-task chaining within Render is future work).
@@ -155,7 +157,7 @@ type IncarnationMeta struct {
 // not the service snapshot.
 type RenderInput struct {
 	Scenario       *config.ScenarioManifest
-	ServiceVars    map[string]any
+	ServiceVars    *cel.VarView
 	Input          map[string]any
 	Register       map[string]any
 	RegisterByHost map[string]map[string]any
@@ -184,24 +186,29 @@ type RenderInput struct {
 	// reads with context.Background() (cel.Vars.Ctx semantics).
 	Ctx context.Context
 
-	// DestinyVarsResolved — resolved destiny-local `vars.yml` values (Variant A,
-	// docs/destiny/vars.md), per host: sid → name→value. Filled ONCE per destiny
-	// pass (renderApplyDestiny resolves vars.yml over destiny-env
-	// input+soulprint.self+incarnation, isolated from scenario register/vars
-	// and without visibility between vars), then used as the BASE `vars.*` layer
-	// when rendering each destiny task (resolveTaskVars merges task-level
-	// `vars:` on top — task overrides same-named file-vars). Invariant across
-	// the pass's tasks (resolved not per-task). nil/empty for a host → base
-	// `vars.*` is empty (scenario pass: file-vars don't participate). Key is the
-	// host SID; a synthetic empty host (where: filtered out everyone) → key "".
-	DestinyVarsResolved map[string]map[string]any
+	// destinyVars — the destiny pass's base views, per host: sid → the `vars.yml`
+	// rung alone (docs/destiny/vars.md), lazy, evaluated in the destiny env over
+	// that host's input and soulprint.self. Built ONCE per destiny pass
+	// ([Pipeline.destinyBaseViews]); each destiny task view stacks its block + task
+	// rung on its host's ([RenderInput.destinyBase]). A `vars.yml` value is evaluated
+	// once per host and reused by every task view there whose own rungs redefine
+	// nothing it read. A task view that does redefine such a name evaluates the
+	// definition again, with that view's value (late binding), and a failed
+	// evaluation is memoized nowhere. nil on a scenario pass and for a destiny without
+	// `vars.yml`. Key "" is the synthetic empty host (where: filtered out everyone).
+	destinyVars map[string]*cel.VarView
+
+	// StrictVars — evaluate every task view the render builds whole and fail on any
+	// error (ADR-0082 amendment 2026-10-15, point 12b): set by the L0 harness and
+	// Go tests, never in production. Carried into the destiny pass.
+	StrictVars bool
 
 	// InputByHost — the destiny pass's `apply: input:` resolved PER HOST (NIM-908):
 	// sid → name→value, each already through the destiny's full `input:` contract.
 	// Filled ONCE per destiny pass ([Pipeline.resolveApplyInput]) and selected by
 	// [inputForHost] wherever a host is bound. Key is the host SID; a synthetic
-	// empty host (where: filtered out everyone) → key "", exactly as
-	// DestinyVarsResolved above.
+	// empty host (where: filtered out everyone) → key "", exactly as destinyVars
+	// above.
 	//
 	// nil on a scenario pass, where `input:` is the operator's run input and has no
 	// host axis at all. That nil is what makes [inputForHost] fall through to Input
@@ -216,9 +223,9 @@ type RenderInput struct {
 
 	// hostVariantInputs — the destiny input names in InputByHost that actually
 	// render per host, sorted: the ones whose `apply: input:` value REACHES
-	// `soulprint.self` or `register`, directly or through the applier's own `vars:`
-	// ([hostVariantVarNames] closes that transitively — dropping it restores the hole
-	// the first cut of NIM-908 shipped with). Threaded into every host-free CEL context as
+	// `soulprint.self` or `register`, directly or through a name of the applier's
+	// view of `vars` ([hostVariantVarNames] closes that transitively — dropping it
+	// restores the hole the first cut of NIM-908 shipped with). Threaded into every host-free CEL context as
 	// [cel.Vars.HostVariantInputs], where naming one is a compile-time refusal.
 	//
 	// Unexported, like destinyIsolated: an external caller (scenario-runner, trial,
@@ -232,7 +239,9 @@ type RenderInput struct {
 	// sorted: a local reading `soulprint.self` or a per-host `input.<name>`
 	// ([hostVariantDestinyVars]). The mirror of hostVariantInputs one layer down, and
 	// it is separate because the reference that reaches a host-free context says only
-	// `vars.<name>` — nothing about it looks per-host.
+	// `vars.<name>` — nothing about it looks per-host. The set of the pass, for the
+	// contexts with no task rung; one that decides a task reads its view's
+	// ([Pipeline.hostVariantTaskVars]).
 	//
 	// Unexported and nil on a scenario pass for the same reason as the field above.
 	hostVariantVars []string
@@ -410,17 +419,6 @@ type RenderInput struct {
 	// is sealed. Run-level, like the block itself.
 	sealedCompute map[string]bool
 
-	// sealedFileVars — the BOTTOM of the `vars.*` taint for this pass: the names
-	// of a destiny's `vars.yml` locals whose own value reads a secret source,
-	// derived by [Pipeline.renderApplyDestiny] for its own pass. A task's own
-	// `vars:` layer is stacked on top of it per task ([Pipeline.taskSealSources])
-	// — that layer is the one thing here that is not pass-wide.
-	//
-	// nil on a scenario pass: there is no file layer there, and the SERVICE layer
-	// under both cannot carry a secret at all — [cel.NewServiceVars] declares
-	// neither `input` nor vault(), so a service var has no secret source to read.
-	sealedFileVars map[string]bool
-
 	// sealedLoopBinds — `loop:` bind names whose value came out of a sealed
 	// `items:` expression, tainted WHOLE ([cel.SealSources.Roots]). Set by
 	// [Pipeline.renderLoopTask] on ITS OWN copy of RenderInput, which is why this
@@ -428,6 +426,14 @@ type RenderInput struct {
 	// author-chosen (`as:`, default `item`) and means nothing outside the task
 	// that declared it.
 	sealedLoopBinds map[string]bool
+
+	// sealMemo — what each raw definition string reads for the seal, parsed once per
+	// [Pipeline.Render] and shared with its destiny passes. nil outside a Render.
+	sealMemo *sealMemo
+
+	// loopSeal — set by [Pipeline.renderLoopTask] on its own copy, like
+	// sealedLoopBinds: the seal sources every iteration of that loop shares.
+	loopSeal *loopSeal
 }
 
 // RenderedTask — a task after the Keeper-side CEL render, an intermediate

@@ -3,6 +3,8 @@ package render
 import (
 	"context"
 	"fmt"
+	"maps"
+	"slices"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/vault"
@@ -41,12 +43,14 @@ func resolveVaultRefs(ctx context.Context, vc KVReader, params map[string]any) (
 }
 
 // walkVaultValue recursively resolves vault-refs in an arbitrary YAML value
-// (map / slice / scalar). Returns a new value of the same kind.
+// (map / slice / scalar). Returns a new value of the same kind. A map is walked in
+// key order, so of two failing refs the same one is reported every time.
 func walkVaultValue(ctx context.Context, vc KVReader, v any) (any, error) {
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
-		for k, val := range t {
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			val := t[k]
 			rv, err := walkVaultValue(ctx, vc, val)
 			if err != nil {
 				return nil, err
@@ -180,7 +184,8 @@ func (p *Pipeline) resolveRegisterSecrets(ctx context.Context, in RenderInput) (
 	}
 	out := make(map[string]any, len(in.KeeperRegister))
 	var sealed map[string]bool
-	for name, payload := range in.KeeperRegister {
+	for _, name := range slices.Sorted(maps.Keys(in.KeeperRegister)) {
+		payload := in.KeeperRegister[name]
 		n := 0
 		rv, err := walkRegisterValue(ctx, p.vault, payload, service, incarnation, &n)
 		if err != nil {
@@ -205,7 +210,8 @@ func walkRegisterValue(ctx context.Context, vc KVReader, v any, service, incarna
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
-		for k, val := range t {
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			val := t[k]
 			rv, err := walkRegisterValue(ctx, vc, val, service, incarnation, resolved)
 			if err != nil {
 				return nil, err

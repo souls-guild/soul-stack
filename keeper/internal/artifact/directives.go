@@ -7,6 +7,7 @@ import (
 	"sort"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
+	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
 // varsBaseFile — the conventional name of a service's baseline vars layer. Kept
@@ -14,6 +15,9 @@ import (
 // out to be missing; the catalog itself is read from the assembled vars, not from
 // this file.
 const varsBaseFile = "vars/00-base.yaml"
+
+// directivesVar — the service var carrying the catalog: a series→[]name map.
+const directivesVar = "redis_directives"
 
 // DirectiveCatalog — a snapshot directive catalog: the SHA1 of the
 // materialized snapshot (serves as an ETag, the catalog is immutable at a
@@ -51,15 +55,26 @@ func loadDirectiveCatalogFull(serviceRoot string) (map[string][]string, error) {
 	// it. Lexical assembly specifically — a `_stack.yaml`'s conditionality is
 	// per-incarnation by construction (its steps read `incarnation.*`), and this
 	// endpoint answers a service-level question with no incarnation in hand.
-	vars, err := servicevars.NewResolver(nil).ResolveLexical(serviceRoot)
+	view, err := servicevars.NewResolver(nil).LexicalView(serviceRoot)
 	if err != nil {
 		return nil, fmt.Errorf("artifact: assembling service vars: %w", err)
+	}
+	return directiveCatalogOf(view)
+}
+
+// directiveCatalogOf reads the catalog from the service view: `redis_directives`
+// and no other var, so a broken var elsewhere in the service is never evaluated
+// and does not empty the editor (ADR-0082 amendment 2026-10-15, point 7).
+func directiveCatalogOf(view *cel.VarView) (map[string][]string, error) {
+	v, ok, err := view.Lookup(directivesVar)
+	if err != nil {
+		return nil, fmt.Errorf("artifact: evaluating %s: %w", directivesVar, err)
 	}
 	raw := struct {
 		RedisDirectives map[string][]string
 	}{}
-	if v, ok := vars["redis_directives"]; ok {
-		b, merr := json.Marshal(map[string]any{"redis_directives": v})
+	if ok {
+		b, merr := json.Marshal(map[string]any{directivesVar: v})
 		if merr != nil {
 			return nil, fmt.Errorf("artifact: re-encoding the directive catalog: %w", merr)
 		}

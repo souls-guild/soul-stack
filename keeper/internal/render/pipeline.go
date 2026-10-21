@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"log/slog"
 	"regexp"
+	"strings"
 	"sync"
 	"time"
 
@@ -43,6 +44,14 @@ type Pipeline struct {
 	cel     *cel.Engine
 	logger  *slog.Logger
 	metrics *RenderMetrics
+
+	// scenarioVars compiles a scenario's top-level `vars:` definitions
+	// ([cel.NewScenarioVars]); scenarioVarsErr is why it could not be built, reported
+	// by the first view that needs it.
+	scenarioVars    *cel.Engine
+	scenarioVarsErr error
+
+	onView func(*cel.VarView) // tests only: every view of `vars.*` the pipeline builds
 }
 
 // NewPipeline constructs a Pipeline. engine is required. vc may be nil (a
@@ -60,7 +69,8 @@ func NewPipeline(vc KVReader, engine *cel.Engine, logger *slog.Logger, metrics *
 	if logger == nil {
 		logger = slog.New(slog.DiscardHandler)
 	}
-	return &Pipeline{vault: vc, cel: engine, logger: logger, metrics: metrics}
+	scenarioVars, err := cel.NewScenarioVars()
+	return &Pipeline{vault: vc, cel: engine, logger: logger, metrics: metrics, scenarioVars: scenarioVars, scenarioVarsErr: err}
 }
 
 // Render runs a scenario through vault-resolve → CEL-render → `on:`/`where:`
@@ -139,6 +149,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 	// to this Render.
 	ctx = WithVaultFence(ctx, in.Incarnation.Service)
 	in.Ctx = ctx // propagate to CEL vault() (ReadKV cancel/timeout + memo + fence)
+	in.sealMemo = newSealMemo()
 
 	// The own-namespace fence ([ADR-0083] §7), runtime half. The load-time half
 	// (artifact.LoadScenarioManifestResolved, soul-lint) sees the MAIN FILE only —
@@ -316,7 +327,7 @@ func (p *Pipeline) Render(ctx context.Context, in RenderInput) (_ []*RenderedTas
 		}
 
 		resolve := func() ([]*topology.HostFacts, error) {
-			t, err := resolveTargets(p.cel, in, task)
+			t, err := p.resolveTargets(in, task)
 			if err != nil {
 				return nil, err
 			}
@@ -623,32 +634,31 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// (tmpl.UsesRootField via AST, not string search — mentioning `.input`
 	// inside a body comment doesn't count). The template path is
 	// host-invariant (pilot contract), so content and the flag are too.
-	// content is reused by injectTemplateContent below (no double read).
-	var templateContent string
+	// The file is delivered by injectTemplateContent below as read here.
+	var tf templateFile
 	var injectInput bool
-	var fileVarKeys map[string]bool
+	var templateVarKeys map[string]bool
 	var wholeVars bool
 	if isRendered {
-		content, uses, terr := p.resolveTemplateUsesInput(in, resolved)
+		var terr error
+		tf, terr = p.resolveTemplateUsesInput(in, task.Module.Params, resolved)
 		if terr != nil {
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, terr)
 		}
-		templateContent = content
-		injectInput = uses
+		injectInput = tf.readsInput
 
-		// Targeted file-vars (vars.yml) injection: which `.vars.<key>` the
-		// template actually reads (AST) — see buildRenderContext/
-		// referencedFileVars. Host-invariant (one template path), computed
-		// once before the per-host loop.
-		keys, kerr := templateVarSubKeys(templateContent)
+		// Which `.vars.<key>` the template actually reads (AST) — the names
+		// render_context carries (renderContextVarNames). Host-invariant (one
+		// template path), computed once before the per-host loop.
+		keys, kerr := templateVarSubKeys(tf.content)
 		if kerr != nil {
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, kerr)
 		}
-		fileVarKeys = keys
+		templateVarKeys = keys
 
 		// A whole-map read gets the whole map: scoping by subkeys cannot serve a
 		// template that names none.
-		whole, werr := templateReadsWholeVars(templateContent)
+		whole, werr := templateReadsWholeVars(tf.content)
 		if werr != nil {
 			return nil, fmt.Errorf("render: task %q: %w", task.Name, werr)
 		}
@@ -659,11 +669,16 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		// input injection itself (see sealRenderContextInput/
 		// buildRenderContext §Security).
 		// The `vars.*` half of the same relocation, and NOT gated on injectInput:
-		// render_context.vars is built from the file layer and params.vars
-		// whatever the template does with `.input`. A sealed var reaching a
-		// rendered template is the destiny-vars.yml shape the seal now derives
-		// (NIM-811), so the mark exists for the first time here.
+		// render_context.vars is built from the task's view and params.vars
+		// whatever the template does with `.input`, and the names it marks are the
+		// view's taint the params walk above was given.
 		sealRenderContextVars(in.Sealed, sealedVarNamesOf(sources))
+		// And params.vars by its own cells, under the path it is written to: a key
+		// that is no name of the view is marked by nothing above, and the masker
+		// matches paths exactly.
+		if pv, ok := task.Module.Params[paramVars]; ok {
+			collectSealed(p.cel, in.Sealed, map[string]any{paramVars: pv}, sources, paramRenderContext)
+		}
 
 		if injectInput {
 			sealRenderContextInput(in.Sealed, in)
@@ -676,14 +691,23 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	fcReads := taskFlowContextReads(p.cel, task)
 
 	var firstSID string
+	// The render_context names: host-invariant, as the rungs of every host's view
+	// define the same names. Computed on the first host.
+	var rcNames []string
 	// sid → this host's rendered params, filled for every host and reduced to
 	// rt.ParamsBySID after the loop (materializePerHostParams).
 	paramsBySID := make(map[string]*structpb.Struct, len(renderHosts))
+	// Strict mode's views, one per targeted host, materialized after the loop. The
+	// synthetic host of an empty target is no host: a definition over soulprint.self
+	// would fail on it though no host reads it.
+	var strictViews []*cel.VarView
 	for hi, h := range renderHosts {
-		vars := hostLoopVars(in, h, len(targeted), loopVars)
-		vars, err = resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
+		vars, err := p.withTaskView(in, task, h, hostLoopVars(in, h, len(targeted), loopVars))
 		if err != nil {
 			return nil, hostErr(task.Name, h.SID, err)
+		}
+		if in.StrictVars && len(targeted) > 0 {
+			strictViews = append(strictViews, vars.View)
 		}
 		st, err := renderParams(p.cel, resolved, vars)
 		if err != nil {
@@ -713,27 +737,20 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		if isRendered {
 			paramsVars := extractParamsVars(st)
 			delete(st.Fields, paramVars)
-			available := mergeVars(in.ServiceVars, fileVarsForHost(in, h))
-			fileVars := referencedFileVars(available, fileVarKeys)
-			if wholeVars {
-				// A whole-map read (`index .vars "x"`, `range … := .vars`,
-				// `toYaml .vars`) names no key the AST can see, so the
-				// statically-referenced filter cannot be applied to the SERVICE
-				// layer — holding it back is what made such a template render an
-				// empty section into a config file and restart the service onto it.
-				//
-				// The FILE layer is deliberately not widened with it. In a destiny
-				// pass ServiceVars is nil by construction (destiny.go), so
-				// `available` there is the destiny's entire vars.yml — every
-				// internal plumbing var it uses to build paths and versions. Passing
-				// that whole set would put it in render_context, which crosses the
-				// wire to the host, and would buy nothing: a destiny's own vars.yml
-				// is already fully in reach through the same filter for every key
-				// the template names, and the keys a dynamic index reaches for are
-				// the ones the task put there.
-				fileVars = mergeVars(in.ServiceVars, fileVars)
+			// A whole-map read (`index .vars "x"`, `range … := .vars`, `toYaml .vars`)
+			// names no key the AST can see, so the service and scenario rungs go
+			// whole — holding them back is what made such a template render an empty
+			// section into a config file and restart the service onto it. A
+			// destiny's `vars.yml` is not widened with them: its internal plumbing
+			// would cross the wire to the host for nothing (renderContextVarNames).
+			if hi == 0 {
+				rcNames = renderContextVarNames(vars.View, templateVarKeys, wholeVars)
 			}
-			if err := setRenderContext(st, buildRenderContext(in, h, fileVars, paramsVars, injectInput)); err != nil {
+			rungVars, err := lookupVars(vars.View, rcNames)
+			if err != nil {
+				return nil, hostErr(task.Name, h.SID, err)
+			}
+			if err := setRenderContext(st, buildRenderContext(in, h, rungVars, paramsVars, injectInput)); err != nil {
 				return nil, hostErr(task.Name, h.SID, err)
 			}
 			if len(renderHosts) > 1 {
@@ -823,6 +840,12 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 		}
 	}
 
+	for i, view := range strictViews {
+		if err := materialize(view); err != nil {
+			return nil, hostErr(task.Name, renderHosts[i].SID, err)
+		}
+	}
+
 	rt.ParamsBySID = materializePerHostParams(rt.Params, paramsBySID)
 
 	// core.file.rendered: after the CEL phase, replace params.template (a
@@ -830,7 +853,7 @@ func (p *Pipeline) renderTaskIter(ctx context.Context, in RenderInput, task conf
 	// A1/ADR-012(d)). text/template is not executed here — rendering happens
 	// on Soul. Content was already read before the per-host loop
 	// (resolveTemplateUsesInput) — reused, not read again.
-	if err := injectTemplateContent(rt, in.Templates, templateContent); err != nil {
+	if err := injectTemplateContent(rt, tf); err != nil {
 		return nil, err
 	}
 
@@ -871,9 +894,10 @@ func (p *Pipeline) staticWhenSkips(
 	// The decision below is taken ONCE, on firstFC — the roster's first host by SID.
 	// That is sound for a predicate over run-level values and is exactly the NIM-908
 	// defect for one over a destiny input that renders per host: eight hosts would
-	// be gated on the ninth's value with nothing to show it. Inert unless this pass
-	// actually has such an input.
-	if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, in.hostVariantVars); err != nil {
+	// be gated on the ninth's value with nothing to show it. The same for a name of
+	// the task's view that resolves per host, its own `vars:` included. Inert unless
+	// this pass actually has such a name.
+	if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, p.hostVariantTaskVars(in, task)); err != nil {
 		return nil, fmt.Errorf("render: task %q: static-when: %w", task.Name, err)
 	}
 
@@ -883,16 +907,32 @@ func (p *Pipeline) staticWhenSkips(
 	// static evaluation below keeps every key it needs.
 	fcReads := taskFlowContextReads(p.cel, task)
 
+	// A keeper task's `when:` is read where its params are, in keeperVars: no host
+	// bound, host_count 0, the keeper's register — not on the roster's first host.
+	keeper := IsKeeperTask(task)
+	if keeper {
+		renderHosts, targetCount = []*topology.HostFacts{{}}, 0
+	}
+	fail := func(h *topology.HostFacts, err error) error {
+		if keeper {
+			return fmt.Errorf("render: keeper task %q: %w", task.Name, err)
+		}
+		return hostErr(task.Name, h.SID, err)
+	}
+
 	var firstFC *structpb.Struct
 	for hi, h := range renderHosts {
-		vars := hostLoopVars(in, h, targetCount, loopVars)
-		vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, h), task.Vars, vars)
+		reader := hostLoopVars(in, h, targetCount, loopVars)
+		if keeper {
+			reader = keeperVars(in)
+		}
+		vars, err := p.withTaskView(in, task, h, reader)
 		if err != nil {
-			return nil, hostErr(task.Name, h.SID, err)
+			return nil, fail(h, err)
 		}
 		fc, err := buildFlowContext(in, h, vars, targetCount, fcReads)
 		if err != nil {
-			return nil, hostErr(task.Name, h.SID, err)
+			return nil, fail(h, err)
 		}
 		if hi == 0 {
 			firstFC = fc
@@ -932,7 +972,8 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	}
 	// An include group is spliced into the plan or dropped from it for EVERY host,
 	// so a per-host destiny input cannot decide it (NIM-908) — and the evaluation
-	// below would quietly take the roster's first host's value if it tried.
+	// below would quietly take the roster's first host's value if it tried. The
+	// pass's own per-host set, not a task view's: this view has no task rung.
 	if err := p.cel.GuardHostFreePredicate(when, cel.HostFreeIncludeWhen, in.hostVariantInputs, in.hostVariantVars); err != nil {
 		return false, err
 	}
@@ -940,14 +981,20 @@ func (p *Pipeline) evalIncludeWhen(in RenderInput, when string) (bool, error) {
 	if len(in.Hosts) > 0 {
 		host = in.Hosts[0]
 	}
+	// The group decides whether its tasks exist, so no task's own `vars:` is in
+	// this view: the service and scenario rungs, or in a destiny pass the first
+	// host's `vars.yml` (ADR-0082 amendment 2026-10-15, point 5).
 	vars := hostVars(in, host, len(in.Hosts))
-	vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, host), nil, vars)
-	if err != nil {
-		return false, fmt.Errorf("render: include-when %q: %w", when, err)
+	if in.destinyIsolated {
+		vars.View = in.destinyBase(host)
+	} else {
+		view, err := p.runLevelView(in, vars)
+		if err != nil {
+			return false, fmt.Errorf("render: include-when %q: %w", when, err)
+		}
+		vars.View = view
 	}
-	// Keeper-local: this snapshot decides keep/drop here and is then dropped
-	// itself, so there is nothing on the wire to narrow (allFlowContextReads).
-	fc, err := buildFlowContext(in, host, vars, len(in.Hosts), allFlowContextReads())
+	fc, err := buildFlowContext(in, host, vars, len(in.Hosts), keeperLocalFlowContextReads(p.cel, when))
 	if err != nil {
 		return false, fmt.Errorf("render: include-when %q: flow_context: %w", when, err)
 	}
@@ -1212,15 +1259,31 @@ func (p *Pipeline) EvalAsserts(ctx context.Context, in RenderInput) error {
 // "disappears" from the plan, no RenderedTask emitted — caller does that via
 // continue).
 func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
+	// Run-level context: roster's first host (or a synthetic empty one when
+	// the roster is empty). soulprint.hosts projects from in.Hosts
+	// (AllowHosts=true in the scenario pass); size(soulprint.hosts) is
+	// host-invariant — the choice of first host for self doesn't affect
+	// topology predicate results. The gate and that[] read the task's view on
+	// that host, its own `vars:` included (ADR-0082 amendment 2026-10-15, point 7).
+	host := &topology.HostFacts{}
+	if len(in.Hosts) > 0 {
+		host = in.Hosts[0]
+	}
+	vars, err := p.withTaskView(in, task, host, hostVars(in, host, len(in.Hosts)))
+	if err != nil {
+		return fmt.Errorf("render: assert %q: %w", task.Name, err)
+	}
+
 	// when: gate — statically-false → assert not evaluated (inactive mode).
 	if isStaticWhen(task.When) {
-		renderHosts := in.Hosts
-		if len(renderHosts) == 0 {
-			renderHosts = []*topology.HostFacts{{}}
+		// Decided on one host for the whole roster, as a static `when:` is
+		// (staticWhenSkips), so refused when it reads a per-host destiny name.
+		if err := p.cel.GuardHostFreePredicate(task.When, cel.HostFreeStaticWhen, in.hostVariantInputs, p.hostVariantTaskVars(in, task)); err != nil {
+			return fmt.Errorf("render: assert %q: static-when: %w", task.Name, err)
 		}
 		// Keeper-local, like evalIncludeWhen: an assert emits no RenderedTask, so
-		// this snapshot never leaves the process (allFlowContextReads).
-		fc, err := buildFlowContext(in, renderHosts[0], hostVars(in, renderHosts[0], len(in.Hosts)), len(in.Hosts), allFlowContextReads())
+		// this snapshot never leaves the process.
+		fc, err := buildFlowContext(in, host, vars, len(in.Hosts), keeperLocalFlowContextReads(p.cel, task.When))
 		if err != nil {
 			return fmt.Errorf("render: assert %q: when flow_context: %w", task.Name, err)
 		}
@@ -1233,21 +1296,6 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 		}
 	}
 
-	// Run-level context: roster's first host (or a synthetic empty one when
-	// the roster is empty). soulprint.hosts projects from in.Hosts
-	// (AllowHosts=true in the scenario pass); size(soulprint.hosts) is
-	// host-invariant — the choice of first host for self doesn't affect
-	// topology predicate results.
-	host := &topology.HostFacts{}
-	if len(in.Hosts) > 0 {
-		host = in.Hosts[0]
-	}
-	vars := hostVars(in, host, len(in.Hosts))
-	vars, err := resolveTaskVars(p.cel, fileVarsForHost(in, host), task.Vars, vars)
-	if err != nil {
-		return fmt.Errorf("render: assert %q: %w", task.Name, err)
-	}
-
 	for i, pred := range task.Assert.That {
 		ok, err := evalBoolExpr(p.cel, "assert.that", pred, vars)
 		if err != nil {
@@ -1255,6 +1303,13 @@ func (p *Pipeline) evalAssertTask(in RenderInput, task config.Task) error {
 		}
 		if !ok {
 			return fmt.Errorf("%w: %s (predicate that[%d] %q evaluated to false)", ErrAssertFailed, assertMessage(task), i, pred)
+		}
+	}
+	// Strict mode, on the host the assert was decided on; the synthetic host of an
+	// empty roster is no host, as for a host task.
+	if in.StrictVars && len(in.Hosts) > 0 {
+		if err := materialize(vars.View); err != nil {
+			return fmt.Errorf("render: assert %q: %w", task.Name, err)
 		}
 	}
 	return nil
@@ -1333,21 +1388,24 @@ func (p *Pipeline) renderKeeperTask(ctx context.Context, in RenderInput, task co
 
 	// seal / sealed-paths ([ADR-010] §7.4): a keeper-side task
 	// (core.vault.kv-read and similar) can also carry `${ vault(...) }`/`${
-	// input.<secret> }` in params — and its own `vars:`, resolved just below,
-	// are as much of a hop here as on a Soul-side task.
+	// input.<secret> }` in params — and its own `vars:` are as much of a hop here
+	// as on a Soul-side task.
 	collectSealed(p.cel, in.Sealed, task.Module.Params, p.taskSealSources(in, task), "")
 
-	vars := keeperVars(in)
-	// keeper-side task — not a destiny pass (destiny tasks are all Soul-side
-	// in pilot); no file-vars base (DestinyVarsResolved is nil outside
-	// renderApplyDestiny).
-	vars, err = resolveTaskVars(p.cel, nil, task.Vars, vars)
+	// A keeper task lives in a scenario only, so its view is the service view under
+	// the scenario rung and its own; both read keeperVars' run-level values.
+	vars, err := p.withTaskView(in, task, nil, keeperVars(in))
 	if err != nil {
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
 	}
 	st, err := renderParams(p.cel, resolved, vars)
 	if err != nil {
 		return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
+	}
+	if in.StrictVars {
+		if err := materialize(vars.View); err != nil {
+			return nil, fmt.Errorf("render: keeper task %q: %w", task.Name, err)
+		}
 	}
 
 	rt := &RenderedTask{
@@ -1704,8 +1762,8 @@ func usesFieldEngine() (*tmpl.Engine, error) {
 // into render_context (Variant B, ADR-010 §3.2): true iff the template
 // actually reads `.input.*` (AST detection via tmpl.UsesRootField —
 // mentioning `.input` in literal text or a body comment doesn't count).
-// Content is returned to the caller so injectTemplateContent doesn't read
-// the file again.
+// This is the only read of the file: injectTemplateContent delivers what it
+// returns.
 //
 // The path comes from resolved params (after vault-resolve, before CEL). In
 // pilot it's a string literal; for a `${ … }` expression it's resolved via
@@ -1715,23 +1773,30 @@ func usesFieldEngine() (*tmpl.Engine, error) {
 // params.template absent) → nothing to read: content="", detection falls
 // back to the existing template_content.
 //
-// reader=nil while params.template is set is a handoff error (as in
-// injectTemplateContent): Keeper isn't configured to deliver the content.
-func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]any) (string, bool, error) {
+// reader=nil while params.template is set is a handoff error: Keeper isn't
+// configured to deliver the content.
+//
+// ★ The errors after the resolve quote `template:` as the author wrote it, never the
+// resolved path: a path an expression built can be built from a secret, and a read
+// error is no CEL error, so withhold (failure.go) never judges it. The written text is
+// taken from params, the task's own, and not from resolved: a `vault:` reference is a
+// path built from a secret too, one phase earlier.
+func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, params, resolved map[string]any) (templateFile, error) {
 	tv, hasPath := resolved[paramTemplate]
 	if !hasPath {
 		// inline template_content (no file): detect directly on it.
 		cv, hasContent := resolved[paramTemplateContent]
 		content, _ := cv.(string)
 		if !hasContent || content == "" {
-			return "", false, nil
+			return templateFile{}, nil
 		}
 		uses, err := usesInputField(content)
-		return content, uses, err
+		return templateFile{content: content, readsInput: uses}, err
 	}
 
+	raw := fmt.Sprint(params[paramTemplate])
 	rel, ok := tv.(string)
-	if !ok || rel == "" {
+	if !ok || rel == "" || strings.Contains(rel, "${") {
 		// non-string/`${}` path: resolve via CEL in the keeper context.
 		// The keeper context, but with register.hosts explicitly closed: this
 		// resolves a HOST task's param, and the accessor is keeper-only (NIM-711).
@@ -1747,36 +1812,46 @@ func (p *Pipeline) resolveTemplateUsesInput(in RenderInput, resolved map[string]
 		// on: keeper task" and point the author at soulprint.hosts / register.hosts,
 		// neither of which exists in a destiny.
 		kv.HostScope = cel.HostFreeTemplatePath
+		// The path is chosen before any host and before the task's own `vars:`
+		// (ADR-0082 amendment 2026-10-15, point 5): the run-level view, none in a
+		// destiny pass.
+		view, err := p.runLevelView(in, kv)
+		if err != nil {
+			return templateFile{}, fmt.Errorf("resolving template path: %w", err)
+		}
+		kv.View = view
 		st, err := renderParams(p.cel, map[string]any{paramTemplate: tv}, kv)
 		if err != nil {
-			return "", false, fmt.Errorf("resolving template path: %w", err)
+			return templateFile{}, fmt.Errorf("resolving template path: %w", err)
 		}
 		rel = st.GetFields()[paramTemplate].GetStringValue()
 		if rel == "" {
-			return "", false, fmt.Errorf("%q must resolve to a non-empty path string, got %v", paramTemplate, tv)
+			return templateFile{}, fmt.Errorf("%q must resolve to a non-empty path string, got %q", paramTemplate, raw)
 		}
 	}
 
 	if in.Templates == nil {
-		return "", false, fmt.Errorf("TemplateReader not configured - Keeper cannot deliver template content %q (RenderInput.Templates=nil)", rel)
+		return templateFile{}, fmt.Errorf("TemplateReader not configured - Keeper cannot deliver template content %q (RenderInput.Templates=nil)", raw)
 	}
 	data, err := in.Templates.Read(rel)
 	if err != nil {
-		return "", false, err
+		if rel != raw {
+			return templateFile{}, &templateReadError{raw: raw, cause: pathFreeCause(err)}
+		}
+		return templateFile{}, err
 	}
 	content := string(data)
 	uses, derr := usesInputField(content)
-	return content, uses, derr
+	return templateFile{path: rel, content: content, readsInput: uses}, derr
 }
 
-// templateVarField is the root render_context field carrying
-// template-derived values (`.vars.<name>`): the file-vars from vars.yml
-// whose keys the template actually reads are placed here selectively.
+// templateVarField is the root render_context field carrying `.vars.<name>`:
+// the vars of the task's view the template reads (renderContextVarNames).
 const templateVarField = "vars"
 
 // templateVarSubKeys returns the set of `.vars.<key>` subkeys the template
-// actually reads (AST, tmpl.RootFieldSubKeys) — the basis for selective
-// file-vars injection into render_context.vars. Empty content (inline with
+// actually reads (AST, tmpl.RootFieldSubKeys) — the names render_context.vars
+// carries (renderContextVarNames). Empty content (inline with
 // no file / not core.file.rendered) → empty set. A broken template → error
 // (caller fails render_failed like Soul would on render).
 func templateVarSubKeys(content string) (map[string]bool, error) {
@@ -1804,26 +1879,6 @@ func templateReadsWholeVars(content string) (bool, error) {
 		return false, fmt.Errorf("building the tmpl engine: %w", err)
 	}
 	return engine.UsesWholeRootField(content, templateVarField)
-}
-
-// referencedFileVars filters the resolved destiny locals (vars.yml) down to
-// just the keys the template actually reads as `.vars.<key>` (keys). This
-// way render_context.vars gets EXACTLY the needed file-vars, not the whole
-// vars.yml: node-exporter gets bin_path, redis (reads task-var keys, not
-// file-vars) gets nothing extra. Empty fileVars/keys → nil
-// (buildRenderContext substitutes an empty `.vars` layer). Doesn't mutate
-// its input.
-func referencedFileVars(fileVars map[string]any, keys map[string]bool) map[string]any {
-	if len(fileVars) == 0 || len(keys) == 0 {
-		return nil
-	}
-	out := make(map[string]any, len(keys))
-	for k := range keys {
-		if v, ok := fileVars[k]; ok {
-			out[k] = v
-		}
-	}
-	return out
 }
 
 // usesInputField detects whether a template references the root `.input`

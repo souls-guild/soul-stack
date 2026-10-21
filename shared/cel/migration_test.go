@@ -50,10 +50,10 @@ func TestMigration_ContextVarsUndeclared(t *testing.T) {
 	}
 }
 
-// TestMigration_VarsStillUndeclared_AfterVarLayer — the var→var feature (VarRefs +
-// resolveVarLayer, scenario/destiny phase) does NOT touch migration-CEL (case #11):
+// TestMigration_VarsStillUndeclared_AfterVarLayer — the var→var feature (the lazy
+// [VarView], scenario/destiny phase) does NOT touch migration-CEL (case #11):
 // `vars` stays undeclared in the migration env, so `${ vars.x }` in set.value →
-// compile-error undeclared reference, as before the feature. VarRefs lives in the
+// compile-error undeclared reference, as before the feature. `vars` is declared in the
 // regular Engine (New), not the migration Engine; the var layer exists only in the
 // scenario/destiny pass. Guard test against a "var→var leaked into migration" regression.
 func TestMigration_VarsStillUndeclared_AfterVarLayer(t *testing.T) {

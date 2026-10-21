@@ -7,24 +7,28 @@ package servicevars
 // forget. The other two are fed by `render.incarnationVars` (the scenario /
 // destiny root, and the flow-control context built from it), guarded in
 // keeper/internal/render/label_invariant_guard_test.go. This one is separate
-// code with its own map builder: `vars/_stack.yaml` is evaluated by
-// [Resolver.resolveStack] through `cel.NewServiceVars()` ([ADR-0082]), BEFORE
-// the render, and it assembles `incarnation.*` from [IncarnationContext]
+// code with its own map builder: every service definition and every
+// `vars/_stack.yaml` selector is evaluated through `cel.NewServiceVars()`
+// ([ADR-0082]) over an `incarnation.*` assembled from [IncarnationContext]
 // alone.
 //
 // So a `Label` field added here plus one line in [IncarnationContext.celMap]
-// would make `${ incarnation.label }` resolve in a service's `_stack.yaml` while
-// the render guard — whose own doc claims to cover "the CEL root
-// `incarnation.*`" — stayed green. That is the hole this file closes.
+// would make `${ incarnation.label }` resolve in a service's vars while the
+// render guard — whose own doc claims to cover "the CEL root `incarnation.*`" —
+// stayed green. That is the hole this file closes.
 //
 // Why a caption must not resolve here specifically: a `_stack.yaml` step selects
-// which vars OVERLAY a service gets. A step branching on a mutable caption would
-// make renaming a screen label silently change the configuration handed to every
-// host of the incarnation — the exact class of surprise the id/label split
-// exists to remove, arriving one layer earlier than a scenario would.
+// which vars OVERLAY a service gets, and a definition derives the values. One
+// branching on a mutable caption would make renaming a screen label silently
+// change the configuration handed to every host of the incarnation — the exact
+// class of surprise the id/label split exists to remove, arriving one layer
+// earlier than a scenario would.
 //
 // HOW TO BREAK IT ON PURPOSE: add `Label string` to IncarnationContext and
 // `m["label"] = c.Label` to celMap. Both tests below go red.
+//
+// [ADR-0085]: ../../docs/adr/0085-entity-id-and-label.md
+// [ADR-0082]: ../../docs/adr/0082-service-vars.md
 
 import (
 	"reflect"
@@ -58,7 +62,7 @@ func TestIncarnationLabel_NotInServiceVarsCELRoot(t *testing.T) {
 			t.Errorf("IncarnationContext gained a %q field.\n"+
 				"ADR-0085: a caption participates in nothing derived, and `incarnation.*` in CEL "+
 				"is one of the four surfaces named — in ALL THREE environments, this one included. "+
-				"A `_stack.yaml` step branching on a mutable caption turns renaming a screen label "+
+				"A service var branching on a mutable caption turns renaming a screen label "+
 				"into changing the vars every host of the incarnation is handed.",
 				ctxT.Field(i).Name)
 		}
@@ -66,7 +70,7 @@ func TestIncarnationLabel_NotInServiceVarsCELRoot(t *testing.T) {
 
 	m := guardIncarnationContext().celMap()
 	if _, ok := m["label"]; ok {
-		t.Error("celMap produced a `label` key — `incarnation.label` would resolve in `_stack.yaml`")
+		t.Error("celMap produced a `label` key — `incarnation.label` would resolve in service vars")
 	}
 	if got := m["id"]; got != guardStackID {
 		t.Errorf("incarnation.id = %v, want the IDENTIFIER %q", got, guardStackID)
@@ -79,9 +83,10 @@ func TestIncarnationLabel_NotInServiceVarsCELRoot(t *testing.T) {
 }
 
 // TestIncarnationLabel_ServiceVarsCELIDIsTheIdentifier evaluates through the
-// real service-vars engine — the same one `_stack.yaml` is evaluated by — so the
-// guard pins what an author's expression actually yields, and that
-// `incarnation.label` is a no-such-key rather than an empty string.
+// real service-vars engine — the one every service definition and `_stack.yaml`
+// selector is evaluated by — so the guard pins what an author's expression
+// actually yields, and that `incarnation.label` is a no-such-key rather than an
+// empty string.
 func TestIncarnationLabel_ServiceVarsCELIDIsTheIdentifier(t *testing.T) {
 	eng, err := cel.NewServiceVars()
 	if err != nil {

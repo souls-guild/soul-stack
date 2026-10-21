@@ -45,7 +45,7 @@
 //   - CEL root `incarnation.<...>` — ALL THREE environments [ADR-0085] names:
 //     keeper/internal/render/label_invariant_guard_test.go covers the scenario /
 //     destiny root and the flow-control context built from it;
-//     keeper/internal/servicevars/label_invariant_guard_test.go covers the
+//     shared/servicevars/label_invariant_guard_test.go covers the
 //     [ADR-0082] service-vars environment, which builds its own map and would
 //     otherwise have been missed.
 //   - snapshot directory `<cacheRoot>/<service>/<sha1>` — the address at

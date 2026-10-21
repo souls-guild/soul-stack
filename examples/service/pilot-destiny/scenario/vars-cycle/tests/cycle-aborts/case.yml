@@ -1,8 +1,8 @@
 # L0-trial (Trial, ADR-023): var→var CYCLE in file-level vars.yml destiny
 # pilot-vars-cycle (a → b → c → a) aborts the destiny render pass with a var_cycle
-# error with trace. EAGER-topological resolve of the layer: the graph is built at
-# layer start, the cycle can't be resolved by toposort → ErrVarCycle BEFORE params
-# render. Guard test for the invariant
+# error with trace. Vars are evaluated on request (ADR-0082 amendment 2026-10-15): the
+# destiny task's content cell reads vars.a, the evaluation runs a → b → c, and c's
+# read of a finds a already on the evaluation path. Guard test for the invariant
 # "cycle → error with trace" (case #3).
 name: cyclic var chain in destiny vars.yml aborts render with cycle trace
 
@@ -11,6 +11,8 @@ fixtures:
   input:
     path: /etc/pilot/marker.txt
 
-# Render MUST abort. The substring var_cycle is a stable error marker;
-# the trace "a → b → c → a" is printed in the text (see ErrVarCycle).
+# Render MUST abort. The substring var_cycle is a stable error marker; the Keeper's
+# text ends `render: cell "content": CEL eval "vars.a": var_cycle: a → b → c → a` -
+# the cell that read the var, then the path rotated to start at the smallest name
+# whichever var was read first (see shared/cel VarCycleError).
 expect_render_error: "var_cycle"

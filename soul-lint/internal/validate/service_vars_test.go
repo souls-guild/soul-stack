@@ -49,26 +49,35 @@ func lintService(t *testing.T, root string) string {
 //
 // Each case is a shape whose runtime symptom is a WRONG RESOLUTION rather than a
 // failure: an unknown key means a gate that silently did not gate, an empty
-// `stack:` means every var of the service quietly gone.
+// `stack:` means every var of the service quietly gone, a selector over `vars.*`
+// means a layer chosen from a value the final merge then changes. `inline:` is
+// removed (ADR-0082 amendment 2026-10-15), so it is refused with the hint that
+// says where its values go.
 func TestServiceVars_StackStepInvalid(t *testing.T) {
-	for name, stack := range map[string]string{
-		"unknown key":  "stack:\n  - file: 00-base.yaml\n    whn: vars.env == 'prd'\n",
-		"no steps":     "steps:\n  - file: 00-base.yaml\n",
-		"both sources": "stack:\n  - file: 00-base.yaml\n    inline: {a: 1}\n",
-		"foreach without as": "stack:\n  - foreach: \"${ incarnation.covens }\"\n" +
-			"    file: \"coven-x.yaml\"\n",
-		"as shadows context": "stack:\n  - foreach: \"${ incarnation.covens }\"\n" +
-			"    as: vars\n    file: \"coven-x.yaml\"\n",
-		"bad strategy": "stack:\n  - file: 00-base.yaml\n    strategy: shallow\n",
+	for name, tc := range map[string]struct{ stack, want string }{
+		"unknown key": {"stack:\n  - file: 00-base.yaml\n    whn: incarnation.traits.env == 'prd'\n", ""},
+		"no steps":    {"steps:\n  - file: 00-base.yaml\n", ""},
+		"inline":      {"stack:\n  - file: 00-base.yaml\n    inline: {a: 1}\n", "put the values in a file under vars/ and name it with file:"},
+		"foreach without as": {"stack:\n  - foreach: \"${ incarnation.covens }\"\n" +
+			"    file: \"coven-x.yaml\"\n", ""},
+		"as shadows context": {"stack:\n  - foreach: \"${ incarnation.covens }\"\n" +
+			"    as: vars\n    file: \"coven-x.yaml\"\n", ""},
+		"bad strategy":    {"stack:\n  - file: 00-base.yaml\n    strategy: shallow\n", ""},
+		"when reads vars": {"stack:\n  - file: 00-base.yaml\n  - file: coven-x.yaml\n    when: vars.env == 'dev'\n", "step 2"},
+		"file reads vars": {"stack:\n  - file: \"coven-${ vars.tier }.yaml\"\n", "file: reads vars.tier"},
 	} {
 		t.Run(name, func(t *testing.T) {
 			root := writeServiceTree(t, map[string]string{
 				"vars/00-base.yaml": "port: 6379\n",
-				"vars/_stack.yaml":  stack,
+				"vars/_stack.yaml":  tc.stack,
 				"vars/coven-x.yaml": "tier: gold\n",
 			})
-			if got := lintService(t, root); !strings.Contains(got, "stack_step_invalid") {
+			got := lintService(t, root)
+			if !strings.Contains(got, "stack_step_invalid") {
 				t.Errorf("expected stack_step_invalid, got: %s", got)
+			}
+			if !strings.Contains(got, tc.want) {
+				t.Errorf("expected %q in: %s", tc.want, got)
 			}
 		})
 	}
@@ -82,10 +91,11 @@ func TestServiceVars_ValidStackIsQuiet(t *testing.T) {
 	root := writeServiceTree(t, map[string]string{
 		"vars/00-base.yaml": "port: 6379\nenv: dev\n",
 		"vars/coven-x.yaml": "tier: gold\n",
+		"vars/90-dev.yaml":  "maxmemory_percent: 60\n",
 		"vars/_stack.yaml": "stack:\n  - file: 00-base.yaml\n" +
 			"  - foreach: \"${ incarnation.covens }\"\n    as: coven\n" +
 			"    file: \"coven-${ coven }.yaml\"\n    optional: true\n" +
-			"  - inline: {maxmemory_percent: 60}\n    when: vars.env == 'dev'\n" +
+			"  - file: 90-dev.yaml\n    when: incarnation.traits.env == 'dev'\n" +
 			"    strategy: replace\n",
 	})
 	if got := lintService(t, root); strings.Contains(got, "stack_step_invalid") {
@@ -241,7 +251,9 @@ tasks:
 // fails BEFORE the render — so the whole run refuses to start rather than one
 // task failing, with nothing having warned.
 //
-// All four evaluated cells are covered, each with its own address.
+// All three selectors are covered, each with its own address. (`inline:`, the
+// fourth evaluated cell, is refused at parse since the ADR-0082 amendment of
+// 2026-10-15.)
 //
 // HOW TO BREAK IT ON PURPOSE, in the form of real code: delete the
 // `stackLegacyRootDiags(...)` call from stackFileDiags. The stack still parses,
@@ -254,12 +266,11 @@ func TestStackLegacyRoot_IsWalked(t *testing.T) {
   - file: "tier-${ incarnation.name }.yaml"
     optional: true
   - when: "incarnation.name != ''"
-    inline:
-      owner: "${ incarnation.name }"
+    file: "00-base.yaml"
   - foreach: "${ [incarnation.name] }"
     as: n
-    inline:
-      who: "${ n }"
+    file: "who-${ n }.yaml"
+    optional: true
 `,
 	})
 
@@ -268,8 +279,7 @@ func TestStackLegacyRoot_IsWalked(t *testing.T) {
 		"incarnation_name_legacy_root",
 		"_stack.yaml:3:5", // file:
 		"_stack.yaml:5:5", // when:
-		"_stack.yaml:7:7", // inline value
-		"_stack.yaml:8:5", // foreach:
+		"_stack.yaml:7:5", // foreach:
 	} {
 		if !strings.Contains(got, want) {
 			t.Errorf("missing %q in:\n%s", want, got)
@@ -285,18 +295,42 @@ func TestStackLegacyRoot_IsWalked(t *testing.T) {
 	}
 }
 
-// TestStackLegacyRoot_LayerFileIsNotACELSurface — the counter-case, and the
-// reason this rule stops at `_stack.yaml`. A plain layer file is read by
-// [servicevars.Resolver.readLayer], which parses YAML and returns it: a `${ … }`
-// written there is literal text in the vars namespace, never evaluated and never
-// re-evaluated downstream. Flagging it would be a false positive, and a rule that
-// cries wolf on a file nobody evaluates is a rule authors learn to ignore.
-func TestStackLegacyRoot_LayerFileIsNotACELSurface(t *testing.T) {
+// TestLayerLegacyRoot_IsWalked — a layer file's definitions are evaluated since
+// the ADR-0082 amendment of 2026-10-15, so `${ incarnation.name }` in one is a
+// real read leaning on the alias window, exactly as in a selector. Every YAML file
+// under vars/ is walked, a subdirectory included — a `_stack.yaml` `file:` can
+// name one — and each finding cites its own file and line. The current spelling
+// and prose naming the root stay silent, and the stack itself is not walked twice.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: delete the
+// `layerLegacyRootDiags(varsDir)` call from serviceVarsDiags. The stack and the
+// layers still lint, and this test goes red.
+func TestLayerLegacyRoot_IsWalked(t *testing.T) {
 	root := writeServiceTree(t, map[string]string{
-		"vars/00-base.yaml": "port: 6379\nlegacy_probe: \"${ incarnation.name }\"\n",
+		"vars/00-base.yaml": "port: 6379\nowner: \"${ incarnation.name }\"\n" +
+			"note: \"composed from incarnation.name at create\"\n",
+		"vars/coven/prod.yml": "tls:\n  cn: \"${ incarnation.name }.svc\"\n  sans:\n" +
+			"    - \"${ incarnation.id }\"\n    - \"x-${ incarnation.name }\"\n",
+		"vars/_stack.yaml": "stack:\n  - file: 00-base.yaml\n  - file: coven/prod.yml\n",
 	})
-	if got := lintService(t, root); strings.Contains(got, "incarnation_name_legacy_root") {
-		t.Errorf("a layer file is not a CEL surface; flagging it is a false positive:\n%s", got)
+
+	got := lintService(t, root)
+	for _, want := range []string{
+		filepath.Join("vars", "00-base.yaml") + ":2:1",
+		filepath.Join("vars", "coven", "prod.yml") + ":2:3",
+		filepath.Join("vars", "coven", "prod.yml") + ":5:7",
+	} {
+		if !strings.Contains(got, want) {
+			t.Errorf("missing %q in:\n%s", want, got)
+		}
+	}
+	if n := strings.Count(got, "incarnation_name_legacy_root"); n != 3 {
+		t.Errorf("want exactly 3 findings (owner, tls.cn, tls.sans[1]), got %d:\n%s", n, got)
+	}
+	for _, line := range strings.Split(got, "\n") {
+		if strings.Contains(line, "incarnation_name_legacy_root") && !strings.Contains(line, "warning:") {
+			t.Errorf("the retired root in a layer file must WARN, not error: %s", line)
+		}
 	}
 }
 
@@ -308,8 +342,8 @@ func TestStackLegacyRoot_NewSpellingIsSilent(t *testing.T) {
 		"vars/_stack.yaml": `stack:
   - file: "00-base.yaml"
   - when: "incarnation.id != ''"
-    inline:
-      owner: "${ incarnation.id }"
+    file: "owner-${ incarnation.id }.yaml"
+    optional: true
 `,
 	})
 	if got := lintService(t, root); strings.Contains(got, "incarnation_name_legacy_root") {

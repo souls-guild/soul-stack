@@ -91,3 +91,53 @@ func TestDetectSealed_NestedSelect(t *testing.T) {
 		t.Fatal("a nested reference to sealed vars -> sealed")
 	}
 }
+
+// TestDetectSealed_VarsLiteralIndexIsTheField — ADR-0082 amendment 2026-10-15, point
+// 15: on the `vars` root a literal index is the field the lazy view reads for it.
+func TestDetectSealed_VarsLiteralIndexIsTheField(t *testing.T) {
+	e := newSealEngine(t)
+	src := SealSources{Fields: map[string]bool{FieldAddr("vars", "pw"): true}}
+	for raw, want := range map[string]bool{
+		"${ vars['pw'] }":           true,
+		"${ vars['pw'].size() }":    true,
+		"${ vars['public'] }":       false,
+		"${ vars['public']['pw'] }": false,
+	} {
+		if got := e.DetectSealed(raw, src); got != want {
+			t.Errorf("DetectSealed(%s) = %v, want %v", raw, got, want)
+		}
+	}
+}
+
+// TestDetectSealed_AVarsReadNamingNoFieldIsTaintedWhenAnyVarsNameIs — point 15: a
+// whole read of `vars` and an index by a key the text does not spell name no field the
+// walk can follow, so they are tainted when any `vars` name is, and only then: a
+// secret under another root does not make them so.
+func TestDetectSealed_AVarsReadNamingNoFieldIsTaintedWhenAnyVarsNameIs(t *testing.T) {
+	e := newSealEngine(t)
+	tainted := SealSources{Fields: map[string]bool{FieldAddr("vars", "pw"): true}}
+	clean := SealSources{Fields: map[string]bool{FieldAddr("input", "pw"): true}}
+	for _, raw := range []string{
+		"${ vars }",
+		"${ merge(vars, {'a': 1}) }",
+		"${ vars[input.key] }",
+		"${ vars[vars.public] }",
+		"${ vars.filter(k, k != 'x').map(k, vars[k]) }",
+		"prefix-${ vars == {} }",
+	} {
+		if !e.DetectSealed(raw, tainted) {
+			t.Errorf("DetectSealed(%s) with a tainted vars name = false, want true", raw)
+		}
+		if e.DetectSealed(raw, clean) {
+			t.Errorf("DetectSealed(%s) with no tainted vars name = true, want false", raw)
+		}
+	}
+	if !e.PredicateReadsSecret("vars == {}", tainted) || e.PredicateReadsSecret("vars == {}", clean) {
+		t.Error("a predicate comparing vars whole must follow the same rule")
+	}
+	// Every field the text names is accounted for, so naming only untainted ones is
+	// not a whole read.
+	if e.DetectSealed("${ vars.public + vars['other'] + string(has(vars.x)) }", tainted) {
+		t.Error("reads that each name an untainted field were sealed as a whole read")
+	}
+}

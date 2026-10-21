@@ -10,6 +10,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/incarnation"
 	"github.com/souls-guild/soul-stack/keeper/internal/render"
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
 )
@@ -73,9 +74,9 @@ var ErrAssertFailed = render.ErrAssertFailed
 //     already validated by ValidateInput upstream, so value validation here
 //     is guaranteed to pass).
 //
-//   - service vars are resolved from the SAME input run() step 4 would use for
+//   - the service view is built from the SAME input run() step 4 would use for
 //     this run, so a `vars.*` predicate cannot answer one way here and another at
-//     render ([Runner.resolvePreflightServiceVars], NIM-271). They are
+//     render ([Runner.resolvePreflightServiceVars], NIM-271). It is
 //     host-invariant (ADR-0082), so the roster cannot make the two disagree. On
 //     the create path there is no row, and the gate resolves against an
 //     incarnation synthesised from the request — labels included, so a
@@ -241,8 +242,10 @@ func (r *Runner) preflightIncarnation(ctx context.Context, name string) (*incarn
 	return inc, nil
 }
 
-// resolvePreflightServiceVars resolves the service vars an assert will read, from
-// the SAME input run() step 4 uses for this run (NIM-271).
+// resolvePreflightServiceVars builds the service view an assert will read, from
+// the SAME input run() step 4 uses for this run (NIM-271). The gate's own view:
+// its memo outlives nothing but this check (ADR-0082 amendment 2026-10-15,
+// point 7).
 //
 // Since ADR-0082 that agreement is structural rather than argued: service vars
 // are host-invariant, so there is one resolve input and no roster-dependent
@@ -254,7 +257,7 @@ func (r *Runner) resolvePreflightServiceVars(
 	art *artifact.ServiceArtifact,
 	spec RunSpec,
 	inc *incarnation.Incarnation,
-) (map[string]any, error) {
+) (*cel.VarView, error) {
 	if inc == nil {
 		// No row yet (create). Build the incarnation the request is ABOUT to
 		// insert, labels included — a step keyed on `incarnation.covens` must see
@@ -272,7 +275,7 @@ func (r *Runner) resolvePreflightServiceVars(
 			Traits:  spec.Traits,
 		}
 	}
-	return r.deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
+	return r.deps.ServiceVars.View(serviceVarsInput(art.LocalDir, inc))
 }
 
 // partitionRosterAsserts splits an expanded task list into the tasks pre-flight

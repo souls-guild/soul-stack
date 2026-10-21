@@ -1,9 +1,11 @@
 package servicevars
 
 import (
+	"log/slog"
 	"time"
 
 	keeperv1 "github.com/souls-guild/soul-stack/proto/gen/go/keeper/v1"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -18,9 +20,42 @@ const (
 	varKeyTelemetryCollectors = "telemetry_collectors"
 )
 
+// TelemetryVars looks up, in the service view, the vars [ResolveEffectiveTelemetry]
+// and [UnknownTelemetryCollectors] read — those two keys and no other, so a broken
+// var elsewhere in the service is never evaluated and does not withhold the host's
+// telemetry config (ADR-0082 amendment 2026-10-15, point 7). A key the service does
+// not define is absent from the map.
+//
+// A key whose definition fails to evaluate is absent too, with a WARN naming it and
+// the error: the per-key fallback [ResolveEffectiveTelemetry] already gives a value
+// that does not parse. Failing the whole lookup instead withheld the entire
+// config, the manifest's `enabled: false` with it, over one key. logger nil is
+// [slog.Default].
+func TelemetryVars(view *cel.VarView, logger *slog.Logger) map[string]any {
+	if logger == nil {
+		logger = slog.Default()
+	}
+	out := make(map[string]any, 2)
+	for _, key := range [...]string{varKeyTelemetryInterval, varKeyTelemetryCollectors} {
+		val, found, err := view.Lookup(key)
+		if err != nil {
+			logger.Warn("telemetry: a service var does not evaluate, falling back to the manifest for it",
+				slog.String("key", key),
+				slog.Any("error", err),
+			)
+			continue
+		}
+		if found {
+			out[key] = val
+		}
+	}
+	return out
+}
+
 // ResolveEffectiveTelemetry merges the manifest `telemetry:` policy with the
 // service's own vars into the effective host-vitals config (ADR-072, NIM-87). A
-// pure function: does not touch PG/IO — tested in isolation.
+// pure function: does not touch PG/IO — tested in isolation. vars is what
+// [TelemetryVars] looked up, or nil for a service-level default.
 //
 //   - enabled  = m.EnabledOrDefault() (a service var does NOT override enabled);
 //   - interval = vars[telemetry_interval] (string) else m.IntervalOrDefault();
@@ -86,10 +121,10 @@ func filterKnownCollectors(in []string) []string {
 	return out
 }
 
-// UnknownTelemetryCollectors returns collectors named in the service's vars that
-// are not part of the closed set (observability: an author's typo is visible in
-// keeper logs). nil if the key is missing / it is not a list of strings / all
-// names are known.
+// UnknownTelemetryCollectors returns collectors named in the service's vars (as
+// [TelemetryVars] looked them up) that are not part of the closed set
+// (observability: an author's typo is visible in keeper logs). nil if the key is
+// missing / it is not a list of strings / all names are known.
 func UnknownTelemetryCollectors(vars map[string]any) []string {
 	ov, ok := varStringSlice(vars, varKeyTelemetryCollectors)
 	if !ok {

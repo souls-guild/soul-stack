@@ -30,7 +30,7 @@ func TestResolveCompute_ChainAndContext(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		ServiceVars: map[string]any{"defaults": map[string]any{"a": "1", "b": "2"}},
+		ServiceVars: serviceView(t, map[string]any{"defaults": map[string]any{"a": "1", "b": "2"}}),
 		Input:       map[string]any{"over": map[string]any{"b": "9"}},
 		Hosts:       []*topology.HostFacts{host("h1", []string{"create"}, nil)},
 		Ctx:         context.Background(),
@@ -109,7 +109,7 @@ func TestCompute_SameValueInTasksAndCapture(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    manifest,
-		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
+		ServiceVars: serviceView(t, map[string]any{"base": map[string]any{"appendonly": "yes"}}),
 		Input:       map[string]any{"mb": int64(512)},
 		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("h1", []string{"create"}, nil)},
@@ -180,7 +180,7 @@ func TestCompute_NotLeakingIntoDestiny_RenderThrough(t *testing.T) {
 	p := NewPipeline(nil, newEngine(t), nil, nil)
 	in := RenderInput{
 		Scenario:    scenario,
-		ServiceVars: map[string]any{"base": map[string]any{"appendonly": "yes"}},
+		ServiceVars: serviceView(t, map[string]any{"base": map[string]any{"appendonly": "yes"}}),
 		Incarnation: IncarnationMeta{ID: "svc"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,

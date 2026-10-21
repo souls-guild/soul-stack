@@ -93,8 +93,7 @@ func TestIDTemplateInputRefs(t *testing.T) {
 }
 
 // TestIDTemplateInputRefs_IndexFormRejected — the index form hides the component
-// name from static analysis, so it is rejected deterministically (mirror of
-// shared/cel.ErrVarIndexForm for vars).
+// name from static analysis, so it is rejected deterministically.
 func TestIDTemplateInputRefs_IndexFormRejected(t *testing.T) {
 	if _, err := IDTemplateInputRefs(`${input['project']}`); !errors.Is(err, ErrIDTemplateIndexForm) {
 		t.Fatalf("expected ErrIDTemplateIndexForm, got %v", err)

@@ -506,7 +506,7 @@ func (p *Pipeline) blockChildTargets(in RenderInput, child config.Task, targeted
 	// The dropped hosts the block's `on:` selects stand beside its hosts, so a
 	// child's where: sees the block's share of soulprint.hosts, not the run's.
 	scoped.Dropped = in.droppedCover
-	childTargeted, err := resolveTargets(p.cel, scoped, child)
+	childTargeted, err := p.resolveTargets(scoped, child)
 	if err != nil {
 		return nil, err
 	}

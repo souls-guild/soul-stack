@@ -54,8 +54,17 @@ var computeScopeStance = map[string]struct {
 			"predicate, and ADR-012(d) wants keeper-side static-when to fail bit-for-bit the way Soul fails. soul-lint uses the stance offline, " +
 			"where there is no env to do the refusing",
 	},
-	"resolveTaskVars": {
-		reason: "the zero Vars is returned next to a non-nil error and is never evaluated; on the success path the caller's base carries the stance",
+	"taskVarLayers": {
+		want:   "",
+		reason: "nothing is evaluated through it: the task's view is built only for its layers' raw text, which the seal, the host-variance classification and soul_needs read, and no rung's Base is kept",
+	},
+	"runLevelVarLayers": {
+		want:   "",
+		reason: "nothing is evaluated through it: the run-level view is built only for its layers' raw text, which soul_needs reads, and no rung's Base is kept",
+	},
+	"scenarioRungBase": {
+		want:   "reader.ComputeScope",
+		reason: "a scenario `vars:` definition is evaluated for the cell that reads it, so it stands where that cell stands: on the loop axis it is host-free and compute is out of scope, in a task it is the task's (ADR-0082 amendment 2026-10-15, point 6)",
 	},
 }
 
@@ -231,8 +240,8 @@ func TestComputeScope_KeeperTaskReadsCompute(t *testing.T) {
 	}
 }
 
-// TestComputeScope_KeeperTaskVarsReadCompute — task-level vars: layer onto that very
-// same keeper context (resolveTaskVars takes it as its base), so the value reaches
+// TestComputeScope_KeeperTaskVarsReadCompute — task-level vars: are evaluated in that
+// very same keeper context (the task rung's base), so the value reaches
 // params: through them too. Under the old omission this was the "obvious workaround
 // that silently isn't"; it is now simply the same context, twice.
 func TestComputeScope_KeeperTaskVarsReadCompute(t *testing.T) {

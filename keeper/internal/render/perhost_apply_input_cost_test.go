@@ -118,7 +118,7 @@ func BenchmarkApplyInput_ResolveByRoster(b *testing.B) {
 			for i := 0; i < b.N; i++ {
 				// The classification is inside the loop because renderApplyDestiny pays
 				// it once per applier per pass, exactly like the resolve.
-				variant := hostVariantInputNames(e, applier, keeperRegisterNames(manifest))
+				variant := p.hostVariantInputNames(in, applier)
 				if _, _, _, err := p.resolveApplyInput(in, applier, res.resolved, hosts, variant); err != nil {
 					b.Fatal(err)
 				}

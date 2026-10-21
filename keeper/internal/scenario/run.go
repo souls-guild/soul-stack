@@ -342,8 +342,11 @@ func (r *Runner) run(ctx context.Context, spec RunSpec) {
 	//    CEL as `vars.<path>` (slice E2; the root merges into `vars.*` in
 	//    NIM-414). Host-invariant by construction (ADR-0082), so the keeper
 	//    context — empty roster, provision-from-zero, where hosts[0] would panic
-	//    — resolves exactly the same map as a run with a roster.
-	serviceVars, err := r.deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
+	//    — sees exactly the same view as a run with a roster. Built once for the
+	//    run and kept across its Passages: a definition is evaluated when a task
+	//    reads it, and one no task override touches is evaluated once for the run
+	//    (ADR-0082 amendment 2026-10-15, points 7 and 8).
+	serviceVars, err := r.deps.ServiceVars.View(serviceVarsInput(art.LocalDir, inc))
 	if err != nil {
 		abort("service_vars_failed", err)
 		return

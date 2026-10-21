@@ -127,9 +127,10 @@ func RenderForHost(ctx context.Context, deps Deps, recipe *applyrun.Recipe, inca
 	}
 
 	// 5. Service vars (the service's own layer) — host-invariant since ADR-0082,
-	//    so this resolves the same map as the run-goroutine (run.go step 4) with
-	//    no representative host to pick.
-	serviceVars, err := deps.ServiceVars.Resolve(serviceVarsInput(art.LocalDir, inc))
+	//    so this builds the same view as the run-goroutine (run.go step 4) with
+	//    no representative host to pick. The claim's own view: its memo is this
+	//    render's (ADR-0082 amendment 2026-10-15, point 7).
+	serviceVars, err := deps.ServiceVars.View(serviceVarsInput(art.LocalDir, inc))
 	if err != nil {
 		return nil, nil, fmt.Errorf("scenario: RenderForHost: service vars: %w", err)
 	}

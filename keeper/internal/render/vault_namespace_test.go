@@ -260,7 +260,7 @@ func renderLoopVault(t *testing.T, scn *config.ScenarioManifest, path string) ([
 	p := NewPipeline(kv, vaultEngine(t, kv), nil, nil)
 	tasks, _, err := p.Render(context.Background(), RenderInput{
 		Scenario:    scn,
-		ServiceVars: map[string]any{"p": path},
+		ServiceVars: serviceView(t, map[string]any{"p": path}),
 		Incarnation: IncarnationMeta{ID: "prod", Service: "redis"},
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"prod"}, nil)},
 	})

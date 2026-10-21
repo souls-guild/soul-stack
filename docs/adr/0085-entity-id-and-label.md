@@ -58,7 +58,7 @@ tree today, all verified on disk:
 | pattern | where |
 |---|---|
 | `^[a-z0-9-]{1,63}$` | `keeper/internal/augur/augur.go:59`, `keeper/internal/herald/herald.go:25`, `keeper/internal/oracle/validate.go:31`, `keeper/internal/profile/profile.go:19`, `keeper/internal/provider/provider.go:21` |
-| `^[a-z0-9][a-z0-9-]{0,62}$` | `keeper/internal/incarnation/incarnation.go:60` |
+| `^[a-z0-9][a-z0-9-]{0,62}$` | `keeper/internal/incarnation/incarnation.go:65` |
 | `^[a-z][a-z0-9-]{0,62}$` | `keeper/internal/pushprovider/pushprovider.go:28` |
 | `^[a-z][a-z0-9-]*$` | `keeper/internal/serviceregistry/types.go:61`, `keeper/internal/rbac/crud.go:63` |
 
@@ -150,7 +150,7 @@ The capital letter lives in `label` and never in `id`.
 ### The `id` grammar — one grammar for every registry
 
 **`^[a-z0-9][a-z0-9-]{0,62}$`** — `incarnation`'s existing pattern
-(`keeper/internal/incarnation/incarnation.go:60`), adopted unchanged by all of them. Three
+(`keeper/internal/incarnation/incarnation.go:65`), adopted unchanged by all of them. Three
 properties decide it:
 
 - **All lower-case**, as decided. Case-folding is not an option: a Vault path segment passes through
@@ -327,7 +327,10 @@ catcher that covered one would report a fraction of the sites while looking gree
   evaluated BEFORE the render, so a stale root fails the whole run rather than one task. Only
   the four evaluated cells (`when:`, `foreach:`, `file:`, `inline:` values) are walked — a
   plain layer file under `vars/` is parsed and returned unrendered, so a `${ … }` written
-  there is literal text and flagging it would be a false positive.
+  there is literal text and flagging it would be a false positive. *(Superseded in part by the
+  [ADR-0082 amendment 2026-10-15](0082-service-vars.md#amendment-2026-10-15-nim-1014-vars-are-evaluated-on-request-and-bound-late),
+  NIM-1014: `inline:` is removed, so three step cells are walked, and a layer file's values are
+  evaluated now, so a stale root in one is a real reference.)*
 
 It is AST-based through the same `shared/cel` walk the engine uses, so `incarnation.name` in
 prose or in a string CONSTANT is correctly not a reference, `incarnation['name']` correctly is,
@@ -371,7 +374,7 @@ is absent. Recorded here rather than left to be discovered live.
 
 `incarnation` is declared `cel.DynType` in all three CEL environments
 (`shared/cel/engine.go:50-57` scenario/destiny, `:82-87` flow-control, `:232-236` service-vars; the
-declaration itself is `cel.Variable(name, cel.DynType)` at `shared/cel/engine.go:284`). A DynType
+declaration itself is `cel.Variable(name, cel.DynType)` at `shared/cel/engine.go:323`). A DynType
 root does not type-check its fields, so `incarnation.name` after the drop is a **no-such-key at
 evaluation**, not a compile error.
 

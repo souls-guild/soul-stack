@@ -5,6 +5,8 @@ import (
 	"path/filepath"
 	"sort"
 	"testing"
+
+	"github.com/souls-guild/soul-stack/keeper/internal/servicevars"
 )
 
 // TestLoadDirectiveCatalog_ReadsTheWholeVarsDirectory — the catalog is wherever
@@ -44,6 +46,41 @@ func TestLoadDirectiveCatalog_LaterFileWins(t *testing.T) {
 	}
 	if got := cat["7.0"]; len(got) != 1 || got[0] != "new" {
 		t.Fatalf("the later file must win: %#v", cat)
+	}
+}
+
+// TestLoadDirectiveCatalog_EvaluatesOnlyItsKey — point 7 of the ADR-0082
+// amendment of 2026-10-15: the catalog reads the service view host-free and
+// evaluates `redis_directives` alone. A broken var elsewhere in the service does
+// not empty the editor, and the evaluation counter proves it was never touched;
+// a catalog that is itself a definition is evaluated like any other.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: read the catalog from
+// `view.Materialize()` in directiveCatalogOf. The broken var then fails it.
+func TestLoadDirectiveCatalog_EvaluatesOnlyItsKey(t *testing.T) {
+	root := t.TempDir()
+	writeFile(t, filepath.Join(root, "vars", "00-base.yaml"),
+		"series: \"7.0\"\nbroken: \"${ vars.nope }\"\n")
+	writeFile(t, filepath.Join(root, "vars", "50-catalog.yaml"),
+		"redis_directives:\n  \"7.0\":\n    - maxmemory\n    - \"${ 'appendonly' }\"\n")
+
+	cat, err := LoadDirectiveCatalog(root, "")
+	if err != nil {
+		t.Fatalf("LoadDirectiveCatalog: %v", err)
+	}
+	if want := []string{"appendonly", "maxmemory"}; !equalStr(cat["7.0"], want) {
+		t.Fatalf("7.0 = %v, want %v", cat["7.0"], want)
+	}
+
+	view, err := servicevars.NewResolver(nil).LexicalView(root)
+	if err != nil {
+		t.Fatalf("LexicalView: %v", err)
+	}
+	if _, err := directiveCatalogOf(view); err != nil {
+		t.Fatalf("directiveCatalogOf: %v", err)
+	}
+	if n := view.Evaluations(); n != 1 {
+		t.Fatalf("Evaluations = %d, want 1: the catalog evaluated a var it does not read", n)
 	}
 }
 

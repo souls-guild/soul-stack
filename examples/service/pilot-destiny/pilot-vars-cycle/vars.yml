@@ -1,7 +1,9 @@
-# vars.yml with a CYCLE a → b → c → a (vars.md, ADR-009/ADR-010 amendment 2026-06-24):
-# var→var is allowed within a layer, but a cycle is unresolvable by topological sort → render aborts
-# with var_cycle and a trace. This file exists SPECIFICALLY for the negative L0 case
-# (pilot-destiny::vars-cycle, expect_render_error: var_cycle).
+# vars.yml with a CYCLE a → b → c → a (vars.md, ADR-0082 amendment 2026-10-15):
+# var→var is allowed, and a var is evaluated when something reads it. Reading vars.a
+# evaluates b, then c, and c's read of a finds a already on the evaluation path, so the
+# render aborts with `var_cycle: a → b → c → a` - the path rotated to start at its
+# smallest name, whichever var was read first. This file exists SPECIFICALLY for the
+# negative L0 case (pilot-destiny::vars-cycle, expect_render_error: var_cycle).
 a: "${ vars.b }"
 b: "${ vars.c }"
 c: "${ vars.a }"

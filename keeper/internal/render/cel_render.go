@@ -2,7 +2,10 @@ package render
 
 import (
 	"fmt"
+	"maps"
+	"slices"
 
+	"github.com/google/cel-go/common/types"
 	"google.golang.org/protobuf/types/known/structpb"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
@@ -41,7 +44,10 @@ func renderValue(engine *cel.Engine, v any, vars cel.Vars, path string) (any, er
 	switch t := v.(type) {
 	case map[string]any:
 		out := make(map[string]any, len(t))
-		for k, val := range t {
+		// In key order: of two failing cells the same one is reported every time
+		// (ADR-0082 amendment 2026-10-15, point 10).
+		for _, k := range slices.Sorted(maps.Keys(t)) {
+			val := t[k]
 			rv, err := renderValue(engine, val, vars, joinKey(path, k))
 			if err != nil {
 				return nil, err
@@ -82,72 +88,18 @@ func evalBoolExpr(engine *cel.Engine, kind, expr string, vars cel.Vars) (bool, e
 	if err != nil {
 		return false, fmt.Errorf("render: %s %q: %w", kind, expr, err)
 	}
-	b, ok := out.Value().(bool)
+	// By type, not by Value(): `where: vars` would have its whole view evaluated to
+	// produce a value the message only names the type of.
+	b, ok := out.(types.Bool)
 	if !ok {
-		return false, fmt.Errorf("render: %s %q returned %T, expected bool", kind, expr, out.Value())
+		return false, fmt.Errorf("render: %s %q returned %s, expected bool", kind, expr, out.Type().TypeName())
 	}
-	return b, nil
+	return bool(b), nil
 }
 
 // evalWhere evaluates the per-host `where:` predicate (orchestration.md §4).
 func evalWhere(engine *cel.Engine, where string, vars cel.Vars) (bool, error) {
 	return evalBoolExpr(engine, "where", where, vars)
-}
-
-// resolveTaskVars builds the final `vars.*` layer for one task on one host:
-// BASE is resolved destiny locals `vars.yml` (fileVars), OVERLAID with
-// task-level `vars:` (taskVars). Variant A (vars.md): a same-named task-var
-// shadows a file-var. In the scenario pass fileVars is empty (vars.yml is a
-// destiny concept), so scenario-task behavior is bit-for-bit unchanged. Both
-// empty → base returned unchanged.
-//
-// CRITICAL (cross-layer isolation): taskVars are resolved by resolveVarLayer
-// with an EMPTY base.Vars at start — a task-var sees ONLY task-vars in its own
-// layer (var→var within layer, eager-topological), never file-vars. file-vars
-// are deliberately NOT put into base.Vars before task-vars resolve: otherwise
-// `${ vars.<file_var> }` inside a task-var would resolve instead of raising
-// ErrVarUnknownRef, breaking the boundary. task-var→task-var cycle →
-// ErrVarCycle (mirrors resolveDestinyVars).
-func resolveTaskVars(engine *cel.Engine, fileVars, taskVars map[string]any, base cel.Vars) (cel.Vars, error) {
-	if len(fileVars) == 0 && len(taskVars) == 0 {
-		return base, nil // base.Vars is already the service layer
-	}
-	// The service's own vars are the bottom of the ladder and the only layer a
-	// task var may reach downward into (ADR-0082); the file layer is stacked in
-	// below the task layer AFTER the resolve, which is what keeps the two of them
-	// isolated from each other.
-	serviceVars := base.Vars
-	resolvedTask, err := resolveVarLayer(engine, taskVars, serviceVars, base)
-	if err != nil {
-		return cel.Vars{}, err
-	}
-	resolved := make(map[string]any, len(serviceVars)+len(fileVars)+len(resolvedTask))
-	for key, val := range serviceVars { // bottom: the service's own vars
-		resolved[key] = val
-	}
-	for key, val := range fileVars { // then: file-vars, already resolved (no CEL)
-		resolved[key] = val
-	}
-	for key, val := range resolvedTask { // top: a task-var shadows both
-		resolved[key] = val
-	}
-	base.Vars = resolved
-	return base, nil
-}
-
-// fileVarsForHost returns resolved destiny locals `vars.yml` for host (base of
-// the `vars.*` layer, Variant A). Source is in.DestinyVarsResolved, filled
-// per-host by renderApplyDestiny. nil host (synthetic empty context) → key "".
-// nil map (scenario pass / destiny without vars.yml) → nil (empty base).
-func fileVarsForHost(in RenderInput, host *topology.HostFacts) map[string]any {
-	if in.DestinyVarsResolved == nil {
-		return nil
-	}
-	sid := ""
-	if host != nil {
-		sid = host.SID
-	}
-	return in.DestinyVarsResolved[sid]
 }
 
 // incarnationVars builds the incarnation map for the CEL context: id/service/
@@ -181,12 +133,11 @@ func incarnationVars(in RenderInput, hostCount int) map[string]any {
 }
 
 // hostVars builds cel.Vars for a specific host: the common run context
-// (input/register/incarnation/vars) + soulprint.self for this host.
+// (input/register/incarnation/compute) + soulprint.self for this host.
 //
-// Vars is seeded with the SERVICE's own vars — the bottom of the flat `vars.*`
-// namespace (ADR-0082). They are host-invariant but placed in every per-host
-// context, available wherever input is; resolveTaskVars layers the destiny's
-// `vars.yml` and the task's own `vars:` over them.
+// `vars` is not set here: the caller attaches the view its cell reads
+// ([Pipeline.withTaskView], varview.go), because which rungs a cell sees depends on
+// the cell, not on the host.
 //
 // soulprint.hosts (+ .where) is projected from in.Hosts ONLY in the scenario
 // pass (in.destinyIsolated==false). In the destiny pass the host accessor is
@@ -203,7 +154,6 @@ func hostVars(in RenderInput, host *topology.HostFacts, hostCount int) cel.Vars 
 		Incarnation:    incarnationVars(in, hostCount),
 		SoulprintSelf:  soulprintSelfMap(host),
 		SoulprintHosts: soulprintHosts(in),
-		Vars:           in.ServiceVars,
 		Compute:        in.Compute,
 		Ctx:            in.Ctx,
 		AllowHosts:     !in.destinyIsolated,
@@ -377,13 +327,12 @@ func registerHosts(in RenderInput) map[string]any {
 //   - self is the same soulprintSelfMap as in the CEL phase (ADR-018:
 //     soulprint.self.<p> in CEL ≡ .self.<p> in the template). role is the
 //     host's declared role (may be "").
-//   - vars is the service's own vars + file-vars (base, fileVars) + the step's
-//     params.vars (override) — mirrors resolveTaskVars in the CEL phase
-//     (Variant A, vars.md), nested under key vars, not flattened. The base is
-//     SCOPED (referencedFileVars: only keys the template reads as
-//     `.vars.<key>`) — a template that reads neither a file-var nor a service
-//     var gets no extras, so its `.vars` stays bit-for-bit as before. In the
-//     destiny pass the service layer is empty by isolation.
+//   - vars is rungVars — the names [renderContextVarNames] picks, valued from the
+//     task's view, so `.vars.<x>` is what `${ vars.<x> }` is in the same task's
+//     params, task override included (ADR-0082 amendment 2026-10-15, point 17) —
+//     with the step's params.vars over it, nested under key vars, not flattened.
+//     A template that names no var of a lower rung gets no extras. In the destiny
+//     pass there is no service rung by isolation.
 //   - input is the pass's operator-input (Variant B, ADR-010 §3.2): placed
 //     ONLY when injectInput (the template actually reads `.input.*`, detected
 //     via AST). vars-only templates get no input → their render_context stays
@@ -395,11 +344,11 @@ func registerHosts(in RenderInput) map[string]any {
 // Provenance is reconstructed by the caller (renderTaskIter →
 // sealRenderContextInput) DECLARATIVELY from the schema, under the same
 // injectInput gate.
-func buildRenderContext(in RenderInput, host *topology.HostFacts, fileVars, paramsVars map[string]any, injectInput bool) map[string]any {
+func buildRenderContext(in RenderInput, host *topology.HostFacts, rungVars, paramsVars map[string]any, injectInput bool) map[string]any {
 	// orEmptyMap normalizes nil (mergeVars returns nil when both are empty) —
 	// `.vars` is always present as a key, so `.vars.*` fails meaningfully, not panics.
 	rc := map[string]any{
-		"vars": orEmptyMap(mergeVars(fileVars, paramsVars)),
+		"vars": orEmptyMap(mergeVars(rungVars, paramsVars)),
 		"self": soulprintSelfMap(host),
 		"role": host.Role,
 	}
@@ -423,8 +372,8 @@ const flowContextSelfKey = "self"
 
 // The flow_context sections narrowed to what a task's flow-control predicates
 // actually read (flowContextRoots) — everything the run's operator supplied.
-// input is the run input INCLUDING its `secret: true` fields; vars is the task's
-// resolved vars, which may hold a `vault()` result; incarnation carries `state`,
+// input is the run input INCLUDING its `secret: true` fields; vars is what the
+// task's view evaluates, which may hold a `vault()` result; incarnation carries `state`,
 // whose captured values are secret under the same rules ([ADR-0084]).
 //
 // `self` is deliberately not among them: it is the receiving host's own facts, so
@@ -446,14 +395,23 @@ var flowContextRoots = []string{flowContextInputKey, flowContextVarsKey, flowCon
 // to travel to that host at all.
 type flowContextReads map[string]cel.RootReads
 
-// allFlowContextReads ships every section whole — for the call sites that
-// evaluate a predicate on Keeper and then drop the snapshot (evalIncludeWhen,
-// evalAssertTask). Nothing crosses the wire there, so there is nothing to narrow.
+// allFlowContextReads ships every section whole.
 func allFlowContextReads() flowContextReads {
 	reads := make(flowContextReads, len(flowContextRoots))
 	for _, root := range flowContextRoots {
 		reads[root] = cel.RootReads{Whole: true}
 	}
+	return reads
+}
+
+// keeperLocalFlowContextReads is for a snapshot that decides one predicate on the
+// Keeper and is then dropped (evalIncludeWhen, evalAssertTask): nothing crosses the
+// wire, so input and incarnation ship whole, but vars carries only what the
+// predicate reads — a whole section would evaluate every var of the view, a broken
+// one nobody reads included (ADR-0082 amendment 2026-10-15, point 4).
+func keeperLocalFlowContextReads(engine *cel.Engine, predicate string) flowContextReads {
+	reads := allFlowContextReads()
+	reads[flowContextVarsKey] = engine.PredicateReads(predicate, []string{flowContextVarsKey})[flowContextVarsKey]
 	return reads
 }
 
@@ -549,9 +507,10 @@ func projectFlowSection(m map[string]any, reads flowContextReads, root string) m
 // phase. register.* is NOT placed in flow_context — Soul builds it itself from
 // previous tasks' results.
 //
-// vars is task-level `vars:`, already CEL-resolved (vars.Vars); nil → empty
-// map. Returns *structpb.Struct (direct fit for proto
-// RenderedTask.flow_context).
+// vars is the names of vars.View the predicates read, each evaluated in that
+// view — late-bound, the task's overrides included (ADR-0082 amendment
+// 2026-10-15, point 17); a whole read evaluates the view whole. Returns
+// *structpb.Struct (direct fit for proto RenderedTask.flow_context).
 //
 // reads narrows the operator-supplied sections to what this task's predicates
 // name (see flowContextReads); the snapshot used to be full, which put every
@@ -559,11 +518,15 @@ func projectFlowSection(m map[string]any, reads flowContextReads, root string) m
 // tasks with no predicate too, which never read the snapshot at all (NIM-813).
 // One compromised host then yielded the whole run's secrets rather than the ones
 // its own tasks used. Callers that keep the snapshot on Keeper pass
-// allFlowContextReads.
+// keeperLocalFlowContextReads.
 func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, hostCount int, reads flowContextReads) (*structpb.Struct, error) {
+	varsSection, err := flowVarsSection(vars, reads)
+	if err != nil {
+		return nil, err
+	}
 	fc := map[string]any{
 		flowContextInputKey:       projectFlowSection(vars.Input, reads, flowContextInputKey),
-		flowContextVarsKey:        projectFlowSection(vars.Vars, reads, flowContextVarsKey),
+		flowContextVarsKey:        varsSection,
 		flowContextIncarnationKey: projectFlowSection(incarnationVars(in, hostCount), reads, flowContextIncarnationKey),
 		flowContextSelfKey:        soulprintSelfMap(host),
 	}
@@ -572,6 +535,20 @@ func buildFlowContext(in RenderInput, host *topology.HostFacts, vars cel.Vars, h
 		return nil, fmt.Errorf("flow_context → structpb: %w", err)
 	}
 	return st, nil
+}
+
+// flowVarsSection is flow_context's vars section: [projectFlowSection] over the
+// view instead of a map — a Lookup per name reads names, in sorted order so the
+// same var is the one that fails every time, and Materialize for a whole read.
+func flowVarsSection(vars cel.Vars, reads flowContextReads) (map[string]any, error) {
+	if vars.View == nil {
+		return projectFlowSection(vars.Vars, reads, flowContextVarsKey), nil
+	}
+	r, named := reads[flowContextVarsKey]
+	if !named || r.Whole {
+		return vars.View.Materialize()
+	}
+	return lookupVars(vars.View, slices.Sorted(maps.Keys(r.Fields)))
 }
 
 // orEmptyMap turns a nil map into empty (structpb.NewStruct doesn't accept nil

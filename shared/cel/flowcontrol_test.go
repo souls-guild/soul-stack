@@ -2,6 +2,7 @@ package cel
 
 import (
 	"errors"
+	"strings"
 	"testing"
 )
 
@@ -219,5 +220,19 @@ func TestFlowControl_WithVaultRejected(t *testing.T) {
 	kv := &stubKV{secrets: map[string]map[string]any{}}
 	if _, err := NewFlowControl(WithVault(kv)); err == nil {
 		t.Fatalf("NewFlowControl(WithVault): error = nil, want non-nil (guard)")
+	}
+}
+
+// TestEvalPredicate_ALazyVarsResultIsRefusedByType — a predicate returning the
+// `vars` map itself is not a bool, and saying so evaluates nothing: a lazy map's
+// Value() would evaluate every var, a broken one included.
+func TestEvalPredicate_ALazyVarsResultIsRefusedByType(t *testing.T) {
+	view := NewVarView(nil, serviceLayer(newServiceVarsEngine(t), "vars/00-base.yaml", map[string]any{"broken": "${ vars.nope }"}))
+	_, err := newEngine(t).EvalPredicate("vars", Vars{View: view})
+	if !errors.Is(err, ErrPredicateNotBool) || !strings.Contains(err.Error(), "predicate returned map") {
+		t.Fatalf("err = %v, want ErrPredicateNotBool naming the map type", err)
+	}
+	if n := view.Evaluations(); n != 0 {
+		t.Fatalf("refusing the result evaluated %d definitions, want 0", n)
 	}
 }

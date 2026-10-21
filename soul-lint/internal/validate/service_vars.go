@@ -2,12 +2,15 @@ package validate
 
 import (
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"github.com/souls-guild/soul-stack/shared/config"
 	"github.com/souls-guild/soul-stack/shared/diag"
+	"github.com/souls-guild/soul-stack/shared/servicevars"
 )
 
 // varsDirName — the service-vars directory, relative to the service root.
@@ -21,19 +24,24 @@ const retiredVarsDirName = "essence"
 
 // serviceVarsDiags checks the `vars/` directory next to a `service.yml`, offline.
 //
-// Three classes, all of which otherwise surface as a service that resolved to
+// Four classes, all of which otherwise surface as a service that resolved to
 // something other than what its author wrote — and resolved without complaint:
 //
 //   - `stack_step_invalid` — `_stack.yaml` cannot be read as written. Runs the
-//     SAME parser the keeper runs (config.ParseServiceVarsStack), so the offline
+//     SAME parser the keeper runs (servicevars.ParseStack), so the offline
 //     answer and the runtime answer cannot disagree.
-//   - `vars_dir_nested` — a layer file in a subdirectory of `vars/`, which the
-//     resolver does not walk. The file is simply never read.
+//   - `vars_dir_nested` — a layer file in a subdirectory of `vars/` that no
+//     `_stack.yaml` step can name. The file is simply never read.
 //   - `vars_retired_layout` — the retired directory is still present.
+//   - `incarnation_name_legacy_root` — the retired CEL root in a `_stack.yaml`
+//     selector or in a definition of any layer file under `vars/`.
+//
+// Plus the var checks of the service view (var_views.go), its stub evaluation
+// against serviceName.
 //
 // Any I/O error other than "not there" is left alone: the linter reports on what
 // it can read, and an unreadable tree is the caller's problem to notice.
-func serviceVarsDiags(manifestPath string) []diag.Diagnostic {
+func serviceVarsDiags(manifestPath, serviceName string) []diag.Diagnostic {
 	root := filepath.Dir(manifestPath)
 	varsDir := filepath.Join(root, varsDirName)
 
@@ -57,48 +65,80 @@ func serviceVarsDiags(manifestPath string) []diag.Diagnostic {
 	}
 
 	out = append(out, nestedVarsDiags(varsDir, entries)...)
-	out = append(out, stackFileDiags(varsDir, entries)...)
+	stackDiags := stackFileDiags(varsDir, entries)
+	out = append(out, stackDiags...)
+	out = append(out, layerLegacyRootDiags(varsDir)...)
+	out = append(out, serviceVarViewDiags(root, serviceName, !diag.HasErrors(stackDiags))...)
 	return out
 }
 
 // nestedVarsDiags reports layer files parked where the resolver will never look.
 //
-// The resolver reads `vars/*.yaml` and does not descend. A `vars/coven/prod.yaml`
-// is therefore not a layer that failed to apply — it is a file nothing reads, and
-// nothing says so. This is the exact shape the retired `essence/coven/` layout
-// had, so it is the mistake an author migrating a service is most likely to make.
+// The lexical scan reads `vars/*.yaml` and does not descend; only a `_stack.yaml`
+// `file:` step reaches a nested file, at any depth. A `vars/coven/prod.yaml` no step
+// can name is therefore not a layer that failed to apply — it is a file nothing
+// reads, and nothing says so. This is the exact shape the retired `essence/coven/`
+// layout had, so it is the mistake an author migrating a service is most likely to
+// make.
 func nestedVarsDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
+	reachable := stackReach(varsDir)
 	var out []diag.Diagnostic
 	for _, e := range entries {
 		if !e.IsDir() {
 			continue
 		}
-		sub := filepath.Join(varsDir, e.Name())
-		inner, err := os.ReadDir(sub)
-		if err != nil {
+		var dead string
+		_ = filepath.WalkDir(filepath.Join(varsDir, e.Name()), func(p string, d fs.DirEntry, err error) error {
+			if err != nil || d.IsDir() || !isYAMLName(d.Name()) {
+				return nil
+			}
+			rel, rerr := filepath.Rel(varsDir, p)
+			if rerr != nil || reachable(filepath.ToSlash(rel)) {
+				return nil
+			}
+			dead = p
+			return fs.SkipAll
+		})
+		if dead == "" {
 			continue
 		}
-		for _, f := range inner {
-			if f.IsDir() || !isYAMLName(f.Name()) {
-				continue
-			}
-			out = append(out, diag.Diagnostic{
-				Level:   diag.LevelWarning,
-				Phase:   diag.PhaseSemanticValidate,
-				File:    filepath.Join(sub, f.Name()),
-				Code:    "vars_dir_nested",
-				Message: fmt.Sprintf("%s/%s/%s is never read: only files directly inside %s/ are layers", varsDirName, e.Name(), f.Name(), varsDirName),
-				Hint:    fmt.Sprintf("move it up into %s/ with a name that sorts where you want it, or name it from a %s step", varsDirName, config.StackFileName),
-			})
-			// One diagnostic per subdirectory: an author who parked ten files
-			// under coven/ has one mistake, not ten.
-			break
-		}
+		rel, _ := filepath.Rel(varsDir, dead)
+		out = append(out, diag.Diagnostic{
+			Level:   diag.LevelWarning,
+			Phase:   diag.PhaseSemanticValidate,
+			File:    dead,
+			Code:    "vars_dir_nested",
+			Message: fmt.Sprintf("%s/%s is never read: the lexical scan reads only files directly inside %s/, and no %s step names it", varsDirName, filepath.ToSlash(rel), varsDirName, config.StackFileName),
+			Hint:    fmt.Sprintf("move it up into %s/ with a name that sorts where you want it, or name it from a %s step", varsDirName, config.StackFileName),
+		})
+		// One diagnostic per subdirectory: an author who parked ten files under
+		// coven/ has one mistake, not ten.
 	}
 	return out
 }
 
-// stackFileDiags validates `_stack.yaml` through the keeper's own parser, and
+// stackReach reports whether some `_stack.yaml` step can include a file, by its
+// path relative to `vars/` ([servicevars.StepFileMatcher]). Without a stack that
+// parses, nothing is reachable but the top level.
+func stackReach(varsDir string) func(rel string) bool {
+	data, err := os.ReadFile(filepath.Join(varsDir, config.StackFileName))
+	if err != nil {
+		return func(string) bool { return false }
+	}
+	stack, err := servicevars.ParseStack(data)
+	if err != nil {
+		return func(string) bool { return false }
+	}
+	matchers := make([]func(string) bool, 0, len(stack.Stack))
+	for _, step := range stack.Stack {
+		matchers = append(matchers, servicevars.StepFileMatcher(step.File))
+	}
+	return func(rel string) bool {
+		return slices.ContainsFunc(matchers, func(match func(string) bool) bool { return match(rel) })
+	}
+}
+
+// stackFileDiags validates `_stack.yaml` through the parser keeper runs, and
 // catches the `.yml` spelling that would otherwise sit unread.
 func stackFileDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
 	var out []diag.Diagnostic
@@ -122,7 +162,7 @@ func stackFileDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
 	if err != nil {
 		return out
 	}
-	stack, err := config.ParseServiceVarsStack(data)
+	stack, err := servicevars.ParseStack(data)
 	if err != nil {
 		out = append(out, diag.Diagnostic{
 			Level:   diag.LevelError,
@@ -148,11 +188,9 @@ func stackFileDiags(varsDir string, entries []os.DirEntry) []diag.Diagnostic {
 // goes — before the render, so the whole run fails to start rather than one task
 // failing, and with nothing having warned.
 //
-// Only the four evaluated cells are walked. A layer file under `vars/` is NOT one
-// of them: [servicevars.Resolver.readLayer] parses it and returns it, so a
-// `${ … }` written there is literal text in the vars namespace, never a
-// reference, and flagging it would be a false positive that teaches authors to
-// ignore the rule.
+// Only the three selectors of a step are walked here (`inline:` is refused at
+// parse). The layer files' definitions are the same environment and are walked by
+// [layerLegacyRootDiags].
 func stackLegacyRootDiags(stackPath string, data []byte, stack *config.ServiceVarsStack) []diag.Diagnostic {
 	eng := computeScopeEngine()
 	if eng == nil || stack == nil {
@@ -171,9 +209,54 @@ func stackLegacyRootDiags(stackPath string, data []byte, stack *config.ServiceVa
 		c.expression(where+".when", step.When)
 		c.interpolation(where+".foreach", step.Foreach)
 		c.interpolation(where+".file", step.File)
-		c.value(step.Inline, where+".inline")
 	}
 	return c.out
+}
+
+// layerLegacyRootDiags reports the retired CEL root `incarnation.name` in the
+// definitions of the layer files ([ADR-0085]). A definition is evaluated since the
+// ADR-0082 amendment of 2026-10-15, in the same environment as the selectors, so
+// `owner: "${ incarnation.name }"` resolves through the window's alias today and
+// fails the run when the alias goes.
+//
+// Every `*.yaml`/`*.yml` under `vars/` is walked, subdirectories included: the
+// lexical scan reads only the top level, but a `_stack.yaml` `file:` can name a
+// nested file, and which ones it names is per-incarnation. `_stack.yaml` itself is
+// not a layer and has its own walk; `_stack.yml` is refused by the parser and is
+// never read.
+func layerLegacyRootDiags(varsDir string) []diag.Diagnostic {
+	eng := computeScopeEngine()
+	if eng == nil {
+		return nil
+	}
+	var out []diag.Diagnostic
+	_ = filepath.WalkDir(varsDir, func(p string, d fs.DirEntry, err error) error {
+		if err != nil || d.IsDir() || !isYAMLName(d.Name()) {
+			return nil
+		}
+		if filepath.Dir(p) == varsDir && (d.Name() == config.StackFileName || d.Name() == config.StackFileMisspelt) {
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return nil
+		}
+		defs, err := config.LoadDestinyVarsFromBytes(p, data)
+		if err != nil || len(defs) == 0 {
+			return nil
+		}
+		c := &legacyRootChecker{
+			eng:  eng,
+			path: p,
+			position: func(yamlPath string) (int, int, bool) {
+				return config.PositionIn(data, yamlPath)
+			},
+		}
+		c.value(defs, "$")
+		out = append(out, c.out...)
+		return nil
+	})
+	return out
 }
 
 // isYAMLName — the extensions the resolver treats as a layer, matched the way it

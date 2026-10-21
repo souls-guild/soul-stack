@@ -144,3 +144,18 @@ func TestTraitKeys(t *testing.T) {
 		t.Errorf("traitKeys(nil) = %v, want non-nil empty slice", empty)
 	}
 }
+
+// An incarnation with no traits reads back an EMPTY map, never nil: the column is NOT
+// NULL DEFAULT '{}' (migration 088). A service definition sees the difference — the
+// service rung's `incarnation` map carries `traits` only for a non-nil map
+// (shared/servicevars IncarnationContext) — and the L0 harness gives the same empty
+// map so a trial reads what a run reads (keeper/internal/trial/harness.go).
+func TestScanIncarnation_NoTraitsIsAnEmptyMapNotNil(t *testing.T) {
+	inc, err := scanIncarnation(incToStaticRow(&Incarnation{ID: "redis-prod", Service: "redis"}))
+	if err != nil {
+		t.Fatalf("scanIncarnation: %v", err)
+	}
+	if inc.Traits == nil || len(inc.Traits) != 0 {
+		t.Fatalf("Traits = %#v, want an empty non-nil map", inc.Traits)
+	}
+}

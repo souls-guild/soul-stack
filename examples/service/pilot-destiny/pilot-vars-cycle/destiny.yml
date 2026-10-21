@@ -1,9 +1,10 @@
 name: pilot-vars-cycle
 description: >
-  Negative pilot-destiny for the L0 var→var check (ADR-009/ADR-010 amendment
-  2026-06-24): vars.yml carries a cyclic reference a → b → c → a. Render MUST
-  abort with a var_cycle error and a trace (eager-topological layer resolution). Used
-  only by the pilot-destiny::vars-cycle scenario with expect_render_error.
+  Negative pilot-destiny for the L0 var→var check (ADR-0082 amendment
+  2026-10-15): vars.yml carries a cyclic reference a → b → c → a. A var is
+  evaluated when it is read, so when the task reads vars.a the cycle is found on
+  the evaluation path and render MUST abort with a var_cycle error and its trace.
+  Used only by the pilot-destiny::vars-cycle scenario with expect_render_error.
 
 input:
   marker_file:

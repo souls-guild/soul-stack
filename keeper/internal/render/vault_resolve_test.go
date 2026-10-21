@@ -10,6 +10,39 @@ import (
 	"github.com/souls-guild/soul-stack/shared/cel"
 )
 
+// Two refs that fail to resolve, in params and in the keeper register: the one
+// reported is the same on every render, the first in key order (ADR-0082 amendment
+// 2026-10-15, point 10).
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: range over the map directly in
+// walkVaultValue or in resolveRegisterSecrets. The matching case goes red.
+func TestResolveVaultRefs_TheReportedRefDoesNotDependOnMapOrder(t *testing.T) {
+	kv := resolveVaultStubKV{secrets: map[string]map[string]any{}}
+	const ns = "vault:secret/demo-service-redis/redis-prod/"
+	for name, resolve := range map[string]func() error{
+		"params": func() error {
+			_, err := resolveVaultRefs(context.Background(), kv, map[string]any{"a": ns + "x#f", "b": ns + "y#f"})
+			return err
+		},
+		"keeper register": func() error {
+			_, _, err := NewPipeline(kv, nil, nil, nil).resolveRegisterSecrets(context.Background(), regInput(map[string]any{
+				"a": map[string]any{"v": ns + "x#f"},
+				"b": map[string]any{"v": ns + "y#f"},
+			}))
+			return err
+		},
+	} {
+		t.Run(name, func(t *testing.T) {
+			for i := range 50 {
+				err := resolve()
+				if err == nil || !strings.Contains(err.Error(), "redis-prod/x") {
+					t.Fatalf("resolve %d: err = %v, want the ref under key a", i, err)
+				}
+			}
+		})
+	}
+}
+
 // TestResolveVaultRefs_NoRefs — params without vault refs pass through with no
 // Vault call (PM-decision 2, no-op). vc=nil is safe.
 func TestResolveVaultRefs_NoRefs(t *testing.T) {

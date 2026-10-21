@@ -77,7 +77,7 @@ func TestRenderToSoulExecute_GoldenPath(t *testing.T) {
 	in := RenderInput{
 		Scenario:    manifest,
 		Input:       map[string]any{"password": "s3cr3t"},
-		ServiceVars: map[string]any{"redis": map[string]any{"maxmemory": "512mb"}},
+		ServiceVars: serviceView(t, map[string]any{"redis": map[string]any{"maxmemory": "512mb"}}),
 		Incarnation: IncarnationMeta{ID: "redis-prod"},
 		Hosts:       []*topology.HostFacts{host},
 		Templates:   reader,

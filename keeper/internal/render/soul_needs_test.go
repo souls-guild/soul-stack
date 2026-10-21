@@ -345,7 +345,7 @@ tasks:
 `)
 	in := surveyInput(m, needHosts())
 	in.State = map[string]any{}
-	in.ServiceVars = map[string]any{"region": "eu"}
+	in.ServiceVars = serviceView(t, map[string]any{"region": "eu"})
 	got := surveyNeeds(t, in)
 	var names []string
 	for name := range got {
@@ -609,5 +609,124 @@ func TestSoulNeeds_AgreesWithEachStepsRender(t *testing.T) {
 		if !seen[name] {
 			t.Errorf("the survey names %q, which no step sent", name)
 		}
+	}
+}
+
+// surveyedNames is the sorted task names a survey states needs for.
+func surveyedNames(got map[string]SoulNeed) []string {
+	names := make([]string, 0, len(got))
+	for name := range got {
+		names = append(names, name)
+	}
+	sort.Strings(names)
+	return names
+}
+
+// ★ GUARD (ADR-0082 amendment 2026-10-15, point 16). A predicate reads moving state
+// through a name of the task's VIEW, not only of its own `vars:`: a scenario var over
+// incarnation.state moves once a capture has run. So a `where:` reading it leaves the
+// task's hosts to the step, and a static `when:` or an include's `when:` reading it
+// counts as sent — the include's through the service and scenario rungs it reads. A
+// string nested in a definition counts, and so does a name read through another.
+// Before the capture the state is the run's snapshot, and early is decided up front.
+//
+// Mutations: close moving vars over the task's own `vars:` only → by_where, by_nested
+// and by_chain appear, by_static_when, by_nested_when and by_include are missing; give
+// the include's `when:` no vars → by_include is missing; read a definition's top-level
+// strings only → by_nested appears and by_nested_when is missing.
+func TestSoulNeeds_AScenarioVarOverStateMovesItsReaders(t *testing.T) {
+	m := loadStagedManifest(t, `
+name: scenario-moving
+vars:
+  phase: "${ has(incarnation.state.done) ? 'late' : 'early' }"
+  nested: { flag: "${ has(incarnation.state.done) }" }
+  label: "${ vars.phase }"
+tasks:
+  - name: early
+    module: core.exec.run
+    where: "vars.phase == 'early'"
+    params: { cmd: e }
+  - name: record
+    module: core.state.set
+    params: { field: done, value: "yes" }
+  - name: by_where
+    module: core.exec.run
+    where: "vars.phase == 'early'"
+    params: { cmd: w }
+  - name: by_nested
+    module: core.exec.run
+    where: "!vars.nested.flag"
+    params: { cmd: n }
+  - name: by_chain
+    module: core.exec.run
+    where: "vars.label == 'early'"
+    params: { cmd: c }
+  - name: by_static_when
+    module: core.exec.run
+    when: "vars.phase == 'late'"
+    params: { cmd: s }
+  - name: by_nested_when
+    module: core.exec.run
+    when: vars.nested.flag
+    params: { cmd: nw }
+  - name: by_include
+    module: core.exec.run
+    params: { cmd: i }
+`)
+	for i := range m.Tasks {
+		if m.Tasks[i].Name == "by_include" {
+			m.Tasks[i].IncludeGroupID, m.Tasks[i].IncludeWhen = 1, "vars.phase == 'late'"
+		}
+	}
+	in := surveyInput(m, needHosts())
+	in.State = map[string]any{}
+	want := []string{"by_include", "by_nested_when", "by_static_when", "early"}
+	if got := surveyedNames(surveyNeeds(t, in)); !reflect.DeepEqual(got, want) {
+		t.Errorf("surveyed %v, want %v", got, want)
+	}
+}
+
+// ★ GUARD (point 16). targetingKnown walks a task's `vars:` at any depth and follows a
+// `where:`'s names through the view: a register read nested in a task var leaves the
+// task's hosts to its step, and so does moving state nested in a scenario var that a
+// task var reads by name. A nested literal changes nothing.
+//
+// Mutations: scan a task var's top-level strings only for a register → deep_register
+// appears; close moving vars over the task's own `vars:` only → deep_through_name
+// appears.
+func TestSoulNeeds_TargetingKnownWalksVarsAtDepthThroughNames(t *testing.T) {
+	m := loadStagedManifest(t, `
+name: deep-targeting
+vars:
+  gate: { open: "${ has(incarnation.state.done) }" }
+tasks:
+  - name: probe
+    module: core.exec.run
+    register: probe
+    params: { cmd: probe }
+  - name: record
+    module: core.state.set
+    params: { field: done, value: "yes" }
+  - name: deep_register
+    module: core.exec.run
+    vars: { cfg: { who: "${ has(register.probe) ? register.probe.stdout : 'none' }" } }
+    where: "vars.cfg.who == 'none'"
+    params: { cmd: r }
+  - name: deep_through_name
+    module: core.exec.run
+    vars: { mine: "${ vars.gate }" }
+    where: "!vars.mine.open"
+    params: { cmd: n }
+  - name: deep_literal
+    module: core.exec.run
+    vars: { cfg: { who: none } }
+    where: "vars.cfg.who == 'none'"
+    params: { cmd: l }
+`)
+	in := surveyInput(m, needHosts())
+	in.State = map[string]any{}
+	want := []string{"deep_literal", "probe"}
+	if got := surveyedNames(surveyNeeds(t, in)); !reflect.DeepEqual(got, want) {
+		t.Errorf("surveyed %v, want %v", got, want)
 	}
 }

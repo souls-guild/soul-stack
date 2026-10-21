@@ -80,7 +80,8 @@ ORDER BY i.id
 //
 //	registry gate -> incarnation by MEMBERSHIP (first by name)
 //	  -> serviceRegistry.Resolve(inc.Service) (ref = inc.ServiceVersion)
-//	  -> loader.Load -> art.Manifest.Telemetry + servicevars.Resolve
+//	  -> loader.Load -> art.Manifest.Telemetry + the service view's telemetry keys
+//	     (servicevars.TelemetryVars: nothing else is evaluated)
 //	  -> ResolveEffectiveTelemetry(merge+clamp).
 //
 // "Which incarnation's service config is this host owed" is MEMBERSHIP
@@ -130,7 +131,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 		return nil, fmt.Errorf("telemetry: load service %q@%q: %w", ref.Name, ref.Ref, err)
 	}
 
-	serviceVars, err := s.vars.Resolve(servicevars.ResolveInput{
+	view, err := s.vars.View(servicevars.ResolveInput{
 		ServiceDir: art.LocalDir,
 		Incarnation: servicevars.IncarnationContext{
 			ID:             inc.ID,
@@ -143,6 +144,7 @@ func (s *telemetrySource) ResolveForSID(ctx context.Context, sid string) (*keepe
 	if err != nil {
 		return nil, fmt.Errorf("telemetry: service-vars resolve (%q): %w", inc.ID, err)
 	}
+	serviceVars := servicevars.TelemetryVars(view, s.logger.With(slog.String("incarnation", inc.ID)))
 
 	// An operator typo in collectors named in the service vars (unknown names are silently
 	// filtered out) - made visible in the logs, otherwise there is nothing to diagnose it with.

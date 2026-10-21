@@ -307,6 +307,35 @@ func TestVaultScope_ValidNoErrors(t *testing.T) {
 	}
 }
 
+// Two `vault:` input refs that both fail to resolve: the one reported is the same on
+// every call, the first in field-name order.
+//
+// HOW TO BREAK IT ON PURPOSE, in the form of real code: range over schema directly in
+// resolveInputVaultRefs. It goes red.
+func TestResolveInputValuesVault_TheReportedRefDoesNotDependOnMapOrder(t *testing.T) {
+	schema := schemaFromInput(t, `a:
+  type: string
+  secret: true
+  vault_scope: "secret/services/redis/*"
+b:
+  type: string
+  secret: true
+  vault_scope: "secret/services/redis/*"
+`)
+	refuse := func(name string, _ *InputSchema, _ string) (any, error) {
+		return nil, errors.New("refused " + name)
+	}
+	for i := range 50 {
+		_, err := ResolveInputValuesVault(schema, map[string]any{
+			"a": "vault:secret/services/redis/x#f",
+			"b": "vault:secret/services/redis/y#f",
+		}, refuse)
+		if err == nil || err.Error() != "refused a" {
+			t.Fatalf("call %d: err = %v, want the ref of field a", i, err)
+		}
+	}
+}
+
 // TestResolveInputValuesVault_NilResolver — a nil resolver leaves vault: refs
 // untouched (back-compat: path without a vault client); the value passes as a string.
 func TestResolveInputValuesVault_NilResolver(t *testing.T) {

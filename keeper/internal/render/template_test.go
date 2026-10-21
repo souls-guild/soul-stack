@@ -38,11 +38,9 @@ func TestInjectTemplateContent_PathToContent(t *testing.T) {
 		"template": "templates/redis.conf.tmpl",
 		"mode":     "0640",
 	})
-	reader := fakeReader{files: map[string][]byte{
-		"templates/redis.conf.tmpl": []byte("port {{ .vars.port }}\n"),
-	}}
+	tf := templateFile{path: "templates/redis.conf.tmpl", content: "port {{ .vars.port }}\n"}
 
-	if err := injectTemplateContent(rt, reader, ""); err != nil {
+	if err := injectTemplateContent(rt, tf); err != nil {
 		t.Fatalf("injectTemplateContent: %v", err)
 	}
 	fields := rt.Params.GetFields()
@@ -68,7 +66,7 @@ func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 		"path":    "/etc/x",
 		"content": "data",
 	})
-	if err := injectTemplateContent(rt, fakeReader{}, ""); err != nil {
+	if err := injectTemplateContent(rt, templateFile{}); err != nil {
 		t.Fatalf("injectTemplateContent: %v", err)
 	}
 	if rt.RawTemplate != "" {
@@ -81,17 +79,26 @@ func TestInjectTemplateContent_OtherModulePassthrough(t *testing.T) {
 
 // A nil reader with core.file.rendered and a template path is a handoff
 // error (this exact gap was a prod blocker for the golden path).
-func TestInjectTemplateContent_NilReaderIsError(t *testing.T) {
-	rt := renderedTask(moduleFileRendered, map[string]any{
-		"path":     "/etc/x",
-		"template": "templates/x.tmpl",
-	})
-	err := injectTemplateContent(rt, nil, "")
+func TestResolveTemplate_NilReaderIsError(t *testing.T) {
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	params := map[string]any{"template": "templates/x.tmpl"}
+	_, err := p.resolveTemplateUsesInput(RenderInput{}, params, params)
 	if err == nil {
 		t.Fatal("expected an error: TemplateReader not configured")
 	}
 	if !strings.Contains(err.Error(), "TemplateReader") {
 		t.Errorf("error = %q, want mention of TemplateReader", err)
+	}
+}
+
+// A template path nothing read is refused rather than delivered empty.
+func TestInjectTemplateContent_UnreadPathIsError(t *testing.T) {
+	rt := renderedTask(moduleFileRendered, map[string]any{
+		"path":     "/etc/x",
+		"template": "templates/x.tmpl",
+	})
+	if err := injectTemplateContent(rt, templateFile{}); err == nil {
+		t.Fatal("expected an error: the template path was not read")
 	}
 }
 
@@ -101,7 +108,7 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 		"path":             "/etc/x",
 		"template_content": "inline {{ .vars.y }}",
 	})
-	if err := injectTemplateContent(rt, nil, ""); err != nil {
+	if err := injectTemplateContent(rt, templateFile{}); err != nil {
 		t.Fatalf("inline template_content should not require a reader: %v", err)
 	}
 	if got := rt.Params.GetFields()["template_content"].GetStringValue(); got != "inline {{ .vars.y }}" {
@@ -112,18 +119,16 @@ func TestInjectTemplateContent_InlineContentKept(t *testing.T) {
 // Neither template nor template_content — error.
 func TestInjectTemplateContent_MissingBoth(t *testing.T) {
 	rt := renderedTask(moduleFileRendered, map[string]any{"path": "/etc/x"})
-	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
+	if err := injectTemplateContent(rt, templateFile{}); err == nil {
 		t.Fatal("expected an error: neither template nor template_content")
 	}
 }
 
-// non-string template — error (after the CEL phase the path must be a string).
-func TestInjectTemplateContent_NonStringTemplate(t *testing.T) {
-	rt := renderedTask(moduleFileRendered, map[string]any{
-		"path":     "/etc/x",
-		"template": 42,
-	})
-	if err := injectTemplateContent(rt, fakeReader{}, ""); err == nil {
+// non-string template — error (the path must resolve to a string).
+func TestResolveTemplate_NonStringTemplate(t *testing.T) {
+	p := NewPipeline(nil, newEngine(t), nil, nil)
+	params := map[string]any{"template": 42}
+	if _, err := p.resolveTemplateUsesInput(RenderInput{Templates: fakeReader{}}, params, params); err == nil {
 		t.Fatal("expected an error: template is not a string")
 	}
 }

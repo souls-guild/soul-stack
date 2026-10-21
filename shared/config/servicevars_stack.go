@@ -17,8 +17,9 @@ import (
 // passing one and failing the other — the whole point of the offline check is
 // that it answers the same question the runtime will.
 //
-// What is NOT here is the execution: CEL evaluation of `when:`/`foreach:`, the
-// layer merge, and path containment stay in `keeper/internal/servicevars`. This
+// What is NOT here is anything CEL: the refusal of a selector reading `vars.*`,
+// the evaluation of `when:`/`foreach:`/`file:` and the assembly of the layers live
+// in `shared/servicevars`, whose ParseStack is the parse both binaries call. This
 // file is the shape a step may have; that package decides what a step does.
 
 // Merge strategies for one stack step (ADR-0082 §4).
@@ -57,24 +58,30 @@ type ServiceVarsStack struct {
 
 // ServiceVarsStackStep — one step of the declarative pipeline.
 //
-// Exactly one of File / Inline carries the layer. Foreach repeats the step once
-// per element of a list, binding the element to the name in As. When gates the
-// step (a bare CEL bool, no `${ }`). Optional tolerates a missing File.
+// File names the layer. Foreach repeats the step once per element of a list,
+// binding the element to the name in As. When gates the step (a bare CEL bool, no
+// `${ }`). Optional tolerates a missing File.
+//
+// Inline is REMOVED (ADR-0082 amendment 2026-10-15, point 14) and is always
+// refused by Validate. The field stays so the strict decode reaches that refusal,
+// with its hint, instead of a bare unknown-key error; `any`, so every shape of
+// the value reaches it too.
 type ServiceVarsStackStep struct {
-	File     string         `yaml:"file"`
-	Inline   map[string]any `yaml:"inline"`
-	When     string         `yaml:"when"`
-	Optional bool           `yaml:"optional"`
-	Foreach  string         `yaml:"foreach"`
-	As       string         `yaml:"as"`
-	Strategy string         `yaml:"strategy"`
+	File     string `yaml:"file"`
+	Inline   any    `yaml:"inline"`
+	When     string `yaml:"when"`
+	Optional bool   `yaml:"optional"`
+	Foreach  string `yaml:"foreach"`
+	As       string `yaml:"as"`
+	Strategy string `yaml:"strategy"`
 }
 
-// stackContextNames — every name the step env declares (`cel.NewServiceVars`). A
-// `foreach:` binding may not take one of them: the shadowed value would still be
-// referenced by the same spelling, and which one won would depend on where the
-// reader looked. The list must stay in step with that env — the env is
-// deliberately two names, so this is two names.
+// stackContextNames — the roots of the service rung (`cel.NewServiceVars`): the
+// selector env's `incarnation`, and the `vars` its definitions read. A `foreach:`
+// binding may not take one of them: the shadowed value would still be referenced by
+// the same spelling, and which one won would depend on where the reader looked. The
+// list must stay in step with that env — the env is deliberately two names, so this
+// is two names.
 var stackContextNames = map[string]bool{"incarnation": true, "vars": true}
 
 // ParseServiceVarsStack decodes and validates the contents of a `_stack.yaml`.
@@ -88,6 +95,11 @@ var stackContextNames = map[string]bool{"incarnation": true, "vars": true}
 //
 // Every returned error wraps [ErrStackStepInvalid], so a caller can answer
 // "this stack is malformed" without matching on message text.
+//
+// This is the SHAPE only. A selector reading `vars.*` is refused by
+// `shared/servicevars.ParseStack`, which wraps this one and is what keeper and
+// soul-lint call: the check needs the CEL parser, and this package does not
+// depend on shared/cel.
 func ParseServiceVarsStack(data []byte) (*ServiceVarsStack, error) {
 	var doc ServiceVarsStack
 	if err := yaml.UnmarshalWithOptions(data, &doc, yaml.Strict()); err != nil {
@@ -114,18 +126,17 @@ func ParseServiceVarsStack(data []byte) (*ServiceVarsStack, error) {
 // error about the typo rather than a layer that quietly did not apply.
 func (s *ServiceVarsStackStep) Validate() error {
 	switch {
-	case s.File == "" && s.Inline == nil:
-		return fmt.Errorf("%w: needs one of file: or inline:", ErrStackStepInvalid)
-	case s.File != "" && s.Inline != nil:
-		return fmt.Errorf("%w: file: and inline: are mutually exclusive", ErrStackStepInvalid)
+	case s.Inline != nil:
+		return fmt.Errorf("%w: inline: is removed (ADR-0082 amendment 2026-10-15) — "+
+			"put the values in a file under vars/ and name it with file:", ErrStackStepInvalid)
+	case s.File == "":
+		return fmt.Errorf("%w: needs file:", ErrStackStepInvalid)
 	case s.Foreach != "" && s.As == "":
 		return fmt.Errorf("%w: foreach: requires as:", ErrStackStepInvalid)
 	case s.Foreach == "" && s.As != "":
 		return fmt.Errorf("%w: as: without foreach:", ErrStackStepInvalid)
 	case s.As != "" && stackContextNames[s.As]:
 		return fmt.Errorf("%w: as: %q shadows the step context", ErrStackStepInvalid, s.As)
-	case s.Optional && s.File == "":
-		return fmt.Errorf("%w: optional: applies to file:, an inline layer is always present", ErrStackStepInvalid)
 	}
 	switch s.Strategy {
 	case "", StrategyDeep, StrategyReplace:

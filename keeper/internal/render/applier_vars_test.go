@@ -2,10 +2,12 @@ package render
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/topology"
+	"github.com/souls-guild/soul-stack/shared/cel"
 	"github.com/souls-guild/soul-stack/shared/config"
 )
 
@@ -16,11 +18,11 @@ import (
 // — it is written on the block, where §6.5 explicitly allows it, so no offline
 // validator can see it.
 //
-// ★ What this is NOT: a wrong value. The scenario pass has no file-vars base,
-// so before the fix `${ vars.x }` in apply.input failed the render with "no
-// such key" rather than resolving to something else. The gap is that a block
-// documented as passing `vars:` to its descendants did not pass them to one
-// kind of descendant. TestApplier_NoVarsLayerWithoutTaskVars pins that.
+// ★ What this is NOT: a wrong value. Before the fix `${ vars.x }` in apply.input
+// failed the render with "no such key" rather than resolving to something else.
+// The gap is that a block documented as passing `vars:` to its descendants did
+// not pass them to one kind of descendant. TestApplier_NoVarsLayerWithoutTaskVars
+// pins that.
 
 // varsDestiny takes one input and echoes it into a command, so a test can read
 // back exactly what crossed the boundary.
@@ -50,7 +52,7 @@ func renderWithVars(t *testing.T, tasks []config.Task) ([]*RenderedTask, error) 
 }
 
 // Entrance 1 — the applier's own `vars:`. Before NIM-336 resolveApplyInput
-// built its env with hostVars alone and never called resolveTaskVars, so the
+// built its env with hostVars alone and never read the applier's `vars:`, so the
 // key was accepted and dropped.
 func TestApplier_OwnVarsReachApplyInput(t *testing.T) {
 	tasks, err := renderWithVars(t, []config.Task{{
@@ -86,11 +88,10 @@ func TestApplier_BlockVarsReachApplyInput(t *testing.T) {
 	}
 }
 
-// ★ Pre-fix behaviour, pinned so nobody re-derives it wrongly: the scenario
-// pass has NO file-vars base (fileVarsForHost is destiny-only, Variant A of
-// vars.md), so an applier that declares no `vars:` has no `vars.*` layer at
-// all. Before this fix that was true of EVERY applier — `${ vars.x }` in
-// apply.input failed with "no such key". The loss was loud, not silent: this
+// ★ Pre-fix behaviour, pinned so nobody re-derives it wrongly: an applier that
+// declares no `vars:`, in a service and scenario that define none, reads a name
+// no rung defines. Before this fix that was true of EVERY applier — `${ vars.x }`
+// in apply.input failed with "no such key". The loss was loud, not silent: this
 // ticket is about a capability the DSL documents and did not deliver, not about
 // a wrong value being used.
 func TestApplier_NoVarsLayerWithoutTaskVars(t *testing.T) {
@@ -128,19 +129,37 @@ func TestApplier_OwnVarsShadowBlockVars(t *testing.T) {
 }
 
 // An unknown `vars.<name>` must still fail loudly rather than render empty —
-// the fix must not turn a typo into a silent empty string.
+// the fix must not turn a typo into a silent empty string. Read by a cell it is
+// the cell's no-such-key; read inside a definition the cell asked for, it is the
+// same no-such-key wrapped in a [cel.VarError] naming that definition (point 11).
 func TestApplier_UnknownVarRefStillFails(t *testing.T) {
-	_, err := renderWithVars(t, []config.Task{{
-		Name:  "apply-step",
-		Vars:  map[string]any{"pause": "5"},
-		Apply: &config.ApplyTask{Destiny: "d", Input: map[string]any{"pause": "${ vars.nope }"}},
-	}})
-	if err == nil {
-		t.Fatal("Render succeeded; want an error for an unknown vars.nope in apply.input")
-	}
-	if !strings.Contains(err.Error(), "nope") {
-		t.Errorf("error = %v, want it to name the unknown var", err)
-	}
+	t.Run("in the cell", func(t *testing.T) {
+		_, err := renderWithVars(t, []config.Task{{
+			Name:  "apply-step",
+			Vars:  map[string]any{"pause": "5"},
+			Apply: &config.ApplyTask{Destiny: "d", Input: map[string]any{"pause": "${ vars.nope }"}},
+		}})
+		if err == nil {
+			t.Fatal("Render succeeded; want an error for an unknown vars.nope in apply.input")
+		}
+		if !strings.Contains(err.Error(), "nope") {
+			t.Errorf("error = %v, want it to name the unknown var", err)
+		}
+	})
+	t.Run("in a definition", func(t *testing.T) {
+		_, err := renderWithVars(t, []config.Task{{
+			Name:  "apply-step",
+			Vars:  map[string]any{"pause": "${ vars.nope }"},
+			Apply: &config.ApplyTask{Destiny: "d", Input: map[string]any{"pause": "${ vars.pause }"}},
+		}})
+		var ve *cel.VarError
+		if !errors.As(err, &ve) {
+			t.Fatalf("error = %v, want a *cel.VarError", err)
+		}
+		if ve.Name != "pause" || !strings.Contains(ve.Err.Error(), "nope") {
+			t.Errorf("VarError = %+v, want vars.pause failing on the missing key nope", ve)
+		}
+	})
 }
 
 // A var-to-var cycle inside the applier's own layer is reported, not spun on.
@@ -150,10 +169,10 @@ func TestApplier_VarCycleReported(t *testing.T) {
 		Vars:  map[string]any{"a": "${ vars.b }", "b": "${ vars.a }"},
 		Apply: &config.ApplyTask{Destiny: "d", Input: map[string]any{"pause": "${ vars.a }"}},
 	}})
-	if err == nil {
-		t.Fatal("Render succeeded; want an error for a vars cycle on the applier")
+	if !errors.Is(err, ErrVarCycle) {
+		t.Fatalf("error = %v, want a var_cycle for the applier's vars", err)
 	}
-	if !strings.Contains(err.Error(), "apply-step") {
-		t.Errorf("error = %v, want it to name the applier task", err)
+	if f := FailureOf(err); f == nil || len(f.Tasks) == 0 || f.Tasks[0].Name != "apply-step" {
+		t.Errorf("failure = %+v, want it addressed to the applier task", f)
 	}
 }

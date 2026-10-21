@@ -1,6 +1,8 @@
 package cel
 
 import (
+	"strings"
+
 	"github.com/google/cel-go/common/ast"
 	"github.com/google/cel-go/common/operators"
 	"github.com/google/cel-go/common/types"
@@ -13,8 +15,10 @@ import (
 //     input schema (scenario-input on scenario, destiny-input on destiny);
 //   - vault(...) — a Vault KV read;
 //   - transitively — vars.<x>/compute.<x> whose own value is sealed: the render
-//     pass runs this same detector over the RAW `vars:`/`compute:` text and hands
-//     the names in below, before it walks any params;
+//     pass runs this same detector over the RAW definitions of a task's `vars.*`
+//     view and over `compute:`, and hands the names in below, before it walks any
+//     params. On the `vars` root a literal index is a field, and a read naming no
+//     field is tainted when any `vars` name is ([SealReads.readsSecret]);
 //   - register.<x> whose payload holds a declared secret the render boundary
 //     resolved out of a `vault:` reference ([ADR-0083] §6);
 //   - incarnation.state.<field> declared `secret: true` in the manifest's
@@ -202,25 +206,13 @@ const (
 // the detector does not duplicate validation, it only marks taint on valid
 // expressions.
 func (e *Engine) DetectSealed(raw string, sources SealSources) bool {
-	segs, err := e.scanInterpolation(raw)
-	if err != nil {
-		return false
-	}
-	for _, s := range segs {
-		if !s.expr {
-			continue
-		}
-		if e.exprReadsSecret(s.text, sources, true) {
-			return true
-		}
-	}
-	return false
+	return e.SealReadsOf(raw).Sealed(sources)
 }
 
 // PredicateReadsSecret is [Engine.DetectSealed] for a whole-string predicate
 // (`when:`, `failed_when:`), which carries no `${ … }` wrapper.
 func (e *Engine) PredicateReadsSecret(expr string, sources SealSources) bool {
-	return e.exprReadsSecret(expr, sources, true)
+	return e.exprSealReads(expr).readsSecret(sources, true)
 }
 
 // ReadsSecretField is [Engine.PredicateReadsSecret] with a single `vault()` call
@@ -229,46 +221,131 @@ func (e *Engine) PredicateReadsSecret(expr string, sources SealSources) bool {
 // calls count, wherever they sit: one's value can reach the other's path through
 // a comprehension variable no argument shows.
 func (e *Engine) ReadsSecretField(expr string, sources SealSources) bool {
-	return e.exprReadsSecret(expr, sources, false)
+	return e.exprSealReads(expr).readsSecret(sources, false)
 }
 
-// exprReadsSecret parses one CEL expression (without the `${ }` wrapper) without
-// macros and returns true if anywhere in the tree it reads a secret source per
-// sources. A `vault()` call is such a read when withVault, and otherwise only
-// beside another one.
-func (e *Engine) exprReadsSecret(expr string, sources SealSources, withVault bool) bool {
+// SealReads is what an interpolated string reads that the seal is decided on: taken
+// from the text once ([Engine.SealReadsOf]) and judged against any [SealSources]
+// ([SealReads.Sealed]). A caller judging one text under a source set it keeps
+// growing — the fixpoint over a task's view — parses it once rather than once per
+// round. [Engine.DetectSealed] is the same two steps, so the two cannot disagree.
+type SealReads struct {
+	// addrs — every `<base>.<field>` read, by a select or by a literal index on
+	// `vars`, with [selectBaseField]'s flattening.
+	addrs []sealAddr
+	// idents — every identifier read: a binding tainted WHOLE is read by its bare
+	// name.
+	idents     []string
+	vaultCalls int
+	// varsWhole — a read of `vars` naming no field.
+	varsWhole bool
+}
+
+type sealAddr struct{ base, field string }
+
+// SealReadsOf is what raw's `${ … }` blocks read. A string that does not scan, or a
+// block that does not parse, reads nothing: broken CEL is the eval phase's to report.
+func (e *Engine) SealReadsOf(raw string) SealReads {
+	segs, err := e.scanInterpolation(raw)
+	if err != nil {
+		return SealReads{}
+	}
+	var out SealReads
+	for _, s := range segs {
+		if !s.expr {
+			continue
+		}
+		r := e.exprSealReads(s.text)
+		out.addrs = append(out.addrs, r.addrs...)
+		out.idents = append(out.idents, r.idents...)
+		out.vaultCalls += r.vaultCalls
+		out.varsWhole = out.varsWhole || r.varsWhole
+	}
+	return out
+}
+
+// Sealed reports whether a cell holding the text must be marked sealed under sources.
+func (r SealReads) Sealed(sources SealSources) bool {
+	return r.readsSecret(sources, true)
+}
+
+// exprSealReads parses one CEL expression (without the `${ }` wrapper) without
+// macros and collects what it reads.
+func (e *Engine) exprSealReads(expr string) SealReads {
 	parsed, perr := e.parseNoMacro(expr)
 	if perr != nil {
-		return false
+		return SealReads{}
 	}
-	vaultCalls := 0
-	found := false
+	var r SealReads
+	// varsIdents against varsFields counts the reads of the `vars` root that name a
+	// field — a select or a literal index — the way [Engine.PredicateReads] does: an
+	// ident they do not account for is a read naming no field.
+	varsIdents, varsFields := 0, 0
 	ast.PostOrderVisit(parsed.Expr(), ast.NewExprVisitor(func(n ast.Expr) {
-		if found {
-			return
-		}
 		switch n.Kind() {
 		case ast.CallKind:
 			if isVaultCall(n) {
-				vaultCalls++
-				found = withVault || vaultCalls > 1
+				r.vaultCalls++
+			}
+			if field, ok := varsLiteralIndex(n); ok {
+				varsFields++
+				r.addrs = append(r.addrs, sealAddr{varsRoot, field})
 			}
 		case ast.IdentKind:
-			// A WHOLE-binding read: `${ item }` with no field, which reaches no
-			// Select node and so was visible to nothing here before NIM-822.
-			// Only a [SealSources.Roots] binding can be secret this way — a
-			// fixed root is tainted per field, and its bare read is judged by
-			// [activationRoots] instead (see readsSecretAddr).
-			if sources.Roots[n.AsIdent()] {
-				found = true
+			r.idents = append(r.idents, n.AsIdent())
+			if n.AsIdent() == varsRoot {
+				varsIdents++
 			}
 		case ast.SelectKind:
-			if base, field, ok := selectBaseField(n); ok && readsSecretAddr(base, field, sources) {
-				found = true
+			if base, field, ok := selectBaseField(n); ok {
+				if base == varsRoot {
+					varsFields++
+				}
+				r.addrs = append(r.addrs, sealAddr{base, field})
 			}
 		}
 	}))
-	return found
+	r.varsWhole = varsIdents > varsFields
+	return r
+}
+
+// readsSecret reports whether r reads a secret source per sources. A `vault()` call
+// is such a read when withVault, and otherwise only beside another one; withVault
+// false is asked of one expression only, whose calls are the ones counted.
+func (r SealReads) readsSecret(sources SealSources, withVault bool) bool {
+	if r.vaultCalls > 1 || (withVault && r.vaultCalls > 0) {
+		return true
+	}
+	// A WHOLE-binding read: `${ item }` with no field, which reaches no Select node
+	// and so was visible to nothing here before NIM-822. Only a [SealSources.Roots]
+	// binding can be secret this way — a fixed root is tainted per field, and its
+	// bare read is judged by [activationRoots] instead (see readsSecretAddr).
+	for _, id := range r.idents {
+		if sources.Roots[id] {
+			return true
+		}
+	}
+	for _, a := range r.addrs {
+		if readsSecretAddr(a.base, a.field, sources) {
+			return true
+		}
+	}
+	// A read of `vars` that names no field — `${ vars }`, `merge(vars, …)`,
+	// `vars[expr]` — materializes or picks a definition the text does not say, so it
+	// reads whatever is tainted in the view (ADR-0082 amendment 2026-10-15, point 15).
+	// The other per-field roots stay unsealed on such a read: NIM-827.
+	return r.varsWhole && sources.anyField(varsRoot)
+}
+
+// anyField reports whether any `<root>.<field>` address is tainted.
+func (s SealSources) anyField(root string) bool {
+	prefix := FieldAddr(root, "")
+	for addr := range s.Fields {
+		if strings.HasPrefix(addr, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 // isVaultCall reports a node of the form vault(...) (global call `vault`, before

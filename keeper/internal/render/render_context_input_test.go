@@ -134,7 +134,7 @@ func TestRenderContext_BuildRenderContext_InputOmitted(t *testing.T) {
 // onto it. Both spellings ship in examples/ today
 // (`redis.conf.tmpl` uses `index .vars "loadmodules"`, mongo's uses `toYaml`).
 func TestRenderContext_WholeVarsReadGetsTheWholeMap(t *testing.T) {
-	in := RenderInput{ServiceVars: map[string]any{"loadmodules": []any{"a.so"}, "other": 1}}
+	in := RenderInput{ServiceVars: serviceView(t, map[string]any{"loadmodules": []any{"a.so"}, "other": 1})}
 
 	for name, content := range map[string]string{
 		"index":  `{{ range (index .vars "loadmodules") }}x{{ end }}`,
@@ -156,8 +156,11 @@ func TestRenderContext_WholeVarsReadGetsTheWholeMap(t *testing.T) {
 			}
 			// The point of the pairing: subkey scoping sees nothing here, so
 			// without the whole-map branch the injected map would be empty.
-			if scoped := referencedFileVars(in.ServiceVars, keys); len(scoped) != 0 {
+			if scoped := renderContextVarNames(in.ServiceVars, keys, false); len(scoped) != 0 {
 				t.Fatalf("expected subkey scoping to find nothing, got %#v", scoped)
+			}
+			if wide := renderContextVarNames(in.ServiceVars, keys, true); len(wide) != 2 {
+				t.Fatalf("a whole read must carry every service var, got %#v", wide)
 			}
 		})
 	}
@@ -174,7 +177,7 @@ func TestRenderContext_WholeVarsReadGetsTheWholeMap(t *testing.T) {
 	if err != nil {
 		t.Fatalf("templateVarSubKeys: %v", err)
 	}
-	scoped := referencedFileVars(in.ServiceVars, keys)
+	scoped := renderContextVarNames(in.ServiceVars, keys, false)
 	if len(scoped) != 1 {
 		t.Fatalf("scoped injection must carry exactly the named key, got %#v", scoped)
 	}

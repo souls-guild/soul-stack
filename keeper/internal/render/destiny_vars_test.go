@@ -164,7 +164,7 @@ func TestDestinyFileVars_ServiceVarsIsolation(t *testing.T) {
 		Scenario:    applyScenario("pilot-vars", map[string]any{}),
 		Incarnation: IncarnationMeta{ID: "svc"},
 		// the scenario carries service vars — destiny must NOT see them, even in vars.yml.
-		ServiceVars: map[string]any{"maxmemory": "256mb"},
+		ServiceVars: serviceView(t, map[string]any{"maxmemory": "256mb"}),
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
@@ -174,9 +174,8 @@ func TestDestinyFileVars_ServiceVarsIsolation(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_VarToVar — a file-var references another file-var of the
-// same layer (`${ vars.<other> }` is ALLOWED, eager-topological); mirrors
-// TestResolveTaskVars_VarToVar (case #1, file layer). The ORIGINAL feature case:
+// TestDestinyFileVars_VarToVar — a file-var reads another file-var of the same
+// layer through the view (`${ vars.<other> }`); the ORIGINAL feature case:
 // root_group: "${ vars.root_owner }".
 func TestDestinyFileVars_VarToVar(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
@@ -202,56 +201,66 @@ func TestDestinyFileVars_VarToVar(t *testing.T) {
 	}
 }
 
+// destinyViews is the per-host vars.yml views of a destiny pass over raw, the way
+// renderApplyDestiny builds them.
+func destinyViews(t *testing.T, input, raw map[string]any, hosts []*topology.HostFacts, passage int) map[string]*cel.VarView {
+	t.Helper()
+	destinyIn := RenderInput{
+		Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
+		Input:           input,
+		Incarnation:     IncarnationMeta{ID: "svc"},
+		ActivePassage:   passage,
+		destinyIsolated: true,
+	}
+	return NewPipeline(nil, newEngine(t), nil, nil).destinyBaseViews(destinyIn, raw, hosts)
+}
+
 // TestDestinyFileVars_TransitiveChain — a transitive chain a→b→c of the same
-// layer (case #2): c is computed first, b sees c, a sees b.
+// layer: reading a evaluates b, which evaluates c.
 func TestDestinyFileVars_TransitiveChain(t *testing.T) {
-	got, err := resolveVarLayer(newEngine(t), map[string]any{
+	view := destinyViews(t, nil, map[string]any{
 		"a": "${ vars.b }/a",
 		"b": "${ vars.c }/b",
 		"c": "root",
-	}, nil, cel.Vars{})
-	if err != nil {
-		t.Fatalf("resolveVarLayer: %v", err)
-	}
-	if got["a"] != "root/b/a" {
-		t.Errorf("vars.a = %v, want root/b/a (transitively a->b->c)", got["a"])
+	}, nil, 0)[""]
+	if got := lookupOK(t, view, "a"); got != "root/b/a" {
+		t.Errorf("vars.a = %v, want root/b/a (transitively a->b->c)", got)
 	}
 }
 
-// TestDestinyFileVars_Cycle — a cycle a→b→c→a (case #3) → ErrVarCycle with a trace.
+// TestDestinyFileVars_Cycle — a cycle a→b→c→a is var_cycle with its path rotated
+// to the smallest name, the same text whichever var is read first (point 10).
 func TestDestinyFileVars_Cycle(t *testing.T) {
-	_, err := resolveVarLayer(newEngine(t), map[string]any{
+	view := destinyViews(t, nil, map[string]any{
 		"a": "${ vars.b }",
 		"b": "${ vars.c }",
 		"c": "${ vars.a }",
-	}, nil, cel.Vars{})
-	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveVarLayer: expected ErrVarCycle, got: %v", err)
-	}
-	// The trace is closed: it contains the starting node twice (a → … → a).
-	if !strings.Contains(err.Error(), "a → b → c → a") {
-		t.Errorf("err = %v, want trace 'a -> b -> c -> a'", err)
+	}, nil, 0)[""]
+	for _, name := range []string{"b", "a", "c"} {
+		_, _, err := view.Lookup(name)
+		if !errors.Is(err, ErrVarCycle) {
+			t.Fatalf("vars.%s: err = %v, want ErrVarCycle", name, err)
+		}
+		if !strings.Contains(err.Error(), "var_cycle: a → b → c → a") {
+			t.Errorf("vars.%s: err = %v, want the path 'a → b → c → a'", name, err)
+		}
 	}
 }
 
-// TestDestinyFileVars_SelfReference — a self-reference a→a (case #4) → ErrVarCycle
-// (a special case of a cycle, trace 'a → a').
+// TestDestinyFileVars_SelfReference — a self-reference with nothing below it is
+// var_cycle 'a → a' (point 9).
 func TestDestinyFileVars_SelfReference(t *testing.T) {
-	_, err := resolveVarLayer(newEngine(t), map[string]any{
-		"a": "${ vars.a }-loop",
-	}, nil, cel.Vars{})
-	if err == nil || !errors.Is(err, ErrVarCycle) {
-		t.Fatalf("resolveVarLayer: self-reference must give ErrVarCycle, got: %v", err)
-	}
-	if !strings.Contains(err.Error(), "a → a") {
-		t.Errorf("err = %v, want trace 'a -> a'", err)
+	view := destinyViews(t, nil, map[string]any{"a": "${ vars.a }-loop"}, nil, 0)[""]
+	_, _, err := view.Lookup("a")
+	if !errors.Is(err, ErrVarCycle) || !strings.Contains(err.Error(), "var_cycle: a → a") {
+		t.Fatalf("err = %v, want var_cycle: a → a", err)
 	}
 }
 
-// TestDestinyFileVars_UnusedBrokenRef — an UNUSED var references nonexistent
-// vars.z (case #5): EAGER marker — layer resolution fails with ErrVarUnknownRef,
-// even if the referencing var is never read by params.
-func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
+// TestDestinyFileVars_UnusedBrokenRefIsNotEvaluated — a var nobody reads is never
+// evaluated, a broken one included (point 4): the render succeeds, and only
+// soul-lint and strict mode report it (point 12).
+func TestDestinyFileVars_UnusedBrokenRefIsNotEvaluated(t *testing.T) {
 	res := &stubDestinyResolver{resolved: destinyWithFileVars(
 		map[string]any{
 			"used":   "redis-server",
@@ -266,43 +275,37 @@ func TestDestinyFileVars_UnusedBrokenRef(t *testing.T) {
 		Hosts:       []*topology.HostFacts{host("a.example.com", []string{"svc"}, nil)},
 		Destiny:     res,
 	}
-	_, _, err := p.Render(context.Background(), in)
-	if err == nil {
-		t.Fatal("Render: a broken unused var must fail render EAGERLY (var_unknown_ref)")
+	tasks, _, err := p.Render(context.Background(), in)
+	if err != nil {
+		t.Fatalf("Render: a broken var nothing reads must not fail the render: %v", err)
 	}
-	if !errors.Is(err, ErrVarUnknownRef) {
-		t.Errorf("err = %v, want ErrVarUnknownRef", err)
+	if got := tasks[0].Params.GetFields()["cmd"].GetStringValue(); got != "echo redis-server" {
+		t.Errorf("cmd = %q, want echo redis-server", got)
 	}
 }
 
-// TestDestinyFileVars_OrderIndependent — key order in the file layer doesn't
-// matter (case #7): two raw variants with different declaration order give an
-// equal result.
+// TestDestinyFileVars_OrderIndependent — the order vars are read in does not change
+// a value (point 10): a chain read from its top and from its bottom agrees.
 func TestDestinyFileVars_OrderIndependent(t *testing.T) {
-	e := newEngine(t)
-	v1, err := resolveVarLayer(e, map[string]any{
+	raw := map[string]any{
 		"a": "root",
 		"b": "${ vars.a }-b",
 		"c": "${ vars.b }-c",
-	}, nil, cel.Vars{})
-	if err != nil {
-		t.Fatalf("resolveVarLayer v1: %v", err)
 	}
-	v2, err := resolveVarLayer(e, map[string]any{
-		"c": "${ vars.b }-c",
-		"a": "root",
-		"b": "${ vars.a }-b",
-	}, nil, cel.Vars{})
-	if err != nil {
-		t.Fatalf("resolveVarLayer v2: %v", err)
-	}
-	for _, k := range []string{"a", "b", "c"} {
-		if v1[k] != v2[k] {
-			t.Errorf("vars.%s diverges with different order: v1=%v v2=%v", k, v1[k], v2[k])
+	got := map[string][]any{}
+	for _, order := range [][]string{{"a", "b", "c"}, {"c", "a", "b"}} {
+		view := destinyViews(t, nil, raw, nil, 0)[""]
+		for _, name := range order {
+			got[name] = append(got[name], lookupOK(t, view, name))
 		}
 	}
-	if v1["c"] != "root-b-c" {
-		t.Errorf("vars.c = %v, want root-b-c", v1["c"])
+	for _, k := range []string{"a", "b", "c"} {
+		if got[k][0] != got[k][1] {
+			t.Errorf("vars.%s diverges with the read order: %v", k, got[k])
+		}
+	}
+	if got["c"][0] != "root-b-c" {
+		t.Errorf("vars.c = %v, want root-b-c", got["c"][0])
 	}
 }
 
@@ -543,45 +546,27 @@ func TestDestinyFileVars_TaskVarsOverrideFileInRenderContext(t *testing.T) {
 	}
 }
 
-// TestDestinyFileVars_PerHost — vars.yml references soulprint.self → resolves
-// per-host; different hosts give different values (DestinyVarsResolved by SID).
+// TestDestinyFileVars_PerHost — vars.yml references soulprint.self → each host's
+// view evaluates it over that host (destinyBaseViews, one view per SID).
 func TestDestinyFileVars_PerHost(t *testing.T) {
-	p := NewPipeline(nil, newEngine(t), nil, nil)
-
-	// A direct call to renderApplyDestiny via Render: a destiny-task is
-	// host-invariant in the pilot, so params with per-host soulprint.self would fail
-	// verification. To check per-host vars resolution specifically, we keep params
-	// host-invariant and check per-host via resolveDestinyVars directly.
-	destinyIn := RenderInput{
-		Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
-		Input:           map[string]any{},
-		Incarnation:     IncarnationMeta{ID: "svc"},
-		destinyIsolated: true,
-	}
 	hosts := []*topology.HostFacts{
 		host("a", []string{"svc"}, map[string]any{"os": map[string]any{"family": "debian"}}),
 		host("b", []string{"svc"}, map[string]any{"os": map[string]any{"family": "rhel"}}),
 	}
-	raw := map[string]any{"family": "${ soulprint.self.os.family }"}
-	got, err := p.resolveDestinyVars(destinyIn, raw, hosts)
-	if err != nil {
-		t.Fatalf("resolveDestinyVars: %v", err)
+	views := destinyViews(t, map[string]any{}, map[string]any{"family": "${ soulprint.self.os.family }"}, hosts, 0)
+	if got := lookupOK(t, views["a"], "family"); got != "debian" {
+		t.Errorf("host a vars.family = %v, want debian", got)
 	}
-	if got["a"]["family"] != "debian" {
-		t.Errorf("host a vars.family = %v, want debian", got["a"]["family"])
-	}
-	if got["b"]["family"] != "rhel" {
-		t.Errorf("host b vars.family = %v, want rhel (per-host resolve)", got["b"]["family"])
+	if got := lookupOK(t, views["b"], "family"); got != "rhel" {
+		t.Errorf("host b vars.family = %v, want rhel (per-host evaluation)", got)
 	}
 }
 
 // TestDestinyFileVars_StagedInvariant — file-vars are invariant across Passages:
-// they resolve over input+self+incarnation WITHOUT register, so ActivePassage
-// doesn't affect them. We compare resolution at ActivePassage 0 and 1 — identical
-// (ADR-056: the destiny pass's input is invariant across passages, file-vars even
-// more so).
+// they are evaluated over input+self+incarnation WITHOUT register, so
+// ActivePassage doesn't affect them (ADR-056: the destiny pass's input is invariant
+// across passages, file-vars even more so).
 func TestDestinyFileVars_StagedInvariant(t *testing.T) {
-	p := NewPipeline(nil, newEngine(t), nil, nil)
 	hosts := []*topology.HostFacts{host("a", []string{"svc"}, map[string]any{
 		"os": map[string]any{"family": "debian"},
 	})}
@@ -589,29 +574,18 @@ func TestDestinyFileVars_StagedInvariant(t *testing.T) {
 		"acl":    "/acl/${ input.user }",
 		"family": "${ soulprint.self.os.family }",
 	}
-	base := func(passage int) RenderInput {
-		return RenderInput{
-			Scenario:        &config.ScenarioManifest{Name: "pilot-vars"},
-			Input:           map[string]any{"user": "dave"},
-			Incarnation:     IncarnationMeta{ID: "svc"},
-			ActivePassage:   passage,
-			destinyIsolated: true,
-		}
-	}
-	p0, err := p.resolveDestinyVars(base(0), raw, hosts)
-	if err != nil {
-		t.Fatalf("resolveDestinyVars P0: %v", err)
-	}
-	p1, err := p.resolveDestinyVars(base(1), raw, hosts)
-	if err != nil {
-		t.Fatalf("resolveDestinyVars P1: %v", err)
-	}
+	input := map[string]any{"user": "dave"}
+	p0 := destinyViews(t, input, raw, hosts, 0)["a"]
+	p1 := destinyViews(t, input, raw, hosts, 1)["a"]
 	for _, key := range []string{"acl", "family"} {
-		if p0["a"][key] != p1["a"][key] {
-			t.Errorf("vars.%s diverges P0=%v P1=%v - file-vars must be invariant across Passage", key, p0["a"][key], p1["a"][key])
+		if v0, v1 := lookupOK(t, p0, key), lookupOK(t, p1, key); v0 != v1 {
+			t.Errorf("vars.%s diverges P0=%v P1=%v - file-vars must be invariant across Passage", key, v0, v1)
 		}
 	}
-	if p0["a"]["acl"] != "/acl/dave" || p0["a"]["family"] != "debian" {
-		t.Errorf("file-vars resolve = %v, want acl=/acl/dave family=debian", p0["a"])
+	if got := lookupOK(t, p0, "acl"); got != "/acl/dave" {
+		t.Errorf("vars.acl = %v, want /acl/dave", got)
+	}
+	if got := lookupOK(t, p0, "family"); got != "debian" {
+		t.Errorf("vars.family = %v, want debian", got)
 	}
 }

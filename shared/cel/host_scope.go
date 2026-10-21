@@ -361,10 +361,11 @@ func (e *Engine) guardHostScope(expr, compiled string, stance hostStance, loopNa
 	}
 
 	// vars: the MIRROR of the input half, one layer down. A destiny's own `vars.yml`
-	// resolves per host, so a var reading a per-host `input.<name>` (or
-	// `soulprint.self` directly) is per-host too — and the reference that reaches a
-	// host-free context says only `vars.<name>`, which looks as ordinary as any
-	// other. Measured before this branch existed: a destiny `when: vars.addr == …`
+	// resolves per host, and so does a task's `vars:` over it, so a var reading a
+	// per-host `input.<name>` (or `soulprint.self` directly) is per-host too — and
+	// the reference that reaches a host-free context says only `vars.<name>`, which
+	// looks as ordinary as any other. Measured before this branch existed: a destiny
+	// `when: vars.addr == …`
 	// true on the SECOND host was decided on the first and the task was skipped for
 	// everyone, silently, green.
 	if touchesVars {
@@ -387,7 +388,7 @@ func (e *Engine) guardHostScope(expr, compiled string, stance hostStance, loopNa
 			sort.Strings(hit)
 			return &ErrHostOutOfScope{
 				Expr:      expr,
-				Reference: fmt.Sprintf("%s.%s (a destiny local that resolves per host: its vars.yml value reaches soulprint.self or a per-host input)", varsRoot, hit[0]),
+				Reference: fmt.Sprintf("%s.%s (resolves per host: its definition in the destiny's vars.yml or in the task's vars: reaches soulprint.self or a per-host input, directly or through another var)", varsRoot, hit[0]),
 				Context:   stance.scope.contextName(),
 				Hint:      stance.scope.variantInputHint(),
 			}

@@ -61,9 +61,12 @@ func (p *Pipeline) renderLoopTask(
 	// because the taint is iteration-invariant for the reason sealedLoopItems
 	// states, and because renderTaskIter takes `in` by value, so marking it here
 	// reaches exactly this loop's iterations.
-	if task.Loop.Items != nil && sealedLoopItems(p.cel, task.Loop.Items, p.taskSealSources(in, task)) {
+	src := p.taskSealSources(in, task)
+	if task.Loop.Items != nil && sealedLoopItems(p.cel, task.Loop.Items, src) {
 		in = withSealedLoopBind(in, asName)
+		src = p.taskSealSources(in, task)
 	}
+	in.loopSeal = &loopSeal{name: task.Name, source: task.Source, src: src}
 
 	// A static-when-false loop task never reaches here: both call sites
 	// (scenario loop in pipeline.go, destiny.go) call emitStaticWhenSkip
@@ -73,7 +76,11 @@ func (p *Pipeline) renderLoopTask(
 	// static-when gate would be unreachable and just duplicate per-host
 	// staticWhenSkips. renderLoopTask only sees the fan-out of the active
 	// branch.
-	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
+	axis, err := p.loopAxisView(in)
+	if err != nil {
+		return nil, nil, p.taskFailure(in, task, -1, fmt.Errorf("render: task %q loop: %w", task.Name, err))
+	}
+	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName, axis)
 	if err != nil {
 		return nil, nil, p.taskFailure(in, task, -1, fmt.Errorf("render: task %q loop: %w", task.Name, err))
 	}
@@ -83,7 +90,7 @@ func (p *Pipeline) renderLoopTask(
 	plans := make([]DispatchPlan, 0, len(iters))
 	idx := startIndex
 	for _, it := range iters {
-		keep, werr := evalLoopWhen(p.cel, in, task.Loop.When, it)
+		keep, werr := evalLoopWhen(p.cel, in, task.Loop.When, it, axis)
 		if werr != nil {
 			// Here, with `in` carrying the secret loop binding: above this function
 			// nothing knows `<as>` is secret.
@@ -134,7 +141,11 @@ func (p *Pipeline) loopStaticSkip(
 	asName string,
 	skip *structpb.Struct,
 ) ([]*RenderedTask, []DispatchPlan, error) {
-	iters, err := resolveLoopItems(p.cel, in, task.Loop, asName)
+	axis, err := p.loopAxisView(in)
+	var iters []map[string]any
+	if err == nil {
+		iters, err = resolveLoopItems(p.cel, in, task.Loop, asName, axis)
+	}
 	if err != nil {
 		// Unresolvable items in a skipped task is NOT an error: emit one placeholder.
 		rt := p.loopSkipPlaceholder(task, startIndex, skip, in.Modules)
@@ -186,13 +197,14 @@ func (p *Pipeline) loopSkipPlaceholder(task config.Task, idx int, skip *structpb
 // resolveLoopItems evaluates items and lays it out as an ordered list of loop
 // contexts (`map[<as>]=element` + optionally `map[<index_as>]=index/key`).
 // items is resolved once per run in a host-invariant context (input/register/
-// incarnation; no soulprint — items must not depend on the host).
+// incarnation; no soulprint — items must not depend on the host), reading `vars`
+// through axis ([Pipeline.loopAxisView]).
 //
 // array → as=element, index_as=0-based; object → as=value, index_as=key,
 // alphabetical order by key (destiny/tasks.md §7). Scalar/string (e.g. items
 // that didn't resolve to a collection) → error: loop requires array/object.
-func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec, asName string) ([]map[string]any, error) {
-	resolved, err := renderValue(engine, loop.Items, loopInvariantVars(in, nil), "loop.items")
+func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec, asName string, axis *cel.VarView) ([]map[string]any, error) {
+	resolved, err := renderValue(engine, loop.Items, loopInvariantVars(in, nil, axis), "loop.items")
 	if err != nil {
 		return nil, err
 	}
@@ -233,9 +245,10 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 // register/incarnation/vars + current iteration variables (`<as>`/
 // `<index_as>`), WITHOUT soulprint.self. items and when: resolve in exactly
 // this context — all host-invariant in the pilot (symmetric with
-// resolveCovenList: on: also resolves not per-host). The service-vars layer is
-// host-invariant, so it's available in items/when (`items:
-// ${ vars.users }`). loopVars=nil for items itself (no loop variables yet).
+// resolveCovenList: on: also resolves not per-host). `vars` is axis, the
+// service and scenario rungs and never the task's own (`items: ${ vars.users }`,
+// [Pipeline.loopAxisView]). loopVars=nil for items itself (no loop variables
+// yet).
 //
 // soulprint.hosts (+ .where) IS available: it's the run's host-invariant
 // roster (not per-host facts), a legitimate items source (`items:
@@ -243,14 +256,14 @@ func resolveLoopItems(engine *cel.Engine, in RenderInput, loop *config.LoopSpec,
 // unavailable in loop — per-host loop is deferred; a soulprint reference in
 // loop.when is rejected by a separate guard (reLoopWhenSoulprint) BEFORE this
 // context is built.
-func loopInvariantVars(in RenderInput, loopVars map[string]any) cel.Vars {
+func loopInvariantVars(in RenderInput, loopVars map[string]any, axis *cel.VarView) cel.Vars {
 	return cel.Vars{
 		Ctx:            in.Ctx, // vault() in items/when: cancel/timeout + memo + §7 fence
 		Input:          in.Input,
 		Register:       in.Register,
 		Incarnation:    incarnationVars(in, len(in.Hosts)),
 		SoulprintHosts: soulprintHosts(in),
-		Vars:           in.ServiceVars,
+		View:           axis,
 		Loop:           loopVars,
 		AllowHosts:     !in.destinyIsolated,
 		// compute is not in the loop axis (NIM-619): declared, so a reference names
@@ -283,7 +296,7 @@ var reLoopWhenSoulprint = regexp.MustCompile(`\bsoulprint\b`)
 // silently deciding based on the first host: symmetric with the
 // host-invariance guard for params (see renderTaskIter). Non-bool result →
 // error (when: must return a boolean, like where:).
-func evalLoopWhen(engine *cel.Engine, in RenderInput, when string, loopVars map[string]any) (bool, error) {
+func evalLoopWhen(engine *cel.Engine, in RenderInput, when string, loopVars map[string]any, axis *cel.VarView) (bool, error) {
 	if when == "" {
 		return true, nil
 	}
@@ -292,5 +305,16 @@ func evalLoopWhen(engine *cel.Engine, in RenderInput, when string, loopVars map[
 			"loop.when %q references soulprint - host-variant when in loop isn't supported in the pilot (loop is host-invariant; per-host loop filtering is deferred)",
 			when)
 	}
-	return evalBoolExpr(engine, "loop.when", when, loopInvariantVars(in, loopVars))
+	return evalBoolExpr(engine, "loop.when", when, loopInvariantVars(in, loopVars, axis))
+}
+
+// loopAxisView is the view `loop.items:` and `loop.when:` read (ADR-0082 amendment
+// 2026-10-15, point 5): the service and scenario rungs, never the task's own — a
+// task-rung definition is evaluated per iteration and may read the loop binding,
+// so the set being iterated cannot depend on it. The scenario rung is evaluated
+// with the loop axis's compute scope, so a scenario definition reading `compute.*`
+// is refused here (point 6). Built once per loop task: no rung of it reads the
+// iteration. nil in a destiny pass, as before: the loop axis there sees no vars.
+func (p *Pipeline) loopAxisView(in RenderInput) (*cel.VarView, error) {
+	return p.runLevelView(in, loopInvariantVars(in, nil, nil))
 }

@@ -33,6 +33,11 @@ type Options struct {
 	// resolves the same interface from its Sigil grants, which an offline runner
 	// does not have — that asymmetry is the whole reason the flag exists.
 	Modules config.ModuleManifestResolver
+
+	// lenientVars renders without strict mode, for tests only: every case is
+	// rendered with render.RenderInput.StrictVars, and a guard shows that a failure
+	// is strict mode's by running the same case without it.
+	lenientVars bool
 }
 
 // notices collects the non-error diagnostics of loading a case's definition.
