@@ -177,7 +177,7 @@ jobs:
 
       # Exactly the bytes `provenance` verified. Nothing here re-reads the release.
       - name: Collect the verified packages
-        uses: actions/download-artifact@v7
+        uses: actions/download-artifact@v8
         with:
           name: verified-debs
           path: dist/pkg
