@@ -37,7 +37,7 @@ assert against them):
 |---|---|---|
 | [`install.yml`](tasks/install.yml) | installing redis binaries — dispatched by `install.method`: **package** (default — the `redis-tools`/`redis-server`/`redis-sentinel` packages at one `=version` pin, preceded by `core.url.fetched` + `core.repo.present` declaring `install.repo_uri` when one is given) **or** **binary** (separate binaries fetched from a mirror: distro user/group → **four** `core.url.fetched` fetch `redis-server`/`redis-cli`/`redis-benchmark`/`redis-sentinel` into `/usr/local/bin` (URL `<base_url>/<arch>/Debian/<distro_ver>/<version>/…`) → symlinks `redis-check-aof`/`redis-check-rdb` → its own systemd unit + its OWN restart) + unix-socket directory (both branches) | [`core.pkg`](../../../docs/module/core/pkg/README.md), [`core.url`](../../../docs/module/core/url/README.md), [`core.cmd`](../../../docs/module/core/cmd/README.md), [`core.group`](../../../docs/module/core/group/README.md), [`core.user`](../../../docs/module/core/user/README.md), [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`server.yml`](tasks/server.yml) | data plane `redis-server` (gated by `deploy_redis`): TLS-PEM (cert/key/ca) → `users.acl` → `redis.conf` → systemd-hardening drop-in → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
-| [`sentinel.yml`](tasks/sentinel.yml) | sentinel daemon (gated by `sentinel_enabled`): `sentinel-users.acl` (2nd aclfile) → `sentinel.conf` → systemd unit → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
+| [`sentinel.yml`](tasks/sentinel.yml) | sentinel daemon (gated by `sentinel_enabled`): `sentinel-users.acl` (2nd aclfile) → `sentinel.managed.conf` → `sentinel.conf` (the daemon stopped, the config copied and started again only while the render is not yet applied) → systemd unit → `core.service running/restarted` | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md) |
 | [`extras.yml`](tasks/extras.yml) | host-tuning, **unconditional** (a Redis recommendation / hardening, not an operator choice): disabling THP (oneshot unit) / logrotate / sysctl kernel parameters | [`core.file`](../../../docs/module/core/file/README.md), [`core.service`](../../../docs/module/core/service/README.md), [`core.sysctl`](../../../docs/module/core/sysctl/README.md) |
 | [`modules.yml`](tasks/modules.yml) | `.so` directory + fetching Redis modules (RediSearch/RedisJSON/RedisTimeSeries/RedisBloom). The whole file is gated (`vars.redis_modules_enabled`): enabled when the data plane is on **AND** Redis < 8 **AND** `modules_base_url` is NON-EMPTY; otherwise a group-drop — an empty `modules_base_url` gives **vanilla** redis (no `loadmodule`/fetch) | [`core.file`](../../../docs/module/core/file/README.md), [`core.url`](../../../docs/module/core/url/README.md) |
 
@@ -112,8 +112,19 @@ service-README → Input contract. Key groups:
   single `.so`). `.so` files are fetched by content-idempotency (SHA-256), the URL is
   arch-specific (`soulprint.self.os.arch` per host).
 - **Sentinel.** `sentinel_enabled` (bool) + `sentinel: {master_name, master_ip,
-  master_port, quorum, auth_user, auth_pass, config}` — used only in sentinel modes;
-  `master_ip` is required whenever the dict is passed.
+  master_port, quorum, auth_user, auth_pass, config}` — used only in sentinel modes.
+  Without `master_ip` no `sentinel monitor` is written: the service monitors at runtime
+  with `redis.sentinel.monitored`, and a failover never changes the rendered config.
+  The config is rendered into `sentinel.managed.conf`; the daemon is stopped, the
+  render copied to `sentinel.conf`, the daemon started again and the render recorded
+  as `sentinel.applied.conf` only while the render differs from that record. Sentinel rewrites `sentinel.conf` itself, so
+  rendering into it directly would differ and restart the daemon on every run; a run
+  cut short before the record repeats the copy next time. The copy replaces what
+  Sentinel saved at runtime (monitor, auth, known replicas and sentinels), so a
+  service that passes no `master_ip` runs `redis.sentinel.monitored` after every
+  apply of this destiny. The check is a `core.cmd.shell`, which dry-run cannot plan:
+  a dry run of this destiny in sentinel mode fails there (`plan.unsupported`) and
+  leaves every later task unplanned.
 
 ## System ACL users and the second aclfile
 
@@ -137,8 +148,7 @@ service-README → "System ACL users".
 `sentinel-users.acl` is rendered as the **first** task of [`sentinel.yml`](tasks/sentinel.yml)
 (BEFORE `sentinel.conf` — its `aclfile` directive must point to an already-existing
 file), under `register: redis_sentinel_acl`. The sentinel daemon's ACL is reread only
-via a **restart** of the daemon (`onchanges: [redis_sentinel_conf, redis_sentinel_acl,
-redis_sentinel_unit]`) — there is no separate hot-reload path for the sentinel-aclfile:
+via a **restart** of the daemon (`onchanges: [redis_sentinel_acl, redis_sentinel_unit]`) — there is no separate hot-reload path for the sentinel-aclfile:
 the set is a system one, changed only on create/rotation. An empty map → a valid empty
 aclfile (back-compat: a destiny at an old ref without the `sentinel_users` field
 renders an empty file, the directive is harmless).

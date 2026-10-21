@@ -1,11 +1,13 @@
 # tasks/sentinel.yml — sentinel daemon (sentinel/sentinel_only mode). The WHOLE file is gated
 # on sentinel_enabled AT include (main.yml, conditional-include ADR-009 amendment), NOT
 # inside the file. Outside sentinel mode the include is dropped entirely (group-drop). master
-# election is done by the service scenario run_once, which passes READY master_ip/master_port —
-# destiny stays a mode-agnostic "dumb" brick.
+# election is done by the service scenario run_once, which either passes READY
+# master_ip/master_port or none and monitors through redis.sentinel.monitored — destiny stays
+# a mode-agnostic "dumb" brick.
 
-# ★ registers for redis_sentinel_conf/redis_sentinel_unit and their onchanges-restart MUST
-#   live IN THIS file: the per-file linter (validateTaskRefs) rejects cross-file onchanges.
+# ★ registers and the onchanges/onfail tasks that read them (stop, copy, start, restart,
+#   record) MUST live IN THIS file: the per-file linter (validateTaskRefs) resolves a
+#   reference only within the file and the files that include it.
 #   There is no explicit daemon-reload step: core.service (daemon_reload: auto) re-reads the
 #   unit itself BEFORE restart — hence restart goes THROUGH core.service.restarted (not raw exec).
 
@@ -25,21 +27,25 @@
     vars:
       users: "${ default(input.sentinel_users, {}) }"
 
-# sentinel.conf from the passed master parameters. register — restart the daemon on
-# change. announce-ip is rendered in the template per-host from .self (NOT from vars).
-# aclfile (sentinel.conf directive) points at sentinel-users.acl (see template).
-- name: Render sentinel.conf
+# Sentinel rewrites its own sentinel.conf at runtime (myid, known replicas and sentinels,
+# epochs), so a render straight into it differs on every run and restarts the daemon every
+# time. The config is rendered into sentinel.managed.conf instead; the daemon is stopped,
+# sentinel.conf replaced from the render and the daemon started again only while that render
+# differs from the last one applied (sentinel.applied.conf, written once it runs). A run cut
+# short in between repeats the swap on the next one. The copy discards what Sentinel saved at
+# runtime, so a service that passes no master_ip re-applies its monitor after this destiny.
+# announce-ip is rendered in the template per-host from .self (NOT from vars).
+- name: Render sentinel.managed.conf
   module: core.file.rendered
-  register: redis_sentinel_conf
   params:
-    path: "${ vars.redis_conf_dir_eff + '/sentinel.conf' }"
+    path: "${ vars.redis_conf_dir_eff + '/sentinel.managed.conf' }"
     template: templates/sentinel.conf.tmpl
     mode: "${ vars.redis_secret_file_mode }"
     owner: "${ vars.redis_user }"
     group: "${ vars.redis_group }"
     vars:
       master_name: "${ default(input.sentinel.master_name, 'master') }"
-      master_ip:   "${ input.sentinel.master_ip }"
+      master_ip:   "${ default(input.sentinel.master_ip, '') }"
       # master_port/quorum — has()?string(X):Y: the then-branch calls string(), NOT bare
       # X → default() (select-chain-only) doesn't apply here, left as a ternary.
       master_port: "${ has(input.sentinel.master_port) ? string(input.sentinel.master_port) : '6379' }"
@@ -54,6 +60,34 @@
       port:        "${ vars.sentinel_port }"
       run_dir:     "${ vars.run_dir }"
       log_dir:     "${ vars.log_dir }"
+
+- name: Check whether the rendered sentinel config is applied
+  module: core.cmd.shell
+  register: redis_sentinel_pending
+  params:
+    cmd: "true"
+    unless: "${ 'cmp -s ' + vars.redis_conf_dir_eff + '/sentinel.managed.conf ' + vars.redis_conf_dir_eff + '/sentinel.applied.conf' }"
+
+# A running Sentinel saves its in-memory config over sentinel.conf whenever its view changes
+# (a new replica or peer, an epoch); between a copy and a restart that save would undo the
+# copy. So it is stopped first and started again by the running step below.
+- name: Stop redis-sentinel before replacing its config
+  module: core.service.stopped
+  register: redis_sentinel_stopped
+  onchanges: [redis_sentinel_pending]
+  params:
+    name: "${ vars.sentinel_service_name }"
+
+- name: Install sentinel.conf from the rendered config
+  module: core.file.present
+  register: redis_sentinel_installed
+  onchanges: [redis_sentinel_pending]
+  params:
+    path:  "${ vars.redis_conf_dir_eff + '/sentinel.conf' }"
+    src:   "${ vars.redis_conf_dir_eff + '/sentinel.managed.conf' }"
+    mode:  "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"
 
 # The full redis-sentinel systemd unit (the package doesn't always set it up under our config).
 # register — restart reactively on unit change (daemon-reload on unit change
@@ -86,17 +120,37 @@
 
 - name: Ensure redis-sentinel is running and enabled at boot
   module: core.service.running
+  register: redis_sentinel_started
   params:
     name: "${ vars.sentinel_service_name }"
     enabled: true
 
-# Restart reactively on change of sentinel.conf, sentinel-users.acl, or the unit.
-# core.service does daemon-reload itself before restart on unit change. The sentinel
-# daemon's ACL is re-read only via restart (there's no separate hot-reload scenario for the
-# sentinel aclfile — the set is service-only, changed only on rotation/create).
-- name: Restart redis-sentinel because config, ACL or unit changed
+# A failure between the stop and the start would otherwise leave Sentinel down on that host
+# until the next run — on every host, if the failure is shared. The run still fails.
+- name: Start redis-sentinel again after a failed config swap
+  module: core.service.running
+  onfail: [redis_sentinel_stopped, redis_sentinel_installed, redis_sentinel_unit, redis_sentinel_started]
+  params:
+    name: "${ vars.sentinel_service_name }"
+
+# Restart reactively on sentinel-users.acl or the unit (a new config was already applied by
+# the stop above and the running step). core.service does daemon-reload itself before
+# restart on unit change. The sentinel daemon's ACL is re-read only via restart (there's no
+# separate hot-reload scenario for the sentinel aclfile — the set is service-only, changed
+# only on rotation/create).
+- name: Restart redis-sentinel because ACL or unit changed
   module: core.service.restarted
-  onchanges: [redis_sentinel_conf, redis_sentinel_acl, redis_sentinel_unit]
+  onchanges: [redis_sentinel_acl, redis_sentinel_unit]
   timeout: 30s
   params:
     name: "${ vars.sentinel_service_name }"
+
+- name: Record the applied sentinel config
+  module: core.file.present
+  onchanges: [redis_sentinel_pending]
+  params:
+    path:  "${ vars.redis_conf_dir_eff + '/sentinel.applied.conf' }"
+    src:   "${ vars.redis_conf_dir_eff + '/sentinel.managed.conf' }"
+    mode:  "${ vars.redis_secret_file_mode }"
+    owner: "${ vars.redis_user }"
+    group: "${ vars.redis_group }"

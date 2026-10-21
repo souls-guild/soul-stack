@@ -50,7 +50,7 @@ set -euo pipefail
 # key for these repositories.
 plugin_catalog() {
   cat <<'CATALOG'
-redis|https://github.com/soul-stack-plugin/redis.git|1c210084c852c311a0249b654568e7e987524a26|the artifact examples/module/redis/schema.json is vendored from, and the SoulModule the L3b live tier delivers
+redis|https://github.com/soul-stack-plugin/redis.git|9e0b9d9bf5ed8a3c77c189e70fd6c947e9198af2|the artifact examples/module/redis/schema.json is vendored from, and the SoulModule the L3b live tier delivers
 vmlocal|https://github.com/soul-stack-plugin/vmlocal.git|71eb17bc3d8864c8e6f0cd6bde0a05a7dcfd1066|the libvirt machine provider the keeper-side ssh lane provisions a real VM through
 CATALOG
 }

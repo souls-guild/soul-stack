@@ -479,6 +479,45 @@ func TestSentinelConf_AuthRendered(t *testing.T) {
 	}
 }
 
+// TestSentinelConf_NoMonitorWithoutMasterIP: a service that monitors through
+// redis.sentinel.monitored passes no master_ip, so the rendered config must not
+// name a master. If it did, a failover would change the render and restart every
+// Sentinel on the next run (NIM-1033).
+func TestSentinelConf_NoMonitorWithoutMasterIP(t *testing.T) {
+	vars := map[string]any{
+		"master_name":     "mymaster",
+		"master_ip":       "",
+		"master_port":     "6379",
+		"quorum":          "2",
+		"auth_user":       "default_admin",
+		"auth_pass":       "s3cr3t-sentinel-pass",
+		"data_dir":        "/var/lib/redis",
+		"conf_dir":        "/etc/redis",
+		"port":            26379,
+		"run_dir":         "/var/run/redis",
+		"log_dir":         "/var/log/redis",
+		"sentinel_config": map[string]any{},
+	}
+	root := map[string]any{
+		"self": map[string]any{"network": map[string]any{"primary_ip": "10.0.0.5"}},
+		"vars": vars,
+	}
+	out := renderRedisTmpl(t, "sentinel.conf.tmpl", root)
+	for _, banned := range []string{"sentinel monitor", "sentinel auth-user", "sentinel auth-pass", "# Monitored master"} {
+		if strings.Contains(out, banned) {
+			t.Fatalf("no master_ip: %q must not render:\n%s", banned, out)
+		}
+	}
+	if !strings.Contains(out, "sentinel announce-ip 10.0.0.5") {
+		t.Fatalf("announce-ip must render without master_ip:\n%s", out)
+	}
+
+	vars["master_ip"] = "10.0.0.1"
+	if out := renderRedisTmpl(t, "sentinel.conf.tmpl", root); !strings.Contains(out, "sentinel monitor mymaster 10.0.0.1 6379 2") {
+		t.Fatalf("with master_ip the monitor line must render:\n%s", out)
+	}
+}
+
 // TestRedisConf_MasterAuthPersisted is a direct regress-guard for a live
 // defect: "sentinel restart fails: replica master_link_status:DOWN, masterauth
 // empty" (2026-06-30). Root cause: after the default_admin redesign

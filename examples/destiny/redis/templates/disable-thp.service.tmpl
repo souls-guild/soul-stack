@@ -21,9 +21,9 @@
   (the unit's enable+start sits BEFORE the main brick's main service.running,
   by virtue of tail placement, while the oneshot's own
   WantedBy=multi-user.target catches up at boot).
-*/}}
+*/ -}}
 [Unit]
-Description=Disable Transparent Huge Pages (THP) for Redis
+Description=Disable Transparent Huge Pages (THP)
 DefaultDependencies=no
 After=sysinit.target local-fs.target
 

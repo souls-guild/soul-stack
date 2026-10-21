@@ -18,9 +18,9 @@
   is guaranteed by task position in tasks/main.yml (the unit's enable+start comes BEFORE
   the main brick's service.running, based on trailing placement,
   while the oneshot's own WantedBy=multi-user.target catches up on boot).
-*/}}
+*/ -}}
 [Unit]
-Description=Disable Transparent Huge Pages (THP) for Redis
+Description=Disable Transparent Huge Pages (THP)
 DefaultDependencies=no
 After=sysinit.target local-fs.target
 

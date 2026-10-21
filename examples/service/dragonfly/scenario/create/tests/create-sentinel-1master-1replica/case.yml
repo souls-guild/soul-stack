@@ -140,12 +140,21 @@ assert:
         name: redis-server
         version: "5:7.0.15-1~deb12u7"
 
-    # sentinel.conf is rendered into /etc/redis (redis plane, owner redis), NOT /etc/dragonfly.
+    # The sentinel config is rendered into /etc/redis (redis plane, owner redis), NOT /etc/dragonfly.
     # template_content presence — fact of literal-template delivery of redis-destiny Keeper→Soul.
     - module: core.file.rendered
       params_subset:
-        path: /etc/redis/sentinel.conf
+        path: /etc/redis/sentinel.managed.conf
         template_content: "<present>"
+        mode: "0640"
+        owner: redis
+        group: redis
+    # sentinel.conf is copied from the rendered config, so Sentinel's own rewrites of it
+    # do not count as a change (NIM-1033).
+    - module: core.file.present
+      params_subset:
+        path: /etc/redis/sentinel.conf
+        src: /etc/redis/sentinel.managed.conf
         mode: "0640"
         owner: redis
         group: redis
