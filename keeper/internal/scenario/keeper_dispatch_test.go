@@ -159,6 +159,42 @@ func TestApplyKeeperTask_NoSealIsAnEmptySet(t *testing.T) {
 	}
 }
 
+// TestApplyKeeperTask_DestroyRunReachesTheModule — the destroy marker is the only
+// thing that lets `core.soul.forgotten` and `core.vault.kv-absent` act, and it is
+// derived from the run's terminal mode, not its scenario name. Drop the line in
+// runKeeperTask and both steps refuse in every destroy; set it from the name and an
+// operational scenario called `destroy` could release the incarnation under
+// `incarnation.run`. Their own tests inject the context, so only this one sees the
+// wiring.
+func TestApplyKeeperTask_DestroyRunReachesTheModule(t *testing.T) {
+	cases := []struct {
+		name string
+		spec RunSpec
+		want bool
+	}{
+		{"destroy run", RunSpec{ApplyID: "01JDESTROY", ScenarioName: DestroyScenarioName, TerminalMode: TerminalDestroy}, true},
+		{"ordinary run of a scenario named destroy", RunSpec{ApplyID: "01JAPPLY", ScenarioName: DestroyScenarioName}, false},
+		{"ordinary run", RunSpec{ApplyID: "01JAPPLY", ScenarioName: "update"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			var got, seen bool
+			mod := &ctxProbeModule{onApply: func(ctx context.Context) {
+				seen = true
+				got = coremodutil.IsDestroyRun(ctx)
+			}}
+			r := &Runner{keeperModules: fakeKeeperRegistry{"core.soul": mod}}
+			r.applyKeeperTask(context.Background(), c.spec, nil, &render.RenderedTask{Module: "core.soul.forgotten"}, nil)
+			if !seen {
+				t.Fatal("the module was not called")
+			}
+			if got != c.want {
+				t.Errorf("IsDestroyRun = %v, want %v", got, c.want)
+			}
+		})
+	}
+}
+
 // ctxProbeModule reports what the runner put on the module context.
 type ctxProbeModule struct {
 	module.BaseModule

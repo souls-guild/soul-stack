@@ -28,10 +28,10 @@ Author-form examples → parsing:
 
 | Task address (`module:`) | Registry-key (`base`) | `ApplyRequest.state` |
 |---|---|---|
-| `core.soul.registered` | `core.soul` | `registered` |
+| `core.soul.registered` / `core.soul.forgotten` | `core.soul` | `registered` / `forgotten` |
 | `core.bootstrap.issued` | `core.bootstrap` | `issued` |
 | `core.choir.present` / `core.choir.absent` | `core.choir` | `present` / `absent` |
-| `core.vault.kv-read` / `core.vault.kv-present` | `core.vault` | `kv-read` / `kv-present` |
+| `core.vault.kv-read` / `core.vault.kv-present` / `core.vault.kv-absent` | `core.vault` | `kv-read` / `kv-present` / `kv-absent` |
 | `core.state.set` / `.present` / `.add` / `.append` / `.modify` / `.remove` / `.unset` | `core.state` | the address suffix, one per [ADR-057](../adr/0057-state-changes-crud-verbs.md) verb |
 | `core.cert.registered` / `core.cert.issued` | `core.cert` | `registered` / `issued` |
 
@@ -269,6 +269,58 @@ After [ADR-008 amendment 2026-07-17](../adr/0008-coven-stable-tags.md#amendment-
 
 There used to be a destiny wrapper for this (`examples/destiny/coven-assign/`), and it was **removed in NIM-749 because it could never have run**. A destiny is rendered per host and dispatched to a Soul, whose registry has no `core.soul` module: nothing in the destiny render path diverts a keeper-side address (`guardDestinyTask` looks at the discriminator, not at the side), so the step reached a host as an unknown module. Reading the side off the module address made that statable, and it is now refused offline as `keeper_module_in_destiny`. **A keeper-side module cannot be wrapped in a destiny at all** — a destiny is Soul-side by construction, so the scenario task list is the only place such a step belongs.
 
+## `core.soul.forgotten`
+
+Forgets **every current member of the running incarnation**, each the way `DELETE /v1/souls/{sid}` and MCP `keeper.soul.forget` forget one ([operator-api/souls.md](operator-api/souls.md), NIM-386): the host's seeds are revoked, its unused bootstrap tokens burned, its EventStream closed across the cluster, its per-SID Redis keys purged, and its `souls` row deleted with the four cascades (seeds, tokens, memberships, Choir Voices). A forgotten host cannot reconnect — seed authentication is an allow-list, and its entry is gone with the row. **Keeper-side**, routed by its module address; the same module as `registered` (Registry key `core.soul`, state `forgotten`). A step of a service's `destroy` ([ADR-017 amendment 2026-10-21](../adr/0017-keeper-side-core.md#amendment-2026-10-21-nim-1040-corevaultkv-absent-and-coresoulforgotten--what-a-destroy-releases)); where it goes in one is [below](#placing-the-two-steps-in-a-destroy).
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `scope` | string, `enum: [incarnation]` | yes | Whom to forget. `incarnation` — every current member of the running incarnation; the only value. It makes the destructive intent explicit, and the enum leaves room for a narrower scope later. |
+
+**Only in the incarnation's destroy run.** The step refuses in any other run — an `update`, the `destroy` scenario itself started as an ordinary run, a run whose kind is unknown — before the registry is read. The marker is the run's terminal mode, which only `DELETE /v1/incarnations/{id}` / `keeper.incarnation.destroy` sets. Without it an operator holding only `incarnation.run` could erase hosts past `soul.forget` and its host scope; inside destroy the right is `incarnation.destroy`, which already authorizes removing the whole incarnation (see the pending note at [`incarnation.destroy` in rbac.md](rbac.md)).
+
+**Known limit — the refusal is these two steps', not the run's.** A `destroy` scenario can still be started as an ordinary run (`POST /v1/incarnations/{id}/scenarios/destroy`, permission `incarnation.run`): nothing in the run path refuses the name, so every other step of it — the plugin step that deletes the VMs included — runs. That gap predates these steps. Placed **first**, `forgotten` stops such a run before it reaches the VM delete ([placement](#placing-the-two-steps-in-a-destroy)).
+
+**The step takes no host list.** The members are read from `incarnation_membership` for the incarnation on the module context, the same channel `core.state.*` takes its owner from, so no author input can name a host of another incarnation. A keeper task could not supply a reliable list anyway: it renders once per run and has no `soulprint.hosts` (see [The context of `params:`](#the-context-of-params-is-incarnationstate-but-not-soulprint)), and a list taken from state can name hosts that never became members.
+
+- **A host tied to another incarnation fails the step, and nothing is forgotten** — a member of another incarnation as well, or a holder of a Choir Voice in another incarnation's Choir (a host unbound from B can still hold a Voice there). Forgetting it would cascade away that incarnation's membership row or Voice. Every member is checked before the first host is touched; the same rule is re-checked per host under the `souls` row lock inside the forget transaction, so a host bound elsewhere in between is refused rather than severed. Such a late refusal leaves the host registered with its seeds, but the teardown notice that precedes the check has already gone out: a stream another Keeper instance held for the host was closed and reconnects on its own, while a stream held by the instance running the step is not touched (it filters its own notice and closes locally only after a delete), and on a Keeper without Redis no notice is sent at all. The failure message says so. To proceed, unbind the host from the other incarnation and remove its Voice there first.
+- **No members is a no-op** (`changed=false`) — an incarnation that never got a host, or a step that already ran. A member whose row vanished before its turn is skipped.
+- **A missing incarnation on the context fails closed.**
+- If the cluster-wide teardown notice cannot be sent for a host, the step fails naming the hosts already forgotten; that host is untouched.
+
+Output: `forgotten` — the SIDs this run forgot, sorted; `warnings` — `<sid>: <resource>` for each host forgotten but not fully released, exactly the `warnings[]` of the REST reply (empty means fully released). `changed=true` when any host was forgotten. Audit: one `soul.forgotten` event per host, `source: keeper_internal`, with the REST payload plus `incarnation` / `scenario` / `apply_id`.
+
+```yaml
+- name: Forget the incarnation's hosts
+  module: core.soul.forgotten
+  register: forgotten
+  params:
+    scope: incarnation
+```
+
+### Placing the two steps in a `destroy`
+
+`core.soul.forgotten` and [`core.vault.kv-absent`](#corevaultkv-absent) release what the incarnation holds, and both are irreversible. Where they sit decides what a failure leaves behind.
+
+- **Make the destroy all-keeper.** A destroy that also has host tasks cannot be re-run once `forgotten` has emptied the roster: the re-run starts on an empty roster and is refused by the `no_hosts` gate. An all-keeper plan bypasses that gate (`planBuildsRoster`, the same bypass a provision-from-zero `create` uses), so a failed destroy can be retried — and a retry re-runs the WHOLE destroy, every step from the top. When the VMs are deleted by a `side: keeper` plugin step, there is nothing left on the hosts to clean up anyway — and that step must carry `on: keeper`: a plugin address is keeper-side only by that key, and without it the plan is no longer all-keeper. The destroy may open with an `assert:` guard ("refuse a running instance"): an assert dispatches nowhere and does not count as a host task, so it keeps the bypass ([ADR-061 amendment 2026-10-21](../adr/0061-onboarding-await-and-midrun-reresolve.md#amendment-2026-10-21-nim-1040--an-assert-does-not-cost-a-plan-the-all-keeper-class)); before NIM-1040 it did not, and every retry died on `no_hosts`.
+- **Known limit — the work-queue path.** Under `execution_model: staged` with `keeper.acolytes > 0`, a plan that renders as a single Passage with no `serial:` goes through the Acolyte work queue: its keeper tasks run first, then the planned host fan-out refuses an empty roster and the run aborts `dispatch_failed`. There an all-keeper destroy re-run after `forgotten` runs every keeper step — the VM delete and `kv-absent` included — and still ends `destroy_failed`. The default `linear` model is not affected. Pre-existing, not fixed by NIM-1040.
+- **Do not rely on file order in a mixed plan.** Under the default `linear` model tasks run in order. Under `keeper.yml::scenario.execution_model: staged` a keeper task that reads no register lands in Passage 0 and runs **before** that Passage's host dispatch, so host tasks written above `forgotten` can run after it and target hosts whose streams are closed and whose seeds are gone.
+- **Order: `core.soul.forgotten` → the plugin step that deletes the VMs → `core.vault.kv-absent`.**
+  - `forgotten`'s refusal of a host tied to another incarnation comes before anything is touched: no host forgotten, no VM deleted, no secret deleted.
+  - `forgotten`'s destroy-only check also stops a `destroy` scenario started as an ordinary run (the known limit above) before it reaches the VM delete.
+  - The VM-deleting step must tolerate VMs that are already gone: every retry runs it again.
+
+What each failure leaves behind, in that order:
+
+| Fails at | Left behind | Retry of the all-keeper destroy |
+|---|---|---|
+| `forgotten` refuses (a tied host) | nothing changed | after the tie is removed, runs as new |
+| `forgotten`, teardown notice unavailable for a later host | the hosts before it forgotten, the rest registered | `forgotten` forgets the rest, then the rest of the destroy |
+| VM delete | hosts forgotten; VMs (some or all) and secrets in place | `forgotten` has no members (no-op), the VM delete is retried, then `kv-absent` |
+| `kv-absent` mid-delete | hosts forgotten, VMs deleted, secrets **partly** deleted — the failure names what is gone | `forgotten` no-op, the VM delete again, `kv-absent` deletes what is left |
+
+Unlocking `destroy_failed` → `ready` instead of retrying leaves an incarnation without hosts once `forgotten` has run, and one whose `incarnation.state` holds `vault:` references to deleted secrets once `kv-absent` has run. The other orders are worse at the point that matters: with the VM delete first, a `forgotten` refusal arrives after the VMs are gone; with `kv-absent` before `forgotten`, after the secrets are.
+
 ## `core.choir.present` / `core.choir.absent`
 
 Editing Voice membership in Choir incarnation (ADR-044): "SID is the Voice of the specified Choir of this incarnation." **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). Registry key - base `core.choir`; state (`present`/`absent`) comes from the address suffix via `SplitModuleAddr` (see the Registration and Dispatch section). Registered only when `Deps.ChoirStore` is specified - otherwise the step drops to "unknown keeper-side module". Implementation - [`keeper/internal/coremod/choir/member.go`](../../keeper/internal/coremod/choir/member.go).
@@ -388,6 +440,34 @@ Explicit reading of the secret from Vault KV (v1/v2, mount version is determined
 Generate-if-absent for Vault KV secrets on the keeper side ([ADR-017 amendment 2026-06-28](../adr/0017-keeper-side-core.md)). **Keeper-side**, routed by its module address (NIM-747 - the task carries no `on:` key). The same module as `kv-read`: Registry key - base `core.vault`; state `kv-present` comes from the address suffix. For each target, it guarantees the existence of a non-empty secret field: absent (no field / `null` / empty string) generates a crypto-random value (`crypto/rand`, bias-free) according to the **password-policy** described by the author (length in characters + alphabet `charset`/`allowed_chars`), present - no-op (does not overwrite). `changed=true` only during real generation; idempotent (rerun/re-create are safe). `destroy` does not clear secrets → re-create reuses the same passwords. Purpose - the service itself generates missing passwords when `create`, the operator does not need to manually pre-seed secrets `vault kv put`.
 
 **Security-invariant (ADR-010):** the generated **value** never goes into register-output / audit-payload / log / OTel / error text - only `path` + names of generated fields come out. register-output - `generated` (map path → \[fields]); audit-event `vault.kv-present` (`source: keeper_internal`) is written only with `changed=true`, payload `{paths}` - without values. Complete per-module reference with params (`targets` / `policy`) / output / security - [docs/module/core/vault/README.md](../module/core/vault/README.md#corevaultkv-present).
+
+## `core.vault.kv-absent`
+
+Permanently deletes the running incarnation's own Vault namespace `<mount>/<service>/<incarnation>/` — every entry under it, and on KV v2 every **version** of each (the metadata is deleted, not the latest version soft-deleted). **Keeper-side**, routed by its module address; the same module as `kv-read` / `kv-present` (Registry key `core.vault`, state `kv-absent`). A step of a service's `destroy` ([placement](#placing-the-two-steps-in-a-destroy)): it removes the incarnation's declared secrets ([ADR-0083](../adr/0083-declared-secret-state-fields.md) §1) and the TLS material `core.cert.issued` stores at `<…>/<incarnation>/tls/{cert,key}`.
+
+| Param | Type | Required | Meaning |
+|---|---|---|---|
+| `scope` | string, `enum: [incarnation]` | yes | What to delete. `incarnation` — the running incarnation's own derived subtree; the only value. It makes the destructive intent explicit, and the enum leaves room for a narrower scope later. |
+
+**Only in the incarnation's destroy run.** The step refuses in any other run — an `update`, the `destroy` scenario itself started as an ordinary run, a run whose kind is unknown — before Vault is asked anything; the rest of such a run is not refused ([known limit](#coresoulforgotten)). Without that, an operator holding only `incarnation.run` could irreversibly delete every declared secret of a live incarnation; inside destroy the right is `incarnation.destroy`, which already authorizes removing the whole incarnation.
+
+**The step takes no path.** The subtree is derived from the service and incarnation on the module context by the same function every declared secret's path is built on (`config.IncarnationVaultPrefix`), so the delete reaches exactly where the platform wrote and nothing above it — never the service root `<mount>/<service>/`, and never a sibling incarnation whose name shares the prefix: Vault's LIST answers a folder's children, not a string prefix, so `prod-10/…` is not listed under `prod-1`. (The step builds every child path as `<…>/prod-1/` + name; the trailing slash keeps those joins inside the subtree, while the request itself loses it — vault/api joins request paths with `path.Join`.) This is the platform's own derived delete, not an authoring channel, so the §7 fence on author-written paths is unchanged ([ADR-0083 amendment 2026-10-21](../adr/0083-declared-secret-state-fields.md#amendment-2026-10-21-nim-1040-destroy-deletes-the-incarnations-own-subtree--derived-never-authored)). Secrets `core.vault.kv-present` generated **outside** the service namespace are not touched.
+
+- **A missing service or incarnation on the context fails closed**, and so does a derived segment that is not one plain `[a-zA-Z0-9_-]+` segment or a reserved service name.
+- The subtree is walked in full before the first delete, so a failed listing deletes nothing. A listed name that is not one path segment stops the walk.
+- **An empty or absent subtree is a no-op** (`changed=false`) — the step itself can run again; whether the whole destroy can is the [placement](#placing-the-two-steps-in-a-destroy) question.
+- A delete failing midway fails the step and names the paths already deleted; they are audited too.
+- **Known limit:** the Reaper's cert rotation (`rotate_due_certs`) can re-issue a Warrant of the incarnation while it is `destroying` or `destroy_failed`, recreating `<…>/<incarnation>/tls/{cert,key}` after the step deleted them.
+
+Output: `deleted` — the paths this run deleted (`<mount>/<service>/<incarnation>/…`), sorted; paths only, never values. `changed=true` when anything was deleted. Audit event `vault.kv-absent` (`source: keeper_internal`), payload `{paths, service, incarnation}`, written whenever something was deleted. Vault policy, per service whose destroy runs the step: on KV v2, `list`, `read` and `delete` on `<mount>/metadata/<service>/*` — the existence check reads metadata only, never a value; on KV v1 there is no metadata, so the same three capabilities go on `<mount>/<service>/*` and the existence check reads the entry itself, value included ([`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl)).
+
+```yaml
+- name: Delete the incarnation's secrets
+  module: core.vault.kv-absent
+  register: secrets_deleted
+  params:
+    scope: incarnation
+```
 
 ## `core.state.<verb>`
 

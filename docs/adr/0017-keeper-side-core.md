@@ -465,3 +465,74 @@ certificate_rotation:          certificate:
   decision: it needs the `auto_rotate: false` path thought through first.
 
 Spec — [service/manifest.md → Section `certificate`](../service/manifest.md#certificate-section).
+
+## Amendment 2026-10-21 (NIM-1040): `core.vault.kv-absent` and `core.soul.forgotten` — what a `destroy` releases
+
+A `destroy` scenario archived the incarnation and released neither its Vault secrets nor its hosts:
+the membership rows went with the incarnation's cascade, and the hosts stayed in the `souls` registry,
+able to reconnect. Two keeper-side states close that. Both take a single `scope` param whose only
+value is `incarnation`, and both derive what they act on from the run's owner on the module context,
+never from author input.
+
+**Both run only in the incarnation's destroy run.** The marker is the run's terminal mode, set only
+by `DELETE /v1/incarnations/{id}` / `keeper.incarnation.destroy`, and carried to the module on its
+context; it is not the scenario's name, and an unknown run kind fails closed. In any other scenario
+these steps would hand `incarnation.run` two rights it was never given: erasing hosts past
+`soul.forget` and its host scope, and irreversibly deleting a live incarnation's secrets. Inside
+destroy the right is `incarnation.destroy`, which already authorizes removing the incarnation whole.
+That it now also erases the `souls` rows of the incarnation's own unshared hosts past `soul.forget`
+is a deliberate widening, approved by the user on 2026-10-21 ([rbac.md](../keeper/rbac.md),
+`incarnation.destroy`).
+
+The refusal is these two steps', not the run's. A `destroy` scenario can still be started as an
+ordinary run (`POST /v1/incarnations/{id}/scenarios/destroy`, permission `incarnation.run`) — a gap
+that predates this amendment — and every other step of it runs. With `core.soul.forgotten` placed
+first, such a run stops before it reaches the VM delete.
+
+**`core.vault.kv-absent`** deletes the running incarnation's own subtree
+`<mount>/<service>/<incarnation>/`. Its relation to the service-namespace fence is decided in
+[ADR-0083's amendment 2026-10-21](0083-declared-secret-state-fields.md#amendment-2026-10-21-nim-1040-destroy-deletes-the-incarnations-own-subtree--derived-never-authored).
+
+**`core.soul.forgotten`** forgets every current member of the running incarnation, each through the
+forget path of `DELETE /v1/souls/{sid}` / `keeper.soul.forget` (NIM-386): seeds revoked, unused
+bootstrap tokens burned, the EventStream closed cluster-wide, the per-SID Redis keys purged, the `souls`
+row deleted with its cascades. One `soul.forgotten` audit event per host, `source: keeper_internal`,
+with `incarnation` / `scenario` / `apply_id` in place of the operator.
+
+- **The members are read, not listed by the author.** They come from `incarnation_membership` for the
+  incarnation on the module context. A host list was the first design and does not work: a keeper task
+  renders once per run and cannot read `soulprint.hosts` ([docs/keeper/modules.md](../keeper/modules.md)),
+  a destroy's VMs may already be gone so a probe finds nothing, and a list taken from state can name
+  hosts that never became members. Reading the relation makes "no author input names a foreign host"
+  hold by construction.
+- **A host tied to another incarnation is refused, and the step forgets nothing** — a member of
+  another incarnation as well, or the holder of a Choir Voice in another incarnation's Choir. Both
+  rows cascade off `souls`, and a host unbound from B can still hold a Voice there, so membership
+  alone does not decide whose host it is. Forgetting such a host would change an incarnation this run
+  does not own. Every member is checked before the first host is touched, and the same rule
+  (`soulforget.OwnedBy`, over memberships and Voices) is checked again per host under the `souls` row
+  lock inside the forget transaction (`soulforget.EraseOwned`), so a host bound elsewhere in between is
+  refused rather than severed. The host stays registered with its seeds, but the teardown notice
+  precedes the check: a stream another Keeper instance held for it is closed and reconnects, a stream
+  held by the instance running the step is untouched (it filters its own notice and closes locally
+  only after a delete), and a Keeper without Redis sends no notice at all. The failure message says so.
+- **No members is a no-op** (`changed=false`): an incarnation that never got a host, or a step that
+  already ran. A member whose row vanished before its turn is skipped.
+- **Where it goes in a destroy.** The run's roster is resolved before the run, so a Soul-side task
+  that runs after this step targets a host whose stream is closed and whose seed is gone; under
+  `scenario.execution_model: staged` a keeper task that reads no register runs in Passage 0, before
+  that Passage's host dispatch, so "write it last" does not order it last. A destroy that carries host
+  tasks also cannot be re-run once this step has emptied the roster — the `no_hosts` gate refuses it —
+  while an all-keeper destroy bypasses that gate (`planBuildsRoster`); its retry re-runs the whole
+  destroy. The recommended form is an all-keeper destroy ordered `core.soul.forgotten` → the plugin
+  step that deletes the VMs → `core.vault.kv-absent`. A refusal of a tied host then comes before
+  anything is touched; the destroy-only check stops a `destroy` started as an ordinary run before the
+  VM delete; and a failed VM delete is retried with `forgotten` a no-op (no members left). A
+  `kv-absent` failure mid-delete leaves the secrets partly deleted, and its retry runs the VM delete
+  again, so that step must tolerate VMs already gone. What each failure leaves behind is tabled in
+  [docs/keeper/modules.md → Placing the two steps in a `destroy`](../keeper/modules.md#placing-the-two-steps-in-a-destroy).
+  The destroy finalization itself is unaffected: on the non-force path
+  `incarnation.DeleteAfterTeardown` reads no membership, and `collectUnreleased` runs only on a
+  force-destroy, where no scenario runs at all.
+
+Spec — [docs/keeper/modules.md → `core.soul.forgotten`](../keeper/modules.md#coresoulforgotten).

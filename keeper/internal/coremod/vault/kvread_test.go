@@ -40,6 +40,14 @@ func (f *fakeVault) WriteKV(_ context.Context, path string, data map[string]any)
 	return nil
 }
 
+func (f *fakeVault) ListKVEntries(context.Context, string) ([]string, error) { return nil, nil }
+
+// DeleteKV fails the read-tests' expectations loudly if the read branch ever deletes.
+func (f *fakeVault) DeleteKV(_ context.Context, path string) (bool, error) {
+	f.wrote = append(f.wrote, writeCall{path: "DELETE " + path})
+	return false, nil
+}
+
 type fakeAudit struct {
 	events []*audit.Event
 	err    error

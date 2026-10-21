@@ -1,9 +1,11 @@
-// Package soul implements the keeper-side core module `core.soul.registered`
+// Package soul implements the keeper-side core module `core.soul`
 // (ADR-017, docs/keeper/modules.md).
 //
-// State:
+// States:
 //   - registered: declarative form "Soul with the given sid is in the registry
 //     and bound to the specified set of Coven labels".
+//   - forgotten (forgotten.go, NIM-1040): the run's own hosts are erased from the
+//     registry the way `DELETE /v1/souls/{sid}` erases one.
 //
 // Mode semantics:
 //   - append (default): existing ∪ provided.
@@ -53,6 +55,12 @@ import (
 // author form of the task address is `core.soul.registered` (base + state, like
 // Soul-side core modules); state `registered` arrives in pluginv1.ApplyRequest.state.
 const Name = "core.soul"
+
+// States of `core.soul`, the suffix of the task address.
+const (
+	StateRegistered = "registered"
+	StateForgotten  = "forgotten"
+)
 
 // Mode values. Match docs/keeper/modules.md → mode semantics.
 const (
@@ -105,6 +113,10 @@ type Module struct {
 	// config.DefaultMaxAwaitTimeout. A function (not a value): config.Store.Get()
 	// changes on reload.
 	maxAwaitTimeout func() string
+
+	// forget/audit serve state `forgotten`; set via WithForget.
+	forget Forgetter
+	audit  AuditWriter
 }
 
 // New constructs the module with the given Store. Caller typically provides an
@@ -134,10 +146,15 @@ func (m *Module) WithPresence(p PresenceChecker, maxAwaitTimeout func() string) 
 // ValidateAgainstManifest — its coremanifest facade lives in Soul-side util;
 // duplicating for one module is excessive now.)
 func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pluginv1.ValidateReply, error) {
-	var errs []string
-	if req.State != "registered" {
-		errs = append(errs, fmt.Sprintf("unknown state %q (want registered)", req.State))
+	switch req.State {
+	case StateRegistered:
+	case StateForgotten:
+		errs := validateForgotten(req.Params)
+		return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
+	default:
+		return &pluginv1.ValidateReply{Errors: []string{fmt.Sprintf("unknown state %q (want %s/%s)", req.State, StateRegistered, StateForgotten)}}, nil
 	}
+	var errs []string
 	sids, err := util.StringOrSliceParam(req.Params, "sid")
 	if err != nil {
 		errs = append(errs, err.Error())
@@ -163,10 +180,18 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 // (not gRPC-error) so that scenario-applier sees them through ApplyEvent.failed
 // and enters the `onfail:` branch.
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
-	ctx := stream.Context()
-	if req.State != "registered" {
+	switch req.State {
+	case StateRegistered:
+		return m.applyRegistered(req, stream)
+	case StateForgotten:
+		return m.applyForgotten(req, stream)
+	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}
+}
+
+func (m *Module) applyRegistered(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
+	ctx := stream.Context()
 
 	// sid accepts a string OR a list (ADR-061). A single string is normalized
 	// to a list of one element; output form (aggregate vs single) is chosen by

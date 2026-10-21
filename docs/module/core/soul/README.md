@@ -1,5 +1,10 @@
 # core.soul.registered
 
+> `core.soul` has a second state, `forgotten` (NIM-1040): it forgets every member of the
+> running incarnation the way `DELETE /v1/souls/{sid}` does, as the last step of a
+> `destroy`. Its spec is [keeper/modules.md → `core.soul.forgotten`](../../../keeper/modules.md#coresoulforgotten),
+> implementation [`forgotten.go`](../../../../keeper/internal/coremod/soul/forgotten.go).
+
 Binds a Soul (by `SID`) as a **member** of the run's incarnation and optionally to a
 set of real stable Coven tags in the keeper registry (tables `souls` +
 `incarnation_membership` + coven). Membership is set **implicitly** from the run's
@@ -28,6 +33,7 @@ Accepts a **string OR list of SIDs** and optionally carries an **onboarding barr
 | State | Destination | Idempotency (when `changed=true`) |
 |---|---|---|
 | `registered` | Soul with the specified `sid` is in the registry and is tied to the specified set of Coven tags (by `mode`). | `changed=true` if the record `souls` was created by the module **or** the resulting coven set is different from the current one (order-independent reconciliation). The set matched and there was already an entry - `changed=false`. |
+| `forgotten` | Every current member of the running incarnation is forgotten (`scope: incarnation`); refused in any run but the incarnation's destroy; a member tied to another incarnation (a second membership or a Choir Voice there) fails the step with nothing forgotten. | `changed=true` if any host was forgotten; no members - `changed=false`. |
 
 ## registered — params
 

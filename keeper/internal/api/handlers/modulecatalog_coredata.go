@@ -113,7 +113,7 @@ var coreModuleDocs = map[string]coreModuleDoc{
 		Description: "Manage Voice membership in the Choir of the current incarnation (params: incarnation, choir, sid, optional role/position; keeper-side).",
 	},
 	"core.soul": {
-		Description: "Register a Soul in the keeper registry (keeper-side).",
+		Description: "Register a Soul in the keeper registry, or forget every member of the running incarnation the way DELETE /v1/souls/{sid} does (keeper-side).",
 	},
 	"core.ssh": {
 		Description: "Reach hosts with no agent over SSH: run shell steps, or deliver the agent and apply a destiny rendered per host (keeper-side).",
@@ -122,6 +122,6 @@ var coreModuleDocs = map[string]coreModuleDoc{
 		Description: "Write one field of the incarnation state at this step; the state suffix is the verb (keeper-side, ADR-0084).",
 	},
 	"core.vault": {
-		Description: "Work with Vault KV on the keeper side: kv-read (explicit read with an audit event) and kv-present (generate-if-absent - guarantees the secret exists, generates missing crypto/rand). keeper-side.",
+		Description: "Work with Vault KV on the keeper side: kv-read (explicit read with an audit event), kv-present (generate-if-absent - guarantees the secret exists, generates missing crypto/rand) and kv-absent (permanently delete the running incarnation's own derived subtree). keeper-side.",
 	},
 }

@@ -4,8 +4,9 @@
 // Modules (Registry key = base name, author form = base + state in address) —
 // the seven of shared/coremanifest.KeeperSideAddrs(), which is the catalog the
 // linter and the render pipeline route by:
-// `core.soul` (`core.soul.registered`, docs/keeper/modules.md),
-// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`, ADR-017(b)), `core.state`
+// `core.soul` (`core.soul.registered`/`core.soul.forgotten`, docs/keeper/modules.md),
+// `core.vault` (`core.vault.kv-read`/`core.vault.kv-present`/`core.vault.kv-absent`,
+// ADR-017(b)), `core.state`
 // (`core.state.*`, [ADR-0083] §4 — the write of a service state field
 // carrying declared secrets, registered when Deps.Vault AND Deps.StateStore are
 // both present), `core.choir`
@@ -38,6 +39,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/state"
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
 	"github.com/souls-guild/soul-stack/keeper/internal/push"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
 	"github.com/souls-guild/soul-stack/sdk/module"
 )
 
@@ -72,6 +74,15 @@ type Deps struct {
 	// config.DefaultMaxAwaitTimeout. Prod wraps config.Store.Get().
 	MaxAwaitTimeout func() string
 
+	// SoulForgetDB / SoulTeardown — `core.soul.forgotten` (NIM-1040): the pool
+	// and the release half of the forget path REST `DELETE /v1/souls/{sid}` and
+	// MCP `keeper.soul.forget` use. A nil SoulForgetDB leaves the state
+	// unconfigured (it fails by name). SoulTeardown must be the daemon's real
+	// adapter: a nil one erases the row and releases nothing — the stream on
+	// another instance stays open and `soul:<sid>:hb` is left with no TTL.
+	SoulForgetDB soul.ForgetDB
+	SoulTeardown soulforget.Teardown
+
 	// Vault is vault-client for `core.vault` (kv-read reads; kv-present
 	// generate-if-absent reads+writes). *vault.Client satisfies both;
 	// kv-read write-path does not call (read-state).
@@ -79,7 +90,8 @@ type Deps struct {
 
 	// VaultMount is the KV mount from keeper.yml (`vault.kv_mount`), used by
 	// `core.state.*` to DERIVE the path of a declared secret ([ADR-0083]
-	// §1). "" means the default mount. A snapshot, not a hot-reload accessor,
+	// §1), and by `core.vault.kv-absent` to fence a delete to the same
+	// `<mount>/<service>/<incarnation>/` prefix. "" means the default mount. A snapshot, not a hot-reload accessor,
 	// deliberately: the mount is one segment of a derived path, so re-reading it
 	// mid-life would orphan every secret already written under the old one. The
 	// ADR-064 write path (secretwrite.NewWriter) snapshots the same value.
@@ -157,15 +169,16 @@ type Deps struct {
 	SSHDeliveryErr error
 
 	// Audit is single audit-writer for keeper-side modules (vault/bootstrap/cert
-	// write audit events; soul/choir do not). nil allowed (modules skip write and
-	// continue), but prod wire-up from main should provide real
-	// keeper/internal/auditpg or auditmulti.
+	// and soul's `forgotten` write audit events; choir does not). nil allowed
+	// (modules skip write and continue), but prod wire-up from main should
+	// provide real keeper/internal/auditpg or auditmulti.
 	Audit AuditWriter
 }
 
 // AuditWriter is common type for audit-writing modules (vault/bootstrap/cert);
 // matches shared/audit.Writer.
 type AuditWriter interface {
+	soul.AuditWriter
 	vault.AuditWriter
 	bootstrap.AuditWriter
 	cert.AuditWriter
@@ -182,9 +195,14 @@ func Default(d Deps) *Registry {
 	// await_timeout ceiling provider optional. nil presence →
 	// step with await_online: true fails (test/dev builds without Redis).
 	soulMod := soul.New(d.SoulStore).WithPresence(d.SoulPresence, d.MaxAwaitTimeout)
+	if d.SoulForgetDB != nil {
+		soulMod.WithForget(soul.NewPGForgetter(d.SoulForgetDB, d.SoulTeardown), d.Audit)
+	}
+	vaultMod := vault.New(d.Vault, d.Audit)
+	vaultMod.Mount = d.VaultMount
 	mods := map[string]module.SoulModule{
 		soul.Name:  soulMod,
-		vault.Name: vault.New(d.Vault, d.Audit),
+		vault.Name: vaultMod,
 	}
 	// `core.state.*` ([ADR-0083] §4) needs BOTH: the Vault client, because
 	// its job is to put a declared secret in Vault and hand back a reference, and

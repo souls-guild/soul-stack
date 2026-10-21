@@ -6,6 +6,15 @@ import "github.com/souls-guild/soul-stack/sdk/schema"
 var modVault = schema.Module{
 	Name: "vault",
 	States: map[string]schema.State{
+		"kv-absent": {
+			Description: "Keeper-side, destroy run only. Permanently delete the running incarnation's own Vault namespace <mount>/<service>/<incarnation>/: every entry under it, every version (kv-v2 metadata delete). Takes no path - the subtree is derived from the run, like a declared secret's (ADR-0083 amendment 2026-10-21). Refused in any run but the incarnation's destroy. An empty subtree is a no-op.",
+			Input: schema.Input{
+				"scope": {Type: schema.String, Required: true, Enum: []any{"incarnation"}, Description: "What to delete. incarnation - the running incarnation's own derived subtree (the only value)."},
+			},
+			Output: schema.Output{
+				"deleted": {Type: schema.List, Items: &schema.Param{Type: schema.String}, Description: "Vault paths this run deleted, sorted. Names only, never values."},
+			},
+		},
 		"kv-present": {
 			Description: "Keeper-side (on:keeper). Generate-if-absent - guarantees the secret exists (generates the missing crypto/rand per policy; if present - no-op, never returns values).",
 			Input: schema.Input{

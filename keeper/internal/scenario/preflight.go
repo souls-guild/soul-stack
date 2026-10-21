@@ -48,13 +48,15 @@ var ErrAssertFailed = render.ErrAssertFailed
 //     not empty-by-circumstance but IMPOSSIBLE, so `size(soulprint.hosts) == N`
 //     rejected EVERY create carrying a topology assert.
 //
-//     (2) THE PLAN BUILDS ITS OWN ROSTER ([planBuildsRoster], NIM-270). A
-//     provision-from-zero run creates its hosts mid-run and Stratify puts the
-//     roster consumers after the refresh boundary; the roster at request time
-//     is not a smaller version of the run's roster, it is a different thing
-//     entirely. Evaluating the assert against it is the same false 422 as (1),
-//     which is why this shares its predicate with the no_hosts bypass in
-//     [Runner.run] §3 rather than restating it.
+//     (2) THE PLAN RE-READS ITS ROSTER MID-RUN ([config.HasRefreshEmitter],
+//     NIM-270). A provision-from-zero run creates its hosts mid-run and Stratify
+//     puts the roster consumers after the refresh boundary; the roster at
+//     request time is not a smaller version of the run's roster, it is a
+//     different thing entirely. Evaluating the assert against it is the same
+//     false 422 as (1). This is ONE of the two no_hosts bypass classes, not
+//     their union ([planBuildsRoster]): an all-keeper plan without a refresh
+//     emitter never re-reads its roster, so the roster here is the one render
+//     will measure, and its assert is answered here (NIM-1040).
 //
 //     Everything else DOES evaluate: an existing incarnation plus a plan that
 //     consumes its roster is exactly the case the two-point amendment was
@@ -133,8 +135,8 @@ func (r *Runner) PreflightAssert(ctx context.Context, spec RunSpec) error {
 	if err != nil {
 		return err
 	}
-	rosterIsSubject := !planBuildsRoster(scn.Tasks)
-	deferReason := "the plan builds its own roster mid-run, so the assert is about hosts that do not exist yet (NIM-270)"
+	rosterIsSubject := !config.HasRefreshEmitter(scn.Tasks)
+	deferReason := "the plan re-reads its roster after a refresh boundary, so the assert is about hosts that do not exist yet (NIM-270)"
 	if rosterIsSubject && inc == nil {
 		rosterIsSubject = false
 		deferReason = "the incarnation does not exist yet, so it has no roster (NIM-124)"

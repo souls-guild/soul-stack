@@ -1101,6 +1101,35 @@
     {
       "name": "soul",
       "states": {
+        "forgotten": {
+          "description": "Keeper-side, destroy run only. Forget every current member of the running incarnation the way DELETE /v1/souls/{sid} does: revoke seeds, burn unused bootstrap tokens, close the EventStream cluster-wide, purge Redis keys, delete the souls row with its cascades. Refused in any run but the incarnation's destroy. A member tied to another incarnation (a second membership or a Choir Voice there) fails the step with nothing forgotten; no members is a no-op.",
+          "input": {
+            "scope": {
+              "type": "string",
+              "required": true,
+              "description": "Whom to forget. incarnation - every current member of the running incarnation (the only value).",
+              "enum": [
+                "incarnation"
+              ]
+            }
+          },
+          "output": {
+            "forgotten": {
+              "description": "SIDs this run forgot, sorted.",
+              "items": {
+                "type": "string"
+              },
+              "type": "list"
+            },
+            "warnings": {
+              "description": "\u003csid\u003e: \u003cresource\u003e for each host that was forgotten but not fully released (as the REST reply's warnings[]); empty means fully released.",
+              "items": {
+                "type": "string"
+              },
+              "type": "list"
+            }
+          }
+        },
         "registered": {
           "description": "Keeper-side (on:keeper). The bind act — a Soul with sid becomes a member of the run's incarnation (incarnation_membership) and optionally carries stable Coven tags (ADR-017; ADR-008 amendment NIM-124). Onboarding barrier — ADR-061.",
           "input": {
@@ -1333,6 +1362,28 @@
     {
       "name": "vault",
       "states": {
+        "kv-absent": {
+          "description": "Keeper-side, destroy run only. Permanently delete the running incarnation's own Vault namespace \u003cmount\u003e/\u003cservice\u003e/\u003cincarnation\u003e/: every entry under it, every version (kv-v2 metadata delete). Takes no path - the subtree is derived from the run, like a declared secret's (ADR-0083 amendment 2026-10-21). Refused in any run but the incarnation's destroy. An empty subtree is a no-op.",
+          "input": {
+            "scope": {
+              "type": "string",
+              "required": true,
+              "description": "What to delete. incarnation - the running incarnation's own derived subtree (the only value).",
+              "enum": [
+                "incarnation"
+              ]
+            }
+          },
+          "output": {
+            "deleted": {
+              "description": "Vault paths this run deleted, sorted. Names only, never values.",
+              "items": {
+                "type": "string"
+              },
+              "type": "list"
+            }
+          }
+        },
         "kv-present": {
           "description": "Keeper-side (on:keeper). Generate-if-absent - guarantees the secret exists (generates the missing crypto/rand per policy; if present - no-op, never returns values).",
           "input": {

@@ -136,6 +136,9 @@ func TestAllKeeperTasks(t *testing.T) {
 	keeper := config.Task{On: "keeper"}
 	hostOmitted := config.Task{}                      // on: omitted → Soul-side (whole incarnation)
 	hostCoven := config.Task{On: []any{"redis-prod"}} // on: a list of covens → Soul-side
+	guard := config.Task{Assert: &config.AssertSpec{That: []string{"size(soulprint.hosts) == 0"}}}
+	// Lint-legal, and still an assert: it dispatches nowhere whatever `on:` says.
+	guardOnKeeper := config.Task{On: "keeper", Assert: &config.AssertSpec{That: []string{"true"}}}
 
 	tests := []struct {
 		name  string
@@ -150,6 +153,17 @@ func TestAllKeeperTasks(t *testing.T) {
 		{"one-host-coven", []config.Task{hostCoven}, false},
 		{"keeper-plus-host", []config.Task{keeper, hostOmitted}, false},
 		{"host-plus-keeper", []config.Task{hostCoven, keeper}, false},
+		// An assert dispatches nowhere: it is skipped, not counted as a host task
+		// (NIM-1040 — an all-keeper destroy opening with a guard assert).
+		{"assert-then-keeper", []config.Task{guard, keeper}, true},
+		{"keeper-assert-keeper", []config.Task{keeper, guard, keeper}, true},
+		{"assert-plus-host", []config.Task{guard, hostOmitted}, false},
+		// Asserts alone build nothing: the no_hosts gate still holds.
+		{"assert-only", []config.Task{guard, guard}, false},
+		// An `on: keeper` assert is skipped before its side is asked, so it is no
+		// keeper task either: asserts alone stay behind no_hosts.
+		{"on-keeper-assert-only", []config.Task{guardOnKeeper}, false},
+		{"on-keeper-assert-then-keeper", []config.Task{guardOnKeeper, keeper}, true},
 	}
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
@@ -157,6 +171,20 @@ func TestAllKeeperTasks(t *testing.T) {
 				t.Errorf("allKeeperTasks(%+v) = %v, want %v", tt.tasks, got, tt.want)
 			}
 		})
+	}
+}
+
+// TestPlanBuildsRoster_SkipsAsserts — the no_hosts gate and the assert pre-flight
+// both ask planBuildsRoster, so the assert skip has to reach it, not only
+// allKeeperTasks.
+func TestPlanBuildsRoster_SkipsAsserts(t *testing.T) {
+	guard := config.Task{Assert: &config.AssertSpec{That: []string{"size(soulprint.hosts) == 0"}}}
+	keeper := config.Task{On: "keeper"}
+	if !planBuildsRoster([]config.Task{guard, keeper}) {
+		t.Error("planBuildsRoster(assert, keeper) = false: an all-keeper destroy with a guard assert would die on no_hosts")
+	}
+	if planBuildsRoster([]config.Task{guard}) {
+		t.Error("planBuildsRoster(assert) = true: a plan of asserts alone must stay behind the no_hosts gate")
 	}
 }
 

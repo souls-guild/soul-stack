@@ -6,6 +6,16 @@ import "github.com/souls-guild/soul-stack/sdk/schema"
 var modSoul = schema.Module{
 	Name: "soul",
 	States: map[string]schema.State{
+		"forgotten": {
+			Description: "Keeper-side, destroy run only. Forget every current member of the running incarnation the way DELETE /v1/souls/{sid} does: revoke seeds, burn unused bootstrap tokens, close the EventStream cluster-wide, purge Redis keys, delete the souls row with its cascades. Refused in any run but the incarnation's destroy. A member tied to another incarnation (a second membership or a Choir Voice there) fails the step with nothing forgotten; no members is a no-op.",
+			Input: schema.Input{
+				"scope": {Type: schema.String, Required: true, Enum: []any{"incarnation"}, Description: "Whom to forget. incarnation - every current member of the running incarnation (the only value)."},
+			},
+			Output: schema.Output{
+				"forgotten": {Type: schema.List, Items: &schema.Param{Type: schema.String}, Description: "SIDs this run forgot, sorted."},
+				"warnings":  {Type: schema.List, Items: &schema.Param{Type: schema.String}, Description: "<sid>: <resource> for each host that was forgotten but not fully released (as the REST reply's warnings[]); empty means fully released."},
+			},
+		},
 		"registered": {
 			Description: "Keeper-side (on:keeper). The bind act — a Soul with sid becomes a member of the run's incarnation (incarnation_membership) and optionally carries stable Coven tags (ADR-017; ADR-008 amendment NIM-124). Onboarding barrier — ADR-061.",
 			Input: schema.Input{

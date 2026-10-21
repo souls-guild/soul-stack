@@ -103,13 +103,37 @@ type Result struct {
 // host is already unable to come back); they are recorded in
 // [Release.Warnings] so the operator sees exactly what is still holding on.
 func Erase(ctx context.Context, db TxBeginner, td Teardown, sid, reason string) (Result, error) {
+	return erase(ctx, db, td, sid, reason, nil)
+}
+
+// EraseOwned is [Erase] for a scenario run (`core.soul.forgotten`, NIM-1040): it
+// forgets the host only while it is tied to incarnation alone — a member of it and
+// of no other, with no Choir Voice elsewhere ([OwnedBy]) — checked under the souls
+// row lock inside the transaction that deletes it, and otherwise returns a
+// [*NotOwnedError] with nothing deleted.
+//
+// The teardown notice of step 1 still goes out before the check, and its seeds stay
+// untouched. What that costs a refused host depends on where its stream is: one held
+// by ANOTHER Keeper instance is closed and reconnects on its own; one held by this
+// instance is not touched, since the origin filters its own echo and closes locally
+// only after the delete; and on a Keeper without Redis nothing is sent at all. A caller
+// is expected to apply [OwnedBy] to its own read first, so that only a tie changed in
+// between reaches this refusal.
+func EraseOwned(ctx context.Context, db TxBeginner, td Teardown, sid, incarnation, reason string) (Result, error) {
+	if incarnation == "" {
+		return Result{}, errors.New("soulforget: incarnation is empty")
+	}
+	return erase(ctx, db, td, sid, reason, ownedByGuard(incarnation))
+}
+
+func erase(ctx context.Context, db TxBeginner, td Teardown, sid, reason string, check guard) (Result, error) {
 	if td != nil {
 		if _, err := td.Broadcast(ctx, sid); err != nil {
 			return Result{}, fmt.Errorf("%w: %w", ErrTeardownUnavailable, err)
 		}
 	}
 
-	counts, err := Forget(ctx, db, sid, reason)
+	counts, err := forget(ctx, db, sid, reason, check)
 	if err != nil {
 		return Result{}, err
 	}

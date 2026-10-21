@@ -25,6 +25,7 @@ import (
 	"fmt"
 	"os"
 	"path"
+	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -328,7 +329,7 @@ func loadSecretID(auth config.KeeperVaultAuth) (string, error) {
 
 // relativeKVPath normalizes the input KV path to its relative form (without the mount
 // prefix) and checks it for safety. Common preamble for all KV methods
-// (ReadKV / WriteKV / ListKV / ReadKVMetadata).
+// (ReadKV / WriteKV / ListKV / ListKVEntries / DeleteKV / ReadKVMetadata).
 //
 // Steps:
 //   - strip the leading slash (otherwise `/secret/foo` wouldn't reduce to `foo`);
@@ -550,6 +551,104 @@ func (c *Client) ListKV(ctx context.Context, prefix string) (_ []string, err err
 		names = append(names, name)
 	}
 	return names, nil
+}
+
+// ListKVEntries lists the names directly under prefix, sub-folders included and
+// marked by a trailing `/` — the shape a recursive walk needs, which [ListKV] filters
+// out. Sorted. Works on both KV versions: v2 lists the metadata path
+// (`<mount>/metadata/<rel>`), v1 the path itself. A missing prefix is (nil, nil),
+// as for [ListKV]. Names only; no secret is read.
+func (c *Client) ListKVEntries(ctx context.Context, prefix string) (_ []string, err error) {
+	rel, err := c.relativeKVPath(prefix)
+	if err != nil {
+		return nil, err
+	}
+
+	start := time.Now()
+	defer func() { c.metrics.ObserveList(c.kvMount, time.Since(start), err) }()
+
+	logical, err := c.entryPath(ctx, rel)
+	if err != nil {
+		return nil, err
+	}
+	secret, err := c.c.Logical().ListWithContext(ctx, logical)
+	if err != nil {
+		err = fmt.Errorf("vault: list %q: %w", prefix, err)
+		return nil, err
+	}
+	if secret == nil || secret.Data == nil {
+		return nil, nil
+	}
+	rawKeys, ok := secret.Data["keys"].([]any)
+	if !ok {
+		return nil, nil
+	}
+	names := make([]string, 0, len(rawKeys))
+	for _, rk := range rawKeys {
+		if name, ok := rk.(string); ok && name != "" {
+			names = append(names, name)
+		}
+	}
+	sort.Strings(names)
+	return names, nil
+}
+
+// DeleteKV permanently deletes the KV entry at path and reports whether there was
+// one to delete.
+//
+// On KV v2 it deletes the entry's METADATA, which takes every version with it. A
+// `DELETE <mount>/data/<rel>` would only soft-delete the latest version and leave the
+// older ones recoverable — and [Client.ReadKV] already reports a soft-deleted path as
+// absent, which is also why existence is asked of the metadata and not of ReadKV:
+// an entry whose versions are all soft-deleted still exists, and still has to go. On
+// KV v1 there are no versions and the path itself is deleted.
+//
+// Like [Client.WriteKV], it drops the reads of that entry memoized on ctx, so a later
+// pass of the same run does not resolve a value that is gone. Counted under the write
+// metrics: a delete is a mutation, and the label is the mount, never the path.
+func (c *Client) DeleteKV(ctx context.Context, path string) (existed bool, err error) {
+	rel, err := c.relativeKVPath(path)
+	if err != nil {
+		return false, err
+	}
+	defer cel.ForgetVaultReads(ctx, func(body string) bool {
+		r, rerr := c.relativeKVPath(body)
+		return rerr == nil && sameKVEntry(r, rel)
+	})
+
+	start := time.Now()
+	defer func() { c.metrics.ObserveWrite(c.kvMount, time.Since(start), err) }()
+
+	logical, err := c.entryPath(ctx, rel)
+	if err != nil {
+		return false, err
+	}
+	secret, err := c.c.Logical().ReadWithContext(ctx, logical)
+	if err != nil {
+		err = fmt.Errorf("vault: delete %q: existence check: %w", path, err)
+		return false, err
+	}
+	if secret == nil {
+		return false, nil
+	}
+	if _, err = c.c.Logical().DeleteWithContext(ctx, logical); err != nil {
+		err = fmt.Errorf("vault: delete %q: %w", path, err)
+		return false, err
+	}
+	return true, nil
+}
+
+// entryPath is the logical path that names a KV entry as a whole: the metadata path on
+// KV v2 (versions hang off it), the path itself on KV v1.
+func (c *Client) entryPath(ctx context.Context, rel string) (string, error) {
+	version, err := c.resolveKVVersion(ctx, c.kvMount)
+	if err != nil {
+		return "", err
+	}
+	if version == 2 {
+		return c.kvMount + "/metadata/" + rel, nil
+	}
+	return c.kvMount + "/" + rel, nil
 }
 
 // ReadKVMetadata reads a secret's version-agnostic metadata (`created_time`) from the

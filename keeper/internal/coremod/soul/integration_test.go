@@ -22,9 +22,11 @@ import (
 
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
 	coremodsoul "github.com/souls-guild/soul-stack/keeper/internal/coremod/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	"github.com/souls-guild/soul-stack/keeper/internal/migrate"
 	keepersoul "github.com/souls-guild/soul-stack/keeper/internal/soul"
+	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
 	"github.com/souls-guild/soul-stack/keeper/migrations"
 
 	pluginv1 "github.com/souls-guild/soul-stack/proto/plugin/gen/go/v1"
@@ -272,5 +274,198 @@ func TestIntegration_Apply_Idempotent(t *testing.T) {
 	ev := stream.Last()
 	if ev.Failed || ev.Changed {
 		t.Fatalf("expected no-op, got %+v", ev)
+	}
+}
+
+// TestIntegration_Forgotten_MembersOfTheRunOnly — `core.soul.forgotten` over the real
+// forget path and real rows: the running incarnation's members go with their seeds
+// and memberships; a host of ANOTHER incarnation only and a registered non-member
+// stay; the re-run finds no members and changes nothing.
+func TestIntegration_Forgotten_MembersOfTheRunOnly(t *testing.T) {
+	resetSouls(t)
+	ctx := context.Background()
+	mustExecIT(t, `TRUNCATE TABLE incarnation_membership, incarnation CASCADE`)
+	for _, sid := range []string{"a.example.com", "b.example.com", "other.example.com", "pending.example.com"} {
+		if err := keepersoul.Insert(ctx, integrationPool, &keepersoul.Soul{SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected}); err != nil {
+			t.Fatalf("insert %s: %v", sid, err)
+		}
+	}
+	mustExecIT(t, `INSERT INTO incarnation (id, service, service_version, status)
+	               VALUES ('inc-one', 'svc', 'v1', 'destroying'), ('inc-two', 'svc', 'v1', 'ready')`)
+	mustExecIT(t, `INSERT INTO incarnation_membership (incarnation_name, sid)
+	               VALUES ('inc-one', 'a.example.com'), ('inc-one', 'b.example.com'), ('inc-two', 'other.example.com')`)
+
+	apply := func() *pluginv1.ApplyEvent {
+		m := coremodsoul.New(coremodsoul.NewPGStore(integrationPool)).
+			WithForget(coremodsoul.NewPGForgetter(integrationPool, nil), nil)
+		stream := internaltest.NewApplyStreamCtx(destroyRunCtx(ctx))
+		if err := m.Apply(&pluginv1.ApplyRequest{
+			State:  coremodsoul.StateForgotten,
+			Params: mustStructIT(t, map[string]any{"scope": "incarnation"}),
+		}, stream); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		return stream.Last()
+	}
+
+	ev := apply()
+	if ev.GetFailed() || !ev.GetChanged() {
+		t.Fatalf("first run: failed=%v changed=%v msg=%s", ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
+	}
+	if got := ev.GetOutput().AsMap()["forgotten"]; !reflect.DeepEqual(got, []any{"a.example.com", "b.example.com"}) {
+		t.Errorf("forgotten = %v", got)
+	}
+	for _, sid := range []string{"a.example.com", "b.example.com"} {
+		if _, err := keepersoul.SelectBySID(ctx, integrationPool, sid); err == nil {
+			t.Errorf("%s is still registered", sid)
+		}
+	}
+	for _, sid := range []string{"other.example.com", "pending.example.com"} {
+		if _, err := keepersoul.SelectBySID(ctx, integrationPool, sid); err != nil {
+			t.Errorf("%s, not a member of inc-one, was forgotten: %v", sid, err)
+		}
+	}
+
+	again := apply()
+	if again.GetFailed() || again.GetChanged() {
+		t.Errorf("re-run: failed=%v changed=%v msg=%s", again.GetFailed(), again.GetChanged(), again.GetMessage())
+	}
+}
+
+// TestIntegration_Forgotten_SharedHostRefused — a member of the running incarnation
+// that is also a member of another one is refused, and nothing is forgotten — not even
+// the run's own other member.
+func TestIntegration_Forgotten_SharedHostRefused(t *testing.T) {
+	resetSouls(t)
+	ctx := context.Background()
+	mustExecIT(t, `TRUNCATE TABLE incarnation_membership, incarnation CASCADE`)
+	for _, sid := range []string{"a.example.com", "shared.example.com"} {
+		if err := keepersoul.Insert(ctx, integrationPool, &keepersoul.Soul{SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected}); err != nil {
+			t.Fatalf("insert %s: %v", sid, err)
+		}
+	}
+	mustExecIT(t, `INSERT INTO incarnation (id, service, service_version, status)
+	               VALUES ('inc-one', 'svc', 'v1', 'destroying'), ('inc-two', 'svc', 'v1', 'ready')`)
+	mustExecIT(t, `INSERT INTO incarnation_membership (incarnation_name, sid)
+	               VALUES ('inc-one', 'a.example.com'), ('inc-one', 'shared.example.com'), ('inc-two', 'shared.example.com')`)
+
+	m := coremodsoul.New(coremodsoul.NewPGStore(integrationPool)).
+		WithForget(coremodsoul.NewPGForgetter(integrationPool, nil), nil)
+	stream := internaltest.NewApplyStreamCtx(destroyRunCtx(ctx))
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  coremodsoul.StateForgotten,
+		Params: mustStructIT(t, map[string]any{"scope": "incarnation"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	if ev := stream.Last(); !ev.GetFailed() {
+		t.Fatalf("a shared host was not refused: %v", ev.GetOutput().AsMap())
+	}
+	for _, sid := range []string{"a.example.com", "shared.example.com"} {
+		if _, err := keepersoul.SelectBySID(ctx, integrationPool, sid); err != nil {
+			t.Errorf("%s was forgotten despite the refusal: %v", sid, err)
+		}
+	}
+}
+
+// TestIntegration_Forgotten_VoiceInAnotherIncarnationRefused — a member of the
+// run's incarnation only, unbound from inc-two but still holding a Voice in its
+// Choir, is refused against real rows, and nothing is forgotten.
+func TestIntegration_Forgotten_VoiceInAnotherIncarnationRefused(t *testing.T) {
+	resetSouls(t)
+	ctx := context.Background()
+	mustExecIT(t, `TRUNCATE TABLE incarnation_choir_voices, incarnation_choirs, incarnation_membership, incarnation CASCADE`)
+	for _, sid := range []string{"a.example.com", "voice.example.com"} {
+		if err := keepersoul.Insert(ctx, integrationPool, &keepersoul.Soul{SID: sid, Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected}); err != nil {
+			t.Fatalf("insert %s: %v", sid, err)
+		}
+	}
+	mustExecIT(t, `INSERT INTO incarnation (id, service, service_version, status)
+	               VALUES ('inc-one', 'svc', 'v1', 'destroying'), ('inc-two', 'svc', 'v1', 'ready')`)
+	mustExecIT(t, `INSERT INTO incarnation_membership (incarnation_name, sid)
+	               VALUES ('inc-one', 'a.example.com'), ('inc-one', 'voice.example.com')`)
+	mustExecIT(t, `INSERT INTO incarnation_choirs (incarnation_name, choir_name) VALUES ('inc-two', 'db')`)
+	mustExecIT(t, `INSERT INTO incarnation_choir_voices (incarnation_name, choir_name, sid, role)
+	               VALUES ('inc-two', 'db', 'voice.example.com', 'replica')`)
+
+	ev := applyForgottenIT(t, ctx, coremodsoul.NewPGForgetter(integrationPool, nil))
+	if !ev.GetFailed() {
+		t.Fatalf("a host with a Voice in another incarnation was not refused: %v", ev.GetOutput().AsMap())
+	}
+	for _, sid := range []string{"a.example.com", "voice.example.com"} {
+		if _, err := keepersoul.SelectBySID(ctx, integrationPool, sid); err != nil {
+			t.Errorf("%s was forgotten despite the refusal: %v", sid, err)
+		}
+	}
+	var voices int
+	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM incarnation_choir_voices WHERE incarnation_name = 'inc-two'`).Scan(&voices); err != nil || voices != 1 {
+		t.Errorf("inc-two's Voices = %d (%v), want 1", voices, err)
+	}
+}
+
+// bindingForgetter is the real forget path with a concurrent bind in the window
+// between the step's pre-check and the delete: before each Forget it makes the host
+// a member of inc-two as well.
+type bindingForgetter struct {
+	*coremodsoul.PGForgetter
+	t *testing.T
+}
+
+func (b bindingForgetter) Forget(ctx context.Context, sid, incarnation, reason string) (soulforget.Result, error) {
+	mustExecIT(b.t, `INSERT INTO incarnation_membership (incarnation_name, sid) VALUES ('inc-two', $1)`, sid)
+	return b.PGForgetter.Forget(ctx, sid, incarnation, reason)
+}
+
+// TestIntegration_Forgotten_BindInTheWindowIsRefusedInsideTheDelete — the pre-check
+// saw a host of inc-one alone; by the delete it is shared. Only the guard inside
+// the forget transaction (PGForgetter.Forget → soulforget.EraseOwned) can see that,
+// so this is what fails if the forget path ever goes through the unguarded Erase.
+func TestIntegration_Forgotten_BindInTheWindowIsRefusedInsideTheDelete(t *testing.T) {
+	resetSouls(t)
+	ctx := context.Background()
+	mustExecIT(t, `TRUNCATE TABLE incarnation_membership, incarnation CASCADE`)
+	if err := keepersoul.Insert(ctx, integrationPool, &keepersoul.Soul{SID: "a.example.com", Transport: keepersoul.TransportAgent, Status: keepersoul.StatusConnected}); err != nil {
+		t.Fatalf("insert: %v", err)
+	}
+	mustExecIT(t, `INSERT INTO incarnation (id, service, service_version, status)
+	               VALUES ('inc-one', 'svc', 'v1', 'destroying'), ('inc-two', 'svc', 'v1', 'ready')`)
+	mustExecIT(t, `INSERT INTO incarnation_membership (incarnation_name, sid) VALUES ('inc-one', 'a.example.com')`)
+
+	ev := applyForgottenIT(t, ctx, bindingForgetter{PGForgetter: coremodsoul.NewPGForgetter(integrationPool, nil), t: t})
+	if !ev.GetFailed() {
+		t.Fatalf("a host bound to inc-two in the window was forgotten: %v", ev.GetOutput().AsMap())
+	}
+	if _, err := keepersoul.SelectBySID(ctx, integrationPool, "a.example.com"); err != nil {
+		t.Errorf("the host was erased although it became shared before the delete: %v", err)
+	}
+	var memberships int
+	if err := integrationPool.QueryRow(ctx, `SELECT COUNT(*) FROM incarnation_membership WHERE sid = 'a.example.com'`).Scan(&memberships); err != nil || memberships != 2 {
+		t.Errorf("memberships = %d (%v), want both left in place", memberships, err)
+	}
+}
+
+func applyForgottenIT(t *testing.T, ctx context.Context, f coremodsoul.Forgetter) *pluginv1.ApplyEvent {
+	t.Helper()
+	m := coremodsoul.New(coremodsoul.NewPGStore(integrationPool)).WithForget(f, nil)
+	stream := internaltest.NewApplyStreamCtx(destroyRunCtx(ctx))
+	if err := m.Apply(&pluginv1.ApplyRequest{
+		State:  coremodsoul.StateForgotten,
+		Params: mustStructIT(t, map[string]any{"scope": "incarnation"}),
+	}, stream); err != nil {
+		t.Fatalf("Apply: %v", err)
+	}
+	return stream.Last()
+}
+
+// destroyRunCtx is what keeper_dispatch puts on a keeper task of inc-one's destroy run.
+func destroyRunCtx(ctx context.Context) context.Context {
+	return util.WithRunScope(util.WithIncarnation(ctx, "inc-one"),
+		util.RunScope{Scenario: "destroy", ApplyID: "01JDESTROY", Destroy: true})
+}
+
+func mustExecIT(t *testing.T, sql string, args ...any) {
+	t.Helper()
+	if _, err := integrationPool.Exec(context.Background(), sql, args...); err != nil {
+		t.Fatalf("exec %q: %v", sql, err)
 	}
 }

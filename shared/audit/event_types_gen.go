@@ -149,6 +149,7 @@ var allEventTypes = []EventType{
 	"tiding.deleted",                            // EventTidingDeleted
 	"tiding.label_changed",                      // EventTidingLabelChanged
 	"tiding.updated",                            // EventTidingUpdated
+	"vault.kv-absent",                           // EventVaultKVAbsent
 	"vault.kv-present",                          // EventVaultKVPresent
 	"vault.kv-read",                             // EventVaultKVRead
 	"vigil.created",                             // EventVigilCreated

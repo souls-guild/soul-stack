@@ -655,3 +655,73 @@ func ctxWithPeerCert(cert *x509.Certificate) context.Context {
 		}},
 	})
 }
+
+// TestIntegration_EraseOwned — the ownership rule a scenario-driven forget runs
+// under, checked inside the transaction against real rows: only a host tied to the
+// incarnation alone goes; a host of another incarnation, of none, shared with
+// another one, or holding a Choir Voice of another one stays registered with its
+// seed, memberships and Voices intact.
+func TestIntegration_EraseOwned(t *testing.T) {
+	cases := []struct {
+		name       string
+		memberOf   []string
+		voiceIn    []string
+		wantErased bool
+	}{
+		{"own host", []string{"inc-one"}, nil, true},
+		{"own host with a Voice in its own Choir", []string{"inc-one"}, []string{"inc-one"}, true},
+		{"another incarnation's host", []string{"inc-two"}, nil, false},
+		{"shared with another incarnation", []string{"inc-one", "inc-two"}, nil, false},
+		{"host of no incarnation", nil, nil, false},
+		// Unbound from inc-two, still a Voice in its Choir: the cascade off `souls`
+		// would delete inc-two's Voice.
+		{"Voice in another incarnation's Choir", []string{"inc-one"}, []string{"inc-two"}, false},
+	}
+	for _, c := range cases {
+		t.Run(c.name, func(t *testing.T) {
+			resetAll(t)
+			ctx := context.Background()
+			seedSoul(t, testSID, soul.StatusConnected)
+			seedActiveSeed(t, testSID, hexFingerprint('a'), "01")
+			mustExec(t, `INSERT INTO incarnation (id, service, service_version, status)
+			             VALUES ('inc-one', 'svc', 'v1', 'ready'), ('inc-two', 'svc', 'v1', 'ready')`)
+			for _, inc := range c.memberOf {
+				mustExec(t, `INSERT INTO incarnation_membership (incarnation_name, sid) VALUES ($1, $2)`, inc, testSID)
+			}
+			for _, inc := range c.voiceIn {
+				mustExec(t, `INSERT INTO incarnation_choirs (incarnation_name, choir_name) VALUES ($1, 'db')`, inc)
+				mustExec(t, `INSERT INTO incarnation_choir_voices (incarnation_name, choir_name, sid, role) VALUES ($1, 'db', $2, 'replica')`, inc, testSID)
+			}
+
+			res, err := EraseOwned(ctx, integrationPool, nil, testSID, "inc-one", testReason)
+			if c.wantErased {
+				if err != nil {
+					t.Fatalf("EraseOwned of the incarnation's own host: %v", err)
+				}
+				if res.MembershipsSevered != 1 {
+					t.Errorf("memberships_severed = %d, want 1", res.MembershipsSevered)
+				}
+				if _, err := soul.SelectBySID(ctx, integrationPool, testSID); !errors.Is(err, soul.ErrSoulNotFound) {
+					t.Errorf("souls row after EraseOwned: err = %v, want ErrSoulNotFound", err)
+				}
+				return
+			}
+			var notOwned *NotOwnedError
+			if !errors.Is(err, ErrNotOwned) || !errors.As(err, &notOwned) {
+				t.Fatalf("EraseOwned err = %v, want a NotOwnedError", err)
+			}
+			if _, err := soul.SelectBySID(ctx, integrationPool, testSID); err != nil {
+				t.Errorf("the refused host was deleted: %v", err)
+			}
+			if got := countRows(t, "soul_seeds", testSID); got != 1 {
+				t.Errorf("seed rows of the refused host = %d, want 1", got)
+			}
+			if got := countRows(t, "incarnation_membership", testSID); got != int64(len(c.memberOf)) {
+				t.Errorf("memberships of the refused host = %d, want %d", got, len(c.memberOf))
+			}
+			if got := countRows(t, "incarnation_choir_voices", testSID); got != int64(len(c.voiceIn)) {
+				t.Errorf("Choir Voices of the refused host = %d, want %d", got, len(c.voiceIn))
+			}
+		})
+	}
+}

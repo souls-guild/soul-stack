@@ -33,13 +33,13 @@ var expectedModules = map[string][]string{
 	"core.repo":      {"present", "absent"},
 	"core.firewall":  {"present", "absent"},
 	"core.http":      {"probe", "request"},
-	"core.noop":      {"run"},                   // no-op/barrier anchor (ADR-015)
-	"core.module":    {"installed"},             // SoulModule plugin delivery (ADR-065)
-	"core.soul":      {"registered"},            // keeper-side (routed by address)
-	"core.bootstrap": {"issued"},                // keeper-side ready-made VM token minting (delivery removed, NIM-834)
-	"core.ssh":       {"run", "apply"},          // keeper-side agentless transport: shell (NIM-849), destiny (NIM-905)
-	"core.vault":     {"kv-read", "kv-present"}, // keeper-side (ADR-017): kv-read (explicit read) + kv-present (generate-if-absent)
-	"core.choir":     {"present", "absent"},     // keeper-side (ADR-044)
+	"core.noop":      {"run"},                                // no-op/barrier anchor (ADR-015)
+	"core.module":    {"installed"},                          // SoulModule plugin delivery (ADR-065)
+	"core.soul":      {"registered", "forgotten"},            // keeper-side (routed by address); forgotten NIM-1040
+	"core.bootstrap": {"issued"},                             // keeper-side ready-made VM token minting (delivery removed, NIM-834)
+	"core.ssh":       {"run", "apply"},                       // keeper-side agentless transport: shell (NIM-849), destiny (NIM-905)
+	"core.vault":     {"kv-read", "kv-present", "kv-absent"}, // keeper-side (ADR-017): explicit read, generate-if-absent, incarnation-subtree delete (NIM-1040)
+	"core.choir":     {"present", "absent"},                  // keeper-side (ADR-044)
 	// keeper-side: the write point of a state field ([ADR-0084]); the state suffix
 	// IS the ADR-057 verb, one address per verb.
 	"core.state": {"set", "present", "add", "append", "modify", "remove", "unset"},

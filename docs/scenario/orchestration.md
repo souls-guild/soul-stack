@@ -208,7 +208,9 @@ Two facts decide it. A roster only exists once the incarnation row does (members
 | `input.` / `vars.` / `incarnation.` only | any | **pre-flight** | **422 `assert-failed`**, nothing created, nothing locked |
 | the roster (`soulprint.*`) | explicit run, plan consumes an existing roster | **pre-flight** | **422 `assert-failed`**, the run never starts |
 | the roster | `POST /v1/incarnations` (a `create: true` starter) | render | `error_locked` → `unlock` |
-| the roster | plan builds its own roster (all-keeper, or carries a refresh emitter) | render, **after** the refresh boundary | `error_locked` → `unlock` |
+| the roster | explicit run, plan re-reads its roster mid-run (carries a refresh emitter) | render, **after** the refresh boundary | `error_locked` → `unlock` |
+
+An **all-keeper** plan without a refresh emitter falls in the second row, not the last: it has no refresh boundary and reads its roster once, at the start, so pre-flight measures the roster render will (NIM-1040). The same plan may start on an EMPTY roster — the `no_hosts` bypass ([ADR-0061](../adr/0061-onboarding-await-and-midrun-reresolve.md)) — which is a different question from where its assert is answered.
 
 Read the last two rows as the same rule: **pre-flight declines to measure a roster that is not the one the assert is about**, because the alternative is worse than a late answer — before this was fixed, a create carrying a topology guard was rejected 422 unconditionally, with no input that could satisfy it ([ADR-009 amendment 2026-07-28](../adr/0009-scenario-dsl.md#amendment-2026-07-28-nim-235-a-roster-reading-assert-has-no-pre-flight-point-at-create)).
 

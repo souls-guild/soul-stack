@@ -39,6 +39,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 
 	"github.com/jackc/pgx/v5"
 
@@ -139,6 +140,96 @@ SELECT COUNT(*) FROM incarnation_choir_voices WHERE sid = $1
 // operator, since after the delete the seed rows are gone and the audit event
 // is the only place the act survives.
 func Forget(ctx context.Context, db TxBeginner, sid, reason string) (Counts, error) {
+	return forget(ctx, db, sid, reason, nil)
+}
+
+// guard runs inside the forget transaction, after the souls row is locked and before
+// anything is changed; an error rolls the transaction back with nothing deleted.
+type guard func(ctx context.Context, tx pgx.Tx, sid string) error
+
+// tiesOfSQL reads both relations that cascade off `souls` and name an incarnation:
+// the host's memberships, and the incarnations whose Choir holds a Voice of it.
+const tiesOfSQL = `
+SELECT
+    ARRAY(SELECT incarnation_name FROM incarnation_membership WHERE sid = $1 ORDER BY 1),
+    ARRAY(SELECT DISTINCT incarnation_name FROM incarnation_choir_voices WHERE sid = $1 ORDER BY 1)
+`
+
+// Ties is what binds a host to incarnations. Both halves are rows that cascade away
+// with the `souls` row, so both decide whose host it is: a host unbound from B can
+// still hold a Voice in B's Choir.
+type Ties struct {
+	MemberOf []string
+	VoiceIn  []string
+}
+
+// ErrNotOwned is returned by [EraseOwned] when the host is not tied to the
+// incarnation alone ([OwnedBy]). Nothing was deleted.
+var ErrNotOwned = errors.New("soulforget: host is not owned by the incarnation")
+
+// NotOwnedError names what else the host is tied to. It wraps [ErrNotOwned].
+type NotOwnedError struct {
+	SID         string
+	Incarnation string
+	Ties
+}
+
+func (e *NotOwnedError) Error() string {
+	var why []string
+	member := false
+	for _, inc := range e.MemberOf {
+		member = member || inc == e.Incarnation
+	}
+	switch {
+	case len(e.MemberOf) == 0:
+		why = append(why, "it is a member of no incarnation")
+	case !member:
+		why = append(why, "it is a member of "+strings.Join(e.MemberOf, ", ")+", not of "+e.Incarnation)
+	case len(e.MemberOf) > 1:
+		why = append(why, "it is also a member of "+joinOthers(e.MemberOf, e.Incarnation))
+	}
+	if others := joinOthers(e.VoiceIn, e.Incarnation); others != "" {
+		why = append(why, "it holds a Choir Voice in "+others)
+	}
+	return fmt.Sprintf("host %s is not %s's alone: %s — forgetting it would cascade into those incarnations too",
+		e.SID, e.Incarnation, strings.Join(why, "; "))
+}
+
+func (e *NotOwnedError) Unwrap() error { return ErrNotOwned }
+
+func joinOthers(all []string, self string) string {
+	var others []string
+	for _, x := range all {
+		if x != self {
+			others = append(others, x)
+		}
+	}
+	return strings.Join(others, ", ")
+}
+
+// OwnedBy is the ownership rule of a scenario-driven forget: the host is a member of
+// exactly {incarnation} and holds no Choir Voice of any other incarnation. Anything
+// else is not the run's to forget — the cascade would take another incarnation's
+// roster row or Voice with it. Exported so a caller can apply the same rule to its
+// own pre-check before it starts.
+func OwnedBy(sid, incarnation string, t Ties) error {
+	if len(t.MemberOf) == 1 && t.MemberOf[0] == incarnation && joinOthers(t.VoiceIn, incarnation) == "" {
+		return nil
+	}
+	return &NotOwnedError{SID: sid, Incarnation: incarnation, Ties: t}
+}
+
+func ownedByGuard(incarnation string) guard {
+	return func(ctx context.Context, tx pgx.Tx, sid string) error {
+		var t Ties
+		if err := tx.QueryRow(ctx, tiesOfSQL, sid).Scan(&t.MemberOf, &t.VoiceIn); err != nil {
+			return fmt.Errorf("soulforget: read memberships and Choir Voices: %w", err)
+		}
+		return OwnedBy(sid, incarnation, t)
+	}
+}
+
+func forget(ctx context.Context, db TxBeginner, sid, reason string, check guard) (Counts, error) {
 	if db == nil {
 		return Counts{}, errors.New("soulforget: nil pool")
 	}
@@ -156,6 +247,14 @@ func Forget(ctx context.Context, db TxBeginner, sid, reason string) (Counts, err
 				return soul.ErrSoulNotFound
 			}
 			return fmt.Errorf("soulforget: lock souls row: %w", err)
+		}
+		// The row lock is what makes the check hold until COMMIT: a membership or Voice
+		// insert for this sid takes FOR KEY SHARE on the same row through its foreign
+		// key, so it waits for this transaction instead of slipping in behind the check.
+		if check != nil {
+			if err := check(ctx, tx, sid); err != nil {
+				return err
+			}
 		}
 
 		if err := tx.QueryRow(ctx, countMembershipsSQL, sid).Scan(&counts.MembershipsSevered); err != nil {

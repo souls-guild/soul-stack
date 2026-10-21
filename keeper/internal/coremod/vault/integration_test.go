@@ -21,6 +21,7 @@ import (
 	tcvault "github.com/testcontainers/testcontainers-go/modules/vault"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/coremod/internaltest"
+	"github.com/souls-guild/soul-stack/keeper/internal/coremod/util"
 	coremodvault "github.com/souls-guild/soul-stack/keeper/internal/coremod/vault"
 	"github.com/souls-guild/soul-stack/keeper/internal/integrationenv"
 	keepervault "github.com/souls-guild/soul-stack/keeper/internal/vault"
@@ -214,4 +215,54 @@ func sortedKeys(m map[string]any) []string {
 	}
 	sort.Strings(out)
 	return out
+}
+
+// TestIntegration_VaultKVAbsent_DestroysTheIncarnationNamespace — the destroy use on
+// a real KV v2 mount: kv-absent over the incarnation's derived subtree takes every
+// version of every entry under it and leaves the sibling incarnations alone — one of
+// them, prod-10, sharing the name as a prefix; the re-run is a no-op.
+func TestIntegration_VaultKVAbsent_DestroysTheIncarnationNamespace(t *testing.T) {
+	ctx := context.Background()
+	for _, p := range []string{"nim1040df/prod-1/users/alice", "nim1040df/prod-1/users/alice", "nim1040df/prod-1/tls/cert", "nim1040df/prod-10/users/alice", "nim1040df/prod-2/users/alice"} {
+		seedKV(t, p, map[string]any{"password": "x"})
+	}
+	runCtx := util.WithRunScope(util.WithService(util.WithIncarnation(ctx, "prod-1"), "nim1040df"),
+		util.RunScope{Scenario: "destroy", ApplyID: "01JDESTROY", Destroy: true})
+	apply := func() *pluginv1.ApplyEvent {
+		m := coremodvault.New(integrationClient, &capturingAudit{})
+		m.Mount = "secret"
+		stream := internaltest.NewApplyStreamCtx(runCtx)
+		if err := m.Apply(&pluginv1.ApplyRequest{
+			State:  coremodvault.StateAbsent,
+			Params: mustStructIT(t, map[string]any{"scope": "incarnation"}),
+		}, stream); err != nil {
+			t.Fatalf("Apply: %v", err)
+		}
+		return stream.Last()
+	}
+
+	ev := apply()
+	if ev.GetFailed() || !ev.GetChanged() {
+		t.Fatalf("first run: failed=%v changed=%v msg=%s", ev.GetFailed(), ev.GetChanged(), ev.GetMessage())
+	}
+	got := ev.GetOutput().AsMap()["deleted"]
+	want := []any{"secret/nim1040df/prod-1/tls/cert", "secret/nim1040df/prod-1/users/alice"}
+	if !reflect.DeepEqual(got, want) {
+		t.Errorf("deleted = %v, want %v", got, want)
+	}
+	for _, p := range []string{"nim1040df/prod-1/users/alice", "nim1040df/prod-1/tls/cert"} {
+		if md, err := integrationAPI.Logical().ReadWithContext(ctx, "secret/metadata/"+p); err != nil || md != nil {
+			t.Errorf("metadata of %s after kv-absent = (%v, %v), want gone", p, md, err)
+		}
+	}
+	for _, p := range []string{"nim1040df/prod-2/users/alice", "nim1040df/prod-10/users/alice"} {
+		if _, err := integrationClient.ReadKV(ctx, p); err != nil {
+			t.Errorf("sibling incarnation lost %s: %v", p, err)
+		}
+	}
+
+	again := apply()
+	if again.GetFailed() || again.GetChanged() {
+		t.Errorf("re-run: failed=%v changed=%v msg=%s", again.GetFailed(), again.GetChanged(), again.GetMessage())
+	}
 }

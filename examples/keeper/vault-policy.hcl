@@ -69,6 +69,25 @@ path "secret/data/redis/*" {
   capabilities = ["read"]
 }
 
+# --- KV v2: destroy deletes the incarnation's own subtree (NIM-1040) ---------
+#
+# `core.vault.kv-absent`, in a service's destroy run, permanently deletes every
+# entry under <mount>/<service>/<incarnation>/ (ADR-0083 amendment 2026-10-21):
+#   - `list`   - walk the subtree (LIST on the metadata path);
+#   - `read`   - the existence check reads the entry's METADATA, never its value;
+#   - `delete` - DELETE on the metadata path, which takes every version.
+# No access to the data path is needed on KV v2. (On a KV v1 mount there is no
+# metadata: the same three capabilities go on secret/<service>/* itself, and the
+# existence check then reads the value.)
+#
+# One block per service whose destroy runs the step - `redis` here; replace it
+# with the service name. Deliberately NOT `secret/metadata/*`: that would also
+# grant delete over secret/metadata/keeper/* - the Keeper's own JWT and Sigil
+# signing keys - which no scenario step may reach.
+path "secret/metadata/redis/*" {
+  capabilities = ["list", "read", "delete"]
+}
+
 # --- PKI: signing the SoulSeed CSR during onboarding -------------------------
 #
 # On the Bootstrap RPC (ADR-012(b)) Keeper issues the SoulSeed certificate

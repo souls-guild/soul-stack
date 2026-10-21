@@ -29,23 +29,24 @@ import (
 // miniredis, so a renamed key or a changed publish path breaks both ends at
 // once instead of leaving a green test pointing at nothing.
 
-// TestSoulTeardown_IsWiredIntoBothOperatorSurfaces — everything below proves
-// the adapter works. This proves anything reaches it.
+// TestSoulTeardown_IsWiredIntoEveryForgetPath — everything below proves the
+// adapter works. This proves anything reaches it.
 //
-// `api.Deps.SoulTeardown` and `mcp.HandlerDeps.SoulTeardown` are plain nil-able
-// interface fields, and [soulforget.Erase] reads a nil Teardown as "no cluster,
-// nothing to release" and deletes anyway — correct for unit tests, catastrophic
-// in `keeper run`. So deleting either wiring line compiles, keeps every test in
-// this repo green, and turns the endpoint into a bare row delete: the operator
-// is handed a 200 with local_stream_closed=false, broadcast=false,
-// cache_keys_purged=0 and NO warnings, while the forgotten host's EventStream
-// stays open on this very instance and its TTL-less `soul:<sid>:hb` leaks for
-// good. Deleted the record, released nothing, reported success.
+// `api.Deps.SoulTeardown`, `mcp.HandlerDeps.SoulTeardown` and
+// `coremod.Deps.SoulTeardown` (the scenario step `core.soul.forgotten`, NIM-1040)
+// are plain nil-able interface fields, and [soulforget.Erase] reads a nil Teardown
+// as "no cluster, nothing to release" and deletes anyway — correct for unit tests,
+// catastrophic in `keeper run`. So deleting any wiring line compiles, keeps every
+// test in this repo green, and turns the forget into a bare row delete: the
+// operator is handed a 200 (or a green step) with local_stream_closed=false,
+// broadcast=false, cache_keys_purged=0 and NO warnings, while the forgotten host's
+// EventStream stays open on this very instance and its TTL-less `soul:<sid>:hb`
+// leaks for good. Deleted the record, released nothing, reported success.
 //
-// Neither setup function can be called from a test — both build a live server
+// None of the setup functions can be called from a test — each builds live state
 // over a real pool — so the guard reads the wiring out of the source, the way
 // credential_out_test.go guards the stdout rule.
-func TestSoulTeardown_IsWiredIntoBothOperatorSurfaces(t *testing.T) {
+func TestSoulTeardown_IsWiredIntoEveryForgetPath(t *testing.T) {
 	t.Parallel()
 	fset := token.NewFileSet()
 	file, err := parser.ParseFile(fset, "daemon.go", nil, 0)
@@ -53,7 +54,7 @@ func TestSoulTeardown_IsWiredIntoBothOperatorSurfaces(t *testing.T) {
 		t.Fatalf("parse daemon.go: %v", err)
 	}
 
-	for _, fnName := range []string{"setupAPIServer", "setupMCPServer"} {
+	for _, fnName := range []string{"setupAPIServer", "setupMCPServer", "setupCoreModules"} {
 		fn := findDaemonMethod(file, fnName)
 		if fn == nil {
 			t.Fatalf("method (*daemon).%s not found in daemon.go — this guard now guards nothing", fnName)

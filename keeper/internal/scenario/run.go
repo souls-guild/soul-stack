@@ -1171,25 +1171,21 @@ func (r *Runner) resolveRoster(ctx context.Context, incarnationName string) ([]*
 	return r.deps.Topology.LoadIncarnationHosts(ctx, incarnationName)
 }
 
-// planBuildsRoster reports whether the plan produces its own run roster rather
-// than consuming one that already exists — the union of the TWO no_hosts bypass
-// classes (ADR-0061 amendment 2026-06-28), named once so its two readers cannot
-// drift apart:
+// planBuildsRoster reports whether the plan may start on an empty roster — the
+// union of the TWO no_hosts bypass classes (ADR-0061 amendment 2026-06-28):
+// all-keeper, or carrying a refresh emitter. Its one reader is the no_hosts gate
+// in [Runner.run] §3.
 //
-//   - the no_hosts gate in [Runner.run] §3, which lets such a plan start on an
-//     empty roster;
-//   - the pre-flight assert gate ([Runner.PreflightAssert]), which must NOT
-//     measure a topology predicate against the roster as it stands at request
-//     time — for these plans that roster is the run's INPUT to nothing, and the
-//     one the assert is written against does not exist until the run creates it
-//     (NIM-270).
-//
-// Both readers are asking the same question in different words: "is the roster
-// I can see right now the roster this plan is about?". A plan that provisions
-// from zero answers no at both points, which is why splitting the predicate in
-// two would be a bug waiting to happen — a false 422 at the gate is the exact
-// mirror of the false no_hosts abort the bypass classes were introduced to
-// prevent.
+// The pre-flight assert gate ([Runner.PreflightAssert]) deliberately does NOT
+// read it, and the two questions really are different (NIM-1040). The gate asks
+// "can this plan run with no hosts?"; pre-flight asks "is the roster I see now
+// the one the assert will be measured against?". Only the refresh class answers
+// no to the second — it re-reads the roster after its boundary (NIM-270). An
+// all-keeper plan without a refresh emitter reads the roster once, at the start,
+// so pre-flight and render measure the same roster and a topology mismatch
+// belongs in a 422, not an error_locked. The two predicates used to coincide only
+// because an `assert:` counted as a host task and kept every assert-bearing plan
+// out of the all-keeper class; skipping asserts there split them.
 //
 // Computed over tasks AFTER ExpandIncludes — the same flat top-level list
 // Render and Stratify see.
@@ -1219,16 +1215,26 @@ func planBuildsRoster(tasks []config.Task) bool {
 // empty scenario (len==0) → false: "no tasks" isn't a reason to bypass the
 // gate. Computed over tasks AFTER ExpandIncludes (the flat top-level list
 // Render also sees).
+//
+// An `assert:` task is neither side: it is evaluated at render and dispatches
+// nowhere (orchestration.md §2.3), so it is skipped rather than counted. The
+// side predicate answers "Soul" for it (no module, no `on:`), and before
+// NIM-1040 that made an all-keeper `destroy` opening with a guard assert lose
+// the bypass: once `core.soul.forgotten` had emptied the roster, every retry
+// died on no_hosts before reaching the VM delete. A plan of asserts alone has
+// no keeper task to build anything and stays behind the gate.
 func allKeeperTasks(tasks []config.Task) bool {
-	if len(tasks) == 0 {
-		return false
-	}
+	keeper := false
 	for _, t := range tasks {
+		if render.IsAssertTask(t) {
+			continue
+		}
 		if !render.IsKeeperTask(t) {
 			return false
 		}
+		keeper = true
 	}
-	return true
+	return keeper
 }
 
 // effectiveRunTimeout returns the run-duration ceiling for a task plan

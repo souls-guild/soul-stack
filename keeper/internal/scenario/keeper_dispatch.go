@@ -365,6 +365,7 @@ func (r *Runner) runKeeperTask(ctx context.Context, spec RunSpec, stateSchema co
 		Scenario:     spec.ScenarioName,
 		ApplyID:      spec.ApplyID,
 		StartedByAID: spec.StartedByAID,
+		Destroy:      spec.TerminalMode == TerminalDestroy,
 	})
 	// The merge-time CEL evaluators, for a capture verb whose predicate runs per
 	// element (`add` dedup, `modify`/`remove` matching) and therefore cannot be

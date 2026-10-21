@@ -98,6 +98,13 @@ type RunScope struct {
 	// operator" (a schedule, an internal path) and is written as NULL — the FK
 	// on `state_history.changed_by_aid` allows it.
 	StartedByAID string
+	// Destroy marks the incarnation's lifecycle teardown run — the one the
+	// destroy endpoints start under `incarnation.destroy` (scenario
+	// TerminalDestroy). It is the run's terminal mode, not its scenario name:
+	// the name is a convention, the mode is set only by that start path. A
+	// step that releases the incarnation itself (`core.soul.forgotten`,
+	// `core.vault.kv-absent`) refuses unless it is true.
+	Destroy bool
 }
 
 // WithRunScope returns ctx carrying the run's identity. A scope without an
@@ -115,6 +122,14 @@ func WithRunScope(ctx context.Context, s RunScope) context.Context {
 func RunScopeFrom(ctx context.Context) (RunScope, bool) {
 	s, ok := ctx.Value(runScopeKey{}).(RunScope)
 	return s, ok
+}
+
+// IsDestroyRun reports whether ctx belongs to the incarnation's lifecycle destroy
+// run ([RunScope.Destroy]). No run scope at all is false: an unknown run kind is
+// not a destroy.
+func IsDestroyRun(ctx context.Context) bool {
+	s, ok := RunScopeFrom(ctx)
+	return ok && s.Destroy
 }
 
 // sealedPathsKey carries the run's seal — the params-cell paths whose value

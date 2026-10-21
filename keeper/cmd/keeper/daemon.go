@@ -1192,6 +1192,12 @@ func (d *daemon) setupCoreModules(ctx context.Context) error {
 			}
 			return "" // Keeper daemon runtime wiring note.
 		},
+		// `core.soul.forgotten` (NIM-1040) releases a host the way REST and MCP
+		// do, so it gets the same teardown adapter; it reads the stream manager
+		// and Redis at call time, which exist by the time a run dispatches.
+		SoulForgetDB: d.pool,
+		SoulTeardown: soulTeardown{d: d},
+
 		Vault: d.vc,
 		Audit: d.auditWriter,
 		// `core.state.*` derives its Vault path from the same KV mount the

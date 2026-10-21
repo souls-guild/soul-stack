@@ -556,3 +556,89 @@ func mustMakeCSR(t *testing.T, cn string) string {
 	}
 	return b.String()
 }
+
+// TestIntegration_VaultDeleteKV_TakesEveryVersion — on a real KV v2 mount the delete
+// leaves nothing recoverable. The entry is given two versions and its latest is
+// soft-deleted first: ReadKV then already calls it absent, and a delete that asked
+// ReadKV whether there was anything to do would walk away from two recoverable
+// versions.
+func TestIntegration_VaultDeleteKV_TakesEveryVersion(t *testing.T) {
+	ctx := context.Background()
+	kv := integrationAPI.KVv2("secret")
+	const p = "nim1040svc/inc-a/users/alice"
+	for _, v := range []string{"v1", "v2"} {
+		if _, err := kv.Put(ctx, p, map[string]any{"password": v}); err != nil {
+			t.Fatalf("seed Put %s: %v", v, err)
+		}
+	}
+	if err := kv.Delete(ctx, p); err != nil {
+		t.Fatalf("soft-delete latest: %v", err)
+	}
+	if _, err := integrationClient.ReadKV(ctx, p); !errors.Is(err, ErrVaultKVNotFound) {
+		t.Fatalf("precondition: ReadKV after soft-delete = %v, want ErrVaultKVNotFound", err)
+	}
+
+	existed, err := integrationClient.DeleteKV(ctx, "secret/"+p)
+	if err != nil {
+		t.Fatalf("DeleteKV: %v", err)
+	}
+	if !existed {
+		t.Fatal("DeleteKV reported a soft-deleted entry with a live version as absent")
+	}
+	if _, err := kv.GetVersion(ctx, p, 1); err == nil {
+		t.Error("version 1 is still readable after DeleteKV")
+	}
+	if md, err := integrationAPI.Logical().ReadWithContext(ctx, "secret/metadata/"+p); err != nil || md != nil {
+		t.Errorf("metadata after DeleteKV = (%v, %v), want (nil, nil)", md, err)
+	}
+
+	again, err := integrationClient.DeleteKV(ctx, p)
+	if err != nil || again {
+		t.Errorf("second DeleteKV = (%v, %v), want (false, nil)", again, err)
+	}
+}
+
+// TestIntegration_VaultListKVEntries_FoldersAndLeaves — the walk a recursive delete
+// does depends on Vault marking a sub-folder with a trailing `/`, and on one name
+// being both a leaf and a folder.
+func TestIntegration_VaultListKVEntries_FoldersAndLeaves(t *testing.T) {
+	ctx := context.Background()
+	kv := integrationAPI.KVv2("secret")
+	for _, p := range []string{"nim1040list/inc/b", "nim1040list/inc/a", "nim1040list/inc/a/x"} {
+		if _, err := kv.Put(ctx, p, map[string]any{"password": "x"}); err != nil {
+			t.Fatalf("seed Put %s: %v", p, err)
+		}
+	}
+	got, err := integrationClient.ListKVEntries(ctx, "nim1040list/inc")
+	if err != nil {
+		t.Fatalf("ListKVEntries: %v", err)
+	}
+	want := []string{"a", "a/", "b"}
+	if strings.Join(got, ",") != strings.Join(want, ",") {
+		t.Errorf("ListKVEntries = %v, want %v", got, want)
+	}
+}
+
+// TestIntegration_VaultDeleteKV_V1Mount — on KV v1 the path itself is deleted.
+func TestIntegration_VaultDeleteKV_V1Mount(t *testing.T) {
+	ctx := context.Background()
+	cl := newV1MountClient(ctx, t)
+	if err := integrationAPI.KVv1("kv-v1").Put(ctx, "nim1040svc/inc/cfg", map[string]any{"password": "x"}); err != nil {
+		t.Fatalf("seed KVv1 Put: %v", err)
+	}
+
+	existed, err := cl.DeleteKV(ctx, "nim1040svc/inc/cfg")
+	if err != nil || !existed {
+		t.Fatalf("DeleteKV v1 = (%v, %v), want (true, nil)", existed, err)
+	}
+	if _, err := cl.ReadKV(ctx, "nim1040svc/inc/cfg"); !errors.Is(err, ErrVaultKVNotFound) {
+		t.Errorf("ReadKV after DeleteKV v1 = %v, want ErrVaultKVNotFound", err)
+	}
+	names, err := cl.ListKVEntries(ctx, "nim1040svc")
+	if err != nil {
+		t.Fatalf("ListKVEntries v1: %v", err)
+	}
+	if len(names) != 0 {
+		t.Errorf("ListKVEntries v1 after delete = %v, want empty", names)
+	}
+}

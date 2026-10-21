@@ -46,6 +46,13 @@ package config
 // its own resolver (keeper/internal/scenario.buildInputVaultResolver), against the
 // same predicate. Four layers, one PathAddressesOwnNamespace, and the four are the
 // guarantee.
+//
+// `core.vault.kv-absent` is outside this fence by construction rather than by
+// exemption: it takes no path at all. It deletes the run's own subtree
+// `<mount>/<service>/<incarnation>/`, derived from the run's owner by
+// [IncarnationVaultPrefix] — the same derivation every declared secret is written
+// under — so no author spelling reaches it and nothing here needs to scan it
+// ([ADR-0083] amendment 2026-10-21).
 
 import (
 	"sort"

@@ -532,3 +532,74 @@ func countIncarnations(t *testing.T, name string) int {
 	}
 	return n
 }
+
+// keeperRosterAssertRepo is a keeper-only plan opening with a roster assert — the
+// shape of a `rotate` scenario. refresh adds `refresh_soulprint: true` to the
+// keeper step, which makes the plan re-read its roster mid-run.
+func keeperRosterAssertRepo(t *testing.T, refresh bool) string {
+	t.Helper()
+	extra := ""
+	if refresh {
+		extra = "\n      refresh_soulprint: true"
+	}
+	return writeServiceRepo(t, `name: create
+description: roster assert, then keeper-only steps
+tasks:
+  - name: three hosts
+    assert:
+      that:
+        - "size(soulprint.hosts) == 3"
+      message: "rotate needs three hosts"
+  - name: Keeper step
+    module: core.soul.registered
+    params:
+      sid: "a.example.com"
+      mode: append`+extra+`
+`)
+}
+
+// TestIntegration_PreflightAssert_AllKeeperPlanIsAnsweredAtPreflight — an
+// all-keeper plan without a refresh emitter reads its roster once, at the start,
+// so pre-flight measures the roster render will: a mismatch is a 422 here, not an
+// error_locked later (NIM-1040). The no_hosts bypass the same plan enjoys is a
+// different question and must not leak into this one.
+func TestIntegration_PreflightAssert_AllKeeperPlanIsAnsweredAtPreflight(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnationRoster(t, "rot-prod", "a.example.com", "b.example.com")
+	gitURL := keeperRosterAssertRepo(t, false)
+	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
+
+	err := r.PreflightAssert(context.Background(), RunSpec{
+		IncarnationName: "rot-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "rot", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	})
+	if !errors.Is(err, render.ErrAssertFailed) {
+		t.Fatalf("PreflightAssert = %v, want ErrAssertFailed (2 hosts against 3, answered at pre-flight)", err)
+	}
+	if !strings.Contains(err.Error(), "rotate needs three hosts") {
+		t.Errorf("error does not carry the author message: %v", err)
+	}
+}
+
+// TestIntegration_PreflightAssert_RefreshEmitterPlanDefers — the class that DOES
+// re-read its roster after a refresh boundary keeps its roster asserts for render
+// (NIM-270): the roster at request time is not the one they are about.
+func TestIntegration_PreflightAssert_RefreshEmitterPlanDefers(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnationRoster(t, "rot-prod", "a.example.com", "b.example.com")
+	gitURL := keeperRosterAssertRepo(t, true)
+	r := newRunner(t, &mockDispatcher{t: t}, gitURL)
+
+	if err := r.PreflightAssert(context.Background(), RunSpec{
+		IncarnationName: "rot-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "rot", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("PreflightAssert = %v, want nil (a refresh-emitter plan defers its roster assert to render)", err)
+	}
+}

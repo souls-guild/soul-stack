@@ -8,8 +8,10 @@
 //   - kv-present ([StatePresent], applyPresent in kvpresent.go): generate-if-absent
 //     — ensure secrets exist, generating missing ones with cryptographically random
 //     values per author-specified password-policy.
+//   - kv-absent ([StateAbsent], applyAbsent in kvabsent.go): permanent delete of
+//     entries, or whole subtrees, inside the run's own incarnation namespace.
 //
-// Both states are handled by one [Module] (Registry key is base name `core.vault`,
+// All states are handled by one [Module] (Registry key is base name `core.vault`,
 // state arrives in pluginv1.ApplyRequest.state and is routed to Validate/Apply).
 //
 // Why kv-read exists when CEL has implicit `${ vault(...) }`:
@@ -47,7 +49,7 @@ import (
 )
 
 // Name is the base module name without state suffix (Registry key). Author form
-// of task address is base + state (`core.vault.kv-read` / `core.vault.kv-present`);
+// of task address is base + state (`core.vault.kv-read` / `.kv-present` / `.kv-absent`);
 // state arrives in pluginv1.ApplyRequest.state.
 const Name = "core.vault"
 
@@ -56,14 +58,17 @@ const Name = "core.vault"
 const StateRead = "kv-read"
 
 // VaultWriter is a narrow subset of keeper/internal/vault.Client needed by the module:
-// read (kv-read + existence check in kv-present) and write (generation in kv-present).
-// Narrowing over *vault.Client simplifies unit tests (fake without HTTP).
+// read (kv-read + existence check in kv-present), write (generation in kv-present),
+// and list + delete (kv-absent). Narrowing over *vault.Client simplifies unit tests
+// (fake without HTTP).
 //
-// kv-read uses only ReadKV (write path not called in read state); single common interface
-// keeps wire-up uniform (`Deps.Vault` — *vault.Client, implements both).
+// Each state uses only its part; a single common interface keeps wire-up uniform
+// (`Deps.Vault` — *vault.Client implements all of it).
 type VaultWriter interface {
 	ReadKV(ctx context.Context, path string) (map[string]any, error)
 	WriteKV(ctx context.Context, path string, data map[string]any) error
+	ListKVEntries(ctx context.Context, prefix string) ([]string, error)
+	DeleteKV(ctx context.Context, path string) (existed bool, err error)
 }
 
 // AuditWriter is a narrow dependency for audit-events `vault.kv-read` /
@@ -74,11 +79,15 @@ type AuditWriter interface {
 }
 
 // Module implements sdk/module.SoulModule over VaultWriter+AuditWriter.
-// One module per base name `core.vault`; state (`kv-read`/`kv-present`)
+// One module per base name `core.vault`; state (`kv-read`/`kv-present`/`kv-absent`)
 // is routed inside Validate/Apply.
 type Module struct {
 	Vault VaultWriter
 	Audit AuditWriter
+	// Mount is keeper.yml's `vault.kv_mount` ("" is the default): kv-absent's fence
+	// needs it to tell `<mount>/<service>/…` from a mount-relative path the same way
+	// the client does. A startup snapshot, like the client's own.
+	Mount string
 }
 
 // New is a wire helper.
@@ -98,8 +107,10 @@ func (m *Module) Validate(_ context.Context, req *pluginv1.ValidateRequest) (*pl
 		}
 	case StatePresent:
 		errs = append(errs, validatePresent(req)...)
+	case StateAbsent:
+		errs = append(errs, validateAbsent(req)...)
 	default:
-		errs = append(errs, fmt.Sprintf("unknown state %q (want %s/%s)", req.State, StateRead, StatePresent))
+		errs = append(errs, fmt.Sprintf("unknown state %q (want %s/%s/%s)", req.State, StateRead, StatePresent, StateAbsent))
 	}
 	return &pluginv1.ValidateReply{Ok: len(errs) == 0, Errors: errs}, nil
 }
@@ -109,14 +120,17 @@ func (m *Module) Plan(_ *pluginv1.PlanRequest, _ grpc.ServerStreamingServer[plug
 }
 
 // Apply routes by state: kv-read → applyReadKV (read-only, changed=false),
-// kv-present → applyPresent (generate-if-absent, kvpresent.go). Unknown state
-// → failed-event (scenario-applier enters onfail).
+// kv-present → applyPresent (generate-if-absent, kvpresent.go), kv-absent →
+// applyAbsent (incarnation-subtree delete, kvabsent.go). Unknown state →
+// failed-event (scenario-applier enters onfail).
 func (m *Module) Apply(req *pluginv1.ApplyRequest, stream grpc.ServerStreamingServer[pluginv1.ApplyEvent]) error {
 	switch req.State {
 	case StateRead:
 		return m.applyReadKV(req, stream)
 	case StatePresent:
 		return m.applyPresent(req, stream)
+	case StateAbsent:
+		return m.applyAbsent(req, stream)
 	default:
 		return util.SendFailed(stream, fmt.Sprintf("unknown state %q", req.State))
 	}

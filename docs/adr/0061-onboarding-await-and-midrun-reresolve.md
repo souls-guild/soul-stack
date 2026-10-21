@@ -25,6 +25,24 @@ if len(hosts)==0 && !allKeeperTasks(scn.Tasks) && !provisionsRoster { abort no_h
 
 **Cross-ref:** [ADR-017(h)](0017-keeper-side-core.md) (cloud-init B-flat + `core.cloud.created` generate_userdata), [ADR-063](0063-bootstrap-token-delivery.md) (`core.bootstrap.delivered`).
 
+## Amendment 2026-10-21 (NIM-1040) — an `assert:` does not cost a plan the all-keeper class
+
+**Problem.** Class (a) counted every task through `render.IsKeeperTask`, and an `assert:` task — no module, no `on:` — answers "Soul" there. An assert dispatches nowhere: it is evaluated at render and emits no `RenderedTask` ([orchestration.md §2.3](../scenario/orchestration.md)). So an all-keeper plan that opened with a guard assert lost the bypass. The case that surfaced it is a service `destroy`: guard assert → `core.soul.forgotten` → a keeper plugin that deletes the VMs → `core.vault.kv-absent`. Once `forgotten` had emptied the roster, every retry aborted `no_hosts` → `destroy_failed` before the VM delete or the secret delete could run again — and a destroy of an incarnation whose `create` died before any host came online could not run at all.
+
+**Decision.** `allKeeperTasks` skips `assert:` tasks — they are neither side — and needs at least one keeper task. `planBuildsRoster` (`allKeeperTasks || HasRefreshEmitter`) follows, and its one reader is the `no_hosts` gate.
+
+- An all-keeper plan may open with (or interleave) `assert:` tasks and keeps class (a).
+- A plan of asserts alone has no keeper task and stays behind `no_hosts`, as an empty plan does. That holds for an assert written with `on: keeper` too (lint-legal): it is skipped before its side is asked, because it dispatches nowhere either way.
+- The assert itself is still evaluated, at render, over the run's roster — empty included. An empty roster projects no hosts (`render.soulprintHosts` returns nil), and the CEL binding turns that into an empty list (`shared/cel` `orEmptyHosts`), so `size(soulprint.hosts) == 0` holds and `> 0` fails the run on the assert, not on `no_hosts`. The synthetic empty host render supplies on an empty roster feeds only `soulprint.self`.
+- **The pre-flight assert gate does not follow.** It defers a roster-reading assert to render only for the refresh class (`HasRefreshEmitter`) or when the incarnation row does not exist yet — not for the whole `planBuildsRoster` union. An all-keeper plan without a refresh emitter reads its roster once, at the start, so pre-flight measures the roster render will, and a topology mismatch stays a 422 ([orchestration.md §2.3.1](../scenario/orchestration.md)). The two predicates had coincided only because an assert-bearing plan could never be all-keeper; this amendment would otherwise have moved such a plan's mismatch from a 422 to an `error_locked`. This revises the "one predicate, shared" point of the [ADR-009 amendment 2026-07-28 (NIM-270)](0009-scenario-dsl.md#amendment-2026-07-28-nim-270-the-pre-flight-gate-moves-to-where-the-roster-is-real).
+
+The side predicate itself (`config.IsKeeperSideTask`) is unchanged — only `allKeeperTasks` skips asserts — so every other caller reads an assert exactly as before, as a non-keeper task:
+
+- the render loop diverts an assert before it asks the side;
+- `settlesStaticWhenError` requires a module, which an assert has none of;
+- `config.taskReadsRoster` (`shared/config/passage_refresh.go`) counts an assert with no `on:` as a roster consumer, so Stratify keeps it after a refresh boundary — the behaviour an assert about the refreshed roster needs, and not touched here;
+- `render.isRescue` and `config.RescueSteps` act on non-keeper tasks carrying `onfail:`; what they do with an assert did not change.
+
 ## Amendment 2026-06-29 — deploy-branch size-asserts are gated by `when: !provision.enabled`
 
 **Problem.** The Redis service carries keeper-side render-time **size-asserts** (`assert: size(soulprint.hosts) == shards*(1+replicas)` for cluster, `== 1+replicas` for sentinel — a topology guard, [ADR-009 amendment 2026-06-23](0009-scenario-dsl.md)). Pre-flight `EvalAsserts` (non-staged, [pre-flight invariant](0056-staged-render-passage.md)) evaluates them **before** the run starts. On the provision path (`input.provision.enabled`) the souls at that moment are **not yet created** — they will be brought up by the `redis-provision.yml` steps (`core.cloud.created` → VM → `await_online` barrier → `refresh_soulprint`), so `size(soulprint.hosts)` at pre-flight equals 0 → the assert failed with `ErrAssertFailed` (422) BEFORE the cluster even exists. The same chicken-egg that closed the no_hosts-bypass (amendment 2026-06-28), but on a different gate — a pre-flight assert, not run.go no_hosts.

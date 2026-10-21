@@ -2673,6 +2673,125 @@ func TestIntegration_KeeperOnly_NoHosts_RunsKeeperTasks(t *testing.T) {
 	}
 }
 
+// assertThenKeeperServiceRepo is an all-keeper scenario that opens with a guard
+// assert over the roster — the shape of a service `destroy` that refuses a running
+// instance before `core.soul.forgotten`. pred is the assert's predicate.
+func assertThenKeeperServiceRepo(t *testing.T, keeperModule, pred string) string {
+	t.Helper()
+	return writeServiceRepo(t, fmt.Sprintf(`name: create
+description: guard assert, then keeper-only steps
+tasks:
+  - name: Guard
+    assert:
+      that:
+        - %q
+      message: guard refused
+  - name: Keeper only step
+    module: %s
+    params:
+      sid: "host-a.example.com"
+      coven: ["tagged"]
+      mode: append
+`, pred, keeperModule))
+}
+
+// TestIntegration_AssertThenKeeper_NoHosts_RunsKeeperTasks — an all-keeper plan
+// that opens with an assert keeps the no_hosts bypass (NIM-1040): the assert
+// dispatches nowhere, so it is not a host task. Before the fix such a plan died on
+// no_hosts once its roster was empty — a destroy retried after
+// `core.soul.forgotten`, or one whose create never got a host.
+//
+// The assert reads soulprint.hosts and is EVALUATED over the empty roster, not
+// skipped: `size(soulprint.hosts) == 0` lets the keeper step run, and the same plan
+// with `> 0` fails the run on the assert rather than on no_hosts.
+func TestIntegration_AssertThenKeeper_NoHosts_RunsKeeperTasks(t *testing.T) {
+	t.Run("assert holds over the empty roster", func(t *testing.T) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "noop-prod")
+
+		mod := &orderedKeeperModule{}
+		r := newRunnerWithKeeper(t, &mockDispatcher{t: t, result: applyrun.StatusSuccess}, fakeKeeperRegistry{"core.soul": mod})
+		gitURL := assertThenKeeperServiceRepo(t, "core.soul.registered", "size(soulprint.hosts) == 0")
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "noop-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "create",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		waitRunDone(t, "noop-prod", applyID, incarnation.StatusReady)
+		if got := mod.applyCount(); got != 1 {
+			t.Errorf("keeper module Apply called %d times, want 1 (an assert must not cost an all-keeper plan the no_hosts bypass)", got)
+		}
+	})
+
+	t.Run("assert fails over the empty roster", func(t *testing.T) {
+		resetAll(t)
+		seedOperator(t, "archon-alice")
+		seedIncarnation(t, "noop-prod")
+
+		mod := &orderedKeeperModule{}
+		r := newRunnerWithKeeper(t, &mockDispatcher{t: t, result: applyrun.StatusSuccess}, fakeKeeperRegistry{"core.soul": mod})
+		gitURL := assertThenKeeperServiceRepo(t, "core.soul.registered", "size(soulprint.hosts) > 0")
+		applyID := audit.NewULID()
+		if err := r.Start(context.Background(), RunSpec{
+			ApplyID:         applyID,
+			IncarnationName: "noop-prod",
+			ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+			ScenarioName:    "create",
+			StartedByAID:    "archon-alice",
+		}); err != nil {
+			t.Fatalf("Start: %v", err)
+		}
+		inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
+		if inc.StatusDetails["reason"] != "render_failed" {
+			t.Errorf("reason = %v, want render_failed (the assert evaluated over the empty roster and failed)", inc.StatusDetails["reason"])
+		}
+		if msg, _ := inc.StatusDetails["error"].(string); !strings.Contains(msg, "guard refused") {
+			t.Errorf("error = %q, want it to carry the assert's message", msg)
+		}
+		if got := mod.applyCount(); got != 0 {
+			t.Errorf("keeper module Apply called %d times after a failed assert, want 0", got)
+		}
+	})
+}
+
+// TestIntegration_AssertOnly_NoHosts_StillAborts — asserts alone build no roster:
+// the no_hosts gate holds for them as for any host plan.
+func TestIntegration_AssertOnly_NoHosts_StillAborts(t *testing.T) {
+	resetAll(t)
+	seedOperator(t, "archon-alice")
+	seedIncarnation(t, "noop-prod")
+
+	gitURL := writeServiceRepo(t, `name: create
+description: asserts only
+tasks:
+  - name: Guard
+    assert:
+      that:
+        - "size(soulprint.hosts) == 0"
+`)
+	r := newRunner(t, &mockDispatcher{t: t, result: applyrun.StatusSuccess}, gitURL)
+	applyID := audit.NewULID()
+	if err := r.Start(context.Background(), RunSpec{
+		ApplyID:         applyID,
+		IncarnationName: "noop-prod",
+		ServiceRef:      artifact.ServiceRef{Name: "noop", Git: gitURL, Ref: "master"},
+		ScenarioName:    "create",
+		StartedByAID:    "archon-alice",
+	}); err != nil {
+		t.Fatalf("Start: %v", err)
+	}
+	inc := waitRunDone(t, "noop-prod", applyID, incarnation.StatusErrorLocked)
+	if inc.StatusDetails["reason"] != "no_hosts" {
+		t.Errorf("reason = %v, want no_hosts (asserts alone do not bypass the gate)", inc.StatusDetails["reason"])
+	}
+}
+
 // mixedKeeperHostServiceRepo creates a service repo with a create scenario of
 // ONE keeper task (`on: keeper`, WITHOUT refresh_soulprint) AND ONE Soul-side
 // task (core.exec.run). Mixed composition → allKeeperTasks(false); no refresh

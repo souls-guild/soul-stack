@@ -496,3 +496,51 @@ port:           { type: integer }
 		t.Errorf("a non-secret property was touched: %+v", state)
 	}
 }
+
+// TestIncarnationVaultPrefix_IsTheIncarnationNotTheService — the subtree
+// `core.vault.kv-absent` deletes is exactly `<mount>/<service>/<incarnation>`, and
+// every declared secret of that incarnation is derived beneath it: the delete reaches
+// where the writes went and nothing above them.
+func TestIncarnationVaultPrefix_IsTheIncarnationNotTheService(t *testing.T) {
+	prefix, err := IncarnationVaultPrefix("", "dragonfly", "prod-1")
+	if err != nil {
+		t.Fatalf("IncarnationVaultPrefix: %v", err)
+	}
+	if prefix != "secret/dragonfly/prod-1" {
+		t.Fatalf("prefix = %q, want secret/dragonfly/prod-1 (never the service root secret/dragonfly)", prefix)
+	}
+	scalar := SecretField{State: "admin_password"}
+	coll := SecretField{State: "users", Property: "password", Key: "name"}
+	for _, c := range []struct {
+		f   SecretField
+		key string
+	}{{scalar, ""}, {coll, "alice"}} {
+		p, err := c.f.VaultPath("", "dragonfly", "prod-1", c.key)
+		if err != nil {
+			t.Fatalf("VaultPath(%s): %v", c.f.ID(), err)
+		}
+		if !strings.HasPrefix(p, prefix+"/") {
+			t.Errorf("VaultPath(%s) = %q is not under %s/", c.f.ID(), p, prefix)
+		}
+	}
+}
+
+// TestIncarnationVaultPrefix_FailsClosed — an owner segment that is empty or could
+// move the delete (`/`, `.`, `..`) refuses, and so does a reserved service name.
+func TestIncarnationVaultPrefix_FailsClosed(t *testing.T) {
+	for _, c := range []struct{ mount, service, incarnation string }{
+		{"", "", "prod-1"},
+		{"", "dragonfly", ""},
+		{"", "dragonfly", "."},
+		{"", "dragonfly", ".."},
+		{"", "dragonfly", "prod-1/../prod-2"},
+		{"", "dragon/fly", "prod-1"},
+		{"", "..", "prod-1"},
+		{"kv/v2", "dragonfly", "prod-1"},
+		{"", "keeper", "sigil-keys"},
+	} {
+		if got, err := IncarnationVaultPrefix(c.mount, c.service, c.incarnation); err == nil {
+			t.Errorf("IncarnationVaultPrefix(%q, %q, %q) = %q, want a refusal", c.mount, c.service, c.incarnation, got)
+		}
+	}
+}

@@ -219,6 +219,11 @@ const (
 	// memberships_severed, choir_voices_removed, local_stream_closed,
 	// broadcast, cache_keys_purged, warnings}`.
 	//
+	// The same event, one per host, comes from the scenario step
+	// `core.soul.forgotten` (NIM-1040) with `source: keeper_internal`,
+	// `archon_aid: NULL`, and the payload extended by `{incarnation, scenario,
+	// apply_id}` — the run that forgot it.
+	//
 	// This event is the ONLY durable record of the act. Four foreign keys onto
 	// `souls(sid)` are ON DELETE CASCADE, so the row, its seeds, its unburnt
 	// tokens, its incarnation memberships and its Choir Voices all go at once
@@ -326,6 +331,16 @@ const (
 	// a new secret must not surface in the audit trail / logs / OTel, only the
 	// fact of generation is recorded).
 	EventVaultKVPresent EventType = "vault.kv-present"
+
+	// EventVaultKVAbsent — the keeper-side core module `core.vault.kv-absent`
+	// (NIM-1040) permanently deleted Vault KV entries inside the run's own
+	// incarnation namespace. `source: keeper_internal`, `archon_aid: NULL`.
+	// Written ONLY when something was actually deleted (changed=true) — and also
+	// when a later delete of the same step failed, since the ones before it are
+	// gone either way. Payload: `{paths, service, incarnation}` — `paths` = the
+	// sorted list of deleted entries. A delete is irreversible (on KV v2 every
+	// version goes), so this event is the only record of what was there.
+	EventVaultKVAbsent EventType = "vault.kv-absent"
 
 	// EventCertRegistered — the keeper-side core module `core.cert.registered`
 	// (cert-rotation Variant 1, E1) recorded a SERVICE TLS cert of an

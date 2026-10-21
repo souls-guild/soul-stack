@@ -67,6 +67,14 @@ func (v *presentVault) WriteKV(_ context.Context, path string, data map[string]a
 	return nil
 }
 
+func (v *presentVault) ListKVEntries(context.Context, string) ([]string, error) { return nil, nil }
+
+func (v *presentVault) DeleteKV(_ context.Context, path string) (bool, error) {
+	_, ok := v.store[path]
+	delete(v.store, path)
+	return ok, nil
+}
+
 func presentParams(t *testing.T, m map[string]any) *structpb.Struct {
 	t.Helper()
 	return mustStruct(t, m)

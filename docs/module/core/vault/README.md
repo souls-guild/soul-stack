@@ -8,14 +8,16 @@ Keeper-side core module for working with Vault KV secrets. One module (base-name
 |---|---|---|
 | `core.vault.kv-read` | `kv-read` (verb) | Explicit reading of a secret from Vault KV with an audit-event entry. |
 | `core.vault.kv-present` | `kv-present` | Generate-if-absent: guarantee the existence of secrets by generating the missing ones with a crypto-random value according to password-policy. |
+| `core.vault.kv-absent` | `kv-absent` | Permanently delete the running incarnation's own derived subtree `<mount>/<service>/<incarnation>/`. Destroy run only - refused in any other run. Takes `scope: incarnation`, no path - see [keeper/modules.md](../../../keeper/modules.md#corevaultkv-absent). |
 
-**Keeper-side** - both states are executed on the Keeper itself,
+**Keeper-side** - every state is executed on the Keeper itself,
 not on the host (unlike Soul-side core). The side comes from the ADDRESS since
-NIM-747, so the task does not restate it: writing `on: keeper` on either address is
+NIM-747, so the task does not restate it: writing `on: keeper` on any of the addresses is
 refused as redundant (`on_keeper_redundant`).
 Implementation - [`kvread.go`](../../../../keeper/internal/coremod/vault/kvread.go)
 (base module + `kv-read`), [`kvpresent.go`](../../../../keeper/internal/coremod/vault/kvpresent.go)
-(`kv-present`), [`policy.go`](../../../../keeper/internal/coremod/vault/policy.go)
+(`kv-present`), [`kvabsent.go`](../../../../keeper/internal/coremod/vault/kvabsent.go)
+(`kv-absent`), [`policy.go`](../../../../keeper/internal/coremod/vault/policy.go)
 (the params form of the policy). The **grammar** itself - alphabets, length bounds,
 validation - lives in [`shared/secretpolicy`](../../../../shared/secretpolicy/policy.go):
 `generate_secret()` ([ADR-0083](../../../adr/0083-declared-secret-state-fields.md) §3)
@@ -36,7 +38,9 @@ reads. `kv-read` - explicit form for cases requiring an audit event
 > `state_schema` field with `type: secret`, written by
 > a [`core.state.<verb>`](../../../keeper/modules.md#corestateverb) capture step. Both states stay
 > available for every path OUTSIDE the prefix - a shared TLS CA, another service's
-> credential - which is what they are for now.
+> credential - which is what they are for now. `kv-absent` is outside this fence by
+> construction: it takes no path and deletes only the incarnation's own derived subtree
+> ([ADR-0083 amendment 2026-10-21](../../../adr/0083-declared-secret-state-fields.md#amendment-2026-10-21-nim-1040-destroy-deletes-the-incarnations-own-subtree--derived-never-authored)).
 
 ---
 

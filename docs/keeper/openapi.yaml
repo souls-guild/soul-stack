@@ -167,6 +167,7 @@ components:
             - tiding.deleted
             - tiding.label_changed
             - tiding.updated
+            - vault.kv-absent
             - vault.kv-present
             - vault.kv-read
             - vigil.created

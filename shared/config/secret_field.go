@@ -200,6 +200,35 @@ func (f SecretField) VaultField() string {
 // — and is the one segment an attacker can influence. The service's own `types.yml` may
 // constrain it as well; the platform does not rely on a service having done so.
 func (f SecretField) VaultPath(mount, service, incarnation, key string) (string, error) {
+	prefix, err := IncarnationVaultPrefix(mount, service, incarnation)
+	if err != nil {
+		return "", fmt.Errorf("secret field %s: %w", f.ID(), err)
+	}
+	segs := []struct{ name, value string }{
+		{"state field", f.State},
+	}
+	if f.Collection() {
+		if key == "" {
+			return "", fmt.Errorf("secret field %s: key is required for a collection secret", f.ID())
+		}
+		segs = append(segs, struct{ name, value string }{"key", key})
+	}
+	out := []string{prefix}
+	for _, s := range segs {
+		if !ValidVaultPathSegment(s.value) {
+			return "", fmt.Errorf("secret field %s: unsafe %s segment %q", f.ID(), s.name, s.value)
+		}
+		out = append(out, s.value)
+	}
+	return strings.Join(out, "/"), nil
+}
+
+// IncarnationVaultPrefix derives `<mount>/<service>/<incarnation>` — the namespace
+// every declared secret of one incarnation lives under ([SecretField.VaultPath] builds
+// on it), and the subtree `core.vault.kv-absent` deletes on destroy. One derivation for
+// both, so the delete reaches exactly where the writes went. Every segment is checked
+// against [ValidVaultPathSegment] and the call fails closed.
+func IncarnationVaultPrefix(mount, service, incarnation string) (string, error) {
 	mount = EffectiveVaultMount(mount)
 	// Namespace floor (NIM-706): a service whose name is one the platform writes under
 	// as a fixed first segment derives on top of that family, and secretwrite REPLACES
@@ -212,25 +241,18 @@ func (f SecretField) VaultPath(mount, service, incarnation, key string) (string,
 	// the same reason [PathAddressesOwnNamespace] leaves it out: what makes the path
 	// collide is the service segment, not which mount it lives on.
 	if IsReservedVaultNamespace(service) {
-		return "", fmt.Errorf("secret field %s: service %q is a reserved Vault namespace (%s) — its derived path would collide with the platform's own",
-			f.ID(), service, strings.Join(ReservedVaultNamespaceNames(), ", "))
+		return "", fmt.Errorf("service %q is a reserved Vault namespace (%s) — its derived path would collide with the platform's own",
+			service, strings.Join(ReservedVaultNamespaceNames(), ", "))
 	}
 	segs := []struct{ name, value string }{
 		{"mount", mount},
 		{"service", service},
 		{"incarnation", incarnation},
-		{"state field", f.State},
-	}
-	if f.Collection() {
-		if key == "" {
-			return "", fmt.Errorf("secret field %s: key is required for a collection secret", f.ID())
-		}
-		segs = append(segs, struct{ name, value string }{"key", key})
 	}
 	out := make([]string, 0, len(segs))
 	for _, s := range segs {
 		if !ValidVaultPathSegment(s.value) {
-			return "", fmt.Errorf("secret field %s: unsafe %s segment %q", f.ID(), s.name, s.value)
+			return "", fmt.Errorf("unsafe %s segment %q", s.name, s.value)
 		}
 		out = append(out, s.value)
 	}

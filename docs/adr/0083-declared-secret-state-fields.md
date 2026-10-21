@@ -797,3 +797,85 @@ imprecise is the sentence describing it — here, and in the three places that q
 [docs/keeper/modules.md](../keeper/modules.md) (`core.state.<verb>`) and
 [docs/scenario/orchestration.md](../scenario/orchestration.md) (§7.1, both halves), all corrected in
 the same commit. Rotation stays inexpressible, for the reason §4 gives.
+
+### Amendment 2026-10-21 (NIM-1040): destroy deletes the incarnation's own subtree — derived, never authored
+
+Nothing deleted an incarnation's secrets. `core.state.unset` drops a field from `incarnation.state`
+and leaves its Vault entry; the TLS material `keeper/internal/certissue` stores at
+`<mount>/<service>/<incarnation>/tls/{cert,key}` has no remover at all; and §7 refuses the one spelling
+an author could have reached for, a `core.vault.*` path under `<mount>/<service>/`. A `destroy` therefore
+archived the incarnation and left every secret it had minted in Vault.
+
+**`core.vault.kv-absent` is the platform-derived delete, and §7 is unchanged.** The step takes no path.
+Its only param is `scope`, whose only value is `incarnation` — it is there to make the destructive
+intent explicit in the scenario, and the enum leaves room for a narrower scope later. The subtree is
+derived from the service and incarnation on the module context, exactly as `core.state.*` derives
+where it writes, by `config.IncarnationVaultPrefix` — the function `SecretField.VaultPath` itself now
+builds on, so the delete reaches exactly where the writes went and nothing above them. The step walks
+`<mount>/<service>/<incarnation>/` depth-first and permanently deletes every leaf: on KV v2 the
+metadata, which takes every version. What keeps a sibling such as `prod-10/…` out of `prod-1`'s
+listing is Vault's own LIST semantics — it answers a folder's children, not a string prefix. The
+trailing `/` the step keeps on the walk root does not reach Vault (vault/api joins request paths with
+`path.Join`, which drops it); it is what keeps each child path the walk builds, `<root>` + name, inside
+the subtree. An empty or absent subtree is a no-op (`changed=false`) — the step can run again; whether
+the whole destroy can is a placement question, below.
+
+**Only in the incarnation's destroy run.** The step refuses unless the run is the lifecycle `destroy`
+started by `DELETE /v1/incarnations/{id}` / `keeper.incarnation.destroy` — marked by the run's terminal
+mode on the module context, not by the scenario's name, and an unknown run kind fails closed. In any
+other scenario an operator holding only `incarnation.run` could irreversibly delete every declared
+secret of a live incarnation. Inside destroy the right is `incarnation.destroy`, which already
+authorizes removing the incarnation whole; that this right now also deletes the derived Vault subtree
+was approved by the user on 2026-10-21 ([rbac.md](../keeper/rbac.md), `incarnation.destroy`). The refusal is
+the step's, not the run's: a `destroy` scenario can still be started as an ordinary run
+(`POST /v1/incarnations/{id}/scenarios/destroy`), a gap that predates this amendment; with
+`core.soul.forgotten` placed first, such a run stops before it reaches anything irreversible.
+
+This does not open §7. §7 fences **authored text** that names a path inside the namespace, because an
+authored copy of a platform-derived secret is free to diverge from it. `kv-absent` carries no authored
+path, so no spelling of the author's reaches the namespace through it, and it needs no entry in the
+fence's module list — there is no param for the scan to read. It is the reverse of the platform's own
+write, not an authoring channel.
+
+Fail-closed points: a missing service or incarnation on the context; a segment of the derived prefix
+that is not one plain `[a-zA-Z0-9_-]+` segment (so `..`, `.`, an empty segment or a `/` cannot move the
+delete); a reserved service name ([NIM-706 amendment](#amendment-2026-08-26-nim-706-7s-fence-has-a-second-axis--the-name-that-opens-the-namespace));
+and a name Vault lists under the subtree that is not one segment. The incarnation root itself
+(`<mount>/<service>/<incarnation>` without the slash) is not a derived path and is not deleted. Every
+deleted path — never a value — goes to the output `deleted` and to the audit event `vault.kv-absent`.
+The Keeper's Vault policy needs `list`, `read` and `delete` on `<mount>/metadata/<service>/*` per
+service whose destroy runs the step — not on `<mount>/metadata/*`, which would reach the Keeper's own
+keys under `<mount>/metadata/keeper/` ([`examples/keeper/vault-policy.hcl`](../../examples/keeper/vault-policy.hcl)).
+On a KV v1 mount the same capabilities go on `<mount>/<service>/*`, and the existence check reads the
+entry's value, there being no metadata.
+
+**Placement, and what a failure leaves behind.** A destroy that also carries host tasks cannot be
+re-run once `core.soul.forgotten` has emptied the roster — the re-run is refused at the `no_hosts`
+gate — while an all-keeper destroy bypasses that gate (`planBuildsRoster`), and its retry re-runs
+the whole destroy. Under
+`scenario.execution_model: staged` a keeper task that reads no register runs in Passage 0, before that
+Passage's host dispatch, so its position in the file does not order it after host tasks. The
+recommended form is therefore an all-keeper destroy ordered `core.soul.forgotten` → the plugin step
+that deletes the VMs → `core.vault.kv-absent`: `forgotten`'s refusal of a tied host then comes before
+any VM or secret is touched, and its destroy-only check stops a `destroy` started as an ordinary run
+before the VM delete. `kv-absent` last means a failure there leaves the secrets **partly** deleted
+(the failure names what is gone) under an `incarnation.state` that still holds `vault:` references to
+them; the retry runs the whole destroy again — `forgotten` a no-op, the VM delete again, then the rest
+of the delete — and an incarnation unlocked from `destroy_failed` to `ready` instead keeps dangling
+references. Spec and the full reasoning —
+[docs/keeper/modules.md → Placing the two steps in a `destroy`](../keeper/modules.md#placing-the-two-steps-in-a-destroy).
+
+**Known limit.** The Reaper's `rotate_due_certs` selects warrants by their own status, not the
+incarnation's, so it can re-issue a cert of an incarnation that is `destroying` or `destroy_failed`
+and recreate `<…>/<incarnation>/tls/{cert,key}` after `kv-absent` deleted them.
+
+Rejected:
+
+- **An author-written path fenced to the incarnation subtree** — the first design of NIM-1040. An
+  authored path inside `<mount>/<service>/` is exactly what §7 refuses, and an allow-list predicate
+  beside the derivation is a second definition of the same prefix, free to drift from it.
+- **Arbitrary paths outside the namespace.** Out of scope. A delete is the destructive direction, so
+  it would need an allow-list of its own; §7's deny-list was built for a write, where a stray path
+  mints a duplicate rather than destroying another owner's credential.
+
+Spec — [docs/keeper/modules.md → `core.vault.kv-absent`](../keeper/modules.md#corevaultkv-absent).
