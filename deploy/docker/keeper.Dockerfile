@@ -27,9 +27,9 @@
 # then `keeper run`. The CMD here is only `run`, WITHOUT `--initialize`:
 # auto-bootstrap in prod is dangerous.
 
-# The Go version is synced with the `toolchain` line in go.work (go1.26.9). When upgrading
+# The Go version is synced with the `toolchain` line in go.work (go1.26.10). When upgrading
 # Go, update here and in go.work at the same time.
-FROM golang:1.26.9 AS builder
+FROM golang:1.26.10 AS builder
 
 WORKDIR /src
 

@@ -73,7 +73,7 @@ permissions:
 
 env:
   # Go toolchain from go.work, synced with ci.yml.
-  GO_VERSION: "1.26.9"
+  GO_VERSION: "1.26.10"
   # protoc and its plugins, synced with ci.yml — `make build` pulls in `make gen`.
   PROTOC_VERSION: "34.1"
   PROTOC_GEN_GO_VERSION: "v1.36.11"

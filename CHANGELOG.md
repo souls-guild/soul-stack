@@ -2826,6 +2826,10 @@ order to act in.
 
 ### Security
 
+- **Go toolchain 1.26.10 (NIM-1046).** `check-vuln` went red on every module on GO-2026-6809
+  in the standard library's `crypto/x509`, fixed in go1.26.10. `go.work`, the three pluginhost
+  fixtures, the CI workflows and the Dockerfiles move to go1.26.10 — version edits only.
+
 - **Go toolchain 1.26.9 and `golang.org/x/net` v0.60.0 (NIM-951).** `check-vuln` went red on
   advisories published after the last bump: GO-2026-6617 (HTTP/2 server crash, an HPACK encoder
   race) in `golang.org/x/net` v0.58.0, and standard-library ones fixed in go1.26.9 (`crypto/tls`,

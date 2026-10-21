@@ -2,7 +2,7 @@ module github.com/souls-guild/soul-stack/soul/internal/pluginhost/testdata/echo-
 
 go 1.26.4
 
-toolchain go1.26.9
+toolchain go1.26.10
 
 require (
 	github.com/souls-guild/soul-stack/proto/plugin v0.1.0-beta.1
