@@ -224,6 +224,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaProvisioningPolicyPut(api, stub)
 			return nil
 		}},
+		{"/v1/ldap-sync", func(api huma.API) error {
+			stub := handlers.LDAPSyncSpecStub()
+			registerHumaLDAPSyncGet(api, stub)
+			registerHumaLDAPSyncPut(api, stub)
+			return nil
+		}},
 		{"/v1/settings", func(api huma.API) error {
 			stub := handlers.SettingsSpecStub()
 			registerHumaSettingsList(api, stub)

@@ -436,6 +436,11 @@ var wireProjections = []wireProjection{
 		project: func(b any) any { return toProvisioningPolicyUpdateInput(b.(ProvisioningPolicyUpdateRequest)) },
 	},
 	{
+		fn:      "toLDAPSyncUpdateInput",
+		wire:    LDAPSyncUpdateRequest{},
+		project: func(b any) any { return toLDAPSyncUpdateInput(b.(LDAPSyncUpdateRequest)) },
+	},
+	{
 		fn:      "toPushProviderUpdateInput",
 		wire:    PushProviderUpdateRequest{},
 		project: func(b any) any { return toPushProviderUpdateInput(b.(PushProviderUpdateRequest)) },

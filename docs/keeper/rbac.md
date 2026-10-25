@@ -889,8 +889,8 @@ The SettingsStore overlay of reload-able Keeper parameters — the `cfg_*` rows 
 
 | Permission | Semantics |
 |---|---|
-| `setting.read` | Read the settings catalog (`GET /v1/settings`): per key its type, range bounds, default, the **effective** value on the answering instance and its `source ∈ {default, file, pg}`. |
-| `setting.update` | Override a key cluster-wide (`PUT /v1/settings/{key}`). Unknown key → 404 (admission is enumerated); unparsable or out-of-range value → 422 with `keeper_settings` unchanged. Audited (`setting.updated`). |
+| `setting.read` | Read the settings catalog (`GET /v1/settings`): per key its type, range bounds, default, the **effective** value on the answering instance and its `source ∈ {default, file, pg}`. Also the LDAP group sync settings and status (`GET /v1/ldap-sync`). |
+| `setting.update` | Override a key cluster-wide (`PUT /v1/settings/{key}`). Unknown key → 404 (admission is enumerated); unparsable or out-of-range value → 422 with `keeper_settings` unchanged. Audited (`setting.updated`). Also the LDAP group sync interval (`PUT /v1/ldap-sync`, outside `[1m, 24h]` → 422, audited `ldap_sync.settings_changed`) — which is how long a role lost in the directory keeps working, so grant it accordingly. |
 | `setting.delete` | Drop an override (`DELETE /v1/settings/{key}`), so the `keeper.yml` value or the built-in default is back in effect. No override → 404. Audited (`setting.deleted`). |
 
 ### Audit (1) — [ADR-022](../adr/0022-audit-pipeline.md#adr-022-audit-pipeline-storage-schema-retention)

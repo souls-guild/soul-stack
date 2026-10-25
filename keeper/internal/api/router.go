@@ -140,7 +140,8 @@ const (
 // routerExtras — buildRouter inputs added after its positional list grew past
 // fifty; tests that predate them build the router without and get the zero value.
 type routerExtras struct {
-	jwtUse apimiddleware.JWTUseRecorder
+	jwtUse    apimiddleware.JWTUseRecorder
+	ldapSyncH *handlers.LDAPSyncHandler
 }
 
 type routerOption func(*routerExtras)
@@ -149,6 +150,11 @@ type routerOption func(*routerExtras)
 // amendment NIM-1045, `operator_jwts.last_used_*`).
 func withJWTUse(rec apimiddleware.JWTUseRecorder) routerOption {
 	return func(x *routerExtras) { x.jwtUse = rec }
+}
+
+// withLDAPSync mounts /v1/ldap-sync (ADR-058 amendment NIM-1053).
+func withLDAPSync(h *handlers.LDAPSyncHandler) routerOption {
+	return func(x *routerExtras) { x.ldapSyncH = h }
 }
 
 // Health/meta live outside `/v1/*` per operator-api.md § Health / Meta.
@@ -1319,6 +1325,26 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 					apimiddleware.RequirePermission(enforcer, "provisioning", "update", apimiddleware.NoSelector),
 				).Group(func(r chi.Router) {
 					registerHumaProvisioningPolicyPut(newHumaProvisioningAPI(r, auditWriter, audit.EventProvisioningPolicyChanged, logger), provisioningPolicyH)
+				})
+			})
+		}
+
+		// /v1/ldap-sync — settings and status of the background LDAP group sync
+		// (ADR-058 amendment NIM-1053). It is a Keeper setting, so it takes the
+		// setting.* permissions; not the ADR-0073 overlay, which is closed to
+		// security controls (j.2). PUT — WRITE+AUDIT variant B on its own group.
+		if extras.ldapSyncH != nil {
+			r.Route("/ldap-sync", func(r chi.Router) {
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "setting", "read", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaLDAPSyncGet(newHumaCadenceAPI(r), extras.ldapSyncH)
+				})
+
+				r.With(
+					apimiddleware.RequirePermission(enforcer, "setting", "update", apimiddleware.NoSelector),
+				).Group(func(r chi.Router) {
+					registerHumaLDAPSyncPut(newHumaAuditAPI(r, auditWriter, audit.EventLDAPSyncSettingsChanged, logger), extras.ldapSyncH)
 				})
 			})
 		}

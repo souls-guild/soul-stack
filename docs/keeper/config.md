@@ -282,11 +282,11 @@ auth:
 | `auth.ldap.user_dn_template` | `string` | — | DN pattern for `bind_mode: direct` (for example `uid=%s,ou=people,...`). The field is reserved (direct is deferred), `bind_mode` is not activated. |
 | `auth.ldap.group_filter` | `string` | — | User group search filter (`%s` = user-DN), for example `(member=%s)`. |
 | `auth.ldap.group_attr` | `string` | — | An attribute of the found group, the value of which is keyed in `group_role_map` (for example, `cn`). |
-| `auth.ldap.aid_attr` | `string` | `uid` | A user attribute whose value becomes the operator's AID. |
+| `auth.ldap.aid_attr` | `string` | `uid` | A user attribute whose value becomes the operator's AID. The background group sync finds the operator again by `(<aid_attr>=<aid>)` ANDed with `user_filter` under `base_dn`, so the attribute must be searchable by the service account. |
 | `auth.ldap.timeout` | `duration` | — | LDAP operations timeout. |
 | `auth.ldap.tls.ca_ref` | `vault-ref` | — | Opt. Vault-reference to CA-bundle for LDAPS certificate verification (field in KV - `ca`). |
 | `auth.ldap.tls.insecure_skip_verify` | `bool` | `false` | Disables TLS certificate verification. **dev-only**: `true` → WARN at start (`ldap_insecure_skip_verify`). |
-| `auth.ldap.group_role_map` | `map<string, list<string>>` | — | External group (value `group_attr`) → list of RBAC roles that the operator will receive. Source of roles for auto-provision and reconciliation on each login. |
+| `auth.ldap.group_role_map` | `map<string, list<string>>` | — | External group (value `group_attr`) → list of RBAC roles that the operator will receive. Source of roles for auto-provision, for reconciliation on each login and for the background group sync between logins ([`ldap_sync`](#ldap-group-sync---ldap_sync-adr-058j)). |
 
 ### `auth.oidc` - federated OAuth2/OIDC authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md))
 
@@ -354,6 +354,37 @@ The **CREATE** method of the operator (`created_via`) can be limited by the `pro
 - Method outside `{user,ldap,oidc}` → failure.
 
 Runtime management - endpoints `GET`/`PUT /v1/provisioning-policy` (permissions `provisioning.read` / `provisioning.update`, [rbac.md → Provisioning](rbac.md#provisioning-2--adr-058)). `GET` without audit (`policy_set=false` → key not set = default "everything is allowed"); `PUT` — replace semantics, writes audit `provisioning.policy_changed`, empty list → `422` anti-lockout, creation method prohibited by policy → `422` [`provisioning-method-disabled`](../naming-rules.md#error-codes). See [storage.md](storage.md) (`keeper_settings`), [naming-rules.md → `provisioning_allowed_methods`](../naming-rules.md).
+
+### LDAP group sync - `ldap_sync` ([ADR-058(j)](../adr/0058-operator-auth-ldap-oidc.md))
+
+With `auth.ldap` configured and Redis present, one Keeper of the cluster (the `ldapsync` leader, lease `ldapsync:leader`) re-reads the groups of every active LDAP operator once per interval through the service account and reconciles its roles with the code a login runs — so removal from a group takes effect between logins, for every live token of that operator. Only roles in `values(group_role_map)` are touched (a hand grant of one of them included); the operator is **never revoked**.
+
+The operator is looked up by `(<aid_attr>=<aid>)` ANDed with `user_filter` (its `%s` widened to `*`), so an account the login would refuse — disabled, filtered out — is "not found" here too. The group search is the login's, but bound as the service account: that account must be allowed to read group membership.
+
+| Directory answer for an operator | What happens |
+|---|---|
+| its groups | roles reconciled to them — revoked and granted; a mapped role missing from the registry is skipped, logged as a WARN and named in `ldap_sync_operators.error` |
+| no entry for the AID | the roles from `group_role_map` are dropped; the operator stays active and the next login brings them back |
+| could not read (no connection, failed service bind, search error — a `base_dn` that does not exist included; one naming another existing subtree answers "not found" —, ambiguous answer) | nothing the first time; the second failure in a row, a pass later, drops the group roles; the first answer brings them back |
+| the answers would strip every operator holding group roles (two at least) | read as a broken lookup (`aid_attr`, `user_filter`, `group_filter`, the service account's rights): nothing changes for the operators answered, the run is reported `guarded`; an operator the directory did not answer still takes the row above |
+| dropping would empty the cluster's admin set | refused (`lockout_refused`), nothing changes, the pass is not `ok` |
+| the roles could not be written | `reconcile_failed`, retried on the next pass |
+
+A pass reads every operator and is due once the previous one is an interval old; a new operator joins the next pass.
+
+The settings are a **well-known key `keeper_settings` in Postgres**, not a `keeper.yml` field — one value for the whole cluster. The value is a JSON object, so later settings join it:
+
+```json
+{"interval": "15m"}
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `interval` | `duration` | `15m` | How often the groups are re-read; `[1m, 24h]`. Also the grace: LDAP being unreachable keeps the roles for one more interval. |
+
+Fields this version does not know are ignored, so a newer Keeper can add one during a rolling upgrade — but a `PUT` served by an older Keeper writes the whole object and drops them. A stored value that cannot be read is reported by `GET` as the default the sync runs on, with `settings_error` saying why.
+
+Runtime management — `GET`/`PUT /v1/ldap-sync` (permissions `setting.read` / `setting.update`, [rbac.md → Settings](rbac.md#settings--adr-0073)). `GET` returns `settings`, `settings_set` (false → the key is absent) and `status`: whether this Keeper takes part in the sync (one such Keeper leads), `last_run_at`, `last_success_at`, and the active LDAP operators by the outcome of their last attempt (`synced`, `not_found`, `unreachable`, `lockout_refused`, `guarded`, `reconcile_failed`, `pending`). `PUT` replaces the settings, `422` outside the bounds, audit `ldap_sync.settings_changed`. The leader re-reads the key every 30 s. Per-operator state lives in `ldap_sync_operators`; role changes are audited as `operator.roles-synced`; metrics `keeper_ldapsync_*` ([observability.md](../observability.md)). Without Redis the sync does not run and the groups are read at login only (a WARN at start).
 
 **Soul does not have the `auth:` block** - Soul authenticates to Keeper via mTLS / SoulSeed, see [`docs/soul/identity.md`](../soul/identity.md). JWT - only for operators (OpenAPI/MCP).
 

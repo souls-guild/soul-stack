@@ -72,6 +72,7 @@ var allEventTypes = []EventType{
 	"incarnation.unlocked",                      // EventIncarnationUnlocked
 	"incarnation.upgrade_started",               // EventIncarnationUpgradeStarted
 	"input.vault_resolved",                      // EventInputVaultResolved
+	"ldap_sync.settings_changed",                // EventLDAPSyncSettingsChanged
 	"omen.created",                              // EventOmenCreated
 	"omen.label_changed",                        // EventOmenLabelChanged
 	"omen.revoked",                              // EventOmenRevoked
@@ -80,6 +81,7 @@ var allEventTypes = []EventType{
 	"operator.login",                            // EventOperatorLogin
 	"operator.provisioned",                      // EventOperatorProvisioned
 	"operator.revoked",                          // EventOperatorRevoked
+	"operator.roles-synced",                     // EventOperatorRolesSynced
 	"operator.token-issued",                     // EventOperatorTokenIssued
 	"oracle.fired",                              // EventOracleFired
 	"plugin.allowed",                            // EventPluginAllowed

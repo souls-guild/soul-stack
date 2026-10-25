@@ -603,6 +603,31 @@ func DirectRolesOf(ctx context.Context, db ExecQueryRower, aid string) ([]string
 	return out, nil
 }
 
+// ExistingRoles returns which of names exist in rbac_roles. The background
+// LDAP group sync asks before granting, so a group_role_map value naming a
+// deleted role cannot fail the grant and roll back the revokes made in the
+// same transaction (NIM-1053).
+func ExistingRoles(ctx context.Context, db ExecQueryRower, names []string) (map[string]bool, error) {
+	rows, err := db.Query(ctx, `SELECT name FROM rbac_roles WHERE name = ANY($1)`, names)
+	if err != nil {
+		return nil, fmt.Errorf("rbac: select existing roles: %w", wrapPgErr(err))
+	}
+	defer rows.Close()
+
+	out := make(map[string]bool, len(names))
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			return nil, fmt.Errorf("rbac: scan existing role: %w", err)
+		}
+		out[name] = true
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rbac: iterate existing roles: %w", err)
+	}
+	return out, nil
+}
+
 // wrapPgErr adds the SQLSTATE to the message when the error is a
 // pgconn.PgError. This makes it easier to tell "table rbac_* doesn't exist"
 // (migration not applied) apart from transport failures.

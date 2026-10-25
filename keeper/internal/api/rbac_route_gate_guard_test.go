@@ -289,6 +289,8 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/v1/settings"}:            {asks: []string{"check:setting.read"}},
 	{http.MethodPut, "/v1/settings/{key}"}:      {asks: []string{"check:setting.update"}},
 	{http.MethodDelete, "/v1/settings/{key}"}:   {asks: []string{"check:setting.delete"}},
+	{http.MethodGet, "/v1/ldap-sync"}:           {asks: []string{"check:setting.read"}},
+	{http.MethodPut, "/v1/ldap-sync"}:           {asks: []string{"check:setting.update"}},
 
 	// --- augur (ADR-025) / oracle (ADR-030) ---
 	{http.MethodGet, "/v1/augur/omens"}:            {asks: []string{"check:omen.list"}},

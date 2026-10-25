@@ -1234,6 +1234,24 @@ const (
 	// secret; the password / bind-creds are NOT put in the payload.
 	EventOperatorProvisioned EventType = "operator.provisioned"
 
+	// EventOperatorRolesSynced — the background LDAP group sync changed an
+	// operator's roles (ADR-058 amendment NIM-1053): one event per operator per
+	// pass that granted or revoked anything. `source: keeper_internal`,
+	// `archon_aid` NULL (no initiator). Payload: `{aid, reason, granted,
+	// revoked, groups?}` — `reason` ∈ `groups` (its groups changed), `not_found`
+	// (no directory entry: the group roles go, the operator is NOT revoked),
+	// `unreachable` (LDAP could not answer for it twice in a row); `groups` only
+	// for `groups`. Only roles from group_role_map ever appear.
+	EventOperatorRolesSynced EventType = "operator.roles-synced"
+
+	// EventLDAPSyncSettingsChanged — an Archon changed the LDAP group sync
+	// settings (`ldap_sync` in keeper_settings, ADR-058 amendment NIM-1053) via
+	// `PUT /v1/ldap-sync`. `source: api`, `archon_aid` is the initiator.
+	// Payload: `{settings, previous?}` — the new settings object and the prior
+	// one if the key was set. Security-sensitive: the interval is how long a
+	// role lost in the directory keeps working.
+	EventLDAPSyncSettingsChanged EventType = "ldap_sync.settings_changed"
+
 	// EventProviderCreated — RETIRED (NIM-761): the `providers` registry and its
 	// routes are gone, so nothing emits this. Kept so the catalog can still
 	// describe the rows already written. It recorded that an Archon created a

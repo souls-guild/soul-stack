@@ -147,6 +147,12 @@ func toProvisioningPolicyUpdateInput(b ProvisioningPolicyUpdateRequest) handlers
 	}
 }
 
+// toLDAPSyncUpdateInput projects the PUT /v1/ldap-sync body onto the handler
+// input.
+func toLDAPSyncUpdateInput(b LDAPSyncUpdateRequest) handlers.LDAPSyncUpdateInput {
+	return handlers.LDAPSyncUpdateInput{Interval: b.Interval}
+}
+
 // toPushProviderUpdateInput projects the PUT /v1/push-providers/{id} body onto the
 // handler input.
 func toPushProviderUpdateInput(b PushProviderUpdateRequest) handlers.PushProviderUpdateInput {

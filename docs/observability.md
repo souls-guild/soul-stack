@@ -257,6 +257,21 @@ Registrar - `RegisterConductorMetrics(r *obs.Registry) *ConductorMetrics` in [`k
 | `keeper_conductor_spawn_errors_total` | counter | — | Spawn tick errors (`Spawner.Run` returned error: PG failure / resolve target). Selected from `spawn_executions_total` to alert without a histogram. Any non-zero increase is an alert candidate. |
 | `keeper_conductor_spawn_duration_seconds` | histogram(`0.005…30s`) | — | Spawn tick duration (`Spawner.Run`): SELECT due + per-row insert — units or tens of ms; The top 30s catches an abnormally long tick. `_count` is the same as `spawn_executions_total`. |
 
+#### Keeper · ldapsync (background LDAP group sync, [ADR-058(j)](adr/0058-operator-auth-ldap-oidc.md))
+
+Registrar - `RegisterMetrics(r *obs.Registry) *Metrics` in `keeper/internal/ldapsync/metrics.go`, registered only on an instance that runs the sync (`auth.ldap` configured, Redis present). Only the leader moves anything but the lease gauge.
+
+| Metric | Type | Labels | Meaning |
+|---|---|---|---|
+| `keeper_ldapsync_lease_held` | gauge | — | `1` if this instance holds the Redis lease `ldapsync:leader`. `sum(...) == 1` with exactly one leader. |
+| `keeper_ldapsync_runs_total` | counter | `result` | Passes (each reads every active LDAP operator), by result: `ok` (the directory answered for every operator and every answer was applied), `partial` (some could not be read or reconciled, or a reconciliation was refused to keep the admin set), `unreachable` (no connection or a failed service bind), `guarded` (the answers would have stripped every operator holding group roles — read as a broken lookup, nothing changed for them), `error` (the pass could not read its own state). Ticks on which no pass is due are not counted. |
+| `keeper_ldapsync_operators_total` | counter | `outcome` | Attempts by per-operator outcome: `synced`, `not_found`, `unreachable`, `lockout_refused`, `guarded`, `reconcile_failed`. |
+| `keeper_ldapsync_role_changes_total` | counter | `change`, `reason` | Roles `granted` / `revoked`, by `reason ∈ {groups, not_found, unreachable}`. |
+| `keeper_ldapsync_lockout_refusals_total` | counter | — | Reconciliations refused because they would have emptied the cluster's admin set (NIM-320). Any increase wants a human: someone holds `*` only through an LDAP group they are leaving. |
+| `keeper_ldapsync_last_success_timestamp_seconds` | gauge | — | Unix time of the last `ok` pass. Set by the leader only; read it as `max()` across instances. |
+
+Alerts worth having: `increase(keeper_ldapsync_runs_total{result=~"unreachable|partial|guarded|error"}[30m]) > 0` (the directory is not answering for someone — their roles go after a second interval; or a drop was refused to keep the admin set, see the lockout counter; for `guarded`, the answered operators keep their roles until the lookup is fixed), `increase(keeper_ldapsync_lockout_refusals_total[1h]) > 0`, and staleness `time() - max(keeper_ldapsync_last_success_timestamp_seconds) > 2 * <interval>` once the gauge has been set. Per-operator detail is in `GET /v1/ldap-sync` and in `ldap_sync_operators.error`.
+
 #### Keeper · Tempo (per-AID rate-limiter write-API, [ADR-050](adr/0050-tempo.md#adr-050-tempo--per-aid-rate-limiting-write-api))
 
 Registrar - `RegisterTempoMetrics(reg *obs.Registry) *TempoMetrics` in [`keeper/internal/api/tempo_metrics.go`](adr/0011-go-layout.md). Counters are incremented by middleware on each resolved/rejected request of the resolver-heavy write endpoint (config - [config.md → tempo](keeper/config.md#tempo)). Registered **unconditionally** (registry is always raised): with Tempo turned off (no Redis / `tempo.enabled: false`) counters remain at 0 - a valid signal "limiter is not active".

@@ -242,6 +242,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 		&consoleWSDeps{},                     // consoleWSDeps — the console WebSocket is mounted (NIM-143); it carries no OpenAPI operation, so it is in pathAllowlist
 		handlers.ConsoleRecordingSpecStub(),  // consoleRecordingH — playback routes (NIM-148) ARE in the spec, so they are mounted and checked as ordinary routes
 		nil,                                  // logger — nil is fine (handlers get io.Discard internally)
+		withLDAPSync(handlers.LDAPSyncSpecStub()),
 	)
 
 	routes, ok := h.(chi.Routes)

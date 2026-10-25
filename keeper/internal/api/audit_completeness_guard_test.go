@@ -158,6 +158,9 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	// provisioning-policy (middleware-audit; PUT mutating, GET — read). ADR-058 Part B.
 	{http.MethodPut, "/v1/provisioning-policy"}: {events: []audit.EventType{audit.EventProvisioningPolicyChanged}},
 
+	// ldap-sync settings (middleware-audit). ADR-058 amendment NIM-1053.
+	{http.MethodPut, "/v1/ldap-sync"}: {events: []audit.EventType{audit.EventLDAPSyncSettingsChanged}},
+
 	// settings (middleware-audit; PUT/DELETE mutating, GET — read). The
 	// SettingsStore overlay, ADR-0073(i): separate events so "an override was
 	// set" and "an override was dropped" stay distinguishable in the trail.

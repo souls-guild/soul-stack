@@ -526,6 +526,7 @@ func runDaemon(args []string) int {
 		// Keeper command runtime helper note.
 		// Keeper command runtime helper note.
 		d.setupConductor,
+		d.setupLDAPSync,
 	}
 	for i, step := range steps {
 		if err := step(ctx); err != nil {

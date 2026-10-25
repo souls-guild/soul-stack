@@ -195,6 +195,7 @@ func revokedGateRouterVerifier(t *testing.T, verifier *keeperjwt.Verifier, enfor
 		&consoleWSDeps{},                     // consoleWSDeps — the console WebSocket (NIM-143)
 		handlers.ConsoleRecordingSpecStub(),  // consoleRecordingH — playback (NIM-148)
 		nil,                                  // logger
+		withLDAPSync(handlers.NewLDAPSyncHandler(&fakeLDAPSyncStore{}, true, nil)),
 	)
 }
 

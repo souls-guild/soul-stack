@@ -417,6 +417,10 @@ var AllowedPermissions = map[string]struct{}{
 	// Selector — NoSelector: settings are cluster-level (like provisioning.*
 	// / role.*). Mutations are audited (`setting.updated` /
 	// `setting.deleted`), read is not.
+	//
+	// read / update also cover `GET` / `PUT /v1/ldap-sync`, the background
+	// LDAP group sync (ADR-058 amendment NIM-1053). Not a harmless tunable:
+	// its interval is how long a role lost in the directory keeps working.
 	"setting.read":   {},
 	"setting.update": {},
 	"setting.delete": {},

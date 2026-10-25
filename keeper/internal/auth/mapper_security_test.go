@@ -140,6 +140,10 @@ type reconcileDB struct {
 
 	granted []string // role_name from INSERT rbac_role_operators
 	revoked []string // role_name from DELETE rbac_role_operators
+
+	// missingRoles — names the registry does not hold, for the existence check
+	// ReconcileRoles runs before granting (NIM-1053).
+	missingRoles map[string]bool
 }
 
 func (d *reconcileDB) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
@@ -151,6 +155,9 @@ func (d *reconcileDB) Exec(_ context.Context, sql string, args ...any) (pgconn.C
 		return pgconn.NewCommandTag("DELETE 1"), nil
 	case strings.Contains(sql, "rbac_role_operators"):
 		// insertRoleOperatorSQL: ($1 role_name, $2 aid, $3 granted_by)
+		if d.missingRoles[toStr(args[0])] {
+			return pgconn.CommandTag{}, &pgconn.PgError{Code: "23503", ConstraintName: "rbac_role_operators_role_name_fkey"}
+		}
 		d.granted = append(d.granted, toStr(args[0]))
 	}
 	return pgconn.CommandTag{}, nil
@@ -179,6 +186,14 @@ func (d *reconcileDB) Query(_ context.Context, sql string, args ...any) (pgx.Row
 	case strings.Contains(sql, "FROM synod_operators so"):
 		// The Synod branch — no group membership in these fixtures.
 		return &directRoleRows{}, nil
+	case strings.Contains(sql, "FROM rbac_roles WHERE name = ANY"):
+		var exist []string
+		for _, r := range args[0].([]string) {
+			if !d.missingRoles[r] {
+				exist = append(exist, r)
+			}
+		}
+		return &directRoleRows{names: exist}, nil
 	}
 	return nil, errors.New("reconcileDB.Query: unexpected sql")
 }

@@ -90,6 +90,7 @@ components:
             - incarnation.unlocked
             - incarnation.upgrade_started
             - input.vault_resolved
+            - ldap_sync.settings_changed
             - omen.created
             - omen.label_changed
             - omen.revoked
@@ -98,6 +99,7 @@ components:
             - operator.login
             - operator.provisioned
             - operator.revoked
+            - operator.roles-synced
             - operator.token-issued
             - oracle.fired
             - plugin.allowed
@@ -2081,6 +2083,102 @@ components:
       required:
         - username
         - password
+      type: object
+    LDAPSyncOperatorCounts:
+      additionalProperties: false
+      properties:
+        guarded:
+          description: the pass would have stripped every operator holding group roles, read as a broken lookup; nothing changed
+          format: int64
+          type: integer
+        lockout_refused:
+          description: dropping its roles would have emptied the cluster admin set; nothing changed
+          format: int64
+          type: integer
+        not_found:
+          description: "no directory entry: group roles dropped, operator not revoked"
+          format: int64
+          type: integer
+        pending:
+          description: not attempted yet
+          format: int64
+          type: integer
+        reconcile_failed:
+          description: the directory answered but the roles could not be written; retried on the next pass
+          format: int64
+          type: integer
+        synced:
+          description: groups read, roles reconciled to them
+          format: int64
+          type: integer
+        unreachable:
+          description: groups could not be read; the second attempt in a row drops the group roles
+          format: int64
+          type: integer
+      required:
+        - synced
+        - not_found
+        - unreachable
+        - lockout_refused
+        - guarded
+        - reconcile_failed
+        - pending
+      type: object
+    LDAPSyncReply:
+      additionalProperties: false
+      properties:
+        settings:
+          $ref: "#/components/schemas/LDAPSyncSettings"
+        settings_error:
+          description: the stored ldap_sync value could not be read; settings shows the default the sync runs on
+          type: string
+        settings_set:
+          description: "false: the ldap_sync key is absent and these are the defaults"
+          type: boolean
+        status:
+          $ref: "#/components/schemas/LDAPSyncStatus"
+      required:
+        - settings
+        - settings_set
+        - status
+      type: object
+    LDAPSyncSettings:
+      additionalProperties: false
+      properties:
+        interval:
+          description: how often each LDAP operator's groups are re-read
+          type: string
+      required:
+        - interval
+      type: object
+    LDAPSyncStatus:
+      additionalProperties: false
+      properties:
+        enabled:
+          description: this Keeper takes part in the sync (auth.ldap configured, Redis there for the leader lease); one such Keeper leads
+          type: boolean
+        last_run_at:
+          description: latest attempt for any LDAP operator
+          format: date-time
+          type: string
+        last_success_at:
+          description: latest answer from the directory the sync accepted, for any LDAP operator
+          format: date-time
+          type: string
+        operators:
+          $ref: "#/components/schemas/LDAPSyncOperatorCounts"
+      required:
+        - enabled
+        - operators
+      type: object
+    LDAPSyncUpdateRequest:
+      additionalProperties: false
+      properties:
+        interval:
+          description: how often each LDAP operator's groups are re-read, keeper.yml duration grammar ("15m", "1h"), within [1m, 24h]; LDAP being unreachable keeps the roles for one more interval
+          type: string
+      required:
+        - interval
       type: object
     LabelSetRequest:
       additionalProperties: false
@@ -9971,6 +10069,81 @@ paths:
       summary: Incarnation upgrade paths
       tags:
         - incarnation
+  /v1/ldap-sync:
+    get:
+      description: "Settings of the background LDAP group sync (ldap_sync in keeper_settings, ADR-058 amendment NIM-1053) and where it stands: when it last ran, when it last accepted an answer from the directory, and the active LDAP operators by the outcome of their last attempt. settings_set=false -> the key is absent and the defaults apply. status.enabled=false -> this Keeper takes no part in the sync (no auth.ldap or no Redis). Permission setting.read. Read-only, no audit."
+      operationId: getLDAPSync
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LDAPSyncReply"
+          description: OK
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: LDAP group sync settings and status
+      tags:
+        - ldap-sync
+    put:
+      description: Replaces the settings of the background LDAP group sync (ADR-058 amendment NIM-1053). The leader re-reads them on its next tick, within 30 seconds, and the next pass is due once the last one is an interval old; no restart. Permission setting.update. 422 - interval unparsable or outside [1m, 24h]; nothing is written.
+      operationId: updateLDAPSync
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LDAPSyncUpdateRequest"
+        required: true
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/LDAPSyncReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Change the LDAP group sync settings
+      tags:
+        - ldap-sync
   /v1/me/permissions:
     get:
       description: Subset of the catalog actually granted to the current operator (AID from JWT-claims). Auth-only (any authenticated caller can see their own permissions; others' are not exposed). Read-only, no audit.

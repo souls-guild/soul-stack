@@ -496,6 +496,12 @@ type Deps struct {
 	// write). nil → the group isn't wired (unit tests without serviceregistry).
 	ProvisioningPolicyReader handlers.ProvisioningPolicyReader
 
+	// LDAPSync — the settings and status of the background LDAP group sync
+	// behind /v1/ldap-sync (ADR-058 amendment NIM-1053). nil → not mounted.
+	// LDAPSyncEnabled says whether this instance runs the sync.
+	LDAPSync        handlers.LDAPSyncStore
+	LDAPSyncEnabled bool
+
 	// SettingsConfig / SettingsOverlay — the SettingsStore surfaces behind
 	// /v1/settings (ADR-0073): the live config store (effective snapshot + file
 	// document) and the overlay store (which keys Postgres overrides, plus the
@@ -773,6 +779,11 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		settingsH = handlers.NewSettingsHandler(deps.SettingsConfig, deps.SettingsOverlay, deps.ServiceSvc, logger)
 	}
 
+	var ldapSyncH *handlers.LDAPSyncHandler
+	if deps.LDAPSync != nil {
+		ldapSyncH = handlers.NewLDAPSyncHandler(deps.LDAPSync, deps.LDAPSyncEnabled, logger)
+	}
+
 	// augurH is optional: when nil AugurSvc the augur.* routes aren't wired
 	// (the production wire-up in `keeper run` passes *augur.Service). Symmetric to
 	// serviceH.
@@ -964,7 +975,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse))
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse), withLDAPSync(ldapSyncH))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

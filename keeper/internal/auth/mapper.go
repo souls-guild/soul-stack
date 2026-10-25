@@ -295,27 +295,112 @@ func (m *DBMapper) provision(ctx context.Context, aid string, ext ExternalIdenti
 // starts. The case that needed closing was the PARTIAL one — groups that still
 // map to something, minus the role granting `*`.
 func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string) error {
-	for _, role := range want {
-		if !rbac.ValidRoleName(role) {
-			return fmt.Errorf("auth/mapper: invalid role name %q in group_role_map", role)
-		}
-	}
-
 	if m.cfg.Tx == nil {
+		for _, role := range want {
+			if !rbac.ValidRoleName(role) {
+				return fmt.Errorf("auth/mapper: invalid role name %q in group_role_map", role)
+			}
+		}
 		// Back-compat without a transaction: only grant (revoke requires reading
 		// current membership + atomicity with grant — not guaranteed without Tx).
 		return m.grantRoles(ctx, m.cfg.DB, aid, want)
 	}
+	_, err := m.reconcileTx(ctx, aid, want, false)
+	return err
+}
+
+// RoleChange is what one reconciliation did to an operator's direct
+// membership. Granted and Revoked are sorted; both empty means nothing
+// changed. Missing — roles want named that do not exist in the registry and
+// were left out (only [DBMapper.ReconcileRoles] skips them; a login fails).
+type RoleChange struct {
+	Granted []string
+	Revoked []string
+	Missing []string
+}
+
+// Empty reports whether the reconciliation changed nothing.
+func (c RoleChange) Empty() bool { return len(c.Granted) == 0 && len(c.Revoked) == 0 }
+
+// ReconcileRoles is the reconciliation a login runs, for the background group
+// sync (ADR-058, NIM-1053): same managed domain, same single transaction, same
+// refusal to empty the admin set ([ErrReconcileWouldLockOutCluster]). Three
+// differences from a login, all deliberate. An empty want is legal and drops
+// every managed role — a login never gets here with one, [DBMapper.Map] refuses
+// first. A mapper without a transaction factory is an error rather than a
+// grant-only fallback: a sync that silently cannot revoke is the defect it
+// exists to close. And a wanted role missing from the registry is skipped and
+// reported instead of failing the grant, which would roll back the revokes made
+// in the same transaction and leave the operator holding what it lost.
+func (m *DBMapper) ReconcileRoles(ctx context.Context, aid string, want []string) (RoleChange, error) {
+	if m.cfg.Tx == nil {
+		return RoleChange{}, errors.New("auth/mapper: reconciliation needs a transaction factory to revoke")
+	}
+	return m.reconcileTx(ctx, aid, want, true)
+}
+
+// RolesForGroups maps external groups onto roles through group_role_map,
+// deduplicated and sorted — the want set a login reconciles to.
+func (m *DBMapper) RolesForGroups(groups []string) []string { return m.rolesForGroups(groups) }
+
+// ManagedRolesOf returns the roles aid holds directly that group_role_map
+// owns — what a reconciliation to the empty set would take away.
+func (m *DBMapper) ManagedRolesOf(ctx context.Context, aid string) ([]string, error) {
+	current, err := rbac.DirectRolesOf(ctx, m.cfg.DB, aid)
+	if err != nil {
+		return nil, err
+	}
+	var out []string
+	for _, r := range current {
+		if _, ok := m.managedRoles[r]; ok {
+			out = append(out, r)
+		}
+	}
+	sort.Strings(out)
+	return out, nil
+}
+
+// ExistingRoles reports which of names the registry holds.
+func (m *DBMapper) ExistingRoles(ctx context.Context, names []string) (map[string]bool, error) {
+	if len(names) == 0 {
+		return map[string]bool{}, nil
+	}
+	return rbac.ExistingRoles(ctx, m.cfg.DB, names)
+}
+
+func (m *DBMapper) reconcileTx(ctx context.Context, aid string, want []string, skipMissing bool) (RoleChange, error) {
+	var change RoleChange
+	for _, role := range want {
+		if !rbac.ValidRoleName(role) {
+			return change, fmt.Errorf("auth/mapper: invalid role name %q in group_role_map", role)
+		}
+	}
 
 	tx, err := m.cfg.Tx.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
-		return fmt.Errorf("auth/mapper: begin reconcile tx: %w", err)
+		return change, fmt.Errorf("auth/mapper: begin reconcile tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }() // no-op after Commit
 
+	if skipMissing && len(want) > 0 {
+		exists, err := rbac.ExistingRoles(ctx, tx, want)
+		if err != nil {
+			return change, err
+		}
+		kept := make([]string, 0, len(want))
+		for _, r := range want {
+			if exists[r] {
+				kept = append(kept, r)
+			} else {
+				change.Missing = append(change.Missing, r)
+			}
+		}
+		want = kept
+	}
+
 	current, err := rbac.DirectRolesOf(ctx, tx, aid)
 	if err != nil {
-		return err
+		return change, err
 	}
 
 	wantSet := make(map[string]struct{}, len(want))
@@ -345,23 +430,25 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 			if errors.Is(err, rbac.ErrRoleOperatorNotFound) {
 				continue
 			}
-			// Obeying would leave the cluster with no administrator. Fail the
-			// login and touch nothing (the deferred Rollback discards the grants
-			// made above in this same tx, so membership is not left half-synced).
-			// A failed login is recoverable by fixing the IdP or the map; an empty
-			// admin set is not recoverable through the API.
+			// Obeying would leave the cluster with no administrator. Refuse and
+			// touch nothing (the deferred Rollback discards the revokes this loop
+			// already made in the same tx, so membership is not left half-synced): a login
+			// fails, the background sync skips the operator. Either is recoverable
+			// by fixing the IdP or the map; an empty admin set is not recoverable
+			// through the API.
 			if errors.Is(err, rbac.ErrWouldLockOutCluster) {
 				if m.cfg.Logger != nil {
-					m.cfg.Logger.Error("auth/mapper: refusing to revoke a role from the last cluster administrator — federated login failed",
+					m.cfg.Logger.Error("auth/mapper: refusing to revoke a role from the last cluster administrator",
 						slog.String("aid", aid),
 						slog.String("role", role),
 						slog.String("method", string(m.cfg.Method)),
 						slog.String("remedy", "stop mapping a `*`-granting role to an external group, or give the cluster a second administrator outside the federated domain"))
 				}
-				return fmt.Errorf("%w: role %q, aid %q", ErrReconcileWouldLockOutCluster, role, aid)
+				return RoleChange{}, fmt.Errorf("%w: role %q, aid %q", ErrReconcileWouldLockOutCluster, role, aid)
 			}
-			return fmt.Errorf("auth/mapper: reconcile revoke role %q: %w", role, err)
+			return RoleChange{}, fmt.Errorf("auth/mapper: reconcile revoke role %q: %w", role, err)
 		}
+		change.Revoked = append(change.Revoked, role)
 	}
 
 	// Grant: roles from want that aren't present yet (idempotent, but skip existing).
@@ -370,14 +457,17 @@ func (m *DBMapper) reconcileRoles(ctx context.Context, aid string, want []string
 			continue
 		}
 		if err := rbac.GrantOperator(ctx, tx, role, aid, nil); err != nil {
-			return fmt.Errorf("auth/mapper: reconcile grant role %q: %w", role, err)
+			return RoleChange{}, fmt.Errorf("auth/mapper: reconcile grant role %q: %w", role, err)
 		}
+		change.Granted = append(change.Granted, role)
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return fmt.Errorf("auth/mapper: commit reconcile tx: %w", err)
+		return RoleChange{}, fmt.Errorf("auth/mapper: commit reconcile tx: %w", err)
 	}
-	return nil
+	sort.Strings(change.Granted)
+	sort.Strings(change.Revoked)
+	return change, nil
 }
 
 // grantRoles idempotently grants each role over db (pool OR tx).

@@ -431,6 +431,12 @@ type daemon struct {
 	// Keeper daemon runtime wiring note.
 	pushMetrics *push.Metrics
 
+	// ldapAuthn / ldapMapper — the LDAP login's authenticator and mapper, kept
+	// for the background group sync, which reads the directory and reconciles
+	// roles with the same code (ADR-058 amendment NIM-1053). nil without auth.ldap.
+	ldapAuthn  *keeperldap.Authenticator
+	ldapMapper *keeperauth.DBMapper
+
 	// --- redis / apply-bus ---
 	redisClient *keeperredis.Client
 	applyBus    *applybus.EventBus
@@ -4834,6 +4840,8 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// lie (an explicit nil, not a typed nil in the interface).
 		SettingsConfig:  d.store,
 		SettingsOverlay: settingsOverlayOrNil(d.settings),
+		LDAPSync:        ldapSyncStoreOrNil(d.pool),
+		LDAPSyncEnabled: d.ldapSyncRuns(),
 	}, logger)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build HTTP server: %v\n", err)
@@ -4910,6 +4918,8 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 		ProvisioningGate: d.serviceHolder,
 		Logger:           d.logger,
 	})
+	d.ldapAuthn = authn
+	d.ldapMapper = mapper
 
 	return &api.LDAPAuthDeps{
 		Authenticator: authn,
