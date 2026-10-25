@@ -217,7 +217,7 @@ func (p *opCapturePool) Query(ctx context.Context, sql string, args ...any) (pgx
 func humaOperatorRouterWithPool(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool handlers.OperatorPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	opH := handlers.NewOperatorHandler(pool, opIssuer{}, opRBAC{}, time.Hour, 0, nil)
+	opH := handlers.NewOperatorHandler(pool, opIssuer{}, opRBAC{}, time.Hour, 0, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {

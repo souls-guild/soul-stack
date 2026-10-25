@@ -48,7 +48,15 @@ const (
 	TypeJWTRevoked = "https://soul-stack.com/errors/jwt-revoked"
 	// TypeJWTAlreadyRevoked — 409 on the write side: revoking a token that is
 	// already revoked (parity with [TypeOperatorRevoked]).
-	TypeJWTAlreadyRevoked   = "https://soul-stack.com/errors/jwt-already-revoked"
+	TypeJWTAlreadyRevoked = "https://soul-stack.com/errors/jwt-already-revoked"
+	// TypePersonalJWTFromPersonal — 403 on `POST /v1/me/jwts` made with a
+	// personal token (ADR-014 amendment NIM-1052): a personal token is issued
+	// from a sign-in or another kind of token, never by one of its own kind.
+	TypePersonalJWTFromPersonal = "https://soul-stack.com/errors/personal-jwt-from-personal"
+	// TypePersonalJWTLimit — 409 on `POST /v1/me/jwts`: the caller holds the
+	// maximum number of active personal tokens, or issued the maximum in 24
+	// hours; the detail says which.
+	TypePersonalJWTLimit    = "https://soul-stack.com/errors/personal-jwt-limit"
 	TypeWouldLockOutCluster = "https://soul-stack.com/errors/would-lock-out-cluster"
 	TypeIncarnationExists   = "https://soul-stack.com/errors/incarnation-already-exists"
 	TypeIncarnationLocked   = "https://soul-stack.com/errors/incarnation-locked"
@@ -227,6 +235,8 @@ var titles = map[string]string{
 	TypeOperatorRevokedToken:       "Operator revoked",
 	TypeJWTRevoked:                 "JWT revoked",
 	TypeJWTAlreadyRevoked:          "JWT is already revoked",
+	TypePersonalJWTFromPersonal:    "A personal token cannot issue personal tokens",
+	TypePersonalJWTLimit:           "Personal token limit reached",
 	TypeWouldLockOutCluster:        "Operation would lock out the cluster",
 	TypeIncarnationExists:          "Incarnation already exists",
 	TypeIncarnationLocked:          "Incarnation is locked",
@@ -324,6 +334,8 @@ var statuses = map[string]int{
 	TypeOperatorRevokedToken:       http.StatusUnauthorized,
 	TypeJWTRevoked:                 http.StatusUnauthorized,
 	TypeJWTAlreadyRevoked:          http.StatusConflict,
+	TypePersonalJWTFromPersonal:    http.StatusForbidden,
+	TypePersonalJWTLimit:           http.StatusConflict,
 	TypeWouldLockOutCluster:        http.StatusConflict,
 	TypeIncarnationExists:          http.StatusConflict,
 	TypeIncarnationLocked:          http.StatusConflict,

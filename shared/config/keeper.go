@@ -1289,8 +1289,10 @@ type KeeperAuthJWT struct {
 	SigningKeyRef string `yaml:"signing_key_ref,omitempty"`
 	Issuer        string `yaml:"issuer,omitempty"`
 	TTLDefault    string `yaml:"ttl_default,omitempty"`
-	// TTLMax — the longest lifetime POST /v1/operators and issue-token accept
-	// in their `ttl` (ADR-014 amendment NIM-1045). Default 2160h (90 days);
+	// TTLMax — the longest lifetime POST /v1/operators, issue-token and
+	// POST /v1/me/jwts accept in their `ttl` (ADR-014 amendments NIM-1045 /
+	// NIM-1052; an OIDC operator's personal token is capped lower, at
+	// ttl_default). Default 2160h (90 days);
 	// must not be below ttl_default. Duration string.
 	TTLMax       string `yaml:"ttl_max,omitempty" json:"ttl_max,omitempty"`
 	TTLBootstrap string `yaml:"ttl_bootstrap,omitempty"`

@@ -152,7 +152,9 @@ func (p *Purger) PurgeUsedTokens(ctx context.Context, maxAge time.Duration, batc
 // PurgeOperatorJWTs removes a batch of `operator_jwts` rows whose token expired
 // more than `maxAge` ago (migration 127, NIM-1045). Default `maxAge` = 30d
 // (docs/keeper/reaper.md). A revoked row goes on the same clock: once its token
-// expired, revocation has nothing left to refuse.
+// expired, revocation has nothing left to refuse. A `personal` row is also kept
+// until it is 24 hours old, the window of the daily personal-token limit
+// (migration 129, NIM-1052).
 func (p *Purger) PurgeOperatorJWTs(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
 	return p.callIntervalBatch(ctx, "purge_operator_jwts", maxAge, batchSize)
 }

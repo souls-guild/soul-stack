@@ -148,7 +148,7 @@ func TestToolAudit_RecordsTheActorToken(t *testing.T) {
 	if p[audit.PayloadActorJWTID] != mcpLiveJWTID {
 		t.Errorf("payload[%s] = %v, want the caller's jti", audit.PayloadActorJWTID, p[audit.PayloadActorJWTID])
 	}
-	if p["ttl"] != "1h0m0s" || p["label"] != "sd" || p["jwt_id"] == "" {
+	if p["ttl"] != "1h0m0s" || p["label"] != "sd" || p["jwt_id"] == "" || p["kind"] != "issued" {
 		t.Errorf("token-issued payload = %v", p)
 	}
 }

@@ -41,7 +41,7 @@ func TestIntegration_JWT_MintListTouchRevoke(t *testing.T) {
 	time.Sleep(10 * time.Millisecond)
 	session := mintFor(t, "sd-integration", JWTKindSession, "", "")
 
-	recs, total, err := ListJWTs(ctx, integrationPool, "sd-integration", 0, 50)
+	recs, total, err := ListJWTs(ctx, integrationPool, "sd-integration", JWTFilter{}, 0, 50)
 	if err != nil {
 		t.Fatalf("ListJWTs: %v", err)
 	}
@@ -67,7 +67,7 @@ func TestIntegration_JWT_MintListTouchRevoke(t *testing.T) {
 	if err := TouchJWT(ctx, integrationPool, issued.JWTID, used.Add(-time.Hour), ClientMeta{IP: "stale", UserAgent: "stale"}); err != nil {
 		t.Fatalf("TouchJWT (older): %v", err)
 	}
-	recs, _, _ = ListJWTs(ctx, integrationPool, "sd-integration", 0, 50)
+	recs, _, _ = ListJWTs(ctx, integrationPool, "sd-integration", JWTFilter{}, 0, 50)
 	if lu := recs[1].LastUsedAt; lu == nil || !lu.Equal(used) || recs[1].LastUsedIP != "10.0.0.9" {
 		t.Errorf("last used = %v %q, want %v from 10.0.0.9 — a delayed older write must not move it back", lu, recs[1].LastUsedIP, used)
 	}
@@ -162,7 +162,7 @@ func TestIntegration_JWT_Constraints(t *testing.T) {
 	seedActiveOperator(t, "archon-alice", nil)
 
 	for name, sql := range map[string]string{
-		"unknown kind":     `INSERT INTO operator_jwts (jwt_id, aid, kind, created_at, expires_at) VALUES ('01JKC0NSTRA1NT000000000000', 'archon-alice', 'personal', NOW(), NOW() + INTERVAL '1 hour')`,
+		"unknown kind":     `INSERT INTO operator_jwts (jwt_id, aid, kind, created_at, expires_at) VALUES ('01JKC0NSTRA1NT000000000000', 'archon-alice', 'forever', NOW(), NOW() + INTERVAL '1 hour')`,
 		"malformed id":     `INSERT INTO operator_jwts (jwt_id, aid, kind, created_at, expires_at) VALUES ('not-a-ulid', 'archon-alice', 'issued', NOW(), NOW() + INTERVAL '1 hour')`,
 		"label too long":   `INSERT INTO operator_jwts (jwt_id, aid, kind, label, created_at, expires_at) VALUES ('01JKC0NSTRA1NT000000000001', 'archon-alice', 'issued', '` + strings.Repeat("x", 201) + `', NOW(), NOW() + INTERVAL '1 hour')`,
 		"expiry not after": `INSERT INTO operator_jwts (jwt_id, aid, kind, created_at, expires_at) VALUES ('01JKC0NSTRA1NT000000000002', 'archon-alice', 'issued', NOW(), NOW())`,

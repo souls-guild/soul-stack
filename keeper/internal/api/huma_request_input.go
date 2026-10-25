@@ -139,6 +139,12 @@ func toOperatorIssueTokenInput(b OperatorIssueTokenRequest) handlers.OperatorIss
 	return handlers.OperatorIssueTokenInput{TTL: b.TTL, Label: b.Label}
 }
 
+// toOperatorJWTFilterInput projects the token-list query (both list routes) onto
+// the handler filter.
+func toOperatorJWTFilterInput(q JWTListFilterQuery) handlers.OperatorJWTFilterInput {
+	return handlers.OperatorJWTFilterInput{Kinds: q.Kinds, State: q.State, Q: q.Q}
+}
+
 // toProvisioningPolicyUpdateInput projects the PUT /v1/provisioning-policy body
 // onto the handler input.
 func toProvisioningPolicyUpdateInput(b ProvisioningPolicyUpdateRequest) handlers.ProvisioningPolicyUpdateInput {

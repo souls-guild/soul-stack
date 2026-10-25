@@ -276,7 +276,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 // stubOperatorHandler builds an OperatorHandler with a stub pool/issuer/rbac.
 func stubOperatorHandler(t *testing.T) *handlers.OperatorHandler {
 	t.Helper()
-	return handlers.NewOperatorHandler(stubOperatorPool{}, stubIssuer{}, stubRBACSource{}, time.Hour, 0, nil)
+	return handlers.NewOperatorHandler(stubOperatorPool{}, stubIssuer{}, stubRBACSource{}, time.Hour, 0, 0, nil)
 }
 
 // stubRoleHandler builds a RoleHandler via rbac.Service with a stub pool.

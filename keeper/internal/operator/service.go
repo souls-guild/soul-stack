@@ -29,8 +29,36 @@ var ErrWouldLockOutCluster = errors.New("operator: would lock out cluster (targe
 const MinJWTTTL = time.Minute
 
 // ErrInvalidTTL — a requested token lifetime is below [MinJWTTTL] or above
-// `auth.jwt.ttl_max`.
+// `auth.jwt.ttl_max` (for a personal token: above the operator's own ceiling).
 var ErrInvalidTTL = errors.New("operator: invalid ttl")
+
+// The bounds on personal tokens (ADR-014 amendment NIM-1052). Issuing one needs
+// no permission, so both are what any operator can do:
+//   - MaxActivePersonalJWTs bounds the live ones — the credentials a person can
+//     have exposed at once. A revoke frees a slot.
+//   - MaxPersonalJWTsPerDay bounds issuance, revoked ones included. Without it
+//     an issue-then-revoke loop would grow `operator_jwts`, grow every node's
+//     snapshot of revoked ids until those tokens expire, and reload every
+//     node's snapshot once per revoke.
+const (
+	MaxActivePersonalJWTs = 10
+	MaxPersonalJWTsPerDay = 20
+)
+
+var (
+	// ErrPersonalJWTLimit — the operator already holds [MaxActivePersonalJWTs]
+	// active personal tokens.
+	ErrPersonalJWTLimit = fmt.Errorf("operator: at most %d active personal tokens; revoke one first", MaxActivePersonalJWTs)
+	// ErrPersonalJWTDailyLimit — the operator issued [MaxPersonalJWTsPerDay]
+	// personal tokens in the last 24 hours.
+	ErrPersonalJWTDailyLimit = fmt.Errorf("operator: at most %d personal tokens a day, revoked ones included; try again later", MaxPersonalJWTsPerDay)
+	// ErrPersonalJWTFromPersonal — the request that asks for a personal token is
+	// itself made with one (or with a token no row of the caller accounts for),
+	// so a personal token cannot mint its own successor. It does not stop an
+	// owner who holds `operator.issue-token`: that route mints an `issued`
+	// token for anyone, the owner included, from any of its tokens.
+	ErrPersonalJWTFromPersonal = errors.New("operator: a personal token cannot issue personal tokens; sign in or use another token")
+)
 
 // ServiceDeps — dependencies of [Service]. All fields immutable after constructor.
 //
@@ -41,13 +69,16 @@ var ErrInvalidTTL = errors.New("operator: invalid ttl")
 // (Slice 3): admin-set taken from DB under FOR UPDATE (rbac.LockEffectiveClusterAdmins).
 // TTLDefault — TTL of JWTs issued by Create/IssueToken when the caller asks for none.
 // TTLMax — the longest TTL a caller may ask for (`auth.jwt.ttl_max`); 0 → TTLDefault.
+// OIDCSessionTTL — the lifetime of an OIDC sign-in, the ceiling of an OIDC
+// operator's personal token; 0 → TTLDefault.
 type ServiceDeps struct {
-	Pool       ServicePool
-	Issuer     JWTIssuer
-	RBAC       RBACSource
-	TTLDefault time.Duration
-	TTLMax     time.Duration
-	Logger     *slog.Logger
+	Pool           ServicePool
+	Issuer         JWTIssuer
+	RBAC           RBACSource
+	TTLDefault     time.Duration
+	TTLMax         time.Duration
+	OIDCSessionTTL time.Duration
+	Logger         *slog.Logger
 }
 
 // ServicePool — narrow subset of pgxpool.Pool needed by service.
@@ -91,12 +122,13 @@ type Invalidator interface {
 // cluster-wide invalidation — via atomic late-binding
 // [SetInvalidator].
 type Service struct {
-	pool       ServicePool
-	issuer     JWTIssuer
-	rbac       RBACSource
-	ttlDefault time.Duration
-	ttlMax     time.Duration
-	logger     *slog.Logger
+	pool           ServicePool
+	issuer         JWTIssuer
+	rbac           RBACSource
+	ttlDefault     time.Duration
+	ttlMax         time.Duration
+	oidcSessionTTL time.Duration
+	logger         *slog.Logger
 
 	// inv — optional cluster-wide invalidator (ADR-014 Amendment
 	// 2026-05-27). Late-binding via [Service.SetInvalidator]: Redis client
@@ -130,13 +162,21 @@ func NewService(d ServiceDeps) (*Service, error) {
 	if ttlMax < d.TTLDefault {
 		return nil, fmt.Errorf("operator: ServiceDeps.TTLMax %s is below TTLDefault %s", ttlMax, d.TTLDefault)
 	}
+	oidcSessionTTL := d.OIDCSessionTTL
+	if oidcSessionTTL < 0 {
+		return nil, errors.New("operator: ServiceDeps.OIDCSessionTTL must not be negative")
+	}
+	if oidcSessionTTL == 0 {
+		oidcSessionTTL = d.TTLDefault
+	}
 	return &Service{
-		pool:       d.Pool,
-		issuer:     d.Issuer,
-		rbac:       d.RBAC,
-		ttlDefault: d.TTLDefault,
-		ttlMax:     ttlMax,
-		logger:     d.Logger,
+		pool:           d.Pool,
+		issuer:         d.Issuer,
+		rbac:           d.RBAC,
+		ttlDefault:     d.TTLDefault,
+		ttlMax:         ttlMax,
+		oidcSessionTTL: oidcSessionTTL,
+		logger:         d.Logger,
 	}, nil
 }
 
@@ -585,17 +625,234 @@ func (s *Service) IssueToken(ctx context.Context, in IssueTokenInput) (*IssueTok
 	}, nil
 }
 
-// ListJWTs returns a page of the operator's accounted tokens, newest first.
-// [ErrOperatorNotFound] for an unknown AID, so an empty list always means an
-// operator with no tokens.
-func (s *Service) ListJWTs(ctx context.Context, aid string, offset, limit int) ([]JWTRecord, int, error) {
+// ListJWTs returns a page of the operator's accounted tokens under f, newest
+// first. [ErrOperatorNotFound] for an unknown AID, so an empty list always
+// means an operator with no tokens (under f).
+func (s *Service) ListJWTs(ctx context.Context, aid string, f JWTFilter, offset, limit int) ([]JWTRecord, int, error) {
 	if !ValidAID(aid) {
 		return nil, 0, fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
 	}
 	if _, err := SelectByAID(ctx, s.pool, aid); err != nil {
 		return nil, 0, err
 	}
-	return ListJWTs(ctx, s.pool, aid, offset, limit)
+	return ListJWTs(ctx, s.pool, aid, f, offset, limit)
+}
+
+// personalTTLMax is the longest personal token op may ask for. An OIDC
+// operator's roles are reconciled from its groups only at sign-in, so its token
+// must not outlive a sign-in: a person removed from a group at the IdP keeps
+// the roles of the last sign-in for as long as the token lives (ADR-014
+// amendment NIM-1052, lifted by NIM-1054). LDAP gets the general ceiling on the
+// strength of the background group sync (NIM-1053); without that sync an LDAP
+// operator would be in the OIDC operator's position.
+func (s *Service) personalTTLMax(m AuthMethod) time.Duration {
+	if m == AuthMethodOIDC && s.oidcSessionTTL < s.ttlMax {
+		return s.oidcSessionTTL
+	}
+	return s.ttlMax
+}
+
+// resolvePersonalTTL is [Service.resolveTTL] under the operator's own ceiling.
+// signInLeft > 0 is the time left in the OIDC sign-in the request is made
+// with: the token is cut to expire with it, so a token minted late in a
+// sign-in does not carry that sign-in's roles past the next one.
+func (s *Service) resolvePersonalTTL(requested time.Duration, m AuthMethod, signInLeft time.Duration) (time.Duration, error) {
+	ceiling := s.personalTTLMax(m)
+	ttl := requested
+	switch {
+	case requested == 0:
+		ttl = min(s.ttlDefault, ceiling)
+	case requested < MinJWTTTL:
+		return 0, fmt.Errorf("%w: %s is below the minimum %s", ErrInvalidTTL, requested, MinJWTTTL)
+	case requested > ceiling && ceiling < s.ttlMax:
+		return 0, fmt.Errorf("%w: %s is above %s, the lifetime of an OIDC sign-in: OIDC group membership is re-checked only at sign-in", ErrInvalidTTL, requested, ceiling)
+	case requested > ceiling:
+		return 0, fmt.Errorf("%w: %s is above auth.jwt.ttl_max %s", ErrInvalidTTL, requested, ceiling)
+	}
+	if signInLeft > 0 {
+		// The mint takes its own `now` a few milliseconds after signInLeft was
+		// measured; the second off the end keeps the token inside the sign-in.
+		left := (signInLeft - time.Second).Truncate(time.Second)
+		if left < MinJWTTTL {
+			return 0, fmt.Errorf("%w: your OIDC sign-in ends too soon for a token of at least %s; sign in again", ErrInvalidTTL, MinJWTTTL)
+		}
+		ttl = min(ttl, left)
+	}
+	return ttl, nil
+}
+
+// IssuePersonalJWTInput — parameters for [Service.IssuePersonalJWT]. AID is the
+// caller and the owner; CallerJWTID is the `jti` of the token the request is
+// made with ("" for a token minted before migration 127).
+type IssuePersonalJWTInput struct {
+	AID         string
+	CallerJWTID string
+	// TTL — 0 → `auth.jwt.ttl_default`, capped at the operator's ceiling.
+	TTL    time.Duration
+	Label  string
+	Client ClientMeta
+}
+
+const lockOperatorForPersonalJWTSQL = `SELECT auth_method, revoked_at IS NOT NULL FROM operators WHERE aid = $1 FOR NO KEY UPDATE`
+
+// IssuePersonalJWT mints a token the operator issues to itself (kind
+// `personal`). It needs no permission: the token's rights are the owner's at
+// each request, read from the RBAC snapshot like every token's, so it can do
+// nothing its owner cannot do at that moment. What it adds is a lifetime, and
+// that is what is bounded here — the ceiling ([Service.resolvePersonalTTL]),
+// the counts ([MaxActivePersonalJWTs], [MaxPersonalJWTsPerDay]) and the
+// credential that may ask ([ErrPersonalJWTFromPersonal]).
+//
+// The operator row is locked for the counts and the insert, so two concurrent
+// requests cannot both take the last free slot.
+func (s *Service) IssuePersonalJWT(ctx context.Context, in IssuePersonalJWTInput) (*IssueTokenResult, error) {
+	if !ValidAID(in.AID) {
+		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
+	}
+	if !ValidJWTLabel(in.Label) {
+		return nil, ErrInvalidJWTLabel
+	}
+
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return nil, fmt.Errorf("operator: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+
+	var (
+		method  string
+		revoked bool
+	)
+	switch err := tx.QueryRow(ctx, lockOperatorForPersonalJWTSQL, in.AID).Scan(&method, &revoked); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return nil, ErrOperatorNotFound
+	case err != nil:
+		return nil, fmt.Errorf("operator: lock operator: %w", err)
+	case revoked:
+		return nil, ErrOperatorAlreadyRevoked
+	}
+
+	signInLeft, err := s.callerSignInLeft(ctx, tx, in.AID, in.CallerJWTID, AuthMethod(method))
+	if err != nil {
+		return nil, err
+	}
+
+	ttl, err := s.resolvePersonalTTL(in.TTL, AuthMethod(method), signInLeft)
+	if err != nil {
+		return nil, err
+	}
+
+	counts, err := CountPersonalJWTs(ctx, tx, in.AID)
+	if err != nil {
+		return nil, err
+	}
+	// The daily limit is reported first: revoking a token does not lift it.
+	if counts.LastDay >= MaxPersonalJWTsPerDay {
+		return nil, ErrPersonalJWTDailyLimit
+	}
+	if counts.Active >= MaxActivePersonalJWTs {
+		return nil, ErrPersonalJWTLimit
+	}
+
+	minted, err := MintJWT(ctx, tx, s.issuer, MintInput{
+		AID:          in.AID,
+		Roles:        s.rbac.RolesOf(in.AID),
+		TTL:          ttl,
+		Kind:         JWTKindPersonal,
+		Label:        in.Label,
+		CreatedByAID: in.AID,
+		Client:       in.Client,
+	})
+	if err != nil {
+		return nil, fmt.Errorf("operator: issue personal JWT failed: %w", err)
+	}
+	// The token was signed inside the transaction; a failed commit drops its
+	// row, so it is discarded here and never leaves the process unaccounted.
+	if err := tx.Commit(ctx); err != nil {
+		return nil, fmt.Errorf("operator: commit tx: %w", err)
+	}
+	return &IssueTokenResult{
+		AID:       in.AID,
+		JWT:       minted.JWT,
+		JWTID:     minted.JWTID,
+		TTL:       ttl,
+		ExpiresAt: minted.ExpiresAt,
+	}, nil
+}
+
+// callerSignInLeft checks the token the request is made with and returns the
+// time left in it when it is the OIDC sign-in a personal token must not
+// outlive (0 otherwise). [ErrPersonalJWTFromPersonal] for a personal token and
+// for a `jti` that is not a row of aid; an empty `jti` is a token from before
+// migration 127, not a personal one.
+func (s *Service) callerSignInLeft(ctx context.Context, db ExecQueryRower, aid, callerJWTID string, m AuthMethod) (time.Duration, error) {
+	if callerJWTID == "" {
+		return 0, nil
+	}
+	kind, expiresAt, found, err := LookupJWT(ctx, db, aid, callerJWTID)
+	if err != nil {
+		return 0, err
+	}
+	if !found || kind == JWTKindPersonal {
+		return 0, ErrPersonalJWTFromPersonal
+	}
+	if m != AuthMethodOIDC || kind != JWTKindSession {
+		return 0, nil
+	}
+	left := time.Until(expiresAt)
+	if left <= 0 {
+		// Expired since it was verified; anything below MinJWTTTL is refused.
+		left = time.Nanosecond
+	}
+	return left, nil
+}
+
+// PersonalJWTTerms — what [Service.IssuePersonalJWT] would allow aid right now.
+// TTLMax is the longest ttl it accepts; ExpiresBy, set for a request made with
+// an OIDC sign-in, is when a token issued now expires at the latest.
+type PersonalJWTTerms struct {
+	TTLMax     time.Duration
+	ExpiresBy  *time.Time
+	Active     int
+	Limit      int
+	LastDay    int
+	DailyLimit int
+}
+
+// PersonalJWTTerms reads aid's ceiling and its personal-token counts, so a
+// client can offer only what will be accepted. callerJWTID is the request's
+// `jti`.
+func (s *Service) PersonalJWTTerms(ctx context.Context, aid, callerJWTID string) (PersonalJWTTerms, error) {
+	if !ValidAID(aid) {
+		return PersonalJWTTerms{}, fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
+	}
+	op, err := SelectByAID(ctx, s.pool, aid)
+	if err != nil {
+		return PersonalJWTTerms{}, err
+	}
+	counts, err := CountPersonalJWTs(ctx, s.pool, aid)
+	if err != nil {
+		return PersonalJWTTerms{}, err
+	}
+	terms := PersonalJWTTerms{
+		TTLMax:     s.personalTTLMax(op.AuthMethod),
+		Active:     counts.Active,
+		Limit:      MaxActivePersonalJWTs,
+		LastDay:    counts.LastDay,
+		DailyLimit: MaxPersonalJWTsPerDay,
+	}
+	// A refusal of the caller's own token is IssuePersonalJWT's to report; the
+	// terms only lack the cut-off then.
+	left, err := s.callerSignInLeft(ctx, s.pool, aid, callerJWTID, op.AuthMethod)
+	switch {
+	case errors.Is(err, ErrPersonalJWTFromPersonal):
+	case err != nil:
+		return PersonalJWTTerms{}, err
+	case left > 0:
+		by := time.Now().Add(left - time.Second).UTC().Truncate(time.Second)
+		terms.ExpiresBy = &by
+	}
+	return terms, nil
 }
 
 // RevokeJWTInput — parameters for RevokeJWT.

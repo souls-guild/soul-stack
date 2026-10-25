@@ -285,6 +285,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"127_create_operator_jwts.up.sql",
 		"128_create_ldap_sync_operators.down.sql",
 		"128_create_ldap_sync_operators.up.sql",
+		"129_operator_jwts_personal_kind.down.sql",
+		"129_operator_jwts_personal_kind.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

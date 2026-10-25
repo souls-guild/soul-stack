@@ -2341,6 +2341,63 @@ components:
         - name
         - required
       type: object
+    MyJWTListReply:
+      additionalProperties: false
+      properties:
+        items:
+          description: page of the caller's tokens, newest first
+          items:
+            $ref: "#/components/schemas/OperatorJWT"
+          type:
+            - array
+            - "null"
+        limit:
+          description: page size
+          format: int32
+          type: integer
+        offset:
+          description: offset from start of set
+          format: int32
+          type: integer
+        personal_active:
+          description: the caller's personal tokens that are neither revoked nor expired
+          format: int32
+          type: integer
+        personal_daily_limit:
+          description: the most personal tokens an operator may issue in 24 hours
+          format: int32
+          type: integer
+        personal_expires_by:
+          description: "set when the request is made with an OIDC sign-in: a personal token issued now expires at this time at the latest"
+          format: date-time
+          type: string
+        personal_last_day:
+          description: the caller's personal tokens issued in the last 24 hours, revoked ones included
+          format: int32
+          type: integer
+        personal_limit:
+          description: the most active personal tokens an operator may hold
+          format: int32
+          type: integer
+        personal_ttl_max_seconds:
+          description: the longest ttl POST /v1/me/jwts accepts from the caller, in seconds
+          format: int64
+          type: integer
+        total:
+          description: total number of entries under the filters
+          format: int32
+          type: integer
+      required:
+        - items
+        - offset
+        - limit
+        - total
+        - personal_ttl_max_seconds
+        - personal_active
+        - personal_limit
+        - personal_last_day
+        - personal_daily_limit
+      type: object
     MyPermission:
       additionalProperties: false
       properties:
@@ -2565,7 +2622,7 @@ components:
           maxLength: 200
           type: string
         ttl:
-          description: lifetime ("2160h" or "90d"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max, else 422
+          description: "lifetime (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max (on POST /v1/me/jwts: the caller's own ceiling, the OIDC sign-in lifetime for an OIDC operator), else 422"
           type: string
       type: object
     OperatorJWT:
@@ -2594,6 +2651,7 @@ components:
             - bootstrap
             - issued
             - session
+            - personal
           type: string
         label:
           type: string
@@ -10144,6 +10202,183 @@ paths:
       summary: Change the LDAP group sync settings
       tags:
         - ldap-sync
+  /v1/me/jwts:
+    get:
+      description: "Every token of the caller, of every kind, newest first, with where it was minted and last used; never the token itself. Filters kind/state/q as on GET /v1/operators/{aid}/jwts. Also answers what POST /v1/me/jwts would accept from the caller now: the ttl ceiling, the OIDC sign-in cut-off, and the personal-token counts against both limits. No permission (ADR-014 amendment NIM-1052). Read-only, no audit."
+      operationId: listMyJWTs
+      parameters:
+        - description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+          explode: true
+          in: query
+          name: kind
+          schema:
+            description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+            items:
+              enum:
+                - bootstrap
+                - issued
+                - session
+                - personal
+              type: string
+            type:
+              - array
+              - "null"
+        - description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+            enum:
+              - active
+              - revoked
+              - expired
+            type: string
+        - description: case-insensitive substring of the label; empty -> no filter
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: case-insensitive substring of the label; empty -> no filter
+            maxLength: 200
+            type: string
+        - description: offset from start of set, ≥0 (out-of-range → 400)
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: offset from start of set, ≥0 (out-of-range → 400)
+            format: int32
+            type: integer
+        - description: page size 1..1000 (out-of-range → 400)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: page size 1..1000 (out-of-range → 400)
+            format: int32
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/MyJWTListReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Your own tokens
+      tags:
+        - operator
+    post:
+      description: "Mints a token of kind personal for the caller (ADR-014 amendment NIM-1052). No permission: the token's rights are the caller's at each request, read from the RBAC data like every token's. Optional body: ttl and label. The ttl ceiling is auth.jwt.ttl_max, or the OIDC sign-in lifetime for an OIDC operator, whose token made from a sign-in also expires with that sign-in at the latest (GET /v1/me/jwts answers both as personal_ttl_max_seconds / personal_expires_by). At most 10 active personal tokens and 20 issued in 24 hours (409 personal-jwt-limit). A request made with a personal token is refused (403 personal-jwt-from-personal). Returns the JWT once."
+      operationId: issueMyJWT
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorIssueTokenRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueTokenReply"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Issue a personal token to yourself
+      tags:
+        - operator
+  /v1/me/jwts/{jwt_id}/revoke:
+    post:
+      description: "Revokes one of the caller's tokens of any kind (ADR-014 amendment NIM-1052): refused (401 jwt-revoked) on its next request on every Keeper node. No permission. 404 - not a token of the caller (also for another operator's token). 409 - already revoked. Revoking the token the request is made with succeeds and signs the caller out of it."
+      operationId: revokeMyJWT
+      parameters:
+        - description: jwt_id of one of the caller's tokens
+          in: path
+          name: jwt_id
+          required: true
+          schema:
+            description: jwt_id of one of the caller's tokens
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Revoke one of your own tokens
+      tags:
+        - operator
   /v1/me/permissions:
     get:
       description: Subset of the catalog actually granted to the current operator (AID from JWT-claims). Auth-only (any authenticated caller can see their own permissions; others' are not exposed). Read-only, no audit.
@@ -10554,7 +10789,7 @@ paths:
         - operator
   /v1/operators/{aid}/jwts:
     get:
-      description: Every JWT Keeper minted for the operator, newest first, with where it was minted from and where it was last used (ADR-014 amendment NIM-1045). Never returns a token. Expired tokens stay listed until the Reaper rule purge_operator_jwts removes them. Permission operator.list. Read-only, no audit.
+      description: "Every JWT Keeper minted for the operator, newest first, with where it was minted from and where it was last used (ADR-014 amendment NIM-1045). Never returns a token. Expired tokens stay listed until the Reaper rule purge_operator_jwts removes them. Filters: kind (repeatable), state (active/revoked/expired), q (label substring) - ADR-014 amendment NIM-1052. Permission operator.list. Read-only, no audit."
       operationId: listOperatorJWTs
       parameters:
         - description: AID of the Archon
@@ -10564,6 +10799,41 @@ paths:
           schema:
             description: AID of the Archon
             pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+        - description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+          explode: true
+          in: query
+          name: kind
+          schema:
+            description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+            items:
+              enum:
+                - bootstrap
+                - issued
+                - session
+                - personal
+              type: string
+            type:
+              - array
+              - "null"
+        - description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+            enum:
+              - active
+              - revoked
+              - expired
+            type: string
+        - description: case-insensitive substring of the label; empty -> no filter
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: case-insensitive substring of the label; empty -> no filter
+            maxLength: 200
             type: string
         - description: offset from start of set, ≥0 (out-of-range → 400)
           explode: false

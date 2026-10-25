@@ -1074,6 +1074,7 @@ func (h *Handler) callOperatorIssueToken(ctx context.Context, claims *jwt.Claims
 		"aid":        res.AID,
 		"expires_at": res.ExpiresAt.UTC().Truncate(time.Second).Format(time.RFC3339),
 		"jwt_id":     res.JWTID,
+		"kind":       string(operator.JWTKindIssued),
 		"ttl":        res.TTL.String(),
 	}
 	if a.Label != "" {
@@ -1149,7 +1150,7 @@ func (h *Handler) callOperatorJWTList(ctx context.Context, claims *jwt.Claims, r
 			"operator lacks required permission operator.list")
 	}
 
-	recs, total, err := h.deps.OperatorSvc.ListJWTs(ctx, a.AID, offset, limit)
+	recs, total, err := h.deps.OperatorSvc.ListJWTs(ctx, a.AID, operator.JWTFilter{}, offset, limit)
 	if err != nil {
 		code, detail := mapServiceErrorToMCP(err)
 		if code == mcpCodeInternalError {

@@ -95,18 +95,21 @@ func (h *OperatorHandler) SetProvisioningGate(gate ProvisioningGate) {
 
 // NewOperatorHandler creates a handler. ttlDefault — TTL of a JWT the caller asks no
 // lifetime for; ttlMax — the longest one it may ask for (`auth.jwt.ttl_max`, 0 →
-// ttlDefault). Internally it assembles [operator.Service] (one per handler).
-func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource, ttlDefault, ttlMax time.Duration, logger *slog.Logger) *OperatorHandler {
+// ttlDefault); oidcSessionTTL — the lifetime of an OIDC sign-in, the ceiling of an
+// OIDC operator's personal token (0 → ttlDefault). Internally it assembles
+// [operator.Service] (one per handler).
+func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource, ttlDefault, ttlMax, oidcSessionTTL time.Duration, logger *slog.Logger) *OperatorHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
 	svc, err := operator.NewService(operator.ServiceDeps{
-		Pool:       pool,
-		Issuer:     issuer,
-		RBAC:       rbacSrc,
-		TTLDefault: ttlDefault,
-		TTLMax:     ttlMax,
-		Logger:     logger,
+		Pool:           pool,
+		Issuer:         issuer,
+		RBAC:           rbacSrc,
+		TTLDefault:     ttlDefault,
+		TTLMax:         ttlMax,
+		OIDCSessionTTL: oidcSessionTTL,
+		Logger:         logger,
 	})
 	if err != nil {
 		// Single point of misconfiguration — the caller (NewServer) already
@@ -354,18 +357,21 @@ type OperatorIssueTokenReply struct {
 	AID       string
 	JWT       string
 	JWTID     string
+	Kind      operator.JWTKind
 	TTL       time.Duration
 	Label     string
 	ExpiresAt time.Time
 }
 
 // AuditPayload assembles the audit payload of the issue-token route (parity with legacy:
-// aid + expires_at RFC3339). WITHOUT the JWT itself (SENSITIVE). Source for huma variant B.
+// aid + expires_at RFC3339) and of `POST /v1/me/jwts`; kind tells them apart. WITHOUT the
+// JWT itself (SENSITIVE). Source for huma variant B.
 func (r OperatorIssueTokenReply) AuditPayload() middleware.AuditPayload {
 	p := middleware.AuditPayload{
 		"aid":        r.AID,
 		"expires_at": r.ExpiresAt.Format(time.RFC3339),
 		"jwt_id":     r.JWTID,
+		"kind":       string(r.Kind),
 		"ttl":        r.TTL.String(),
 	}
 	if r.Label != "" {
@@ -427,6 +433,54 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 		AID:       res.AID,
 		JWT:       res.JWT,
 		JWTID:     res.JWTID,
+		Kind:      operator.JWTKindIssued,
+		TTL:       res.TTL,
+		Label:     req.Label,
+		ExpiresAt: res.ExpiresAt.UTC().Truncate(time.Second),
+	}, nil
+}
+
+// IssuePersonalJWTTyped — domain function for POST /v1/me/jwts: the caller
+// issues a token to itself (ADR-014 amendment NIM-1052). The owner is the
+// claims' subject, never a path or body field, so no request can name another
+// operator. 403 when the request is made with a personal token, 409 at either
+// limit, 422 for a ttl above the caller's ceiling.
+func (h *OperatorHandler) IssuePersonalJWTTyped(ctx context.Context, claims *jwt.Claims, req OperatorIssueTokenInput) (OperatorIssueTokenReply, error) {
+	var zero OperatorIssueTokenReply
+	ttl, err := operator.ParseTTL(req.TTL)
+	if err != nil {
+		p, _ := tokenTermsProblem(err)
+		return zero, p
+	}
+	res, err := h.svc.IssuePersonalJWT(ctx, operator.IssuePersonalJWTInput{
+		AID:         claims.Subject,
+		CallerJWTID: claims.ID,
+		TTL:         ttl,
+		Label:       req.Label,
+		Client:      clientMeta(ctx),
+	})
+	if p, ok := tokenTermsProblem(err); ok {
+		return zero, p
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, operator.ErrPersonalJWTFromPersonal):
+		return zero, &problemError{problem.New(problem.TypePersonalJWTFromPersonal, "", strings.TrimPrefix(err.Error(), "operator: "))}
+	case errors.Is(err, operator.ErrPersonalJWTLimit), errors.Is(err, operator.ErrPersonalJWTDailyLimit):
+		return zero, &problemError{problem.New(problem.TypePersonalJWTLimit, "", strings.TrimPrefix(err.Error(), "operator: "))}
+	case errors.Is(err, operator.ErrOperatorNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "operator "+claims.Subject+" not found")}
+	case errors.Is(err, operator.ErrOperatorAlreadyRevoked):
+		return zero, &problemError{problem.New(problem.TypeOperatorRevokedToken, "", "operator "+claims.Subject+" is revoked")}
+	default:
+		h.logger.Error("me.jwt-issue: service failed", slog.String("aid", claims.Subject), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "issue JWT failed")}
+	}
+	return OperatorIssueTokenReply{
+		AID:       res.AID,
+		JWT:       res.JWT,
+		JWTID:     res.JWTID,
+		Kind:      operator.JWTKindPersonal,
 		TTL:       res.TTL,
 		Label:     req.Label,
 		ExpiresAt: res.ExpiresAt.UTC().Truncate(time.Second),
@@ -487,10 +541,26 @@ type OperatorJWTPage struct {
 	Total  int
 }
 
+// OperatorJWTFilterInput — the token-list filters as a query carries them:
+// kinds (OR), one state, a label substring. Zero value — every row.
+type OperatorJWTFilterInput struct {
+	Kinds []string
+	State string
+	Q     string
+}
+
+func (f OperatorJWTFilterInput) domain() operator.JWTFilter {
+	kinds := make([]operator.JWTKind, 0, len(f.Kinds))
+	for _, k := range f.Kinds {
+		kinds = append(kinds, operator.JWTKind(k))
+	}
+	return operator.JWTFilter{Kinds: kinds, State: operator.JWTState(f.State), Q: f.Q}
+}
+
 // ListJWTsTyped — domain function for GET /v1/operators/{aid}/jwts: the
-// operator's accounted tokens, newest first, expired ones included until the
-// Reaper purges them. 404 for an unknown AID.
-func (h *OperatorHandler) ListJWTsTyped(ctx context.Context, targetAID string, offset, limit int) (OperatorJWTPage, error) {
+// operator's accounted tokens under f, newest first, expired ones included
+// until the Reaper purges them. 404 for an unknown AID.
+func (h *OperatorHandler) ListJWTsTyped(ctx context.Context, targetAID string, f OperatorJWTFilterInput, offset, limit int) (OperatorJWTPage, error) {
 	var zero OperatorJWTPage
 	if !operator.ValidAID(targetAID) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
@@ -499,11 +569,13 @@ func (h *OperatorHandler) ListJWTsTyped(ctx context.Context, targetAID string, o
 	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
 		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
 	}
-	recs, total, err := h.svc.ListJWTs(ctx, targetAID, offset, limit)
+	recs, total, err := h.svc.ListJWTs(ctx, targetAID, f.domain(), offset, limit)
 	switch {
 	case err == nil:
 	case errors.Is(err, operator.ErrOperatorNotFound):
 		return zero, &problemError{problem.New(problem.TypeNotFound, "", "operator "+targetAID+" not found")}
+	case errors.Is(err, operator.ErrInvalidJWTFilter):
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "", strings.TrimPrefix(err.Error(), "operator: "))}
 	default:
 		h.logger.Error("operator.jwt-list: service failed", slog.String("aid", targetAID), slog.Any("error", err))
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "list jwts failed")}
@@ -552,6 +624,50 @@ func (h *OperatorHandler) RevokeJWTTyped(ctx context.Context, claims *jwt.Claims
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "revoke jwt failed")}
 	}
 	return OperatorJWTRevokeReply{AID: rec.AID, JWTID: rec.JWTID, Kind: string(rec.Kind)}, nil
+}
+
+// MyJWTPage — a page of the caller's own tokens, plus what POST /v1/me/jwts
+// would allow it right now, so a client offers only what will be accepted.
+type MyJWTPage struct {
+	OperatorJWTPage
+	PersonalTTLMax     time.Duration
+	PersonalExpiresBy  *time.Time
+	PersonalActive     int
+	PersonalLimit      int
+	PersonalLastDay    int
+	PersonalDailyLimit int
+}
+
+// ListMyJWTsTyped — domain function for GET /v1/me/jwts: [OperatorHandler.ListJWTsTyped]
+// for the claims' subject, which is the only operator this route can read.
+func (h *OperatorHandler) ListMyJWTsTyped(ctx context.Context, claims *jwt.Claims, f OperatorJWTFilterInput, offset, limit int) (MyJWTPage, error) {
+	page, err := h.ListJWTsTyped(ctx, claims.Subject, f, offset, limit)
+	if err != nil {
+		return MyJWTPage{}, err
+	}
+	terms, err := h.svc.PersonalJWTTerms(ctx, claims.Subject, claims.ID)
+	if err != nil {
+		h.logger.Error("me.jwt-list: personal terms failed", slog.String("aid", claims.Subject), slog.Any("error", err))
+		return MyJWTPage{}, &problemError{problem.New(problem.TypeInternalError, "", "list jwts failed")}
+	}
+	return MyJWTPage{
+		OperatorJWTPage:    page,
+		PersonalTTLMax:     terms.TTLMax,
+		PersonalExpiresBy:  terms.ExpiresBy,
+		PersonalActive:     terms.Active,
+		PersonalLimit:      terms.Limit,
+		PersonalLastDay:    terms.LastDay,
+		PersonalDailyLimit: terms.DailyLimit,
+	}, nil
+}
+
+// RevokeMyJWTTyped — domain function for POST /v1/me/jwts/{jwt_id}/revoke: the
+// caller revokes one of its own tokens of any kind, without
+// `operator.jwt-revoke`. A token id of another operator answers 404 exactly as
+// an unknown one does. Revoking the token the request is made with succeeds and
+// signs the caller out of it (NIM-1055 is the open decision on refusing that).
+func (h *OperatorHandler) RevokeMyJWTTyped(ctx context.Context, claims *jwt.Claims, jwtID string) (OperatorJWTRevokeReply, error) {
+	return h.RevokeJWTTyped(ctx, claims, claims.Subject, jwtID)
 }
 
 // OperatorView — FLAT wire form of an Operator (list-item / get-200), handler-native

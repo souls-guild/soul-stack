@@ -120,6 +120,9 @@ import (
 //	GET    /v1/event-types                           — catalog of event-types for Tiding subscription (auth-only, fixes UI hardcode).
 //	GET    /v1/herald-types                          — catalog of Herald channel types and config fields (auth-only, fixes UI hardcode).
 //	GET    /v1/me/permissions                        — effective permissions of the current Archon (auth-only, permission-aware UI).
+//	POST   /v1/me/jwts                               — issue a personal token to yourself (auth-only, NIM-1052).
+//	GET    /v1/me/jwts                               — your own tokens (auth-only, NIM-1052).
+//	POST   /v1/me/jwts/{jwt_id}/revoke               — revoke one of your own tokens (auth-only, NIM-1052).
 //	/v1/*                                            — catch-all 404 behind the auth chain.
 //
 // tempoBucketVoyageCreate / tempoBucketVoyagePreview — logical names of the
@@ -379,6 +382,20 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			).Group(func(r chi.Router) {
 				registerHumaOperatorJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
 			})
+		})
+
+		// /v1/me/jwts — the caller's own tokens (ADR-014 amendment NIM-1052).
+		// Auth-only, like /v1/me/permissions: the owner is the claims' subject,
+		// so no request reaches another operator's rows and there is no
+		// permission to ask. Each write on its own group for its audit event.
+		r.Group(func(r chi.Router) {
+			registerHumaMeJWTIssue(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorTokenIssued, logger), opH)
+		})
+		r.Group(func(r chi.Router) {
+			registerHumaMeJWTList(newHumaCadenceAPI(r), opH)
+		})
+		r.Group(func(r chi.Router) {
+			registerHumaMeJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
 		})
 
 		// /v1/audit — read-only feed of audit events for UI iteration 2 (/audit).

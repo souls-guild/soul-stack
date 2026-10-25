@@ -81,7 +81,7 @@ type OperatorJWT struct {
 	CreatedUserAgent  string     `json:"created_user_agent,omitempty"`
 	ExpiresAt         time.Time  `json:"expires_at"`
 	JWTID             string     `json:"jwt_id"`
-	Kind              string     `json:"kind" enum:"bootstrap,issued,session"`
+	Kind              string     `json:"kind" enum:"bootstrap,issued,session,personal"`
 	Label             string     `json:"label,omitempty"`
 	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
 	LastUsedIP        string     `json:"last_used_ip,omitempty"`

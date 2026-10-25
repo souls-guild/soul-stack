@@ -420,7 +420,7 @@ func newHandler(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config) (*Operat
 		t.Fatalf("NewEnforcer: %v", err)
 	}
 	iss := &fakeIssuer{}
-	h := NewOperatorHandler(pool, iss, enf, time.Hour, 0, nil)
+	h := NewOperatorHandler(pool, iss, enf, time.Hour, 0, 0, nil)
 	return h, iss
 }
 

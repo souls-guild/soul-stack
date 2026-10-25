@@ -37,16 +37,20 @@ const (
 	EventOperatorRevoked EventType = "operator.revoked"
 
 	// EventOperatorTokenIssued — a new JWT was issued for an existing Archon
-	// via the Operator API (`POST /v1/operators/{aid}/issue-token`).
-	// `source: api`, `archon_aid` is the initiator; payload:
-	// `{aid, expires_at, jwt_id, ttl, label?}`. The JWT is NOT put in the
-	// payload (sensitive, masked even if it leaks in).
+	// via the Operator API: `POST /v1/operators/{aid}/issue-token` or MCP
+	// `keeper.operator.issue-token` (kind `issued`), or `POST /v1/me/jwts`, the
+	// caller to itself (kind `personal`, ADR-014 amendment NIM-1052). `source:
+	// api` (`mcp` from the tool), `archon_aid` is the initiator;
+	// payload: `{aid, expires_at, jwt_id, kind, ttl, label?}`. The JWT is NOT
+	// put in the payload (sensitive, masked even if it leaks in).
 	EventOperatorTokenIssued EventType = "operator.token-issued"
 
 	// EventOperatorJWTRevoked — one token of an Archon was revoked
-	// (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke` or MCP
-	// `keeper.operator.jwt-revoke`, ADR-014 amendment NIM-1045). `archon_aid` is
-	// the initiator; payload: `{aid, jwt_id, kind}`. The operator stays active.
+	// (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`, MCP
+	// `keeper.operator.jwt-revoke`, or the Archon's own through
+	// `POST /v1/me/jwts/{jwt_id}/revoke` — ADR-014 amendments NIM-1045 /
+	// NIM-1052). `archon_aid` is the initiator; payload: `{aid, jwt_id, kind}`.
+	// The operator stays active.
 	EventOperatorJWTRevoked EventType = "operator.jwt-revoked"
 
 	// EventIncarnationCreated — a new runtime instance was created via the

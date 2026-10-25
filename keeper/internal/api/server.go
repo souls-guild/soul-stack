@@ -669,7 +669,13 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	if deps.TTLMax != 0 && deps.TTLMax < deps.TTLDefault {
 		return nil, errors.New("api: TTLMax must not be below TTLDefault")
 	}
-	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, deps.TTLMax, logger)
+	// The ceiling of an OIDC operator's personal token follows the OIDC sign-in
+	// lifetime itself (ADR-014 amendment NIM-1052), not a second copy of it.
+	var oidcSessionTTL time.Duration
+	if deps.OIDCAuth != nil {
+		oidcSessionTTL = deps.OIDCAuth.TTL
+	}
+	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, deps.TTLMax, oidcSessionTTL, logger)
 	// Gate for the provisioning_allowed_methods policy on POST /v1/operators (ADR-058
 	// Part B): the same policy snapshot (Holder) as for the GET endpoint.
 	// ProvisioningPolicyReader (Holder) also implements the narrow gate interface

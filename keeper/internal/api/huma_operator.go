@@ -139,7 +139,7 @@ func registerHumaOperatorJWTList(humaAPI huma.API, opH *handlers.OperatorHandler
 		return
 	}
 	huma.Register(humaAPI, operatorJWTListOperation(), func(ctx context.Context, in *operatorJWTListInput) (*operatorJWTListOutput, error) {
-		page, err := opH.ListJWTsTyped(ctx, in.AID, int(in.Offset), int(in.Limit))
+		page, err := opH.ListJWTsTyped(ctx, in.AID, toOperatorJWTFilterInput(in.JWTListFilterQuery), int(in.Offset), int(in.Limit))
 		if err != nil {
 			return nil, operatorProblem(err)
 		}

@@ -60,6 +60,32 @@ func TestOperatorRevokeJWTTyped_MalformedID_404(t *testing.T) {
 
 func TestOperatorListJWTsTyped_UnknownOperator_404(t *testing.T) {
 	h, _ := newHandler(t, &fakePool{}, &rbactest.Config{})
-	_, err := h.ListJWTsTyped(context.Background(), "archon-ghost", 0, 50)
+	_, err := h.ListJWTsTyped(context.Background(), "archon-ghost", OperatorJWTFilterInput{}, 0, 50)
 	wantProblem(t, err, problem.TypeNotFound)
+}
+
+func TestOperatorListJWTsTyped_UnknownFilter_422(t *testing.T) {
+	for name, f := range map[string]OperatorJWTFilterInput{
+		"kind":  {Kinds: []string{"forever"}},
+		"state": {State: "dormant"},
+	} {
+		t.Run(name, func(t *testing.T) {
+			h, _ := newHandler(t, activeOperatorFakePool(), &rbactest.Config{})
+			_, err := h.ListJWTsTyped(context.Background(), "archon-bob", f, 0, 50)
+			wantProblem(t, err, problem.TypeValidationFailed)
+		})
+	}
+}
+
+// The issue-token payload names its kind, so a subscriber can tell an
+// administrator's token for someone from a personal one (NIM-1052).
+func TestOperatorIssueTokenTyped_AuditNamesTheKind(t *testing.T) {
+	h, _ := newHandler(t, activeOperatorFakePool(), &rbactest.Config{})
+	reply, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-bob", OperatorIssueTokenInput{})
+	if err != nil {
+		t.Fatalf("IssueTokenTyped: %v", err)
+	}
+	if got := reply.AuditPayload()["kind"]; got != "issued" {
+		t.Errorf("audit kind = %v, want issued", got)
+	}
 }

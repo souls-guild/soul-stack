@@ -29,7 +29,30 @@ const (
 	// cookie is exchanged for carries the same `jti` and has no row of its own,
 	// so revoking the session refuses both.
 	JWTKindSession JWTKind = "session"
+	// JWTKindPersonal — a token the operator issued to itself through
+	// `POST /v1/me/jwts` (migration 129, ADR-014 amendment NIM-1052).
+	JWTKindPersonal JWTKind = "personal"
 )
+
+// JWTState narrows a token list by what the token can still do.
+type JWTState string
+
+const (
+	// JWTStateActive — not revoked and not expired.
+	JWTStateActive JWTState = "active"
+	// JWTStateRevoked — revoked, whether or not it has expired since.
+	JWTStateRevoked JWTState = "revoked"
+	// JWTStateExpired — expired without being revoked.
+	JWTStateExpired JWTState = "expired"
+)
+
+// JWTFilter narrows [ListJWTs]. The zero value lists every row.
+type JWTFilter struct {
+	Kinds []JWTKind
+	State JWTState // "" → any state
+	// Q — a case-insensitive substring of the label.
+	Q string
+}
 
 // MaxJWTLabelLen bounds `operator_jwts.label` (SQL CHECK `operator_jwts_label_len`).
 const MaxJWTLabelLen = 200
@@ -48,7 +71,48 @@ var (
 	ErrJWTNotFound = errors.New("operator: jwt not found")
 	// ErrJWTAlreadyRevoked — the row already carries `revoked_at`.
 	ErrJWTAlreadyRevoked = errors.New("operator: jwt already revoked")
+	// ErrInvalidJWTFilter — a [JWTFilter] names a kind or a state that does not exist.
+	ErrInvalidJWTFilter = errors.New("operator: invalid jwt filter")
 )
+
+const countPersonalJWTsSQL = `
+SELECT COUNT(*) FILTER (WHERE revoked_at IS NULL AND expires_at > NOW()),
+       COUNT(*) FILTER (WHERE created_at > NOW() - INTERVAL '24 hours')
+FROM operator_jwts
+WHERE aid = $1 AND kind = 'personal'
+`
+
+// PersonalJWTCounts — what [MaxActivePersonalJWTs] and [MaxPersonalJWTsPerDay]
+// bound: the personal tokens neither revoked nor expired, and those issued in
+// the last 24 hours whatever became of them.
+type PersonalJWTCounts struct {
+	Active  int
+	LastDay int
+}
+
+// CountPersonalJWTs counts aid's personal tokens.
+func CountPersonalJWTs(ctx context.Context, db ExecQueryRower, aid string) (PersonalJWTCounts, error) {
+	var c PersonalJWTCounts
+	if err := db.QueryRow(ctx, countPersonalJWTsSQL, aid).Scan(&c.Active, &c.LastDay); err != nil {
+		return PersonalJWTCounts{}, fmt.Errorf("operator: count personal jwts: %w", err)
+	}
+	return c, nil
+}
+
+const lookupJWTSQL = `SELECT kind, expires_at FROM operator_jwts WHERE jwt_id = $1 AND aid = $2`
+
+// LookupJWT reads the kind and expiry of aid's token jwtID; found=false when
+// no such row.
+func LookupJWT(ctx context.Context, db ExecQueryRower, aid, jwtID string) (kind JWTKind, expiresAt time.Time, found bool, err error) {
+	var k string
+	switch err := db.QueryRow(ctx, lookupJWTSQL, jwtID, aid).Scan(&k, &expiresAt); {
+	case errors.Is(err, pgx.ErrNoRows):
+		return "", time.Time{}, false, nil
+	case err != nil:
+		return "", time.Time{}, false, fmt.Errorf("operator: read jwt: %w", err)
+	}
+	return JWTKind(k), expiresAt, true, nil
+}
 
 var jwtIDRe = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)
 
@@ -136,7 +200,7 @@ func MintJWT(ctx context.Context, db ExecQueryRower, issuer JWTIssuer, in MintIn
 		return MintResult{}, fmt.Errorf("operator: mint jwt: ttl must be positive, got %s", in.TTL)
 	}
 	switch in.Kind {
-	case JWTKindBootstrap, JWTKindIssued, JWTKindSession:
+	case JWTKindBootstrap, JWTKindIssued, JWTKindSession, JWTKindPersonal:
 	default:
 		return MintResult{}, fmt.Errorf("operator: mint jwt: unknown kind %q", in.Kind)
 	}
@@ -160,28 +224,65 @@ func MintJWT(ctx context.Context, db ExecQueryRower, issuer JWTIssuer, in MintIn
 	return MintResult{JWT: token, JWTID: id, ExpiresAt: expiresAt}, nil
 }
 
-const listJWTsSQL = `
+const listJWTsColumns = `
 SELECT jwt_id, aid, kind, COALESCE(label, ''), created_at, expires_at, created_by_aid,
        COALESCE(created_ip, ''), COALESCE(created_user_agent, ''),
        last_used_at, COALESCE(last_used_ip, ''), COALESCE(last_used_user_agent, ''),
        revoked_at, revoked_by_aid
-FROM operator_jwts
-WHERE aid = $1
-ORDER BY created_at DESC, jwt_id DESC
-LIMIT $2 OFFSET $3
-`
+FROM operator_jwts`
 
-const countJWTsSQL = `SELECT COUNT(*) FROM operator_jwts WHERE aid = $1`
+// buildJWTWhere renders f as a WHERE over operator_jwts, aid always first ($1).
+func buildJWTWhere(aid string, f JWTFilter) (string, []any, error) {
+	args := []any{aid}
+	where := " WHERE aid = $1"
+	if len(f.Kinds) > 0 {
+		kinds := make([]string, 0, len(f.Kinds))
+		for _, k := range f.Kinds {
+			switch k {
+			case JWTKindBootstrap, JWTKindIssued, JWTKindSession, JWTKindPersonal:
+			default:
+				return "", nil, fmt.Errorf("%w: unknown kind %q", ErrInvalidJWTFilter, k)
+			}
+			kinds = append(kinds, string(k))
+		}
+		args = append(args, kinds)
+		where += " AND kind = ANY($" + intToString(len(args)) + ")"
+	}
+	switch f.State {
+	case "":
+	case JWTStateActive:
+		where += " AND revoked_at IS NULL AND expires_at > NOW()"
+	case JWTStateRevoked:
+		where += " AND revoked_at IS NOT NULL"
+	case JWTStateExpired:
+		where += " AND revoked_at IS NULL AND expires_at <= NOW()"
+	default:
+		return "", nil, fmt.Errorf("%w: unknown state %q", ErrInvalidJWTFilter, f.State)
+	}
+	if f.Q != "" {
+		args = append(args, "%"+escapeLike(f.Q)+"%")
+		where += " AND label ILIKE $" + intToString(len(args))
+	}
+	return where, args, nil
+}
 
-// ListJWTs returns a page of the AID's accounted tokens, newest first, and the
-// total. Expired rows are included until the Reaper purges them: a list that
-// hid them would hide what a leaked token was doing until yesterday.
-func ListJWTs(ctx context.Context, db ExecQueryRower, aid string, offset, limit int) ([]JWTRecord, int, error) {
+// ListJWTs returns a page of the AID's accounted tokens under f, newest first,
+// and the total under f. Expired rows are included until the Reaper purges
+// them: a list that hid them would hide what a leaked token was doing until
+// yesterday.
+func ListJWTs(ctx context.Context, db ExecQueryRower, aid string, f JWTFilter, offset, limit int) ([]JWTRecord, int, error) {
+	where, args, err := buildJWTWhere(aid, f)
+	if err != nil {
+		return nil, 0, err
+	}
 	var total int
-	if err := db.QueryRow(ctx, countJWTsSQL, aid).Scan(&total); err != nil {
+	if err := db.QueryRow(ctx, "SELECT COUNT(*) FROM operator_jwts"+where, args...).Scan(&total); err != nil {
 		return nil, 0, fmt.Errorf("operator: count jwts: %w", err)
 	}
-	rows, err := db.Query(ctx, listJWTsSQL, aid, limit, offset)
+	n := len(args)
+	rows, err := db.Query(ctx, listJWTsColumns+where+
+		" ORDER BY created_at DESC, jwt_id DESC LIMIT $"+intToString(n+1)+" OFFSET $"+intToString(n+2),
+		append(args, limit, offset)...)
 	if err != nil {
 		return nil, 0, fmt.Errorf("operator: list jwts: %w", err)
 	}

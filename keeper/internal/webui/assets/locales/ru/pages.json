@@ -26,6 +26,7 @@
   "archonSynods": "Синоды",
   "archonTabActivity": "Активность",
   "archonTabInfo": "Информация",
+  "archonTabTokens": "Токены",
   "archonsCrumbs": "операторы кластера",
   "backendUnsupported": "backend не поддерживает эту возможность",
   "builtinDeleteDenied": "builtin-роль — удаление запрещено сервером",

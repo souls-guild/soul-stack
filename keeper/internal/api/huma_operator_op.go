@@ -214,7 +214,7 @@ type operatorIssueTokenInput struct {
 
 // OperatorIssueTokenRequest — the optional body of issue-token.
 type OperatorIssueTokenRequest struct {
-	TTL   string `json:"ttl,omitempty" doc:"lifetime (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max, else 422"`
+	TTL   string `json:"ttl,omitempty" doc:"lifetime (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max (on POST /v1/me/jwts: the caller's own ceiling, the OIDC sign-in lifetime for an OIDC operator), else 422"`
 	Label string `json:"label,omitempty" maxLength:"200" doc:"free text shown in the operator's token list (\"Service Desk prod\")"`
 }
 
@@ -247,9 +247,10 @@ func operatorIssueTokenOperation() huma.Operation {
 // operatorJWTListInput — huma input for GET /v1/operators/{aid}/jwts. Offset/Limit —
 // int32 with the same defaults and the same domain-side bounds as the operators list.
 type operatorJWTListInput struct {
-	AID    string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon"`
-	Offset int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
-	Limit  int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon"`
+	JWTListFilterQuery
+	Offset int32 `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit  int32 `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
 }
 
 // operatorJWTListOutput — huma output for GET /v1/operators/{aid}/jwts.
@@ -264,7 +265,7 @@ func operatorJWTListOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/{aid}/jwts",
 		Summary:       "Tokens of an Archon",
-		Description:   "Every JWT Keeper minted for the operator, newest first, with where it was minted from and where it was last used (ADR-014 amendment NIM-1045). Never returns a token. Expired tokens stay listed until the Reaper rule purge_operator_jwts removes them. Permission operator.list. Read-only, no audit.",
+		Description:   "Every JWT Keeper minted for the operator, newest first, with where it was minted from and where it was last used (ADR-014 amendment NIM-1045). Never returns a token. Expired tokens stay listed until the Reaper rule purge_operator_jwts removes them. Filters: kind (repeatable), state (active/revoked/expired), q (label substring) - ADR-014 amendment NIM-1052. Permission operator.list. Read-only, no audit.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

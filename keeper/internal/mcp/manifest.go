@@ -1272,7 +1272,7 @@ var (
 "properties":{
 "jwt_id":{"type":"string"},
 "aid":{"type":"string"},
-"kind":{"type":"string","enum":["bootstrap","issued","session"]},
+"kind":{"type":"string","enum":["bootstrap","issued","session","personal"]},
 "label":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"},
 "expires_at":{"type":"string","format":"date-time"},

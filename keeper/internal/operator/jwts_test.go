@@ -144,7 +144,7 @@ func TestMintJWT_RowBeforeSignature(t *testing.T) {
 		}
 	})
 	t.Run("unknown kind", func(t *testing.T) {
-		if _, err := MintJWT(context.Background(), &svcPool{}, &fakeIssuer{}, MintInput{AID: "a1", TTL: time.Hour, Kind: "personal"}); err == nil {
+		if _, err := MintJWT(context.Background(), &svcPool{}, &fakeIssuer{}, MintInput{AID: "a1", TTL: time.Hour, Kind: "forever"}); err == nil {
 			t.Fatal("MintJWT accepted a kind the CHECK constraint does not")
 		}
 	})

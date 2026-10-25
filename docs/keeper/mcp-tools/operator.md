@@ -67,9 +67,9 @@ Release of new JWT for existing Archon. Permission: `operator.issue-token`. Endp
 
 Every JWT Keeper minted for an Archon, newest first — never the token itself ([ADR-014 amendment NIM-1045](../../adr/0014-operator-identity.md)). Permission: `operator.list`. Endpoint: [`GET /v1/operators/{aid}/jwts`](../operator-api/operator.md#tokens-of-an-archon). Async: no.
 
-**Input:** `aid` (required), `offset` (default 0), `limit` (1..1000, default 50).
+**Input:** `aid` (required), `offset` (default 0), `limit` (1..1000, default 50). The `kind` / `state` / `q` filters of the HTTP route are not offered here (NIM-1052 added them to HTTP only).
 
-**Output:** `{items, offset, limit, total}`; an item carries `jwt_id`, `aid`, `kind` (`bootstrap` / `issued` / `session`), `label`, `created_at`, `expires_at`, `created_by_aid`, `created_ip`, `created_user_agent`, `last_used_at`, `last_used_ip`, `last_used_user_agent`, `revoked_at`, `revoked_by_aid` — the same fields as the HTTP reply. **Errors:** `not-found` (unknown AID), `forbidden`.
+**Output:** `{items, offset, limit, total}`; an item carries `jwt_id`, `aid`, `kind` (`bootstrap` / `issued` / `session` / `personal`), `label`, `created_at`, `expires_at`, `created_by_aid`, `created_ip`, `created_user_agent`, `last_used_at`, `last_used_ip`, `last_used_user_agent`, `revoked_at`, `revoked_by_aid` — the same fields as the HTTP reply. **Errors:** `not-found` (unknown AID), `forbidden`.
 
 #### `keeper.operator.jwt-revoke`
 
