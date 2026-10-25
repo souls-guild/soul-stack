@@ -37,6 +37,7 @@ import (
 	keeperaugur "github.com/souls-guild/soul-stack/keeper/internal/augur"
 	keeperauth "github.com/souls-guild/soul-stack/keeper/internal/auth"
 	keeperldap "github.com/souls-guild/soul-stack/keeper/internal/auth/ldap"
+	keeperlocal "github.com/souls-guild/soul-stack/keeper/internal/auth/local"
 	keeperoidc "github.com/souls-guild/soul-stack/keeper/internal/auth/oidc"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstrap"
 	"github.com/souls-guild/soul-stack/keeper/internal/bootstraptoken"
@@ -4631,9 +4632,15 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		Revoked:  d.rbacHolder,
 		Logger:   d.logger,
 	}
+	localAuth, localPolicy, err := d.setupLocalAuth()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: setup local password auth: %v\n", err)
+		return errSetupFailed
+	}
+
 	// AuthMethods — booleans for the public GET /auth/methods (UI login form):
-	// password is always available; ldap/oidc — based on actual configuration.
-	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil}
+	// password is always available; ldap/oidc/local — based on actual configuration.
+	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil, Local: localAuth != nil}
 
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
 		JWTVerifier: d.verifier,
@@ -4815,6 +4822,10 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		// Keeper daemon runtime wiring note.
 		// Keeper daemon runtime wiring note.
 		OIDCAuth: oidcAuth,
+		// Local passwords (NIM-1051): the login and the policy come from the
+		// same auth.local block; both nil without it.
+		LocalAuth:           localAuth,
+		LocalPasswordPolicy: localPolicy,
 		// AuthToken / AuthMethods — session-cookie→Bearer exchange (POST
 		// /auth/token, NIM-77 Variant B) + public GET /auth/methods.
 		// /auth/methods is always mounted; /auth/token — when AuthToken is
@@ -4849,6 +4860,26 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 	}
 	d.apiServer = srv
 	return nil
+}
+
+// setupLocalAuth builds the local-password login and policy from auth.local
+// (NIM-1051); both nil when the block is absent. Nothing to resolve from
+// Vault: the hashes live in operator_passwords.
+func (d *daemon) setupLocalAuth() (*api.LocalAuthDeps, *operator.PasswordPolicy, error) {
+	if d.cfg.Auth == nil || d.cfg.Auth.Local == nil {
+		return nil, nil, nil
+	}
+	authn, err := keeperlocal.New(d.pool, d.rbacHolder, d.issuer, d.logger)
+	if err != nil {
+		return nil, nil, err
+	}
+	policy := &operator.PasswordPolicy{MinLength: d.cfg.Auth.Local.ResolvedMinPasswordLength()}
+	return &api.LocalAuthDeps{
+		Authenticator: authn,
+		TTL:           d.ttlDefault,
+		Audit:         d.auditWriter,
+		Logger:        d.logger,
+	}, policy, nil
 }
 
 // Keeper daemon runtime wiring note.

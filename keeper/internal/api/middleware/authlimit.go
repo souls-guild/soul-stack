@@ -46,10 +46,11 @@ const (
 	authScopeIP   = "ip"
 	authScopeUser = "user"
 
-	// maxLoginBodySnoop — the ceiling on reading the login body to extract the username.
-	// The login body is a tiny JSON; reading more is pointless (anti-DoS is already covered by
-	// the shared maxBody on the /auth group). What's read is buffered and returned into
-	// r.Body so the handler can re-read it in full.
+	// maxLoginBodySnoop — the most of a request body the limiter reads, and with an
+	// extractor the most it lets through: a larger body is refused with 413
+	// ([boundLoginBody]), since a key read from part of a body the handler reads in
+	// full could be dodged by padding (NIM-1051). A login is a few hundred bytes.
+	// What is read is buffered and returned into r.Body for the handler.
 	maxLoginBodySnoop = 4 << 10 // 4 KiB
 )
 
@@ -68,7 +69,9 @@ type AuthLoginLimitConfig struct {
 //
 // guard=nil → passthrough (no Redis — login without throttling, like Tempo with
 // limiter=nil; consistent with the OPTIONAL tier). extractUsername — an optional extractor
-// of the username from the request (LDAP: from the JSON body; OIDC-login: nil — per-IP only).
+// of the username from the request (LDAP / local: from the JSON body; PUT /v1/me/password:
+// the token's subject; OIDC-login: nil — per-IP only). With an extractor a body over
+// [maxLoginBodySnoop] is refused with 413 before anything else.
 // recordFailures — whether to write the failure counter: true for login (LDAP) and the
 // OIDC callback (where success/failure is decided); for OIDC-login (start of the flow,
 // there is no "failure") — false (throttling of floods only).
@@ -87,6 +90,13 @@ func AuthLoginLimit(
 			ip := clientIP(r)
 			username := ""
 			if extractUsername != nil {
+				// A body the username cannot be read from would leave the
+				// per-username layer out, and the handler reads further than the
+				// snoop does: an oversized login body is refused before either.
+				if !boundLoginBody(r) {
+					writeLogin413(w, r)
+					return
+				}
 				username = extractUsername(r)
 			}
 
@@ -198,7 +208,8 @@ const defaultLockedRetry = 60 * time.Second
 
 // isAuthFailure — the response codes treated as a failed authentication for the
 // failure counter: 401 (bad credentials ErrAuthFailed, and since NIM-421 a revoked
-// operator too) and 403 (no role mapping / provisioning disabled). Both are counted,
+// operator too) and 403 (no role mapping / provisioning disabled / a wrong current
+// password on PUT /v1/me/password, NIM-1051). Both are counted,
 // so moving the revoked case from 403 to 401 did not change what the lockout sees.
 // 2xx/302 (success) and 5xx (our own error) are NOT a user failure, the counter is
 // left untouched.
@@ -211,23 +222,78 @@ func isAuthFailure(status int) bool {
 // error / non-JSON body → "" (the per-username layer simply does not apply, per-IP
 // still stands). Does not log the body (it contains the password).
 func LDAPUsernameExtractor(r *http.Request) string {
-	if r.Body == nil {
+	var body struct {
+		Username string `json:"username"`
+	}
+	if !snoopLoginBody(r, &body) {
 		return ""
+	}
+	return body.Username
+}
+
+// LocalAIDExtractor extracts `aid` from the JSON body of POST /auth/local/login
+// (NIM-1051) the way [LDAPUsernameExtractor] does, passed through normalize —
+// the normalization the handler applies before the lookup. An unnormalized key
+// would give every spelling of one AID ("Alice", " alice") its own lockout
+// counter.
+func LocalAIDExtractor(normalize func(string) string) func(r *http.Request) string {
+	return func(r *http.Request) string {
+		var body struct {
+			AID string `json:"aid"`
+		}
+		if !snoopLoginBody(r, &body) {
+			return ""
+		}
+		return normalize(body.AID)
+	}
+}
+
+// ClaimsSubjectExtractor keys the per-AID counter by the authenticated caller
+// (RequireJWT has run): PUT /v1/me/password checks the caller's own password,
+// and its failures belong to the same counter as the login form's (NIM-1051).
+func ClaimsSubjectExtractor(r *http.Request) string {
+	if c, ok := ClaimsFromContext(r.Context()); ok {
+		return c.Subject
+	}
+	return ""
+}
+
+// boundLoginBody reports whether the login body fits [maxLoginBodySnoop],
+// putting what it read back into r.Body. A larger body is not a login — the
+// credentials are a few hundred bytes — and padding one (JSON allows trailing
+// whitespace) must not take a guess past the per-username counter.
+func boundLoginBody(r *http.Request) bool {
+	if r.Body == nil {
+		return true
+	}
+	buf, err := io.ReadAll(io.LimitReader(r.Body, maxLoginBodySnoop+1))
+	_ = r.Body.Close()
+	r.Body = io.NopCloser(bytes.NewReader(buf))
+	return err == nil && len(buf) <= maxLoginBodySnoop
+}
+
+// writeLogin413 answers like huma's own 413 (validation-failed carrying 413).
+func writeLogin413(w http.ResponseWriter, r *http.Request) {
+	d := problem.New(problem.TypeValidationFailed, r.URL.Path, "login request body is too large")
+	d.Status = http.StatusRequestEntityTooLarge
+	problem.Write(w, d)
+}
+
+// snoopLoginBody decodes the login body into v and puts the bytes back into
+// r.Body for the handler. The decode is encoding/json's, the same the handler's
+// binding uses, so both read one key the same way.
+func snoopLoginBody(r *http.Request, v any) bool {
+	if r.Body == nil {
+		return false
 	}
 	buf, err := io.ReadAll(io.LimitReader(r.Body, maxLoginBodySnoop+1))
 	_ = r.Body.Close()
 	// Return the body to the handler in any case (even if the parse failed).
 	r.Body = io.NopCloser(bytes.NewReader(buf))
 	if err != nil || len(buf) > maxLoginBodySnoop {
-		return ""
+		return false
 	}
-	var body struct {
-		Username string `json:"username"`
-	}
-	if json.Unmarshal(buf, &body) != nil {
-		return ""
-	}
-	return body.Username
+	return json.Unmarshal(buf, v) == nil
 }
 
 // clientIP — the IP of the direct peer (r.RemoteAddr). Does NOT trust X-Forwarded-For/

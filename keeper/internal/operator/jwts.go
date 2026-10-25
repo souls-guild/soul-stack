@@ -99,19 +99,21 @@ func CountPersonalJWTs(ctx context.Context, db ExecQueryRower, aid string) (Pers
 	return c, nil
 }
 
-const lookupJWTSQL = `SELECT kind, expires_at FROM operator_jwts WHERE jwt_id = $1 AND aid = $2`
+const lookupJWTSQL = `SELECT kind, expires_at, revoked_at IS NOT NULL FROM operator_jwts WHERE jwt_id = $1 AND aid = $2`
 
-// LookupJWT reads the kind and expiry of aid's token jwtID; found=false when
-// no such row.
-func LookupJWT(ctx context.Context, db ExecQueryRower, aid, jwtID string) (kind JWTKind, expiresAt time.Time, found bool, err error) {
+// LookupJWT reads the kind, expiry and revocation of aid's token jwtID;
+// found=false when no such row. revoked is read from the row, not the RBAC
+// snapshot: a revocation the snapshot has not picked up yet (another node, a
+// lost invalidation) still counts (NIM-1051).
+func LookupJWT(ctx context.Context, db ExecQueryRower, aid, jwtID string) (kind JWTKind, expiresAt time.Time, revoked, found bool, err error) {
 	var k string
-	switch err := db.QueryRow(ctx, lookupJWTSQL, jwtID, aid).Scan(&k, &expiresAt); {
+	switch err := db.QueryRow(ctx, lookupJWTSQL, jwtID, aid).Scan(&k, &expiresAt, &revoked); {
 	case errors.Is(err, pgx.ErrNoRows):
-		return "", time.Time{}, false, nil
+		return "", time.Time{}, false, false, nil
 	case err != nil:
-		return "", time.Time{}, false, fmt.Errorf("operator: read jwt: %w", err)
+		return "", time.Time{}, false, false, fmt.Errorf("operator: read jwt: %w", err)
 	}
-	return JWTKind(k), expiresAt, true, nil
+	return JWTKind(k), expiresAt, revoked, true, nil
 }
 
 var jwtIDRe = regexp.MustCompile(`^[0-9A-HJKMNP-TV-Z]{26}$`)

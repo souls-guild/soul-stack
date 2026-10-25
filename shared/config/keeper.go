@@ -1188,6 +1188,12 @@ type KeeperAuth struct {
 	LDAP *KeeperAuthLDAP `yaml:"ldap,omitempty"` // ADR-058 stage 1
 	OIDC *KeeperAuthOIDC `yaml:"oidc,omitempty"` // ADR-058 stage 2
 
+	// Local turns on the local-password login (NIM-1051): `POST
+	// /auth/local/login`, operators with `auth_method: local`, setting and
+	// changing their passwords. Absent → no password is set or checked on
+	// this Keeper. `local: {}` turns it on with the defaults.
+	Local *KeeperAuthLocal `yaml:"local,omitempty"`
+
 	// RateLimit is the anti-bruteforce guard for public login endpoints
 	// (ADR-058(g), HIGH-3). Per-IP + per-username attempt-rate throttle + lockout
 	// after a series of failures. Optional: nil/omitted → defaults
@@ -1241,6 +1247,30 @@ type KeeperAuthLoginRateLimit struct {
 	// duration (duration-convention: Go duration or `<N>d`).
 	LockoutWindow  string `yaml:"lockout_window,omitempty"`
 	LockoutBackoff string `yaml:"lockout_backoff,omitempty"`
+}
+
+// Bounds of `auth.local.min_password_length` (NIM-1051). LocalMaxPasswordLength
+// is also the password policy's maximum (keeper/internal/operator).
+const (
+	DefaultLocalMinPasswordLength = 12
+	LocalMinPasswordLengthFloor   = 8
+	LocalMaxPasswordLength        = 128
+)
+
+// KeeperAuthLocal is the local-password login configuration (NIM-1051).
+type KeeperAuthLocal struct {
+	// MinPasswordLength — the shortest password, in characters, an operator
+	// may be given. 0/omitted → [DefaultLocalMinPasswordLength]; otherwise
+	// between [LocalMinPasswordLengthFloor] and [LocalMaxPasswordLength].
+	MinPasswordLength int `yaml:"min_password_length,omitempty"`
+}
+
+// ResolvedMinPasswordLength is the effective minimum (omitted → default).
+func (l *KeeperAuthLocal) ResolvedMinPasswordLength() int {
+	if l == nil || l.MinPasswordLength == 0 {
+		return DefaultLocalMinPasswordLength
+	}
+	return l.MinPasswordLength
 }
 
 // LoginRateLimitEnabled is the effective toggle (nil block/nil field → true).

@@ -555,7 +555,7 @@ Synod self-lockout checks - **from the database under `SELECT … FOR UPDATE`**,
 
 Full list of permission names validated by Keeper in MVP. Names outside this directory are rejected by the `keeper.yml` parser with error `unknown_permission`.
 
-### Operator (6) — [ADR-014](../adr/0014-operator-identity.md)
+### Operator (7) — [ADR-014](../adr/0014-operator-identity.md)
 
 | Permission | Semantics |
 |---|---|
@@ -563,6 +563,7 @@ Full list of permission names validated by Keeper in MVP. Names outside this dir
 | `operator.revoke` | Setting `revoked_at` for an existing Archon — permanent. Every JWT of the Archon is refused with `401 operator-revoked-token` on its next request ([ADR-014 amendment NIM-421](../adr/0014-operator-identity.md)). |
 | `operator.issue-token` | Issuing a new JWT for an existing Archon (for example, an operator has lost a token; another operator with this right issues a new one), with an optional `ttl` up to `auth.jwt.ttl_max` (default 90 days) and a `label` ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). **Not restricted by target:** whoever holds it can mint a token for any Archon, `cluster-admin` included — grant it as you would `cluster-admin` itself. |
 | `operator.jwt-revoke` | Revoking **one** token of an Archon (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`, MCP `keeper.operator.jwt-revoke`): that token is refused on its next request (`401 jwt-revoked` over HTTP, `unauthenticated` on MCP), the Archon and its other tokens keep working. Revoking the token you are calling with locks you out of it ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). Separate from `operator.revoke`, which ends the identity. Listing an Archon's tokens (`GET /v1/operators/{aid}/jwts`) is covered by `operator.list`. NoSelector. |
+| `operator.set-password` | Setting or resetting the local password of an Archon with `auth_method: local` (`PUT /v1/operators/{aid}/password`, no MCP tool, NIM-1051): all of the target's web sessions and personal tokens are revoked. **Not restricted by target**, like `operator.issue-token`: whoever holds it can log in as any local Archon — grant it as you would `cluster-admin`. Changing one's own password (`PUT /v1/me/password`) needs no permission, only the current password ([ADR-0092](../adr/0092-operator-local-passwords.md)). NoSelector. |
 | `operator.list` | Enumeration of Archons with filters (`auth_method` / `revoked`). Also covers single-archon read `GET /v1/operators/{aid}` - the one-permission-on-read pattern, like `soul.list` / `service.list`. The selector is NoSelector in MVP. |
 | `operator.read` | Registered forward-only in the directory; MVP is not used in the router (route mounts `operator.list` on both endpoints). Introduced so that role configs can specify it without `unknown_permission`. |
 
@@ -878,12 +879,12 @@ CRUD registries for notifications about run events: **Herald** (delivery channel
 
 ### Provisioning (2) — [ADR-058](../adr/0058-operator-auth-ldap-oidc.md)
 
-Runtime policy management of **CREATE** operator methods - key `provisioning_allowed_methods` in `keeper_settings` (CSV from domain `{user,ldap,oidc}`). The policy gates ONLY the operator creation branch (`POST /v1/operators` → `user`; federated auto-provision → `ldap`/`oidc`); existing operators log in regardless of policy, `bootstrap`/`system` are never gated. NO key = all methods are allowed (back-compat); specified-but-empty = config-error (anti-lockout - you cannot prohibit ALL methods and lock the establishment of operators). The selector is **NoSelector** (cluster-level policy, like `operator.*` / `role.*`). `update` writes audit (`provisioning.policy_changed`), read-only `read` - no.
+Runtime policy management of **CREATE** operator methods - key `provisioning_allowed_methods` in `keeper_settings` (CSV from domain `{user,ldap,oidc,local}`). The policy gates ONLY the operator creation branch (`POST /v1/operators` → `user`, or `local` for `auth_method: local` — NIM-1051; federated auto-provision → `ldap`/`oidc`); existing operators log in regardless of policy, `bootstrap`/`system` are never gated. NO key = all methods are allowed (back-compat); specified-but-empty = config-error (anti-lockout - you cannot prohibit ALL methods and lock the establishment of operators). The selector is **NoSelector** (cluster-level policy, like `operator.*` / `role.*`). `update` writes audit (`provisioning.policy_changed`), read-only `read` - no.
 
 | Permission | Semantics |
 |---|---|
 | `provisioning.read` | Read the current statement creation method policy (`GET /v1/provisioning-policy`). `policy_set=false` → policy is not set (default: everything is allowed). |
-| `provisioning.update` | Change policy (`PUT /v1/provisioning-policy`, replace semantics). Empty list → 422 (anti-lockout); method outside `{user,ldap,oidc}` → 422. Audited (`provisioning.policy_changed`). |
+| `provisioning.update` | Change policy (`PUT /v1/provisioning-policy`, replace semantics). Empty list → 422 (anti-lockout); method outside `{user,ldap,oidc,local}` → 422. Audited (`provisioning.policy_changed`). |
 
 ### Settings — [ADR-0073](../adr/0073-keeper-runtime-config-pg.md)
 

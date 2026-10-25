@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 )
 
 func authTestLogger() *slog.Logger { return slog.New(slog.NewTextHandler(io.Discard, nil)) }
@@ -300,5 +301,66 @@ func TestWriteAuth429_AntiOracle(t *testing.T) {
 	}
 	if !strings.Contains(body, problem.TypeAuthThrottled) {
 		t.Errorf("429 must carry TypeAuthThrottled, got %q", body)
+	}
+}
+
+// The local login's per-AID key is the AID the handler looks up (NIM-1051):
+// "Alice" and " alice" must land on one lockout counter, and the body must
+// still reach the handler.
+func TestLocalAIDExtractor_NormalizesAndRestoresBody(t *testing.T) {
+	extract := LocalAIDExtractor(func(s string) string { return strings.ToLower(strings.TrimSpace(s)) })
+	for _, raw := range []string{"alice", "Alice", "  ALICE "} {
+		r := httptest.NewRequest(http.MethodPost, "/auth/local/login",
+			strings.NewReader(`{"aid":"`+raw+`","password":"x"}`))
+		if got := extract(r); got != "alice" {
+			t.Errorf("extract(%q) = %q, want alice", raw, got)
+		}
+		body, _ := io.ReadAll(r.Body)
+		if !strings.Contains(string(body), `"password":"x"`) {
+			t.Errorf("body not restored for the handler: %q", body)
+		}
+	}
+	if got := extract(httptest.NewRequest(http.MethodPost, "/auth/local/login", strings.NewReader(`not json`))); got != "" {
+		t.Errorf("extract(non-JSON) = %q, want empty (per-IP still applies)", got)
+	}
+}
+
+func TestClaimsSubjectExtractor(t *testing.T) {
+	r := httptest.NewRequest(http.MethodPut, "/v1/me/password", nil)
+	if got := ClaimsSubjectExtractor(r); got != "" {
+		t.Fatalf("no claims: %q, want empty", got)
+	}
+	r = r.WithContext(InjectClaimsForTest(r.Context(), &jwt.Claims{Subject: "alice"}))
+	if got := ClaimsSubjectExtractor(r); got != "alice" {
+		t.Fatalf("claims of alice: %q, want alice", got)
+	}
+}
+
+// Every extractor-keyed route refuses a body past what the key is read from,
+// before the guard and the handler (NIM-1051): padding must not take a guess
+// past the per-username layer.
+func TestAuthLoginLimit_RefusesAnOversizedBody(t *testing.T) {
+	for name, extract := range map[string]func(*http.Request) string{
+		"ldap":  LDAPUsernameExtractor,
+		"local": LocalAIDExtractor(strings.ToLower),
+		"me":    ClaimsSubjectExtractor,
+	} {
+		reached := false
+		h := AuthLoginLimit(newFakeGuard(), AuthLoginLimitConfig{Rate: 100, Burst: 100, LockoutThreshold: 5, LockoutWindow: time.Minute, LockoutBackoff: time.Minute},
+			extract, true, slog.Default())(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+			reached = true
+			w.WriteHeader(http.StatusNoContent)
+		}))
+		body := `{"username":"alice","aid":"alice","password":"x"}` + strings.Repeat(" ", maxLoginBodySnoop)
+		rec := httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(body)))
+		if rec.Code != http.StatusRequestEntityTooLarge || reached {
+			t.Errorf("%s: status %d, handler reached %v; want 413 before the handler", name, rec.Code, reached)
+		}
+		rec = httptest.NewRecorder()
+		h.ServeHTTP(rec, httptest.NewRequest(http.MethodPost, "/auth/login", strings.NewReader(`{"username":"alice","aid":"alice","password":"x"}`)))
+		if rec.Code != http.StatusNoContent {
+			t.Errorf("%s: a normal body got %d, want it through", name, rec.Code)
+		}
 	}
 }

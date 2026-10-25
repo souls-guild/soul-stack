@@ -13,9 +13,9 @@ package rbac
 import "sort"
 
 // AllowedPermissions — the catalog of permission names from rbac.md →
-// §Catalog of permissions. 121 names (sum of the categories below):
+// §Catalog of permissions. 122 names (sum of the categories below):
 //
-//   - operator (6): create / revoke / issue-token / jwt-revoke / list / read;
+//   - operator (7): create / revoke / issue-token / jwt-revoke / set-password (NIM-1051) / list / read;
 //   - role (8): create / create-root / delete / list / list-all / update / grant-operator / revoke-operator;
 //   - synod (9): create / update / delete / list / list-all / add-operator / remove-operator / grant-role / revoke-role (ADR-049; list-all — NIM-216);
 //   - incarnation (14): create / rerun-last / run / get / list / history / unlock / upgrade / destroy / traits-set / view-secrets / bind-member / unbind-member (NIM-209) / label-set ([ADR-0085]);
@@ -62,6 +62,10 @@ var AllowedPermissions = map[string]struct{}{
 	// amendment NIM-1045). Separate from operator.revoke: revoking an operator is
 	// permanent and ends every token, revoking a token ends that token only.
 	"operator.jwt-revoke": {},
+	// operator.set-password — set or reset the local password of an Archon with
+	// auth_method local (NIM-1051). Not restricted by target, like
+	// operator.issue-token: whoever holds it can log in as any local Archon.
+	"operator.set-password": {},
 	// operator.list / operator.read — read-only access to the Archon
 	// registry (`GET /v1/operators`, `GET /v1/operators/{aid}`). Selector —
 	// NoSelector (no per-resource scope, same as operator.create/revoke);

@@ -72,11 +72,14 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
 	{http.MethodPost, "/v1/me/jwts"}:                              {events: []audit.EventType{audit.EventOperatorTokenIssued}},
 	{http.MethodPost, "/v1/me/jwts/{jwt_id}/revoke"}:              {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
+	{http.MethodPut, "/v1/operators/{aid}/password"}:              {events: []audit.EventType{audit.EventOperatorPasswordSet}},
+	{http.MethodPut, "/v1/me/password"}:                           {events: []audit.EventType{audit.EventOperatorPasswordChanged}},
 
 	// auth (self-audit inside the handler: login writes operator.login after issuing the
 	// JWT, OUTSIDE /v1, with no middleware-audit wiring — ADR-058). provision (operator.
 	// provisioned) is written by the Mapper, not the endpoint — this route has one login event.
-	{http.MethodPost, "/auth/ldap/login"}: {events: []audit.EventType{audit.EventOperatorLogin}, note: "self-audit: handler writes operator.login after issuing JWT (ADR-058, outside /v1)"},
+	{http.MethodPost, "/auth/ldap/login"}:  {events: []audit.EventType{audit.EventOperatorLogin}, note: "self-audit: handler writes operator.login after issuing JWT (ADR-058, outside /v1)"},
+	{http.MethodPost, "/auth/local/login"}: {events: []audit.EventType{audit.EventOperatorLogin}, note: "self-audit: handler writes operator.login {method: local} after issuing JWT (NIM-1051, outside /v1)"},
 
 	// roles (middleware-audit).
 	{http.MethodPost, "/v1/roles"}:                          {events: []audit.EventType{audit.EventRoleCreated}},

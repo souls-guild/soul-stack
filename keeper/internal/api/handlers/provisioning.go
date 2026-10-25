@@ -1,6 +1,6 @@
 // Provisioning-policy handler, Operator API (ADR-058 Part B) — runtime read and
 // change of the `provisioning_allowed_methods` policy (keeper_settings): the list
-// of allowed operator-CREATION methods ({user,ldap,oidc}). GET — read (no
+// of allowed operator-CREATION methods ({user,ldap,oidc,local}). GET — read (no
 // audit, permission provisioning.read); PUT — write+audit (event
 // provisioning.policy_changed, permission provisioning.update).
 //
@@ -110,7 +110,7 @@ func (r ProvisioningPolicyUpdateReply) AuditPayload() middleware.AuditPayload {
 }
 
 // PutTyped — domain function PUT /v1/provisioning-policy (WRITE+AUDIT): validates
-// the list (non-empty, each ∈ {user,ldap,oidc}), joins it into CSV, writes via
+// the list (non-empty, each ∈ {user,ldap,oidc,local}), joins it into CSV, writes via
 // serviceregistry.Service.SetSetting (upsert + cluster-wide invalidate). claims provides
 // the callerAID for updated_by_aid. Errors are *problemError (422 anti-lockout/invalid
 // method, 404 caller-not-found, 500), success is [ProvisioningPolicyUpdateReply].
@@ -122,7 +122,7 @@ func (h *ProvisioningPolicyHandler) PutTyped(ctx context.Context, claims *jwt.Cl
 	var zero ProvisioningPolicyUpdateReply
 
 	// Normalization + validation via the single parser (lowercase/trim/dedup + domain
-	// {user,ldap,oidc} + anti-lockout "non-empty"). CSV from the input list is the same
+	// {user,ldap,oidc,local} + anti-lockout "non-empty"). CSV from the input list is the same
 	// format that keeper_settings stores and PoolSource.Load reads.
 	csv := joinMethodsCSV(req.AllowedMethods)
 	methods, err := serviceregistry.ParseProvisioningMethods(csv)

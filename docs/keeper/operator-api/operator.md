@@ -4,13 +4,15 @@ Domain section [Operator API](../operator-api.md): endpoints `/v1/operators*` (c
 
 ## Endpoint sections
 
-Mapping endpoint ↔ MCP-tool ↔ permission (table of 7 routes + a note about the deferred MCP symmetry of read endpoints) - in the root [operator-api.md → Operator (7)](../operator-api.md).
+Mapping endpoint ↔ MCP-tool ↔ permission (table of 9 routes + a note about the deferred MCP symmetry of read endpoints) - in the root [operator-api.md → Operator (9)](../operator-api.md).
 
 #### `POST /v1/operators` - create an Archon
 
 Permission: `operator.create`. MCP-tool: `keeper.operator.create`.
 
 Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../../adr/0014-operator-identity.md)), binds to roles from `keeper.yml → rbac.roles[].operators`, releases the first JWT — for `ttl` if the request gives one, otherwise `auth.jwt.ttl_default` ([config.md → auth](../config.md#auth)) — and accounts for it as an `operator_jwts` row of kind `issued` ([§ Tokens](#tokens-of-an-archon)).
+
+With `auth_method: local` the Archon gets a **password instead of a token** (NIM-1051, [ADR-0092](../../adr/0092-operator-local-passwords.md)): no JWT is minted, the reply carries none, and the Archon logs in at `POST /auth/local/login`. Needs `auth.local` on this Keeper ([config.md → auth.local](../config.md#authlocal---local-operator-passwords-adr-0092)) and `local` in the provisioning policy (a token Archon needs `user`). MCP `keeper.operator.create` creates token Archons only.
 
 **Request `OperatorCreateRequest`:**
 
@@ -20,7 +22,9 @@ Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../
 | `display_name` | `string` | yes | Human readable name for UI/audit. |
 | `roles` | `string[]` | optional | Roles granted in the same transaction (any error rolls the operator back). |
 | `ttl` | `string` (`duration`: `2160h`, `90d`) | optional | Lifetime of the returned JWT. Omitted → `auth.jwt.ttl_default`; between `1m` and `auth.jwt.ttl_max`, else `422`. |
-| `label` | `string` (≤ 200 characters, no control characters) | optional | Shown in the Archon's token list. |
+| `label` | `string` (≤ 200 characters, no control characters) | optional | Shown in the Archon's token list. Not with `auth_method: local`. |
+| `auth_method` | `jwt` \| `local` | optional | How the Archon logs in. `jwt` (default) — the reply carries its token; `local` — `password` is required and the reply carries no token. |
+| `password` | `string` | with `local` | The initial local password: at least `auth.local.min_password_length` (default 12) and at most 128 characters, no control characters, not equal to the AID. Never logged, never returned. |
 
 ```json
 {
@@ -34,6 +38,7 @@ Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../
 | Field | Type | Meaning |
 |---|---|---|
 | `aid` | `string` | AID of the created Archon. |
+| `auth_method` | `jwt` \| `local` | How it logs in; `local` → the three token fields below are absent. |
 | `display_name` | `string` | Mirror from request. |
 | `created_at` | `string` (RFC 3339) | Postgres record creation time. |
 | `created_by_aid` | `string` | AID of the Archon who made the request (from JWT `sub`). FK on `operators(aid)`. |
@@ -44,6 +49,7 @@ Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../
 ```json
 {
   "aid": "archon-alice",
+  "auth_method": "jwt",
   "display_name": "Alice Smith",
   "created_at": "2026-05-20T15:30:00Z",
   "created_by_aid": "archon-root",
@@ -55,7 +61,7 @@ Creates a registry entry `operators` ([storage.md](../storage.md), [ADR-014](../
 
 > The JWT in the response is masked in all observability channels (masked-keys rule, [§ Secret masking](../operator-api.md)) and **is given once** - save the token immediately upon receipt.
 
-**Errors:** `403 forbidden`, `409 operator-already-exists`, `422 validation-failed` (invalid AID, `ttl` outside `[1m, auth.jwt.ttl_max]`, invalid `label`).
+**Errors:** `403 forbidden` (also `provisioning-method-disabled` when the policy does not allow `user` / `local`), `409 operator-already-exists`, `422 validation-failed` (invalid AID, `ttl` outside `[1m, auth.jwt.ttl_max]`, invalid `label`; with `local`: no `auth.local`, a password outside the policy, `ttl`/`label` given; a `password` without `auth_method: local`).
 
 #### `POST /v1/operators/{aid}/revoke` - recall Archon
 
@@ -107,7 +113,7 @@ Permission: `operator.list`. Read-only, no audit.
 
 | Field | Type | Obligation | Meaning |
 |---|---|---|---|
-| `auth_method` | `string` (jwt/mtls/combined) | optional | Filter by credential form. |
+| `auth_method` | `string` (jwt/mtls/combined/ldap/oidc/local) | optional | Filter by how the Archon logs in. |
 | `revoked` | `bool` (default `false`) | optional | `false` - active only (`revoked_at IS NULL`); `true` - including the reviled. |
 | `offset` / `limit` | `int` | optional | Standard pagination ([§ Pagination](../operator-api.md#pagination)). |
 
@@ -119,9 +125,33 @@ Permission: `operator.list` (`soul.list` pattern: one permission covers list+get
 
 **Response `200 Operator`:** registry entry `operators`. **Errors:** `404 not-found` if the AID does not exist, `422 validation-failed` for a broken AID.
 
+### Local passwords
+
+An Archon with `auth_method: local` logs in with its AID and password at `POST /auth/local/login` and gets the same session an LDAP/OIDC login gets (NIM-1051, [ADR-0092](../../adr/0092-operator-local-passwords.md)). The hash (argon2id) lives in `operator_passwords` and is never returned by any route. Both routes below need `auth.local` on this Keeper; without it they answer `422`.
+
+#### `PUT /v1/operators/{aid}/password` - set an Archon's password
+
+Permission: `operator.set-password`. No MCP tool. Audit `operator.password-set` (`{aid, tokens_revoked}`).
+
+Replaces the password of a `local` Archon and revokes **all** of its web sessions and personal tokens (`operator_jwts` rows of kind `session` and `personal`), a login still in flight with the old password included — whoever held the old password could have issued itself a personal token. `issued` and `bootstrap` tokens, handed out by an administrator or `keeper init`, are untouched. The caller's own AID is refused: this route asks for no current password, so it is changed with `PUT /v1/me/password`, which does. A personal token cannot be minted from a session the reset revoked, on this node or another (`401 jwt-revoked` on `POST /v1/me/jwts`). **Not restricted by target**, like `operator.issue-token`: whoever holds the permission can log in as any local Archon.
+
+**Request `OperatorPasswordRequest`:** `{ "password": "…" }` (the policy of `POST /v1/operators`).
+
+**Response `204 No Content`.** **Errors:** `403 forbidden`, `404 not-found`, `409 operator-revoked`, `422 validation-failed` (the caller's own AID, not a `local` Archon, policy not met, no `auth.local`).
+
+#### `PUT /v1/me/password` - change my password
+
+No permission: the subject is the caller. No MCP tool. Audit `operator.password-changed` (`{aid, tokens_revoked}`).
+
+The calling `local` Archon replaces its own password, proving the current one. Its other web sessions are revoked; the one this request came with stays, and so do its personal tokens (its scripts) — revoke one in the token list if it may be someone else's. A reset by an administrator committed since the current password was checked refuses the change (`403`) rather than being overwritten.
+
+**Request `MyPasswordChangeRequest`:** `{ "current_password": "…", "new_password": "…" }`.
+
+**Response `204 No Content`.** **Errors:** `403 forbidden` — the current password is wrong (not `401`: the caller's token is fine); it counts towards the per-AID login lockout of `auth.rate_limit`, `429 auth-throttled` once locked; `401 operator-revoked-token` — revoked before the current password was checked; `413` — body over 4 KiB; `422 validation-failed` (not a `local` Archon, policy not met, no `auth.local`).
+
 ### Tokens of an Archon
 
-Every JWT Keeper mints is a row in `operator_jwts` ([storage.md](../storage.md), [ADR-014 amendment NIM-1045](../../adr/0014-operator-identity.md)) whose `jwt_id` is the token's `jti`: the bootstrap token of `keeper init`, every token of `POST /v1/operators` / `issue-token`, the session cookie of every LDAP/OIDC login (the short Bearer `POST /auth/token` exchanges it for carries the session's `jti`), and every personal token an Archon issues to itself ([§ Your own tokens](#your-own-tokens), NIM-1052). A token minted before migration 127 — or outside Keeper, like the dev stand's `make dev-jwt` — has no `jti`, is not listed, and stops only with its Archon.
+Every JWT Keeper mints is a row in `operator_jwts` ([storage.md](../storage.md), [ADR-014 amendment NIM-1045](../../adr/0014-operator-identity.md)) whose `jwt_id` is the token's `jti`: the bootstrap token of `keeper init`, every token of `POST /v1/operators` / `issue-token`, the session cookie of every LDAP/OIDC/local-password login (the short Bearer `POST /auth/token` exchanges it for carries the session's `jti`), and every personal token an Archon issues to itself ([§ Your own tokens](#your-own-tokens), NIM-1052). A token minted before migration 127 — or outside Keeper, like the dev stand's `make dev-jwt` — has no `jti`, is not listed, and stops only with its Archon.
 
 #### `GET /v1/operators/{aid}/jwts` - tokens of an Archon
 
@@ -174,9 +204,9 @@ The token is of kind `personal`. Its rights are its owner's **at each request**,
 
 - **Ceiling.** `auth.jwt.ttl_max` (90 days by default) for every Archon but an **OIDC** one. For an OIDC Archon — the lifetime of an OIDC sign-in (`auth.jwt.ttl_default`, 24h by default), and a token asked for from a sign-in is cut to expire with that sign-in: OIDC groups are reconciled into roles only at sign-in, so a person removed from a group at the IdP keeps the roles of the last sign-in for as long as the token lives. That lifts with the OIDC group re-check (NIM-1054). LDAP gets `ttl_max` on the strength of the background group sync (NIM-1053).
 - **Counts.** At most **10** active personal tokens (neither revoked nor expired) and at most **20** issued in 24 hours, revoked ones included, per Archon → `409 personal-jwt-limit`. A revoke frees an active slot, not a daily one.
-- **Credential.** A request made **with a personal token** is refused → `403 personal-jwt-from-personal`, so a personal token cannot mint its own successor. A sign-in, an `issued` or a `bootstrap` token may ask; so may a token minted before migration 127. An Archon holding `operator.issue-token` can still mint an `issued` token for itself through that route, from any of its tokens.
+- **Credential.** A request made **with a personal token** is refused → `403 personal-jwt-from-personal`, so a personal token cannot mint its own successor. A sign-in, an `issued` or a `bootstrap` token may ask; so may a token minted before migration 127. An Archon holding `operator.issue-token` can still mint an `issued` token for itself through that route, from any of its tokens. The revocation of the token asked with is read from its row, not from the RBAC snapshot: a session a password reset ended a moment ago mints nothing on a node that has not heard of the reset yet → `401 jwt-revoked` (NIM-1051).
 
-**Response `201 IssueTokenReply`:** `{aid, jwt, jwt_id, expires_at}` — the token is returned once. **Errors:** `400` (malformed body), `403 personal-jwt-from-personal`, `409 personal-jwt-limit` (either count), `422 validation-failed` (`ttl` above the caller's ceiling or below `1m`, an OIDC sign-in ending too soon for a `1m` token, `label`).
+**Response `201 IssueTokenReply`:** `{aid, jwt, jwt_id, expires_at}` — the token is returned once. **Errors:** `400` (malformed body), `401 jwt-revoked` (the token asked with is revoked), `403 personal-jwt-from-personal`, `409 personal-jwt-limit` (either count), `422 validation-failed` (`ttl` above the caller's ceiling or below `1m`, an OIDC sign-in ending too soon for a `1m` token, `label`).
 
 #### `GET /v1/me/jwts` - your own tokens
 

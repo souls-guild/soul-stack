@@ -130,6 +130,8 @@ func toOperatorCreateInput(b OperatorCreateRequest) handlers.OperatorCreateInput
 		Roles:       b.Roles,
 		TTL:         b.TTL,
 		Label:       b.Label,
+		AuthMethod:  b.AuthMethod,
+		Password:    b.Password,
 	}
 }
 

@@ -53,7 +53,7 @@ type Snapshot struct {
 	// unset (no key in keeper_settings) → everything allowed (back-compat).
 	// non-nil = policy set, exactly these methods are allowed. Load never
 	// publishes a malformed-nonempty key (returns an error instead), so
-	// non-nil here is always a nonempty set from the {user,ldap,oidc} domain.
+	// non-nil here is always a nonempty set from the {user,ldap,oidc,local} domain.
 	provisioningMethods map[string]bool
 }
 

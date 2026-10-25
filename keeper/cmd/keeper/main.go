@@ -134,6 +134,7 @@ func runInit(args []string) int {
 		configPath  string
 		credOut     string
 		displayName string
+		pwStdin     bool
 	)
 	fs := flag.NewFlagSet("init", flag.ContinueOnError)
 	fs.SetOutput(os.Stderr)
@@ -141,6 +142,7 @@ func runInit(args []string) int {
 	fs.StringVar(&configPath, "config", defaultConfigPath, "keeper.yml path")
 	fs.StringVar(&credOut, "credential-out", "", "path to write JWT token, or \"-\" for stdout (default <user-cache>/keeper/bootstrap-<aid>.token or /var/lib/keeper/bootstrap-<aid>.token)")
 	fs.StringVar(&displayName, "display-name", "", "display name (default = ArchonAID)")
+	fs.BoolVar(&pwStdin, "password-stdin", false, "read a local password for the first Archon from stdin (needs auth.local): it logs in at POST /auth/local/login; the token file is written as well")
 	fs.Usage = func() {
 		fmt.Fprintln(os.Stderr, "Usage: keeper init --archon=<aid> [flags]")
 		fs.PrintDefaults()
@@ -188,6 +190,25 @@ func runInit(args []string) int {
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper init: %v\n", err)
 		return exitError
+	}
+	// The password is read and checked before anything is touched: a refusal
+	// here must not leave a half-initialized cluster behind.
+	var archonPassword string
+	if pwStdin {
+		if cfg.Auth.Local == nil {
+			fmt.Fprintln(os.Stderr, "keeper init: --password-stdin needs an auth.local block in keeper.yml (without it nobody logs in by password)")
+			return exitUsage
+		}
+		archonPassword, err = readPasswordStdin(os.Stdin)
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "keeper init: --password-stdin: %v\n", err)
+			return exitUsage
+		}
+		policy := operator.PasswordPolicy{MinLength: cfg.Auth.Local.ResolvedMinPasswordLength()}
+		if err := policy.Check(archonAID, archonPassword); err != nil {
+			fmt.Fprintf(os.Stderr, "keeper init: --password-stdin: %v\n", err)
+			return exitUsage
+		}
 	}
 	jwtIssuerName := cfg.Auth.JWT.Issuer
 	if jwtIssuerName == "" {
@@ -270,6 +291,7 @@ func runInit(args []string) int {
 		AuditWriter:      auditWriter,
 		CredentialOutput: credLabel,
 		CredentialWriter: credWriter,
+		Password:         archonPassword,
 	}
 	res, err := bootstrap.Init(ctx, bootCfg)
 	if err != nil {

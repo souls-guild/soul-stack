@@ -43,10 +43,10 @@ func meJWTIssueOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/me/jwts",
 		Summary:       "Issue a personal token to yourself",
-		Description:   "Mints a token of kind personal for the caller (ADR-014 amendment NIM-1052). No permission: the token's rights are the caller's at each request, read from the RBAC data like every token's. Optional body: ttl and label. The ttl ceiling is auth.jwt.ttl_max, or the OIDC sign-in lifetime for an OIDC operator, whose token made from a sign-in also expires with that sign-in at the latest (GET /v1/me/jwts answers both as personal_ttl_max_seconds / personal_expires_by). At most 10 active personal tokens and 20 issued in 24 hours (409 personal-jwt-limit). A request made with a personal token is refused (403 personal-jwt-from-personal). Returns the JWT once.",
+		Description:   "Mints a token of kind personal for the caller (ADR-014 amendment NIM-1052). No permission: the token's rights are the caller's at each request, read from the RBAC data like every token's. Optional body: ttl and label. The ttl ceiling is auth.jwt.ttl_max, or the OIDC sign-in lifetime for an OIDC operator, whose token made from a sign-in also expires with that sign-in at the latest (GET /v1/me/jwts answers both as personal_ttl_max_seconds / personal_expires_by). At most 10 active personal tokens and 20 issued in 24 hours (409 personal-jwt-limit). A request made with a personal token is refused (403 personal-jwt-from-personal), and so is one made with a token already revoked in the database, such as a session a password reset ended (401 jwt-revoked). Returns the JWT once.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusCreated,
-		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 

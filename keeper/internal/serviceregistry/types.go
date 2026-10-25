@@ -50,7 +50,7 @@ var (
 	// CREATION via all methods (user/ldap/oidc) — an operator must not silently
 	// lock themselves out. The "everything allowed" default is signaled by the
 	// key's ABSENCE, not by an empty value.
-	ErrInvalidProvisioningMethod = errors.New("serviceregistry: provisioning method must be one of {user,ldap,oidc}")
+	ErrInvalidProvisioningMethod = errors.New("serviceregistry: provisioning method must be one of {user,ldap,oidc,local}")
 	ErrEmptyProvisioningMethods  = errors.New("serviceregistry: provisioning_allowed_methods is set but empty (anti-lockout)")
 )
 
@@ -89,32 +89,37 @@ const (
 	// SettingDefaultDestinySource — default git source for Destiny.
 	SettingDefaultDestinySource = "default_destiny_source"
 
-	// SettingProvisioningAllowedMethods — CSV from the domain {user,ldap,oidc}:
-	// the list of allowed operator-CREATION methods (created_via methods). Gates
-	// only the creation branch (POST /v1/operators → "user"; federated
-	// auto-provision → "ldap"/"oidc"); bootstrap/system are NEVER gated. Key
+	// SettingProvisioningAllowedMethods — CSV from the domain {user,ldap,oidc,local}:
+	// the list of allowed operator-CREATION methods. Gates only the creation
+	// branch (POST /v1/operators → "user" for a token operator, "local" for a
+	// password one (NIM-1051); federated auto-provision → "ldap"/"oidc");
+	// bootstrap/system are NEVER gated. A policy set before `local` existed
+	// does not name it, so it refuses local creation until it does. Key
 	// ABSENT = everything allowed (back-compat); SET-but-empty = config error
 	// ([ErrEmptyProvisioningMethods], anti-lockout). Parsing semantics —
 	// [ParseProvisioningMethods].
 	SettingProvisioningAllowedMethods = "provisioning_allowed_methods"
 )
 
-// provisioningMethodDomain — the closed set of created_via methods that can be
-// specified in the provisioning_allowed_methods policy. bootstrap/system are
+// provisioningMethodDomain — the closed set of creation methods that can be
+// specified in the provisioning_allowed_methods policy: the created_via values
+// user/ldap/oidc plus local, the auth_method of a password operator created via
+// the API (its created_via is user). bootstrap/system are
 // NOT included: they aren't gated (bootstrap of the first Archon via
 // `keeper init`, system = internal records) — specifying them in the policy
 // is an error.
 var provisioningMethodDomain = map[string]struct{}{
-	"user": {},
-	"ldap": {},
-	"oidc": {},
+	"user":  {},
+	"ldap":  {},
+	"oidc":  {},
+	"local": {},
 }
 
 // ParseProvisioningMethods parses the CSV value of the
 // provisioning_allowed_methods policy into a set of allowed methods. Semantics:
 //   - split on ',', trim whitespace, drop empty elements, lowercase;
 //   - each element is validated against [provisioningMethodDomain] ({user,ldap,
-//     oidc}); invalid → [ErrInvalidProvisioningMethod];
+//     oidc,local}); invalid → [ErrInvalidProvisioningMethod];
 //   - empty result (csv="" / commas-and-whitespace only) → [ErrEmptyProvisioningMethods].
 //
 // "Key absent" is handled ABOVE (PoolSource.Load: ErrSettingNotFound → policy

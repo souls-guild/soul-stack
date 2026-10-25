@@ -35,11 +35,17 @@ func TestGoldenWire_OperatorReply(t *testing.T) {
 
 	// --- OperatorCreateReply: roles omitempty (both branches) ---
 	goldenOperatorWire(t, "OperatorCreateReply/roles_set",
-		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: &roles},
-		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A","roles":["cluster-admin","operator"]}`)
+		OperatorCreateReply{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: &ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: &roles},
+		`{"aid":"archon-alice","auth_method":"jwt","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A","roles":["cluster-admin","operator"]}`)
 	goldenOperatorWire(t, "OperatorCreateReply/roles_nil",
-		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: nil},
-		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A"}`)
+		OperatorCreateReply{AID: "archon-alice", AuthMethod: OperatorAuthMethod("jwt"), CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: &ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: nil},
+		`{"aid":"archon-alice","auth_method":"jwt","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A"}`)
+
+	// --- OperatorCreateReply of a local Archon: no token, so jwt/jwt_id/expires_at
+	// are absent rather than empty (NIM-1051) ---
+	goldenOperatorWire(t, "OperatorCreateReply/local",
+		OperatorCreateReply{AID: "alice", AuthMethod: OperatorAuthMethod("local"), CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice"},
+		`{"aid":"alice","auth_method":"local","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice"}`)
 
 	// --- Operator (GET + list-element): enum auth_method + omitempty nullable +
 	// created_via (ALWAYS present, no omitempty) ---

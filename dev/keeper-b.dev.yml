@@ -59,6 +59,9 @@ auth:
     issuer: keeper-dev-b
     ttl_default: 24h
     ttl_bootstrap: 720h
+  # Local passwords (NIM-1051): log in to the UI with an AID and a password,
+  # no LDAP needed on a dev stand.
+  local: {}
 
 otel:
   # Same dev traces: otel-collector (docker-compose) :4317 → Jaeger

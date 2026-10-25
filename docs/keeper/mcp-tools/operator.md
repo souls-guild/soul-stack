@@ -6,7 +6,7 @@ Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.operator.*`
 
 #### `keeper.operator.create`
 
-Creation of a new Archon. Permission: `operator.create`. Endpoint: [`POST /v1/operators`](../operator-api/operator.md). Async: no.
+Creation of a new Archon. Permission: `operator.create`. Endpoint: [`POST /v1/operators`](../operator-api/operator.md). Async: no. Creates a token Archon (`auth_method: jwt`) only: an Archon that logs in with a password (`auth_method: local`, NIM-1051) is created over HTTP, so that a password never travels through an agent's channel; for the same reason there is no MCP tool for setting or changing a password.
 
 **Input:**
 

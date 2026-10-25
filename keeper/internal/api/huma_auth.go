@@ -150,7 +150,7 @@ func ldapLoginOperation() huma.Operation {
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusNoContent,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).
-		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusTooManyRequests, http.StatusInternalServerError},
+		Errors: []int{http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }
 

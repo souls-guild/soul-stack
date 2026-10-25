@@ -105,8 +105,8 @@ type ListFilter struct {
 //
 // Pre-conditions:
 //   - op.AID matches [AIDPattern] (validated before round-trip).
-//   - op.AuthMethod — one of the enums (jwt / mtls / combined / ldap / oidc;
-//     ldap/oidc — federated authentication, ADR-058).
+//   - op.AuthMethod — one of the enums (jwt / mtls / combined / ldap / oidc /
+//     local; ldap/oidc — federated authentication, ADR-058; local — NIM-1051).
 //   - op.DisplayName — non-empty (NOT NULL without DEFAULT in schema).
 //
 // Returns:
@@ -128,7 +128,7 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		return fmt.Errorf("operator: display_name is empty")
 	}
 	switch op.AuthMethod {
-	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined, AuthMethodLDAP, AuthMethodOIDC:
+	case AuthMethodJWT, AuthMethodMTLS, AuthMethodCombined, AuthMethodLDAP, AuthMethodOIDC, AuthMethodLocal:
 	default:
 		return fmt.Errorf("operator: invalid auth_method %q", op.AuthMethod)
 	}

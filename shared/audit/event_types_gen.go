@@ -79,6 +79,8 @@ var allEventTypes = []EventType{
 	"operator.created",                          // EventOperatorCreated
 	"operator.jwt-revoked",                      // EventOperatorJWTRevoked
 	"operator.login",                            // EventOperatorLogin
+	"operator.password-changed",                 // EventOperatorPasswordChanged
+	"operator.password-set",                     // EventOperatorPasswordSet
 	"operator.provisioned",                      // EventOperatorProvisioned
 	"operator.revoked",                          // EventOperatorRevoked
 	"operator.roles-synced",                     // EventOperatorRolesSynced

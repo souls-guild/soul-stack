@@ -25,6 +25,20 @@ What's happening:
 
 Nothing `keeper init` prints goes to stdout: the completion line and the warnings go to **stderr**, and the structured log line goes wherever `logging` in `keeper.yml` sends it — stderr by default, a file if `logging.file` is set. Stdout carries the token and nothing else, and only when asked for.
 
+### First Archon with a password
+
+With an `auth.local` block in `keeper.yml` ([config.md → `auth.local`](../keeper/config.md)), `--password-stdin` makes the first Archon a `local` operator that logs in to the web UI with its AID and password (NIM-1051, [ADR-0092](../adr/0092-operator-local-passwords.md)):
+
+```sh
+printf '%s' "$ARCHON_PASSWORD" | keeper init \
+  --archon=alice \
+  --config=/etc/keeper/keeper.yml \
+  --credential-out=/etc/keeper/alice.jwt \
+  --password-stdin
+```
+
+The whole of stdin minus one trailing line ending is the password; it must meet `auth.local.min_password_length` (default 12) and is checked before anything is written. Everything else above holds — the token is still issued and written, so scripts keep a credential. Without `auth.local` the flag is refused.
+
 ### Token on stdout
 
 `--credential-out=-` writes the JWT to stdout instead of opening any path:
@@ -105,13 +119,26 @@ The request has **no body** - the TTL of the issued token is not a per-request p
 
 JWT is the only time the operator sees it; Keeper does not store issued tokens (only signing-key and the Archon registry).
 
+### An Archon that logs in with a password
+
+With `auth.local` configured, an Archon can be created with a password instead of a token — for a human who will use the web UI ([operator-api/operator.md → Local passwords](../keeper/operator-api/operator.md#local-passwords)):
+
+```sh
+curl -X POST https://keeper.internal:8080/v1/operators \
+  -H "Authorization: Bearer $(cat /etc/keeper/archon-alice.jwt)" \
+  -H "Content-Type: application/json" \
+  -d '{"aid": "bob", "display_name": "Bob", "auth_method": "local", "password": "…", "roles": ["operator"]}'
+```
+
+The reply carries no token; Bob logs in at the login page (`POST /auth/local/login`) and can change his password himself (`PUT /v1/me/password`). An administrator with `operator.set-password` resets it with `PUT /v1/operators/bob/password`, which also ends all of Bob's web sessions and the personal tokens he issued himself. That route refuses the administrator's own AID: an administrator changes its own password with `PUT /v1/me/password`, which asks for the current one. A first Archon that forgot its password is reset by another administrator — a token one does as well as a local one. With none yet, its bootstrap token (the `--credential-out` file, valid for `auth.jwt.ttl_bootstrap`, 30 days by default) creates one, and can also issue the first Archon a personal token of up to `auth.jwt.ttl_max` (`POST /v1/me/jwts`) to keep. With none of these left, nothing in the API recovers a sole local Archon ([catastrophic recovery](#reset-to-single-admin-catastrophic-recovery) below) — so create a second administrator early. The provisioning policy gates this kind of creation by the method `local` (a token Archon — by `user`).
+
 ### Token lifetimes
 
 A request may ask for a lifetime (`ttl` on `POST /v1/operators` and `issue-token`, up to `auth.jwt.ttl_max`); everything else is a `keeper.yml` knob read **once at Keeper startup** ([config.md → `auth.jwt`](../keeper/config.md)), so changing any of them requires editing the file and **restarting** Keeper - a hot-reload will not affect newly issued tokens.
 
 | Knob | Default | Applies to |
 |---|---|---|
-| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token` **without** a `ttl`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. |
+| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token` **without** a `ttl`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC/local-password login. |
 | `auth.jwt.ttl_max` | `2160h` (90 days), or `ttl_default` if longer | The ceiling of the `ttl` a request may ask for ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). An explicit value below `ttl_default` is refused. |
 | `auth.jwt.ttl_bootstrap` | `720h` (30 days) | Only the first token written by `keeper init`. Read by the subcommand itself at each invocation, so it does not depend on the running daemon. |
 | `auth.jwt.exchange_ttl` | `10m` (floor `1m`) | The short Bearer that `POST /auth/token` gives the web UI in exchange for a `soul_session` cookie ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md)); additionally capped by the remaining lifetime of the cookie. |

@@ -44,6 +44,9 @@ auth:
     issuer: ${ISSUER}
     ttl_default: 24h
     ttl_bootstrap: 720h
+  # Local passwords (NIM-1051): log in to the UI with an AID and a password,
+  # no LDAP needed on a dev stand.
+  local: {}
 
 otel:
   # Traces go to the dev stack: otel-collector (docker-compose) on :4317 ->

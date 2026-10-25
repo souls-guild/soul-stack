@@ -78,6 +78,8 @@ Result - `keeper/bin/keeper`, `soul/bin/soul`, `soul-lint/bin/soul-lint`.
 
 What happens: under PG advisory lock, it is checked that the operator registry is empty, the first Archon with the role `cluster-admin` (permissions `["*"]`) is created, a JWT (bootstrap-TTL) is issued, the JWT is written to `--credential-out` from `mode 0400`. The same command applies the database (migration) scheme idempotently.
 
+To log in to the web UI with a password instead of pasting the token, add `--password-stdin` and pipe the password in (`printf '%s' "$PW" | ./keeper/bin/keeper init … --password-stdin`): `dev/keeper.dev.yml` carries `auth.local: {}`, so the first Archon becomes a `local` operator ([operations/bootstrap-rbac.md → First Archon with a password](operations/bootstrap-rbac.md#first-archon-with-a-password)).
+
 > File `archon-alice.jwt` - admin-credential with rights `*`. In a real installation, it is immediately hidden in the password manager / Vault and revoked after setting up the remaining operators.
 
 After bootstrap, the service registry is still empty. Reprovisioning seeds it with demo records (see [Step 7, dev-shortcut](#step-7-apply-apply-script-hello-world)):

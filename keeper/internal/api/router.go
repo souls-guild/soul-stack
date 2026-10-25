@@ -11,6 +11,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/health"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/keeper/internal/toll"
 	"github.com/souls-guild/soul-stack/keeper/internal/webui"
 	"github.com/souls-guild/soul-stack/shared/audit"
@@ -145,6 +146,7 @@ const (
 type routerExtras struct {
 	jwtUse    apimiddleware.JWTUseRecorder
 	ldapSyncH *handlers.LDAPSyncHandler
+	localAuth *LocalAuthDeps
 }
 
 type routerOption func(*routerExtras)
@@ -158,6 +160,11 @@ func withJWTUse(rec apimiddleware.JWTUseRecorder) routerOption {
 // withLDAPSync mounts /v1/ldap-sync (ADR-058 amendment NIM-1053).
 func withLDAPSync(h *handlers.LDAPSyncHandler) routerOption {
 	return func(x *routerExtras) { x.ldapSyncH = h }
+}
+
+// withLocalAuth mounts POST /auth/local/login (NIM-1051); nil → not mounted.
+func withLocalAuth(d *LocalAuthDeps) routerOption {
+	return func(x *routerExtras) { x.localAuth = d }
 }
 
 // Health/meta live outside `/v1/*` per operator-api.md § Health / Meta.
@@ -288,6 +295,14 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				registerHumaOIDCLogin(newHumaAuthAPI(r), oidcAuth)
 			})
 		}
+		if extras.localAuth != nil {
+			// Local password (NIM-1051): throttle+lockout per IP and per AID,
+			// the AID normalized the way the handler looks it up.
+			r.Group(func(r chi.Router) {
+				r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.LocalAIDExtractor(operator.NormalizeLoginAID), true, logger))
+				registerHumaLocalLogin(newHumaAuthAPI(r), extras.localAuth)
+			})
+		}
 	})
 
 	// /v1/* — auth + RBAC + audit. The selector-extractor for operator
@@ -382,6 +397,25 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			).Group(func(r chi.Router) {
 				registerHumaOperatorJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
 			})
+
+			// Local passwords (NIM-1051). Mounted whatever auth.local says: without
+			// it the service refuses with 422, which says why; an unmounted route
+			// would say 404.
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "operator", "set-password", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaOperatorSetPassword(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorPasswordSet, logger), opH)
+			})
+		})
+
+		// PUT /v1/me/password — the caller changes its own local password
+		// (NIM-1051). Auth-only like /v1/me/permissions: the subject is the
+		// caller. A wrong current password is a 403 that counts towards the
+		// lockout of the caller's AID, so a stolen Bearer cannot brute-force the
+		// password behind it faster than the login form could.
+		r.Group(func(r chi.Router) {
+			r.Use(apimiddleware.AuthLoginLimit(loginGuard, loginLimitCfg, apimiddleware.ClaimsSubjectExtractor, true, logger))
+			registerHumaMyPasswordChange(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorPasswordChanged, logger), opH)
 		})
 
 		// /v1/me/jwts — the caller's own tokens (ADR-014 amendment NIM-1052).

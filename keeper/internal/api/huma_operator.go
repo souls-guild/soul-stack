@@ -173,6 +173,48 @@ func registerHumaOperatorJWTRevoke(humaAPI huma.API, opH *handlers.OperatorHandl
 	})
 }
 
+// registerHumaOperatorSetPassword mounts PUT /v1/operators/{aid}/password
+// (WRITE+AUDIT variant B — event operator.password-set, NIM-1051). RBAC
+// operator.set-password — on the group.
+func registerHumaOperatorSetPassword(humaAPI huma.API, opH *handlers.OperatorHandler) {
+	if opH == nil {
+		return
+	}
+	huma.Register(humaAPI, operatorSetPasswordOperation(), func(ctx context.Context, in *operatorSetPasswordInput) (*operatorNoContentOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, operatorMissingClaims()
+		}
+		reply, err := opH.SetPasswordTyped(ctx, claims, in.AID, in.Body.Password)
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &operatorNoContentOutput{Status: 204}, nil
+	})
+}
+
+// registerHumaMyPasswordChange mounts PUT /v1/me/password (WRITE+AUDIT variant
+// B — event operator.password-changed, NIM-1051). Auth-only: the subject is the
+// caller.
+func registerHumaMyPasswordChange(humaAPI huma.API, opH *handlers.OperatorHandler) {
+	if opH == nil {
+		return
+	}
+	huma.Register(humaAPI, myPasswordChangeOperation(), func(ctx context.Context, in *myPasswordChangeInput) (*operatorNoContentOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, operatorMissingClaims()
+		}
+		reply, err := opH.ChangeOwnPasswordTyped(ctx, claims, in.Body.CurrentPassword, in.Body.NewPassword)
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &operatorNoContentOutput{Status: 204}, nil
+	})
+}
+
 // === projection of the handler's domain results → native wire-DTO (handler-native
 // PILOT: the api↔handlers boundary builds the schema body from flat domain fields; huma
 // derives the OpenAPI schema from these native types, generated types are not involved). ===
@@ -183,12 +225,16 @@ func registerHumaOperatorJWTRevoke(humaAPI huma.API, opH *handlers.OperatorHandl
 func newOperatorCreateReply(r handlers.OperatorCreateReply) OperatorCreateReply {
 	out := OperatorCreateReply{
 		AID:          r.AID,
+		AuthMethod:   OperatorAuthMethod(r.AuthMethod),
 		CreatedAt:    r.CreatedAt,
 		CreatedByAID: r.CreatedByAID,
 		DisplayName:  r.DisplayName,
-		ExpiresAt:    r.ExpiresAt,
 		JWT:          r.JWT,
 		JWTID:        r.JWTID,
+	}
+	if !r.ExpiresAt.IsZero() {
+		exp := r.ExpiresAt
+		out.ExpiresAt = &exp
 	}
 	if len(r.GrantedRoles) > 0 {
 		roles := r.GrantedRoles
@@ -297,6 +343,7 @@ func HumaOperatorSpecYAML() (string, error) {
 		registerHumaOperatorIssueToken(api, stub)
 		registerHumaOperatorJWTList(api, stub)
 		registerHumaOperatorJWTRevoke(api, stub)
+		registerHumaOperatorSetPassword(api, stub)
 		return nil
 	})
 }

@@ -161,6 +161,19 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		out = append(out, checkAuthOIDC(root, c.Auth.OIDC)...)
 	}
 
+	// auth.local (NIM-1051): the configured minimum must leave a password policy
+	// worth the name and still admit a password the maximum allows.
+	if c.Auth != nil && c.Auth.Local != nil {
+		if n := c.Auth.Local.MinPasswordLength; n != 0 && (n < LocalMinPasswordLengthFloor || n > LocalMaxPasswordLength) {
+			out = append(out, atPath(root, "$.auth.local.min_password_length", diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "local_min_password_length_out_of_range",
+				Message: fmt.Sprintf("auth.local.min_password_length %d is outside [%d, %d]", n, LocalMinPasswordLengthFloor, LocalMaxPasswordLength),
+				Hint:    fmt.Sprintf("omit it for the default %d", DefaultLocalMinPasswordLength),
+			}))
+		}
+	}
+
 	// auth.rate_limit (ADR-058(g), HIGH-3): duration format for lockout window/backoff.
 	if c.Auth != nil && c.Auth.RateLimit != nil {
 		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_window", c.Auth.RateLimit.LockoutWindow)...)

@@ -1064,3 +1064,46 @@ func TestIntegration_CountNonSystem_IgnoresSystemArchon(t *testing.T) {
 		t.Errorf("CountNonSystem = %d, want 0 (archon-system does not count, so restart-guard requires bootstrap)", nonSystem)
 	}
 }
+
+// `keeper init --password-stdin` (NIM-1051): the first Archon becomes a local
+// operator with its password set in the bootstrap transaction, and still gets
+// its token file.
+func TestIntegration_Init_WithPasswordMakesALocalArchon(t *testing.T) {
+	resetState(t)
+	ctx := context.Background()
+	credPath := filepath.Join(t.TempDir(), "k.token")
+
+	writer := auditpg.NewWriter(integrationPool)
+	if _, err := Init(ctx, Config{
+		ArchonAID:        "alice",
+		TTLBootstrap:     720 * time.Hour,
+		Pool:             integrationPool,
+		VaultClient:      integrationVaultC,
+		SigningKeyRef:    "vault:" + integrationKVPath,
+		IssuerFactory:    newIssuerFactory(),
+		AuditWriter:      writer,
+		CredentialOutput: credPath,
+		Password:         "correct horse battery",
+	}); err != nil {
+		t.Fatalf("Init: %v", err)
+	}
+
+	var method, via string
+	if err := integrationPool.QueryRow(ctx,
+		`SELECT auth_method, created_via FROM operators WHERE aid = 'alice'`).Scan(&method, &via); err != nil {
+		t.Fatal(err)
+	}
+	if method != "local" || via != "bootstrap" {
+		t.Fatalf("first Archon = (%s, %s), want (local, bootstrap)", method, via)
+	}
+	if _, err := operator.VerifyLocalPassword(ctx, integrationPool, "alice", "correct horse battery"); err != nil {
+		t.Fatalf("the bootstrap password does not verify: %v", err)
+	}
+	var setBy *string
+	if err := integrationPool.QueryRow(ctx, `SELECT set_by_aid FROM operator_passwords WHERE aid = 'alice'`).Scan(&setBy); err != nil || setBy != nil {
+		t.Fatalf("set_by_aid = %v (%v), want NULL — keeper init has no initiator", setBy, err)
+	}
+	if b, err := os.ReadFile(credPath); err != nil || len(strings.TrimSpace(string(b))) == 0 {
+		t.Fatalf("token file %s: %v — a password Archon still gets its token", credPath, err)
+	}
+}

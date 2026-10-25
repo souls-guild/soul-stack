@@ -97,6 +97,8 @@ components:
             - operator.created
             - operator.jwt-revoked
             - operator.login
+            - operator.password-changed
+            - operator.password-set
             - operator.provisioned
             - operator.revoked
             - operator.roles-synced
@@ -215,16 +217,20 @@ components:
         ldap:
           description: federated LDAP login is configured
           type: boolean
+        local:
+          description: login with an AID and a local password is configured (auth.local)
+          type: boolean
         oidc:
           description: federated OIDC login is configured
           type: boolean
         password:
-          description: local login (always available)
+          description: pasting an operator JWT (always available)
           type: boolean
       required:
         - password
         - ldap
         - oidc
+        - local
       type: object
     AuthTokenReply:
       additionalProperties: false
@@ -2189,6 +2195,24 @@ components:
             - string
             - "null"
       type: object
+    LocalLoginRequest:
+      additionalProperties: false
+      properties:
+        aid:
+          description: the operator's AID
+          maxLength: 128
+          minLength: 1
+          type: string
+        password:
+          description: local password (never logged, never returned)
+          format: password
+          maxLength: 512
+          minLength: 1
+          type: string
+      required:
+        - aid
+        - password
+      type: object
     ModuleCatalogItem:
       additionalProperties: false
       properties:
@@ -2398,6 +2422,25 @@ components:
         - personal_last_day
         - personal_daily_limit
       type: object
+    MyPasswordChangeRequest:
+      additionalProperties: false
+      properties:
+        current_password:
+          description: the caller's current local password
+          format: password
+          maxLength: 512
+          minLength: 1
+          type: string
+        new_password:
+          description: the new local password
+          format: password
+          maxLength: 512
+          minLength: 1
+          type: string
+      required:
+        - current_password
+        - new_password
+      type: object
     MyPermission:
       additionalProperties: false
       properties:
@@ -2559,6 +2602,8 @@ components:
         aid:
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        auth_method:
+          type: string
         created_at:
           format: date-time
           type: string
@@ -2580,12 +2625,10 @@ components:
           type: array
       required:
         - aid
+        - auth_method
         - created_at
         - created_by_aid
         - display_name
-        - expires_at
-        - jwt
-        - jwt_id
       type: object
     OperatorCreateRequest:
       additionalProperties: false
@@ -2594,12 +2637,23 @@ components:
           description: AID of the new Archon (naming-rules.md)
           pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
           type: string
+        auth_method:
+          description: "how the Archon logs in: jwt (default) - the reply carries its token; local - it logs in with password at POST /auth/local/login, the reply carries no token (needs auth.local)"
+          enum:
+            - jwt
+            - local
+          type: string
         display_name:
           description: human-readable name for UI/audit
           type: string
         label:
           description: free text shown in the operator's token list ("Service Desk prod")
           maxLength: 200
+          type: string
+        password:
+          description: initial local password, required with auth_method local (never logged, never returned)
+          format: password
+          maxLength: 512
           type: string
         roles:
           description: opt. list of roles for atomic create+grant (onboarding in one call); role error -> rollback
@@ -2730,6 +2784,18 @@ components:
         - offset
         - limit
         - total
+      type: object
+    OperatorPasswordRequest:
+      additionalProperties: false
+      properties:
+        password:
+          description: the new local password (never logged, never returned)
+          format: password
+          maxLength: 512
+          minLength: 1
+          type: string
+      required:
+        - password
       type: object
     OperatorRevokeRequest:
       additionalProperties: false
@@ -2913,12 +2979,13 @@ components:
       additionalProperties: false
       properties:
         allowed_methods:
-          description: "allowed operator creation methods (anti-lockout: non-empty list from {user,ldap,oidc})"
+          description: "allowed operator creation methods (anti-lockout: non-empty list from {user,ldap,oidc,local})"
           items:
             enum:
               - user
               - ldap
               - oidc
+              - local
             type: string
           minItems: 1
           type:
@@ -6201,6 +6268,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Forbidden
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Request Entity Too Large
         "422":
           content:
             application/problem+json:
@@ -6222,9 +6295,59 @@ paths:
       summary: Operator login via LDAP
       tags:
         - auth
+  /auth/local/login:
+    post:
+      description: "NIM-1051: checks the AID's local password (argon2id) and puts an internal JWT into the HttpOnly+Secure soul_session cookie; exchange it at POST /auth/token. Only operators with auth_method=local log in here. Every credential refusal is the same 401, including a password reset that landed between the check and the session. 413 - body over 4 KiB (while the login rate limit runs). Mounted only when auth.local is configured. Response body is empty."
+      operationId: localLogin
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/LocalLoginRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+          headers:
+            Set-Cookie:
+              schema:
+                type: string
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Request Entity Too Large
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Operator login with a local password
+      tags:
+        - auth
   /auth/methods:
     get:
-      description: Public list of login methods for the UI login form (password always true; ldap/oidc — depending on keeper config). Booleans only, no IdP URLs/domains.
+      description: Public list of login methods for the UI login form (password - pasting an operator JWT - always true; ldap/oidc/local - depending on keeper config). Booleans only, no IdP URLs/domains.
       operationId: authMethods
       responses:
         "200":
@@ -10289,7 +10412,7 @@ paths:
       tags:
         - operator
     post:
-      description: "Mints a token of kind personal for the caller (ADR-014 amendment NIM-1052). No permission: the token's rights are the caller's at each request, read from the RBAC data like every token's. Optional body: ttl and label. The ttl ceiling is auth.jwt.ttl_max, or the OIDC sign-in lifetime for an OIDC operator, whose token made from a sign-in also expires with that sign-in at the latest (GET /v1/me/jwts answers both as personal_ttl_max_seconds / personal_expires_by). At most 10 active personal tokens and 20 issued in 24 hours (409 personal-jwt-limit). A request made with a personal token is refused (403 personal-jwt-from-personal). Returns the JWT once."
+      description: "Mints a token of kind personal for the caller (ADR-014 amendment NIM-1052). No permission: the token's rights are the caller's at each request, read from the RBAC data like every token's. Optional body: ttl and label. The ttl ceiling is auth.jwt.ttl_max, or the OIDC sign-in lifetime for an OIDC operator, whose token made from a sign-in also expires with that sign-in at the latest (GET /v1/me/jwts answers both as personal_ttl_max_seconds / personal_expires_by). At most 10 active personal tokens and 20 issued in 24 hours (409 personal-jwt-limit). A request made with a personal token is refused (403 personal-jwt-from-personal), and so is one made with a token already revoked in the database, such as a session a password reset ended (401 jwt-revoked). Returns the JWT once."
       operationId: issueMyJWT
       requestBody:
         content:
@@ -10309,6 +10432,12 @@ paths:
               schema:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
         "403":
           content:
             application/problem+json:
@@ -10377,6 +10506,64 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Revoke one of your own tokens
+      tags:
+        - operator
+  /v1/me/password:
+    put:
+      description: The calling Archon (auth_method local) replaces its own password, proving the current one; its other web sessions are revoked, the one this request came with stays (NIM-1051). No permission required. A reset committed since the current password was checked refuses the change (403). 403 - current password is incorrect (counts towards the login lockout). 401 operator-revoked-token - revoked before the check. 413 - body over 4 KiB (while the login rate limit runs). 422 - not a local Archon, password policy not met, or auth.local not configured. 429 - locked out.
+      operationId: changeMyPassword
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/MyPasswordChangeRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "413":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Request Entity Too Large
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "429":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Too Many Requests
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Change my local password
       tags:
         - operator
   /v1/me/permissions:
@@ -10554,6 +10741,7 @@ paths:
               - combined
               - ldap
               - oidc
+              - local
             type: string
         - description: include revoked (false - active only); bad-value -> 400
           explode: false
@@ -10622,7 +10810,7 @@ paths:
       tags:
         - operator
     post:
-      description: Creates an operator (Archon) + opt. atomic-grant of roles (ADR-013/014). Permission operator.create. 409 - AID taken. Returns JWT once.
+      description: Creates an operator (Archon) + opt. atomic-grant of roles (ADR-013/014). Permission operator.create. 409 - AID taken. Returns JWT once; an Archon with auth_method local gets a password instead and no JWT (NIM-1051).
       operationId: createOperator
       requestBody:
         content:
@@ -10950,6 +11138,67 @@ paths:
       summary: Revoke one token of an Archon
       tags:
         - operator
+  /v1/operators/{aid}/password:
+    put:
+      description: "Replaces the local password of an Archon with auth_method local and revokes all of its web sessions and personal tokens (NIM-1051). Not restricted by target: whoever holds operator.set-password can log in as any local Archon. The caller's own AID is refused: that goes through PUT /v1/me/password, which asks for the current password. 404 - no such AID. 409 - operator revoked. 422 - the caller's own AID, not a local Archon, password policy not met, or auth.local not configured."
+      operationId: setOperatorPassword
+      parameters:
+        - description: AID of the local Archon
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of the local Archon
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorPasswordRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set an Archon's local password
+      tags:
+        - operator
   /v1/operators/{aid}/revoke:
     post:
       description: Sets operators.revoked_at (ADR-014). Permission operator.revoke. 409 - last cluster-admin (self-lockout protection) or already revoked.
@@ -11176,7 +11425,7 @@ paths:
       tags:
         - provisioning
     put:
-      description: Replace semantics for the list of allowed operator CREATION methods (provisioning_allowed_methods, ADR-058 Part B). Permission provisioning.update. 422 - empty list (anti-lockout) or method outside {user,ldap,oidc}. Gates ONLY operator creation; existing operators log in independent of the policy.
+      description: Replace semantics for the list of allowed operator CREATION methods (provisioning_allowed_methods, ADR-058 Part B). Permission provisioning.update. 422 - empty list (anti-lockout) or method outside {user,ldap,oidc,local}. Gates ONLY operator creation; existing operators log in independent of the policy.
       operationId: updateProvisioningPolicy
       requestBody:
         content:

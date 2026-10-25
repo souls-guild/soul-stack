@@ -53,6 +53,15 @@ const (
 	// The operator stays active.
 	EventOperatorJWTRevoked EventType = "operator.jwt-revoked"
 
+	// EventOperatorPasswordSet — an administrator set or reset the local
+	// password of an Archon (`PUT /v1/operators/{aid}/password`, NIM-1051).
+	// Payload `{aid, tokens_revoked}` — never the password.
+	EventOperatorPasswordSet EventType = "operator.password-set"
+
+	// EventOperatorPasswordChanged — an Archon changed its own local password
+	// (`PUT /v1/me/password`, NIM-1051). Payload `{aid, tokens_revoked}`.
+	EventOperatorPasswordChanged EventType = "operator.password-changed"
+
 	// EventIncarnationCreated — a new runtime instance was created via the
 	// Operator API (`POST /v1/incarnations`). `source: api`, `archon_aid`
 	// is the initiator; payload: `{name, service, apply_id}`. M0.6c-1 is a
@@ -1196,7 +1205,7 @@ const (
 	// CREATION methods (`provisioning_allowed_methods` in keeper_settings,
 	// ADR-058 Part B) via `PUT /v1/provisioning-policy`. `source: api`,
 	// `archon_aid` is the initiator. Payload: `{allowed_methods, previous?}` —
-	// `allowed_methods` (the new list from {user,ldap,oidc}) and `previous` (the
+	// `allowed_methods` (the new list from {user,ldap,oidc,local}) and `previous` (the
 	// prior list, if the policy was set) are not a secret and are logged. A
 	// security-sensitive mutation (it governs access to operator provisioning) —
 	// must be audited.

@@ -29,6 +29,11 @@ const (
 	// `auth_method_valid` extended by migration 083 (only-add, forward-only).
 	AuthMethodLDAP AuthMethod = "ldap" // ADR-058 stage 1
 	AuthMethodOIDC AuthMethod = "oidc" // ADR-058 stage 2
+
+	// AuthMethodLocal — a password Keeper itself checks (NIM-1051, migration
+	// 130). Only operators of this method log in by password: a `jwt`
+	// operator never gets one.
+	AuthMethodLocal AuthMethod = "local"
 )
 
 // CreatedVia — source of operator creation (ADR-058(d)). Differs from
@@ -91,9 +96,8 @@ type Operator struct {
 	Metadata     map[string]any `json:"metadata,omitempty"`
 }
 
-// IsRevoked — Operator has RevokedAt set (non-nil). Active JWTs
-// of existing sessions per ADR-014(d) continue to work until `exp`;
-// IsRevoked check needed on write-path operations and for UI.
+// IsRevoked — Operator has RevokedAt set (non-nil). Every JWT of a revoked
+// operator is refused from its next request (ADR-014 amendment NIM-421).
 func (o *Operator) IsRevoked() bool { return o.RevokedAt != nil }
 
 // IsBootstrap — Operator created via `keeper init` (created_via='bootstrap').

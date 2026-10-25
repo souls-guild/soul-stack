@@ -89,6 +89,12 @@ func fullSpecGroups() []specGroup {
 			registerHumaOperatorIssueToken(api, stub)
 			registerHumaOperatorJWTList(api, stub)
 			registerHumaOperatorJWTRevoke(api, stub)
+			registerHumaOperatorSetPassword(api, stub)
+			return nil
+		}},
+		// PUT /v1/me/password — a full under-/v1 path (NIM-1051).
+		{"/v1", func(api huma.API) error {
+			registerHumaMyPasswordChange(api, handlers.OperatorSpecStub())
 			return nil
 		}},
 		{"/v1", func(api huma.API) error {
@@ -397,6 +403,12 @@ func fullSpecGroups() []specGroup {
 		{"/auth", func(api huma.API) error {
 			registerHumaAuthMethods(api, authMethodsSpecStub())
 			registerHumaAuthTokenExchange(api, authTokenSpecStub())
+			return nil
+		}},
+		// NIM-1051: POST /auth/local/login, its own chi group under its own
+		// AuthLoginLimit (the per-AID counter).
+		{"/auth", func(api huma.API) error {
+			registerHumaLocalLogin(api, localAuthSpecStub())
 			return nil
 		}},
 	}

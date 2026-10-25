@@ -275,7 +275,7 @@ func TestHumaOperator_Create_GoldenWire(t *testing.T) {
 	delete(m, "jwt_id")
 	delete(m, "expires_at")
 	out, _ := json.Marshal(m)
-	const golden = `{"aid":"archon-bob","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","display_name":"Bob","jwt":"jwt-archon-bob"}`
+	const golden = `{"aid":"archon-bob","auth_method":"jwt","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","display_name":"Bob","jwt":"jwt-archon-bob"}`
 	if got := string(out); got != golden {
 		t.Errorf("GOLDEN wire-drift operator.create:\n got  = %s\n want = %s", got, golden)
 	}

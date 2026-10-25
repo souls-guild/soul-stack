@@ -149,6 +149,10 @@ type OperatorCreateInput struct {
 	// TTL — Go duration string ("2160h"); "" → `auth.jwt.ttl_default`.
 	TTL   string
 	Label string
+	// AuthMethod — "" / "jwt" (a token in the reply) or "local" (Password, no
+	// token; NIM-1051).
+	AuthMethod string
+	Password   string
 }
 
 // OperatorCreateReply — extracted result of [OperatorHandler.CreateTyped]
@@ -207,12 +211,21 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 	}
 
 	// provisioning_allowed_methods policy gate (ADR-058 Part B): creating an operator via
-	// the Operator API is the "user" method (created_via=user). gate==nil → let it through
-	// (policy not configured, back-compat). The bootstrap path (`keeper init`) does NOT
-	// come here — it does not call CreateTyped.
-	if h.gate != nil && !h.gate.ProvisioningMethodAllowed("user") {
+	// the Operator API is the "user" method (created_via=user) for a token operator and the
+	// "local" method for a password one (NIM-1051). gate==nil → let it through (policy not
+	// configured, back-compat). The bootstrap path (`keeper init`) does NOT come here — it
+	// does not call CreateTyped.
+	method := operator.AuthMethod(req.AuthMethod)
+	if method == "" {
+		method = operator.AuthMethodJWT
+	}
+	policyMethod := "user"
+	if method == operator.AuthMethodLocal {
+		policyMethod = "local"
+	}
+	if h.gate != nil && !h.gate.ProvisioningMethodAllowed(policyMethod) {
 		return zero, &problemError{problem.New(problem.TypeProvisioningMethodDisabled, "",
-			"operator provisioning via 'user' method is disabled by policy")}
+			"operator provisioning via '"+policyMethod+"' method is disabled by policy")}
 	}
 
 	ttl, err := operator.ParseTTL(req.TTL)
@@ -229,9 +242,14 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		TTL:         ttl,
 		Label:       req.Label,
 		Client:      clientMeta(ctx),
+		AuthMethod:  method,
+		Password:    req.Password,
 	})
 	if err != nil {
 		if p, ok := tokenTermsProblem(err); ok {
+			return zero, p
+		}
+		if p, ok := passwordProblem(err); ok {
 			return zero, p
 		}
 		switch {
@@ -248,8 +266,9 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		// impossible by construction, but we guard with an explicit 404 mapping.
 		case errors.Is(err, rbac.ErrOperatorNotFound):
 			return zero, &problemError{problem.New(problem.TypeNotFound, "", err.Error())}
-		// invalid role name from pre-validation — validation-failed.
-		case strings.Contains(err.Error(), "invalid role name"):
+		// invalid role name from pre-validation, or an auth_method create does not
+		// take — validation-failed.
+		case strings.Contains(err.Error(), "invalid role name"), strings.Contains(err.Error(), "invalid auth_method"):
 			return zero, &problemError{problem.New(problem.TypeValidationFailed, "", err.Error())}
 		}
 		h.logger.Error("operator.create: service failed",
@@ -260,7 +279,7 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		return zero, &problemError{problem.New(problem.TypeInternalError, "", "create operator failed")}
 	}
 
-	return OperatorCreateReply{
+	reply := OperatorCreateReply{
 		AID:          res.AID,
 		DisplayName:  res.DisplayName,
 		AuthMethod:   string(res.AuthMethod),
@@ -268,10 +287,96 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		CreatedByAID: res.CreatedByAID,
 		JWT:          res.JWT,
 		JWTID:        res.JWTID,
-		ExpiresAt:    res.ExpiresAt.UTC().Truncate(time.Second),
 		Label:        req.Label,
 		GrantedRoles: res.GrantedRoles,
-	}, nil
+	}
+	if !res.ExpiresAt.IsZero() {
+		reply.ExpiresAt = res.ExpiresAt.UTC().Truncate(time.Second)
+	}
+	return reply, nil
+}
+
+// passwordProblem maps the local-password sentinels (NIM-1051) to problem
+// details; ok=false for any other error. A wrong current password is 403, not
+// 401: the caller's token is fine, and a 401 would log the UI out.
+func passwordProblem(err error) (error, bool) {
+	if err == nil {
+		return nil, false
+	}
+	detail := strings.TrimPrefix(err.Error(), "operator: ")
+	switch {
+	case errors.Is(err, operator.ErrLocalPasswordsDisabled),
+		errors.Is(err, operator.ErrNotLocalOperator),
+		errors.Is(err, operator.ErrWeakPassword),
+		errors.Is(err, operator.ErrLocalOperatorNoToken),
+		errors.Is(err, operator.ErrOwnPasswordViaAdmin):
+		return &problemError{problem.New(problem.TypeValidationFailed, "", detail)}, true
+	case errors.Is(err, operator.ErrPasswordMismatch):
+		return &problemError{problem.New(problem.TypeForbidden, "", "current password is incorrect")}, true
+	}
+	return nil, false
+}
+
+// OperatorPasswordReply — the result of setting or changing a local password:
+// audit fields only (the HTTP response is an empty 204). Never the password.
+type OperatorPasswordReply struct {
+	AID           string
+	TokensRevoked int64
+}
+
+// AuditPayload — source for huma variant B.
+func (r OperatorPasswordReply) AuditPayload() middleware.AuditPayload {
+	return middleware.AuditPayload{"aid": r.AID, "tokens_revoked": r.TokensRevoked}
+}
+
+// SetPasswordTyped — PUT /v1/operators/{aid}/password: an administrator sets a
+// local operator's password; all of the target's web sessions and personal
+// tokens are revoked.
+func (h *OperatorHandler) SetPasswordTyped(ctx context.Context, claims *jwt.Claims, targetAID, password string) (OperatorPasswordReply, error) {
+	var zero OperatorPasswordReply
+	if !operator.ValidAID(targetAID) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'aid' must match "+operator.AIDPattern)}
+	}
+	n, err := h.svc.SetPassword(ctx, operator.SetPasswordInput{AID: targetAID, Password: password, CallerAID: claims.Subject})
+	if p, ok := passwordProblem(err); ok {
+		return zero, p
+	}
+	switch {
+	case err == nil:
+	case errors.Is(err, operator.ErrOperatorNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "operator "+targetAID+" not found")}
+	case errors.Is(err, operator.ErrOperatorAlreadyRevoked):
+		return zero, &problemError{problem.New(problem.TypeOperatorRevoked, "", "operator "+targetAID+" is revoked")}
+	default:
+		h.logger.Error("operator.set-password: service failed",
+			slog.String("aid", targetAID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "set password failed")}
+	}
+	return OperatorPasswordReply{AID: targetAID, TokensRevoked: n}, nil
+}
+
+// ChangeOwnPasswordTyped — PUT /v1/me/password: the caller changes its own local
+// password, proving the current one. The caller's other web sessions are
+// revoked; the one this request came with stays.
+func (h *OperatorHandler) ChangeOwnPasswordTyped(ctx context.Context, claims *jwt.Claims, current, newPassword string) (OperatorPasswordReply, error) {
+	var zero OperatorPasswordReply
+	n, err := h.svc.ChangePassword(ctx, operator.ChangePasswordInput{
+		AID: claims.Subject, Current: current, New: newPassword, CurrentJWTID: claims.ID,
+	})
+	if p, ok := passwordProblem(err); ok {
+		return zero, p
+	}
+	// Revoked after RejectRevoked let the request through: the same verdict
+	// that gate gives, an identity one.
+	if errors.Is(err, operator.ErrOperatorAlreadyRevoked) {
+		return zero, &problemError{problem.New(problem.TypeOperatorRevokedToken, "", "operator revoked")}
+	}
+	if err != nil {
+		h.logger.Error("operator.change-password: service failed", slog.String("aid", claims.Subject), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "change password failed")}
+	}
+	return OperatorPasswordReply{AID: claims.Subject, TokensRevoked: n}, nil
 }
 
 // AuditPayload assembles the audit payload of the create route (parity with legacy
@@ -283,7 +388,9 @@ func (r OperatorCreateReply) AuditPayload() middleware.AuditPayload {
 		"display_name":   r.DisplayName,
 		"auth_method":    r.AuthMethod,
 		"created_by_aid": r.CreatedByAID,
-		"jwt_id":         r.JWTID,
+	}
+	if r.JWTID != "" {
+		p["jwt_id"] = r.JWTID
 	}
 	if len(r.GrantedRoles) > 0 {
 		p["roles"] = r.GrantedRoles
@@ -443,8 +550,9 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 // IssuePersonalJWTTyped — domain function for POST /v1/me/jwts: the caller
 // issues a token to itself (ADR-014 amendment NIM-1052). The owner is the
 // claims' subject, never a path or body field, so no request can name another
-// operator. 403 when the request is made with a personal token, 409 at either
-// limit, 422 for a ttl above the caller's ceiling.
+// operator. 401 when the token it is made with is revoked in the database,
+// 403 when it is a personal token, 409 at either limit, 422 for a ttl above
+// the caller's ceiling.
 func (h *OperatorHandler) IssuePersonalJWTTyped(ctx context.Context, claims *jwt.Claims, req OperatorIssueTokenInput) (OperatorIssueTokenReply, error) {
 	var zero OperatorIssueTokenReply
 	ttl, err := operator.ParseTTL(req.TTL)
@@ -466,6 +574,8 @@ func (h *OperatorHandler) IssuePersonalJWTTyped(ctx context.Context, claims *jwt
 	case err == nil:
 	case errors.Is(err, operator.ErrPersonalJWTFromPersonal):
 		return zero, &problemError{problem.New(problem.TypePersonalJWTFromPersonal, "", strings.TrimPrefix(err.Error(), "operator: "))}
+	case errors.Is(err, operator.ErrCallerJWTRevoked):
+		return zero, &problemError{problem.New(problem.TypeJWTRevoked, "", "token revoked")}
 	case errors.Is(err, operator.ErrPersonalJWTLimit), errors.Is(err, operator.ErrPersonalJWTDailyLimit):
 		return zero, &problemError{problem.New(problem.TypePersonalJWTLimit, "", strings.TrimPrefix(err.Error(), "operator: "))}
 	case errors.Is(err, operator.ErrOperatorNotFound):

@@ -50,11 +50,14 @@ type AuthMethodsDeps struct {
 	// Password — ALWAYS true (user decision Q4, ADR-058): the classic
 	// operator-JWT paste into localStorage is available regardless of federated
 	// methods (FE paste-JWT fallback — the token goes in directly as a Bearer, no
-	// cookie/exchange needed). NOT tied to a separate endpoint; the contract is
-	// "local login always exists".
+	// cookie/exchange needed). NOT tied to a separate endpoint, and not the
+	// password login — that is Local.
 	Password bool
 	LDAP     bool
 	OIDC     bool
+	// Local — `auth.local` is configured: POST /auth/local/login takes an
+	// AID and a local password (NIM-1051). Not to be confused with Password.
+	Local bool
 }
 
 // authTokenInput — huma input for POST /auth/token. Session — the HttpOnly
@@ -84,11 +87,13 @@ type authTokenOutput struct {
 type authMethodsInput struct{}
 
 // AuthMethodsReply — available login methods (booleans only). password is
-// always true (local login always exists). Name is NOT *Response (schema-naming guard).
+// always true (pasting an operator JWT always works); local is the password
+// login of NIM-1051. Name is NOT *Response (schema-naming guard).
 type AuthMethodsReply struct {
-	Password bool `json:"password" doc:"local login (always available)"`
+	Password bool `json:"password" doc:"pasting an operator JWT (always available)"`
 	LDAP     bool `json:"ldap" doc:"federated LDAP login is configured"`
 	OIDC     bool `json:"oidc" doc:"federated OIDC login is configured"`
+	Local    bool `json:"local" doc:"login with an AID and a local password is configured (auth.local)"`
 }
 
 // authMethodsOutput — huma output with body [AuthMethodsReply] (status 200).
@@ -118,7 +123,7 @@ func authMethodsOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/methods",
 		Summary:       "Available login methods",
-		Description:   "Public list of login methods for the UI login form (password always true; ldap/oidc — depending on keeper config). Booleans only, no IdP URLs/domains.",
+		Description:   "Public list of login methods for the UI login form (password - pasting an operator JWT - always true; ldap/oidc/local - depending on keeper config). Booleans only, no IdP URLs/domains.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusOK,
 	}
@@ -233,7 +238,7 @@ func registerHumaAuthTokenExchange(humaAPI huma.API, d *AuthTokenDeps) {
 // (methods are always declared): value-deps, no no-op branch.
 func registerHumaAuthMethods(humaAPI huma.API, d AuthMethodsDeps) {
 	huma.Register(humaAPI, authMethodsOperation(), func(_ context.Context, _ *authMethodsInput) (*authMethodsOutput, error) {
-		return &authMethodsOutput{Body: AuthMethodsReply{Password: d.Password, LDAP: d.LDAP, OIDC: d.OIDC}}, nil
+		return &authMethodsOutput{Body: AuthMethodsReply{Password: d.Password, LDAP: d.LDAP, OIDC: d.OIDC, Local: d.Local}}, nil
 	})
 }
 

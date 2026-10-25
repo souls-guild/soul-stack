@@ -56,7 +56,14 @@ func (f fakeRevoked) IsJWTRevoked(string) bool { return false }
 // stub handlers (like collectRoutes), but with live verifier/enforcer/
 // authToken — so both /auth/token and the /v1 perimeter can be checked in
 // one tree.
-func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider, authToken *AuthTokenDeps, authMethods AuthMethodsDeps) http.Handler {
+func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, opts ...routerOption) http.Handler {
+	t.Helper()
+	return authRouterWithGuard(t, verifier, enforcer, authToken, authMethods, nil, opts...)
+}
+
+// authRouterWithGuard — authTokenRouter with a login guard, for the tests that
+// check which routes run under AuthLoginLimit and by which key.
+func authRouterWithGuard(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, guard apimiddleware.LoginGuard, opts ...routerOption) http.Handler {
 	t.Helper()
 	return buildRouter(
 		verifier,
@@ -87,14 +94,15 @@ func authTokenRouter(t *testing.T, verifier *jwt.Verifier, enforcer RBACProvider
 		nil, nil, // ldapAuth, oidcAuth
 		authToken,   // authToken
 		authMethods, // authMethods
-		nil,         // loginGuard
-		apimiddleware.AuthLoginLimitConfig{},
+		guard,       // loginGuard
+		apimiddleware.AuthLoginLimitConfig{Rate: 100, Burst: 100, LockoutThreshold: 5, LockoutWindow: time.Minute, LockoutBackoff: time.Minute},
 		nil,              // soulStatsStaleFn
 		nil,              // clusterH
 		&runEventsDeps{}, // runEventsDeps
 		nil,              // consoleWSDeps (console WebSocket not tested here)
 		nil,              // consoleRecordingH (console recording playback not tested here)
 		nil,              // logger
+		opts...,
 	)
 }
 

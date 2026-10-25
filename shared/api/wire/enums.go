@@ -58,16 +58,18 @@ const (
 //
 // ADR-058 (LDAP part accepted) added the only-add values `ldap`/`oidc` (federated
 // authentication, see operator.AuthMethodLDAP/OIDC). The counterpart to this
-// extension is the OpenAPI enum struct tag `enum:"jwt,mtls,combined,ldap,oidc"`
+// extension is the OpenAPI enum struct tag `enum:"jwt,mtls,combined,ldap,oidc,local"`
 // (huma_operator_op.go list filter) + committed openapi.yaml: the huma-layer const
 // set must match the filter's wire enum. `oidc` was added up front (ADR-058 stage 2),
-// so a later OIDC implementation does not touch the contract again.
+// so a later OIDC implementation does not touch the contract again. `local` — a
+// password Keeper checks itself (NIM-1051).
 type OperatorAuthMethod string
 
 const (
 	OperatorAuthMethodCombined OperatorAuthMethod = "combined"
 	OperatorAuthMethodJWT      OperatorAuthMethod = "jwt"
 	OperatorAuthMethodLDAP     OperatorAuthMethod = "ldap"
+	OperatorAuthMethodLocal    OperatorAuthMethod = "local"
 	OperatorAuthMethodMTLS     OperatorAuthMethod = "mtls"
 	OperatorAuthMethodOIDC     OperatorAuthMethod = "oidc"
 )

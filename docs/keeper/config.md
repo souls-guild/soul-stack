@@ -217,9 +217,10 @@ Operator Authentication (Archon) for OpenAPI / MCP. Subblocks:
 - `jwt` - internal JWT-issuer ([ADR-014](../adr/0014-operator-identity.md)), signature and token format (actual part; below).
 - `ldap` - federated LDAP authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md), stage 1).
 - `oidc` - federated OAuth2/OIDC authentication ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md), stage 2, requires Redis).
+- `local` - login with an AID and a password Keeper checks itself, no identity provider ([ADR-0092](../adr/0092-operator-local-passwords.md), NIM-1051).
 - `rate_limit` - anti-bruteforce login endpoints ([ADR-058(g)](../adr/0058-operator-auth-ldap-oidc.md)).
 
-Federated methods (`ldap`/`oidc`) validate the external identity on Keeper, map it to the `operators(aid)` + RBAC roles line and release **internal** JWT - RBAC/MCP/middleware work without changes. All three subblocks are optional: not specified → login method is not available, Keeper starts. The operator registry and RBAC directory are in Postgres (`operators` and `rbac_*`, respectively, ADR-028), role management is through `role.*` API/MCP ([rbac.md](rbac.md)). Secret fields of federated blocks - via `*_ref` (`vault:<mount>/<path>[#field]`, resolve load-time as `redis.password_ref`).
+Federated methods (`ldap`/`oidc`) validate the external identity on Keeper, map it to the `operators(aid)` + RBAC roles line and release **internal** JWT - RBAC/MCP/middleware work without changes. The `ldap`, `oidc` and `local` subblocks are optional: not specified → that login method is not available, Keeper starts. The operator registry and RBAC directory are in Postgres (`operators` and `rbac_*`, respectively, ADR-028), role management is through `role.*` API/MCP ([rbac.md](rbac.md)). Secret fields of federated blocks - via `*_ref` (`vault:<mount>/<path>[#field]`, resolve load-time as `redis.password_ref`).
 
 ```yaml
 auth:
@@ -321,9 +322,24 @@ auth:
 | `auth.oidc.tls.ca_ref` | `vault-ref` | — | Opt. Vault-reference to custom CA IdP (field in KV - `ca`). |
 | `auth.oidc.group_role_map` | `map<string, list<string>>` | — | External group (value from `groups_claim`) → list of RBAC roles. Source of roles for auto-provision and reconciliation on login. |
 
+### `auth.local` - local operator passwords ([ADR-0092](../adr/0092-operator-local-passwords.md))
+
+Optional block (NIM-1051). If present, `POST /auth/local/login` is mounted (outside `/v1`): an operator with `auth_method: local` logs in with its AID and password, checked by Keeper against the argon2id hash in `operator_passwords`, and gets the same `soul_session` cookie as an LDAP/OIDC login (exchanged at `POST /auth/token`). Only `local` operators log in this way — a `jwt`, `ldap` or `oidc` operator is refused with the same `401` as a wrong password. With the block, this Keeper also sets passwords: `POST /v1/operators` with `auth_method: local`, `PUT /v1/operators/{aid}/password` (permission `operator.set-password`) and `PUT /v1/me/password`; without it those answer `422`, and `keeper init --password-stdin` refuses. Brute force is `auth.rate_limit` below, keyed per IP and per AID. No secrets to resolve; read at start (changing the block takes a restart).
+
+```yaml
+auth:
+  local: {}                    # on, with the defaults
+  # local:
+  #   min_password_length: 16
+```
+
+| Field | Type | Default | Meaning |
+|---|---|---|---|
+| `auth.local.min_password_length` | `int` (characters) | `12` | The shortest password an operator may be given (create, admin reset, change, `keeper init --password-stdin`). Allowed `8..128`; outside → `local_min_password_length_out_of_range` at load. The policy is otherwise fixed: at most 128 characters, valid UTF-8, no control characters, not equal to the AID; no composition rules. Existing passwords are not re-checked when it changes. |
+
 ### `auth.rate_limit` - anti-bruteforce login endpoints ([ADR-058(g)](../adr/0058-operator-auth-ldap-oidc.md))
 
-Optional block. Protection of public login paths (`/auth/ldap/login`, `/auth/oidc/login`) from brute force: per-IP + per-username throttle the frequency of attempts (token-bucket) **plus** lockout after a series of failures. **Default-ON** (nil/omitted → enabled, footgun-guard as `tempo`/`toll`); explicit `enabled: false` - opt-out. In fact, it only rises when Redis is running (limiter cluster-shared is the authority in Redis, not ×N for stateless instances); Without Redis, login paths degrade without throttle. Lockout check **fail-closed** for Redis error (login is a security perimeter, Redis inaccessibility should not open brute force). Excess → `429` + `Retry-After` + `application/problem+json` with type [`auth-throttled`](../naming-rules.md#error-codes) (detail anti-oracle - without specifying scope/reason). Hot-reloadable. Primitive - **LoginGuard** (`keeper/internal/redis/loginguard.go`).
+Optional block. Protection of public login paths (`/auth/ldap/login`, `/auth/oidc/login`, `/auth/local/login`) from brute force — and of `PUT /v1/me/password`, whose wrong current password counts towards the same per-AID lockout. While the limiter runs (Redis present, `enabled` not `false`), a body over 4 KiB on the routes it keys by name — the LDAP and local-password logins (the username/AID is read from at most that much) and `PUT /v1/me/password` — is refused with `413` before the limiter and the handler, so padding cannot take a guess past the per-username layer (NIM-1051). Per-IP + per-username throttle the frequency of attempts (token-bucket) **plus** lockout after a series of failures. **Default-ON** (nil/omitted → enabled, footgun-guard as `tempo`/`toll`); explicit `enabled: false` - opt-out. In fact, it only rises when Redis is running (limiter cluster-shared is the authority in Redis, not ×N for stateless instances); Without Redis, login paths degrade without throttle. Lockout check **fail-closed** for Redis error (login is a security perimeter, Redis inaccessibility should not open brute force). Excess → `429` + `Retry-After` + `application/problem+json` with type [`auth-throttled`](../naming-rules.md#error-codes) (detail anti-oracle - without specifying scope/reason). Hot-reloadable. Primitive - **LoginGuard** (`keeper/internal/redis/loginguard.go`).
 
 ```yaml
 auth:
@@ -347,11 +363,11 @@ auth:
 
 ### Operator Provisioning Policy - `provisioning_allowed_methods` ([ADR-058(i)](../adr/0058-operator-auth-ldap-oidc.md))
 
-The **CREATE** method of the operator (`created_via`) can be limited by the `provisioning_allowed_methods` policy - this is the **well-known key `keeper_settings` in Postgres**, and not the `keeper.yml` field (control via API/MCP, not by file editing, symmetrical to the Service registry). CSV from domain `{user, ldap, oidc}`: gates only the creation branch (`POST /v1/operators` → `user`; federated auto-provision → `ldap`/`oidc`). Existing operators log in regardless of policy; `bootstrap`/`system` **never gated** (not included in the domain).
+The **CREATE** method of the operator (`created_via`) can be limited by the `provisioning_allowed_methods` policy - this is the **well-known key `keeper_settings` in Postgres**, and not the `keeper.yml` field (control via API/MCP, not by file editing, symmetrical to the Service registry). CSV from domain `{user, ldap, oidc, local}`: gates only the creation branch (`POST /v1/operators` → `user` for a token operator, `local` for one with `auth_method: local` (NIM-1051); federated auto-provision → `ldap`/`oidc`). A policy set before `local` existed does not name it, so it refuses local creation until it does. Existing operators log in regardless of policy; `bootstrap`/`system` **never gated** (not included in the domain).
 
 - **Key missing** → all methods are allowed (back-compat).
 - **The key has been specified, but is empty** → config-error (anti-lockout: it is impossible to prohibit ALL methods and lock the establishment of operators).
-- Method outside `{user,ldap,oidc}` → failure.
+- Method outside `{user,ldap,oidc,local}` → failure.
 
 Runtime management - endpoints `GET`/`PUT /v1/provisioning-policy` (permissions `provisioning.read` / `provisioning.update`, [rbac.md → Provisioning](rbac.md#provisioning-2--adr-058)). `GET` without audit (`policy_set=false` → key not set = default "everything is allowed"); `PUT` — replace semantics, writes audit `provisioning.policy_changed`, empty list → `422` anti-lockout, creation method prohibited by policy → `422` [`provisioning-method-disabled`](../naming-rules.md#error-codes). See [storage.md](storage.md) (`keeper_settings`), [naming-rules.md → `provisioning_allowed_methods`](../naming-rules.md).
 

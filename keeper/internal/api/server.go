@@ -466,6 +466,16 @@ type Deps struct {
 	// AND Redis is live (the flow-state store is cluster-shared): without Redis OIDC is unavailable.
 	OIDCAuth *OIDCAuthDeps
 
+	// LocalAuth — the local-password login (NIM-1051, POST /auth/local/login).
+	// nil → not mounted: keeper.yml::auth.local unset.
+	LocalAuth *LocalAuthDeps
+
+	// LocalPasswordPolicy — the policy new local passwords must meet; nil →
+	// this Keeper sets no local password (create with auth_method local, PUT
+	// /v1/operators/{aid}/password and PUT /v1/me/password answer 422).
+	// Set from the same auth.local block as LocalAuth.
+	LocalPasswordPolicy *operator.PasswordPolicy
+
 	// AuthToken — exchange of session-cookie for a short-lived Bearer (POST /auth/token,
 	// NIM-77/ADR-058 Variant B). When nil the endpoint is not mounted (opt-in, same
 	// pattern as LDAPAuth); production wire-up supplies shared verifier+issuer+rbacHolder.
@@ -684,6 +694,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 	if gate, ok := deps.ProvisioningPolicyReader.(handlers.ProvisioningGate); ok && gate != nil {
 		opH.SetProvisioningGate(gate)
 	}
+	opH.Service().SetPasswordPolicy(deps.LocalPasswordPolicy)
 	incH := handlers.NewIncarnationHandler(deps.IncarnationDB, deps.ScenarioRunner, deps.ScenarioDestroyer, deps.ServiceRegistry, deps.ServiceLoader, deps.AuditWriter, deps.RBAC, logger)
 	// refs-lister (the same ls-remote cache as ServiceHandler) for the cheap mode of
 	// GET .../upgrade-paths (ADR-0068 §6); late-binding, the constructor isn't extended.
@@ -981,7 +992,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse), withLDAPSync(ldapSyncH))
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse), withLDAPSync(ldapSyncH), withLocalAuth(deps.LocalAuth))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

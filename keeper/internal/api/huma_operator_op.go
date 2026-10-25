@@ -40,6 +40,8 @@ type OperatorCreateRequest struct {
 	Roles       []string `json:"roles,omitempty" doc:"opt. list of roles for atomic create+grant (onboarding in one call); role error -> rollback"`
 	TTL         string   `json:"ttl,omitempty" doc:"lifetime of the returned JWT (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max, else 422"`
 	Label       string   `json:"label,omitempty" maxLength:"200" doc:"free text shown in the operator's token list (\"Service Desk prod\")"`
+	AuthMethod  string   `json:"auth_method,omitempty" enum:"jwt,local" doc:"how the Archon logs in: jwt (default) - the reply carries its token; local - it logs in with password at POST /auth/local/login, the reply carries no token (needs auth.local)"`
+	Password    string   `json:"password,omitempty" format:"password" maxLength:"512" doc:"initial local password, required with auth_method local (never logged, never returned)"`
 }
 
 // operatorCreateOutput — huma output for POST /v1/operators (FULL-TYPED). Status=201;
@@ -60,7 +62,7 @@ func operatorCreateOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/",
 		Summary:       "Create an Archon",
-		Description:   "Creates an operator (Archon) + opt. atomic-grant of roles (ADR-013/014). Permission operator.create. 409 - AID taken. Returns JWT once.",
+		Description:   "Creates an operator (Archon) + opt. atomic-grant of roles (ADR-013/014). Permission operator.create. 409 - AID taken. Returns JWT once; an Archon with auth_method local gets a password instead and no JWT (NIM-1051).",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusCreated,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
@@ -73,11 +75,12 @@ func operatorCreateOperation() huma.Operation {
 // field carries `query:"<name>"` → huma binds from url.Values and validates against the schema.
 //
 // Bind-phase semantics (parity with legacy List → ListTyped):
-//   - AuthMethod carries `enum:"jwt,mtls,combined,ldap,oidc"` — a value outside the set → 422
+//   - AuthMethod carries `enum:"jwt,mtls,combined,ldap,oidc,local"` — a value outside the set → 422
 //     (schema-validate enum-mismatch, NOT parse) → error-override classifies it as
 //     TypeValidationFailed (KEY contract: enum→422, as an audit source). Empty →
 //     no filter applied. enum set = domain operator.AuthMethod{JWT,MTLS,Combined,
-//     LDAP,OIDC}; ldap/oidc — federated authentication (ADR-058), only-add to the former;
+//     LDAP,OIDC,Local}; ldap/oidc — federated authentication (ADR-058), local — a
+//     password Keeper checks (NIM-1051), only-add to the former;
 //   - Revoked — bool: huma parseInto on a bad value yields "invalid boolean …" → 400
 //     (hasQueryParseError). Omitted → false (active only, parity with legacy);
 //   - Q — free substring search (ILIKE) over display_name/aid, case-insensitive;
@@ -89,7 +92,7 @@ func operatorCreateOperation() huma.Operation {
 //     with 422, whereas legacy ParsePage returns 400) — enforced by the DOMAIN ListTyped via
 //     CheckPageBounds with the same message → 400.
 type operatorListInput struct {
-	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc" doc:"filter by credential form; value outside enum -> 422"`
+	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc,local" doc:"filter by credential form; value outside enum -> 422"`
 	Revoked    bool   `query:"revoked" doc:"include revoked (false - active only); bad-value -> 400"`
 	Q          string `query:"q" doc:"free search over display_name/aid (substring, case-insensitive); empty -> no filter"`
 	Offset     int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
@@ -292,5 +295,60 @@ func operatorJWTRevokeOperation() huma.Operation {
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/operators/{aid}/password (set-password) — WRITE+AUDIT operator.password-set ===
+
+type operatorSetPasswordInput struct {
+	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the local Archon"`
+	Body OperatorPasswordRequest
+}
+
+// OperatorPasswordRequest — the body of PUT /v1/operators/{aid}/password.
+type OperatorPasswordRequest struct {
+	Password string `json:"password" required:"true" format:"password" minLength:"1" maxLength:"512" doc:"the new local password (never logged, never returned)"`
+}
+
+// operatorSetPasswordOperation — PUT /v1/operators/{aid}/password (NIM-1051).
+// Permission operator.set-password + audit operator.password-set.
+func operatorSetPasswordOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setOperatorPassword",
+		Method:        http.MethodPut,
+		Path:          "/{aid}/password",
+		Summary:       "Set an Archon's local password",
+		Description:   "Replaces the local password of an Archon with auth_method local and revokes all of its web sessions and personal tokens (NIM-1051). Not restricted by target: whoever holds operator.set-password can log in as any local Archon. The caller's own AID is refused: that goes through PUT /v1/me/password, which asks for the current password. 404 - no such AID. 409 - operator revoked. 422 - the caller's own AID, not a local Archon, password policy not met, or auth.local not configured.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT /v1/me/password (change own password) — WRITE+AUDIT operator.password-changed ===
+
+type myPasswordChangeInput struct {
+	Body MyPasswordChangeRequest
+}
+
+// MyPasswordChangeRequest — the body of PUT /v1/me/password.
+type MyPasswordChangeRequest struct {
+	CurrentPassword string `json:"current_password" required:"true" format:"password" minLength:"1" maxLength:"512" doc:"the caller's current local password"`
+	NewPassword     string `json:"new_password" required:"true" format:"password" minLength:"1" maxLength:"512" doc:"the new local password"`
+}
+
+// myPasswordChangeOperation — PUT /v1/me/password (NIM-1051). No permission:
+// the caller changes its own password. A wrong current password counts towards
+// the login lockout of the AID (auth.rate_limit).
+func myPasswordChangeOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "changeMyPassword",
+		Method:        http.MethodPut,
+		Path:          "/me/password",
+		Summary:       "Change my local password",
+		Description:   "The calling Archon (auth_method local) replaces its own password, proving the current one; its other web sessions are revoked, the one this request came with stays (NIM-1051). No permission required. A reset committed since the current password was checked refuses the change (403). 403 - current password is incorrect (counts towards the login lockout). 401 operator-revoked-token - revoked before the check. 413 - body over 4 KiB (while the login rate limit runs). 422 - not a local Archon, password policy not met, or auth.local not configured. 429 - locked out.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusBadRequest, http.StatusUnauthorized, http.StatusForbidden, http.StatusRequestEntityTooLarge, http.StatusUnprocessableEntity, http.StatusTooManyRequests, http.StatusInternalServerError},
 	}
 }

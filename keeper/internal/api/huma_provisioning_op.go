@@ -50,11 +50,11 @@ type provisioningPolicyPutInput struct {
 
 // ProvisioningPolicyUpdateRequest — Go form of the PUT /v1/provisioning-policy body.
 // allowed_methods — list of allowed operator CREATION methods (enum
-// {user,ldap,oidc}); minItems:1 — anti-lockout (can't forbid ALL methods and
+// {user,ldap,oidc,local}); minItems:1 — anti-lockout (can't forbid ALL methods and
 // lock out operator creation). Domain validation (domain/dedup) — in PutTyped.
 // Struct name = contract schema name in OpenAPI.
 type ProvisioningPolicyUpdateRequest struct {
-	AllowedMethods []string `json:"allowed_methods" required:"true" minItems:"1" enum:"user,ldap,oidc" doc:"allowed operator creation methods (anti-lockout: non-empty list from {user,ldap,oidc})"`
+	AllowedMethods []string `json:"allowed_methods" required:"true" minItems:"1" enum:"user,ldap,oidc,local" doc:"allowed operator creation methods (anti-lockout: non-empty list from {user,ldap,oidc,local})"`
 }
 
 // provisioningPolicyPutOutput — huma output PUT. Status=200 WITH BODY (native
@@ -74,7 +74,7 @@ func provisioningPolicyPutOperation() huma.Operation {
 		Method:        http.MethodPut,
 		Path:          "/",
 		Summary:       "Change the operator creation methods policy",
-		Description:   "Replace semantics for the list of allowed operator CREATION methods (provisioning_allowed_methods, ADR-058 Part B). Permission provisioning.update. 422 - empty list (anti-lockout) or method outside {user,ldap,oidc}. Gates ONLY operator creation; existing operators log in independent of the policy.",
+		Description:   "Replace semantics for the list of allowed operator CREATION methods (provisioning_allowed_methods, ADR-058 Part B). Permission provisioning.update. 422 - empty list (anti-lockout) or method outside {user,ldap,oidc,local}. Gates ONLY operator creation; existing operators log in independent of the policy.",
 		Tags:          []string{"provisioning"},
 		DefaultStatus: http.StatusOK,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},

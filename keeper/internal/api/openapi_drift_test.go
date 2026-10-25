@@ -116,7 +116,8 @@ var pathAllowlist = map[route]string{
 	// drift-test builds the router with LDAPAuth=nil → declared in the spec
 	// (prefix /auth), but absent from the router. OUTSIDE /v1 (public entry,
 	// RequireJWT doesn't apply).
-	{method: http.MethodPost, path: "/auth/ldap/login"}: "ADR-058 LDAP login: route wired ONLY when non-nil LDAPAuth (optional block auth.ldap in keeper.yml)",
+	{method: http.MethodPost, path: "/auth/ldap/login"}:  "ADR-058 LDAP login: route wired ONLY when non-nil LDAPAuth (optional block auth.ldap in keeper.yml)",
+	{method: http.MethodPost, path: "/auth/local/login"}: "NIM-1051 local-password login: route wired ONLY when non-nil LocalAuth (optional block auth.local in keeper.yml)",
 
 	// auth.oidc endpoints (ADR-058 stage 2): wired ONLY when OIDCAuth is non-nil
 	// (optional auth.oidc + Redis block); the drift-test builds the router with

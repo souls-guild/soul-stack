@@ -58,6 +58,15 @@ var (
 	// owner who holds `operator.issue-token`: that route mints an `issued`
 	// token for anyone, the owner included, from any of its tokens.
 	ErrPersonalJWTFromPersonal = errors.New("operator: a personal token cannot issue personal tokens; sign in or use another token")
+	// ErrCallerJWTRevoked — the token the request came with is revoked in the
+	// database though it still verified here (the RBAC snapshot is behind):
+	// nothing may be minted from it (NIM-1051).
+	ErrCallerJWTRevoked = errors.New("operator: the token this request was made with is revoked")
+	// ErrOwnPasswordViaAdmin — an administrator asked to set its own password
+	// through the administrative route; that route needs no current password,
+	// so a token holding operator.set-password would be a way to a password
+	// without knowing the old one (NIM-1051). PUT /v1/me/password is the way.
+	ErrOwnPasswordViaAdmin = errors.New("operator: set your own password with PUT /v1/me/password, which asks for the current one")
 )
 
 // ServiceDeps — dependencies of [Service]. All fields immutable after constructor.
@@ -137,6 +146,10 @@ type Service struct {
 	// atomic.Pointer — concurrent write by setter vs. read from Revoke without
 	// separate mutex.
 	inv atomic.Pointer[Invalidator]
+
+	// passwords — the local-password policy (`auth.local`, NIM-1051); nil →
+	// this Keeper sets no local passwords ([ErrLocalPasswordsDisabled]).
+	passwords atomic.Pointer[PasswordPolicy]
 }
 
 // NewService assembles service. nil logger allowed — caller not writing
@@ -227,6 +240,25 @@ func (s *Service) SetInvalidator(inv Invalidator) {
 	s.inv.Store(&inv)
 }
 
+// SetPasswordPolicy turns local passwords on with policy p, or off with nil
+// (`auth.local` absent). Called from `keeper run` before serving.
+func (s *Service) SetPasswordPolicy(p *PasswordPolicy) {
+	if p == nil {
+		s.passwords.Store(nil)
+		return
+	}
+	cp := *p
+	s.passwords.Store(&cp)
+}
+
+func (s *Service) passwordPolicy() (PasswordPolicy, error) {
+	p := s.passwords.Load()
+	if p == nil {
+		return PasswordPolicy{}, ErrLocalPasswordsDisabled
+	}
+	return *p, nil
+}
+
 // invalidate sends cluster-wide invalidate signal after successful Revoke
 // commit (ADR-014 Amendment 2026-05-27). No-op if invalidator not connected
 // (single-Keeper/dev). Best-effort: Invalidate implementation logs and
@@ -256,11 +288,17 @@ type CreateInput struct {
 	TTL    time.Duration
 	Label  string
 	Client ClientMeta
+	// AuthMethod — "" or [AuthMethodJWT]: the operator gets a token in the
+	// reply. [AuthMethodLocal]: it gets Password instead and no token, and logs
+	// in by password (NIM-1051).
+	AuthMethod AuthMethod
+	Password   string
 }
 
 // CreateResult — result of Create. JWT and ExpiresAt — issued token returned
 // to caller exactly once (no re-issue path without explicit
-// issue-token call).
+// issue-token call). A local operator gets none: JWT, JWTID and ExpiresAt are
+// zero.
 //
 // GrantedRoles — deterministic (input order) list of roles attached
 // in same transaction as INSERT (CreateInput.Roles). Empty/nil if caller
@@ -306,14 +344,45 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 			return nil, fmt.Errorf("operator: invalid role name %q (must match %s)", r, rbac.RoleNamePattern)
 		}
 	}
-	// The token's terms are checked before the INSERT: a bad ttl or label must
-	// refuse the whole call, not leave an operator behind with no token.
-	ttl, err := s.resolveTTL(in.TTL)
-	if err != nil {
-		return nil, err
+	method := in.AuthMethod
+	if method == "" {
+		method = AuthMethodJWT
 	}
-	if !ValidJWTLabel(in.Label) {
-		return nil, ErrInvalidJWTLabel
+	// The token's terms — or, for a local operator, the password — are checked
+	// before the INSERT: a bad one must refuse the whole call, not leave an
+	// operator behind that cannot log in.
+	var (
+		ttl  time.Duration
+		hash string
+		err  error
+	)
+	switch method {
+	case AuthMethodJWT:
+		if in.Password != "" {
+			return nil, fmt.Errorf("%w: a password is set only for auth_method %q", ErrNotLocalOperator, AuthMethodLocal)
+		}
+		if ttl, err = s.resolveTTL(in.TTL); err != nil {
+			return nil, err
+		}
+		if !ValidJWTLabel(in.Label) {
+			return nil, ErrInvalidJWTLabel
+		}
+	case AuthMethodLocal:
+		policy, perr := s.passwordPolicy()
+		if perr != nil {
+			return nil, perr
+		}
+		if in.TTL != 0 || in.Label != "" {
+			return nil, ErrLocalOperatorNoToken
+		}
+		if err := policy.Check(in.AID, in.Password); err != nil {
+			return nil, err
+		}
+		if hash, err = hashPassword(ctx, in.Password); err != nil {
+			return nil, err
+		}
+	default:
+		return nil, fmt.Errorf("operator: invalid auth_method %q for create (want %q or %q)", method, AuthMethodJWT, AuthMethodLocal)
 	}
 
 	displayName := in.DisplayName
@@ -325,11 +394,11 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	op := &Operator{
 		AID:          in.AID,
 		DisplayName:  displayName,
-		AuthMethod:   AuthMethodJWT,
+		AuthMethod:   method,
 		CreatedByAID: &creator,
 	}
 
-	grantedRoles, err := s.insertWithOptionalRoles(ctx, op, in.Roles)
+	grantedRoles, err := s.insertOperator(ctx, op, in.Roles, hash)
 	if err != nil {
 		return nil, err
 	}
@@ -343,6 +412,10 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	// unnecessary publish traffic.
 	if len(grantedRoles) > 0 {
 		s.invalidate(ctx)
+	}
+
+	if method == AuthMethodLocal {
+		return s.createdResult(ctx, op, creator, grantedRoles, MintResult{}), nil
 	}
 
 	// JWT issued AFTER tx commit — RolesOf sees fresh membership
@@ -374,24 +447,25 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		}
 		return nil, fmt.Errorf("operator: issue JWT failed: %w", err)
 	}
+	return s.createdResult(ctx, op, creator, grantedRoles, minted), nil
+}
 
-	// SelectByAID after Insert — to return created_at from DB
-	// (DEFAULT NOW()), not local "now". On Select error don't fail
-	// Create — Insert + JWT already successful; fall back to
-	// local time. Symmetric with HTTP-handler (M0.6b).
-	saved, err := SelectByAID(ctx, s.pool, in.AID)
+// createdResult reads the new row back for its created_at (DEFAULT NOW(), not
+// local "now"). A failed read does not fail Create — the insert, and the token
+// if any, already succeeded — and falls back to local time.
+func (s *Service) createdResult(ctx context.Context, op *Operator, creator string, grantedRoles []string, minted MintResult) *CreateResult {
+	saved, err := SelectByAID(ctx, s.pool, op.AID)
 	if err != nil {
 		if s.logger != nil {
 			s.logger.Warn("operator.Create: post-insert SelectByAID failed",
-				slog.String("aid", in.AID),
-				slog.String("by_aid", in.CallerAID),
+				slog.String("aid", op.AID),
+				slog.String("by_aid", creator),
 				slog.Any("error", err),
 			)
 		}
 		saved = op
 		saved.CreatedAt = time.Now().UTC()
 	}
-
 	return &CreateResult{
 		AID:          saved.AID,
 		DisplayName:  saved.DisplayName,
@@ -402,20 +476,20 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		JWT:          minted.JWT,
 		JWTID:        minted.JWTID,
 		ExpiresAt:    minted.ExpiresAt,
-	}, nil
+	}
 }
 
-// insertWithOptionalRoles — internal path of Create. If roles empty —
-// fast-path without tx (Insert via s.pool, zero regression risk for
+// insertOperator — internal path of Create. With no roles and no password
+// hash — fast-path without tx (Insert via s.pool, zero regression risk for
 // existing calls without Roles). Otherwise — atomic tx: BeginTx → Insert →
-// rbac.GrantOperator x N → Commit; any error → rollback, operator not
-// created.
+// password hash → rbac.GrantOperator x N → Commit; any error → rollback,
+// operator not created.
 //
 // Returns actually-granted roles (input order). Sentinel errors
 // (ErrOperatorAlreadyExists / rbac.ErrRoleNotFound / rbac.ErrOperatorNotFound)
 // passed as-is for mapping in transport layer.
-func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, roles []string) ([]string, error) {
-	if len(roles) == 0 {
+func (s *Service) insertOperator(ctx context.Context, op *Operator, roles []string, passwordHash string) ([]string, error) {
+	if len(roles) == 0 && passwordHash == "" {
 		if err := Insert(ctx, s.pool, op); err != nil {
 			return nil, err
 		}
@@ -430,6 +504,11 @@ func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, rol
 
 	if err := Insert(ctx, tx, op); err != nil {
 		return nil, err
+	}
+	if passwordHash != "" {
+		if err := storePasswordHash(ctx, tx, op.AID, passwordHash, *op.CreatedByAID); err != nil {
+			return nil, err
+		}
 	}
 
 	// GrantOperator called as repository function (rbac.GrantOperator), not
@@ -448,6 +527,9 @@ func (s *Service) insertWithOptionalRoles(ctx context.Context, op *Operator, rol
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("operator: commit tx: %w", err)
+	}
+	if len(roles) == 0 {
+		return nil, nil
 	}
 	return append([]string(nil), roles...), nil
 }
@@ -693,6 +775,29 @@ type IssuePersonalJWTInput struct {
 	Client ClientMeta
 }
 
+// operatorTokensLockClass is the first key of the advisory lock below; the
+// second is hashtext(aid). The two-key form shares no key space with the
+// one-key locks of keeper init and the migrator.
+const operatorTokensLockClass int32 = 0x4f505457
+
+const lockOperatorTokensSQL = `SELECT pg_advisory_xact_lock($1, hashtext($2))`
+
+// lockOperatorTokens serializes, for one AID, the password replacements and
+// personal token issues of it (and of any AID whose hashtext collides — an
+// extra wait, nothing more); no other transaction takes it. A personal token
+// being minted from a session a replacement revokes either commits first — and
+// the revocation sees it — or waits and then finds its session revoked. Not the operators
+// row: the replacement writes rows whose foreign keys share-lock the acting
+// administrator's row, and an operator revoke holds the administrators' rows
+// FOR UPDATE while it waits for the target's — a lock on the target's row here
+// would close that cycle (NIM-1051).
+func lockOperatorTokens(ctx context.Context, db ExecQueryRower, aid string) error {
+	if _, err := db.Exec(ctx, lockOperatorTokensSQL, operatorTokensLockClass, aid); err != nil {
+		return fmt.Errorf("operator: lock operator tokens: %w", err)
+	}
+	return nil
+}
+
 const lockOperatorForPersonalJWTSQL = `SELECT auth_method, revoked_at IS NOT NULL FROM operators WHERE aid = $1 FOR NO KEY UPDATE`
 
 // IssuePersonalJWT mints a token the operator issues to itself (kind
@@ -704,7 +809,9 @@ const lockOperatorForPersonalJWTSQL = `SELECT auth_method, revoked_at IS NOT NUL
 // credential that may ask ([ErrPersonalJWTFromPersonal]).
 //
 // The operator row is locked for the counts and the insert, so two concurrent
-// requests cannot both take the last free slot.
+// requests cannot both take the last free slot. Before it, [lockOperatorTokens]
+// waits out a password replacement in flight, so the caller's token is read
+// after that replacement has revoked it.
 func (s *Service) IssuePersonalJWT(ctx context.Context, in IssuePersonalJWTInput) (*IssueTokenResult, error) {
 	if !ValidAID(in.AID) {
 		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
@@ -718,6 +825,9 @@ func (s *Service) IssuePersonalJWT(ctx context.Context, in IssuePersonalJWTInput
 		return nil, fmt.Errorf("operator: begin tx: %w", err)
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockOperatorTokens(ctx, tx, in.AID); err != nil {
+		return nil, err
+	}
 
 	var (
 		method  string
@@ -783,18 +893,24 @@ func (s *Service) IssuePersonalJWT(ctx context.Context, in IssuePersonalJWTInput
 // callerSignInLeft checks the token the request is made with and returns the
 // time left in it when it is the OIDC sign-in a personal token must not
 // outlive (0 otherwise). [ErrPersonalJWTFromPersonal] for a personal token and
-// for a `jti` that is not a row of aid; an empty `jti` is a token from before
-// migration 127, not a personal one.
+// for a `jti` that is not a row of aid, [ErrCallerJWTRevoked] for a revoked
+// one; an empty `jti` is a token from before migration 127, not a personal one.
 func (s *Service) callerSignInLeft(ctx context.Context, db ExecQueryRower, aid, callerJWTID string, m AuthMethod) (time.Duration, error) {
 	if callerJWTID == "" {
 		return 0, nil
 	}
-	kind, expiresAt, found, err := LookupJWT(ctx, db, aid, callerJWTID)
+	kind, expiresAt, revoked, found, err := LookupJWT(ctx, db, aid, callerJWTID)
 	if err != nil {
 		return 0, err
 	}
 	if !found || kind == JWTKindPersonal {
 		return 0, ErrPersonalJWTFromPersonal
+	}
+	// A password reset may have revoked the session the request came with a
+	// moment ago, before this node's snapshot heard of it: a personal token
+	// minted from it would outlive the reset (NIM-1051).
+	if revoked {
+		return 0, ErrCallerJWTRevoked
 	}
 	if m != AuthMethodOIDC || kind != JWTKindSession {
 		return 0, nil
@@ -845,7 +961,7 @@ func (s *Service) PersonalJWTTerms(ctx context.Context, aid, callerJWTID string)
 	// terms only lack the cut-off then.
 	left, err := s.callerSignInLeft(ctx, s.pool, aid, callerJWTID, op.AuthMethod)
 	switch {
-	case errors.Is(err, ErrPersonalJWTFromPersonal):
+	case errors.Is(err, ErrPersonalJWTFromPersonal), errors.Is(err, ErrCallerJWTRevoked):
 	case err != nil:
 		return PersonalJWTTerms{}, err
 	case left > 0:
@@ -881,6 +997,129 @@ func (s *Service) RevokeJWT(ctx context.Context, in RevokeJWTInput) (JWTRecord, 
 	}
 	s.invalidate(ctx)
 	return rec, nil
+}
+
+// SetPasswordInput — parameters for SetPassword (an administrator sets or
+// resets another operator's local password).
+type SetPasswordInput struct {
+	AID       string
+	Password  string
+	CallerAID string
+}
+
+// SetPassword replaces a local operator's password and revokes all of its web
+// sessions and personal tokens ([resetRevokesKinds]): whoever held the old
+// password is logged out everywhere, a token it issued itself included.
+//
+// Returns [ErrLocalPasswordsDisabled], [ErrOwnPasswordViaAdmin],
+// [ErrOperatorNotFound], [ErrOperatorAlreadyRevoked], [ErrNotLocalOperator] or
+// [ErrWeakPassword].
+func (s *Service) SetPassword(ctx context.Context, in SetPasswordInput) (revokedTokens int64, err error) {
+	policy, err := s.passwordPolicy()
+	if err != nil {
+		return 0, err
+	}
+	if in.AID == in.CallerAID {
+		return 0, ErrOwnPasswordViaAdmin
+	}
+	if !ValidAID(in.AID) {
+		return 0, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
+	}
+	op, err := SelectByAID(ctx, s.pool, in.AID)
+	if err != nil {
+		return 0, err
+	}
+	if op.IsRevoked() {
+		return 0, ErrOperatorAlreadyRevoked
+	}
+	if op.AuthMethod != AuthMethodLocal {
+		return 0, ErrNotLocalOperator
+	}
+	if err := policy.Check(in.AID, in.Password); err != nil {
+		return 0, err
+	}
+	return s.replacePassword(ctx, in.AID, in.Password, in.CallerAID, "", nil, resetRevokesKinds)
+}
+
+// ChangePasswordInput — parameters for ChangePassword (an operator changes its
+// own password). CurrentJWTID is the token the request came with; its session
+// survives the change.
+type ChangePasswordInput struct {
+	AID          string
+	Current      string
+	New          string
+	CurrentJWTID string
+}
+
+// ChangePassword replaces the caller's own password after checking the
+// current one, and revokes the caller's other web sessions. The write is bound
+// to the password that was checked: a reset committed between the check and
+// the write refuses the change rather than being overwritten by it.
+//
+// Returns [ErrLocalPasswordsDisabled], [ErrNotLocalOperator],
+// [ErrPasswordMismatch] (the current password is wrong, or no longer current),
+// [ErrOperatorAlreadyRevoked] or [ErrWeakPassword].
+func (s *Service) ChangePassword(ctx context.Context, in ChangePasswordInput) (revokedTokens int64, err error) {
+	policy, err := s.passwordPolicy()
+	if err != nil {
+		return 0, err
+	}
+	check, err := VerifyLocalPassword(ctx, s.pool, in.AID, in.Current)
+	switch {
+	case errors.Is(err, ErrOperatorNotFound):
+		return 0, ErrNotLocalOperator
+	case err != nil:
+		return 0, err
+	}
+	if err := policy.Check(in.AID, in.New); err != nil {
+		return 0, err
+	}
+	return s.replacePassword(ctx, in.AID, in.New, in.AID, in.CurrentJWTID, &check, changeRevokesKinds)
+}
+
+// replacePassword takes [lockOperatorTokens], writes the new hash and revokes
+// aid's tokens of kinds. With check non-nil the old hash is re-read FOR UPDATE
+// first and must still be the one that verified.
+func (s *Service) replacePassword(ctx context.Context, aid, password, byAID, keepJWTID string, check *PasswordCheck, kinds []JWTKind) (int64, error) {
+	hash, err := hashPassword(ctx, password)
+	if err != nil {
+		return 0, err
+	}
+	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
+	if err != nil {
+		return 0, fmt.Errorf("operator: begin tx: %w", err)
+	}
+	defer func() { _ = tx.Rollback(ctx) }()
+	if err := lockOperatorTokens(ctx, tx, aid); err != nil {
+		return 0, err
+	}
+	if check != nil {
+		current, err := stillCurrent(ctx, tx, *check, "UPDATE")
+		if err != nil {
+			return 0, err
+		}
+		if !current {
+			return 0, ErrPasswordMismatch
+		}
+	}
+	// The upsert must come before the revocation: it takes the row lock a
+	// password login's mint holds FOR SHARE, so a mint in progress commits its
+	// session first and the UPDATE below — a later statement, a fresh snapshot —
+	// sees and revokes it. Revoking first would miss that uncommitted row.
+	if err := storePasswordHash(ctx, tx, aid, hash, byAID); err != nil {
+		return 0, err
+	}
+	n, err := RevokeTokensOfKinds(ctx, tx, aid, keepJWTID, byAID, kinds)
+	if err != nil {
+		return 0, err
+	}
+	if err := tx.Commit(ctx); err != nil {
+		return 0, fmt.Errorf("operator: commit tx: %w", err)
+	}
+	if n > 0 {
+		s.invalidate(ctx)
+	}
+	return n, nil
 }
 
 // List returns page of Archons under filter. Thin wrapper over [List];

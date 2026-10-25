@@ -85,9 +85,35 @@ type fakePool struct {
 
 	// jwtInserts — args of each INSERT INTO operator_jwts (NIM-1045).
 	jwtInserts [][]any
+
+	// passwordUpserts — args of each upsert into the password table (NIM-1051).
+	passwordUpserts [][]any
+	// passwordFn — the password login lookup: method, revoked, hash (nil → no
+	// row). nil → no row.
+	passwordFn func(aid string) (method string, revoked bool, hash *string, found bool)
+	// tokensRevoked — RowsAffected of the token revocation UPDATE.
+	tokensRevoked int64
+	tokenRevokes  [][]any
+	// rereadHash — what the locked re-read of the hash answers when set: a
+	// reset that committed after the login lookup.
+	rereadHash *string
+	// callerJWTRevoked — the revocation the lookup of the caller's own token
+	// reads, for a personal token issue (NIM-1051).
+	callerJWTRevoked bool
 }
 
 func (f *fakePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "INSERT INTO operator_passwords") {
+		f.passwordUpserts = append(f.passwordUpserts, args)
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	}
+	if strings.Contains(sql, "UPDATE operator_jwts") && strings.Contains(sql, "kind = ANY($4)") {
+		f.tokenRevokes = append(f.tokenRevokes, args)
+		return pgconn.NewCommandTag(fmt.Sprintf("UPDATE %d", f.tokensRevoked)), nil
+	}
+	if strings.Contains(sql, "pg_advisory_xact_lock") {
+		return pgconn.NewCommandTag("SELECT 1"), nil
+	}
 	if strings.Contains(sql, "INSERT INTO operator_jwts") {
 		f.jwtInserts = append(f.jwtInserts, args)
 		return pgconn.NewCommandTag("INSERT 0 1"), nil
@@ -135,6 +161,41 @@ func (f *fakePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.Co
 }
 
 func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
+	// The re-read of the hash a password write is bound to (FOR UPDATE / FOR
+	// SHARE): the same row the login lookup answered.
+	if strings.Contains(sql, "SELECT hash FROM operator_passwords") {
+		if f.passwordFn == nil {
+			return errRow{err: pgx.ErrNoRows}
+		}
+		_, _, hash, found := f.passwordFn(args[0].(string))
+		if f.rereadHash != nil {
+			hash = f.rereadHash
+		}
+		if !found || hash == nil {
+			return errRow{err: pgx.ErrNoRows}
+		}
+		return staticRow{values: []any{*hash}}
+	}
+	if strings.Contains(sql, "SELECT auth_method, revoked_at IS NOT NULL FROM operators") {
+		return staticRow{values: []any{string(operator.AuthMethodLocal), false}}
+	}
+	if strings.Contains(sql, "SELECT kind, expires_at, revoked_at IS NOT NULL FROM operator_jwts") {
+		return staticRow{values: []any{string(operator.JWTKindSession), time.Now().Add(time.Hour), f.callerJWTRevoked}}
+	}
+	if strings.Contains(sql, "LEFT JOIN operator_passwords") {
+		if f.passwordFn == nil {
+			return errRow{err: pgx.ErrNoRows}
+		}
+		method, revoked, hash, found := f.passwordFn(args[0].(string))
+		if !found {
+			return errRow{err: pgx.ErrNoRows}
+		}
+		var h any
+		if hash != nil {
+			h = *hash
+		}
+		return staticRow{values: []any{method, revoked, h}}
+	}
 	if strings.Contains(sql, "COUNT(*) FROM operators") {
 		// List-COUNT — issued before SELECT operators in List(); tests care
 		// only that the number is consistent with listFn (or 0 without listFn).

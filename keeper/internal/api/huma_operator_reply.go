@@ -29,16 +29,18 @@ import (
 
 // OperatorCreateReply — native 201 body of POST /v1/operators. SENSITIVE: jwt is returned
 // once; the secret-masking middleware strips it from logs/OTel/audit. roles — `*[]string`
-// with omitempty (nil → key omitted). created_at — nanosecond time-wire.
+// with omitempty (nil → key omitted). created_at — nanosecond time-wire. An Archon with
+// auth_method local gets no token (NIM-1051): jwt/jwt_id/expires_at are omitted.
 type OperatorCreateReply struct {
-	AID          string    `json:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	CreatedAt    time.Time `json:"created_at"`
-	CreatedByAID string    `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
-	DisplayName  string    `json:"display_name"`
-	ExpiresAt    time.Time `json:"expires_at"`
-	JWT          string    `json:"jwt"`
-	JWTID        string    `json:"jwt_id"`
-	Roles        *[]string `json:"roles,omitempty"`
+	AID          string             `json:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	AuthMethod   OperatorAuthMethod `json:"auth_method"`
+	CreatedAt    time.Time          `json:"created_at"`
+	CreatedByAID string             `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	DisplayName  string             `json:"display_name"`
+	ExpiresAt    *time.Time         `json:"expires_at,omitempty"`
+	JWT          string             `json:"jwt,omitempty"`
+	JWTID        string             `json:"jwt_id,omitempty"`
+	Roles        *[]string          `json:"roles,omitempty"`
 }
 
 // Operator — native body of GET /v1/operators/{aid} (and list-envelope element). Shape 1:1

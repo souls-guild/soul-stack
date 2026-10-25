@@ -44,6 +44,11 @@ auth:
     issuer: keeper-eu-west-01
     ttl_default: 24h
     ttl_bootstrap: 30d
+  # Local passwords (NIM-1051): operators with auth_method local log in with
+  # an AID and a password Keeper checks itself. Leave it out where every human
+  # logs in through LDAP/OIDC.
+  # local:
+  #   min_password_length: 12
 
 # Observability
 otel:

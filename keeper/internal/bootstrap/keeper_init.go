@@ -153,6 +153,12 @@ type Config struct {
 	// The writer must not be buffered, or the caller must flush it:
 	// bootstrap writes once and does not close what it did not open.
 	CredentialWriter io.Writer
+
+	// Password, when non-empty, makes the first Archon a local operator
+	// (`auth_method = local`, NIM-1051) with this password, set in the same
+	// transaction. The caller has already checked it against the policy. The
+	// token is minted and written as without it.
+	Password string
 }
 
 // Result is the return value of a successful Init. Used by the caller
@@ -267,10 +273,14 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, ErrAlreadyInitialized
 	}
 
+	authMethod := operator.AuthMethodJWT
+	if cfg.Password != "" {
+		authMethod = operator.AuthMethodLocal
+	}
 	op := &operator.Operator{
 		AID:         cfg.ArchonAID,
 		DisplayName: displayName,
-		AuthMethod:  operator.AuthMethodJWT,
+		AuthMethod:  authMethod,
 		CreatedVia:  operator.CreatedViaBootstrap,
 		// CreatedByAID = nil (first bootstrap Archon, ADR-013/014).
 		// The bootstrap invariant (exactly one) is enforced by the
@@ -280,6 +290,11 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 	}
 	if err := operator.Insert(ctx, tx, op); err != nil {
 		return nil, fmt.Errorf("bootstrap: insert operator: %w", err)
+	}
+	if cfg.Password != "" {
+		if err := operator.SetInitialPassword(ctx, tx, cfg.ArchonAID, cfg.Password); err != nil {
+			return nil, fmt.Errorf("bootstrap: set password: %w", err)
+		}
 	}
 
 	// Fix for BUG-1 (ADR-028(c)): the membership row (cluster-admin, <aid>)
@@ -327,7 +342,7 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 			"bootstrap_initial": true,
 			"aid":               cfg.ArchonAID,
 			"display_name":      displayName,
-			"auth_method":       string(operator.AuthMethodJWT),
+			"auth_method":       string(authMethod),
 		},
 	}
 	if err := cfg.AuditWriter.Write(ctx, ev); err != nil {

@@ -126,6 +126,7 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/auth/methods"}:       {why: "pre-authentication (ADR-058): the login form asks which methods exist before any Archon exists, so there is no subject to authorize"},
 	{http.MethodPost, "/auth/token"}:        {why: "pre-authentication (NIM-77): exchanges a verified session cookie for a short Bearer. The cookie IS the authorization; an RBAC gate would need the token this route issues"},
 	{http.MethodPost, "/auth/ldap/login"}:   {why: "pre-authentication (ADR-058): credentials in, JWT out. Throttled by AuthLoginLimit rather than authorized"},
+	{http.MethodPost, "/auth/local/login"}:  {why: "pre-authentication (NIM-1051): an AID and its local password in, JWT out. Throttled by AuthLoginLimit (per IP and per AID) rather than authorized"},
 	{http.MethodGet, "/auth/oidc/login"}:    {why: "pre-authentication (ADR-058 stage 2): redirects to the IdP, carries no subject yet"},
 	{http.MethodGet, "/auth/oidc/callback"}: {why: "pre-authentication (ADR-058 stage 2): the IdP's code lands here and is exchanged for a JWT — this route establishes the identity an RBAC gate would need"},
 
@@ -140,6 +141,7 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/v1/permissions"}:    {why: "architect verdict (router.go §/v1/permissions): requiring a permission to read the catalog of permissions is chicken-and-egg — the UI needs the real names to assign any. Static content from rbac.catalog.go, identical for every Archon, and a revoked one is still refused by RejectRevoked (NIM-421)"},
 	{http.MethodGet, "/v1/event-types"}:    {why: "same chicken-and-egg verdict as /v1/permissions: the static catalog of event types a Tiding can subscribe to (herald/eventtypes.go), identical for every Archon"},
 	{http.MethodGet, "/v1/herald-types"}:   {why: "same chicken-and-egg verdict: the static catalog of Herald channel types and their config fields"},
+	{http.MethodPut, "/v1/me/password"}:    {why: "changes the CALLER's own local password, AID taken from the claims, and only after the caller proves the current password (NIM-1051). A gate here would be a permission to change one's own password; a wrong current password counts towards the login lockout"},
 	{http.MethodGet, "/v1/me/permissions"}: {why: "reads the CALLER's own effective permissions, AID taken from the claims and never from the query — so the only thing it can disclose is what the caller already holds. A gate here would be a permission to know one's own permissions"},
 
 	// --- the caller's own tokens (ADR-014 amendment NIM-1052): authentication-only ---
@@ -161,6 +163,7 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodPost, "/v1/operators/{aid}/revoke"}:               {asks: []string{"check:operator.revoke"}},
 	{http.MethodGet, "/v1/operators/{aid}/jwts"}:                  {asks: []string{"check:operator.list"}},
 	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {asks: []string{"check:operator.jwt-revoke"}},
+	{http.MethodPut, "/v1/operators/{aid}/password"}:              {asks: []string{"check:operator.set-password"}},
 
 	// --- audit ---
 	{http.MethodGet, "/v1/audit"}: {asks: []string{"check:audit.read"}},
