@@ -411,8 +411,10 @@ func runDaemon(args []string) int {
 		// values from d.cfg, which the overlay replaces with the effective one.
 		d.setupSettingsStore,
 		d.setupOperatorBootstrapGuard,
-		d.setupJWT,
+		// RBAC before JWT: the verifier takes the RBAC holder as its revocation
+		// source (ADR-014 amendment NIM-1045), so the holder must exist first.
 		d.setupRBAC,
+		d.setupJWT,
 		d.setupServiceRegistry,
 		d.setupAudit,
 		d.setupCoreModules,
@@ -598,6 +600,29 @@ func parseTTL(raw, fieldName string, def time.Duration) (time.Duration, error) {
 // minExchangeTTL is a floor on auth.jwt.exchange_ttl: a lower value is raised
 // to it (protection from a misconfig that would make the cookie->Bearer exchange pointless).
 const minExchangeTTL = 1 * time.Minute
+
+// defaultTTLMax is auth.jwt.ttl_max when keeper.yml sets none: 90 days, the
+// lifetime agreed for service-account tokens (NIM-1045).
+const defaultTTLMax = 90 * 24 * time.Hour
+
+// resolveTTLMax reads auth.jwt.ttl_max. Unset, it is the larger of the 90-day
+// default and ttl_default: a cluster that already ran ttl_default above 90 days
+// before the key existed must not stop starting on upgrade. Set explicitly, a
+// value below ttl_default is refused — the operator asked for a ceiling the
+// default lifetime already breaks.
+func resolveTTLMax(raw string, ttlDefault time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return max(defaultTTLMax, ttlDefault), nil
+	}
+	ttlMax, err := parseTTL(raw, "auth.jwt.ttl_max", defaultTTLMax)
+	if err != nil {
+		return 0, err
+	}
+	if ttlMax < ttlDefault {
+		return 0, fmt.Errorf("auth.jwt.ttl_max %s is below auth.jwt.ttl_default %s", ttlMax, ttlDefault)
+	}
+	return ttlMax, nil
+}
 
 // clampExchangeTTL raises d to minExchangeTTL if it is below the floor.
 func clampExchangeTTL(d time.Duration) time.Duration {

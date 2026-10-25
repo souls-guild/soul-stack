@@ -408,8 +408,9 @@ WHERE aid = $1 AND revoked_at IS NULL
 //   - aid already revoked (revoked_at != NULL) → [ErrOperatorAlreadyRevoked].
 //   - reason is empty — allowed (field is optional), metadata unchanged.
 //
-// Active JWTs of a revoked Archon continue to work until `exp`
-// (ADR-014(d), PM-decision M0.6b #3 — JWT verify does not check revoked_at).
+// Every JWT of a revoked Archon is refused on its next request: the RBAC
+// snapshot carries `revoked_at` and `RejectRevoked` asks it (ADR-014 amendment
+// 2026-08-07, NIM-421). To stop one token and keep the operator, see [RevokeJWT].
 func Revoke(ctx context.Context, db execQueryRower, aid string, reason string) error {
 	if !ValidAID(aid) {
 		return fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)

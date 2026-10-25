@@ -227,14 +227,16 @@ auth:
     signing_key_ref: vault:secret/keeper/jwt-signing-key
     issuer: keeper-eu-west-01
     ttl_default: 24h
+    ttl_max: 2160h             # 90d — the longest `ttl` a caller may ask for
     ttl_bootstrap: 720h        # 30d
 ```
 
 | Field | Type | Default | Meaning |
 |---|---|---|---|
-| `auth.jwt.signing_key_ref` | `vault-ref` | `vault:secret/keeper/jwt-signing-key` | Vault KV-path to signing-key, which is used to sign operator JWTs (`iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`). Post-MVP - Vault Transit without key export ([ADR-014(b)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.signing_key_ref` | `vault-ref` | `vault:secret/keeper/jwt-signing-key` | Vault KV-path to signing-key, which is used to sign operator JWTs (`jti`/`iss`/`sub`/`iat`/`exp`/`roles`/`bootstrap_initial`). Post-MVP - Vault Transit without key export ([ADR-014(b)](../adr/0014-operator-identity.md)). |
 | `auth.jwt.issuer` | `string` | `<kid>` | The value of claim is `iss` in issued JWTs. If there is no value, the parser substitutes the value of the `kid:` field of the instance ([ADR-014(b)](../adr/0014-operator-identity.md)). It is permissible to redefine - a single name per cluster instead of per-instance. |
-| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of regular operator tokens issued through `POST /v1/operators` and `operator.issue-token`, and of the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. **The only place the lifetime is set** - the issuing endpoints take no `ttl` parameter. Short TTL is a natural defense against revocation-blocklist ([ADR-014(d)/(tradeoffs)](../adr/0014-operator-identity.md)). |
+| `auth.jwt.ttl_default` | `duration` | `24h` | TTL of an operator token issued through `POST /v1/operators` or `operator.issue-token` **when the request asks for none**, and of the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. A short TTL still limits what a *stolen* token is worth; revocation itself no longer depends on it — a revoked operator and a revoked token are both refused on the next request ([ADR-014, amendments NIM-421 and NIM-1045](../adr/0014-operator-identity.md)). |
+| `auth.jwt.ttl_max` | `duration` | `2160h` (90 days), or `ttl_default` if that is longer | The longest lifetime the `ttl` field of `POST /v1/operators` and `issue-token` (HTTP and MCP) accepts; a request above it, or below `1m`, is refused (`422` over HTTP, `validation-failed` on MCP). Unset, it follows a longer `ttl_default` up, so an existing config keeps starting; set explicitly below `ttl_default`, the config check reports `ttl_max_below_ttl_default` and Keeper refuses to start. Raise the default only together with a way to notice a leaked token: every token is listed with where it was minted and last used (`GET /v1/operators/{aid}/jwts`) and can be revoked on its own ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). |
 | `auth.jwt.ttl_bootstrap` | `duration` | `720h` (30 days) | TTL of the first bootstrap token issued by `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md), [ADR-014(b)](../adr/0014-operator-identity.md)). |
 | `auth.jwt.exchange_ttl` | `duration` | `10m` | TTL of the short Bearer that `POST /auth/token` returns to the web UI in exchange for the `soul_session` cookie ([ADR-058, amendment NIM-77](../adr/0058-operator-auth-ldap-oidc.md)). A value below the floor of `1m` is raised to it; the effective lifetime is additionally capped by what is left of the cookie (`≤0` → 401). |
 
@@ -1360,6 +1362,7 @@ reaper:
   rules:
     expire_pending_seeds: { enabled: true, max_age: 24h, action: delete }
     purge_used_tokens:    { enabled: true, max_age: 90d, action: delete }
+    purge_operator_jwts:  { enabled: true, max_age: 30d, action: delete }
     purge_souls:          { enabled: true, statuses: [disconnected, expired], max_age: 30d, action: delete }
     purge_old_seeds:      { enabled: true, statuses: [superseded, expired, revoked], max_age: 90d, action: delete }
     mark_disconnected:    { enabled: true, stale_after: 90s, action: set_status, target_status: disconnected }

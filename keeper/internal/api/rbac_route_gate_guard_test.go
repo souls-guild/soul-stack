@@ -149,11 +149,13 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodDelete, "/v1/voyages/{id}"}:                          {why: "ADR-043 §6 RBAC-by-kind, kind read from the stored row rather than a body: scenario→incarnation.run, command→errand.run, checked in VoyageHandler.CancelTyped after voyage.SelectByID. Since NIM-841/842/846 a disjunction of the two rights is asked BEFORE the row is read, so 403-vs-404 no longer tells an Archon holding neither whether a guessed ULID is a real run; the by-kind check still follows. handlers.TestVoyageCancel_RBACDenied pins the scenario branch only — the command→errand.run half of cancel is asserted nowhere"},
 
 	// --- operators (ADR-014) ---
-	{http.MethodGet, "/v1/operators"}:                    {asks: []string{"check:operator.list"}},
-	{http.MethodPost, "/v1/operators"}:                   {asks: []string{"check:operator.create"}},
-	{http.MethodGet, "/v1/operators/{aid}"}:              {asks: []string{"check:operator.list"}},
-	{http.MethodPost, "/v1/operators/{aid}/issue-token"}: {asks: []string{"check:operator.issue-token"}},
-	{http.MethodPost, "/v1/operators/{aid}/revoke"}:      {asks: []string{"check:operator.revoke"}},
+	{http.MethodGet, "/v1/operators"}:                             {asks: []string{"check:operator.list"}},
+	{http.MethodPost, "/v1/operators"}:                            {asks: []string{"check:operator.create"}},
+	{http.MethodGet, "/v1/operators/{aid}"}:                       {asks: []string{"check:operator.list"}},
+	{http.MethodPost, "/v1/operators/{aid}/issue-token"}:          {asks: []string{"check:operator.issue-token"}},
+	{http.MethodPost, "/v1/operators/{aid}/revoke"}:               {asks: []string{"check:operator.revoke"}},
+	{http.MethodGet, "/v1/operators/{aid}/jwts"}:                  {asks: []string{"check:operator.list"}},
+	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {asks: []string{"check:operator.jwt-revoke"}},
 
 	// --- audit ---
 	{http.MethodGet, "/v1/audit"}: {asks: []string{"check:audit.read"}},

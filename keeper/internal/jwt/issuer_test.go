@@ -57,7 +57,7 @@ func TestIssue_ClaimsCorrect(t *testing.T) {
 		t.Fatalf("NewIssuer: %v", err)
 	}
 	before := time.Now().UTC()
-	tok, err := iss.Issue(aid, roles, ttl, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", aid, roles, ttl, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -119,7 +119,7 @@ func TestIssue_BootstrapInitial(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue("archon-bootstrap", []string{"cluster-admin"}, time.Hour, true)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", "archon-bootstrap", []string{"cluster-admin"}, time.Hour, true)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestIssue_Signature(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", "archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -176,13 +176,13 @@ func TestIssue_RejectsBadInput(t *testing.T) {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	if _, err := iss.Issue("", []string{"cluster-admin"}, time.Hour, false); err == nil {
+	if _, err := iss.Issue("01JTESTJT1000000000000000A", "", []string{"cluster-admin"}, time.Hour, false); err == nil {
 		t.Errorf("Issue with empty aid: expected error")
 	}
-	if _, err := iss.Issue("archon-x", nil, 0, false); err == nil {
+	if _, err := iss.Issue("01JTESTJT1000000000000000A", "archon-x", nil, 0, false); err == nil {
 		t.Errorf("Issue with zero ttl: expected error")
 	}
-	if _, err := iss.Issue("archon-x", nil, -time.Hour, false); err == nil {
+	if _, err := iss.Issue("01JTESTJT1000000000000000A", "archon-x", nil, -time.Hour, false); err == nil {
 		t.Errorf("Issue with negative ttl: expected error")
 	}
 }

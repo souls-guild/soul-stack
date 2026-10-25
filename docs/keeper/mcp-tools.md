@@ -135,6 +135,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `rerun-input-unavailable` | `keeper.incarnation.rerun-last` (advanced-scenario path) cannot restore the input of a failed run: recipe `apply_runs.recipe` cleaned up by retention Reaper / legacy run without a recipe (fail-closed) - remove the block with the usual `unlock` and run the scenario manually with an explicit input. Separate code from `incarnation-locked` (REST `TypeRerunInputUnavailable`, 409): machine-readable distinguishing "input lost" from "status not `error_locked`". |
 | `migration-failed` | Incarnation in `migration_failed` - manual parsing of state_history is required. |
 | `would-lock-out-cluster` | The operation would leave the cluster without an active Archon with an effective `*`-permission. Occurs in `keeper.operator.revoke` (recall of the last `*`-Archon), in role-operations `keeper.role.delete` / `keeper.role.update` / `keeper.role.revoke-operator` (see [§ Role](#role-6)) and in synod-operations `keeper.synod.delete` / `keeper.synod.remove-operator` / `keeper.synod.revoke-role` (effective `*` may come via Synod, see [§ Synod](#synod-8)). |
+| `jwt-already-revoked` | `keeper.operator.jwt-revoke` on a token that is already revoked (ADR-014 amendment NIM-1045). Nothing to retry: the token is refused already. |
 | `role-not-found` | The role with the specified `name` is missing from `rbac_roles` (`keeper.role.delete` / `keeper.role.update` / `keeper.role.grant-operator` / `keeper.role.revoke-operator`; `keeper.synod.grant-role` over a non-existent role). |
 | `role-already-exists` | `name` role is occupied (`keeper.role.create`). |
 | `role-builtin` | The role with `builtin=true` (`cluster-admin`) - `keeper.role.delete` / `keeper.role.update` above it is prohibited. `grant-operator` / `revoke-operator` over the builtin role are allowed. |
@@ -167,15 +168,15 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 
 Extending the code list - only-add symmetrically Operator API.
 
-## Catalog 97 MCP-tool
+## Catalog 99 MCP-tool
 
 1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
 Field names input - 1:1 with JSON body HTTP endpoint; The paths in output are the same as in the HTTP response. Async-tools are marked in the **Async** column.
 
-### Operator (3)
+### Operator (5)
 
-Moved to a domain file - [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`. The source of truth for semantics is [operator-api/operator.md](operator-api/operator.md).
+Moved to a domain file - [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`, `keeper.operator.jwt-list`, `keeper.operator.jwt-revoke`. The source of truth for semantics is [operator-api/operator.md](operator-api/operator.md).
 
 ### Role (6)
 

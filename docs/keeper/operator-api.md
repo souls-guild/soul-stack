@@ -138,6 +138,8 @@ All `type` are stable URNs under the `https://soul-stack.com/errors/` domain. Li
 |---|---|---|---|
 | `unauthenticated` | 401 | JWT is missing, invalid or expired. | Any `/v1/*` endpoint. |
 | `operator-revoked-token` | 401 | The token is well-formed and unexpired, but the Archon it names has been revoked (`operators.revoked_at`). Distinct from `unauthenticated` (nothing is wrong with the token) and from `forbidden` (no grant can fix it — the identity is gone; a client should log the operator out, not ask for permissions). **Since 2026-08-07 ([ADR-014 amendment, NIM-421](../adr/0014-operator-identity.md)) it is answered by `RejectRevoked`, one middleware link right after `RequireJWT`, so it reaches every authenticated route by construction** — previously only routes gated by `RequirePermission` could return it, existence-gate routes said `403 forbidden` and four ungated read routes kept answering 200. | Any authenticated endpoint: all of `/v1/*`, the two spec routes `/openapi.yaml` / `/openapi.json`, and `/auth/ldap/login` / `/auth/oidc/callback`. |
+| `jwt-revoked` | 401 | The token is well-formed, unexpired and its Archon is active, but this token's `jti` has been revoked (`operator_jwts.revoked_at`, [ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). Distinct from `operator-revoked-token`: a fresh token for the same Archon works. Answered by the verifier, so by every authenticated route and by `POST /auth/token` for a revoked session; MCP answers `unauthenticated` with detail `token revoked`. | Any authenticated endpoint, `POST /auth/token`. |
+| `jwt-already-revoked` | 409 | Revoking a token that is already revoked. | `POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`. |
 | `forbidden` | 403 | RBAC check failed — this identity is valid and may not do this. `detail` contains the required permission and context. A revoked Archon is **not** in this class (see the row above): 403 is answerable by a grant, 401 is not. | Any `/v1/*` endpoint after JWT authentication. |
 | `not-found` | 404 | The resource does not exist. | Any endpoint with path-param. |
 | `validation-failed` | 422 | Semantic validation error: incarnation input does not match scenario `input:`-scheme ([destiny/input](../input.md)); `create_scenario` in `POST /v1/incarnations` is empty if there are create scenarios (`detail` starts with `create_scenario_required:` + list of valid ones) or points to a scenario outside the create set (`create_scenario_invalid:`, see [operator-api/incarnations.md → Selecting a starting scenario](operator-api/incarnations.md)); ⛔ profile `params` does not match CloudDriver `profile_schema` — gone with the contract and the Profile registry in NIM-761 (`cloud.md` no longer exists); request `issue-token` for Soul with `transport: ssh` (ssh host does not have bootstrap phase - `POST /v1/souls/{sid}/issue-token`). `detail` - path to a specific field or reason. |
@@ -220,7 +222,7 @@ On the API facade itself ([`router.go`](../../keeper/internal/api/router.go)) **
 
 Health-paths selected in kubernetes-convention style (`/healthz`, `/readyz`); viewer route `/docs` - industry standard name (a deliberate exception from the Soul Stack dictionary, [naming-rules.md](../naming-rules.md)). All of them are clearly **not** under the `/v1/` prefix - independent of the major version of the Operator API.
 
-### Operator (5) - control of Archons, [ADR-013](../adr/0013-bootstrap-archon.md) / [ADR-014](../adr/0014-operator-identity.md)
+### Operator (7) - control of Archons, [ADR-013](../adr/0013-bootstrap-archon.md) / [ADR-014](../adr/0014-operator-identity.md)
 
 | Method | Path | Permission | MCP-tool |
 |---|---|---|---|
@@ -229,6 +231,8 @@ Health-paths selected in kubernetes-convention style (`/healthz`, `/readyz`); vi
 | `GET` | `/v1/operators/{aid}` | `operator.list` | — (UI iter 2) |
 | `POST` | `/v1/operators/{aid}/revoke` | `operator.revoke` | `keeper.operator.revoke` |
 | `POST` | `/v1/operators/{aid}/issue-token` | `operator.issue-token` | `keeper.operator.issue-token` |
+| `GET` | `/v1/operators/{aid}/jwts` | `operator.list` | `keeper.operator.jwt-list` |
+| `POST` | `/v1/operators/{aid}/jwts/{jwt_id}/revoke` | `operator.jwt-revoke` | `keeper.operator.jwt-revoke` |
 
 Read endpoints (`GET /v1/operators`, `GET /v1/operators/{aid}`) added to UI iteration 2 (placeholder `/archons-list` / `/archons/:aid`). MCP-tool symmetry is postponed until the next slice. Read-only - without audit-trail (pattern `soul.list`).
 

@@ -108,8 +108,8 @@ func registerHumaOperatorRevoke(humaAPI huma.API, opH *handlers.OperatorHandler)
 
 // registerHumaOperatorIssueToken mounts POST /v1/operators/{aid}/issue-token via
 // huma (WRITE+AUDIT variant B — event operator.token-issued). opH nil → no-op.
-// Handler: claims → IssueTokenTyped(aid) → audit-payload → 200 WITH BODY (jwt; unlike
-// the 204 write routes — issue-token returns the issued token).
+// Handler: claims → IssueTokenTyped(aid, ttl/label) → audit-payload → 200 WITH BODY
+// (jwt; unlike the 204 write routes — issue-token returns the issued token).
 func registerHumaOperatorIssueToken(humaAPI huma.API, opH *handlers.OperatorHandler) {
 	if opH == nil {
 		return
@@ -119,12 +119,57 @@ func registerHumaOperatorIssueToken(humaAPI huma.API, opH *handlers.OperatorHand
 		if !ok {
 			return nil, operatorMissingClaims()
 		}
-		reply, err := opH.IssueTokenTyped(ctx, claims, in.AID)
+		var req handlers.OperatorIssueTokenInput
+		if in.Body != nil {
+			req = toOperatorIssueTokenInput(*in.Body)
+		}
+		reply, err := opH.IssueTokenTyped(ctx, claims, in.AID, req)
 		if err != nil {
 			return nil, operatorProblem(err)
 		}
 		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
 		return &operatorIssueTokenOutput{Status: 200, Body: newIssueTokenReply(reply)}, nil
+	})
+}
+
+// registerHumaOperatorJWTList mounts GET /v1/operators/{aid}/jwts (READ, no audit).
+// RBAC operator.list — on the group.
+func registerHumaOperatorJWTList(humaAPI huma.API, opH *handlers.OperatorHandler) {
+	if opH == nil {
+		return
+	}
+	huma.Register(humaAPI, operatorJWTListOperation(), func(ctx context.Context, in *operatorJWTListInput) (*operatorJWTListOutput, error) {
+		page, err := opH.ListJWTsTyped(ctx, in.AID, int(in.Offset), int(in.Limit))
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		items := make([]OperatorJWT, 0, len(page.Items))
+		for _, v := range page.Items {
+			items = append(items, newOperatorJWT(v))
+		}
+		return &operatorJWTListOutput{Body: sharedapi.PagedResponse[OperatorJWT]{
+			Items: items, Offset: page.Offset, Limit: page.Limit, Total: page.Total,
+		}}, nil
+	})
+}
+
+// registerHumaOperatorJWTRevoke mounts POST /v1/operators/{aid}/jwts/{jwt_id}/revoke
+// (WRITE+AUDIT variant B — event operator.jwt-revoked). RBAC operator.jwt-revoke — on the group.
+func registerHumaOperatorJWTRevoke(humaAPI huma.API, opH *handlers.OperatorHandler) {
+	if opH == nil {
+		return
+	}
+	huma.Register(humaAPI, operatorJWTRevokeOperation(), func(ctx context.Context, in *operatorJWTRevokeInput) (*operatorNoContentOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, operatorMissingClaims()
+		}
+		reply, err := opH.RevokeJWTTyped(ctx, claims, in.AID, in.JWTID)
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &operatorNoContentOutput{Status: 204}, nil
 	})
 }
 
@@ -141,7 +186,9 @@ func newOperatorCreateReply(r handlers.OperatorCreateReply) OperatorCreateReply 
 		CreatedAt:    r.CreatedAt,
 		CreatedByAID: r.CreatedByAID,
 		DisplayName:  r.DisplayName,
+		ExpiresAt:    r.ExpiresAt,
 		JWT:          r.JWT,
+		JWTID:        r.JWTID,
 	}
 	if len(r.GrantedRoles) > 0 {
 		roles := r.GrantedRoles
@@ -153,7 +200,27 @@ func newOperatorCreateReply(r handlers.OperatorCreateReply) OperatorCreateReply 
 // newIssueTokenReply projects the domain handlers.OperatorIssueTokenReply into the native
 // issue-token 200 body.
 func newIssueTokenReply(r handlers.OperatorIssueTokenReply) IssueTokenReply {
-	return IssueTokenReply{AID: r.AID, ExpiresAt: r.ExpiresAt, JWT: r.JWT}
+	return IssueTokenReply{AID: r.AID, ExpiresAt: r.ExpiresAt, JWT: r.JWT, JWTID: r.JWTID}
+}
+
+// newOperatorJWT projects the domain handlers.OperatorJWTView into the native OperatorJWT.
+func newOperatorJWT(v handlers.OperatorJWTView) OperatorJWT {
+	return OperatorJWT{
+		AID:               v.AID,
+		CreatedAt:         v.CreatedAt,
+		CreatedByAID:      v.CreatedByAID,
+		CreatedIP:         v.CreatedIP,
+		CreatedUserAgent:  v.CreatedUserAgent,
+		ExpiresAt:         v.ExpiresAt,
+		JWTID:             v.JWTID,
+		Kind:              v.Kind,
+		Label:             v.Label,
+		LastUsedAt:        v.LastUsedAt,
+		LastUsedIP:        v.LastUsedIP,
+		LastUsedUserAgent: v.LastUsedUserAgent,
+		RevokedAt:         v.RevokedAt,
+		RevokedByAID:      v.RevokedByAID,
+	}
 }
 
 // newOperator projects the domain handlers.OperatorView into the native Operator (get-200 /
@@ -228,6 +295,8 @@ func HumaOperatorSpecYAML() (string, error) {
 		registerHumaOperatorGet(api, stub)
 		registerHumaOperatorRevoke(api, stub)
 		registerHumaOperatorIssueToken(api, stub)
+		registerHumaOperatorJWTList(api, stub)
+		registerHumaOperatorJWTRevoke(api, stub)
 		return nil
 	})
 }

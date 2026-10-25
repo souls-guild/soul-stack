@@ -81,7 +81,7 @@ func revokedGateToken(t *testing.T, aid string) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue(aid, []string{"cluster-admin"}, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", aid, []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -126,10 +126,18 @@ func revokedGateRouterWith(t *testing.T, enforcer RBACProvider, soulH *handlers.
 // only the completeness guard asks for the static mount as well.
 func revokedGateRouterFull(t *testing.T, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer, webUI bool) http.Handler {
 	t.Helper()
-	verifier, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
+	return revokedGateRouterVerifier(t, verifier, enforcer, soulH, auditW, webUI)
+}
+
+// revokedGateRouterVerifier is [revokedGateRouterFull] with the verifier supplied
+// by the caller, for the per-token sweep (NIM-1045) that needs one with a
+// revocation source of its own.
+func revokedGateRouterVerifier(t *testing.T, verifier *keeperjwt.Verifier, enforcer RBACProvider, soulH *handlers.SoulHandler, auditW audit.Writer, webUI bool) http.Handler {
+	t.Helper()
 	return buildRouter(
 		verifier,
 		health.NewHandler(health.Deps{}),

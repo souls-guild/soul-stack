@@ -161,7 +161,7 @@ func (h *Handler) callSoulCreate(ctx context.Context, claims *jwt.Claims, req js
 
 	// Audit — parity with REST: payload {sid, transport, covens, created_by_aid,
 	// token_issued}. The bootstrap token itself (sensitive) isn't written.
-	h.writeAudit(audit.EventSoulCreated, creator, map[string]any{
+	h.writeAudit(ctx, audit.EventSoulCreated, creator, map[string]any{
 		"sid":            s.SID,
 		"transport":      string(s.Transport),
 		"covens":         out.Covens,

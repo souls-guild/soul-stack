@@ -263,7 +263,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		// Same event the bind tool writes, `via: create` marking where it came from:
 		// a roster that appeared at birth and one bound a second later are the same
 		// fact about the incarnation (parity with REST bindCreateRoster).
-		h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
+		h.writeAudit(ctx, audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
 			"id":             name,
 			"sids":           roster.SIDs,
 			"bound":          emptyIfNilSIDs(bound),
@@ -313,7 +313,7 @@ func (h *Handler) callIncarnationCreate(ctx context.Context, claims *jwt.Claims,
 		auditApplyID = applyID
 		out.ApplyID = &applyID
 	}
-	h.writeAudit(audit.EventIncarnationCreated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationCreated, claims.Subject, map[string]any{
 		"id":       name,
 		"service":  a.Service,
 		"covens":   auditCovens,

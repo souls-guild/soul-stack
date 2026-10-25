@@ -24,6 +24,8 @@ type snapPool struct {
 	perms      []rolePermRow        // selectRolePermissionsSQL
 	membership []membershipRow      // selectRoleOperatorsSQL
 	revoked    []revokedOperatorRow // selectRevokedOperatorsSQL
+	// revokedJWTs — selectRevokedJWTsSQL (jwt_id, NIM-1045).
+	revokedJWTs []string
 
 	synodOps   []synodOperatorRow // selectSynodOperatorsSQL (ADR-049)
 	synodRoles []synodRoleRow     // selectSynodRolesSQL (ADR-049)
@@ -66,6 +68,8 @@ func (p *snapPool) Query(_ context.Context, sql string, _ ...any) (pgx.Rows, err
 		return &snapMembershipRows{values: p.membership}, nil
 	case contains(sql, "FROM operators"):
 		return &snapRevokedRows{values: p.revoked}, nil
+	case contains(sql, "FROM operator_jwts"):
+		return &snapRevokedJWTRows{values: p.revokedJWTs}, nil
 	}
 	return nil, errors.New("snapPool.Query: unexpected SQL: " + sql)
 }
@@ -215,6 +219,34 @@ func (r *snapRevokedRows) FieldDescriptions() []pgconn.FieldDescription { return
 func (r *snapRevokedRows) Values() ([]any, error)                       { return nil, nil }
 func (r *snapRevokedRows) RawValues() [][]byte                          { return nil }
 func (r *snapRevokedRows) Conn() *pgx.Conn                              { return nil }
+
+// snapRevokedJWTRows — for selectRevokedJWTsSQL (jwt_id).
+type snapRevokedJWTRows struct {
+	values []string
+	idx    int
+}
+
+func (r *snapRevokedJWTRows) Next() bool {
+	if r.idx >= len(r.values) {
+		return false
+	}
+	r.idx++
+	return true
+}
+func (r *snapRevokedJWTRows) Scan(dest ...any) error {
+	if len(dest) != 1 {
+		return errors.New("snapRevokedJWTRows: expected 1 dest")
+	}
+	*(dest[0].(*string)) = r.values[r.idx-1]
+	return nil
+}
+func (r *snapRevokedJWTRows) Err() error                                   { return nil }
+func (r *snapRevokedJWTRows) Close()                                       {}
+func (r *snapRevokedJWTRows) CommandTag() pgconn.CommandTag                { return pgconn.CommandTag{} }
+func (r *snapRevokedJWTRows) FieldDescriptions() []pgconn.FieldDescription { return nil }
+func (r *snapRevokedJWTRows) Values() ([]any, error)                       { return nil, nil }
+func (r *snapRevokedJWTRows) RawValues() [][]byte                          { return nil }
+func (r *snapRevokedJWTRows) Conn() *pgx.Conn                              { return nil }
 
 // snapSynodOpRows — for selectSynodOperatorsSQL (synod_name, aid) (ADR-049).
 type snapSynodOpRows struct {
@@ -615,5 +647,32 @@ func TestLoadSnapshot_SynodQueryError(t *testing.T) {
 	}
 	if _, err := LoadSnapshot(context.Background(), pool); err == nil {
 		t.Fatal("LoadSnapshot: err = nil, want connection reset")
+	}
+}
+
+// TestLoadSnapshot_RevokedJWTs — revoked tokens reach the enforcer, so the JWT
+// verifier (whose revocation source is the holder) refuses them (NIM-1045).
+func TestLoadSnapshot_RevokedJWTs(t *testing.T) {
+	pool := &snapPool{revokedJWTs: []string{"01JREV0KEDJWT0000000000000"}}
+	snap, err := LoadSnapshot(context.Background(), pool)
+	if err != nil {
+		t.Fatalf("LoadSnapshot: %v", err)
+	}
+	enf, err := NewEnforcerFromSnapshot(snap)
+	if err != nil {
+		t.Fatalf("NewEnforcerFromSnapshot: %v", err)
+	}
+	if !enf.IsJWTRevoked("01JREV0KEDJWT0000000000000") {
+		t.Error("a revoked token is not revoked in the enforcer")
+	}
+	if enf.IsJWTRevoked("01JG00DJWT0000000000000000") {
+		t.Error("an unrevoked token is reported revoked")
+	}
+}
+
+func TestLoadSnapshot_RevokedJWTsQueryFailureFailsTheLoad(t *testing.T) {
+	pool := &snapPool{failQuery: map[string]error{"FROM operator_jwts": errors.New("boom")}}
+	if _, err := LoadSnapshot(context.Background(), pool); err == nil {
+		t.Fatal("LoadSnapshot succeeded without the revoked-token projection; a snapshot that silently dropped it would un-revoke every token")
 	}
 }

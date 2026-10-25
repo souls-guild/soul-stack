@@ -170,7 +170,7 @@ func (h *Handler) callIncarnationBindMember(ctx context.Context, claims *jwt.Cla
 	}
 	already := diffSortedSIDs(sids, bound)
 
-	h.writeAudit(audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationMemberBound, claims.Subject, map[string]any{
 		"id":             a.ID,
 		"sids":           sids,
 		"bound":          bound,
@@ -257,7 +257,7 @@ func (h *Handler) callIncarnationUnbindMember(ctx context.Context, claims *jwt.C
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "unbind member failed")
 	}
 
-	h.writeAudit(audit.EventIncarnationMemberUnbound, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationMemberUnbound, claims.Subject, map[string]any{
 		"id":      a.ID,
 		"sid":     a.SID,
 		"removed": removed,

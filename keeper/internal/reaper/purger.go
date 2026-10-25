@@ -149,6 +149,14 @@ func (p *Purger) PurgeUsedTokens(ctx context.Context, maxAge time.Duration, batc
 	return p.callIntervalBatch(ctx, "purge_used_tokens", maxAge, batchSize)
 }
 
+// PurgeOperatorJWTs removes a batch of `operator_jwts` rows whose token expired
+// more than `maxAge` ago (migration 127, NIM-1045). Default `maxAge` = 30d
+// (docs/keeper/reaper.md). A revoked row goes on the same clock: once its token
+// expired, revocation has nothing left to refuse.
+func (p *Purger) PurgeOperatorJWTs(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error) {
+	return p.callIntervalBatch(ctx, "purge_operator_jwts", maxAge, batchSize)
+}
+
 // PurgeSouls removes batch of `souls` records in specified `statuses`
 // (e.g., `[disconnected, expired]`) older than `maxAge`.
 // Age is calculated from `COALESCE(last_seen_at, registered_at)` — for

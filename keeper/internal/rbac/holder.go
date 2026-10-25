@@ -305,6 +305,13 @@ func (h *Holder) IsRevoked(aid string) bool {
 	return h.current().IsRevoked(aid)
 }
 
+// IsJWTRevoked - is the token id revoked in the current snapshot. See
+// [Enforcer.IsJWTRevoked]. The holder is the JWT verifier's revocation source in
+// `keeper run`, so a revocation reaches every door that verifies a token.
+func (h *Holder) IsJWTRevoked(id string) bool {
+	return h.current().IsJWTRevoked(id)
+}
+
 // RolesOf - role names of the AID in the current snapshot. See [Enforcer.RolesOf].
 func (h *Holder) RolesOf(aid string) []string {
 	return h.current().RolesOf(aid)

@@ -204,7 +204,7 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 		if err != nil {
 			return h.bulkTraitsError(req.ID, toolName, err)
 		}
-		h.auditTraitsAssign(claims.Subject, a, mode, scope, soul.Report{
+		h.auditTraitsAssign(ctx, claims.Subject, a, mode, scope, soul.Report{
 			Matched: matched,
 			Status:  soul.BulkCompleted,
 		}, true)
@@ -234,13 +234,13 @@ func (h *Handler) callSoulTraitsAssign(ctx context.Context, claims *jwt.Claims, 
 				slog.Int("chunks", rep.ChunksCommitted),
 				slog.Any("error", err),
 			)
-			h.auditTraitsAssign(claims.Subject, a, mode, scope, rep, false)
+			h.auditTraitsAssign(ctx, claims.Subject, a, mode, scope, rep, false)
 			return h.toolResult(req.ID, buildTraitsAssignOutput(a, mode, rep, false))
 		}
 		return h.bulkTraitsError(req.ID, toolName, err)
 	}
 
-	h.auditTraitsAssign(claims.Subject, a, mode, scope, rep, false)
+	h.auditTraitsAssign(ctx, claims.Subject, a, mode, scope, rep, false)
 	return h.toolResult(req.ID, buildTraitsAssignOutput(a, mode, rep, false))
 }
 
@@ -302,7 +302,7 @@ func (h *Handler) bulkTraitsError(id json.RawMessage, toolName string, err error
 // mirrors REST (buildTraitsAssignReply), but `source` = "mcp" — the MCP
 // channel is tracked separately for a granular trail. keys are the
 // affected trait keys; trait values are NOT included.
-func (h *Handler) auditTraitsAssign(aid string, a soulTraitsAssignArgs, mode soul.TraitMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
+func (h *Handler) auditTraitsAssign(ctx context.Context, aid string, a soulTraitsAssignArgs, mode soul.TraitMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
 	payload := map[string]any{
 		"mode":          string(mode),
 		"selector":      normalizeMCPTraitsSelector(a.Selector),
@@ -314,7 +314,7 @@ func (h *Handler) auditTraitsAssign(aid string, a soulTraitsAssignArgs, mode sou
 		"dry_run":       dryRun,
 		"source":        string(audit.SourceMCP),
 	}
-	h.writeAudit(audit.EventSoulTraitsChanged, aid, payload)
+	h.writeAudit(ctx, audit.EventSoulTraitsChanged, aid, payload)
 }
 
 // mcpAffectedTraitKeys — sorted set of affected trait keys (merge/replace:

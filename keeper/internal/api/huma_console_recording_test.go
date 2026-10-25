@@ -214,6 +214,8 @@ type stubRBAC struct{}
 
 func (stubRBAC) IsRevoked(string) bool { return false }
 
+func (stubRBAC) IsJWTRevoked(string) bool { return false }
+
 func (stubRBAC) ResolvePurview(string, string, string) rbac.Purview {
 	return rbac.Purview{Unrestricted: true}
 }

@@ -37,7 +37,7 @@ const oidcCallbackSuccessRedirect = "/ui"
 type OIDCAuthDeps struct {
 	Authenticator oidcAuthenticator
 	Mapper        auth.Mapper
-	Issuer        JWTIssuerLogin
+	Sessions      SessionMinter
 	TTL           time.Duration
 	Audit         audit.Writer
 	Logger        *slog.Logger
@@ -142,7 +142,7 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 		if err != nil {
 			return nil, oidcLoginProblem(err)
 		}
-		token, err := d.Issuer.Issue(mapped.AID, mapped.Roles, d.TTL, false)
+		token, err := d.Sessions.MintSession(ctx, mapped.AID, mapped.Roles, d.TTL)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Error("auth/oidc callback: issue JWT failed", slog.String("aid", mapped.AID), slog.Any("error", err))

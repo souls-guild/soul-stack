@@ -66,6 +66,7 @@ type sseDeps struct {
 	RBAC        ServerRBAC
 	Limiter     *sseConnLimiter
 	Logger      *slog.Logger
+	JWTUse      middleware.JWTUseRecorder
 	// ReauthInterval overrides how often an open stream re-asks whether the
 	// subscriber may still have it (NIM-858); zero takes
 	// [middleware.LongLivedReauthInterval]. Only this file's tests set it, to
@@ -168,6 +169,9 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 				"unauthenticated: "+jwt.ClassifyVerifyErr(err))
 			return
 		}
+		if deps.JWTUse != nil && claims.ID != "" {
+			deps.JWTUse.RecordUse(claims.ID, middleware.PeerIP(r), r.UserAgent())
+		}
 
 		applyID := strings.TrimSpace(r.URL.Query().Get(sseQueryApplyID))
 		if applyID == "" {
@@ -179,6 +183,7 @@ func buildSSEHandler(deps sseDeps) http.HandlerFunc {
 		// Subscription RBAC check (M1). Runs BEFORE Acquire/headers — a
 		// denial returns as a plain JSON error, stream never opens.
 		grant, ok := authorizeSSE(r.Context(), deps, claims.Subject, applyID)
+		grant.jwtID = claims.ID
 		if !ok {
 			writeJSONError(w, http.StatusForbidden,
 				"forbidden: no access to this apply_id")
@@ -304,6 +309,8 @@ type sseGrant struct {
 	// initiator is true when this subscriber started the run, which is the half
 	// of the rule no permission can express.
 	initiator bool
+	// jwtID is the `jti` the stream was opened with (NIM-1045).
+	jwtID string
 }
 
 // authorizeSSE — subscription RBAC check for apply_id (M1).
@@ -326,8 +333,9 @@ type sseGrant struct {
 // WHY REVOCATION IS ASKED HERE AND NOT ON THE /v1 TWIN. The initiator branch
 // admits an Archon holding no permission at all — having started the run is the
 // whole of the rule — so nothing else on this path ever consults the revoked
-// projection: [jwt.Verifier.Verify] checks the signature and `exp`, not the
-// registry, and this listener carries no [middleware.RejectRevoked] (NIM-551).
+// projection of revoked operators: [jwt.Verifier.Verify] checks the signature,
+// `exp` and the revoked-token list (NIM-1045), not whether the operator is
+// revoked, and this listener carries no [middleware.RejectRevoked] (NIM-551).
 // The /v1 stream can leave the question to that middleware; here there is nobody
 // to leave it to, and without this line a revoked Archon opens the stream, loses
 // it to the re-check one interval later, and re-opens — delivery continuing
@@ -398,7 +406,7 @@ func authorizeSSE(ctx context.Context, deps sseDeps, sub, applyID string) (sseGr
 // Revocation comes first because it is not a permission question: the token is no
 // longer trusted, so being the run's initiator stops earning anything.
 func sseStillAuthorized(deps sseDeps, sub string, g sseGrant) bool {
-	if deps.RBAC != nil && deps.RBAC.IsRevoked(sub) {
+	if deps.RBAC != nil && middleware.CredentialRevoked(deps.RBAC, &jwt.Claims{Subject: sub, ID: g.jwtID}) {
 		return false
 	}
 	if g.initiator {

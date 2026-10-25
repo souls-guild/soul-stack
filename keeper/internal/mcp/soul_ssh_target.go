@@ -116,7 +116,7 @@ func (h *Handler) callSoulSshTargetUpdate(ctx context.Context, claims *jwt.Claim
 	if a.SSHProvider != "" {
 		auditPayload["ssh_provider"] = a.SSHProvider
 	}
-	h.writeAudit(audit.EventSoulSshTargetUpdated, claims.Subject, auditPayload)
+	h.writeAudit(ctx, audit.EventSoulSshTargetUpdated, claims.Subject, auditPayload)
 
 	return h.toolResult(req.ID, soulSshTargetOutput{
 		SID: a.SID,

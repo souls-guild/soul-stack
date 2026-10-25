@@ -143,7 +143,7 @@ func (h *Handler) callSoulIssueToken(ctx context.Context, claims *jwt.Claims, re
 	// Audit — parity with REST: non-sensitive facts under names without a
 	// `token` substring (the audit secret-mask redacts any key containing
 	// `token`). The token itself isn't written.
-	h.writeAudit(audit.EventSoulTokenIssued, creator, map[string]any{
+	h.writeAudit(ctx, audit.EventSoulTokenIssued, creator, map[string]any{
 		"sid":              a.SID,
 		"force":            a.Force,
 		"expired_previous": expiredPrevious,

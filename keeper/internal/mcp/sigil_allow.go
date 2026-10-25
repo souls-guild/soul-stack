@@ -131,7 +131,7 @@ func (h *Handler) callPluginAllow(ctx context.Context, claims *jwt.Claims, req j
 	// key is gone rather than reused for the list — see the REST AuditPayload for why.
 	// The signature and the schema (crypto material / a large document) are NOT
 	// written — same as REST.
-	h.writeAudit(audit.EventPluginAllowed, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventPluginAllowed, claims.Subject, map[string]any{
 		"alias":           a.Alias,
 		"source":          a.Source,
 		"ref":             a.Ref,

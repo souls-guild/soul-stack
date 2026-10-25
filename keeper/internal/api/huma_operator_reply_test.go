@@ -35,11 +35,11 @@ func TestGoldenWire_OperatorReply(t *testing.T) {
 
 	// --- OperatorCreateReply: roles omitempty (both branches) ---
 	goldenOperatorWire(t, "OperatorCreateReply/roles_set",
-		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", JWT: "ey.tok", Roles: &roles},
-		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","jwt":"ey.tok","roles":["cluster-admin","operator"]}`)
+		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: &roles},
+		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A","roles":["cluster-admin","operator"]}`)
 	goldenOperatorWire(t, "OperatorCreateReply/roles_nil",
-		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", JWT: "ey.tok", Roles: nil},
-		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","jwt":"ey.tok"}`)
+		OperatorCreateReply{AID: "archon-alice", CreatedAt: ts, CreatedByAID: aid, DisplayName: "Alice", ExpiresAt: ts2, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A", Roles: nil},
+		`{"aid":"archon-alice","created_at":"2026-06-14T12:34:56.789012345Z","created_by_aid":"archon-bob","display_name":"Alice","expires_at":"2026-06-13T01:02:03.456789012Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A"}`)
 
 	// --- Operator (GET + list-element): enum auth_method + omitempty nullable +
 	// created_via (ALWAYS present, no omitempty) ---
@@ -52,6 +52,15 @@ func TestGoldenWire_OperatorReply(t *testing.T) {
 
 	// --- IssueTokenReply: date-time + SENSITIVE jwt ---
 	goldenOperatorWire(t, "IssueTokenReply",
-		IssueTokenReply{AID: "archon-alice", ExpiresAt: ts, JWT: "ey.tok"},
-		`{"aid":"archon-alice","expires_at":"2026-06-14T12:34:56.789012345Z","jwt":"ey.tok"}`)
+		IssueTokenReply{AID: "archon-alice", ExpiresAt: ts, JWT: "ey.tok", JWTID: "01JTESTJT1000000000000000A"},
+		`{"aid":"archon-alice","expires_at":"2026-06-14T12:34:56.789012345Z","jwt":"ey.tok","jwt_id":"01JTESTJT1000000000000000A"}`)
+
+	// --- OperatorJWT (GET /v1/operators/{aid}/jwts element, NIM-1045): the
+	// optional metadata and revocation fields omitted when unset ---
+	goldenOperatorWire(t, "OperatorJWT/minimal",
+		OperatorJWT{AID: "archon-alice", CreatedAt: ts2, ExpiresAt: ts, JWTID: "01JTESTJT1000000000000000A", Kind: "session"},
+		`{"aid":"archon-alice","created_at":"2026-06-13T01:02:03.456789012Z","expires_at":"2026-06-14T12:34:56.789012345Z","jwt_id":"01JTESTJT1000000000000000A","kind":"session"}`)
+	goldenOperatorWire(t, "OperatorJWT/full",
+		OperatorJWT{AID: "archon-alice", CreatedAt: ts2, CreatedByAID: &aid, CreatedIP: "10.0.0.1", CreatedUserAgent: "curl/8", ExpiresAt: ts, JWTID: "01JTESTJT1000000000000000A", Kind: "issued", Label: "Service Desk", LastUsedAt: &ts, LastUsedIP: "10.0.0.2", LastUsedUserAgent: "sd/1", RevokedAt: &ts, RevokedByAID: &aid},
+		`{"aid":"archon-alice","created_at":"2026-06-13T01:02:03.456789012Z","created_by_aid":"archon-bob","created_ip":"10.0.0.1","created_user_agent":"curl/8","expires_at":"2026-06-14T12:34:56.789012345Z","jwt_id":"01JTESTJT1000000000000000A","kind":"issued","label":"Service Desk","last_used_at":"2026-06-14T12:34:56.789012345Z","last_used_ip":"10.0.0.2","last_used_user_agent":"sd/1","revoked_at":"2026-06-14T12:34:56.789012345Z","revoked_by_aid":"archon-bob"}`)
 }

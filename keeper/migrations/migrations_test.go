@@ -281,6 +281,8 @@ func TestEmbed_ContainsExpectedMigrations(t *testing.T) {
 		"125_add_voyage_targets_error.up.sql",
 		"126_state_history_error_detail.down.sql",
 		"126_state_history_error_detail.up.sql",
+		"127_create_operator_jwts.down.sql",
+		"127_create_operator_jwts.up.sql",
 	}
 	if len(names) != len(want) {
 		t.Fatalf("got %d files, want %d: %v", len(names), len(want), names)

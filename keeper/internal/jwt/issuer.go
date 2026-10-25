@@ -1,7 +1,7 @@
 // Package jwt — JWT issuer for Archon operators.
 //
 // MVP (ADR-014): HS256 (HMAC-SHA256), signing key from Vault KV
-// `secret/keeper/jwt-signing-key`. Claims: `iss`/`sub`/`iat`/`exp`/`roles` +
+// `secret/keeper/jwt-signing-key`. Claims: `jti`/`iss`/`sub`/`iat`/`exp`/`roles` +
 // `bootstrap_initial` (only for the first Archon per ADR-013).
 //
 // The verify side isn't implemented here — that's the Operator API
@@ -56,12 +56,18 @@ func NewIssuer(signingKey []byte, issuer string) (*Issuer, error) {
 
 // Issue issues an HS256-signed JWT for an archon.
 //
+// id — the `jti` claim: the `operator_jwts` row the token is accounted under
+// (ADR-014 amendment NIM-1045). Required, so a token that no row can revoke
+// cannot be minted by forgetting to pass one.
 // aid — Archon ID (e.g. "archon-alice"), goes into the `sub` claim.
 // roles — array of RBAC roles, `roles` claim.
 // ttl — token lifetime, drives `exp` (now + ttl).
 // bootstrapInitial — true only for the first Archon (ADR-013, `bootstrap_initial`
 // claim; omitted for all other operators).
-func (i *Issuer) Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error) {
+func (i *Issuer) Issue(id, aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error) {
+	if id == "" {
+		return "", errors.New("jwt: id is empty")
+	}
 	if aid == "" {
 		return "", errors.New("jwt: aid is empty")
 	}
@@ -74,6 +80,7 @@ func (i *Issuer) Issue(aid string, roles []string, ttl time.Duration, bootstrapI
 		Roles:            roles,
 		BootstrapInitial: bootstrapInitial,
 		RegisteredClaims: jwtv5.RegisteredClaims{
+			ID:        id,
 			Issuer:    i.issuer,
 			Subject:   aid,
 			IssuedAt:  jwtv5.NewNumericDate(now),

@@ -123,7 +123,7 @@ func (h *Handler) callIncarnationUpgrade(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventIncarnationUpgradeStarted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationUpgradeStarted, claims.Subject, map[string]any{
 		"id":         a.ID,
 		"to_version": a.ToVersion,
 		"apply_id":   applyID,

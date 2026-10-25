@@ -60,7 +60,7 @@ func (h *Handler) callRoleDelete(ctx context.Context, claims *jwt.Claims, req js
 	}
 
 	// Audit — parallel to the HTTP handler (authorization change, ADR-022).
-	h.writeAudit(audit.EventRoleDeleted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventRoleDeleted, claims.Subject, map[string]any{
 		"name": a.Name,
 	})
 

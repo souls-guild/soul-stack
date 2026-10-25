@@ -159,6 +159,9 @@ type daemon struct {
 	verifier   *keeperjwt.Verifier
 	issuer     *keeperjwt.Issuer
 	ttlDefault time.Duration
+	ttlMax     time.Duration
+	// jwtUse records operator_jwts.last_used_* off the request path (NIM-1045).
+	jwtUse *operator.JWTUseRecorder
 
 	// --- rbac ---
 	rbacHolder *rbac.Holder
@@ -840,7 +843,9 @@ func (d *daemon) setupJWT(ctx context.Context) error {
 		fmt.Fprintf(os.Stderr, "keeper run: load signing key: %v\n", err)
 		return errSetupFailed
 	}
-	verifier, err := keeperjwt.NewVerifier(signingKey, d.jwtIssuerName)
+	// The RBAC holder is the revocation source: a revoked jti is refused by every
+	// door that verifies a token (ADR-014 amendment NIM-1045).
+	verifier, err := keeperjwt.NewVerifier(signingKey, d.jwtIssuerName, d.rbacHolder)
 	if err != nil {
 		fmt.Fprintf(os.Stderr, "keeper run: build JWT verifier: %v\n", err)
 		return errSetupFailed
@@ -859,6 +864,16 @@ func (d *daemon) setupJWT(ctx context.Context) error {
 		return errSetupFailed
 	}
 	d.ttlDefault = ttlDefault
+
+	ttlMax, err := resolveTTLMax(d.cfg.Auth.JWT.TTLMax, ttlDefault)
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: %v\n", err)
+		return errSetupFailed
+	}
+	d.ttlMax = ttlMax
+
+	d.jwtUse = operator.NewJWTUseRecorder(d.pool, d.logger)
+	go d.jwtUse.Run(ctx)
 	return nil
 }
 
@@ -4700,6 +4715,8 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		ClusterLeaderReader: clusterLeaderReaderOrNil(d),
 		SelfKID:             cfg.KID,
 		TTLDefault:          d.ttlDefault,
+		TTLMax:              d.ttlMax,
+		JWTUse:              d.jwtUse,
 		MetricsHTTP:         d.httpMetrics,
 		ScenarioRunner:      d.scenarioRunner,
 		ScenarioDestroyer:   d.scenarioRunner,
@@ -4897,7 +4914,7 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	return &api.LDAPAuthDeps{
 		Authenticator: authn,
 		Mapper:        mapper,
-		Issuer:        d.issuer,
+		Sessions:      api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
 		TTL:           d.ttlDefault,
 		Audit:         d.auditWriter,
 		Logger:        d.logger,
@@ -5004,7 +5021,7 @@ func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 	return &api.OIDCAuthDeps{
 		Authenticator: authn,
 		Mapper:        mapper,
-		Issuer:        d.issuer,
+		Sessions:      api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
 		TTL:           d.ttlDefault,
 		Audit:         d.auditWriter,
 		Logger:        d.logger,
@@ -5167,6 +5184,7 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			ApplyAccess: mcp.NewApplyAccessPG(d.pool),
 			RBAC:        d.rbacHolder,
 			Logger:      logger,
+			JWTUse:      d.jwtUse,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: build MCP server: %v\n", err)

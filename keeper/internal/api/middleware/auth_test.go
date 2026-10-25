@@ -19,7 +19,7 @@ var testSigningKey = bytes.Repeat([]byte{0xab}, 32)
 
 func newVerifier(t *testing.T) *keeperjwt.Verifier {
 	t.Helper()
-	v, err := keeperjwt.NewVerifier(testSigningKey, testIssuer)
+	v, err := keeperjwt.NewVerifier(testSigningKey, testIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -32,7 +32,7 @@ func newToken(t *testing.T, ttl time.Duration) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue("archon-alice", []string{"cluster-admin"}, ttl, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", "archon-alice", []string{"cluster-admin"}, ttl, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

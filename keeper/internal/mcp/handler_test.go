@@ -98,6 +98,9 @@ type fakePool struct {
 }
 
 func (f *fakePool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if contains(sql, "INSERT INTO operator_jwts") {
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	}
 	if contains(sql, "INSERT INTO operators") {
 		f.insertCalls++
 		op := &operator.Operator{
@@ -679,7 +682,7 @@ func (r *stringRows) Conn() *pgx.Conn                              { return nil 
 
 type fakeIssuer struct{ called bool }
 
-func (f *fakeIssuer) Issue(aid string, _ []string, _ time.Duration, _ bool) (string, error) {
+func (f *fakeIssuer) Issue(_ string, aid string, _ []string, _ time.Duration, _ bool) (string, error) {
 	f.called = true
 	return "fake-jwt-" + aid, nil
 }
@@ -1102,8 +1105,9 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	// 97 = 89 + the eight `keeper.<resource>.label-set` tools ([ADR-0085], NIM-728),
 	// one per registry that carries a display caption. Eight CRUD tools and two
 	// captions left with the Cloud Provider/Profile registries (NIM-761).
-	if len(res.Tools) != 97 {
-		t.Errorf("tool count = %d, want 97", len(res.Tools))
+	// 99 = 97 + keeper.operator.jwt-list / jwt-revoke (NIM-1045).
+	if len(res.Tools) != 99 {
+		t.Errorf("tool count = %d, want 99", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}

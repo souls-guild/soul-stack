@@ -79,7 +79,7 @@ func (h *Handler) callRoleGrantOperator(ctx context.Context, claims *jwt.Claims,
 
 	// Audit mirrors the HTTP handler (authorization change, ADR-022):
 	// payload {name, aid, granted_by_aid}. AIDs aren't secret.
-	h.writeAudit(audit.EventRoleOperatorGranted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventRoleOperatorGranted, claims.Subject, map[string]any{
 		"name":           a.Role,
 		"aid":            a.AID,
 		"granted_by_aid": callerAID,

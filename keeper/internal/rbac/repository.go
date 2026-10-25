@@ -60,6 +60,11 @@ type Snapshot struct {
 	// Used by [Enforcer.Check] as the first step — a revoked AID is denied
 	// regardless of roles (ADR-014 Amendment 2026-05-27).
 	Revoked map[string]time.Time
+
+	// RevokedJWTs holds the `operator_jwts.jwt_id` of every revoked token that
+	// may still verify (ADR-014 amendment NIM-1045). The JWT verifier refuses
+	// these ids; the operator behind them is unaffected.
+	RevokedJWTs map[string]struct{}
 }
 
 const (
@@ -81,6 +86,13 @@ const (
 	// populate Snapshot.Revoked. Active operators aren't selected — the
 	// snapshot only holds the revoked projection.
 	selectRevokedOperatorsSQL = `SELECT aid, revoked_at FROM operators WHERE revoked_at IS NOT NULL`
+
+	// selectRevokedJWTsSQL — revoked tokens that may still verify (ADR-014
+	// amendment NIM-1045). The five-minute margin is for the clocks: `exp` is
+	// checked against the verifying instance's clock and this against the
+	// database's, and a row dropped while some instance still considers its
+	// token alive would un-revoke that token there.
+	selectRevokedJWTsSQL = `SELECT jwt_id FROM operator_jwts WHERE revoked_at IS NOT NULL AND expires_at > NOW() - INTERVAL '5 minutes'`
 
 	// selectSynodOperatorsSQL — "Synod ↔ archon" membership (ADR-049). Joined
 	// with selectSynodRolesSQL in Go when the snapshot is assembled: an
@@ -119,6 +131,7 @@ func LoadSnapshot(ctx context.Context, db ExecQueryRower) (*Snapshot, error) {
 		RoleParents: make(map[string]string),
 		Membership:  make(map[string][]string),
 		Revoked:     make(map[string]time.Time),
+		RevokedJWTs: make(map[string]struct{}),
 	}
 
 	if err := loadRoles(ctx, db, snap); err != nil {
@@ -131,6 +144,9 @@ func LoadSnapshot(ctx context.Context, db ExecQueryRower) (*Snapshot, error) {
 		return nil, err
 	}
 	if err := loadRevoked(ctx, db, snap); err != nil {
+		return nil, err
+	}
+	if err := loadRevokedJWTs(ctx, db, snap); err != nil {
 		return nil, err
 	}
 	if err := loadSynodMembership(ctx, db, snap); err != nil {
@@ -235,6 +251,25 @@ func loadRevoked(ctx context.Context, db ExecQueryRower, snap *Snapshot) error {
 	}
 	if err := rows.Err(); err != nil {
 		return fmt.Errorf("rbac: iter revoked: %w", err)
+	}
+	return nil
+}
+
+func loadRevokedJWTs(ctx context.Context, db ExecQueryRower, snap *Snapshot) error {
+	rows, err := db.Query(ctx, selectRevokedJWTsSQL)
+	if err != nil {
+		return fmt.Errorf("rbac: query revoked jwts: %w", wrapPgErr(err))
+	}
+	defer rows.Close()
+	for rows.Next() {
+		var id string
+		if err := rows.Scan(&id); err != nil {
+			return fmt.Errorf("rbac: scan revoked jwt: %w", err)
+		}
+		snap.RevokedJWTs[id] = struct{}{}
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rbac: iter revoked jwts: %w", err)
 	}
 	return nil
 }

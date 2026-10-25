@@ -142,7 +142,7 @@ func (h *Handler) callSettingUpdate(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventSettingUpdated, claims.Subject, map[string]any(reply.AuditPayload()))
+	h.writeAudit(ctx, audit.EventSettingUpdated, claims.Subject, map[string]any(reply.AuditPayload()))
 	return h.toolResult(req.ID, toSettingView(reply.Body))
 }
 
@@ -183,7 +183,7 @@ func (h *Handler) callSettingDelete(ctx context.Context, claims *jwt.Claims, req
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventSettingDeleted, claims.Subject, map[string]any(reply.AuditPayload()))
+	h.writeAudit(ctx, audit.EventSettingDeleted, claims.Subject, map[string]any(reply.AuditPayload()))
 	return h.toolResult(req.ID, toSettingView(reply.Body))
 }
 

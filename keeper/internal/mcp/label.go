@@ -108,7 +108,7 @@ func callLabelSet[V any](h *Handler, ctx context.Context, claims *jwt.Claims, re
 	// caller sending "  " stored NULL and the audit must say so; the OLD value
 	// comes off the UPDATE itself, so the pair always describes a transition that
 	// really happened.
-	h.writeAudit(spec.event, claims.Subject,
+	h.writeAudit(ctx, spec.event, claims.Subject,
 		labelAuditPayload(a.ID, previous, registrylabel.Normalize(a.Label)))
 	return h.toolResult(req.ID, view)
 }

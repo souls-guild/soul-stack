@@ -138,7 +138,7 @@ func (h *Handler) callHeraldCreate(ctx context.Context, claims *jwt.Claims, req 
 	if err != nil {
 		return h.heraldErr(req.ID, toolName, err, "herald.create", a.ID)
 	}
-	h.writeAudit(audit.EventHeraldCreated, claims.Subject, heraldAuditMCP(created))
+	h.writeAudit(ctx, audit.EventHeraldCreated, claims.Subject, heraldAuditMCP(created))
 	return h.toolResult(req.ID, toHeraldView(created))
 }
 
@@ -174,7 +174,7 @@ func (h *Handler) callHeraldUpdate(ctx context.Context, claims *jwt.Claims, req 
 	if err != nil {
 		return h.heraldErr(req.ID, toolName, err, "herald.update", a.ID)
 	}
-	h.writeAudit(audit.EventHeraldUpdated, claims.Subject, heraldAuditMCP(updated))
+	h.writeAudit(ctx, audit.EventHeraldUpdated, claims.Subject, heraldAuditMCP(updated))
 	return h.toolResult(req.ID, toHeraldView(updated))
 }
 
@@ -198,7 +198,7 @@ func (h *Handler) callHeraldDelete(ctx context.Context, claims *jwt.Claims, req 
 	if err := h.deps.HeraldSvc.DeleteHerald(ctx, a.ID); err != nil {
 		return h.heraldErr(req.ID, toolName, err, "herald.delete", a.ID)
 	}
-	h.writeAudit(audit.EventHeraldDeleted, claims.Subject, map[string]any{"id": a.ID})
+	h.writeAudit(ctx, audit.EventHeraldDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 
@@ -429,7 +429,7 @@ func (h *Handler) callTidingCreate(ctx context.Context, claims *jwt.Claims, req 
 	if err != nil {
 		return h.tidingErr(req.ID, toolName, err, "tiding.create", a.ID)
 	}
-	h.writeAudit(audit.EventTidingCreated, claims.Subject, tidingAuditMCP(created))
+	h.writeAudit(ctx, audit.EventTidingCreated, claims.Subject, tidingAuditMCP(created))
 	return h.toolResult(req.ID, toTidingView(created))
 }
 
@@ -465,7 +465,7 @@ func (h *Handler) callTidingUpdate(ctx context.Context, claims *jwt.Claims, req 
 	if err != nil {
 		return h.tidingErr(req.ID, toolName, err, "tiding.update", a.ID)
 	}
-	h.writeAudit(audit.EventTidingUpdated, claims.Subject, tidingAuditMCP(updated))
+	h.writeAudit(ctx, audit.EventTidingUpdated, claims.Subject, tidingAuditMCP(updated))
 	return h.toolResult(req.ID, toTidingView(updated))
 }
 
@@ -489,7 +489,7 @@ func (h *Handler) callTidingDelete(ctx context.Context, claims *jwt.Claims, req 
 	if err := h.deps.HeraldSvc.DeleteTiding(ctx, a.ID); err != nil {
 		return h.tidingErr(req.ID, toolName, err, "tiding.delete", a.ID)
 	}
-	h.writeAudit(audit.EventTidingDeleted, claims.Subject, map[string]any{"id": a.ID})
+	h.writeAudit(ctx, audit.EventTidingDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 

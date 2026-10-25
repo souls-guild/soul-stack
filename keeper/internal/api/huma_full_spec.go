@@ -87,6 +87,8 @@ func fullSpecGroups() []specGroup {
 			registerHumaOperatorGet(api, stub)
 			registerHumaOperatorRevoke(api, stub)
 			registerHumaOperatorIssueToken(api, stub)
+			registerHumaOperatorJWTList(api, stub)
+			registerHumaOperatorJWTRevoke(api, stub)
 			return nil
 		}},
 		{"/v1/roles", func(api huma.API) error {

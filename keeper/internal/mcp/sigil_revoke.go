@@ -99,7 +99,7 @@ func (h *Handler) callPluginRevoke(ctx context.Context, claims *jwt.Claims, req 
 	}
 
 	// Audit — parallel to the REST handler: payload {alias}.
-	h.writeAudit(audit.EventPluginRevoked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventPluginRevoked, claims.Subject, map[string]any{
 		"alias": a.Alias,
 	})
 

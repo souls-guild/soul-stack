@@ -110,7 +110,7 @@ func (h *Handler) callIncarnationLabelSet(ctx context.Context, claims *jwt.Claim
 	// cleared. Normalized rather than echoed, so the trail records what the row
 	// holds — a caller sending "  " stored NULL and the audit must say so.
 	stored := registrylabel.Normalize(a.Label)
-	h.writeAudit(audit.EventIncarnationLabelChanged, claims.Subject,
+	h.writeAudit(ctx, audit.EventIncarnationLabelChanged, claims.Subject,
 		labelAuditPayload(a.ID, previous, stored))
 
 	return h.toolResult(req.ID, incarnationLabelSetOutput{

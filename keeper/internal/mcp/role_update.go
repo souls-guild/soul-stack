@@ -114,7 +114,7 @@ func (h *Handler) callRoleUpdate(ctx context.Context, claims *jwt.Claims, req js
 	if a.ConfirmCascade {
 		payload["confirm_cascade"] = true
 	}
-	h.writeAudit(audit.EventRolePermissionsUpdated, claims.Subject, payload)
+	h.writeAudit(ctx, audit.EventRolePermissionsUpdated, claims.Subject, payload)
 
 	return h.toolResult(req.ID, struct{}{})
 }

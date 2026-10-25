@@ -41,9 +41,17 @@ const (
 	// distinguish "my own token expired → time to log in" from "cannot
 	// perform the operation on someone else's revoked AID".
 	TypeOperatorRevokedToken = "https://soul-stack.com/errors/operator-revoked-token"
-	TypeWouldLockOutCluster  = "https://soul-stack.com/errors/would-lock-out-cluster"
-	TypeIncarnationExists    = "https://soul-stack.com/errors/incarnation-already-exists"
-	TypeIncarnationLocked    = "https://soul-stack.com/errors/incarnation-locked"
+	// TypeJWTRevoked — the JWT is valid by signature/exp and its operator is
+	// active, but this token's `jti` has been revoked (`operator_jwts`, ADR-014
+	// amendment NIM-1045). 401: the holder needs a new token; the operator does
+	// not need to be re-created, which is what [TypeOperatorRevokedToken] says.
+	TypeJWTRevoked = "https://soul-stack.com/errors/jwt-revoked"
+	// TypeJWTAlreadyRevoked — 409 on the write side: revoking a token that is
+	// already revoked (parity with [TypeOperatorRevoked]).
+	TypeJWTAlreadyRevoked   = "https://soul-stack.com/errors/jwt-already-revoked"
+	TypeWouldLockOutCluster = "https://soul-stack.com/errors/would-lock-out-cluster"
+	TypeIncarnationExists   = "https://soul-stack.com/errors/incarnation-already-exists"
+	TypeIncarnationLocked   = "https://soul-stack.com/errors/incarnation-locked"
 	// TypeRerunInputUnavailable — `rerun-last` cannot restore the input of a failed
 	// run: the recipe (`apply_runs.recipe`) is unavailable (recipe IS NULL on the
 	// legacy dispatchWave path, OR the row was purged by Reaper retention). 409 Conflict,
@@ -217,6 +225,8 @@ var titles = map[string]string{
 	TypeOperatorExists:             "Operator already exists",
 	TypeOperatorRevoked:            "Operator is revoked",
 	TypeOperatorRevokedToken:       "Operator revoked",
+	TypeJWTRevoked:                 "JWT revoked",
+	TypeJWTAlreadyRevoked:          "JWT is already revoked",
 	TypeWouldLockOutCluster:        "Operation would lock out the cluster",
 	TypeIncarnationExists:          "Incarnation already exists",
 	TypeIncarnationLocked:          "Incarnation is locked",
@@ -312,6 +322,8 @@ var statuses = map[string]int{
 	TypeOperatorExists:             http.StatusConflict,
 	TypeOperatorRevoked:            http.StatusConflict,
 	TypeOperatorRevokedToken:       http.StatusUnauthorized,
+	TypeJWTRevoked:                 http.StatusUnauthorized,
+	TypeJWTAlreadyRevoked:          http.StatusConflict,
 	TypeWouldLockOutCluster:        http.StatusConflict,
 	TypeIncarnationExists:          http.StatusConflict,
 	TypeIncarnationLocked:          http.StatusConflict,

@@ -78,6 +78,9 @@ type Enforcer struct {
 	// than as a separate projection) so Check is one cheap map lookup with no
 	// sync against an external structure (immutable after construction).
 	revoked map[string]time.Time
+
+	// revokedJWTs is Snapshot.RevokedJWTs, shared the same way as revoked.
+	revokedJWTs map[string]struct{}
 }
 
 // NewEnforcerFromSnapshot builds an Enforcer from a DB snapshot (ADR-028(d))
@@ -104,6 +107,7 @@ func NewEnforcerFromSnapshot(snap *Snapshot) (*Enforcer, error) {
 	// Snapshot.Revoked is never mutated after the enforcer is constructed
 	// (the caller, Holder, always builds a fresh enforcer after Refresh).
 	e.revoked = snap.Revoked
+	e.revokedJWTs = snap.RevokedJWTs
 
 	// Parent graph (ADR-078): validated BEFORE any role is built, so a snapshot
 	// with a cycle / an over-deep chain / a dangling parent never becomes an
@@ -227,6 +231,13 @@ func (e *Enforcer) Check(aid, resource, action string, context map[string]string
 // (POST /auth/token, NIM-77) rejects a revoked Archon in-memory, not via SQL.
 func (e *Enforcer) IsRevoked(aid string) bool {
 	_, ok := e.revoked[aid]
+	return ok
+}
+
+// IsJWTRevoked — whether the token id is in the revoked projection (ADR-014
+// amendment NIM-1045). The JWT verifier asks it on every verification.
+func (e *Enforcer) IsJWTRevoked(id string) bool {
+	_, ok := e.revokedJWTs[id]
 	return ok
 }
 

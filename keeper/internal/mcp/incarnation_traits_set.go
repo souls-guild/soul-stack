@@ -125,7 +125,7 @@ func (h *Handler) callIncarnationTraitsSet(ctx context.Context, claims *jwt.Clai
 	// audit: EventIncarnationTraitsChanged {name, old_keys, new_keys},
 	// source=mcp (writeAudit). trait VALUES are not included — parity with
 	// REST (secret hygiene).
-	h.writeAudit(audit.EventIncarnationTraitsChanged, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationTraitsChanged, claims.Subject, map[string]any{
 		"id":       a.ID,
 		"old_keys": res.OldKeys,
 		"new_keys": res.NewKeys,

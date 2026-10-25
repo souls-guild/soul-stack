@@ -146,7 +146,7 @@ func (h *Handler) callServiceRegister(ctx context.Context, claims *jwt.Claims, r
 
 	// Audit — parallels the REST handler (ADR-028 pattern): payload {id, git,
 	// ref, created_by_aid}. The git URL is not a secret.
-	h.writeAudit(audit.EventServiceRegistered, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventServiceRegistered, callerAID, map[string]any{
 		"id":             entry.ID,
 		"label":          entry.Label,
 		"git":            entry.Git,

@@ -45,7 +45,13 @@ type loginStubIssuer struct {
 	gotRoles []string
 }
 
-func (s *loginStubIssuer) Issue(aid string, roles []string, _ time.Duration, _ bool) (string, error) {
+func (s *loginStubIssuer) Issue(_ string, aid string, roles []string, _ time.Duration, _ bool) (string, error) {
+	s.gotAID = aid
+	s.gotRoles = roles
+	return s.token, s.err
+}
+
+func (s *loginStubIssuer) MintSession(_ context.Context, aid string, roles []string, _ time.Duration) (string, error) {
 	s.gotAID = aid
 	s.gotRoles = roles
 	return s.token, s.err
@@ -85,7 +91,7 @@ func TestLDAPLogin_SetsSecureCookie(t *testing.T) {
 	d := &LDAPAuthDeps{
 		Authenticator: stubAuthenticator{ext: auth.ExternalIdentity{AID: "alice", Groups: []string{"ops"}}},
 		Mapper:        stubMapper{mapped: auth.MappedOperator{AID: "alice", Roles: []string{"cluster-admin"}, Provisioned: true}},
-		Issuer:        issuer,
+		Sessions:      issuer,
 		TTL:           time.Hour,
 		Audit:         aw,
 	}
@@ -144,7 +150,7 @@ func TestLDAPLogin_AuthFailedIs401(t *testing.T) {
 	d := &LDAPAuthDeps{
 		Authenticator: stubAuthenticator{err: auth.ErrAuthFailed},
 		Mapper:        stubMapper{},
-		Issuer:        &loginStubIssuer{token: "x"},
+		Sessions:      &loginStubIssuer{token: "x"},
 		TTL:           time.Hour,
 		Audit:         aw,
 	}
@@ -165,7 +171,7 @@ func TestLDAPLogin_NoRoleMappingIs403(t *testing.T) {
 	d := &LDAPAuthDeps{
 		Authenticator: stubAuthenticator{ext: auth.ExternalIdentity{AID: "bob"}},
 		Mapper:        stubMapper{err: auth.ErrNoRoleMapping},
-		Issuer:        &loginStubIssuer{token: "x"},
+		Sessions:      &loginStubIssuer{token: "x"},
 		TTL:           time.Hour,
 		Audit:         &authTestAudit{},
 	}
@@ -187,7 +193,7 @@ func TestLDAPLogin_RevokedIs401(t *testing.T) {
 	d := &LDAPAuthDeps{
 		Authenticator: stubAuthenticator{ext: auth.ExternalIdentity{AID: "carol"}},
 		Mapper:        stubMapper{err: auth.ErrOperatorRevoked},
-		Issuer:        issuer,
+		Sessions:      issuer,
 		TTL:           time.Hour,
 		Audit:         &authTestAudit{},
 	}

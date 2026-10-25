@@ -32,16 +32,22 @@ const (
 
 	// EventOperatorRevoked — an Archon was revoked via the Operator API
 	// (`POST /v1/operators/{aid}/revoke`). `source: api`, `archon_aid` is
-	// the initiator; payload: `{aid, reason}`. Active JWTs of the revoked
-	// Archon keep working until `exp` (ADR-014(d)).
+	// the initiator; payload: `{aid, reason}`. Every JWT of the revoked Archon
+	// is refused on its next request (ADR-014 amendment 2026-08-07, NIM-421).
 	EventOperatorRevoked EventType = "operator.revoked"
 
 	// EventOperatorTokenIssued — a new JWT was issued for an existing Archon
 	// via the Operator API (`POST /v1/operators/{aid}/issue-token`).
 	// `source: api`, `archon_aid` is the initiator; payload:
-	// `{aid, expires_at}`. The JWT is NOT put in the payload (sensitive,
-	// masked even if it leaks in).
+	// `{aid, expires_at, jwt_id, ttl, label?}`. The JWT is NOT put in the
+	// payload (sensitive, masked even if it leaks in).
 	EventOperatorTokenIssued EventType = "operator.token-issued"
+
+	// EventOperatorJWTRevoked — one token of an Archon was revoked
+	// (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke` or MCP
+	// `keeper.operator.jwt-revoke`, ADR-014 amendment NIM-1045). `archon_aid` is
+	// the initiator; payload: `{aid, jwt_id, kind}`. The operator stays active.
+	EventOperatorJWTRevoked EventType = "operator.jwt-revoked"
 
 	// EventIncarnationCreated — a new runtime instance was created via the
 	// Operator API (`POST /v1/incarnations`). `source: api`, `archon_aid`

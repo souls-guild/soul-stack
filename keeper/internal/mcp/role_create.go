@@ -95,7 +95,7 @@ func (h *Handler) callRoleCreate(ctx context.Context, claims *jwt.Claims, req js
 	// {name, permissions, created_by_aid, parent_role, default_scope}. The last two
 	// are always present, null included: on a derived role the permission list alone
 	// does not say what it grants (ADR-078). Permission strings aren't secret.
-	h.writeAudit(audit.EventRoleCreated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventRoleCreated, claims.Subject, map[string]any{
 		"name":           a.Name,
 		"permissions":    a.Permissions,
 		"created_by_aid": claims.Subject,

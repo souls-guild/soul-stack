@@ -77,7 +77,7 @@ func humaAuditMiddleware(writer audit.Writer, evt audit.EventType, logger *slog.
 			EventType: evt,
 			Source:    audit.SourceAPI,
 			ArchonAID: claims.Subject,
-			Payload:   carrier.Payload,
+			Payload:   audit.WithActorJWTID(carrier.Payload, claims.ID),
 		}
 		// Background ctx, not request-ctx: the HTTP server may cancel the request-ctx
 		// right after the write response (the client dropped the connection) — audit must not

@@ -89,7 +89,7 @@ func (h *Handler) callIncarnationUnlock(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventIncarnationUnlocked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationUnlocked, claims.Subject, map[string]any{
 		"id":              a.ID,
 		"previous_status": string(res.PreviousStatus),
 		"reason":          a.Reason,

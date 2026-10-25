@@ -131,7 +131,9 @@ func (h *Handler) callSoulRunCommand(ctx context.Context, claims *jwt.Claims, re
 
 	out, err := runCommand(ctx, runCommandDeps{
 		Dispatch: h.deps.ErrandDispatcher.Dispatch,
-		Audit:    h.writeAuditCorrelated,
+		Audit: func(evt audit.EventType, aid, correlationID string, payload map[string]any) {
+			h.writeAuditCorrelated(ctx, evt, aid, correlationID, payload)
+		},
 		Recorder: h.deps.ConsoleRecorder,
 	}, claims.Subject, a)
 	if err != nil {

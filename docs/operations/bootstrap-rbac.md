@@ -107,15 +107,16 @@ JWT is the only time the operator sees it; Keeper does not store issued tokens (
 
 ### Token lifetimes
 
-There is no per-request TTL: every lifetime is a `keeper.yml` knob read **once at Keeper startup** ([config.md → `auth.jwt`](../keeper/config.md)), so changing any of them requires editing the file and **restarting** Keeper - a hot-reload will not affect newly issued tokens.
+A request may ask for a lifetime (`ttl` on `POST /v1/operators` and `issue-token`, up to `auth.jwt.ttl_max`); everything else is a `keeper.yml` knob read **once at Keeper startup** ([config.md → `auth.jwt`](../keeper/config.md)), so changing any of them requires editing the file and **restarting** Keeper - a hot-reload will not affect newly issued tokens.
 
 | Knob | Default | Applies to |
 |---|---|---|
-| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. |
+| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token` **without** a `ttl`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC login. |
+| `auth.jwt.ttl_max` | `2160h` (90 days), or `ttl_default` if longer | The ceiling of the `ttl` a request may ask for ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). An explicit value below `ttl_default` is refused. |
 | `auth.jwt.ttl_bootstrap` | `720h` (30 days) | Only the first token written by `keeper init`. Read by the subcommand itself at each invocation, so it does not depend on the running daemon. |
 | `auth.jwt.exchange_ttl` | `10m` (floor `1m`) | The short Bearer that `POST /auth/token` gives the web UI in exchange for a `soul_session` cookie ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md)); additionally capped by the remaining lifetime of the cookie. |
 
-Issuing a fresh token does **not** invalidate the previous one: both live until their own `exp`. The only levers that cut a live token short are § Archon Revocation and § Emergency recall of all JWTs below - with the reservations stated there.
+Issuing a fresh token does **not** invalidate the previous one: both live until their own `exp` unless revoked. Three levers cut a live token short: revoking that one token (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`, permission `operator.jwt-revoke` — every token Keeper mints is listed under `GET /v1/operators/{aid}/jwts` with where it was minted from and last used), § Archon Revocation, and § Emergency recall of all JWTs below. A token minted before migration 127 carries no `jti` and only the last two reach it.
 
 ### Role assignment
 
@@ -179,8 +180,7 @@ curl -X POST https://keeper.internal:8080/v1/operators/archon-old/revoke \
 What's happening:
 
 - `operators.revoked_at = NOW()` is installed. The Archon remains on the registry for auditing, and new JWTs for it are no longer released.
-- **Active JWTs of a recalled Archon continue to operate until their `exp`** ([ADR-014(d)](../adr/0014-operator-identity.md)). Short TTL (`ttl_default: 24h`) is a natural protection.
-- Forced revocation of "all live JWTs" is a separate post-MVP task (requires JWT-blocklist/session-store, not part of MVP).
+- **Every JWT of the Archon is refused from its next request** with `401 operator-revoked-token` ([ADR-014 amendment NIM-421](../adr/0014-operator-identity.md)) — no blocklist, the RBAC snapshot carries `revoked_at`. Revocation is permanent; to stop one token and keep the Archon, revoke that token instead (above).
 
 ### Emergency recall of all JWTs - signing-key rotation
 
@@ -222,7 +222,15 @@ All RBAC operations are written to `audit_log` ([ADR-022](../adr/0022-audit-pipe
 
 ### Machine-identity (CI / scripts)
 
-MVP - JWT with a long TTL (separate Archon `archon-ci-deployer`, narrow role with the required set of permissions). Stored in CI secret-store as a Bearer token. Scheduled re-release (in short `ttl_default` - for example, 7 days) - through `operator.issue-token` from the admin-Archon or by a script using the previous JWT before its `exp`.
+A separate Archon per service (`archon-ci-deployer`, `sd-integration`) with a narrow role, and a token asked for with a long `ttl` and a `label` — up to `auth.jwt.ttl_max`, 90 days by default ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)):
+
+```bash
+curl -X POST https://keeper.internal:8080/v1/operators/sd-integration/issue-token \
+  -H "Authorization: Bearer $ADMIN_JWT" -H 'Content-Type: application/json' \
+  -d '{"ttl": "90d", "label": "Service Desk prod"}'
+```
+
+Store it in the service's secret store as a Bearer token. To rotate, issue the next one, switch the service over, then revoke the previous token by its `jwt_id` — the Archon and its role stay. Watch `GET /v1/operators/{aid}/jwts`: `last_used_ip` / `last_used_user_agent` show where the token is actually used from, which is how a leaked one gets noticed. Do not automate rotation with a job that holds `operator.issue-token`: the permission is not restricted by target, so that job could mint a `cluster-admin` token.
 
 mTLS-cert-form of Archon for machine-identity - post-MVP ([ADR-014(b)](../adr/0014-operator-identity.md)), extension via `auth_method` enum without breaking changes.
 

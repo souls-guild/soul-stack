@@ -216,7 +216,7 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 		if err != nil {
 			return h.bulkAssignError(req.ID, toolName, err)
 		}
-		h.auditCovenAssign(claims.Subject, a, mode, scope, soul.Report{
+		h.auditCovenAssign(ctx, claims.Subject, a, mode, scope, soul.Report{
 			Matched: matched,
 			Status:  soul.BulkCompleted,
 		}, true)
@@ -248,13 +248,13 @@ func (h *Handler) callSoulCovenAssign(ctx context.Context, claims *jwt.Claims, r
 				slog.Int("chunks", rep.ChunksCommitted),
 				slog.Any("error", err),
 			)
-			h.auditCovenAssign(claims.Subject, a, mode, scope, rep, false)
+			h.auditCovenAssign(ctx, claims.Subject, a, mode, scope, rep, false)
 			return h.toolResult(req.ID, buildCovenAssignOutput(a, mode, rep, false))
 		}
 		return h.bulkAssignError(req.ID, toolName, err)
 	}
 
-	h.auditCovenAssign(claims.Subject, a, mode, scope, rep, false)
+	h.auditCovenAssign(ctx, claims.Subject, a, mode, scope, rep, false)
 	return h.toolResult(req.ID, buildCovenAssignOutput(a, mode, rep, false))
 }
 
@@ -308,7 +308,7 @@ func (h *Handler) bulkAssignError(id json.RawMessage, toolName string, err error
 //
 // `label`/`labels` is XOR by mode (REST parity): append/remove → `label`,
 // replace → `labels` (always an array, including empty for "remove all").
-func (h *Handler) auditCovenAssign(aid string, a soulCovenAssignArgs, mode soul.CovenMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
+func (h *Handler) auditCovenAssign(ctx context.Context, aid string, a soulCovenAssignArgs, mode soul.CovenMode, scope soul.BulkScope, rep soul.Report, dryRun bool) {
 	payload := map[string]any{
 		"mode":          string(mode),
 		"selector":      normalizeMCPCovenSelector(a.Selector),
@@ -328,7 +328,7 @@ func (h *Handler) auditCovenAssign(aid string, a soulCovenAssignArgs, mode soul.
 	} else {
 		payload["label"] = a.Label
 	}
-	h.writeAudit(audit.EventSoulCovenChanged, aid, payload)
+	h.writeAudit(ctx, audit.EventSoulCovenChanged, aid, payload)
 }
 
 // normalizeMCPCovenSelector — normalized selector form for the audit

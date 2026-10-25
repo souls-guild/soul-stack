@@ -78,7 +78,7 @@ func (h *Handler) callSigilKeyIntroduce(ctx context.Context, claims *jwt.Claims,
 
 	// Audit — parity with REST: payload {key_id, is_primary, introduced_by_aid}.
 	// The private key (in Vault) is NOT written.
-	h.writeAudit(audit.EventSigilKeyIntroduced, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSigilKeyIntroduced, claims.Subject, map[string]any{
 		"key_id":            res.KeyID,
 		"is_primary":        res.IsPrimary,
 		"introduced_by_aid": claims.Subject,
@@ -178,7 +178,7 @@ func (h *Handler) callSigilKeySetPrimary(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventSigilKeyPrimarySet, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSigilKeyPrimarySet, claims.Subject, map[string]any{
 		"key_id":     a.KeyID,
 		"set_by_aid": claims.Subject,
 	})
@@ -222,7 +222,7 @@ func (h *Handler) callSigilKeyRetire(ctx context.Context, claims *jwt.Claims, re
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventSigilKeyRetired, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSigilKeyRetired, claims.Subject, map[string]any{
 		"key_id":         a.KeyID,
 		"retired_by_aid": claims.Subject,
 	})

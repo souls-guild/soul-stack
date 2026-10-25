@@ -275,7 +275,7 @@ func collectRoutes(t *testing.T) map[route]struct{} {
 // stubOperatorHandler builds an OperatorHandler with a stub pool/issuer/rbac.
 func stubOperatorHandler(t *testing.T) *handlers.OperatorHandler {
 	t.Helper()
-	return handlers.NewOperatorHandler(stubOperatorPool{}, stubIssuer{}, stubRBACSource{}, time.Hour, nil)
+	return handlers.NewOperatorHandler(stubOperatorPool{}, stubIssuer{}, stubRBACSource{}, time.Hour, 0, nil)
 }
 
 // stubRoleHandler builds a RoleHandler via rbac.Service with a stub pool.
@@ -461,7 +461,7 @@ type stubOperatorPool struct{ handlers.OperatorPool }
 
 type stubIssuer struct{}
 
-func (stubIssuer) Issue(string, []string, time.Duration, bool) (string, error) {
+func (stubIssuer) Issue(string, string, []string, time.Duration, bool) (string, error) {
 	return "", fmt.Errorf("stub issuer: should not be called in the drift test")
 }
 

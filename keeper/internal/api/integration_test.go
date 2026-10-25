@@ -159,7 +159,7 @@ func run(m *testing.M) int {
 func startServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdown func()) {
 	t.Helper()
 
-	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -259,7 +259,7 @@ func newValidTokenFor(t *testing.T, aid string, roles []string) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue(aid, roles, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", aid, roles, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -533,7 +533,7 @@ func TestIntegration_Metrics_NotOnOpenAPI(t *testing.T) {
 // openapi port and checks that the keeper_http_* metrics (recorded by middleware
 // on /v1/*) are visible on the DEDICATED metrics listener (the same *obs.Registry).
 func TestIntegration_Metrics_RecordsV1Requests(t *testing.T) {
-	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

@@ -52,6 +52,9 @@ type mutableRBAC struct {
 	mu sync.Mutex
 	// revoked mirrors the snapshot's revoked projection.
 	revoked bool
+	// revokedJWT mirrors the revoked-token projection for the socket's own token
+	// (NIM-1045).
+	revokedJWT bool
 	// denyHosts are SIDs this operator may no longer reach with soul.console.
 	denyHosts map[string]bool
 	// allow is the permission allow-set for the stream, keyed "resource.action".
@@ -100,6 +103,18 @@ func (m *mutableRBAC) IsRevoked(string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.revoked
+}
+
+func (m *mutableRBAC) IsJWTRevoked(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return id != "" && m.revokedJWT
+}
+
+func (m *mutableRBAC) revokeJWT() {
+	m.mu.Lock()
+	m.revokedJWT = true
+	m.mu.Unlock()
 }
 
 func (m *mutableRBAC) revoke() {
@@ -160,6 +175,28 @@ func TestConsoleReauth_RevokedOperatorLosesTheSocket(t *testing.T) {
 	// And the shells must actually be gone — a close frame the Hub does not act on
 	// would leave the pty running on the host.
 	waitFor(t, "the revoked operator's sessions to be reaped", func() bool { return s.hub.Count() == 0 })
+}
+
+// TestConsoleReauth_RevokedTokenLosesTheSocket — revoking the one token the
+// console was opened with (NIM-1045) closes it like revoking the operator does,
+// while the operator stays active.
+func TestConsoleReauth_RevokedTokenLosesTheSocket(t *testing.T) {
+	rbac := &mutableRBAC{}
+	s := newConsoleTestServer(t, rbac, console.Limits{}, func(d *consoleWSDeps) {
+		d.ReauthInterval = reauthTestInterval
+	})
+	ws := s.dial(t)
+
+	writeFrame(t, ws, map[string]any{"type": "open", "session_id": "pane-1", "sid": "host-a"})
+	readFrameOfType(t, ws, "opened")
+
+	rbac.revokeJWT()
+
+	errFrame := readFrameOfType(t, ws, "error")
+	if msg, _ := errFrame["message"].(string); !strings.Contains(msg, "token") || !strings.Contains(msg, "revoked") {
+		t.Errorf("error.message = %q, want it to name the revoked token", msg)
+	}
+	waitFor(t, "the sessions opened with the revoked token to be reaped", func() bool { return s.hub.Count() == 0 })
 }
 
 // TestConsoleReauth_WithdrawnHostScopeLosesOnlyThatPane — the narrowing half. A
@@ -588,6 +625,22 @@ func TestRunEventsReauth_RevokedSubscriberLosesTheStream(t *testing.T) {
 	rbac.revoke()
 	expectStreamEnds(t, resp.Body,
 		"the stream outlived the revocation of the Archon holding it — RejectRevoked cannot reach a request already inside its handler, so nothing else will")
+}
+
+// TestRunEventsReauth_RevokedTokenLosesTheStream — revoking the one token the
+// stream was opened with (NIM-1045) ends it; the Archon stays active.
+func TestRunEventsReauth_RevokedTokenLosesTheStream(t *testing.T) {
+	bus := applybus.NewBus(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	rbac := &mutableRBAC{allow: map[string]bool{}}
+	const applyID = "01APPLYREV0KEDJWT000000000"
+	url, mint := sseReauthHarness(t, bus,
+		fakeRunAccess{acc: &applyrun.Access{IncarnationName: "redis-prod", StartedByAID: ptrStr("archon-op")}}, rbac)
+
+	resp := openSSE(t, url+"/v1/incarnations/redis-prod/runs/"+applyID+"/events", mint("archon-op"))
+	waitSubscribed(t, bus, applyID)
+
+	rbac.revokeJWT()
+	expectStreamEnds(t, resp.Body, "the stream outlived the revocation of the token it was opened with")
 }
 
 // TestRunEventsReauth_NarrowedSubscriberLosesTheStream — the permission case: a

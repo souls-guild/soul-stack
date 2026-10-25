@@ -63,7 +63,7 @@ func (h *Handler) callSynodCreate(ctx context.Context, claims *jwt.Claims, req j
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodCreated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodCreated, claims.Subject, map[string]any{
 		"name": a.Name, "created_by_aid": claims.Subject,
 	})
 	return h.toolResult(req.ID, struct{}{})
@@ -100,7 +100,7 @@ func (h *Handler) callSynodDelete(ctx context.Context, claims *jwt.Claims, req j
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodDeleted, claims.Subject, map[string]any{"name": a.Name})
+	h.writeAudit(ctx, audit.EventSynodDeleted, claims.Subject, map[string]any{"name": a.Name})
 	return h.toolResult(req.ID, struct{}{})
 }
 
@@ -148,7 +148,7 @@ func (h *Handler) callSynodUpdate(ctx context.Context, claims *jwt.Claims, req j
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodUpdated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodUpdated, claims.Subject, map[string]any{
 		"name": a.Name, "description": a.Description,
 	})
 	return h.toolResult(req.ID, struct{}{})
@@ -246,7 +246,7 @@ func (h *Handler) callSynodAddOperator(ctx context.Context, claims *jwt.Claims, 
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodOperatorAdded, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodOperatorAdded, claims.Subject, map[string]any{
 		"name": a.Synod, "aid": a.AID, "added_by_aid": claims.Subject,
 	})
 	return h.toolResult(req.ID, struct{}{})
@@ -294,7 +294,7 @@ func (h *Handler) callSynodRemoveOperator(ctx context.Context, claims *jwt.Claim
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodOperatorRemoved, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodOperatorRemoved, claims.Subject, map[string]any{
 		"name": a.Synod, "aid": a.AID,
 	})
 	return h.toolResult(req.ID, struct{}{})
@@ -339,7 +339,7 @@ func (h *Handler) callSynodGrantRole(ctx context.Context, claims *jwt.Claims, re
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodRoleGranted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodRoleGranted, claims.Subject, map[string]any{
 		"name": a.Synod, "role": a.Role, "granted_by_aid": claims.Subject,
 	})
 	return h.toolResult(req.ID, struct{}{})
@@ -384,7 +384,7 @@ func (h *Handler) callSynodRevokeRole(ctx context.Context, claims *jwt.Claims, r
 		}
 		return h.toolError(req.ID, toolName, code, detail)
 	}
-	h.writeAudit(audit.EventSynodRoleRevoked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSynodRoleRevoked, claims.Subject, map[string]any{
 		"name": a.Synod, "role": a.Role,
 	})
 	return h.toolResult(req.ID, struct{}{})

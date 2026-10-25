@@ -36,7 +36,7 @@ type fakeIssuer struct {
 	err      error
 }
 
-func (f *fakeIssuer) Issue(aid string, roles []string, _ time.Duration, _ bool) (string, error) {
+func (f *fakeIssuer) Issue(_ string, aid string, roles []string, _ time.Duration, _ bool) (string, error) {
 	f.calls++
 	f.lastAID = aid
 	f.lastRole = roles
@@ -103,6 +103,10 @@ type svcPool struct {
 	insertCalls int
 	insertErr   error
 
+	// jwtInserts — args of each INSERT INTO operator_jwts (MintJWT, NIM-1045).
+	jwtInserts [][]any
+	jwtErr     error
+
 	// selectFn — response for SelectByAID; nil → ErrNoRows (not found).
 	selectFn func(aid string) (*Operator, error)
 
@@ -138,6 +142,12 @@ type roleGrantArgs struct {
 
 func (p *svcPool) Exec(_ context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
 	switch {
+	case strings.Contains(sql, "INSERT INTO operator_jwts"):
+		if p.jwtErr != nil {
+			return pgconn.CommandTag{}, p.jwtErr
+		}
+		p.jwtInserts = append(p.jwtInserts, args)
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
 	case strings.Contains(sql, "INSERT INTO operators"):
 		p.insertCalls++
 		if p.insertErr != nil {

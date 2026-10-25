@@ -13,6 +13,7 @@ package middleware
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"strings"
 
@@ -73,12 +74,14 @@ func RequireJWT(v *jwt.Verifier) func(http.Handler) http.Handler {
 			if err != nil {
 				// detail strings are built ONLY via jwt.ClassifyVerifyErr —
 				// never forward err.Error() into the HTTP response (a raw
-				// golang-jwt/v5 message = an oracle-attack surface).
-				problem.Write(w, problem.New(
-					problem.TypeUnauthenticated,
-					r.URL.Path,
-					jwt.ClassifyVerifyErr(err),
-				))
+				// golang-jwt/v5 message = an oracle-attack surface). A revoked
+				// token gets its own type: the holder needs a new token, not a
+				// new identity (ADR-014 amendment NIM-1045).
+				typ := problem.TypeUnauthenticated
+				if errors.Is(err, jwt.ErrRevokedJWT) {
+					typ = problem.TypeJWTRevoked
+				}
+				problem.Write(w, problem.New(typ, r.URL.Path, jwt.ClassifyVerifyErr(err)))
 				return
 			}
 

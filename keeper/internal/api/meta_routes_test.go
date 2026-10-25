@@ -38,7 +38,7 @@ const (
 // the JWT on /openapi.yaml.
 func metaVerifier(t *testing.T) *keeperjwt.Verifier {
 	t.Helper()
-	v, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer)
+	v, err := keeperjwt.NewVerifier([]byte(metaSigningKey), metaIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -52,7 +52,7 @@ func metaValidToken(t *testing.T) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue("archon-meta-test", []string{"cluster-admin"}, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", "archon-meta-test", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

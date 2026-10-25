@@ -25,7 +25,7 @@ const (
 
 func sseTestVerifier(t *testing.T) *keeperjwt.Verifier {
 	t.Helper()
-	v, err := keeperjwt.NewVerifier([]byte(sseTestSigningKey), sseTestIssuer)
+	v, err := keeperjwt.NewVerifier([]byte(sseTestSigningKey), sseTestIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -38,7 +38,7 @@ func sseTestToken(t *testing.T, aid string) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue(aid, []string{"cluster-admin"}, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", aid, []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -60,6 +60,7 @@ type allowAllRBAC struct{}
 
 func (allowAllRBAC) Check(_, _, _ string, _ map[string]string) error { return nil }
 func (allowAllRBAC) IsRevoked(string) bool                           { return false }
+func (allowAllRBAC) IsJWTRevoked(string) bool                        { return false }
 
 func sseTestServer(t *testing.T, bus *applybus.EventBus) *httptest.Server {
 	t.Helper()
@@ -247,6 +248,8 @@ func (f fakeRBAC) Check(aid, resource, action string, ctx map[string]string) err
 }
 
 func (fakeRBAC) IsRevoked(string) bool { return false }
+
+func (fakeRBAC) IsJWTRevoked(string) bool { return false }
 
 func ptr(s string) *string { return &s }
 

@@ -61,8 +61,10 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 	// duration fields.
 	if c.Auth != nil && c.Auth.JWT != nil {
 		out = append(out, checkDuration(root, "$.auth.jwt.ttl_default", c.Auth.JWT.TTLDefault)...)
+		out = append(out, checkDuration(root, "$.auth.jwt.ttl_max", c.Auth.JWT.TTLMax)...)
 		out = append(out, checkDuration(root, "$.auth.jwt.ttl_bootstrap", c.Auth.JWT.TTLBootstrap)...)
 		out = append(out, checkDuration(root, "$.auth.jwt.exchange_ttl", c.Auth.JWT.ExchangeTTL)...)
+		out = append(out, checkTTLMaxNotBelowDefault(root, c.Auth.JWT)...)
 	}
 	if c.PluginRuntime != nil {
 		out = append(out, checkDuration(root, "$.plugin_runtime.startup_timeout", c.PluginRuntime.StartupTimeout)...)
@@ -452,6 +454,32 @@ func checkVaultRef(root *ast.MappingNode, yamlPath, val string) []diag.Diagnosti
 		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
 		Code:    "vault_ref_invalid_format",
 		Message: vaultRefMessage(fieldFromYAMLPath(yamlPath), vaultRefFormPath),
+	})}
+}
+
+// checkTTLMaxNotBelowDefault refuses an explicit auth.jwt.ttl_max below
+// ttl_default — the same refusal `keeper run` makes at startup, so a config
+// check does not pass a file the daemon will not start on (NIM-1045). An unset
+// ttl_max is never below: it follows ttl_default up.
+func checkTTLMaxNotBelowDefault(root *ast.MappingNode, j *KeeperAuthJWT) []diag.Diagnostic {
+	if j.TTLMax == "" {
+		return nil
+	}
+	ttlMax, errMax := ParseDuration(j.TTLMax)
+	ttlDefault, errDef := 24*time.Hour, error(nil)
+	defaultText := "24h (the default)"
+	if j.TTLDefault != "" {
+		ttlDefault, errDef = ParseDuration(j.TTLDefault)
+		defaultText = j.TTLDefault
+	}
+	if errMax != nil || errDef != nil || ttlMax >= ttlDefault {
+		return nil
+	}
+	return []diag.Diagnostic{atPath(root, "$.auth.jwt.ttl_max", diag.Diagnostic{
+		Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+		Code:    "ttl_max_below_ttl_default",
+		Message: fmt.Sprintf("auth.jwt.ttl_max %s is below auth.jwt.ttl_default %s", j.TTLMax, defaultText),
+		Hint:    "raise ttl_max to at least ttl_default, or drop it to follow ttl_default",
 	})}
 }
 

@@ -128,7 +128,15 @@ func toOperatorCreateInput(b OperatorCreateRequest) handlers.OperatorCreateInput
 		AID:         b.AID,
 		DisplayName: b.DisplayName,
 		Roles:       b.Roles,
+		TTL:         b.TTL,
+		Label:       b.Label,
 	}
+}
+
+// toOperatorIssueTokenInput projects the optional POST /v1/operators/{aid}/issue-token
+// body onto the handler input.
+func toOperatorIssueTokenInput(b OperatorIssueTokenRequest) handlers.OperatorIssueTokenInput {
+	return handlers.OperatorIssueTokenInput{TTL: b.TTL, Label: b.Label}
 }
 
 // toProvisioningPolicyUpdateInput projects the PUT /v1/provisioning-policy body

@@ -29,6 +29,10 @@ import (
 // (RegisteredClaims), so middleware consumers do not depend on the internal
 // representation or accidentally read unvalidated fields.
 type Claims struct {
+	// ID is `jti` — the `operator_jwts` row. Empty for a token minted before
+	// per-token accounting existed: it verifies until `exp` but cannot be
+	// revoked on its own.
+	ID               string
 	Subject          string // sub → AID
 	Issuer           string // iss
 	Roles            []string
@@ -112,6 +116,27 @@ var ErrClockSkew = errors.New("jwt: token issued in the future")
 // on the Verifier.
 var ErrInvalidIssuer = errors.New("jwt: invalid issuer")
 
+// ErrRevokedJWT means the token is valid by signature and lifetime, but its
+// `jti` has been revoked (`operator_jwts.revoked_at`, ADR-014 amendment
+// NIM-1045). A separate sentinel so the transport can answer `jwt-revoked`:
+// the holder must get a new token, while the operator itself is still valid.
+var ErrRevokedJWT = errors.New("jwt: token revoked")
+
+// RevocationSource answers whether a token id has been revoked. In `keeper run`
+// it is the RBAC snapshot holder, so the answer is a map lookup refreshed by
+// `rbac:invalidate`, never a query per request.
+type RevocationSource interface {
+	IsJWTRevoked(id string) bool
+}
+
+type noRevocation struct{}
+
+func (noRevocation) IsJWTRevoked(string) bool { return false }
+
+// NoRevocation revokes nothing. For tests and for tools that verify a token
+// outside a running Keeper; `keeper run` passes the RBAC holder.
+var NoRevocation RevocationSource = noRevocation{}
+
 // publicDetail* are fixed strings returned by [ClassifyVerifyErr] in the HTTP
 // response. Do not format with err.Error(): golang-jwt/v5 internal messages
 // (for example, the parser path) are unnecessary oracle-attack surface via
@@ -123,7 +148,8 @@ const (
 	// publicDetailClockSkew names a cause the caller cannot act on by retrying
 	// and the operator can fix in one place. It reveals nothing: the caller
 	// supplied the `iat` this is measured against.
-	publicDetailClockSkew = "token issued in the future"
+	publicDetailClockSkew  = "token issued in the future"
+	publicDetailRevokedJWT = "token revoked"
 )
 
 // ClassifyVerifyErr returns a public-safe detail string for an HTTP 401
@@ -147,6 +173,8 @@ func ClassifyVerifyErr(err error) string {
 		return publicDetailClockSkew
 	case errors.Is(err, ErrInvalidIssuer):
 		return publicDetailInvalidIssuer
+	case errors.Is(err, ErrRevokedJWT):
+		return publicDetailRevokedJWT
 	default:
 		// ErrInvalidToken + any unwrapped error -> one generic detail.
 		return publicDetailInvalidToken
@@ -158,26 +186,35 @@ func ClassifyVerifyErr(err error) string {
 type Verifier struct {
 	signingKey []byte
 	issuer     string
+	revoked    RevocationSource
 }
 
 // NewVerifier creates a verifier. signingKey must be >= 32 bytes (the HS256
 // requirement in RFC 7518 section 3.2), and issuer must be a non-empty string
 // for the pin.
-func NewVerifier(signingKey []byte, issuer string) (*Verifier, error) {
+//
+// revoked is required rather than optional: every caller of Verify — the /v1
+// chain, both MCP doors, the cookie exchange — gets per-token revocation from
+// this one place, and a verifier built without it would let a revoked token in
+// through whichever door used it. Pass [NoRevocation] to opt out explicitly.
+func NewVerifier(signingKey []byte, issuer string, revoked RevocationSource) (*Verifier, error) {
 	if len(signingKey) < minSigningKeyBytes {
 		return nil, fmt.Errorf("jwt: signing key length %d < %d (HS256 minimum)", len(signingKey), minSigningKeyBytes)
 	}
 	if issuer == "" {
 		return nil, errors.New("jwt: issuer is empty")
 	}
-	return &Verifier{signingKey: signingKey, issuer: issuer}, nil
+	if revoked == nil {
+		return nil, errors.New("jwt: revocation source is nil (pass jwt.NoRevocation to opt out)")
+	}
+	return &Verifier{signingKey: signingKey, issuer: issuer, revoked: revoked}, nil
 }
 
 // Verify parses and validates tokenString. It returns extracted claims or one
-// of four sentinel errors ([ErrInvalidToken], [ErrExpiredToken],
-// [ErrClockSkew], [ErrInvalidIssuer]) for predictable HTTP 401 mapping. Adding
-// a fifth means extending [ClassifyVerifyErr] in the same change — see the
-// contract on the publicDetail constants.
+// of five sentinel errors ([ErrInvalidToken], [ErrExpiredToken],
+// [ErrClockSkew], [ErrInvalidIssuer], [ErrRevokedJWT]) for predictable HTTP
+// 401 mapping. Adding a sixth means extending [ClassifyVerifyErr] in the same
+// change — see the contract on the publicDetail constants.
 //
 // Checks:
 //
@@ -188,7 +225,10 @@ func NewVerifier(signingKey []byte, issuer string) (*Verifier, error) {
 //     explicit re-check that [clockSkewLeeway] does not soften it);
 //   - `iat` no further ahead than [clockSkewLeeway], else [ErrClockSkew];
 //   - non-empty `sub` (otherwise the token is useless: there is nobody to
-//     attribute actions to).
+//     attribute actions to);
+//   - `jti` not revoked, else [ErrRevokedJWT]. Asked last, after the token is
+//     known to be ours and alive, so a revoked answer discloses nothing to a
+//     caller who did not already hold a valid token.
 func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 	if tokenString == "" {
 		return nil, ErrInvalidToken
@@ -264,8 +304,12 @@ func (v *Verifier) Verify(tokenString string) (*Claims, error) {
 	if time.Now().After(claims.ExpiresAt.Time) {
 		return nil, ErrExpiredToken
 	}
+	if claims.ID != "" && v.revoked.IsJWTRevoked(claims.ID) {
+		return nil, ErrRevokedJWT
+	}
 
 	return &Claims{
+		ID:               claims.ID,
 		Subject:          claims.Subject,
 		Issuer:           claims.Issuer,
 		Roles:            claims.Roles,

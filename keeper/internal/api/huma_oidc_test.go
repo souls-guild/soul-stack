@@ -56,7 +56,7 @@ func TestOIDCLogin_RedirectsToIdP(t *testing.T) {
 		RedirectTo: "https://idp.example.com/authorize?state=abc&code_challenge=xyz",
 		State:      "abc",
 	}}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Sessions: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/login")
 	if rec.Code != http.StatusFound {
@@ -77,7 +77,7 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	d := &OIDCAuthDeps{
 		Authenticator: authn,
 		Mapper:        stubMapper{mapped: auth.MappedOperator{AID: "alice", Roles: []string{"cluster-admin"}, Provisioned: true}},
-		Issuer:        issuer,
+		Sessions:      issuer,
 		TTL:           time.Hour,
 		Audit:         aw,
 	}
@@ -128,7 +128,7 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 // TestOIDCCallback_AuthFailedIs401 — CompleteLogin ErrAuthFailed → 401, no cookie.
 func TestOIDCCallback_AuthFailedIs401(t *testing.T) {
 	authn := &stubOIDCAuthenticator{completeErr: auth.ErrAuthFailed}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Sessions: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
 	if rec.Code != http.StatusUnauthorized {
@@ -144,7 +144,7 @@ func TestOIDCCallback_AuthFailedIs401(t *testing.T) {
 //nolint:dupl // parity with the sibling ProvisioningDisabled case
 func TestOIDCCallback_NoRoleMappingIs403(t *testing.T) {
 	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "bob"}}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrNoRoleMapping}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrNoRoleMapping}, Sessions: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
 	if rec.Code != http.StatusForbidden {
@@ -161,7 +161,7 @@ func TestOIDCCallback_NoRoleMappingIs403(t *testing.T) {
 func TestOIDCCallback_RevokedIs401(t *testing.T) {
 	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "carol"}}
 	issuer := &loginStubIssuer{token: "x"}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrOperatorRevoked}, Issuer: issuer, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrOperatorRevoked}, Sessions: issuer, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
 	if rec.Code != http.StatusUnauthorized {
@@ -183,7 +183,7 @@ func TestOIDCCallback_RevokedIs401(t *testing.T) {
 // 403 (provisioning_allowed_methods policy without oidc; reuses the policy gate).
 func TestOIDCCallback_ProvisioningDisabledIs403(t *testing.T) {
 	authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "newbie"}}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrProvisioningDisabled}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{err: auth.ErrProvisioningDisabled}, Sessions: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?code=c&state=s")
 	if rec.Code != http.StatusForbidden {
@@ -195,7 +195,7 @@ func TestOIDCCallback_ProvisioningDisabledIs403(t *testing.T) {
 // CompleteLogin is not even called.
 func TestOIDCCallback_IdPError(t *testing.T) {
 	authn := &stubOIDCAuthenticator{}
-	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Issuer: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
+	d := &OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Sessions: &loginStubIssuer{}, TTL: time.Hour, Audit: &authTestAudit{}}
 
 	rec := doGet(mountOIDC(d), "/auth/oidc/callback?error=access_denied&state=s")
 	if rec.Code != http.StatusUnauthorized {

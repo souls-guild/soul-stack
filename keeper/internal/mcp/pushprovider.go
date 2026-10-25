@@ -122,7 +122,7 @@ func (h *Handler) callPushProviderCreate(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "create push provider failed")
 	}
 
-	h.writeAudit(audit.EventPushProviderCreated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventPushProviderCreated, claims.Subject, map[string]any{
 		"id":          p.ID,
 		"label":       p.Label,
 		"params_keys": paramKeysSortedMCP(p.Params),
@@ -176,7 +176,7 @@ func (h *Handler) callPushProviderUpdate(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "update push provider failed")
 	}
 
-	h.writeAudit(audit.EventPushProviderUpdated, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventPushProviderUpdated, claims.Subject, map[string]any{
 		"id":          p.ID,
 		"params_keys": paramKeysSortedMCP(p.Params),
 	})
@@ -221,7 +221,7 @@ func (h *Handler) callPushProviderDelete(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "delete push provider failed")
 	}
 
-	h.writeAudit(audit.EventPushProviderDeleted, claims.Subject, map[string]any{"id": a.ID})
+	h.writeAudit(ctx, audit.EventPushProviderDeleted, claims.Subject, map[string]any{"id": a.ID})
 	return h.toolResult(req.ID, struct{}{})
 }
 

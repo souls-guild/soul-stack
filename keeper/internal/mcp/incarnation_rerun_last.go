@@ -151,7 +151,7 @@ func (h *Handler) callIncarnationRerunLast(ctx context.Context, claims *jwt.Clai
 		return h.toolError(req.ID, toolName, mcpCodeInternalError, "start scenario "+res.Scenario+" failed")
 	}
 
-	h.writeAuditCorrelated(audit.EventIncarnationRerunLast, claims.Subject, applyID, map[string]any{
+	h.writeAuditCorrelated(ctx, audit.EventIncarnationRerunLast, claims.Subject, applyID, map[string]any{
 		"id":              a.ID,
 		"reason":          a.Reason,
 		"scenario":        res.Scenario,

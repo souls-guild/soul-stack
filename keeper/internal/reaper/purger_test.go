@@ -1017,3 +1017,22 @@ func TestDurationToPGInterval(t *testing.T) {
 		})
 	}
 }
+
+func TestPurger_PurgeOperatorJWTs_PassesArgs(t *testing.T) {
+	fq := &fakeQueryRower{row: &fakeRow{count: 4}}
+	p := newPurgerFromQueryRower(fq)
+
+	got, err := p.PurgeOperatorJWTs(context.Background(), 30*24*time.Hour, 100)
+	if err != nil {
+		t.Fatalf("PurgeOperatorJWTs: %v", err)
+	}
+	if got != 4 {
+		t.Errorf("count = %d, want 4", got)
+	}
+	if !strings.Contains(fq.lastSQL, "purge_operator_jwts") {
+		t.Errorf("SQL missing purge_operator_jwts: %q", fq.lastSQL)
+	}
+	if fq.args[0] != "2592000 seconds" { // 30 * 24 * 3600
+		t.Errorf("args[0] interval = %v, want \"2592000 seconds\"", fq.args[0])
+	}
+}

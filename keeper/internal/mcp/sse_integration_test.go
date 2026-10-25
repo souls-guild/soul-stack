@@ -71,7 +71,7 @@ func seedApplyRunForSSE(t *testing.T, applyID, ownerAID string) {
 // without the gRPC wrapping — a separate integration-scenario slice).
 func startMCPServerWithBus(t *testing.T) (baseURL string, bus *applybus.EventBus, shutdown func()) {
 	t.Helper()
-	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

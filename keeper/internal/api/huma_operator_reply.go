@@ -35,7 +35,9 @@ type OperatorCreateReply struct {
 	CreatedAt    time.Time `json:"created_at"`
 	CreatedByAID string    `json:"created_by_aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	DisplayName  string    `json:"display_name"`
+	ExpiresAt    time.Time `json:"expires_at"`
 	JWT          string    `json:"jwt"`
+	JWTID        string    `json:"jwt_id"`
 	Roles        *[]string `json:"roles,omitempty"`
 }
 
@@ -64,4 +66,26 @@ type IssueTokenReply struct {
 	AID       string    `json:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 	ExpiresAt time.Time `json:"expires_at"`
 	JWT       string    `json:"jwt"`
+	JWTID     string    `json:"jwt_id"`
+}
+
+// OperatorJWT — one accounted token in GET /v1/operators/{aid}/jwts (ADR-014
+// amendment NIM-1045). Carries no token. The *_ip / *_user_agent fields are
+// what the minting / last using request said about itself: untrusted, and
+// behind an L7 proxy the IP is the proxy's.
+type OperatorJWT struct {
+	AID               string     `json:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedAt         time.Time  `json:"created_at"`
+	CreatedByAID      *string    `json:"created_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
+	CreatedIP         string     `json:"created_ip,omitempty"`
+	CreatedUserAgent  string     `json:"created_user_agent,omitempty"`
+	ExpiresAt         time.Time  `json:"expires_at"`
+	JWTID             string     `json:"jwt_id"`
+	Kind              string     `json:"kind" enum:"bootstrap,issued,session"`
+	Label             string     `json:"label,omitempty"`
+	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
+	LastUsedIP        string     `json:"last_used_ip,omitempty"`
+	LastUsedUserAgent string     `json:"last_used_user_agent,omitempty"`
+	RevokedAt         *time.Time `json:"revoked_at,omitempty"`
+	RevokedByAID      *string    `json:"revoked_by_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$"` // ← operator.AIDPattern
 }

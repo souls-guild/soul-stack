@@ -79,6 +79,10 @@ func (f *fakePurger) PurgeUsedTokens(_ context.Context, maxAge time.Duration, ba
 	return f.record("purge_used_tokens", maxAge, batchSize, nil)
 }
 
+func (f *fakePurger) PurgeOperatorJWTs(_ context.Context, maxAge time.Duration, batchSize int) (int64, error) {
+	return f.record("purge_operator_jwts", maxAge, batchSize, nil)
+}
+
 func (f *fakePurger) PurgeSouls(_ context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error) {
 	return f.record("purge_souls", maxAge, batchSize, statuses)
 }
@@ -653,6 +657,9 @@ reaper:
       enabled: true
       max_age: 90d
       action: delete
+    purge_operator_jwts:
+      enabled: true
+      action: delete
     purge_souls:
       enabled: true
       statuses: [disconnected, expired]
@@ -715,11 +722,12 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 	done := make(chan error, 1)
 	go func() { done <- rn.Run(ctx) }()
 
-	// Wait until each of the 14 rules has been called at least once.
+	// Wait until each of the 15 rules has been called at least once.
 	want := []string{
 		"purge_audit_old",
 		"expire_pending_seeds",
 		"purge_used_tokens",
+		"purge_operator_jwts",
 		"purge_souls",
 		"purge_old_seeds",
 		"mark_disconnected",
@@ -757,6 +765,7 @@ func TestRunner_DispatchesAllReaperRules(t *testing.T) {
 		wantArchiveMaxAge  = 365 * 24 * time.Hour // defaultPurgeArchiveMaxAge
 	)
 	maxAgeWant := map[string]time.Duration{
+		"purge_operator_jwts":          30 * 24 * time.Hour, // defaultPurgeOperatorJWTsMaxAge (NIM-1045)
 		"purge_push_runs":              wantPushRunsMaxAge,
 		"purge_incarnation_archive":    wantArchiveMaxAge,
 		"purge_state_history_archive":  wantArchiveMaxAge,

@@ -137,12 +137,33 @@ const (
 	tempoBucketVoyagePreview = "voyage_preview"
 )
 
+// routerExtras — buildRouter inputs added after its positional list grew past
+// fifty; tests that predate them build the router without and get the zero value.
+type routerExtras struct {
+	jwtUse apimiddleware.JWTUseRecorder
+}
+
+type routerOption func(*routerExtras)
+
+// withJWTUse records token use on every authenticated /v1 request (ADR-014
+// amendment NIM-1045, `operator_jwts.last_used_*`).
+func withJWTUse(rec apimiddleware.JWTUseRecorder) routerOption {
+	return func(x *routerExtras) { x.jwtUse = rec }
+}
+
 // Health/meta live outside `/v1/*` per operator-api.md § Health / Meta.
 // chi.NotFound and chi.MethodNotAllowed are replaced with problem+json
 // handlers, so 404/405 do not come back in stdlib's text/plain default
 // format.
-func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, settingsH *handlers.SettingsHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, consoleDeps *consoleWSDeps, consoleRecordingH *handlers.ConsoleRecordingHandler, logger *slog.Logger) http.Handler {
+func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.OperatorHandler, incH *handlers.IncarnationHandler, soulH *handlers.SoulHandler, telemetryH *handlers.TelemetryHandler, roleH *handlers.RoleHandler, synodH *handlers.SynodHandler, sigilH *handlers.SigilHandler, sigilKeyH *handlers.SigilKeyHandler, serviceH *handlers.ServiceHandler, provisioningPolicyH *handlers.ProvisioningPolicyHandler, settingsH *handlers.SettingsHandler, augurH *handlers.AugurHandler, oracleH *handlers.OracleHandler, pushH *handlers.PushHandler, pushProviderH *handlers.PushProviderHandler, errandH *handlers.ErrandHandler, voyageH *handlers.VoyageHandler, cadenceH *handlers.CadenceHandler, auditH *handlers.AuditHandler, choirH *handlers.ChoirHandler, heraldH *handlers.HeraldHandler, moduleCatalogH *handlers.ModuleCatalogHandler, moduleFormPrepH *handlers.ModuleFormPrepHandler, permCatalogH *handlers.PermissionCatalogHandler, eventTypeCatalogH *handlers.EventTypeCatalogHandler, heraldTypeCatalogH *handlers.HeraldTypeCatalogHandler, meH *handlers.MyPermissionsHandler, enforcer RBACProvider, auditWriter audit.Writer, metricsHTTP *obs.HTTPMetrics, tollDegraded toll.DegradedReader, tempoLimiter apimiddleware.RateLimiter, tempoMetrics apimiddleware.RateLimitMetrics, tempoVoyageCreateLimits func() apimiddleware.RateLimitLimits, tempoVoyagePreviewLimits func() apimiddleware.RateLimitLimits, webUIEnabled bool, ldapAuth *LDAPAuthDeps, oidcAuth *OIDCAuthDeps, authToken *AuthTokenDeps, authMethods AuthMethodsDeps, loginGuard apimiddleware.LoginGuard, loginLimitCfg apimiddleware.AuthLoginLimitConfig, soulStatsStaleFn func() time.Duration, clusterH *handlers.ClusterHandler, runEventsDeps *runEventsDeps, consoleDeps *consoleWSDeps, consoleRecordingH *handlers.ConsoleRecordingHandler, logger *slog.Logger, opts ...routerOption) http.Handler {
+	var extras routerExtras
+	for _, o := range opts {
+		o(&extras)
+	}
 	r := chi.NewRouter()
+	// Who sent a request, for the token a handler may mint from it (huma
+	// handlers have no *http.Request). Global: /auth mints session tokens too.
+	r.Use(apimiddleware.WithClientMeta)
 
 	// huma error-override (ADR-054, FULL-TYPED): global huma.NewError →
 	// our problem+json. The SINGLE install POINT is here, at router assembly (not in
@@ -289,6 +310,7 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// carry the reason, so those routes answered 403 "lacks permission" —
 		// the wrong state, and the one a client cannot act on. See RejectRevoked.
 		r.Use(apimiddleware.RejectRevoked(enforcer))
+		r.Use(apimiddleware.RecordJWTUse(extras.jwtUse))
 
 		// FULL-TYPED huma (ADR-054, ROLLOUT BATCH 2a of the entire operator domain over 5
 		// references): create/revoke/issue-token — WRITE+AUDIT variant B (huma-audit-
@@ -336,6 +358,20 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 				apimiddleware.RequirePermission(enforcer, "operator", "issue-token", apimiddleware.NoSelector),
 			).Group(func(r chi.Router) {
 				registerHumaOperatorIssueToken(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorTokenIssued, logger), opH)
+			})
+
+			// Per-token accounting (ADR-014 amendment NIM-1045). Listing reads under
+			// the operators' read right; revoking one token is its own right,
+			// separate from revoking the operator.
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "operator", "list", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaOperatorJWTList(newHumaCadenceAPI(r), opH)
+			})
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "operator", "jwt-revoke", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaOperatorJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
 			})
 		})
 

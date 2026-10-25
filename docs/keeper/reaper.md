@@ -53,6 +53,11 @@ reaper:
       max_age: 90d      # burned/expired bootstrap tokens — delete (audit is kept separately)
       action: delete
 
+    purge_operator_jwts:
+      enabled: true
+      max_age: 30d      # operator_jwts rows expired over a month ago (NIM-1045)
+      action: delete
+
     purge_souls:
       enabled: true
       statuses: [disconnected, expired]
@@ -197,6 +202,7 @@ The allowed values of `statuses` and `target_status` are **not normalized in thi
 |---|---|---|---|---|
 | `expire_pending_seeds` | `bootstrap_tokens` (see [storage.md](storage.md), [`../soul/identity.md`](../soul/identity.md)) | `delete` | `max_age` (+ `enabled`, `statuses` opt.) | Deletes unused (`used_at IS NULL`) bootstrap tokens with an expired `expires_at` — older than `max_age` beyond the expiry moment (default 24h). An expired pending token cannot be used (`Burn` rejects it), there is no point keeping it further; the long-term audit of creation lives in `audit_log`. `bootstrap_tokens` has no `status` column, so historically `action: expire` (marking `expired`) is not applicable on this table — the rule's actual semantics is `delete`. |
 | `purge_used_tokens` | `bootstrap_tokens` | `delete` | `max_age` (+ `enabled`, `statuses` opt.) | Deletes burned / expired tokens older than `max_age`. The long-term audit is kept separately. |
+| `purge_operator_jwts` | `operator_jwts` | `delete` | `max_age` (default `30d`, floored at `1h`; + `enabled`) | Deletes per-token accounting rows whose token expired more than `max_age` ago (NIM-1045). A `max_age` below one hour is raised to it by the SQL function: the RBAC snapshot keeps a revoked id five minutes past its expiry for clock skew, and a row purged inside that window would un-revoke its token on a lagging instance. A revoked row goes on the same clock: once its token has expired there is nothing left to refuse. The token's actions stay in `audit_log` under its own retention. |
 | `purge_souls` | `souls` | `delete` | `max_age`, `statuses` (+ `enabled` opt.) | Deletes Soul records in `disconnected` / `expired` older than `max_age` (default 30d). |
 | `purge_old_seeds` | `soul_seeds` | `delete` | `max_age`, `statuses` (+ `enabled` opt.) | Deletes certificate history in `superseded` / `expired` / `revoked` older than `max_age` (default 90d). |
 | `mark_disconnected` | `souls` | `set_status` | `stale_after`, `target_status` (+ `enabled`, `statuses` opt.) | **A bidirectional lease-aware reconcile** of the `souls.status` snapshot ([ADR-006(a)](../adr/0006-cache-redis.md)). (1) `connected` → `disconnected`: `last_seen_at` older than `stale_after` (default 90s) **and** no live Redis SID-lease. (2) `disconnected` → `connected`: a live SID-lease (the Soul is really online — a reconnect grabbed the lease, but the snapshot stayed `disconnected`). Each direction is two-phase: select PG candidates, verify against the lease `soul:<sid>:lock`, mark. Thus an idle Soul (PG `last_seen_at` stale, but the stream is alive) is not falsely marked disconnected, **and** the snapshot is not latched into `disconnected` after the first "break+sweep" (a reconnect fixes the snapshot via reconcile, since eventstream presence is not written to PG, and a Bootstrap-RPC of an already-onboarded Soul does not fire). Without configured Redis (single-instance dev) — a fallback to the pure-SQL **one-directional** `mark_disconnected` (migration 014), where a stale `last_seen_at` ⇔ no stream by construction (one instance), and there is no latch. |
@@ -281,7 +287,7 @@ Registered in Keeper's Prometheus registry only when `reaper.enabled: true` (if 
 | `keeper_reaper_dispatch_errors_total` | counter | `rule` | The number of dispatch errors (the Purger returned an error, PG/Redis unavailable, etc.). On a trigger `executions_total{rule}` is also incremented, `purged_total{rule}` — not. |
 | `keeper_reaper_lease_held` | gauge | — | `1` if this instance holds the Redis lease `reaper:leader`, otherwise `0`. One gauge per keeper instance. Cluster-wide invariant: `sum(keeper_reaper_lease_held) == 1`. |
 
-`rule` — the canonical rule name from the [Rules](#rules) table above (`expire_pending_seeds` / `purge_used_tokens` / `purge_souls` / `purge_old_seeds` / `mark_disconnected` / `purge_audit_old` / `purge_apply_runs` / `purge_voyages` / `purge_push_runs` / `purge_incarnation_archive` / `purge_state_history_archive` / `purge_archived_state_history` / `purge_apply_task_register` / `reclaim_apply_runs` / `reclaim_voyages` / `reconcile_orphan_applying` / `reap_orphan_vault_keys` / `archive_state_history` / `purge_old_errands` / `purge_old_console_recordings` / `purge_orphan_ephemeral_tidings`). Extension of the closed enum — via propose-and-wait together with a new `keeper.yml::reaper.rules.<name>`.
+`rule` — the canonical rule name from the [Rules](#rules) table above (`expire_pending_seeds` / `purge_used_tokens` / `purge_operator_jwts` / `purge_souls` / `purge_old_seeds` / `mark_disconnected` / `purge_audit_old` / `purge_apply_runs` / `purge_voyages` / `purge_push_runs` / `purge_incarnation_archive` / `purge_state_history_archive` / `purge_archived_state_history` / `purge_apply_task_register` / `reclaim_apply_runs` / `reclaim_voyages` / `reconcile_orphan_applying` / `reap_orphan_vault_keys` / `archive_state_history` / `purge_old_errands` / `purge_old_console_recordings` / `purge_orphan_ephemeral_tidings`). Extension of the closed enum — via propose-and-wait together with a new `keeper.yml::reaper.rules.<name>`.
 
 ## See also
 

@@ -40,6 +40,9 @@ type ServerDeps struct {
 	ApplyAccess applyAccessStore
 	RBAC        ServerRBAC
 	Logger      *slog.Logger
+	// JWTUse records `operator_jwts.last_used_*` for tokens presented here, as
+	// the /v1 chain does (ADR-014 amendment NIM-1045). nil → not recorded.
+	JWTUse middleware.JWTUseRecorder
 }
 
 // ServerRBAC — the RBAC surface this listener needs: the scope-aware check that
@@ -124,7 +127,7 @@ func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) 
 	}
 
 	mux := http.NewServeMux()
-	mux.HandleFunc("/mcp", buildMCPHandler(deps))
+	mux.Handle("/mcp", middleware.WithClientMeta(buildMCPHandler(deps)))
 	mux.HandleFunc("/mcp/events", buildSSEHandler(sseDeps{
 		JWTVerifier: deps.JWTVerifier,
 		Bus:         deps.Bus,
@@ -132,6 +135,7 @@ func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) 
 		RBAC:        deps.RBAC,
 		Limiter:     newSSEConnLimiter(sseMaxConnsGlobal, sseMaxConnsPerAID),
 		Logger:      deps.Logger,
+		JWTUse:      deps.JWTUse,
 	}))
 	mux.HandleFunc("/", buildNotFoundHandler())
 
@@ -248,6 +252,9 @@ func buildMCPHandler(deps ServerDeps) http.HandlerFunc {
 				jwt.ClassifyVerifyErr(err),
 				mcpToolError{Code: mcpCodeUnauthenticated})
 			return
+		}
+		if deps.JWTUse != nil && claims.ID != "" {
+			deps.JWTUse.RecordUse(claims.ID, middleware.PeerIP(r), r.UserAgent())
 		}
 
 		// Parse body as a JSON-RPC request. Batch requests (array) are out

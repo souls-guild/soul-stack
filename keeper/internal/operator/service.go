@@ -13,6 +13,7 @@ import (
 	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
+	"github.com/souls-guild/soul-stack/shared/config"
 )
 
 // ErrWouldLockOutCluster — attempt to revoke last active
@@ -23,6 +24,14 @@ import (
 // active wildcard `*`-permission".
 var ErrWouldLockOutCluster = errors.New("operator: would lock out cluster (target is the last active cluster-admin)")
 
+// MinJWTTTL is the shortest lifetime a caller may ask for. Below it a token
+// expires before a client can reasonably use it; asking for that is a mistake.
+const MinJWTTTL = time.Minute
+
+// ErrInvalidTTL — a requested token lifetime is below [MinJWTTTL] or above
+// `auth.jwt.ttl_max`.
+var ErrInvalidTTL = errors.New("operator: invalid ttl")
+
 // ServiceDeps — dependencies of [Service]. All fields immutable after constructor.
 //
 // Pool — narrow ExecQueryRower + BeginTx (for atomic Revoke).
@@ -30,12 +39,14 @@ var ErrWouldLockOutCluster = errors.New("operator: would lock out cluster (targe
 // RBAC — read-only interface for RolesOf (token issuance with current roles
 // from RBAC DB snapshot, ADR-028). Lockout-probe for Revoke does NOT depend on ClusterAdmins() snapshot
 // (Slice 3): admin-set taken from DB under FOR UPDATE (rbac.LockEffectiveClusterAdmins).
-// TTLDefault — TTL of JWTs issued by Create/IssueToken.
+// TTLDefault — TTL of JWTs issued by Create/IssueToken when the caller asks for none.
+// TTLMax — the longest TTL a caller may ask for (`auth.jwt.ttl_max`); 0 → TTLDefault.
 type ServiceDeps struct {
 	Pool       ServicePool
 	Issuer     JWTIssuer
 	RBAC       RBACSource
 	TTLDefault time.Duration
+	TTLMax     time.Duration
 	Logger     *slog.Logger
 }
 
@@ -44,13 +55,6 @@ type ServiceDeps struct {
 type ServicePool interface {
 	ExecQueryRower
 	BeginTx(ctx context.Context, opts pgx.TxOptions) (pgx.Tx, error)
-}
-
-// JWTIssuer — narrow interface over `*keeper/internal/jwt.Issuer`,
-// needed by service. Matches HTTP-handler interface (handlers.JWTIssuer);
-// declared here so service doesn't depend on handlers package.
-type JWTIssuer interface {
-	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
 }
 
 // RBACSource — read-only interface over RBAC enforcer. Implemented by both
@@ -91,6 +95,7 @@ type Service struct {
 	issuer     JWTIssuer
 	rbac       RBACSource
 	ttlDefault time.Duration
+	ttlMax     time.Duration
 	logger     *slog.Logger
 
 	// inv — optional cluster-wide invalidator (ADR-014 Amendment
@@ -118,13 +123,56 @@ func NewService(d ServiceDeps) (*Service, error) {
 	if d.TTLDefault <= 0 {
 		return nil, errors.New("operator: ServiceDeps.TTLDefault must be positive")
 	}
+	ttlMax := d.TTLMax
+	if ttlMax == 0 {
+		ttlMax = d.TTLDefault
+	}
+	if ttlMax < d.TTLDefault {
+		return nil, fmt.Errorf("operator: ServiceDeps.TTLMax %s is below TTLDefault %s", ttlMax, d.TTLDefault)
+	}
 	return &Service{
 		pool:       d.Pool,
 		issuer:     d.Issuer,
 		rbac:       d.RBAC,
 		ttlDefault: d.TTLDefault,
+		ttlMax:     ttlMax,
 		logger:     d.Logger,
 	}, nil
+}
+
+// TTLMax is the longest lifetime [Service.Create] and [Service.IssueToken] accept.
+func (s *Service) TTLMax() time.Duration { return s.ttlMax }
+
+// ParseTTL reads a requested lifetime as the API carries it, in the same
+// `duration` convention as keeper.yml: a Go duration ("2160h") or whole days
+// ("90d"); "" → 0, which means `auth.jwt.ttl_default`. The range is checked by
+// the service, against the configured ceiling.
+func ParseTTL(raw string) (time.Duration, error) {
+	if raw == "" {
+		return 0, nil
+	}
+	d, err := config.ParseDuration(raw)
+	if err != nil {
+		return 0, fmt.Errorf("%w: %q is not a duration (e.g. \"2160h\" or \"90d\")", ErrInvalidTTL, raw)
+	}
+	if d <= 0 {
+		return 0, fmt.Errorf("%w: %q must be positive", ErrInvalidTTL, raw)
+	}
+	return d, nil
+}
+
+// resolveTTL turns a requested lifetime into the one to mint: 0 → the default,
+// otherwise within [MinJWTTTL, ttlMax].
+func (s *Service) resolveTTL(requested time.Duration) (time.Duration, error) {
+	switch {
+	case requested == 0:
+		return s.ttlDefault, nil
+	case requested < MinJWTTTL:
+		return 0, fmt.Errorf("%w: %s is below the minimum %s", ErrInvalidTTL, requested, MinJWTTTL)
+	case requested > s.ttlMax:
+		return 0, fmt.Errorf("%w: %s is above auth.jwt.ttl_max %s", ErrInvalidTTL, requested, s.ttlMax)
+	}
+	return requested, nil
 }
 
 // SetInvalidator late-binds cluster-wide invalidator (ADR-014
@@ -164,6 +212,10 @@ type CreateInput struct {
 	DisplayName string
 	CallerAID   string
 	Roles       []string
+	// TTL of the token returned with the new operator; 0 → `auth.jwt.ttl_default`.
+	TTL    time.Duration
+	Label  string
+	Client ClientMeta
 }
 
 // CreateResult — result of Create. JWT and ExpiresAt — issued token returned
@@ -182,6 +234,7 @@ type CreateResult struct {
 	CreatedByAID string
 	GrantedRoles []string
 	JWT          string
+	JWTID        string
 	ExpiresAt    time.Time
 }
 
@@ -212,6 +265,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		if !rbac.ValidRoleName(r) {
 			return nil, fmt.Errorf("operator: invalid role name %q (must match %s)", r, rbac.RoleNamePattern)
 		}
+	}
+	// The token's terms are checked before the INSERT: a bad ttl or label must
+	// refuse the whole call, not leave an operator behind with no token.
+	ttl, err := s.resolveTTL(in.TTL)
+	if err != nil {
+		return nil, err
+	}
+	if !ValidJWTLabel(in.Label) {
+		return nil, ErrInvalidJWTLabel
 	}
 
 	displayName := in.DisplayName
@@ -250,8 +312,15 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	// effort; token carries roles only for information anyway, authz
 	// checked against fresh DB snapshot on each request — ADR-028).
 	roles := s.rbac.RolesOf(in.AID)
-	expiresAt := time.Now().UTC().Add(s.ttlDefault)
-	token, err := s.issuer.Issue(in.AID, roles, s.ttlDefault, false)
+	minted, err := MintJWT(ctx, s.pool, s.issuer, MintInput{
+		AID:          in.AID,
+		Roles:        roles,
+		TTL:          ttl,
+		Kind:         JWTKindIssued,
+		Label:        in.Label,
+		CreatedByAID: in.CallerAID,
+		Client:       in.Client,
+	})
 	if err != nil {
 		// Insert already committed. Caller (transport side) logs
 		// "manual reconciliation may be needed". Service also logs
@@ -290,8 +359,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		CreatedAt:    saved.CreatedAt,
 		CreatedByAID: creator,
 		GrantedRoles: grantedRoles,
-		JWT:          token,
-		ExpiresAt:    expiresAt,
+		JWT:          minted.JWT,
+		JWTID:        minted.JWTID,
+		ExpiresAt:    minted.ExpiresAt,
 	}, nil
 }
 
@@ -448,12 +518,18 @@ func (s *Service) Revoke(ctx context.Context, in RevokeInput) error {
 type IssueTokenInput struct {
 	AID       string
 	CallerAID string
+	// TTL — 0 → `auth.jwt.ttl_default`; otherwise within [MinJWTTTL, `auth.jwt.ttl_max`].
+	TTL    time.Duration
+	Label  string
+	Client ClientMeta
 }
 
 // IssueTokenResult — issued token.
 type IssueTokenResult struct {
 	AID       string
 	JWT       string
+	JWTID     string
+	TTL       time.Duration
 	ExpiresAt time.Time
 }
 
@@ -473,6 +549,13 @@ func (s *Service) IssueToken(ctx context.Context, in IssueTokenInput) (*IssueTok
 	if !ValidAID(in.AID) {
 		return nil, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
 	}
+	ttl, err := s.resolveTTL(in.TTL)
+	if err != nil {
+		return nil, err
+	}
+	if !ValidJWTLabel(in.Label) {
+		return nil, ErrInvalidJWTLabel
+	}
 	op, err := SelectByAID(ctx, s.pool, in.AID)
 	if err != nil {
 		return nil, err
@@ -481,16 +564,66 @@ func (s *Service) IssueToken(ctx context.Context, in IssueTokenInput) (*IssueTok
 		return nil, ErrOperatorAlreadyRevoked
 	}
 	roles := s.rbac.RolesOf(in.AID)
-	expiresAt := time.Now().UTC().Add(s.ttlDefault)
-	token, err := s.issuer.Issue(in.AID, roles, s.ttlDefault, false)
+	minted, err := MintJWT(ctx, s.pool, s.issuer, MintInput{
+		AID:          in.AID,
+		Roles:        roles,
+		TTL:          ttl,
+		Kind:         JWTKindIssued,
+		Label:        in.Label,
+		CreatedByAID: in.CallerAID,
+		Client:       in.Client,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("operator: issue JWT failed: %w", err)
 	}
 	return &IssueTokenResult{
 		AID:       in.AID,
-		JWT:       token,
-		ExpiresAt: expiresAt,
+		JWT:       minted.JWT,
+		JWTID:     minted.JWTID,
+		TTL:       ttl,
+		ExpiresAt: minted.ExpiresAt,
 	}, nil
+}
+
+// ListJWTs returns a page of the operator's accounted tokens, newest first.
+// [ErrOperatorNotFound] for an unknown AID, so an empty list always means an
+// operator with no tokens.
+func (s *Service) ListJWTs(ctx context.Context, aid string, offset, limit int) ([]JWTRecord, int, error) {
+	if !ValidAID(aid) {
+		return nil, 0, fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
+	}
+	if _, err := SelectByAID(ctx, s.pool, aid); err != nil {
+		return nil, 0, err
+	}
+	return ListJWTs(ctx, s.pool, aid, offset, limit)
+}
+
+// RevokeJWTInput — parameters for RevokeJWT.
+type RevokeJWTInput struct {
+	AID       string
+	JWTID     string
+	CallerAID string
+}
+
+// RevokeJWT revokes one token of an operator and invalidates the RBAC snapshot
+// cluster-wide, so the token is refused on its next request on every node. The
+// operator and its other tokens are untouched.
+//
+// Returns [ErrJWTNotFound] (also for a token of another operator) or
+// [ErrJWTAlreadyRevoked].
+func (s *Service) RevokeJWT(ctx context.Context, in RevokeJWTInput) (JWTRecord, error) {
+	if !ValidAID(in.AID) {
+		return JWTRecord{}, fmt.Errorf("operator: invalid AID %q (must match %s)", in.AID, AIDPattern)
+	}
+	if !ValidJWTID(in.JWTID) {
+		return JWTRecord{}, ErrJWTNotFound
+	}
+	rec, err := RevokeJWT(ctx, s.pool, in.AID, in.JWTID, in.CallerAID)
+	if err != nil {
+		return JWTRecord{}, err
+	}
+	s.invalidate(ctx)
+	return rec, nil
 }
 
 // List returns page of Archons under filter. Thin wrapper over [List];

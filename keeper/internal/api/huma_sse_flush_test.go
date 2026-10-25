@@ -35,7 +35,7 @@ import (
 func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac runEventsRBAC) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
-	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -74,7 +74,7 @@ func sseHarnessProdMiddleware(t *testing.T, bus *applybus.EventBus, access runEv
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	mint := func(aid string) string {
-		tok, err := issuer.Issue(aid, []string{"cluster-admin"}, time.Hour, false)
+		tok, err := issuer.Issue("01JTESTJT1000000000000000A", aid, []string{"cluster-admin"}, time.Hour, false)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}

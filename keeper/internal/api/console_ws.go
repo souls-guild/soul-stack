@@ -170,6 +170,7 @@ func consoleWSHandler(deps *consoleWSDeps) http.HandlerFunc {
 		}
 
 		c := newConsoleConn(ws, claims.Subject, deps)
+		c.jwtID = claims.ID
 		c.run(r.Context())
 	}
 }
@@ -284,8 +285,11 @@ func (q *outQueue) signal() {
 // the ones the EventStream produces from other goroutines — funnels through
 // `out`.
 type consoleConn struct {
-	ws      *websocket.Conn
-	aid     string
+	ws  *websocket.Conn
+	aid string
+	// jwtID is the `jti` the socket was opened with; revoking that token closes
+	// the socket as revoking the operator does (NIM-1045).
+	jwtID   string
 	hub     *console.Hub
 	deps    *consoleWSDeps
 	logger  *slog.Logger
@@ -923,6 +927,13 @@ func (c *consoleConn) reauthorizeLoop(ctx context.Context) {
 // that must not gate it.
 func (c *consoleConn) reauthorize(ctx context.Context) {
 	if c.deps.Enforcer == nil || c.closing() {
+		return
+	}
+	if c.jwtID != "" && c.deps.Enforcer.IsJWTRevoked(c.jwtID) {
+		c.sendError("", console.ErrCodeForbidden, "the token this console was opened with has been revoked")
+		c.logger.Warn("console: socket closed, its token revoked under it",
+			slog.String("aid", c.aid), slog.String("jwt_id", c.jwtID))
+		c.shutdown(console.CloseAccessRevoked)
 		return
 	}
 	if c.deps.Enforcer.IsRevoked(c.aid) {

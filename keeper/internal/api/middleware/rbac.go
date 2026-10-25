@@ -5,6 +5,7 @@ import (
 	"net/http"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/keeper/internal/rbac"
 )
 
@@ -73,12 +74,31 @@ type ActionHolder interface {
 	HoldsAction(aid, resource, action string) bool
 }
 
-// RevocationChecker — the narrow surface [RejectRevoked] needs: is this AID in
-// the snapshot's revoked projection (ADR-014 Amendment 2026-05-27). Implemented
-// by both [rbac.Enforcer] and [rbac.Holder], like [PermissionChecker] and
-// [ActionHolder].
+// RevocationChecker — the narrow surface [RejectRevoked] and the long-lived
+// channels' re-checks need: is this AID in the snapshot's revoked projection
+// (ADR-014 Amendment 2026-05-27), and is this token (ADR-014 amendment
+// NIM-1045). Implemented by both [rbac.Enforcer] and [rbac.Holder], like
+// [PermissionChecker] and [ActionHolder].
+//
+// Both questions in one interface on purpose: every RBAC surface that embeds it
+// must answer the token one too, so a stream that re-checks revocation cannot
+// be wired to ask only about the operator.
 type RevocationChecker interface {
 	IsRevoked(aid string) bool
+	IsJWTRevoked(jwtID string) bool
+}
+
+// CredentialRevoked reports whether claims may no longer act: the operator is
+// revoked, or this token is. The long-lived channels ask it on every re-check;
+// the verifier has already asked the token half when the channel opened.
+func CredentialRevoked(rc RevocationChecker, claims *jwt.Claims) bool {
+	if claims == nil {
+		return true
+	}
+	if rc.IsRevoked(claims.Subject) {
+		return true
+	}
+	return claims.ID != "" && rc.IsJWTRevoked(claims.ID)
 }
 
 // RejectRevoked — a middleware factory that turns a revoked Archon away with 401
@@ -128,6 +148,12 @@ func RejectRevoked(rc RevocationChecker) func(http.Handler) http.Handler {
 			if rc.IsRevoked(claims.Subject) {
 				problem.Write(w, problem.New(problem.TypeOperatorRevokedToken, r.URL.Path,
 					"archon "+claims.Subject+" has been revoked"))
+				return
+			}
+			// The verifier already refuses a revoked jti; this repeats it so the
+			// chain stays closed even behind a verifier built with jwt.NoRevocation.
+			if claims.ID != "" && rc.IsJWTRevoked(claims.ID) {
+				problem.Write(w, problem.New(problem.TypeJWTRevoked, r.URL.Path, "token revoked"))
 				return
 			}
 			next.ServeHTTP(w, r)

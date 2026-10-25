@@ -184,7 +184,7 @@ func (h *Handler) callIncarnationRun(ctx context.Context, claims *jwt.Claims, re
 			"start scenario "+a.Scenario+" failed")
 	}
 
-	h.writeAudit(audit.EventIncarnationScenarioStarted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventIncarnationScenarioStarted, claims.Subject, map[string]any{
 		"id":       a.ID,
 		"scenario": a.Scenario,
 		"apply_id": applyID,

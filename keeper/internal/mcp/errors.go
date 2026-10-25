@@ -30,6 +30,7 @@ const (
 	mcpCodeOperatorExists      = "operator-already-exists"
 	mcpCodeOperatorRevoked     = "operator-revoked"
 	mcpCodeWouldLockOutCluster = "would-lock-out-cluster"
+	mcpCodeJWTAlreadyRevoked   = "jwt-already-revoked"
 	mcpCodeInternalError       = "internal-error"
 	mcpCodeNotImplemented      = "not-implemented"
 	// mcpCodeTeardownUnavailable mirrors REST TypeTeardownUnavailable:
@@ -226,6 +227,12 @@ func mapServiceErrorToMCP(err error) (code, detail string) {
 		return mcpCodeWouldLockOutCluster, "target is the last active cluster-admin; revoking would lock out the cluster"
 	case errors.Is(err, rbac.ErrPermissionDenied):
 		return mcpCodeForbidden, "operator lacks required permission"
+	case errors.Is(err, operator.ErrInvalidTTL), errors.Is(err, operator.ErrInvalidJWTLabel):
+		return mcpCodeValidationFailed, strings.TrimPrefix(err.Error(), "operator: ")
+	case errors.Is(err, operator.ErrJWTNotFound):
+		return mcpCodeNotFound, "jwt not found for this operator"
+	case errors.Is(err, operator.ErrJWTAlreadyRevoked):
+		return mcpCodeJWTAlreadyRevoked, "jwt is already revoked"
 	}
 	// Validation errors from service.Create/Revoke/IssueToken are fmt.Errorf
 	// with prefix "operator: invalid AID …" / "operator: ... is empty".

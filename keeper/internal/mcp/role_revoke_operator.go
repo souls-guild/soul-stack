@@ -78,7 +78,7 @@ func (h *Handler) callRoleRevokeOperator(ctx context.Context, claims *jwt.Claims
 
 	// Audit — mirrors the HTTP handler (authorization change, ADR-022):
 	// payload {name, aid}. AIDs aren't secret.
-	h.writeAudit(audit.EventRoleOperatorRevoked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventRoleOperatorRevoked, claims.Subject, map[string]any{
 		"name": a.Role,
 		"aid":  a.AID,
 	})

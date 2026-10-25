@@ -426,6 +426,11 @@ var wireProjections = []wireProjection{
 		project: func(b any) any { return toOperatorCreateInput(b.(OperatorCreateRequest)) },
 	},
 	{
+		fn:      "toOperatorIssueTokenInput",
+		wire:    OperatorIssueTokenRequest{},
+		project: func(b any) any { return toOperatorIssueTokenInput(b.(OperatorIssueTokenRequest)) },
+	},
+	{
 		fn:      "toProvisioningPolicyUpdateInput",
 		wire:    ProvisioningPolicyUpdateRequest{},
 		project: func(b any) any { return toProvisioningPolicyUpdateInput(b.(ProvisioningPolicyUpdateRequest)) },
@@ -618,6 +623,9 @@ var captionedCreateProjections = map[route]string{
 	{http.MethodPost, "/v1/decrees"}:        "toDecreeCreateInput",
 	{http.MethodPost, "/v1/augur/omens"}:    "toOmenCreateInput",
 	{http.MethodPost, "/v1/push-providers"}: "toPushProviderCreateInput",
+	// The minted token's label (operator_jwts.label, NIM-1045).
+	{http.MethodPost, "/v1/operators"}:                   "toOperatorCreateInput",
+	{http.MethodPost, "/v1/operators/{aid}/issue-token"}: "toOperatorIssueTokenInput",
 }
 
 // labelIsNotACaption — POST routes whose body carries a `label` that is NOT a

@@ -43,7 +43,7 @@ func TestSigningKey_NotLeaked_Constructors(t *testing.T) {
 	}
 	assertNoKeyLeak(t, "NewIssuer", errIss, shortKeyWithMarker)
 
-	_, errVer := NewVerifier(shortKeyWithMarker, "keeper.test")
+	_, errVer := NewVerifier(shortKeyWithMarker, "keeper.test", NoRevocation)
 	if errVer == nil {
 		t.Fatalf("NewVerifier with short key: expected length error")
 	}
@@ -60,12 +60,12 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 
 	// Issue with deliberately invalid input returns validation errors. The key
 	// must not appear in them.
-	if _, err := iss.Issue("", []string{"x"}, time.Hour, false); err == nil {
+	if _, err := iss.Issue("01JTESTJT1000000000000000A", "", []string{"x"}, time.Hour, false); err == nil {
 		t.Fatalf("Issue empty aid: expected error")
 	} else {
 		assertNoKeyLeak(t, "Issue(empty aid)", err, leakMarkerKey)
 	}
-	if _, err := iss.Issue("archon-x", nil, -time.Hour, false); err == nil {
+	if _, err := iss.Issue("01JTESTJT1000000000000000A", "archon-x", nil, -time.Hour, false); err == nil {
 		t.Fatalf("Issue non-positive ttl: expected error")
 	} else {
 		assertNoKeyLeak(t, "Issue(bad ttl)", err, leakMarkerKey)
@@ -75,12 +75,12 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 	// returns bad-signature. err.Error() wraps the internal golang-jwt message
 	// (the ErrInvalidToken default in Verify's parse-error switch), but the key
 	// must not appear there.
-	tok, err := iss.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", "archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
 	otherKey := []byte("OTHER-SIGNKEY-MUST-NOT-LEAK-0123456789")
-	ver, err := NewVerifier(otherKey, "keeper.test")
+	ver, err := NewVerifier(otherKey, "keeper.test", NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -92,7 +92,7 @@ func TestSigningKey_NotLeaked_IssueAndVerify(t *testing.T) {
 	}
 
 	// Malformed token -> ErrInvalidToken with a wrapped JWT message; no key.
-	ver2, err := NewVerifier(leakMarkerKey, "keeper.test")
+	ver2, err := NewVerifier(leakMarkerKey, "keeper.test", NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

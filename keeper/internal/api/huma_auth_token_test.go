@@ -14,6 +14,8 @@ import (
 	"testing"
 	"time"
 
+	jwtv5 "github.com/golang-jwt/jwt/v5"
+
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
@@ -32,7 +34,7 @@ const exchangeIssuer = "keeper.test"
 // Variant B).
 func exchangeCrypto(t *testing.T) (*jwt.Verifier, *jwt.Issuer) {
 	t.Helper()
-	v, err := jwt.NewVerifier(exchangeSigningKey, exchangeIssuer)
+	v, err := jwt.NewVerifier(exchangeSigningKey, exchangeIssuer, jwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -47,6 +49,8 @@ func exchangeCrypto(t *testing.T) (*jwt.Verifier, *jwt.Issuer) {
 type fakeRevoked map[string]bool
 
 func (f fakeRevoked) IsRevoked(aid string) bool { return f[aid] }
+
+func (f fakeRevoked) IsJWTRevoked(string) bool { return false }
 
 // authTokenRouter assembles the REAL Operator API router (buildRouter) with
 // stub handlers (like collectRoutes), but with live verifier/enforcer/
@@ -138,7 +142,7 @@ func decodeReply(t *testing.T, rec *httptest.ResponseRecorder) AuthTokenReply {
 // /v1 (RequireJWT).
 func TestAuthPerimeter_V1CookieOnly_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	session, err := issuer.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	session, err := issuer.Issue("01JTESTJT1000000000000000A", "archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("issue session: %v", err)
 	}
@@ -163,7 +167,7 @@ func TestAuthPerimeter_V1CookieOnly_401(t *testing.T) {
 // RequireJWT on /v1 (403≠401 from RBAC means "Bearer accepted").
 func TestAuthTokenExchange_ValidCookie_RoundTrip(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	session, _ := issuer.Issue("archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-alice", []string{"cluster-admin"}, time.Hour, false)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
@@ -217,7 +221,7 @@ func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 	// 5, which answers the generic "authentication required" — so this margin is
 	// exactly the one that distinguishes the two paths, and the detail below is
 	// what says which one ran. Widen the margin and the case stops testing that.
-	expired, _ := issuer.Issue("archon-alice", nil, time.Millisecond, false)
+	expired, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-alice", nil, time.Millisecond, false)
 	time.Sleep(5 * time.Millisecond)
 
 	cases := []struct {
@@ -258,7 +262,7 @@ func TestAuthTokenExchange_BadCookies_401(t *testing.T) {
 // token (no privilege escalation).
 func TestAuthTokenExchange_SubjectFromClaimsOnly(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	session, _ := issuer.Issue("archon-real", []string{"read-only"}, time.Hour, false)
+	session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-real", []string{"read-only"}, time.Hour, false)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
@@ -298,7 +302,7 @@ func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
 	for _, bootstrap := range []bool{true, false} {
-		session, _ := issuer.Issue("archon-root", []string{"cluster-admin"}, time.Hour, bootstrap)
+		session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-root", []string{"cluster-admin"}, time.Hour, bootstrap)
 		rec := postExchange(h, session, nil)
 		if rec.Code != http.StatusOK {
 			t.Fatalf("bootstrap=%v: status = %d, want 200; body=%s", bootstrap, rec.Code, rec.Body.String())
@@ -329,7 +333,7 @@ func TestAuthTokenExchange_BootstrapInitialRoundTrip(t *testing.T) {
 // revoked type for *every* refusal would pass just as happily.
 func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	session, _ := issuer.Issue("archon-fired", []string{"cluster-admin"}, time.Hour, false)
+	session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-fired", []string{"cluster-admin"}, time.Hour, false)
 	spy := &loginStubIssuer{token: "must-not-be-issued"}
 	td := &AuthTokenDeps{
 		Verifier: verifier,
@@ -372,7 +376,7 @@ func TestAuthTokenExchange_Revoked_401(t *testing.T) {
 // Path=/auth + HttpOnly on the cookie itself.
 func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
-	session, _ := issuer.Issue("archon-alice", nil, time.Hour, false)
+	session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-alice", nil, time.Hour, false)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
@@ -410,7 +414,7 @@ func TestAuthTokenExchange_SecFetchAllowlist(t *testing.T) {
 func TestAuthTokenExchange_TTLCap(t *testing.T) {
 	verifier, issuer := exchangeCrypto(t)
 	// Cookie lives 30s; exchange_ttl = 10m → issued exp ≈ 30s.
-	session, _ := issuer.Issue("archon-alice", nil, 30*time.Second, false)
+	session, _ := issuer.Issue("01JTESTJT1000000000000000A", "archon-alice", nil, 30*time.Second, false)
 	td := &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}
 	h := authTokenRouter(t, verifier, emptyEnforcer(t), td, AuthMethodsDeps{})
 
@@ -486,5 +490,86 @@ func TestNewSessionCookie_PathScopedToAuth(t *testing.T) {
 	}
 	if !c.HttpOnly || !c.Secure || c.SameSite != http.SameSiteStrictMode {
 		t.Errorf("session-cookie weakened attributes: HttpOnly=%v Secure=%v SameSite=%v", c.HttpOnly, c.Secure, c.SameSite)
+	}
+}
+
+// revokedJWTs — a jwt.RevocationSource for the per-token exchange tests.
+type revokedJWTs map[string]bool
+
+func (r revokedJWTs) IsJWTRevoked(id string) bool { return r[id] }
+
+// TestAuthTokenExchange_RevokedSession_401 — a session whose own token was
+// revoked (NIM-1045) cannot be exchanged, and says so by type: the operator is
+// fine, signing in again is the repair.
+func TestAuthTokenExchange_RevokedSession_401(t *testing.T) {
+	const sessionID = "01JREV0KEDJWT0000000000000"
+	verifier, err := jwt.NewVerifier(exchangeSigningKey, exchangeIssuer, revokedJWTs{sessionID: true})
+	if err != nil {
+		t.Fatalf("NewVerifier: %v", err)
+	}
+	_, issuer := exchangeCrypto(t)
+	session, _ := issuer.Issue(sessionID, "archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	spy := &loginStubIssuer{token: "must-not-be-issued"}
+	h := authTokenRouter(t, verifier, emptyEnforcer(t), &AuthTokenDeps{Verifier: verifier, Issuer: spy, TTL: 10 * time.Minute}, AuthMethodsDeps{})
+
+	rec := postExchange(h, session, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("revoked session: status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	if !strings.Contains(rec.Body.String(), problem.TypeJWTRevoked) {
+		t.Errorf("revoked session: want problem type %q, got body=%s", problem.TypeJWTRevoked, rec.Body.String())
+	}
+	if spy.gotAID != "" {
+		t.Errorf("revoked session → a Bearer was issued for %q", spy.gotAID)
+	}
+}
+
+// TestAuthTokenExchange_BearerCarriesTheSessionJTI — the exchanged Bearer is
+// accounted under its session's jti, so revoking the session refuses it too.
+func TestAuthTokenExchange_BearerCarriesTheSessionJTI(t *testing.T) {
+	const sessionID = "01JSESS10NJWT0000000000000"
+	verifier, issuer := exchangeCrypto(t)
+	session, _ := issuer.Issue(sessionID, "archon-alice", []string{"cluster-admin"}, time.Hour, false)
+	h := authTokenRouter(t, verifier, emptyEnforcer(t), &AuthTokenDeps{Verifier: verifier, Issuer: issuer, TTL: 10 * time.Minute}, AuthMethodsDeps{})
+
+	rec := postExchange(h, session, nil)
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want 200; body=%s", rec.Code, rec.Body.String())
+	}
+	var reply AuthTokenReply
+	if err := json.Unmarshal(rec.Body.Bytes(), &reply); err != nil {
+		t.Fatalf("reply: %v", err)
+	}
+	claims, err := verifier.Verify(reply.Token)
+	if err != nil {
+		t.Fatalf("verify bearer: %v", err)
+	}
+	if claims.ID != sessionID {
+		t.Errorf("bearer jti = %q, want the session's %q", claims.ID, sessionID)
+	}
+}
+
+// TestAuthTokenExchange_SessionWithoutJTI_401 — a cookie minted before per-token
+// accounting has no jti to hand on; the exchange refuses it rather than mint a
+// Bearer nothing could revoke.
+func TestAuthTokenExchange_SessionWithoutJTI_401(t *testing.T) {
+	verifier, _ := exchangeCrypto(t)
+	legacy := jwtv5.NewWithClaims(jwtv5.SigningMethodHS256, jwtv5.MapClaims{
+		"iss": exchangeIssuer, "sub": "archon-alice", "roles": []string{"cluster-admin"},
+		"iat": time.Now().Unix(), "exp": time.Now().Add(time.Hour).Unix(),
+	})
+	session, err := legacy.SignedString(exchangeSigningKey)
+	if err != nil {
+		t.Fatalf("sign legacy cookie: %v", err)
+	}
+	spy := &loginStubIssuer{token: "must-not-be-issued"}
+	h := authTokenRouter(t, verifier, emptyEnforcer(t), &AuthTokenDeps{Verifier: verifier, Issuer: spy, TTL: 10 * time.Minute}, AuthMethodsDeps{})
+
+	rec := postExchange(h, session, nil)
+	if rec.Code != http.StatusUnauthorized {
+		t.Fatalf("legacy cookie: status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+	}
+	if spy.gotAID != "" {
+		t.Errorf("legacy cookie → a Bearer was issued for %q", spy.gotAID)
 	}
 }

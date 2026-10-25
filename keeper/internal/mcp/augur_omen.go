@@ -108,7 +108,7 @@ func (h *Handler) callAugurOmenCreate(ctx context.Context, claims *jwt.Claims, r
 	// Audit — parallels the REST handler: payload {name, source_type,
 	// endpoint, auth_ref, created_by_aid}. endpoint/auth_ref aren't secrets
 	// (no master cred in the record, augur.md §8).
-	h.writeAudit(audit.EventOmenCreated, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventOmenCreated, callerAID, map[string]any{
 		"id":             o.ID,
 		"label":          o.Label,
 		"source_type":    string(o.SourceType),
@@ -248,7 +248,7 @@ func (h *Handler) callAugurOmenDelete(ctx context.Context, claims *jwt.Claims, r
 	}
 
 	// Audit — parallels the REST handler: payload {name}.
-	h.writeAudit(audit.EventOmenRevoked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventOmenRevoked, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
 

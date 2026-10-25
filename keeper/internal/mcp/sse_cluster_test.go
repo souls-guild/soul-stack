@@ -90,7 +90,7 @@ func startRedisContainer(t *testing.T) (addr string, shutdown func()) {
 // the caller so it can pass in a Redis client and KID.
 func startMCPServerWithCustomBus(t *testing.T, bus *applybus.EventBus) (baseURL string, shutdown func()) {
 	t.Helper()
-	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

@@ -18,7 +18,7 @@ func mustIssue(t *testing.T, key []byte, issuer, sub string, ttl time.Duration, 
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue(sub, roles, ttl, bootstrap)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", sub, roles, ttl, bootstrap)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -26,13 +26,13 @@ func mustIssue(t *testing.T, key []byte, issuer, sub string, ttl time.Duration, 
 }
 
 func TestNewVerifier_RejectsShortKey(t *testing.T) {
-	if _, err := NewVerifier(bytes.Repeat([]byte{0x01}, 16), testIssuer); err == nil {
+	if _, err := NewVerifier(bytes.Repeat([]byte{0x01}, 16), testIssuer, NoRevocation); err == nil {
 		t.Fatalf("NewVerifier with 16-byte key: expected error")
 	}
 }
 
 func TestNewVerifier_RejectsEmptyIssuer(t *testing.T) {
-	if _, err := NewVerifier(testSigningKey, ""); err == nil {
+	if _, err := NewVerifier(testSigningKey, "", NoRevocation); err == nil {
 		t.Fatalf("NewVerifier with empty issuer: expected error")
 	}
 }
@@ -40,7 +40,7 @@ func TestNewVerifier_RejectsEmptyIssuer(t *testing.T) {
 func TestVerify_Happy(t *testing.T) {
 	tok := mustIssue(t, testSigningKey, testIssuer, "archon-alice",
 		time.Hour, true, []string{"cluster-admin"})
-	v, err := NewVerifier(testSigningKey, testIssuer)
+	v, err := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -84,7 +84,7 @@ func TestVerify_Expired(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manual sign: %v", err)
 	}
-	v, _ := NewVerifier(testSigningKey, testIssuer)
+	v, _ := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	_, err = v.Verify(tok)
 	if !errors.Is(err, ErrExpiredToken) {
 		t.Fatalf("Verify expired: err = %v, want ErrExpiredToken", err)
@@ -94,7 +94,7 @@ func TestVerify_Expired(t *testing.T) {
 func TestVerify_BadSignature(t *testing.T) {
 	tok := mustIssue(t, testSigningKey, testIssuer, "archon-alice", time.Hour, false, nil)
 	otherKey := bytes.Repeat([]byte{0xcd}, 32)
-	v, _ := NewVerifier(otherKey, testIssuer)
+	v, _ := NewVerifier(otherKey, testIssuer, NoRevocation)
 	_, err := v.Verify(tok)
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("Verify bad-sig: err = %v, want ErrInvalidToken", err)
@@ -103,7 +103,7 @@ func TestVerify_BadSignature(t *testing.T) {
 
 func TestVerify_WrongIssuer(t *testing.T) {
 	tok := mustIssue(t, testSigningKey, "other.issuer", "archon-alice", time.Hour, false, nil)
-	v, _ := NewVerifier(testSigningKey, testIssuer)
+	v, _ := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	_, err := v.Verify(tok)
 	if !errors.Is(err, ErrInvalidIssuer) {
 		t.Fatalf("Verify wrong-issuer: err = %v, want ErrInvalidIssuer", err)
@@ -118,7 +118,7 @@ func TestVerify_Malformed(t *testing.T) {
 		"header.payload",
 		strings.Repeat("a", 50),
 	}
-	v, _ := NewVerifier(testSigningKey, testIssuer)
+	v, _ := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	for _, tc := range cases {
 		t.Run(tc, func(t *testing.T) {
 			_, err := v.Verify(tc)
@@ -144,7 +144,7 @@ func TestVerify_RejectsNoneAlg(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manual none-sign: %v", err)
 	}
-	v, _ := NewVerifier(testSigningKey, testIssuer)
+	v, _ := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	_, err = v.Verify(tok)
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("Verify alg-none: err = %v, want ErrInvalidToken", err)
@@ -166,7 +166,7 @@ func TestVerify_MissingSubject(t *testing.T) {
 	if err != nil {
 		t.Fatalf("manual sign: %v", err)
 	}
-	v, _ := NewVerifier(testSigningKey, testIssuer)
+	v, _ := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	_, err = v.Verify(tok)
 	if !errors.Is(err, ErrInvalidToken) {
 		t.Fatalf("Verify missing-sub: err = %v, want ErrInvalidToken", err)
@@ -202,7 +202,7 @@ func issueAtSkew(t *testing.T, key []byte, issuer, sub string, skew, ttl time.Du
 // forged signature gets, which is how a clock problem gets diagnosed as an
 // attack (NIM-621).
 func TestVerify_ClockSkew(t *testing.T) {
-	v, err := NewVerifier(testSigningKey, testIssuer)
+	v, err := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -268,7 +268,7 @@ func TestVerify_ClockSkew(t *testing.T) {
 // the parser catches it either way; it gates that parser branch instead, and is
 // not coverage of this one.
 func TestVerify_LeewayDoesNotReachExpiry(t *testing.T) {
-	v, err := NewVerifier(testSigningKey, testIssuer)
+	v, err := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -320,7 +320,7 @@ func TestVerify_LeewayDoesNotReachExpiry(t *testing.T) {
 // answers are a 401 carrying a fact the holder can already read out of its own
 // token, so nothing downstream distinguishes them.
 func TestVerify_ExpiryLosesToIssuerInsideTheLeeway(t *testing.T) {
-	v, err := NewVerifier(testSigningKey, testIssuer)
+	v, err := NewVerifier(testSigningKey, testIssuer, NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}

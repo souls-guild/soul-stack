@@ -75,7 +75,7 @@ func (h *Handler) callServiceUpdate(ctx context.Context, claims *jwt.Claims, req
 
 	// Audit — parallels the REST handler: payload {name, git, ref}. The git
 	// URL isn't a secret.
-	h.writeAudit(audit.EventServiceUpdated, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventServiceUpdated, callerAID, map[string]any{
 		"id":  entry.ID,
 		"git": entry.Git,
 		"ref": entry.Ref,

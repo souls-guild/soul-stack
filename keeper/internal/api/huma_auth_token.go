@@ -14,6 +14,7 @@ package api
 
 import (
 	"context"
+	"errors"
 	"log/slog"
 	"net/http"
 	"time"
@@ -144,8 +145,20 @@ func registerHumaAuthTokenExchange(humaAPI huma.API, d *AuthTokenDeps) {
 		// 3. Verify the cookie with the same verifier as the Bearer. detail is
 		// only public-safe [jwt.ClassifyVerifyErr] (the raw err is not leaked, anti-oracle).
 		claims, err := d.Verifier.Verify(in.Session)
+		if errors.Is(err, jwt.ErrRevokedJWT) {
+			// The session itself was revoked (ADR-014 amendment NIM-1045): typed,
+			// for the same reason step 4 is — sign in again, nothing else helps.
+			return nil, humaProblemError{Details: problemWithStatus(
+				problem.TypeJWTRevoked, http.StatusUnauthorized, jwt.ClassifyVerifyErr(err))}
+		}
 		if err != nil {
 			return nil, authTokenUnauthenticated(jwt.ClassifyVerifyErr(err))
+		}
+		// A session minted before per-token accounting has no `jti` to carry into
+		// the Bearer, and a Bearer without one could not be revoked with its
+		// session. Such a cookie lives at most one ttl_default; it signs in again.
+		if claims.ID == "" {
+			return nil, authTokenUnauthenticated("")
 		}
 		// 4. Revoked check against the in-memory RBAC snapshot (map-lookup): a
 		// revoked Archon cannot exchange an otherwise-live cookie for a new Bearer.
@@ -188,8 +201,9 @@ func registerHumaAuthTokenExchange(humaAPI huma.API, d *AuthTokenDeps) {
 			return nil, authTokenUnauthenticated("")
 		}
 		// 6. Issue. Subject/roles/bootstrapInitial — STRICTLY from verified claims
-		// (no privilege-escalation via body/query/headers).
-		token, err := d.Issuer.Issue(claims.Subject, claims.Roles, ttl, claims.BootstrapInitial)
+		// (no privilege-escalation via body/query/headers). The session's own jti:
+		// revoking the session refuses every Bearer exchanged from it.
+		token, err := d.Issuer.Issue(claims.ID, claims.Subject, claims.Roles, ttl, claims.BootstrapInitial)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Error("auth/token exchange: issue JWT failed",

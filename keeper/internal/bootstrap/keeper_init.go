@@ -96,9 +96,7 @@ var ErrTokenFileWriteFailed = errors.New("bootstrap: token file write failed")
 // narrowing is needed for unit tests (without loading a signing-key and
 // golang-jwt). The real `*jwt.Issuer` satisfies the interface
 // automatically.
-type JWTIssuer interface {
-	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
-}
+type JWTIssuer = operator.JWTIssuer
 
 // Config holds all the dependencies Init needs. Populated in
 // `keeper/cmd/keeper`; does not parse keeper.yml itself.
@@ -296,15 +294,20 @@ func Init(ctx context.Context, cfg Config) (*Result, error) {
 		return nil, fmt.Errorf("bootstrap: grant cluster-admin membership: %w", err)
 	}
 
-	token, err := issuer.Issue(
-		cfg.ArchonAID,
-		[]string{BootstrapRoleClusterAdmin},
-		cfg.TTLBootstrap,
-		true, // bootstrapInitial
-	)
+	// The token's `operator_jwts` row goes into the same transaction: the first
+	// Archon's token can be revoked on its own like any other (ADR-014 amendment
+	// NIM-1045), and a rolled-back init leaves no row behind.
+	minted, err := operator.MintJWT(ctx, tx, issuer, operator.MintInput{
+		AID:              cfg.ArchonAID,
+		Roles:            []string{BootstrapRoleClusterAdmin},
+		TTL:              cfg.TTLBootstrap,
+		Kind:             operator.JWTKindBootstrap,
+		BootstrapInitial: true,
+	})
 	if err != nil {
 		return nil, fmt.Errorf("bootstrap: issue jwt: %w", err)
 	}
+	token := minted.JWT
 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, fmt.Errorf("bootstrap: commit tx: %w", err)

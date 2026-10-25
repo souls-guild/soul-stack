@@ -47,6 +47,8 @@ const sseReauthTestInterval = 25 * time.Millisecond
 type mutableSSERBAC struct {
 	mu      sync.Mutex
 	revoked bool
+	// revokedJWT revokes the token the stream was opened with (NIM-1045).
+	revokedJWT bool
 	// allow is the permission allow-set, keyed "resource.action". A nil map
 	// allows everything, so a test that only cares about revocation says so by
 	// leaving it out.
@@ -74,6 +76,18 @@ func (m *mutableSSERBAC) IsRevoked(string) bool {
 	m.mu.Lock()
 	defer m.mu.Unlock()
 	return m.revoked
+}
+
+func (m *mutableSSERBAC) IsJWTRevoked(id string) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return id != "" && m.revokedJWT
+}
+
+func (m *mutableSSERBAC) revokeJWT() {
+	m.mu.Lock()
+	m.revokedJWT = true
+	m.mu.Unlock()
 }
 
 func (m *mutableSSERBAC) revoke() {
@@ -179,6 +193,26 @@ func TestSSEReauth_RevokedSubscriberLosesTheStream(t *testing.T) {
 	rbac.revoke()
 	expectSSEStreamEnds(t, resp.Body,
 		"the stream outlived the revocation of the Archon holding it — this listener has no RejectRevoked on it at all (NIM-551), so nothing else ever will")
+}
+
+// TestSSEReauth_RevokedTokenLosesTheStream — revoking the one token the stream
+// was opened with (NIM-1045) ends it as revoking the Archon does; the Archon
+// itself stays active.
+func TestSSEReauth_RevokedTokenLosesTheStream(t *testing.T) {
+	bus := applybus.NewBus(slog.New(slog.NewJSONHandler(io.Discard, nil)))
+	rbac := &mutableSSERBAC{allow: map[string]bool{}}
+	const applyID = "01APPLYREV0KEDJWT000000000"
+	access := fakeAccess{byID: map[string]*applyrun.Access{
+		applyID: {IncarnationName: "redis-prod", StartedByAID: ptr("archon-op")},
+	}}
+	srv := sseReauthServer(t, bus, access, rbac)
+
+	resp := openSSEStream(t, srv, "archon-op", applyID)
+	waitSSESubscribed(t, bus, applyID)
+
+	rbac.revokeJWT()
+	expectSSEStreamEnds(t, resp.Body,
+		"the stream outlived the revocation of the token it was opened with")
 }
 
 // TestSSEReauth_NarrowedSubscriberLosesTheStream — the permission case: a watcher

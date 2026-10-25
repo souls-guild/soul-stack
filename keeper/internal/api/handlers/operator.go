@@ -51,9 +51,7 @@ type OperatorPool interface {
 
 // JWTIssuer — narrow interface over `*keeper/internal/jwt.Issuer`.
 // The narrowing is for unit tests (mock without loading a signing key).
-type JWTIssuer interface {
-	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
-}
+type JWTIssuer = operator.JWTIssuer
 
 // RBACSource — narrow surface of the rbac service for handler-side helpers.
 // Only RolesOf is needed (passed to operator.Service for JWT issuance); the
@@ -95,13 +93,10 @@ func (h *OperatorHandler) SetProvisioningGate(gate ProvisioningGate) {
 	h.gate = gate
 }
 
-// NewOperatorHandler creates a handler. ttlDefault — TTL of JWT tokens. Internally it
-// assembles [operator.Service] (one per handler).
-//
-// The old signature (pool / issuer / rbacSrc / ttlDefault / logger) is kept for binary
-// compatibility with the keeper/cmd/keeper wire-up and unit tests
-// (handlers/operator_test.go) — the service object is created behind the scenes.
-func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource, ttlDefault time.Duration, logger *slog.Logger) *OperatorHandler {
+// NewOperatorHandler creates a handler. ttlDefault — TTL of a JWT the caller asks no
+// lifetime for; ttlMax — the longest one it may ask for (`auth.jwt.ttl_max`, 0 →
+// ttlDefault). Internally it assembles [operator.Service] (one per handler).
+func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource, ttlDefault, ttlMax time.Duration, logger *slog.Logger) *OperatorHandler {
 	if logger == nil {
 		logger = slog.New(slog.NewJSONHandler(io.Discard, nil))
 	}
@@ -110,6 +105,7 @@ func NewOperatorHandler(pool OperatorPool, issuer JWTIssuer, rbacSrc RBACSource,
 		Issuer:     issuer,
 		RBAC:       rbacSrc,
 		TTLDefault: ttlDefault,
+		TTLMax:     ttlMax,
 		Logger:     logger,
 	})
 	if err != nil {
@@ -147,6 +143,9 @@ type OperatorCreateInput struct {
 	AID         string
 	DisplayName string
 	Roles       []string
+	// TTL — Go duration string ("2160h"); "" → `auth.jwt.ttl_default`.
+	TTL   string
+	Label string
 }
 
 // OperatorCreateReply — extracted result of [OperatorHandler.CreateTyped]
@@ -161,7 +160,27 @@ type OperatorCreateReply struct {
 	CreatedAt    time.Time
 	CreatedByAID string
 	JWT          string
+	JWTID        string
+	ExpiresAt    time.Time
+	Label        string
 	GrantedRoles []string
+}
+
+// tokenTermsProblem maps the token-terms sentinels shared by create and
+// issue-token to 422; ok=false for any other error.
+func tokenTermsProblem(err error) (error, bool) {
+	switch {
+	case errors.Is(err, operator.ErrInvalidTTL):
+		return &problemError{problem.New(problem.TypeValidationFailed, "", strings.TrimPrefix(err.Error(), "operator: "))}, true
+	case errors.Is(err, operator.ErrInvalidJWTLabel):
+		return &problemError{problem.New(problem.TypeValidationFailed, "", strings.TrimPrefix(err.Error(), "operator: "))}, true
+	}
+	return nil, false
+}
+
+func clientMeta(ctx context.Context) operator.ClientMeta {
+	m := middleware.ClientMetaFromContext(ctx)
+	return operator.ClientMeta{IP: m.IP, UserAgent: m.UserAgent}
 }
 
 // CreateTyped — domain function for POST /v1/operators (handler-native PILOT):
@@ -193,13 +212,25 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 			"operator provisioning via 'user' method is disabled by policy")}
 	}
 
+	ttl, err := operator.ParseTTL(req.TTL)
+	if err != nil {
+		p, _ := tokenTermsProblem(err)
+		return zero, p
+	}
+
 	res, err := h.svc.Create(ctx, operator.CreateInput{
 		AID:         req.AID,
 		DisplayName: req.DisplayName,
 		CallerAID:   claims.Subject,
 		Roles:       req.Roles,
+		TTL:         ttl,
+		Label:       req.Label,
+		Client:      clientMeta(ctx),
 	})
 	if err != nil {
+		if p, ok := tokenTermsProblem(err); ok {
+			return zero, p
+		}
 		switch {
 		case errors.Is(err, operator.ErrOperatorAlreadyExists):
 			return zero, &problemError{problem.New(problem.TypeOperatorExists, "",
@@ -233,6 +264,9 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		CreatedAt:    res.CreatedAt.UTC().Truncate(time.Second),
 		CreatedByAID: res.CreatedByAID,
 		JWT:          res.JWT,
+		JWTID:        res.JWTID,
+		ExpiresAt:    res.ExpiresAt.UTC().Truncate(time.Second),
+		Label:        req.Label,
 		GrantedRoles: res.GrantedRoles,
 	}, nil
 }
@@ -246,9 +280,13 @@ func (r OperatorCreateReply) AuditPayload() middleware.AuditPayload {
 		"display_name":   r.DisplayName,
 		"auth_method":    r.AuthMethod,
 		"created_by_aid": r.CreatedByAID,
+		"jwt_id":         r.JWTID,
 	}
 	if len(r.GrantedRoles) > 0 {
 		p["roles"] = r.GrantedRoles
+	}
+	if r.Label != "" {
+		p["label"] = r.Label
 	}
 	return p
 }
@@ -315,31 +353,58 @@ func (h *OperatorHandler) RevokeTyped(ctx context.Context, claims *jwt.Claims, t
 type OperatorIssueTokenReply struct {
 	AID       string
 	JWT       string
+	JWTID     string
+	TTL       time.Duration
+	Label     string
 	ExpiresAt time.Time
 }
 
 // AuditPayload assembles the audit payload of the issue-token route (parity with legacy:
 // aid + expires_at RFC3339). WITHOUT the JWT itself (SENSITIVE). Source for huma variant B.
 func (r OperatorIssueTokenReply) AuditPayload() middleware.AuditPayload {
-	return middleware.AuditPayload{
+	p := middleware.AuditPayload{
 		"aid":        r.AID,
 		"expires_at": r.ExpiresAt.Format(time.RFC3339),
+		"jwt_id":     r.JWTID,
+		"ttl":        r.TTL.String(),
 	}
+	if r.Label != "" {
+		p["label"] = r.Label
+	}
+	return p
+}
+
+// OperatorIssueTokenInput — the optional body of issue-token: the token's
+// lifetime ("" → `auth.jwt.ttl_default`) and a label for the operator's list.
+type OperatorIssueTokenInput struct {
+	TTL   string
+	Label string
 }
 
 // IssueTokenTyped — domain function for POST /v1/operators/{aid}/issue-token
 // (handler-native PILOT): path-AID validation + svc.IssueToken + sentinel→problem.
 // Errors — *problemError; success — [OperatorIssueTokenReply] (wire fields + audit).
-func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, targetAID string) (OperatorIssueTokenReply, error) {
+func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claims, targetAID string, req OperatorIssueTokenInput) (OperatorIssueTokenReply, error) {
 	var zero OperatorIssueTokenReply
 	if !operator.ValidAID(targetAID) {
 		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
 			"path 'aid' must match "+operator.AIDPattern)}
 	}
+	ttl, err := operator.ParseTTL(req.TTL)
+	if err != nil {
+		p, _ := tokenTermsProblem(err)
+		return zero, p
+	}
 	res, err := h.svc.IssueToken(ctx, operator.IssueTokenInput{
 		AID:       targetAID,
 		CallerAID: claims.Subject,
+		TTL:       ttl,
+		Label:     req.Label,
+		Client:    clientMeta(ctx),
 	})
+	if p, ok := tokenTermsProblem(err); ok {
+		return zero, p
+	}
 	switch {
 	case err == nil:
 		// fall through.
@@ -361,8 +426,132 @@ func (h *OperatorHandler) IssueTokenTyped(ctx context.Context, claims *jwt.Claim
 	return OperatorIssueTokenReply{
 		AID:       res.AID,
 		JWT:       res.JWT,
+		JWTID:     res.JWTID,
+		TTL:       res.TTL,
+		Label:     req.Label,
 		ExpiresAt: res.ExpiresAt.UTC().Truncate(time.Second),
 	}, nil
+}
+
+// OperatorJWTView — FLAT wire form of one accounted token (ADR-014 amendment
+// NIM-1045). Never carries the token. Times UTC, truncated to the second like
+// every operator wire time.
+type OperatorJWTView struct {
+	JWTID             string
+	AID               string
+	Kind              string
+	Label             string
+	CreatedAt         time.Time
+	ExpiresAt         time.Time
+	CreatedByAID      *string
+	CreatedIP         string
+	CreatedUserAgent  string
+	LastUsedAt        *time.Time
+	LastUsedIP        string
+	LastUsedUserAgent string
+	RevokedAt         *time.Time
+	RevokedByAID      *string
+}
+
+func toOperatorJWTView(r operator.JWTRecord) OperatorJWTView {
+	sec := func(t *time.Time) *time.Time {
+		if t == nil {
+			return nil
+		}
+		v := t.UTC().Truncate(time.Second)
+		return &v
+	}
+	return OperatorJWTView{
+		JWTID:             r.JWTID,
+		AID:               r.AID,
+		Kind:              string(r.Kind),
+		Label:             r.Label,
+		CreatedAt:         r.CreatedAt.UTC().Truncate(time.Second),
+		ExpiresAt:         r.ExpiresAt.UTC().Truncate(time.Second),
+		CreatedByAID:      r.CreatedByAID,
+		CreatedIP:         r.CreatedIP,
+		CreatedUserAgent:  r.CreatedUserAgent,
+		LastUsedAt:        sec(r.LastUsedAt),
+		LastUsedIP:        r.LastUsedIP,
+		LastUsedUserAgent: r.LastUsedUserAgent,
+		RevokedAt:         sec(r.RevokedAt),
+		RevokedByAID:      r.RevokedByAID,
+	}
+}
+
+// OperatorJWTPage — a page of [OperatorJWTView], newest first.
+type OperatorJWTPage struct {
+	Items  []OperatorJWTView
+	Offset int
+	Limit  int
+	Total  int
+}
+
+// ListJWTsTyped — domain function for GET /v1/operators/{aid}/jwts: the
+// operator's accounted tokens, newest first, expired ones included until the
+// Reaper purges them. 404 for an unknown AID.
+func (h *OperatorHandler) ListJWTsTyped(ctx context.Context, targetAID string, offset, limit int) (OperatorJWTPage, error) {
+	var zero OperatorJWTPage
+	if !operator.ValidAID(targetAID) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'aid' must match "+operator.AIDPattern)}
+	}
+	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
+		return zero, &problemError{problem.New(problem.TypeMalformedRequest, "", err.Error())}
+	}
+	recs, total, err := h.svc.ListJWTs(ctx, targetAID, offset, limit)
+	switch {
+	case err == nil:
+	case errors.Is(err, operator.ErrOperatorNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "", "operator "+targetAID+" not found")}
+	default:
+		h.logger.Error("operator.jwt-list: service failed", slog.String("aid", targetAID), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "list jwts failed")}
+	}
+	items := make([]OperatorJWTView, 0, len(recs))
+	for _, r := range recs {
+		items = append(items, toOperatorJWTView(r))
+	}
+	return OperatorJWTPage{Items: items, Offset: offset, Limit: limit, Total: total}, nil
+}
+
+// OperatorJWTRevokeReply — result of [OperatorHandler.RevokeJWTTyped]: audit
+// fields (the HTTP response is an empty 204).
+type OperatorJWTRevokeReply struct {
+	AID   string
+	JWTID string
+	Kind  string
+}
+
+// AuditPayload — payload of `operator.jwt-revoked`.
+func (r OperatorJWTRevokeReply) AuditPayload() middleware.AuditPayload {
+	return middleware.AuditPayload{"aid": r.AID, "jwt_id": r.JWTID, "kind": r.Kind}
+}
+
+// RevokeJWTTyped — domain function for POST /v1/operators/{aid}/jwts/{jwt_id}/revoke.
+// 404 when the token is not this operator's (also for an id of another
+// operator's token), 409 when it is already revoked.
+func (h *OperatorHandler) RevokeJWTTyped(ctx context.Context, claims *jwt.Claims, targetAID, jwtID string) (OperatorJWTRevokeReply, error) {
+	var zero OperatorJWTRevokeReply
+	if !operator.ValidAID(targetAID) {
+		return zero, &problemError{problem.New(problem.TypeValidationFailed, "",
+			"path 'aid' must match "+operator.AIDPattern)}
+	}
+	rec, err := h.svc.RevokeJWT(ctx, operator.RevokeJWTInput{AID: targetAID, JWTID: jwtID, CallerAID: claims.Subject})
+	switch {
+	case err == nil:
+	case errors.Is(err, operator.ErrJWTNotFound):
+		return zero, &problemError{problem.New(problem.TypeNotFound, "",
+			"jwt "+jwtID+" of operator "+targetAID+" not found")}
+	case errors.Is(err, operator.ErrJWTAlreadyRevoked):
+		return zero, &problemError{problem.New(problem.TypeJWTAlreadyRevoked, "", "jwt "+jwtID+" is already revoked")}
+	default:
+		h.logger.Error("operator.jwt-revoke: service failed",
+			slog.String("aid", targetAID), slog.String("jwt_id", jwtID),
+			slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		return zero, &problemError{problem.New(problem.TypeInternalError, "", "revoke jwt failed")}
+	}
+	return OperatorJWTRevokeReply{AID: rec.AID, JWTID: rec.JWTID, Kind: string(rec.Kind)}, nil
 }
 
 // OperatorView — FLAT wire form of an Operator (list-item / get-200), handler-native

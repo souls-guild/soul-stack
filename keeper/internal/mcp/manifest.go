@@ -44,7 +44,7 @@ type toolEntry struct {
 // what the tool does. Full semantics, async shape, and error codes live in
 // operator-api.md (cross-linked from mcp-tools.md).
 var catalogManifest = []toolEntry{
-	// --- Operator (3) — implemented in M0.7.a ---
+	// --- Operator (5) — implemented in M0.7.a; jwt-list / jwt-revoke in NIM-1045 ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -58,7 +58,7 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.operator.revoke",
-			Description:  "Revokes an Archon (sets revoked_at=NOW). Active JWTs keep working until exp. Permission: operator.revoke. Fails with code=would-lock-out-cluster if target is the only active cluster-admin.",
+			Description:  "Revokes an Archon (sets revoked_at=NOW, permanent). Every JWT of the Archon is refused on its next request. To stop one token and keep the Archon, use keeper.operator.jwt-revoke. Permission: operator.revoke. Fails with code=would-lock-out-cluster if target is the only active cluster-admin.",
 			InputSchema:  schemaOperatorRevokeInput,
 			OutputSchema: schemaEmptyObject,
 		},
@@ -67,9 +67,27 @@ var catalogManifest = []toolEntry{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
 			Name:         "keeper.operator.issue-token",
-			Description:  "Issues a new JWT for an existing active Archon with current roles from keeper.yml. Permission: operator.issue-token.",
+			Description:  "Issues a new JWT for an existing active Archon. Optional ttl (up to auth.jwt.ttl_max) and label. The token is accounted under jwt_id and can be revoked alone. Permission: operator.issue-token.",
 			InputSchema:  schemaOperatorIssueTokenInput,
 			OutputSchema: schemaOperatorIssueTokenOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.operator.jwt-list",
+			Description:  "Lists every JWT Keeper minted for an Archon, newest first, with where it was minted from and last used. Never returns a token. Permission: operator.list.",
+			InputSchema:  schemaOperatorJWTListInput,
+			OutputSchema: schemaOperatorJWTListOutput,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.operator.jwt-revoke",
+			Description:  "Revokes one JWT of an Archon by jwt_id: that token is refused on its next request, the Archon and its other tokens keep working. Permission: operator.jwt-revoke. Fails with code=not-found if the token is not this Archon's, code=jwt-already-revoked if it already is.",
+			InputSchema:  schemaOperatorJWTRevokeInput,
+			OutputSchema: schemaEmptyObject,
 		},
 	},
 
@@ -1183,19 +1201,22 @@ var (
 "required":["aid","display_name"],
 "properties":{
 "aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$","description":"AID of the new Archon."},
-"display_name":{"type":"string","description":"Human-readable name."}}}`)
+"display_name":{"type":"string","description":"Human-readable name."},
+"ttl":{"type":"string","description":"Lifetime of the returned JWT (\"2160h\" or \"90d\"). Omitted: auth.jwt.ttl_default. Between 1m and auth.jwt.ttl_max."},
+"label":{"type":"string","maxLength":200,"description":"Free text shown in the operator's token list."}}}`)
 
 	schemaOperatorCreateOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["aid","display_name","created_at","created_by_aid","jwt","expires_at"],
+"required":["aid","display_name","created_at","created_by_aid","jwt","jwt_id","expires_at"],
 "properties":{
 "aid":{"type":"string"},
 "display_name":{"type":"string"},
 "created_at":{"type":"string","format":"date-time"},
 "created_by_aid":{"type":"string"},
 "jwt":{"type":"string","description":"Issued once; the client must save it."},
+"jwt_id":{"type":"string","description":"The token's jti; revoke it alone with keeper.operator.jwt-revoke."},
 "expires_at":{"type":"string","format":"date-time"}}}`)
 
 	schemaOperatorRevokeInput = json.RawMessage(`{
@@ -1213,17 +1234,68 @@ var (
 "additionalProperties":false,
 "required":["aid"],
 "properties":{
-"aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$"}}}`)
+"aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$"},
+"ttl":{"type":"string","description":"Lifetime (\"2160h\" or \"90d\"). Omitted: auth.jwt.ttl_default. Between 1m and auth.jwt.ttl_max."},
+"label":{"type":"string","maxLength":200,"description":"Free text shown in the operator's token list."}}}`)
 
 	schemaOperatorIssueTokenOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",
 "type":"object",
 "additionalProperties":false,
-"required":["aid","jwt","expires_at"],
+"required":["aid","jwt","jwt_id","expires_at"],
 "properties":{
 "aid":{"type":"string"},
 "jwt":{"type":"string"},
+"jwt_id":{"type":"string","description":"The token's jti; revoke it alone with keeper.operator.jwt-revoke."},
 "expires_at":{"type":"string","format":"date-time"}}}`)
+
+	schemaOperatorJWTListInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["aid"],
+"properties":{
+"aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$"},
+"offset":{"type":"integer","minimum":0,"default":0},
+"limit":{"type":"integer","minimum":1,"maximum":1000,"default":50}}}`)
+
+	schemaOperatorJWTListOutput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["items","offset","limit","total"],
+"properties":{
+"items":{"type":"array","items":{
+"type":"object",
+"additionalProperties":false,
+"required":["jwt_id","aid","kind","created_at","expires_at"],
+"properties":{
+"jwt_id":{"type":"string"},
+"aid":{"type":"string"},
+"kind":{"type":"string","enum":["bootstrap","issued","session"]},
+"label":{"type":"string"},
+"created_at":{"type":"string","format":"date-time"},
+"expires_at":{"type":"string","format":"date-time"},
+"created_by_aid":{"type":"string"},
+"created_ip":{"type":"string"},
+"created_user_agent":{"type":"string"},
+"last_used_at":{"type":"string","format":"date-time"},
+"last_used_ip":{"type":"string"},
+"last_used_user_agent":{"type":"string"},
+"revoked_at":{"type":"string","format":"date-time"},
+"revoked_by_aid":{"type":"string"}}}},
+"offset":{"type":"integer","minimum":0},
+"limit":{"type":"integer","minimum":1,"maximum":1000},
+"total":{"type":"integer","minimum":0}}}`)
+
+	schemaOperatorJWTRevokeInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["aid","jwt_id"],
+"properties":{
+"aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$"},
+"jwt_id":{"type":"string","pattern":"^[0-9A-HJKMNP-TV-Z]{26}$"}}}`)
 
 	schemaRoleCreateInput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

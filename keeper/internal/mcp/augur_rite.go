@@ -103,7 +103,7 @@ func (h *Handler) callAugurRiteCreate(ctx context.Context, claims *jwt.Claims, r
 
 	// Audit — mirrors the REST handler: payload {id, omen, subject, delegate,
 	// created_by_aid}. The allow-list is NOT included (augur.md §8).
-	h.writeAudit(audit.EventRiteCreated, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventRiteCreated, callerAID, map[string]any{
 		"id":             rite.ID,
 		"omen":           rite.Omen,
 		"subject":        rite.Subject().String(),
@@ -209,7 +209,7 @@ func (h *Handler) callAugurRiteDelete(ctx context.Context, claims *jwt.Claims, r
 	}
 
 	// Audit — mirrors the REST handler: payload {id}.
-	h.writeAudit(audit.EventRiteRevoked, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventRiteRevoked, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
 

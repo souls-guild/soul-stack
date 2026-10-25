@@ -555,13 +555,14 @@ Synod self-lockout checks - **from the database under `SELECT … FOR UPDATE`**,
 
 Full list of permission names validated by Keeper in MVP. Names outside this directory are rejected by the `keeper.yml` parser with error `unknown_permission`.
 
-### Operator (5) — [ADR-014](../adr/0014-operator-identity.md)
+### Operator (6) — [ADR-014](../adr/0014-operator-identity.md)
 
 | Permission | Semantics |
 |---|---|
 | `operator.create` | Creating a new Archon in the registry `operators` (via OpenAPI/MCP). The first Archon is created not through this permission, but through `keeper init` ([ADR-013](../adr/0013-bootstrap-archon.md)). |
-| `operator.revoke` | Setting `revoked_at` for an existing Archon. Active JWTs continue to run until `exp` ([ADR-014(d)](../adr/0014-operator-identity.md)). |
-| `operator.issue-token` | Issuing a new JWT for an existing Archon (for example, an operator has lost a token; another operator with this right issues a new one). |
+| `operator.revoke` | Setting `revoked_at` for an existing Archon — permanent. Every JWT of the Archon is refused with `401 operator-revoked-token` on its next request ([ADR-014 amendment NIM-421](../adr/0014-operator-identity.md)). |
+| `operator.issue-token` | Issuing a new JWT for an existing Archon (for example, an operator has lost a token; another operator with this right issues a new one), with an optional `ttl` up to `auth.jwt.ttl_max` (default 90 days) and a `label` ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). **Not restricted by target:** whoever holds it can mint a token for any Archon, `cluster-admin` included — grant it as you would `cluster-admin` itself. |
+| `operator.jwt-revoke` | Revoking **one** token of an Archon (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`, MCP `keeper.operator.jwt-revoke`): that token is refused on its next request (`401 jwt-revoked` over HTTP, `unauthenticated` on MCP), the Archon and its other tokens keep working. Revoking the token you are calling with locks you out of it ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). Separate from `operator.revoke`, which ends the identity. Listing an Archon's tokens (`GET /v1/operators/{aid}/jwts`) is covered by `operator.list`. NoSelector. |
 | `operator.list` | Enumeration of Archons with filters (`auth_method` / `revoked`). Also covers single-archon read `GET /v1/operators/{aid}` - the one-permission-on-read pattern, like `soul.list` / `service.list`. The selector is NoSelector in MVP. |
 | `operator.read` | Registered forward-only in the directory; MVP is not used in the router (route mounts `operator.list` on both endpoints). Introduced so that role configs can specify it without `unknown_permission`. |
 

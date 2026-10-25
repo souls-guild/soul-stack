@@ -491,9 +491,10 @@ func TestRoleTools_InManifest(t *testing.T) {
 // registry that carries a display caption: incarnation / service / provider /
 // profile / push-provider / augur.omen / herald / tiding / oracle.vigil /
 // oracle.decree.
+// PLUS keeper.operator.jwt-list / jwt-revoke (NIM-1045).
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 97 {
-		t.Errorf("catalog size = %d, want 97", n)
+	if n := len(listAllTools()); n != 99 {
+		t.Errorf("catalog size = %d, want 99", n)
 	}
 }
 

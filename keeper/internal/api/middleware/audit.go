@@ -239,7 +239,7 @@ func Audit(writer audit.Writer, eventType audit.EventType, builder AuditPayloadB
 				return
 			}
 
-			payload := mergeAuditPayload(builder, r, rec.status, auditPayloadFromContext(r.Context()))
+			payload := audit.WithActorJWTID(mergeAuditPayload(builder, r, rec.status, auditPayloadFromContext(r.Context())), claims.ID)
 
 			ev := &audit.Event{
 				EventType: eventType,

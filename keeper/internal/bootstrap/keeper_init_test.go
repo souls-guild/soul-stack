@@ -765,7 +765,7 @@ type fakeIssuer struct {
 	err   error
 }
 
-func (f *fakeIssuer) Issue(_ string, _ []string, _ time.Duration, _ bool) (string, error) {
+func (f *fakeIssuer) Issue(_, _ string, _ []string, _ time.Duration, _ bool) (string, error) {
 	f.calls++
 	return f.token, f.err
 }

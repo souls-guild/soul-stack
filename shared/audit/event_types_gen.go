@@ -76,6 +76,7 @@ var allEventTypes = []EventType{
 	"omen.label_changed",                        // EventOmenLabelChanged
 	"omen.revoked",                              // EventOmenRevoked
 	"operator.created",                          // EventOperatorCreated
+	"operator.jwt-revoked",                      // EventOperatorJWTRevoked
 	"operator.login",                            // EventOperatorLogin
 	"operator.provisioned",                      // EventOperatorProvisioned
 	"operator.revoked",                          // EventOperatorRevoked

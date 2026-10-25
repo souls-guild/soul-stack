@@ -140,7 +140,7 @@ func run(m *testing.M) int {
 
 func startMCPServer(t *testing.T, rbacCfg *rbactest.Config) (baseURL string, shutdown func()) {
 	t.Helper()
-	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(integrationSigningKey), integrationIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -239,7 +239,7 @@ func newToken(t *testing.T, aid string, roles []string) string {
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := iss.Issue(aid, roles, time.Hour, false)
+	tok, err := iss.Issue("01JTESTJT1000000000000000A", aid, roles, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}

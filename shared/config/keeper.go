@@ -1289,7 +1289,11 @@ type KeeperAuthJWT struct {
 	SigningKeyRef string `yaml:"signing_key_ref,omitempty"`
 	Issuer        string `yaml:"issuer,omitempty"`
 	TTLDefault    string `yaml:"ttl_default,omitempty"`
-	TTLBootstrap  string `yaml:"ttl_bootstrap,omitempty"`
+	// TTLMax — the longest lifetime POST /v1/operators and issue-token accept
+	// in their `ttl` (ADR-014 amendment NIM-1045). Default 2160h (90 days);
+	// must not be below ttl_default. Duration string.
+	TTLMax       string `yaml:"ttl_max,omitempty" json:"ttl_max,omitempty"`
+	TTLBootstrap string `yaml:"ttl_bootstrap,omitempty"`
 	// ExchangeTTL — short-lived Bearer TTL issued by POST /auth/token in exchange for a
 	// session-cookie (NIM-77/ADR-058 Variant B). Separate from ttl_default (24h);
 	// default 10m, floor 1m (a value below the minimum is raised). Duration string.

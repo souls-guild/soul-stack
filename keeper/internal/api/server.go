@@ -191,6 +191,12 @@ type Deps struct {
 	IncarnationDB handlers.IncarnationDB
 	SoulDB        handlers.SoulPool
 	TTLDefault    time.Duration
+	// TTLMax — `auth.jwt.ttl_max`, the longest lifetime create/issue-token accept
+	// (ADR-014 amendment NIM-1045). 0 → TTLDefault, i.e. no longer than before.
+	TTLMax time.Duration
+	// JWTUse records `operator_jwts.last_used_*` on authenticated /v1 requests.
+	// nil → not recorded.
+	JWTUse apimiddleware.JWTUseRecorder
 
 	// ApplyBus — the pub/sub bus of apply events for the run's live SSE (ADR-068 §A3,
 	// GET /v1/incarnations/{id}/runs/{apply_id}/events). The same bus as the
@@ -654,7 +660,10 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		Vault:         deps.VaultPinger,
 		KeeperVersion: deps.KeeperVersion,
 	})
-	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, logger)
+	if deps.TTLMax != 0 && deps.TTLMax < deps.TTLDefault {
+		return nil, errors.New("api: TTLMax must not be below TTLDefault")
+	}
+	opH := handlers.NewOperatorHandler(deps.OperatorDB, deps.JWTIssuer, deps.RBAC, deps.TTLDefault, deps.TTLMax, logger)
 	// Gate for the provisioning_allowed_methods policy on POST /v1/operators (ADR-058
 	// Part B): the same policy snapshot (Holder) as for the GET endpoint.
 	// ProvisioningPolicyReader (Holder) also implements the narrow gate interface
@@ -955,7 +964,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger)
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

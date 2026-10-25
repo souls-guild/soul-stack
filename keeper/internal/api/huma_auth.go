@@ -3,7 +3,8 @@ package api
 // Federated operator authentication: POST /auth/ldap/login (ADR-058,
 // stage 1 LDAP). ROOT-mount OUTSIDE /v1 (parity /healthz): this is a public entry
 // (login itself, no JWT yet — RequireJWT is inapplicable). A FULL-TYPED huma operation
-// (ADR-054 pattern): typed body input → Authenticator → Mapper → issuer.Issue →
+// (ADR-054 pattern): typed body input → Authenticator → Mapper → MintSession (an
+// `operator_jwts` row of kind `session`, ADR-014 amendment NIM-1045) →
 // Set-Cookie (HttpOnly+Secure+SameSite=Strict, no JSON token in the body).
 //
 // Audit is written by the handler ITSELF (operator.login after issuing the JWT), the huma-audit
@@ -19,8 +20,10 @@ import (
 	"github.com/danielgtaylor/huma/v2"
 	"github.com/go-chi/chi/v5"
 
+	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/auth"
+	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -63,10 +66,41 @@ func newSessionCookie(token string, ttl time.Duration) *http.Cookie {
 type LDAPAuthDeps struct {
 	Authenticator ldapAuthenticator
 	Mapper        auth.Mapper
-	Issuer        JWTIssuerLogin
+	Sessions      SessionMinter
 	TTL           time.Duration
 	Audit         audit.Writer
 	Logger        *slog.Logger
+}
+
+// SessionMinter mints the internal JWT a federated login puts in the session
+// cookie, and accounts for it as an `operator_jwts` row of kind `session`
+// (ADR-014 amendment NIM-1045), so the session can be listed and revoked.
+type SessionMinter interface {
+	MintSession(ctx context.Context, aid string, roles []string, ttl time.Duration) (string, error)
+}
+
+// OperatorSessionMinter is the [SessionMinter] of `keeper run`: a row in
+// `operator_jwts`, then the token signed under its id. The client meta comes
+// from the request context ([apimiddleware.WithClientMeta]).
+type OperatorSessionMinter struct {
+	DB     operator.ExecQueryRower
+	Issuer operator.JWTIssuer
+}
+
+// MintSession implements [SessionMinter].
+func (m OperatorSessionMinter) MintSession(ctx context.Context, aid string, roles []string, ttl time.Duration) (string, error) {
+	client := apimiddleware.ClientMetaFromContext(ctx)
+	res, err := operator.MintJWT(ctx, m.DB, m.Issuer, operator.MintInput{
+		AID:    aid,
+		Roles:  roles,
+		TTL:    ttl,
+		Kind:   operator.JWTKindSession,
+		Client: operator.ClientMeta{IP: client.IP, UserAgent: client.UserAgent},
+	})
+	if err != nil {
+		return "", err
+	}
+	return res.JWT, nil
 }
 
 // ldapAuthenticator — a narrow contract for the LDAP authenticator (avoids importing
@@ -76,10 +110,10 @@ type ldapAuthenticator interface {
 	Authenticate(ctx context.Context, username, password string) (auth.ExternalIdentity, error)
 }
 
-// JWTIssuerLogin — a narrow issuer contract (parity bootstrap.JWTIssuer): issuing
-// the internal JWT after federated authentication.
+// JWTIssuerLogin — a narrow issuer contract: the cookie exchange re-signs the
+// session's claims, under the session's own `jti`, as a short Bearer.
 type JWTIssuerLogin interface {
-	Issue(aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
+	Issue(id, aid string, roles []string, ttl time.Duration, bootstrapInitial bool) (string, error)
 }
 
 // ldapLoginInput — huma input for POST /auth/ldap/login. Body — credentials.
@@ -138,7 +172,7 @@ func registerHumaLDAPLogin(humaAPI huma.API, d *LDAPAuthDeps) {
 		if err != nil {
 			return nil, ldapLoginProblem(err)
 		}
-		token, err := d.Issuer.Issue(mapped.AID, mapped.Roles, d.TTL, false)
+		token, err := d.Sessions.MintSession(ctx, mapped.AID, mapped.Roles, d.TTL)
 		if err != nil {
 			if d.Logger != nil {
 				d.Logger.Error("auth/ldap login: issue JWT failed", slog.String("aid", mapped.AID), slog.Any("error", err))

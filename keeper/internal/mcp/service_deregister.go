@@ -60,7 +60,7 @@ func (h *Handler) callServiceDeregister(ctx context.Context, claims *jwt.Claims,
 	}
 
 	// Audit — parallels the REST handler: payload {id}.
-	h.writeAudit(audit.EventServiceDeregistered, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventServiceDeregistered, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
 

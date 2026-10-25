@@ -154,6 +154,7 @@ Keeper cleans its tables itself via Reaper rules ([`docs/keeper/reaper.md`](../k
 |---|---|---|
 | `bootstrap_tokens` (pending) | `expire_pending_seeds` | 24h |
 | `bootstrap_tokens` (used) | `purge_used_tokens` | 90d |
+| `operator_jwts` (expired) | `purge_operator_jwts` | 30d (floor 1h) |
 | `souls` (disconnected/expired) | `purge_souls` | 30d |
 | `soul_seeds` (superseded/expired/revoked) | `purge_old_seeds` | 90d |
 | `audit_log` | `purge_audit_old` | 365d |

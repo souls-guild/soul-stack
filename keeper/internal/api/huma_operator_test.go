@@ -17,6 +17,7 @@ package api
 import (
 	"context"
 	"encoding/json"
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -31,6 +32,7 @@ import (
 	apimiddleware "github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	keeperjwt "github.com/souls-guild/soul-stack/keeper/internal/jwt"
+	"github.com/souls-guild/soul-stack/keeper/internal/operator"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -179,7 +181,7 @@ func (r *opListRows) Conn() *pgx.Conn                              { return nil 
 // opIssuer — a JWTIssuer mock: a fixed token (a deterministic golden jwt).
 type opIssuer struct{}
 
-func (opIssuer) Issue(aid string, _ []string, _ time.Duration, _ bool) (string, error) {
+func (opIssuer) Issue(_ string, aid string, _ []string, _ time.Duration, _ bool) (string, error) {
 	return "jwt-" + aid, nil
 }
 
@@ -215,7 +217,7 @@ func (p *opCapturePool) Query(ctx context.Context, sql string, args ...any) (pgx
 func humaOperatorRouterWithPool(t *testing.T, enforcer apimiddleware.PermissionChecker, auditW audit.Writer, pool handlers.OperatorPool) *chi.Mux {
 	t.Helper()
 	installHumaErrorOverride()
-	opH := handlers.NewOperatorHandler(pool, opIssuer{}, opRBAC{}, time.Hour, nil)
+	opH := handlers.NewOperatorHandler(pool, opIssuer{}, opRBAC{}, time.Hour, 0, nil)
 
 	r := chi.NewRouter()
 	injectClaims := func(next http.Handler) http.Handler {
@@ -262,6 +264,16 @@ func TestHumaOperator_Create_GoldenWire(t *testing.T) {
 	if err := json.Unmarshal(rec.Body.Bytes(), &m); err != nil {
 		t.Fatalf("reply is not a JSON object: %v; body=%s", err, rec.Body.String())
 	}
+	// jwt_id and expires_at are minted per request (NIM-1045): their shape is
+	// pinned here, the rest of the body byte-for-byte below.
+	if id, _ := m["jwt_id"].(string); !operator.ValidJWTID(id) {
+		t.Errorf("jwt_id = %v, want a ULID", m["jwt_id"])
+	}
+	if exp, err := time.Parse(time.RFC3339, fmt.Sprint(m["expires_at"])); err != nil || time.Until(exp) <= 0 {
+		t.Errorf("expires_at = %v, want a future RFC3339 time", m["expires_at"])
+	}
+	delete(m, "jwt_id")
+	delete(m, "expires_at")
 	out, _ := json.Marshal(m)
 	const golden = `{"aid":"archon-bob","created_at":"2026-06-13T10:00:00Z","created_by_aid":"archon-alice","display_name":"Bob","jwt":"jwt-archon-bob"}`
 	if got := string(out); got != golden {

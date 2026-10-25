@@ -147,6 +147,10 @@ reaper:
       enabled: true
       max_age: 90d
       action: delete
+    purge_operator_jwts:
+      enabled: true
+      max_age: 30d
+      action: delete
     purge_souls:
       enabled: true
       statuses: [disconnected, expired]

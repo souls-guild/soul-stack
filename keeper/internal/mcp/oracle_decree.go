@@ -159,7 +159,7 @@ func (h *Handler) callOracleDecreeCreate(ctx context.Context, claims *jwt.Claims
 	// Audit mirrors the REST handler: payload {name, on_beacon, incarnation,
 	// action_scenario, subject, created_by_aid}. where-CEL and action_input
 	// are NOT put in the payload (action_input may carry a vault-ref in transit).
-	h.writeAudit(audit.EventDecreeCreated, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventDecreeCreated, callerAID, map[string]any{
 		"id":              d.ID,
 		"label":           d.Label,
 		"on_beacon":       d.OnBeacon,
@@ -273,7 +273,7 @@ func (h *Handler) callOracleDecreeDelete(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventDecreeDeleted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventDecreeDeleted, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
 

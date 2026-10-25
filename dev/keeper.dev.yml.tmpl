@@ -192,6 +192,7 @@ reaper:
   rules:
     expire_pending_seeds: { enabled: true, max_age: 24h, action: delete }
     purge_used_tokens:    { enabled: true, max_age: 90d, action: delete }
+    purge_operator_jwts:  { enabled: true, max_age: 30d, action: delete }
     purge_souls:          { enabled: true, statuses: [disconnected, expired], max_age: 30d, action: delete }
     purge_old_seeds:      { enabled: true, statuses: [superseded, expired, revoked], max_age: 90d, action: delete }
     mark_disconnected:    { enabled: true, stale_after: 90s, action: set_status, target_status: disconnected }

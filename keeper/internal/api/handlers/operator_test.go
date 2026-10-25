@@ -49,7 +49,7 @@ type fakeIssuer struct {
 	err    error
 }
 
-func (f *fakeIssuer) Issue(aid string, roles []string, ttl time.Duration, _ bool) (string, error) {
+func (f *fakeIssuer) Issue(_ string, aid string, roles []string, ttl time.Duration, _ bool) (string, error) {
 	f.called = true
 	if f.err != nil {
 		return "", f.err
@@ -82,9 +82,16 @@ type fakePool struct {
 	grantErrFor map[string]error
 
 	beginErr error
+
+	// jwtInserts — args of each INSERT INTO operator_jwts (NIM-1045).
+	jwtInserts [][]any
 }
 
 func (f *fakePool) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if strings.Contains(sql, "INSERT INTO operator_jwts") {
+		f.jwtInserts = append(f.jwtInserts, args)
+		return pgconn.NewCommandTag("INSERT 0 1"), nil
+	}
 	if strings.Contains(sql, "INSERT INTO operators") {
 		f.insertCalls++
 		// args order = aid, display_name, auth_method, created_at, created_by_aid, revoked_at, metadata
@@ -413,7 +420,7 @@ func newHandler(t *testing.T, pool *fakePool, rbacCfg *rbactest.Config) (*Operat
 		t.Fatalf("NewEnforcer: %v", err)
 	}
 	iss := &fakeIssuer{}
-	h := NewOperatorHandler(pool, iss, enf, time.Hour, nil)
+	h := NewOperatorHandler(pool, iss, enf, time.Hour, 0, nil)
 	return h, iss
 }
 
@@ -614,7 +621,7 @@ func TestOperatorIssueTokenTyped_200(t *testing.T) {
 			{Name: "admin", Operators: []string{"archon-bob"}, Permissions: []string{"*"}},
 		},
 	})
-	reply, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-bob")
+	reply, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-bob", OperatorIssueTokenInput{})
 	if err != nil {
 		t.Fatalf("IssueTokenTyped: %v", err)
 	}
@@ -638,7 +645,7 @@ func TestOperatorIssueTokenTyped_Revoked_409(t *testing.T) {
 		},
 	}
 	h, _ := newHandler(t, pool, nil)
-	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-bob")
+	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-bob", OperatorIssueTokenInput{})
 	wantProblem(t, err, problem.TypeOperatorRevoked)
 }
 
@@ -649,13 +656,13 @@ func TestOperatorIssueTokenTyped_NotFound_404(t *testing.T) {
 		},
 	}
 	h, _ := newHandler(t, pool, nil)
-	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-ghost")
+	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "archon-ghost", OperatorIssueTokenInput{})
 	wantProblem(t, err, problem.TypeNotFound)
 }
 
 func TestOperatorIssueTokenTyped_InvalidAID_422(t *testing.T) {
 	h, _ := newHandler(t, &fakePool{}, nil)
-	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "BOB")
+	_, err := h.IssueTokenTyped(context.Background(), claims("archon-alice"), "BOB", OperatorIssueTokenInput{})
 	wantProblem(t, err, problem.TypeValidationFailed)
 }
 

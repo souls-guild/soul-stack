@@ -10,6 +10,7 @@ import (
 	"time"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/handlers"
+	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/augur"
 	"github.com/souls-guild/soul-stack/keeper/internal/console"
 	"github.com/souls-guild/soul-stack/keeper/internal/errand"
@@ -25,6 +26,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/sigil"
 	"github.com/souls-guild/soul-stack/keeper/internal/soul"
 	"github.com/souls-guild/soul-stack/keeper/internal/soulforget"
+	sharedapi "github.com/souls-guild/soul-stack/shared/api"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -272,6 +274,9 @@ func NewHandler(d HandlerDeps) (*Handler, error) {
 //   - `notifications/*` — ignored (no id, nothing returned).
 //   - unknown method    — MethodNotFound (-32601).
 func (h *Handler) Dispatch(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest) (resp jsonRPCResponse, isNotification bool) {
+	if claims != nil {
+		ctx = withActorJWTID(ctx, claims.ID)
+	}
 	if req.JSONRPC != jsonRPCVersion {
 		return newRPCError(req.ID, rpcCodeInvalidRequest,
 			"unsupported jsonrpc version; expected \""+jsonRPCVersion+"\"", nil), false
@@ -456,6 +461,10 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callOperatorRevoke(ctx, claims, req, p.Arguments), false
 	case "keeper.operator.issue-token":
 		return h.callOperatorIssueToken(ctx, claims, req, p.Arguments), false
+	case "keeper.operator.jwt-list":
+		return h.callOperatorJWTList(ctx, claims, req, p.Arguments), false
+	case "keeper.operator.jwt-revoke":
+		return h.callOperatorJWTRevoke(ctx, claims, req, p.Arguments), false
 
 	// Role-tools (6) — RBAC CRUD over rbac.Service (Slice 2b). 1:1 with
 	// permission (keeper.role.<action> ↔ role.<action>).
@@ -844,6 +853,8 @@ func (h *Handler) toolError(id json.RawMessage, toolName, code, detail string) j
 type operatorCreateArgs struct {
 	AID         string `json:"aid"`
 	DisplayName string `json:"display_name"`
+	TTL         string `json:"ttl"`
+	Label       string `json:"label"`
 }
 
 type operatorCreateOutput struct {
@@ -852,7 +863,15 @@ type operatorCreateOutput struct {
 	CreatedAt    time.Time `json:"created_at"`
 	CreatedByAID string    `json:"created_by_aid"`
 	JWT          string    `json:"jwt"`
+	JWTID        string    `json:"jwt_id"`
 	ExpiresAt    time.Time `json:"expires_at"`
+}
+
+// clientMetaOf is the operator-package form of what the MCP request said about
+// its sender (stored with a token the call mints).
+func clientMetaOf(ctx context.Context) operator.ClientMeta {
+	m := middleware.ClientMetaFromContext(ctx)
+	return operator.ClientMeta{IP: m.IP, UserAgent: m.UserAgent}
 }
 
 func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
@@ -883,10 +902,19 @@ func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, re
 			"operator lacks required permission operator.create")
 	}
 
+	ttl, err := operator.ParseTTL(a.TTL)
+	if err != nil {
+		code, detail := mapServiceErrorToMCP(err)
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
 	res, err := h.deps.OperatorSvc.Create(ctx, operator.CreateInput{
 		AID:         a.AID,
 		DisplayName: a.DisplayName,
 		CallerAID:   claims.Subject,
+		TTL:         ttl,
+		Label:       a.Label,
+		Client:      clientMetaOf(ctx),
 	})
 	if err != nil {
 		code, detail := mapServiceErrorToMCP(err)
@@ -901,13 +929,19 @@ func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, re
 	}
 
 	// Audit write mirrors the HTTP handler: payload {aid, display_name,
-	// auth_method, created_by_aid}. JWT is sensitive, not written.
-	h.writeAudit(audit.EventOperatorCreated, claims.Subject, map[string]any{
+	// auth_method, created_by_aid, jwt_id, label?}. JWT and expires_at are
+	// not written (parity with the HTTP create payload).
+	payload := map[string]any{
 		"aid":            res.AID,
 		"display_name":   res.DisplayName,
 		"auth_method":    string(res.AuthMethod),
 		"created_by_aid": res.CreatedByAID,
-	})
+		"jwt_id":         res.JWTID,
+	}
+	if a.Label != "" {
+		payload["label"] = a.Label
+	}
+	h.writeAudit(ctx, audit.EventOperatorCreated, claims.Subject, payload)
 
 	return h.toolResult(req.ID, operatorCreateOutput{
 		AID:          res.AID,
@@ -915,6 +949,7 @@ func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, re
 		CreatedAt:    res.CreatedAt,
 		CreatedByAID: res.CreatedByAID,
 		JWT:          res.JWT,
+		JWTID:        res.JWTID,
 		ExpiresAt:    res.ExpiresAt,
 	})
 }
@@ -968,19 +1003,22 @@ func (h *Handler) callOperatorRevoke(ctx context.Context, claims *jwt.Claims, re
 	if a.Reason != "" {
 		payload["reason"] = a.Reason
 	}
-	h.writeAudit(audit.EventOperatorRevoked, claims.Subject, payload)
+	h.writeAudit(ctx, audit.EventOperatorRevoked, claims.Subject, payload)
 
 	// HTTP returns 204 No Content; MCP equivalent is an empty output object.
 	return h.toolResult(req.ID, struct{}{})
 }
 
 type operatorIssueTokenArgs struct {
-	AID string `json:"aid"`
+	AID   string `json:"aid"`
+	TTL   string `json:"ttl"`
+	Label string `json:"label"`
 }
 
 type operatorIssueTokenOutput struct {
 	AID       string    `json:"aid"`
 	JWT       string    `json:"jwt"`
+	JWTID     string    `json:"jwt_id"`
 	ExpiresAt time.Time `json:"expires_at"`
 }
 
@@ -1007,9 +1045,18 @@ func (h *Handler) callOperatorIssueToken(ctx context.Context, claims *jwt.Claims
 			"operator lacks required permission operator.issue-token")
 	}
 
+	ttl, err := operator.ParseTTL(a.TTL)
+	if err != nil {
+		code, detail := mapServiceErrorToMCP(err)
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
 	res, err := h.deps.OperatorSvc.IssueToken(ctx, operator.IssueTokenInput{
 		AID:       a.AID,
 		CallerAID: claims.Subject,
+		TTL:       ttl,
+		Label:     a.Label,
+		Client:    clientMetaOf(ctx),
 	})
 	if err != nil {
 		code, detail := mapServiceErrorToMCP(err)
@@ -1023,16 +1070,172 @@ func (h *Handler) callOperatorIssueToken(ctx context.Context, claims *jwt.Claims
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventOperatorTokenIssued, claims.Subject, map[string]any{
+	payload := map[string]any{
 		"aid":        res.AID,
-		"expires_at": res.ExpiresAt.Format(time.RFC3339),
-	})
+		"expires_at": res.ExpiresAt.UTC().Truncate(time.Second).Format(time.RFC3339),
+		"jwt_id":     res.JWTID,
+		"ttl":        res.TTL.String(),
+	}
+	if a.Label != "" {
+		payload["label"] = a.Label
+	}
+	h.writeAudit(ctx, audit.EventOperatorTokenIssued, claims.Subject, payload)
 
 	return h.toolResult(req.ID, operatorIssueTokenOutput{
 		AID:       res.AID,
 		JWT:       res.JWT,
+		JWTID:     res.JWTID,
 		ExpiresAt: res.ExpiresAt,
 	})
+}
+
+type operatorJWTListArgs struct {
+	AID    string `json:"aid"`
+	Offset *int   `json:"offset"`
+	Limit  *int   `json:"limit"`
+}
+
+type operatorJWTItem struct {
+	JWTID             string     `json:"jwt_id"`
+	AID               string     `json:"aid"`
+	Kind              string     `json:"kind"`
+	Label             string     `json:"label,omitempty"`
+	CreatedAt         time.Time  `json:"created_at"`
+	ExpiresAt         time.Time  `json:"expires_at"`
+	CreatedByAID      *string    `json:"created_by_aid,omitempty"`
+	CreatedIP         string     `json:"created_ip,omitempty"`
+	CreatedUserAgent  string     `json:"created_user_agent,omitempty"`
+	LastUsedAt        *time.Time `json:"last_used_at,omitempty"`
+	LastUsedIP        string     `json:"last_used_ip,omitempty"`
+	LastUsedUserAgent string     `json:"last_used_user_agent,omitempty"`
+	RevokedAt         *time.Time `json:"revoked_at,omitempty"`
+	RevokedByAID      *string    `json:"revoked_by_aid,omitempty"`
+}
+
+type operatorJWTListOutput struct {
+	Items  []operatorJWTItem `json:"items"`
+	Offset int               `json:"offset"`
+	Limit  int               `json:"limit"`
+	Total  int               `json:"total"`
+}
+
+func (h *Handler) callOperatorJWTList(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.operator.jwt-list"
+
+	var a operatorJWTListArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest,
+				"invalid arguments: "+err.Error())
+		}
+	}
+	if !operator.ValidAID(a.AID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'aid' must match "+operator.AIDPattern)
+	}
+	offset, limit := 0, sharedapi.DefaultPageLimit
+	if a.Offset != nil {
+		offset = *a.Offset
+	}
+	if a.Limit != nil {
+		limit = *a.Limit
+	}
+	if err := sharedapi.CheckPageBounds(offset, limit); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, err.Error())
+	}
+
+	if err := h.deps.RBAC.Check(claims.Subject, "operator", "list", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission operator.list")
+	}
+
+	recs, total, err := h.deps.OperatorSvc.ListJWTs(ctx, a.AID, offset, limit)
+	if err != nil {
+		code, detail := mapServiceErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: operator.jwt-list service failed",
+				slog.String("aid", a.AID), slog.Any("error", err))
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+	sec := func(t *time.Time) *time.Time {
+		if t == nil {
+			return nil
+		}
+		v := t.UTC().Truncate(time.Second)
+		return &v
+	}
+	items := make([]operatorJWTItem, 0, len(recs))
+	for _, r := range recs {
+		items = append(items, operatorJWTItem{
+			JWTID:             r.JWTID,
+			AID:               r.AID,
+			Kind:              string(r.Kind),
+			Label:             r.Label,
+			CreatedAt:         r.CreatedAt.UTC().Truncate(time.Second),
+			ExpiresAt:         r.ExpiresAt.UTC().Truncate(time.Second),
+			CreatedByAID:      r.CreatedByAID,
+			CreatedIP:         r.CreatedIP,
+			CreatedUserAgent:  r.CreatedUserAgent,
+			LastUsedAt:        sec(r.LastUsedAt),
+			LastUsedIP:        r.LastUsedIP,
+			LastUsedUserAgent: r.LastUsedUserAgent,
+			RevokedAt:         sec(r.RevokedAt),
+			RevokedByAID:      r.RevokedByAID,
+		})
+	}
+	return h.toolResult(req.ID, operatorJWTListOutput{Items: items, Offset: offset, Limit: limit, Total: total})
+}
+
+type operatorJWTRevokeArgs struct {
+	AID   string `json:"aid"`
+	JWTID string `json:"jwt_id"`
+}
+
+func (h *Handler) callOperatorJWTRevoke(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.operator.jwt-revoke"
+
+	var a operatorJWTRevokeArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest,
+				"invalid arguments: "+err.Error())
+		}
+	}
+	if !operator.ValidAID(a.AID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'aid' must match "+operator.AIDPattern)
+	}
+	if a.JWTID == "" {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed, "field 'jwt_id' is required")
+	}
+
+	if err := h.deps.RBAC.Check(claims.Subject, "operator", "jwt-revoke", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission operator.jwt-revoke")
+	}
+
+	rec, err := h.deps.OperatorSvc.RevokeJWT(ctx, operator.RevokeJWTInput{
+		AID:       a.AID,
+		JWTID:     a.JWTID,
+		CallerAID: claims.Subject,
+	})
+	if err != nil {
+		code, detail := mapServiceErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: operator.jwt-revoke service failed",
+				slog.String("aid", a.AID), slog.String("jwt_id", a.JWTID),
+				slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
+	h.writeAudit(ctx, audit.EventOperatorJWTRevoked, claims.Subject, map[string]any{
+		"aid":    rec.AID,
+		"jwt_id": rec.JWTID,
+		"kind":   string(rec.Kind),
+	})
+	return h.toolResult(req.ID, struct{}{})
 }
 
 // toolResult serializes typed output into the MCP-spec `toolsCallResult`
@@ -1067,12 +1270,12 @@ func (h *Handler) toolResult(id json.RawMessage, out any) jsonRPCResponse {
 // Background context has the same rationale as HTTP audit-middleware: the
 // client may have disconnected, audit must not be lost. The tools/call-level
 // ctx param isn't needed here — it arrives in M0.7.c with cancellation / SSE.
-func (h *Handler) writeAudit(eventType audit.EventType, aid string, payload map[string]any) {
+func (h *Handler) writeAudit(ctx context.Context, eventType audit.EventType, aid string, payload map[string]any) {
 	ev := &audit.Event{
 		EventType: eventType,
 		Source:    audit.SourceMCP,
 		ArchonAID: aid,
-		Payload:   payload,
+		Payload:   audit.WithActorJWTID(payload, actorJWTID(ctx)),
 	}
 	if err := h.deps.AuditWriter.Write(context.Background(), ev); err != nil {
 		h.deps.Logger.Error("mcp: audit write failed",
@@ -1083,17 +1286,35 @@ func (h *Handler) writeAudit(eventType audit.EventType, aid string, payload map[
 	}
 }
 
+type actorJWTKey struct{}
+
+// withActorJWTID carries the caller's token id to the audit writes a tool call
+// makes ([audit.PayloadActorJWTID], NIM-1045). The writes themselves run on a
+// background context — a client hanging up must not lose them — so the id is
+// read from the call's context and copied into the payload.
+func withActorJWTID(ctx context.Context, jwtID string) context.Context {
+	if jwtID == "" {
+		return ctx
+	}
+	return context.WithValue(ctx, actorJWTKey{}, jwtID)
+}
+
+func actorJWTID(ctx context.Context) string {
+	id, _ := ctx.Value(actorJWTKey{}).(string)
+	return id
+}
+
 // writeAuditCorrelated extends writeAudit with a CorrelationID (run/check
 // ULID). Needed for events that must coalesce with a task.executed /
 // run.completed chain (all task.executed events within one run). Background
 // context has the same rationale as writeAudit (client may have disconnected).
-func (h *Handler) writeAuditCorrelated(eventType audit.EventType, aid, correlationID string, payload map[string]any) {
+func (h *Handler) writeAuditCorrelated(ctx context.Context, eventType audit.EventType, aid, correlationID string, payload map[string]any) {
 	ev := &audit.Event{
 		EventType:     eventType,
 		Source:        audit.SourceMCP,
 		ArchonAID:     aid,
 		CorrelationID: correlationID,
-		Payload:       payload,
+		Payload:       audit.WithActorJWTID(payload, actorJWTID(ctx)),
 	}
 	if err := h.deps.AuditWriter.Write(context.Background(), ev); err != nil {
 		h.deps.Logger.Error("mcp: audit write failed",

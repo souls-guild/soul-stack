@@ -230,6 +230,7 @@ type allowAllRBAC struct{}
 func (allowAllRBAC) Check(string, string, string, map[string]string) error { return nil }
 func (allowAllRBAC) HoldsAction(string, string, string) bool               { return true }
 func (allowAllRBAC) IsRevoked(string) bool                                 { return false }
+func (allowAllRBAC) IsJWTRevoked(string) bool                              { return false }
 
 type denyHostRBAC struct{ deny string }
 
@@ -241,6 +242,7 @@ func (d denyHostRBAC) Check(_, _, _ string, ctx map[string]string) error {
 }
 func (denyHostRBAC) HoldsAction(string, string, string) bool { return true }
 func (denyHostRBAC) IsRevoked(string) bool                   { return false }
+func (denyHostRBAC) IsJWTRevoked(string) bool                { return false }
 
 // hostScopedRBAC models the role the ADR is written for: `soul.console on
 // host=<allow>`. It holds the action (so the socket must open) but denies every
@@ -257,6 +259,7 @@ func (h hostScopedRBAC) Check(_, _, _ string, ctx map[string]string) error {
 }
 func (hostScopedRBAC) HoldsAction(string, string, string) bool { return true }
 func (hostScopedRBAC) IsRevoked(string) bool                   { return false }
+func (hostScopedRBAC) IsJWTRevoked(string) bool                { return false }
 
 // consoleTestServer is a live HTTP server carrying the real /v1 chain.
 type consoleTestServer struct {
@@ -352,7 +355,7 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleTestRBAC, limits cons
 	}
 	soul.hub = hub
 
-	verifier, err := keeperjwt.NewVerifier(consoleTestKey, consoleTestIssuer)
+	verifier, err := keeperjwt.NewVerifier(consoleTestKey, consoleTestIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -360,7 +363,7 @@ func newConsoleTestServerLogging(t *testing.T, rbac consoleTestRBAC, limits cons
 	if err != nil {
 		t.Fatalf("NewIssuer: %v", err)
 	}
-	tok, err := issuer.Issue(consoleTestAID, []string{"cluster-admin"}, time.Hour, false)
+	tok, err := issuer.Issue("01JTESTJT1000000000000000A", consoleTestAID, []string{"cluster-admin"}, time.Hour, false)
 	if err != nil {
 		t.Fatalf("Issue: %v", err)
 	}
@@ -1156,6 +1159,7 @@ func (denyAllRBAC) Check(string, string, string, map[string]string) error {
 }
 func (denyAllRBAC) HoldsAction(string, string, string) bool { return false }
 func (denyAllRBAC) IsRevoked(string) bool                   { return false }
+func (denyAllRBAC) IsJWTRevoked(string) bool                { return false }
 
 // The socket-level gate cannot see the target host, so a per-host scope has to
 // be re-checked when the `open` frame names it.

@@ -28,6 +28,7 @@ import (
 //     runner.go::dispatch (enum closed by runner-dispatch, not by this list —
 //     docstring is synchronized manually). Full set:
 //     `purge_audit_old`, `expire_pending_seeds`, `purge_used_tokens`,
+//     `purge_operator_jwts`,
 //     `purge_souls`, `purge_old_seeds`, `mark_disconnected`,
 //     `purge_apply_runs`, `purge_voyages`, `purge_push_runs`,
 //     `purge_incarnation_archive`, `purge_state_history_archive`,

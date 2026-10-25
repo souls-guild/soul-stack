@@ -105,7 +105,7 @@ func (h *Handler) callSoulForget(ctx context.Context, claims *jwt.Claims, req js
 	// this call there is nothing else left to read: every row it describes is
 	// gone, so `soul.forgotten` is the only durable record that the host, its
 	// seeds, its memberships and its Voices ever existed.
-	h.writeAudit(audit.EventSoulForgotten, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventSoulForgotten, claims.Subject, map[string]any{
 		"sid":                  a.SID,
 		"status_before":        res.StatusBefore,
 		"seeds_revoked":        res.SeedsRevoked,

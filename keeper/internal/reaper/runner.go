@@ -58,8 +58,11 @@ const (
 	// rejects invalid format; empty is normal for omitting field).
 	defaultExpirePendingSeedsMaxAge = 24 * time.Hour
 	defaultPurgeUsedTokensMaxAge    = 90 * 24 * time.Hour
-	defaultPurgeSoulsMaxAge         = 30 * 24 * time.Hour
-	defaultPurgeOldSeedsMaxAge      = 90 * 24 * time.Hour
+	// Retention of operator_jwts rows after their token expired (NIM-1045):
+	// long enough to answer "what was that token doing last month".
+	defaultPurgeOperatorJWTsMaxAge = 30 * 24 * time.Hour
+	defaultPurgeSoulsMaxAge        = 30 * 24 * time.Hour
+	defaultPurgeOldSeedsMaxAge     = 90 * 24 * time.Hour
 	// Retention of history of service cert rotations (`purge_old_certs`, R4,
 	// cert-rotation Var1). 90d — parity defaultPurgeOldSeedsMaxAge (same class
 	// "cert-material history", keep trail of rotations long enough for
@@ -150,6 +153,7 @@ type PurgerAPI interface {
 	PurgeAuditOld(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeExpiredPendingTokens(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeUsedTokens(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
+	PurgeOperatorJWTs(ctx context.Context, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeSouls(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeOldSeeds(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
 	PurgeOldCerts(ctx context.Context, statuses []string, maxAge time.Duration, batchSize int) (int64, error)
@@ -464,6 +468,9 @@ func (r *Runner) dispatch(ctx context.Context, cfg *config.KeeperConfig) {
 		case "purge_used_tokens":
 			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeUsedTokensMaxAge, batchSize, dryRun,
 				r.deps.Purger.PurgeUsedTokens)
+		case "purge_operator_jwts":
+			r.runDurationRule(ctx, name, rule.MaxAge, defaultPurgeOperatorJWTsMaxAge, batchSize, dryRun,
+				r.deps.Purger.PurgeOperatorJWTs)
 		case "purge_souls":
 			r.runStatusesRule(ctx, name, rule.Statuses, defaultPurgeSoulsStatuses,
 				rule.MaxAge, defaultPurgeSoulsMaxAge, batchSize, dryRun,

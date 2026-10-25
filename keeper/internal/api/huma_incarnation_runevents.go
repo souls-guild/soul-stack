@@ -40,6 +40,7 @@ import (
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
 	"github.com/souls-guild/soul-stack/keeper/internal/applybus"
 	"github.com/souls-guild/soul-stack/keeper/internal/applyrun"
+	"github.com/souls-guild/soul-stack/keeper/internal/jwt"
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
@@ -166,6 +167,7 @@ func registerHumaIncarnationRunEvents(humaAPI huma.API, deps *runEventsDeps) {
 		if !ok {
 			return nil, sseForbidden()
 		}
+		grant.jwtID = claims.ID
 		// conn-limit (M4): take a slot ONLY for an authorized subscription, release it in the
 		// stream body's defer (huma is guaranteed to call Body on a StreamResponse).
 		if deps.Limiter != nil && !deps.Limiter.Acquire(claims.Subject) {
@@ -192,6 +194,9 @@ type runEventsGrant struct {
 	// initiator is true when this subscriber started the run, which is the half
 	// of the rule no permission can express.
 	initiator bool
+	// jwtID is the `jti` of the token the stream was opened with: revoking that
+	// one token must close the stream as revoking the operator does (NIM-1045).
+	jwtID string
 }
 
 // authorizeRunEventsSSE — RBAC check of the subscription to apply_id (ADR-068 §A3, parity
@@ -250,7 +255,7 @@ func authorizeRunEventsSSE(ctx context.Context, deps *runEventsDeps, sub, name, 
 // Revocation comes first because it is not a permission question: the token is no
 // longer trusted, so being the run's initiator stops earning anything.
 func runEventsStillAuthorized(deps *runEventsDeps, sub string, g runEventsGrant) bool {
-	if deps.RBAC != nil && deps.RBAC.IsRevoked(sub) {
+	if deps.RBAC != nil && apimiddleware.CredentialRevoked(deps.RBAC, &jwt.Claims{Subject: sub, ID: g.jwtID}) {
 		return false
 	}
 	if g.initiator {

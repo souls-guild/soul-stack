@@ -35,6 +35,15 @@ type operatorListReply struct {
 	Total  int32      `json:"total" doc:"total number of entries in set"`
 }
 
+// operatorJWTListReply — the alias target for the GET /v1/operators/{aid}/jwts
+// envelope schema, same shape as [operatorListReply].
+type operatorJWTListReply struct {
+	Items  []OperatorJWT `json:"items" doc:"page of tokens, newest first"`
+	Offset int32         `json:"offset" doc:"offset from start of set"`
+	Limit  int32         `json:"limit" doc:"page size"`
+	Total  int32         `json:"total" doc:"total number of entries in set"`
+}
+
 // registerOperatorEnvelopes registers a huma alias on the registry from the instantiated generic
 // sharedapi.PagedResponse[Operator] → the named-struct envelope, so that huma builds the
 // list-Body schema under the contract name/shape. Called in newHumaCadenceAPI for
@@ -43,5 +52,9 @@ func registerOperatorEnvelopes(api huma.API) {
 	api.OpenAPI().Components.Schemas.RegisterTypeAlias(
 		reflect.TypeFor[sharedapi.PagedResponse[Operator]](),
 		reflect.TypeFor[operatorListReply](),
+	)
+	api.OpenAPI().Components.Schemas.RegisterTypeAlias(
+		reflect.TypeFor[sharedapi.PagedResponse[OperatorJWT]](),
+		reflect.TypeFor[operatorJWTListReply](),
 	)
 }

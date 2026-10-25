@@ -38,6 +38,8 @@ type OperatorCreateRequest struct {
 	AID         string   `json:"aid" required:"true" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the new Archon (naming-rules.md)"`
 	DisplayName string   `json:"display_name,omitempty" doc:"human-readable name for UI/audit"`
 	Roles       []string `json:"roles,omitempty" doc:"opt. list of roles for atomic create+grant (onboarding in one call); role error -> rollback"`
+	TTL         string   `json:"ttl,omitempty" doc:"lifetime of the returned JWT (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max, else 422"`
+	Label       string   `json:"label,omitempty" maxLength:"200" doc:"free text shown in the operator's token list (\"Service Desk prod\")"`
 }
 
 // operatorCreateOutput — huma output for POST /v1/operators (FULL-TYPED). Status=201;
@@ -203,9 +205,17 @@ func operatorRevokeOperation() huma.Operation {
 // === POST /v1/operators/{aid}/issue-token (issue) — WRITE+AUDIT operator.token-issued ===
 
 // operatorIssueTokenInput — huma input for POST /v1/operators/{aid}/issue-token. AID —
-// path parameter. No Body (issuing a new JWT carries no body).
+// path parameter. Body is optional (a pointer): an empty request keeps the pre-NIM-1045
+// contract — a token for `auth.jwt.ttl_default` with no label.
 type operatorIssueTokenInput struct {
-	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon for whom a new JWT is issued"`
+	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon for whom a new JWT is issued"`
+	Body *OperatorIssueTokenRequest
+}
+
+// OperatorIssueTokenRequest — the optional body of issue-token.
+type OperatorIssueTokenRequest struct {
+	TTL   string `json:"ttl,omitempty" doc:"lifetime (\"2160h\" or \"90d\"); omitted -> auth.jwt.ttl_default; between 1m and auth.jwt.ttl_max, else 422"`
+	Label string `json:"label,omitempty" maxLength:"200" doc:"free text shown in the operator's token list (\"Service Desk prod\")"`
 }
 
 // operatorIssueTokenOutput — huma output for POST /v1/operators/{aid}/issue-token
@@ -225,9 +235,61 @@ func operatorIssueTokenOperation() huma.Operation {
 		Method:        http.MethodPost,
 		Path:          "/{aid}/issue-token",
 		Summary:       "Issue a new JWT to an Archon",
-		Description:   "Issues a fresh JWT to an existing operator (ADR-014). Permission operator.issue-token. 409 - operator revoked. Returns JWT once.",
+		Description:   "Issues a fresh JWT to an existing operator (ADR-014). Optional body: ttl (up to auth.jwt.ttl_max) and label. The token is accounted under jwt_id and can be revoked on its own (POST /v1/operators/{aid}/jwts/{jwt_id}/revoke). Permission operator.issue-token. 409 - operator revoked. Returns JWT once.",
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === GET /v1/operators/{aid}/jwts (jwt-list) — READ (no audit) ===
+
+// operatorJWTListInput — huma input for GET /v1/operators/{aid}/jwts. Offset/Limit —
+// int32 with the same defaults and the same domain-side bounds as the operators list.
+type operatorJWTListInput struct {
+	AID    string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon"`
+	Offset int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (out-of-range → 400)"`
+	Limit  int32  `query:"limit" default:"50" doc:"page size 1..1000 (out-of-range → 400)"`
+}
+
+// operatorJWTListOutput — huma output for GET /v1/operators/{aid}/jwts.
+type operatorJWTListOutput struct {
+	Body sharedapi.PagedResponse[OperatorJWT]
+}
+
+// operatorJWTListOperation — GET /v1/operators/{aid}/jwts. Permission operator.list.
+func operatorJWTListOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "listOperatorJWTs",
+		Method:        http.MethodGet,
+		Path:          "/{aid}/jwts",
+		Summary:       "Tokens of an Archon",
+		Description:   "Every JWT Keeper minted for the operator, newest first, with where it was minted from and where it was last used (ADR-014 amendment NIM-1045). Never returns a token. Expired tokens stay listed until the Reaper rule purge_operator_jwts removes them. Permission operator.list. Read-only, no audit.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusOK,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === POST /v1/operators/{aid}/jwts/{jwt_id}/revoke (jwt-revoke) — WRITE+AUDIT operator.jwt-revoked ===
+
+// operatorJWTRevokeInput — huma input for the jwt revoke. Both ids are path parameters.
+type operatorJWTRevokeInput struct {
+	AID   string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the Archon the token belongs to"`
+	JWTID string `path:"jwt_id" pattern:"^[0-9A-HJKMNP-TV-Z]{26}$" doc:"jwt_id of the token (its jti)"`
+}
+
+// operatorJWTRevokeOperation — POST /v1/operators/{aid}/jwts/{jwt_id}/revoke.
+// Permission operator.jwt-revoke + audit operator.jwt-revoked.
+func operatorJWTRevokeOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "revokeOperatorJWT",
+		Method:        http.MethodPost,
+		Path:          "/{aid}/jwts/{jwt_id}/revoke",
+		Summary:       "Revoke one token of an Archon",
+		Description:   "Sets operator_jwts.revoked_at: the token is refused (401 jwt-revoked) on its next request on every Keeper node; the operator and its other tokens keep working (ADR-014 amendment NIM-1045). Permission operator.jwt-revoke. 404 - not a token of this operator. 409 - already revoked.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }

@@ -150,7 +150,7 @@ func (h *Handler) callOracleVigilCreate(ctx context.Context, claims *jwt.Claims,
 
 	// Audit — mirrors the REST handler: payload {name, check, interval,
 	// subject, created_by_aid}. params is NOT included in the payload.
-	h.writeAudit(audit.EventVigilCreated, callerAID, map[string]any{
+	h.writeAudit(ctx, audit.EventVigilCreated, callerAID, map[string]any{
 		"id":             v.ID,
 		"label":          v.Label,
 		"check":          v.CheckAddr,
@@ -261,7 +261,7 @@ func (h *Handler) callOracleVigilDelete(ctx context.Context, claims *jwt.Claims,
 		return h.toolError(req.ID, toolName, code, detail)
 	}
 
-	h.writeAudit(audit.EventVigilDeleted, claims.Subject, map[string]any{
+	h.writeAudit(ctx, audit.EventVigilDeleted, claims.Subject, map[string]any{
 		"id": a.ID,
 	})
 

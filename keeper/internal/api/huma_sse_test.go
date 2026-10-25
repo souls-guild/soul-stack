@@ -58,6 +58,8 @@ func (s stubRBACChecker) Check(_, resource, action string, _ map[string]string) 
 
 func (s stubRBACChecker) IsRevoked(aid string) bool { return s.revoked[aid] }
 
+func (s stubRBACChecker) IsJWTRevoked(string) bool { return false }
+
 func ptrStr(s string) *string { return &s }
 
 func discardLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Discard, nil)) }
@@ -67,7 +69,7 @@ func discardLogger() *slog.Logger { return slog.New(slog.NewJSONHandler(io.Disca
 func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess, rbac runEventsRBAC, opts ...func(*runEventsDeps)) (*httptest.Server, func(aid string) string) {
 	t.Helper()
 	installHumaErrorOverride()
-	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer)
+	verifier, err := keeperjwt.NewVerifier([]byte(sseAPISigningKey), sseAPIIssuer, keeperjwt.NoRevocation)
 	if err != nil {
 		t.Fatalf("NewVerifier: %v", err)
 	}
@@ -100,7 +102,7 @@ func sseTestHarness(t *testing.T, bus *applybus.EventBus, access runEventsAccess
 	srv := httptest.NewServer(r)
 	t.Cleanup(srv.Close)
 	mint := func(aid string) string {
-		tok, err := issuer.Issue(aid, []string{"cluster-admin"}, time.Hour, false)
+		tok, err := issuer.Issue("01JTESTJT1000000000000000A", aid, []string{"cluster-admin"}, time.Hour, false)
 		if err != nil {
 			t.Fatalf("Issue: %v", err)
 		}
