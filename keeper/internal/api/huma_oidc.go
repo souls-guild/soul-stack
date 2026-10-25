@@ -15,6 +15,7 @@ package api
 
 import (
 	"context"
+	"crypto/subtle"
 	"errors"
 	"log/slog"
 	"net/http"
@@ -28,9 +29,39 @@ import (
 	"github.com/souls-guild/soul-stack/shared/audit"
 )
 
-// oidcCallbackSuccessRedirect — where to redirect the browser after a successful login.
-// `/ui` — the built-in UI (ADR-055); the cookie is already set, the UI will pick up the session.
-const oidcCallbackSuccessRedirect = "/ui"
+// oidcCallbackSuccessRedirect — where to redirect the browser after a successful
+// login: the login page of the built-in UI (ADR-055), told by `sso=done` that a
+// session cookie is waiting to be exchanged. The SPA knows of a cookie only
+// from a login it made itself; a bare `/ui` landed on the login form with the
+// session unused (ADR-058 amendment NIM-1050).
+const oidcCallbackSuccessRedirect = "/ui/login?sso=done"
+
+// oidcStateCookieName binds a login's `state` to the browser that started it
+// (ADR-058 amendment NIM-1050). The flow state in Redis says only that the
+// state was issued; without this cookie a callback URL completed at the IdP
+// by one person and opened by another would sign the second one in as the
+// first (login CSRF), and the web UI's `sso=done` landing would use it.
+const oidcStateCookieName = "__Host-soul_oidc_state"
+
+// oidcStateCookieTTL — as long as the flow state in Redis lives (oidcFlowTTL
+// of `keeper run`); a cookie outliving it names a state that is gone.
+const oidcStateCookieTTL = 5 * time.Minute
+
+// newOIDCStateCookie — Lax, not Strict: the callback is a cross-site top-level
+// GET from the IdP, the one cross-site request Lax still sends a cookie on.
+// The __Host- prefix makes the browser refuse one set by a sibling domain
+// (cookie tossing); it requires Path=/ and no Domain.
+func newOIDCStateCookie(state string) *http.Cookie {
+	return &http.Cookie{
+		Name:     oidcStateCookieName,
+		Value:    state,
+		Path:     "/",
+		HttpOnly: true,
+		Secure:   true,
+		SameSite: http.SameSiteLaxMode,
+		MaxAge:   int(oidcStateCookieTTL / time.Second),
+	}
+}
 
 // OIDCAuthDeps — dependencies of the OIDC endpoints. nil → not mounted (opt-in,
 // same as LDAPAuth): keeper.yml::auth.oidc not set → this login method is unavailable.
@@ -56,10 +87,12 @@ type oidcAuthenticator interface {
 // oidcLoginInput — input with no fields (starting login requires no parameters).
 type oidcLoginInput struct{}
 
-// oidcLoginOutput — 302 to the IdP. Body is empty; Location is the authorization URL.
+// oidcLoginOutput — 302 to the IdP. Body is empty; Location is the
+// authorization URL, SetCookie the state binding.
 type oidcLoginOutput struct {
-	Status   int    `json:"-"`
-	Location string `header:"Location" json:"-"`
+	Status    int    `json:"-"`
+	Location  string `header:"Location" json:"-"`
+	SetCookie string `header:"Set-Cookie" json:"-"`
 }
 
 func oidcLoginOperation() huma.Operation {
@@ -68,7 +101,7 @@ func oidcLoginOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/oidc/login",
 		Summary:       "Start OIDC login for the operator",
-		Description:   "Federated authentication (ADR-058): generates state+nonce+PKCE and redirects (302) to the external IdP's authorization_endpoint.",
+		Description:   "Federated authentication (ADR-058): generates state+nonce+PKCE, binds the state to this browser with the HttpOnly cookie __Host-soul_oidc_state, and redirects (302) to the external IdP's authorization_endpoint.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
 		// 429 — anti-bruteforce throttle (AuthLoginLimit middleware, HIGH-3:
@@ -84,6 +117,8 @@ type oidcCallbackInput struct {
 	Code  string `query:"code" doc:"authorization code from the IdP"`
 	State string `query:"state" doc:"opaque CSRF-state, issued at /auth/oidc/login"`
 	Error string `query:"error" doc:"error code from the IdP (if authentication was rejected)"`
+	// StateCookie — what /auth/oidc/login set in this browser; must equal State.
+	StateCookie string `cookie:"__Host-soul_oidc_state" required:"false"`
 }
 
 // oidcCallbackOutput — 302 to the UI + Set-Cookie with the internal JWT.
@@ -99,7 +134,7 @@ func oidcCallbackOperation() huma.Operation {
 		Method:        http.MethodGet,
 		Path:          "/oidc/callback",
 		Summary:       "OIDC callback for the operator",
-		Description:   "Validates id_token (JWKS signature/iss/aud/exp/nonce), maps to operators(aid)+roles, issues the internal JWT in an HttpOnly+Secure cookie and redirects (302) to the UI. Validation/mapping error -> 401/403.",
+		Description:   "Validates id_token (JWKS signature/iss/aud/exp/nonce), maps to operators(aid)+roles, issues the internal JWT in an HttpOnly+Secure cookie and redirects (302) to the UI login page (/ui/login?sso=done), which exchanges it. A state that does not match the __Host-soul_oidc_state cookie set by /auth/oidc/login in the same browser is refused (401) before it is used. Validation/mapping error -> 401/403.",
 		Tags:          []string{"auth"},
 		DefaultStatus: http.StatusFound,
 		// 429 — anti-bruteforce throttle/lockout (AuthLoginLimit middleware, HIGH-3).
@@ -122,7 +157,7 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 			}
 			return nil, huma.NewError(http.StatusInternalServerError, "internal error")
 		}
-		return &oidcLoginOutput{Status: http.StatusFound, Location: authz.RedirectTo}, nil
+		return &oidcLoginOutput{Status: http.StatusFound, Location: authz.RedirectTo, SetCookie: newOIDCStateCookie(authz.State).String()}, nil
 	})
 
 	huma.Register(humaAPI, oidcCallbackOperation(), func(ctx context.Context, in *oidcCallbackInput) (*oidcCallbackOutput, error) {
@@ -134,6 +169,11 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 			return nil, oidcLoginProblem(auth.ErrAuthFailed)
 		}
 
+		// Checked before the state is consumed: a stranger's callback URL does
+		// not use up the flow of the browser that started it.
+		if in.StateCookie == "" || subtle.ConstantTimeCompare([]byte(in.StateCookie), []byte(in.State)) != 1 {
+			return nil, oidcLoginProblem(auth.ErrAuthFailed)
+		}
 		ext, err := d.Authenticator.CompleteLogin(ctx, in.Code, in.State)
 		if err != nil {
 			return nil, oidcLoginProblem(err)
@@ -152,8 +192,9 @@ func registerHumaOIDCLogin(humaAPI huma.API, d *OIDCAuthDeps) {
 
 		// A SINGLE cookie factory (newSessionCookie): SameSite=Strict symmetric with LDAP
 		// (MED fix for the mismatch, ADR-058(g)). Strict is safe for the callback:
-		// the cookie is SET on the callback response and SENT on the subsequent
-		// same-site navigation to /ui (302). See the newSessionCookie doc.
+		// the cookie is SET on the callback response; the UI login page it
+		// redirects to sends it, same-site, to /auth/token. See the
+		// newSessionCookie doc.
 		cookie := newSessionCookie(token, d.TTL)
 
 		if d.Audit != nil {

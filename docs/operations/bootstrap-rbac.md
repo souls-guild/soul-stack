@@ -138,7 +138,8 @@ A request may ask for a lifetime (`ttl` on `POST /v1/operators` and `issue-token
 
 | Knob | Default | Applies to |
 |---|---|---|
-| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators` and `operator.issue-token` **without** a `ttl`, plus the internal JWT behind the `soul_session` cookie of an LDAP/OIDC/local-password login. |
+| `auth.jwt.ttl_default` | `24h` | Every JWT issued through `POST /v1/operators`, `operator.issue-token` and `POST /v1/me/jwts` **without** a `ttl`. |
+| `auth.local.session_ttl` / `auth.ldap.session_ttl` / `auth.oidc.session_ttl` | `168h` / `168h` / `24h` | The web session — the internal JWT behind the `soul_session` cookie — of a password, LDAP or OIDC login, counted from the login; at most `ttl_max` ([ADR-058(k)](../adr/0058-operator-auth-ldap-oidc.md)). |
 | `auth.jwt.ttl_max` | `2160h` (90 days), or `ttl_default` if longer | The ceiling of the `ttl` a request may ask for ([ADR-014 amendment NIM-1045](../adr/0014-operator-identity.md)). An explicit value below `ttl_default` is refused. |
 | `auth.jwt.ttl_bootstrap` | `720h` (30 days) | Only the first token written by `keeper init`. Read by the subcommand itself at each invocation, so it does not depend on the running daemon. |
 | `auth.jwt.exchange_ttl` | `10m` (floor `1m`) | The short Bearer that `POST /auth/token` gives the web UI in exchange for a `soul_session` cookie ([ADR-058](../adr/0058-operator-auth-ldap-oidc.md)); additionally capped by the remaining lifetime of the cookie. |

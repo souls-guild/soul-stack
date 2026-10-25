@@ -53,6 +53,12 @@ const (
 	// The operator stays active.
 	EventOperatorJWTRevoked EventType = "operator.jwt-revoked"
 
+	// EventOperatorSessionsRevoked — an Archon ended its own web sessions
+	// (`POST /v1/me/sessions/revoke`, ADR-058 amendment NIM-1050). Payload
+	// `{aid, revoked, keep_current}`: how many were ended, and whether the
+	// session the request came with was left alive.
+	EventOperatorSessionsRevoked EventType = "operator.sessions-revoked"
+
 	// EventOperatorPasswordSet — an administrator set or reset the local
 	// password of an Archon (`PUT /v1/operators/{aid}/password`, NIM-1051).
 	// Payload `{aid, tokens_revoked}` — never the password.

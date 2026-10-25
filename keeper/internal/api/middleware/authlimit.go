@@ -296,18 +296,19 @@ func snoopLoginBody(r *http.Request, v any) bool {
 	return json.Unmarshal(buf, v) == nil
 }
 
-// clientIP — the IP of the direct peer (r.RemoteAddr). Does NOT trust X-Forwarded-For/
-// X-Real-IP (spoofable without a trusted-proxy configuration, which Keeper does not
-// have yet — see observations). Behind an L4 LB (passthrough) RemoteAddr is the real client;
-// behind an L7 proxy all attempts collapse onto the proxy's IP (then the per-username layer carries
-// the main defense). The port is dropped (otherwise every ephemeral port is its own
-// principal, and the per-IP limit is bypassed).
+// clientIP — the client address [ResolveClientAddr] put into the request: the
+// direct peer, or behind a proxy in `listen.trusted_proxies` the client that
+// proxy names in X-Forwarded-For. Without the middleware (tests, a router
+// built without it) — the direct peer; the header is never read here. Behind
+// an L7 proxy Keeper does not trust, every attempt collapses onto the proxy's
+// IP and the per-username layer carries the defense. The port is dropped
+// (otherwise every ephemeral port is its own principal, and the per-IP limit
+// is bypassed).
 func clientIP(r *http.Request) string {
-	host, _, err := net.SplitHostPort(r.RemoteAddr)
-	if err != nil {
-		return r.RemoteAddr // no port (rare) — return as-is
+	if addr, ok := r.Context().Value(clientAddrCtxKey{}).(string); ok {
+		return addr
 	}
-	return host
+	return peerHost(r.RemoteAddr)
 }
 
 // writeAuth429 writes 429 + Retry-After + RFC 7807 problem+json

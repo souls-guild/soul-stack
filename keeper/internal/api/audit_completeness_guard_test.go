@@ -72,6 +72,7 @@ var auditedWriteRoutes = map[route]auditedRoute{
 	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
 	{http.MethodPost, "/v1/me/jwts"}:                              {events: []audit.EventType{audit.EventOperatorTokenIssued}},
 	{http.MethodPost, "/v1/me/jwts/{jwt_id}/revoke"}:              {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
+	{http.MethodPost, "/v1/me/sessions/revoke"}:                   {events: []audit.EventType{audit.EventOperatorSessionsRevoked}},
 	{http.MethodPut, "/v1/operators/{aid}/password"}:              {events: []audit.EventType{audit.EventOperatorPasswordSet}},
 	{http.MethodPut, "/v1/me/password"}:                           {events: []audit.EventType{audit.EventOperatorPasswordChanged}},
 

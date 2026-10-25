@@ -14,7 +14,7 @@
 //     authorization_endpoint.
 //  2. the human authenticates with the IdP.
 //  3. CompleteLogin (GET /auth/oidc/callback?code&state) → Consume state from
-//     the store (CSRF + single-use), code-exchange with the code_verifier
+//     the store (single-use, issued here), code-exchange with the code_verifier
 //     (PKCE), id_token VALIDATION via the go-oidc verifier (JWKS signature /
 //     iss / aud==client_id / exp / iat), nonce check (anti-replay), claims
 //     extraction.
@@ -22,7 +22,10 @@
 // Security (ADR-058(g), "security first"):
 //   - PKCE is mandatory (S256): code_verifier stays server-side, without it
 //     the code-exchange is impossible (anti code-interception);
-//   - state is a CSRF token, single-use (FlowStore.Consume = GETDEL);
+//   - state is single-use and must have been issued here (FlowStore.Consume =
+//     GETDEL); that it came back to the browser that started the login is
+//     checked before this package, against the __Host-soul_oidc_state cookie
+//     (api/huma_oidc.go) — the store cannot tell browsers apart;
 //   - nonce protects against id_token replay;
 //   - issuer is HTTPS-only (validated by the config layer + New);
 //   - any failure reason is sanitized into auth.ErrAuthFailed (anti-oracle);
@@ -235,8 +238,9 @@ func (a *Authenticator) BeginLogin(ctx context.Context) (Authorization, error) {
 	return Authorization{RedirectTo: url, State: state}, nil
 }
 
-// CompleteLogin finishes the flow given (code, state): Consume state (CSRF +
-// single-use), code-exchange with the PKCE verifier, id_token VALIDATION via
+// CompleteLogin finishes the flow given (code, state): Consume state
+// (single-use, issued here; the caller has matched it to the browser),
+// code-exchange with the PKCE verifier, id_token VALIDATION via
 // the verifier (JWKS/iss/aud/exp), nonce check, claims extraction →
 // auth.ExternalIdentity. Any failure surfaces as auth.ErrAuthFailed
 // (anti-oracle); details go to the debug log without tokens.
@@ -245,8 +249,10 @@ func (a *Authenticator) CompleteLogin(ctx context.Context, code, state string) (
 		return auth.ExternalIdentity{}, auth.ErrAuthFailed
 	}
 
-	// 1. Consume state from the store: the sole anti-CSRF + single-use guard
-	// (GETDEL). An unknown/already-consumed/expired state → deny.
+	// 1. Consume state from the store: single-use, issued here (GETDEL). An
+	// unknown/already-consumed/expired state → deny. Not a login-CSRF guard by
+	// itself: the caller has already matched state against the browser's
+	// state cookie (api/huma_oidc.go).
 	fs, err := a.store.Consume(ctx, state)
 	if err != nil {
 		a.debugFail("consume state", err)

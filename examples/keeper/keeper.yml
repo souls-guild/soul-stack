@@ -21,6 +21,9 @@ listen:
   openapi: { addr: "0.0.0.0:8080" }
   mcp:     { addr: "0.0.0.0:8081" }
   metrics: { addr: "0.0.0.0:9090" }
+  # The ingress in front of openapi/mcp: its X-Forwarded-For names the client
+  # for the login limit and token meta. Leave it out without an L7 proxy.
+  # trusted_proxies: ["10.20.0.0/24"]
 
 # Storage
 postgres:
@@ -49,6 +52,7 @@ auth:
   # logs in through LDAP/OIDC.
   # local:
   #   min_password_length: 12
+  #   session_ttl: 7d          # a web session of a password login
 
 # Observability
 otel:

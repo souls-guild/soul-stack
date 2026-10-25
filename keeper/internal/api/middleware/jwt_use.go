@@ -55,7 +55,6 @@ func ClientMetaFromContext(ctx context.Context) ClientMeta {
 	return meta
 }
 
-// PeerIP is the address of the direct peer, without the port. Forwarded
-// headers are not read: Keeper has no trusted-proxy configuration, so behind an
-// L7 proxy this is the proxy (NIM-1050 adds trusted proxies).
+// PeerIP is the address of the client, without the port: the direct peer, or
+// the client a trusted proxy names ([ResolveClientAddr]).
 func PeerIP(r *http.Request) string { return clientIP(r) }

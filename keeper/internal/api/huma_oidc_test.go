@@ -43,11 +43,72 @@ func mountOIDC(d *OIDCAuthDeps) http.Handler {
 	return r
 }
 
+// doGet — a callback carries the state cookie its login would have set in the
+// same browser; the tests of a missing or foreign one build their own request.
 func doGet(h http.Handler, target string) *httptest.ResponseRecorder {
 	req := httptest.NewRequest(http.MethodGet, target, nil)
+	if req.URL.Path == "/auth/oidc/callback" {
+		req.AddCookie(&http.Cookie{Name: oidcStateCookieName, Value: req.URL.Query().Get("state")})
+	}
 	rec := httptest.NewRecorder()
 	h.ServeHTTP(rec, req)
 	return rec
+}
+
+// The login binds its state to the browser: an HttpOnly, Secure cookie the
+// IdP's cross-site redirect back still carries (Lax), which a sibling domain
+// cannot plant (__Host-: Path=/, no Domain).
+func TestOIDCLogin_BindsTheStateToTheBrowser(t *testing.T) {
+	authn := &stubOIDCAuthenticator{authz: oidcauth.Authorization{RedirectTo: "https://idp.example.com/authorize?state=abc", State: "abc"}}
+	rec := doGet(mountOIDC(&OIDCAuthDeps{Authenticator: authn, Mapper: stubMapper{}, Sessions: &loginStubIssuer{}, TTL: time.Hour}), "/auth/oidc/login")
+	cookies := rec.Result().Cookies()
+	if len(cookies) != 1 {
+		t.Fatalf("Set-Cookie count = %d, want 1", len(cookies))
+	}
+	c := cookies[0]
+	if c.Name != "__Host-soul_oidc_state" || c.Value != "abc" || c.Path != "/" || c.Domain != "" || !c.HttpOnly || !c.Secure ||
+		c.SameSite != http.SameSiteLaxMode || c.MaxAge <= 0 {
+		t.Errorf("state cookie = %+v", c)
+	}
+}
+
+// A callback URL opened in a browser that did not start the login — no state
+// cookie, or another login's — is refused before the state is used, so a
+// stranger's IdP sign-in cannot become this browser's session (login CSRF).
+func TestOIDCCallback_RefusesAStateThisBrowserDidNotStart(t *testing.T) {
+	for _, c := range []struct {
+		name   string
+		cookie *http.Cookie
+	}{
+		{"no state cookie", nil},
+		{"another login's state", &http.Cookie{Name: oidcStateCookieName, Value: "MINE"}},
+	} {
+		t.Run(c.name, func(t *testing.T) {
+			issuer := &loginStubIssuer{token: "ey.oidc.jwt"}
+			authn := &stubOIDCAuthenticator{ext: auth.ExternalIdentity{AID: "mallory"}}
+			h := mountOIDC(&OIDCAuthDeps{
+				Authenticator: authn,
+				Mapper:        stubMapper{mapped: auth.MappedOperator{AID: "mallory", Roles: []string{"operator"}}},
+				Sessions:      issuer,
+				TTL:           time.Hour,
+			})
+			req := httptest.NewRequest(http.MethodGet, "/auth/oidc/callback?code=STOLEN&state=THEIRS", nil)
+			if c.cookie != nil {
+				req.AddCookie(c.cookie)
+			}
+			rec := httptest.NewRecorder()
+			h.ServeHTTP(rec, req)
+			if rec.Code != http.StatusUnauthorized {
+				t.Fatalf("status = %d, want 401; body=%s", rec.Code, rec.Body.String())
+			}
+			if authn.gotState != "" {
+				t.Errorf("the state %q was used despite the mismatch", authn.gotState)
+			}
+			if len(rec.Result().Cookies()) != 0 {
+				t.Errorf("a session cookie was set: %v", rec.Result().Cookies())
+			}
+		})
+	}
 }
 
 // TestOIDCLogin_RedirectsToIdP — /auth/oidc/login → 302 to the IdP authorization URL.
@@ -86,8 +147,10 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	if rec.Code != http.StatusFound {
 		t.Fatalf("status = %d, want 302; body=%s", rec.Code, rec.Body.String())
 	}
-	if loc := rec.Header().Get("Location"); loc != oidcCallbackSuccessRedirect {
-		t.Errorf("Location = %q, want %q", loc, oidcCallbackSuccessRedirect)
+	// The literal, not the constant: the web login page exchanges the cookie
+	// only when it lands with sso=done (ADR-058 amendment NIM-1050).
+	if loc := rec.Header().Get("Location"); loc != "/ui/login?sso=done" {
+		t.Errorf("Location = %q, want /ui/login?sso=done", loc)
 	}
 	// authenticator received code+state from the query.
 	if authn.gotCode != "AUTHCODE" || authn.gotState != "STATE123" {
@@ -110,7 +173,8 @@ func TestOIDCCallback_SetsSecureCookieAndRedirects(t *testing.T) {
 	}
 	// MED fix (2026-06-24): SameSite unified to Strict (parity LDAP,
 	// ADR-058(g)). Strict is safe on the callback: the cookie is SET on the callback
-	// response and SENT on the subsequent same-site navigation to /ui (302).
+	// response; the UI login page the 302 lands on sends it, same-site, to
+	// POST /auth/token (Path=/auth keeps it off the navigation itself).
 	if c.SameSite != http.SameSiteStrictMode {
 		t.Errorf("cookie SameSite = %v, want Strict (unified with LDAP, MED fix)", c.SameSite)
 	}

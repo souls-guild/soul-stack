@@ -202,7 +202,7 @@ Body optional: `{ttl?, label?}` with the same rules as [`issue-token`](#post-v1o
 
 The token is of kind `personal`. Its rights are its owner's **at each request**, read from the RBAC data like every token's: it can do nothing its owner cannot do at that moment, and a role taken from the owner is taken from the token. What it adds is a lifetime, and that is bounded three ways:
 
-- **Ceiling.** `auth.jwt.ttl_max` (90 days by default) for every Archon but an **OIDC** one. For an OIDC Archon — the lifetime of an OIDC sign-in (`auth.jwt.ttl_default`, 24h by default), and a token asked for from a sign-in is cut to expire with that sign-in: OIDC groups are reconciled into roles only at sign-in, so a person removed from a group at the IdP keeps the roles of the last sign-in for as long as the token lives. That lifts with the OIDC group re-check (NIM-1054). LDAP gets `ttl_max` on the strength of the background group sync (NIM-1053).
+- **Ceiling.** `auth.jwt.ttl_max` (90 days by default) for every Archon but an **OIDC** one. For an OIDC Archon — the lifetime of an OIDC sign-in (`auth.oidc.session_ttl`, 24h by default), and a token asked for from a sign-in is cut to expire with that sign-in: OIDC groups are reconciled into roles only at sign-in, so a person removed from a group at the IdP keeps the roles of the last sign-in for as long as the token lives. That lifts with the OIDC group re-check (NIM-1054). LDAP gets `ttl_max` on the strength of the background group sync (NIM-1053).
 - **Counts.** At most **10** active personal tokens (neither revoked nor expired) and at most **20** issued in 24 hours, revoked ones included, per Archon → `409 personal-jwt-limit`. A revoke frees an active slot, not a daily one.
 - **Credential.** A request made **with a personal token** is refused → `403 personal-jwt-from-personal`, so a personal token cannot mint its own successor. A sign-in, an `issued` or a `bootstrap` token may ask; so may a token minted before migration 127. An Archon holding `operator.issue-token` can still mint an `issued` token for itself through that route, from any of its tokens. The revocation of the token asked with is read from its row, not from the RBAC snapshot: a session a password reset ended a moment ago mints nothing on a node that has not heard of the reset yet → `401 jwt-revoked` (NIM-1051).
 
@@ -218,6 +218,16 @@ Every token of the caller, **of every kind** (a client shows its sign-ins apart 
 
 Any kind, including a token an administrator issued to you. No body. Audit `operator.jwt-revoked`. Same effect as the [administrator's revoke](#post-v1operatorsaidjwtsjwt_idrevoke---revoke-one-token).
 
-Revoking **the token the request is made with** succeeds and signs the caller out of it — every later request with it is `401 jwt-revoked`. Whether to refuse that is an open decision (NIM-1055; [ADR-014](../../adr/0014-operator-identity.md) NIM-1045 amendment, "Revoking the token you are using").
+Revoking **the token the request is made with** succeeds and signs the caller out of it — every later request with it is `401 jwt-revoked`. That is how the web UI logs out of its session (NIM-1055 decided to allow it; [ADR-014](../../adr/0014-operator-identity.md) NIM-1045 amendment, "Revoking the token you are using").
 
 **Response `204 No Content`.** **Errors:** `404 not-found` (not a token of the caller — another Archon's id answers the same), `409 jwt-already-revoked`, `422 validation-failed`.
+
+### Your own web sessions
+
+A web session is the token of kind `session` a login (password, LDAP, OIDC) mints; every Bearer the web UI exchanges for it carries its `jti`, so ending the session ends them all. It lasts its login method's `session_ttl` — `auth.local.session_ttl` and `auth.ldap.session_ttl` 7 days, `auth.oidc.session_ttl` 24h by default ([config.md → auth](../config.md#auth), [ADR-058(k)](../../adr/0058-operator-auth-ldap-oidc.md)). List them with `GET /v1/me/jwts?kind=session` and end one with `POST /v1/me/jwts/{jwt_id}/revoke` (above); each row says where it was signed in from and where it was last used (`created_ip`, `created_user_agent`, `last_used_*`, written at most every 5 minutes). The IP is the client's when Keeper's proxies are listed in `listen.trusted_proxies`, otherwise the nearest peer's.
+
+#### `POST /v1/me/sessions/revoke` - end your web sessions
+
+**Auth-only**, REST only. Body optional: `{keep_current?: bool}` — `true` ends every session but the one the request is made with ("end all others"); omitted or `false` ends every session, that one included ("end all"; the caller is signed out). Only tokens of kind `session` are revoked: personal and issued tokens keep working. Audit `operator.sessions-revoked` `{aid, revoked, keep_current}`.
+
+**Response `200 MySessionsRevokeReply`:** `{revoked}` — how many sessions were ended (`0` is a success). **Errors:** `422 validation-failed` (malformed body).

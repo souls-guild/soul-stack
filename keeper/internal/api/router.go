@@ -124,6 +124,7 @@ import (
 //	POST   /v1/me/jwts                               — issue a personal token to yourself (auth-only, NIM-1052).
 //	GET    /v1/me/jwts                               — your own tokens (auth-only, NIM-1052).
 //	POST   /v1/me/jwts/{jwt_id}/revoke               — revoke one of your own tokens (auth-only, NIM-1052).
+//	POST   /v1/me/sessions/revoke                    — end your web sessions, all or all but this one (auth-only, NIM-1050).
 //	/v1/*                                            — catch-all 404 behind the auth chain.
 //
 // tempoBucketVoyageCreate / tempoBucketVoyagePreview — logical names of the
@@ -144,9 +145,10 @@ const (
 // routerExtras — buildRouter inputs added after its positional list grew past
 // fifty; tests that predate them build the router without and get the zero value.
 type routerExtras struct {
-	jwtUse    apimiddleware.JWTUseRecorder
-	ldapSyncH *handlers.LDAPSyncHandler
-	localAuth *LocalAuthDeps
+	jwtUse         apimiddleware.JWTUseRecorder
+	ldapSyncH      *handlers.LDAPSyncHandler
+	localAuth      *LocalAuthDeps
+	trustedProxies apimiddleware.TrustedProxies
 }
 
 type routerOption func(*routerExtras)
@@ -167,6 +169,11 @@ func withLocalAuth(d *LocalAuthDeps) routerOption {
 	return func(x *routerExtras) { x.localAuth = d }
 }
 
+// withTrustedProxies — `listen.trusted_proxies` (ADR-058 amendment NIM-1050).
+func withTrustedProxies(t apimiddleware.TrustedProxies) routerOption {
+	return func(x *routerExtras) { x.trustedProxies = t }
+}
+
 // Health/meta live outside `/v1/*` per operator-api.md § Health / Meta.
 // chi.NotFound and chi.MethodNotAllowed are replaced with problem+json
 // handlers, so 404/405 do not come back in stdlib's text/plain default
@@ -177,6 +184,9 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		o(&extras)
 	}
 	r := chi.NewRouter()
+	// The client address, first: the login limiter and every token's meta
+	// read it, so all of them agree on who is behind a trusted proxy.
+	r.Use(apimiddleware.ResolveClientAddr(extras.trustedProxies))
 	// Who sent a request, for the token a handler may mint from it (huma
 	// handlers have no *http.Request). Global: /auth mints session tokens too.
 	r.Use(apimiddleware.WithClientMeta)
@@ -430,6 +440,10 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		})
 		r.Group(func(r chi.Router) {
 			registerHumaMeJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
+		})
+		// The caller's own web sessions at once (ADR-058 amendment NIM-1050).
+		r.Group(func(r chi.Router) {
+			registerHumaMeSessionsRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorSessionsRevoked, logger), opH)
 		})
 
 		// /v1/audit — read-only feed of audit events for UI iteration 2 (/audit).

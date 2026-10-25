@@ -775,9 +775,38 @@ func (h *OperatorHandler) ListMyJWTsTyped(ctx context.Context, claims *jwt.Claim
 // caller revokes one of its own tokens of any kind, without
 // `operator.jwt-revoke`. A token id of another operator answers 404 exactly as
 // an unknown one does. Revoking the token the request is made with succeeds and
-// signs the caller out of it (NIM-1055 is the open decision on refusing that).
+// signs the caller out of it — that is how a web session logs out (NIM-1055,
+// decided: allowed).
 func (h *OperatorHandler) RevokeMyJWTTyped(ctx context.Context, claims *jwt.Claims, jwtID string) (OperatorJWTRevokeReply, error) {
 	return h.RevokeJWTTyped(ctx, claims, claims.Subject, jwtID)
+}
+
+// MySessionsRevokeResult — the result of [OperatorHandler.RevokeMySessionsTyped].
+type MySessionsRevokeResult struct {
+	AID         string
+	Revoked     int64
+	KeepCurrent bool
+}
+
+// AuditPayload — payload of `operator.sessions-revoked`.
+func (r MySessionsRevokeResult) AuditPayload() middleware.AuditPayload {
+	return middleware.AuditPayload{"aid": r.AID, "revoked": r.Revoked, "keep_current": r.KeepCurrent}
+}
+
+// RevokeMySessionsTyped — domain function for POST /v1/me/sessions/revoke: the
+// caller ends its own web sessions, every one or every one but the session
+// this request is made with (keepCurrent).
+func (h *OperatorHandler) RevokeMySessionsTyped(ctx context.Context, claims *jwt.Claims, keepCurrent bool) (MySessionsRevokeResult, error) {
+	keep := ""
+	if keepCurrent {
+		keep = claims.ID
+	}
+	n, err := h.svc.RevokeSessions(ctx, claims.Subject, keep)
+	if err != nil {
+		h.logger.Error("me.sessions-revoke: service failed", slog.String("aid", claims.Subject), slog.Any("error", err))
+		return MySessionsRevokeResult{}, &problemError{problem.New(problem.TypeInternalError, "", "revoke sessions failed")}
+	}
+	return MySessionsRevokeResult{AID: claims.Subject, Revoked: n, KeepCurrent: keepCurrent}, nil
 }
 
 // OperatorView — FLAT wire form of an Operator (list-item / get-200), handler-native

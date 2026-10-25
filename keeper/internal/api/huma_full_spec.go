@@ -102,6 +102,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaMeJWTIssue(api, stub)
 			registerHumaMeJWTList(api, stub)
 			registerHumaMeJWTRevoke(api, stub)
+			registerHumaMeSessionsRevoke(api, stub)
 			return nil
 		}},
 		{"/v1/roles", func(api huma.API) error {

@@ -174,6 +174,11 @@ func semanticValidateKeeper(c *KeeperConfig, root *ast.MappingNode) []diag.Diagn
 		}
 	}
 
+	if c.Auth != nil {
+		out = append(out, checkSessionTTLs(root, c.Auth)...)
+	}
+	out = append(out, checkTrustedProxies(root, c.Listen.TrustedProxies)...)
+
 	// auth.rate_limit (ADR-058(g), HIGH-3): duration format for lockout window/backoff.
 	if c.Auth != nil && c.Auth.RateLimit != nil {
 		out = append(out, checkDuration(root, "$.auth.rate_limit.lockout_window", c.Auth.RateLimit.LockoutWindow)...)
@@ -494,6 +499,97 @@ func checkTTLMaxNotBelowDefault(root *ast.MappingNode, j *KeeperAuthJWT) []diag.
 		Message: fmt.Sprintf("auth.jwt.ttl_max %s is below auth.jwt.ttl_default %s", j.TTLMax, defaultText),
 		Hint:    "raise ttl_max to at least ttl_default, or drop it to follow ttl_default",
 	})}
+}
+
+// checkSessionTTLs checks the session_ttl of each login block: a duration
+// between [MinSessionTTL] and the effective auth.jwt.ttl_max, which no token
+// outlives (ADR-058 amendment NIM-1050). `keeper run` refuses the same range.
+func checkSessionTTLs(root *ast.MappingNode, a *KeeperAuth) []diag.Diagnostic {
+	type block struct {
+		path, raw string
+	}
+	var blocks []block
+	if a.Local != nil {
+		blocks = append(blocks, block{"$.auth.local.session_ttl", a.Local.SessionTTL})
+	}
+	if a.LDAP != nil {
+		blocks = append(blocks, block{"$.auth.ldap.session_ttl", a.LDAP.SessionTTL})
+	}
+	if a.OIDC != nil {
+		blocks = append(blocks, block{"$.auth.oidc.session_ttl", a.OIDC.SessionTTL})
+	}
+	ttlMax, maxKnown := effectiveTTLMax(a.JWT)
+	var out []diag.Diagnostic
+	for _, b := range blocks {
+		if b.raw == "" {
+			continue
+		}
+		if d := checkDuration(root, b.path, b.raw); len(d) > 0 {
+			out = append(out, d...)
+			continue
+		}
+		ttl, _ := ParseDuration(b.raw)
+		var why string
+		switch {
+		case ttl < MinSessionTTL:
+			why = "is below the minimum 1m"
+		case maxKnown && ttl > ttlMax:
+			why = "is above auth.jwt.ttl_max " + ttlMax.String()
+		default:
+			continue
+		}
+		out = append(out, atPath(root, b.path, diag.Diagnostic{
+			Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+			Code:    "session_ttl_out_of_range",
+			Message: fmt.Sprintf("%s %s %s", strings.TrimPrefix(b.path, "$."), b.raw, why),
+			Hint:    "omit it for the method's default, or raise auth.jwt.ttl_max",
+		}))
+	}
+	return out
+}
+
+// effectiveTTLMax resolves auth.jwt.ttl_max as `keeper run` does; false when a
+// malformed ttl value leaves it unknown (that value is reported on its own).
+func effectiveTTLMax(j *KeeperAuthJWT) (time.Duration, bool) {
+	ttlDefault := 24 * time.Hour
+	if j != nil && j.TTLDefault != "" {
+		d, err := ParseDuration(j.TTLDefault)
+		if err != nil {
+			return 0, false
+		}
+		ttlDefault = d
+	}
+	ttlMax, err := j.ResolvedTTLMax(ttlDefault)
+	return ttlMax, err == nil
+}
+
+// checkTrustedProxies refuses a listen.trusted_proxies entry that is neither
+// a CIDR nor an address, and warns on one that trusts every peer: then any
+// client names its own address in X-Forwarded-For.
+func checkTrustedProxies(root *ast.MappingNode, entries []string) []diag.Diagnostic {
+	var out []diag.Diagnostic
+	for i, raw := range entries {
+		path := fmt.Sprintf("$.listen.trusted_proxies[%d]", i)
+		p, err := ParseTrustedProxy(raw)
+		if err != nil {
+			out = append(out, atPath(root, path, diag.Diagnostic{
+				Level: diag.LevelError, Phase: diag.PhaseSemanticValidate,
+				Code:    "trusted_proxy_invalid",
+				Message: fmt.Sprintf("listen.trusted_proxies entry %q is neither a CIDR nor an IP address", raw),
+				Hint:    "write 10.0.0.0/8 or 10.1.2.3",
+			}))
+			continue
+		}
+		if p.Bits() == 0 {
+			out = append(out, atPath(root, path, diag.Diagnostic{
+				Level: diag.LevelWarning, Phase: diag.PhaseSemanticValidate,
+				Code:    "trusted_proxy_any",
+				Message: fmt.Sprintf("listen.trusted_proxies entry %q trusts every peer: any client can set its own address", raw),
+				Hint:    "list the proxies themselves",
+			}))
+		}
+	}
+	return out
 }
 
 // checkDuration accepts a value per the Soul Stack `duration` convention

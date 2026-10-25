@@ -1,6 +1,8 @@
 package config
 
 import (
+	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/souls-guild/soul-stack/shared/plugin"
@@ -947,6 +949,47 @@ type KeeperListen struct {
 	OpenAPI KeeperListenSimple `yaml:"openapi"`
 	MCP     KeeperListenSimple `yaml:"mcp"`
 	Metrics KeeperListenSimple `yaml:"metrics"`
+	// TrustedProxies — the L7 proxies in front of the OpenAPI and MCP
+	// listeners, each a CIDR or a single address (ADR-058 amendment NIM-1050).
+	// X-Forwarded-For is believed only from a peer in this list; empty → the
+	// peer is the client, as before.
+	TrustedProxies []string `yaml:"trusted_proxies,omitempty"`
+}
+
+// ResolvedTrustedProxies parses [KeeperListen.TrustedProxies]; a single
+// address becomes a one-address prefix.
+func (l *KeeperListen) ResolvedTrustedProxies() ([]netip.Prefix, error) {
+	out := make([]netip.Prefix, 0, len(l.TrustedProxies))
+	for _, raw := range l.TrustedProxies {
+		p, err := ParseTrustedProxy(raw)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, p)
+	}
+	return out, nil
+}
+
+// ParseTrustedProxy reads one `listen.trusted_proxies` entry.
+func ParseTrustedProxy(raw string) (netip.Prefix, error) {
+	if strings.Contains(raw, "/") {
+		p, err := netip.ParsePrefix(raw)
+		if err != nil {
+			return netip.Prefix{}, err
+		}
+		// A peer is matched unmapped, and an IPv6 prefix never contains an
+		// IPv4 address: ::ffff:10.0.0.0/104 is written as 10.0.0.0/8.
+		if p.Addr().Is4In6() && p.Bits() >= 96 {
+			p = netip.PrefixFrom(p.Addr().Unmap(), p.Bits()-96)
+		}
+		return p.Masked(), nil
+	}
+	a, err := netip.ParseAddr(raw)
+	if err != nil {
+		return netip.Prefix{}, err
+	}
+	a = a.Unmap()
+	return netip.PrefixFrom(a, a.BitLen()), nil
 }
 
 // KeeperListenGRPC holds Keeper's two sub-listeners under ADR-012(b):
@@ -1263,6 +1306,73 @@ type KeeperAuthLocal struct {
 	// may be given. 0/omitted → [DefaultLocalMinPasswordLength]; otherwise
 	// between [LocalMinPasswordLengthFloor] and [LocalMaxPasswordLength].
 	MinPasswordLength int `yaml:"min_password_length,omitempty"`
+	// SessionTTL — how long a web session of this login lasts, counted from
+	// the login. Omitted → [DefaultLocalSessionTTL].
+	SessionTTL string `yaml:"session_ttl,omitempty"`
+}
+
+// Web-session lifetimes, one per login method (ADR-058 amendment NIM-1050).
+// A session is the `soul_session` cookie a login sets; its lifetime is fixed at
+// the login and bounded by `auth.jwt.ttl_max`.
+const (
+	DefaultLocalSessionTTL = 7 * 24 * time.Hour
+	DefaultLDAPSessionTTL  = 7 * 24 * time.Hour
+	// A day: nothing re-reads an OIDC operator's groups between logins, so a
+	// longer session keeps a role the IdP has already taken away.
+	DefaultOIDCSessionTTL = 24 * time.Hour
+	// MinSessionTTL is the shortest accepted session_ttl, the floor every
+	// token lifetime shares.
+	MinSessionTTL = time.Minute
+)
+
+// DefaultJWTTTLMax is `auth.jwt.ttl_max` when keeper.yml sets none (and
+// ttl_default is not longer).
+const DefaultJWTTTLMax = 90 * 24 * time.Hour
+
+// ResolvedSessionTTL is the lifetime of a local-password session; ttlMax is
+// the effective auth.jwt.ttl_max (see [resolveSessionTTL]).
+func (l *KeeperAuthLocal) ResolvedSessionTTL(ttlMax time.Duration) (time.Duration, error) {
+	if l == nil {
+		return min(DefaultLocalSessionTTL, ttlMax), nil
+	}
+	return resolveSessionTTL(l.SessionTTL, DefaultLocalSessionTTL, ttlMax)
+}
+
+// ResolvedSessionTTL is the lifetime of an LDAP session.
+func (l *KeeperAuthLDAP) ResolvedSessionTTL(ttlMax time.Duration) (time.Duration, error) {
+	if l == nil {
+		return min(DefaultLDAPSessionTTL, ttlMax), nil
+	}
+	return resolveSessionTTL(l.SessionTTL, DefaultLDAPSessionTTL, ttlMax)
+}
+
+// ResolvedSessionTTL is the lifetime of an OIDC session.
+func (o *KeeperAuthOIDC) ResolvedSessionTTL(ttlMax time.Duration) (time.Duration, error) {
+	if o == nil {
+		return min(DefaultOIDCSessionTTL, ttlMax), nil
+	}
+	return resolveSessionTTL(o.SessionTTL, DefaultOIDCSessionTTL, ttlMax)
+}
+
+// resolveSessionTTL — an omitted key is the method's default, cut to ttlMax
+// when a cluster runs a shorter ceiling: a config that started before the key
+// existed keeps starting. An explicit value is taken as written, and one
+// above ttlMax is refused rather than cut — the operator asked for it.
+func resolveSessionTTL(raw string, def, ttlMax time.Duration) (time.Duration, error) {
+	if raw == "" {
+		return min(def, ttlMax), nil
+	}
+	return ParseDuration(raw)
+}
+
+// ResolvedTTLMax is the effective `auth.jwt.ttl_max`. Unset, it is the larger
+// of [DefaultJWTTTLMax] and ttl_default; ttlDefault is the resolved
+// ttl_default. A malformed value is the semantic check's to report.
+func (j *KeeperAuthJWT) ResolvedTTLMax(ttlDefault time.Duration) (time.Duration, error) {
+	if j == nil || j.TTLMax == "" {
+		return max(DefaultJWTTTLMax, ttlDefault), nil
+	}
+	return ParseDuration(j.TTLMax)
 }
 
 // ResolvedMinPasswordLength is the effective minimum (omitted → default).
@@ -1322,7 +1432,7 @@ type KeeperAuthJWT struct {
 	// TTLMax — the longest lifetime POST /v1/operators, issue-token and
 	// POST /v1/me/jwts accept in their `ttl` (ADR-014 amendments NIM-1045 /
 	// NIM-1052; an OIDC operator's personal token is capped lower, at
-	// ttl_default). Default 2160h (90 days);
+	// auth.oidc.session_ttl). Default 2160h (90 days);
 	// must not be below ttl_default. Duration string.
 	TTLMax       string `yaml:"ttl_max,omitempty" json:"ttl_max,omitempty"`
 	TTLBootstrap string `yaml:"ttl_bootstrap,omitempty"`
@@ -1357,6 +1467,7 @@ type KeeperAuthLDAP struct {
 	AIDAttr         string              `yaml:"aid_attr,omitempty"`          // uid | mail → AID
 	Timeout         string              `yaml:"timeout,omitempty"`           // duration
 	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // external group → RBAC roles
+	SessionTTL      string              `yaml:"session_ttl,omitempty"`       // duration; omitted → DefaultLDAPSessionTTL
 }
 
 type KeeperAuthLDAPTLS struct {
@@ -1389,6 +1500,7 @@ type KeeperAuthOIDC struct {
 	AIDClaim        string              `yaml:"aid_claim,omitempty"`         // sub | email | preferred_username (default sub)
 	GroupsClaim     string              `yaml:"groups_claim,omitempty"`      // claim with groups (default groups)
 	GroupRoleMap    map[string][]string `yaml:"group_role_map,omitempty"`    // external group → RBAC roles
+	SessionTTL      string              `yaml:"session_ttl,omitempty"`       // duration; omitted → DefaultOIDCSessionTTL
 }
 
 type KeeperAuthOIDCTLS struct {

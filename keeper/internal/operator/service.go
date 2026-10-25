@@ -999,6 +999,27 @@ func (s *Service) RevokeJWT(ctx context.Context, in RevokeJWTInput) (JWTRecord, 
 	return rec, nil
 }
 
+// RevokeSessions ends aid's web sessions — tokens of kind `session` that may
+// still verify — on the operator's own request (ADR-058 amendment NIM-1050).
+// keepJWTID, when non-empty, is the session to leave alive: "all but this
+// one". Personal and issued tokens are untouched. Returns how many were
+// revoked; any revocation invalidates the RBAC snapshot cluster-wide, so a
+// revoked session and every Bearer exchanged from it are refused on their next
+// request on every node.
+func (s *Service) RevokeSessions(ctx context.Context, aid, keepJWTID string) (int64, error) {
+	if !ValidAID(aid) {
+		return 0, fmt.Errorf("operator: invalid AID %q (must match %s)", aid, AIDPattern)
+	}
+	n, err := RevokeTokensOfKinds(ctx, s.pool, aid, keepJWTID, aid, []JWTKind{JWTKindSession})
+	if err != nil {
+		return 0, err
+	}
+	if n > 0 {
+		s.invalidate(ctx)
+	}
+	return n, nil
+}
+
 // SetPasswordInput — parameters for SetPassword (an administrator sets or
 // resets another operator's local password).
 type SetPasswordInput struct {

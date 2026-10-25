@@ -4641,6 +4641,11 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 	// AuthMethods — booleans for the public GET /auth/methods (UI login form):
 	// password is always available; ldap/oidc/local — based on actual configuration.
 	authMethods := api.AuthMethodsDeps{Password: true, LDAP: ldapAuth != nil, OIDC: oidcAuth != nil, Local: localAuth != nil}
+	trustedProxies, err := cfg.Listen.ResolvedTrustedProxies()
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "keeper run: listen.trusted_proxies: %v\n", err)
+		return errSetupFailed
+	}
 
 	srv, err := api.NewServer(cfg.Listen.OpenAPI, api.Deps{
 		JWTVerifier: d.verifier,
@@ -4730,6 +4735,7 @@ func (d *daemon) setupAPIServer(ctx context.Context) error {
 		TTLDefault:          d.ttlDefault,
 		TTLMax:              d.ttlMax,
 		JWTUse:              d.jwtUse,
+		TrustedProxies:      trustedProxies,
 		MetricsHTTP:         d.httpMetrics,
 		ScenarioRunner:      d.scenarioRunner,
 		ScenarioDestroyer:   d.scenarioRunner,
@@ -4874,9 +4880,13 @@ func (d *daemon) setupLocalAuth() (*api.LocalAuthDeps, *operator.PasswordPolicy,
 		return nil, nil, err
 	}
 	policy := &operator.PasswordPolicy{MinLength: d.cfg.Auth.Local.ResolvedMinPasswordLength()}
+	ttl, err := resolveSessionTTL("auth.local.session_ttl", d.cfg.Auth.Local.ResolvedSessionTTL, d.ttlMax)
+	if err != nil {
+		return nil, nil, err
+	}
 	return &api.LocalAuthDeps{
 		Authenticator: authn,
-		TTL:           d.ttlDefault,
+		TTL:           ttl,
 		Audit:         d.auditWriter,
 		Logger:        d.logger,
 	}, policy, nil
@@ -4952,11 +4962,15 @@ func (d *daemon) setupLDAPAuth(ctx context.Context) (*api.LDAPAuthDeps, error) {
 	d.ldapAuthn = authn
 	d.ldapMapper = mapper
 
+	ttl, err := resolveSessionTTL("auth.ldap.session_ttl", d.cfg.Auth.LDAP.ResolvedSessionTTL, d.ttlMax)
+	if err != nil {
+		return nil, err
+	}
 	return &api.LDAPAuthDeps{
 		Authenticator: authn,
 		Mapper:        mapper,
 		Sessions:      api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
-		TTL:           d.ttlDefault,
+		TTL:           ttl,
 		Audit:         d.auditWriter,
 		Logger:        d.logger,
 	}, nil
@@ -5059,11 +5073,15 @@ func (d *daemon) setupOIDCAuth(ctx context.Context) (*api.OIDCAuthDeps, error) {
 		Logger:           d.logger,
 	})
 
+	ttl, err := resolveSessionTTL("auth.oidc.session_ttl", d.cfg.Auth.OIDC.ResolvedSessionTTL, d.ttlMax)
+	if err != nil {
+		return nil, err
+	}
 	return &api.OIDCAuthDeps{
 		Authenticator: authn,
 		Mapper:        mapper,
 		Sessions:      api.OperatorSessionMinter{DB: d.pool, Issuer: d.issuer},
-		TTL:           d.ttlDefault,
+		TTL:           ttl,
 		Audit:         d.auditWriter,
 		Logger:        d.logger,
 	}, nil
@@ -5218,14 +5236,20 @@ func (d *daemon) setupMCPServer(ctx context.Context) error {
 			fmt.Fprintf(os.Stderr, "keeper run: build MCP handler: %v\n", err)
 			return errSetupFailed
 		}
+		trustedProxies, err := cfg.Listen.ResolvedTrustedProxies()
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "keeper run: listen.trusted_proxies: %v\n", err)
+			return errSetupFailed
+		}
 		mcpSrv, err := mcp.NewServer(cfg.Listen.MCP, mcp.ServerDeps{
-			JWTVerifier: d.verifier,
-			Handler:     mcpHandler,
-			Bus:         d.applyBus,
-			ApplyAccess: mcp.NewApplyAccessPG(d.pool),
-			RBAC:        d.rbacHolder,
-			Logger:      logger,
-			JWTUse:      d.jwtUse,
+			JWTVerifier:    d.verifier,
+			Handler:        mcpHandler,
+			Bus:            d.applyBus,
+			ApplyAccess:    mcp.NewApplyAccessPG(d.pool),
+			RBAC:           d.rbacHolder,
+			Logger:         logger,
+			JWTUse:         d.jwtUse,
+			TrustedProxies: trustedProxies,
 		})
 		if err != nil {
 			fmt.Fprintf(os.Stderr, "keeper run: build MCP server: %v\n", err)

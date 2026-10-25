@@ -25,11 +25,12 @@ type stubLocalAuthenticator struct {
 	gotAID  string
 	gotPass string
 	gotTTL  time.Duration
+	client  operator.ClientMeta
 }
 
-func (s *stubLocalAuthenticator) Login(_ context.Context, aid, password string, ttl time.Duration, _ operator.ClientMeta) (auth.MappedOperator, string, error) {
+func (s *stubLocalAuthenticator) Login(_ context.Context, aid, password string, ttl time.Duration, client operator.ClientMeta) (auth.MappedOperator, string, error) {
 	s.calls++
-	s.gotAID, s.gotPass, s.gotTTL = aid, password, ttl
+	s.gotAID, s.gotPass, s.gotTTL, s.client = aid, password, ttl, client
 	return s.op, s.token, s.err
 }
 

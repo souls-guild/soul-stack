@@ -84,6 +84,7 @@ var allEventTypes = []EventType{
 	"operator.provisioned",                      // EventOperatorProvisioned
 	"operator.revoked",                          // EventOperatorRevoked
 	"operator.roles-synced",                     // EventOperatorRolesSynced
+	"operator.sessions-revoked",                 // EventOperatorSessionsRevoked
 	"operator.token-issued",                     // EventOperatorTokenIssued
 	"oracle.fired",                              // EventOracleFired
 	"plugin.allowed",                            // EventPluginAllowed

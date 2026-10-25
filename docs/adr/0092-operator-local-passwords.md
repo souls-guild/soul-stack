@@ -54,7 +54,7 @@ A password Keeper checks itself, as a separate login method:
 
 - **`POST /auth/local/login`** `{aid, password}` → `204` and the same `soul_session` cookie as
   LDAP/OIDC (`newSessionCookie`: HttpOnly, Secure, `SameSite=Strict`, `Path=/auth`, lifetime
-  `auth.jwt.ttl_default`), exchanged at `POST /auth/token` like theirs. The session is an
+  `auth.local.session_ttl` since NIM-1050), exchanged at `POST /auth/token` like theirs. The session is an
   `operator_jwts` row of kind `session` minted through `MintJWT`, **bound to the password that
   verified**: the mint runs in one transaction that re-reads the hash `FOR SHARE` and refuses
   (the same `401`) when it is no longer the one checked. The check is slow on purpose, so a reset
@@ -170,9 +170,9 @@ A password Keeper checks itself, as a separate login method:
 
 ### What is not here
 
-- **Session lifetime.** A password session lives `auth.jwt.ttl_default`, like LDAP/OIDC; a
-  longer web session with its own setting is a later ticket of the same release (NIM-1050).
-- **Logging out a session server-side.** The web UI forgets its Bearer; the cookie lives until
-  it expires. Listing and ending one's own sessions is the same later ticket.
+- **Session lifetime.** A password session lived `auth.jwt.ttl_default`, like LDAP/OIDC; since
+  NIM-1050 it lives `auth.local.session_ttl`, 7 days by default ([ADR-058(k)](0058-operator-auth-ldap-oidc.md)).
+- **Logging out a session server-side.** Done in NIM-1050: the web UI's log-out revokes its
+  session, and `POST /v1/me/sessions/revoke` ends all of them ([ADR-058(k)](0058-operator-auth-ldap-oidc.md)).
 - **Changing an existing operator's method** (`jwt` → `local`). `auth_method` stays immutable.
 - **Password expiry, history, composition rules, breached-password lists.**

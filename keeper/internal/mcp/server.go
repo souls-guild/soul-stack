@@ -43,6 +43,9 @@ type ServerDeps struct {
 	// JWTUse records `operator_jwts.last_used_*` for tokens presented here, as
 	// the /v1 chain does (ADR-014 amendment NIM-1045). nil → not recorded.
 	JWTUse middleware.JWTUseRecorder
+	// TrustedProxies — `listen.trusted_proxies` (ADR-058 amendment NIM-1050);
+	// nil → the peer is the client.
+	TrustedProxies middleware.TrustedProxies
 }
 
 // ServerRBAC — the RBAC surface this listener needs: the scope-aware check that
@@ -141,7 +144,7 @@ func NewServer(cfg config.KeeperListenSimple, deps ServerDeps) (*Server, error) 
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,
-		Handler:           mux,
+		Handler:           middleware.ResolveClientAddr(deps.TrustedProxies)(mux),
 		ReadHeaderTimeout: mcpReadHeaderTimeout,
 		ReadTimeout:       mcpReadTimeout,
 		WriteTimeout:      mcpWriteTimeout,

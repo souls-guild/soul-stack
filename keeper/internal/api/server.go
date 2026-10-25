@@ -197,6 +197,8 @@ type Deps struct {
 	// JWTUse records `operator_jwts.last_used_*` on authenticated /v1 requests.
 	// nil → not recorded.
 	JWTUse apimiddleware.JWTUseRecorder
+	// TrustedProxies — `listen.trusted_proxies`; nil → the peer is the client.
+	TrustedProxies apimiddleware.TrustedProxies
 
 	// ApplyBus — the pub/sub bus of apply events for the run's live SSE (ADR-068 §A3,
 	// GET /v1/incarnations/{id}/runs/{apply_id}/events). The same bus as the
@@ -992,7 +994,7 @@ func NewServer(cfg config.KeeperListenSimple, deps Deps, logger *slog.Logger) (*
 		consoleRecordingH = handlers.NewConsoleRecordingHandler(deps.ConsoleRecordings, deps.RBAC, deps.AuditWriter, logger)
 	}
 
-	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse), withLDAPSync(ldapSyncH), withLocalAuth(deps.LocalAuth))
+	handler := buildRouter(deps.JWTVerifier, healthH, opH, incH, soulH, telemetryH, roleH, synodH, sigilH, sigilKeyH, serviceH, provisioningPolicyH, settingsH, augurH, oracleH, pushH, pushProviderH, errandH, voyageH, cadenceH, auditH, choirH, heraldH, moduleCatalogH, deps.ModuleFormPrepH, permCatalogH, eventTypeCatalogH, heraldTypeCatalogH, meH, deps.RBAC, deps.AuditWriter, deps.MetricsHTTP, deps.TollDegraded, deps.TempoLimiter, deps.TempoMetrics, tempoVoyageCreateLimits, tempoVoyagePreviewLimits, deps.WebUIEnabled, deps.LDAPAuth, deps.OIDCAuth, deps.AuthToken, deps.AuthMethods, deps.LoginGuard, deps.LoginLimitCfg, deps.SoulStatsStaleFn, clusterH, runEventsDeps, consoleDeps, consoleRecordingH, logger, withJWTUse(deps.JWTUse), withLDAPSync(ldapSyncH), withLocalAuth(deps.LocalAuth), withTrustedProxies(deps.TrustedProxies))
 
 	srv := &http.Server{
 		Addr:              cfg.Addr,

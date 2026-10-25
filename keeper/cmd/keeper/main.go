@@ -626,7 +626,23 @@ const minExchangeTTL = 1 * time.Minute
 
 // defaultTTLMax is auth.jwt.ttl_max when keeper.yml sets none: 90 days, the
 // lifetime agreed for service-account tokens (NIM-1045).
-const defaultTTLMax = 90 * 24 * time.Hour
+const defaultTTLMax = config.DefaultJWTTTLMax
+
+// resolveSessionTTL resolves one login method's session lifetime (field names
+// it in the error) and refuses one above ttlMax: no token outlives
+// auth.jwt.ttl_max (ADR-058 amendment NIM-1050). An omitted key is already cut
+// to ttlMax by resolve — even below a minute, the ceiling winning; an explicit
+// value below the minute was refused when the config loaded.
+func resolveSessionTTL(field string, resolve func(ttlMax time.Duration) (time.Duration, error), ttlMax time.Duration) (time.Duration, error) {
+	ttl, err := resolve(ttlMax)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s: %w", field, err)
+	}
+	if ttl <= 0 || ttl > ttlMax {
+		return 0, fmt.Errorf("%s %s is outside (0, auth.jwt.ttl_max %s]", field, ttl, ttlMax)
+	}
+	return ttl, nil
+}
 
 // resolveTTLMax reads auth.jwt.ttl_max. Unset, it is the larger of the 90-day
 // default and ttl_default: a cluster that already ran ttl_default above 90 days
