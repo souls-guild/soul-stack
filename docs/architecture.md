@@ -105,7 +105,7 @@ Moved to [`docs/adr/0013-bootstrap-archon.md`](adr/0013-bootstrap-archon.md). Bo
 
 ### [ADR-014. Operator identity model (Archon)](adr/0014-operator-identity.md)
 
-Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). Registry `operators` in Postgres (mandatory, with real FK), credential - JWT (signing key from Vault KV), identifier AID (charset `[a-z0-9._@-]`, prefix `archon-` removed by amendment); creation/revocation lifecycle via OpenAPI/MCP; near-instant revocation via RBAC snapshot (amendment); every minted JWT accounted in `operator_jwts` and revocable on its own, `ttl` up to `auth.jwt.ttl_max` (amendment NIM-1045); an operator issues, lists and revokes its own tokens under `/v1/me/jwts` (kind `personal`, amendment NIM-1052).
+Moved to [`docs/adr/0014-operator-identity.md`](adr/0014-operator-identity.md). Registry `operators` in Postgres (mandatory, with real FK), credential - JWT (signing key from Vault KV), identifier AID (charset `[a-z0-9._@-]`, prefix `archon-` removed by amendment); creation/revocation lifecycle via OpenAPI/MCP; near-instant revocation via RBAC snapshot (amendment); every minted JWT accounted in `operator_jwts` and revocable on its own, `ttl` up to `auth.jwt.ttl_max` (amendment NIM-1045); an operator issues, lists and revokes its own tokens under `/v1/me/jwts` (kind `personal`, amendment NIM-1052); a machine operator (`auth_method: jwt`) may have an owner — a person or a Synod — who issues and revokes its tokens under `/v1/me/operators`, issuing only while the owner's rights cover the operator's (`operator.set-owner`, amendment NIM-1057).
 
 ### [ADR-015. Core MVP modules: exact list](adr/0015-core-modules-mvp.md)
 

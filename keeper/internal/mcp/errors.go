@@ -77,6 +77,9 @@ const (
 	mcpCodeSynodExists   = "synod-already-exists"
 	mcpCodeSynodNotFound = "synod-not-found"
 	mcpCodeSynodBuiltin  = "synod-builtin"
+	// synod-owns-operators — synod.delete on a group that owns machine
+	// operators (REST TypeSynodOwnsOperators, NIM-1057).
+	mcpCodeSynodOwnsOperators = "synod-owns-operators"
 
 	// Soul codes (onboarding, parity with REST POST /v1/souls + issue-token).
 	// soul-already-exists — UNIQUE violation on souls.sid (REST TypeSoulExists);
@@ -227,7 +230,8 @@ func mapServiceErrorToMCP(err error) (code, detail string) {
 		return mcpCodeWouldLockOutCluster, "target is the last active cluster-admin; revoking would lock out the cluster"
 	case errors.Is(err, rbac.ErrPermissionDenied):
 		return mcpCodeForbidden, "operator lacks required permission"
-	case errors.Is(err, operator.ErrInvalidTTL), errors.Is(err, operator.ErrInvalidJWTLabel):
+	case errors.Is(err, operator.ErrInvalidTTL), errors.Is(err, operator.ErrInvalidJWTLabel),
+		errors.Is(err, operator.ErrInvalidOwner), errors.Is(err, operator.ErrOwnerNotAllowed):
 		return mcpCodeValidationFailed, strings.TrimPrefix(err.Error(), "operator: ")
 	case errors.Is(err, operator.ErrJWTNotFound):
 		return mcpCodeNotFound, "jwt not found for this operator"
@@ -421,6 +425,8 @@ func mapSynodErrorToMCP(err error) (code, detail string) {
 		return mcpCodeSynodExists, "synod with this name already exists"
 	case errors.Is(err, rbac.ErrSynodBuiltin):
 		return mcpCodeSynodBuiltin, "synod is builtin — delete forbidden"
+	case errors.Is(err, rbac.ErrSynodOwnsOperators):
+		return mcpCodeSynodOwnsOperators, strings.TrimPrefix(err.Error(), "rbac: ")
 	case errors.Is(err, rbac.ErrWouldLockOutCluster):
 		return mcpCodeWouldLockOutCluster, "operation would leave the cluster without an active operator holding '*' permission"
 	case errors.Is(err, rbac.ErrInvalidSynodName):

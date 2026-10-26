@@ -436,6 +436,11 @@ var wireProjections = []wireProjection{
 		project: func(b any) any { return toOperatorJWTFilterInput(b.(JWTListFilterQuery)) },
 	},
 	{
+		fn:      "toOperatorOwnerInput",
+		wire:    OperatorOwnerRequest{},
+		project: func(b any) any { return toOperatorOwnerInput(b.(OperatorOwnerRequest)) },
+	},
+	{
 		fn:      "toProvisioningPolicyUpdateInput",
 		wire:    ProvisioningPolicyUpdateRequest{},
 		project: func(b any) any { return toProvisioningPolicyUpdateInput(b.(ProvisioningPolicyUpdateRequest)) },
@@ -637,6 +642,7 @@ var captionedCreateProjections = map[route]string{
 	{http.MethodPost, "/v1/operators"}:                   "toOperatorCreateInput",
 	{http.MethodPost, "/v1/operators/{aid}/issue-token"}: "toOperatorIssueTokenInput",
 	{http.MethodPost, "/v1/me/jwts"}:                     "toOperatorIssueTokenInput",
+	{http.MethodPost, "/v1/me/operators/{aid}/jwts"}:     "toOperatorIssueTokenInput",
 }
 
 // labelIsNotACaption — POST routes whose body carries a `label` that is NOT a

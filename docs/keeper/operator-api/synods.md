@@ -6,7 +6,7 @@ Domain section [Operator API](../operator-api.md): endpoints `/v1/synods*` (Syno
 
 Mapping endpoint ↔ MCP-tool ↔ permission (table of 8 routes + remark about `PATCH /v1/synods/{name}` editing only `description`, NoSelector) - in the root [operator-api.md → Synod (8)](../operator-api.md).
 
-**Source of truth on semantics, bodies and error codes** CRUD `/v1/synods*` (`synod-already-exists`, `synod-not-found`, `synod-builtin`, `would-lock-out-cluster`) - [rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods) (business invariants builtin boundaries, self-lockout, least-privilege subset live in `rbac.Service`). Effective rights of the initiator with subset-check = direct ∪ roles through his Synods.
+**Source of truth on semantics, bodies and error codes** CRUD `/v1/synods*` (`synod-already-exists`, `synod-not-found`, `synod-builtin`, `synod-owns-operators`, `would-lock-out-cluster`) - [rbac.md → REST `/v1/synods`](../rbac.md#rest-v1synods) (business invariants builtin boundaries, self-lockout, least-privilege subset live in `rbac.Service`). Effective rights of the initiator with subset-check = direct ∪ roles through his Synods.
 
 Summary of 8 routes:
 

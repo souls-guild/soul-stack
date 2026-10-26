@@ -231,7 +231,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			}
 			return staticRow{values: []any{
 				op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-				createdByPtr, createdVia, revokedPtr, []byte("{}"),
+				createdByPtr, createdVia, revokedPtr, []byte("{}"), nil, nil,
 			}}
 		}
 		return errRow{err: pgx.ErrNoRows}

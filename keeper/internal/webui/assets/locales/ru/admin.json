@@ -93,6 +93,7 @@
   "auditEventLabel_operator_created": "Archon создан",
   "auditEventLabel_operator_jwt-revoked": "Отозван один токен Archon",
   "auditEventLabel_operator_login": "Archon вошёл",
+  "auditEventLabel_operator_owner-set": "Владелец машинного Archon назначен, изменён или снят",
   "auditEventLabel_operator_password-changed": "Archon сменил свой пароль",
   "auditEventLabel_operator_password-set": "Администратор задал пароль Archon",
   "auditEventLabel_operator_provisioned": "Archon создан автоматически при первом входе через IdP",

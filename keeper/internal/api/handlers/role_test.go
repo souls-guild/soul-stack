@@ -139,6 +139,9 @@ func (p *rbacFakePool) Exec(_ context.Context, sql string, _ ...any) (pgconn.Com
 
 func (p *rbacFakePool) Query(_ context.Context, sql string, args ...any) (pgx.Rows, error) {
 	switch {
+	case contains(sql, "FROM operators WHERE owner_synod"):
+		// assertSynodOwnsNoOperator (NIM-1057): the group owns no operator.
+		return &roleStringRows{}, nil
 	case contains(sql, "SELECT builtin FROM rbac_roles"):
 		// lockRole: empty → ErrRoleNotFound; else a single bool row.
 		if !p.lockRoleFound {

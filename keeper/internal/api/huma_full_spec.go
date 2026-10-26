@@ -90,6 +90,7 @@ func fullSpecGroups() []specGroup {
 			registerHumaOperatorJWTList(api, stub)
 			registerHumaOperatorJWTRevoke(api, stub)
 			registerHumaOperatorSetPassword(api, stub)
+			registerHumaOperatorSetOwner(api, stub)
 			return nil
 		}},
 		// PUT /v1/me/password — a full under-/v1 path (NIM-1051).
@@ -103,6 +104,10 @@ func fullSpecGroups() []specGroup {
 			registerHumaMeJWTList(api, stub)
 			registerHumaMeJWTRevoke(api, stub)
 			registerHumaMeSessionsRevoke(api, stub)
+			registerHumaMeOperatorList(api, stub)
+			registerHumaMeOperatorJWTList(api, stub)
+			registerHumaMeOperatorJWTIssue(api, stub)
+			registerHumaMeOperatorJWTRevoke(api, stub)
 			return nil
 		}},
 		{"/v1/roles", func(api huma.API) error {

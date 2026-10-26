@@ -150,6 +150,12 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodPost, "/v1/me/jwts/{jwt_id}/revoke"}: {why: "revokes one of the CALLER's own tokens: the row is matched on jwt_id AND the claims' AID, so another operator's id answers 404. Revoking only takes access away. Pinned by TestIntegration_MeJWT_OnlyTheCallersRows"},
 	{http.MethodPost, "/v1/me/sessions/revoke"}:      {why: "ends the CALLER's own web sessions (ADR-058 amendment NIM-1050): the UPDATE is scoped to the claims' AID and kind session, so no request reaches another operator's rows. Revoking only takes access away. Pinned by TestIntegration_MeSessionsRevoke_OnlyTheCallersSessions"},
 
+	// --- the machine operators the caller owns (ADR-014 amendment NIM-1057): authentication-only, ownership decided by operator.Service ---
+	{http.MethodGet, "/v1/me/operators"}:                             {why: "lists only the operators the CALLER owns (owner_aid = claims' AID, or owner_synod a Synod the caller is a member of as a person — a machine operator owns nothing through a Synod); nothing else is selected. Pinned by TestIntegration_OwnedOperators_OnlyTheCallersOwn"},
+	{http.MethodGet, "/v1/me/operators/{aid}/jwts"}:                  {why: "lists the tokens of an operator only after operator.ownedOperator finds the CALLER among its owners; any other AID answers 404 like an unknown one. Pinned by TestIntegration_OwnedOperators_OnlyTheCallersOwn"},
+	{http.MethodPost, "/v1/me/operators/{aid}/jwts"}:                 {why: "mints a token of an operator the CALLER owns, and only after rbac.AssertCovers finds the caller's effective rights covering the operator's in the minting transaction — so owning never lets the caller act with a right it does not hold (403 owner-lacks-permissions). Both sides' rights are read the way the enforcer grants them (rbac.resolvedPermissions: derived roles resolved through their parent chains). Ownership, the refusal of a personal token and the coverage are operator.Service.IssueOwnedJWT. Pinned by TestIntegration_OwnedOperators_IssueNeedsCoverage"},
+	{http.MethodPost, "/v1/me/operators/{aid}/jwts/{jwt_id}/revoke"}: {why: "revokes one token of an operator the CALLER owns; a non-owner gets 404. Revoking only takes access away. Pinned by TestIntegration_OwnedOperators_OnlyTheCallersOwn"},
+
 	// --- authorization inside the handler: no chi gate, by construction ---
 	{http.MethodGet, "/v1/incarnations/{id}/runs/{apply_id}/events"}: {why: "ADR-068 §A3: the rule is 'the run's initiator OR incarnation.get/history', and an initiator may hold neither permission — not expressible as an existence gate, which is why there is no chi one. authorizeRunEventsSSE decides it per stream (huma_incarnation_runevents.go), pinned by TestAuthorizeRunEventsSSE_Matrix and TestRunEventsSSE_Forbidden*, and re-decided for the life of the stream by TestRunEventsStillAuthorized_Matrix (NIM-844)"},
 	{http.MethodPost, "/v1/voyages"}:                                 {why: "ADR-043 §6 RBAC-by-kind: the permission is incarnation.run for a scenario recipe and errand.run for a command one, and the kind is only visible in the body — so VoyageHandler.CreateTyped picks and checks it, through resolveScenarioScopeErr / the command half. Pinned by handlers.TestVoyageCreate_ScenarioRBACDenied and TestVoyageCreate_CommandRBACDenied"},
@@ -165,6 +171,8 @@ var rbacRouteGates = map[route]rbacGate{
 	{http.MethodGet, "/v1/operators/{aid}/jwts"}:                  {asks: []string{"check:operator.list"}},
 	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {asks: []string{"check:operator.jwt-revoke"}},
 	{http.MethodPut, "/v1/operators/{aid}/password"}:              {asks: []string{"check:operator.set-password"}},
+	{http.MethodPut, "/v1/operators/{aid}/owner"}:                 {asks: []string{"check:operator.set-owner"}},
+	{http.MethodDelete, "/v1/operators/{aid}/owner"}:              {asks: []string{"check:operator.set-owner"}},
 
 	// --- audit ---
 	{http.MethodGet, "/v1/audit"}: {asks: []string{"check:audit.read"}},

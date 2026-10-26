@@ -174,8 +174,8 @@ func TestInsert_HappyPath_Bootstrap(t *testing.T) {
 	if !strings.Contains(f.lastExecSQL, "INSERT INTO operators") {
 		t.Errorf("SQL: %q", f.lastExecSQL)
 	}
-	if len(f.lastExecArgs) != 8 {
-		t.Fatalf("args len = %d, want 8", len(f.lastExecArgs))
+	if len(f.lastExecArgs) != 10 {
+		t.Fatalf("args len = %d, want 10", len(f.lastExecArgs))
 	}
 	if f.lastExecArgs[0] != "archon-alice" {
 		t.Errorf("args[0] aid = %v", f.lastExecArgs[0])
@@ -401,7 +401,7 @@ func TestSelectByAID_HappyPath(t *testing.T) {
 	f := &fakeDB{
 		rowFunc: func() pgx.Row {
 			return staticRow{values: []any{
-				"archon-bob", "Bob", "jwt", now, any("archon-alice"), "user", any(nil), []byte(`{"team":"ops"}`),
+				"archon-bob", "Bob", "jwt", now, any("archon-alice"), "user", any(nil), []byte(`{"team":"ops"}`), nil, nil,
 			}}
 		},
 	}
@@ -542,7 +542,7 @@ func TestRevoke_AlreadyRevoked(t *testing.T) {
 		rowFunc: func() pgx.Row {
 			// SelectByAID sees already-revoked operator.
 			return staticRow{values: []any{
-				"archon-bob", "Bob", "jwt", now, any(nil), "user", any(now), []byte("{}"),
+				"archon-bob", "Bob", "jwt", now, any(nil), "user", any(now), []byte("{}"), nil, nil,
 			}}
 		},
 	}

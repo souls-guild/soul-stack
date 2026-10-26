@@ -54,10 +54,13 @@ func (s *Service) CreateSynod(ctx context.Context, in CreateSynodInput) error {
 //  1. lock the group row; missing → [ErrSynodNotFound].
 //  2. builtin=true → [ErrSynodBuiltin] (FIRST, before lockout — builtin takes
 //     priority).
-//  3. if the group bundles a `*`-granting role — self-lockout: the group's
+//  3. the group owns machine operators → [ErrSynodOwnsOperators] naming them
+//     (ADR-014 amendment NIM-1057). The row lock of step 1 holds off an owner
+//     being set to it meanwhile: setting one share-locks the group's row.
+//  4. if the group bundles a `*`-granting role — self-lockout: the group's
 //     disappearance must not orphan the last admin whose `*` is held through
 //     it (ADR-049(f)). Empty → [ErrWouldLockOutCluster].
-//  4. DELETE.
+//  5. DELETE.
 func (s *Service) DeleteSynod(ctx context.Context, name string) error {
 	tx, err := s.pool.BeginTx(ctx, pgx.TxOptions{})
 	if err != nil {
@@ -71,6 +74,9 @@ func (s *Service) DeleteSynod(ctx context.Context, name string) error {
 	}
 	if builtin {
 		return ErrSynodBuiltin
+	}
+	if err := assertSynodOwnsNoOperator(ctx, tx, name); err != nil {
+		return err
 	}
 
 	// `*` via the group might be its members' last path to admin — check only

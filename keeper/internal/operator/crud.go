@@ -74,16 +74,15 @@ var (
 // DEFAULT NOW() if the caller did not set a value — behavior is symmetric with
 // audit_log in `keeper/internal/auditpg`.
 const insertOperatorSQL = `
-INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata)
-VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8)
+INSERT INTO operators (aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata, owner_aid, owner_synod)
+VALUES ($1, $2, $3, COALESCE($4, NOW()), $5, $6, $7, $8, $9, $10)
 `
 
+// operatorColumns — the columns [scanOperator] reads, in its order.
+const operatorColumns = `aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata, owner_aid, owner_synod`
+
 // selectOperatorByAIDSQL — SELECT all columns of operators by PK.
-const selectOperatorByAIDSQL = `
-SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
-FROM operators
-WHERE aid = $1
-`
+const selectOperatorByAIDSQL = `SELECT ` + operatorColumns + ` FROM operators WHERE aid = $1`
 
 const countOperatorsSQL = `SELECT COUNT(*) FROM operators`
 
@@ -99,6 +98,9 @@ type ListFilter struct {
 	IncludeRevoked bool
 	// Q — free substring search (ILIKE) by display_name/aid; "" = no filter.
 	Q string
+	// OwnerAID / OwnerSynod — exact owner match (NIM-1057); "" = no filter.
+	OwnerAID   string
+	OwnerSynod string
 }
 
 // Insert inserts a new Archon into the registry.
@@ -177,6 +179,8 @@ func Insert(ctx context.Context, db execQueryRower, op *Operator) error {
 		createdVia,
 		revokedAt,
 		metadataBytes,
+		op.OwnerAID,
+		op.OwnerSynod,
 	)
 	if err != nil {
 		return mapInsertError(err)
@@ -228,6 +232,8 @@ func scanOperator(row pgx.Row) (*Operator, error) {
 		&op.CreatedVia,
 		&op.RevokedAt,
 		&metadataBytes,
+		&op.OwnerAID,
+		&op.OwnerSynod,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -279,7 +285,7 @@ func List(ctx context.Context, db execQueryRower, f ListFilter, offset, limit in
 		return nil, 0, fmt.Errorf("operator: list count: %w", err)
 	}
 
-	selectSQL := `SELECT aid, display_name, auth_method, created_at, created_by_aid, created_via, revoked_at, metadata
+	selectSQL := `SELECT ` + operatorColumns + `
 FROM operators` + whereSQL + `
 ORDER BY created_at DESC
 LIMIT $` + intToString(len(args)+1) + ` OFFSET $` + intToString(len(args)+2)
@@ -320,6 +326,14 @@ func buildOperatorWhere(f ListFilter) (string, []any) {
 		args = append(args, "%"+escapeLike(f.Q)+"%")
 		n := intToString(len(args))
 		conds = append(conds, "(display_name ILIKE $"+n+" OR aid ILIKE $"+n+")")
+	}
+	if f.OwnerAID != "" {
+		args = append(args, f.OwnerAID)
+		conds = append(conds, "owner_aid = $"+intToString(len(args)))
+	}
+	if f.OwnerSynod != "" {
+		args = append(args, f.OwnerSynod)
+		conds = append(conds, "owner_synod = $"+intToString(len(args)))
 	}
 	if !f.IncludeRevoked {
 		conds = append(conds, "revoked_at IS NULL")

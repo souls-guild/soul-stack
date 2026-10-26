@@ -17,6 +17,7 @@ import (
 	"errors"
 	"io"
 	"log/slog"
+	"strings"
 
 	"github.com/souls-guild/soul-stack/keeper/internal/api/middleware"
 	"github.com/souls-guild/soul-stack/keeper/internal/api/problem"
@@ -197,6 +198,8 @@ func (h *SynodHandler) DeleteTyped(ctx context.Context, name string) (SynodNameR
 		return zero, &problemError{problem.New(problem.TypeSynodNotFound, "", "synod "+name+" not found")}
 	case errors.Is(err, rbac.ErrSynodBuiltin):
 		return zero, &problemError{problem.New(problem.TypeSynodBuiltin, "", "synod "+name+" is builtin and cannot be deleted")}
+	case errors.Is(err, rbac.ErrSynodOwnsOperators):
+		return zero, &problemError{problem.New(problem.TypeSynodOwnsOperators, "", strings.TrimPrefix(err.Error(), "rbac: "))}
 	case errors.Is(err, rbac.ErrWouldLockOutCluster):
 		return zero, &problemError{problem.New(problem.TypeWouldLockOutCluster, "", "deleting synod "+name+" would lock out the cluster")}
 	default:

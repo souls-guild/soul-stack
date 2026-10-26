@@ -36,6 +36,7 @@
   "synodBuiltin": "Builtin-Synod нельзя удалить (сервер защищает).",
   "synodLockout": "Удаление/изменение оставит кластер без `*`-администратора (self-lockout-защита).",
   "synodNotFound": "Synod не найден.",
+  "synodOwnsOperators": "Synod владеет машинными Archons — сначала назначьте им другого владельца или снимите его. Keeper: {{detail}}",
   "synodSubsetDenied": "Нельзя выдать право, которого нет у вас самих (subset-check escalation, 403).",
   "unknown": "Неизвестная ошибка.",
   "validation": "Валидация: {{detail}}"

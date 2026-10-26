@@ -492,9 +492,10 @@ func TestRoleTools_InManifest(t *testing.T) {
 // profile / push-provider / augur.omen / herald / tiding / oracle.vigil /
 // oracle.decree.
 // PLUS keeper.operator.jwt-list / jwt-revoke (NIM-1045).
+// PLUS keeper.operator.set-owner (NIM-1057).
 func TestCatalog_TotalCount(t *testing.T) {
-	if n := len(listAllTools()); n != 99 {
-		t.Errorf("catalog size = %d, want 99", n)
+	if n := len(listAllTools()); n != 100 {
+		t.Errorf("catalog size = %d, want 100", n)
 	}
 }
 

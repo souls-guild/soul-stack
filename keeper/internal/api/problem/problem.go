@@ -56,10 +56,14 @@ const (
 	// TypePersonalJWTLimit — 409 on `POST /v1/me/jwts`: the caller holds the
 	// maximum number of active personal tokens, or issued the maximum in 24
 	// hours; the detail says which.
-	TypePersonalJWTLimit    = "https://soul-stack.com/errors/personal-jwt-limit"
-	TypeWouldLockOutCluster = "https://soul-stack.com/errors/would-lock-out-cluster"
-	TypeIncarnationExists   = "https://soul-stack.com/errors/incarnation-already-exists"
-	TypeIncarnationLocked   = "https://soul-stack.com/errors/incarnation-locked"
+	TypePersonalJWTLimit = "https://soul-stack.com/errors/personal-jwt-limit"
+	// TypeOwnerLacksPermissions — 403 on `POST /v1/me/operators/{aid}/jwts`:
+	// the caller owns the operator but does not hold every right it holds
+	// (ADR-014 amendment NIM-1057); `detail` names the first one.
+	TypeOwnerLacksPermissions = "https://soul-stack.com/errors/owner-lacks-permissions"
+	TypeWouldLockOutCluster   = "https://soul-stack.com/errors/would-lock-out-cluster"
+	TypeIncarnationExists     = "https://soul-stack.com/errors/incarnation-already-exists"
+	TypeIncarnationLocked     = "https://soul-stack.com/errors/incarnation-locked"
 	// TypeRerunInputUnavailable — `rerun-last` cannot restore the input of a failed
 	// run: the recipe (`apply_runs.recipe`) is unavailable (recipe IS NULL on the
 	// legacy dispatchWave path, OR the row was purged by Reaper retention). 409 Conflict,
@@ -88,14 +92,17 @@ const (
 	// resent with `confirm_cascade: true`. `detail` names the affected roles and
 	// how many operators hold them; it is what the operator has to be shown before
 	// confirming, so a client must surface it rather than retrying blind.
-	TypeRoleCascade      = "https://soul-stack.com/errors/role-cascade-not-confirmed"
-	TypeSynodNotFound    = "https://soul-stack.com/errors/synod-not-found"
-	TypeSynodExists      = "https://soul-stack.com/errors/synod-already-exists"
-	TypeSynodBuiltin     = "https://soul-stack.com/errors/synod-builtin"
-	TypeSigilActive      = "https://soul-stack.com/errors/sigil-already-active"
-	TypeSigilNotFound    = "https://soul-stack.com/errors/sigil-not-found"
-	TypePluginNotInCache = "https://soul-stack.com/errors/plugin-not-in-cache"
-	TypeServiceExists    = "https://soul-stack.com/errors/service-already-exists"
+	TypeRoleCascade   = "https://soul-stack.com/errors/role-cascade-not-confirmed"
+	TypeSynodNotFound = "https://soul-stack.com/errors/synod-not-found"
+	TypeSynodExists   = "https://soul-stack.com/errors/synod-already-exists"
+	TypeSynodBuiltin  = "https://soul-stack.com/errors/synod-builtin"
+	// TypeSynodOwnsOperators — 409 on deleting a Synod that owns machine
+	// operators (ADR-014 amendment NIM-1057); `detail` names them.
+	TypeSynodOwnsOperators = "https://soul-stack.com/errors/synod-owns-operators"
+	TypeSigilActive        = "https://soul-stack.com/errors/sigil-already-active"
+	TypeSigilNotFound      = "https://soul-stack.com/errors/sigil-not-found"
+	TypePluginNotInCache   = "https://soul-stack.com/errors/plugin-not-in-cache"
+	TypeServiceExists      = "https://soul-stack.com/errors/service-already-exists"
 	// Augur — the Omen / Rite registry (ADR-025, augur.md). omen-already-exists —
 	// UNIQUE on omens.id (409). not-found Omen / Rite — the shared TypeNotFound.
 	TypeOmenExists = "https://soul-stack.com/errors/omen-already-exists"
@@ -237,6 +244,7 @@ var titles = map[string]string{
 	TypeJWTAlreadyRevoked:          "JWT is already revoked",
 	TypePersonalJWTFromPersonal:    "A personal token cannot issue personal tokens",
 	TypePersonalJWTLimit:           "Personal token limit reached",
+	TypeOwnerLacksPermissions:      "The owner does not hold every permission of the operator",
 	TypeWouldLockOutCluster:        "Operation would lock out the cluster",
 	TypeIncarnationExists:          "Incarnation already exists",
 	TypeIncarnationLocked:          "Incarnation is locked",
@@ -251,6 +259,7 @@ var titles = map[string]string{
 	TypeSynodNotFound:              "Synod not found",
 	TypeSynodExists:                "Synod already exists",
 	TypeSynodBuiltin:               "Synod is builtin",
+	TypeSynodOwnsOperators:         "Synod owns operators",
 	TypeSigilActive:                "Sigil already active",
 	TypeSigilNotFound:              "Sigil not found",
 	TypePluginNotInCache:           "Plugin not found in host cache",
@@ -336,6 +345,7 @@ var statuses = map[string]int{
 	TypeJWTAlreadyRevoked:          http.StatusConflict,
 	TypePersonalJWTFromPersonal:    http.StatusForbidden,
 	TypePersonalJWTLimit:           http.StatusConflict,
+	TypeOwnerLacksPermissions:      http.StatusForbidden,
 	TypeWouldLockOutCluster:        http.StatusConflict,
 	TypeIncarnationExists:          http.StatusConflict,
 	TypeIncarnationLocked:          http.StatusConflict,
@@ -350,6 +360,7 @@ var statuses = map[string]int{
 	TypeSynodNotFound:              http.StatusNotFound,
 	TypeSynodExists:                http.StatusConflict,
 	TypeSynodBuiltin:               http.StatusConflict,
+	TypeSynodOwnsOperators:         http.StatusConflict,
 	TypeSigilActive:                http.StatusConflict,
 	TypeSigilNotFound:              http.StatusNotFound,
 	TypePluginNotInCache:           http.StatusNotFound,

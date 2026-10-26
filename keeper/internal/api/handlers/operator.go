@@ -153,6 +153,10 @@ type OperatorCreateInput struct {
 	// token; NIM-1051).
 	AuthMethod string
 	Password   string
+	// OwnerAID / OwnerSynod — the owner of a new machine operator, at most one
+	// (NIM-1057).
+	OwnerAID   string
+	OwnerSynod string
 }
 
 // OperatorCreateReply — extracted result of [OperatorHandler.CreateTyped]
@@ -171,6 +175,7 @@ type OperatorCreateReply struct {
 	ExpiresAt    time.Time
 	Label        string
 	GrantedRoles []string
+	Owner        operator.Owner
 }
 
 // tokenTermsProblem maps the token-terms sentinels shared by create and
@@ -244,12 +249,16 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		Client:      clientMeta(ctx),
 		AuthMethod:  method,
 		Password:    req.Password,
+		Owner:       operator.Owner{AID: req.OwnerAID, Synod: req.OwnerSynod},
 	})
 	if err != nil {
 		if p, ok := tokenTermsProblem(err); ok {
 			return zero, p
 		}
 		if p, ok := passwordProblem(err); ok {
+			return zero, p
+		}
+		if p, ok := ownerProblem(err); ok {
 			return zero, p
 		}
 		switch {
@@ -289,6 +298,7 @@ func (h *OperatorHandler) CreateTyped(ctx context.Context, claims *jwt.Claims, r
 		JWTID:        res.JWTID,
 		Label:        req.Label,
 		GrantedRoles: res.GrantedRoles,
+		Owner:        res.Owner,
 	}
 	if !res.ExpiresAt.IsZero() {
 		reply.ExpiresAt = res.ExpiresAt.UTC().Truncate(time.Second)
@@ -397,6 +407,12 @@ func (r OperatorCreateReply) AuditPayload() middleware.AuditPayload {
 	}
 	if r.Label != "" {
 		p["label"] = r.Label
+	}
+	if r.Owner.AID != "" {
+		p["owner_aid"] = r.Owner.AID
+	}
+	if r.Owner.Synod != "" {
+		p["owner_synod"] = r.Owner.Synod
 	}
 	return p
 }
@@ -830,6 +846,8 @@ type OperatorView struct {
 	DisplayName      string
 	Metadata         map[string]any
 	RevokedAt        *time.Time
+	OwnerAID         *string
+	OwnerSynod       *string
 }
 
 func toOperatorView(op *operator.Operator) OperatorView {
@@ -842,6 +860,8 @@ func toOperatorView(op *operator.Operator) OperatorView {
 		CreatedVia:       op.CreatedVia,
 		BootstrapInitial: op.IsBootstrap(),
 		Metadata:         op.Metadata,
+		OwnerAID:         op.OwnerAID,
+		OwnerSynod:       op.OwnerSynod,
 	}
 	if op.RevokedAt != nil {
 		t := op.RevokedAt.UTC().Truncate(time.Second)

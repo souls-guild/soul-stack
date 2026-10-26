@@ -25,6 +25,8 @@ With `auth_method: local` the Archon gets a **password instead of a token** (NIM
 | `label` | `string` (≤ 200 characters, no control characters) | optional | Shown in the Archon's token list. Not with `auth_method: local`. |
 | `auth_method` | `jwt` \| `local` | optional | How the Archon logs in. `jwt` (default) — the reply carries its token; `local` — `password` is required and the reply carries no token. |
 | `password` | `string` | with `local` | The initial local password: at least `auth.local.min_password_length` (default 12) and at most 128 characters, no control characters, not equal to the AID. Never logged, never returned. |
+| `owner_aid` | `string` (AID) | optional, `jwt` only | The person who owns the new machine operator and rotates its tokens ([§ The owner of a machine operator](#the-owner-of-a-machine-operator)). Exclusive with `owner_synod`. |
+| `owner_synod` | `string` | optional, `jwt` only | The Synod whose members (those who sign in themselves) own the new operator. Exclusive with `owner_aid`. |
 
 ```json
 {
@@ -115,6 +117,8 @@ Permission: `operator.list`. Read-only, no audit.
 |---|---|---|---|
 | `auth_method` | `string` (jwt/mtls/combined/ldap/oidc/local) | optional | Filter by how the Archon logs in. |
 | `revoked` | `bool` (default `false`) | optional | `false` - active only (`revoked_at IS NULL`); `true` - including the reviled. |
+| `q` | `string` | optional | Case-insensitive substring of `display_name` or `aid`. |
+| `owner_aid` / `owner_synod` | `string` | optional | Only the operators this person / this Synod owns (NIM-1057). |
 | `offset` / `limit` | `int` | optional | Standard pagination ([§ Pagination](../operator-api.md#pagination)). |
 
 **Response `200 OperatorListReply`:** `{items: Operator[], offset, limit, total}`. Sort by `created_at DESC` (newest on top).
@@ -123,7 +127,7 @@ Permission: `operator.list`. Read-only, no audit.
 
 Permission: `operator.list` (`soul.list` pattern: one permission covers list+get). Path-param: `aid`. Read-only, no audit.
 
-**Response `200 Operator`:** registry entry `operators`. **Errors:** `404 not-found` if the AID does not exist, `422 validation-failed` for a broken AID.
+**Response `200 Operator`:** registry entry `operators`; a machine operator with an owner also carries `owner_aid` or `owner_synod`. **Errors:** `404 not-found` if the AID does not exist, `422 validation-failed` for a broken AID.
 
 ### Local passwords
 
@@ -231,3 +235,49 @@ A web session is the token of kind `session` a login (password, LDAP, OIDC) mint
 **Auth-only**, REST only. Body optional: `{keep_current?: bool}` — `true` ends every session but the one the request is made with ("end all others"); omitted or `false` ends every session, that one included ("end all"; the caller is signed out). Only tokens of kind `session` are revoked: personal and issued tokens keep working. Audit `operator.sessions-revoked` `{aid, revoked, keep_current}`.
 
 **Response `200 MySessionsRevokeReply`:** `{revoked}` — how many sessions were ended (`0` is a success). **Errors:** `422 validation-failed` (malformed body).
+
+### The owner of a machine operator
+
+A machine operator is an Archon with `auth_method: jwt` created through `POST /v1/operators` — one that signs in only with a token issued to it, such as the account of an integration. It may have an **owner**: one person (`owner_aid`, an active Archon with `auth_method` `local`, `ldap` or `oidc`, never the operator itself) or one Synod (`owner_synod`, every current member that signs in itself is an owner — a machine operator in it owns nothing). The owner rotates the operator's tokens itself, without `operator.issue-token`, while its own rights cover the operator's ([ADR-014 amendment NIM-1057](../../adr/0014-operator-identity.md), [rbac.md → The operators you own](../rbac.md#operator-8--adr-014)). Bootstrap, `archon-system` and every Archon that signs in itself have no owner.
+
+#### `PUT /v1/operators/{aid}/owner` - set the owner
+
+Permission: `operator.set-owner` (not restricted by target). MCP-tool: `keeper.operator.set-owner`. Audit `operator.owner-set` (`{aid, owner_aid | owner_synod, previous_owner_aid | previous_owner_synod}`).
+
+**Request `OperatorOwnerRequest`:** exactly one of `owner_aid` / `owner_synod`. Replaces the previous owner.
+
+```json
+{"owner_synod": "dba"}
+```
+
+**Response `204 No Content`.** **Errors:** `403 forbidden`, `404 not-found` (unknown AID), `409 operator-revoked`, `422 validation-failed` — not a machine operator, both or neither field, the operator itself, an unknown or revoked Archon, an Archon that does not sign in itself, an unknown Synod.
+
+#### `DELETE /v1/operators/{aid}/owner` - clear the owner
+
+Permission: `operator.set-owner`. MCP: `keeper.operator.set-owner` with neither field. Audit `operator.owner-set` without the owner fields. The operator's tokens stay. Idempotent, and works on a revoked operator too. **Response `204 No Content`.** **Errors:** `403 forbidden`, `404 not-found`, `422 validation-failed` (not a machine operator).
+
+A Synod that owns operators cannot be deleted: `DELETE /v1/synods/{name}` answers `409 synod-owns-operators` naming them, revoked ones included. Give them another owner or clear it first — `DELETE` clears the owner of a revoked operator too, `PUT` refuses one (`409`).
+
+#### `GET /v1/me/operators` - the operators you own
+
+**Auth-only**, REST only. The active machine operators the caller owns, directly or through a Synod it is a member of — as a person; a machine operator owns nothing through a Synod — by AID. Query: `offset` / `limit`. **Response `200 OperatorListReply`** (the shape of `GET /v1/operators`).
+
+#### `GET /v1/me/operators/{aid}/jwts` - tokens of an operator you own
+
+**Auth-only**. `GET /v1/operators/{aid}/jwts` without `operator.list`, the same filters and reply. **Errors:** `404 not-found` — not an operator the caller owns (an unknown AID answers the same).
+
+#### `POST /v1/me/operators/{aid}/jwts` - issue a token of an operator you own
+
+**Auth-only**. Optional body `{ttl?, label?}` as for `issue-token`: `ttl` up to `auth.jwt.ttl_max`, omitted → `auth.jwt.ttl_default`. Mints a token of kind `issued` with `created_by_aid` the caller. Audit `operator.token-issued` (`{aid, expires_at, jwt_id, kind, ttl, label?}`, `archon_aid` the owner).
+
+Checked in the transaction that mints, in this order: the caller owns the operator; the operator is not revoked; the request is not made with a personal token or with a token already revoked in the database; **the caller's effective permissions (direct and through Synods, each role resolved through its parent chain and under its effective `default_scope`) cover every effective permission of the operator** — the containment of the least-privilege invariant, so `incarnation.get on service=dragonfly` does not cover `incarnation.get`. The token is authorized against the operator's roles at each request, like every token: a role granted to the operator later reaches the tokens its owner minted before.
+
+```json
+{"ttl": "90d", "label": "servicedesk prod"}
+```
+
+**Response `201 IssueTokenReply`:** `{aid, jwt, jwt_id, expires_at}` — the JWT once. **Errors:** `401 jwt-revoked` (the caller's token is revoked in the database), `403 owner-lacks-permissions` (detail names the first right not covered), `403 personal-jwt-from-personal`, `404 not-found`, `409 operator-revoked`, `422 validation-failed` (`ttl` / `label`).
+
+#### `POST /v1/me/operators/{aid}/jwts/{jwt_id}/revoke` - revoke a token of an operator you own
+
+**Auth-only**. `POST /v1/operators/{aid}/jwts/{jwt_id}/revoke` without `operator.jwt-revoke`; no coverage check — revoking only takes access away. Audit `operator.jwt-revoked`. **Response `204 No Content`.** **Errors:** `404 not-found` (not an operator the caller owns, or not a token of it), `409 jwt-already-revoked`.

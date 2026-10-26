@@ -60,7 +60,7 @@ func (opPool) QueryRow(_ context.Context, sql string, _ ...any) pgx.Row {
 		// created_via='bootstrap' (ADR-058(d)), revoked_at NULL, metadata empty.
 		return opStaticRow{values: []any{
 			"archon-bob", "Bob", "jwt", opCreatedAt,
-			nil, "bootstrap", nil, []byte("{}"),
+			nil, "bootstrap", nil, []byte("{}"), nil, nil,
 		}}
 	}
 	return opStaticRow{err: pgx.ErrNoRows}
@@ -98,8 +98,9 @@ type opIntRow struct{ n int }
 
 func (r opIntRow) Scan(dest ...any) error { *dest[0].(*int) = r.n; return nil }
 
-// opStaticRow — a SELECT operator row (8 columns: aid/display_name/auth_method/
-// created_at/created_by_aid/created_via/revoked_at/metadata). nil values → NULL.
+// opStaticRow — a SELECT operator row (10 columns: aid/display_name/auth_method/
+// created_at/created_by_aid/created_via/revoked_at/metadata/owner_aid/owner_synod).
+// nil values → NULL.
 type opStaticRow struct {
 	values []any
 	err    error
@@ -167,7 +168,7 @@ func (r *opListRows) Next() bool {
 func (r *opListRows) Scan(dest ...any) error {
 	return opStaticRow{values: []any{
 		"archon-bob", "Bob", "jwt", opCreatedAt,
-		nil, "bootstrap", nil, []byte("{}"),
+		nil, "bootstrap", nil, []byte("{}"), nil, nil,
 	}}.Scan(dest...)
 }
 func (r *opListRows) Err() error                                   { return nil }

@@ -94,6 +94,17 @@ type Operator struct {
 	CreatedVia   CreatedVia     `json:"created_via"`
 	RevokedAt    *time.Time     `json:"revoked_at,omitempty"`
 	Metadata     map[string]any `json:"metadata,omitempty"`
+	// OwnerAID / OwnerSynod — the owner of a machine operator, at most one of
+	// them set (ADR-014 amendment NIM-1057); both nil for everyone else.
+	OwnerAID   *string `json:"owner_aid,omitempty"`
+	OwnerSynod *string `json:"owner_synod,omitempty"`
+}
+
+// IsMachine — the operator may have an owner: it signs in only with a token
+// issued to it (`auth_method: jwt`) and was created through the Operator API,
+// not by `keeper init` or as `archon-system` (SQL CHECK operators_owner_jwt_only).
+func (o *Operator) IsMachine() bool {
+	return o.AuthMethod == AuthMethodJWT && o.CreatedVia == CreatedViaUser
 }
 
 // IsRevoked — Operator has RevokedAt set (non-nil). Every JWT of a revoked

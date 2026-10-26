@@ -125,6 +125,10 @@ import (
 //	GET    /v1/me/jwts                               — your own tokens (auth-only, NIM-1052).
 //	POST   /v1/me/jwts/{jwt_id}/revoke               — revoke one of your own tokens (auth-only, NIM-1052).
 //	POST   /v1/me/sessions/revoke                    — end your web sessions, all or all but this one (auth-only, NIM-1050).
+//	GET    /v1/me/operators                          — the machine operators you own (auth-only, NIM-1057).
+//	GET    /v1/me/operators/{aid}/jwts               — tokens of an operator you own (auth-only, NIM-1057).
+//	POST   /v1/me/operators/{aid}/jwts               — issue a token of an operator you own (auth-only, NIM-1057).
+//	POST   /v1/me/operators/{aid}/jwts/{jwt_id}/revoke — revoke a token of an operator you own (auth-only, NIM-1057).
 //	/v1/*                                            — catch-all 404 behind the auth chain.
 //
 // tempoBucketVoyageCreate / tempoBucketVoyagePreview — logical names of the
@@ -416,6 +420,14 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 			).Group(func(r chi.Router) {
 				registerHumaOperatorSetPassword(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorPasswordSet, logger), opH)
 			})
+
+			// The owner of a machine operator (ADR-014 amendment NIM-1057): PUT
+			// sets it, DELETE clears it, one event for both.
+			r.With(
+				apimiddleware.RequirePermission(enforcer, "operator", "set-owner", apimiddleware.NoSelector),
+			).Group(func(r chi.Router) {
+				registerHumaOperatorSetOwner(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorOwnerSet, logger), opH)
+			})
 		})
 
 		// PUT /v1/me/password — the caller changes its own local password
@@ -444,6 +456,23 @@ func buildRouter(verifier *jwt.Verifier, healthH *health.Handler, opH *handlers.
 		// The caller's own web sessions at once (ADR-058 amendment NIM-1050).
 		r.Group(func(r chi.Router) {
 			registerHumaMeSessionsRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorSessionsRevoked, logger), opH)
+		})
+
+		// /v1/me/operators — the operators the caller owns and their tokens
+		// (ADR-014 amendment NIM-1057). Auth-only: operator.Service decides
+		// ownership and checks that the caller's rights cover the operator's
+		// before it mints.
+		r.Group(func(r chi.Router) {
+			registerHumaMeOperatorList(newHumaCadenceAPI(r), opH)
+		})
+		r.Group(func(r chi.Router) {
+			registerHumaMeOperatorJWTList(newHumaCadenceAPI(r), opH)
+		})
+		r.Group(func(r chi.Router) {
+			registerHumaMeOperatorJWTIssue(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorTokenIssued, logger), opH)
+		})
+		r.Group(func(r chi.Router) {
+			registerHumaMeOperatorJWTRevoke(newHumaOperatorAPI(r, auditWriter, audit.EventOperatorJWTRevoked, logger), opH)
 		})
 
 		// /v1/audit — read-only feed of audit events for UI iteration 2 (/audit).

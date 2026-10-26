@@ -120,6 +120,7 @@ var rbacToolGates = map[string]toolGate{
 	"keeper.operator.issue-token": {asks: []string{"check:operator.issue-token"}, args: `{"aid":"archon-probe"}`},
 	"keeper.operator.jwt-list":    {asks: []string{"check:operator.list"}, args: `{"aid":"archon-probe"}`},
 	"keeper.operator.jwt-revoke":  {asks: []string{"check:operator.jwt-revoke"}, args: `{"aid":"archon-probe","jwt_id":"01JTESTJT1000000000000000A"}`},
+	"keeper.operator.set-owner":   {asks: []string{"check:operator.set-owner"}, args: `{"aid":"archon-probe"}`},
 
 	// --- roles / synods ---
 	"keeper.role.create":           {asks: []string{"check:role.create"}},

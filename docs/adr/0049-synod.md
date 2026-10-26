@@ -34,7 +34,7 @@ Full symmetry with the RBAC tables: `synods` ↔ `rbac_roles` (catalog + `builti
 **(g) API/MCP + the `synod.*` permission family.** Management via OpenAPI/MCP (the `role.*` pattern [ADR-028(e)](0028-rbac-storage.md#adr-028-rbac-storage--postgres), `operator.*` [ADR-014(d)](0014-operator-identity.md#adr-014-operator-identity-model-archon)):
 
 - `synod.create` — create a group (+ description).
-- `synod.delete` — delete a group (cascades membership + bundle; forbidden on `builtin=true`; the self-lockout guard (f)).
+- `synod.delete` — delete a group (cascades membership + bundle; forbidden on `builtin=true`; the self-lockout guard (f); forbidden while the group owns machine operators — `409 synod-owns-operators`, [ADR-014 amendment NIM-1057](0014-operator-identity.md)).
 - `synod.list` — list groups with their members and roles.
 - `synod.add-operator` — add an Archon to a group (`synod_operators`); under the least-privilege subset (f).
 - `synod.remove-operator` — remove an Archon from a group (the self-lockout guard (f)).

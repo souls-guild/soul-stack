@@ -132,7 +132,15 @@ func toOperatorCreateInput(b OperatorCreateRequest) handlers.OperatorCreateInput
 		Label:       b.Label,
 		AuthMethod:  b.AuthMethod,
 		Password:    b.Password,
+		OwnerAID:    b.OwnerAID,
+		OwnerSynod:  b.OwnerSynod,
 	}
+}
+
+// toOperatorOwnerInput projects the PUT /v1/operators/{aid}/owner body onto the
+// handler input.
+func toOperatorOwnerInput(b OperatorOwnerRequest) handlers.OperatorOwnerInput {
+	return handlers.OperatorOwnerInput{OwnerAID: b.OwnerAID, OwnerSynod: b.OwnerSynod}
 }
 
 // toOperatorIssueTokenInput projects the optional POST /v1/operators/{aid}/issue-token

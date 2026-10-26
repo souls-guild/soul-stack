@@ -2,7 +2,7 @@
 
 Domain section [MCP-tools directory](../mcp-tools.md): tools `keeper.operator.*` (creation / review / release of JWT Archons). Transport, auth, tool declaration format, async-convention, error mapping - in the root [mcp-tools.md](../mcp-tools.md). The source of truth for semantics is [operator-api.md → Operator](../operator-api/operator.md).
 
-### Operator (5)
+### Operator (6)
 
 #### `keeper.operator.create`
 
@@ -16,6 +16,8 @@ Creation of a new Archon. Permission: `operator.create`. Endpoint: [`POST /v1/op
 | `display_name` | `string` | yes | Human-readable name. |
 | `ttl` | `string` (`duration`: `2160h`, `90d`) | no | Lifetime of the returned JWT. Omitted → `auth.jwt.ttl_default`; between `1m` and `auth.jwt.ttl_max`, else `validation-failed`. |
 | `label` | `string` (≤ 200 characters) | no | Shown in the Archon's token list. |
+| `owner_aid` | `string` (AID) | no | The person who owns the new Archon and rotates its tokens: an active Archon with `auth_method` `local`, `ldap` or `oidc` ([ADR-014 amendment NIM-1057](../../adr/0014-operator-identity.md)). Exclusive with `owner_synod`. |
+| `owner_synod` | `string` | no | The Synod whose members (those who sign in themselves) own the new Archon. Exclusive with `owner_aid`. |
 
 **Output:**
 
@@ -76,3 +78,9 @@ Every JWT Keeper minted for an Archon, newest first — never the token itself (
 Revokes one JWT of an Archon: the token is refused on its next request on every door, the Archon and its other tokens keep working. Permission: `operator.jwt-revoke`. Endpoint: [`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`](../operator-api/operator.md#tokens-of-an-archon). Async: no. Audit `operator.jwt-revoked`.
 
 **Input:** `aid`, `jwt_id` (both required). **Output:** empty object. **Errors:** `not-found` (not a token of this Archon), `jwt-already-revoked`, `forbidden`.
+
+#### `keeper.operator.set-owner`
+
+Sets, changes or clears the owner of a machine operator — an Archon with `auth_method: jwt` created through the Operator API ([ADR-014 amendment NIM-1057](../../adr/0014-operator-identity.md)). The owner issues and revokes the operator's tokens itself, over HTTP under `/v1/me/operators` (no MCP tool); it issues only while its own permissions cover the operator's. Permission: `operator.set-owner`. Endpoints: [`PUT` / `DELETE /v1/operators/{aid}/owner`](../operator-api/operator.md#the-owner-of-a-machine-operator). Async: no. Audit `operator.owner-set`.
+
+**Input:** `aid` (required), and at most one of `owner_aid` (a person: an active Archon with `auth_method` `local`, `ldap` or `oidc`, not the operator itself) or `owner_synod`; neither clears the owner. **Output:** empty object. **Errors:** `validation-failed` (not a machine operator, both fields, an unknown or revoked Archon, an Archon that does not sign in itself, the operator itself, an unknown Synod), `operator-revoked`, `not-found`, `forbidden`.

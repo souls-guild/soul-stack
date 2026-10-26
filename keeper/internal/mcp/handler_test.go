@@ -316,7 +316,7 @@ func (f *fakePool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row 
 			}
 			return staticRow{values: []any{
 				op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-				createdByPtr, createdVia, revokedPtr, []byte("{}"),
+				createdByPtr, createdVia, revokedPtr, []byte("{}"), nil, nil,
 			}}
 		}
 		return errRow{err: pgx.ErrNoRows}
@@ -1106,8 +1106,9 @@ func TestDispatch_ToolsList_HasAllTools(t *testing.T) {
 	// one per registry that carries a display caption. Eight CRUD tools and two
 	// captions left with the Cloud Provider/Profile registries (NIM-761).
 	// 99 = 97 + keeper.operator.jwt-list / jwt-revoke (NIM-1045).
-	if len(res.Tools) != 99 {
-		t.Errorf("tool count = %d, want 99", len(res.Tools))
+	// 100 = 99 + keeper.operator.set-owner (NIM-1057).
+	if len(res.Tools) != 100 {
+		t.Errorf("tool count = %d, want 100", len(res.Tools))
 	}
 	// Names must stay stable (spec — mcp-tools.md).
 	names := map[string]bool{}

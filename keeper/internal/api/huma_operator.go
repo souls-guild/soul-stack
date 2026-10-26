@@ -60,6 +60,8 @@ func registerHumaOperatorList(humaAPI huma.API, opH *handlers.OperatorHandler) {
 			AuthMethod:     operator.AuthMethod(in.AuthMethod), // empty → filter not applied; the huma enum already rejected out-of-set (422)
 			IncludeRevoked: in.Revoked,
 			Q:              in.Q, // pass-through: empty → no filter (parity /v1/runs)
+			OwnerAID:       in.OwnerAID,
+			OwnerSynod:     in.OwnerSynod,
 		}
 		page, err := opH.ListTyped(ctx, filter, int(in.Offset), int(in.Limit))
 		if err != nil {
@@ -194,6 +196,44 @@ func registerHumaOperatorSetPassword(humaAPI huma.API, opH *handlers.OperatorHan
 	})
 }
 
+// registerHumaOperatorSetOwner mounts PUT and DELETE /v1/operators/{aid}/owner
+// (WRITE+AUDIT variant B — event operator.owner-set, NIM-1057). RBAC
+// operator.set-owner — on the group.
+func registerHumaOperatorSetOwner(humaAPI huma.API, opH *handlers.OperatorHandler) {
+	if opH == nil {
+		return
+	}
+	huma.Register(humaAPI, operatorSetOwnerOperation(), func(ctx context.Context, in *operatorSetOwnerInput) (*operatorNoContentOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, operatorMissingClaims()
+		}
+		owner := toOperatorOwnerInput(in.Body)
+		if owner.OwnerAID == "" && owner.OwnerSynod == "" {
+			return nil, humaProblemError{Details: problem.New(problem.TypeValidationFailed, "",
+				"set owner_aid or owner_synod; DELETE /v1/operators/{aid}/owner clears the owner")}
+		}
+		reply, err := opH.SetOwnerTyped(ctx, claims, in.AID, owner)
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &operatorNoContentOutput{Status: 204}, nil
+	})
+	huma.Register(humaAPI, operatorClearOwnerOperation(), func(ctx context.Context, in *operatorClearOwnerInput) (*operatorNoContentOutput, error) {
+		claims, ok := apimiddleware.ClaimsFromContext(ctx)
+		if !ok {
+			return nil, operatorMissingClaims()
+		}
+		reply, err := opH.SetOwnerTyped(ctx, claims, in.AID, handlers.OperatorOwnerInput{})
+		if err != nil {
+			return nil, operatorProblem(err)
+		}
+		apimiddleware.SetHumaAuditPayload(ctx, apimiddleware.AuditPayload(reply.AuditPayload()))
+		return &operatorNoContentOutput{Status: 204}, nil
+	})
+}
+
 // registerHumaMyPasswordChange mounts PUT /v1/me/password (WRITE+AUDIT variant
 // B — event operator.password-changed, NIM-1051). Auth-only: the subject is the
 // caller.
@@ -282,6 +322,8 @@ func newOperator(v handlers.OperatorView) Operator {
 		CreatedVia:       v.CreatedVia,
 		DisplayName:      v.DisplayName,
 		RevokedAt:        v.RevokedAt,
+		OwnerAID:         v.OwnerAID,
+		OwnerSynod:       v.OwnerSynod,
 	}
 	if len(v.Metadata) > 0 {
 		m := map[string]interface{}(v.Metadata)
@@ -344,6 +386,7 @@ func HumaOperatorSpecYAML() (string, error) {
 		registerHumaOperatorJWTList(api, stub)
 		registerHumaOperatorJWTRevoke(api, stub)
 		registerHumaOperatorSetPassword(api, stub)
+		registerHumaOperatorSetOwner(api, stub)
 		return nil
 	})
 }

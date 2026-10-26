@@ -142,6 +142,7 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 | `synod-not-found` | The synod group with the specified `name` is missing in `synods` (`keeper.synod.update` / `keeper.synod.delete` / `keeper.synod.add-operator` / `keeper.synod.grant-role`). |
 | `synod-already-exists` | Group `name` is busy (`keeper.synod.create`). |
 | `synod-builtin` | The group with `builtin=true` - `keeper.synod.delete` above it is prohibited. |
+| `synod-owns-operators` | `keeper.synod.delete` on a group that owns machine operators ([ADR-014 amendment NIM-1057](../adr/0014-operator-identity.md)). Give them another owner (`keeper.operator.set-owner`) or clear it, then retry; the detail names them. |
 | `incarnation-already-exists` | An Incarnation with the specified `name` has already been created. |
 | `operator-already-exists` | AID is already busy. |
 | `soul-already-exists` | The SID is already registered in the registry `souls`. |
@@ -168,15 +169,15 @@ Full list of error codes - stable URN suffixes from [operator-api.md → Error t
 
 Extending the code list - only-add symmetrically Operator API.
 
-## Catalog 99 MCP-tool
+## Catalog 100 MCP-tool
 
 1:1 with HTTP endpoints from [operator-api.md → Mapping endpoint ↔ MCP-tool ↔ permission](operator-api.md#mapping-endpoint--mcp-tool--permission). For each tool: input schema (short table of fields), output schema, cross-link to the endpoint section of operator-api.md as a source of truth for semantics.
 
 Field names input - 1:1 with JSON body HTTP endpoint; The paths in output are the same as in the HTTP response. Async-tools are marked in the **Async** column.
 
-### Operator (5)
+### Operator (6)
 
-Moved to a domain file - [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`, `keeper.operator.jwt-list`, `keeper.operator.jwt-revoke`. The source of truth for semantics is [operator-api/operator.md](operator-api/operator.md).
+Moved to a domain file - [mcp-tools/operator.md](mcp-tools/operator.md): `keeper.operator.create`, `keeper.operator.revoke`, `keeper.operator.issue-token`, `keeper.operator.jwt-list`, `keeper.operator.jwt-revoke`, `keeper.operator.set-owner`. The source of truth for semantics is [operator-api/operator.md](operator-api/operator.md).
 
 ### Role (6)
 

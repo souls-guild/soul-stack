@@ -3,6 +3,7 @@ package rbac
 import (
 	"context"
 	"fmt"
+	"sort"
 )
 
 // ErrPermissionNotHeld signals a least-privilege violation (subset check):
@@ -57,6 +58,80 @@ func (s *Service) assertCallerMayGrant(ctx context.Context, db ExecQueryRower, c
 		return err
 	}
 	return assertCallerCovers(callerPerms, required)
+}
+
+// AssertCovers checks that callerAID's effective permissions cover every
+// effective permission of targetAID — the containment a grant is judged by
+// ([assertCallerCovers]). The owner of a machine operator mints its tokens only
+// under it (ADR-014 amendment NIM-1057), so owning an operator never lets the
+// owner act with rights it does not hold. Uncovered → [ErrPermissionNotHeld]
+// naming the first one in permission order. Run it in the transaction that acts
+// on the answer.
+//
+// Both sides are read through [resolvedPermissions], not [callerPermissions]: a
+// derived role's stored rows are only its delta, and reading them raw would hand
+// the caller a parent's rights without its ceiling (the grant gates still read
+// them raw — NIM-1058).
+func AssertCovers(ctx context.Context, db ExecQueryRower, callerAID, targetAID string) error {
+	required, err := resolvedPermissions(ctx, db, targetAID)
+	if err != nil {
+		return err
+	}
+	if len(required) == 0 {
+		return nil
+	}
+	callerPerms, err := resolvedPermissions(ctx, db, callerAID)
+	if err != nil {
+		return err
+	}
+	sort.Slice(required, func(i, j int) bool { return permString(required[i]) < permString(required[j]) })
+	return assertCallerCovers(callerPerms, required)
+}
+
+// selectAIDRolesSQL — the roles an active operator holds, directly or through a
+// Synod (ADR-049(f)).
+const selectAIDRolesSQL = `
+SELECT ro.role_name FROM rbac_role_operators ro JOIN operators o ON o.aid = ro.aid
+WHERE ro.aid = $1 AND o.revoked_at IS NULL
+UNION
+SELECT sr.role_name FROM synod_operators so
+JOIN synod_roles sr ON sr.synod_name = so.synod_name
+JOIN operators o ON o.aid = so.aid
+WHERE so.aid = $1 AND o.revoked_at IS NULL
+ORDER BY 1
+`
+
+// resolvedPermissions reads an operator's effective permissions the way the
+// enforcer grants them: each role resolved through its parent chain
+// ([resolveRoleChain] — the ceiling and the intersection of ADR-078), then its
+// bare permissions under its effective scope. A revoked operator holds none.
+func resolvedPermissions(ctx context.Context, db ExecQueryRower, aid string) ([]Permission, error) {
+	rows, err := db.Query(ctx, selectAIDRolesSQL, aid)
+	if err != nil {
+		return nil, fmt.Errorf("rbac: read roles of %q: %w", aid, wrapPgErr(err))
+	}
+	var names []string
+	for rows.Next() {
+		var name string
+		if err := rows.Scan(&name); err != nil {
+			rows.Close()
+			return nil, fmt.Errorf("rbac: scan role of %q: %w", aid, err)
+		}
+		names = append(names, name)
+	}
+	rows.Close()
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rbac: iter roles of %q: %w", aid, err)
+	}
+	var out []Permission
+	for _, name := range names {
+		role, err := resolveRoleChain(ctx, db, name)
+		if err != nil {
+			return nil, err
+		}
+		out = append(out, effectivePermissions(role.Permissions, role.DefaultScope)...)
+	}
+	return out, nil
 }
 
 // widenedRights returns the permissions in now that was does not already cover —

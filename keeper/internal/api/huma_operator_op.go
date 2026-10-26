@@ -42,6 +42,8 @@ type OperatorCreateRequest struct {
 	Label       string   `json:"label,omitempty" maxLength:"200" doc:"free text shown in the operator's token list (\"Service Desk prod\")"`
 	AuthMethod  string   `json:"auth_method,omitempty" enum:"jwt,local" doc:"how the Archon logs in: jwt (default) - the reply carries its token; local - it logs in with password at POST /auth/local/login, the reply carries no token (needs auth.local)"`
 	Password    string   `json:"password,omitempty" format:"password" maxLength:"512" doc:"initial local password, required with auth_method local (never logged, never returned)"`
+	OwnerAID    string   `json:"owner_aid,omitempty" doc:"only with auth_method jwt: the person (an active Archon with auth_method local, ldap or oidc) who owns the new operator and rotates its tokens (NIM-1057); exclusive with owner_synod"`
+	OwnerSynod  string   `json:"owner_synod,omitempty" doc:"only with auth_method jwt: the Synod whose members (those who sign in themselves) own the new operator and rotate its tokens (NIM-1057); exclusive with owner_aid"`
 }
 
 // operatorCreateOutput — huma output for POST /v1/operators (FULL-TYPED). Status=201;
@@ -95,6 +97,8 @@ type operatorListInput struct {
 	AuthMethod string `query:"auth_method" enum:"jwt,mtls,combined,ldap,oidc,local" doc:"filter by credential form; value outside enum -> 422"`
 	Revoked    bool   `query:"revoked" doc:"include revoked (false - active only); bad-value -> 400"`
 	Q          string `query:"q" doc:"free search over display_name/aid (substring, case-insensitive); empty -> no filter"`
+	OwnerAID   string `query:"owner_aid" doc:"only the operators this person owns (NIM-1057); empty -> no filter"`
+	OwnerSynod string `query:"owner_synod" doc:"only the operators this Synod owns (NIM-1057); empty -> no filter"`
 	Offset     int32  `query:"offset" default:"0" doc:"offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)"`
 	Limit      int32  `query:"limit" default:"50" doc:"page size 1..1000 (matches shared/api.ParsePage; out-of-range → 400)"`
 }
@@ -322,6 +326,54 @@ func operatorSetPasswordOperation() huma.Operation {
 		Tags:          []string{"operator"},
 		DefaultStatus: http.StatusNoContent,
 		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+// === PUT / DELETE /v1/operators/{aid}/owner (set-owner) — WRITE+AUDIT operator.owner-set ===
+
+type operatorSetOwnerInput struct {
+	AID  string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the machine operator (auth_method jwt)"`
+	Body OperatorOwnerRequest
+}
+
+// OperatorOwnerRequest — the body of PUT /v1/operators/{aid}/owner: exactly one
+// of the two fields (checked by the service, 422 otherwise).
+type OperatorOwnerRequest struct {
+	OwnerAID   string `json:"owner_aid,omitempty" doc:"the person who owns the operator: an active Archon with auth_method local, ldap or oidc, not the operator itself; exclusive with owner_synod"`
+	OwnerSynod string `json:"owner_synod,omitempty" doc:"the Synod whose members (those who sign in themselves) own the operator; exclusive with owner_aid"`
+}
+
+// operatorSetOwnerOperation — PUT /v1/operators/{aid}/owner (NIM-1057).
+// Permission operator.set-owner + audit operator.owner-set.
+func operatorSetOwnerOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "setOperatorOwner",
+		Method:        http.MethodPut,
+		Path:          "/{aid}/owner",
+		Summary:       "Set the owner of a machine operator",
+		Description:   "Sets or replaces the owner of an operator with auth_method jwt created through the Operator API (ADR-014 amendment NIM-1057): one person (owner_aid) or one Synod (owner_synod). The owner issues and revokes the operator's tokens under /v1/me/operators without operator.issue-token; it issues only while its own permissions cover the operator's, and revokes regardless. Not restricted by target. 404 - no such AID. 409 - operator revoked (DELETE still clears its owner). 422 - not a machine operator, both or neither field, the operator itself, an unknown or revoked Archon, an Archon that does not sign in itself, an unknown Synod.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusBadRequest, http.StatusForbidden, http.StatusNotFound, http.StatusConflict, http.StatusUnprocessableEntity, http.StatusInternalServerError},
+	}
+}
+
+type operatorClearOwnerInput struct {
+	AID string `path:"aid" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"AID of the machine operator (auth_method jwt)"`
+}
+
+// operatorClearOwnerOperation — DELETE /v1/operators/{aid}/owner (NIM-1057).
+// Permission operator.set-owner + audit operator.owner-set (no owner fields).
+func operatorClearOwnerOperation() huma.Operation {
+	return huma.Operation{
+		OperationID:   "clearOperatorOwner",
+		Method:        http.MethodDelete,
+		Path:          "/{aid}/owner",
+		Summary:       "Clear the owner of a machine operator",
+		Description:   "Leaves a machine operator without an owner (ADR-014 amendment NIM-1057); its tokens stay. Idempotent: an operator with no owner answers 204 too. Works on a revoked operator, so a Synod that owned it can be deleted. 404 - no such AID. 422 - not a machine operator.",
+		Tags:          []string{"operator"},
+		DefaultStatus: http.StatusNoContent,
+		Errors:        []int{http.StatusForbidden, http.StatusNotFound, http.StatusUnprocessableEntity, http.StatusInternalServerError},
 	}
 }
 

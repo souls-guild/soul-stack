@@ -201,7 +201,7 @@ func (p *svcPool) QueryRow(_ context.Context, sql string, args ...any) pgx.Row {
 		}
 		return staticRow{values: []any{
 			op.AID, op.DisplayName, string(op.AuthMethod), op.CreatedAt,
-			createdBy, createdVia, revoked, []byte("{}"),
+			createdBy, createdVia, revoked, []byte("{}"), nil, nil,
 		}}
 	}
 	return errRow{err: errors.New("svcPool.QueryRow: unexpected SQL: " + sql)}

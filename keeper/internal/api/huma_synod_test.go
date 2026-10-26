@@ -63,6 +63,8 @@ func (p synodSuccessPool) Query(_ context.Context, sql string, args ...any) (pgx
 		return &synodBoolRows{values: []bool{false}}, nil
 	case strings.Contains(sql, "rp.permission = '*'"):
 		return &synodEmptyRows{}, nil // the group grants no `*` → self-lockout probe skipped
+	case strings.Contains(sql, "FROM operators WHERE owner_synod"):
+		return &synodEmptyRows{}, nil // the group owns no operator → delete is not refused (NIM-1057)
 	case strings.Contains(sql, "FROM synod_roles WHERE synod_name"):
 		return &synodStrRows{}, nil // the group has no roles → subset-check is trivial
 	case strings.Contains(sql, "FROM rbac_role_permissions"):

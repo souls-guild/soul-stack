@@ -293,6 +293,9 @@ type CreateInput struct {
 	// in by password (NIM-1051).
 	AuthMethod AuthMethod
 	Password   string
+	// Owner — the owner of the new operator, only for [AuthMethodJWT]
+	// (NIM-1057); zero → none.
+	Owner Owner
 }
 
 // CreateResult — result of Create. JWT and ExpiresAt — issued token returned
@@ -311,6 +314,7 @@ type CreateResult struct {
 	CreatedAt    time.Time
 	CreatedByAID string
 	GrantedRoles []string
+	Owner        Owner
 	JWT          string
 	JWTID        string
 	ExpiresAt    time.Time
@@ -384,6 +388,9 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 	default:
 		return nil, fmt.Errorf("operator: invalid auth_method %q for create (want %q or %q)", method, AuthMethodJWT, AuthMethodLocal)
 	}
+	if !in.Owner.IsZero() && method != AuthMethodJWT {
+		return nil, ErrOwnerNotAllowed
+	}
 
 	displayName := in.DisplayName
 	if displayName == "" {
@@ -397,6 +404,7 @@ func (s *Service) Create(ctx context.Context, in CreateInput) (*CreateResult, er
 		AuthMethod:   method,
 		CreatedByAID: &creator,
 	}
+	op.OwnerAID, op.OwnerSynod = in.Owner.columns()
 
 	grantedRoles, err := s.insertOperator(ctx, op, in.Roles, hash)
 	if err != nil {
@@ -473,23 +481,25 @@ func (s *Service) createdResult(ctx context.Context, op *Operator, creator strin
 		CreatedAt:    saved.CreatedAt,
 		CreatedByAID: creator,
 		GrantedRoles: grantedRoles,
+		Owner:        OwnerOf(saved),
 		JWT:          minted.JWT,
 		JWTID:        minted.JWTID,
 		ExpiresAt:    minted.ExpiresAt,
 	}
 }
 
-// insertOperator — internal path of Create. With no roles and no password
-// hash — fast-path without tx (Insert via s.pool, zero regression risk for
-// existing calls without Roles). Otherwise — atomic tx: BeginTx → Insert →
-// password hash → rbac.GrantOperator x N → Commit; any error → rollback,
-// operator not created.
+// insertOperator — internal path of Create. With no roles, no password hash
+// and no owner — fast-path without tx (Insert via s.pool, zero regression risk
+// for existing calls without Roles). Otherwise — atomic tx: BeginTx → owner
+// check → Insert → password hash → rbac.GrantOperator x N → Commit; any error
+// → rollback, operator not created.
 //
 // Returns actually-granted roles (input order). Sentinel errors
-// (ErrOperatorAlreadyExists / rbac.ErrRoleNotFound / rbac.ErrOperatorNotFound)
-// passed as-is for mapping in transport layer.
+// (ErrOperatorAlreadyExists / ErrInvalidOwner / rbac.ErrRoleNotFound /
+// rbac.ErrOperatorNotFound) passed as-is for mapping in transport layer.
 func (s *Service) insertOperator(ctx context.Context, op *Operator, roles []string, passwordHash string) ([]string, error) {
-	if len(roles) == 0 && passwordHash == "" {
+	owner := OwnerOf(op)
+	if len(roles) == 0 && passwordHash == "" && owner.IsZero() {
 		if err := Insert(ctx, s.pool, op); err != nil {
 			return nil, err
 		}
@@ -502,6 +512,11 @@ func (s *Service) insertOperator(ctx context.Context, op *Operator, roles []stri
 	}
 	defer func() { _ = tx.Rollback(ctx) }()
 
+	if !owner.IsZero() {
+		if err := validateOwner(ctx, tx, op.AID, owner); err != nil {
+			return nil, err
+		}
+	}
 	if err := Insert(ctx, tx, op); err != nil {
 		return nil, err
 	}
@@ -783,8 +798,9 @@ const operatorTokensLockClass int32 = 0x4f505457
 const lockOperatorTokensSQL = `SELECT pg_advisory_xact_lock($1, hashtext($2))`
 
 // lockOperatorTokens serializes, for one AID, the password replacements and
-// personal token issues of it (and of any AID whose hashtext collides — an
-// extra wait, nothing more); no other transaction takes it. A personal token
+// personal token issues of it, and the changes of its owner against the
+// owner's issues and revokes of its tokens (NIM-1057) — and the same for any
+// AID whose hashtext collides, an extra wait, nothing more. A personal token
 // being minted from a session a replacement revokes either commits first — and
 // the revocation sees it — or waits and then finds its session revoked. Not the operators
 // row: the replacement writes rows whose foreign keys share-lock the acting
@@ -890,27 +906,38 @@ func (s *Service) IssuePersonalJWT(ctx context.Context, in IssuePersonalJWTInput
 	}, nil
 }
 
-// callerSignInLeft checks the token the request is made with and returns the
-// time left in it when it is the OIDC sign-in a personal token must not
-// outlive (0 otherwise). [ErrPersonalJWTFromPersonal] for a personal token and
-// for a `jti` that is not a row of aid, [ErrCallerJWTRevoked] for a revoked
-// one; an empty `jti` is a token from before migration 127, not a personal one.
-func (s *Service) callerSignInLeft(ctx context.Context, db ExecQueryRower, aid, callerJWTID string, m AuthMethod) (time.Duration, error) {
+// checkCallerToken refuses to mint from the token a request is made with when
+// it is a personal token or a `jti` that is not a row of aid
+// ([ErrPersonalJWTFromPersonal]) or is revoked in the database
+// ([ErrCallerJWTRevoked]), and returns its kind and expiry. An empty `jti` is a
+// token from before migration 127, which is neither: kind "" and no error.
+func checkCallerToken(ctx context.Context, db ExecQueryRower, aid, callerJWTID string) (JWTKind, time.Time, error) {
 	if callerJWTID == "" {
-		return 0, nil
+		return "", time.Time{}, nil
 	}
 	kind, expiresAt, revoked, found, err := LookupJWT(ctx, db, aid, callerJWTID)
 	if err != nil {
-		return 0, err
+		return "", time.Time{}, err
 	}
 	if !found || kind == JWTKindPersonal {
-		return 0, ErrPersonalJWTFromPersonal
+		return "", time.Time{}, ErrPersonalJWTFromPersonal
 	}
 	// A password reset may have revoked the session the request came with a
-	// moment ago, before this node's snapshot heard of it: a personal token
-	// minted from it would outlive the reset (NIM-1051).
+	// moment ago, before this node's snapshot heard of it: a token minted from
+	// it would outlive the reset (NIM-1051).
 	if revoked {
-		return 0, ErrCallerJWTRevoked
+		return "", time.Time{}, ErrCallerJWTRevoked
+	}
+	return kind, expiresAt, nil
+}
+
+// callerSignInLeft checks the token the request is made with
+// ([checkCallerToken]) and returns the time left in it when it is the OIDC
+// sign-in a personal token must not outlive (0 otherwise).
+func (s *Service) callerSignInLeft(ctx context.Context, db ExecQueryRower, aid, callerJWTID string, m AuthMethod) (time.Duration, error) {
+	kind, expiresAt, err := checkCallerToken(ctx, db, aid, callerJWTID)
+	if err != nil || kind == "" {
+		return 0, err
 	}
 	if m != AuthMethodOIDC || kind != JWTKindSession {
 		return 0, nil

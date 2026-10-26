@@ -97,6 +97,7 @@ components:
             - operator.created
             - operator.jwt-revoked
             - operator.login
+            - operator.owner-set
             - operator.password-changed
             - operator.password-set
             - operator.provisioned
@@ -2603,6 +2604,13 @@ components:
         metadata:
           additionalProperties: {}
           type: object
+        owner_aid:
+          description: the person who owns this machine operator and rotates its tokens (NIM-1057); exclusive with owner_synod
+          pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+          type: string
+        owner_synod:
+          description: the Synod whose members (those who sign in themselves) own this machine operator and rotate its tokens (NIM-1057); exclusive with owner_aid
+          type: string
         revoked_at:
           format: date-time
           type: string
@@ -2667,6 +2675,12 @@ components:
         label:
           description: free text shown in the operator's token list ("Service Desk prod")
           maxLength: 200
+          type: string
+        owner_aid:
+          description: "only with auth_method jwt: the person (an active Archon with auth_method local, ldap or oidc) who owns the new operator and rotates its tokens (NIM-1057); exclusive with owner_synod"
+          type: string
+        owner_synod:
+          description: "only with auth_method jwt: the Synod whose members (those who sign in themselves) own the new operator and rotate its tokens (NIM-1057); exclusive with owner_aid"
           type: string
         password:
           description: initial local password, required with auth_method local (never logged, never returned)
@@ -2802,6 +2816,16 @@ components:
         - offset
         - limit
         - total
+      type: object
+    OperatorOwnerRequest:
+      additionalProperties: false
+      properties:
+        owner_aid:
+          description: "the person who owns the operator: an active Archon with auth_method local, ldap or oidc, not the operator itself; exclusive with owner_synod"
+          type: string
+        owner_synod:
+          description: the Synod whose members (those who sign in themselves) own the operator; exclusive with owner_aid
+          type: string
       type: object
     OperatorPasswordRequest:
       additionalProperties: false
@@ -10533,6 +10557,277 @@ paths:
       summary: Revoke one of your own tokens
       tags:
         - operator
+  /v1/me/operators:
+    get:
+      description: The active machine operators the caller owns, directly (owner_aid) or through a Synod it is a person member of (owner_synod; a machine operator owns nothing through a Synod), by AID (ADR-014 amendment NIM-1057). No permission. Read-only, no audit.
+      operationId: listMyOperators
+      parameters:
+        - description: offset from start of set, ≥0 (out-of-range → 400)
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: offset from start of set, ≥0 (out-of-range → 400)
+            format: int32
+            type: integer
+        - description: page size 1..1000 (out-of-range → 400)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: page size 1..1000 (out-of-range → 400)
+            format: int32
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorListReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Operators you own
+      tags:
+        - operator
+  /v1/me/operators/{aid}/jwts:
+    get:
+      description: GET /v1/operators/{aid}/jwts for an operator the caller owns, without operator.list (ADR-014 amendment NIM-1057). Same filters. 404 - not an operator the caller owns. Read-only, no audit.
+      operationId: listMyOperatorJWTs
+      parameters:
+        - description: AID of an operator the caller owns
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of an operator the caller owns
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+        - description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+          explode: true
+          in: query
+          name: kind
+          schema:
+            description: multi-value ?kind=personal&kind=issued - exact-match OR; value outside enum -> 422
+            items:
+              enum:
+                - bootstrap
+                - issued
+                - session
+                - personal
+              type: string
+            type:
+              - array
+              - "null"
+        - description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+          explode: false
+          in: query
+          name: state
+          schema:
+            description: active - neither revoked nor expired; revoked - revoked (expired since or not); expired - expired without being revoked; omitted -> every state
+            enum:
+              - active
+              - revoked
+              - expired
+            type: string
+        - description: case-insensitive substring of the label; empty -> no filter
+          explode: false
+          in: query
+          name: q
+          schema:
+            description: case-insensitive substring of the label; empty -> no filter
+            maxLength: 200
+            type: string
+        - description: offset from start of set, ≥0 (out-of-range → 400)
+          explode: false
+          in: query
+          name: offset
+          schema:
+            default: 0
+            description: offset from start of set, ≥0 (out-of-range → 400)
+            format: int32
+            type: integer
+        - description: page size 1..1000 (out-of-range → 400)
+          explode: false
+          in: query
+          name: limit
+          schema:
+            default: 50
+            description: page size 1..1000 (out-of-range → 400)
+            format: int32
+            type: integer
+      responses:
+        "200":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/OperatorJWTListReply"
+          description: OK
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Tokens of an operator you own
+      tags:
+        - operator
+    post:
+      description: "Mints a token (kind issued) of an operator the caller owns, without operator.issue-token (ADR-014 amendment NIM-1057). Optional body: ttl (up to auth.jwt.ttl_max; omitted -> auth.jwt.ttl_default) and label. The caller's effective permissions must cover the operator's (403 owner-lacks-permissions, naming the first one missing), and the request must not be made with a personal token (403 personal-jwt-from-personal) or with a token already revoked in the database (401 jwt-revoked). 404 - not an operator the caller owns. 409 - operator revoked. Returns the JWT once."
+      operationId: issueMyOperatorJWT
+      parameters:
+        - description: AID of an operator the caller owns
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of an operator the caller owns
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorIssueTokenRequest"
+      responses:
+        "201":
+          content:
+            application/json:
+              schema:
+                $ref: "#/components/schemas/IssueTokenReply"
+          description: Created
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "401":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unauthorized
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Issue a token of an operator you own
+      tags:
+        - operator
+  /v1/me/operators/{aid}/jwts/{jwt_id}/revoke:
+    post:
+      description: "POST /v1/operators/{aid}/jwts/{jwt_id}/revoke for an operator the caller owns, without operator.jwt-revoke (ADR-014 amendment NIM-1057): the token is refused (401 jwt-revoked) on its next request on every Keeper node. 404 - not an operator the caller owns, or not a token of it. 409 - already revoked."
+      operationId: revokeMyOperatorJWT
+      parameters:
+        - description: AID of the Archon the token belongs to
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of the Archon the token belongs to
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+        - description: jwt_id of the token (its jti)
+          in: path
+          name: jwt_id
+          required: true
+          schema:
+            description: jwt_id of the token (its jti)
+            pattern: ^[0-9A-HJKMNP-TV-Z]{26}$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Revoke one token of an operator you own
+      tags:
+        - operator
   /v1/me/password:
     put:
       description: The calling Archon (auth_method local) replaces its own password, proving the current one; its other web sessions are revoked, the one this request came with stays (NIM-1051). No permission required. A reset committed since the current password was checked refuses the change (403). 403 - current password is incorrect (counts towards the login lockout). 401 operator-revoked-token - revoked before the check. 413 - body over 4 KiB (while the login rate limit runs). 422 - not a local Archon, password policy not met, or auth.local not configured. 429 - locked out.
@@ -10812,6 +11107,20 @@ paths:
           name: q
           schema:
             description: free search over display_name/aid (substring, case-insensitive); empty -> no filter
+            type: string
+        - description: only the operators this person owns (NIM-1057); empty -> no filter
+          explode: false
+          in: query
+          name: owner_aid
+          schema:
+            description: only the operators this person owns (NIM-1057); empty -> no filter
+            type: string
+        - description: only the operators this Synod owns (NIM-1057); empty -> no filter
+          explode: false
+          in: query
+          name: owner_synod
+          schema:
+            description: only the operators this Synod owns (NIM-1057); empty -> no filter
             type: string
         - description: offset from start of set, ≥0 (matches shared/api.ParsePage; out-of-range → 400)
           explode: false
@@ -11192,6 +11501,109 @@ paths:
                 $ref: "#/components/schemas/HumaProblemError"
           description: Internal Server Error
       summary: Revoke one token of an Archon
+      tags:
+        - operator
+  /v1/operators/{aid}/owner:
+    delete:
+      description: "Leaves a machine operator without an owner (ADR-014 amendment NIM-1057); its tokens stay. Idempotent: an operator with no owner answers 204 too. Works on a revoked operator, so a Synod that owned it can be deleted. 404 - no such AID. 422 - not a machine operator."
+      operationId: clearOperatorOwner
+      parameters:
+        - description: AID of the machine operator (auth_method jwt)
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of the machine operator (auth_method jwt)
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+      responses:
+        "204":
+          description: No Content
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Clear the owner of a machine operator
+      tags:
+        - operator
+    put:
+      description: "Sets or replaces the owner of an operator with auth_method jwt created through the Operator API (ADR-014 amendment NIM-1057): one person (owner_aid) or one Synod (owner_synod). The owner issues and revokes the operator's tokens under /v1/me/operators without operator.issue-token; it issues only while its own permissions cover the operator's, and revokes regardless. Not restricted by target. 404 - no such AID. 409 - operator revoked (DELETE still clears its owner). 422 - not a machine operator, both or neither field, the operator itself, an unknown or revoked Archon, an Archon that does not sign in itself, an unknown Synod."
+      operationId: setOperatorOwner
+      parameters:
+        - description: AID of the machine operator (auth_method jwt)
+          in: path
+          name: aid
+          required: true
+          schema:
+            description: AID of the machine operator (auth_method jwt)
+            pattern: ^[a-z0-9][a-z0-9._@-]{1,127}$
+            type: string
+      requestBody:
+        content:
+          application/json:
+            schema:
+              $ref: "#/components/schemas/OperatorOwnerRequest"
+        required: true
+      responses:
+        "204":
+          description: No Content
+        "400":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Bad Request
+        "403":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Forbidden
+        "404":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Not Found
+        "409":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Conflict
+        "422":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Unprocessable Entity
+        "500":
+          content:
+            application/problem+json:
+              schema:
+                $ref: "#/components/schemas/HumaProblemError"
+          description: Internal Server Error
+      summary: Set the owner of a machine operator
       tags:
         - operator
   /v1/operators/{aid}/password:

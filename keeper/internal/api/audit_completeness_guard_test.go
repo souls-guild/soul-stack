@@ -66,15 +66,19 @@ type auditedRoute struct {
 // indistinguishable — both must emit and both are here.
 var auditedWriteRoutes = map[route]auditedRoute{
 	// operators (middleware-audit).
-	{http.MethodPost, "/v1/operators"}:                            {events: []audit.EventType{audit.EventOperatorCreated}},
-	{http.MethodPost, "/v1/operators/{aid}/revoke"}:               {events: []audit.EventType{audit.EventOperatorRevoked}},
-	{http.MethodPost, "/v1/operators/{aid}/issue-token"}:          {events: []audit.EventType{audit.EventOperatorTokenIssued}},
-	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}: {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
-	{http.MethodPost, "/v1/me/jwts"}:                              {events: []audit.EventType{audit.EventOperatorTokenIssued}},
-	{http.MethodPost, "/v1/me/jwts/{jwt_id}/revoke"}:              {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
-	{http.MethodPost, "/v1/me/sessions/revoke"}:                   {events: []audit.EventType{audit.EventOperatorSessionsRevoked}},
-	{http.MethodPut, "/v1/operators/{aid}/password"}:              {events: []audit.EventType{audit.EventOperatorPasswordSet}},
-	{http.MethodPut, "/v1/me/password"}:                           {events: []audit.EventType{audit.EventOperatorPasswordChanged}},
+	{http.MethodPost, "/v1/operators"}:                               {events: []audit.EventType{audit.EventOperatorCreated}},
+	{http.MethodPost, "/v1/operators/{aid}/revoke"}:                  {events: []audit.EventType{audit.EventOperatorRevoked}},
+	{http.MethodPost, "/v1/operators/{aid}/issue-token"}:             {events: []audit.EventType{audit.EventOperatorTokenIssued}},
+	{http.MethodPost, "/v1/operators/{aid}/jwts/{jwt_id}/revoke"}:    {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
+	{http.MethodPost, "/v1/me/jwts"}:                                 {events: []audit.EventType{audit.EventOperatorTokenIssued}},
+	{http.MethodPost, "/v1/me/jwts/{jwt_id}/revoke"}:                 {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
+	{http.MethodPut, "/v1/operators/{aid}/owner"}:                    {events: []audit.EventType{audit.EventOperatorOwnerSet}},
+	{http.MethodDelete, "/v1/operators/{aid}/owner"}:                 {events: []audit.EventType{audit.EventOperatorOwnerSet}},
+	{http.MethodPost, "/v1/me/operators/{aid}/jwts"}:                 {events: []audit.EventType{audit.EventOperatorTokenIssued}},
+	{http.MethodPost, "/v1/me/operators/{aid}/jwts/{jwt_id}/revoke"}: {events: []audit.EventType{audit.EventOperatorJWTRevoked}},
+	{http.MethodPost, "/v1/me/sessions/revoke"}:                      {events: []audit.EventType{audit.EventOperatorSessionsRevoked}},
+	{http.MethodPut, "/v1/operators/{aid}/password"}:                 {events: []audit.EventType{audit.EventOperatorPasswordSet}},
+	{http.MethodPut, "/v1/me/password"}:                              {events: []audit.EventType{audit.EventOperatorPasswordChanged}},
 
 	// auth (self-audit inside the handler: login writes operator.login after issuing the
 	// JWT, OUTSIDE /v1, with no middleware-audit wiring — ADR-058). provision (operator.

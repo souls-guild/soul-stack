@@ -38,8 +38,10 @@ const (
 
 	// EventOperatorTokenIssued — a new JWT was issued for an existing Archon
 	// via the Operator API: `POST /v1/operators/{aid}/issue-token` or MCP
-	// `keeper.operator.issue-token` (kind `issued`), or `POST /v1/me/jwts`, the
-	// caller to itself (kind `personal`, ADR-014 amendment NIM-1052). `source:
+	// `keeper.operator.issue-token` (kind `issued`), `POST /v1/me/jwts`, the
+	// caller to itself (kind `personal`, ADR-014 amendment NIM-1052), or `POST
+	// /v1/me/operators/{aid}/jwts`, an owner for its machine operator (kind
+	// `issued`, NIM-1057). `source:
 	// api` (`mcp` from the tool), `archon_aid` is the initiator;
 	// payload: `{aid, expires_at, jwt_id, kind, ttl, label?}`. The JWT is NOT
 	// put in the payload (sensitive, masked even if it leaks in).
@@ -47,9 +49,10 @@ const (
 
 	// EventOperatorJWTRevoked — one token of an Archon was revoked
 	// (`POST /v1/operators/{aid}/jwts/{jwt_id}/revoke`, MCP
-	// `keeper.operator.jwt-revoke`, or the Archon's own through
-	// `POST /v1/me/jwts/{jwt_id}/revoke` — ADR-014 amendments NIM-1045 /
-	// NIM-1052). `archon_aid` is the initiator; payload: `{aid, jwt_id, kind}`.
+	// `keeper.operator.jwt-revoke`, the Archon's own through
+	// `POST /v1/me/jwts/{jwt_id}/revoke`, or an owner's through
+	// `POST /v1/me/operators/{aid}/jwts/{jwt_id}/revoke` — ADR-014 amendments
+	// NIM-1045 / NIM-1052 / NIM-1057). `archon_aid` is the initiator; payload: `{aid, jwt_id, kind}`.
 	// The operator stays active.
 	EventOperatorJWTRevoked EventType = "operator.jwt-revoked"
 
@@ -67,6 +70,14 @@ const (
 	// EventOperatorPasswordChanged — an Archon changed its own local password
 	// (`PUT /v1/me/password`, NIM-1051). Payload `{aid, tokens_revoked}`.
 	EventOperatorPasswordChanged EventType = "operator.password-changed"
+
+	// EventOperatorOwnerSet — the owner of a machine operator was set, changed
+	// or cleared (`PUT` / `DELETE /v1/operators/{aid}/owner`, MCP
+	// `keeper.operator.set-owner`, ADR-014 amendment NIM-1057). Payload `{aid,
+	// owner_aid | owner_synod, previous_owner_aid | previous_owner_synod}`; the
+	// owner fields are absent when it was cleared, the previous ones when there
+	// was none.
+	EventOperatorOwnerSet EventType = "operator.owner-set"
 
 	// EventIncarnationCreated — a new runtime instance was created via the
 	// Operator API (`POST /v1/incarnations`). `source: api`, `archon_aid`

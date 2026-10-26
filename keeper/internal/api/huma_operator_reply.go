@@ -60,6 +60,8 @@ type Operator struct {
 	DisplayName      string                  `json:"display_name"`
 	Metadata         *map[string]interface{} `json:"metadata,omitempty"`
 	RevokedAt        *time.Time              `json:"revoked_at,omitempty"`
+	OwnerAID         *string                 `json:"owner_aid,omitempty" pattern:"^[a-z0-9][a-z0-9._@-]{1,127}$" doc:"the person who owns this machine operator and rotates its tokens (NIM-1057); exclusive with owner_synod"` // ← operator.AIDPattern
+	OwnerSynod       *string                 `json:"owner_synod,omitempty" doc:"the Synod whose members (those who sign in themselves) own this machine operator and rotate its tokens (NIM-1057); exclusive with owner_aid"`
 }
 
 // IssueTokenReply — native 200 body of POST /v1/operators/{aid}/issue-token. SENSITIVE:

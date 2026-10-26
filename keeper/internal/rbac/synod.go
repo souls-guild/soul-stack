@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"sort"
+	"strings"
 
 	"github.com/jackc/pgx/v5/pgconn"
 )
@@ -28,6 +29,12 @@ var ErrInvalidSynodName = errors.New("rbac: invalid synod name")
 // builtin=true. A builtin group cannot be deleted (ADR-049(g), symmetric
 // with [ErrRoleBuiltin]). Transport maps it to 409.
 var ErrSynodBuiltin = errors.New("rbac: synod is builtin (delete forbidden)")
+
+// ErrSynodOwnsOperators signals a synod.delete attempt on a group that owns
+// machine operators (ADR-014 amendment NIM-1057): deleting it would leave them
+// without an owner silently. The wrapped message names them. Transport maps it
+// to 409.
+var ErrSynodOwnsOperators = errors.New("rbac: synod owns operators; give them another owner or clear it first")
 
 // ErrSynodOperatorNotFound means the membership row (synod_name, aid) is
 // missing from synod_operators during RemoveOperator. Transport maps it to
@@ -129,6 +136,35 @@ func CreateSynod(ctx context.Context, db ExecQueryRower, name, description strin
 	}
 	if _, err := db.Exec(ctx, insertSynodSQL, name, description, createdBy); err != nil {
 		return mapSynodError(err)
+	}
+	return nil
+}
+
+// synodOwnedOperatorsSQL — the operators a group owns, revoked ones included:
+// the foreign key operators_owner_synod_fk holds for every row.
+const synodOwnedOperatorsSQL = `SELECT aid FROM operators WHERE owner_synod = $1 ORDER BY aid`
+
+// assertSynodOwnsNoOperator — [ErrSynodOwnsOperators] naming the operators
+// the group owns, nil when it owns none.
+func assertSynodOwnsNoOperator(ctx context.Context, db ExecQueryRower, name string) error {
+	rows, err := db.Query(ctx, synodOwnedOperatorsSQL, name)
+	if err != nil {
+		return fmt.Errorf("rbac: read operators synod %q owns: %w", name, wrapPgErr(err))
+	}
+	defer rows.Close()
+	var owned []string
+	for rows.Next() {
+		var aid string
+		if err := rows.Scan(&aid); err != nil {
+			return fmt.Errorf("rbac: scan operator synod %q owns: %w", name, err)
+		}
+		owned = append(owned, aid)
+	}
+	if err := rows.Err(); err != nil {
+		return fmt.Errorf("rbac: iter operators synod %q owns: %w", name, err)
+	}
+	if len(owned) > 0 {
+		return fmt.Errorf("%w: %s", ErrSynodOwnsOperators, strings.Join(owned, ", "))
 	}
 	return nil
 }

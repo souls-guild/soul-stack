@@ -44,7 +44,7 @@ type toolEntry struct {
 // what the tool does. Full semantics, async shape, and error codes live in
 // operator-api.md (cross-linked from mcp-tools.md).
 var catalogManifest = []toolEntry{
-	// --- Operator (5) — implemented in M0.7.a; jwt-list / jwt-revoke in NIM-1045 ---
+	// --- Operator (6) — implemented in M0.7.a; jwt-list / jwt-revoke in NIM-1045; set-owner in NIM-1057 ---
 	{
 		status: toolStatusImplemented,
 		decl: toolDeclaration{
@@ -87,6 +87,15 @@ var catalogManifest = []toolEntry{
 			Name:         "keeper.operator.jwt-revoke",
 			Description:  "Revokes one JWT of an Archon by jwt_id: that token is refused on its next request, the Archon and its other tokens keep working. Permission: operator.jwt-revoke. Fails with code=not-found if the token is not this Archon's, code=jwt-already-revoked if it already is.",
 			InputSchema:  schemaOperatorJWTRevokeInput,
+			OutputSchema: schemaEmptyObject,
+		},
+	},
+	{
+		status: toolStatusImplemented,
+		decl: toolDeclaration{
+			Name:         "keeper.operator.set-owner",
+			Description:  "Sets, changes or clears the owner of a machine operator (auth_method jwt): one person (owner_aid) or one Synod (owner_synod); neither clears it. The owner issues and revokes the operator's tokens itself; it issues only while its own permissions cover the operator's, and revokes regardless. Permission: operator.set-owner. Fails with code=validation-failed for a bad owner or a non-machine operator, code=operator-revoked when setting an owner on a revoked operator (clearing it works, and is what lets a Synod that owned it be deleted).",
+			InputSchema:  schemaOperatorSetOwnerInput,
 			OutputSchema: schemaEmptyObject,
 		},
 	},
@@ -1203,7 +1212,19 @@ var (
 "aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$","description":"AID of the new Archon."},
 "display_name":{"type":"string","description":"Human-readable name."},
 "ttl":{"type":"string","description":"Lifetime of the returned JWT (\"2160h\" or \"90d\"). Omitted: auth.jwt.ttl_default. Between 1m and auth.jwt.ttl_max."},
-"label":{"type":"string","maxLength":200,"description":"Free text shown in the operator's token list."}}}`)
+"label":{"type":"string","maxLength":200,"description":"Free text shown in the operator's token list."},
+"owner_aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$","description":"The person (an active Archon with auth_method local, ldap or oidc) who owns the new operator and rotates its tokens. Exclusive with owner_synod."},
+"owner_synod":{"type":"string","description":"The Synod whose members (those who sign in themselves) own the new operator and rotate its tokens. Exclusive with owner_aid."}}}`)
+
+	schemaOperatorSetOwnerInput = json.RawMessage(`{
+"$schema":"https://json-schema.org/draft/2020-12/schema",
+"type":"object",
+"additionalProperties":false,
+"required":["aid"],
+"properties":{
+"aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$","description":"AID of the machine operator (auth_method jwt)."},
+"owner_aid":{"type":"string","pattern":"^[a-z0-9][a-z0-9._@-]{1,127}$","description":"The person who owns it: an active Archon with auth_method local, ldap or oidc, not the operator itself. Exclusive with owner_synod."},
+"owner_synod":{"type":"string","description":"The Synod whose members (those who sign in themselves) own it. Exclusive with owner_aid. Neither field clears the owner."}}}`)
 
 	schemaOperatorCreateOutput = json.RawMessage(`{
 "$schema":"https://json-schema.org/draft/2020-12/schema",

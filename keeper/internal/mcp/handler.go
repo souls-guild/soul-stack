@@ -465,6 +465,8 @@ func (h *Handler) handleToolsCall(ctx context.Context, claims *jwt.Claims, req j
 		return h.callOperatorJWTList(ctx, claims, req, p.Arguments), false
 	case "keeper.operator.jwt-revoke":
 		return h.callOperatorJWTRevoke(ctx, claims, req, p.Arguments), false
+	case "keeper.operator.set-owner":
+		return h.callOperatorSetOwner(ctx, claims, req, p.Arguments), false
 
 	// Role-tools (6) — RBAC CRUD over rbac.Service (Slice 2b). 1:1 with
 	// permission (keeper.role.<action> ↔ role.<action>).
@@ -855,6 +857,8 @@ type operatorCreateArgs struct {
 	DisplayName string `json:"display_name"`
 	TTL         string `json:"ttl"`
 	Label       string `json:"label"`
+	OwnerAID    string `json:"owner_aid"`
+	OwnerSynod  string `json:"owner_synod"`
 }
 
 type operatorCreateOutput struct {
@@ -915,6 +919,7 @@ func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, re
 		TTL:         ttl,
 		Label:       a.Label,
 		Client:      clientMetaOf(ctx),
+		Owner:       operator.Owner{AID: a.OwnerAID, Synod: a.OwnerSynod},
 	})
 	if err != nil {
 		code, detail := mapServiceErrorToMCP(err)
@@ -940,6 +945,12 @@ func (h *Handler) callOperatorCreate(ctx context.Context, claims *jwt.Claims, re
 	}
 	if a.Label != "" {
 		payload["label"] = a.Label
+	}
+	if res.Owner.AID != "" {
+		payload["owner_aid"] = res.Owner.AID
+	}
+	if res.Owner.Synod != "" {
+		payload["owner_synod"] = res.Owner.Synod
 	}
 	h.writeAudit(ctx, audit.EventOperatorCreated, claims.Subject, payload)
 
@@ -1236,6 +1247,62 @@ func (h *Handler) callOperatorJWTRevoke(ctx context.Context, claims *jwt.Claims,
 		"jwt_id": rec.JWTID,
 		"kind":   string(rec.Kind),
 	})
+	return h.toolResult(req.ID, struct{}{})
+}
+
+type operatorSetOwnerArgs struct {
+	AID        string `json:"aid"`
+	OwnerAID   string `json:"owner_aid"`
+	OwnerSynod string `json:"owner_synod"`
+}
+
+func (h *Handler) callOperatorSetOwner(ctx context.Context, claims *jwt.Claims, req jsonRPCRequest, args json.RawMessage) jsonRPCResponse {
+	const toolName = "keeper.operator.set-owner"
+
+	var a operatorSetOwnerArgs
+	if len(args) > 0 {
+		if err := strictUnmarshal(args, &a); err != nil {
+			return h.toolError(req.ID, toolName, mcpCodeMalformedRequest,
+				"invalid arguments: "+err.Error())
+		}
+	}
+	if !operator.ValidAID(a.AID) {
+		return h.toolError(req.ID, toolName, mcpCodeValidationFailed,
+			"field 'aid' must match "+operator.AIDPattern)
+	}
+
+	if err := h.deps.RBAC.Check(claims.Subject, "operator", "set-owner", nil); err != nil {
+		return h.toolError(req.ID, toolName, mcpCodeForbidden,
+			"operator lacks required permission operator.set-owner")
+	}
+
+	res, err := h.deps.OperatorSvc.SetOwner(ctx, operator.SetOwnerInput{
+		AID:   a.AID,
+		Owner: operator.Owner{AID: a.OwnerAID, Synod: a.OwnerSynod},
+	})
+	if err != nil {
+		code, detail := mapServiceErrorToMCP(err)
+		if code == mcpCodeInternalError {
+			h.deps.Logger.Error("mcp: operator.set-owner service failed",
+				slog.String("aid", a.AID), slog.String("by_aid", claims.Subject), slog.Any("error", err))
+		}
+		return h.toolError(req.ID, toolName, code, detail)
+	}
+
+	payload := map[string]any{"aid": res.AID}
+	if res.Owner.AID != "" {
+		payload["owner_aid"] = res.Owner.AID
+	}
+	if res.Owner.Synod != "" {
+		payload["owner_synod"] = res.Owner.Synod
+	}
+	if res.Previous.AID != "" {
+		payload["previous_owner_aid"] = res.Previous.AID
+	}
+	if res.Previous.Synod != "" {
+		payload["previous_owner_synod"] = res.Previous.Synod
+	}
+	h.writeAudit(ctx, audit.EventOperatorOwnerSet, claims.Subject, payload)
 	return h.toolResult(req.ID, struct{}{})
 }
 

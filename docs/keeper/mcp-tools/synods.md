@@ -33,7 +33,7 @@ Deleting a group (membership + bundle cascade). Permission: `synod.delete`. Endp
 
 **Output:** empty object (`{}`). Corresponds to HTTP `204 No Content`.
 
-Errors: `synod-not-found`, `synod-builtin` (builtin group cannot be deleted, check **before** self-lockout), `would-lock-out-cluster` (disappearance of the group will remove the last effective `*`).
+Errors: `synod-not-found`, `synod-builtin` (builtin group cannot be deleted, check **before** self-lockout), `synod-owns-operators` (the group owns machine operators — give them another owner or clear it first; the detail names them, [ADR-014 amendment NIM-1057](../../adr/0014-operator-identity.md)), `would-lock-out-cluster` (disappearance of the group will remove the last effective `*`).
 
 #### `keeper.synod.list`
 
